@@ -24,7 +24,7 @@ const appInfoPanel = document.getElementById('appInfoPanel');
 const videoProperties = document.getElementById('videoProperties');
 
 // Global State
-let backgroundPath = '';
+let backgroundPath = 'background.jpg';
 let scenes = { 'Scene 1': [] };
 let currentScene = 'Scene 1';
 let variables = {};
@@ -148,8 +148,11 @@ function setupEventListeners() {
   customWidthInput.addEventListener('change', updateCanvasSize);
   customHeightInput.addEventListener('change', updateCanvasSize);
 
-  // Background image
-  backgroundFileInput.addEventListener('change', setBackground);
+  // Background image (stored as a path string, matching the Go runtime)
+  const backgroundPathInput = document.getElementById('backgroundPathInput');
+  if (backgroundPathInput) {
+    backgroundPathInput.addEventListener('input', setBackgroundPath);
+  }
 
   // Add variable button
   addVariableButton.addEventListener('click', addVariable);
@@ -330,6 +333,7 @@ function duplicateScene() {
 }
 
 function changeScene() {
+  saveCurrentScene();
   currentScene = sceneSelector.value;
   loadScene(currentScene);
   updateAllMenuSceneButtons();
@@ -376,6 +380,8 @@ function addElement(type, x, y) {
     input: { width: '150px', height: '40px' },
     video: { width: '200px', height: '150px' },
     dynamiclist: { width: '600px', height: '40px' }, // Add this line
+    searchresults: { width: '1160px', height: '510px' },
+    textlog: { width: '600px', height: '300px' },
     default: { width: 'auto', height: 'auto' }
   };
 
@@ -398,7 +404,6 @@ function addElement(type, x, y) {
       <span class="text-content">Dynamic List</span>
       <span class="remove-button">✕</span>
   `;
-    el.setAttribute('data-command', '');
     el.setAttribute('data-variable', '');
     setupDynamicListExecution(el);
   } else if (type === 'menu') {
@@ -433,6 +438,19 @@ function addElement(type, x, y) {
     el.appendChild(removeButton);
 
     el.setAttribute('data-type', type);
+
+    // Special handling for search results element
+    if (type === 'searchresults') {
+      el.setAttribute('data-results-variable', 'search_results');
+      el.classList.add('searchresults-element');
+      el.innerHTML = `
+        <div class="searchresults-placeholder">
+          <i class="fas fa-th-large"></i>
+          <span>Search Results Grid</span>
+        </div>
+        <span class="remove-button">✕</span>
+      `;
+    }
 
     // Special handling for input elements
     if (type === 'input') {
@@ -639,11 +657,6 @@ function setupElementEvents(el) {
       const input = el.querySelector('.element-input');
       if (input) input.focus();
     } else if (type === 'dynamiclist') {
-      const command = prompt("Enter command path:", el.getAttribute('data-command') || '');
-      if (command !== null) {
-        el.setAttribute('data-command', command);
-      }
-
       const variable = prompt("Enter variable name:", el.getAttribute('data-variable') || '');
       if (variable !== null) {
         el.setAttribute('data-variable', variable);
@@ -755,17 +768,10 @@ function showElementProperties(el) {
     }
   }
 
-  // Dynamic List properties - only show for dynamiclist elements
+  // Dynamic List / Text Log properties - both use data-variable
   const dynamicListProperties = document.querySelector('.dynamic-list-properties');
-  if (el.getAttribute('data-type') === 'dynamiclist') {
+  if (el.getAttribute('data-type') === 'dynamiclist' || el.getAttribute('data-type') === 'textlog') {
     dynamicListProperties.style.display = 'block';
-
-    // Set command path
-    const commandInput = document.getElementById('dynamicCommand');
-    commandInput.value = el.getAttribute('data-command') || '';
-    commandInput.onchange = () => {
-      el.setAttribute('data-command', commandInput.value);
-    };
 
     // Set up variable selector
     const variableSelector = document.getElementById('dynamicVariable');
@@ -775,6 +781,36 @@ function showElementProperties(el) {
     };
   } else {
     dynamicListProperties.style.display = 'none';
+  }
+
+  // Input properties - variable that stores the typed text
+  const inputProperties = document.querySelector('.input-properties');
+  if (el.getAttribute('data-type') === 'input') {
+    inputProperties.style.display = 'block';
+    const inputVar = document.getElementById('inputVariable');
+    inputVar.value = el.getAttribute('data-variable') || '';
+    inputVar.oninput = () => el.setAttribute('data-variable', inputVar.value);
+  } else {
+    inputProperties.style.display = 'none';
+  }
+
+  // Search Results properties - only show for searchresults elements
+  const searchresultsProperties = document.querySelector('.searchresults-properties');
+  if (el.getAttribute('data-type') === 'searchresults') {
+    searchresultsProperties.style.display = 'block';
+    const resultsVarInput = document.getElementById('resultsVariable');
+    resultsVarInput.value = el.getAttribute('data-results-variable') || 'search_results';
+    resultsVarInput.oninput = () => el.setAttribute('data-results-variable', resultsVarInput.value);
+
+    const colsInput = document.getElementById('gridColumns');
+    colsInput.value = el.getAttribute('data-columns') || '';
+    colsInput.oninput = () => el.setAttribute('data-columns', colsInput.value);
+
+    const rowsInput = document.getElementById('gridRows');
+    rowsInput.value = el.getAttribute('data-rows') || '';
+    rowsInput.oninput = () => el.setAttribute('data-rows', rowsInput.value);
+  } else {
+    searchresultsProperties.style.display = 'none';
   }
 
 
@@ -911,6 +947,22 @@ function showElementProperties(el) {
     mediaVariableSelector.onchange = () => {
       el.setAttribute('data-media-variable', mediaVariableSelector.value);
     };
+  } else if (triggerSelector.value === 'yt_search') {
+    const ytCmd = document.getElementById('ytSearchCommand');
+    ytCmd.style.display = 'block';
+    ytCmd.value = el.getAttribute('data-yt-search-command') || '';
+    ytCmd.oninput = () => el.setAttribute('data-yt-search-command', ytCmd.value);
+    const ytVar = document.getElementById('ytSearchResultVar');
+    ytVar.style.display = 'block';
+    ytVar.value = el.getAttribute('data-yt-search-result-var') || 'search_results';
+    ytVar.oninput = () => el.setAttribute('data-yt-search-result-var', ytVar.value);
+  } else if (triggerSelector.value === 'play_focused') {
+    // No extra options: plays the currently focused grid item
+  } else if (triggerSelector.value === 'play_video_from_var') {
+    const playFromVar = document.getElementById('playFromVarSelector');
+    playFromVar.style.display = 'block';
+    updateVariableSelector(playFromVar, el.getAttribute('data-play-from-var') || '');
+    playFromVar.onchange = () => el.setAttribute('data-play-from-var', playFromVar.value);
   }
 
 
@@ -951,6 +1003,13 @@ function showElementProperties(el) {
       mediaVariableSelector.onchange = () => {
         el.setAttribute('data-media-variable', mediaVariableSelector.value);
       };
+    } else if (value === 'yt_search') {
+      document.getElementById('ytSearchCommand').style.display = 'block';
+      document.getElementById('ytSearchResultVar').style.display = 'block';
+    } else if (value === 'play_focused') {
+      // No extra options
+    } else if (value === 'play_video_from_var') {
+      document.getElementById('playFromVarSelector').style.display = 'block';
     }
 
   };
@@ -1239,17 +1298,15 @@ function processTextForVariables(textElement) {
 }
 
 // File Operations
-function setBackground() {
-  const file = backgroundFileInput.files[0];
-  if (!file) return;
-
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    canvas.style.backgroundImage = `url(${e.target.result})`;
+function setBackgroundPath() {
+  const input = document.getElementById('backgroundPathInput');
+  backgroundPath = (input && input.value || '').trim();
+  if (backgroundPath) {
+    canvas.style.backgroundImage = `url(${backgroundPath})`;
     canvas.style.backgroundSize = 'cover';
-    backgroundPath = e.target.result;
-  };
-  reader.readAsDataURL(file);
+  } else {
+    canvas.style.backgroundImage = '';
+  }
 }
 
 function getFontSize(fontSize) {
@@ -1264,21 +1321,66 @@ function getFontSize(fontSize) {
 }
 
 // Export functionality
-function createJukaApp() {
-  const config = {
-    title: document.getElementById('title').value,
-    author: document.getElementById('author').value,
-    description: document.getElementById('description').value,
-    variables: {
-      ...variables,
-      backgroundImage: backgroundPath,
-      fontSizes: {
-        title: parseInt(titleSizeInput.value, 10),
-        big: parseInt(bigSizeInput.value, 10),
-        medium: parseInt(mediumSizeInput.value, 10),
-        small: parseInt(smallSizeInput.value, 10)
-      }
-    },
+ function hexToRgb(hex) {
+   hex = (hex || '').replace('#', '');
+   if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+   const num = parseInt(hex, 16);
+   if (isNaN(num)) return { r: 0, g: 0, b: 0 };
+   return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
+ }
+
+ function rgbToHex(r, g, b) {
+   const toHex = n => {
+     const v = Math.max(0, Math.min(255, parseInt(n, 10) || 0)).toString(16);
+     return v.length === 1 ? '0' + v : v;
+   };
+   return '#' + toHex(r) + toHex(g) + toHex(b);
+ }
+
+ function createJukaApp() {
+   saveCurrentScene();
+   const buttonColorPicker = document.getElementById('buttonColorPicker');
+   const labelColorPicker = document.getElementById('labelColorPicker');
+    const toolsPath = (document.getElementById('toolsPath').value || '').trim() || './required';
+    const fileExplorerRoot = (document.getElementById('fileExplorerRoot').value || '').trim();
+    const weatherUnit = document.getElementById('weatherUnit').value || 'C';
+   const fullscreen = document.getElementById('fullscreenToggle').checked;
+   const screenWidth = parseInt(document.getElementById('screenWidthInput').value, 10) || 1280;
+   const screenHeight = parseInt(document.getElementById('screenHeightInput').value, 10) || 720;
+
+   const fonts = {};
+   const titleFont = (document.getElementById('titleFontFile').value || '').trim();
+   const bigFont = (document.getElementById('bigFontFile').value || '').trim();
+   const mediumFont = (document.getElementById('mediumFontFile').value || '').trim();
+   const smallFont = (document.getElementById('smallFontFile').value || '').trim();
+   if (titleFont) fonts.title = titleFont;
+   if (bigFont) fonts.big = bigFont;
+   if (mediumFont) fonts.medium = mediumFont;
+   if (smallFont) fonts.small = smallFont;
+
+   const config = {
+     title: document.getElementById('title').value,
+     author: document.getElementById('author').value,
+     description: document.getElementById('description').value,
+     variables: {
+       ...variables,
+       buttonColor: hexToRgb(buttonColorPicker ? buttonColorPicker.value : '#3498db'),
+       labelColor: hexToRgb(labelColorPicker ? labelColorPicker.value : '#ffffff'),
+       backgroundImage: backgroundPath,
+       fonts: fonts,
+       fontSizes: {
+         title: parseInt(titleSizeInput.value, 10),
+         big: parseInt(bigSizeInput.value, 10),
+         medium: parseInt(mediumSizeInput.value, 10),
+         small: parseInt(smallSizeInput.value, 10)
+       },
+        tools_path: toolsPath,
+        fullscreen: fullscreen,
+        screenWidth: screenWidth,
+        screenHeight: screenHeight,
+        fileExplorerRoot: fileExplorerRoot,
+        weatherUnit: weatherUnit
+     },
     scenes: Object.keys(scenes).map(sceneName => ({
       name: sceneName,
       elements: scenes[sceneName].map(el => {
@@ -1311,13 +1413,20 @@ function createJukaApp() {
           element.trigger = el.getAttribute('data-trigger');
 
           if (element.trigger === 'change_scene') {
-            element.sceneChange = el.getAttribute('data-scene-change');
+            element.trigger = 'change_scene:' + (el.getAttribute('data-scene-change') || '');
           } else if (element.trigger === 'external_app') {
             element.externalAppPath = el.getAttribute('data-external-app-path');
             element.externalAppReturn = el.getAttribute('data-external-app-return');
           } else if (element.trigger === 'set_variable') {
             element.variableChange = el.getAttribute('data-variable-change');
             element.variableChangeValue = el.getAttribute('data-variable-change-value');
+          } else if (element.trigger === 'yt_search') {
+            element.triggerTarget = el.getAttribute('data-yt-search-command') || '';
+            element.triggerValue = el.getAttribute('data-yt-search-result-var') || 'search_results';
+          } else if (element.trigger === 'play_focused') {
+            // Plays the currently focused search-results item (no extra data)
+          } else if (element.trigger === 'play_video_from_var') {
+            element.triggerTarget = el.getAttribute('data-play-from-var') || '';
           } else if (element.trigger === 'play_video' || element.trigger === 'play_image') {
             element.mediaVariable = el.getAttribute('data-media-variable') || '';
           }
@@ -1332,9 +1441,20 @@ function createJukaApp() {
           if (textSpan) element.text = textSpan.textContent;
         }
 
-        if (type === 'dynamiclist') {
-          element.command = el.getAttribute('data-command') || '';
+        if (type === 'dynamiclist' || type === 'textlog') {
           element.variable = el.getAttribute('data-variable') || '';
+        }
+
+        if (type === 'input') {
+          element.variable = el.getAttribute('data-variable') || '';
+        }
+
+        if (type === 'searchresults') {
+          element.variable = el.getAttribute('data-results-variable') || 'search_results';
+          const cols = parseInt(el.getAttribute('data-columns'), 10);
+          const rows = parseInt(el.getAttribute('data-rows'), 10);
+          if (!isNaN(cols) && cols > 0) element.columns = cols;
+          if (!isNaN(rows) && rows > 0) element.rows = rows;
         }
 
 
@@ -1504,11 +1624,36 @@ function loadJukaApp(data) {
     document.getElementById('smallSize').value = data.variables.fontSizes.small || 18;
   }
 
+  // Load theme & display settings
+  if (data.variables) {
+    const bc = data.variables.buttonColor;
+    const lc = data.variables.labelColor;
+    if (bc && typeof bc === 'object') {
+      document.getElementById('buttonColorPicker').value = rgbToHex(bc.r, bc.g, bc.b);
+    }
+    if (lc && typeof lc === 'object') {
+      document.getElementById('labelColorPicker').value = rgbToHex(lc.r, lc.g, lc.b);
+    }
+    document.getElementById('toolsPath').value = data.variables.tools_path || './required';
+    document.getElementById('fullscreenToggle').checked = !!data.variables.fullscreen;
+    document.getElementById('screenWidthInput').value = data.variables.screenWidth || 1280;
+    document.getElementById('screenHeightInput').value = data.variables.screenHeight || 720;
+    document.getElementById('fileExplorerRoot').value = data.variables.fileExplorerRoot || '';
+    document.getElementById('weatherUnit').value = data.variables.weatherUnit || 'C';
+    const fonts = data.variables.fonts || {};
+    document.getElementById('titleFontFile').value = fonts.title || '';
+    document.getElementById('bigFontFile').value = fonts.big || '';
+    document.getElementById('mediumFontFile').value = fonts.medium || '';
+    document.getElementById('smallFontFile').value = fonts.small || '';
+  }
+
   // Load background
   if (data.variables && data.variables.backgroundImage) {
     canvas.style.backgroundImage = `url(${data.variables.backgroundImage})`;
     canvas.style.backgroundSize = 'cover';
     backgroundPath = data.variables.backgroundImage;
+    const bgInput = document.getElementById('backgroundPathInput');
+    if (bgInput) bgInput.value = backgroundPath;
   }
 
   // Clear existing scenes and variables
@@ -1518,7 +1663,7 @@ function loadJukaApp(data) {
 
   // Load variables
   if (data.variables) {
-    const excludedKeys = ['backgroundImage', 'fontSizes', 'buttonColor', 'labelColor', 'fonts'];
+    const excludedKeys = ['backgroundImage', 'fontSizes', 'buttonColor', 'labelColor', 'fonts', 'tools_path', 'fullscreen', 'screenWidth', 'screenHeight'];
     for (const key in data.variables) {
       if (!excludedKeys.includes(key)) {
         variables[key] = data.variables[key];
@@ -1641,6 +1786,90 @@ function createElementFromData(elementData) {
     return el;
   }
 
+  // Handle search results element
+  if (elementData.type === 'searchresults') {
+    const srWidth = elementData.width || 1160;
+    const srHeight = elementData.height || 510;
+    el.style.width = `${srWidth}px`;
+    el.style.height = `${srHeight}px`;
+    el.setAttribute('data-width', srWidth);
+    el.setAttribute('data-height', srHeight);
+    el.setAttribute('data-results-variable', elementData.variable || 'search_results');
+    if (elementData.columns) el.setAttribute('data-columns', elementData.columns);
+    if (elementData.rows) el.setAttribute('data-rows', elementData.rows);
+    el.classList.add('searchresults-element');
+    el.innerHTML = `
+      <div class="searchresults-placeholder">
+        <i class="fas fa-th-large"></i>
+        <span>Search Results Grid</span>
+      </div>
+      <span class="remove-button">✕</span>
+    `;
+    return el;
+  }
+
+  // Handle textlog element (read-only multi-line display)
+  if (elementData.type === 'textlog') {
+    const tWidth = elementData.width || 600;
+    const tHeight = elementData.height || 300;
+    el.style.width = `${tWidth}px`;
+    el.style.height = `${tHeight}px`;
+    el.setAttribute('data-width', tWidth);
+    el.setAttribute('data-height', tHeight);
+    el.setAttribute('data-variable', elementData.variable || '');
+    el.classList.add('textlog-element');
+    el.innerHTML = `
+      <div class="textlog-placeholder">
+        <i class="fas fa-align-left"></i>
+        <span>Text Log</span>
+      </div>
+      <span class="remove-button">✕</span>
+    `;
+    return el;
+  }
+
+  // Handle image element
+  if (elementData.type === 'image') {
+    const iWidth = elementData.width || 100;
+    const iHeight = elementData.height || 100;
+    el.style.width = `${iWidth}px`;
+    el.style.height = `${iHeight}px`;
+    el.setAttribute('data-width', iWidth);
+    el.setAttribute('data-height', iHeight);
+    const img = document.createElement('img');
+    img.className = 'element-image';
+    img.src = elementData.image || '';
+    img.draggable = false;
+    el.appendChild(img);
+    const removeButton = document.createElement('span');
+    removeButton.textContent = '✕';
+    removeButton.className = 'remove-button';
+    el.appendChild(removeButton);
+    return el;
+  }
+
+  // Handle input element
+  if (elementData.type === 'input') {
+    const iWidth = elementData.width || 150;
+    const iHeight = elementData.height || 40;
+    el.style.width = `${iWidth}px`;
+    el.style.height = `${iHeight}px`;
+    el.setAttribute('data-width', iWidth);
+    el.setAttribute('data-height', iHeight);
+    el.setAttribute('data-variable', elementData.variable || '');
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'element-input';
+    input.placeholder = 'Input text';
+    input.addEventListener('mousedown', (e) => e.stopPropagation());
+    el.appendChild(input);
+    const removeButton = document.createElement('span');
+    removeButton.textContent = '✕';
+    removeButton.className = 'remove-button';
+    el.appendChild(removeButton);
+    return el;
+  }
+
   // Handle button and label elements with null dimensions
   let width = elementData.width;
   let height = elementData.height;
@@ -1657,8 +1886,35 @@ function createElementFromData(elementData) {
     if (height === null) height = dimensions.height;
   }
 
-  if (elementData.trigger === 'play_video' || elementData.trigger === 'play_image') {
-    el.setAttribute('data-media-variable', elementData.mediaVariable || '');
+  // Restore trigger-related attributes
+  if (elementData.trigger) {
+    // Go stores change_scene targets as "change_scene:<Scene>"; normalize to
+    // the editor's internal "change_scene" type + separate scene-change attr.
+    let trig = elementData.trigger;
+    let sceneChange = elementData.sceneChange || '';
+    if (trig.startsWith('change_scene:')) {
+      sceneChange = elementData.trigger.split(':').slice(1).join(':');
+      trig = 'change_scene';
+    }
+    el.setAttribute('data-trigger', trig);
+    if (trig === 'change_scene') {
+      el.setAttribute('data-scene-change', sceneChange);
+    } else if (trig === 'external_app') {
+      el.setAttribute('data-external-app-path', elementData.externalAppPath || '');
+      el.setAttribute('data-external-app-return', elementData.externalAppReturn || '');
+    } else if (elementData.trigger === 'set_variable') {
+      el.setAttribute('data-variable-change', elementData.variableChange || '');
+      el.setAttribute('data-variable-change-value', elementData.variableChangeValue || '');
+    } else if (elementData.trigger === 'yt_search') {
+      el.setAttribute('data-yt-search-command', elementData.triggerTarget || '');
+      el.setAttribute('data-yt-search-result-var', elementData.triggerValue || 'search_results');
+    } else if (elementData.trigger === 'play_focused') {
+      // No extra data
+    } else if (elementData.trigger === 'play_video_from_var') {
+      el.setAttribute('data-play-from-var', elementData.triggerTarget || '');
+    } else if (elementData.trigger === 'play_video' || elementData.trigger === 'play_image') {
+      el.setAttribute('data-media-variable', elementData.mediaVariable || '');
+    }
   }
 
   // Set default dimensions if still null
@@ -1684,7 +1940,6 @@ function createElementFromData(elementData) {
 
   // Set element-specific properties
   if (elementData.type === 'dynamiclist') {
-    el.setAttribute('data-command', elementData.command || '');
     el.setAttribute('data-variable', elementData.variable || '');
     setupDynamicListExecution(el);
   }
@@ -1746,7 +2001,10 @@ function setupMobileElementAdding() {
       { type: 'image', icon: 'fas fa-image', name: 'Image' },
       { type: 'input', icon: 'fas fa-edit', name: 'Input' },
       { type: 'menu', icon: 'fas fa-bars', name: 'Menu' },
-      { type: 'collapsedlist', icon: 'fas fa-bars', name: 'Collapsed List' }
+      { type: 'collapsedlist', icon: 'fas fa-bars', name: 'Collapsed List' },
+      { type: 'searchresults', icon: 'fas fa-th-large', name: 'Search Results' },
+      { type: 'dynamiclist', icon: 'fas fa-list', name: 'Dynamic List' },
+      { type: 'textlog', icon: 'fas fa-align-left', name: 'Text Log' }
     ];
 
     elements.forEach(element => {
@@ -1850,16 +2108,6 @@ function setupDynamicListProperties(el) {
   const container = document.createElement('div');
   container.className = 'dynamic-list-properties';
 
-  // Command Path input
-  const commandGroup = document.createElement('div');
-  commandGroup.className = 'control-group';
-  commandGroup.innerHTML = `
-    <label for="dynamicCommand"><i class="fas fa-terminal"></i> Command Path:</label>
-    <input type="text" id="dynamicCommand" class="dynamic-command-input" 
-           placeholder="Path to executable" value="${el.getAttribute('data-command') || ''}">
-  `;
-  container.appendChild(commandGroup);
-
   // Variable input
   const variableGroup = document.createElement('div');
   variableGroup.className = 'control-group';
@@ -1871,12 +2119,7 @@ function setupDynamicListProperties(el) {
   container.appendChild(variableGroup);
 
   // Add event listeners
-  const commandInput = container.querySelector('#dynamicCommand');
   const variableInput = container.querySelector('#dynamicVariable');
-
-  commandInput.onchange = () => {
-    el.setAttribute('data-command', commandInput.value);
-  };
 
   variableInput.onchange = () => {
     el.setAttribute('data-variable', variableInput.value);
@@ -1889,14 +2132,6 @@ function setupDynamicListProperties(el) {
   } else {
     elementProperties.appendChild(container);
   }
-}
-
-function executeDynamicListCommand(command, variable) {
-  // This would be implemented in the Juka runtime
-  console.log(`Executing command: ${command}, storing in: ${variable}`);
-  // Simulate command execution
-  const result = [{ name: "Item 1", value: "1" }, { name: "Item 2", value: "2" }];
-  showDynamicListItems(el, result, variable);
 }
 
 function showDynamicListItems(el, items, variable) {
@@ -1961,17 +2196,9 @@ function setupMobileCanvasClick() {
 }
 
 function setupDynamicListExecution(el) {
-  el.addEventListener('click', (e) => {
-    if (e.target !== el && !e.target.classList.contains('remove-button')) return;
-
-    const command = el.getAttribute('data-command');
-    const variable = el.getAttribute('data-variable');
-
-    if (command && variable) {
-      // Execute command and store result
-      executeDynamicListCommand(command, variable);
-    }
-  });
+  // Reserved for future dynamic-list behavior (e.g. populating the variable
+  // from a data source). The legacy "Command Path" field was removed because
+  // it had no effect on the running app.
 }
 
 function setupMobileElementSelection() {

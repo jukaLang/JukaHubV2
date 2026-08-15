@@ -1,4 +1,4 @@
-# JukaGUI
+# JukaHub
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/dea0cf4b-3799-41d9-8f2a-b4fd2a270b15/deploy-status)](https://generate.jukalang.com)
 
@@ -10,7 +10,7 @@ If you just want to create the app, launch it from here: [https://generate.jukal
 
 ## Overview
 
-JukaGUI is a powerful tool designed to streamline the process of creating graphical user interfaces (GUIs) for Trimui Smart Pro and Trimui Brick. This project is split into two primary components:
+JukaHub is a powerful tool designed to streamline the process of creating graphical user interfaces (GUIs) for Trimui Smart Pro and Trimui Brick. This project is split into two primary components:
 
 1. **Website with Drag/Drop Interface**: This interface allows users to generate `jukaconfig.json` code effortlessly.
 2. **Player Application**: Developed in Go, this player takes the `jukaconfig.json` file and launches the application accordingly.
@@ -80,7 +80,7 @@ If you encounter any issues or have questions, feel free to join our [Discord Ch
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](https://github.com/jukaLang/JukaGUI/blob/main/LICENSE) file for details.
+This project is licensed under the MIT License. See the [LICENSE](https://github.com/jukaLang/JukaHubV2/blob/main/LICENSE) file for details.
 
 ## Special Thanks
 Special thanks to Nevrdid for finding and documenting bugs

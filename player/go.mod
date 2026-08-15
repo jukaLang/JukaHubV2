@@ -1,4 +1,4 @@
-module jukagui/JukaGUI
+module jukahub/JukaHub
 
 go 1.23
 

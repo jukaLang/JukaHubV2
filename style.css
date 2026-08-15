@@ -2240,6 +2240,85 @@ body.dark-mode .dynamic-list-select {
     margin-bottom: 0.5rem;
 }
 
+/* Search Results element on the canvas */
+.searchresults-element {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px dashed var(--border);
+    border-radius: var(--border-radius-md);
+    background: rgba(52, 152, 219, 0.08);
+    overflow: hidden;
+}
+
+.searchresults-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    color: var(--text-secondary);
+    text-align: center;
+    padding: 1rem;
+    pointer-events: none;
+}
+
+.searchresults-placeholder i {
+    font-size: 2rem;
+    opacity: 0.7;
+}
+
+/* Theme & Display section in App Info */
+.theme-controls {
+    border-top: 1px solid var(--border);
+    margin-top: 1rem;
+    padding-top: 1rem;
+}
+
+.theme-controls h4 {
+    margin: 1rem 0 0.5rem;
+    font-size: 0.95rem;
+    color: var(--text);
+}
+
+.theme-controls .size-inputs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.theme-controls .size-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1 1 120px;
+}
+
+.theme-controls .size-group label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.theme-controls input[type="text"],
+.theme-controls input[type="number"] {
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--border-radius-sm);
+    font-size: 0.9rem;
+}
+
+.yt-search-command,
+.yt-search-result-var,
+.play-from-var-selector,
+.results-variable-input {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid var(--border);
+    border-radius: var(--border-radius-sm);
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+
 /* Ensure dynamic list properties are properly hidden for non-dynamic list elements */
 .dynamic-list-properties {
     display: none;

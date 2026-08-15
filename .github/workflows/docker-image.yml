@@ -26,7 +26,7 @@ jobs:
         id: generate_tag
         run: |
           timestamp=$(date +%Y%m%d%H%M%S)
-          tag=JukaGUI-$timestamp
+          tag=JukaHub-$timestamp
           echo "tag_name=$tag" >> $GITHUB_OUTPUT
 
       - name: Set Tag using GitHub Script
@@ -156,7 +156,7 @@ jobs:
 
       - name: Build Package
         run: |
-          mkdir -p ../JukaGUI-Trimui
+          mkdir -p ../JukaHub-Trimui
           cd player
           echo "Building package..."
           CGO_ENABLED=1 \
@@ -166,26 +166,26 @@ jobs:
           GOOS=linux \
           CGO_CFLAGS="-I${SYSROOT}/usr/include -I/usr/aarch64-linux-gnu/include -I/usr/aarch64-linux-gnu/include/SDL2 -I/usr/include/SDL2 -D_REENTRANT" \
           CGO_LDFLAGS="-L${SYSROOT}/usr/lib -L/usr/lib/aarch64-linux-gnu -lSDL2_image -lSDL2_ttf -lSDL2 -ldl -lpthread -lm" \
-          go build -tags dynamic -o ../JukaGUI-Trimui/JukaGUI ./
+          go build -tags dynamic -o ../JukaHub-Trimui/JukaHub ./
           echo "Build completed."
 
       - name: Package Artifacts
         run: |
-          mkdir -p JukaGUI-Trimui
-          cp player/jukaconfig.json JukaGUI-Trimui/
-          cp player/Roboto-Black.ttf JukaGUI-Trimui/
-          cp player/launch.sh JukaGUI-Trimui/
-          cp player/config.json JukaGUI-Trimui/
-          cp player/background.jpg JukaGUI-Trimui/
-          cp player/JukaPlayer.png JukaGUI-Trimui/
-          zip -r JukaGUI-Trimui.zip JukaGUI-Trimui/
+          mkdir -p JukaHub-Trimui
+          cp player/jukaconfig.json JukaHub-Trimui/
+          cp player/Roboto-Black.ttf JukaHub-Trimui/
+          cp player/launch.sh JukaHub-Trimui/
+          cp player/config.json JukaHub-Trimui/
+          cp player/background.jpg JukaHub-Trimui/
+          cp player/JukaPlayer.png JukaHub-Trimui/
+          zip -r JukaHub-Trimui.zip JukaHub-Trimui/
 
       - name: Upload Release Assets
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
-          asset_path: ./JukaGUI-Trimui.zip
-          asset_name: JukaGUI-Trimui.zip
+          asset_path: ./JukaHub-Trimui.zip
+          asset_name: JukaHub-Trimui.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -265,30 +265,30 @@ jobs:
           GOOS: "windows"
           MINGW_DIR: $(brew --prefix mingw-w64)/toolchain-x86_64
           CGO_CFLAGS: "-I$(brew --prefix mingw-w64)/toolchain-x86_64/x86_64-w64-mingw32/include -D_REENTRANT"
-          CGO_LDFLAGS: "-L$(brew --prefix mingw-w64)/toolchain-x86_64/x86_64-w64-mingw32/lib -lSDL2"
+          CGO_LDFLAGS: "-L$(brew --prefix mingw-w64)/toolchain-x86_64/x86_64-w64-mingw32/lib -lSDL2 -lSDL2_image -lSDL2_ttf"
         run: |
-          mkdir -p ../JukaGUI-Trimui-Windows
+          mkdir -p ../JukaHub-Trimui-Windows
           cd player
           echo "CC: $CC"
           echo "CXX: $CXX"
           echo "CGO_CFLAGS: $CGO_CFLAGS"
           echo "CGO_LDFLAGS: $CGO_LDFLAGS"
-          go build -o ../JukaGUI-Trimui-Windows/JukaGUI.exe ./
+          go build -o ../JukaHub-Trimui-Windows/JukaHub.exe ./
           echo "Build completed."
 
       - name: Package Artifacts
         run: |
           cd player
-          cp jukaconfig.json Roboto-Black.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaGUI-Trimui-Windows/
+          cp jukaconfig.json Roboto-Black.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
           cd ..
-          zip -r JukaGUI-Windows.zip JukaGUI-Trimui-Windows/
+          zip -r JukaHub-Windows.zip JukaHub-Trimui-Windows/
 
       - name: Upload Release Assets
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
-          asset_path: ./JukaGUI-Windows.zip
-          asset_name: JukaGUI-Windows.zip
+          asset_path: ./JukaHub-Windows.zip
+          asset_name: JukaHub-Windows.zip
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

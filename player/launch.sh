@@ -33,6 +33,6 @@ fi
 export LD_LIBRARY_PATH="$(dirname "$0"):/lib64:/usr/trimui/lib:/usr/lib:/usr/trimui/lib:$LD_LIBRARY_PATH"
 export CLR_OPENSSL_VERSION_OVERRIDE=1.1
 
-./JukaGUI &> errors.txt
+./JukaHub &> errors.txt
 
 exit 0

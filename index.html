@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport"
         content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>JukaGUI Generator</title>
+    <title>JukaHub Generator</title>
     <link data-rh="true" rel="icon" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap">
@@ -16,7 +16,7 @@
     <header>
         <div class="header-content">
             <div class="title-container">
-                <h1>JukaGUI Generator</h1>
+                <h1>JukaHub Generator</h1>
                 <p class="subtitle">The Ultimate Retro Handheld Device GUI Creator</p>
             </div>
             <div class="header-actions">
@@ -54,11 +54,11 @@
                         </li>
                         <li>Select elements to edit properties in the right sidebar</li>
                         <li>Use the "Download Config" button when finished</li>
-                        <li>Combine with the JukaGUI template from <a
-                                href="https://github.com/jukaLang/JukaGUI/releases">GitHub releases</a></li>
+                        <li>Combine with the JukaHub template from <a
+                                href="https://github.com/jukaLang/JukaHubV2/releases">GitHub releases</a></li>
                     </ol>
-                    Visit <a href="https://github.com/jukaLang/JukaGUI/wiki"
-                        target="_blank">https://github.com/jukaLang/JukaGUI/wiki</a> for more info
+                    Visit <a href="https://github.com/jukaLang/JukaHubV2/wiki"
+                        target="_blank">https://github.com/jukaLang/JukaHubV2/wiki</a> for more info
                 </div>
             </div>
         </div>
@@ -89,6 +89,12 @@
                     </div>
                     <div class="element" draggable="true" data-type="dynamiclist" title="Dynamic List">
                         <i class="fas fa-list"></i> Dynamic List
+                    </div>
+                    <div class="element" draggable="true" data-type="searchresults" title="YouTube / Search Results">
+                        <i class="fas fa-th-large"></i> Search Results
+                    </div>
+                    <div class="element" draggable="true" data-type="textlog" title="Text Log (read-only)">
+                        <i class="fas fa-align-left"></i> Text Log
                     </div>
                 </div>
                 <div class="variables-panel">
@@ -212,8 +218,29 @@
                                     <option value="exit">Exit</option>
                                     <option value="external_app">External App</option>
                                     <option value="set_variable">Set Variable</option>
-                                    <option value="play_video">Play Video</option>
-                                    <option value="play_image">Fullscreen Image</option>
+                                    <option value="youtube_search">YouTube Search</option>
+                                    <option value="youtube_play">YouTube Play (focused)</option>
+                                    <option value="youtube_trending">YouTube Trending</option>
+                                    <option value="play_focused">Play Focused Video</option>
+                                    <option value="play_video_from_var">Play Video From Variable</option>
+                                    <option value="fe_list">File Explorer: List</option>
+                                    <option value="fe_up">File Explorer: Up</option>
+                                    <option value="custom_link">Custom Link</option>
+                                    <option value="ip_stream">IP Stream</option>
+                                    <option value="iptv_load">Live TV: Load</option>
+                                    <option value="podcast_load">Podcasts: Load</option>
+                                    <option value="tick">Tickers: Refresh</option>
+                                    <option value="add_ticker">Tickers: Add Symbol</option>
+                                    <option value="clear_tickers">Tickers: Clear Custom</option>
+                                    <option value="netspeed_run">Net Speed: Run</option>
+                                    <option value="benchmark_run">Benchmark: Run</option>
+                                    <option value="terminal_run">Terminal: Run</option>
+                                    <option value="cron_load">Cron: Load</option>
+                                    <option value="cron_startup">Cron: Startup Items</option>
+                                    <option value="hw_load">Hardware: Refresh</option>
+                                    <option value="log_export">Log: Export</option>
+                                    <option value="log_clear">Log: Clear</option>
+                                    <option value="save_config">Save Config</option>
                                 </select>
                             </div>
 
@@ -227,17 +254,41 @@
                                 <input type="text" id="variableChangeValue" class="variable-change-value"
                                     placeholder="New value">
                                 <select id="mediaVariableSelector" class="media-variable-selector"></select>
+                                <input type="text" id="ytSearchCommand" class="yt-search-command"
+                                    placeholder="yt-dlp command (use $search_query)">
+                                <input type="text" id="ytSearchResultVar" class="yt-search-result-var"
+                                    placeholder="Result variable (e.g. search_results)">
+                                <select id="playFromVarSelector" class="play-from-var-selector"></select>
+                            </div>
+                        </div>
+                        <div class="searchresults-properties" style="display: none;">
+                            <div class="control-group">
+                                <label for="resultsVariable"><i class="fas fa-code"></i> Results Variable:</label>
+                                <input type="text" id="resultsVariable" class="results-variable-input"
+                                    placeholder="search_results">
+                            </div>
+                            <div class="control-group">
+                                <label for="gridColumns"><i class="fas fa-columns"></i> Columns:</label>
+                                <input type="number" id="gridColumns" class="grid-columns-input"
+                                    min="1" max="8" placeholder="2">
+                            </div>
+                            <div class="control-group">
+                                <label for="gridRows"><i class="fas fa-th-list"></i> Rows:</label>
+                                <input type="number" id="gridRows" class="grid-rows-input"
+                                    min="1" max="12" placeholder="6">
                             </div>
                         </div>
                         <div class="dynamic-list-properties" style="display: none;">
                             <div class="control-group">
-                                <label for="dynamicCommand"><i class="fas fa-terminal"></i> Command Path:</label>
-                                <input type="text" id="dynamicCommand" class="dynamic-command-input"
-                                    placeholder="Path to executable">
-                            </div>
-                            <div class="control-group">
                                 <label for="dynamicVariable"><i class="fas fa-code"></i> Variable:</label>
                                 <select id="dynamicVariable" class="dynamic-variable-selector"></select>
+                            </div>
+                        </div>
+                        <div class="input-properties" style="display: none;">
+                            <div class="control-group">
+                                <label for="inputVariable"><i class="fas fa-code"></i> Variable (config key for typed text):</label>
+                                <input type="text" id="inputVariable" class="input-variable-input"
+                                    placeholder="e.g. terminal_cmd">
                             </div>
                         </div>
 
@@ -273,14 +324,9 @@
                                 <span>x</span>
                                 <input type="number" id="customHeight" placeholder="Height" min="1">
                             </div>
-                            <div class="input-group file-input-group">
-                                <label for="backgroundFile"><i class="fas fa-image"></i> Background:</label>
-                                <div class="file-input-container">
-                                    <label for="backgroundFile" class="file-button">
-                                        <i class="fas fa-upload"></i> Choose Image
-                                    </label>
-                                    <input type="file" id="backgroundFile" accept="image/*">
-                                </div>
+                            <div class="input-group">
+                                <label for="backgroundPathInput"><i class="fas fa-image"></i> Background Image Path:</label>
+                                <input type="text" id="backgroundPathInput" placeholder="background.jpg">
                             </div>
                         </div>
                         <div class="font-size-controls">
@@ -303,6 +349,70 @@
                                     <input type="number" id="smallSize" value="18" min="10">
                                 </div>
                             </div>
+                            <div class="theme-controls">
+                                <h4><i class="fas fa-palette"></i> Theme &amp; Display</h4>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="buttonColorPicker">Button Color:</label>
+                                        <input type="color" id="buttonColorPicker" value="#3498db">
+                                    </div>
+                                    <div class="size-group">
+                                        <label for="labelColorPicker">Label Color:</label>
+                                        <input type="color" id="labelColorPicker" value="#ffffff">
+                                    </div>
+                                </div>
+                                <div class="input-group">
+                                    <label for="toolsPath"><i class="fas fa-folder"></i> Tools Path:</label>
+                                    <input type="text" id="toolsPath" placeholder="./required" value="./required">
+                                </div>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="fullscreenToggle"><input type="checkbox" id="fullscreenToggle"> Fullscreen</label>
+                                    </div>
+                                </div>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="screenWidthInput">Screen W:</label>
+                                        <input type="number" id="screenWidthInput" value="1280" min="1">
+                                    </div>
+                                    <div class="size-group">
+                                        <label for="screenHeightInput">Screen H:</label>
+                                        <input type="number" id="screenHeightInput" value="720" min="1">
+                                    </div>
+                                </div>
+                                <div class="input-group">
+                                    <label for="fileExplorerRoot"><i class="fas fa-hdd"></i> File Explorer Root:</label>
+                                    <input type="text" id="fileExplorerRoot" placeholder="/mnt">
+                                </div>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="weatherUnit">Weather Units:</label>
+                                        <select id="weatherUnit">
+                                            <option value="C">°C</option>
+                                            <option value="F">°F</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <h4><i class="fas fa-font"></i> Font Files</h4>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="titleFontFile">Title:</label>
+                                        <input type="text" id="titleFontFile" placeholder="Roboto-Black.ttf">
+                                    </div>
+                                    <div class="size-group">
+                                        <label for="bigFontFile">Big:</label>
+                                        <input type="text" id="bigFontFile" placeholder="Roboto-Black.ttf">
+                                    </div>
+                                    <div class="size-group">
+                                        <label for="mediumFontFile">Medium:</label>
+                                        <input type="text" id="mediumFontFile" placeholder="Roboto-Black.ttf">
+                                    </div>
+                                    <div class="size-group">
+                                        <label for="smallFontFile">Small:</label>
+                                        <input type="text" id="smallFontFile" placeholder="Roboto-Black.ttf">
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -315,7 +425,7 @@
             <p>
                 Need help? Join us on <a href="https://discord.gg/R9qgJjh5jG"><i class="fab fa-discord"></i>
                     Discord</a>!
-                Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaGUI"><i
+                Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2"><i
                         class="fab fa-github"></i> GitHub</a>
             </p>
         </div>
