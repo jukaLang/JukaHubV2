@@ -13,7 +13,7 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// --- Recently Played (persisted to recently_played.json) ---
+// --- Recently Played (persisted in jukauser.json) ---
 
 var (
 	rpMutex        sync.Mutex
@@ -21,9 +21,22 @@ var (
 )
 
 func loadRecentlyPlayed() {
-	data, err := os.ReadFile("recently_played.json")
-	if err == nil {
-		_ = json.Unmarshal(data, &recentlyPlayed)
+	user := loadUserConfig()
+	if user == nil || user.Variables.Custom == nil {
+		return
+	}
+	val, ok := user.Variables.Custom["recently_played"]
+	if !ok {
+		return
+	}
+	list, ok := val.([]interface{})
+	if !ok {
+		return
+	}
+	for _, item := range list {
+		if s, ok := item.(string); ok {
+			recentlyPlayed[s] = true
+		}
 	}
 }
 
@@ -39,9 +52,25 @@ func recordPlayed(key string) {
 	}
 	rpMutex.Lock()
 	recentlyPlayed[key] = true
-	data, _ := json.MarshalIndent(recentlyPlayed, "", "  ")
+	var list []string
+	for k := range recentlyPlayed {
+		list = append(list, k)
+	}
 	rpMutex.Unlock()
-	_ = os.WriteFile("recently_played.json", data, 0644)
+
+	user := loadUserConfig()
+	if user == nil {
+		user = &UserConfig{
+			Variables: UserVariables{
+				Custom: make(map[string]interface{}),
+			},
+		}
+	}
+	if user.Variables.Custom == nil {
+		user.Variables.Custom = make(map[string]interface{})
+	}
+	user.Variables.Custom["recently_played"] = list
+	saveUserConfig(user)
 }
 
 // --- Weather (best-effort IP-geolocated current temperature; non-fatal) ---
@@ -102,18 +131,22 @@ func fetchWeatherOnce() {
 // --- Top status bar (clock + weather + username) ---
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
-	barH := int32(36)
-	// frosted glass status bar
-	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, sdl.Color{R: 18, G: 22, B: 32, A: 240})
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 140)
+	barH := int32(28)
+	// sleek frosted glass status bar
+	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, sdl.Color{R: 12, G: 16, B: 24, A: 240})
+	// subtle top highlight
+	renderer.SetDrawColor(255, 255, 255, 10)
+	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: 1})
+	// bottom accent line
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 100)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
 		return
 	}
-	white := sdl.Color{R: 235, G: 238, B: 245, A: 255}
-	secondary := sdl.Color{R: 160, G: 170, B: 190, A: 255}
+	white := sdl.Color{R: 250, G: 252, B: 255, A: 255}
+	secondary := sdl.Color{R: 140, G: 154, B: 180, A: 255}
 
 	titleFont, _ := getCachedFont(config, "medium")
 	if titleFont == nil {
@@ -121,21 +154,21 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// accent dot (pulsing)
-	pulse := uint8(180 + 75*float64(math.Sin(float64(sdl.GetTicks64())/500.0)))
+	pulse := uint8(140 + 115*float64(math.Sin(float64(sdl.GetTicks64())/700.0)))
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, pulse)
-	renderer.FillRect(&sdl.Rect{X: 16, Y: 10, W: 14, H: 14})
-	renderText(renderer, config, titleFont, "JukaHub", white, 38, 6)
+	renderer.FillRect(&sdl.Rect{X: 14, Y: 9, W: 8, H: 8})
+	renderText(renderer, config, titleFont, "JukaHub", white, 28, 6)
 
 	// Username
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok && name != "" {
-		renderText(renderer, config, font, "Hi "+name, secondary, 140, 10)
+		renderText(renderer, config, font, "Hi "+name, secondary, 110, 8)
 	}
 
 	// Clock (top-right)
 	now := time.Now()
 	clk := now.Format("15:04")
 	cw, _, _ := font.SizeUTF8(clk)
-	clockX := screenWidth - int32(cw) - 16
+	clockX := screenWidth - int32(cw) - 12
 
 	// Weather pill (immediately left of the clock)
 	wxMutex.Lock()
@@ -154,9 +187,9 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		wxText = "—"
 	}
 	ww, _, _ := font.SizeUTF8(wxText)
-	wxX := clockX - int32(ww) - 20
-	renderer.SetDrawColor(255, 255, 255, 30)
-	renderer.FillRect(&sdl.Rect{X: wxX - 10, Y: 6, W: int32(ww) + 20, H: 22})
+	wxX := clockX - int32(ww) - 16
+	renderer.SetDrawColor(255, 255, 255, 25)
+	renderer.FillRect(&sdl.Rect{X: wxX - 8, Y: 7, W: int32(ww) + 16, H: 18})
 	renderText(renderer, config, font, wxText, white, wxX, 8)
 
 	renderText(renderer, config, font, clk, white, clockX, 8)

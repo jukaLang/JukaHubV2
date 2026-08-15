@@ -597,7 +597,7 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 		if y > element.Y+elemH-16 {
 			break
 		}
-		renderText(renderer, config, font, ln, sdl.Color{R: 220, G: 220, B: 220, A: 255}, element.X+10, y)
+		renderText(renderer, config, font, ln, sdl.Color{R: 210, G: 218, B: 230, A: 255}, element.X+10, y)
 		y += lineH
 	}
 }

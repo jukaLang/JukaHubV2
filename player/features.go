@@ -192,6 +192,7 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		return
 	}
 
+	// header with path
 	renderText(renderer, config, font, "Path: "+feCurrentPath(config),
 		sdl.Color{R: 180, G: 190, B: 220, A: 255}, element.X, element.Y)
 
@@ -221,27 +222,29 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		rowY := y + 2
 
 		// card background
-		fillRoundedRect(renderer, rowX+1, rowY+1, rowW, rowH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 60})
+		fillRoundedRect(renderer, rowX+1, rowY+1, rowW, rowH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 50})
 		fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: 26, G: 30, B: 40, A: 255})
 
 		if i == focusedFileIndex {
-			fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 60})
+			fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 70})
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
 			renderer.FillRect(&sdl.Rect{X: rowX, Y: rowY, W: 4, H: rowH})
+			// inner highlight for selected row
+			fillRoundedRect(renderer, rowX+1, rowY+1, rowW-2, rowH/2, 7, sdl.Color{R: 255, G: 255, B: 255, A: 12})
 		}
 
 		if isRecentlyPlayed(entries[i].Path) {
-			renderer.SetDrawColor(200, 30, 30, 255)
+			renderer.SetDrawColor(220, 50, 50, 255)
 			renderer.FillRect(&sdl.Rect{X: rowX + rowW - 6, Y: rowY + 6, W: 4, H: rowH - 12})
 		}
 
 		prefix := ""
 		color := sdl.Color{R: 200, G: 210, B: 230, A: 255}
 		if entries[i].IsDir {
-			prefix = "📁 "
+			prefix = "D "
 			color = sdl.Color{R: 255, G: 230, B: 120, A: 255}
 		} else if isMediaFile(entries[i].Name) {
-			prefix = "▶ "
+			prefix = "> "
 			color = sdl.Color{R: 120, G: 200, B: 255, A: 255}
 		}
 		txt := prefix + entries[i].Name
@@ -249,6 +252,25 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 			txt = txt[:52] + "..."
 		}
 		renderText(renderer, config, font, txt, color, rowX+12, rowY+8)
+	}
+
+	// scroll indicators
+	if len(entries) > maxVisible {
+		indicatorColor := sdl.Color{R: 255, G: 255, B: 255, A: 80}
+		if start > 0 {
+			renderer.SetDrawColor(indicatorColor.R, indicatorColor.G, indicatorColor.B, indicatorColor.A)
+			triX := element.X + elemW - 20
+			triY := element.Y + 20
+			renderer.DrawLine(triX, triY+8, triX+8, triY)
+			renderer.DrawLine(triX+8, triY, triX+16, triY+8)
+		}
+		if end < len(entries) {
+			renderer.SetDrawColor(indicatorColor.R, indicatorColor.G, indicatorColor.B, indicatorColor.A)
+			triX := element.X + elemW - 20
+			triY := element.Y + elemH - 20
+			renderer.DrawLine(triX, triY, triX+8, triY+8)
+			renderer.DrawLine(triX+8, triY+8, triX+16, triY)
+		}
 	}
 }
 

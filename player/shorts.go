@@ -87,32 +87,47 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 
 		if i == currentShortIdx {
-			fillRoundedRect(renderer, xPos-4, yPos-4, cellWidth+8, cellHeight+8, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 160})
+			fillRoundedRect(renderer, xPos-4, yPos-4, cellWidth+8, cellHeight+8, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 140})
 		}
 
-		thumbLoaded := false
-		if vid.Thumbnail != "" {
-			tex := loadThumbnail(renderer, vid.Thumbnail)
-			if tex != nil {
-				renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-				thumbLoaded = true
-			}
-		}
-		if !thumbLoaded && placeholderTexture != nil {
-			renderer.Copy(placeholderTexture, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-		}
+		// card shadow
+		fillRoundedRect(renderer, xPos+3, yPos+4, thumbWidth, thumbHeight, 10, sdl.Color{R: 0, G: 0, B: 0, A: 60})
+		// card background
+		fillRoundedRect(renderer, xPos, yPos, thumbWidth, thumbHeight, 10, sdl.Color{R: 22, G: 26, B: 36, A: 255})
 
+	thumbLoaded := false
+	if vid.Thumbnail != "" {
+		tex := loadThumbnail(renderer, vid.Thumbnail)
+		if tex != nil {
+			renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+			thumbLoaded = true
+		}
+	}
+	if !thumbLoaded && len(vid.Thumbnails) > 0 {
+		tex := loadThumbnailFromURLs(renderer, vid.Thumbnails)
+		if tex != nil {
+			renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+			thumbLoaded = true
+		}
+	}
+	if !thumbLoaded && placeholderTexture != nil {
+		renderer.Copy(placeholderTexture, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+	}
+
+		// title overlay at bottom of thumbnail
 		title := vid.Title
-		if len(title) > 28 {
-			title = title[:25] + "..."
+		if len(title) > 24 {
+			title = title[:21] + "..."
 		}
-		renderText(renderer, config, font, title, sdl.Color{R: 240, G: 244, B: 250, A: 255}, xPos, yPos+thumbHeight+6)
+		titleY := yPos + thumbHeight - 30
+		fillRoundedRect(renderer, xPos, titleY, thumbWidth, 30, 0, sdl.Color{R: 0, G: 0, B: 0, A: 140})
+		renderText(renderer, config, font, title, sdl.Color{R: 245, G: 248, B: 255, A: 255}, xPos+8, titleY+6)
 
 		dur := fmt.Sprintf("%d:%02d", int(vid.Duration)/60, int(vid.Duration)%60)
 		bw, bh := int32(50), int32(20)
 		bx := xPos + thumbWidth - bw - 6
 		by := yPos + thumbHeight - 26
-		fillRoundedRect(renderer, bx, by, bw, bh, 6, sdl.Color{R: 0, G: 0, B: 0, A: 180})
+		fillRoundedRect(renderer, bx, by, bw, bh, 6, sdl.Color{R: 0, G: 0, B: 0, A: 160})
 		renderText(renderer, config, font, dur, sdl.Color{R: 255, G: 255, B: 255, A: 255}, bx+6, by+3)
 	}
 }

@@ -38,7 +38,10 @@
       "SearchWidth": 940,
       "TSPUsername": "",
       "WeatherEnabled": true,
-      "WeatherUnit": "C"
+      "WeatherUnit": "C",
+      "recently_played": [
+        "https://www.youtube.com/watch?v=fhMC4nQ0UCA"
+      ]
     }
   }
 }

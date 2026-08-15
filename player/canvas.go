@@ -27,8 +27,15 @@ func renderCanvasSandbox(renderer *sdl.Renderer, config *Config, element Element
 	previewX := editorX + editorW + 10
 	previewY := editorY
 
-	fillRoundedRect(renderer, editorX, editorY, editorW, elemH, 10, sdl.Color{R: 20, G: 24, B: 34, A: 255})
-	fillRoundedRect(renderer, previewX, previewY, previewW, elemH, 10, sdl.Color{R: 20, G: 24, B: 34, A: 255})
+	// editor panel
+	fillRoundedRect(renderer, editorX, editorY, editorW, elemH, 10, sdl.Color{R: 18, G: 22, B: 30, A: 255})
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 60)
+	renderer.FillRect(&sdl.Rect{X: editorX, Y: editorY, W: editorW, H: 1})
+
+	// preview panel
+	fillRoundedRect(renderer, previewX, previewY, previewW, elemH, 10, sdl.Color{R: 18, G: 22, B: 30, A: 255})
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 60)
+	renderer.FillRect(&sdl.Rect{X: previewX, Y: previewY, W: previewW, H: 1})
 
 	lines := strings.Split(canvasCode, "\n")
 	lineH := int32(18)

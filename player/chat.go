@@ -109,26 +109,36 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		msg := messages[i]
 		iy := listY + 10 + int32(i-start)*lineH
 		timeStr := msg.Timestamp.Format("15:04")
-		line := fmt.Sprintf("[%s] %s: %s", timeStr, msg.Sender, msg.Text)
-		if len(line) > 90 {
-			line = line[:87] + "..."
+		prefix := fmt.Sprintf("[%s] %s:", timeStr, msg.Sender)
+		line := msg.Text
+		if len(line) > 70 {
+			line = line[:67] + "..."
 		}
-		renderText(renderer, config, font, line, sdl.Color{R: 200, G: 210, B: 230, A: 255}, listX+12, iy)
+		// timestamp + sender in secondary color
+		if font != nil {
+			renderText(renderer, config, font, prefix, sdl.Color{R: 160, G: 170, B: 190, A: 255}, listX+12, iy)
+			pw, _, _ := font.SizeUTF8(prefix)
+			renderText(renderer, config, font, " "+line, sdl.Color{R: 220, G: 230, B: 245, A: 255}, listX+12+int32(pw), iy)
+		}
 	}
 
 	inputY := listY + listH + 10
-	inputW := listW - 120
+	inputW := listW - 110
+	fillRoundedRect(renderer, listX+2, inputY+3, inputW, 36, 8, sdl.Color{R: 0, G: 0, B: 0, A: 50})
 	fillRoundedRect(renderer, listX, inputY, inputW, 36, 8, sdl.Color{R: 30, G: 35, B: 48, A: 255})
 	display := chatInputText
 	if display == "" {
 		display = "Type a message..."
+		renderText(renderer, config, font, display, sdl.Color{R: 120, G: 130, B: 150, A: 255}, listX+12, inputY+8)
+	} else {
+		renderText(renderer, config, font, display, sdl.Color{R: 220, G: 230, B: 245, A: 255}, listX+12, inputY+8)
 	}
-	renderText(renderer, config, font, display, sdl.Color{R: 200, G: 210, B: 230, A: 255}, listX+12, inputY+8)
 
 	sendX := listX + inputW + 10
-	fillRoundedRect(renderer, sendX, inputY, 100, 36, 8, sdl.Color{R: 44, G: 49, B: 62, A: 255})
+	fillRoundedRect(renderer, sendX+2, inputY+3, 100, 36, 8, sdl.Color{R: 0, G: 0, B: 0, A: 40})
+	fillRoundedRect(renderer, sendX, inputY, 100, 36, 8, sdl.Color{R: 46, G: 204, B: 113, A: 255})
 	sw, _, _ := font.SizeUTF8("Send")
-	renderText(renderer, config, font, "Send", sdl.Color{R: 235, G: 238, B: 245, A: 255}, sendX+(100-int32(sw))/2, inputY+8)
+	renderText(renderer, config, font, "Send", sdl.Color{R: 18, G: 22, B: 30, A: 255}, sendX+(100-int32(sw))/2, inputY+8)
 }
 
 func handleChatInput(e *sdl.KeyboardEvent, config *Config) {

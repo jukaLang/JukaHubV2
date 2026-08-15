@@ -104,11 +104,14 @@ if errorlevel 1 (
 echo.
 echo Build succeeded: %OUT%
 echo.
-
 if "%1"=="nobuild" goto :eof
 
 echo Launching %OUT%...
 echo.
+
+REM In CI (e.g. GitHub Actions), skip launching the GUI.
+if defined GITHUB_ACTIONS goto :eof
+
 start "" "%OUT%"
 goto :eof
 

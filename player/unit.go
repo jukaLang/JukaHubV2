@@ -111,17 +111,22 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 
 	catStartX := element.X + 20
 	catY := element.Y + 20
-	catW := int32(130)
-	catH := int32(36)
+	catW := int32(120)
+	catH := int32(34)
 	catGap := int32(10)
 
 	for i, cat := range categories {
 		cx := catStartX + int32(i)*(catW+catGap)
-		bg := sdl.Color{R: 30, G: 35, B: 48, A: 255}
+		bg := sdl.Color{R: 24, G: 28, B: 40, A: 255}
 		if cat == unitCategory {
 			bg = accentColor
 		}
+		fillRoundedRect(renderer, cx+2, catY+2, catW, catH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 30})
 		fillRoundedRect(renderer, cx, catY, catW, catH, 8, bg)
+		if cat == unitCategory {
+			renderer.SetDrawColor(255, 255, 255, 120)
+			renderer.FillRect(&sdl.Rect{X: cx + 8, Y: catY + catH - 2, W: catW - 16, H: 2})
+		}
 		if font != nil {
 			lw, _, _ := font.SizeUTF8(catLabels[cat])
 			renderText(renderer, config, font, catLabels[cat], sdl.Color{R: 255, G: 255, B: 255, A: 255}, cx+(catW-int32(lw))/2, catY+8)
@@ -152,8 +157,8 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		inputW = int32(w) - 260
 	}
 
-	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, sdl.Color{R: 30, G: 35, B: 48, A: 255})
-	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, sdl.Color{R: 30, G: 35, B: 48, A: 255})
+	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, sdl.Color{R: 24, G: 28, B: 40, A: 255})
+	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, sdl.Color{R: 24, G: 28, B: 40, A: 255})
 	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, sdl.Color{R: 30, G: 35, B: 48, A: 255})
 
 	if font != nil {
@@ -170,13 +175,13 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 
 	arrowY := rowY + rowH/2
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-	renderer.FillRect(&sdl.Rect{X: fromX + rowW + 4, Y: arrowY - 6, W: gap - 8, H: 12})
+	renderer.FillRect(&sdl.Rect{X: fromX + rowW + 6, Y: arrowY - 6, W: gap - 12, H: 12})
 
 	resultY := rowY + rowH + 40
 	resultH := int32(60)
 	fillRoundedRect(renderer, inputX, resultY, inputW, resultH, 12, sdl.Color{R: 22, G: 26, B: 36, A: 255})
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
-	renderer.FillRect(&sdl.Rect{X: inputX, Y: resultY, W: inputW, H: 3})
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 100)
+	renderer.FillRect(&sdl.Rect{X: inputX, Y: resultY, W: inputW, H: 2})
 
 	if font != nil {
 		resultText := unitResult
@@ -192,6 +197,8 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	swapH := int32(40)
 	swapX := inputX + inputW - swapW
 	fillRoundedRect(renderer, swapX, swapY, swapW, swapH, 10, sdl.Color{R: 44, G: 49, B: 62, A: 255})
+	renderer.SetDrawColor(255, 255, 255, 30)
+	renderer.FillRect(&sdl.Rect{X: swapX + 1, Y: swapY + 1, W: swapW - 2, H: 1})
 	if font != nil {
 		sw, _, _ := font.SizeUTF8("Swap")
 		renderText(renderer, config, font, "Swap", sdl.Color{R: 235, G: 238, B: 245, A: 255}, swapX+(swapW-int32(sw))/2, swapY+10)

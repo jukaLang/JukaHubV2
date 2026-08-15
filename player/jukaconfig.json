@@ -305,9 +305,11 @@
       "Background": "#0f1115",
       "Elements": [
         { "Type": "label", "Text": "Settings", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "button", "Text": "General", "X": 380, "Y": 250, "Width": 220, "Height": 55, "Trigger": "change_scene:SettingsGeneral", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Appearance", "X": 680, "Y": 250, "Width": 220, "Height": 55, "Trigger": "change_scene:SettingsAppearance", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 530, "Y": 320, "Width": 220, "Height": 55, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "button", "Text": "General", "X": 380, "Y": 200, "Width": 220, "Height": 55, "Trigger": "change_scene:SettingsGeneral", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "button", "Text": "Appearance", "X": 680, "Y": 200, "Width": 220, "Height": 55, "Trigger": "change_scene:SettingsAppearance", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "button", "Text": "Theme Presets", "X": 380, "Y": 270, "Width": 220, "Height": 55, "Trigger": "change_scene:ThemePresets", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "button", "Text": "Plugins", "X": 680, "Y": 270, "Width": 220, "Height": 55, "Trigger": "change_scene:Plugins", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "button", "Text": "Back", "X": 530, "Y": 340, "Width": 220, "Height": 55, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
         { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
       ]
     },
@@ -339,6 +341,29 @@
         { "Type": "button", "Text": "Save", "X": 60, "Y": 310, "Width": 160, "Height": 45, "Trigger": "save_config", "BgColor": "$buttonColor", "Color": "$labelColor" },
         { "Type": "button", "Text": "Back", "X": 240, "Y": 310, "Width": 160, "Height": 45, "Trigger": "change_scene:Settings", "BgColor": "$buttonColor", "Color": "$labelColor" },
         { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Settings" }
+      ]
+    },
+    {
+      "Name": "ThemePresets",
+      "Background": "#0f1115",
+      "Elements": [
+        { "Type": "label", "Text": "Theme Presets", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
+        { "Type": "button", "Text": "Dark", "X": 60, "Y": 140, "Width": 200, "Height": 55, "Trigger": "theme_preset", "TriggerTarget": "dark", "BgColor": "#1c2230", "Color": "#e8eefc" },
+        { "Type": "button", "Text": "Light", "X": 300, "Y": 140, "Width": 200, "Height": 55, "Trigger": "theme_preset", "TriggerTarget": "light", "BgColor": "#f0f2f5", "Color": "#1a1d26" },
+        { "Type": "button", "Text": "OLED", "X": 540, "Y": 140, "Width": 200, "Height": 55, "Trigger": "theme_preset", "TriggerTarget": "oled", "BgColor": "#000000", "Color": "#ffffff" },
+        { "Type": "button", "Text": "Back", "X": 530, "Y": 470, "Width": 220, "Height": 55, "Trigger": "change_scene:Settings", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+      ]
+    },
+    {
+      "Name": "Plugins",
+      "Background": "#0f1115",
+      "Elements": [
+        { "Type": "label", "Text": "Plugins", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
+        { "Type": "textlog", "Variable": "plugin_list", "X": 60, "Y": 120, "Width": 1160, "Height": 400, "Color": "#0c0f16" },
+        { "Type": "button", "Text": "Refresh", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "plugin_refresh", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "button", "Text": "Back", "X": 220, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Settings", "BgColor": "$buttonColor", "Color": "$labelColor" },
+        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
       ]
     },
     {

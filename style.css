@@ -1,38 +1,3 @@
-/* === Modern Color Scheme === */
-:root {
-  --primary: #4361ee;
-  --primary-light: #4895ef;
-  --secondary: #3a0ca3;
-  --accent: #f72585;
-  --background: #f8f9fa;
-  --surface: #ffffff;
-  --text: #2b2d42;
-  --text-secondary: #6c757d;
-  --border: #e9ecef;
-  --success: #4CAF50;
-  --warning: #FFC107;
-  --error: #e63946;
-  --info: #219ebc;
-  --on-primary: #ffffff;
-  --on-secondary: #ffffff;
-  --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.1);
-  --border-radius-sm: 6px;
-  --border-radius-md: 10px;
-  --border-radius-lg: 14px;
-  --transition: all 0.2s ease;
-  --dark-primary: #5e81f4;
-  --dark-primary-light: #7b9dfa;
-  --dark-secondary: #4c6ef5;
-  --dark-accent: #ff7d66;
-  --dark-background: #0f172a;
-  --dark-surface: #1e293b;
-  --dark-text: #e2e8f0;
-  --dark-text-secondary: #94a3b8;
-  --dark-border: #334155;
-}
-
 /* === Base Styles === */
 * {
   box-sizing: border-box;
@@ -184,10 +149,6 @@ main {
   position: relative;
   background: #ffffff;
   background-size: cover;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.05);
-  margin: 0 auto;
   width: 1280px;
   height: 720px;
 }
@@ -367,14 +328,6 @@ label {
   display: block;
 }
 
-.element-properties .control-group {
-  margin-bottom: 0.75rem;
-}
-
-.element-properties .control-group label {
-  font-size: 0.8rem;
-}
-
 .dynamic-list-properties {
   padding: 0.5rem;
 }
@@ -472,6 +425,11 @@ label {
   to   { transform: translateX(0); opacity: 1; }
 }
 
+@keyframes fadeOut {
+  from { opacity: 1; transform: translateX(0); }
+  to   { opacity: 0; transform: translateX(-20px); }
+}
+
 /* === Dark Mode === */
 body.dark-mode {
   --background: #0f172a;
@@ -565,4 +523,18 @@ body.dark-mode textarea {
   .btn {
     width: 100%;
   }
+}
+
+/* === Variable Tooltip Styles === */
+.variable-tooltip {
+  position: fixed;
+  background: var(--dark-surface);
+  color: var(--dark-text);
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--border-radius-sm);
+  box-shadow: var(--shadow-md);
+  font-size: 0.85rem;
+  pointer-events: none;
+  z-index: 9999;
+  max-width: 200px;
 }

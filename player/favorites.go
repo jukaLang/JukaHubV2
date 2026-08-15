@@ -283,7 +283,6 @@ func getCurrentFavorites() []FavoriteItem {
 
 var favTabRects [4]sdl.Rect
 var favBackRect sdl.Rect
-
 func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	tabLabels := []string{"Videos", "Recent", "Files", "IPTV"}
 	tabColors := []sdl.Color{
@@ -292,11 +291,11 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 		{R: 46, G: 204, B: 113, A: 255},
 		{R: 155, G: 89, B: 182, A: 255},
 	}
-	tabWidth := int32(200)
-	tabHeight := int32(44)
-	tabY := element.Y + 10
+	tabWidth := int32(180)
+	tabHeight := int32(40)
+	tabY := element.Y + 8
 	tabStartX := element.X + 10
-	tabGap := int32(16)
+	tabGap := int32(12)
 
 	favTabRects = [4]sdl.Rect{}
 	titleFont, _ := getCachedFont(config, "medium")
@@ -308,17 +307,17 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	for i, label := range tabLabels {
 		tx := tabStartX + int32(i)*(tabWidth+tabGap)
 		active := i == favoritesCurrentTab
-		bg := sdl.Color{R: 30, G: 35, B: 48, A: 255}
+		// inactive tab background
+		fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, sdl.Color{R: 24, G: 28, B: 40, A: 255})
 		if active {
-			bg = tabColors[i]
-		}
-		fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, bg)
-		if active {
-			renderer.SetDrawColor(255, 255, 255, 60)
-			renderer.FillRect(&sdl.Rect{X: tx, Y: tabY + tabHeight - 3, W: tabWidth, H: 3})
+			// active tab: solid color with subtle inner highlight
+			fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, tabColors[i])
+			fillRoundedRect(renderer, tx+2, tabY+2, tabWidth-4, tabHeight/2, 8, sdl.Color{R: 255, G: 255, B: 255, A: 30})
+			renderer.SetDrawColor(255, 255, 255, 160)
+			renderer.FillRect(&sdl.Rect{X: tx + 8, Y: tabY + tabHeight - 2, W: tabWidth - 16, H: 2})
 		} else {
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
-			renderer.FillRect(&sdl.Rect{X: tx, Y: tabY + tabHeight - 2, W: tabWidth, H: 2})
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 80)
+			renderer.FillRect(&sdl.Rect{X: tx + 8, Y: tabY + tabHeight - 2, W: tabWidth - 16, H: 1})
 		}
 		if font != nil {
 			lw, _, _ := font.SizeUTF8(label)
@@ -335,7 +334,7 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 
 	items := getCurrentFavorites()
 	listX := element.X + 10
-	listY := tabY + tabHeight + 16
+	listY := tabY + tabHeight + 14
 	listW := getElementWidth(element, 1160)
 	listH := getElementHeight(element, 500)
 	listW -= 20
@@ -350,7 +349,7 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			renderText(renderer, config, font, "No favorites yet. Browse and add items!", sdl.Color{R: 160, G: 170, B: 190, A: 255}, listX+20, listY+20)
 		}
 	} else {
-		lineH := int32(42)
+		lineH := int32(40)
 		maxVisible := int((listH - 20) / lineH)
 		if maxVisible < 1 {
 			maxVisible = 1
@@ -390,13 +389,16 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			rowY := iy + 2
 			rowW := listW - 16
 			rowH := lineH - 4
-			fillRoundedRect(renderer, rowX+1, rowY+1, rowW, rowH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 60})
+			fillRoundedRect(renderer, rowX+1, rowY+1, rowW, rowH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 40})
 			fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: 26, G: 30, B: 40, A: 255})
 			if i == favoritesFocusIndex {
-				fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 60})
+				fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 50})
 				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
 				renderer.FillRect(&sdl.Rect{X: rowX, Y: rowY, W: 4, H: rowH})
+				// subtle inner highlight
+				fillRoundedRect(renderer, rowX+1, rowY+1, rowW-2, rowH/2, 7, sdl.Color{R: 255, G: 255, B: 255, A: 10})
 			}
+
 			prefix := prefixMap[item.Type]
 			if prefix == "" {
 				prefix = "\u25b6 "
@@ -416,15 +418,16 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 
 	backText := "Back"
-	bw, bh := int32(140), int32(44)
+	bw, bh := int32(120), int32(40)
 	bx := element.X + getElementWidth(element, 1160) - bw - 20
-	by := element.Y + getElementHeight(element, 500) + 30
+	by := element.Y + getElementHeight(element, 500) + 26
 	if by < element.Y+getElementHeight(element, 500) {
 		by = element.Y + getElementHeight(element, 500) + 10
 	}
-	fillRoundedRect(renderer, bx, by, bw, bh, 12, sdl.Color{R: 44, G: 49, B: 62, A: 255})
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 180)
-	renderer.FillRect(&sdl.Rect{X: bx, Y: by + bh - 3, W: bw, H: 3})
+	fillRoundedRect(renderer, bx+3, by+3, bw, bh, 10, sdl.Color{R: 0, G: 0, B: 0, A: 40})
+	fillRoundedRect(renderer, bx, by, bw, bh, 10, sdl.Color{R: 44, G: 49, B: 62, A: 255})
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
+	renderer.FillRect(&sdl.Rect{X: bx + 8, Y: by + bh - 2, W: bw - 16, H: 2})
 	if font != nil {
 		blw, _, _ := font.SizeUTF8(backText)
 		renderText(renderer, config, font, backText, sdl.Color{R: 235, G: 238, B: 245, A: 255}, bx+(bw-int32(blw))/2, by+10)

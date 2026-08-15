@@ -3,7 +3,7 @@
 [![Netlify Status](https://api.netlify.com/api/v1/badges/dea0cf4b-3799-41d9-8f2a-b4fd2a270b15/deploy-status)](https://generate.jukalang.com)
 [![Go Version](https://img.shields.io/badge/Go-1.21+-00ADD8?logo=go)](https://golang.org/dl/)
 [![SDL2](https://img.shields.io/badge/SDL2-2.0+-3A75C0?logo=sdl)](https://www.libsdl.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
 **Juka GUI Creator**
 
@@ -134,23 +134,37 @@ Created automatically. Stores mutable settings:
 - **IP Stream** — RTSP/HTTP live streams
 - **Live TV / IPTV** — M3U playlist support
 - **Podcasts** — RSS feed aggregator with curated and custom feeds
+- **YouTube Shorts** — Dedicated Shorts browsing and auto-play
+- **MPV / ffplay backend** — Configurable audio backend (ffplay or MPV)
 
 ### 📁 File Management
 - **File Explorer** — Browse local files with media detection
 - **Unzip** — Extract `.zip` archives in-place
+- **Image Viewer** — Full-screen image viewing with zoom/pan
 - **Recently Played** — Auto-tracked with visual indicators
 
 ### 🛠️ Tools
 - **Network Speed Meter** — Download speed test with latency
-- **Read/Write Benchmark** — Sequential I/O performance testing
-- **Hardware Monitor** — System info with log export
+- **Read/Write Benchmark** — Sequential and random I/O performance testing
+- **Hardware Monitor** — System info with auto-refresh and log export
 - **Cron / Task Scheduler** — Manage cron, systemd, init.d, rc.local, supervisor, Windows services
 - **Startup Items** — View boot-time applications
 - **Terminal** — Execute shell commands
 - **Weather** — IP geolocation with °C/°F toggle
+- **Disk Space Pie Chart** — Auto-refresh graphical visualization
 
-### 🎮 Gaming
-- **JukaLand** — Built-in 2D game with crafting, vehicles, and chat
+### 🎮 Creative & Social
+- **Canvas Sandbox** — HTML5 Canvas API playground with JS-like editor
+- **Unit Converter** — Category-based conversion (length, weight, temperature, volume, speed, time, data, area)
+- **Chat System** — Local persistent chat (JukaLand multiplayer ready)
+- **Favorites** — Tabbed system (Videos, Recent, Files, IPTV) with play-on-click
+- **Theme Presets** — Light / Dark / OLED mode switching
+- **Plugin System** — Custom modules and extensions
+
+### 🎯 UX
+- **On-Screen Keyboard** — Virtual keyboard for text input
+- **Smooth Transitions** — Fade scene transitions and button feedback
+- **Toast Notifications** — Slide-in status messages
 
 ---
 
@@ -272,21 +286,20 @@ We welcome contributions. Please follow these steps:
 
 ## Roadmap
 
-Features from JukaHubV1 being ported to the new runtime:
+Features ported from JukaHubV1:
 
-- [ ] Canvas Sandbox — HTML5 Canvas API playground with JS editor
-- [ ] Favorites tab system — Videos, Recent, Files, IPTV tabs with play-on-click
-- [ ] Unit Converter — Category-based conversion tool
-- [ ] Disk Space pie chart — Auto-refresh graphical visualization
-- [ ] MPV audio backend — Alternative to ffplay for better compatibility
-- [ ] Image viewer — Full-screen image viewing with zoom/pan
-- [ ] Chat system — Send files to chat (for JukaLand multiplayer)
-- [ ] YouTube Shorts — Dedicated Shorts browsing and auto-play
-- [ ] Random I/O benchmark — Add random read/write tests to benchmark tool
-- [ ] Integrated log viewer — Hardware Monitor with built-in log export
-- [ ] Theme presets — Light/dark/OLED mode switching
-- [ ] Plugin system — Custom modules and extensions
-- [ ] Touch gesture support — Swipe and pinch gestures for handhelds
+- [x] Canvas Sandbox — HTML5 Canvas API playground with JS editor
+- [x] Favorites tab system — Videos, Recent, Files, IPTV tabs with play-on-click
+- [x] Unit Converter — Category-based conversion tool
+- [x] Disk Space pie chart — Auto-refresh graphical visualization
+- [x] MPV audio backend — Alternative to ffplay for better compatibility
+- [x] Image viewer — Full-screen image viewing with zoom/pan
+- [x] Chat system — Send files to chat (for JukaLand multiplayer)
+- [x] YouTube Shorts — Dedicated Shorts browsing and auto-play
+- [x] Random I/O benchmark — Add random read/write tests to benchmark tool
+- [x] Integrated log viewer — Hardware Monitor with built-in log export
+- [x] Theme presets — Light/dark/OLED mode switching
+- [x] Plugin system — Custom modules and extensions
 
 ---
 
@@ -299,7 +312,7 @@ If you encounter any issues:
 
 ## License
 
-MIT License. See the [LICENSE](https://github.com/jukaLang/JukaHubV2/blob/main/LICENSE) file for details.
+AGPL-3.0 License. See the [LICENSE](https://github.com/jukaLang/JukaHubV2/blob/main/LICENSE) file for details.
 
 ## Special Thanks
 
