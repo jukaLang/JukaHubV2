@@ -129,6 +129,40 @@ func getDiskInfo() (total, used int64, pct int) {
 	return
 }
 
+// ---------------------------------------------------------------------------
+// Disk Pie Chart Data (auto-refresh every 5 seconds)
+// ---------------------------------------------------------------------------
+
+type diskPieData struct {
+	Total uint64
+	Used  uint64
+	Pct   int
+}
+
+var (
+	diskPie       diskPieData
+	diskPieMutex  sync.Mutex
+)
+
+func startDiskPieAutoRefresh() {
+	go func() {
+		refreshDiskPie()
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			refreshDiskPie()
+		}
+	}()
+}
+
+func refreshDiskPie() {
+	total, used, pct := getDiskInfo()
+	diskPieMutex.Lock()
+	diskPie = diskPieData{Total: uint64(total), Used: uint64(used), Pct: pct}
+	diskPieMutex.Unlock()
+	publishCustom("diskpie_data", diskPie)
+}
+
 func getCPUModel() string {
 	model := readProcFirstMatch("/proc/cpuinfo", "model name")
 	if model == "N/A" {

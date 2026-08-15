@@ -87,6 +87,37 @@ func exeNameFor(tool string) string {
 	return tool
 }
 
+// findMPVPath returns the path to the mpv binary, searching common install
+// locations and falling back to system PATH. Returns empty string if not found.
+func findMPVPath() string {
+	candidates := []string{}
+	if runtime.GOOS == "windows" {
+		candidates = []string{
+			filepath.Join(".", "required", "mpv.exe"),
+			`C:\Program Files\mpv\mpv.exe`,
+			`C:\Program Files (x86)\mpv\mpv.exe`,
+			"mpv.exe",
+		}
+	} else {
+		candidates = []string{
+			filepath.Join(".", "required", "mpv"),
+			"/usr/bin/mpv",
+			"/usr/local/bin/mpv",
+			"/bin/mpv",
+			"mpv",
+		}
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
+	}
+	if p, err := exec.LookPath("mpv"); err == nil {
+		return p
+	}
+	return ""
+}
+
 // downloadFile downloads url to dest following redirects.
 func downloadFile(url, dest string) error {
 	out, err := os.Create(dest)
@@ -95,7 +126,7 @@ func downloadFile(url, dest string) error {
 	}
 	defer out.Close()
 
-	resp, err := http.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return err
 	}

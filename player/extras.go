@@ -102,17 +102,10 @@ func fetchWeatherOnce() {
 // --- Top status bar (clock + weather + username) ---
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
-	barH := int32(28)
-	// gradient status bar
-	for i := int32(0); i < barH; i += 2 {
-		t := float32(i) / float32(barH)
-		r := uint8(float32(8) + t*float32(18))
-		g := uint8(float32(10) + t*float32(20))
-		b := uint8(float32(16) + t*float32(26))
-		renderer.SetDrawColor(r, g, b, 235)
-		renderer.FillRect(&sdl.Rect{X: 0, Y: i, W: screenWidth, H: 2})
-	}
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 160)
+	barH := int32(36)
+	// frosted glass status bar
+	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, sdl.Color{R: 18, G: 22, B: 32, A: 240})
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 140)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
 
 	font, _ := getCachedFont(config, "small")
@@ -120,28 +113,29 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	white := sdl.Color{R: 235, G: 238, B: 245, A: 255}
+	secondary := sdl.Color{R: 160, G: 170, B: 190, A: 255}
 
-	// App title (top-left)
 	titleFont, _ := getCachedFont(config, "medium")
 	if titleFont == nil {
 		titleFont = font
 	}
+
 	// accent dot (pulsing)
 	pulse := uint8(180 + 75*float64(math.Sin(float64(sdl.GetTicks64())/500.0)))
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, pulse)
-	renderer.FillRect(&sdl.Rect{X: 12, Y: 8, W: 12, H: 12})
-	renderText(renderer, config, titleFont, "JukaHub", white, 32, 3)
+	renderer.FillRect(&sdl.Rect{X: 16, Y: 10, W: 14, H: 14})
+	renderText(renderer, config, titleFont, "JukaHub", white, 38, 6)
 
-	// Username (under/next to title)
+	// Username
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok && name != "" {
-		renderText(renderer, config, font, "Hi "+name, white, 130, 5)
+		renderText(renderer, config, font, "Hi "+name, secondary, 140, 10)
 	}
 
 	// Clock (top-right)
 	now := time.Now()
 	clk := now.Format("15:04")
 	cw, _, _ := font.SizeUTF8(clk)
-	clockX := screenWidth - int32(cw) - 12
+	clockX := screenWidth - int32(cw) - 16
 
 	// Weather pill (immediately left of the clock)
 	wxMutex.Lock()
@@ -160,30 +154,129 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		wxText = "—"
 	}
 	ww, _, _ := font.SizeUTF8(wxText)
-	wxX := clockX - int32(ww) - 24
-	renderer.SetDrawColor(255, 255, 255, 40)
-	renderer.FillRect(&sdl.Rect{X: wxX - 8, Y: 4, W: int32(ww) + 16, H: 20})
-	renderText(renderer, config, font, wxText, white, wxX, 5)
+	wxX := clockX - int32(ww) - 20
+	renderer.SetDrawColor(255, 255, 255, 30)
+	renderer.FillRect(&sdl.Rect{X: wxX - 10, Y: 6, W: int32(ww) + 20, H: 22})
+	renderText(renderer, config, font, wxText, white, wxX, 8)
 
-	renderText(renderer, config, font, clk, white, clockX, 5)
+	renderText(renderer, config, font, clk, white, clockX, 8)
 }
 
-// --- Persist settings/theme to jukaconfig.json ---
+// --- User config (mutable settings) persisted to jukauser.json ---
+
+type UserConfig struct {
+	Variables UserVariables `json:"variables"`
+}
+
+type UserVariables struct {
+	ButtonColor        RGB                `json:"buttonColor"`
+	LabelColor         RGB                `json:"labelColor"`
+	InputColor         RGB                `json:"inputColor"`
+	Fullscreen         bool               `json:"fullscreen"`
+	FileExplorerRoot   string             `json:"fileExplorerRoot"`
+	WeatherEnabled     bool               `json:"weatherEnabled"`
+	WeatherUnit        string             `json:"weatherUnit"`
+	TSPUsername        string             `json:"tspUsername"`
+	PlaybackResolution string            `json:"playbackResolution"`
+	AudioBackend       string             `json:"audioBackend"`
+	Custom             map[string]interface{}
+}
+
+func loadUserConfig() *UserConfig {
+	data, err := os.ReadFile("jukauser.json")
+	if err != nil {
+		return &UserConfig{
+			Variables: UserVariables{
+				Custom: make(map[string]interface{}),
+			},
+		}
+	}
+	var uc UserConfig
+	if err := json.Unmarshal(data, &uc); err != nil {
+		log.Printf("loadUserConfig: parse error: %v", err)
+		return &UserConfig{
+			Variables: UserVariables{
+				Custom: make(map[string]interface{}),
+			},
+		}
+	}
+	if uc.Variables.Custom == nil {
+		uc.Variables.Custom = make(map[string]interface{})
+	}
+	return &uc
+}
+
+func saveUserConfig(user *UserConfig) {
+	userCopy := *user
+	userCopy.Variables.Custom = make(map[string]interface{})
+	for k, v := range user.Variables.Custom {
+		switch k {
+		case "search_results", "fe_entries", "fe_path", "stream_url", "search_query", "search_error":
+			// skip volatile runtime state
+		default:
+			userCopy.Variables.Custom[k] = v
+		}
+	}
+	data, err := json.MarshalIndent(userCopy, "", "  ")
+	if err != nil {
+		log.Printf("saveUserConfig: marshal error: %v", err)
+		return
+	}
+	if err := os.WriteFile("jukauser.json", data, 0644); err != nil {
+		log.Printf("saveUserConfig: write error: %v", err)
+		return
+	}
+	log.Printf("[DEBUG] User config saved to jukauser.json")
+}
+
+func mergeUserConfig(config *Config, user *UserConfig) {
+	if user == nil {
+		return
+	}
+	config.Variables.ButtonColor = user.Variables.ButtonColor
+	config.Variables.LabelColor = user.Variables.LabelColor
+	config.Variables.InputColor = user.Variables.InputColor
+	config.Variables.Fullscreen = user.Variables.Fullscreen
+	config.Variables.FileExplorerRoot = user.Variables.FileExplorerRoot
+	config.Variables.WeatherEnabled = user.Variables.WeatherEnabled
+	config.Variables.WeatherUnit = user.Variables.WeatherUnit
+	config.Variables.TSPUsername = user.Variables.TSPUsername
+	config.Variables.PlaybackResolution = user.Variables.PlaybackResolution
+	config.Variables.AudioBackend = user.Variables.AudioBackend
+	for k, v := range user.Variables.Custom {
+		if _, volatile := map[string]bool{
+			"search_results": true, "fe_entries": true, "fe_path": true,
+			"stream_url": true, "search_query": true, "search_error": true,
+		}[k]; !volatile {
+			config.Variables.Custom[k] = v
+		}
+	}
+}
+
+// --- Persist design-only config to jukaconfig.json ---
 
 func saveConfig(config *Config) {
-	// Copy without volatile runtime variables so the saved file stays clean.
 	saved := *config
-	savedVars := config.Variables
-	savedVars.Custom = make(map[string]interface{})
+	saved.Variables = config.Variables
+	saved.Variables.Custom = make(map[string]interface{})
 	for k, v := range config.Variables.Custom {
 		switch k {
 		case "search_results", "fe_entries", "fe_path", "stream_url", "search_query", "search_error":
 			// skip volatile runtime state
 		default:
-			savedVars.Custom[k] = v
+			saved.Variables.Custom[k] = v
 		}
 	}
-	saved.Variables = savedVars
+	saved.Variables.ButtonColor = RGB{}
+	saved.Variables.LabelColor = RGB{}
+	saved.Variables.InputColor = RGB{}
+	saved.Variables.Fullscreen = false
+	saved.Variables.FileExplorerRoot = ""
+	saved.Variables.WeatherEnabled = false
+	saved.Variables.WeatherUnit = ""
+	saved.Variables.TSPUsername = ""
+	saved.Variables.PlaybackResolution = ""
+	saved.Variables.AudioBackend = ""
 
 	data, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {
@@ -194,5 +287,6 @@ func saveConfig(config *Config) {
 		log.Printf("saveConfig: write error: %v", err)
 		return
 	}
-	log.Printf("[DEBUG] Config saved to jukaconfig.json")
+	log.Printf("[DEBUG] Design config saved to jukaconfig.json")
 }
+

@@ -1584,7 +1584,7 @@ function deleteScene() {
 // Load initial config
 function loadInitialConfig() {
   // This would typically fetch from a server
-  console.log('Loading initial configuration...');
+  // log removed
 }
 
 
@@ -1601,7 +1601,7 @@ function loadDefaultConfig() {
       loadJukaApp(config);
     })
     .catch(error => {
-      console.log('No default config found:', error.message);
+      // log removed
     });
 }
 

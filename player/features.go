@@ -111,7 +111,7 @@ func feUp(config *Config) {
 }
 
 // feEnterFocused acts on the highlighted entry of the current scene's
-// dynamiclist: enter directories, unzip archives, or play media/URLs.
+// dynamiclist: enter directories, unzip archives, view images, or play media/URLs.
 func feEnterFocused(config *Config) {
 	entries, ok := getSceneFileEntries(config, config.Scenes[currentSceneIndex])
 	if !ok || focusedFileIndex < 0 || focusedFileIndex >= len(entries) {
@@ -131,6 +131,18 @@ func feEnterFocused(config *Config) {
 			log.Printf("Unzipped %s", entry.Path)
 			feListDirectory(config)
 		}
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(entry.Path))
+	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
+		imageViewerPath = entry.Path
+		if imageViewerTexture != nil {
+			imageViewerTexture.Destroy()
+			imageViewerTexture = nil
+		}
+		imageViewerZoom = 1.0
+		imageViewerPanX = 0
+		imageViewerPanY = 0
 		return
 	}
 	if isMediaFile(entry.Name) || hasMediaExtension(entry.Path) {
@@ -181,12 +193,12 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 
 	renderText(renderer, config, font, "Path: "+feCurrentPath(config),
-		sdl.Color{R: 180, G: 180, B: 255, A: 255}, element.X, element.Y)
+		sdl.Color{R: 180, G: 190, B: 220, A: 255}, element.X, element.Y)
 
 	elemW := getElementWidth(element, 600)
 	elemH := getElementHeight(element, 500)
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, sdl.Color{R: 16, G: 19, B: 26, A: 220}, accentColor)
-	lineH := int32(34)
+	lineH := int32(40)
 	maxVisible := int((elemH - 30) / lineH)
 	if maxVisible < 1 {
 		maxVisible = 1
@@ -203,27 +215,40 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 
 	for i := start; i < end; i++ {
 		y := element.Y + 30 + int32(i-start)*lineH
+		rowW := elemW - 16
+		rowH := lineH - 4
+		rowX := element.X + 8
+		rowY := y + 2
+
+		// card background
+		fillRoundedRect(renderer, rowX+1, rowY+1, rowW, rowH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 60})
+		fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: 26, G: 30, B: 40, A: 255})
+
+		if i == focusedFileIndex {
+			fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 60})
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
+			renderer.FillRect(&sdl.Rect{X: rowX, Y: rowY, W: 4, H: rowH})
+		}
+
 		if isRecentlyPlayed(entries[i].Path) {
 			renderer.SetDrawColor(200, 30, 30, 255)
-			renderer.FillRect(&sdl.Rect{X: element.X, Y: y - 2, W: 4, H: lineH})
+			renderer.FillRect(&sdl.Rect{X: rowX + rowW - 6, Y: rowY + 6, W: 4, H: rowH - 12})
 		}
-		if i == focusedFileIndex {
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-			renderer.FillRect(&sdl.Rect{X: element.X, Y: y - 2, W: elemW, H: lineH})
-		}
-		prefix := "[ ] "
-		color := sdl.Color{R: 255, G: 255, B: 255, A: 255}
+
+		prefix := ""
+		color := sdl.Color{R: 200, G: 210, B: 230, A: 255}
 		if entries[i].IsDir {
-			prefix = "[D] "
+			prefix = "📁 "
 			color = sdl.Color{R: 255, G: 230, B: 120, A: 255}
 		} else if isMediaFile(entries[i].Name) {
-			prefix = "[>] "
+			prefix = "▶ "
+			color = sdl.Color{R: 120, G: 200, B: 255, A: 255}
 		}
 		txt := prefix + entries[i].Name
-		if len(txt) > 60 {
-			txt = txt[:57] + "..."
+		if len(txt) > 55 {
+			txt = txt[:52] + "..."
 		}
-		renderText(renderer, config, font, txt, color, element.X+8, y+4)
+		renderText(renderer, config, font, txt, color, rowX+12, rowY+8)
 	}
 }
 

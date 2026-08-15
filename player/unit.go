@@ -1,0 +1,260 @@
+package main
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/veandco/go-sdl2/sdl"
+)
+
+// --- Unit Converter ---
+
+var unitConversionTable = map[string]map[string]float64{
+	"length": {
+		"mm": 0.001, "cm": 0.01, "m": 1, "km": 1000,
+		"inch": 0.0254, "foot": 0.3048, "yard": 0.9144, "mile": 1609.344,
+	},
+	"weight": {
+		"mg": 0.001, "g": 1, "kg": 1000, "lb": 453.592, "oz": 28.3495,
+	},
+	"volume": {
+		"ml": 0.001, "L": 1, "gallon": 3.78541, "quart": 0.946353,
+		"pint": 0.473176, "cup": 0.236588, "floz": 0.0295735,
+	},
+	"speed": {
+		"m/s": 1, "km/h": 0.277778, "mph": 0.44704, "knot": 0.514444,
+	},
+	"time": {
+		"ms": 0.001, "s": 1, "min": 60, "hour": 3600, "day": 86400,
+		"week": 604800, "month": 2592000, "year": 31536000,
+	},
+	"data": {
+		"bit": 0.125, "byte": 1, "KB": 1024, "MB": 1048576,
+		"GB": 1073741824, "TB": 1099511627776,
+	},
+	"area": {
+		"mm2": 0.000001, "cm2": 0.0001, "m2": 1, "km2": 1000000,
+		"inch2": 0.00064516, "foot2": 0.092903, "acre": 4046.86, "hectare": 10000,
+	},
+}
+
+func convertTemperature(value float64, from, to string) (float64, bool) {
+	var c float64
+	switch strings.ToLower(from) {
+	case "c":
+		c = value
+	case "f":
+		c = (value - 32) * 5 / 9
+	case "k":
+		c = value - 273.15
+	default:
+		return 0, false
+	}
+	switch strings.ToLower(to) {
+	case "c":
+		return c, true
+	case "f":
+		return c*9/5 + 32, true
+	case "k":
+		return c + 273.15, true
+	default:
+		return 0, false
+	}
+}
+
+func convertUnit(value float64, from, to, category string) (float64, bool) {
+	if category == "temperature" {
+		return convertTemperature(value, from, to)
+	}
+	table, ok := unitConversionTable[category]
+	if !ok {
+		return 0, false
+	}
+	fromFactor, ok1 := table[from]
+	toFactor, ok2 := table[to]
+	if !ok1 || !ok2 {
+		return 0, false
+	}
+	base := value * fromFactor
+	result := base / toFactor
+	return result, true
+}
+
+func getUnitsForCategory(category string) []string {
+	if category == "temperature" {
+		return []string{"C", "F", "K"}
+	}
+	table, ok := unitConversionTable[category]
+	if !ok {
+		return []string{}
+	}
+	units := make([]string, 0, len(table))
+	for u := range table {
+		units = append(units, u)
+	}
+	return units
+}
+
+func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element) {
+	titleFont, _ := getCachedFont(config, "medium")
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		font = titleFont
+	}
+
+	categories := []string{"length", "weight", "temperature", "volume", "speed", "time", "data", "area"}
+	catLabels := map[string]string{
+		"length": "Length", "weight": "Weight", "temperature": "Temp",
+		"volume": "Volume", "speed": "Speed", "time": "Time", "data": "Data", "area": "Area",
+	}
+
+	catStartX := element.X + 20
+	catY := element.Y + 20
+	catW := int32(130)
+	catH := int32(36)
+	catGap := int32(10)
+
+	for i, cat := range categories {
+		cx := catStartX + int32(i)*(catW+catGap)
+		bg := sdl.Color{R: 30, G: 35, B: 48, A: 255}
+		if cat == unitCategory {
+			bg = accentColor
+		}
+		fillRoundedRect(renderer, cx, catY, catW, catH, 8, bg)
+		if font != nil {
+			lw, _, _ := font.SizeUTF8(catLabels[cat])
+			renderText(renderer, config, font, catLabels[cat], sdl.Color{R: 255, G: 255, B: 255, A: 255}, cx+(catW-int32(lw))/2, catY+8)
+		}
+	}
+
+	units := getUnitsForCategory(unitCategory)
+	if len(units) < 2 {
+		units = []string{unitFrom, unitTo}
+	}
+	if unitFrom == "" {
+		unitFrom = units[0]
+	}
+	if unitTo == "" {
+		unitTo = units[len(units)-1]
+	}
+
+	rowY := catY + catH + 30
+	rowH := int32(44)
+	rowW := int32(200)
+	gap := int32(20)
+
+	fromX := element.X + 40
+	toX := fromX + rowW + gap
+	inputX := toX + rowW + gap
+	inputW := int32(0)
+	if w, err := strconv.Atoi(string(element.Width)); err == nil {
+		inputW = int32(w) - 260
+	}
+
+	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, sdl.Color{R: 30, G: 35, B: 48, A: 255})
+	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, sdl.Color{R: 30, G: 35, B: 48, A: 255})
+	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, sdl.Color{R: 30, G: 35, B: 48, A: 255})
+
+	if font != nil {
+		fw, _, _ := font.SizeUTF8(unitFrom)
+		renderText(renderer, config, font, unitFrom, sdl.Color{R: 255, G: 255, B: 255, A: 255}, fromX+(rowW-int32(fw))/2, rowY+12)
+		tw, _, _ := font.SizeUTF8(unitTo)
+		renderText(renderer, config, font, unitTo, sdl.Color{R: 255, G: 255, B: 255, A: 255}, toX+(rowW-int32(tw))/2, rowY+12)
+		display := unitInputValue
+		if display == "" {
+			display = "Enter value..."
+		}
+		renderText(renderer, config, font, display, sdl.Color{R: 200, G: 210, B: 230, A: 255}, inputX+16, rowY+12)
+	}
+
+	arrowY := rowY + rowH/2
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
+	renderer.FillRect(&sdl.Rect{X: fromX + rowW + 4, Y: arrowY - 6, W: gap - 8, H: 12})
+
+	resultY := rowY + rowH + 40
+	resultH := int32(60)
+	fillRoundedRect(renderer, inputX, resultY, inputW, resultH, 12, sdl.Color{R: 22, G: 26, B: 36, A: 255})
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
+	renderer.FillRect(&sdl.Rect{X: inputX, Y: resultY, W: inputW, H: 3})
+
+	if font != nil {
+		resultText := unitResult
+		if resultText == "" {
+			resultText = "Result will appear here"
+		}
+		rw, _, _ := font.SizeUTF8(resultText)
+		renderText(renderer, config, font, resultText, sdl.Color{R: 240, G: 244, B: 250, A: 255}, inputX+(inputW-int32(rw))/2, resultY+18)
+	}
+
+	swapY := resultY + resultH + 20
+	swapW := int32(120)
+	swapH := int32(40)
+	swapX := inputX + inputW - swapW
+	fillRoundedRect(renderer, swapX, swapY, swapW, swapH, 10, sdl.Color{R: 44, G: 49, B: 62, A: 255})
+	if font != nil {
+		sw, _, _ := font.SizeUTF8("Swap")
+		renderText(renderer, config, font, "Swap", sdl.Color{R: 235, G: 238, B: 245, A: 255}, swapX+(swapW-int32(sw))/2, swapY+10)
+	}
+}
+
+func handleUnitInput(e *sdl.KeyboardEvent, config *Config) {
+	switch e.Keysym.Sym {
+	case sdl.K_LEFT:
+		units := getUnitsForCategory(unitCategory)
+		for i, u := range units {
+			if u == unitFrom && i > 0 {
+				unitFrom = units[i-1]
+				break
+			}
+		}
+	case sdl.K_RIGHT:
+		units := getUnitsForCategory(unitCategory)
+		for i, u := range units {
+			if u == unitFrom && i < len(units)-1 {
+				unitFrom = units[i+1]
+				break
+			}
+		}
+	case sdl.K_UP:
+		unitInputValue = ""
+		unitResult = ""
+	case sdl.K_DOWN:
+		unitInputValue = ""
+		unitResult = ""
+	case sdl.K_RETURN:
+		if unitInputValue != "" {
+			var val float64
+			if _, err := fmt.Sscanf(unitInputValue, "%f", &val); err == nil {
+				if res, ok := convertUnit(val, unitFrom, unitTo, unitCategory); ok {
+					if unitCategory == "temperature" {
+						if unitTo == "C" || unitTo == "c" {
+							unitResult = fmt.Sprintf("%.2f °C", res)
+						} else if unitTo == "F" || unitTo == "f" {
+							unitResult = fmt.Sprintf("%.2f °F", res)
+						} else {
+							unitResult = fmt.Sprintf("%.2f K", res)
+						}
+					} else {
+						unitResult = fmt.Sprintf("%.4g", res)
+					}
+				} else {
+					unitResult = "Error"
+				}
+			} else {
+				unitResult = "Invalid number"
+			}
+		}
+	case sdl.K_BACKSPACE:
+		if len(unitInputValue) > 0 {
+			unitInputValue = unitInputValue[:len(unitInputValue)-1]
+		}
+	default:
+		if e.Type == sdl.KEYDOWN {
+			ks := e.Keysym.Sym
+			if (ks >= sdl.K_0 && ks <= sdl.K_9) || ks == sdl.K_PERIOD {
+				unitInputValue += string(ks)
+			}
+		}
+	}
+}

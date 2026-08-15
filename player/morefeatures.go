@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
 	"os"
 	"os/exec"
@@ -75,6 +76,39 @@ func playStream(config *Config, url string) {
 		}
 		if err := cmd.Run(); err != nil {
 			log.Printf("playStream error: %v", err)
+		}
+	}()
+}
+
+// playWithMPV plays a URL through the MPV media player as an alternative
+// backend to ffplay. MPV is launched fullscreen with no OSC and an IPC
+// socket so the app can communicate with it if needed in the future.
+func playWithMPV(config *Config, url string) {
+	recordPlayed(url)
+	mpv := findMPVPath()
+	if mpv == "" {
+		log.Printf("playWithMPV: mpv not found on this system")
+		showToast("MPV not found. Install MPV or switch audio backend in Settings.", sdl.Color{R: 230, G: 80, B: 80, A: 255})
+		return
+	}
+	ipcSocket := "/tmp/mpv-socket"
+	if runtime.GOOS == "windows" {
+		ipcSocket = filepath.Join(os.TempDir(), "mpv-socket")
+	}
+	log.Printf("playWithMPV: url=%s mpv=%s", url, mpv)
+	go func() {
+		cmd := exec.Command(mpv,
+			"--fs",
+			"--no-osc",
+			"--input-ipc-server="+ipcSocket,
+			"--",
+			url,
+		)
+		cmd.Env = append(os.Environ(),
+			"SDL_AUDIODRIVER=directsound",
+		)
+		if err := cmd.Run(); err != nil {
+			log.Printf("playWithMPV error: %v", err)
 		}
 	}()
 }
@@ -306,7 +340,7 @@ func runNetSpeed(config *Config) {
 	go func() {
 		url := "https://cachefly.cachefly.net/100mb.test"
 		start := time.Now()
-		resp, err := http.Get(url)
+		resp, err := httpClient.Get(url)
 		if err != nil {
 			publishCustom("netspeed_text", "Error: "+err.Error())
 			return
@@ -361,6 +395,68 @@ func runBenchmark(config *Config) {
 		publishCustom("benchmark_text", fmt.Sprintf(
 			"Write: %.1f MB/s\nRead:  %.1f MB/s",
 			float64(sz)/d1.Seconds()/1e6, float64(sz)/d2.Seconds()/1e6))
+	}()
+}
+
+// runRandomBenchmark performs random-access I/O benchmarking: it writes
+// 10 MB of random data to a temp file at random offsets, then reads 10 MB
+// of random positions, reporting MB/s for each phase.
+func runRandomBenchmark(config *Config) {
+	go func() {
+		const fileSize = 50 * 1024 * 1024
+		const ioBytes = 10 * 1024 * 1024
+		blockSize := 4 * 1024
+		path := ".jukarandbench.tmp"
+
+		f, err := os.Create(path)
+		if err != nil {
+			publishCustom("benchmark_text", "Random Error: "+err.Error())
+			return
+		}
+		if err := f.Truncate(fileSize); err != nil {
+			f.Close()
+			publishCustom("benchmark_text", "Random Error: "+err.Error())
+			return
+		}
+
+		rnd := make([]byte, blockSize)
+		offsets := make([]int64, ioBytes/blockSize)
+		for i := range offsets {
+			offsets[i] = int64(i) * int64(fileSize) / int64(len(offsets))
+		}
+
+		start := time.Now()
+		for _, off := range offsets {
+			if _, err := rand.Read(rnd); err != nil {
+				rnd = []byte{byte(off), byte(off >> 8), byte(off >> 16)}
+			}
+			if _, err := f.WriteAt(rnd, off); err != nil {
+				f.Close()
+				os.Remove(path)
+				publishCustom("benchmark_text", "Random Write Error: "+err.Error())
+				return
+			}
+		}
+		f.Sync()
+		dWrite := time.Since(start)
+
+		readBuf := make([]byte, blockSize)
+		start = time.Now()
+		for _, off := range offsets {
+			if _, err := f.ReadAt(readBuf, off); err != nil {
+				f.Close()
+				os.Remove(path)
+				publishCustom("benchmark_text", "Random Read Error: "+err.Error())
+				return
+			}
+		}
+		dRead := time.Since(start)
+
+		f.Close()
+		os.Remove(path)
+		publishCustom("benchmark_text", fmt.Sprintf(
+			"Random Write: %.1f MB/s\nRandom Read:  %.1f MB/s",
+			float64(ioBytes)/dWrite.Seconds()/1e6, float64(ioBytes)/dRead.Seconds()/1e6))
 	}()
 }
 
