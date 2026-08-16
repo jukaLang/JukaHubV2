@@ -26,7 +26,12 @@ import (
 
 func httpGetText(url string, timeout time.Duration) string {
 	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "JukaHub/0.4")
+	resp, err := client.Do(req)
 	if err != nil {
 		return ""
 	}
@@ -64,7 +69,7 @@ func hasMediaExtension(s string) bool {
 // playStream launches ffplay directly on a stream URL (rtsp://, http://,
 // or any URL ffplay understands) without going through yt-dlp.
 func playStream(config *Config, url string) {
-	recordPlayed(url)
+	recordPlayed(config, url)
 	ff := getToolPath("ffplay", config)
 	log.Printf("playStream: %s", url)
 	go func() {
@@ -74,6 +79,7 @@ func playStream(config *Config, url string) {
 		} else {
 			cmd = exec.Command(ff, "-fs", "-autoexit", url)
 		}
+		cmd.Env = ffplayEnv(ff)
 		if err := cmd.Run(); err != nil {
 			log.Printf("playStream error: %v", err)
 		}
@@ -84,11 +90,11 @@ func playStream(config *Config, url string) {
 // backend to ffplay. MPV is launched fullscreen with no OSC and an IPC
 // socket so the app can communicate with it if needed in the future.
 func playWithMPV(config *Config, url string) {
-	recordPlayed(url)
+	recordPlayed(config, url)
 	mpv := findMPVPath()
 	if mpv == "" {
 		log.Printf("playWithMPV: mpv not found on this system")
-		showToast("MPV not found. Install MPV or switch audio backend in Settings.", sdl.Color{R: 230, G: 80, B: 80, A: 255})
+		showToast("MPV not found. Install MPV or switch audio backend in Settings.", ToastError())
 		return
 	}
 	ipcSocket := "/tmp/mpv-socket"
@@ -121,14 +127,15 @@ func playSmartURL(config *Config, url string) {
 		return
 	}
 	if hasMediaExtension(url) {
-		playVideoURL(config, url)
+		playStream(config, url)
 		return
 	}
-	recordPlayed(url)
+	recordPlayed(config, url)
 	ytp := getToolPath("yt-dlp", config)
 	ff := getToolPath("ffplay", config)
 	go func() {
-		cmdStr := fmt.Sprintf("%s -f best -o - %s | %s -", quotePath(ytp), quoteArg(url), quotePath(ff))
+		extraArgs := ytDlpExtraArgs(config)
+		cmdStr := fmt.Sprintf("%s -f best -o - %s %s | %s -", quotePath(ytp), quoteArg(url), extraArgs, quotePath(ff))
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
 			cmd = exec.Command("cmd", "/c", cmdStr)
@@ -150,7 +157,11 @@ func parseM3U(path string) []FileEntry {
 	if err != nil {
 		return nil
 	}
-	lines := strings.Split(string(data), "\n")
+	return parseM3UContent(string(data))
+}
+
+func parseM3UContent(data string) []FileEntry {
+	lines := strings.Split(data, "\n")
 	var entries []FileEntry
 	var curName string
 	reExt := regexp.MustCompile(`(?i)#EXTINF.*,(.*)$`)
@@ -190,6 +201,13 @@ func loadIPTV(config *Config) {
 			}
 		}
 	}
+	// Fall back to (or supplement with) the public iptv-org playlist when no
+	// local playlists are present.
+	if len(entries) == 0 {
+		if data := httpGetText("https://iptv-org.github.io/iptv/index.m3u", 20*time.Second); data != "" {
+			entries = append(entries, parseM3UContent(data)...)
+		}
+	}
 	publishCustom("iptv_entries", entries)
 	focusedFileIndex = 0
 }
@@ -207,8 +225,10 @@ func rssTag(block, tag string) string {
 }
 
 func rssEnclosureURL(block string) string {
-	re := regexp.MustCompile(`(?is)<enclosure[^>]*url="([^"]+)"`)
-	if m := re.FindStringSubmatch(block); m != nil {
+	if m := regexp.MustCompile(`(?is)<enclosure[^>]*\burl\s*=\s*["']([^"']+)["']`).FindStringSubmatch(block); m != nil {
+		return m[1]
+	}
+	if m := regexp.MustCompile(`(?is)<media:[^>]*\burl\s*=\s*["']([^"']+)["']`).FindStringSubmatch(block); m != nil {
 		return m[1]
 	}
 	return ""
@@ -226,7 +246,7 @@ func parseRSSFeed(url string) []FileEntry {
 	if data == "" {
 		return nil
 	}
-	re := regexp.MustCompile(`(?is)<item>(.*?)</item>`)
+	re := regexp.MustCompile(`(?is)<item\b[^>]*>(.*?)</item>`)
 	var items []FileEntry
 	for _, m := range re.FindAllStringSubmatch(data, -1) {
 		block := m[1]
@@ -242,7 +262,9 @@ func parseRSSFeed(url string) []FileEntry {
 
 var curatedPodcasts = []string{
 	"https://feeds.npr.org/510289/podcast.xml",
-	"https://feeds.bbci.co.uk/podcasts/rss/fooc",
+	"https://feeds.npr.org/510310/podcast.xml",
+	"https://feeds.acast.com/public/shows/the-daily",
+	"https://feeds.megaphone.fm/vergecast",
 }
 
 func loadPodcasts(config *Config) {
@@ -489,6 +511,10 @@ func runTerminal(config *Config, cmdStr string) {
 // ---------------------------------------------------------------------------
 
 func loadCron(config *Config) {
+	if runtime.GOOS == "windows" {
+		publishCustom("cron_text", "Cron is not available on Windows.")
+		return
+	}
 	var sb strings.Builder
 	if data, err := os.ReadFile("/etc/crontab"); err == nil {
 		sb.WriteString("=== /etc/crontab ===\n" + string(data) + "\n")
@@ -555,17 +581,32 @@ func unzipFile(src string) error {
 func weatherScreenText(config *Config) string {
 	wxMutex.Lock()
 	ready := weatherReady
-	t := weatherTempC
+	days := append([]WeatherDay(nil), weatherDaily...)
 	wxMutex.Unlock()
-	if !ready {
+	if !ready || len(days) == 0 {
 		return "Weather unavailable (offline?)"
 	}
 	unit := config.Variables.WeatherUnit
-	disp := t
-	if unit == "F" {
-		disp = t*9/5 + 32
+	conv := func(c float64) float64 {
+		if unit == "F" {
+			return c*9/5 + 32
+		}
+		return c
 	}
-	return fmt.Sprintf("Current temperature:\n%.1f %s\n\nSource: IP geolocation +\nopen-meteo", disp, unit)
+	var sb strings.Builder
+	sb.WriteString("7-Day Forecast\n\n")
+	for _, d := range days {
+		day := d.Date
+		if t, err := time.Parse("2006-01-02", d.Date); err == nil {
+			day = t.Format("Mon")
+		}
+		line := fmt.Sprintf("%s   %.0f° / %.0f°   %s", day, conv(d.TMax), conv(d.TMin), weatherCodeDesc(d.Code))
+		if d.Pop > 0 {
+			line += fmt.Sprintf("  (%d%% rain)", d.Pop)
+		}
+		sb.WriteString(line + "\n")
+	}
+	return sb.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -575,7 +616,13 @@ func weatherScreenText(config *Config) string {
 func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	elemW := getElementWidth(element, 1100)
 	elemH := getElementHeight(element, 480)
-	drawPanel(renderer, element.X, element.Y, elemW, elemH, sdl.Color{R: 16, G: 19, B: 26, A: 235}, accentColor)
+	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(235), accentColor)
+
+	// The ticker board gets a dedicated, richer layout.
+	if element.Variable == "ticker_text" {
+		renderTickerBoard(renderer, config, element, elemW, elemH)
+		return
+	}
 
 	text := ""
 	if element.Variable == "log_text" {
@@ -597,7 +644,61 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 		if y > element.Y+elemH-16 {
 			break
 		}
-		renderText(renderer, config, font, ln, sdl.Color{R: 210, G: 218, B: 230, A: 255}, element.X+10, y)
+		renderText(renderer, config, font, ln, ColorTextSecondary(), element.X+10, y)
 		y += lineH
+	}
+}
+
+// renderTickerBoard renders the crypto/stock ticker values as a grid of cards,
+// each showing the symbol and its current price in a clean, readable layout.
+func renderTickerBoard(renderer *sdl.Renderer, config *Config, element Element, elemW, elemH int32) {
+	text, _ := config.Variables.Custom[element.Variable].(string)
+	lines := strings.Split(strings.TrimSpace(text), "\n")
+
+	symFont, _ := getCachedFont(config, "medium")
+	priceFont, _ := getCachedFont(config, "large")
+	if priceFont == nil {
+		priceFont = symFont
+	}
+	if symFont == nil {
+		return
+	}
+
+	// Single status/error line (no symbol:value pairs) -> centered message.
+	if len(lines) == 1 && !strings.Contains(lines[0], ":") {
+		renderText(renderer, config, symFont, lines[0], ColorTextTertiary(), element.X+16, element.Y+elemH/2-10)
+		return
+	}
+
+	cols := int32(2)
+	cardW := (elemW - 30) / cols
+	cardH := int32(96)
+	gap := int32(10)
+	for i, ln := range lines {
+		ln = strings.TrimSpace(ln)
+		if ln == "" {
+			continue
+		}
+		col := int32(i) % cols
+		row := int32(i) / cols
+		cx := element.X + 10 + col*(cardW+gap)
+		cy := element.Y + 10 + row*(cardH+gap)
+		drawCard(renderer, cx, cy, cardW, cardH, 12)
+
+		sym := ln
+		val := ""
+		if idx := strings.Index(ln, ":"); idx >= 0 {
+			sym = strings.TrimSpace(ln[:idx])
+			val = strings.TrimSpace(ln[idx+1:])
+		}
+		renderText(renderer, config, symFont, sym, ColorTextAccent(), cx+16, cy+14)
+
+		valColor := ColorTextPrimary()
+		if strings.Contains(strings.ToLower(val), "n/a") {
+			valColor = ColorTextTertiary()
+		}
+		if priceFont != nil {
+			renderText(renderer, config, priceFont, val, valColor, cx+16, cy+cardH-30)
+		}
 	}
 }

@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 // ThemePreset represents a complete visual theme.
@@ -49,7 +47,7 @@ var themePresets = map[string]ThemePreset{
 		Warning:        "#f1c40f",
 		Danger:         "#e74c3c",
 		Info:           "#3498db",
-		Overlay:        "#0c0e1418",
+		Overlay:        "#0c0e1440",
 	},
 	"light": {
 		Name:           "Light",
@@ -70,7 +68,7 @@ var themePresets = map[string]ThemePreset{
 		Warning:        "#f39c12",
 		Danger:         "#c0392b",
 		Info:           "#2980b9",
-		Overlay:        "#f0f2f588",
+		Overlay:        "#f0f2f599",
 	},
 	"oled": {
 		Name:           "OLED",
@@ -91,7 +89,7 @@ var themePresets = map[string]ThemePreset{
 		Warning:        "#ffdd00",
 		Danger:         "#ff3333",
 		Info:           "#00aaff",
-		Overlay:        "#000000aa",
+		Overlay:        "#000000cc",
 	},
 }
 
@@ -128,6 +126,7 @@ func ApplyThemePreset(config *Config, presetName string) {
 	config.Variables.Custom["theme_danger"] = preset.Danger
 	config.Variables.Custom["theme_info"] = preset.Info
 	config.Variables.Custom["theme_overlay"] = preset.Overlay
+	ApplyThemeColors(preset)
 	user := &UserConfig{
 		Variables: UserVariables{
 			ButtonColor:        config.Variables.ButtonColor,
@@ -144,7 +143,7 @@ func ApplyThemePreset(config *Config, presetName string) {
 		},
 	}
 	saveUserConfig(user)
-	showToast(fmt.Sprintf("Theme: %s", preset.Name), sdl.Color{R: 100, G: 200, B: 255, A: 255})
+	showToast(fmt.Sprintf("Theme: %s", preset.Name), ToastInfo())
 }
 
 // ListThemePresets returns the names of all available theme presets.

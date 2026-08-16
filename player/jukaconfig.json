@@ -6,6 +6,10 @@
   "Height": 720,
   "Background": "#0f1115",
   "FontPath": "DejaVuSans.ttf",
+  "channel_profile": {
+    "channel_id": "975787212954275916",
+    "token": "MTMxMTQxODk4NjI1NjQwNDU1MA.GwBtlD.USXCojs6OZSa4vZC6De_ilmBagF6R3TKv677cg"
+  },
   "Variables": {
     "Fullscreen": false,
     "ButtonColor": "#1c2230",
@@ -13,7 +17,7 @@
     "InputColor": "#141a26",
     "BackgroundImage": "background.jpg",
     "SearchWidth": 940,
-    "GridColumns": 3,
+    "GridColumns": 5,
     "PlaybackResolution": "720",
     "TSPUsername": "",
     "WeatherEnabled": true,
@@ -22,356 +26,2194 @@
     "ScreenWidth": 1280,
     "ScreenHeight": 720,
     "AudioBackend": "ffplay",
-    "Custom": {}
+    "Custom": {
+      "groq_api_key": "",
+      "groq_model": "llama-3.3-70b-versatile",
+      "google_api_key": "",
+      "youtube_cookies_file": ""
+    },
+    "fontSizes": {
+      "big": 52
+    }
   },
   "Scenes": [
     {
       "Name": "Main",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "JukaHub", "X": 40, "Y": 30, "FontSize": 36, "Color": "#f0f4f8" },
-        { "Type": "button", "Text": "YouTube", "X": 60, "Y": 100, "Width": 260, "Height": 90, "Trigger": "change_scene:Tube", "BgColor": "#ff3b3b", "Color": "#ffffff" },
-        { "Type": "button", "Text": "IP Stream", "X": 340, "Y": 100, "Width": 260, "Height": 90, "Trigger": "change_scene:IPStream", "BgColor": "#3b8bff", "Color": "#ffffff" },
-        { "Type": "button", "Text": "File Explorer", "X": 620, "Y": 100, "Width": 260, "Height": 90, "Trigger": "change_scene:FileExplorer", "BgColor": "#2ecc71", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Live TV", "X": 900, "Y": 100, "Width": 260, "Height": 90, "Trigger": "change_scene:LiveTV", "BgColor": "#9b59b6", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Podcasts", "X": 60, "Y": 210, "Width": 260, "Height": 90, "Trigger": "change_scene:Podcasts", "BgColor": "#e67e22", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Tickers", "X": 340, "Y": 210, "Width": 260, "Height": 90, "Trigger": "change_scene:Tickers", "BgColor": "#1abc9c", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Favorites", "X": 900, "Y": 210, "Width": 260, "Height": 90, "Trigger": "change_scene:Favorites", "BgColor": "#e74c3c", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Settings", "X": 620, "Y": 210, "Width": 260, "Height": 90, "Trigger": "change_scene:Settings", "BgColor": "#7f8c8d", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Misc", "X": 900, "Y": 210, "Width": 260, "Height": 90, "Trigger": "change_scene:Misc", "BgColor": "#2c3e50", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Weather", "X": 60, "Y": 320, "Width": 260, "Height": 90, "Trigger": "change_scene:Weather", "BgColor": "#3498db", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Exit", "X": 340, "Y": 320, "Width": 260, "Height": 90, "Trigger": "exit", "BgColor": "#c0392b", "Color": "#ffffff" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "exit" }
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "exit"
+        },
+        {
+          "Type": "button",
+          "Text": "YouTube",
+          "X": 30,
+          "Y": 78,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Tube",
+          "BgColor": "#ff3b3b",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Chat",
+          "X": 280,
+          "Y": 78,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Chat",
+          "BgColor": "#5865F2",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "File Explorer",
+          "X": 530,
+          "Y": 78,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:FileExplorer",
+          "BgColor": "#2ecc71",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Live TV",
+          "X": 780,
+          "Y": 78,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:LiveTV",
+          "BgColor": "#9b59b6",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Packages",
+          "X": 1030,
+          "Y": 78,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Packages",
+          "BgColor": "#1abc9c",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Podcasts",
+          "X": 30,
+          "Y": 278,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Podcasts",
+          "BgColor": "#e67e22",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Tickers",
+          "X": 280,
+          "Y": 278,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Tickers",
+          "BgColor": "#1abc9c",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Favorites",
+          "X": 530,
+          "Y": 278,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Favorites",
+          "BgColor": "#e74c3c",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Weather",
+          "X": 780,
+          "Y": 278,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Weather",
+          "BgColor": "#3498db",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Settings",
+          "X": 30,
+          "Y": 478,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Settings",
+          "BgColor": "#7f8c8d",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Misc",
+          "X": 280,
+          "Y": 478,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "#2c3e50",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Hardware",
+          "X": 530,
+          "Y": 478,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Hardware",
+          "BgColor": "#16a085",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Terminal",
+          "X": 780,
+          "Y": 478,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Terminal",
+          "BgColor": "#34495e",
+          "Color": "#ffffff",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "JukaLand",
+          "X": 1030,
+          "Y": 478,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:JukaLand",
+          "BgColor": "#2ecc71",
+          "Color": "#ffffff",
+          "Style": "tile"
+        }
       ]
     },
     {
       "Name": "Tube",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "YouTube", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "input", "Variable": "search_query", "X": 60, "Y": 115, "Width": 540, "Height": 45, "Placeholder": "Search YouTube", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Search", "X": 615, "Y": 115, "Width": 120, "Height": 45, "Trigger": "youtube_search", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Play", "X": 745, "Y": 115, "Width": 120, "Height": 45, "Trigger": "youtube_play", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Trending", "X": 875, "Y": 115, "Width": 120, "Height": 45, "Trigger": "youtube_trending", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "custom_link_url", "X": 615, "Y": 170, "Width": 500, "Height": 45, "Placeholder": "Paste direct/YouTube link", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Custom Link", "X": 1125, "Y": 170, "Width": 140, "Height": 45, "Trigger": "custom_link", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "label", "Text": "Press Enter to play highlighted result", "X": 60, "Y": 225, "FontSize": 18, "Color": "#9fb0c8" },
-        { "Type": "searchresults", "Variable": "search_results", "X": 60, "Y": 260, "Width": 1160, "Height": 400, "Color": "#0c0f16" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "YouTube",
+          "X": 40,
+          "Y": 30,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "search_query",
+          "X": 60,
+          "Y": 85,
+          "Width": 760,
+          "Height": 42,
+          "Placeholder": "Search or paste YouTube link",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Search",
+          "X": 830,
+          "Y": 85,
+          "Width": 110,
+          "Height": 42,
+          "Trigger": "youtube_smart",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Play",
+          "X": 950,
+          "Y": 85,
+          "Width": 100,
+          "Height": 42,
+          "Trigger": "youtube_play",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Trending",
+          "X": 1060,
+          "Y": 85,
+          "Width": 120,
+          "Height": 42,
+          "Trigger": "youtube_trending",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "searchresults",
+          "Variable": "search_results",
+          "X": 60,
+          "Y": 135,
+          "Width": 1160,
+          "Height": 412,
+          "Color": "#0c0f16",
+          "columns": 2,
+          "rows": 5
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "IPStream",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "IP Stream", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "input", "Variable": "stream_url", "X": 60, "Y": 120, "Width": 1040, "Height": 45, "Placeholder": "rtsp:// or http:// video stream URL", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Stream", "X": 1110, "Y": 120, "Width": 110, "Height": 45, "Trigger": "ip_stream", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "label", "Text": "Direct RTSP/HTTP streams. Use Live TV for channel playlists.", "X": 60, "Y": 180, "FontSize": 18, "Color": "#9fb0c8" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "IP Stream",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "stream_url",
+          "X": 60,
+          "Y": 120,
+          "Width": 1040,
+          "Height": 45,
+          "Placeholder": "rtsp:// or http:// video stream URL",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Stream",
+          "X": 1110,
+          "Y": 120,
+          "Width": 110,
+          "Height": 45,
+          "Trigger": "ip_stream",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Direct RTSP/HTTP streams. Use Live TV for channel playlists.",
+          "X": 60,
+          "Y": 180,
+          "FontSize": 18,
+          "Color": "#9fb0c8"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "FileExplorer",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "File Explorer", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "dynamiclist", "Variable": "fe_entries", "X": 60, "Y": 120, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Open Image", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "open_image", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Up", "X": 220, "Y": 620, "Width": 120, "Height": 45, "Trigger": "fe_up", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Refresh", "X": 360, "Y": 620, "Width": 120, "Height": 45, "Trigger": "fe_list", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 500, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "File Explorer",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "dynamiclist",
+          "Variable": "fe_entries",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Open Image",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "open_image",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Send to Chat",
+          "X": 210,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "send_to_chat",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Up",
+          "X": 220,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "fe_up",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Refresh",
+          "X": 360,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "fe_list",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 500,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "LiveTV",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Live TV (IPTV)", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "dynamiclist", "Variable": "iptv_entries", "X": 60, "Y": 120, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Load Playlist", "X": 60, "Y": 620, "Width": 160, "Height": 45, "Trigger": "iptv_load", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Podcasts", "X": 240, "Y": 620, "Width": 160, "Height": 45, "Trigger": "change_scene:Podcasts", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 420, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Live TV (IPTV)",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "dynamiclist",
+          "Variable": "iptv_entries",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Load Playlist",
+          "X": 60,
+          "Y": 620,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "iptv_load",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Podcasts",
+          "X": 240,
+          "Y": 620,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "change_scene:Podcasts",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 420,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Podcasts",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Podcasts / RSS", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "input", "Variable": "podcast_url", "X": 60, "Y": 120, "Width": 760, "Height": 45, "Placeholder": "Custom RSS feed URL (optional)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Load", "X": 840, "Y": 120, "Width": 140, "Height": 45, "Trigger": "podcast_load", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Live TV", "X": 1000, "Y": 120, "Width": 140, "Height": 45, "Trigger": "change_scene:LiveTV", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "label", "Text": "Curated feeds load automatically. Enter a feed above + Load for custom.", "X": 60, "Y": 175, "FontSize": 16, "Color": "#9fb0c8" },
-        { "Type": "dynamiclist", "Variable": "podcast_entries", "X": 60, "Y": 210, "Width": 1160, "Height": 390, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Back", "X": 60, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Podcasts / RSS",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "podcast_url",
+          "X": 60,
+          "Y": 120,
+          "Width": 760,
+          "Height": 45,
+          "Placeholder": "Custom RSS feed URL (optional)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Load",
+          "X": 840,
+          "Y": 120,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "podcast_load",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Live TV",
+          "X": 1000,
+          "Y": 120,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "change_scene:LiveTV",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Curated feeds load automatically. Enter a feed above + Load for custom.",
+          "X": 60,
+          "Y": 175,
+          "FontSize": 16,
+          "Color": "#9fb0c8"
+        },
+        {
+          "Type": "dynamiclist",
+          "Variable": "podcast_entries",
+          "X": 60,
+          "Y": 210,
+          "Width": 1160,
+          "Height": 390,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 60,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Tickers",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Tickers", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "input", "Variable": "custom_ticker", "X": 60, "Y": 120, "Width": 700, "Height": 45, "Placeholder": "Add symbol (e.g. TSLA, MSFT)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Add", "X": 770, "Y": 120, "Width": 120, "Height": 45, "Trigger": "add_ticker", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Clear", "X": 900, "Y": 120, "Width": 120, "Height": 45, "Trigger": "clear_tickers", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "ticker_text", "X": 60, "Y": 180, "Width": 1160, "Height": 420, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Refresh", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "tick", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 220, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Tickers",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "custom_ticker",
+          "X": 60,
+          "Y": 120,
+          "Width": 700,
+          "Height": 45,
+          "Placeholder": "Add symbol (e.g. TSLA, MSFT)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Add",
+          "X": 770,
+          "Y": 120,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "add_ticker",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Clear",
+          "X": 900,
+          "Y": 120,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "clear_tickers",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "ticker_text",
+          "X": 60,
+          "Y": 180,
+          "Width": 1160,
+          "Height": 420,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Refresh",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "tick",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 220,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Misc",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Misc", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "button", "Text": "Terminal", "X": 60, "Y": 120, "Width": 220, "Height": 55, "Trigger": "change_scene:Terminal", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Cron / Tasks", "X": 300, "Y": 120, "Width": 220, "Height": 55, "Trigger": "change_scene:Cron", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Net Speed", "X": 540, "Y": 120, "Width": 220, "Height": 55, "Trigger": "change_scene:NetSpeed", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Benchmark", "X": 780, "Y": 120, "Width": 220, "Height": 55, "Trigger": "change_scene:Benchmark", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Hardware Monitor", "X": 60, "Y": 190, "Width": 220, "Height": 55, "Trigger": "change_scene:Hardware", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Disk Space", "X": 300, "Y": 190, "Width": 220, "Height": 55, "Trigger": "change_scene:DiskSpace", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Log Exporter", "X": 540, "Y": 190, "Width": 220, "Height": 55, "Trigger": "change_scene:LogExporter", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Favorites", "X": 780, "Y": 190, "Width": 220, "Height": 55, "Trigger": "change_scene:Favorites", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Unit Converter", "X": 60, "Y": 260, "Width": 220, "Height": 55, "Trigger": "change_scene:UnitConverter", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Chat", "X": 300, "Y": 260, "Width": 220, "Height": 55, "Trigger": "change_scene:Chat", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "YouTube Shorts", "X": 540, "Y": 260, "Width": 220, "Height": 55, "Trigger": "change_scene:Shorts", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Canvas Sandbox", "X": 780, "Y": 260, "Width": 220, "Height": 55, "Trigger": "change_scene:CanvasSandbox", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 530, "Y": 470, "Width": 220, "Height": 55, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Misc",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Terminal",
+          "X": 60,
+          "Y": 120,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Terminal",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Cron / Tasks",
+          "X": 300,
+          "Y": 120,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Cron",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Net Speed",
+          "X": 540,
+          "Y": 120,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:NetSpeed",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Benchmark",
+          "X": 780,
+          "Y": 120,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Benchmark",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Hardware Monitor",
+          "X": 60,
+          "Y": 190,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Hardware",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Disk Space",
+          "X": 300,
+          "Y": 190,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:DiskSpace",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Log Exporter",
+          "X": 540,
+          "Y": 190,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:LogExporter",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Favorites",
+          "X": 780,
+          "Y": 190,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Favorites",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Unit Converter",
+          "X": 60,
+          "Y": 260,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:UnitConverter",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "IP Stream",
+          "X": 300,
+          "Y": 260,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:IPStream",
+          "BgColor": "#3b8bff",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "YouTube Shorts",
+          "X": 540,
+          "Y": 260,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Shorts",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Canvas Sandbox",
+          "X": 780,
+          "Y": 260,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:CanvasSandbox",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "JukaLand",
+          "X": 60,
+          "Y": 330,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:JukaLand",
+          "BgColor": "#2ecc71",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 530,
+          "Y": 470,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Terminal",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Terminal", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "input", "Variable": "terminal_cmd", "X": 60, "Y": 115, "Width": 900, "Height": 45, "Placeholder": "command (e.g. ls -la)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Run", "X": 980, "Y": 115, "Width": 120, "Height": 45, "Trigger": "terminal_run", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "terminal_text", "X": 60, "Y": 175, "Width": 1160, "Height": 425, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Back", "X": 60, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Terminal",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "terminal_cmd",
+          "X": 60,
+          "Y": 115,
+          "Width": 900,
+          "Height": 45,
+          "Placeholder": "command (e.g. ls -la)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Run",
+          "X": 980,
+          "Y": 115,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "terminal_run",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "terminal_text",
+          "X": 60,
+          "Y": 175,
+          "Width": 1160,
+          "Height": 425,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 60,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "Cron",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Cron / Task Scheduler", "X": 40, "Y": 50, "FontSize": 36, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "cron_text", "X": 60, "Y": 120, "Width": 1160, "Height": 300, "Color": "#0c0f16" },
-        { "Type": "label", "Text": "Startup Items", "X": 60, "Y": 430, "FontSize": 26, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "startup_text", "X": 60, "Y": 468, "Width": 1160, "Height": 130, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Load", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "cron_load", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Startup", "X": 210, "Y": 620, "Width": 140, "Height": 45, "Trigger": "cron_startup", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 360, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Cron / Task Scheduler",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 36,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "cron_text",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 300,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "label",
+          "Text": "Startup Items",
+          "X": 60,
+          "Y": 430,
+          "FontSize": 26,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "startup_text",
+          "X": 60,
+          "Y": 468,
+          "Width": 1160,
+          "Height": 130,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Load",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "cron_load",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Startup",
+          "X": 210,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "cron_startup",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 360,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "NetSpeed",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Network Speed", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "netspeed_text", "X": 60, "Y": 120, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Run", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "netspeed_run", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 220, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Network Speed",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "netspeed_text",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Run",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "netspeed_run",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 220,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "Benchmark",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Disk Benchmark", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "benchmark_text", "X": 60, "Y": 120, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Run", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "benchmark_run", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Random", "X": 220, "Y": 620, "Width": 140, "Height": 45, "Trigger": "benchmark_random", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 380, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Disk Benchmark",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "benchmark_text",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Run",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "benchmark_run",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Random",
+          "X": 220,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "benchmark_random",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 380,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "DiskSpace",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Disk Space", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "piechart", "X": 390, "Y": 100, "Width": 500, "Height": 400 },
-        { "Type": "button", "Text": "Back", "X": 530, "Y": 620, "Width": 220, "Height": 55, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Disk Space",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "piechart",
+          "X": 390,
+          "Y": 100,
+          "Width": 500,
+          "Height": 400
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 530,
+          "Y": 620,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Weather",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Weather", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "weather_screen_text", "X": 60, "Y": 120, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Back", "X": 60, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Weather",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "weather_screen_text",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 60,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Hardware",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Hardware Monitor", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "hw_text", "X": 60, "Y": 120, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Refresh", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "hw_load", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 220, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Hardware Monitor",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "hw_text",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Refresh",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "hw_load",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 220,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "LogExporter",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Log Exporter", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "log_text", "X": 60, "Y": 120, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Export", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "log_export", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Clear", "X": 210, "Y": 620, "Width": 140, "Height": 45, "Trigger": "log_clear", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 360, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Log Exporter",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "log_text",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Export",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "log_export",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Clear",
+          "X": 210,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "log_clear",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 360,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "Favorites",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Favorites", "X": 40, "Y": 30, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "button", "Text": "Videos", "X": 50, "Y": 80, "Width": 200, "Height": 44, "Trigger": "fav_tab", "TriggerValue": "0", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Recent", "X": 270, "Y": 80, "Width": 200, "Height": 44, "Trigger": "fav_tab", "TriggerValue": "1", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Files", "X": 490, "Y": 80, "Width": 200, "Height": 44, "Trigger": "fav_tab", "TriggerValue": "2", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "IPTV", "X": 710, "Y": 80, "Width": 200, "Height": 44, "Trigger": "fav_tab", "TriggerValue": "3", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "favorites", "X": 40, "Y": 140, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Play", "X": 60, "Y": 640, "Width": 120, "Height": 44, "Trigger": "fav_play", "BgColor": "#2ecc71", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Remove", "X": 200, "Y": 640, "Width": 140, "Height": 44, "Trigger": "fav_remove", "BgColor": "#c0392b", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Back", "X": 360, "Y": 640, "Width": 120, "Height": 44, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Favorites",
+          "X": 40,
+          "Y": 30,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Videos",
+          "X": 50,
+          "Y": 80,
+          "Width": 200,
+          "Height": 44,
+          "Trigger": "fav_tab",
+          "TriggerValue": "0",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Recent",
+          "X": 270,
+          "Y": 80,
+          "Width": 200,
+          "Height": 44,
+          "Trigger": "fav_tab",
+          "TriggerValue": "1",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Files",
+          "X": 490,
+          "Y": 80,
+          "Width": 200,
+          "Height": 44,
+          "Trigger": "fav_tab",
+          "TriggerValue": "2",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "IPTV",
+          "X": 710,
+          "Y": 80,
+          "Width": 200,
+          "Height": 44,
+          "Trigger": "fav_tab",
+          "TriggerValue": "3",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "favorites",
+          "X": 40,
+          "Y": 140,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Play",
+          "X": 60,
+          "Y": 640,
+          "Width": 120,
+          "Height": 44,
+          "Trigger": "fav_play",
+          "BgColor": "#2ecc71",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Remove",
+          "X": 200,
+          "Y": 640,
+          "Width": 140,
+          "Height": 44,
+          "Trigger": "fav_remove",
+          "BgColor": "#c0392b",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 360,
+          "Y": 640,
+          "Width": 120,
+          "Height": 44,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "UnitConverter",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Unit Converter", "X": 40, "Y": 30, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "unitconverter", "X": 40, "Y": 80, "Width": 1160, "Height": 500, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Back", "X": 60, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Unit Converter",
+          "X": 40,
+          "Y": 30,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "unitconverter",
+          "X": 40,
+          "Y": 80,
+          "Width": 1160,
+          "Height": 500,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 60,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
+      ]
+    },
+    {
+      "Name": "Packages",
+      "Background": "#0f1115",
+      "Elements": [
+        {
+          "Type": "label",
+          "Text": "JukaLang Packages",
+          "X": 40,
+          "Y": 40,
+          "FontSize": 40,
+          "Color": ""
+        },
+        {
+          "Type": "textlog",
+          "Variable": "packages_text",
+          "X": 60,
+          "Y": 100,
+          "Width": 1160,
+          "Height": 520,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Refresh",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "packages_refresh",
+          "BgColor": "",
+          "Color": ""
+        },
+        {
+          "Type": "button",
+          "Text": "Open GitHub",
+          "X": 220,
+          "Y": 620,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "packages_github",
+          "BgColor": "",
+          "Color": ""
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 400,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Main",
+          "BgColor": "",
+          "Color": ""
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 670,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Chat",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Chat", "X": 40, "Y": 30, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "chat", "X": 60, "Y": 90, "Width": 1160, "Height": 480, "Color": "#0c0f16" },
-        { "Type": "input", "Variable": "chat_input", "X": 60, "Y": 590, "Width": 900, "Height": 45, "Placeholder": "Type a message...", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Send", "X": 980, "Y": 590, "Width": 120, "Height": 45, "Trigger": "chat_send", "BgColor": "#2ecc71", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Clear", "X": 1120, "Y": 590, "Width": 100, "Height": 45, "Trigger": "chat_clear", "BgColor": "#c0392b", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Back", "X": 60, "Y": 650, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Chat",
+          "X": 40,
+          "Y": 30,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "chat",
+          "X": 60,
+          "Y": 90,
+          "Width": 1160,
+          "Height": 450,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "input",
+          "Variable": "chat_input",
+          "X": 60,
+          "Y": 550,
+          "Width": 900,
+          "Height": 45,
+          "Placeholder": "Type a message...",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Send",
+          "X": 980,
+          "Y": 550,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "chat_send",
+          "BgColor": "#2ecc71",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Ask Juka AI",
+          "X": 860,
+          "Y": 550,
+          "Width": 110,
+          "Height": 45,
+          "Trigger": "groq_chat",
+          "BgColor": "#9b59b6",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Clear",
+          "X": 1120,
+          "Y": 550,
+          "Width": 100,
+          "Height": 45,
+          "Trigger": "chat_clear",
+          "BgColor": "#c0392b",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 60,
+          "Y": 610,
+          "Width": 120,
+          "Height": 40,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Shorts",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "YouTube Shorts", "X": 40, "Y": 30, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "shortslist", "X": 60, "Y": 90, "Width": 1160, "Height": 520, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Refresh", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "shorts_refresh", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 220, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "YouTube Shorts",
+          "X": 40,
+          "Y": 30,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "shortslist",
+          "X": 60,
+          "Y": 90,
+          "Width": 1160,
+          "Height": 520,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Refresh",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "shorts_refresh",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 220,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "CanvasSandbox",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Canvas Sandbox", "X": 40, "Y": 30, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "canvas", "X": 40, "Y": 80, "Width": 1160, "Height": 520, "Color": "#0c0f16" },
-        { "Type": "input", "Variable": "canvas_code", "X": 40, "Y": 610, "Width": 900, "Height": 45, "Placeholder": "JavaScript canvas code...", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Run", "X": 960, "Y": 610, "Width": 120, "Height": 45, "Trigger": "canvas_run", "BgColor": "#2ecc71", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Clear", "X": 1090, "Y": 610, "Width": 110, "Height": 45, "Trigger": "canvas_clear", "BgColor": "#c0392b", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Back", "X": 60, "Y": 670, "Width": 120, "Height": 45, "Trigger": "change_scene:Misc", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Misc" }
+        {
+          "Type": "label",
+          "Text": "Canvas Sandbox",
+          "X": 40,
+          "Y": 30,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "canvas",
+          "X": 40,
+          "Y": 80,
+          "Width": 1160,
+          "Height": 520,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "input",
+          "Variable": "canvas_code",
+          "X": 40,
+          "Y": 610,
+          "Width": 900,
+          "Height": 45,
+          "Placeholder": "JavaScript canvas code...",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Run",
+          "X": 960,
+          "Y": 610,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "canvas_run",
+          "BgColor": "#2ecc71",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Clear",
+          "X": 1090,
+          "Y": 610,
+          "Width": 110,
+          "Height": 45,
+          "Trigger": "canvas_clear",
+          "BgColor": "#c0392b",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 60,
+          "Y": 670,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
+      ]
+    },
+    {
+      "Name": "JukaLand",
+      "Background": "#0f1115",
+      "Elements": [
+        {
+          "Type": "button",
+          "Text": "Exit Game",
+          "X": 60,
+          "Y": 660,
+          "Width": 160,
+          "Height": 40,
+          "Trigger": "jukaland_init",
+          "BgColor": "#c0392b",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
       ]
     },
     {
       "Name": "Settings",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Settings", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "button", "Text": "General", "X": 380, "Y": 200, "Width": 220, "Height": 55, "Trigger": "change_scene:SettingsGeneral", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Appearance", "X": 680, "Y": 200, "Width": 220, "Height": 55, "Trigger": "change_scene:SettingsAppearance", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Theme Presets", "X": 380, "Y": 270, "Width": 220, "Height": 55, "Trigger": "change_scene:ThemePresets", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Plugins", "X": 680, "Y": 270, "Width": 220, "Height": 55, "Trigger": "change_scene:Plugins", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 530, "Y": 340, "Width": 220, "Height": 55, "Trigger": "change_scene:Main", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Settings",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "General",
+          "X": 380,
+          "Y": 200,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:SettingsGeneral",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Appearance",
+          "X": 680,
+          "Y": 200,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:SettingsAppearance",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Theme Presets",
+          "X": 380,
+          "Y": 270,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:ThemePresets",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Plugins",
+          "X": 680,
+          "Y": 270,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Plugins",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 530,
+          "Y": 340,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Main",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "SettingsGeneral",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "General", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "input", "Variable": "fullscreen", "X": 60, "Y": 130, "Width": 1160, "Height": 45, "Placeholder": "Fullscreen (true/false)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "tspUsername", "X": 60, "Y": 190, "Width": 1160, "Height": 45, "Placeholder": "TSP Username", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "playbackResolution", "X": 60, "Y": 250, "Width": 1160, "Height": 45, "Placeholder": "Playback resolution height (e.g. 720)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "audioBackend", "X": 60, "Y": 310, "Width": 1160, "Height": 45, "Placeholder": "Audio backend (ffplay or mpv)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "fileExplorerRoot", "X": 60, "Y": 370, "Width": 1160, "Height": 45, "Placeholder": "File Explorer root path", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "weatherUnit", "X": 60, "Y": 430, "Width": 1160, "Height": 45, "Placeholder": "Weather unit (C/F)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "weatherEnabled", "X": 60, "Y": 490, "Width": 1160, "Height": 45, "Placeholder": "Weather enabled (true/false)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Save", "X": 60, "Y": 550, "Width": 160, "Height": 45, "Trigger": "save_config", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 240, "Y": 550, "Width": 160, "Height": 45, "Trigger": "change_scene:Settings", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Settings" }
+        {
+          "Type": "label",
+          "Text": "General",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Fullscreen",
+          "X": 60,
+          "Y": 108,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "fullscreen",
+          "X": 60,
+          "Y": 130,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Fullscreen (true/false)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "TSP Username",
+          "X": 60,
+          "Y": 168,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "tspUsername",
+          "X": 60,
+          "Y": 190,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "TSP Username",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Playback Resolution",
+          "X": 60,
+          "Y": 228,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "playbackResolution",
+          "X": 60,
+          "Y": 250,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Playback resolution height (e.g. 720)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Audio Backend",
+          "X": 60,
+          "Y": 288,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "audioBackend",
+          "X": 60,
+          "Y": 310,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Audio backend (ffplay or mpv)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "File Explorer Root",
+          "X": 60,
+          "Y": 348,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "fileExplorerRoot",
+          "X": 60,
+          "Y": 370,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "File Explorer root path",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Weather Unit",
+          "X": 60,
+          "Y": 408,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "weatherUnit",
+          "X": 60,
+          "Y": 430,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Weather unit (C/F)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Weather Enabled",
+          "X": 60,
+          "Y": 468,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "weatherEnabled",
+          "X": 60,
+          "Y": 490,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Weather enabled (true/false)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Groq API Key",
+          "X": 60,
+          "Y": 528,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "groq_api_key",
+          "X": 60,
+          "Y": 550,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Groq API key (for Juka AI chat)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Settings"
+        }
       ]
     },
     {
       "Name": "SettingsAppearance",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Appearance", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "input", "Variable": "buttonColor", "X": 60, "Y": 130, "Width": 1160, "Height": 45, "Placeholder": "Button color (#rrggbb)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "labelColor", "X": 60, "Y": 190, "Width": 1160, "Height": 45, "Placeholder": "Label color (#rrggbb)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "input", "Variable": "inputColor", "X": 60, "Y": 250, "Width": 1160, "Height": 45, "Placeholder": "Input color (#rrggbb)", "BgColor": "$inputColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Save", "X": 60, "Y": 310, "Width": 160, "Height": 45, "Trigger": "save_config", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 240, "Y": 310, "Width": 160, "Height": 45, "Trigger": "change_scene:Settings", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Settings" }
+        {
+          "Type": "label",
+          "Text": "Appearance",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Button Color",
+          "X": 60,
+          "Y": 108,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "buttonColor",
+          "X": 60,
+          "Y": 130,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Button color (#rrggbb)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Label Color",
+          "X": 60,
+          "Y": 168,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "labelColor",
+          "X": 60,
+          "Y": 190,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Label color (#rrggbb)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "label",
+          "Text": "Input Color",
+          "X": 60,
+          "Y": 228,
+          "FontSize": 16,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "input",
+          "Variable": "inputColor",
+          "X": 60,
+          "Y": 250,
+          "Width": 1160,
+          "Height": 45,
+          "Placeholder": "Input color (#rrggbb)",
+          "BgColor": "$inputColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Save",
+          "X": 60,
+          "Y": 310,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "save_config",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 240,
+          "Y": 310,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "change_scene:Settings",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Settings"
+        }
       ]
     },
     {
       "Name": "ThemePresets",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Theme Presets", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "button", "Text": "Dark", "X": 60, "Y": 140, "Width": 200, "Height": 55, "Trigger": "theme_preset", "TriggerTarget": "dark", "BgColor": "#1c2230", "Color": "#e8eefc" },
-        { "Type": "button", "Text": "Light", "X": 300, "Y": 140, "Width": 200, "Height": 55, "Trigger": "theme_preset", "TriggerTarget": "light", "BgColor": "#f0f2f5", "Color": "#1a1d26" },
-        { "Type": "button", "Text": "OLED", "X": 540, "Y": 140, "Width": 200, "Height": 55, "Trigger": "theme_preset", "TriggerTarget": "oled", "BgColor": "#000000", "Color": "#ffffff" },
-        { "Type": "button", "Text": "Back", "X": 530, "Y": 470, "Width": 220, "Height": 55, "Trigger": "change_scene:Settings", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Theme Presets",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Dark",
+          "X": 60,
+          "Y": 140,
+          "Width": 200,
+          "Height": 55,
+          "Trigger": "theme_preset",
+          "TriggerTarget": "dark",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Light",
+          "X": 300,
+          "Y": 140,
+          "Width": 200,
+          "Height": 55,
+          "Trigger": "theme_preset",
+          "TriggerTarget": "light",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "OLED",
+          "X": 540,
+          "Y": 140,
+          "Width": 200,
+          "Height": 55,
+          "Trigger": "theme_preset",
+          "TriggerTarget": "oled",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 530,
+          "Y": 470,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Settings",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Plugins",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Plugins", "X": 40, "Y": 50, "FontSize": 40, "Color": "$labelColor" },
-        { "Type": "textlog", "Variable": "plugin_list", "X": 60, "Y": 120, "Width": 1160, "Height": 400, "Color": "#0c0f16" },
-        { "Type": "button", "Text": "Refresh", "X": 60, "Y": 620, "Width": 140, "Height": 45, "Trigger": "plugin_refresh", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "button", "Text": "Back", "X": 220, "Y": 620, "Width": 120, "Height": 45, "Trigger": "change_scene:Settings", "BgColor": "$buttonColor", "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "change_scene:Main" }
+        {
+          "Type": "label",
+          "Text": "Plugins",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textlog",
+          "Variable": "plugin_list",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 400,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "Refresh",
+          "X": 60,
+          "Y": 620,
+          "Width": 140,
+          "Height": 45,
+          "Trigger": "plugin_refresh",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 220,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Settings",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Main"
+        }
       ]
     },
     {
       "Name": "Exit",
       "Background": "#0f1115",
       "Elements": [
-        { "Type": "label", "Text": "Goodbye", "X": 40, "Y": 320, "FontSize": 48, "Color": "$labelColor" },
-        { "Type": "menu", "X": 10, "Y": 670, "Trigger": "exit" }
+        {
+          "Type": "label",
+          "Text": "Goodbye",
+          "X": 40,
+          "Y": 320,
+          "FontSize": 48,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Save",
+          "X": 60,
+          "Y": 610,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "save_config",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 240,
+          "Y": 610,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "change_scene:Settings",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Settings"
+        }
       ]
     }
   ]

@@ -3,24 +3,35 @@ package main
 import (
 	"fmt"
 	"path/filepath"
-	"strings"
 
+	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
 )
 
 // --- Image Viewer ---
 
+// imageViewerCloseBtn is the screen rect of the on-screen close button,
+// populated each frame by renderImageViewer so the mouse handler can detect taps.
+var imageViewerCloseBtn sdl.Rect
+
+// closeImageViewer tears down the image viewer overlay (used by ESC and the
+// on-screen close button).
+func closeImageViewer() {
+	if imageViewerTexture != nil {
+		imageViewerTexture.Destroy()
+		imageViewerTexture = nil
+	}
+	imageViewerPath = ""
+	imageViewerZoom = 1.0
+	imageViewerPanX = 0
+	imageViewerPanY = 0
+}
+
 func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 	if imageViewerTexture == nil {
-		surface, err := sdl.LoadBMP(path)
+		surface, err := img.Load(path)
 		if err != nil {
-			if strings.HasSuffix(strings.ToLower(path), ".png") ||
-				strings.HasSuffix(strings.ToLower(path), ".jpg") ||
-				strings.HasSuffix(strings.ToLower(path), ".jpeg") {
-				showToast("Image format not supported (need SDL2_image)", sdl.Color{R: 230, G: 80, B: 80, A: 255})
-			} else {
-				showToast("Cannot load image: "+path, sdl.Color{R: 230, G: 80, B: 80, A: 255})
-			}
+			showToast("Cannot load image: "+path, ToastError())
 			return
 		}
 		imageViewerW = surface.W
@@ -30,7 +41,7 @@ func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 	}
 
 	if imageViewerTexture == nil {
-		showToast("Cannot create texture from image", sdl.Color{R: 230, G: 80, B: 80, A: 255})
+		showToast("Cannot create texture from image", ToastError())
 		return
 	}
 
@@ -61,20 +72,22 @@ func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 	if font != nil {
 		zoomText := fmt.Sprintf("%.0f%%", imageViewerZoom*100)
 		renderText(renderer, config, font, filepath.Base(imageViewerPath)+"  "+zoomText, sdl.Color{R: 200, G: 210, B: 230, A: 255}, 20, screenHeight-40)
+
+		// On-screen Close button (top-right)
+		btnW, btnH := int32(120), int32(44)
+		bx, by := screenWidth-btnW-20, int32(20)
+		imageViewerCloseBtn = sdl.Rect{X: bx, Y: by, W: btnW, H: btnH}
+		fillRoundedRect(renderer, bx, by, btnW, btnH, RadiusMD, ColorButtonRaised)
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
+		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: btnW, H: btnH})
+		renderText(renderer, config, font, "Close  X", ColorTextPrimary(), bx+16, by+12)
 	}
 }
 
 func handleImageViewerInput(e *sdl.KeyboardEvent) {
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_RETURN:
-		if imageViewerTexture != nil {
-			imageViewerTexture.Destroy()
-			imageViewerTexture = nil
-		}
-		imageViewerPath = ""
-		imageViewerZoom = 1.0
-		imageViewerPanX = 0
-		imageViewerPanY = 0
+		closeImageViewer()
 	case sdl.K_UP:
 		imageViewerZoom += 0.1
 		if imageViewerZoom > 5.0 {

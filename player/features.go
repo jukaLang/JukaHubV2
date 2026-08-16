@@ -11,6 +11,52 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
+// openFileInCanvasSandbox loads a .html or .js file into the Canvas Sandbox.
+// For .html files it reads the content and checks for canvas-related code.
+// For .js files it wraps the content in a basic HTML template with a canvas.
+func openFileInCanvasSandbox(path string) {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext != ".html" && ext != ".js" {
+		showToast("Only .html and .js files can open in Canvas Sandbox", ToastError())
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		showToast("Failed to read file: "+err.Error(), ToastError())
+		return
+	}
+	content := string(data)
+	if ext == ".js" {
+		content = "<canvas id=\"c\" width=\"400\" height=\"300\"></canvas>\n<script>\n" + content + "\n</script>"
+	} else if ext == ".html" {
+		if !strings.Contains(strings.ToLower(content), "<canvas") && !strings.Contains(content, "getContext") {
+			showToast("No canvas element found in HTML file", ToastError())
+			return
+		}
+	}
+	for _, e := range appConfig.Scenes {
+		if e.Name == "CanvasSandbox" {
+			for _, el := range e.Elements {
+				if el.Variable == "canvas_code" {
+					appConfig.Variables.Custom["canvas_code"] = content
+				}
+			}
+		}
+	}
+	canvasCode = content
+	if canvasSurface != nil {
+		canvasSurface.Free()
+		canvasSurface = nil
+	}
+	canvasSurface = executeCanvasCode(canvasCode)
+	for i, e := range appConfig.Scenes {
+		if e.Name == "CanvasSandbox" {
+			changeSceneTo(appConfig, i)
+			break
+		}
+	}
+}
+
 // FileEntry represents a single entry in the File Explorer.
 type FileEntry struct {
 	Name  string `json:"name"`
@@ -145,8 +191,12 @@ func feEnterFocused(config *Config) {
 		imageViewerPanY = 0
 		return
 	}
+	if ext == ".html" || ext == ".js" {
+		openFileInCanvasSandbox(entry.Path)
+		return
+	}
 	if isMediaFile(entry.Name) || hasMediaExtension(entry.Path) {
-		recordPlayed(entry.Path)
+		recordPlayed(config, entry.Path)
 		playSmartURL(config, entry.Path)
 	} else {
 		log.Printf("[DEBUG] File Explorer: skipping non-media file: %s", entry.Name)
@@ -179,7 +229,7 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 	if !ok {
 		font, _ := getCachedFont(config, "small")
 		if font != nil {
-			renderText(renderer, config, font, "No items.", sdl.Color{R: 255, G: 255, B: 255, A: 255}, element.X, element.Y)
+			renderText(renderer, config, font, "No items.", ColorTextPrimary(), element.X, element.Y)
 		}
 		return
 	}
@@ -193,12 +243,12 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 
 	// header with path
-	renderText(renderer, config, font, "Path: "+feCurrentPath(config),
-		sdl.Color{R: 180, G: 190, B: 220, A: 255}, element.X, element.Y)
+		renderText(renderer, config, font, "Path: "+feCurrentPath(config),
+			ColorTextSecondary(), element.X, element.Y)
 
 	elemW := getElementWidth(element, 600)
 	elemH := getElementHeight(element, 500)
-	drawPanel(renderer, element.X, element.Y, elemW, elemH, sdl.Color{R: 16, G: 19, B: 26, A: 220}, accentColor)
+	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
 	lineH := int32(40)
 	maxVisible := int((elemH - 30) / lineH)
 	if maxVisible < 1 {
@@ -221,17 +271,7 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		rowX := element.X + 8
 		rowY := y + 2
 
-		// card background
-		fillRoundedRect(renderer, rowX+1, rowY+1, rowW, rowH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 50})
-		fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: 26, G: 30, B: 40, A: 255})
-
-		if i == focusedFileIndex {
-			fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 70})
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-			renderer.FillRect(&sdl.Rect{X: rowX, Y: rowY, W: 4, H: rowH})
-			// inner highlight for selected row
-			fillRoundedRect(renderer, rowX+1, rowY+1, rowW-2, rowH/2, 7, sdl.Color{R: 255, G: 255, B: 255, A: 12})
-		}
+		drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == focusedFileIndex, false)
 
 		if isRecentlyPlayed(entries[i].Path) {
 			renderer.SetDrawColor(220, 50, 50, 255)
@@ -239,13 +279,13 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 
 		prefix := ""
-		color := sdl.Color{R: 200, G: 210, B: 230, A: 255}
+		color := ColorTextSecondary()
 		if entries[i].IsDir {
 			prefix = "D "
 			color = sdl.Color{R: 255, G: 230, B: 120, A: 255}
 		} else if isMediaFile(entries[i].Name) {
 			prefix = "> "
-			color = sdl.Color{R: 120, G: 200, B: 255, A: 255}
+			color = ColorTextAccent()
 		}
 		txt := prefix + entries[i].Name
 		if len(txt) > 55 {
@@ -254,23 +294,14 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		renderText(renderer, config, font, txt, color, rowX+12, rowY+8)
 	}
 
-	// scroll indicators
+	// scrollbar
 	if len(entries) > maxVisible {
-		indicatorColor := sdl.Color{R: 255, G: 255, B: 255, A: 80}
-		if start > 0 {
-			renderer.SetDrawColor(indicatorColor.R, indicatorColor.G, indicatorColor.B, indicatorColor.A)
-			triX := element.X + elemW - 20
-			triY := element.Y + 20
-			renderer.DrawLine(triX, triY+8, triX+8, triY)
-			renderer.DrawLine(triX+8, triY, triX+16, triY+8)
+		thumbFrac := float64(maxVisible) / float64(len(entries))
+		scrollFrac := 0.0
+		if len(entries) > maxVisible {
+			scrollFrac = float64(start) / float64(len(entries)-maxVisible)
 		}
-		if end < len(entries) {
-			renderer.SetDrawColor(indicatorColor.R, indicatorColor.G, indicatorColor.B, indicatorColor.A)
-			triX := element.X + elemW - 20
-			triY := element.Y + elemH - 20
-			renderer.DrawLine(triX, triY, triX+8, triY+8)
-			renderer.DrawLine(triX+8, triY+8, triX+16, triY)
-		}
+		drawScrollbar(renderer, element.X+elemW-6, element.Y+30, 3, elemH-30, thumbFrac, scrollFrac)
 	}
 }
 

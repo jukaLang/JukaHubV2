@@ -308,11 +308,11 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 		tx := tabStartX + int32(i)*(tabWidth+tabGap)
 		active := i == favoritesCurrentTab
 		// inactive tab background
-		fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, sdl.Color{R: 24, G: 28, B: 40, A: 255})
+		fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, ColorSurfaceRow)
 		if active {
 			// active tab: solid color with subtle inner highlight
 			fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, tabColors[i])
-			fillRoundedRect(renderer, tx+2, tabY+2, tabWidth-4, tabHeight/2, 8, sdl.Color{R: 255, G: 255, B: 255, A: 30})
+			fillRoundedRect(renderer, tx+2, tabY+2, tabWidth-4, tabHeight/2, 8, GlossFill(30))
 			renderer.SetDrawColor(255, 255, 255, 160)
 			renderer.FillRect(&sdl.Rect{X: tx + 8, Y: tabY + tabHeight - 2, W: tabWidth - 16, H: 2})
 		} else {
@@ -323,9 +323,9 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			lw, _, _ := font.SizeUTF8(label)
 			lx := tx + (tabWidth-int32(lw))/2
 			ly := tabY + (tabHeight-int32(14))/2
-			tc := sdl.Color{R: 255, G: 255, B: 255, A: 255}
+			tc := ColorTextPrimary()
 			if !active {
-				tc = sdl.Color{R: 160, G: 170, B: 190, A: 255}
+				tc = ColorTextTertiary()
 			}
 			renderText(renderer, config, font, label, tc, lx, ly)
 		}
@@ -342,11 +342,11 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 		listW = 200
 	}
 
-	drawPanel(renderer, listX, listY, listW, listH, sdl.Color{R: 16, G: 19, B: 26, A: 220}, accentColor)
+	drawPanel(renderer, listX, listY, listW, listH, WithAlpha(ColorSurfacePanel, 220), accentColor)
 
 	if len(items) == 0 {
 		if font != nil {
-			renderText(renderer, config, font, "No favorites yet. Browse and add items!", sdl.Color{R: 160, G: 170, B: 190, A: 255}, listX+20, listY+20)
+			renderText(renderer, config, font, "No favorites yet. Browse and add items!", ColorTextTertiary(), listX+20, listY+20)
 		}
 	} else {
 		lineH := int32(40)
@@ -389,15 +389,7 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			rowY := iy + 2
 			rowW := listW - 16
 			rowH := lineH - 4
-			fillRoundedRect(renderer, rowX+1, rowY+1, rowW, rowH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 40})
-			fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: 26, G: 30, B: 40, A: 255})
-			if i == favoritesFocusIndex {
-				fillRoundedRect(renderer, rowX, rowY, rowW, rowH, 8, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 50})
-				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-				renderer.FillRect(&sdl.Rect{X: rowX, Y: rowY, W: 4, H: rowH})
-				// subtle inner highlight
-				fillRoundedRect(renderer, rowX+1, rowY+1, rowW-2, rowH/2, 7, sdl.Color{R: 255, G: 255, B: 255, A: 10})
-			}
+			drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == favoritesFocusIndex, false)
 
 			prefix := prefixMap[item.Type]
 			if prefix == "" {
@@ -405,7 +397,7 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 			tc := colorMap[item.Type]
 			if tc.R == 0 && tc.G == 0 && tc.B == 0 {
-				tc = sdl.Color{R: 200, G: 210, B: 230, A: 255}
+				tc = ColorTextSecondary()
 			}
 			labelText := prefix + item.Label()
 			if len(labelText) > 60 {
@@ -414,6 +406,16 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			if listFont != nil {
 				renderText(renderer, config, listFont, labelText, tc, rowX+12, rowY+8)
 			}
+		}
+
+		// scrollbar
+		if len(items) > maxVisible {
+			thumbFrac := float64(maxVisible) / float64(len(items))
+			scrollFrac := 0.0
+			if len(items) > maxVisible {
+				scrollFrac = float64(start) / float64(len(items)-maxVisible)
+			}
+			drawScrollbar(renderer, listX+listW-5, listY+6, 3, listH-12, thumbFrac, scrollFrac)
 		}
 	}
 
@@ -424,8 +426,8 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	if by < element.Y+getElementHeight(element, 500) {
 		by = element.Y + getElementHeight(element, 500) + 10
 	}
-	fillRoundedRect(renderer, bx+3, by+3, bw, bh, 10, sdl.Color{R: 0, G: 0, B: 0, A: 40})
-	fillRoundedRect(renderer, bx, by, bw, bh, 10, sdl.Color{R: 44, G: 49, B: 62, A: 255})
+	fillRoundedRect(renderer, bx+3, by+3, bw, bh, 10, ShadowFill(40))
+	fillRoundedRect(renderer, bx, by, bw, bh, 10, ColorButtonRaised)
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
 	renderer.FillRect(&sdl.Rect{X: bx + 8, Y: by + bh - 2, W: bw - 16, H: 2})
 	if font != nil {
@@ -477,7 +479,7 @@ func handleFavoritesInput(e *sdl.KeyboardEvent, config *Config) {
 			if favoritesFocusIndex >= len(getCurrentFavorites()) && favoritesFocusIndex > 0 {
 				favoritesFocusIndex--
 			}
-			showToast("Removed from favorites", sdl.Color{R: 230, G: 80, B: 80, A: 255})
+			showToast("Removed from favorites", ToastError())
 		}
 	}
 }
@@ -558,14 +560,18 @@ func handleFavoritesMouseClick(mx, my int32, config *Config) {
 }
 
 func openInExplorer(path string) {
+	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		dir := filepath.Dir(path)
 		if _, err := os.Stat(dir); err != nil {
 			dir = "."
 		}
-		exec.Command("explorer.exe", dir).Start()
+		cmd = exec.Command("explorer.exe", dir)
 	} else {
-		exec.Command("xdg-open", filepath.Dir(path)).Start()
+		cmd = exec.Command("xdg-open", filepath.Dir(path))
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("openInExplorer: %v", err)
 	}
 }
 

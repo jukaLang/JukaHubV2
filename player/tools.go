@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -42,9 +43,10 @@ func ensureRequiredTools(config *Config) {
 	}
 	specs["yt-dlp"] = spec{directURL: ytURL}
 
-	// ffplay: shipped inside an ffmpeg archive per OS
+	// ffplay: shipped inside an ffmpeg archive per OS.
+	// Windows uses a fully static build so no VC++/UCRT DLLs are needed at runtime.
 	if runtime.GOOS == "windows" {
-		specs["ffplay"] = spec{archive: true, archiveURL: "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"}
+		specs["ffplay"] = spec{archive: true, archiveURL: "STATIC_FFMPEG"}
 	} else {
 		spec := spec{archive: true, archiveURL: "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz"}
 		specs["ffplay"] = spec
@@ -52,7 +54,18 @@ func ensureRequiredTools(config *Config) {
 
 	for tool, s := range specs {
 		target := filepath.Join(requiredDir, exeNameFor(tool))
-		if _, err := os.Stat(target); err == nil {
+		// ffplay ships inside an archive: only consider it "present" if the
+		// static-build marker also exists, otherwise re-download (this heals a
+		// previously extracted non-static build that failed with 0xc0000135).
+		needDownload := false
+		if _, err := os.Stat(target); err != nil {
+			needDownload = true
+		} else if tool == "ffplay" {
+			if _, err := os.Stat(filepath.Join(requiredDir, ".ffmpeg-static")); err != nil {
+				needDownload = true
+			}
+		}
+		if !needDownload {
 			log.Printf("[TOOLS] %s already present at %s", tool, target)
 			continue
 		}
@@ -73,6 +86,9 @@ func ensureRequiredTools(config *Config) {
 		}
 		if _, err := os.Stat(target); err == nil {
 			log.Printf("[TOOLS] %s ready at %s", tool, target)
+			if tool == "ffplay" {
+				_ = os.WriteFile(filepath.Join(requiredDir, ".ffmpeg-static"), []byte("btbn-static"), 0o644)
+			}
 		} else {
 			log.Printf("[TOOLS] %s still missing after download attempt (will try system PATH)", tool)
 		}
@@ -145,6 +161,9 @@ func downloadFile(url, dest string) error {
 // downloadToolArchive downloads an ffmpeg archive and extracts only the
 // ffplay binary (plus its Windows DLLs) into requiredDir.
 func downloadToolArchive(tool, url, requiredDir string) error {
+	if url == "STATIC_FFMPEG" {
+		return downloadStaticFFmpeg(requiredDir)
+	}
 	tmp, err := os.MkdirTemp("", "jukatool-")
 	if err != nil {
 		return err
@@ -235,5 +254,105 @@ func extractFFmpegTarXz(archivePath, requiredDir string) error {
 		return err
 	}
 	log.Printf("[TOOLS] extracted ffplay from archive")
+	return nil
+}
+
+// downloadStaticFFmpeg fetches a fully static Windows ffmpeg build that
+// bundles ffplay.exe with no external (VC++/UCRT) DLL dependencies, then
+// extracts the needed executables into requiredDir.
+func downloadStaticFFmpeg(requiredDir string) error {
+	assetURL, err := latestGitHubReleaseAsset("BtbN/FFmpeg-Builds", func(n string) bool {
+		n = strings.ToLower(n)
+		// BtbN's non-"shared" win64 builds are fully static (no external DLLs).
+		return strings.Contains(n, "win64") &&
+			(strings.Contains(n, "lgpl") || strings.Contains(n, "gpl")) &&
+			!strings.Contains(n, "shared") &&
+			strings.HasSuffix(n, ".zip")
+	})
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "jukatool-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	archivePath := filepath.Join(tmp, "ffmpeg-static.zip")
+	log.Printf("[TOOLS] downloading static ffmpeg build...")
+	if err := downloadFile(assetURL, archivePath); err != nil {
+		return err
+	}
+	return extractFilesFromZip(archivePath, requiredDir, []string{"ffplay.exe", "ffmpeg.exe", "ffprobe.exe"})
+}
+
+// latestGitHubReleaseAsset resolves the download URL for the first asset of the
+// given repo's latest GitHub release for which match(name) returns true.
+func latestGitHubReleaseAsset(repo string, match func(string) bool) (string, error) {
+	apiURL := "https://api.github.com/repos/" + repo + "/releases/latest"
+	resp, err := http.Get(apiURL)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github api %s: unexpected status %d", apiURL, resp.StatusCode)
+	}
+	var rel struct {
+		Assets []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", err
+	}
+	for _, a := range rel.Assets {
+		if match(a.Name) {
+			return a.BrowserDownloadURL, nil
+		}
+	}
+	return "", fmt.Errorf("no matching asset found in %s latest release", repo)
+}
+
+// extractFilesFromZip extracts any entries whose base name matches one of the
+// wanted names (case-insensitive) into requiredDir, regardless of archive path.
+func extractFilesFromZip(archivePath, requiredDir string, wants []string) error {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	wantSet := make(map[string]bool, len(wants))
+	for _, w := range wants {
+		wantSet[strings.ToLower(w)] = true
+	}
+	found := 0
+	for _, f := range r.File {
+		base := filepath.Base(f.Name)
+		if !wantSet[strings.ToLower(base)] {
+			continue
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		dest := filepath.Join(requiredDir, base)
+		out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		_, err = io.Copy(out, rc)
+		out.Close()
+		rc.Close()
+		if err != nil {
+			return err
+		}
+		log.Printf("[TOOLS] extracted %s", base)
+		found++
+	}
+	if found == 0 {
+		return fmt.Errorf("none of %v found in archive", wants)
+	}
 	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // --- Canvas Sandbox ---
@@ -28,12 +29,12 @@ func renderCanvasSandbox(renderer *sdl.Renderer, config *Config, element Element
 	previewY := editorY
 
 	// editor panel
-	fillRoundedRect(renderer, editorX, editorY, editorW, elemH, 10, sdl.Color{R: 18, G: 22, B: 30, A: 255})
+	fillRoundedRect(renderer, editorX, editorY, editorW, elemH, 10, ColorSurfaceAlt)
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 60)
 	renderer.FillRect(&sdl.Rect{X: editorX, Y: editorY, W: editorW, H: 1})
 
 	// preview panel
-	fillRoundedRect(renderer, previewX, previewY, previewW, elemH, 10, sdl.Color{R: 18, G: 22, B: 30, A: 255})
+	fillRoundedRect(renderer, previewX, previewY, previewW, elemH, 10, ColorSurfaceAlt)
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 60)
 	renderer.FillRect(&sdl.Rect{X: previewX, Y: previewY, W: previewW, H: 1})
 
@@ -50,12 +51,12 @@ func renderCanvasSandbox(renderer *sdl.Renderer, config *Config, element Element
 
 	for i := start; i < len(lines); i++ {
 		lineNum := fmt.Sprintf("%d", i+1)
-		renderText(renderer, config, font, lineNum, sdl.Color{R: 100, G: 110, B: 130, A: 255}, editorX+8, editorY+12+int32(i-start)*lineH)
+		renderText(renderer, config, font, lineNum, ColorTextTertiary(), editorX+8, editorY+12+int32(i-start)*lineH)
 		codeLine := lines[i]
 		if len(codeLine) > 55 {
 			codeLine = codeLine[:52] + "..."
 		}
-		renderText(renderer, config, font, codeLine, sdl.Color{R: 220, G: 230, B: 245, A: 255}, editorX+40, editorY+12+int32(i-start)*lineH)
+		renderText(renderer, config, font, codeLine, ColorTextSecondary(), editorX+40, editorY+12+int32(i-start)*lineH)
 	}
 
 	if canvasSurface != nil {
@@ -88,6 +89,12 @@ func executeCanvasCode(code string) *sdl.Surface {
 		surface.FillRect(rect, sdl.MapRGBA(surface.Format, c.R, c.G, c.B, c.A))
 	}
 	fill(sdl.Color{R: 255, G: 255, B: 255, A: 255})
+
+	// optional TTF font for real text rendering in fillText()
+	textFont, fontErr := ttf.OpenFont(resolvePath("Inter-Regular.ttf"), 20)
+	if fontErr == nil {
+		defer textFont.Close()
+	}
 
 	parseColor := func(s string) sdl.Color {
 		s = strings.Trim(s, "\"")
@@ -146,8 +153,14 @@ func executeCanvasCode(code string) *sdl.Surface {
 			continue
 		}
 
-		if strings.HasPrefix(line, "clear()") {
-			fill(sdl.Color{R: 255, G: 255, B: 255, A: 255})
+		if strings.HasPrefix(line, "clear") {
+			c := sdl.Color{R: 255, G: 255, B: 255, A: 255}
+			if strings.HasPrefix(line, "clear(") {
+				line = strings.TrimPrefix(line, "clear(")
+				line = strings.TrimSuffix(line, ")")
+				c = parseColor(strings.TrimSpace(line))
+			}
+			fill(c)
 			continue
 		}
 
@@ -191,6 +204,82 @@ func executeCanvasCode(code string) *sdl.Surface {
 			continue
 		}
 
+		if strings.HasPrefix(line, "fillCircle(") {
+			line = strings.TrimPrefix(line, "fillCircle(")
+			line = strings.TrimSuffix(line, ")")
+			parts := strings.Split(line, ",")
+			if len(parts) >= 4 {
+				var cx, cy, r float64
+				fmt.Sscanf(strings.TrimSpace(parts[0]), "%f", &cx)
+				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &cy)
+				fmt.Sscanf(strings.TrimSpace(parts[2]), "%f", &r)
+				c := parseColor(strings.TrimSpace(parts[3]))
+				r2 := r * r
+				for yy := -int(r); yy <= int(r); yy++ {
+					for xx := -int(r); xx <= int(r); xx++ {
+						if xx*xx+yy*yy <= int(r2) {
+							setPixel(int(cx)+xx, int(cy)+yy, c)
+						}
+					}
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(line, "strokeCircle(") {
+			line = strings.TrimPrefix(line, "strokeCircle(")
+			line = strings.TrimSuffix(line, ")")
+			parts := strings.Split(line, ",")
+			if len(parts) >= 4 {
+				var cx, cy, r float64
+				fmt.Sscanf(strings.TrimSpace(parts[0]), "%f", &cx)
+				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &cy)
+				fmt.Sscanf(strings.TrimSpace(parts[2]), "%f", &r)
+				c := parseColor(strings.TrimSpace(parts[3]))
+				for a := 0.0; a < 2*math.Pi; a += 0.03 {
+					setPixel(int(cx+r*math.Cos(a)), int(cy+r*math.Sin(a)), c)
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(line, "line(") {
+			line = strings.TrimPrefix(line, "line(")
+			line = strings.TrimSuffix(line, ")")
+			parts := strings.Split(line, ",")
+			if len(parts) >= 5 {
+				var x1, y1, x2, y2 float64
+				fmt.Sscanf(strings.TrimSpace(parts[0]), "%f", &x1)
+				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &y1)
+				fmt.Sscanf(strings.TrimSpace(parts[2]), "%f", &x2)
+				fmt.Sscanf(strings.TrimSpace(parts[3]), "%f", &y2)
+				c := parseColor(strings.TrimSpace(parts[4]))
+				steps := int(math.Max(math.Abs(x2-x1), math.Abs(y2-y1))) + 1
+				if steps < 1 {
+					steps = 1
+				}
+				for i := 0; i <= steps; i++ {
+					t := float64(i) / float64(steps)
+					setPixel(int(x1+(x2-x1)*t), int(y1+(y2-y1)*t), c)
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(line, "setPixel(") {
+			line = strings.TrimPrefix(line, "setPixel(")
+			line = strings.TrimSuffix(line, ")")
+			parts := strings.Split(line, ",")
+			if len(parts) >= 3 {
+				var x, y float64
+				fmt.Sscanf(strings.TrimSpace(parts[0]), "%f", &x)
+				fmt.Sscanf(strings.TrimSpace(parts[1]), "%f", &y)
+				c := parseColor(strings.TrimSpace(parts[2]))
+				setPixel(int(x), int(y), c)
+			}
+			continue
+		}
+
 		if strings.HasPrefix(line, "fillText(") {
 			line = strings.TrimPrefix(line, "fillText(")
 			line = strings.TrimSuffix(line, ")")
@@ -204,9 +293,16 @@ func executeCanvasCode(code string) *sdl.Surface {
 				if len(parts) >= 4 {
 					c = parseColor(strings.TrimSpace(parts[3]))
 				}
-				for i, ch := range text {
-					setPixel(int(tx)+i, int(ty), c)
-					_ = ch
+				if textFont != nil && fontErr == nil {
+					if ts, terr := textFont.RenderUTF8Blended(text, c); terr == nil {
+						surface.Blit(&sdl.Rect{X: int32(tx), Y: int32(ty)}, ts, nil)
+						ts.Free()
+					}
+				} else {
+					for i, ch := range text {
+						setPixel(int(tx)+i, int(ty), c)
+						_ = ch
+					}
 				}
 			}
 			continue

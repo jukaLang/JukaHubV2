@@ -7,18 +7,103 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
 
-// --- Recently Played (persisted in jukauser.json) ---
+// --- System status helpers ---
+
+func getBatteryPercent() int {
+	// Try common Linux sysfs paths for battery capacity
+	base := "/sys/class/power_supply"
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return -1
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.Contains(strings.ToLower(name), "bat") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(base, name, "capacity"))
+		if err == nil {
+			var pct int
+			if _, err := fmt.Fscan(strings.NewReader(string(data)), &pct); err == nil {
+				if pct > 100 {
+					pct = 100
+				}
+				if pct < 0 {
+					pct = 0
+				}
+				return pct
+			}
+		}
+	}
+	return -1
+}
+
+func getWifiStatus() string {
+	// Quick heuristic: look for wireless interfaces under /sys/class/net
+	base := "/sys/class/net"
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return ""
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			wireless := filepath.Join(base, entry.Name(), "wireless")
+			if _, err := os.Stat(wireless); err == nil {
+				return "WiFi"
+			}
+		}
+	}
+	return ""
+}
+
+// topBarError is a short message shown centered in the top bar.
+var topBarError string
+
+func setTopBarError(msg string) {
+	topBarError = msg
+}
 
 var (
 	rpMutex        sync.Mutex
 	recentlyPlayed = map[string]bool{}
 )
+
+var (
+	userConfigSaveTimer *time.Timer
+	userConfigSaveMutex sync.Mutex
+	pendingUserConfig   *UserConfig
+)
+
+// saveUserConfigDebounced batches rapid successive config changes into a single
+// disk write after a short quiet period. This avoids excessive I/O on handheld
+// devices when, for example, a user is typing in an input field.
+func saveUserConfigDebounced(user *UserConfig) {
+	userConfigSaveMutex.Lock()
+	pendingUserConfig = user
+	if userConfigSaveTimer != nil {
+		userConfigSaveTimer.Stop()
+	}
+	userConfigSaveTimer = time.AfterFunc(2*time.Second, func() {
+		userConfigSaveMutex.Lock()
+		defer userConfigSaveMutex.Unlock()
+		if pendingUserConfig != nil {
+			saveUserConfig(pendingUserConfig)
+			pendingUserConfig = nil
+		}
+	})
+	userConfigSaveMutex.Unlock()
+}
 
 func loadRecentlyPlayed() {
 	user := loadUserConfig()
@@ -46,7 +131,7 @@ func isRecentlyPlayed(key string) bool {
 	return recentlyPlayed[key]
 }
 
-func recordPlayed(key string) {
+func recordPlayed(config *Config, key string) {
 	if key == "" {
 		return
 	}
@@ -58,27 +143,40 @@ func recordPlayed(key string) {
 	}
 	rpMutex.Unlock()
 
-	user := loadUserConfig()
-	if user == nil {
-		user = &UserConfig{
-			Variables: UserVariables{
-				Custom: make(map[string]interface{}),
-			},
-		}
+	if config != nil {
+		config.Variables.Custom["recently_played"] = list
 	}
-	if user.Variables.Custom == nil {
-		user.Variables.Custom = make(map[string]interface{})
-	}
-	user.Variables.Custom["recently_played"] = list
-	saveUserConfig(user)
+
+	saveUserConfigDebounced(&UserConfig{Variables: UserVariables{
+		ButtonColor:        config.Variables.ButtonColor,
+		LabelColor:         config.Variables.LabelColor,
+		InputColor:         config.Variables.InputColor,
+		Fullscreen:         config.Variables.Fullscreen,
+		FileExplorerRoot:   config.Variables.FileExplorerRoot,
+		WeatherEnabled:     config.Variables.WeatherEnabled,
+		WeatherUnit:        config.Variables.WeatherUnit,
+		TSPUsername:        config.Variables.TSPUsername,
+		PlaybackResolution: config.Variables.PlaybackResolution,
+		AudioBackend:       config.Variables.AudioBackend,
+		Custom:             config.Variables.Custom,
+	}})
 }
 
-// --- Weather (best-effort IP-geolocated current temperature; non-fatal) ---
+// --- Weather (best-effort IP-geolocated 7-day forecast; non-fatal) ---
+
+// WeatherDay holds one day of the weekly forecast.
+type WeatherDay struct {
+	Date string  // ISO date "2006-01-02"
+	TMax float64 // °C
+	TMin float64 // °C
+	Code int     // WMO weather code
+	Pop  int     // precipitation probability %
+}
 
 var (
 	wxMutex      sync.Mutex
-	weatherTempC float64
 	weatherReady bool
+	weatherDaily []WeatherDay
 )
 
 func startWeather(config *Config) {
@@ -89,6 +187,45 @@ func startWeather(config *Config) {
 			fetchWeatherOnce()
 		}
 	}()
+}
+
+// weatherCodeDesc maps a WMO weather code to a short, font-safe description.
+// Emoji are intentionally avoided because the UI font may not contain them.
+func weatherCodeDesc(code int) string {
+	switch code {
+	case 0:
+		return "Clear"
+	case 1:
+		return "Mainly clear"
+	case 2:
+		return "Partly cloudy"
+	case 3:
+		return "Overcast"
+	case 45, 48:
+		return "Fog"
+	case 51, 53, 55:
+		return "Drizzle"
+	case 56, 57:
+		return "Freezing drizzle"
+	case 61, 63, 65:
+		return "Rain"
+	case 66, 67:
+		return "Freezing rain"
+	case 71, 73, 75:
+		return "Snow"
+	case 77:
+		return "Snow grains"
+	case 80, 81, 82:
+		return "Showers"
+	case 85, 86:
+		return "Snow showers"
+	case 95:
+		return "Thunderstorm"
+	case 96, 99:
+		return "Thunderstorm+hail"
+	default:
+		return "—"
+	}
 }
 
 func fetchWeatherOnce() {
@@ -108,23 +245,45 @@ func fetchWeatherOnce() {
 	} else {
 		log.Printf("[WARN] Geolocation request failed, using default weather location")
 	}
-	url := fmt.Sprintf("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m", lat, lon)
+	url := fmt.Sprintf("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&forecast_days=7&timezone=auto", lat, lon)
 	resp, err := client.Get(url)
 	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
 	var w struct {
-		Current struct {
-			Temperature2m float64 `json:"temperature_2m"`
-		} `json:"current"`
+		Daily struct {
+			Time []string  `json:"time"`
+			TMax []float64 `json:"temperature_2m_max"`
+			TMin []float64 `json:"temperature_2m_min"`
+			Code []int     `json:"weather_code"`
+			Pop  []int     `json:"precipitation_probability_max"`
+		} `json:"daily"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&w); err != nil {
 		return
 	}
+	n := len(w.Daily.Time)
+	days := make([]WeatherDay, 0, n)
+	for i := 0; i < n; i++ {
+		d := WeatherDay{Date: w.Daily.Time[i]}
+		if i < len(w.Daily.TMax) {
+			d.TMax = w.Daily.TMax[i]
+		}
+		if i < len(w.Daily.TMin) {
+			d.TMin = w.Daily.TMin[i]
+		}
+		if i < len(w.Daily.Code) {
+			d.Code = w.Daily.Code[i]
+		}
+		if i < len(w.Daily.Pop) {
+			d.Pop = w.Daily.Pop[i]
+		}
+		days = append(days, d)
+	}
 	wxMutex.Lock()
-	weatherTempC = w.Current.Temperature2m
-	weatherReady = true
+	weatherDaily = days
+	weatherReady = len(days) > 0
 	wxMutex.Unlock()
 }
 
@@ -132,8 +291,8 @@ func fetchWeatherOnce() {
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	barH := int32(28)
-	// sleek frosted glass status bar
-	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, sdl.Color{R: 12, G: 16, B: 24, A: 240})
+	// sleek frosted glass status bar (theme-aware)
+	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 235))
 	// subtle top highlight
 	renderer.SetDrawColor(255, 255, 255, 10)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: 1})
@@ -145,8 +304,8 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if font == nil {
 		return
 	}
-	white := sdl.Color{R: 250, G: 252, B: 255, A: 255}
-	secondary := sdl.Color{R: 140, G: 154, B: 180, A: 255}
+	white := ColorTextPrimary()
+	secondary := ColorTextTertiary()
 
 	titleFont, _ := getCachedFont(config, "medium")
 	if titleFont == nil {
@@ -157,45 +316,91 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	pulse := uint8(140 + 115*float64(math.Sin(float64(sdl.GetTicks64())/700.0)))
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, pulse)
 	renderer.FillRect(&sdl.Rect{X: 14, Y: 9, W: 8, H: 8})
-	renderText(renderer, config, titleFont, "JukaHub", white, 28, 6)
+	titleStr := "JukaHub"
+	if config.Version != "" {
+		titleStr += " v" + config.Version
+	}
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		titleStr += " — " + config.Scenes[currentSceneIndex].Name
+	}
+	titleW, _, _ := titleFont.SizeUTF8(titleStr)
+	renderText(renderer, config, titleFont, titleStr, white, 28, 6)
 
-	// Username
+	// Username (placed after the title to avoid overlap)
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok && name != "" {
-		renderText(renderer, config, font, "Hi "+name, secondary, 110, 8)
+		userX := int32(28) + int32(titleW) + 16
+		renderText(renderer, config, font, "Hi "+name, secondary, userX, 8)
 	}
 
-	// Clock (top-right)
-	now := time.Now()
-	clk := now.Format("15:04")
-	cw, _, _ := font.SizeUTF8(clk)
-	clockX := screenWidth - int32(cw) - 12
+	// Error text removed from top bar (moved to bottom bar below)
 
-	// Weather pill (immediately left of the clock)
+	// Weather pill + date/clock (moved from old code, now feed into right-side bar)
+	now := time.Now()
+	dateStr := now.Format("Mon Jan 2")
+	clk := now.Format("15:04")
 	wxMutex.Lock()
 	ready := weatherReady
-	t := weatherTempC
-	wxMutex.Unlock()
-	wxText := ""
-	if ready {
-		unit := config.Variables.WeatherUnit
-		disp := t
-		if unit == "F" {
-			disp = t*9/5 + 32
-		}
-		wxText = fmt.Sprintf("%.0f°%s", disp, unit)
-	} else {
-		wxText = "—"
+	var today WeatherDay
+	if len(weatherDaily) > 0 {
+		today = weatherDaily[0]
 	}
-	ww, _, _ := font.SizeUTF8(wxText)
-	wxX := clockX - int32(ww) - 16
-	renderer.SetDrawColor(255, 255, 255, 25)
-	renderer.FillRect(&sdl.Rect{X: wxX - 8, Y: 7, W: int32(ww) + 16, H: 18})
-	renderText(renderer, config, font, wxText, white, wxX, 8)
+	wxMutex.Unlock()
+	wxText := "—"
+	if ready && len(weatherDaily) > 0 {
+		unit := config.Variables.WeatherUnit
+		hi, lo := today.TMax, today.TMin
+		if unit == "F" {
+			hi = hi*9/5 + 32
+			lo = lo*9/5 + 32
+		}
+		wxText = fmt.Sprintf("%d°/%d°", int(hi), int(lo))
+	}
 
-	renderText(renderer, config, font, clk, white, clockX, 8)
+	// Right-side status: battery + wifi + weather + date + clock
+	bat := getBatteryPercent()
+	wifi := getWifiStatus()
+	var rightText string
+	if bat >= 0 {
+		rightText += fmt.Sprintf("BAT:%d%% ", bat)
+	}
+	if wifi != "" {
+		rightText += wifi + " "
+	}
+	rightText += wxText
+	rightText += "  " + dateStr + " " + clk
+	rw, _, _ := font.SizeUTF8(rightText)
+	rx := screenWidth - int32(rw) - 12
+	renderText(renderer, config, font, rightText, white, rx, 8)
 }
 
-// --- User config (mutable settings) persisted to jukauser.json ---
+func renderBottomErrorBar(renderer *sdl.Renderer, config *Config) {
+	if topBarError == "" {
+		return
+	}
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	barH := int32(22)
+	y := screenHeight - barH
+	fillRoundedRect(renderer, 0, y, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 240))
+	renderer.SetDrawColor(255, 100, 100, 180)
+	renderer.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1})
+	ew, _, _ := font.SizeUTF8(topBarError)
+	ex := (screenWidth - int32(ew)) / 2
+	renderText(renderer, config, font, topBarError, sdl.Color{R: 255, G: 100, B: 100, A: 255}, ex, y+6)
+}
+
+// volatileCustomVars lists runtime-only keys that should not be persisted to
+// disk. They are reconstructed each session rather than saved.
+var volatileCustomVars = map[string]bool{
+	"search_results": true,
+	"fe_entries":     true,
+	"fe_path":        true,
+	"stream_url":     true,
+	"search_query":   true,
+	"search_error":   true,
+}
 
 type UserConfig struct {
 	Variables UserVariables `json:"variables"`
@@ -243,12 +448,10 @@ func saveUserConfig(user *UserConfig) {
 	userCopy := *user
 	userCopy.Variables.Custom = make(map[string]interface{})
 	for k, v := range user.Variables.Custom {
-		switch k {
-		case "search_results", "fe_entries", "fe_path", "stream_url", "search_query", "search_error":
-			// skip volatile runtime state
-		default:
-			userCopy.Variables.Custom[k] = v
+		if volatileCustomVars[k] {
+			continue
 		}
+		userCopy.Variables.Custom[k] = v
 	}
 	data, err := json.MarshalIndent(userCopy, "", "  ")
 	if err != nil {
@@ -277,10 +480,7 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	config.Variables.PlaybackResolution = user.Variables.PlaybackResolution
 	config.Variables.AudioBackend = user.Variables.AudioBackend
 	for k, v := range user.Variables.Custom {
-		if _, volatile := map[string]bool{
-			"search_results": true, "fe_entries": true, "fe_path": true,
-			"stream_url": true, "search_query": true, "search_error": true,
-		}[k]; !volatile {
+		if !volatileCustomVars[k] {
 			config.Variables.Custom[k] = v
 		}
 	}
@@ -293,12 +493,10 @@ func saveConfig(config *Config) {
 	saved.Variables = config.Variables
 	saved.Variables.Custom = make(map[string]interface{})
 	for k, v := range config.Variables.Custom {
-		switch k {
-		case "search_results", "fe_entries", "fe_path", "stream_url", "search_query", "search_error":
-			// skip volatile runtime state
-		default:
-			saved.Variables.Custom[k] = v
+		if volatileCustomVars[k] {
+			continue
 		}
+		saved.Variables.Custom[k] = v
 	}
 	saved.Variables.ButtonColor = RGB{}
 	saved.Variables.LabelColor = RGB{}

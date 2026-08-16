@@ -246,7 +246,7 @@ JukaHubV2/
 
 ### Black screen on launch
 - Verify `jukaconfig.json` is valid JSON
-- Check that font files (`DejaVuSans.ttf`, `Roboto-Black.ttf`) are present
+- Check that font files (`DejaVuSans.ttf`, `Inter-Regular.ttf`) are present
 - Try deleting `jukauser.json` to reset settings
 
 ### Performance issues

@@ -173,7 +173,7 @@ jobs:
         run: |
           mkdir -p JukaHub-Trimui
           cp player/jukaconfig.json JukaHub-Trimui/
-          cp player/Roboto-Black.ttf JukaHub-Trimui/
+          cp player/Inter-Regular.ttf JukaHub-Trimui/
           cp player/launch.sh JukaHub-Trimui/
           cp player/config.json JukaHub-Trimui/
           cp player/background.jpg JukaHub-Trimui/
@@ -279,7 +279,7 @@ jobs:
       - name: Package Artifacts
         run: |
           cd player
-          cp jukaconfig.json Roboto-Black.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
+          cp jukaconfig.json Inter-Regular.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
           cd ..
           zip -r JukaHub-Windows.zip JukaHub-Trimui-Windows/
 

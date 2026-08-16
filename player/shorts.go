@@ -17,7 +17,7 @@ var (
 )
 
 func fetchYouTubeShorts(config *Config, resultVar string, vars map[string]interface{}) {
-	cmd := `yt-dlp --flat-playlist --dump-single-json --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors "ytsearch10:shorts"`
+	cmd := `yt-dlp --flat-playlist --dump-single-json --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors "ytsearch10:shorts"` + " " + ytDlpExtraArgs(config)
 	executeYouTubeSearch(config, cmd, resultVar, vars)
 }
 
@@ -74,7 +74,7 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 		shortsScrollY = targetScrollY
 	}
 
-	drawPanel(renderer, element.X, element.Y, elemW, elemH, sdl.Color{R: 16, G: 19, B: 26, A: 220}, accentColor)
+	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
 
 	for i, vid := range videos {
 		col := int32(i) % int32(cols)
@@ -91,9 +91,9 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 
 		// card shadow
-		fillRoundedRect(renderer, xPos+3, yPos+4, thumbWidth, thumbHeight, 10, sdl.Color{R: 0, G: 0, B: 0, A: 60})
+		fillRoundedRect(renderer, xPos+3, yPos+4, thumbWidth, thumbHeight, 10, ShadowFill(60))
 		// card background
-		fillRoundedRect(renderer, xPos, yPos, thumbWidth, thumbHeight, 10, sdl.Color{R: 22, G: 26, B: 36, A: 255})
+		fillRoundedRect(renderer, xPos, yPos, thumbWidth, thumbHeight, 10, ColorSurfaceAlt)
 
 	thumbLoaded := false
 	if vid.Thumbnail != "" {
@@ -120,15 +120,15 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 			title = title[:21] + "..."
 		}
 		titleY := yPos + thumbHeight - 30
-		fillRoundedRect(renderer, xPos, titleY, thumbWidth, 30, 0, sdl.Color{R: 0, G: 0, B: 0, A: 140})
-		renderText(renderer, config, font, title, sdl.Color{R: 245, G: 248, B: 255, A: 255}, xPos+8, titleY+6)
+		fillRoundedRect(renderer, xPos, titleY, thumbWidth, 30, 0, ShadowFill(140))
+		renderText(renderer, config, font, title, ColorTextPrimary(), xPos+8, titleY+6)
 
 		dur := fmt.Sprintf("%d:%02d", int(vid.Duration)/60, int(vid.Duration)%60)
 		bw, bh := int32(50), int32(20)
 		bx := xPos + thumbWidth - bw - 6
 		by := yPos + thumbHeight - 26
-		fillRoundedRect(renderer, bx, by, bw, bh, 6, sdl.Color{R: 0, G: 0, B: 0, A: 160})
-		renderText(renderer, config, font, dur, sdl.Color{R: 255, G: 255, B: 255, A: 255}, bx+6, by+3)
+		fillRoundedRect(renderer, bx, by, bw, bh, 6, ShadowFill(160))
+		renderText(renderer, config, font, dur, ColorTextPrimary(), bx+6, by+3)
 	}
 }
 

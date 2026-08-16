@@ -117,11 +117,11 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 
 	for i, cat := range categories {
 		cx := catStartX + int32(i)*(catW+catGap)
-		bg := sdl.Color{R: 24, G: 28, B: 40, A: 255}
+		bg := ColorSurfaceRow
 		if cat == unitCategory {
 			bg = accentColor
 		}
-		fillRoundedRect(renderer, cx+2, catY+2, catW, catH, 8, sdl.Color{R: 0, G: 0, B: 0, A: 30})
+		fillRoundedRect(renderer, cx+2, catY+2, catW, catH, 8, ShadowFill(30))
 		fillRoundedRect(renderer, cx, catY, catW, catH, 8, bg)
 		if cat == unitCategory {
 			renderer.SetDrawColor(255, 255, 255, 120)
@@ -129,7 +129,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		}
 		if font != nil {
 			lw, _, _ := font.SizeUTF8(catLabels[cat])
-			renderText(renderer, config, font, catLabels[cat], sdl.Color{R: 255, G: 255, B: 255, A: 255}, cx+(catW-int32(lw))/2, catY+8)
+			renderText(renderer, config, font, catLabels[cat], ColorTextPrimary(), cx+(catW-int32(lw))/2, catY+8)
 		}
 	}
 
@@ -157,20 +157,20 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		inputW = int32(w) - 260
 	}
 
-	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, sdl.Color{R: 24, G: 28, B: 40, A: 255})
-	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, sdl.Color{R: 24, G: 28, B: 40, A: 255})
-	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, sdl.Color{R: 30, G: 35, B: 48, A: 255})
+	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, ColorSurfaceRow)
+	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, ColorSurfaceRow)
+	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, ColorSurfaceRaised)
 
 	if font != nil {
 		fw, _, _ := font.SizeUTF8(unitFrom)
-		renderText(renderer, config, font, unitFrom, sdl.Color{R: 255, G: 255, B: 255, A: 255}, fromX+(rowW-int32(fw))/2, rowY+12)
+		renderText(renderer, config, font, unitFrom, ColorTextPrimary(), fromX+(rowW-int32(fw))/2, rowY+12)
 		tw, _, _ := font.SizeUTF8(unitTo)
-		renderText(renderer, config, font, unitTo, sdl.Color{R: 255, G: 255, B: 255, A: 255}, toX+(rowW-int32(tw))/2, rowY+12)
+		renderText(renderer, config, font, unitTo, ColorTextPrimary(), toX+(rowW-int32(tw))/2, rowY+12)
 		display := unitInputValue
 		if display == "" {
 			display = "Enter value..."
 		}
-		renderText(renderer, config, font, display, sdl.Color{R: 200, G: 210, B: 230, A: 255}, inputX+16, rowY+12)
+		renderText(renderer, config, font, display, ColorTextSecondary(), inputX+16, rowY+12)
 	}
 
 	arrowY := rowY + rowH/2
@@ -179,7 +179,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 
 	resultY := rowY + rowH + 40
 	resultH := int32(60)
-	fillRoundedRect(renderer, inputX, resultY, inputW, resultH, 12, sdl.Color{R: 22, G: 26, B: 36, A: 255})
+	fillRoundedRect(renderer, inputX, resultY, inputW, resultH, 12, ColorSurfaceCard)
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 100)
 	renderer.FillRect(&sdl.Rect{X: inputX, Y: resultY, W: inputW, H: 2})
 
@@ -189,19 +189,19 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 			resultText = "Result will appear here"
 		}
 		rw, _, _ := font.SizeUTF8(resultText)
-		renderText(renderer, config, font, resultText, sdl.Color{R: 240, G: 244, B: 250, A: 255}, inputX+(inputW-int32(rw))/2, resultY+18)
+		renderText(renderer, config, font, resultText, ColorTextPrimary(), inputX+(inputW-int32(rw))/2, resultY+18)
 	}
 
 	swapY := resultY + resultH + 20
 	swapW := int32(120)
 	swapH := int32(40)
 	swapX := inputX + inputW - swapW
-	fillRoundedRect(renderer, swapX, swapY, swapW, swapH, 10, sdl.Color{R: 44, G: 49, B: 62, A: 255})
+	fillRoundedRect(renderer, swapX, swapY, swapW, swapH, 10, ColorButtonRaised)
 	renderer.SetDrawColor(255, 255, 255, 30)
 	renderer.FillRect(&sdl.Rect{X: swapX + 1, Y: swapY + 1, W: swapW - 2, H: 1})
 	if font != nil {
 		sw, _, _ := font.SizeUTF8("Swap")
-		renderText(renderer, config, font, "Swap", sdl.Color{R: 235, G: 238, B: 245, A: 255}, swapX+(swapW-int32(sw))/2, swapY+10)
+		renderText(renderer, config, font, "Swap", ColorTextPrimary(), swapX+(swapW-int32(sw))/2, swapY+10)
 	}
 }
 

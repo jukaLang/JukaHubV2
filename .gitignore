@@ -24,3 +24,5 @@ go.work.sum
 .env
 
 player/.sdl2
+player/required/.ffmpeg-static
+player/chat.json

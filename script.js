@@ -1,28 +1,30 @@
-// DOM Elements (cached for performance)
+// DOM Elements
 const canvas = document.getElementById('canvas');
-darkModeToggle = darkModeToggle || document.querySelector('.dark-mode-toggle');
-sceneSelector = sceneSelector || document.querySelector('#scene-selector') || document.getElementById('sceneSelector');
-toggleGuide = toggleGuide || document.querySelector('#toggle-guide') || document.getElementById('toggleGuide');
-closeGuide = closeGuide || document.querySelector('#close-guide') || document.getElementById('closeGuide');
-canvasSizeSelect = canvasSizeSelect || document.querySelector('#canvas-size-select') || document.getElementById('canvasSize');
-customWidthInput = customWidthInput || document.querySelector('#custom-width-input') || document.getElementById('customWidth');
-customHeightInput = customHeightInput || document.querySelector('#custom-height-input') || document.getElementById('customHeight');
-backgroundPathInput = backgroundPathInput || document.querySelector('#background-path-input') || document.getElementById('backgroundPathInput');
-titleSizeInput = titleSizeInput || document.querySelector('#title-size-input') || document.getElementById('titleSize');
-bigSizeInput = bigSizeInput || document.querySelector('#big-size-input') || document.getElementById('bigSize');
-mediumSizeInput = mediumSizeInput || document.querySelector('#medium-size-input') || document.getElementById('mediumSize');
-smallSizeInput = smallSizeInput || document.querySelector('#small-size-input') || document.getElementById('smallSize');
-addVariableButton = addVariableButton || document.querySelector('#add-variable-button') || document.getElementById('addVariableButton');
-variablesList = variablesList || document.querySelector('#variables-list') || document.getElementById('variablesList');
-loadFileInput = loadFileInput || document.querySelector('#load-file-input') || document.getElementById('loadFile');
-clearButton = clearButton || document.querySelector('#clear-button') || document.getElementById('clearButton');
-propertiesTabs = propertiesTabs || document.querySelectorAll('.properties-tab');
-elementPropertiesPanel = elementPropertiesPanel || document.querySelector('#element-properties-panel') || document.getElementById('elementPropertiesPanel');
-appInfoPanel = appInfoPanel || document.querySelector('#app-info-panel') || document.getElementById('appInfoPanel');
-videoProperties = videoProperties || document.querySelector('#video-properties') || document.getElementById('videoProperties');
+const darkModeToggle = document.getElementById('darkModeToggle');
+const sceneSelector = document.getElementById('sceneSelector');
+const toggleGuide = document.getElementById('toggleGuide');
+const closeGuide = document.getElementById('closeGuide');
+const guidePanel = document.getElementById('guidePanel');
+const elementProperties = document.getElementById('elementProperties');
+const canvasSizeSelect = document.getElementById('canvasSize');
+const customWidthInput = document.getElementById('customWidth');
+const customHeightInput = document.getElementById('customHeight');
+const backgroundFileInput = document.getElementById('backgroundFile');
+const titleSizeInput = document.getElementById('titleSize');
+const bigSizeInput = document.getElementById('bigSize');
+const mediumSizeInput = document.getElementById('mediumSize');
+const smallSizeInput = document.getElementById('smallSize');
+const addVariableButton = document.getElementById('addVariableButton');
+const variablesList = document.getElementById('variablesList');
+const loadFileInput = document.getElementById('loadFile');
+const clearButton = document.getElementById('clearButton');
+const propertiesTabs = document.querySelectorAll('.properties-tab');
+const elementPropertiesPanel = document.getElementById('elementPropertiesPanel');
+const appInfoPanel = document.getElementById('appInfoPanel');
+const videoProperties = document.getElementById('videoProperties');
 
 // Global State
-let backgroundPath = 'background.jpg';
+let backgroundPath = '';
 let scenes = { 'Scene 1': [] };
 let currentScene = 'Scene 1';
 let variables = {};
@@ -30,18 +32,7 @@ let currentElement = null;
 let canvasWidth = 1280;
 let canvasHeight = 720;
 let videoList = [];
-
-// Toast notification helper for better UX than alerts
-function showToast(message, subtitle = '', type = 'info') {
-  const toast = document.createElement('div');
-  toast.className = `toast toast-${type}`;
-  toast.innerHTML = `<div class="toast-title">${message}</div><div class="toast-subtitle">${subtitle || ''}</div>`;
-  document.body.appendChild(toast);
-  setTimeout(() => {
-    toast.style.animation = 'fadeOut 0.3s forwards';
-    setTimeout(() => toast.remove(), 300);
-  }, 4000);
-}
+let globalTooltip = null;
 
 // Initialize the editor
 document.addEventListener('DOMContentLoaded', () => {
@@ -57,7 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Add initial menu
   addElement('menu', 0, canvasHeight - 50);
 
-  // Set up event listeners using event delegation where possible
+  // Set up event listeners
   setupEventListeners();
 
   // Initialize properties panel as expanded
@@ -76,63 +67,68 @@ document.addEventListener('DOMContentLoaded', () => {
   createGlobalTooltip();
 
   loadDefaultConfig();
-  setupMobileElementAdding();
+  setupMobileElementAdding()
   setupMobileCanvasClick();
   setupMobileElementSelection();
 });
 
-// Setup canvas event delegation for better performance
+// Create global tooltip element
+function createGlobalTooltip() {
+  globalTooltip = document.createElement('div');
+  globalTooltip.className = 'variable-tooltip';
+  globalTooltip.style.display = 'none';
+  document.body.appendChild(globalTooltip);
+}
+
+// Set up all event listeners
 function setupEventListeners() {
   // Dark mode toggle
-  darkModeToggle?.addEventListener('click', () => {
+  darkModeToggle.addEventListener('click', () => {
     const isDarkMode = !document.body.classList.contains('dark-mode');
     document.body.classList.toggle('dark-mode');
-    darkModeToggle.innerHTML = isDarkMode ? '<i class="fas fa-sun"></i> Light Mode' : '<i class="fas fa-moon"></i> Dark Mode';
+    darkModeToggle.innerHTML = isDarkMode ?
+      '<i class="fas fa-sun"></i> Light Mode' :
+      '<i class="fas fa-moon"></i> Dark Mode';
 
     // Preserve canvas background in dark mode
     if (isDarkMode) {
-      const bgImage = canvas.style.backgroundImage || '';
-      const bgSize = canvas.style.backgroundSize || '';
-      canvas.style.backgroundImage = bgImage;
-      canvas.style.backgroundSize = bgSize;
+      canvas.style.backgroundImage = canvas.style.backgroundImage;
+      canvas.style.backgroundSize = canvas.style.backgroundSize;
     }
   });
 
   // Guide panel toggle
-  toggleGuide?.addEventListener('click', () => {
+  toggleGuide.addEventListener('click', () => {
     guidePanel.style.display = guidePanel.style.display === 'block' ? 'none' : 'block';
   });
 
-  closeGuide?.addEventListener('click', () => {
+  closeGuide.addEventListener('click', () => {
     guidePanel.style.display = 'none';
   });
 
-  // Properties tabs using event delegation on container
-  if (propertiesTabs.length > 0) {
-    const propertiesContainer = document.querySelector('.properties-tabs') || document.body;
-    propertiesContainer.addEventListener('click', (e) => {
-      const tab = e.target.closest('.properties-tab');
-      if (tab && tab.dataset.tab) {
-        switchTab(tab.dataset.tab);
-      }
+  // Properties tabs
+  propertiesTabs.forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabId = tab.getAttribute('data-tab');
+      switchTab(tabId);
     });
-  }
+  });
 
-  // Canvas drop zone using event delegation
-  canvas.addEventListener('dragover', (e) => e.preventDefault());
-  canvas.addEventListener('drop', (e) => {
+  // Canvas drop zone
+  canvas.addEventListener('dragover', e => e.preventDefault());
+
+  canvas.addEventListener('drop', e => {
     e.preventDefault();
     const type = e.dataTransfer.getData('type');
-    if (!type) return;
     const rect = canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     addElement(type, x, y);
   });
 
-  // Canvas click to deselect using event delegation
-  canvas.addEventListener('click', (e) => {
-    if (e.target === canvas || !e.target.closest('.element')) {
+  // Canvas click to deselect
+  canvas.addEventListener('click', e => {
+    if (e.target === canvas) {
       currentElement = null;
       document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
       document.body.classList.remove('element-selected');
@@ -140,35 +136,28 @@ function setupEventListeners() {
     }
   });
 
-  // Canvas click to select elements using event delegation
-  canvas.addEventListener('click', (e) => {
-    const target = e.target.closest('.element');
-    if (target) {
-      currentElement = target;
-      document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-      target.classList.add('selected');
-      document.body.classList.add('element-selected');
-      switchTab('element-properties');
-    }
+  // Initialize drag events for elements
+  document.querySelectorAll('.left-sidebar .element').forEach(el => {
+    el.addEventListener('dragstart', e => {
+      e.dataTransfer.setData('type', e.target.getAttribute('data-type'));
+    });
   });
 
-  // Canvas size controls using event delegation
-  canvasSizeSelect?.addEventListener('change', updateCanvasSize);
-  customWidthInput?.addEventListener('change', updateCanvasSize);
-  customHeightInput?.addEventListener('change', updateCanvasSize);
+  // Canvas size controls
+  canvasSizeSelect.addEventListener('change', updateCanvasSize);
+  customWidthInput.addEventListener('change', updateCanvasSize);
+  customHeightInput.addEventListener('change', updateCanvasSize);
 
-  // Background image (stored as a path string, matching the Go runtime)
-  if (backgroundPathInput) {
-    backgroundPathInput.addEventListener('input', setBackgroundPath);
-  }
+  // Background image
+  backgroundFileInput.addEventListener('change', setBackground);
 
   // Add variable button
-  addVariableButton?.addEventListener('click', addVariable);
+  addVariableButton.addEventListener('click', addVariable);
 
   setupMobileDoubleTap();
 
   // Load file
-  loadFileInput?.addEventListener('change', function (e) {
+  loadFileInput.addEventListener('change', function (e) {
     const file = e.target.files[0];
     if (!file) return;
 
@@ -178,21 +167,22 @@ function setupEventListeners() {
         const config = JSON.parse(e.target.result);
         loadJukaApp(config);
       } catch (error) {
-        showToast('Error loading config:', error.message, 'error');
+        alert('Error loading config: ' + error.message);
       }
     };
     reader.readAsText(file);
   });
 
   // Clear button
-  clearButton?.addEventListener('click', clearAll);
+  clearButton.addEventListener('click', clearAll);
 }
 
-// Set up font size change listeners using event delegation
+// Set up font size change listeners
 function setupFontSizeListeners() {
-  [titleSizeInput, bigSizeInput, mediumSizeInput, smallSizeInput].forEach(input => {
-    input?.addEventListener('change', updateAllFontSizes);
-  });
+  titleSizeInput.addEventListener('change', updateAllFontSizes);
+  bigSizeInput.addEventListener('change', updateAllFontSizes);
+  mediumSizeInput.addEventListener('change', updateAllFontSizes);
+  smallSizeInput.addEventListener('change', updateAllFontSizes);
 }
 
 // Update all font sizes when font size inputs change
@@ -203,21 +193,20 @@ function updateAllFontSizes() {
       el.style.fontSize = getFontSize(fontType) + 'px';
     }
   });
-
   document.querySelectorAll('.menu-scene-button').forEach(el => {
-    el.style.fontSize = getFontSize('small') + 'px';
+    el.style.fontSize = getFontSize("small") + 'px';
   });
 
   document.querySelectorAll('.menu-clock').forEach(el => {
-    el.style.fontSize = getFontSize('small') + 'px';
+    el.style.fontSize = getFontSize("small") + 'px';
   });
 }
 
 // Switch between tabs
 function switchTab(tabId) {
-  // Update active tab using event delegation
+  // Update active tab
   propertiesTabs.forEach(tab => {
-    if (tab.dataset.tab === tabId) {
+    if (tab.getAttribute('data-tab') === tabId) {
       tab.classList.add('active');
     } else {
       tab.classList.remove('active');
@@ -234,7 +223,7 @@ function switchTab(tabId) {
   }
 }
 
-// Update canvas size based on selection - optimized with cached references
+// Update canvas size based on selection
 function updateCanvasSize() {
   if (canvasSizeSelect.value === 'custom') {
     canvasWidth = parseInt(customWidthInput.value) || 1280;
@@ -247,24 +236,23 @@ function updateCanvasSize() {
     document.getElementById('customSizeFields').style.display = 'none';
   }
 
-  // Apply new size to canvas
+  // Apply new size
   canvas.style.width = `${canvasWidth}px`;
   canvas.style.height = `${canvasHeight}px`;
 
-  // Update menu position using event delegation
-  document.querySelectorAll('[data-type="menu"]').forEach(menu => {
+  // Update menu position
+  document.querySelectorAll('.element[data-type="menu"]').forEach(menu => {
     menu.style.top = `${canvasHeight - 50}px`;
   });
 
-  // Update all elements to stay within new canvas bounds (optimized)
-  const elements = document.querySelectorAll('.element');
-  elements.forEach(el => {
+  // Update all elements to stay within new canvas bounds
+  document.querySelectorAll('.element').forEach(el => {
     const x = parseInt(el.getAttribute('data-x'));
     const y = parseInt(el.getAttribute('data-y'));
-    const width = parseInt(el.getAttribute('data-width')) || 100;
-    const height = parseInt(el.getAttribute('data-height')) || 100;
+    const width = parseInt(el.getAttribute('data-width'));
+    const height = parseInt(el.getAttribute('data-height'));
 
-    // Ensure element stays within canvas bounds
+    // Ensure element stays within canvas
     const newX = Math.min(x, canvasWidth - width);
     const newY = Math.min(y, canvasHeight - height);
 
@@ -275,43 +263,54 @@ function updateCanvasSize() {
   });
 }
 
-// Add a new scene with saved current scene first
+// Update the addScene function to call the new function
 function addScene() {
   saveCurrentScene();
-  
-  // Check if new scene name already exists
   const newSceneName = `Scene ${Object.keys(scenes).length + 1}`;
-  if (scenes[newSceneName]) return showToast('Scene name already exists.', 'Please choose a unique name.', 'warning');
-
   scenes[newSceneName] = [];
 
-  // Add scene to selector
   const option = document.createElement('option');
   option.value = newSceneName;
   option.textContent = newSceneName;
   sceneSelector.appendChild(option);
   sceneSelector.value = newSceneName;
-  currentScene = newSceneName;
 
+  currentScene = newSceneName;
   loadScene(currentScene);
-  
-  // Update scene change selector and menu buttons
+
+  // Add menu to new scene
+  addElement('menu', 0, canvasHeight - 50);
+
+  // Update scene change selector
   updateSceneChangeSelector();
+
+  // Update all menu scene buttons in all scenes
   updateAllMenuSceneButtons();
+  updateAllStoredMenus();
 }
 
-// Duplicate current scene with saved copy
+function updateAllMenuSceneButtons() {
+  document.querySelectorAll('.element[data-type="menu"]').forEach(menu => {
+    updateMenuSceneButtons(menu);
+  });
+}
+
+function updateAllStoredMenus() {
+  for (const sceneName in scenes) {
+    scenes[sceneName].forEach(el => {
+      if (el.getAttribute('data-type') === 'menu') {
+        updateMenuSceneButtons(el);
+      }
+    });
+  }
+}
+
 function duplicateScene() {
   saveCurrentScene();
-  
   const newSceneName = prompt('Name for duplicated scene:', `${currentScene} Copy`);
-  if (!newSceneName || scenes[newSceneName]) {
-    showToast('Invalid scene name.', 'Please choose a unique name.', 'warning');
-    return;
-  }
+  if (!newSceneName || scenes[newSceneName]) return;
 
-  // Deep copy scene elements
-  scenes[newSceneName] = JSON.parse(JSON.stringify(scenes[currentScene]));
+  scenes[newSceneName] = scenes[currentScene].map(el => el.cloneNode(true));
 
   const option = document.createElement('option');
   option.value = newSceneName;
@@ -321,24 +320,23 @@ function duplicateScene() {
   currentScene = newSceneName;
 
   loadScene(newSceneName);
-  
-  // Update UI elements
+
+  // Update scene change selector
   updateSceneChangeSelector();
+
+  // Update all menu scene buttons
   updateAllMenuSceneButtons();
+  updateAllStoredMenus();
 }
 
-// Change to selected scene
 function changeScene() {
-  saveCurrentScene();
   currentScene = sceneSelector.value;
   loadScene(currentScene);
   updateAllMenuSceneButtons();
 }
 
-// Load and render a scene
 function loadScene(sceneName) {
   canvas.innerHTML = '';
-  
   if (scenes[sceneName]) {
     scenes[sceneName].forEach(el => {
       const clonedEl = el.cloneNode(true);
@@ -347,16 +345,17 @@ function loadScene(sceneName) {
     });
   }
 
-  // Update menu buttons for all menus in scene
-  document.querySelectorAll('[data-type="menu"]').forEach(menu => {
+  // Update menu buttons
+  document.querySelectorAll('.menu').forEach(menu => {
     updateMenuSceneButtons(menu);
   });
 }
 
-// Add a new element to the canvas with proper validation
+// Element Management
 function addElement(type, x, y) {
-  if (type === 'menu-element') type = 'menu'; // Convert to actual type
-
+  if (type === 'menu-element') {
+    type = 'menu'; // Convert to the actual type used on canvas
+  }
   const el = document.createElement('div');
   el.className = 'element';
   el.style.position = 'absolute';
@@ -364,10 +363,11 @@ function addElement(type, x, y) {
   el.style.top = `${y}px`;
   el.setAttribute('data-opacity', '100');
   el.style.opacity = 1;
-  el.style.fontFamily = 'Roboto, sans-serif';
+  el.style.fontFamily = 'Inter, sans-serif';
   el.style.fontWeight = '900';
 
-  // Set default dimensions based on element type
+
+  // Set default dimensions
   const dimensions = {
     button: { width: '120px', height: '40px' },
     label: { width: '120px', height: '40px' },
@@ -375,749 +375,1650 @@ function addElement(type, x, y) {
     image: { width: '100px', height: '100px' },
     input: { width: '150px', height: '40px' },
     video: { width: '200px', height: '150px' },
-    dynamiclist: { width: '600px', height: '40px' },
-    searchresults: { width: '1160px', height: '510px' },
-    textlog: { width: '600px', height: '300px' }
+    dynamiclist: { width: '600px', height: '40px' }, // Add this line
+    default: { width: 'auto', height: 'auto' }
   };
 
   const { width, height } = dimensions[type] || dimensions.default;
   el.style.width = width;
   el.style.height = height;
 
+
   // Make elements larger on mobile for better touch interaction
   if (window.innerWidth <= 768) {
-    if (['button', 'label', 'input'].includes(type)) {
+    if (type === 'button' || type === 'label' || type === 'input') {
       el.style.minHeight = '44px'; // Minimum touch target size
       el.style.minWidth = '80px';
     }
   }
 
-  // Create element content based on type
-  createElementContent(el, type);
 
-  // Set element attributes
-  const widthValue = width.replace('px', '') || '100';
-  const heightValue = height.replace('px', '') || '100';
-  
-  el.setAttribute('data-x', x | 0);
-  el.setAttribute('data-y', y | 0);
-  el.setAttribute('data-width', widthValue);
-  el.setAttribute('data-height', heightValue);
+  if (type === 'dynamiclist') {
+    el.innerHTML = `
+      <span class="text-content">Dynamic List</span>
+      <span class="remove-button">✕</span>
+  `;
+    el.setAttribute('data-command', '');
+    el.setAttribute('data-variable', '');
+    setupDynamicListExecution(el);
+  } else if (type === 'textbrowser') {
+    el.innerHTML = `
+      <span class="text-content">Text Browser</span>
+      <span class="remove-button">✕</span>
+  `;
+    el.setAttribute('data-variable', '');
+    el.setAttribute('data-source', 'system');
+  } else if (type === 'menu') {
+    el.style.top = `${dimensions.menu.y}px`;
+    el.style.left = '0px';
+    el.innerHTML = `
+                    <div class="menu-scene-buttons"></div>
+                    <div class="menu-clock">00:00</div>
+                    <span class="remove-button">✕</span>
+                `; // Removed the language button
+    el.style.fontSize = '16px';
+    el.setAttribute('data-type', 'menu');
+    setupMenuEvents(el);
+    updateMenuSceneButtons(el);
+    updateMenuClock(el.querySelector('.menu-clock'));
+  } else {
+    const textSpan = document.createElement('span');
+    textSpan.className = 'text-content';
 
-  // Add element to DOM
-  canvas.appendChild(el);
-}
+    // Fix for Collapsed List text
+    let displayText = type.charAt(0).toUpperCase() + type.slice(1);
+    if (type === 'collapsedlist') {
+      displayText = 'Collapsed List';
+    }
+    textSpan.textContent = displayText;
 
-// Create content for different element types - extracted from duplicated code
-function createElementContent(el, type) {
-  switch (type) {
-    case 'menu':
-      el.style.top = `${dimensions.menu.y}px`;
-      el.innerHTML = `
-        <div class="menu-scene-buttons"></div>
-        <div class="menu-clock">00:00</div>
-        <span class="remove-button">✕</span>
-      `;
-      el.style.fontSize = '16px';
-      el.setAttribute('data-type', 'menu');
-      setupMenuEvents(el);
-      updateMenuSceneButtons(el);
-      updateMenuClock(el.querySelector('.menu-clock'));
-      break;
+    el.appendChild(textSpan);
 
-    case 'dynamiclist':
-      el.innerHTML = `
-        <span class="text-content">Dynamic List</span>
-        <span class="remove-button">✕</span>
-      `;
-      el.setAttribute('data-variable', '');
-      setupDynamicListExecution(el);
-      break;
+    const removeButton = document.createElement('span');
+    removeButton.textContent = '✕';
+    removeButton.className = 'remove-button';
+    el.appendChild(removeButton);
 
-    case 'searchresults':
-      el.innerHTML = `
-        <div class="searchresults-placeholder">
-          <i class="fas fa-th-large"></i>
-          <span>Search Results Grid</span>
-        </div>
-        <span class="remove-button">✕</span>
-      `;
-      el.setAttribute('data-results-variable', 'search_results');
-      el.classList.add('searchresults-element');
-      break;
+    el.setAttribute('data-type', type);
 
-    case 'input':
+    // Special handling for input elements
+    if (type === 'input') {
+      textSpan.style.display = 'none';
       const input = document.createElement('input');
       input.type = 'text';
       input.className = 'element-input';
       input.placeholder = 'Input text';
-      input.addEventListener('mousedown', e => e.stopPropagation()); // Prevent dragging on input
+      input.addEventListener('mousedown', (e) => {
+        e.stopPropagation(); // Prevent dragging when clicking on input
+      });
       el.appendChild(input);
-      break;
+    }
 
-    case 'image':
+    // Special handling for image elements
+    if (type === 'image') {
       const img = document.createElement('img');
       img.className = 'element-image';
       img.src = '';
       img.draggable = false; // Prevent image dragging
       el.appendChild(img);
-      break;
+      textSpan.style.display = 'none';
+    }
 
-    default:
-      const textSpan = document.createElement('span');
-      textSpan.className = 'text-content';
-      
-      let displayText = type.charAt(0).toUpperCase() + type.slice(1);
-      if (type === 'collapsedlist') displayText = 'Collapsed List';
-      textSpan.textContent = displayText;
+    // Update the addElement function
+    if (type === 'collapsedlist') {
+      const listIcon = document.createElement('i');
+      listIcon.className = 'fas fa-bars';
+      listIcon.style.marginRight = '8px';
+      textSpan.prepend(listIcon);
 
-      const removeButton = document.createElement('span');
-      removeButton.textContent = '✕';
-      removeButton.className = 'remove-button';
-      
-      el.appendChild(textSpan);
-      el.appendChild(removeButton);
-      el.setAttribute('data-type', type);
+      // Set up collapsed list properties
+      el.setAttribute('data-list-variable', '');
+    }
 
-      if (type === 'collapsedlist') {
-        const listIcon = document.createElement('i');
-        listIcon.className = 'fas fa-bars';
-        listIcon.style.marginRight = '8px';
-        textSpan.prepend(listIcon);
-        
-        el.setAttribute('data-list-variable', '');
-      }
-
-      if (type === 'label') {
-        el.style.background = 'none';
-      }
+    // Labels should have no background
+    if (type === 'label') {
+      el.style.background = 'none';
+    }
   }
+
+  // Set element attributes
+  el.setAttribute('data-x', x | 0);
+  el.setAttribute('data-y', y | 0);
+  el.setAttribute('data-width', width.replace('px', '') || '100');
+  el.setAttribute('data-height', height.replace('px', '') || '100');
+
+  if (type !== 'menu') {
+    el.setAttribute('data-color', '#000000');
+    el.setAttribute('data-font', 'medium');
+    el.style.fontSize = getFontSize('medium') + 'px';
+    el.style.padding = '4px';
+
+    if (type === 'button') {
+      el.setAttribute('data-bg-color', '#ffffff');
+      el.style.backgroundColor = '#ffffff';
+    }
+  }
+
+  // Add to canvas
+  canvas.appendChild(el);
+  setupElementEvents(el);
+
+  if (!scenes[currentScene]) scenes[currentScene] = [];
+  scenes[currentScene].push(el.cloneNode(true));
+
+  return el;
 }
 
-// Setup menu-specific events using event delegation
-function setupMenuEvents(menu) {
-  // Use event delegation for scene buttons
-  const btnContainer = menu.querySelector('.menu-scene-buttons');
-  if (btnContainer) {
-    btnContainer.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-target="scene"]');
-      if (btn) {
-        changeScene(btn.dataset.target);
+function setupElementEvents(el) {
+  let isDragging = false;
+  let startX, startY;
+  let startTouchX, startTouchY;
+
+  // Touch events for mobile
+  el.addEventListener('touchstart', (event) => {
+    if (event.touches.length === 1) {
+      event.preventDefault();
+      const touch = event.touches[0];
+      startTouchX = touch.clientX - el.offsetLeft;
+      startTouchY = touch.clientY - el.offsetTop;
+      isDragging = true;
+      el.style.cursor = 'grabbing';
+
+    }
+  }, { passive: false });
+
+
+  document.addEventListener('touchmove', (event) => {
+    if (!isDragging) return;
+    event.preventDefault();
+
+    const touch = event.touches[0];
+    const canvasRect = canvas.getBoundingClientRect();
+    let newX = touch.clientX - startTouchX;
+    let newY = touch.clientY - startTouchY;
+    const elRect = el.getBoundingClientRect();
+
+    newX = Math.max(0, Math.min(newX, canvasRect.width - elRect.width));
+    newY = Math.max(0, Math.min(newY, canvasRect.height - elRect.height));
+
+    el.style.transition = 'none';
+    el.style.left = `${newX}px`;
+    el.style.top = `${newY}px`;
+    el.setAttribute('data-x', newX);
+    el.setAttribute('data-y', newY);
+  }, { passive: false });
+
+  document.addEventListener('touchend', () => {
+    if (isDragging) {
+      isDragging = false;
+      el.style.cursor = 'grab';
+    }
+  }, { passive: false });
+
+
+  // Mouse events for dragging and resizing
+  el.addEventListener('mousedown', (event) => {
+    if (event.button === 2) { // Right click for resize
+      handleResize(el, event);
+    } else { // Left click for drag
+      // Prevent dragging if clicking on input or image
+      if (event.target.tagName === 'INPUT' || event.target.tagName === 'IMG') {
+        return;
       }
+
+      isDragging = true;
+      startX = event.clientX - el.offsetLeft;
+      startY = event.clientY - el.offsetTop;
+      el.style.cursor = 'grabbing';
+
+      // Prevent text selection during drag
+      event.preventDefault();
+    }
+  });
+
+  // Mouse move for dragging
+  document.addEventListener('mousemove', (event) => {
+    if (!isDragging) return;
+
+    const canvasRect = canvas.getBoundingClientRect();
+    let newX = event.clientX - startX;
+    let newY = event.clientY - startY;
+    const elRect = el.getBoundingClientRect();
+
+    newX = Math.max(0, Math.min(newX, canvasRect.width - elRect.width));
+    newY = Math.max(0, Math.min(newY, canvasRect.height - elRect.height));
+
+    // Remove any transition effects
+    el.style.transition = 'none';
+
+    el.style.left = `${newX}px`;
+    el.style.top = `${newY}px`;
+    el.setAttribute('data-x', newX);
+    el.setAttribute('data-y', newY);
+  });
+
+  // Mouse up to stop dragging
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      el.style.cursor = 'grab';
+    }
+  });
+
+  // Context menu prevention
+  el.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  // Double click for editing
+  el.addEventListener('dblclick', (event) => {
+    event.stopPropagation();
+    const type = el.getAttribute('data-type');
+    if (['button', 'label', 'video'].includes(type)) {
+      const textSpan = el.querySelector('.text-content');
+      const newText = prompt("Edit text:", textSpan.textContent);
+      if (newText !== null) {
+        textSpan.textContent = newText;
+        processTextForVariables(textSpan);
+      }
+    } else if (type === 'image') {
+      const fileInput = document.createElement('input');
+      fileInput.type = 'file';
+      fileInput.accept = 'image/*';
+      fileInput.style.display = 'none';
+
+      fileInput.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const img = el.querySelector('.element-image');
+          if (img) img.src = e.target.result;
+          const textSpan = el.querySelector('.text-content');
+          if (textSpan) textSpan.style.display = 'none';
+        };
+        reader.readAsDataURL(file);
+      };
+
+      document.body.appendChild(fileInput);
+      fileInput.click();
+      document.body.removeChild(fileInput);
+    } else if (type === 'input') {
+      const input = el.querySelector('.element-input');
+      if (input) input.focus();
+    } else if (type === 'dynamiclist') {
+      const command = prompt("Enter command path:", el.getAttribute('data-command') || '');
+      if (command !== null) {
+        el.setAttribute('data-command', command);
+      }
+
+      const variable = prompt("Enter variable name:", el.getAttribute('data-variable') || '');
+      if (variable !== null) {
+        el.setAttribute('data-variable', variable);
+      }
+    }
+  });
+
+  // Selection
+  // Update the element click event listener to properly switch panels
+  // Update the element click event listener to work better on mobile
+  el.addEventListener('click', (e) => {
+    if (e.target.classList.contains('remove-button') ||
+      e.target.classList.contains('menu-scene-button') ||
+      e.target.classList.contains('menu-language') ||
+      e.target.classList.contains('element-input')) {
+      return;
+    }
+
+    document.querySelectorAll('.element').forEach(otherEl => {
+      otherEl.classList.remove('selected');
+    });
+    el.classList.add('selected');
+    currentElement = el;
+    document.body.classList.add('element-selected');
+    showElementProperties(el);
+
+    // Force the properties panel to show element properties
+    document.getElementById('appInfoPanel').style.display = 'none';
+    document.getElementById('elementPropertiesPanel').style.display = 'block';
+
+    // Update tab states
+    document.querySelectorAll('.properties-tab').forEach(tab => {
+      if (tab.getAttribute('data-tab') === 'element-properties') {
+        tab.classList.add('active');
+      } else {
+        tab.classList.remove('active');
+      }
+    });
+  });
+
+  // Remove button
+  const removeButton = el.querySelector('.remove-button');
+  if (removeButton) {
+    removeButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      el.remove();
+      const sceneElements = scenes[currentScene];
+      const index = sceneElements.findIndex(item => item.isEqualNode(el));
+      if (index > -1) sceneElements.splice(index, 1);
     });
   }
 
-  // Setup button click handlers using delegation
-  menu.querySelectorAll('.button').forEach(button => {
-    button.addEventListener('click', () => handleButtonClick(button));
-  });
-}
-
-// Handle button clicks with proper validation
-function handleButtonClick(button) {
-  const target = button.getAttribute('data-target');
-  if (target === 'close') {
-    removeElement(button);
-  } else if (target && scenes[target]) {
-    changeScene(target);
+  // Process text for variables
+  const textSpan = el.querySelector('.text-content');
+  if (textSpan) {
+    processTextForVariables(textSpan);
   }
 }
 
-// Add a new variable to the variables list
-function addVariable() {
-  const newName = prompt('Enter variable name:', `variable_${Date.now()}`);
-  if (!newName) return;
+function handleResize(el, event) {
+  el.style.cursor = 'nwse-resize';
+  const startX = event.clientX;
+  const startY = event.clientY;
+  const startWidth = el.offsetWidth;
+  const startHeight = el.offsetHeight;
 
-  if (variables[newName] !== undefined) {
-    showToast('Variable already exists.', 'Please choose a unique name.', 'warning');
+  const onMouseMove = (e) => {
+    const newWidth = Math.max(50, startWidth + (e.clientX - startX));
+    const newHeight = Math.max(50, startHeight + (e.clientY - startY));
+    el.style.width = `${newWidth}px`;
+    el.style.height = `${newHeight}px`;
+    el.setAttribute('data-width', newWidth);
+    el.setAttribute('data-height', newHeight);
+  };
+
+  const onMouseUp = () => {
+    el.style.cursor = 'grab';
+    document.removeEventListener('mousemove', onMouseMove);
+    document.removeEventListener('mouseup', onMouseUp);
+  };
+
+  document.addEventListener('mousemove', onMouseMove);
+  document.addEventListener('mouseup', onMouseUp);
+}
+
+
+function showElementProperties(el) {
+  document.querySelectorAll('.dynamic-list-properties input').forEach(input => input.remove());
+
+  if (window.innerWidth <= 768) {
+    document.getElementById('appInfoPanel').style.display = 'none';
+    document.getElementById('elementPropertiesPanel').style.display = 'block';
+
+    // Scroll to properties panel on mobile
+    setTimeout(() => {
+      document.querySelector('.right-sidebar').scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest'
+      });
+    }, 100);
+  }
+
+  const triggerControls = document.querySelector('.trigger-controls');
+  if (triggerControls) {
+    if (['button', 'input'].includes(el.getAttribute('data-type'))) {
+      triggerControls.style.display = 'block';
+    } else {
+      triggerControls.style.display = 'none';
+    }
+  }
+
+  // Dynamic List properties - only show for dynamiclist elements
+  const dynamicListProperties = document.querySelector('.dynamic-list-properties');
+  if (el.getAttribute('data-type') === 'dynamiclist') {
+    dynamicListProperties.style.display = 'block';
+
+    // Set command path
+    const commandInput = document.getElementById('dynamicCommand');
+    commandInput.value = el.getAttribute('data-command') || '';
+    commandInput.onchange = () => {
+      el.setAttribute('data-command', commandInput.value);
+    };
+
+    // Set up variable selector
+    const variableSelector = document.getElementById('dynamicVariable');
+    updateVariableSelector(variableSelector, el.getAttribute('data-variable') || '');
+    variableSelector.onchange = () => {
+      el.setAttribute('data-variable', variableSelector.value);
+    };
+  } else {
+    dynamicListProperties.style.display = 'none';
+  }
+
+
+  // Hide all trigger options first
+  document.querySelectorAll('#triggerOptions > *').forEach(el => {
+    el.style.display = 'none';
+  });
+
+
+
+  elementProperties.classList.add('visible');
+
+  // Add null checks for all DOM elements
+  const bgColorPicker = document.getElementById('bgColorPicker');
+  if (!bgColorPicker) return;
+
+  const bgColorGroup = bgColorPicker.closest('.control-group');
+  if (!bgColorGroup) return;
+
+  if (el.getAttribute('data-type') === 'label') {
+    bgColorGroup.style.display = 'none';
+    el.style.backgroundColor = 'transparent';
+    el.removeAttribute('data-bg-color');
+  } else {
+    bgColorGroup.style.display = 'block';
+  }
+
+  // Position/size
+  const datax = document.getElementById('datax');
+  const datay = document.getElementById('datay');
+  const dataWidth = document.getElementById('dataWidth');
+  const dataHeight = document.getElementById('dataHeight');
+
+  if (datax && datay && dataWidth && dataHeight) {
+    datax.value = el.getAttribute('data-x') || 0;
+    datay.value = el.getAttribute('data-y') || 0;
+    dataWidth.value = el.getAttribute('data-width') || 100;
+    dataHeight.value = el.getAttribute('data-height') || 100;
+
+    // Update position/size when inputs change
+    const updatePositionSize = () => {
+      el.style.left = `${datax.value}px`;
+      el.setAttribute('data-x', datax.value);
+      el.style.top = `${datay.value}px`;
+      el.setAttribute('data-y', datay.value);
+      el.style.width = `${dataWidth.value}px`;
+      el.setAttribute('data-width', dataWidth.value);
+      el.style.height = `${dataHeight.value}px`;
+      el.setAttribute('data-height', dataHeight.value);
+    };
+
+    [datax, datay, dataWidth, dataHeight].forEach(input => {
+      if (input) input.oninput = updatePositionSize;
+    });
+  }
+
+  // Text styling
+  if (!['image', 'input'].includes(el.getAttribute('data-type'))) {
+    const colorPicker = document.getElementById('colorPicker');
+    const fontSizePicker = document.getElementById('fontSizePicker');
+
+    colorPicker.value = el.getAttribute('data-color') || '#000000';
+    colorPicker.oninput = () => {
+      el.style.color = colorPicker.value;
+      el.setAttribute('data-color', colorPicker.value);
+    };
+
+    fontSizePicker.value = el.getAttribute('data-font') || 'medium';
+    fontSizePicker.onchange = () => {
+      el.setAttribute('data-font', fontSizePicker.value);
+      el.style.fontSize = getFontSize(fontSizePicker.value) + 'px';
+    };
+
+    if (el.getAttribute('data-type') !== 'label') {
+      const bgColorPicker = document.getElementById('bgColorPicker');
+      bgColorPicker.value = el.getAttribute('data-bg-color') || '#ffffff';
+      bgColorPicker.oninput = () => {
+        el.style.backgroundColor = bgColorPicker.value;
+        el.setAttribute('data-bg-color', bgColorPicker.value);
+      };
+    }
+  }
+
+  // Transparency
+  if (['image', 'button', 'video', 'input', 'collapsedlist'].includes(el.getAttribute('data-type'))) {
+    const opacitySlider = document.getElementById('opacitySlider');
+    const opacityValue = document.getElementById('opacityValue');
+
+    // Get opacity from data attribute or style
+    let opacity = el.getAttribute('data-opacity');
+    if (!opacity) {
+      // Extract opacity from style if not in data attribute
+      const styleOpacity = parseFloat(el.style.opacity || 1);
+      opacity = Math.round(styleOpacity * 100);
+      el.setAttribute('data-opacity', opacity);
+    }
+
+    opacitySlider.value = opacity;
+    opacityValue.textContent = `${opacity}%`;
+    el.style.opacity = opacity / 100;
+
+    opacitySlider.oninput = () => {
+      const value = opacitySlider.value;
+      el.style.opacity = value / 100;
+      el.setAttribute('data-opacity', value);
+      opacityValue.textContent = `${value}%`;
+    };
+  }
+
+  // Trigger controls
+  const triggerSelector = document.getElementById('triggerSelector');
+  triggerSelector.value = el.getAttribute('data-trigger') || '';
+
+  // Show relevant options based on selected trigger
+  if (triggerSelector.value === 'change_scene') {
+    document.getElementById('sceneChangeSelector').style.display = 'block';
+    document.getElementById('sceneChangeSelector').value = el.getAttribute('data-scene-change') || '';
+  } else if (triggerSelector.value === 'external_app') {
+    document.getElementById('externalAppPath').style.display = 'block';
+    document.getElementById('externalAppPath').value = el.getAttribute('data-external-app-path') || '';
+    document.getElementById('externalAppReturnVar').style.display = 'block';
+    document.getElementById('externalAppReturnVar').value = el.getAttribute('data-external-app-return') || '';
+  } else if (triggerSelector.value === 'set_variable') {
+    document.getElementById('variableChangeSelector').style.display = 'block';
+    document.getElementById('variableChangeSelector').value = el.getAttribute('data-variable-change') || '';
+    document.getElementById('variableChangeValue').style.display = 'block';
+    document.getElementById('variableChangeValue').value = el.getAttribute('data-variable-change-value') || '';
+  } else if (triggerSelector.value === 'play_video' || triggerSelector.value === 'play_image') {
+    document.getElementById('mediaVariableSelector').style.display = 'block';
+
+    // Set up media variable selector
+    const mediaVariableSelector = document.getElementById('mediaVariableSelector');
+    updateVariableSelector(mediaVariableSelector, el.getAttribute('data-media-variable') || '');
+    mediaVariableSelector.onchange = () => {
+      el.setAttribute('data-media-variable', mediaVariableSelector.value);
+    };
+  }
+
+
+  // Add this change handler to the existing ones in showElementProperties function
+  const mediaVariableSelectorEl = document.getElementById('mediaVariableSelector');
+  if (mediaVariableSelectorEl) {
+    mediaVariableSelectorEl.onchange = () => {
+      el.setAttribute('data-media-variable', mediaVariableSelectorEl.value);
+    };
+  }
+
+  // Update trigger change handler
+  triggerSelector.onchange = () => {
+    const value = triggerSelector.value;
+    el.setAttribute('data-trigger', value);
+
+    // Hide all options first
+    document.querySelectorAll('#triggerOptions > *').forEach(el => {
+      el.style.display = 'none';
+    });
+
+    // Show relevant options
+    if (value === 'change_scene') {
+      document.getElementById('sceneChangeSelector').style.display = 'block';
+    } else if (value === 'external_app') {
+      document.getElementById('externalAppPath').style.display = 'block';
+      document.getElementById('externalAppReturnVar').style.display = 'block';
+    } else if (value === 'set_variable') {
+      document.getElementById('variableChangeSelector').style.display = 'block';
+      document.getElementById('variableChangeValue').style.display = 'block';
+      // In triggerSelector.onchange, update the play_video/play_image section:
+    } else if (value === 'play_video' || value === 'play_image') {
+      document.getElementById('mediaVariableSelector').style.display = 'block';
+
+      // Set up media variable selector
+      const mediaVariableSelector = document.getElementById('mediaVariableSelector');
+      updateVariableSelector(mediaVariableSelector, el.getAttribute('data-media-variable') || '');
+      mediaVariableSelector.onchange = () => {
+        el.setAttribute('data-media-variable', mediaVariableSelector.value);
+      };
+    }
+
+  };
+
+  const videoVariableEl = document.getElementById('videoVariable');
+  if (videoVariableEl) {
+    videoVariableEl.onchange = () => {
+      el.setAttribute('data-video-variable', videoVariableEl.value);
+    };
+  }
+
+  const imageVariableEl = document.getElementById('imageVariable');
+  if (imageVariableEl) {
+    imageVariableEl.onchange = () => {
+      el.setAttribute('data-image-variable', imageVariableEl.value);
+    };
+  }
+
+  // Set up change handlers for trigger options
+  const sceneChangeSelectorEl = document.getElementById('sceneChangeSelector');
+  if (sceneChangeSelectorEl) {
+    sceneChangeSelectorEl.value = el.getAttribute('data-scene-change') || '';
+    sceneChangeSelectorEl.onchange = () => {
+      el.setAttribute('data-scene-change', sceneChangeSelectorEl.value);
+    };
+  }
+
+  const externalAppPathEl = document.getElementById('externalAppPath');
+  if (externalAppPathEl) {
+    externalAppPathEl.value = el.getAttribute('data-external-app-path') || '';
+    externalAppPathEl.onchange = () => {
+      el.setAttribute('data-external-app-path', externalAppPathEl.value);
+    };
+  }
+
+  const externalAppReturnVarEl = document.getElementById('externalAppReturnVar');
+  if (externalAppReturnVarEl) {
+    externalAppReturnVarEl.onchange = () => {
+      el.setAttribute('data-external-app-return', externalAppReturnVarEl.value);
+    };
+  }
+
+  const variableChangeSelectorEl = document.getElementById('variableChangeSelector');
+  if (variableChangeSelectorEl) {
+    variableChangeSelectorEl.onchange = () => {
+      el.setAttribute('data-variable-change', variableChangeSelectorEl.value);
+    };
+  }
+
+  const variableChangeValueEl = document.getElementById('variableChangeValue');
+  if (variableChangeValueEl) {
+    variableChangeValueEl.onchange = () => {
+      el.setAttribute('data-variable-change-value', variableChangeValueEl.value);
+    };
+  }
+
+  const videoPathEl = document.getElementById('videoPath');
+  if (videoPathEl) {
+    videoPathEl.onchange = () => {
+      el.setAttribute('data-video-path', videoPathEl.value);
+    };
+  }
+
+  const imagePathEl = document.getElementById('imagePath');
+  if (imagePathEl) {
+    imagePathEl.onchange = () => {
+      el.setAttribute('data-image-path', imagePathEl.value);
+    };
+  }
+
+
+}
+
+// Menu Functions
+function setupMenuEvents(menuEl) {
+  // Remove button
+  const removeButton = menuEl.querySelector('.remove-button');
+  if (removeButton) {
+    removeButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      menuEl.remove();
+      const sceneElements = scenes[currentScene];
+      const index = sceneElements.findIndex(item => item.isEqualNode(menuEl));
+      if (index > -1) sceneElements.splice(index, 1);
+    });
+  }
+}
+
+function updateMenuSceneButtons(menuEl) {
+  const sceneButtonsContainer = menuEl.querySelector('.menu-scene-buttons');
+  if (!sceneButtonsContainer) return;
+
+  sceneButtonsContainer.innerHTML = '';
+
+  Object.keys(scenes).forEach(sceneName => {
+    const button = document.createElement('button');
+    button.className = 'menu-scene-button';
+    if (sceneName === currentScene) button.classList.add('active');
+    button.textContent = sceneName;
+    button.addEventListener('click', () => {
+      sceneSelector.value = sceneName;
+      changeScene();
+      menuEl.querySelectorAll('.menu-scene-button').forEach(btn => btn.classList.remove('active'));
+      button.classList.add('active');
+    });
+    sceneButtonsContainer.appendChild(button);
+  });
+}
+
+function updateMenuClock(clockEl) {
+  if (!clockEl) return;
+
+  const updateTime = () => {
+    const now = new Date();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    clockEl.textContent = `${hours}:${minutes}`;
+  };
+
+  updateTime();
+  setInterval(updateTime, 60000);
+}
+
+// Variable Management
+function addVariable() {
+  const variableName = prompt('Enter variable name:');
+  if (variableName && !variables[variableName]) {
+    variables[variableName] = '';
+
+    // Create variable item
+    const variableItem = document.createElement('div');
+    variableItem.className = 'variable-item';
+    variableItem.innerHTML = `
+                    <div>
+                        <span class="variable-name">${variableName}</span>
+                        <span class="variable-value">${variables[variableName]}</span>
+                    </div>
+                    <div class="variable-actions">
+                        <button onclick="editVariable('${variableName}')"><i class="fas fa-edit"></i></button>
+                        <button onclick="deleteVariable('${variableName}')"><i class="fas fa-trash"></i></button>
+                    </div>
+                `;
+
+    variablesList.appendChild(variableItem);
+
+    document.querySelectorAll('.dynamic-variable-selector').forEach(selector => {
+      const currentValue = selector.value;
+      updateVariableSelector(selector, currentValue);
+    });
+
+    updateVariableChangeSelector();
+  }
+}
+
+function editVariable(name) {
+  const newValue = prompt(`Enter new value for ${name}:`, variables[name]);
+  if (newValue !== null) {
+    variables[name] = newValue;
+
+    // Update UI
+    document.querySelectorAll('.variable-item').forEach(item => {
+      if (item.querySelector('.variable-name').textContent === name) {
+        item.querySelector('.variable-value').textContent = newValue;
+      }
+    });
+
+    // Update all elements with variables
+    document.querySelectorAll('.text-content').forEach(textEl => {
+      processTextForVariables(textEl);
+    });
+  }
+}
+
+function deleteVariable(name) {
+  if (confirm(`Delete variable ${name}?`)) {
+    delete variables[name];
+
+    // Remove from UI
+    document.querySelectorAll('.variable-item').forEach(item => {
+      if (item.querySelector('.variable-name').textContent === name) {
+        item.remove();
+      }
+    });
+
+    document.querySelectorAll('.dynamic-variable-selector').forEach(selector => {
+      const currentValue = selector.value === name ? '' : selector.value;
+      updateVariableSelector(selector, currentValue);
+    });
+
+    // Update variable change selector
+    updateVariableChangeSelector();
+
+    // Update all elements with variables
+    document.querySelectorAll('.text-content').forEach(textEl => {
+      processTextForVariables(textEl);
+    });
+  }
+}
+
+function updateVariableChangeSelector() {
+  const selector = document.getElementById('variableChangeSelector');
+  selector.innerHTML = '';
+
+  Object.keys(variables).forEach(variableName => {
+    const option = document.createElement('option');
+    option.value = variableName;
+    option.textContent = variableName;
+    selector.appendChild(option);
+  });
+}
+
+function updateSceneChangeSelector() {
+  const selector = document.getElementById('sceneChangeSelector');
+  selector.innerHTML = '';
+
+  Object.keys(scenes).forEach(sceneName => {
+    const option = document.createElement('option');
+    option.value = sceneName;
+    option.textContent = sceneName;
+    selector.appendChild(option);
+  });
+}
+
+// Process text for variables and add tooltips
+function processTextForVariables(textElement) {
+  let text = textElement.textContent;
+  const regex = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+  let variablesUsed = {};
+  let match;
+
+  // Find all unique variables in the text
+  while ((match = regex.exec(text)) !== null) {
+    const varName = match[1];
+    variablesUsed[varName] = variables[varName] || '""';
+  }
+
+  // If no variables, remove any existing tooltip and return
+  if (Object.keys(variablesUsed).length === 0) {
+    textElement.parentElement.classList.remove('has-variables');
     return;
   }
 
-  variables[newName] = '';
-  
-  // Create variable item UI element
-  const variableItem = document.createElement('div');
-  variableItem.className = 'variable-item';
-  variableItem.innerHTML = `
-    <input type="text" class="variable-value" value="${escapeHtml(newName)}">
-    <button class="remove-variable-remove">✕</button>
-  `;
-  
-  variablesList.appendChild(variableItem);
+  // Add has-variables class for styling
+  textElement.parentElement.classList.add('has-variables');
 
-  // Setup event listeners for the new variable
-  const newValueInput = variableItem.querySelector('.variable-value');
-  if (newValueInput) {
-    newValueInput.addEventListener('change', () => {
-      variables[newName] = newValueInput.value;
-      updateVariableChangeSelector();
-    });
+  // Format the tooltip text with evaluated values
+  let evaluatedText = text;
+  for (const [varName, varValue] of Object.entries(variablesUsed)) {
+    evaluatedText = evaluatedText.replace(`$${varName}`, varValue);
   }
 
-  // Setup remove button
-  const removeBtn = variableItem.querySelector('.remove-variable-remove');
-  if (removeBtn) {
-    removeBtn.addEventListener('click', () => removeVariable(newName));
-  }
+  const tooltipText = `Evaluated: ${evaluatedText}\n\nVariables:\n${Object.entries(variablesUsed)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join('\n')}`;
+
+  // Remove any existing event listeners
+  const parentEl = textElement.parentElement;
+  parentEl.removeEventListener('mouseenter', parentEl._tooltipMouseEnter);
+  parentEl.removeEventListener('mouseleave', parentEl._tooltipMouseLeave);
+
+  // Add new event listeners using the global tooltip
+  parentEl._tooltipMouseEnter = function (e) {
+    globalTooltip.textContent = tooltipText;
+    globalTooltip.style.display = 'block';
+
+    const rect = parentEl.getBoundingClientRect();
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+
+    globalTooltip.style.left = `${rect.left + (rect.width / 2) - (globalTooltip.offsetWidth / 2)}px`;
+    globalTooltip.style.top = `${rect.top + scrollTop - globalTooltip.offsetHeight - 5}px`;
+
+    // Ensure tooltip stays within viewport
+    const tooltipRect = globalTooltip.getBoundingClientRect();
+    if (tooltipRect.left < 5) globalTooltip.style.left = '5px';
+    if (tooltipRect.right > window.innerWidth - 5) {
+      globalTooltip.style.left = `${window.innerWidth - tooltipRect.width - 5}px`;
+    }
+  };
+
+  parentEl._tooltipMouseLeave = function (e) {
+    globalTooltip.style.display = 'none';
+  };
+
+  parentEl.addEventListener('mouseenter', parentEl._tooltipMouseEnter);
+  parentEl.addEventListener('mouseleave', parentEl._tooltipMouseLeave);
 }
 
-// Remove a variable from the variables list
-function removeVariable(name) {
-  delete variables[name];
-  
-  const item = document.querySelector(`.variable-item[data-name="${escapeHtml(name)}"]`);
-  if (item) {
-    item.remove();
-  }
+// File Operations
+function setBackground() {
+  const file = backgroundFileInput.files[0];
+  if (!file) return;
 
-  updateVariableChangeSelector();
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    canvas.style.backgroundImage = `url(${e.target.result})`;
+    canvas.style.backgroundSize = 'cover';
+    backgroundPath = e.target.result;
+  };
+  reader.readAsDataURL(file);
 }
 
-// Setup mobile double-tap to add element on canvas
-function setupMobileDoubleTap() {
-  let touchStart = null;
-  let touchTimer = null;
+function getFontSize(fontSize) {
+  const sizes = {
+    title: parseInt(titleSizeInput.value) || 48,
+    big: parseInt(bigSizeInput.value) || 36,
+    medium: parseInt(mediumSizeInput.value) || 24,
+    small: parseInt(smallSizeInput.value) || 18
+  };
 
-  canvas.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    
-    const touch = e.touches[0];
-    touchStart = { x: touch.clientX, y: touch.clientY };
-    
-    // Start double-tap timer
-    touchTimer = setTimeout(() => {
-      // Double tap detected - add element at this position
-      if (touchStart) {
-        addElement('button', touchStart.x, touchStart.y);
-        touchStart = null;
+  return sizes[fontSize] || 24;
+}
+
+// Export functionality
+function createJukaApp() {
+  const config = {
+    title: document.getElementById('title').value,
+    author: document.getElementById('author').value,
+    description: document.getElementById('description').value,
+    variables: {
+      ...variables,
+      backgroundImage: backgroundPath,
+      fontSizes: {
+        title: parseInt(titleSizeInput.value, 10),
+        big: parseInt(bigSizeInput.value, 10),
+        medium: parseInt(mediumSizeInput.value, 10),
+        small: parseInt(smallSizeInput.value, 10)
       }
-    }, 500);
-  });
+    },
+    scenes: Object.keys(scenes).map(sceneName => ({
+      name: sceneName,
+      elements: scenes[sceneName].map(el => {
+        const element = {
+          type: el.getAttribute('data-type'),
+          x: parseInt(el.getAttribute('data-x')),
+          y: parseInt(el.getAttribute('data-y')),
+          width: parseInt(el.getAttribute('data-width')),
+          height: parseInt(el.getAttribute('data-height'))
+        };
 
-  canvas.addEventListener('touchmove', () => {
-    clearTimeout(touchTimer);
-    touchTimer = null;
-  });
+        if (el.getAttribute('data-color')) {
+          element.color = el.getAttribute('data-color');
+        }
 
-  canvas.addEventListener('touchend', () => {
-    clearTimeout(touchTimer);
-    touchTimer = null;
-  });
+        if (el.getAttribute('data-bg-color')) {
+          element.bgColor = el.getAttribute('data-bg-color');
+        }
+
+        if (el.getAttribute('data-font')) {
+          element.font = el.getAttribute('data-font');
+        }
+
+        if (el.getAttribute('data-opacity')) {
+          element.opacity = parseInt(el.getAttribute('data-opacity')) / 100;
+        }
+
+        // Add trigger data
+        if (el.getAttribute('data-trigger')) {
+          element.trigger = el.getAttribute('data-trigger');
+
+          if (element.trigger === 'change_scene') {
+            element.sceneChange = el.getAttribute('data-scene-change');
+          } else if (element.trigger === 'external_app') {
+            element.externalAppPath = el.getAttribute('data-external-app-path');
+            element.externalAppReturn = el.getAttribute('data-external-app-return');
+          } else if (element.trigger === 'set_variable') {
+            element.variableChange = el.getAttribute('data-variable-change');
+            element.variableChangeValue = el.getAttribute('data-variable-change-value');
+          } else if (element.trigger === 'play_video' || element.trigger === 'play_image') {
+            element.mediaVariable = el.getAttribute('data-media-variable') || '';
+          }
+        }
+
+        const type = el.getAttribute('data-type');
+        if (type === 'input') {
+          const input = el.querySelector('.element-input');
+          if (input) element.text = input.value;
+        } else {
+          const textSpan = el.querySelector('.text-content');
+          if (textSpan) element.text = textSpan.textContent;
+        }
+
+        if (type === 'dynamiclist') {
+          element.command = el.getAttribute('data-command') || '';
+          element.variable = el.getAttribute('data-variable') || '';
+        }
+
+        if (type === 'textbrowser') {
+          element.variable = el.getAttribute('data-variable') || '';
+          element.source = el.getAttribute('data-source') || 'system';
+        }
+
+
+        if (type === 'image') {
+          const img = el.querySelector('.element-image');
+          if (img && img.src) element.image = img.src;
+        }
+
+        if (type === 'video') {
+          element.videoVariable = el.getAttribute('data-video-variable');
+        }
+
+        return element;
+      })
+    }))
+  };
+
+  const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config, null, 2));
+  const downloadAnchorNode = document.createElement('a');
+  downloadAnchorNode.href = dataStr;
+  downloadAnchorNode.download = "jukaconfig.json";
+  document.body.appendChild(downloadAnchorNode);
+  downloadAnchorNode.click();
+  downloadAnchorNode.remove();
 }
 
-// Setup mobile click to select element on canvas
-function setupMobileCanvasClick() {
-  canvas.addEventListener('click', (e) => {
-    if (!currentElement) {
-      const target = e.target.closest('.element');
-      if (target) {
-        currentElement = target;
-        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-        target.classList.add('selected');
-        document.body.classList.add('element-selected');
-        switchTab('element-properties');
-      }
-    }
-  });
-
-  canvas.addEventListener('contextmenu', (e) => {
-    e.preventDefault(); // Prevent default context menu
-    const target = e.target.closest('.element');
-    if (target) {
-      currentElement = target;
-      document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-      target.classList.add('selected');
-      document.body.classList.add('element-selected');
-      switchTab('element-properties');
-    }
-  });
-}
-
-// Setup mobile element selection with long-press
-function setupMobileElementSelection() {
-  let touchStart = null;
-  let isLongPress = false;
-
-  canvas.addEventListener('touchstart', (e) => {
-    if (!currentElement && e.target.closest('.element')) {
-      const target = e.target.closest('.element');
-      
-      // Check if it's a long press or single tap
-      setTimeout(() => {
-        isLongPress = true;
-        currentElement = target;
-        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-        target.classList.add('selected');
-        document.body.classList.add('element-selected');
-        switchTab('element-properties');
-        
-        clearTimeout(touchTimer);
-      }, 500);
-    }
-  });
-
-  canvas.addEventListener('touchmove', () => {
-    isLongPress = false;
-    clearTimeout(touchTimer);
-  });
-
-  canvas.addEventListener('touchend', () => {
-    if (!isLongPress) {
-      // Single tap - deselect
-      currentElement = null;
-      document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-      document.body.classList.remove('element-selected');
-    }
-    
-    isLongPress = false;
-  });
-}
-
-// Load Juka app from config
-function loadJukaApp(config) {
-  if (!config || typeof config !== 'object') return;
-
-  // Update canvas size from config
-  if (config.canvasSize) {
-    const [width, height] = config.canvasSize.split('x').map(Number);
-    canvasWidth = width;
-    canvasHeight = height;
-    updateCanvasSize();
-  }
-
-  // Load scenes from config
-  if (config.scenes) {
-    scenes = config.scenes;
+function clearAll() {
+  if (confirm('Are you sure you want to clear everything and start new?')) {
+    scenes = { 'Scene 1': [] };
     currentScene = 'Scene 1';
-    
+    variables = {};
+    canvas.innerHTML = '';
+    sceneSelector.innerHTML = '';
+    variablesList.innerHTML = '';
+
     const option = document.createElement('option');
     option.value = 'Scene 1';
     option.textContent = 'Scene 1';
     sceneSelector.appendChild(option);
     sceneSelector.value = 'Scene 1';
 
-    loadScene(currentScene);
-  }
+    document.getElementById('title').value = '';
+    document.getElementById('author').value = '';
+    document.getElementById('description').value = '';
+    titleSizeInput.value = 48;
+    bigSizeInput.value = 36;
+    mediumSizeInput.value = 24;
+    smallSizeInput.value = 18;
 
-  // Load variables from config
-  if (config.variables) {
-    variables = config.variables;
+    canvas.style.backgroundImage = '';
+    backgroundPath = '';
+
+    updateCanvasSize();
+    addElement('menu', 0, canvasHeight - 50);
+
+    document.querySelectorAll('.menu').forEach(menu => {
+      updateMenuSceneButtons(menu);
+    });
+
+    updateSceneChangeSelector();
     updateVariableChangeSelector();
   }
-
-  showToast('App loaded successfully.', 'All scenes and variables have been imported.', 'success');
 }
 
-// Show/hide variable change selector based on active element type
-function updateVariableChangeSelector() {
-  const hasDynamicList = document.querySelector('[data-type="dynamiclist"]') || 
-                         document.querySelector('[data-list-variable]');
-  
-  if (hasDynamicList) {
-    document.getElementById('variable-change-selector').style.display = 'block';
-  } else {
-    document.getElementById('variable-change-selector').style.display = 'none';
-  }
+function saveCurrentScene() {
+  scenes[currentScene] = Array.from(canvas.children).map(el => el.cloneNode(true));
 }
 
-// Set up dynamic list element execution
-function setupDynamicListExecution(el) {
-  const varInput = el.querySelector('[data-variable]');
-  if (varInput) {
-    varInput.addEventListener('input', () => {
-      updateAllFontSizes(); // Update font sizes based on variable
-    });
-  }
+// Scene management functions
+function renameScene() {
+  const newName = prompt('Enter new name for scene:', currentScene);
+  if (!newName || scenes[newName]) return;
+
+  // Update scenes object
+  scenes[newName] = scenes[currentScene];
+  delete scenes[currentScene];
+
+  // Update scene selector
+  const option = sceneSelector.querySelector(`option[value="${currentScene}"]`);
+  option.value = newName;
+  option.textContent = newName;
+
+  currentScene = newName;
+  sceneSelector.value = newName;
+
+  // Update all menu scene buttons
+  updateAllMenuSceneButtons();
+  updateAllStoredMenus();
+
+  // Update scene change selector
+  updateSceneChangeSelector();
 }
 
-// Setup dynamic list properties
-function setupDynamicListProperties() {
-  document.querySelectorAll('.dynamic-list-properties input').forEach(input => {
-    input.addEventListener('change', (e) => {
-      const parent = e.target.closest('.element');
-      if (parent && parent.getAttribute('data-variable')) {
-        variables[parent.getAttribute('data-variable')] = e.target.value;
-      }
-    });
-  });
-}
-
-// Set up menu scene buttons using event delegation
-function updateMenuSceneButtons(menu) {
-  const btnContainer = menu.querySelector('.menu-scene-buttons');
-  if (!btnContainer) return;
-
-  // Remove old buttons and recreate with delegation
-  btnContainer.innerHTML = '';
-  
-  document.querySelectorAll('li.scene-item').forEach(sceneItem => {
-    const sceneName = sceneItem.getAttribute('data-scene');
-    if (sceneName && scenes[sceneName]) {
-      const button = document.createElement('button');
-      button.className = 'menu-scene-button';
-      button.setAttribute('data-target', sceneName);
-      button.textContent = sceneName;
-      
-      if (currentScene === sceneName) {
-        button.classList.add('active');
-      }
-      
-      btnContainer.appendChild(button);
-    }
-  });
-}
-
-// Update all stored menus' scene buttons using event delegation
-function updateAllStoredMenus() {
-  document.querySelectorAll('[data-type="menu"]').forEach(menu => {
-    const btnContainer = menu.querySelector('.menu-scene-buttons');
-    if (btnContainer) {
-      btnContainer.innerHTML = '';
-      
-      document.querySelectorAll('li.scene-item').forEach(sceneItem => {
-        const sceneName = sceneItem.getAttribute('data-scene');
-        if (sceneName && scenes[sceneName]) {
-          const button = document.createElement('button');
-          button.className = 'menu-scene-button';
-          button.setAttribute('data-target', sceneName);
-          button.textContent = sceneName;
-          
-          if (currentScene === sceneName) {
-            button.classList.add('active');
-          }
-          
-          btnContainer.appendChild(button);
-        }
-      });
-    }
-  });
-}
-
-// Update menu clock using event delegation on all menus
-function updateMenuClock(menu) {
-  const clock = menu.querySelector('.menu-clock');
-  if (clock) {
-    updateClock(clock);
-  }
-}
-
-// Update clock display - use setInterval for smooth updates
-let clockInterval = null;
-function updateClock(clockElement) {
-  clockInterval = setInterval(() => {
-    const now = new Date();
-    const hours = String(now.getHours()).padStart(2, '0');
-    const minutes = String(now.getMinutes()).padStart(2, '0');
-    clockElement.textContent = `${hours}:${minutes}`;
-  }, 1000);
-
-  // Cleanup interval when menu is removed
-  const observer = new MutationObserver((mutations) => {
-    if (mutations.some(mutation => mutation.type === 'childList')) {
-      clearInterval(clockInterval);
-      clockInterval = null;
-      observer.disconnect();
-    }
-  });
-
-  observer.observe(canvas, { childList: true });
-}
-
-// Update variable change selector based on active element
-function updateVariableChangeSelector() {
-  const hasDynamicList = document.querySelector('[data-type="dynamiclist"]') || 
-                         document.querySelector('[data-list-variable]');
-  
-  document.getElementById('variable-change-selector').style.display = hasDynamicList ? 'block' : 'none';
-}
-
-// Setup font size change listeners using event delegation
-function setupFontSizeListeners() {
-  [titleSizeInput, bigSizeInput, mediumSizeInput, smallSizeInput].forEach(input => {
-    if (input) input.addEventListener('change', updateAllFontSizes);
-  });
-}
-
-// Create global tooltip for variable values
-function createGlobalTooltip() {
-  const body = document.body || window.document.body;
-  
-  globalTooltip = document.createElement('div');
-  globalTooltip.className = 'variable-tooltip';
-  globalTooltip.style.display = 'none';
-  globalTooltip.setAttribute('role', 'tooltip');
-  globalTooltip.style.position = 'fixed';
-  globalTooltip.style.pointerEvents = 'none';
-  globalTooltip.style.zIndex = '9999';
-  
-  body.appendChild(globalTooltip);
-
-  // Position tooltip on hover over variable elements
-  canvas.addEventListener('mouseenter', (e) => {
-    const target = e.target.closest('[data-variable]');
-    if (target && target.getAttribute('data-variable')) {
-      positionTooltip(target, globaltooltip.textContent || '');
-    }
-  });
-
-  canvas.addEventListener('mouseleave', () => {
-    globaltooltip.style.display = 'none';
-  });
-}
-
-// Position tooltip near element
-function positionTooltip(element, value) {
-  if (!globalTooltip) return;
-  
-  const rect = element.getBoundingClientRect();
-  globaltooltip.textContent = value || '';
-  globaltooltip.style.left = `${rect.right + 10}px`;
-  globaltooltip.style.top = `${rect.top}px`;
-  globaltooltip.style.display = 'block';
-}
-
-// Load default configuration from localStorage or hardcoded defaults
-function loadDefaultConfig() {
-  try {
-    const saved = localStorage.getItem('jukahub-config');
-    if (saved) {
-      const config = JSON.parse(saved);
-      loadJukaApp(config);
-      showToast('Loaded saved configuration.', 'Your previous project has been restored.', 'info');
-    } else {
-      // Create default config
-      const defaultConfig = {
-        canvasSize: '1280x720',
-        scenes: { 'Scene 1': [] },
-        variables: {}
-      };
-      
-      localStorage.setItem('jukahub-config', JSON.stringify(defaultConfig));
-      loadJukaApp(defaultConfig);
-    }
-  } catch (error) {
-    showToast('Error loading saved config.', 'Please create a new project.', 'warning');
-  }
-}
-
-// Clear all elements and scenes
-function clearAll() {
-  if (scenes['Scene 1'].length > 0 && Object.keys(scenes).length === 1) {
-    showToast('Cannot clear scene.', 'There must be at least one element in a scene.', 'warning');
+function deleteScene() {
+  if (Object.keys(scenes).length <= 1) {
+    alert('Cannot delete the only scene.');
     return;
   }
 
-  scenes = {};
-  
-  // Clear DOM elements
-  canvas.innerHTML = '';
-  
-  // Reset UI elements
-  document.querySelectorAll('.menu-scene-buttons').forEach(el => el.innerHTML = '');
-  updateSceneChangeSelector();
-  updateVariableChangeSelector();
-  switchTab('app-properties');
+  if (confirm(`Are you sure you want to delete "${currentScene}"?`)) {
+    // Find next scene to show
+    const sceneNames = Object.keys(scenes);
+    const currentIndex = sceneNames.indexOf(currentScene);
+    const nextScene = currentIndex > 0 ? sceneNames[currentIndex - 1] : sceneNames[1];
+
+    // Delete scene
+    delete scenes[currentScene];
+
+    // Remove from selector
+    const option = sceneSelector.querySelector(`option[value="${currentScene}"]`);
+    option.remove();
+
+    // Switch to next scene
+    currentScene = nextScene;
+    sceneSelector.value = nextScene;
+    loadScene(nextScene);
+
+    // Update all menu scene buttons
+    updateAllMenuSceneButtons();
+    updateAllStoredMenus();
+
+    // Update scene change selector
+    updateSceneChangeSelector();
+  }
 }
 
-// Save current scene to state
-function saveCurrentScene() {
-  scenes[currentScene] = Array.from(canvas.querySelectorAll('.element')).map(el => ({
-    type: el.getAttribute('data-type'),
-    x: parseInt(el.setAttribute('data-x')) || 0,
-    y: parseInt(el.setAttribute('data-y')) || 0,
-    width: parseInt(el.getAttribute('data-width')) || 100,
-    height: parseInt(el.setAttribute('data-height')) || 100,
-    opacity: el.getAttribute('data-opacity') || 100,
-    // Add more properties as needed...
-  }));
+// Load initial config
+function loadInitialConfig() {
+  // This would typically fetch from a server
+  console.log('Loading initial configuration...');
 }
 
-// Get font size based on font type (inferred from data or element class)
-function getFontSize(fontType) {
-  const sizes = {
-    small: '12px',
-    medium: '16px',
-    large: '20px',
-    extraLarge: '24px'
-  };
-  
-  return sizes[fontType] || '16px'; // Default size
-}
 
-// Escape HTML to prevent XSS attacks when displaying variable values
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
 
-// Handle element removal with proper cleanup
-function removeElement(el) {
-  // Remove from DOM
-  el.remove();
-  
-  // Remove from current scene data (simplified - in production, update the full state)
-  if (el.getAttribute('data-type') === 'menu') {
-    const menuSceneButtons = el.querySelector('.menu-scene-buttons');
-    if (menuSceneButtons) {
-      menuSceneButtons.innerHTML = '';
-    }
-    
-    // Update all stored menus to remove this scene button
-    document.querySelectorAll('[data-target]').forEach(btn => {
-      btn.remove();
+function loadDefaultConfig() {
+  fetch('player/jukaconfig.json')
+    .then(response => {
+      if (!response.ok) {
+        throw new Error('jukaconfig.json not found');
+      }
+      return response.json();
+    })
+    .then(config => {
+      loadJukaApp(config);
+    })
+    .catch(error => {
+      console.log('No default config found:', error.message);
     });
+}
+
+
+function loadJukaApp(data) {
+  // Clear existing elements
+  variableChangeSelector.innerHTML = '';
+  canvas.innerHTML = '';
+
+  // Load app info
+  document.getElementById('title').value = data.title || '';
+  document.getElementById('author').value = data.author || '';
+  document.getElementById('description').value = data.description || '';
+
+  // Load font sizes
+  if (data.variables && data.variables.fontSizes) {
+    document.getElementById('titleSize').value = data.variables.fontSizes.title || 48;
+    document.getElementById('bigSize').value = data.variables.fontSizes.big || 36;
+    document.getElementById('mediumSize').value = data.variables.fontSizes.medium || 24;
+    document.getElementById('smallSize').value = data.variables.fontSizes.small || 18;
   }
 
-  showToast('Element removed.', 'Your UI has been updated.', 'info');
+  // Load background
+  if (data.variables && data.variables.backgroundImage) {
+    canvas.style.backgroundImage = `url(${data.variables.backgroundImage})`;
+    canvas.style.backgroundSize = 'cover';
+    backgroundPath = data.variables.backgroundImage;
+  }
+
+  // Clear existing scenes and variables
+  scenes = {};
+  variables = {};
+  variablesList.innerHTML = '';
+
+  // Load variables
+  if (data.variables) {
+    const excludedKeys = ['backgroundImage', 'fontSizes', 'buttonColor', 'labelColor', 'fonts'];
+    for (const key in data.variables) {
+      if (!excludedKeys.includes(key)) {
+        variables[key] = data.variables[key];
+
+        // Add variable to UI
+        const variableItem = document.createElement('div');
+        variableItem.className = 'variable-item';
+        variableItem.innerHTML = `
+                    <div>
+                        <span class="variable-name">${key}</span>
+                        <span class="variable-value">${data.variables[key]}</span>
+                    </div>
+                    <div class="variable-actions">
+                        <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
+                        <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+                    </div>
+                `;
+        variablesList.appendChild(variableItem);
+      }
+    }
+  }
+
+  // Load scenes
+  const sceneSelector = document.getElementById('sceneSelector');
+  sceneSelector.innerHTML = '';
+
+  data.scenes.forEach(scene => {
+    scenes[scene.name] = [];
+
+    // Add scene to selector
+    const option = document.createElement('option');
+    option.value = scene.name;
+    option.textContent = scene.name;
+    sceneSelector.appendChild(option);
+
+    // Load scene elements
+    scene.elements.forEach(elementData => {
+      const el = createElementFromData(elementData);
+      if (el) {
+        canvas.appendChild(el);
+        scenes[scene.name].push(el.cloneNode(true));
+        setupElementEvents(el);
+
+        // Process text for variables if applicable
+        const textSpan = el.querySelector('.text-content');
+        if (textSpan) {
+          processTextForVariables(textSpan);
+        }
+      }
+    });
+  });
+
+  // Set current scene
+  if (data.scenes.length > 0) {
+    currentScene = data.scenes[0].name;
+    sceneSelector.value = currentScene;
+    loadScene(currentScene);
+  }
+
+  // Update UI
+  updateSceneChangeSelector();
+  updateVariableChangeSelector();
+
+  // Update all menu scene buttons
+  updateAllMenuSceneButtons();
 }
 
-// Setup mobile double-tap and long-press handlers
+
+
+function calculateTextDimensions(text, fontSize, fontFamily = 'Inter, sans-serif', fontWeight = '900') {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  context.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+  const metrics = context.measureText(text);
+  return {
+    width: Math.ceil(metrics.width + 16), // Add padding
+    height: Math.ceil(parseInt(fontSize) * 1.4) // Line height factor
+  };
+}
+
+function createElementFromData(elementData) {
+  const el = document.createElement('div');
+  el.className = 'element';
+  el.style.position = 'absolute';
+  el.style.left = `${elementData.x}px`;
+  el.style.top = `${elementData.y}px`;
+  el.setAttribute('data-type', elementData.type);
+  el.setAttribute('data-x', elementData.x);
+  el.setAttribute('data-y', elementData.y);
+
+  // Fix opacity handling
+  if (elementData.opacity !== undefined) {
+    const opacityValue = Math.round(elementData.opacity * 100);
+    el.style.opacity = elementData.opacity;
+    el.setAttribute('data-opacity', opacityValue);
+  } else {
+    el.style.opacity = 1;
+    el.setAttribute('data-opacity', '100');
+  }
+
+  // Handle menu element specifically
+  if (elementData.type === 'menu') {
+    el.style.width = `${canvasWidth}px`; // Full width
+    el.style.height = `${elementData.height || 50}px`;
+    el.setAttribute('data-width', canvasWidth);
+    el.setAttribute('data-height', elementData.height || 50);
+
+    // Create menu structure
+    el.innerHTML = `
+            <div class="menu-scene-buttons"></div>
+            <div class="menu-clock">00:00</div>
+            <span class="remove-button">✕</span>
+        `;
+
+    // Set up menu events and buttons
+    setupMenuEvents(el);
+    updateMenuSceneButtons(el);
+    updateMenuClock(el.querySelector('.menu-clock'));
+
+    return el;
+  }
+
+  // Handle button and label elements with null dimensions
+  let width = elementData.width;
+  let height = elementData.height;
+
+  if ((elementData.type === 'button' || elementData.type === 'label') &&
+    (width === null || height === null)) {
+    const fontSize = getFontSize(elementData.font || 'medium');
+    const dimensions = calculateTextDimensions(
+      elementData.text || elementData.type,
+      fontSize
+    );
+
+    if (width === null) width = dimensions.width;
+    if (height === null) height = dimensions.height;
+  }
+
+  if (elementData.trigger === 'play_video' || elementData.trigger === 'play_image') {
+    el.setAttribute('data-media-variable', elementData.mediaVariable || '');
+  }
+
+  // Set default dimensions if still null
+  width = width || 100;
+  height = height || 40;
+
+  el.style.width = `${width}px`;
+  el.style.height = `${height}px`;
+  el.setAttribute('data-width', width);
+  el.setAttribute('data-height', height);
+
+  // Add text content
+  const textSpan = document.createElement('span');
+  textSpan.className = 'text-content';
+  textSpan.textContent = elementData.text || elementData.type.charAt(0).toUpperCase() + elementData.type.slice(1);
+  el.appendChild(textSpan);
+
+  // Add remove button
+  const removeButton = document.createElement('span');
+  removeButton.textContent = '✕';
+  removeButton.className = 'remove-button';
+  el.appendChild(removeButton);
+
+  // Set element-specific properties
+  if (elementData.type === 'dynamiclist') {
+    el.setAttribute('data-command', elementData.command || '');
+    el.setAttribute('data-variable', elementData.variable || '');
+    setupDynamicListExecution(el);
+  }
+  if (elementData.type === 'textbrowser') {
+    el.setAttribute('data-variable', elementData.variable || '');
+    el.setAttribute('data-source', elementData.source || 'system');
+  }
+  if (elementData.type === 'button') {
+    el.setAttribute('data-color', elementData.color || '#000000');
+    el.style.color = elementData.color || '#000000';
+    el.setAttribute('data-bg-color', elementData.bgColor || '#ffffff');
+    el.style.backgroundColor = elementData.bgColor || '#ffffff';
+    el.setAttribute('data-font', elementData.font || 'medium');
+    el.style.fontSize = getFontSize(elementData.font || 'medium') + 'px';
+  } else if (elementData.type === 'label') {
+    el.setAttribute('data-color', elementData.color || '#000000');
+    el.style.color = elementData.color || '#000000';
+    el.setAttribute('data-font', elementData.font || 'medium');
+    el.style.fontSize = getFontSize(elementData.font || 'medium') + 'px';
+    el.style.background = 'none';
+  }
+
+  return el;
+}
+
+
+
+function setupMobileElementAdding() {
+  if (window.innerWidth <= 768) {
+    // Remove any existing button first
+    const existingButton = document.querySelector('.mobile-add-button');
+    if (existingButton) existingButton.remove();
+
+    const existingMenu = document.querySelector('.mobile-element-menu');
+    if (existingMenu) existingMenu.remove();
+
+    // Create mobile add button
+    const mobileAddButton = document.createElement('button');
+    mobileAddButton.className = 'mobile-add-button';
+    mobileAddButton.innerHTML = '<i class="fas fa-plus"></i>';
+    document.body.appendChild(mobileAddButton);
+
+    let elementType = null;
+
+    // Create mobile element selection menu
+    const mobileMenu = document.createElement('div');
+    mobileMenu.className = 'mobile-element-menu';
+    mobileMenu.style.display = 'none';
+    mobileMenu.style.position = 'fixed';
+    mobileMenu.style.bottom = '170px'; // Position above the add button
+    mobileMenu.style.right = '20px';
+    mobileMenu.style.background = 'var(--surface)';
+    mobileMenu.style.borderRadius = 'var(--border-radius-md)';
+    mobileMenu.style.padding = '1rem';
+    mobileMenu.style.boxShadow = 'var(--shadow-lg)';
+    mobileMenu.style.zIndex = '1001'; // Above other elements
+    mobileMenu.style.maxHeight = '60vh';
+    mobileMenu.style.overflowY = 'auto';
+
+    const elements = [
+      { type: 'button', icon: 'fas fa-square', name: 'Button' },
+      { type: 'label', icon: 'fas fa-font', name: 'Label' },
+      { type: 'image', icon: 'fas fa-image', name: 'Image' },
+      { type: 'input', icon: 'fas fa-edit', name: 'Input' },
+      { type: 'menu', icon: 'fas fa-bars', name: 'Menu' },
+      { type: 'collapsedlist', icon: 'fas fa-bars', name: 'Collapsed List' }
+    ];
+
+    elements.forEach(element => {
+      const button = document.createElement('button');
+      button.className = 'mobile-menu-item';
+      button.style.display = 'flex';
+      button.style.alignItems = 'center';
+      button.style.gap = '0.5rem';
+      button.style.padding = '0.5rem';
+      button.style.width = '100%';
+      button.style.marginBottom = '0.5rem';
+      button.innerHTML = `<i class="${element.icon}"></i> ${element.name}`;
+
+      button.addEventListener('click', () => {
+        elementType = element.type;
+        mobileMenu.style.display = 'none';
+        // Add element to center of canvas
+        const rect = canvas.getBoundingClientRect();
+        const x = rect.width / 2 - 60;
+        const y = rect.height / 2 - 20;
+        addElement(elementType, x, y);
+      });
+
+      mobileMenu.appendChild(button);
+    });
+
+    document.body.appendChild(mobileMenu);
+
+    // Toggle menu on add button click
+    mobileAddButton.addEventListener('click', (e) => {
+      e.stopPropagation(); // Prevent event from bubbling
+      mobileMenu.style.display = mobileMenu.style.display === 'none' ? 'block' : 'none';
+    });
+
+    // Close menu when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!mobileMenu.contains(e.target) && e.target !== mobileAddButton && !mobileAddButton.contains(e.target)) {
+        mobileMenu.style.display = 'none';
+      }
+    });
+  }
+}
+
+window.addEventListener('resize', () => {
+  // Update mobile interface when switching to mobile size
+  if (window.innerWidth <= 768) {
+    setupMobileElementAdding();
+
+    // Ensure left sidebar is hidden
+    document.querySelector('.left-sidebar').style.display = 'none';
+  } else {
+    // Show left sidebar when not on mobile
+    document.querySelector('.left-sidebar').style.display = 'flex';
+
+    // Remove mobile buttons
+    const mobileButton = document.querySelector('.mobile-add-button');
+    if (mobileButton) mobileButton.remove();
+    const mobileMenu = document.querySelector('.mobile-element-menu');
+    if (mobileMenu) mobileMenu.remove();
+  }
+});
+
 function setupMobileDoubleTap() {
-  let touchStart = null;
-  let touchTimer = null;
+  if ('ontouchstart' in window) {
+    let lastTap = 0;
+    document.addEventListener('touchend', function (event) {
+      const currentTime = new Date().getTime();
+      const tapLength = currentTime - lastTap;
 
-  canvas.addEventListener('touchstart', (e) => {
-    if (e.touches.length !== 1) return;
-    
-    const touch = e.touches[0];
-    touchStart = { x: touch.clientX, y: touch.clientY };
-    
-    // Start double-tap timer
-    touchTimer = setTimeout(() => {
-      if (touchStart) {
-        addElement('button', touchStart.x, touchStart.y);
-        touchStart = null;
+      if (tapLength < 300 && tapLength > 0) {
+        // Double tap detected
+        const target = event.target;
+        const element = target.closest('.element');
+
+        if (element && !element.classList.contains('menu')) {
+          event.preventDefault();
+          const type = element.getAttribute('data-type');
+
+          if (['button', 'label', 'video'].includes(type)) {
+            const textSpan = element.querySelector('.text-content');
+            if (textSpan) {
+              const newText = prompt("Edit text:", textSpan.textContent);
+              if (newText !== null) {
+                textSpan.textContent = newText;
+                processTextForVariables(textSpan);
+              }
+            }
+          }
+        }
       }
-    }, 500);
-  });
-
-  canvas.addEventListener('touchmove', () => {
-    clearTimeout(touchTimer);
-    touchTimer = null;
-  });
-
-  canvas.addEventListener('touchend', () => {
-    clearTimeout(touchTimer);
-    touchTimer = null;
-  });
+      lastTap = currentTime;
+    }, { passive: false });
+  }
 }
 
-// Setup mobile click to select element on canvas
+function setupDynamicListProperties(el) {
+  // Remove any existing dynamic list properties
+  document.querySelectorAll('.dynamic-list-properties').forEach(item => item.remove());
+
+  // Create container for dynamic list properties
+  const container = document.createElement('div');
+  container.className = 'dynamic-list-properties';
+
+  // Command Path input
+  const commandGroup = document.createElement('div');
+  commandGroup.className = 'control-group';
+  commandGroup.innerHTML = `
+    <label for="dynamicCommand"><i class="fas fa-terminal"></i> Command Path:</label>
+    <input type="text" id="dynamicCommand" class="dynamic-command-input" 
+           placeholder="Path to executable" value="${el.getAttribute('data-command') || ''}">
+  `;
+  container.appendChild(commandGroup);
+
+  // Variable input
+  const variableGroup = document.createElement('div');
+  variableGroup.className = 'control-group';
+  variableGroup.innerHTML = `
+    <label for="dynamicVariable"><i class="fas fa-code"></i> Variable:</label>
+    <input type="text" id="dynamicVariable" class="dynamic-variable-input" 
+           placeholder="Variable to store selection" value="${el.getAttribute('data-variable') || ''}">
+  `;
+  container.appendChild(variableGroup);
+
+  // Add event listeners
+  const commandInput = container.querySelector('#dynamicCommand');
+  const variableInput = container.querySelector('#dynamicVariable');
+
+  commandInput.onchange = () => {
+    el.setAttribute('data-command', commandInput.value);
+  };
+
+  variableInput.onchange = () => {
+    el.setAttribute('data-variable', variableInput.value);
+  };
+
+  // Add to properties panel - insert after the style controls
+  const styleControls = document.querySelector('.style-controls');
+  if (styleControls) {
+    styleControls.parentNode.insertBefore(container, styleControls.nextSibling);
+  } else {
+    elementProperties.appendChild(container);
+  }
+}
+
+function executeDynamicListCommand(command, variable) {
+  // This would be implemented in the Juka runtime
+  console.log(`Executing command: ${command}, storing in: ${variable}`);
+  // Simulate command execution
+  const result = [{ name: "Item 1", value: "1" }, { name: "Item 2", value: "2" }];
+  showDynamicListItems(el, result, variable);
+}
+
+function showDynamicListItems(el, items, variable) {
+  // Clear existing content
+  el.innerHTML = '';
+
+  // Create dropdown/list UI
+  const select = document.createElement('select');
+  select.className = 'dynamic-list-select';
+  select.style.width = '100%';
+  select.style.height = '100%';
+
+  // Add items to select
+  items.forEach(item => {
+    const option = document.createElement('option');
+    option.value = item.value;
+    option.textContent = item.name;
+    select.appendChild(option);
+  });
+
+  // Handle selection
+  select.addEventListener('change', () => {
+    if (variable) {
+      variables[variable] = select.value;
+
+      // Update all elements with variables
+      document.querySelectorAll('.text-content').forEach(textEl => {
+        processTextForVariables(textEl);
+      });
+    }
+  });
+
+  el.appendChild(select);
+
+  // Add remove button
+  const removeButton = document.createElement('span');
+  removeButton.textContent = '✕';
+  removeButton.className = 'remove-button';
+  removeButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    el.remove();
+  });
+  el.appendChild(removeButton);
+}
+
+
+
 function setupMobileCanvasClick() {
-  canvas.addEventListener('click', (e) => {
-    if (!currentElement) {
-      const target = e.target.closest('.element');
-      if (target) {
-        currentElement = target;
-        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-        target.classList.add('selected');
-        document.body.classList.add('element-selected');
-        switchTab('element-properties');
-      }
-    }
-  });
-
-  canvas.addEventListener('contextmenu', (e) => {
-    e.preventDefault(); // Prevent default context menu
-    const target = e.target.closest('.element');
-    if (target) {
-      currentElement = target;
-      document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-      target.classList.add('selected');
-      document.body.classList.add('element-selected');
-      switchTab('element-properties');
-    }
-  });
-}
-
-// Setup mobile element selection with long-press detection
-function setupMobileElementSelection() {
-  let touchStart = null;
-  let isLongPress = false;
-
   canvas.addEventListener('touchstart', (e) => {
-    if (!currentElement && e.target.closest('.element')) {
-      const target = e.target.closest('.element');
-      
-      // Check if it's a long press or single tap
-      setTimeout(() => {
-        isLongPress = true;
-        currentElement = target;
-        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-        target.classList.add('selected');
-        document.body.classList.add('element-selected');
-        switchTab('element-properties');
-        
-        clearTimeout(touchTimer);
-      }, 500);
-    }
-  });
-
-  canvas.addEventListener('touchmove', () => {
-    isLongPress = false;
-    clearTimeout(touchTimer);
-  });
-
-  canvas.addEventListener('touchend', () => {
-    if (!isLongPress) {
-      // Single tap - deselect
+    if (e.target === canvas) {
       currentElement = null;
       document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
       document.body.classList.remove('element-selected');
+      switchTab('app-properties');
+
+      // Scroll to top of properties panel on mobile
+      if (window.innerWidth <= 768) {
+        document.querySelector('.right-sidebar').scrollTo(0, 0);
+      }
     }
-    
-    isLongPress = false;
   });
 }
 
-// Export configuration to file for backup
-function exportConfig() {
-  const config = {
-    canvasSize: `${canvasWidth}x${canvasHeight}`,
-    scenes: scenes,
-    variables: variables
-  };
-  
-  const blob = new Blob([JSON.stringify(config, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = `jukahub-config-${Date.now()}.json`;
-  
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+function setupDynamicListExecution(el) {
+  el.addEventListener('click', (e) => {
+    if (e.target !== el && !e.target.classList.contains('remove-button')) return;
+
+    const command = el.getAttribute('data-command');
+    const variable = el.getAttribute('data-variable');
+
+    if (command && variable) {
+      // Execute command and store result
+      executeDynamicListCommand(command, variable);
+    }
+  });
 }
 
-// Setup element removal events using event delegation on canvas
-canvas.addEventListener('click', (e) => {
-  const target = e.target.closest('.remove-button, .remove-variable-remove');
-  
-  if (target && (target.classList.contains('remove-button') || target.classList.contains('remove-variable-remove'))) {
-    // Find the parent element or variable item to remove
-    let parent;
-    
-    if (target.classList.contains('remove-button')) {
-      parent = target.closest('.element');
-      if (parent) removeElement(parent);
-    } else {
-      parent = target.parentElement;
-      if (parent && parent.classList.contains('variable-item')) {
-        const varName = parent.querySelector('[data-name]').textContent;
-        removeVariable(varName);
+function setupMobileElementSelection() {
+  if (window.innerWidth <= 768) {
+    // Ensure properties panel shows element properties when an element is selected
+    document.addEventListener('click', (e) => {
+      if (e.target.closest('.element') && !e.target.closest('.menu')) {
+        document.getElementById('appInfoPanel').style.display = 'none';
+        document.getElementById('elementPropertiesPanel').style.display = 'block';
       }
-    }
+    });
   }
-});
+}
 
-// Handle canvas click to deselect when clicking on non-element areas
-canvas.addEventListener('click', (e) => {
-  if (!currentElement && !e.target.closest('.element')) {
-    currentElement = null;
-    document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-    document.body.classList.remove('element-selected');
-  }
-});
+function updateVariableSelector(selector, currentValue) {
+  selector.innerHTML = '';
+
+  // Add empty option
+  const emptyOption = document.createElement('option');
+  emptyOption.value = '';
+  emptyOption.textContent = 'Select variable';
+  selector.appendChild(emptyOption);
+
+  // Add all variables
+  Object.keys(variables).forEach(variableName => {
+    const option = document.createElement('option');
+    option.value = variableName;
+    option.textContent = variableName;
+    if (variableName === currentValue) {
+      option.selected = true;
+    }
+    selector.appendChild(option);
+  });
+}
