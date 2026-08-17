@@ -279,7 +279,7 @@ func browseSystemInfo(element Element) string {
 		sb.WriteString("\n=== Memory ===\n")
 		sb.WriteString(fmt.Sprintf("Total       : %s\n", formatBytes(vm.Total)))
 		sb.WriteString(fmt.Sprintf("Available   : %s\n", formatBytes(vm.Available)))
-		sb.WriteString(fmt.Sprintf("Used        : %s (%d%%)\n", formatBytes(vm.Used), vm.UsedPercent))
+		sb.WriteString(fmt.Sprintf("Used        : %s (%0.1f%%)\n", formatBytes(vm.Used), vm.UsedPercent))
 	}
 
 	parts, err := disk.Partitions(true)
@@ -292,7 +292,7 @@ func browseSystemInfo(element Element) string {
 			}
 			sb.WriteString(fmt.Sprintf("%s (%s)\n", p.Mountpoint, p.Fstype))
 			sb.WriteString(fmt.Sprintf("  Total  : %s\n", formatBytes(usage.Total)))
-			sb.WriteString(fmt.Sprintf("  Used   : %s (%d%%)\n", formatBytes(usage.Used), usage.UsedPercent))
+			sb.WriteString(fmt.Sprintf("  Used   : %s (%0.1f%%)\n", formatBytes(usage.Used), usage.UsedPercent))
 			sb.WriteString(fmt.Sprintf("  Free   : %s\n", formatBytes(usage.Free)))
 		}
 	}
@@ -429,12 +429,12 @@ func browseZeroconfServicesWithTimeout(timeout time.Duration) string {
 	if len(foundEntries) > 0 {
 		seen := make(map[string]bool)
 		for _, e := range foundEntries {
-			key := fmt.Sprintf("%s:%s:%d", e.ServiceName, e.Instance, e.Port)
+			key := fmt.Sprintf("%s:%s:%d", e.Service, e.Instance, e.Port)
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
-			sb.WriteString(fmt.Sprintf("  %s (%s)\n", e.ServiceName, e.Instance))
+			sb.WriteString(fmt.Sprintf("  %s (%s)\n", e.Service, e.Instance))
 			for _, ip := range e.AddrIPv4 {
 				sb.WriteString(fmt.Sprintf("    IPv4: %s:%d\n", ip, e.Port))
 			}

@@ -10,6 +10,22 @@ import (
 // Design tokens for JukaHub.
 // Modern sleek design system with glass morphism and refined surfaces.
 
+// Home screen layout constants (px at 720p; reduced on smaller viewports).
+const (
+	HomeMargin          int32 = 28
+	HomeTopBarH         int32 = 46
+	HomeFooterH         int32 = 48
+	HomeSectionGap      int32 = 18
+	HomeCardGap         int32 = 18
+	HomeCols            int32 = 4
+	HomeColsSmall       int32 = 3
+	HomeColsTiny        int32 = 2
+	HomeContinueH       int32 = 110
+	HomeCardHMax        int32 = 158
+	HomeCardHMin        int32 = 118
+	HomeTileSlotMissing int   = -1
+)
+
 var (
 	// Spacing (4pt grid for tighter, more modern layout)
 	SpaceXS  = int32(4)
@@ -34,10 +50,17 @@ var (
 	RadiusXL = int32(20)
 
 	// Surfaces - refined dark "Midnight" theme
-	ColorBackground    = sdl.Color{R: 9, G: 11, B: 20, A: 255}
-	ColorSurface       = sdl.Color{R: 13, G: 16, B: 24, A: 255}
-	ColorSurfaceAlt    = sdl.Color{R: 21, G: 25, B: 39, A: 255}
-	ColorSurfaceRaised = sdl.Color{R: 28, G: 33, B: 48, A: 255}
+	// Background gradient (top to bottom)
+	ColorBackgroundTop    = sdl.Color{R: 9, G: 13, B: 24, A: 255}
+	ColorBackgroundBottom = sdl.Color{R: 16, G: 19, B: 38, A: 255}
+	ColorBackground       = ColorBackgroundBottom // default solid background
+	ColorTopBar           = sdl.Color{R: 17, G: 23, B: 37, A: 255}
+	ColorPanel            = sdl.Color{R: 21, G: 28, B: 43, A: 255}
+	ColorPanelRaised      = sdl.Color{R: 27, G: 37, B: 54, A: 255}
+	ColorCard             = sdl.Color{R: 24, G: 33, B: 49, A: 255}
+	ColorCardFocus        = sdl.Color{R: 32, G: 45, B: 66, A: 255}
+	ColorBorder           = sdl.Color{R: 42, G: 56, B: 80, A: 255}
+	ColorFooter           = sdl.Color{R: 16, G: 22, B: 34, A: 255}
 
 	// Borders - subtle and refined
 	ColorBorderSubtle  = sdl.Color{R: 255, G: 255, B: 255, A: 8}
@@ -54,13 +77,16 @@ var (
 	ColorShadow = sdl.Color{R: 0, G: 0, B: 0, A: 255}
 
 	// Overlay
-	ColorOverlay = sdl.Color{R: 6, G: 8, B: 14, A: 200}
+	ColorOverlay = sdl.Color{R: 6, G: 8, B: 14, A: 180}
 
-	// Extended surfaces (cards, rows, raised controls)
-	ColorSurfaceCard  = sdl.Color{R: 21, G: 25, B: 39, A: 255}
-	ColorSurfaceRow   = sdl.Color{R: 28, G: 33, B: 48, A: 255}
-	ColorSurfacePanel = sdl.Color{R: 15, G: 18, B: 28, A: 255}
-	ColorButtonRaised = sdl.Color{R: 36, G: 42, B: 58, A: 255}
+	// Surfaces (aliases for backward compat with existing scenes)
+	ColorSurface       = ColorPanel
+	ColorSurfaceAlt    = ColorCard
+	ColorSurfaceRaised = ColorPanelRaised
+	ColorSurfaceCard   = ColorCard
+	ColorSurfaceRow    = ColorPanelRaised
+	ColorSurfacePanel  = ColorPanel
+	ColorButtonRaised  = ColorPanelRaised
 
 	// Toast / notification semantic colors
 	ColorToastError   = sdl.Color{R: 230, G: 80, B: 80, A: 255}
@@ -78,11 +104,12 @@ var (
 // retint the whole UI at runtime when the user picks a theme preset.
 
 var (
-	textPrimaryColor   = sdl.Color{R: 245, G: 247, B: 255, A: 255}
-	textSecondaryColor = sdl.Color{R: 154, G: 164, B: 184, A: 255}
-	textTertiaryColor  = sdl.Color{R: 95, G: 107, B: 130, A: 255}
-	textInverseColor   = sdl.Color{R: 9, G: 11, B: 20, A: 255}
-	textAccentColor    = sdl.Color{R: 110, G: 231, B: 255, A: 255}
+	textPrimaryColor    = sdl.Color{R: 244, G: 247, B: 252, A: 255} // #F4F7FC
+	textSecondaryColor  = sdl.Color{R: 152, G: 167, B: 188, A: 255} // #98A7BC
+	textTertiaryColor   = sdl.Color{R: 102, G: 117, B: 139, A: 255} // #66758B
+	textInverseColor    = sdl.Color{R: 9, G: 11, B: 20, A: 255}
+	textAccentColor     = sdl.Color{R: 110, G: 231, B: 255, A: 255}
+	textAccentSecondary = sdl.Color{R: 139, G: 124, B: 255, A: 255} // #8B7CFF
 )
 
 // ColorTextPrimary returns the primary text color.
@@ -190,6 +217,33 @@ func TextPrimary() sdl.Color {
 // TextSecondary returns the secondary text color.
 func TextSecondary() sdl.Color {
 	return ColorTextSecondary()
+}
+
+// --- Home screen color helpers ---
+
+// HomeCardColor returns the opaque card background color for Home tiles.
+func HomeCardColor() sdl.Color {
+	return ColorCard
+}
+
+// HomeCardFocusColor returns the brighter card background color for focused tiles.
+func HomeCardFocusColor() sdl.Color {
+	return ColorCardFocus
+}
+
+// HomeBorderColor returns the border color for Home cards.
+func HomeBorderColor() sdl.Color {
+	return ColorBorder
+}
+
+// HomeFocusColor returns the cyan accent color for focus rings.
+func HomeFocusColor() sdl.Color {
+	return focusColorForAccent(accentColor)
+}
+
+// HomeFooterColor returns the footer background color.
+func HomeFooterColor() sdl.Color {
+	return ColorFooter
 }
 
 // TextTertiary returns the tertiary / placeholder text color.

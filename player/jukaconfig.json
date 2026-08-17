@@ -39,6 +39,7 @@
   "Scenes": [
     {
       "Name": "Main",
+      "Layout": "home",
       "Background": "#0f1115",
       "Elements": [
         {
@@ -48,10 +49,18 @@
           "Trigger": "exit"
         },
         {
-          "Type": "button",
-          "Text": "YouTube",
+          "Type": "recent",
           "X": 30,
-          "Y": 78,
+          "Y": 44,
+          "Width": 1220,
+          "Height": 178,
+          "Variable": "recent_items"
+        },
+        {
+          "Type": "button",
+          "Text": "Media",
+          "X": 30,
+          "Y": 244,
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Tube",
@@ -61,21 +70,9 @@
         },
         {
           "Type": "button",
-          "Text": "Chat",
+          "Text": "Files",
           "X": 280,
-          "Y": 78,
-          "Width": 220,
-          "Height": 170,
-          "Trigger": "change_scene:Chat",
-          "BgColor": "#5865F2",
-          "Color": "#ffffff",
-          "Style": "tile"
-        },
-        {
-          "Type": "button",
-          "Text": "File Explorer",
-          "X": 530,
-          "Y": 78,
+          "Y": 244,
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:FileExplorer",
@@ -85,21 +82,9 @@
         },
         {
           "Type": "button",
-          "Text": "Live TV",
-          "X": 780,
-          "Y": 78,
-          "Width": 220,
-          "Height": 170,
-          "Trigger": "change_scene:LiveTV",
-          "BgColor": "#9b59b6",
-          "Color": "#ffffff",
-          "Style": "tile"
-        },
-        {
-          "Type": "button",
           "Text": "Packages",
-          "X": 1030,
-          "Y": 78,
+          "X": 530,
+          "Y": 244,
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Packages",
@@ -109,33 +94,21 @@
         },
         {
           "Type": "button",
-          "Text": "Podcasts",
-          "X": 30,
-          "Y": 278,
+          "Text": "Chat",
+          "X": 780,
+          "Y": 244,
           "Width": 220,
           "Height": 170,
-          "Trigger": "change_scene:Podcasts",
-          "BgColor": "#e67e22",
-          "Color": "#ffffff",
-          "Style": "tile"
-        },
-        {
-          "Type": "button",
-          "Text": "Tickers",
-          "X": 280,
-          "Y": 278,
-          "Width": 220,
-          "Height": 170,
-          "Trigger": "change_scene:Tickers",
-          "BgColor": "#1abc9c",
+          "Trigger": "change_scene:Chat",
+          "BgColor": "#5865F2",
           "Color": "#ffffff",
           "Style": "tile"
         },
         {
           "Type": "button",
           "Text": "Favorites",
-          "X": 530,
-          "Y": 278,
+          "X": 30,
+          "Y": 444,
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Favorites",
@@ -145,33 +118,9 @@
         },
         {
           "Type": "button",
-          "Text": "Weather",
-          "X": 780,
-          "Y": 278,
-          "Width": 220,
-          "Height": 170,
-          "Trigger": "change_scene:Weather",
-          "BgColor": "#3498db",
-          "Color": "#ffffff",
-          "Style": "tile"
-        },
-        {
-          "Type": "button",
-          "Text": "Settings",
-          "X": 30,
-          "Y": 478,
-          "Width": 220,
-          "Height": 170,
-          "Trigger": "change_scene:Settings",
-          "BgColor": "#7f8c8d",
-          "Color": "#ffffff",
-          "Style": "tile"
-        },
-        {
-          "Type": "button",
-          "Text": "Misc",
+          "Text": "Apps",
           "X": 280,
-          "Y": 478,
+          "Y": 444,
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Misc",
@@ -181,37 +130,13 @@
         },
         {
           "Type": "button",
-          "Text": "Hardware",
+          "Text": "Settings",
           "X": 530,
-          "Y": 478,
+          "Y": 444,
           "Width": 220,
           "Height": 170,
-          "Trigger": "change_scene:Hardware",
-          "BgColor": "#16a085",
-          "Color": "#ffffff",
-          "Style": "tile"
-        },
-        {
-          "Type": "button",
-          "Text": "Terminal",
-          "X": 780,
-          "Y": 478,
-          "Width": 220,
-          "Height": 170,
-          "Trigger": "change_scene:Terminal",
-          "BgColor": "#34495e",
-          "Color": "#ffffff",
-          "Style": "tile"
-        },
-        {
-          "Type": "button",
-          "Text": "JukaLand",
-          "X": 1030,
-          "Y": 478,
-          "Width": 220,
-          "Height": 170,
-          "Trigger": "change_scene:JukaLand",
-          "BgColor": "#2ecc71",
+          "Trigger": "change_scene:Settings",
+          "BgColor": "#7f8c8d",
           "Color": "#ffffff",
           "Style": "tile"
         }
@@ -828,6 +753,50 @@
           "Height": 55,
           "Trigger": "cache_clear",
           "BgColor": "#e74c3c",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Live TV",
+          "X": 60,
+          "Y": 400,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:LiveTV",
+          "BgColor": "#9b59b6",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Podcasts",
+          "X": 300,
+          "Y": 400,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Podcasts",
+          "BgColor": "#e67e22",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Tickers",
+          "X": 540,
+          "Y": 400,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Tickers",
+          "BgColor": "#1abc9c",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Weather",
+          "X": 780,
+          "Y": 400,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:Weather",
+          "BgColor": "#3498db",
           "Color": "#ffffff"
         },
         {

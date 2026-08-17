@@ -289,43 +289,54 @@ func fetchWeatherOnce() {
 // --- Top status bar (clock + weather + username) ---
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
-	barH := int32(28)
-	// sleek frosted glass status bar (theme-aware)
-	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 230))
-	// subtle top highlight
-	renderer.SetDrawColor(255, 255, 255, 10)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: 1})
+	barH := int32(46)
+	if screenHeight < 600 {
+		barH = 40
+	}
+	// Opaque top bar surface.
+	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, ColorTopBar)
+	// Bottom hairline.
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 180)
+	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
 		return
 	}
 	white := ColorTextPrimary()
-	secondary := ColorTextTertiary()
+	secondary := ColorTextSecondary()
 
 	titleFont, _ := getCachedFont(config, "medium")
 	if titleFont == nil {
 		titleFont = font
 	}
 
-	// Left: page title or profile (no version number on the home screen).
+	// Left: "JukaHub" only on non-Main scenes.
 	titleStr := "JukaHub"
+	sceneName := ""
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-		titleStr = config.Scenes[currentSceneIndex].Name
-		if titleStr == "Main" {
-			titleStr = "JukaHub"
-		}
+		sceneName = config.Scenes[currentSceneIndex].Name
+	}
+	// Only show scene name on non-Main scenes.
+	if sceneName != "" && sceneName != "Main" {
+		titleStr = "JukaHub · " + sceneName
 	}
 	titleW, _, _ := titleFont.SizeUTF8(titleStr)
-	renderText(renderer, config, titleFont, titleStr, white, 12, 6)
+	titleX := int32(20)
+	titleY := barH/2 - 10 // approximate vertical center for 20px font
+	renderText(renderer, config, titleFont, titleStr, white, titleX, titleY)
 
-	// Username (placed after the title to avoid overlap)
+	// Username (compact, after title if space allows).
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok && name != "" {
-		userX := int32(12) + int32(titleW) + 16
-		renderText(renderer, config, font, "Hi "+name, secondary, userX, 8)
+		userX := titleX + int32(titleW) + 16
+		if sceneName != "" && sceneName != "Main" {
+			sw, _, _ := font.SizeUTF8("· " + sceneName)
+			userX = titleX + int32(titleW) + int32(sw) + 12
+		}
+		renderText(renderer, config, font, "Hi "+name, secondary, userX, titleY+4)
 	}
 
-	// Right-side status: wifi + battery + weather + clock (icon-style, quiet).
+	// Right-side grouped status: clock / weather / wifi / battery.
 	now := time.Now()
 	clk := now.Format("15:04")
 	wxMutex.Lock()
@@ -335,7 +346,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		today = weatherDaily[0]
 	}
 	wxMutex.Unlock()
-	wxText := "—"
+	wxText := ""
 	if ready && len(weatherDaily) > 0 {
 		unit := config.Variables.WeatherUnit
 		hi, lo := today.TMax, today.TMin
@@ -346,25 +357,36 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		wxText = fmt.Sprintf("%d°/%d°", int(hi), int(lo))
 	}
 
-	var rightParts []string
-	rightParts = append(rightParts, clk)
-	if wxText != "—" {
-		rightParts = append(rightParts, wxText)
-	}
 	bat := getBatteryPercent()
-	if bat >= 0 {
-		rightParts = append(rightParts, fmt.Sprintf("%d%%", bat))
-	}
 	wifi := getWifiStatus()
-	if wifi != "" {
-		rightParts = append(rightParts, wifi)
+
+	// Build right group as small icon-like tokens separated by gaps.
+	rightX := screenWidth - 20
+	gap := int32(14)
+	parts := []string{clk}
+	if wxText != "" {
+		parts = append(parts, wxText)
 	}
-	rightText := strings.Join(rightParts, "  ")
-	rw, _, _ := font.SizeUTF8(rightText)
-	rx := screenWidth - int32(rw) - 30
-	// frosted pill behind the right-side status
-	fillRoundedRect(renderer, rx-10, 5, int32(rw)+20, 18, 9, WithAlpha(ColorSurfaceAlt, 150))
-	renderText(renderer, config, font, rightText, white, rx, 8)
+	if bat >= 0 {
+		parts = append(parts, fmt.Sprintf("%d%%", bat))
+	}
+	if wifi != "" {
+		parts = append(parts, wifi)
+	}
+	// Measure total from right to left.
+	totalW := int32(0)
+	for _, p := range parts {
+		pw, _, _ := font.SizeUTF8(p)
+		totalW += int32(pw) + gap
+	}
+	startX := rightX - totalW
+	for _, p := range parts {
+		pw, _, _ := font.SizeUTF8(p)
+		startX += int32(pw) + gap
+		startX -= int32(pw)
+		renderText(renderer, config, font, p, secondary, startX, titleY+4)
+		startX -= gap
+	}
 }
 
 func renderBottomErrorBar(renderer *sdl.Renderer, config *Config) {
@@ -383,6 +405,90 @@ func renderBottomErrorBar(renderer *sdl.Renderer, config *Config) {
 	ew, _, _ := font.SizeUTF8(topBarError)
 	ex := (screenWidth - int32(ew)) / 2
 	renderText(renderer, config, font, topBarError, sdl.Color{R: 255, G: 100, B: 100, A: 255}, ex, y+6)
+}
+
+// --- Footer rendering (controller hints) ---
+
+// renderFooter displays controller navigation hints pinned to the bottom of the viewport.
+// It shows only the bindings actually supported by the current input code.
+func renderFooter(renderer *sdl.Renderer, config *Config) {
+	// Only render footer on Home scene
+	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	scene := config.Scenes[currentSceneIndex]
+	if scene.Layout != "home" {
+		return
+	}
+
+	barH := HomeFooterH
+	if screenHeight < 600 {
+		barH = 42
+	}
+	y := screenHeight - barH
+
+	// Opaque footer surface.
+	fillRoundedRect(renderer, 0, y, screenWidth, barH, 0, HomeFooterColor())
+	// Top hairline border.
+	renderer.SetDrawColor(HomeBorderColor().R, HomeBorderColor().G, HomeBorderColor().B, 180)
+	renderer.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1})
+
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	secondary := ColorTextSecondary()
+
+	// Build footer content: navigation hints + action binding.
+	// Based on actual keyboard mappings in main.go:
+	// - UP/DOWN: moveHomeSelection (vertical navigation)
+	// - LEFT/RIGHT: moveHomeSelection (horizontal navigation)
+	// - RETURN/SPACE: activate selected tile
+	// - ESCAPE: go back to previous element
+
+	// Calculate available width for content (with safe margins).
+	margin := int32(20)
+	availableW := screenWidth - 2*margin
+
+	// Build hint labels.
+	hints := []string{
+		"UP/DOWN: Navigate",
+		"LEFT/RIGHT: Switch",
+		"ENTER: Open",
+		"ESC: Back",
+	}
+
+	// Measure total width of all hints.
+	totalW := int32(0)
+	for _, h := range hints {
+		hw, _, _ := font.SizeUTF8(h)
+		totalW += int32(hw) + int32(10) // 10px gap between hints
+	}
+	totalW -= int32(10) // subtract last gap
+
+	// If hints don't fit, truncate to essential ones.
+	if totalW > availableW {
+		// Keep only essential hints: navigation + action
+		hints = []string{
+			"UP/DOWN: Navigate",
+			"ENTER: Open",
+		}
+		totalW = int32(0)
+		for _, h := range hints {
+			hw, _, _ := font.SizeUTF8(h)
+			totalW += int32(hw) + int32(10)
+		}
+		totalW -= int32(10)
+	}
+
+	// Center the hints in the footer.
+	startX := (screenWidth - totalW) / 2
+	for i, h := range hints {
+		hw, _, _ := font.SizeUTF8(h)
+		x := startX + int32(i*10) + (totalW-int32(hw))/2
+		_, th, _ := font.SizeUTF8(h)
+		renderText(renderer, config, font, h, secondary, x, y+int32(th)+4)
+	}
 }
 
 // volatileCustomVars lists runtime-only keys that should not be persisted to

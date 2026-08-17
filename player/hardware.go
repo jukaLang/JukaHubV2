@@ -140,8 +140,8 @@ type diskPieData struct {
 }
 
 var (
-	diskPie       diskPieData
-	diskPieMutex  sync.Mutex
+	diskPie      diskPieData
+	diskPieMutex sync.Mutex
 )
 
 func startDiskPieAutoRefresh() {

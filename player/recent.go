@@ -54,35 +54,66 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		titleFont = font
 	}
 
-	listX := element.X
-	listY := element.Y
-	listW := getElementWidth(element, 1100)
-	listH := getElementHeight(element, 190)
-	if listW < 200 {
-		listW = 200
-	}
-	if listH < 60 {
-		listH = 60
+	// Use home layout rect if available for responsive positioning.
+	var listX, listY, listW, listH int32
+	if rect, ok := homeRecentRect(); ok {
+		listX, listY, listW, listH = rect.X, rect.Y, rect.W, rect.H
+	} else {
+		listX = element.X
+		listY = element.Y
+		listW = getElementWidth(element, 1100)
+		listH = getElementHeight(element, 190)
+		if listW < 200 {
+			listW = 200
+		}
+		if listH < 60 {
+			listH = 60
+		}
 	}
 
-	// Card body
-	drawPanel(renderer, listX, listY, listW, listH, WithAlpha(ColorSurfaceAlt, 230), accentColor)
+	// Opaque panel with subtle border using home layout tokens.
+	fillRoundedRect(renderer, listX, listY, listW, listH, 14, HomeCardColor())
+	// Hairline border.
+	renderer.SetDrawColor(HomeBorderColor().R, HomeBorderColor().G, HomeBorderColor().B, 120)
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: listW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: 1, H: listH - 2})
+	renderer.SetDrawColor(HomeBorderColor().R, HomeBorderColor().G, HomeBorderColor().B, 60)
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + listH - 2, W: listW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: listX + listW - 2, Y: listY + 1, W: 1, H: listH - 2})
 
-	// Header: icon + "Continue"
+	// Header: "Continue" text.
 	renderText(renderer, config, titleFont, "Continue", ColorTextPrimary(), listX+18, listY+14)
 
 	items := getRecentItems()
 	if len(items) == 0 {
-		renderText(renderer, config, font, "Nothing recently played yet.", ColorTextTertiary(), listX+18, listY+60)
+		// Compact empty state: icon + message + action hint.
+		iconSize := int32(32)
+		iconCX := listX + listW/2
+		iconCY := listY + listH/2 + 4
+		drawTileIcon(renderer, iconCX, iconCY, iconSize, "media", ColorTextSecondary())
+		msg1 := "Nothing played recently"
+		msg2 := "Open Media to start watching or listening"
+		f, _ := getCachedFont(config, "small")
+		if f == nil {
+			f = font
+		}
+		mw1, _, _ := f.SizeUTF8(msg1)
+		mw2, _, _ := f.SizeUTF8(msg2)
+		renderText(renderer, config, f, msg1, ColorTextPrimary(), iconCX-int32(mw1)/2, iconCY+22)
+		renderText(renderer, config, f, msg2, ColorTextSecondary(), iconCX-int32(mw2)/2, iconCY+44)
+		if homeLayoutActive {
+			focusCol := focusColorForAccent(accentColor)
+			strokeRoundedRect(renderer, listX, listY, listW, listH, 14, 2, WithAlpha(focusCol, 180))
+		}
 		return
 	}
 
-	// Up to 3 recent items in a horizontal row of cards.
+	// Up to 3 recent items in a compact horizontal row.
 	cardCount := len(items)
 	if cardCount > 3 {
 		cardCount = 3
 	}
-	gap := int32(12)
+	gap := int32(14)
 	cardW := (listW - 18*2 - gap*int32(cardCount-1)) / int32(cardCount)
 	if cardW < 120 {
 		cardW = 120
@@ -93,71 +124,56 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		cardH = 40
 	}
 
-	accent := sdl.Color{R: 110, G: 231, B: 255, A: 255}
-	if int(accentColor.R)+int(accentColor.G) > 420 && int(accentColor.R) > int(accentColor.B) {
-		accent = sdl.Color{R: 139, G: 124, B: 255, A: 255}
-	}
+	accent := focusColorForAccent(accentColor)
 
 	for i := 0; i < cardCount; i++ {
 		cx := listX + 18 + int32(i)*(cardW+gap)
 		selected := i == recentFocusIndex
 
-		// Focus scale for the selected card
-		scale := 1.0
-		if selected {
-			scale = 1.03
-		}
-		scaledW := int32(float64(cardW) * scale)
-		scaledH := int32(float64(cardH) * scale)
-		sx := cx + (cardW-scaledW)/2
-		sy := cardY + (cardH-scaledH)/2
+		sx := cx
+		sy := cardY
+		sw := cardW
+		sh := cardH
 
-		// Selected: glow + cyan/violet outline
+		// Focus ring.
 		if selected {
-			glow := WithAlpha(accent, 28)
-			fillRoundedRect(renderer, sx-6, sy-6, scaledW+12, scaledH+12, 12, glow)
+			strokeRoundedRect(renderer, sx-2, sy-2, sw+4, sh+4, 12, 2, accent)
 		}
-		fillRoundedRect(renderer, sx, sy, scaledW, scaledH, 10, ColorSurfaceRaised)
-		borderCol := ColorBorderDefault
-		if selected {
-			borderCol = accent
-		}
-		renderer.SetDrawColor(borderCol.R, borderCol.G, borderCol.B, 255)
-		renderer.DrawRect(&sdl.Rect{X: sx, Y: sy, W: scaledW, H: scaledH})
+		fillRoundedRect(renderer, sx, sy, sw, sh, 10, ColorCard)
+		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
+		renderer.DrawRect(&sdl.Rect{X: sx, Y: sy, W: sw, H: sh})
 
 		// Icon chip
 		icon := recentItemIcon(items[i])
-		chipS := int32(28)
-		chipX := sx + 12
-		chipY := sy + 12
-		fillRoundedRect(renderer, chipX, chipY, chipS, chipS, 8, WithAlpha(accent, 40))
+		chipS := int32(26)
+		chipX := sx + 10
+		chipY := sy + 10
+		fillRoundedRect(renderer, chipX, chipY, chipS, chipS, 6, WithAlpha(ColorSurfaceAlt, 200))
 		drawTileIcon(renderer, chipX+chipS/2, chipY+chipS/2, int32(float64(chipS)*0.55), icon, ColorTextPrimary())
 
-		// Label (clipped to two lines)
+		// Label (clipped to a single line with ellipsis)
 		label := recentItemLabel(items[i])
-		lw := scaledW - 28
-		fontSize := int32(13)
+		lw := sw - 40
 		f, _ := getCachedFont(config, "small")
-		if f != nil {
-			w, _, _ := f.SizeUTF8(label)
-			if int32(w) > lw {
-				// Ellipsize
-				runes := []rune(label)
-				cur := ""
-				for _, r := range runes {
-					test := cur + string(r) + "…"
-					tw, _, _ := f.SizeUTF8(test)
-					if int32(tw) > lw {
-						break
-					}
-					cur += string(r)
-				}
-				label = cur + "…"
-			}
+		if f == nil {
+			f = font
 		}
-		_ = fontSize
+		w, _, _ := f.SizeUTF8(label)
+		if int32(w) > lw {
+			runes := []rune(label)
+			cur := ""
+			for _, r := range runes {
+				test := cur + string(r) + "…"
+				tw, _, _ := f.SizeUTF8(test)
+				if int32(tw) > lw {
+					break
+				}
+				cur += string(r)
+			}
+			label = cur + "…"
+		}
 		tw, th, _ := f.SizeUTF8(label)
-		renderText(renderer, config, f, label, ColorTextPrimary(), sx+(scaledW-int32(tw))/2, sy+scaledH-int32(th)-14)
+		renderText(renderer, config, f, label, ColorTextPrimary(), sx+10+(lw-int32(tw))/2, sy+sh-int32(th)-14)
 
 		// Type tag under label
 		typeName := map[string]string{
@@ -169,32 +185,48 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 			typeName = "Item"
 		}
 		tw2, _, _ := f.SizeUTF8(typeName)
-		renderText(renderer, config, f, typeName, ColorTextTertiary(), sx+(scaledW-int32(tw2))/2, sy+scaledH-14)
+		renderText(renderer, config, f, typeName, ColorTextSecondary(), sx+10+(lw-int32(tw2))/2, sy+sh-14)
 	}
 
 	if len(items) > cardCount {
-		renderText(renderer, config, font, "▾ View all in Favorites", ColorTextTertiary(), listX+18, listY+listH-26)
+		renderText(renderer, config, font, "View all in Favorites", ColorTextSecondary(), listX+18, listY+listH-24)
 	}
 }
 
 func handleRecentInput(e *sdl.KeyboardEvent, config *Config) {
 	items := getRecentItems()
-	max := len(items)
-	if max > 3 {
-		max = 3
-	}
 	switch e.Keysym.Sym {
 	case sdl.K_LEFT:
-		if recentFocusIndex > 0 {
+		if homeLayoutActive {
+			moveHomeSelection(config, -1, 0)
+		} else if recentFocusIndex > 0 {
 			recentFocusIndex--
 		}
 	case sdl.K_RIGHT:
-		if recentFocusIndex < max-1 {
+		if homeLayoutActive {
+			moveHomeSelection(config, 1, 0)
+		} else if recentFocusIndex < len(items)-1 && recentFocusIndex < 2 {
 			recentFocusIndex++
 		}
-	case sdl.K_UP, sdl.K_DOWN:
-		// not scrollable
+	case sdl.K_UP:
+		if homeLayoutActive {
+			moveHomeSelection(config, 0, -1)
+		} else {
+			moveSelection(config, -1)
+		}
+	case sdl.K_DOWN:
+		if homeLayoutActive {
+			moveHomeSelection(config, 0, 1)
+		} else {
+			moveSelection(config, 1)
+		}
 	case sdl.K_RETURN, sdl.K_SPACE:
+		if len(items) == 0 {
+			if idx := findSceneIndex(config, "Tube"); idx >= 0 {
+				changeSceneTo(config, idx)
+			}
+			return
+		}
 		if recentFocusIndex >= 0 && recentFocusIndex < len(items) {
 			items[recentFocusIndex].Play(config)
 		}
@@ -225,15 +257,26 @@ func handleRecentMouseClick(mx, my int32, config *Config) {
 	if listH < 60 {
 		listH = 60
 	}
+	if rect, ok := homeRecentRect(); ok {
+		listX, listY, listW, listH = rect.X, rect.Y, rect.W, rect.H
+	}
+
 	items := getRecentItems()
+	if len(items) == 0 {
+		// Empty panel: any click opens Media (Tube).
+		if mx >= listX && mx <= listX+listW && my >= listY && my <= listY+listH {
+			if idx := findSceneIndex(config, "Tube"); idx >= 0 {
+				changeSceneTo(config, idx)
+			}
+		}
+		return
+	}
+
 	cardCount := len(items)
 	if cardCount > 3 {
 		cardCount = 3
 	}
-	if cardCount <= 0 {
-		return
-	}
-	gap := int32(12)
+	gap := int32(14)
 	cardW := (listW - 18*2 - gap*int32(cardCount-1)) / int32(cardCount)
 	if cardW < 120 {
 		cardW = 120
@@ -245,16 +288,11 @@ func handleRecentMouseClick(mx, my int32, config *Config) {
 	}
 	for i := 0; i < cardCount; i++ {
 		cx := listX + 18 + int32(i)*(cardW+gap)
-		selected := i == recentFocusIndex
-		scale := 1.0
-		if selected {
-			scale = 1.03
-		}
-		scaledW := int32(float64(cardW) * scale)
-		scaledH := int32(float64(cardH) * scale)
-		sx := cx + (cardW-scaledW)/2
-		sy := cardY + (cardH-scaledH)/2
-		if mx >= sx && mx <= sx+scaledW && my >= sy && my <= sy+scaledH {
+		sx := cx
+		sy := cardY
+		sw := cardW
+		sh := cardH
+		if mx >= sx && mx <= sx+sw && my >= sy && my <= sy+sh {
 			recentFocusIndex = i
 			if i < len(items) {
 				items[i].Play(config)

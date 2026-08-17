@@ -28,6 +28,9 @@ import (
 
 // --- Global state for input and navigation ---
 var (
+	appConfig                  *Config
+	currentSceneIndex          int = -1
+	selectedButtonIndex        int = -1
 	activeSceneIndex           int = -1
 	activeElementIndex         int = -1
 	inputTextBuffer            string
@@ -38,14 +41,7 @@ var (
 	keyboardKeys               []string   // parallel array of key labels
 	keyboardRowCol             [][2]int   // parallel (row,col) for each rect
 	keyboardUpper              bool       // uppercase toggle state
-
-	// appConfig is the active runtime config, exposed to sub-packages (chat,
-	// canvas, ...) that need access to settings such as the Discord credentials.
-	appConfig *Config
-
-	// loadingJokes are Juka / JukaLang themed messages shown rotating on the
-	// loading overlay to keep things fun while assets initialize.
-	loadingJokes = []string{
+	loadingJokes               = []string{
 		"Compiling JukaLang... or just thinking really hard?",
 		"JukaLang: where semicolons are merely a suggestion.",
 		"If it compiles on the first try, it's probably JukaLang.",
@@ -60,16 +56,20 @@ var (
 		"Loading... JukaLang is secretly writing your code for you.",
 	}
 
-	currentSceneIndex   int
-	selectedButtonIndex int
-	videoButtonRects    = make(map[int]sdl.Rect) // video control hitbox (-1=play/pause, -2=stop)
-	exitButtonRect      sdl.Rect                 // exit button hitbox in top bar
-	sceneNavPrevRect    sdl.Rect                 // hint-bar scene pager (prev)
-	sceneNavNextRect    sdl.Rect                 // hint-bar scene pager (next)
+	// Home screen layout state (shared between render and mouse hit-testing)
+	homeLayoutActive     bool
+	homeLayoutState      homeLayout
+	homeTileElementIndex []int // slot -> scene element index
 
 	// Seek bar drag state
 	isDraggingSeekBar bool
 	seekBarDragRect   sdl.Rect
+
+	// Video / exit / scene-nav hitboxes (populated each frame by renderMenu / renderPlaybackOverlay)
+	videoButtonRects = make(map[int]sdl.Rect) // video control hitbox (-1=play/pause, -2=stop)
+	exitButtonRect   sdl.Rect                 // exit button hitbox in top bar
+	sceneNavPrevRect sdl.Rect                 // hint-bar scene pager (prev)
+	sceneNavNextRect sdl.Rect                 // hint-bar scene pager (next)
 
 	// Cache for thumbnails
 	textureCache        = make(map[string]*sdl.Texture)
@@ -355,6 +355,7 @@ type Variables struct {
 type SceneConfig struct {
 	Name       string    `json:"name"`
 	Background string    `json:"background"`
+	Layout     string    `json:"layout"`
 	Elements   []Element `json:"elements"`
 }
 
@@ -650,7 +651,7 @@ func renderText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text str
 var (
 	bgTexture    *sdl.Texture
 	bgImagePath  string
-	overlayColor = sdl.Color{R: 12, G: 14, B: 20, A: 60}
+	overlayColor = sdl.Color{R: 8, G: 10, B: 18, A: 150}
 
 	gradientTexture    *sdl.Texture
 	gradientSceneKey   string
@@ -966,7 +967,11 @@ func renderCircleSectorColor(renderer *sdl.Renderer, cx, cy, outerR, innerR int3
 }
 
 // fillRoundedRect draws a filled rounded rectangle.
+// Uses per-scanline rendering for crisp edges without double-blending artifacts.
 func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
+	if w <= 0 || h <= 0 {
+		return
+	}
 	if r < 1 {
 		renderer.SetDrawColor(c.R, c.G, c.B, c.A)
 		renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
@@ -979,12 +984,82 @@ func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
 		r = h / 2
 	}
 	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
-	renderer.FillRect(&sdl.Rect{X: x + r, Y: y, W: w - 2*r, H: h})
-	renderer.FillRect(&sdl.Rect{X: x, Y: y + r, W: w, H: h - 2*r})
-	fillCircle(renderer, x+r, y+r, r, c)
-	fillCircle(renderer, x+w-r, y+r, r, c)
-	fillCircle(renderer, x+r, y+h-r, r, c)
-	fillCircle(renderer, x+w-r, y+h-r, r, c)
+	for dy := int32(0); dy < h; dy++ {
+		var inset int32
+		if dy < r {
+			inset = r - int32(math.Round(math.Sqrt(float64(2*r*dy-dy*dy))))
+		} else if d := dy - (h - r); d > 0 {
+			inset = r - int32(math.Round(math.Sqrt(float64(2*r*d-d*d))))
+		}
+		x0 := x + inset
+		x1 := x + w - inset
+		if x1 <= x0 {
+			continue
+		}
+		renderer.FillRect(&sdl.Rect{X: x0, Y: y + dy, W: x1 - x0, H: 1})
+	}
+}
+
+// strokeRoundedRect draws a rounded-rect outline (ring) of the given thickness.
+// It uses the same per-scanline inset math as fillRoundedRect so corners stay
+// crisp and never double-blend.
+func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c sdl.Color) {
+	if w <= 0 || h <= 0 || thickness < 1 {
+		return
+	}
+	if r > w/2 {
+		r = w / 2
+	}
+	if r > h/2 {
+		r = h / 2
+	}
+	if thickness > r {
+		thickness = r
+	}
+	if thickness > w/2 {
+		thickness = w / 2
+	}
+	if thickness > h/2 {
+		thickness = h / 2
+	}
+	innerR := r - thickness
+	if innerR < 0 {
+		innerR = 0
+	}
+	ih := h - 2*thickness
+	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
+	for dy := int32(0); dy < h; dy++ {
+		var oInset int32
+		if r > 0 {
+			if dy < r {
+				oInset = r - int32(math.Round(math.Sqrt(float64(2*r*dy-dy*dy))))
+			} else if d := dy - (h - r); d > 0 {
+				oInset = r - int32(math.Round(math.Sqrt(float64(2*r*d-d*d))))
+			}
+		}
+		left := x + oInset
+		right := x + w - oInset
+		if right <= left {
+			continue
+		}
+		var iInset int32
+		if innerR > 0 && dy >= thickness && dy < h-thickness {
+			id := dy - thickness
+			if id < innerR {
+				iInset = innerR - int32(math.Round(math.Sqrt(float64(2*innerR*id-id*id))))
+			} else if d := id - (ih - innerR); d > 0 && innerR > 0 {
+				iInset = innerR - int32(math.Round(math.Sqrt(float64(2*innerR*d-d*d))))
+			}
+		}
+		innerLeft := x + thickness + iInset
+		innerRight := x + w - thickness - iInset
+		if innerLeft > left {
+			renderer.FillRect(&sdl.Rect{X: left, Y: y + dy, W: innerLeft - left, H: 1})
+		}
+		if right > innerRight {
+			renderer.FillRect(&sdl.Rect{X: innerRight, Y: y + dy, W: right - innerRight, H: 1})
+		}
+	}
 }
 
 // gradientRoundedRect draws a smooth vertical gradient inside a rounded rect.
@@ -1242,10 +1317,9 @@ func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, e
 	}
 }
 
-// renderAppTile draws an OS-style launcher icon: a clean translucent card with a
+// renderAppTile draws an OS-style launcher icon: a clean opaque card with a
 // consistent line icon, monochrome accent, and a label beneath. The focused tile
-// scales up (~1.04) with a bright focus ring and soft glow so selection is
-// unmistakable on a handheld.
+// uses a bright 3px focus ring (no scale) so selection is unmistakable.
 func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemIndex int, selected, hovered bool, hoverProgress float64, pressed bool) {
 	labelFont, _ := getCachedFont(config, elem.Font)
 	if labelFont == nil {
@@ -1255,93 +1329,69 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 	x, y := elem.X, elem.Y
 	r := int32(16)
 
-	// Ease the per-tile focus progress toward the target state (smooth scale).
-	target := 0.0
-	if selected {
-		target = 1.0
+	// Home layout override: when Main scene uses layout "home", tiles are
+	// positioned by the shared grid so render + mouse agree.
+	if rect, ok := homeTileRect(elemIndex); ok {
+		x, y, width, height = rect.X, rect.Y, rect.W, rect.H
 	}
-	cur := tileAnimMap[elemIndex]
-	tileAnimMap[elemIndex] = cur + (target-cur)*0.18
-	anim := tileAnimMap[elemIndex]
-	if anim > target-0.005 && anim < target+0.005 {
-		tileAnimMap[elemIndex] = target
-		anim = target
-	}
-
-	// Focus scale: up to ~1.04 when the tile is selected.
-	scale := 1.0 + 0.04*anim
-	cw := int32(float64(width) * scale)
-	ch := int32(float64(height) * scale)
-	cx := x - (cw-width)/2
-	cy := y - (ch-height)/2
 
 	pressOffset := int32(0)
 	if pressed {
 		pressOffset = 2
 	}
-	ox := cx + pressOffset
-	oy := cy + pressOffset
+	ox := x + pressOffset
+	oy := y + pressOffset
+	cw := width
+	ch := height
 
-	// Focus color: cyan focus ring for unmistakable selection.
-	focusCol := sdl.Color{R: 110, G: 231, B: 255, A: 255}
-	if int(accentColor.R)+int(accentColor.G) > 420 && int(accentColor.R) > int(accentColor.B) {
-		// warm accent → violet ring instead for contrast
-		focusCol = sdl.Color{R: 139, G: 124, B: 255, A: 255}
-	}
+	focusCol := focusColorForAccent(accentColor)
 
-	// Soft shadow only on the selected / hovered card (elevation cue).
-	if selected || hovered {
-		fillRoundedRect(renderer, ox+4, oy+6, cw, ch, r, ShadowFill(70))
-		fillRoundedRect(renderer, ox+6, oy+9, cw, ch, r, ShadowFill(50))
-	}
-
-	// Focus glow + bright ring.
+	// Focus ring + subtle outer glow (3px crisp outline, no scale).
 	if selected {
-		fillRoundedRect(renderer, ox-4, oy-4, cw+8, ch+8, r+4, WithAlpha(focusCol, 30))
-		fillRoundedRect(renderer, ox-2, oy-2, cw+4, ch+4, r+2, WithAlpha(focusCol, 70))
+		fillRoundedRect(renderer, ox-5, oy-5, cw+10, ch+10, r+5, WithAlpha(focusCol, 22))
+		strokeRoundedRect(renderer, ox-3, oy-3, cw+6, ch+6, r+3, 3, focusCol)
 	} else if hoverProgress > 0.01 {
-		fillRoundedRect(renderer, ox-3, oy-3, cw+6, ch+6, r+3, WithAlpha(focusCol, uint8(20*hoverProgress)))
+		a := uint8(80 * hoverProgress)
+		strokeRoundedRect(renderer, ox-2, oy-2, cw+4, ch+4, r+2, 2, WithAlpha(focusCol, a))
 	}
 
-	// Tile body: dark translucent surface with a very subtle vertical gradient.
-	base := ColorSurfaceCard
+	// Tile body: solid opaque dark surface (no gradient to avoid banding/washed-out).
+	base := HomeCardColor()
 	if selected {
-		base = WithAlpha(ColorSurfaceRaised, 235)
+		base = HomeCardFocusColor()
 	}
-	top := lighten(base, 14)
-	bottom := darken(base, 10)
-	gradientRoundedRect(renderer, ox, oy, cw, ch, r, top, bottom)
+	fillRoundedRect(renderer, ox, oy, cw, ch, r, base)
 
-	// Hairline border: low-opacity white; bright focus ring when selected.
-	borderCol := WithAlpha(ColorBorderDefault, 60)
+	// Hairline border using HomeBorderColor for consistency.
+	borderCol := HomeBorderColor()
 	if selected {
-		borderCol = WithAlpha(focusCol, 220)
+		borderCol = WithAlpha(focusCol, 200)
 	} else if hovered {
-		borderCol = WithAlpha(focusCol, 110)
+		borderCol = WithAlpha(focusCol, 120)
 	}
-	fillRoundedRect(renderer, ox-1, oy-1, cw+2, ch+2, r+1, borderCol)
+	strokeRoundedRect(renderer, ox, oy, cw, ch, r, 1, borderCol)
 
 	// Icon: consistent line icon, monochrome / two-tone.
 	iconKind := tileIconKind(elem)
 	iconCol := ColorTextSecondary()
 	if selected {
-		iconCol = ColorTextPrimary()
+		iconCol = focusCol
 	}
-	iconSize := width / 2
-	if iconSize > 72 {
-		iconSize = 72
+	iconSize := cw / 3
+	if iconSize > 64 {
+		iconSize = 64
 	}
-	if iconSize < 40 {
-		iconSize = 40
+	if iconSize < 44 {
+		iconSize = 44
 	}
-	drawTileIcon(renderer, ox+cw/2, oy+int32(float64(ch)*0.40), iconSize, iconKind, iconCol)
+	drawTileIcon(renderer, ox+cw/2, oy+int32(float64(ch)*0.36), iconSize, iconKind, iconCol)
 
-	// Label beneath the icon, near-white text, single line, kept off the edges.
+	// Label beneath the icon, single line, kept off the edges.
 	if labelFont != nil && elem.Text != "" {
 		lw, lh, _ := labelFont.SizeUTF8(elem.Text)
-		maxLW := int(cw - 24)
-		if lw > maxLW {
-			lw = maxLW
+		maxLW := cw - 24
+		if lw > int(maxLW) {
+			lw = int(maxLW)
 		}
 		txt := ColorTextPrimary()
 		if !selected {
@@ -2769,6 +2819,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 			renderer.Clear()
 		}
 	}
+	refreshHomeLayout(config)
 
 	for i, elem := range scene.Elements {
 		switch elem.Type {
@@ -2816,6 +2867,9 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	// Always-on top status bar (clock + weather + username)
 	renderStatusBar(renderer, config)
 	renderBottomErrorBar(renderer, config)
+
+	// Footer with controller hints (only on Home scene)
+	renderFooter(renderer, config)
 }
 
 func abs(x int) int {
@@ -2985,15 +3039,16 @@ func renderMenu(renderer *sdl.Renderer, config *Config, element Element) {
 		titleFont = font
 	}
 
-	barH := int32(34)
+	barH := int32(48)
+	if screenHeight < 600 {
+		barH = 42
+	}
 	barY := screenHeight - barH
 
-	// Sleek translucent controller-hint bar (replaces the crowded pill strip).
-	fillRoundedRect(renderer, 0, barY, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 236))
-	renderer.SetDrawColor(255, 255, 255, 14)
+	// Opaque footer surface with top hairline.
+	fillRoundedRect(renderer, 0, barY, screenWidth, barH, 0, ColorFooter)
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 180)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: barY, W: screenWidth, H: 1})
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 80)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: barY + barH - 1, W: screenWidth, H: 1})
 
 	// Scene pager on the left: ◀  Current Scene  ▶
 	scene := "Home"
@@ -3002,7 +3057,7 @@ func renderMenu(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 	sceneW, _, _ := titleFont.SizeUTF8(scene)
 	sceneWi := int32(sceneW)
-	pad := int32(10)
+	pad := int32(16)
 	arrowW := int32(22)
 	prevX := pad
 	prevY := barY + (barH-20)/2
@@ -3012,7 +3067,49 @@ func renderMenu(renderer *sdl.Renderer, config *Config, element Element) {
 	sceneNavNextRect = sdl.Rect{X: prevX + arrowW + sceneWi + 6, Y: prevY, W: arrowW, H: 20}
 	renderText(renderer, config, font, "▶", ColorTextTertiary(), prevX+arrowW+sceneWi+12, prevY+3)
 
+	// Video transport buttons (when active) sit between pager and hints.
+	videoRight := prevX + arrowW + sceneWi + 6 + arrowW + 16
+	if videoPlaybackPhase != "idle" {
+		videoPlaybackMutex.Lock()
+		phase := videoPlaybackPhase
+		videoPlaybackMutex.Unlock()
+
+		btnX := videoRight
+		btnY := barY + (barH-24)/2
+		btnW := int32(36)
+		btnH := int32(24)
+
+		icon := "⏯"
+		if phase == "playing" {
+			icon = "⏸"
+		} else if phase == "downloading" {
+			icon = "⏵"
+		} else if phase == "error" {
+			icon = "↻"
+		}
+		fillRoundedRect(renderer, btnX, btnY, btnW, btnH, 6, WithAlpha(ColorSurfaceAlt, 180))
+		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
+		renderer.DrawRect(&sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH})
+		renderText(renderer, config, font, icon, ColorTextPrimary(), btnX+8, btnY+5)
+		videoButtonRects[-1] = sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH}
+
+		btnX += btnW + 6
+		fillRoundedRect(renderer, btnX, btnY, btnW, btnH, 6, WithAlpha(ColorSurfaceAlt, 180))
+		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
+		renderer.DrawRect(&sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH})
+		renderText(renderer, config, font, "⏹", ColorTextPrimary(), btnX+8, btnY+5)
+		videoButtonRects[-2] = sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH}
+
+		videoRight = btnX + btnW + 12
+	}
+
 	// Controller hints (right-aligned): A/B/X/Y + shoulder categories.
+	// Right-aligned ending before the exit button so they never overlap.
+	exitW := int32(44)
+	exitH := int32(28)
+	exitX := screenWidth - exitW - 16
+	exitY := barY + (barH-exitH)/2
+
 	hints := []struct {
 		btn  string
 		text string
@@ -3023,67 +3120,50 @@ func renderMenu(renderer *sdl.Renderer, config *Config, element Element) {
 		{"Y", "Search"},
 		{"L/R", "Scenes"},
 	}
-	hintX := screenWidth - pad
+	// Measure total width of all hints.
 	var hintW int32
-	for i := len(hints) - 1; i >= 0; i-- {
-		h := hints[i]
-		hw, _, _ := font.SizeUTF8(h.btn)
-		tw, _, _ := font.SizeUTF8(h.text)
-		w := int32(hw) + 8 + int32(tw) + 12
-		hintW += w
-	}
-	hintX -= hintW
 	for _, h := range hints {
 		hw, _, _ := font.SizeUTF8(h.btn)
 		tw, _, _ := font.SizeUTF8(h.text)
-		// button glyph chip
-		chipW := int32(hw) + 8
-		chipH := int32(18)
+		w := int32(hw) + 10 + int32(tw) + 16
+		hintW += w
+	}
+	// Right-align hints before exit button; if too wide, drop lowest priority.
+	hintEnd := exitX - 12
+	hintStart := hintEnd - hintW
+	if hintStart < videoRight+20 {
+		hints = hints[:4]
+		hintW = 0
+		for _, h := range hints {
+			hw, _, _ := font.SizeUTF8(h.btn)
+			tw, _, _ := font.SizeUTF8(h.text)
+			w := int32(hw) + 10 + int32(tw) + 16
+			hintW += w
+		}
+		hintStart = hintEnd - hintW
+	}
+	hintX := hintStart
+	for _, h := range hints {
+		hw, _, _ := font.SizeUTF8(h.btn)
+		tw, _, _ := font.SizeUTF8(h.text)
+		chipW := int32(hw) + 10
+		chipH := int32(22)
 		chipY := barY + (barH-chipH)/2
-		fillRoundedRect(renderer, hintX, chipY, chipW, chipH, 5, WithAlpha(accentColor, 60))
-		renderText(renderer, config, font, h.btn, ColorTextPrimary(), hintX+4, chipY+2)
-		// label
-		renderText(renderer, config, font, h.text, ColorTextTertiary(), hintX+chipW+5, chipY+3)
-		w := chipW + 5 + int32(tw) + 16
+		fillRoundedRect(renderer, hintX, chipY, chipW, chipH, 6, WithAlpha(ColorSurfaceAlt, 200))
+		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 140)
+		renderer.DrawRect(&sdl.Rect{X: hintX, Y: chipY, W: chipW, H: chipH})
+		renderText(renderer, config, font, h.btn, ColorTextPrimary(), hintX+5, chipY+4)
+		renderText(renderer, config, font, h.text, ColorTextSecondary(), hintX+chipW+6, chipY+5)
+		w := chipW + 6 + int32(tw) + 16
 		hintX += w
 	}
 
-	// Keep video transport buttons accessible when a video is active.
-	if videoPlaybackPhase != "idle" {
-		videoPlaybackMutex.Lock()
-		phase := videoPlaybackPhase
-		videoPlaybackMutex.Unlock()
-
-		btnX := prevX + arrowW + sceneWi + 6 + arrowW + 24
-		btnY := barY + (barH-22)/2
-		btnW := int32(32)
-		btnH := int32(22)
-
-		icon := "⏯"
-		if phase == "playing" {
-			icon = "⏸"
-		} else if phase == "downloading" {
-			icon = "⏵"
-		} else if phase == "error" {
-			icon = "↻"
-		}
-		fillRoundedRect(renderer, btnX, btnY, btnW, btnH, 6, GlossFill(18))
-		renderText(renderer, config, font, icon, ColorTextPrimary(), btnX+8, btnY+4)
-		videoButtonRects[-1] = sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH}
-
-		btnX += btnW + 6
-		fillRoundedRect(renderer, btnX, btnY, btnW, btnH, 6, GlossFill(18))
-		renderText(renderer, config, font, "⏹", ColorTextPrimary(), btnX+8, btnY+4)
-		videoButtonRects[-2] = sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH}
-	}
-
 	// Power button on the far right (opens Exit confirmation).
-	exitW := int32(46)
-	exitX := screenWidth - exitW - 12
-	exitY := barY + (barH-24)/2
-	gradientRoundedRect(renderer, exitX, exitY, exitW, 24, 12, sdl.Color{R: 150, G: 45, B: 45, A: 220}, sdl.Color{R: 200, G: 70, B: 70, A: 220})
-	renderText(renderer, config, font, "⏻", sdl.Color{R: 255, G: 240, B: 240, A: 255}, exitX+18, exitY+5)
-	exitButtonRect = sdl.Rect{X: exitX, Y: exitY, W: exitW, H: 24}
+	fillRoundedRect(renderer, exitX+2, exitY+3, exitW, exitH, exitH/2, WithAlpha(ColorDanger, 200))
+	renderer.SetDrawColor(255, 200, 200, 60)
+	renderer.DrawRect(&sdl.Rect{X: exitX, Y: exitY, W: exitW, H: exitH})
+	renderText(renderer, config, font, "⏻", sdl.Color{R: 255, G: 240, B: 240, A: 255}, exitX+14, exitY+6)
+	exitButtonRect = sdl.Rect{X: exitX, Y: exitY, W: exitW, H: exitH}
 }
 
 func renderKeyboard(renderer *sdl.Renderer, config *Config) {
@@ -4001,7 +4081,7 @@ func moveSelection(config *Config, direction int) {
 	currentScene := config.Scenes[currentSceneIndex]
 	var interactive []int
 	for i, el := range currentScene.Elements {
-		if el.Type == "button" || el.Type == "input" || el.Type == "searchresults" || el.Type == "dynamiclist" {
+		if el.Type == "button" || el.Type == "input" || el.Type == "searchresults" || el.Type == "dynamiclist" || el.Type == "recent" {
 			interactive = append(interactive, i)
 		}
 	}
@@ -4027,6 +4107,87 @@ func moveSelection(config *Config, direction int) {
 		newIdx = len(interactive) - 1
 	}
 	selectedButtonIndex = interactive[newIdx]
+}
+
+// moveHomeSelection moves focus within the home tile grid using row/col math.
+// It treats the "recent" element as a row above the tiles: DOWN from recent
+// focuses the first tile, UP from the first row returns to recent.
+func moveHomeSelection(config *Config, dx, dy int) {
+	if !homeLayoutActive || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	scene := config.Scenes[currentSceneIndex]
+	var tileSlots []int
+	recentIdx := -1
+	for i, el := range scene.Elements {
+		if el.Type == "button" && el.Style == "tile" {
+			tileSlots = append(tileSlots, i)
+		}
+		if el.Type == "recent" {
+			recentIdx = i
+		}
+	}
+	if len(tileSlots) == 0 {
+		return
+	}
+	cols := homeLayoutState.Cols
+	if cols < 1 {
+		cols = 4
+	}
+
+	// If recent is focused, DOWN moves to first tile; others cycle.
+	if selectedButtonIndex == recentIdx {
+		if dy > 0 {
+			selectedButtonIndex = tileSlots[0]
+		} else if dy < 0 {
+			selectedButtonIndex = tileSlots[len(tileSlots)-1]
+		} else if dx != 0 {
+			selectedButtonIndex = tileSlots[0]
+		}
+		return
+	}
+
+	// Find current tile slot.
+	cur := -1
+	for i, idx := range tileSlots {
+		if idx == selectedButtonIndex {
+			cur = i
+			break
+		}
+	}
+	if cur < 0 {
+		selectedButtonIndex = tileSlots[0]
+		return
+	}
+
+	row := cur / int(cols)
+	col := cur % int(cols)
+	row += dy
+	col += dx
+	if col < 0 {
+		col = int(cols) - 1
+		row--
+	} else if col >= int(cols) {
+		col = 0
+		row++
+	}
+	if row < 0 {
+		if recentIdx >= 0 {
+			selectedButtonIndex = recentIdx
+		} else {
+			selectedButtonIndex = tileSlots[0]
+		}
+		return
+	}
+	if row < 0 {
+		row = 0
+	}
+	newSlot := row*int(cols) + col
+	if newSlot >= len(tileSlots) {
+		// wrap within last row
+		newSlot = len(tileSlots) - 1
+	}
+	selectedButtonIndex = tileSlots[newSlot]
 }
 
 // --- Main ---
@@ -4327,19 +4488,33 @@ func main() {
 							}
 						} else if curElem.Type == "packagelist" {
 							handlePackageInput(e, config)
+						} else if curElem.Type == "recent" {
+							handleRecentInput(e, config)
 						} else if curScene.Name == "JukaLand" {
 							handleJukaLandInput(e)
 						} else {
 							// Normal button/input navigation
 							switch e.Keysym.Sym {
 							case sdl.K_UP, sdl.K_DOWN:
-								moveSelection(config, map[sdl.Keycode]int{
-									sdl.K_UP: -1, sdl.K_DOWN: 1,
-								}[e.Keysym.Sym])
+								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
+									moveHomeSelection(config, 0, map[sdl.Keycode]int{
+										sdl.K_UP: -1, sdl.K_DOWN: 1,
+									}[e.Keysym.Sym])
+								} else {
+									moveSelection(config, map[sdl.Keycode]int{
+										sdl.K_UP: -1, sdl.K_DOWN: 1,
+									}[e.Keysym.Sym])
+								}
 							case sdl.K_LEFT, sdl.K_RIGHT:
-								moveSelection(config, map[sdl.Keycode]int{
-									sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
-								}[e.Keysym.Sym])
+								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
+									moveHomeSelection(config, map[sdl.Keycode]int{
+										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
+									}[e.Keysym.Sym], 0)
+								} else {
+									moveSelection(config, map[sdl.Keycode]int{
+										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
+									}[e.Keysym.Sym])
+								}
 							case sdl.K_RETURN, sdl.K_SPACE:
 								if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
 									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
@@ -4458,6 +4633,8 @@ func main() {
 							running = false
 							break
 						}
+						// Check recent panel (Continue cards)
+						handleRecentMouseClick(mx, my, config)
 						// Check other elements (input, button, searchresults)
 						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 							for i, elem := range config.Scenes[currentSceneIndex].Elements {
@@ -4478,7 +4655,16 @@ func main() {
 								} else if elem.Type == "button" {
 									font, _ := getCachedFont(config, elem.Font)
 									width, height := buttonHitSize(elem, font)
-									if mx >= elem.X && mx <= elem.X+width && my >= elem.Y && my <= elem.Y+height {
+									bx := elem.X
+									by := elem.Y
+									bw := width
+									bh := height
+									if homeLayoutActive && elem.Style == "tile" {
+										if rect, ok := homeTileRect(i); ok {
+											bx, by, bw, bh = rect.X, rect.Y, rect.W, rect.H
+										}
+									}
+									if mx >= bx && mx <= bx+bw && my >= by && my <= by+bh {
 										pressedButtonIndex = i
 										pressStartTime = sdl.GetTicks64()
 										handleTrigger(renderer, config, elem)
