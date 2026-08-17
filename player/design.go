@@ -12,11 +12,11 @@ import (
 
 var (
 	// Spacing (4pt grid for tighter, more modern layout)
-	SpaceXS = int32(4)
-	SpaceSM = int32(8)
-	SpaceMD = int32(12)
-	SpaceLG = int32(16)
-	SpaceXL = int32(24)
+	SpaceXS  = int32(4)
+	SpaceSM  = int32(8)
+	SpaceMD  = int32(12)
+	SpaceLG  = int32(16)
+	SpaceXL  = int32(24)
 	Space2XL = int32(32)
 
 	// Typography sizes (approximate px)
@@ -33,22 +33,22 @@ var (
 	RadiusLG = int32(14)
 	RadiusXL = int32(20)
 
-	// Surfaces - refined dark theme
-	ColorBackground    = sdl.Color{R: 8, G: 10, B: 16, A: 255}
-	ColorSurface       = sdl.Color{R: 14, G: 18, B: 26, A: 255}
-	ColorSurfaceAlt    = sdl.Color{R: 20, G: 24, B: 34, A: 255}
-	ColorSurfaceRaised = sdl.Color{R: 26, G: 32, B: 44, A: 255}
+	// Surfaces - refined dark "Midnight" theme
+	ColorBackground    = sdl.Color{R: 9, G: 11, B: 20, A: 255}
+	ColorSurface       = sdl.Color{R: 13, G: 16, B: 24, A: 255}
+	ColorSurfaceAlt    = sdl.Color{R: 21, G: 25, B: 39, A: 255}
+	ColorSurfaceRaised = sdl.Color{R: 28, G: 33, B: 48, A: 255}
 
 	// Borders - subtle and refined
-	ColorBorderSubtle   = sdl.Color{R: 255, G: 255, B: 255, A: 8}
-	ColorBorderDefault  = sdl.Color{R: 255, G: 255, B: 255, A: 16}
-	ColorBorderFocus    = sdl.Color{R: 255, G: 255, B: 255, A: 50}
+	ColorBorderSubtle  = sdl.Color{R: 255, G: 255, B: 255, A: 8}
+	ColorBorderDefault = sdl.Color{R: 255, G: 255, B: 255, A: 16}
+	ColorBorderFocus   = sdl.Color{R: 110, G: 231, B: 255, A: 60}
 
 	// Semantic
-	ColorSuccess = sdl.Color{R: 52, G: 211, B: 153, A: 255}
-	ColorWarning = sdl.Color{R: 251, G: 191, B: 36, A: 255}
-	ColorDanger  = sdl.Color{R: 248, G: 113, B: 113, A: 255}
-	ColorInfo    = sdl.Color{R: 96, G: 165, B: 250, A: 255}
+	ColorSuccess = sdl.Color{R: 72, G: 213, B: 151, A: 255}
+	ColorWarning = sdl.Color{R: 255, G: 191, B: 105, A: 255}
+	ColorDanger  = sdl.Color{R: 255, G: 100, B: 124, A: 255}
+	ColorInfo    = sdl.Color{R: 110, G: 231, B: 255, A: 255}
 
 	// Shadow base (apply alpha at call site)
 	ColorShadow = sdl.Color{R: 0, G: 0, B: 0, A: 255}
@@ -57,10 +57,10 @@ var (
 	ColorOverlay = sdl.Color{R: 6, G: 8, B: 14, A: 200}
 
 	// Extended surfaces (cards, rows, raised controls)
-	ColorSurfaceCard  = sdl.Color{R: 18, G: 22, B: 32, A: 255}
-	ColorSurfaceRow   = sdl.Color{R: 24, G: 28, B: 40, A: 255}
-	ColorSurfacePanel = sdl.Color{R: 16, G: 19, B: 26, A: 255}
-	ColorButtonRaised = sdl.Color{R: 44, G: 49, B: 62, A: 255}
+	ColorSurfaceCard  = sdl.Color{R: 21, G: 25, B: 39, A: 255}
+	ColorSurfaceRow   = sdl.Color{R: 28, G: 33, B: 48, A: 255}
+	ColorSurfacePanel = sdl.Color{R: 15, G: 18, B: 28, A: 255}
+	ColorButtonRaised = sdl.Color{R: 36, G: 42, B: 58, A: 255}
 
 	// Toast / notification semantic colors
 	ColorToastError   = sdl.Color{R: 230, G: 80, B: 80, A: 255}
@@ -78,11 +78,11 @@ var (
 // retint the whole UI at runtime when the user picks a theme preset.
 
 var (
-	textPrimaryColor  = sdl.Color{R: 250, G: 252, B: 255, A: 255}
-	textSecondaryColor = sdl.Color{R: 180, G: 192, B: 210, A: 255}
-	textTertiaryColor = sdl.Color{R: 120, G: 134, B: 158, A: 255}
-	textInverseColor  = sdl.Color{R: 14, G: 18, B: 26, A: 255}
-	textAccentColor   = sdl.Color{R: 140, G: 200, B: 255, A: 255}
+	textPrimaryColor   = sdl.Color{R: 245, G: 247, B: 255, A: 255}
+	textSecondaryColor = sdl.Color{R: 154, G: 164, B: 184, A: 255}
+	textTertiaryColor  = sdl.Color{R: 95, G: 107, B: 130, A: 255}
+	textInverseColor   = sdl.Color{R: 9, G: 11, B: 20, A: 255}
+	textAccentColor    = sdl.Color{R: 110, G: 231, B: 255, A: 255}
 )
 
 // ColorTextPrimary returns the primary text color.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"math/rand"
 	"os"
@@ -58,19 +59,19 @@ type JukaLandState struct {
 	GameOver bool
 	LastTime float64
 
-	Score   int
-	Health  int
-	Slimes  []Slime
+	Score  int
+	Health int
+	Slimes []Slime
 }
 
 type Slime struct {
-	X      float64
-	Y      float64
-	VX     float64
-	Dir    float64
-	Alive  bool
-	HP     int
-	MaxHP  int
+	X     float64
+	Y     float64
+	VX    float64
+	Dir   float64
+	Alive bool
+	HP    int
+	MaxHP int
 }
 
 var jukaland JukaLandState
@@ -183,12 +184,12 @@ func resetJukaLand() {
 			ty = 0
 		}
 		jukaland.Slimes = append(jukaland.Slimes, Slime{
-			X: float64(tx * tileSize),
-			Y: float64(ty * tileSize),
-			VX: 40 + float64(rand.Intn(60)),
-			Dir: 1,
+			X:     float64(tx * tileSize),
+			Y:     float64(ty * tileSize),
+			VX:    40 + float64(rand.Intn(60)),
+			Dir:   1,
 			Alive: true,
-			HP: 30,
+			HP:    30,
 			MaxHP: 30,
 		})
 	}

@@ -109,6 +109,11 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		"volume": "Volume", "speed": "Speed", "time": "Time", "data": "Data", "area": "Area",
 	}
 
+	// panel wrapper for consistency
+	elemW := getElementWidth(element, 1080)
+	elemH := getElementHeight(element, 500)
+	drawPanel(renderer, element.X, element.Y, elemW, elemH, WithAlpha(ColorSurfacePanel, 220), accentColor)
+
 	catStartX := element.X + 20
 	catY := element.Y + 20
 	catW := int32(120)
@@ -119,17 +124,29 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		cx := catStartX + int32(i)*(catW+catGap)
 		bg := ColorSurfaceRow
 		if cat == unitCategory {
-			bg = accentColor
+			bg = WithAlpha(accentColor, 90)
 		}
 		fillRoundedRect(renderer, cx+2, catY+2, catW, catH, 8, ShadowFill(30))
 		fillRoundedRect(renderer, cx, catY, catW, catH, 8, bg)
 		if cat == unitCategory {
-			renderer.SetDrawColor(255, 255, 255, 120)
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
 			renderer.FillRect(&sdl.Rect{X: cx + 8, Y: catY + catH - 2, W: catW - 16, H: 2})
+		} else {
+			renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 40)
+			renderer.DrawRect(&sdl.Rect{X: cx + 1, Y: catY + 1, W: catW - 2, H: 1})
+			renderer.DrawRect(&sdl.Rect{X: cx + 1, Y: catY + catH - 2, W: catW - 2, H: 1})
+			renderer.DrawRect(&sdl.Rect{X: cx + 1, Y: catY + 1, W: 1, H: catH - 2})
+			renderer.DrawRect(&sdl.Rect{X: cx + catW - 2, Y: catY + 1, W: 1, H: catH - 2})
 		}
 		if font != nil {
 			lw, _, _ := font.SizeUTF8(catLabels[cat])
-			renderText(renderer, config, font, catLabels[cat], ColorTextPrimary(), cx+(catW-int32(lw))/2, catY+8)
+			tc := ColorTextPrimary()
+			if cat == unitCategory {
+				tc = ColorTextPrimary()
+			} else {
+				tc = ColorTextTertiary()
+			}
+			renderText(renderer, config, font, catLabels[cat], tc, cx+(catW-int32(lw))/2, catY+8)
 		}
 	}
 
@@ -157,9 +174,20 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		inputW = int32(w) - 260
 	}
 
+	fillRoundedRect(renderer, fromX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))
 	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, ColorSurfaceRow)
+	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 40)
+	renderer.DrawRect(&sdl.Rect{X: fromX + 1, Y: rowY + 1, W: rowW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: fromX + 1, Y: rowY + rowH - 2, W: rowW - 2, H: 1})
+	fillRoundedRect(renderer, toX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))
 	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, ColorSurfaceRow)
+	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 40)
+	renderer.DrawRect(&sdl.Rect{X: toX + 1, Y: rowY + 1, W: rowW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: toX + 1, Y: rowY + rowH - 2, W: rowW - 2, H: 1})
+	fillRoundedRect(renderer, inputX+1, rowY+1, inputW, rowH, 10, ShadowFill(30))
 	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, ColorSurfaceRaised)
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
+	renderer.FillRect(&sdl.Rect{X: inputX + 8, Y: rowY + rowH - 2, W: inputW - 16, H: 2})
 
 	if font != nil {
 		fw, _, _ := font.SizeUTF8(unitFrom)
@@ -173,9 +201,18 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		renderText(renderer, config, font, display, ColorTextSecondary(), inputX+16, rowY+12)
 	}
 
+	// swap indicator (chevron glyph in a circular button)
 	arrowY := rowY + rowH/2
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-	renderer.FillRect(&sdl.Rect{X: fromX + rowW + 6, Y: arrowY - 6, W: gap - 12, H: 12})
+	circleR := int32(16)
+	circleX := fromX + rowW + gap/2 - circleR
+	fillRoundedRect(renderer, circleX+2, arrowY-circleR+2, circleR*2, circleR*2, circleR, ShadowFill(40))
+	fillRoundedRect(renderer, circleX, arrowY-circleR, circleR*2, circleR*2, circleR, ColorButtonRaised)
+	renderer.SetDrawColor(255, 255, 255, 30)
+	renderer.FillRect(&sdl.Rect{X: circleX + 4, Y: arrowY - circleR + 3, W: circleR*2 - 8, H: 1})
+	if font != nil {
+		gw, gh, _ := font.SizeUTF8("⇄")
+		renderText(renderer, config, font, "⇄", accentColor, circleX+(circleR*2-int32(gw))/2, arrowY-int32(gh)/2+1)
+	}
 
 	resultY := rowY + rowH + 40
 	resultH := int32(60)

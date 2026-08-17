@@ -1,43 +1,52 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/veandco/go-sdl2/sdl"
 	"github.com/grandcat/zeroconf"
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
-	"github.com/shirou/gopsutil/v3/net"
+	gopsutilnet "github.com/shirou/gopsutil/v3/net"
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/tidwall/gjson"
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 // textBrowserSource constants
 const (
-	textBrowserSourceSystem  = "system"
+	textBrowserSourceSystem   = "system"
 	textBrowserSourceZeroconf = "zeroconf"
-	textBrowserSourceJSON    = "json"
+	textBrowserSourceJSON     = "json"
 )
 
 // textBrowserMode constants
 const (
-	textBrowserModeSummary = "summary"
-	textBrowserModeDetails = "details"
+	textBrowserModeSummary   = "summary"
+	textBrowserModeDetails   = "details"
 	textBrowserModeProcesses = "processes"
-	textBrowserModeNetwork  = "network"
+	textBrowserModeNetwork   = "network"
 )
+
+// textBrowserAutoRefreshInterval is the default auto-refresh duration.
+const textBrowserAutoRefreshInterval = 5 * time.Second
+
+// textBrowserAutoRefreshTimers tracks active auto-refresh timers by variable
+// name. Timers are stopped on scene transitions.
+var textBrowserAutoRefreshTimers = make(map[string]*time.Timer)
+var textBrowserAutoRefreshMutex sync.Mutex
 
 // renderTextBrowser renders a scrollable text browser panel that can display
 // system information, zeroconf discoveries, or parsed JSON content.
@@ -53,7 +62,11 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 	}
 	if text == "" {
-		text = "Press a trigger to load content.\nSources: system, zeroconf, json"
+		if element.AutoRefresh {
+			text = "Auto-refreshing..."
+		} else {
+			text = "Press a trigger to load content.\nSources: system, zeroconf, json"
+		}
 	}
 
 	font, _ := getCachedFont(config, element.Font)
@@ -64,15 +77,112 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		return
 	}
 
-	lines := strings.Split(text, "\n")
-	y := element.Y + 8
-	lineH := int32(22)
-	maxLines := int((elemH - 16) / lineH)
+	headerH := int32(28)
+	headerY := element.Y + 4
+	source := strings.ToLower(strings.TrimSpace(element.Text))
+	if source == "" {
+		source = "system"
+	}
 
-	for i, ln := range lines {
-		if i >= maxLines {
-			break
+	var headerColor sdl.Color
+	switch source {
+	case "zeroconf":
+		headerColor = sdl.Color{R: 46, G: 204, B: 113, A: 255}
+	case "json":
+		headerColor = sdl.Color{R: 155, G: 89, B: 182, A: 255}
+	default:
+		headerColor = sdl.Color{R: 67, G: 97, B: 238, A: 255}
+	}
+
+	lines := strings.Split(text, "\n")
+	lineH := int32(22)
+	contentH := elemH - headerH - 8
+	maxLines := int((contentH) / lineH)
+	totalLines := len(lines)
+
+	fillRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 4, headerColor)
+	labelFont, _ := getCachedFont(config, "small")
+	if labelFont != nil {
+		sourceLabel := "SYSTEM"
+		if source == "zeroconf" {
+			sourceLabel = "ZEROCONF"
+		} else if source == "json" {
+			sourceLabel = "JSON"
 		}
+		lw, lh, _ := labelFont.SizeUTF8(sourceLabel)
+		renderText(renderer, config, labelFont, sourceLabel, sdl.Color{R: 255, G: 255, B: 255, A: 255}, element.X+12, headerY+(headerH-int32(lh))/2)
+
+		if text != "" && text != "Press a trigger to load content.\nSources: system, zeroconf, json" && totalLines > 0 {
+			lineInfo := ""
+			if totalLines > maxLines {
+				startLine := int(textBrowserScrollY) + 1
+				endLine := startLine + maxLines
+				if endLine > totalLines {
+					endLine = totalLines
+				}
+				lineInfo = fmt.Sprintf("%d-%d/%d", startLine, endLine, totalLines)
+			} else {
+				lineInfo = fmt.Sprintf("%d lines", totalLines)
+			}
+			_, _, _ = labelFont.SizeUTF8(lineInfo)
+			renderText(renderer, config, labelFont, lineInfo, sdl.Color{R: 255, G: 255, B: 255, A: 180}, element.X+12+int32(lw)+8, headerY+(headerH-int32(lh))/2)
+		}
+
+		if textBrowserLastUpdate > 0 {
+			ts := time.Unix(textBrowserLastUpdate, 0).Format("15:04:05")
+			tw, _, _ := labelFont.SizeUTF8(ts)
+			tsX := element.X + elemW - int32(tw) - 12
+			if element.AutoRefresh {
+				tsX -= 20
+			}
+			renderText(renderer, config, labelFont, ts, sdl.Color{R: 255, G: 255, B: 255, A: 180}, tsX, headerY+(headerH-int32(lh))/2)
+		}
+
+		if element.AutoRefresh {
+			spinnerX := element.X + elemW - 24
+			if textBrowserLastUpdate > 0 {
+				spinnerX -= 20
+			}
+			spinnerY := headerY + headerH/2
+			angle := float64(sdl.GetTicks64()%360) * math.Pi / 180.0
+			for i := 0; i < 8; i++ {
+				a := float64(i) * 45.0 * math.Pi / 180.0
+				x := spinnerX + int32(math.Cos(angle+a)*6)
+				y := spinnerY + int32(math.Sin(angle+a)*6)
+				alpha := uint8(255 - (i * 28))
+				if alpha > 255 {
+					alpha = 255
+				}
+				renderer.SetDrawColor(255, 255, 255, alpha)
+				renderer.FillRect(&sdl.Rect{X: x, Y: y, W: 2, H: 2})
+			}
+		}
+	}
+
+	y := element.Y + 8 + headerH
+
+	scrollMax := int32(0)
+	if int32(totalLines) > int32(maxLines) {
+		scrollMax = int32(totalLines) - int32(maxLines)
+	}
+	if textBrowserScrollY < 0 {
+		textBrowserScrollY = 0
+	}
+	if textBrowserScrollY > scrollMax {
+		textBrowserScrollY = scrollMax
+	}
+
+	startIdx := int(textBrowserScrollY)
+	endIdx := startIdx + maxLines
+	if endIdx > totalLines {
+		endIdx = totalLines
+	}
+	if startIdx < 0 {
+		startIdx = 0
+	}
+
+	for i := startIdx; i < endIdx; i++ {
+		ln := lines[i]
 		if strings.HasPrefix(ln, "===") || strings.HasPrefix(ln, "---") {
 			renderText(renderer, config, font, ln, accentColor, element.X+10, y)
 		} else if strings.Contains(ln, ":") && !strings.HasPrefix(ln, " ") {
@@ -87,6 +197,31 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			renderText(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
 		}
 		y += lineH
+	}
+
+	if scrollMax > 0 {
+		barX := element.X + elemW - 10
+		barY := element.Y + 8 + headerH
+		barH := contentH
+		thumbH := int32(0)
+		if totalLines > 0 {
+			thumbH = barH * int32(maxLines) / int32(totalLines)
+			if thumbH < 20 {
+				thumbH = 20
+			}
+		}
+		thumbY := barY + int32(float64(barH-thumbH)*float64(textBrowserScrollY)/float64(scrollMax))
+
+		renderer.SetDrawColor(220, 225, 235, 100)
+		renderer.FillRect(&sdl.Rect{X: barX, Y: barY, W: 4, H: barH})
+
+		renderer.SetDrawColor(140, 150, 175, 220)
+		renderer.FillRect(&sdl.Rect{X: barX, Y: thumbY, W: 4, H: thumbH})
+
+		if thumbH > 4 {
+			renderer.SetDrawColor(160, 170, 190, 180)
+			renderer.FillRect(&sdl.Rect{X: barX + 1, Y: thumbY + 2, W: 2, H: thumbH - 4})
+		}
 	}
 }
 
@@ -106,6 +241,7 @@ func textBrowserRefresh(config *Config, element Element) {
 	default:
 		publishCustom(element.Variable, browseSystemInfo(element))
 	}
+	textBrowserLastUpdate = time.Now().Unix()
 }
 
 // browseSystemInfo gathers system information using gopsutil and formats it
@@ -181,7 +317,7 @@ func browseSystemInfo(element Element) string {
 				}
 			}
 
-			ioStats, err := net.IOCounters(true)
+			ioStats, err := gopsutilnet.IOCounters(true)
 			if err == nil {
 				sb.WriteString("\n=== Network I/O ===\n")
 				for _, s := range ioStats {
@@ -209,7 +345,7 @@ func browseSystemInfo(element Element) string {
 					memPercent, _ := p.MemoryPercent()
 					cpuPercent, _ := p.CPUPercent()
 					if name != "" {
-						entries = append(entries, procEntry{name: name, mem: memPercent, cpu: cpuPercent, pid: p.Pid})
+						entries = append(entries, procEntry{name: name, mem: float64(memPercent), cpu: float64(cpuPercent), pid: p.Pid})
 					}
 				}
 				limit := 15
@@ -231,61 +367,7 @@ func browseSystemInfo(element Element) string {
 // browseZeroconfServices performs an mDNS/Bonjour discovery scan using the
 // zeroconf library and returns formatted results.
 func browseZeroconfServices() string {
-	var sb strings.Builder
-	sb.WriteString("=== Zeroconf / mDNS Discovery ===\n")
-	sb.WriteString("Scanning for services (5s)...\n\n")
-
-	serviceTypes := []string{
-		"_http._tcp.local.",
-		"_ssh._tcp.local.",
-		"_smb._tcp.local.",
-		"_airplay._tcp.local.",
-		"_googlecast._tcp.local.",
-		"_raop._tcp.local.",
-		"_spotify-connect._tcp.local.",
-		"_workstation._tcp.local.",
-		"_printer._tcp.local.",
-		"_ftp._tcp.local.",
-		"_sftp-ssh._tcp.local.",
-	}
-
-	found := false
-	for _, st := range serviceTypes {
-		resolver, err := zeroconf.NewResolver(nil)
-		if err != nil {
-			sb.WriteString(fmt.Sprintf("Error resolving %s: %v\n", st, err))
-			continue
-		}
-
-		entries := make(chan *zeroconf.ServiceEntry)
-		done := make(chan bool)
-
-		go func(results chan<- *zeroconf.ServiceEntry, done chan<- bool) {
-			for entry := range entries {
-				_ = entry
-			}
-			done <- true
-		}(entries, done)
-
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-		err = resolver.Browse(ctx, st, "", entries)
-		cancel()
-		if err != nil {
-			continue
-		}
-
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-		}
-
-		resolver.Exit()
-		close(done)
-	}
-
-	sb.WriteString("Tip: Use a trigger with source=\"zeroconf\" to scan.\n")
-	sb.WriteString("Note: On Linux, ensure avahi-daemon is running.\n")
-	return sb.String()
+	return browseZeroconfServicesWithTimeout(4 * time.Second)
 }
 
 // browseZeroconfServicesWithTimeout performs a real zeroconf scan with a
@@ -309,52 +391,67 @@ func browseZeroconfServicesWithTimeout(timeout time.Duration) string {
 		"_sftp-ssh._tcp.local.",
 	}
 
-	foundAny := false
-	for _, st := range serviceTypes {
-		resolver, err := zeroconf.NewResolver(nil)
-		if err != nil {
-			continue
+	resolver, err := zeroconf.NewResolver(nil)
+	if err != nil {
+		return fmt.Sprintf("Zeroconf resolver error: %v\n", err)
+	}
+
+	entries := make(chan *zeroconf.ServiceEntry)
+	done := make(chan bool)
+	var foundEntries []*zeroconf.ServiceEntry
+
+	go func(results <-chan *zeroconf.ServiceEntry, done chan<- bool, found *[]*zeroconf.ServiceEntry) {
+		for entry := range results {
+			*found = append(*found, entry)
 		}
+		done <- true
+	}(entries, done, &foundEntries)
 
-		entries := make(chan *zeroconf.ServiceEntry)
-		done := make(chan bool)
-		var foundEntries []*zeroconf.ServiceEntry
-
-		go func(results chan<- *zeroconf.ServiceEntry, done chan<- bool, found *[]*zeroconf.ServiceEntry) {
-			for entry := range results {
-				*found = append(*found, entry)
-			}
-			done <- true
-		}(entries, done, &foundEntries)
-
+	for _, st := range serviceTypes {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 		err = resolver.Browse(ctx, st, "", entries)
 		cancel()
-
+		if err != nil {
+			continue
+		}
 		select {
 		case <-done:
-		case <-time.After(timeout / 2):
-		}
-
-		resolver.Exit()
-
-		if len(foundEntries) > 0 {
-			foundAny = true
-			sb.WriteString(fmt.Sprintf("--- %s ---\n", strings.TrimSuffix(st, ".local.")))
-			for _, e := range foundEntries {
-				sb.WriteString(fmt.Sprintf("  %s (%s)\n", e.ServiceName, e.Instance))
-				for _, ip := range e.AddrIPv4 {
-					sb.WriteString(fmt.Sprintf("    IPv4: %s:%d\n", ip, e.Port))
-				}
-				if len(e.Text) > 0 {
-					sb.WriteString(fmt.Sprintf("    TXT: %s\n", formatTextRecords(e.Text)))
-				}
-			}
-			sb.WriteString("\n")
+		case <-time.After(300 * time.Millisecond):
 		}
 	}
 
-	if !foundAny {
+	close(entries)
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+
+	if len(foundEntries) > 0 {
+		seen := make(map[string]bool)
+		for _, e := range foundEntries {
+			key := fmt.Sprintf("%s:%s:%d", e.ServiceName, e.Instance, e.Port)
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			sb.WriteString(fmt.Sprintf("  %s (%s)\n", e.ServiceName, e.Instance))
+			for _, ip := range e.AddrIPv4 {
+				sb.WriteString(fmt.Sprintf("    IPv4: %s:%d\n", ip, e.Port))
+			}
+			if len(e.Text) > 0 {
+				txtMap := make(map[string]string, len(e.Text))
+				for _, t := range e.Text {
+					if idx := strings.Index(t, "="); idx >= 0 {
+						txtMap[t[:idx]] = t[idx+1:]
+					} else {
+						txtMap[t] = ""
+					}
+				}
+				sb.WriteString(fmt.Sprintf("    TXT: %s\n", formatTextRecords(txtMap)))
+			}
+			sb.WriteString("\n")
+		}
+	} else {
 		sb.WriteString("No services discovered.\n")
 		sb.WriteString("Ensure avahi-daemon is running and devices are on the same network.\n")
 	}
@@ -393,7 +490,7 @@ func browseJSONContent(element Element) string {
 		return "Invalid JSON data."
 	}
 
-	path := strings.TrimSpace(element.TriggerTarget)
+	path := strings.TrimSpace(element.JsonPath)
 	if path == "" {
 		path = "."
 	}
@@ -405,7 +502,7 @@ func browseJSONContent(element Element) string {
 
 	switch result.Type {
 	case gjson.JSON:
-		sb.WriteString(result.Indent("    "))
+		sb.WriteString(result.Raw)
 	case gjson.String:
 		sb.WriteString(result.String())
 	default:
@@ -595,4 +692,58 @@ func scanLocalFiles(dir string) string {
 		sb.WriteString(fmt.Sprintf("%s%s\n", prefix, e.Name()))
 	}
 	return sb.String()
+}
+
+// startTextBrowserAutoRefresh starts a periodic refresh timer for a textbrowser
+// element. Any existing timer for the same variable is stopped first.
+func startTextBrowserAutoRefresh(config *Config, element Element) {
+	if !element.AutoRefresh || element.Variable == "" {
+		return
+	}
+
+	stopTextBrowserAutoRefresh(element.Variable)
+
+	textBrowserAutoRefreshMutex.Lock()
+	defer textBrowserAutoRefreshMutex.Unlock()
+
+	timer := time.AfterFunc(textBrowserAutoRefreshInterval, func() {
+		textBrowserRefresh(config, element)
+		startTextBrowserAutoRefresh(config, element)
+	})
+	textBrowserAutoRefreshTimers[element.Variable] = timer
+}
+
+// stopTextBrowserAutoRefresh stops the auto-refresh timer for a given variable.
+func stopTextBrowserAutoRefresh(variable string) {
+	textBrowserAutoRefreshMutex.Lock()
+	defer textBrowserAutoRefreshMutex.Unlock()
+
+	if timer, ok := textBrowserAutoRefreshTimers[variable]; ok {
+		timer.Stop()
+		delete(textBrowserAutoRefreshTimers, variable)
+	}
+}
+
+// stopAllTextBrowserAutoRefresh stops all active auto-refresh timers.
+func stopAllTextBrowserAutoRefresh() {
+	textBrowserAutoRefreshMutex.Lock()
+	defer textBrowserAutoRefreshMutex.Unlock()
+
+	for _, timer := range textBrowserAutoRefreshTimers {
+		timer.Stop()
+	}
+	textBrowserAutoRefreshTimers = make(map[string]*time.Timer)
+}
+
+// refreshSceneTextBrowsers starts auto-refresh for all textbrowser elements in
+// the current scene that have autoRefresh enabled.
+func refreshSceneTextBrowsers(config *Config) {
+	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	for _, elem := range config.Scenes[currentSceneIndex].Elements {
+		if elem.Type == "textbrowser" && elem.AutoRefresh {
+			startTextBrowserAutoRefresh(config, elem)
+		}
+	}
 }

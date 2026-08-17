@@ -799,13 +799,35 @@
         },
         {
           "Type": "button",
-          "Text": "JukaLand",
+          "Text": "Text Browser",
           "X": 60,
+          "Y": 330,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "change_scene:TextBrowser",
+          "BgColor": "#e67e22",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "JukaLand",
+          "X": 280,
           "Y": 330,
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:JukaLand",
           "BgColor": "#2ecc71",
+          "Color": "#ffffff"
+        },
+        {
+          "Type": "button",
+          "Text": "Clear Cache",
+          "X": 530,
+          "Y": 330,
+          "Width": 220,
+          "Height": 55,
+          "Trigger": "cache_clear",
+          "BgColor": "#e74c3c",
           "Color": "#ffffff"
         },
         {
@@ -1433,8 +1455,8 @@
           "Color": ""
         },
         {
-          "Type": "textlog",
-          "Variable": "packages_text",
+          "Type": "packagelist",
+          "Variable": "packages_list",
           "X": 60,
           "Y": 100,
           "Width": 1160,
@@ -1454,19 +1476,8 @@
         },
         {
           "Type": "button",
-          "Text": "Open GitHub",
-          "X": 220,
-          "Y": 620,
-          "Width": 160,
-          "Height": 45,
-          "Trigger": "packages_github",
-          "BgColor": "",
-          "Color": ""
-        },
-        {
-          "Type": "button",
           "Text": "Back",
-          "X": 400,
+          "X": 220,
           "Y": 620,
           "Width": 120,
           "Height": 45,
@@ -1701,6 +1712,91 @@
           "Trigger": "jukaland_init",
           "BgColor": "#c0392b",
           "Color": "#ffffff"
+        },
+        {
+          "Type": "menu",
+          "X": 10,
+          "Y": 648,
+          "Trigger": "change_scene:Misc"
+        }
+      ]
+    },
+    {
+      "Name": "TextBrowser",
+      "Background": "#0f1115",
+      "Elements": [
+        {
+          "Type": "label",
+          "Text": "Text Browser",
+          "X": 40,
+          "Y": 50,
+          "FontSize": 40,
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "textbrowser",
+          "Variable": "textbrowser_content",
+          "Text": "system",
+          "X": 60,
+          "Y": 120,
+          "Width": 1160,
+          "Height": 480,
+          "Color": "#0c0f16"
+        },
+        {
+          "Type": "button",
+          "Text": "System Info",
+          "X": 60,
+          "Y": 620,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "textbrowser_system",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Zeroconf",
+          "X": 240,
+          "Y": 620,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "textbrowser_zeroconf",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Processes",
+          "X": 420,
+          "Y": 620,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "textbrowser_processes",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Network",
+          "X": 600,
+          "Y": 620,
+          "Width": 160,
+          "Height": 45,
+          "Trigger": "textbrowser_network",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Back",
+          "X": 780,
+          "Y": 620,
+          "Width": 120,
+          "Height": 45,
+          "Trigger": "change_scene:Misc",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "menu",
@@ -2101,6 +2197,18 @@
           "Height": 55,
           "Trigger": "theme_preset",
           "TriggerTarget": "oled",
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
+        },
+        {
+          "Type": "button",
+          "Text": "Midnight",
+          "X": 780,
+          "Y": 140,
+          "Width": 200,
+          "Height": 55,
+          "Trigger": "theme_preset",
+          "TriggerTarget": "midnight",
           "BgColor": "$buttonColor",
           "Color": "$labelColor"
         },

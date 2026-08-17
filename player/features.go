@@ -242,13 +242,14 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		return
 	}
 
-	// header with path
-		renderText(renderer, config, font, "Path: "+feCurrentPath(config),
-			ColorTextSecondary(), element.X, element.Y)
-
 	elemW := getElementWidth(element, 600)
 	elemH := getElementHeight(element, 500)
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
+
+	// header with path (drawn above the panel, not underneath it)
+	renderText(renderer, config, font, "Path: "+feCurrentPath(config),
+		ColorTextSecondary(), element.X+10, element.Y-20)
+
 	lineH := int32(40)
 	maxVisible := int((elemH - 30) / lineH)
 	if maxVisible < 1 {
@@ -274,24 +275,24 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == focusedFileIndex, false)
 
 		if isRecentlyPlayed(entries[i].Path) {
-			renderer.SetDrawColor(220, 50, 50, 255)
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 200)
 			renderer.FillRect(&sdl.Rect{X: rowX + rowW - 6, Y: rowY + 6, W: 4, H: rowH - 12})
 		}
 
 		prefix := ""
 		color := ColorTextSecondary()
 		if entries[i].IsDir {
-			prefix = "D "
+			prefix = "▸ "
 			color = sdl.Color{R: 255, G: 230, B: 120, A: 255}
 		} else if isMediaFile(entries[i].Name) {
-			prefix = "> "
+			prefix = "▶ "
 			color = ColorTextAccent()
 		}
 		txt := prefix + entries[i].Name
 		if len(txt) > 55 {
 			txt = txt[:52] + "..."
 		}
-		renderText(renderer, config, font, txt, color, rowX+12, rowY+8)
+		renderText(renderer, config, font, txt, color, rowX+14, rowY+9)
 	}
 
 	// scrollbar

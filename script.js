@@ -402,10 +402,20 @@ function addElement(type, x, y) {
     el.setAttribute('data-variable', '');
     setupDynamicListExecution(el);
   } else if (type === 'textbrowser') {
+    const sourceIcons = {
+      'system': '🖥️',
+      'zeroconf': '🔍',
+      'json': '📋'
+    };
+    const sourceNames = {
+      'system': 'System',
+      'zeroconf': 'Zeroconf',
+      'json': 'JSON'
+    };
     el.innerHTML = `
-      <span class="text-content">Text Browser</span>
+      <span class="text-content">${sourceIcons['system'] || '🌐'} ${sourceNames['system'] || 'Text Browser'}</span>
       <span class="remove-button">✕</span>
-  `;
+    `;
     el.setAttribute('data-variable', '');
     el.setAttribute('data-source', 'system');
   } else if (type === 'menu') {
@@ -755,7 +765,7 @@ function showElementProperties(el) {
 
   const triggerControls = document.querySelector('.trigger-controls');
   if (triggerControls) {
-    if (['button', 'input'].includes(el.getAttribute('data-type'))) {
+    if (['button', 'input', 'textbrowser'].includes(el.getAttribute('data-type'))) {
       triggerControls.style.display = 'block';
     } else {
       triggerControls.style.display = 'none';
@@ -782,6 +792,90 @@ function showElementProperties(el) {
     };
   } else {
     dynamicListProperties.style.display = 'none';
+  }
+
+  // Text Browser properties - only show for textbrowser elements
+  const textBrowserProperties = document.querySelector('.textbrowser-properties');
+  if (el.getAttribute('data-type') === 'textbrowser') {
+    textBrowserProperties.style.display = 'block';
+
+    const tbVariable = document.getElementById('textBrowserVariable');
+    updateVariableSelector(tbVariable, el.getAttribute('data-variable') || '');
+    tbVariable.onchange = () => {
+      el.setAttribute('data-variable', tbVariable.value);
+    };
+
+    const tbSource = document.getElementById('textBrowserSource');
+    tbSource.value = el.getAttribute('data-source') || 'system';
+    tbSource.onchange = () => {
+      el.setAttribute('data-source', tbSource.value);
+      const sourceIcons = {
+        'system': '🖥️',
+        'zeroconf': '🔍',
+        'json': '📋'
+      };
+      const sourceNames = {
+        'system': 'System',
+        'zeroconf': 'Zeroconf',
+        'json': 'JSON'
+      };
+      const textContent = el.querySelector('.text-content');
+      if (textContent) {
+        textContent.textContent = `${sourceIcons[tbSource.value] || '🌐'} ${sourceNames[tbSource.value] || 'Text Browser'}`;
+      }
+      const jsonPathGroup = document.getElementById('textBrowserJsonPathGroup');
+      if (jsonPathGroup) {
+        jsonPathGroup.style.display = tbSource.value === 'json' ? 'block' : 'none';
+      }
+      updateSourceBadges(tbSource.value);
+    };
+
+    const tbJsonPath = document.getElementById('textBrowserJsonPath');
+    if (tbJsonPath) {
+      tbJsonPath.value = el.getAttribute('data-json-path') || '';
+      tbJsonPath.onchange = () => {
+        el.setAttribute('data-json-path', tbJsonPath.value);
+      };
+    }
+
+    const jsonPathGroup = document.getElementById('textBrowserJsonPathGroup');
+    if (jsonPathGroup) {
+      jsonPathGroup.style.display = tbSource.value === 'json' ? 'block' : 'none';
+    }
+
+    const tbAutoRefresh = document.getElementById('textBrowserAutoRefresh');
+    if (tbAutoRefresh) {
+      tbAutoRefresh.checked = el.getAttribute('data-auto-refresh') === 'true';
+      tbAutoRefresh.onchange = () => {
+        el.setAttribute('data-auto-refresh', tbAutoRefresh.checked ? 'true' : 'false');
+      };
+    }
+
+    updateSourceBadges(tbSource.value);
+  } else {
+    textBrowserProperties.style.display = 'none';
+  }
+
+  function updateSourceBadges(activeSource) {
+    const badges = document.querySelectorAll('.source-badge');
+    badges.forEach(badge => {
+      badge.classList.remove('active');
+      badge.style.opacity = '0.4';
+      badge.style.transform = 'scale(0.92)';
+      badge.style.boxShadow = 'none';
+    });
+    const activeBadge = document.querySelector('.source-badge.' + activeSource);
+    if (activeBadge) {
+      activeBadge.classList.add('active');
+      activeBadge.style.opacity = '1';
+      activeBadge.style.transform = 'scale(1)';
+      const colors = {
+        'system': 'rgba(67, 97, 238, 0.35)',
+        'zeroconf': 'rgba(46, 204, 113, 0.35)',
+        'json': 'rgba(155, 89, 182, 0.35)'
+      };
+      activeBadge.style.boxShadow = `0 3px 12px ${colors[activeSource] || 'rgba(0,0,0,0.1)'}`;
+    }
   }
 
 
@@ -1347,6 +1441,8 @@ function createJukaApp() {
         if (type === 'textbrowser') {
           element.variable = el.getAttribute('data-variable') || '';
           element.source = el.getAttribute('data-source') || 'system';
+          element.jsonPath = el.getAttribute('data-json-path') || '';
+          element.autoRefresh = el.getAttribute('data-auto-refresh') === 'true';
         }
 
 
@@ -1703,6 +1799,23 @@ function createElementFromData(elementData) {
   if (elementData.type === 'textbrowser') {
     el.setAttribute('data-variable', elementData.variable || '');
     el.setAttribute('data-source', elementData.source || 'system');
+    el.setAttribute('data-json-path', elementData.jsonPath || '');
+    el.setAttribute('data-auto-refresh', elementData.autoRefresh ? 'true' : 'false');
+    const sourceIcons = {
+      'system': '🖥️',
+      'zeroconf': '🔍',
+      'json': '📋'
+    };
+    const sourceNames = {
+      'system': 'System',
+      'zeroconf': 'Zeroconf',
+      'json': 'JSON'
+    };
+    const textContent = el.querySelector('.text-content');
+    if (textContent) {
+      const source = elementData.source || 'system';
+      textContent.textContent = `${sourceIcons[source] || '🌐'} ${sourceNames[source] || 'Text Browser'}`;
+    }
   }
   if (elementData.type === 'button') {
     el.setAttribute('data-color', elementData.color || '#000000');
@@ -1762,7 +1875,8 @@ function setupMobileElementAdding() {
       { type: 'image', icon: 'fas fa-image', name: 'Image' },
       { type: 'input', icon: 'fas fa-edit', name: 'Input' },
       { type: 'menu', icon: 'fas fa-bars', name: 'Menu' },
-      { type: 'collapsedlist', icon: 'fas fa-bars', name: 'Collapsed List' }
+      { type: 'collapsedlist', icon: 'fas fa-bars', name: 'Collapsed List' },
+      { type: 'textbrowser', icon: 'fas fa-globe', name: 'Text Browser' }
     ];
 
     elements.forEach(element => {

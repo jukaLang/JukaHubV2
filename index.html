@@ -212,40 +212,52 @@
                             </div>
                         </div>
 
-                        <div class="trigger-controls">
-                            <div class="control-group">
-                                <label for="triggerSelector"><i class="fas fa-bolt"></i> Trigger:</label>
-                                <select id="triggerSelector" class="trigger-selector">
-                                    <option value="">None</option>
-                                    <option value="change_scene">Change Scene</option>
-                                    <option value="exit">Exit</option>
-                                    <option value="external_app">External App</option>
-                                    <option value="set_variable">Set Variable</option>
-                                    <option value="youtube_search">YouTube Search</option>
-                                    <option value="youtube_play">YouTube Play (focused)</option>
-                                    <option value="youtube_trending">YouTube Trending</option>
-                                    <option value="play_focused">Play Focused Video</option>
-                                    <option value="play_video_from_var">Play Video From Variable</option>
-                                    <option value="fe_list">File Explorer: List</option>
-                                    <option value="fe_up">File Explorer: Up</option>
-                                    <option value="custom_link">Custom Link</option>
-                                    <option value="ip_stream">IP Stream</option>
-                                    <option value="iptv_load">Live TV: Load</option>
-                                    <option value="podcast_load">Podcasts: Load</option>
-                                    <option value="tick">Tickers: Refresh</option>
-                                    <option value="add_ticker">Tickers: Add Symbol</option>
-                                    <option value="clear_tickers">Tickers: Clear Custom</option>
-                                    <option value="netspeed_run">Net Speed: Run</option>
-                                    <option value="benchmark_run">Benchmark: Run</option>
-                                    <option value="terminal_run">Terminal: Run</option>
-                                    <option value="cron_load">Cron: Load</option>
-                                    <option value="cron_startup">Cron: Startup Items</option>
-                                    <option value="hw_load">Hardware: Refresh</option>
-                                    <option value="log_export">Log: Export</option>
-                                    <option value="log_clear">Log: Clear</option>
-                                    <option value="save_config">Save Config</option>
-                                </select>
-                            </div>
+                            <div class="trigger-controls">
+                                <div class="control-group">
+                                    <label for="triggerSelector"><i class="fas fa-bolt"></i> Trigger:</label>
+                                    <select id="triggerSelector" class="trigger-selector">
+                                        <option value="">None</option>
+                                        <option value="change_scene">Change Scene</option>
+                                        <option value="exit">Exit</option>
+                                        <option value="external_app">External App</option>
+                                        <option value="set_variable">Set Variable</option>
+                                        <option value="youtube_search">YouTube Search</option>
+                                        <option value="youtube_play">YouTube Play (focused)</option>
+                                        <option value="youtube_trending">YouTube Trending</option>
+                                        <option value="play_focused">Play Focused Video</option>
+                                        <option value="play_video_from_var">Play Video From Variable</option>
+                                        <option value="fe_list">File Explorer: List</option>
+                                        <option value="fe_up">File Explorer: Up</option>
+                                        <option value="custom_link">Custom Link</option>
+                                        <option value="ip_stream">IP Stream</option>
+                                        <option value="iptv_load">Live TV: Load</option>
+                                        <option value="podcast_load">Podcasts: Load</option>
+                                        <option value="tick">Tickers: Refresh</option>
+                                        <option value="add_ticker">Tickers: Add Symbol</option>
+                                        <option value="clear_tickers">Tickers: Clear Custom</option>
+                                        <option value="netspeed_run">Net Speed: Run</option>
+                                        <option value="benchmark_run">Benchmark: Run</option>
+                                        <option value="terminal_run">Terminal: Run</option>
+                                        <option value="cron_load">Cron: Load</option>
+                                        <option value="cron_startup">Cron: Startup Items</option>
+                                        <option value="hw_load">Hardware: Refresh</option>
+                                        <option value="log_export">Log: Export</option>
+                                        <option value="log_clear">Log: Clear</option>
+                                        <option value="save_config">Save Config</option>
+                                        <option value="textbrowser_refresh">Text Browser: Refresh</option>
+                                        <option value="textbrowser_system">Text Browser: System Info</option>
+                                        <option value="textbrowser_zeroconf">Text Browser: Zeroconf</option>
+                                        <option value="textbrowser_processes">Text Browser: Processes</option>
+                                        <option value="textbrowser_network">Text Browser: Network</option>
+                                        <option value="textbrowser_temps">Text Browser: Temperatures</option>
+                                        <option value="textbrowser_services">Text Browser: Services</option>
+                                        <option value="textbrowser_files">Text Browser: Files</option>
+                                        <option value="textbrowser_json">Text Browser: JSON</option>
+                                        <option value="textbrowser_copy">Text Browser: Copy</option>
+                                        <option value="textbrowser_clear">Text Browser: Clear</option>
+                                        <option value="cache_clear">System: Clear Cache</option>
+                                    </select>
+                                </div>
 
                             <div id="triggerOptions">
                                 <select id="sceneChangeSelector" class="scene-change-selector"></select>
@@ -285,6 +297,43 @@
                             <div class="control-group">
                                 <label for="dynamicVariable"><i class="fas fa-code"></i> Variable:</label>
                                 <select id="dynamicVariable" class="dynamic-variable-selector"></select>
+                            </div>
+                        </div>
+                        <div class="textbrowser-properties" style="display: none;">
+                            <div class="control-group">
+                                <label for="textBrowserVariable"><i class="fas fa-code"></i> Output Variable:</label>
+                                <select id="textBrowserVariable" class="dynamic-variable-selector"></select>
+                            </div>
+                            <div class="control-group">
+                                <label for="textBrowserSource"><i class="fas fa-globe"></i> Data Source:</label>
+                                <select id="textBrowserSource" class="textbrowser-source-selector">
+                                    <option value="system">🖥️ System Info (gopsutil)</option>
+                                    <option value="zeroconf">🔍 Zeroconf / mDNS</option>
+                                    <option value="json">📋 JSON (gjson)</option>
+                                </select>
+                                <div class="source-preview">
+                                    <span class="source-badge system" id="sourceBadgeSystem">System</span>
+                                    <span class="source-badge zeroconf" id="sourceBadgeZeroconf">Zeroconf</span>
+                                    <span class="source-badge json" id="sourceBadgeJson">JSON</span>
+                                </div>
+                            </div>
+                            <div class="control-group" id="textBrowserJsonPathGroup" style="display: none;">
+                                <label for="textBrowserJsonPath"><i class="fas fa-project-diagram"></i> JSON Path (gjson):</label>
+                                <input type="text" id="textBrowserJsonPath" class="textbrowser-json-path"
+                                    placeholder="e.g. .data.items or $.users">
+                                <small class="help-text">Use gjson syntax: .key, .array[0], or $.path</small>
+                            </div>
+                            <div class="control-group">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="textBrowserAutoRefresh" class="toggle-input">
+                                    <span class="toggle-slider"></span>
+                                    <span>Auto-refresh (5s)</span>
+                                </label>
+                            </div>
+                            <div class="control-group">
+                                <small class="help-text">
+                                    <i class="fas fa-keyboard"></i> Runtime shortcuts: ↑↓ scroll • PgUp/PgDn page • Home/End jump • Shoulders page scroll
+                                </small>
                             </div>
                         </div>
                         <div class="input-properties" style="display: none;">

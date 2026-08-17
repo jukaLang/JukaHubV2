@@ -31,6 +31,14 @@
   --dark-text: #e2e8f0;
   --dark-text-secondary: #94a3b8;
   --dark-border: #334155;
+
+  /* Text Browser specific colors */
+  --tb-system: #4361ee;
+  --tb-system-light: rgba(67, 97, 238, 0.1);
+  --tb-zeroconf: #27ae60;
+  --tb-zeroconf-light: rgba(46, 204, 113, 0.1);
+  --tb-json: #8e44ad;
+  --tb-json-light: rgba(155, 89, 182, 0.1);
 }
 
 /* === Base Styles === */
@@ -135,6 +143,22 @@ main {
   flex-direction: column;
   gap: 0.65rem;
 
+}
+
+/* Highlight textbrowser in sidebar */
+.left-sidebar .element[data-type="textbrowser"] {
+  background: linear-gradient(135deg, rgba(67, 97, 238, 0.12), rgba(67, 97, 238, 0.04));
+  border: 1px solid rgba(67, 97, 238, 0.2);
+}
+
+.left-sidebar .element[data-type="textbrowser"]:hover {
+  background: linear-gradient(135deg, rgba(67, 97, 238, 0.18), rgba(67, 97, 238, 0.08));
+  border-color: rgba(67, 97, 238, 0.4);
+  transform: translateY(-1px);
+}
+
+.left-sidebar .element[data-type="textbrowser"] i {
+  color: #4361ee;
 }
 
 .canvas-area {
@@ -876,11 +900,125 @@ body.dark-mode .file-button {
   user-select: none;
   cursor: grab;
   position: relative;
+  border-radius: var(--border-radius-sm);
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+.element[data-type]:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
 .element[data-type]:active {
   cursor: grabbing;
-  box-shadow: 0 6px 15px rgba(67, 97, 238, 0.3);
+  box-shadow: 0 6px 20px rgba(67, 97, 238, 0.35);
+  transform: scale(1.01);
+}
+
+/* Text Browser element special styling */
+.element[data-type="textbrowser"] {
+  border: 2px dashed rgba(67, 97, 238, 0.4);
+  background: rgba(67, 97, 238, 0.03);
+  box-shadow: inset 0 0 20px rgba(67, 97, 238, 0.03);
+  position: relative;
+  overflow: hidden;
+}
+
+.element[data-type="textbrowser"]::after {
+  content: '';
+  position: absolute;
+  top: 8px;
+  right: 4px;
+  width: 3px;
+  height: calc(100% - 16px);
+  background: rgba(67, 97, 238, 0.15);
+  border-radius: 2px;
+  pointer-events: none;
+  transition: all 0.3s ease;
+}
+
+.element[data-type="textbrowser"]:hover::after {
+  background: rgba(67, 97, 238, 0.35);
+}
+
+.element[data-type="textbrowser"][data-source="zeroconf"]::after {
+  background: rgba(46, 204, 113, 0.15);
+}
+
+.element[data-type="textbrowser"][data-source="zeroconf"]:hover::after {
+  background: rgba(46, 204, 113, 0.35);
+}
+
+.element[data-type="textbrowser"][data-source="json"]::after {
+  background: rgba(155, 89, 182, 0.15);
+}
+
+.element[data-type="textbrowser"][data-source="json"]:hover::after {
+  background: rgba(155, 89, 182, 0.35);
+}
+
+.element[data-type="textbrowser"]:hover {
+  border-color: rgba(67, 97, 238, 0.7);
+  background: rgba(67, 97, 238, 0.06);
+  box-shadow: inset 0 0 30px rgba(67, 97, 238, 0.06), 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.element[data-type="textbrowser"]::before {
+  content: "\f0ac";
+  font-family: "Font Awesome 6 Free";
+  font-weight: 900;
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 14px;
+  color: rgba(67, 97, 238, 0.5);
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+
+.element[data-type="textbrowser"]:hover::before {
+  color: rgba(67, 97, 238, 0.9);
+  transform: scale(1.15);
+}
+
+/* Source-colored variants for textbrowser */
+.element[data-type="textbrowser"][data-source="zeroconf"] {
+  border-color: rgba(46, 204, 113, 0.4);
+  background: rgba(46, 204, 113, 0.03);
+  box-shadow: inset 0 0 20px rgba(46, 204, 113, 0.03);
+}
+
+.element[data-type="textbrowser"][data-source="zeroconf"]:hover {
+  border-color: rgba(46, 204, 113, 0.7);
+  background: rgba(46, 204, 113, 0.06);
+  box-shadow: inset 0 0 30px rgba(46, 204, 113, 0.06), 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.element[data-type="textbrowser"][data-source="zeroconf"]::before {
+  color: rgba(46, 204, 113, 0.5);
+}
+
+.element[data-type="textbrowser"][data-source="zeroconf"]:hover::before {
+  color: rgba(46, 204, 113, 0.9);
+}
+
+.element[data-type="textbrowser"][data-source="json"] {
+  border-color: rgba(155, 89, 182, 0.4);
+  background: rgba(155, 89, 182, 0.03);
+  box-shadow: inset 0 0 20px rgba(155, 89, 182, 0.03);
+}
+
+.element[data-type="textbrowser"][data-source="json"]:hover {
+  border-color: rgba(155, 89, 182, 0.7);
+  background: rgba(155, 89, 182, 0.06);
+  box-shadow: inset 0 0 30px rgba(155, 89, 182, 0.06), 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.element[data-type="textbrowser"][data-source="json"]::before {
+  color: rgba(155, 89, 182, 0.5);
+}
+
+.element[data-type="textbrowser"][data-source="json"]:hover::before {
+  color: rgba(155, 89, 182, 0.9);
 }
 
 /* Sidebar element titles */
@@ -2156,6 +2294,32 @@ body.dark-mode .dynamic-variable-selector {
   max-height: 70vh;
 }
 
+/* Custom scrollbar for properties panel */
+.properties-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.properties-panel::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.properties-panel::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.properties-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
+}
+
+body.dark-mode .properties-panel::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+body.dark-mode .properties-panel::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
 /* FIX: Ensure dynamic list properties are properly displayed */
 #elementPropertiesPanel .dynamic-list-properties {
   display: block !important;
@@ -2220,45 +2384,6 @@ body.dark-mode .dynamic-list-select {
   margin-bottom: 0.5rem;
 }
 
-/* Ensure dynamic list properties are properly hidden for non-dynamic list elements */
-.dynamic-list-properties {
-    display: none;
-}
-
-/* Show only for dynamic list elements */
-.element[data-type="dynamiclist"] ~ #elementPropertiesPanel .dynamic-list-properties {
-    display: block;
-}
-
-/* Style for media variable selector */
-.media-variable-selector {
-    width: 100%;
-    padding: 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: var(--border-radius-sm);
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-}
-
-/* Ensure dynamic list properties are properly hidden for non-dynamic list elements */
-.dynamic-list-properties {
-    display: none;
-}
-
-/* Show only for dynamic list elements */
-.element[data-type="dynamiclist"] ~ #elementPropertiesPanel .dynamic-list-properties {
-    display: block;
-}
-
-/* Style for media variable selector */
-.media-variable-selector {
-    width: 100%;
-    padding: 0.5rem;
-    border: 1px solid var(--border);
-    border-radius: var(--border-radius-sm);
-    font-size: 0.9rem;
-    margin-bottom: 0.5rem;
-}
 
 /* Ensure textbrowser properties are properly hidden for non-textbrowser elements */
 .textbrowser-properties {
@@ -2268,4 +2393,231 @@ body.dark-mode .dynamic-list-select {
 /* Show only for textbrowser elements */
 .element[data-type="textbrowser"] ~ #elementPropertiesPanel .textbrowser-properties {
     display: block;
+}
+
+.textbrowser-properties {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(67, 97, 238, 0.02), rgba(155, 89, 182, 0.02));
+  border-radius: var(--border-radius-md);
+  padding: 1rem;
+  margin-left: -0.5rem;
+  margin-right: -0.5rem;
+}
+
+.textbrowser-properties .control-group {
+  margin-bottom: 0.9rem;
+}
+
+.textbrowser-properties label {
+  font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.textbrowser-properties select,
+.textbrowser-properties input {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius-sm);
+  font-size: 0.9rem;
+  background: var(--surface);
+  color: var(--text);
+  transition: var(--transition);
+}
+
+.textbrowser-properties select:focus,
+.textbrowser-properties input:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.15);
+}
+
+/* Improve textbrowser sidebar element appearance */
+.element[data-type="textbrowser"] {
+  background: linear-gradient(135deg, rgba(67, 97, 238, 0.08), rgba(67, 97, 238, 0.02));
+}
+
+.element[data-type="textbrowser"] .text-content {
+  color: #4361ee;
+  font-weight: 600;
+}
+
+/* Textbrowser source selector styling */
+.textbrowser-source-selector {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius-sm);
+  font-size: 0.9rem;
+  margin-bottom: 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.textbrowser-source-selector:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.15);
+}
+
+.textbrowser-json-path {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--border-radius-sm);
+  font-size: 0.85rem;
+  font-family: 'Courier New', monospace;
+  background: var(--surface);
+  color: var(--text);
+  transition: var(--transition);
+}
+
+.textbrowser-json-path:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(67, 97, 238, 0.15);
+}
+
+/* Source badge indicators */
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 20px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 0;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: default;
+  user-select: none;
+}
+
+.source-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.12);
+}
+
+.source-badge.active {
+  transform: scale(1.05);
+  font-weight: 700;
+}
+
+.source-badge.system {
+  background: rgba(67, 97, 238, 0.1);
+  color: #4361ee;
+  border: 1px solid rgba(67, 97, 238, 0.2);
+}
+
+.source-badge.zeroconf {
+  background: rgba(46, 204, 113, 0.1);
+  color: #27ae60;
+  border: 1px solid rgba(46, 204, 113, 0.2);
+}
+
+.source-badge.json {
+  background: rgba(155, 89, 182, 0.1);
+  color: #8e44ad;
+  border: 1px solid rgba(155, 89, 182, 0.2);
+}
+
+body.dark-mode .source-badge.system {
+  background: rgba(67, 97, 238, 0.2);
+  color: #7b9dfa;
+  border-color: rgba(67, 97, 238, 0.3);
+}
+
+body.dark-mode .source-badge.zeroconf {
+  background: rgba(46, 204, 113, 0.2);
+  color: #2ecc71;
+  border-color: rgba(46, 204, 113, 0.3);
+}
+
+body.dark-mode .source-badge.json {
+  background: rgba(155, 89, 182, 0.2);
+  color: #bb8fce;
+  border-color: rgba(155, 89, 182, 0.3);
+}
+
+.source-preview {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.help-text {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.3rem;
+  font-style: italic;
+}
+
+body.dark-mode .help-text {
+  color: var(--dark-text-secondary);
+}
+
+/* Toggle switch for auto-refresh */
+.toggle-label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.toggle-input {
+  display: none;
+}
+
+.toggle-slider {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  background: var(--border);
+  border-radius: 11px;
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+
+.toggle-slider::before {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  background: white;
+  border-radius: 50%;
+  transition: var(--transition);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.toggle-input:checked + .toggle-slider {
+  background: var(--primary);
+}
+
+.toggle-input:checked + .toggle-slider::before {
+  transform: translateX(18px);
+}
+
+body.dark-mode .toggle-slider {
+  background: var(--dark-border);
+}
+
+body.dark-mode .toggle-slider::before {
+  background: var(--dark-surface);
 }

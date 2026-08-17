@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -61,7 +62,14 @@ var (
 
 	currentSceneIndex   int
 	selectedButtonIndex int
-	menuButtonRects     = make(map[int]sdl.Rect) // scene index â†’ hitbox
+	videoButtonRects    = make(map[int]sdl.Rect) // video control hitbox (-1=play/pause, -2=stop)
+	exitButtonRect      sdl.Rect                 // exit button hitbox in top bar
+	sceneNavPrevRect    sdl.Rect                 // hint-bar scene pager (prev)
+	sceneNavNextRect    sdl.Rect                 // hint-bar scene pager (next)
+
+	// Seek bar drag state
+	isDraggingSeekBar bool
+	seekBarDragRect   sdl.Rect
 
 	// Cache for thumbnails
 	textureCache        = make(map[string]*sdl.Texture)
@@ -79,6 +87,19 @@ var (
 
 	// Smooth scroll offset for search results grid
 	scrollY int32 = 0
+
+	// Scroll offset for text browser panels
+	textBrowserScrollY int32 = 0
+
+	// Last update timestamp for text browser content
+	textBrowserLastUpdate int64
+
+	// Kinetic scroll state for text browser panels
+	textBrowserScrollVelocity float64
+	textBrowserScrollFriction = 0.92
+	textBrowserScrollAccel    = 1.4
+	textBrowserScrollMaxVel   = 18.0
+	textBrowserScrollCooldown int
 
 	// Toast notifications
 	toastMessage   string
@@ -161,6 +182,8 @@ var (
 	videoPlaybackError    string
 	videoPlaybackCmd      *exec.Cmd
 	videoPlaybackMutex    sync.Mutex
+
+	embeddedPlaybackPath string
 
 	// mainWindow is kept global so runtime settings (e.g. fullscreen toggle)
 	// can apply changes without threading the window through every handler.
@@ -376,8 +399,10 @@ type Element struct {
 	Columns       int32       `json:"columns"`
 	Rows          int32       `json:"rows"`
 	Placeholder   string      `json:"placeholder"`
-	Style         string      `json:"style"`   // e.g. "tile" for OS-style app icons
-	Icon          string      `json:"icon"`    // monogram/short glyph for tile style
+	Style         string      `json:"style"` // e.g. "tile" for OS-style app icons
+	Icon          string      `json:"icon"`  // monogram/short glyph for tile style
+	JsonPath      string      `json:"jsonPath"`
+	AutoRefresh   bool        `json:"autoRefresh"`
 
 	// Extended trigger payloads (set by the GUI generator)
 	ExternalAppPath     string `json:"externalAppPath"`
@@ -487,6 +512,14 @@ func substituteVars(text string, vars map[string]interface{}) string {
 		}
 		return m
 	})
+}
+
+func normalizeCacheKey(raw string) string {
+	s := strings.ToLower(raw)
+	s = regexp.MustCompile(`"ytsearch\d+:[^"]+"`).ReplaceAllString(s, `"ytsearch:QUERY"`)
+	s = regexp.MustCompile(`-f "[^"]*"`).ReplaceAllString(s, "")
+	s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
+	return strings.TrimSpace(s)
 }
 
 func resolveColor(config *Config, colorName string, defaultColor sdl.Color) sdl.Color {
@@ -844,17 +877,22 @@ func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element)
 	}
 
 	// outer ring
-	renderer.SetDrawColor(30, 36, 50, 255)
+	renderer.SetDrawColor(ColorSurfaceRow.R, ColorSurfaceRow.G, ColorSurfaceRow.B, 255)
 	renderCircleSector(renderer, cx, cy, radius+4, radius, 0, 2*math.Pi)
 
 	// Free sector (background)
-	renderer.SetDrawColor(30, 36, 50, 255)
-	renderCircleSector(renderer, cx, cy, radius, innerR, 0, 2*math.Pi)
+	ringColor := ColorSurfaceRow
+	renderCircleSectorColor(renderer, cx, cy, radius, innerR, 0, 2*math.Pi, ringColor)
 
 	// Used sector
 	usedAngle := 2 * math.Pi * usedFrac
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-	renderCircleSector(renderer, cx, cy, radius, innerR, -math.Pi/2, -math.Pi/2+usedAngle)
+	sectorColor := accentColor
+	if usedFrac > 0.9 {
+		sectorColor = ColorDanger
+	} else if usedFrac > 0.75 {
+		sectorColor = ColorWarning
+	}
+	renderCircleSectorColor(renderer, cx, cy, radius, innerR, -math.Pi/2, -math.Pi/2+usedAngle, sectorColor)
 
 	// Center disk
 	centerColor := ColorSurfacePanel
@@ -884,6 +922,11 @@ func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element)
 // spanning from angleStart to angleEnd (radians, clockwise from top).
 // Uses a dense line fan so the sector reads as a filled shape at render time.
 func renderCircleSector(renderer *sdl.Renderer, cx, cy, outerR, innerR int32, angleStart, angleEnd float64) {
+	renderCircleSectorColor(renderer, cx, cy, outerR, innerR, angleStart, angleEnd, accentColor)
+}
+
+// renderCircleSectorColor is renderCircleSector with an explicit color.
+func renderCircleSectorColor(renderer *sdl.Renderer, cx, cy, outerR, innerR int32, angleStart, angleEnd float64, c sdl.Color) {
 	if outerR <= 0 {
 		return
 	}
@@ -897,7 +940,7 @@ func renderCircleSector(renderer *sdl.Renderer, cx, cy, outerR, innerR int32, an
 	if angleEnd < angleStart {
 		step = -step
 	}
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
+	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
 	prevOX, prevOY, prevIX, prevIY := int32(0), int32(0), int32(0), int32(0)
 	first := true
 	for a := angleStart; (step > 0 && a <= angleEnd+0.01) || (step < 0 && a >= angleEnd-0.01); a += step {
@@ -944,13 +987,49 @@ func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
 	fillCircle(renderer, x+w-r, y+h-r, r, c)
 }
 
-// gradientRoundedRect draws a 2-stop vertical gradient inside a rounded rect
-// by layering a bottom-colored rounded rect with a top-colored upper portion.
+// gradientRoundedRect draws a smooth vertical gradient inside a rounded rect.
+// The gradient is rendered per scanline so it interpolates top→bottom without
+// a visible banding seam, and the rounded corners are preserved exactly.
 func gradientRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, top, bottom sdl.Color) {
-	fillRoundedRect(renderer, x, y, w, h, r, bottom)
-	half := h / 2
-	if half > 2 {
-		fillRoundedRect(renderer, x, y, w, half+r, r, top)
+	if r > w/2 {
+		r = w / 2
+	}
+	if r > h/2 {
+		r = h / 2
+	}
+	if r < 1 {
+		renderVerticalGradient(renderer, x, y, w, h, top, bottom)
+		return
+	}
+	for dy := int32(0); dy < h; dy++ {
+		var inset int32
+		if dy < r {
+			inset = r - int32(math.Sqrt(float64(2*r*dy-dy*dy)))
+		} else if d := dy - (h - r); d > 0 {
+			inset = r - int32(math.Sqrt(float64(2*r*d-d*d)))
+		}
+		x0 := x + inset
+		x1 := x + w - inset
+		if x1 <= x0 {
+			continue
+		}
+		c := lerpColor(top, bottom, float32(dy)/float32(h-1))
+		renderer.SetDrawColor(c.R, c.G, c.B, c.A)
+		renderer.FillRect(&sdl.Rect{X: x0, Y: y + dy, W: x1 - x0, H: 1})
+	}
+}
+
+// renderVerticalGradient draws a plain vertical gradient (no rounding).
+func renderVerticalGradient(renderer *sdl.Renderer, x, y, w, h int32, top, bottom sdl.Color) {
+	if h <= 1 {
+		renderer.SetDrawColor(top.R, top.G, top.B, top.A)
+		renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
+		return
+	}
+	for dy := int32(0); dy < h; dy++ {
+		c := lerpColor(top, bottom, float32(dy)/float32(h-1))
+		renderer.SetDrawColor(c.R, c.G, c.B, c.A)
+		renderer.FillRect(&sdl.Rect{X: x, Y: y + dy, W: w, H: 1})
 	}
 }
 
@@ -965,12 +1044,15 @@ func drawRectOutline(renderer *sdl.Renderer, x, y, w, h int32, c sdl.Color) {
 
 // drawPanel renders a translucent panel with an accent border and soft shadow.
 func drawPanel(renderer *sdl.Renderer, x, y, w, h int32, fill, border sdl.Color) {
-	// soft shadow
-	fillRoundedRect(renderer, x+3, y+3, w, h, 10, ShadowFill(60))
+	// layered soft shadow (growing offset, fading alpha)
+	fillRoundedRect(renderer, x+1, y+2, w, h, 10, ShadowFill(18))
+	fillRoundedRect(renderer, x+3, y+4, w, h, 10, ShadowFill(26))
+	fillRoundedRect(renderer, x+5, y+6, w, h, 10, ShadowFill(38))
 	// fill
 	fillRoundedRect(renderer, x, y, w, h, 10, fill)
-	// subtle inner highlight
-	fillRoundedRect(renderer, x+1, y+1, w-2, h/3, 9, GlossFill(10))
+	// subtle 1px top highlight line
+	renderer.SetDrawColor(255, 255, 255, 12)
+	renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
 	// border
 	renderer.SetDrawColor(border.R, border.G, border.B, border.A)
 	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: w - 2, H: 1})
@@ -983,12 +1065,21 @@ func drawPanel(renderer *sdl.Renderer, x, y, w, h int32, fill, border sdl.Color)
 // drawCard renders a raised surface card: shadow, surface fill, subtle top
 // gloss, and a hairline border. Canonical content container used across screens.
 func drawCard(renderer *sdl.Renderer, x, y, w, h, r int32) {
-	fillRoundedRect(renderer, x+3, y+3, w, h, r, ShadowFill(50))
+	// layered soft shadow (growing offset, fading alpha)
+	fillRoundedRect(renderer, x+1, y+2, w, h, r, ShadowFill(16))
+	fillRoundedRect(renderer, x+3, y+4, w, h, r, ShadowFill(24))
+	fillRoundedRect(renderer, x+5, y+6, w, h, r, ShadowFill(36))
+	// card body
 	fillRoundedRect(renderer, x, y, w, h, r, ColorSurfaceCard)
-	fillRoundedRect(renderer, x+1, y+1, w-2, h/3, r-1, GlossFill(8))
+	// 1px top highlight line (glass edge)
+	renderer.SetDrawColor(255, 255, 255, 12)
+	renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
+	// hairline border
 	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, ColorBorderSubtle.A)
 	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: w - 2, H: 1})
 	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: 1, H: h - 2})
+	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + h - 2, W: w - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: x + w - 2, Y: y + 1, W: 1, H: h - 2})
 }
 
 // drawRow renders a single list row with a consistent surface and optional
@@ -1056,9 +1147,9 @@ func buttonHitSize(elem Element, font *ttf.Font) (int32, int32) {
 	return width, height
 }
 
-func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, selected bool, hovered bool, hoverProgress float64, pressed bool) {
+func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, elemIndex int, selected bool, hovered bool, hoverProgress float64, pressed bool) {
 	if elem.Style == "tile" {
-		renderAppTile(renderer, config, elem, selected, hovered, hoverProgress, pressed)
+		renderAppTile(renderer, config, elem, elemIndex, selected, hovered, hoverProgress, pressed)
 		return
 	}
 	font, _ := getCachedFont(config, elem.Font)
@@ -1089,14 +1180,24 @@ func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, s
 	fillRoundedRect(renderer, ox+2, oy+2, width, height, r, ShadowFill(50))
 
 	if selected && !pressed {
+		fillRoundedRect(renderer, ox-4, oy-4, width+8, height+8, r+4,
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 30})
 		fillRoundedRect(renderer, ox-3, oy-3, width+6, height+6, r+3,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 60})
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 55})
+		fillRoundedRect(renderer, ox-2, oy-2, width+4, height+4, r+2,
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 75})
 		top = lighten(c, 50)
 		bottom = lighten(c, 15)
 	} else if hoverProgress > 0.01 && !pressed {
-		alpha := uint8(40 * hoverProgress)
+		a0 := uint8(18 * hoverProgress)
+		a1 := uint8(36 * hoverProgress)
+		a2 := uint8(52 * hoverProgress)
+		fillRoundedRect(renderer, ox-3, oy-3, width+6, height+6, r+3,
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: a0})
 		fillRoundedRect(renderer, ox-2, oy-2, width+4, height+4, r+2,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: alpha})
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: a1})
+		fillRoundedRect(renderer, ox-1, oy-1, width+2, height+2, r+1,
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: a2})
 		top = lighten(c, 45)
 		bottom = lighten(c, 15)
 	}
@@ -1141,103 +1242,113 @@ func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, s
 	}
 }
 
-// renderAppTile draws an OS-style launcher icon: a rounded tile with a soft
-// shadow, gradient fill, monogram badge, and a label beneath.
-func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, selected, hovered bool, hoverProgress float64, pressed bool) {
+// renderAppTile draws an OS-style launcher icon: a clean translucent card with a
+// consistent line icon, monochrome accent, and a label beneath. The focused tile
+// scales up (~1.04) with a bright focus ring and soft glow so selection is
+// unmistakable on a handheld.
+func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemIndex int, selected, hovered bool, hoverProgress float64, pressed bool) {
 	labelFont, _ := getCachedFont(config, elem.Font)
 	if labelFont == nil {
 		labelFont, _ = getCachedFont(config, "medium")
 	}
 	width, height := buttonHitSize(elem, labelFont)
 	x, y := elem.X, elem.Y
-	r := int32(22)
+	r := int32(16)
 
-	c := resolveColor(config, elem.BgColor, accentColor)
-	if int(c.R)+int(c.G)+int(c.B) < 140 {
-		c = accentColor
+	// Ease the per-tile focus progress toward the target state (smooth scale).
+	target := 0.0
+	if selected {
+		target = 1.0
 	}
-	top := lighten(c, 38)
-	bottom := darken(c, 18)
+	cur := tileAnimMap[elemIndex]
+	tileAnimMap[elemIndex] = cur + (target-cur)*0.18
+	anim := tileAnimMap[elemIndex]
+	if anim > target-0.005 && anim < target+0.005 {
+		tileAnimMap[elemIndex] = target
+		anim = target
+	}
+
+	// Focus scale: up to ~1.04 when the tile is selected.
+	scale := 1.0 + 0.04*anim
+	cw := int32(float64(width) * scale)
+	ch := int32(float64(height) * scale)
+	cx := x - (cw-width)/2
+	cy := y - (ch-height)/2
 
 	pressOffset := int32(0)
 	if pressed {
-		pressOffset = 3
+		pressOffset = 2
 	}
-	ox := x + pressOffset
-	oy := y + pressOffset
+	ox := cx + pressOffset
+	oy := cy + pressOffset
 
-	// drop shadow
-	fillRoundedRect(renderer, ox+3, oy+5, width, height, r, ShadowFill(70))
-
-	// selection / hover glow
-	if selected && !pressed {
-		fillRoundedRect(renderer, ox-4, oy-4, width+8, height+8, r+4,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 75})
-	} else if hoverProgress > 0.01 && !pressed {
-		a := uint8(45 * hoverProgress)
-		fillRoundedRect(renderer, ox-3, oy-3, width+6, height+6, r+3,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: a})
-	}
-	if pressed {
-		top = darken(c, 12)
-		bottom = darken(c, 30)
+	// Focus color: cyan focus ring for unmistakable selection.
+	focusCol := sdl.Color{R: 110, G: 231, B: 255, A: 255}
+	if int(accentColor.R)+int(accentColor.G) > 420 && int(accentColor.R) > int(accentColor.B) {
+		// warm accent → violet ring instead for contrast
+		focusCol = sdl.Color{R: 139, G: 124, B: 255, A: 255}
 	}
 
-	// crisp border (accent when active)
-	borderCol := ColorBorderDefault
+	// Soft shadow only on the selected / hovered card (elevation cue).
 	if selected || hovered {
-		borderCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 220}
-	}
-	fillRoundedRect(renderer, ox-1, oy-1, width+2, height+2, r+1, borderCol)
-
-	// tile body
-	fillRoundedRect(renderer, ox, oy, width, height, r, GlossFill(14))
-	gradientRoundedRect(renderer, ox+1, oy+1, width-2, height-2, r-1, top, bottom)
-
-	// text color with good contrast against the tile
-	lum := int(c.R)*299 + int(c.G)*587 + int(c.B)*114
-	var txt sdl.Color
-	if lum > 60000 {
-		txt = sdl.Color{R: 16, G: 20, B: 28, A: 255}
-	} else {
-		txt = sdl.Color{R: 248, G: 250, B: 255, A: 255}
+		fillRoundedRect(renderer, ox+4, oy+6, cw, ch, r, ShadowFill(70))
+		fillRoundedRect(renderer, ox+6, oy+9, cw, ch, r, ShadowFill(50))
 	}
 
-	// monogram badge (squircle) in the upper portion of the tile
-	badge := width / 3
-	if badge > 96 {
-		badge = 96
-	}
-	if badge < 44 {
-		badge = 44
-	}
-	bx := ox + (width-badge)/2
-	by := oy + int32(float32(height)*0.15)
-	fillRoundedRect(renderer, bx, by, badge, badge, badge/2+6, WithAlpha(ColorShadow, 80))
-	fillRoundedRect(renderer, bx+3, by+3, badge-6, badge-6, (badge-6)/2, WithAlpha(lighten(c, 72), 70))
-
-	glyph := ""
-	if elem.Icon != "" {
-		glyph = string([]rune(elem.Icon)[0])
-	} else if ru := []rune(elem.Text); len(ru) > 0 {
-		glyph = string(ru[0])
-	}
-	bigFont, _ := getCachedFont(config, "big")
-	if bigFont == nil {
-		bigFont = labelFont
-	}
-	if bigFont != nil && glyph != "" {
-		gw, gh, _ := bigFont.SizeUTF8(glyph)
-		gx := ox + (width-int32(gw))/2
-		gy := by + (badge-int32(gh))/2
-		renderText(renderer, config, bigFont, glyph, txt, gx, gy)
+	// Focus glow + bright ring.
+	if selected {
+		fillRoundedRect(renderer, ox-4, oy-4, cw+8, ch+8, r+4, WithAlpha(focusCol, 30))
+		fillRoundedRect(renderer, ox-2, oy-2, cw+4, ch+4, r+2, WithAlpha(focusCol, 70))
+	} else if hoverProgress > 0.01 {
+		fillRoundedRect(renderer, ox-3, oy-3, cw+6, ch+6, r+3, WithAlpha(focusCol, uint8(20*hoverProgress)))
 	}
 
-	// label beneath the badge
+	// Tile body: dark translucent surface with a very subtle vertical gradient.
+	base := ColorSurfaceCard
+	if selected {
+		base = WithAlpha(ColorSurfaceRaised, 235)
+	}
+	top := lighten(base, 14)
+	bottom := darken(base, 10)
+	gradientRoundedRect(renderer, ox, oy, cw, ch, r, top, bottom)
+
+	// Hairline border: low-opacity white; bright focus ring when selected.
+	borderCol := WithAlpha(ColorBorderDefault, 60)
+	if selected {
+		borderCol = WithAlpha(focusCol, 220)
+	} else if hovered {
+		borderCol = WithAlpha(focusCol, 110)
+	}
+	fillRoundedRect(renderer, ox-1, oy-1, cw+2, ch+2, r+1, borderCol)
+
+	// Icon: consistent line icon, monochrome / two-tone.
+	iconKind := tileIconKind(elem)
+	iconCol := ColorTextSecondary()
+	if selected {
+		iconCol = ColorTextPrimary()
+	}
+	iconSize := width / 2
+	if iconSize > 72 {
+		iconSize = 72
+	}
+	if iconSize < 40 {
+		iconSize = 40
+	}
+	drawTileIcon(renderer, ox+cw/2, oy+int32(float64(ch)*0.40), iconSize, iconKind, iconCol)
+
+	// Label beneath the icon, near-white text, single line, kept off the edges.
 	if labelFont != nil && elem.Text != "" {
 		lw, lh, _ := labelFont.SizeUTF8(elem.Text)
-		lx := ox + (width-int32(lw))/2
-		ly := oy + height - int32(lh) - 16
+		maxLW := int(cw - 24)
+		if lw > maxLW {
+			lw = maxLW
+		}
+		txt := ColorTextPrimary()
+		if !selected {
+			txt = ColorTextSecondary()
+		}
+		lx := ox + (cw-int32(lw))/2
+		ly := oy + ch - int32(lh) - 14
 		renderText(renderer, config, labelFont, elem.Text, txt, lx, ly)
 	}
 }
@@ -1508,6 +1619,23 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	tool := tokens[0]
 	args := tokens[1:]
 	fullToolPath := getToolPath(tool, config)
+
+	// Check bbolt cache for YouTube search results before hitting yt-dlp.
+	cacheKey := "ytsearch:" + normalizeCacheKey(cmdWithVars)
+	if db, err := cacheOpen("jukahub.cache"); err == nil {
+		if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
+			var videos []VideoInfo
+			if json.Unmarshal(cached, &videos) == nil {
+				db.Close()
+				publishCustom(resultVar, videos)
+				publishCustom("search_error", nil)
+				focusedResultIndex = -1
+				return
+			}
+		}
+		db.Close()
+	}
+
 	// Run the tool directly (no shell) so special characters are not
 	// interpreted by cmd.exe / sh (e.g. "<" as input redirection).
 	cmd := exec.Command(fullToolPath, args...)
@@ -1585,6 +1713,16 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	if len(videos) == 0 {
 		log.Printf("[ERROR] No videos could be parsed from yt-dlp output")
 		publishCustom("search_error", "No videos found. Try a different query.")
+	}
+
+	// Cache successful YouTube search results for 1 hour.
+	if len(videos) > 0 {
+		if data, err := json.Marshal(videos); err == nil {
+			if db, cErr := cacheOpen("jukahub.cache"); cErr == nil {
+				cacheSet(db, cacheKey, data, time.Hour)
+				db.Close()
+			}
+		}
 	}
 
 	publishCustom(resultVar, videos)
@@ -1740,9 +1878,10 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 		cardH := cellHeight - 8
 		drawCard(renderer, cardX, cardY, cardW, cardH, 10)
 
-		// selection ring
+		// selection ring (soft layered glow)
 		if i == focusedResultIndex {
-			fillRoundedRect(renderer, cardX-3, cardY-3, cardW+6, cardH+6, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 120})
+			fillRoundedRect(renderer, cardX-4, cardY-4, cardW+8, cardH+8, 13, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 40})
+			fillRoundedRect(renderer, cardX-3, cardY-3, cardW+6, cardH+6, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 90})
 			fillRoundedRect(renderer, cardX, cardY, cardW, cardH, 10, ColorSurfaceRaised)
 			// inner top highlight
 			fillRoundedRect(renderer, cardX+1, cardY+1, cardW-2, cardH/3, 8, GlossFill(6))
@@ -1805,6 +1944,11 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 		bx := cardX + cardW - bw - 10
 		by := cardY + cardH - bh - 10
 		fillRoundedRect(renderer, bx, by, bw, bh, 5, sdl.Color{R: 0, G: 0, B: 0, A: 120})
+		renderer.SetDrawColor(255, 255, 255, 40)
+		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + 1, W: bw - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + 1, W: 1, H: bh - 2})
+		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + bh - 2, W: bw - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: bx + bw - 2, Y: by + 1, W: 1, H: bh - 2})
 		renderText(renderer, config, font, dur, ColorTextPrimary(), bx+6, by+3)
 	}
 
@@ -1907,8 +2051,8 @@ func playVideoURL(config *Config, url string) {
 		} else {
 			pipeArgs = append([]string{"-fs"}, pipeArgs...)
 		}
-	ffCmd := exec.Command(ffplayPath, pipeArgs...)
-	ffCmd.Env = ffplayEnv(ffplayPath)
+		ffCmd := exec.Command(ffplayPath, pipeArgs...)
+		ffCmd.Env = ffplayEnv(ffplayPath)
 
 		pipe, err := ytCmd.StdoutPipe()
 		if err == nil {
@@ -2086,97 +2230,13 @@ func playWithTempFile(config *Config, ffplayPath, ytDlpPath, url string) {
 		os.Remove(tempPath)
 		return
 	}
-
 	videoPlaybackMutex.Lock()
 	videoPlaybackPhase = "playing"
 	videoPlaybackProgress = 1.0
 	videoPlaybackMutex.Unlock()
 
-	args := []string{
-		"-loglevel", "debug",
-		"-framedrop",
-		"-autoexit",
-		"-i", tempPath,
-	}
-	playCmd := exec.Command(ffplayPath, args...)
-	playCmd.Env = ffplayEnv(ffplayPath)
-	playCmd.Stdout = os.Stdout
-	playCmd.Stderr = &stderrBuf
-	videoPlaybackMutex.Lock()
-	videoPlaybackCmd = playCmd
-	videoPlaybackMutex.Unlock()
-
-	log.Printf("[DEBUG] playWithTempFile: launching ffplay with args: %v", args)
-	log.Printf("[DEBUG] playWithTempFile: temp file exists: %s, size: %d", tempPath, func() int64 {
-		f, _ := os.Stat(tempPath)
-		if f != nil {
-			return f.Size()
-		}
-		return 0
-	}())
-
-	if err := playCmd.Start(); err != nil {
-		log.Printf("[ERROR] playWithTempFile: ffplay.Start failed: %v", err)
-		log.Printf("[ERROR] playWithTempFile: stderr so far: %s", stderrBuf.String())
-		showToast("Playback failed. Check ffplay in required/.", ToastError())
-		videoPlaybackMutex.Lock()
-		videoPlaybackPhase = "error"
-		videoPlaybackError = err.Error()
-		videoPlaybackCmd = nil
-		videoPlaybackMutex.Unlock()
-		os.Remove(tempPath)
-		return
-	}
-
-	log.Printf("[DEBUG] playWithTempFile: ffplay started, PID=%d", playCmd.Process.Pid)
-
-	// Wait with a timeout to detect immediate exits
-	done = make(chan error, 1)
-	go func() {
-		done <- playCmd.Wait()
-	}()
-
-	select {
-	case err := <-done:
-		log.Printf("[DEBUG] playWithTempFile: ffplay exited immediately with error: %v", err)
-		log.Printf("[DEBUG] playWithTempFile: ffplay stderr: %s", stderrBuf.String())
-		videoPlaybackMutex.Lock()
-		videoPlaybackPhase = "error"
-		videoPlaybackError = fmt.Sprintf("ffplay exited: %v", err)
-		videoPlaybackCmd = nil
-		videoPlaybackMutex.Unlock()
-		if isMissingDLL(err) {
-			showToast("ffplay failed to start (missing DLL). Ensure a working static ffplay.exe is in the required/ folder.", ToastError())
-			log.Printf("[TOOLS] ffplay failed with STATUS_DLL_NOT_FOUND — the required/ffplay.exe is missing a dependency; redownload a static ffmpeg build.")
-		} else {
-			showToast("Video player exited. Check logs.", ToastError())
-		}
-		// Auto-clear the error overlay after a few seconds so it doesn't stay
-		// stuck over the UI.
-		go func() {
-			time.Sleep(4 * time.Second)
-			videoPlaybackMutex.Lock()
-			if videoPlaybackPhase == "error" {
-				videoPlaybackPhase = "idle"
-				videoPlaybackError = ""
-			}
-			videoPlaybackMutex.Unlock()
-		}()
-	case <-time.After(2 * time.Second):
-		log.Printf("[DEBUG] playWithTempFile: ffplay is still running after 2s, assuming it's playing")
-		// ffplay is running, let it continue in the background
-		go func() {
-			playCmd.Wait()
-			videoPlaybackMutex.Lock()
-			videoPlaybackPhase = "idle"
-			videoPlaybackProgress = 0
-			videoPlaybackCmd = nil
-			videoPlaybackMutex.Unlock()
-			log.Printf("[DEBUG] playWithTempFile: ffplay finished")
-			os.Remove(tempPath)
-		}()
-		return
-	}
+	StartEmbeddedPlayback(config, tempPath)
+	log.Printf("[DEBUG] playWithTempFile: embedded playback started for %s", tempPath)
 }
 
 func parseDownloadProgress(stderr string) {
@@ -2352,32 +2412,32 @@ func handleInputElement(renderer *sdl.Renderer, config *Config) {
 						if keyboardPosX < len(keyboard[keyboardPosY])-1 {
 							keyboardPosX++
 						}
-				case sdl.CONTROLLER_BUTTON_A:
-					handleKeyboardInput(config)
-					exitInput = true
-				case sdl.CONTROLLER_BUTTON_B:
-					exitInput = true
-				case sdl.CONTROLLER_BUTTON_BACK:
-					toggleKeyboardCase()
-				}
+					case sdl.CONTROLLER_BUTTON_A:
+						handleKeyboardInput(config)
+						exitInput = true
+					case sdl.CONTROLLER_BUTTON_B:
+						exitInput = true
+					case sdl.CONTROLLER_BUTTON_BACK:
+						toggleKeyboardCase()
+					}
 				}
 			case *sdl.MouseButtonEvent:
 				if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
-				mx, my := int32(e.X), int32(e.Y)
-				for idx, rect := range keyboardRects {
-					if mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H {
-						if idx < len(keyboardRowCol) {
-							keyboardPosY, keyboardPosX = keyboardRowCol[idx][0], keyboardRowCol[idx][1]
+					mx, my := int32(e.X), int32(e.Y)
+					for idx, rect := range keyboardRects {
+						if mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H {
+							if idx < len(keyboardRowCol) {
+								keyboardPosY, keyboardPosX = keyboardRowCol[idx][0], keyboardRowCol[idx][1]
+							}
+							handleKeyboardInput(config)
+							if keyboardPosY >= 0 && keyboardPosY < len(keyboard) &&
+								keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) &&
+								keyboard[keyboardPosY][keyboardPosX] == "ENTER" {
+								exitInput = true
+							}
+							break
 						}
-						handleKeyboardInput(config)
-						if keyboardPosY >= 0 && keyboardPosY < len(keyboard) &&
-							keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) &&
-							keyboard[keyboardPosY][keyboardPosX] == "ENTER" {
-							exitInput = true
-						}
-						break
 					}
-				}
 				}
 			case *sdl.TouchFingerEvent:
 				handleTouchGesture(e, config)
@@ -2633,11 +2693,20 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 	fillRoundedRect(renderer, element.X+1, element.Y+1, width, height, r, ShadowFill(40))
 
 	if isActive {
-		// focus glow
+		// soft layered focus glow
+		fillRoundedRect(renderer, element.X-3, element.Y-3, width+6, height+6, r+3,
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 18})
 		fillRoundedRect(renderer, element.X-2, element.Y-2, width+4, height+4, r+2,
 			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 40})
-		// inner border
+		// crisp inner border
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 140)
+		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: width - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: 1, H: height - 2})
+		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + height - 2, W: width - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: element.X + width - 2, Y: element.Y + 1, W: 1, H: height - 2})
+	} else {
+		// resting hairline border so the field reads as interactive
+		renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, ColorBorderSubtle.A)
 		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: width - 2, H: 1})
 		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: 1, H: height - 2})
 		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + height - 2, W: width - 2, H: 1})
@@ -2706,7 +2775,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		case "label":
 			renderLabelShadowed(renderer, config, elem)
 		case "button":
-			renderButtonElement(renderer, config, elem, i == selectedButtonIndex, i == hoveredButtonIndex, hoverAnimProgress, i == pressedButtonIndex)
+			renderButtonElement(renderer, config, elem, i, i == selectedButtonIndex, i == hoveredButtonIndex, hoverAnimProgress, i == pressedButtonIndex)
 		case "input":
 			renderInputField(renderer, config, elem, currentSceneIndex, i)
 		case "menu":
@@ -2731,6 +2800,10 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 			renderCanvasSandbox(renderer, config, elem)
 		case "textbrowser":
 			renderTextBrowser(renderer, config, elem)
+		case "packagelist":
+			renderPackageList(renderer, config, elem)
+		case "recent":
+			renderRecent(renderer, config, elem)
 		case "image":
 			renderImageElement(renderer, config, elem)
 		case "video":
@@ -2807,9 +2880,13 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	tw, th, _ := font.SizeUTF8(toastMessage)
 	x := (screenWidth - int32(tw)) / 2
 	y := screenHeight - 52 - int32(toastSlideY)
-	// sleek toast with glass effect
-	fillRoundedRect(renderer, x-24, y-12, int32(tw)+48, int32(th)+24, 14, sdl.Color{R: 0, G: 0, B: 0, A: alpha / 3})
+	// sleek toast with glass effect + layered shadow
+	fillRoundedRect(renderer, x-26, y-14, int32(tw)+52, int32(th)+28, 16, ShadowFill(60))
+	fillRoundedRect(renderer, x-22, y-10, int32(tw)+44, int32(th)+22, 13, sdl.Color{R: 0, G: 0, B: 0, A: alpha / 3})
 	fillRoundedRect(renderer, x-20, y-8, int32(tw)+40, int32(th)+20, 12, sdl.Color{R: toastColor.R, G: toastColor.G, B: toastColor.B, A: alpha})
+	// accent left edge
+	renderer.SetDrawColor(255, 255, 255, alpha/3)
+	renderer.FillRect(&sdl.Rect{X: x - 20, Y: y - 8, W: 3, H: int32(th) + 20})
 	// subtle top highlight
 	fillRoundedRect(renderer, x-20, y-8, int32(tw)+40, 1, 12, sdl.Color{R: 255, G: 255, B: 255, A: alpha / 4})
 	renderText(renderer, config, font, toastMessage, sdl.Color{R: 255, G: 255, B: 255, A: alpha}, x, y)
@@ -2903,38 +2980,110 @@ func renderMenu(renderer *sdl.Renderer, config *Config, element Element) {
 	if font == nil {
 		return
 	}
-	// sleek frosted glass bar
-	fillRoundedRect(renderer, 0, element.Y+4, screenWidth, 42, 0, sdl.Color{R: 10, G: 14, B: 22, A: 240})
-	// subtle top highlight
-	renderer.SetDrawColor(255, 255, 255, 15)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: element.Y + 4, W: screenWidth, H: 1})
-	// bottom border
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 60)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: element.Y + 45, W: screenWidth, H: 1})
-
-	buttonX := int32(20)
-	menuButtonRects = make(map[int]sdl.Rect)
-
-	for i, scene := range config.Scenes {
-		label := scene.Name
-		active := i == currentSceneIndex
-		color := ColorTextTertiary()
-		if active {
-			color = ColorTextPrimary()
-		}
-		textWidth, _ := renderText(renderer, config, font, label, color, buttonX, element.Y+16)
-		if active {
-			// active pill background
-			pillW := textWidth + 16
-			pillX := buttonX - 8
-			fillRoundedRect(renderer, pillX, element.Y+8, pillW, 26, 13, GlossFill(12))
-			// accent underline
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 200)
-			renderer.FillRect(&sdl.Rect{X: pillX + 6, Y: element.Y + 36, W: pillW - 12, H: 2})
-		}
-		menuButtonRects[i] = sdl.Rect{X: buttonX - 8, Y: element.Y + 8, W: textWidth + 16, H: 26}
-		buttonX += textWidth + 24
+	titleFont, _ := getCachedFont(config, "medium")
+	if titleFont == nil {
+		titleFont = font
 	}
+
+	barH := int32(34)
+	barY := screenHeight - barH
+
+	// Sleek translucent controller-hint bar (replaces the crowded pill strip).
+	fillRoundedRect(renderer, 0, barY, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 236))
+	renderer.SetDrawColor(255, 255, 255, 14)
+	renderer.FillRect(&sdl.Rect{X: 0, Y: barY, W: screenWidth, H: 1})
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 80)
+	renderer.FillRect(&sdl.Rect{X: 0, Y: barY + barH - 1, W: screenWidth, H: 1})
+
+	// Scene pager on the left: ◀  Current Scene  ▶
+	scene := "Home"
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		scene = config.Scenes[currentSceneIndex].Name
+	}
+	sceneW, _, _ := titleFont.SizeUTF8(scene)
+	sceneWi := int32(sceneW)
+	pad := int32(10)
+	arrowW := int32(22)
+	prevX := pad
+	prevY := barY + (barH-20)/2
+	sceneNavPrevRect = sdl.Rect{X: prevX, Y: prevY, W: arrowW, H: 20}
+	renderText(renderer, config, font, "◀", ColorTextTertiary(), prevX+6, prevY+3)
+	renderText(renderer, config, titleFont, scene, ColorTextPrimary(), prevX+arrowW+6, prevY+2)
+	sceneNavNextRect = sdl.Rect{X: prevX + arrowW + sceneWi + 6, Y: prevY, W: arrowW, H: 20}
+	renderText(renderer, config, font, "▶", ColorTextTertiary(), prevX+arrowW+sceneWi+12, prevY+3)
+
+	// Controller hints (right-aligned): A/B/X/Y + shoulder categories.
+	hints := []struct {
+		btn  string
+		text string
+	}{
+		{"A", "Open"},
+		{"B", "Back"},
+		{"X", "Options"},
+		{"Y", "Search"},
+		{"L/R", "Scenes"},
+	}
+	hintX := screenWidth - pad
+	var hintW int32
+	for i := len(hints) - 1; i >= 0; i-- {
+		h := hints[i]
+		hw, _, _ := font.SizeUTF8(h.btn)
+		tw, _, _ := font.SizeUTF8(h.text)
+		w := int32(hw) + 8 + int32(tw) + 12
+		hintW += w
+	}
+	hintX -= hintW
+	for _, h := range hints {
+		hw, _, _ := font.SizeUTF8(h.btn)
+		tw, _, _ := font.SizeUTF8(h.text)
+		// button glyph chip
+		chipW := int32(hw) + 8
+		chipH := int32(18)
+		chipY := barY + (barH-chipH)/2
+		fillRoundedRect(renderer, hintX, chipY, chipW, chipH, 5, WithAlpha(accentColor, 60))
+		renderText(renderer, config, font, h.btn, ColorTextPrimary(), hintX+4, chipY+2)
+		// label
+		renderText(renderer, config, font, h.text, ColorTextTertiary(), hintX+chipW+5, chipY+3)
+		w := chipW + 5 + int32(tw) + 16
+		hintX += w
+	}
+
+	// Keep video transport buttons accessible when a video is active.
+	if videoPlaybackPhase != "idle" {
+		videoPlaybackMutex.Lock()
+		phase := videoPlaybackPhase
+		videoPlaybackMutex.Unlock()
+
+		btnX := prevX + arrowW + sceneWi + 6 + arrowW + 24
+		btnY := barY + (barH-22)/2
+		btnW := int32(32)
+		btnH := int32(22)
+
+		icon := "⏯"
+		if phase == "playing" {
+			icon = "⏸"
+		} else if phase == "downloading" {
+			icon = "⏵"
+		} else if phase == "error" {
+			icon = "↻"
+		}
+		fillRoundedRect(renderer, btnX, btnY, btnW, btnH, 6, GlossFill(18))
+		renderText(renderer, config, font, icon, ColorTextPrimary(), btnX+8, btnY+4)
+		videoButtonRects[-1] = sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH}
+
+		btnX += btnW + 6
+		fillRoundedRect(renderer, btnX, btnY, btnW, btnH, 6, GlossFill(18))
+		renderText(renderer, config, font, "⏹", ColorTextPrimary(), btnX+8, btnY+4)
+		videoButtonRects[-2] = sdl.Rect{X: btnX, Y: btnY, W: btnW, H: btnH}
+	}
+
+	// Power button on the far right (opens Exit confirmation).
+	exitW := int32(46)
+	exitX := screenWidth - exitW - 12
+	exitY := barY + (barH-24)/2
+	gradientRoundedRect(renderer, exitX, exitY, exitW, 24, 12, sdl.Color{R: 150, G: 45, B: 45, A: 220}, sdl.Color{R: 200, G: 70, B: 70, A: 220})
+	renderText(renderer, config, font, "⏻", sdl.Color{R: 255, G: 240, B: 240, A: 255}, exitX+18, exitY+5)
+	exitButtonRect = sdl.Rect{X: exitX, Y: exitY, W: exitW, H: 24}
 }
 
 func renderKeyboard(renderer *sdl.Renderer, config *Config) {
@@ -3024,29 +3173,29 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 			special := key == "SPACE" || key == "BACK" || key == "ENTER"
 			r := int32(10)
 
-		miamiCyan := sdl.Color{R: 0, G: 220, B: 255, A: 255}
-		miamiPink := sdl.Color{R: 255, G: 0, B: 200, A: 255}
-		miamiPurple := sdl.Color{R: 100, G: 0, B: 255, A: 255}
-		miamiDarkPurple := sdl.Color{R: 60, G: 0, B: 180, A: 255}
+			miamiCyan := sdl.Color{R: 0, G: 220, B: 255, A: 255}
+			miamiPink := sdl.Color{R: 255, G: 0, B: 200, A: 255}
+			miamiPurple := sdl.Color{R: 100, G: 0, B: 255, A: 255}
+			miamiDarkPurple := sdl.Color{R: 60, G: 0, B: 180, A: 255}
 
-		fillRoundedRect(renderer, kx+2, ky+3, w, keyHeight, r, sdl.Color{R: 40, G: 0, B: 100, A: 180})
-		if isSelected || (key == "⇧" && keyboardUpper) {
-			fillRoundedRect(renderer, kx-3, ky-3, w+6, keyHeight+6, r+3, WithAlpha(miamiPink, 170))
-			fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiPink)
-			fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(50))
-		} else if special {
-			fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiPurple)
-			fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(10))
-			renderer.SetDrawColor(miamiDarkPurple.R, miamiDarkPurple.G, miamiDarkPurple.B, 255)
-			renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: w - 2, H: 1})
-			renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: 1, H: keyHeight - 2})
-		} else {
-			fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiCyan)
-			fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(8))
-			renderer.SetDrawColor(miamiPurple.R, miamiPurple.G, miamiPurple.B, 255)
-			renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: w - 2, H: 1})
-			renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: 1, H: keyHeight - 2})
-		}
+			fillRoundedRect(renderer, kx+2, ky+3, w, keyHeight, r, sdl.Color{R: 40, G: 0, B: 100, A: 180})
+			if isSelected || (key == "⇧" && keyboardUpper) {
+				fillRoundedRect(renderer, kx-3, ky-3, w+6, keyHeight+6, r+3, WithAlpha(miamiPink, 170))
+				fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiPink)
+				fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(50))
+			} else if special {
+				fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiPurple)
+				fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(10))
+				renderer.SetDrawColor(miamiDarkPurple.R, miamiDarkPurple.G, miamiDarkPurple.B, 255)
+				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: w - 2, H: 1})
+				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: 1, H: keyHeight - 2})
+			} else {
+				fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiCyan)
+				fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(8))
+				renderer.SetDrawColor(miamiPurple.R, miamiPurple.G, miamiPurple.B, 255)
+				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: w - 2, H: 1})
+				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: 1, H: keyHeight - 2})
+			}
 
 			keyboardRects = append(keyboardRects, sdl.Rect{X: kx, Y: ky, W: w, H: keyHeight})
 			keyboardKeys = append(keyboardKeys, key)
@@ -3062,14 +3211,14 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 				kw, kh, _ := kfont.SizeUTF8(label)
 				tx := kx + (w-int32(kw))/2
 				ty := ky + (keyHeight-int32(kh))/2
-			switch {
-			case isSelected || (key == "⇧" && keyboardUpper):
-				renderText(renderer, config, kfont, label, ColorTextInverse(), tx, ty)
-			case special:
-				renderText(renderer, config, kfont, label, ColorTextInverse(), tx, ty)
-			default:
-				renderText(renderer, config, kfont, label, sdl.Color{R: 0, G: 20, B: 40, A: 255}, tx, ty)
-			}
+				switch {
+				case isSelected || (key == "⇧" && keyboardUpper):
+					renderText(renderer, config, kfont, label, ColorTextInverse(), tx, ty)
+				case special:
+					renderText(renderer, config, kfont, label, ColorTextInverse(), tx, ty)
+				default:
+					renderText(renderer, config, kfont, label, sdl.Color{R: 0, G: 20, B: 40, A: 255}, tx, ty)
+				}
 			}
 			rx += w + gap
 		}
@@ -3138,6 +3287,9 @@ func renderImageElement(renderer *sdl.Renderer, config *Config, elem Element) {
 
 func renderVideoElement(renderer *sdl.Renderer, config *Config, elem Element) {
 	renderImageElement(renderer, config, elem)
+	if embeddedPlayer.phase != "idle" {
+		RenderVideoOverlay(renderer, config, elem)
+	}
 }
 
 // --- Trigger handling ---
@@ -3555,44 +3707,40 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		config.Variables.Custom["plugin_list"] = strings.Join(list, "\n")
 	case "packages_refresh":
-		packagesList := []string{
-			"JukaLang/Juka - Core language runtime",
-			"JukaLang/JukaHub - Handheld media hub",
-			"JukaLang/Packages - Package registry",
-			"JukaLang/Plugins - Plugin system",
-			"JukaLang/Tools - Dev tooling",
-		}
-		var out []string
-		for _, p := range packagesList {
-			out = append(out, "- "+p)
-		}
-		config.Variables.Custom["packages_text"] = strings.Join(out, "\n")
-	case "packages_github":
-		go func(url string) {
-			var cmd *exec.Cmd
-			if runtime.GOOS == "windows" {
-				cmd = exec.Command("cmd", "/c", "start", "", url)
-			} else {
-				cmd = exec.Command("xdg-open", url)
-			}
-			if err := cmd.Run(); err != nil {
-				log.Printf("open url error: %v", err)
-			}
-		}("https://github.com/jukaLang/Packages")
+		go fetchPackages(config)
 	case "textbrowser_refresh":
 		textBrowserRefresh(config, element)
+		if element.AutoRefresh {
+			startTextBrowserAutoRefresh(config, element)
+		}
 	case "textbrowser_system":
 		config.Variables.Custom[element.Variable] = browseSystemInfo(element)
+		textBrowserLastUpdate = time.Now().Unix()
+		if element.AutoRefresh {
+			startTextBrowserAutoRefresh(config, element)
+		}
 	case "textbrowser_zeroconf":
-		go func(v string) {
+		go func(v string, el Element) {
 			publishCustom(v, browseZeroconfServicesWithTimeout(4*time.Second))
-		}(element.Variable)
+			if el.AutoRefresh {
+				startTextBrowserAutoRefresh(config, el)
+			}
+		}(element.Variable, element)
+		textBrowserLastUpdate = time.Now().Unix()
 	case "textbrowser_json":
 		go func(v string, el Element) {
 			publishCustom(v, browseJSONContent(el))
+			if el.AutoRefresh {
+				startTextBrowserAutoRefresh(config, el)
+			}
 		}(element.Variable, element)
+		textBrowserLastUpdate = time.Now().Unix()
 	case "textbrowser_processes":
 		config.Variables.Custom[element.Variable] = getProcessTree()
+		textBrowserLastUpdate = time.Now().Unix()
+		if element.AutoRefresh {
+			startTextBrowserAutoRefresh(config, element)
+		}
 	case "textbrowser_network":
 		var sb strings.Builder
 		ifaces, err := net.Interfaces()
@@ -3615,12 +3763,48 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			sb.WriteString("No active network interfaces\n")
 		}
 		config.Variables.Custom[element.Variable] = sb.String()
+		textBrowserLastUpdate = time.Now().Unix()
+		if element.AutoRefresh {
+			startTextBrowserAutoRefresh(config, element)
+		}
 	case "textbrowser_temps":
 		config.Variables.Custom[element.Variable] = getSystemTemperature()
+		textBrowserLastUpdate = time.Now().Unix()
+		if element.AutoRefresh {
+			startTextBrowserAutoRefresh(config, element)
+		}
 	case "textbrowser_services":
 		config.Variables.Custom[element.Variable] = getRunningServices()
+		textBrowserLastUpdate = time.Now().Unix()
+		if element.AutoRefresh {
+			startTextBrowserAutoRefresh(config, element)
+		}
 	case "textbrowser_files":
 		config.Variables.Custom[element.Variable] = scanLocalFiles("/media")
+		textBrowserLastUpdate = time.Now().Unix()
+		if element.AutoRefresh {
+			startTextBrowserAutoRefresh(config, element)
+		}
+	case "textbrowser_copy":
+		if text, ok := config.Variables.Custom[element.Variable].(string); ok && text != "" {
+			if runtime.GOOS == "windows" {
+				exec.Command("cmd", "/c", "echo", text).Run()
+			} else {
+				exec.Command("pbcopy").Run()
+			}
+			showToast("Copied to clipboard", ToastInfo())
+		}
+	case "textbrowser_clear":
+		config.Variables.Custom[element.Variable] = ""
+		textBrowserScrollY = 0
+		textBrowserScrollVelocity = 0
+		textBrowserScrollCooldown = 0
+	case "cache_clear":
+		if db, err := cacheOpen("jukahub.cache"); err == nil {
+			cacheClear(db)
+			db.Close()
+			showToast("Cache cleared", ToastInfo())
+		}
 	default:
 		if strings.HasPrefix(element.Trigger, "http://") || strings.HasPrefix(element.Trigger, "https://") {
 			go func(url string) {
@@ -3642,7 +3826,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 
 func findFirstSelectableElement(scene SceneConfig) int {
 	for i, e := range scene.Elements {
-		if e.Type == "button" || e.Type == "input" || e.Type == "searchresults" || e.Type == "dynamiclist" || e.Type == "favorites" || e.Type == "textbrowser" {
+		if e.Type == "button" || e.Type == "input" || e.Type == "searchresults" || e.Type == "dynamiclist" || e.Type == "favorites" || e.Type == "textbrowser" || e.Type == "packagelist" || e.Type == "recent" {
 			return i
 		}
 	}
@@ -3670,8 +3854,14 @@ func completeSceneTransition(config *Config) {
 	focusedResultIndex = -1
 	focusedFileIndex = 0
 	scrollY = 0
+	textBrowserScrollY = 0
+	textBrowserScrollVelocity = 0
+	textBrowserScrollCooldown = 0
 	hoveredButtonIndex = -1
 	pressedButtonIndex = -1
+
+	stopAllTextBrowserAutoRefresh()
+	refreshSceneTextBrowsers(config)
 
 	if sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
 		queryVar := ""
@@ -3735,6 +3925,14 @@ func completeSceneTransition(config *Config) {
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "favorites" {
 			favoritesFocusIndex = 0
+			break
+		}
+	}
+	for _, e := range config.Scenes[currentSceneIndex].Elements {
+		if e.Type == "packagelist" {
+			if _, ok := config.Variables.Custom["packages_list"]; !ok {
+				go fetchPackages(config)
+			}
 			break
 		}
 	}
@@ -3938,11 +4136,13 @@ func main() {
 	renderSpinner(renderer, screenWidth/2, screenHeight/2, 50, sdl.Color{R: 100, G: 180, B: 255, A: 255})
 	font, _ := getCachedFont(config, "big")
 	if font != nil {
-		titleW, titleH := font.SizeUTF8("JukaHub")
-		renderText(renderer, config, font, "JukaHub", sdl.Color{R: 220, G: 235, B: 255, A: 255}, screenWidth/2-titleW/2, screenHeight/2-80-titleH/2)
+		titleW, titleH, _ := font.SizeUTF8("JukaHub")
+		tw32, th32 := int32(titleW), int32(titleH)
+		renderText(renderer, config, font, "JukaHub", sdl.Color{R: 220, G: 235, B: 255, A: 255}, screenWidth/2-tw32/2, screenHeight/2-80-th32/2)
 
-		loadW, loadH := font.SizeUTF8("Loading...")
-		renderText(renderer, config, font, "Loading...", sdl.Color{R: 180, G: 200, B: 220, A: 255}, screenWidth/2-loadW/2, screenHeight/2+60-loadH/2)
+		loadW, loadH, _ := font.SizeUTF8("Loading...")
+		lw32, lh32 := int32(loadW), int32(loadH)
+		renderText(renderer, config, font, "Loading...", sdl.Color{R: 180, G: 200, B: 220, A: 255}, screenWidth/2-lw32/2, screenHeight/2+60-lh32/2)
 	}
 	renderer.Present()
 	sdl.Delay(500)
@@ -4027,6 +4227,8 @@ func main() {
 							activeElementIndex = -1
 						}
 					} else {
+						// Video control shortcuts (always active when video is playing)
+						HandleVideoKeyInput(e)
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
@@ -4089,6 +4291,42 @@ func main() {
 							handleShortsInput(e, config)
 						} else if curElem.Type == "canvas" {
 							handleCanvasInput(e, config)
+						} else if curElem.Type == "textbrowser" {
+							switch e.Keysym.Sym {
+							case sdl.K_UP:
+								textBrowserScrollVelocity -= textBrowserScrollAccel
+								if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
+									textBrowserScrollVelocity = -textBrowserScrollMaxVel
+								}
+								textBrowserScrollCooldown = 8
+							case sdl.K_DOWN:
+								textBrowserScrollVelocity += textBrowserScrollAccel
+								if textBrowserScrollVelocity > textBrowserScrollMaxVel {
+									textBrowserScrollVelocity = textBrowserScrollMaxVel
+								}
+								textBrowserScrollCooldown = 8
+							case sdl.K_PAGEUP:
+								textBrowserScrollY -= 10
+								if textBrowserScrollY < 0 {
+									textBrowserScrollY = 0
+								}
+								textBrowserScrollVelocity = 0
+								textBrowserScrollCooldown = 0
+							case sdl.K_PAGEDOWN:
+								textBrowserScrollY += 10
+								textBrowserScrollVelocity = 0
+								textBrowserScrollCooldown = 0
+							case sdl.K_HOME:
+								textBrowserScrollY = 0
+								textBrowserScrollVelocity = 0
+								textBrowserScrollCooldown = 0
+							case sdl.K_END:
+								textBrowserScrollY = 1 << 30
+								textBrowserScrollVelocity = 0
+								textBrowserScrollCooldown = 0
+							}
+						} else if curElem.Type == "packagelist" {
+							handlePackageInput(e, config)
 						} else if curScene.Name == "JukaLand" {
 							handleJukaLandInput(e)
 						} else {
@@ -4131,111 +4369,186 @@ func main() {
 				}
 			case *sdl.MouseMotionEvent:
 				mouseX, mouseY = int32(e.X), int32(e.Y)
-			case *sdl.MouseButtonEvent:
-				if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
-					mx, my := int32(e.X), int32(e.Y)
-					// Image viewer overlay: only the close button is interactive.
-					if imageViewerPath != "" {
-						if mx >= imageViewerCloseBtn.X && mx <= imageViewerCloseBtn.X+imageViewerCloseBtn.W &&
-							my >= imageViewerCloseBtn.Y && my <= imageViewerCloseBtn.Y+imageViewerCloseBtn.H {
-							closeImageViewer()
-						}
-						break
+				if isDraggingSeekBar {
+					fraction := float64(mouseX-seekBarDragRect.X) / float64(seekBarDragRect.W)
+					if fraction < 0 {
+						fraction = 0
 					}
-					// Check menu
-					for sceneIdx, rect := range menuButtonRects {
-						if mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H {
-							changeSceneTo(config, sceneIdx)
+					if fraction > 1 {
+						fraction = 1
+					}
+					SeekVideo(fraction)
+				}
+			case *sdl.MouseWheelEvent:
+				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+					for _, elem := range config.Scenes[currentSceneIndex].Elements {
+						if elem.Type == "textbrowser" {
+							elemW := getElementWidth(elem, 1100)
+							elemH := getElementHeight(elem, 480)
+							if mouseX >= elem.X && mouseX <= elem.X+elemW && mouseY >= elem.Y && mouseY <= elem.Y+elemH {
+								textBrowserScrollVelocity -= float64(e.Y) * 2.5
+								if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
+									textBrowserScrollVelocity = -textBrowserScrollMaxVel
+								} else if textBrowserScrollVelocity > textBrowserScrollMaxVel {
+									textBrowserScrollVelocity = textBrowserScrollMaxVel
+								}
+								textBrowserScrollCooldown = 10
+								break
+							}
+						}
+						if elem.Type == "packagelist" {
+							elemW := getElementWidth(elem, 1160)
+							elemH := getElementHeight(elem, 500)
+							if mouseX >= elem.X && mouseX <= elem.X+elemW && mouseY >= elem.Y && mouseY <= elem.Y+elemH {
+								packagesMutex.Lock()
+								n := len(packagesList)
+								packagesMutex.Unlock()
+								step := 3
+								if e.Y < 0 {
+									packagesFocusIndex -= step
+								} else {
+									packagesFocusIndex += step
+								}
+								if packagesFocusIndex < 0 {
+									packagesFocusIndex = 0
+								}
+								if packagesFocusIndex >= n {
+									packagesFocusIndex = n - 1
+								}
+								break
+							}
+						}
+					}
+				}
+			case *sdl.MouseButtonEvent:
+				if e.Button == sdl.BUTTON_LEFT {
+					mx, my := int32(e.X), int32(e.Y)
+					if e.Type == sdl.MOUSEBUTTONDOWN {
+						// Check if clicking on seek bar for dragging
+						if pointInRect(mx, my, videoControlRects.progress) {
+							isDraggingSeekBar = true
+							seekBarDragRect = videoControlRects.progress
+							fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
+							SeekVideo(fraction)
+						}
+						// Image viewer overlay: only the close button is interactive.
+						if imageViewerPath != "" {
+							if mx >= imageViewerCloseBtn.X && mx <= imageViewerCloseBtn.X+imageViewerCloseBtn.W &&
+								my >= imageViewerCloseBtn.Y && my <= imageViewerCloseBtn.Y+imageViewerCloseBtn.H {
+								closeImageViewer()
+							}
 							break
 						}
-					}
-					// Check other elements (input, button, searchresults)
-					if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-						for i, elem := range config.Scenes[currentSceneIndex].Elements {
-							if elem.Type == "input" {
-								width := int32(200)
-								if string(elem.Width) != "" {
-									w, _ := strconv.Atoi(string(elem.Width))
-									width = int32(w)
-								}
-								height := int32(40)
-								if string(elem.Height) != "" {
-									h, _ := strconv.Atoi(string(elem.Height))
-									height = int32(h)
-								}
-								if mx >= elem.X && mx <= elem.X+width && my >= elem.Y && my <= elem.Y+height {
-									handleInputSelection(renderer, config, currentSceneIndex, i)
-								}
-							} else if elem.Type == "button" {
-								font, _ := getCachedFont(config, elem.Font)
-								width, height := buttonHitSize(elem, font)
-								if mx >= elem.X && mx <= elem.X+width && my >= elem.Y && my <= elem.Y+height {
-									pressedButtonIndex = i
-									pressStartTime = sdl.GetTicks64()
-									handleTrigger(renderer, config, elem)
-								}
-							} else if elem.Type == "searchresults" {
-								videos, ok := config.Variables.Custom[elem.Variable].([]VideoInfo)
-								if !ok {
-									continue
-								}
-								// Grid hit detection (account for smooth scroll offset)
-								cols, rows := gridColsRows(elem)
-								elemWidth := getElementWidth(elem, 1080)
-								elemHeight := getElementHeight(elem, 500)
-								cellWidth := (elemWidth - 30) / cols
-								cellHeight := (elemHeight - 30) / rows
-								for idx := range videos {
-									if idx >= int(cols*rows) {
-										break
+						// Check hint-bar scene pager
+						if mx >= sceneNavPrevRect.X && mx <= sceneNavPrevRect.X+sceneNavPrevRect.W &&
+							my >= sceneNavPrevRect.Y && my <= sceneNavPrevRect.Y+sceneNavPrevRect.H {
+							changeScene(config, -1)
+							break
+						}
+						if mx >= sceneNavNextRect.X && mx <= sceneNavNextRect.X+sceneNavNextRect.W &&
+							my >= sceneNavNextRect.Y && my <= sceneNavNextRect.Y+sceneNavNextRect.H {
+							changeScene(config, 1)
+							break
+						}
+						// Check video controls
+						HandleVideoControlClick(mx, my)
+						// Check exit button
+						if mx >= exitButtonRect.X && mx <= exitButtonRect.X+exitButtonRect.W &&
+							my >= exitButtonRect.Y && my <= exitButtonRect.Y+exitButtonRect.H {
+							running = false
+							break
+						}
+						// Check other elements (input, button, searchresults)
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+							for i, elem := range config.Scenes[currentSceneIndex].Elements {
+								if elem.Type == "input" {
+									width := int32(200)
+									if string(elem.Width) != "" {
+										w, _ := strconv.Atoi(string(elem.Width))
+										width = int32(w)
 									}
-									col := int32(idx) % cols
-									row := int32(idx) / cols
-									xPos := elem.X + col*(cellWidth+10)
-									yPos := elem.Y + row*(cellHeight+10) - scrollY
-									if mx >= xPos && mx <= xPos+cellWidth && my >= yPos && my <= yPos+cellHeight {
-										selectedButtonIndex = i
-										focusedResultIndex = idx
-										if idx < len(videos) {
-											playVideoURL(config, videos[idx].GetURL())
+									height := int32(40)
+									if string(elem.Height) != "" {
+										h, _ := strconv.Atoi(string(elem.Height))
+										height = int32(h)
+									}
+									if mx >= elem.X && mx <= elem.X+width && my >= elem.Y && my <= elem.Y+height {
+										handleInputSelection(renderer, config, currentSceneIndex, i)
+									}
+								} else if elem.Type == "button" {
+									font, _ := getCachedFont(config, elem.Font)
+									width, height := buttonHitSize(elem, font)
+									if mx >= elem.X && mx <= elem.X+width && my >= elem.Y && my <= elem.Y+height {
+										pressedButtonIndex = i
+										pressStartTime = sdl.GetTicks64()
+										handleTrigger(renderer, config, elem)
+									}
+								} else if elem.Type == "searchresults" {
+									videos, ok := config.Variables.Custom[elem.Variable].([]VideoInfo)
+									if !ok {
+										continue
+									}
+									// Grid hit detection (account for smooth scroll offset)
+									cols, rows := gridColsRows(elem)
+									elemWidth := getElementWidth(elem, 1080)
+									elemHeight := getElementHeight(elem, 500)
+									cellWidth := (elemWidth - 30) / cols
+									cellHeight := (elemHeight - 30) / rows
+									for idx := range videos {
+										if idx >= int(cols*rows) {
+											break
 										}
-										break
-									}
-								}
-							} else if elem.Type == "dynamiclist" {
-								entries, ok := config.Variables.Custom[elem.Variable].([]FileEntry)
-								if ok {
-									elemW := getElementWidth(elem, 600)
-									elemH := getElementHeight(elem, 500)
-									// Must match renderDynamicList: lineH = 40, listY = elem.Y + 30.
-									lineH := int32(40)
-									maxVisible := int((elemH - 30) / lineH)
-									if maxVisible < 1 {
-										maxVisible = 1
-									}
-									start := 0
-									if focusedFileIndex >= maxVisible {
-										start = focusedFileIndex - maxVisible + 1
-									}
-									end := start + maxVisible
-									if end > len(entries) {
-										end = len(entries)
-									}
-									listY := elem.Y + 30
-									for i2 := start; i2 < end; i2++ {
-										y := listY + int32(i2-start)*lineH
-										if mx >= elem.X && mx <= elem.X+elemW && my >= y-2 && my <= y+lineH-2 {
+										col := int32(idx) % cols
+										row := int32(idx) / cols
+										xPos := elem.X + col*(cellWidth+10)
+										yPos := elem.Y + row*(cellHeight+10) - scrollY
+										if mx >= xPos && mx <= xPos+cellWidth && my >= yPos && my <= yPos+cellHeight {
 											selectedButtonIndex = i
-											focusedFileIndex = i2
-											feEnterFocused(config)
+											focusedResultIndex = idx
+											if idx < len(videos) {
+												playVideoURL(config, videos[idx].GetURL())
+											}
 											break
 										}
 									}
+								} else if elem.Type == "dynamiclist" {
+									entries, ok := config.Variables.Custom[elem.Variable].([]FileEntry)
+									if ok {
+										elemW := getElementWidth(elem, 600)
+										elemH := getElementHeight(elem, 500)
+										lineH := int32(40)
+										maxVisible := int((elemH - 30) / lineH)
+										if maxVisible < 1 {
+											maxVisible = 1
+										}
+										start := 0
+										if focusedFileIndex >= maxVisible {
+											start = focusedFileIndex - maxVisible + 1
+										}
+										end := start + maxVisible
+										if end > len(entries) {
+											end = len(entries)
+										}
+										listY := elem.Y + 30
+										for i2 := start; i2 < end; i2++ {
+											y := listY + int32(i2-start)*lineH
+											if mx >= elem.X && mx <= elem.X+elemW && my >= y-2 && my <= y+lineH-2 {
+												selectedButtonIndex = i
+												focusedFileIndex = i2
+												feEnterFocused(config)
+												break
+											}
+										}
+									}
+								} else if elem.Type == "favorites" {
+									handleFavoritesMouseClick(mx, my, config)
+								} else if elem.Type == "packagelist" {
+									handlePackageMouseClick(mx, my, config)
 								}
-							} else if elem.Type == "favorites" {
-								handleFavoritesMouseClick(mx, my, config)
 							}
 						}
+					} else if e.Type == sdl.MOUSEBUTTONUP {
+						isDraggingSeekBar = false
 					}
 				}
 			case *sdl.ControllerButtonEvent:
@@ -4268,6 +4581,8 @@ func main() {
 					} else if activeSceneIndex != -1 {
 						// Input field active - handled by virtualKeyboardActive
 					} else {
+						// Video control shortcuts (always active when video is playing)
+						HandleVideoControllerInput(e)
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
@@ -4353,6 +4668,32 @@ func main() {
 									}
 								}
 							}
+						} else if curElem.Type == "textbrowser" {
+							switch e.Button {
+							case sdl.CONTROLLER_BUTTON_DPAD_UP:
+								textBrowserScrollVelocity -= textBrowserScrollAccel
+								if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
+									textBrowserScrollVelocity = -textBrowserScrollMaxVel
+								}
+								textBrowserScrollCooldown = 8
+							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+								textBrowserScrollVelocity += textBrowserScrollAccel
+								if textBrowserScrollVelocity > textBrowserScrollMaxVel {
+									textBrowserScrollVelocity = textBrowserScrollMaxVel
+								}
+								textBrowserScrollCooldown = 8
+							case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+								textBrowserScrollY -= 10
+								if textBrowserScrollY < 0 {
+									textBrowserScrollY = 0
+								}
+								textBrowserScrollVelocity = 0
+								textBrowserScrollCooldown = 0
+							case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+								textBrowserScrollY += 10
+								textBrowserScrollVelocity = 0
+								textBrowserScrollCooldown = 0
+							}
 						} else {
 							// Normal button/input navigation
 							switch e.Button {
@@ -4369,25 +4710,18 @@ func main() {
 									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
 									if elem.Type == "input" {
 										handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
-						} else if curScene.Name == "JukaLand" {
-							handleJukaLandController(e)
-						} else if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
-							elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
-							if elem.Type == "input" {
-								handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
-							} else {
-								handleTrigger(renderer, config, elem)
-							}
-						}
+									} else {
+										handleTrigger(renderer, config, elem)
+									}
 								}
 							}
-						}
-						// Scene switching
-						switch e.Button {
-						case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-							changeScene(config, -1)
-						case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-							changeScene(config, 1)
+							// Scene switching
+							switch e.Button {
+							case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+								changeScene(config, -1)
+							case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+								changeScene(config, 1)
+							}
 						}
 					}
 				}
@@ -4395,6 +4729,46 @@ func main() {
 		}
 
 		drainCustom(config)
+
+		// Apply kinetic scroll for text browser panels
+		if textBrowserScrollCooldown > 0 {
+			textBrowserScrollCooldown--
+		} else if textBrowserScrollVelocity != 0 {
+			textBrowserScrollVelocity *= textBrowserScrollFriction
+			if textBrowserScrollVelocity > -0.05 && textBrowserScrollVelocity < 0.05 {
+				textBrowserScrollVelocity = 0
+			}
+		}
+		if textBrowserScrollVelocity != 0 {
+			textBrowserScrollY += int32(textBrowserScrollVelocity)
+			// Clamp scroll position based on current scene textbrowser elements
+			if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+				for _, elem := range config.Scenes[currentSceneIndex].Elements {
+					if elem.Type == "textbrowser" {
+						elemH := getElementHeight(elem, 480)
+						headerH := int32(28)
+						contentH := elemH - headerH - 8
+						lineH := int32(22)
+						maxLines := int((contentH) / lineH)
+						totalLines := 0
+						if v, ok := config.Variables.Custom[elem.Variable].(string); ok {
+							totalLines = len(strings.Split(v, "\n"))
+						}
+						scrollMax := int32(0)
+						if totalLines > maxLines {
+							scrollMax = int32(totalLines) - int32(maxLines)
+						}
+						if textBrowserScrollY < 0 {
+							textBrowserScrollY = 0
+						}
+						if textBrowserScrollY > scrollMax {
+							textBrowserScrollY = scrollMax
+						}
+						break
+					}
+				}
+			}
+		}
 
 		// Update hover state for buttons
 		hoveredButtonIndex = -1
@@ -4441,6 +4815,9 @@ func main() {
 			}
 			renderer.SetDrawColor(15, 17, 21, sceneFadeAlpha)
 			renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+			// accent sweep along the bottom edge
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, sceneFadeAlpha/2)
+			renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 4, W: screenWidth, H: 4})
 		} else if transitionPhase == "fade-in" {
 			elapsed := float64(sdl.GetTicks64() - sceneFadeStart)
 			duration := float64(300)
@@ -4453,6 +4830,9 @@ func main() {
 			}
 			renderer.SetDrawColor(15, 17, 21, 255-sceneFadeAlpha)
 			renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+			// accent sweep along the bottom edge
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, (255-sceneFadeAlpha)/2)
+			renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 4, W: screenWidth, H: 4})
 		}
 
 		// Image viewer overlay
@@ -4462,21 +4842,44 @@ func main() {
 
 		// Loading overlay
 		if config.Variables.LoadingSpinner || transitionPhase != "none" {
+			// frosted backdrop
 			fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, sdl.Color{R: 6, G: 8, B: 14, A: 200})
-			renderSpinner(renderer, screenWidth/2, screenHeight/2, 44, sdl.Color{R: 140, G: 180, B: 255, A: 200})
-			font, _ := getCachedFont(config, "small")
+			// centered glass card
+			cardW := int32(340)
+			cardH := int32(220)
+			cardX := (screenWidth - cardW) / 2
+			cardY := (screenHeight - cardH) / 2
+			fillRoundedRect(renderer, cardX+4, cardY+6, cardW, cardH, 20, ShadowFill(80))
+			fillRoundedRect(renderer, cardX, cardY, cardW, cardH, 20, sdl.Color{R: 18, G: 24, B: 36, A: 235})
+			renderer.SetDrawColor(255, 255, 255, 14)
+			renderer.FillRect(&sdl.Rect{X: cardX + 12, Y: cardY + 1, W: cardW - 24, H: 1})
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 80)
+			renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + 1, W: cardW - 2, H: 1})
+			renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + 1, W: 1, H: cardH - 2})
+			renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + cardH - 2, W: cardW - 2, H: 1})
+			renderer.DrawRect(&sdl.Rect{X: cardX + cardW - 2, Y: cardY + 1, W: 1, H: cardH - 2})
+			renderSpinner(renderer, cardX+cardW/2, cardY+60, 40, sdl.Color{R: 140, G: 180, B: 255, A: 220})
+			font, _ := getCachedFont(config, "medium")
+			if font == nil {
+				font, _ = getCachedFont(config, "small")
+			}
 			if font != nil {
 				loadingTxt := config.Variables.SpinnerText
 				if loadingTxt == "" {
 					loadingTxt = "Loading..."
 				}
-				renderText(renderer, config, font, loadingTxt, sdl.Color{R: 200, G: 215, B: 235, A: 255}, screenWidth/2-80, screenHeight/2+55)
+				lw, _, _ := font.SizeUTF8(loadingTxt)
+				renderText(renderer, config, font, loadingTxt, sdl.Color{R: 220, G: 230, B: 245, A: 255}, cardX+(cardW-int32(lw))/2, cardY+120)
 				// Rotating Juka / JukaLang themed joke
 				if len(loadingJokes) > 0 {
 					ji := int(sdl.GetTicks64() / 2800 % uint64(len(loadingJokes)))
 					joke := loadingJokes[ji]
-					jw, _, _ := font.SizeUTF8(joke)
-					renderText(renderer, config, font, joke, sdl.Color{R: 150, G: 170, B: 200, A: 220}, screenWidth/2-int32(jw)/2, screenHeight/2+85)
+					smallFont, _ := getCachedFont(config, "small")
+					if smallFont == nil {
+						smallFont = font
+					}
+					jw, _, _ := smallFont.SizeUTF8(joke)
+					renderText(renderer, config, smallFont, joke, sdl.Color{R: 150, G: 170, B: 200, A: 200}, cardX+(cardW-int32(jw))/2, cardY+155)
 				}
 			}
 		}

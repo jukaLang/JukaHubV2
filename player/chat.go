@@ -121,11 +121,17 @@ func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Textu
 
 func processChatImageDownloads(renderer *sdl.Renderer) {
 	chatImageDLMutex.Lock()
-	var toProcess []struct{ url string; data []byte }
+	var toProcess []struct {
+		url  string
+		data []byte
+	}
 	for url, data := range chatImageDownloads {
 		chatImageDLMutex.Unlock()
 		uploadChatImage(renderer, url, data)
-		toProcess = append(toProcess, struct{ url string; data []byte }{url, data})
+		toProcess = append(toProcess, struct {
+			url  string
+			data []byte
+		}{url, data})
 		chatImageDLMutex.Lock()
 	}
 	chatImageDLMutex.Unlock()
@@ -159,6 +165,15 @@ func discordCreds() (string, string) {
 	tok, _ := appConfig.Variables.Custom["discord_token"].(string)
 	if tok == "" {
 		tok = appConfig.ChannelProfile.Token
+	}
+	if strings.HasPrefix(tok, "ENC:") {
+		decrypted, err := DecryptToken(tok)
+		if err != nil {
+			log.Printf("[DISCORD] Failed to decrypt token: %v", err)
+			discordStatus = "Discord: failed to decrypt token"
+			return "", defaultDiscordChannel
+		}
+		tok = decrypted
 	}
 	ch := strings.TrimSpace(appConfig.ChannelProfile.ChannelID)
 	if ch == "" {
@@ -507,6 +522,10 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	for i := start; i < end; i++ {
 		msg := messages[i]
 		iy := listY + 10 + int32(i-start)*lineH
+		// subtle alternating row stripe
+		if (i-start)%2 == 0 {
+			fillRoundedRect(renderer, listX+4, iy, listW-8, lineH-2, 5, GlossFill(4))
+		}
 		timeStr := msg.Timestamp.Format("15:04")
 		prefix := fmt.Sprintf("[%s] %s:", timeStr, msg.Sender)
 		line := msg.Text
@@ -514,7 +533,11 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			line = line[:67] + "..."
 		}
 		if font != nil {
-			renderText(renderer, config, font, prefix, ColorTextTertiary(), listX+12, iy)
+			senderCol := ColorTextAccent()
+			if msg.Sender == "You" || strings.EqualFold(msg.Sender, "user") {
+				senderCol = ColorInfo
+			}
+			renderText(renderer, config, font, prefix, senderCol, listX+12, iy)
 			pw, _, _ := font.SizeUTF8(prefix)
 			textX := listX + 12 + int32(pw) + 1
 

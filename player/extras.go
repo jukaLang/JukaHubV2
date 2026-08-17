@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -292,13 +291,10 @@ func fetchWeatherOnce() {
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	barH := int32(28)
 	// sleek frosted glass status bar (theme-aware)
-	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 235))
+	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 230))
 	// subtle top highlight
 	renderer.SetDrawColor(255, 255, 255, 10)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: 1})
-	// bottom accent line
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 100)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
@@ -312,31 +308,25 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		titleFont = font
 	}
 
-	// accent dot (pulsing)
-	pulse := uint8(140 + 115*float64(math.Sin(float64(sdl.GetTicks64())/700.0)))
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, pulse)
-	renderer.FillRect(&sdl.Rect{X: 14, Y: 9, W: 8, H: 8})
+	// Left: page title or profile (no version number on the home screen).
 	titleStr := "JukaHub"
-	if config.Version != "" {
-		titleStr += " v" + config.Version
-	}
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-		titleStr += " — " + config.Scenes[currentSceneIndex].Name
+		titleStr = config.Scenes[currentSceneIndex].Name
+		if titleStr == "Main" {
+			titleStr = "JukaHub"
+		}
 	}
 	titleW, _, _ := titleFont.SizeUTF8(titleStr)
-	renderText(renderer, config, titleFont, titleStr, white, 28, 6)
+	renderText(renderer, config, titleFont, titleStr, white, 12, 6)
 
 	// Username (placed after the title to avoid overlap)
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok && name != "" {
-		userX := int32(28) + int32(titleW) + 16
+		userX := int32(12) + int32(titleW) + 16
 		renderText(renderer, config, font, "Hi "+name, secondary, userX, 8)
 	}
 
-	// Error text removed from top bar (moved to bottom bar below)
-
-	// Weather pill + date/clock (moved from old code, now feed into right-side bar)
+	// Right-side status: wifi + battery + weather + clock (icon-style, quiet).
 	now := time.Now()
-	dateStr := now.Format("Mon Jan 2")
 	clk := now.Format("15:04")
 	wxMutex.Lock()
 	ready := weatherReady
@@ -356,20 +346,24 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		wxText = fmt.Sprintf("%d°/%d°", int(hi), int(lo))
 	}
 
-	// Right-side status: battery + wifi + weather + date + clock
+	var rightParts []string
+	rightParts = append(rightParts, clk)
+	if wxText != "—" {
+		rightParts = append(rightParts, wxText)
+	}
 	bat := getBatteryPercent()
-	wifi := getWifiStatus()
-	var rightText string
 	if bat >= 0 {
-		rightText += fmt.Sprintf("BAT:%d%% ", bat)
+		rightParts = append(rightParts, fmt.Sprintf("%d%%", bat))
 	}
+	wifi := getWifiStatus()
 	if wifi != "" {
-		rightText += wifi + " "
+		rightParts = append(rightParts, wifi)
 	}
-	rightText += wxText
-	rightText += "  " + dateStr + " " + clk
+	rightText := strings.Join(rightParts, "  ")
 	rw, _, _ := font.SizeUTF8(rightText)
-	rx := screenWidth - int32(rw) - 12
+	rx := screenWidth - int32(rw) - 30
+	// frosted pill behind the right-side status
+	fillRoundedRect(renderer, rx-10, 5, int32(rw)+20, 18, 9, WithAlpha(ColorSurfaceAlt, 150))
 	renderText(renderer, config, font, rightText, white, rx, 8)
 }
 
@@ -407,16 +401,16 @@ type UserConfig struct {
 }
 
 type UserVariables struct {
-	ButtonColor        RGB                `json:"buttonColor"`
-	LabelColor         RGB                `json:"labelColor"`
-	InputColor         RGB                `json:"inputColor"`
-	Fullscreen         bool               `json:"fullscreen"`
-	FileExplorerRoot   string             `json:"fileExplorerRoot"`
-	WeatherEnabled     bool               `json:"weatherEnabled"`
-	WeatherUnit        string             `json:"weatherUnit"`
-	TSPUsername        string             `json:"tspUsername"`
-	PlaybackResolution string            `json:"playbackResolution"`
-	AudioBackend       string             `json:"audioBackend"`
+	ButtonColor        RGB    `json:"buttonColor"`
+	LabelColor         RGB    `json:"labelColor"`
+	InputColor         RGB    `json:"inputColor"`
+	Fullscreen         bool   `json:"fullscreen"`
+	FileExplorerRoot   string `json:"fileExplorerRoot"`
+	WeatherEnabled     bool   `json:"weatherEnabled"`
+	WeatherUnit        string `json:"weatherUnit"`
+	TSPUsername        string `json:"tspUsername"`
+	PlaybackResolution string `json:"playbackResolution"`
+	AudioBackend       string `json:"audioBackend"`
 	Custom             map[string]interface{}
 }
 
@@ -520,4 +514,3 @@ func saveConfig(config *Config) {
 	}
 	log.Printf("[DEBUG] Design config saved to jukaconfig.json")
 }
-

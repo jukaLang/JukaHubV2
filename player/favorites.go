@@ -283,6 +283,7 @@ func getCurrentFavorites() []FavoriteItem {
 
 var favTabRects [4]sdl.Rect
 var favBackRect sdl.Rect
+
 func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	tabLabels := []string{"Videos", "Recent", "Files", "IPTV"}
 	tabColors := []sdl.Color{
@@ -307,16 +308,21 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	for i, label := range tabLabels {
 		tx := tabStartX + int32(i)*(tabWidth+tabGap)
 		active := i == favoritesCurrentTab
-		// inactive tab background
+		// inactive tab background with hairline border
 		fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, ColorSurfaceRow)
+		renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 28)
+		renderer.DrawRect(&sdl.Rect{X: tx + 1, Y: tabY + 1, W: tabWidth - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: tx + 1, Y: tabY + 1, W: 1, H: tabHeight - 2})
+		renderer.DrawRect(&sdl.Rect{X: tx + 1, Y: tabY + tabHeight - 2, W: tabWidth - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: tx + tabWidth - 2, Y: tabY + 1, W: 1, H: tabHeight - 2})
 		if active {
-			// active tab: solid color with subtle inner highlight
-			fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, tabColors[i])
-			fillRoundedRect(renderer, tx+2, tabY+2, tabWidth-4, tabHeight/2, 8, GlossFill(30))
-			renderer.SetDrawColor(255, 255, 255, 160)
-			renderer.FillRect(&sdl.Rect{X: tx + 8, Y: tabY + tabHeight - 2, W: tabWidth - 16, H: 2})
+			// active tab: soft accent-tinted fill + bottom color bar + colored label
+			fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, WithAlpha(tabColors[i], 55))
+			fillRoundedRect(renderer, tx, tabY, tabWidth, 3, 2, tabColors[i])
+			renderer.SetDrawColor(255, 255, 255, 70)
+			renderer.FillRect(&sdl.Rect{X: tx + 6, Y: tabY + 2, W: tabWidth - 12, H: 1})
 		} else {
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 80)
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 70)
 			renderer.FillRect(&sdl.Rect{X: tx + 8, Y: tabY + tabHeight - 2, W: tabWidth - 16, H: 1})
 		}
 		if font != nil {
@@ -324,7 +330,9 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			lx := tx + (tabWidth-int32(lw))/2
 			ly := tabY + (tabHeight-int32(14))/2
 			tc := ColorTextPrimary()
-			if !active {
+			if active {
+				tc = tabColors[i]
+			} else {
 				tc = ColorTextTertiary()
 			}
 			renderText(renderer, config, font, label, tc, lx, ly)

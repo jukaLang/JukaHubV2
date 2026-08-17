@@ -87,40 +87,50 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 
 		if i == currentShortIdx {
-			fillRoundedRect(renderer, xPos-4, yPos-4, cellWidth+8, cellHeight+8, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 140})
+			// soft layered focus glow
+			fillRoundedRect(renderer, xPos-5, yPos-5, cellWidth+10, cellHeight+10, 13, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 45})
+			fillRoundedRect(renderer, xPos-4, yPos-4, cellWidth+8, cellHeight+8, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 95})
+			fillRoundedRect(renderer, xPos-2, yPos-2, cellWidth+4, cellHeight+4, 11, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 140})
 		}
 
 		// card shadow
 		fillRoundedRect(renderer, xPos+3, yPos+4, thumbWidth, thumbHeight, 10, ShadowFill(60))
 		// card background
 		fillRoundedRect(renderer, xPos, yPos, thumbWidth, thumbHeight, 10, ColorSurfaceAlt)
+		// 1px top highlight line
+		renderer.SetDrawColor(255, 255, 255, 14)
+		renderer.FillRect(&sdl.Rect{X: xPos + 2, Y: yPos + 1, W: thumbWidth - 4, H: 1})
 
-	thumbLoaded := false
-	if vid.Thumbnail != "" {
-		tex := loadThumbnail(renderer, vid.Thumbnail)
-		if tex != nil {
-			renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-			thumbLoaded = true
+		thumbLoaded := false
+		if vid.Thumbnail != "" {
+			tex := loadThumbnail(renderer, vid.Thumbnail)
+			if tex != nil {
+				renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+				thumbLoaded = true
+			}
 		}
-	}
-	if !thumbLoaded && len(vid.Thumbnails) > 0 {
-		tex := loadThumbnailFromURLs(renderer, vid.Thumbnails)
-		if tex != nil {
-			renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-			thumbLoaded = true
+		if !thumbLoaded && len(vid.Thumbnails) > 0 {
+			tex := loadThumbnailFromURLs(renderer, vid.Thumbnails)
+			if tex != nil {
+				renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+				thumbLoaded = true
+			}
 		}
-	}
-	if !thumbLoaded && placeholderTexture != nil {
-		renderer.Copy(placeholderTexture, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-	}
+		if !thumbLoaded && placeholderTexture != nil {
+			renderer.Copy(placeholderTexture, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+		}
 
-		// title overlay at bottom of thumbnail
+		// title overlay at bottom of thumbnail (vertical scrim: opaque bottom → transparent top)
 		title := vid.Title
 		if len(title) > 24 {
 			title = title[:21] + "..."
 		}
 		titleY := yPos + thumbHeight - 30
-		fillRoundedRect(renderer, xPos, titleY, thumbWidth, 30, 0, ShadowFill(140))
+		for s := int32(0); s < 30; s += 3 {
+			a := uint8(40 + float64(s)/30.0*120)
+			renderer.SetDrawColor(0, 0, 0, a)
+			renderer.FillRect(&sdl.Rect{X: xPos, Y: titleY + s, W: thumbWidth, H: 3})
+		}
 		renderText(renderer, config, font, title, ColorTextPrimary(), xPos+8, titleY+6)
 
 		dur := fmt.Sprintf("%d:%02d", int(vid.Duration)/60, int(vid.Duration)%60)
@@ -128,6 +138,11 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 		bx := xPos + thumbWidth - bw - 6
 		by := yPos + thumbHeight - 26
 		fillRoundedRect(renderer, bx, by, bw, bh, 6, ShadowFill(160))
+		renderer.SetDrawColor(255, 255, 255, 45)
+		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + 1, W: bw - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + 1, W: 1, H: bh - 2})
+		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + bh - 2, W: bw - 2, H: 1})
+		renderer.DrawRect(&sdl.Rect{X: bx + bw - 2, Y: by + 1, W: 1, H: bh - 2})
 		renderText(renderer, config, font, dur, ColorTextPrimary(), bx+6, by+3)
 	}
 }

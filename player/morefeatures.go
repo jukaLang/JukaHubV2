@@ -204,8 +204,21 @@ func loadIPTV(config *Config) {
 	// Fall back to (or supplement with) the public iptv-org playlist when no
 	// local playlists are present.
 	if len(entries) == 0 {
-		if data := httpGetText("https://iptv-org.github.io/iptv/index.m3u", 20*time.Second); data != "" {
-			entries = append(entries, parseM3UContent(data)...)
+		url := "https://iptv-org.github.io/iptv/index.m3u"
+		if db, err := cacheOpen("jukahub.cache"); err == nil {
+			if cached, cErr := cacheGet(db, "iptv:"+url); cErr == nil && cached != nil {
+				entries = append(entries, parseM3UContent(string(cached))...)
+			} else {
+				if data := httpGetText(url, 20*time.Second); data != "" {
+					entries = append(entries, parseM3UContent(data)...)
+					cacheSet(db, "iptv:"+url, []byte(data), 6*time.Hour)
+				}
+			}
+			db.Close()
+		} else {
+			if data := httpGetText(url, 20*time.Second); data != "" {
+				entries = append(entries, parseM3UContent(data)...)
+			}
 		}
 	}
 	publishCustom("iptv_entries", entries)
@@ -640,11 +653,28 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	lines := strings.Split(text, "\n")
 	y := element.Y + 8
 	lineH := int32(22)
-	for _, ln := range lines {
+	for i, ln := range lines {
 		if y > element.Y+elemH-16 {
 			break
 		}
-		renderText(renderer, config, font, ln, ColorTextSecondary(), element.X+10, y)
+		// subtle alternating row stripe
+		if i%2 == 0 {
+			fillRoundedRect(renderer, element.X+6, y, elemW-12, lineH-2, 4, GlossFill(4))
+		}
+		// severity-aware coloring
+		col := ColorTextSecondary()
+		lower := strings.ToLower(ln)
+		switch {
+		case strings.Contains(lower, "[error]") || strings.Contains(lower, "error:"):
+			col = ColorDanger
+		case strings.Contains(lower, "[warn]") || strings.Contains(lower, "[warning]"):
+			col = ColorWarning
+		case strings.Contains(lower, "[info]"):
+			col = ColorInfo
+		case strings.Contains(lower, "[ok]") || strings.Contains(lower, "[success]"):
+			col = ColorSuccess
+		}
+		renderText(renderer, config, font, ln, col, element.X+12, y)
 		y += lineH
 	}
 }
