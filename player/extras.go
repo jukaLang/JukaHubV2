@@ -289,9 +289,9 @@ func fetchWeatherOnce() {
 // --- Top status bar (clock + weather + username) ---
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
-	barH := int32(46)
+	barH := HomeTopBarH
 	if screenHeight < 600 {
-		barH = 40
+		barH = HomeTopBarHSmall
 	}
 	// Opaque top bar surface.
 	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, ColorTopBar)
@@ -322,18 +322,18 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		titleStr = "JukaHub · " + sceneName
 	}
 	titleW, _, _ := titleFont.SizeUTF8(titleStr)
-	titleX := int32(20)
-	titleY := barH/2 - 10 // approximate vertical center for 20px font
+	titleX := StatusBarMargin
+	titleY := barH/2 - TitleCenterOffset
 	renderText(renderer, config, titleFont, titleStr, white, titleX, titleY)
 
 	// Username (compact, after title if space allows).
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok && name != "" {
-		userX := titleX + int32(titleW) + 16
+		userX := titleX + int32(titleW) + SpaceLG
 		if sceneName != "" && sceneName != "Main" {
 			sw, _, _ := font.SizeUTF8("· " + sceneName)
-			userX = titleX + int32(titleW) + int32(sw) + 12
+			userX = titleX + int32(titleW) + int32(sw) + SpaceMD
 		}
-		renderText(renderer, config, font, "Hi "+name, secondary, userX, titleY+4)
+		renderText(renderer, config, font, "Hi "+name, secondary, userX, titleY+SpaceXS)
 	}
 
 	// Right-side grouped status: clock / weather / wifi / battery.
@@ -361,8 +361,8 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	wifi := getWifiStatus()
 
 	// Build right group as small icon-like tokens separated by gaps.
-	rightX := screenWidth - 20
-	gap := int32(14)
+	rightX := screenWidth - StatusBarMargin
+	gap := StatusPartGap
 	parts := []string{clk}
 	if wxText != "" {
 		parts = append(parts, wxText)
@@ -384,7 +384,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		pw, _, _ := font.SizeUTF8(p)
 		startX += int32(pw) + gap
 		startX -= int32(pw)
-		renderText(renderer, config, font, p, secondary, startX, titleY+4)
+		renderText(renderer, config, font, p, secondary, startX, titleY+SpaceXS)
 		startX -= gap
 	}
 }

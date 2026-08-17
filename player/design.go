@@ -14,13 +14,15 @@ import (
 const (
 	HomeMargin          int32 = 28
 	HomeTopBarH         int32 = 46
+	HomeTopBarHSmall    int32 = 40
 	HomeFooterH         int32 = 48
+	HomeFooterHSmall    int32 = 42
 	HomeSectionGap      int32 = 18
 	HomeCardGap         int32 = 18
 	HomeCols            int32 = 4
 	HomeColsSmall       int32 = 3
 	HomeColsTiny        int32 = 2
-	HomeContinueH       int32 = 110
+	HomeContinueH       int32 = 112
 	HomeCardHMax        int32 = 158
 	HomeCardHMin        int32 = 118
 	HomeTileSlotMissing int   = -1
@@ -34,6 +36,39 @@ var (
 	SpaceLG  = int32(16)
 	SpaceXL  = int32(24)
 	Space2XL = int32(32)
+
+	// Layout tokens (safe margins, offsets, and component sizing)
+	StatusBarMargin   = int32(20)
+	TitleCenterOffset = int32(10)
+	StatusPartGap     = int32(14)
+	ScenePad          = int32(16)
+	SceneTextGap      = int32(6)
+	ArrowWidth        = int32(22)
+	RecentPadding     = int32(18)
+	RecentCardGap     = int32(14)
+	CardAreaPad       = int32(18)
+	CardAreaOffset    = int32(54)
+	CardYOffset       = int32(42)
+	LabelBottomPad    = int32(14)
+	LabelPadding      = int32(40)
+	EmptyIconSize     = int32(32)
+	EmptyMsgOffset1   = int32(22)
+	EmptyMsgOffset2   = int32(44)
+	VideoButtonW      = int32(36)
+	VideoButtonH      = int32(24)
+	ExitButtonW       = int32(44)
+	ExitButtonH       = int32(28)
+	ChipHeight        = int32(22)
+	ChipSize          = int32(26)
+	MinCardWidth      = int32(120)
+	MinCardHeight     = int32(40)
+	PressOffset       = int32(2)
+	FocusGlow         = int32(5)
+	FocusRing         = int32(3)
+	HoverRing         = int32(2)
+	TileRadius        = int32(16)
+	IconSizeMin       = int32(44)
+	IconSizeMax       = int32(64)
 
 	// Typography sizes (approximate px)
 	FontSizeXS  = int32(10)
@@ -68,10 +103,13 @@ var (
 	ColorBorderFocus   = sdl.Color{R: 110, G: 231, B: 255, A: 60}
 
 	// Semantic
-	ColorSuccess = sdl.Color{R: 72, G: 213, B: 151, A: 255}
-	ColorWarning = sdl.Color{R: 255, G: 191, B: 105, A: 255}
-	ColorDanger  = sdl.Color{R: 255, G: 100, B: 124, A: 255}
-	ColorInfo    = sdl.Color{R: 110, G: 231, B: 255, A: 255}
+	ColorSuccess         = sdl.Color{R: 72, G: 213, B: 151, A: 255}
+	ColorWarning         = sdl.Color{R: 255, G: 191, B: 105, A: 255}
+	ColorDanger          = sdl.Color{R: 226, G: 104, B: 120, A: 255} // #E26878
+	ColorAccent          = sdl.Color{R: 85, G: 216, B: 255, A: 255}  // #55D8FF
+	ColorAccentSecondary = sdl.Color{R: 139, G: 124, B: 255, A: 255} // #8B7CFF
+	ColorDangerSubtle    = sdl.Color{R: 255, G: 200, B: 200, A: 60}
+	ColorInfo            = sdl.Color{R: 110, G: 231, B: 255, A: 255}
 
 	// Shadow base (apply alpha at call site)
 	ColorShadow = sdl.Color{R: 0, G: 0, B: 0, A: 255}
@@ -262,6 +300,15 @@ func ToastInfo() sdl.Color { return ColorToastInfo }
 
 // ToastSuccess returns the semantic success toast color.
 func ToastSuccess() sdl.Color { return ColorToastSuccess }
+
+// Accent returns the primary accent color.
+func Accent() sdl.Color { return ColorAccent }
+
+// AccentSecondary returns the secondary accent color.
+func AccentSecondary() sdl.Color { return ColorAccentSecondary }
+
+// Danger returns the danger/error color.
+func Danger() sdl.Color { return ColorDanger }
 
 // GlossFill returns a white specular highlight at the given low alpha,
 // used for subtle top-edge sheen on cards and panels.

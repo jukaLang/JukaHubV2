@@ -8,14 +8,15 @@ import (
 // homeLayoutState stores computed home screen layout for render/mouse hit-testing sync
 type homeLayout struct {
 	Cols        int32      // columns in the grid (4 / 3 / 2)
-	TileRects   []sdl.Rect // index 0..7 for the 8 main home tiles
+	TileRects   []sdl.Rect // index 0..n for the home tiles
 	RecentRect  sdl.Rect   // Continue panel
 	TileElement []int      // slot -> scene element index (0-7) or -1 if missing
+	HeadingRect sdl.Rect   // page heading area (optional)
 }
 
 // computeHomeLayout returns the shared home-screen geometry for render + mouse.
-// tileCount is the number of tile-style buttons in the current home scene
-// (Main has 7). Layout is deterministic and side-effect free.
+// tileCount is the number of tile-style buttons in the current home scene.
+// Layout is deterministic and side-effect free.
 func computeHomeLayout(screenW, screenH int32, tileCount int) homeLayout {
 	margin := HomeMargin
 	if screenW < 1024 {
@@ -27,11 +28,11 @@ func computeHomeLayout(screenW, screenH int32, tileCount int) homeLayout {
 
 	topBarH := HomeTopBarH
 	if screenH < 600 {
-		topBarH = 40
+		topBarH = HomeTopBarHSmall
 	}
 	footerH := HomeFooterH
 	if screenH < 600 {
-		footerH = 42
+		footerH = HomeFooterHSmall
 	}
 
 	cols := HomeCols
@@ -49,19 +50,31 @@ func computeHomeLayout(screenW, screenH int32, tileCount int) homeLayout {
 
 	contentW := screenW - 2*margin
 
+	// Safe area: from topBarH to screenH - footerH.
+	safeTop := topBarH + SpaceLG
+	safeBottom := screenH - footerH - SpaceLG
+	if safeBottom < safeTop {
+		safeBottom = safeTop + 10
+	}
+
+	// Heading area (compact, below status bar).
+	headingH := int32(28)
+	headingY := safeTop
+	headingRect := sdl.Rect{X: margin, Y: headingY, W: contentW, H: headingH}
+
+	// Continue panel.
 	continueW := contentW
 	continueH := HomeContinueH
 	if screenH < 600 {
 		continueH = 96
 	}
 	continueX := margin
-	continueY := topBarH + 12
-
+	continueY := headingY + headingH + SpaceSM
 	recent := sdl.Rect{X: continueX, Y: continueY, W: continueW, H: continueH}
 
+	// Grid area between Continue and footer.
 	gridTop := continueY + continueH + HomeSectionGap
-	footerTop := screenH - footerH
-	gridBottom := footerTop - margin
+	gridBottom := safeBottom
 	if gridBottom < gridTop {
 		gridBottom = gridTop + 10
 	}
@@ -119,6 +132,7 @@ func computeHomeLayout(screenW, screenH int32, tileCount int) homeLayout {
 		TileRects:   tileRects,
 		RecentRect:  recent,
 		TileElement: make([]int, tileCount),
+		HeadingRect: headingRect,
 	}
 }
 
@@ -220,4 +234,20 @@ func fitTextWidth(renderer *sdl.Renderer, config *Config, font *ttf.Font, text s
 		cur += string(r)
 	}
 	return cur + "…"
+}
+
+// renderHomeHeading draws the page heading for the home screen.
+func renderHomeHeading(renderer *sdl.Renderer, config *Config, heading string) {
+	if !homeLayoutActive {
+		return
+	}
+	headingRect := homeLayoutState.HeadingRect
+	if headingRect.W <= 0 || headingRect.H <= 0 {
+		return
+	}
+	font, _ := getCachedFont(config, "medium")
+	if font == nil {
+		return
+	}
+	renderText(renderer, config, font, heading, ColorTextPrimary(), headingRect.X+SpaceXS, headingRect.Y+SpaceXS)
 }
