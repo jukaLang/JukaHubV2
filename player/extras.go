@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -71,6 +72,28 @@ var topBarError string
 
 func setTopBarError(msg string) {
 	topBarError = msg
+}
+
+// safeStatusText strips characters that Inter font may not render and
+// collapses whitespace so the status bar never shows missing-glyph boxes.
+func safeStatusText(s string) string {
+	var b strings.Builder
+	prevSpace := false
+	for _, r := range s {
+		if r > 127 || (!unicode.IsPrint(r) && r != '\t') {
+			continue
+		}
+		if unicode.IsSpace(r) || r == '\t' {
+			if !prevSpace {
+				b.WriteByte(' ')
+				prevSpace = true
+			}
+		} else {
+			b.WriteRune(r)
+			prevSpace = false
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 var (
@@ -336,9 +359,9 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, font, "Hi "+name, secondary, userX, titleY+SpaceXS)
 	}
 
-	// Right-side grouped status: clock / weather / wifi / battery.
+	// Right-side grouped status: weather / date+time / battery / wifi.
 	now := time.Now()
-	clk := now.Format("15:04")
+	clk := safeStatusText(now.Format("Mon 02, 2006 03:04 PM"))
 	wxMutex.Lock()
 	ready := weatherReady
 	var today WeatherDay
@@ -354,38 +377,53 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 			hi = hi*9/5 + 32
 			lo = lo*9/5 + 32
 		}
-		wxText = fmt.Sprintf("%d°/%d°", int(hi), int(lo))
+		wxText = safeStatusText(fmt.Sprintf("%dC / %dC", int(hi), int(lo)))
 	}
 
 	bat := getBatteryPercent()
 	wifi := getWifiStatus()
 
-	// Build right group as small icon-like tokens separated by gaps.
+	// Build right group: weather first, then date+time, then battery, then wifi.
 	rightX := screenWidth - StatusBarMargin
 	gap := StatusPartGap
-	parts := []string{clk}
+	parts := make([]string, 0, 4)
 	if wxText != "" {
 		parts = append(parts, wxText)
 	}
+	parts = append(parts, clk)
 	if bat >= 0 {
-		parts = append(parts, fmt.Sprintf("%d%%", bat))
+		parts = append(parts, safeStatusText(fmt.Sprintf("%d%%", bat)))
 	}
 	if wifi != "" {
-		parts = append(parts, wifi)
+		parts = append(parts, safeStatusText(wifi))
 	}
-	// Measure total from right to left.
+
+	// Measure total width and drop least-important items if they don't fit.
 	totalW := int32(0)
 	for _, p := range parts {
 		pw, _, _ := font.SizeUTF8(p)
-		totalW += int32(pw) + gap
+		totalW += int32(pw)
 	}
+	if len(parts) > 1 {
+		totalW += gap * int32(len(parts)-1)
+	}
+	maxW := screenWidth - StatusBarMargin - titleX - int32(titleW) - Space2XL
+	if maxW < 120 {
+		maxW = 120
+	}
+	for totalW > maxW && len(parts) > 1 {
+		pw, _, _ := font.SizeUTF8(parts[len(parts)-1])
+		totalW -= int32(pw)
+		totalW -= gap
+		parts = parts[:len(parts)-1]
+	}
+
+	// Render right-aligned, left to right.
 	startX := rightX - totalW
 	for _, p := range parts {
 		pw, _, _ := font.SizeUTF8(p)
-		startX += int32(pw) + gap
-		startX -= int32(pw)
 		renderText(renderer, config, font, p, secondary, startX, titleY+SpaceXS)
-		startX -= gap
+		startX += int32(pw) + gap
 	}
 }
 
@@ -450,12 +488,14 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	margin := int32(20)
 	availableW := screenWidth - 2*margin
 
-	// Build hint labels.
+	// Build hint labels. Prefer controller-first labels; keyboard fallbacks are
+	// shown in parentheses for development on Windows.
 	hints := []string{
-		"UP/DOWN: Navigate",
-		"LEFT/RIGHT: Switch",
-		"ENTER: Open",
-		"ESC: Back",
+		"A/Enter: Open",
+		"B/Esc: Back",
+		"X/Ctrl+K: Search",
+		"Menu: Settings",
+		"L2/R2: Switch Page",
 	}
 
 	// Measure total width of all hints.
@@ -470,8 +510,8 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	if totalW > availableW {
 		// Keep only essential hints: navigation + action
 		hints = []string{
-			"UP/DOWN: Navigate",
-			"ENTER: Open",
+			"A/Enter: Open",
+			"B/Esc: Back",
 		}
 		totalW = int32(0)
 		for _, h := range hints {
@@ -483,11 +523,12 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 
 	// Center the hints in the footer.
 	startX := (screenWidth - totalW) / 2
-	for i, h := range hints {
+	x := startX
+	for _, h := range hints {
 		hw, _, _ := font.SizeUTF8(h)
-		x := startX + int32(i*10) + (totalW-int32(hw))/2
 		_, th, _ := font.SizeUTF8(h)
 		renderText(renderer, config, font, h, secondary, x, y+int32(th)+4)
+		x += int32(hw) + 10
 	}
 }
 
@@ -517,6 +558,8 @@ type UserVariables struct {
 	TSPUsername        string `json:"tspUsername"`
 	PlaybackResolution string `json:"playbackResolution"`
 	AudioBackend       string `json:"audioBackend"`
+	ReducedMotion      bool   `json:"reducedMotion"`
+	LowPower           bool   `json:"lowPower"`
 	Custom             map[string]interface{}
 }
 
@@ -558,11 +601,11 @@ func saveUserConfig(user *UserConfig) {
 		log.Printf("saveUserConfig: marshal error: %v", err)
 		return
 	}
-	if err := os.WriteFile("jukauser.json", data, 0644); err != nil {
+	if err := AtomicWrite("jukauser.json", data, 0644); err != nil {
 		log.Printf("saveUserConfig: write error: %v", err)
 		return
 	}
-	log.Printf("[DEBUG] User config saved to jukauser.json")
+	LogScene("config").Info("user config saved")
 }
 
 func mergeUserConfig(config *Config, user *UserConfig) {
@@ -579,6 +622,8 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	config.Variables.TSPUsername = user.Variables.TSPUsername
 	config.Variables.PlaybackResolution = user.Variables.PlaybackResolution
 	config.Variables.AudioBackend = user.Variables.AudioBackend
+	config.Variables.ReducedMotion = user.Variables.ReducedMotion
+	config.Variables.LowPower = user.Variables.LowPower
 	for k, v := range user.Variables.Custom {
 		if !volatileCustomVars[k] {
 			config.Variables.Custom[k] = v
@@ -614,9 +659,9 @@ func saveConfig(config *Config) {
 		log.Printf("saveConfig: marshal error: %v", err)
 		return
 	}
-	if err := os.WriteFile("jukaconfig.json", data, 0644); err != nil {
+	if err := AtomicWrite("jukaconfig.json", data, 0644); err != nil {
 		log.Printf("saveConfig: write error: %v", err)
 		return
 	}
-	log.Printf("[DEBUG] Design config saved to jukaconfig.json")
+	LogScene("config").Info("design config saved")
 }

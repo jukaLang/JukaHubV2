@@ -4,6 +4,8 @@ import (
 	"math"
 	"sort"
 	"sync"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 // Semantic input actions used by the focus engine and input normalization.
@@ -58,7 +60,7 @@ func NewFocusEngine() *FocusEngine {
 // BuildGraph constructs a focus graph from a scene's elements.
 // It includes button, input, recent, dynamiclist, and searchresults elements.
 // Elements are ordered left-to-right, top-to-bottom for stable traversal.
-func (fe *FocusEngine) BuildGraph(scene Scene) *FocusGraph {
+func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 	var nodes []FocusNode
 	for i, el := range scene.Elements {
 		if !isFocusableElement(el) {
@@ -142,7 +144,7 @@ func (fe *FocusEngine) Navigate(action Action) int {
 
 	neighbors := fe.graph.Edges[fe.current]
 	best := -1
-	bestDist := int64(math.MaxInt64)
+	bestDist := int32(math.MaxInt32)
 
 	curNode := fe.graph.Nodes[fe.current]
 	cx := curNode.Rect.X + curNode.Rect.W/2
@@ -246,7 +248,7 @@ func (fe *FocusEngine) SetByElementIndex(idx int) bool {
 // isFocusableElement reports whether an element should participate in the focus graph.
 func isFocusableElement(el Element) bool {
 	switch el.Type {
-	case "button", "input", "searchresults", "dynamiclist", "recent", "favorites":
+	case "button", "input", "searchresults", "dynamiclist", "recent", "favorites", "chat":
 		return true
 	}
 	return false
@@ -275,8 +277,8 @@ func buildSpatialEdges(nodes []FocusNode) map[int][]int {
 			dj := nodes[j].Rect.Y + nodes[j].Rect.H/2
 			dx := cj - ci
 			dy := dj - di
-			adx := abs(dx)
-			ady := abs(dy)
+			adx := absI32(dx)
+			ady := absI32(dy)
 
 			// Require a clear primary direction (at least 1.5x bias).
 			if adx == 0 && ady == 0 {
@@ -339,8 +341,8 @@ func isValidDirection(dx, dy int32, action Action) bool {
 	}
 }
 
-// abs returns the absolute value of x.
-func abs(x int32) int32 {
+// absI32 returns the absolute value of x.
+func absI32(x int32) int32 {
 	if x < 0 {
 		return -x
 	}

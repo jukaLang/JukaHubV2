@@ -52,9 +52,12 @@ func computeHomeLayout(screenW, screenH int32, tileCount int) homeLayout {
 
 	// Safe area: from topBarH to screenH - footerH.
 	safeTop := topBarH + SpaceLG
-	safeBottom := screenH - footerH - SpaceLG
+	safeBottom := screenH - footerH - SpaceXS
 	if safeBottom < safeTop {
 		safeBottom = safeTop + 10
+	}
+	if safeBottom > screenH {
+		safeBottom = screenH
 	}
 
 	// Heading area (compact, below status bar).

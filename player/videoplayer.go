@@ -537,11 +537,10 @@ func SetPlaybackSpeed(speed float64) {
 	embeddedPlayer.speed = speed
 }
 
-// GetEmbeddedPlayerState returns a copy of the current player state.
-func GetEmbeddedPlayerState() VideoPlayerState {
-	embeddedPlayer.mu.Lock()
-	defer embeddedPlayer.mu.Unlock()
-	return *embeddedPlayer
+// GetEmbeddedPlayerState returns a borrowed pointer to the current player
+// state. The caller must not mutate fields without holding embeddedPlayer.mu.
+func GetEmbeddedPlayerState() *VideoPlayerState {
+	return embeddedPlayer
 }
 
 // formatTime converts seconds to MM:SS.
@@ -621,28 +620,36 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
 	}
 
-	// Top gradient for controls visibility (smooth fade)
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+
+	// Use a cool cyan/blue accent for the video player so it never looks red,
+	// regardless of the global theme accent color.
+	accent := ColorInfo
+
+	// Top / bottom gradients for readability.
 	topGradH := int32(70)
 	for s := int32(0); s < topGradH; s += 3 {
 		a := uint8(90 * (1.0 - float64(s)/float64(topGradH)))
 		renderer.SetDrawColor(0, 0, 0, a)
 		renderer.FillRect(&sdl.Rect{X: x, Y: y + s, W: w, H: 3})
 	}
-	// Bottom gradient (smooth fade)
-	bottomGradH := int32(120)
+	bottomGradH := int32(140)
 	bottomY := y + h - bottomGradH
 	for s := int32(0); s < bottomGradH; s += 3 {
-		a := uint8(160 * (float64(s) / float64(bottomGradH)))
+		a := uint8(180 * (float64(s) / float64(bottomGradH)))
 		renderer.SetDrawColor(0, 0, 0, a)
 		renderer.FillRect(&sdl.Rect{X: x, Y: bottomY + s, W: w, H: 3})
 	}
 
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		return
-	}
+	// Bottom control bar.
+	barH := int32(72)
+	barY := y + h - barH
+	fillRoundedRect(renderer, x+8, barY, w-16, barH, 16, WithAlpha(ColorSurfacePanel, 220))
 
-	// Top-left: phase badge with soft accent border
+	// Top-left phase badge.
 	phaseText := "PLAYING"
 	phaseCol := ColorTextPrimary()
 	if state.phase == "paused" {
@@ -656,104 +663,98 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		phaseCol = ColorDanger
 	}
 	phaseW, _, _ := font.SizeUTF8(phaseText)
-	badgeX := x + 12
+	badgeX := x + 16
 	badgeY := y + 12
 	fillRoundedRect(renderer, badgeX, badgeY, int32(phaseW)+18, 26, 13, WithAlpha(ColorSurfaceRaised, 230))
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
-	renderer.DrawRect(&sdl.Rect{X: badgeX + 1, Y: badgeY + 1, W: int32(phaseW) + 16, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: badgeX + 1, Y: badgeY + 1, W: 1, H: 24})
-	renderer.DrawRect(&sdl.Rect{X: badgeX + 1, Y: badgeY + 24, W: int32(phaseW) + 16, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: badgeX + int32(phaseW) + 16, Y: badgeY + 1, W: 1, H: 24})
 	renderText(renderer, config, font, phaseText, phaseCol, badgeX+9, badgeY+6)
 
-	// Top-right: volume indicator
+	// Top-right: back and volume.
 	volText := formatPercentSimple(state.volume)
 	volW, _, _ := font.SizeUTF8(volText)
-	renderText(renderer, config, font, volText, ColorTextPrimary(), w-int32(volW)-12, y+12)
+	backW, _, _ := font.SizeUTF8("✕")
+	backX := x + w - int32(backW) - 26
+	fillRoundedRect(renderer, backX-2, badgeY-2, int32(backW)+20, 30, 10, WithAlpha(ColorSurfaceRaised, 180))
+	renderText(renderer, config, font, "✕", ColorTextPrimary(), backX+6, badgeY+4)
+	videoControlRects.back = sdl.Rect{X: backX - 2, Y: badgeY - 2, W: int32(backW) + 20, H: 30}
+	renderText(renderer, config, font, volText, ColorTextPrimary(), x+w-int32(volW)-50, y+18)
 
-	// Time display
-	currentTime := state.progress * state.duration
-	timeText := formatTime(currentTime) + " / " + formatTime(state.duration)
-	renderText(renderer, config, font, timeText, ColorTextPrimary(), x+12, y+h-92)
-
-	// Seek bar
-	seekBarY := y + h - 64
-	seekBarW := w - 24
-	seekBarX := x + 12
-	fillRoundedRect(renderer, seekBarX, seekBarY, seekBarW, 8, 4, sdl.Color{R: 40, G: 40, B: 50, A: 255})
-	fillRoundedRect(renderer, seekBarX, seekBarY, int32(float64(seekBarW)*state.progress), 8, 4, accentColor)
-	// glossy top edge on the filled portion
-	renderer.SetDrawColor(255, 255, 255, 40)
-	renderer.FillRect(&sdl.Rect{X: seekBarX + 2, Y: seekBarY + 1, W: int32(float64(seekBarW)*state.progress) - 4, H: 1})
-	// Thumb with ring
-	thumbX := seekBarX + int32(float64(seekBarW)*state.progress) - 6
-	fillRoundedRect(renderer, thumbX-2, seekBarY-4, 16, 16, 8, WithAlpha(accentColor, 90))
-	fillRoundedRect(renderer, thumbX, seekBarY-2, 12, 12, 6, sdl.Color{R: 255, G: 255, B: 255, A: 240})
-	videoControlRects.progress = sdl.Rect{X: seekBarX, Y: seekBarY - 6, W: seekBarW, H: 20}
-
-	// Control buttons row
-	btnY := y + h - 32
-	btnSize := int32(28)
-	gap := int32(6)
-	startX := x + 12
-
-	// Seek back
-	videoControlRects.seekBack = drawIconBtn(renderer, config, font, "⏪", startX, btnY, btnSize, state)
-	startX += btnSize + gap
-
-	// Play/Pause
-	icon := "⏸"
-	if state.phase == "paused" {
-		icon = "⏵"
+	// Progress bar sits just above the control bar.
+	seekBarH := int32(6)
+	seekBarY := barY - 16
+	seekBarW := w - 48
+	seekBarX := x + 24
+	fillRoundedRect(renderer, seekBarX, seekBarY, seekBarW, seekBarH, seekBarH/2, sdl.Color{R: 40, G: 40, B: 50, A: 255})
+	if state.progress > 0 {
+		filledW := int32(float64(seekBarW) * state.progress)
+		if filledW > 0 {
+			fillRoundedRect(renderer, seekBarX, seekBarY, filledW, seekBarH, seekBarH/2, accent)
+		}
 	}
-	videoControlRects.playPause = drawIconBtn(renderer, config, font, icon, startX, btnY, btnSize, state)
-	startX += btnSize + gap
+	renderer.SetDrawColor(255, 255, 255, 30)
+	renderer.FillRect(&sdl.Rect{X: seekBarX, Y: seekBarY, W: seekBarW, H: 1})
+	thumbX := seekBarX + int32(float64(seekBarW)*state.progress)
+	fillCircle(renderer, thumbX, seekBarY+seekBarH/2, 7, accent)
+	videoControlRects.progress = sdl.Rect{X: seekBarX, Y: seekBarY - 8, W: seekBarW, H: 20}
 
-	// Stop
+	// Control buttons row, centered within the bar.
+	btnSize := int32(36)
+	gap := int32(10)
+	// Order: stop, seek back, play/pause, seek forward, speed.
+	groupW := 5*btnSize + 4*gap
+	startX := x + (w-groupW)/2
+	btnY := barY + (barH-btnSize)/2
+
 	videoControlRects.stop = drawIconBtn(renderer, config, font, "⏹", startX, btnY, btnSize, state)
 	startX += btnSize + gap
-
-	// Seek forward
-	videoControlRects.seekFwd = drawIconBtn(renderer, config, font, "⏩", startX, btnY, btnSize, state)
-	startX += btnSize + gap + 12
-
-	// Volume down
-	videoControlRects.volDown = drawIconBtn(renderer, config, font, "🔉", startX, btnY, btnSize, state)
+	videoControlRects.seekBack = drawIconBtn(renderer, config, font, "⏪", startX, btnY, btnSize, state)
 	startX += btnSize + gap
-
-	// Volume up
-	videoControlRects.volUp = drawIconBtn(renderer, config, font, "🔊", startX, btnY, btnSize, state)
-	startX += btnSize + gap + 12
-
-	// Speed controls
+	playIcon := "⏸"
+	if state.phase == "paused" {
+		playIcon = "⏵"
+	}
+	videoControlRects.playPause = drawIconBtn(renderer, config, font, playIcon, startX, btnY, btnSize, state)
+	startX += btnSize + gap
+	videoControlRects.seekFwd = drawIconBtn(renderer, config, font, "⏩", startX, btnY, btnSize, state)
+	startX += btnSize + gap
 	speedLabel := fmt.Sprintf("%.1fx", state.speed)
-	speedW, _, _ := font.SizeUTF8(speedLabel)
-	speedX := startX
-	fillRoundedRect(renderer, speedX, btnY-2, int32(speedW)+12, 24, 12, GlossFill(18))
-	renderText(renderer, config, font, speedLabel, ColorTextPrimary(), speedX+6, btnY+2)
-	videoControlRects.speed = sdl.Rect{X: speedX, Y: btnY - 2, W: int32(speedW) + 12, H: 24}
+	videoControlRects.speed = drawIconBtn(renderer, config, font, speedLabel, startX, btnY, btnSize, state)
 
-	// Speed cycle button
-	cycleBtnX := speedX + int32(speedW) + 20
-	fillRoundedRect(renderer, cycleBtnX, btnY, btnSize, btnSize, 6, GlossFill(18))
-	renderText(renderer, config, font, "⚡", ColorTextPrimary(), cycleBtnX+7, btnY+7)
-	videoControlRects.speedCycle = sdl.Rect{X: cycleBtnX, Y: btnY, W: btnSize, H: btnSize}
+	// Volume +/- on the left of the bar.
+	volX := x + 18
+	videoControlRects.volDown = drawIconBtn(renderer, config, font, "🔉", volX, btnY, btnSize, state)
+	videoControlRects.volUp = drawIconBtn(renderer, config, font, "🔊", volX+btnSize+6, btnY, btnSize, state)
 
-	// Back button (top-right, next to volume)
-	backW, _, _ := font.SizeUTF8("✕")
-	backX := w - int32(backW) - 24
-	fillRoundedRect(renderer, backX+1, badgeY+1, int32(backW)+12, 26, 13, ShadowFill(40))
-	fillRoundedRect(renderer, backX, badgeY, int32(backW)+12, 26, 13, sdl.Color{R: 120, G: 120, B: 120, A: 120})
-	renderText(renderer, config, font, "✕", ColorTextPrimary(), backX+6, badgeY+6)
-	videoControlRects.back = sdl.Rect{X: backX, Y: badgeY, W: int32(backW) + 12, H: 26}
+	// Time on the right of the bar.
+	currentTime := state.progress * state.duration
+	timeText := formatTime(currentTime) + " / " + formatTime(state.duration)
+	tw, th, _ := font.SizeUTF8(timeText)
+	renderText(renderer, config, font, timeText, ColorTextPrimary(), x+w-int32(tw)-18, barY+(barH-int32(th))/2)
+
+	// Big centered play/pause button when paused.
+	if state.phase == "paused" {
+		overlayBtnSize := int32(80)
+		overlayBtnX := x + (w-overlayBtnSize)/2
+		overlayBtnY := y + (h-overlayBtnSize)/2
+		fillCircle(renderer, overlayBtnX+overlayBtnSize/2, overlayBtnY+overlayBtnSize/2, overlayBtnSize/2, WithAlpha(ColorSurfacePanel, 200))
+		strokeCircle(renderer, overlayBtnX+overlayBtnSize/2, overlayBtnY+overlayBtnSize/2, overlayBtnSize/2, WithAlpha(accent, 180))
+		// play triangle
+		cx := overlayBtnX + overlayBtnSize/2
+		cy := overlayBtnY + overlayBtnSize/2
+		s := overlayBtnSize / 5
+		renderer.SetDrawColor(accent.R, accent.G, accent.B, accent.A)
+		renderer.DrawLine(cx-s, cy-s, cx-s, cy+s)
+		renderer.DrawLine(cx-s, cy+s, cx+s-2, cy)
+		renderer.DrawLine(cx+s-2, cy, cx-s, cy-s)
+	}
 }
 
-func drawIconBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, icon string, x, y, size int32, state VideoPlayerState) sdl.Rect {
-	fillRoundedRect(renderer, x+1, y+1, size, size, 6, ShadowFill(40))
-	fillRoundedRect(renderer, x, y, size, size, 6, GlossFill(16))
-	renderer.SetDrawColor(255, 255, 255, 20)
+func drawIconBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, icon string, x, y, size int32, state *VideoPlayerState) sdl.Rect {
+	_ = state
+	fillRoundedRect(renderer, x, y, size, size, size/5, WithAlpha(ColorSurfaceRaised, 180))
+	renderer.SetDrawColor(255, 255, 255, 25)
 	renderer.FillRect(&sdl.Rect{X: x + 3, Y: y + 1, W: size - 6, H: 1})
-	renderText(renderer, config, font, icon, ColorTextPrimary(), x+7, y+7)
+	textY := y + (size-int32(font.Height()))/2
+	renderText(renderer, config, font, icon, ColorTextPrimary(), x+size/2-int32(len([]rune(icon))*8)/2, textY)
 	return sdl.Rect{X: x, Y: y, W: size, H: size}
 }
 

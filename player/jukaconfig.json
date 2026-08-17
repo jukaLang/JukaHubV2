@@ -4,7 +4,7 @@
   "Version": "0.4.0",
   "Width": 1280,
   "Height": 720,
-  "Background": "#0f1115",
+  "Background": "#0B0F17",
   "FontPath": "DejaVuSans.ttf",
   "channel_profile": {
     "channel_id": "975787212954275916",
@@ -12,9 +12,9 @@
   },
   "Variables": {
     "Fullscreen": false,
-    "ButtonColor": "#1c2230",
-    "LabelColor": "#e8eefc",
-    "InputColor": "#141a26",
+    "ButtonColor": "#1E293B",
+    "LabelColor": "#F8FAFC",
+    "InputColor": "#0F1420",
     "BackgroundImage": "background.jpg",
     "SearchWidth": 940,
     "GridColumns": 5,
@@ -30,7 +30,8 @@
       "groq_api_key": "",
       "groq_model": "llama-3.3-70b-versatile",
       "google_api_key": "",
-      "youtube_cookies_file": ""
+      "youtube_cookies_file": "",
+      "discord_token_type": "user"
     },
     "fontSizes": {
       "big": 52
@@ -40,7 +41,7 @@
     {
       "Name": "Main",
       "Layout": "home",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "menu",
@@ -54,7 +55,8 @@
           "Y": 44,
           "Width": 1220,
           "Height": 178,
-          "Variable": "recent_items"
+          "Variable": "recent_items",
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -64,8 +66,8 @@
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Tube",
-          "BgColor": "#ff3b3b",
-          "Color": "#ffffff",
+          "BgColor": "#1D4ED8",
+          "Color": "#F8FAFC",
           "Style": "tile"
         },
         {
@@ -76,8 +78,8 @@
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:FileExplorer",
-          "BgColor": "#2ecc71",
-          "Color": "#ffffff",
+          "BgColor": "#047857",
+          "Color": "#F8FAFC",
           "Style": "tile"
         },
         {
@@ -88,8 +90,8 @@
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Packages",
-          "BgColor": "#1abc9c",
-          "Color": "#ffffff",
+          "BgColor": "#B45309",
+          "Color": "#F8FAFC",
           "Style": "tile"
         },
         {
@@ -100,8 +102,8 @@
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Chat",
-          "BgColor": "#5865F2",
-          "Color": "#ffffff",
+          "BgColor": "#6D28D9",
+          "Color": "#F8FAFC",
           "Style": "tile"
         },
         {
@@ -112,8 +114,8 @@
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Favorites",
-          "BgColor": "#e74c3c",
-          "Color": "#ffffff",
+          "BgColor": "#BE185D",
+          "Color": "#F8FAFC",
           "Style": "tile"
         },
         {
@@ -124,8 +126,8 @@
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Misc",
-          "BgColor": "#2c3e50",
-          "Color": "#ffffff",
+          "BgColor": "#4338CA",
+          "Color": "#F8FAFC",
           "Style": "tile"
         },
         {
@@ -136,15 +138,27 @@
           "Width": 220,
           "Height": 170,
           "Trigger": "change_scene:Settings",
-          "BgColor": "#7f8c8d",
-          "Color": "#ffffff",
+          "BgColor": "#475569",
+          "Color": "#F8FAFC",
+          "Style": "tile"
+        },
+        {
+          "Type": "button",
+          "Text": "Search / Tools",
+          "X": 780,
+          "Y": 444,
+          "Width": 220,
+          "Height": 170,
+          "Trigger": "change_scene:Tube",
+          "BgColor": "#0891B2",
+          "Color": "#F8FAFC",
           "Style": "tile"
         }
       ]
     },
     {
       "Name": "Tube",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -205,9 +219,16 @@
           "Y": 135,
           "Width": 1160,
           "Height": 412,
-          "Color": "#0c0f16",
+          "Color": "#141B2B",
           "columns": 2,
           "rows": 5
+        },
+        {
+          "Type": "video",
+          "X": 60,
+          "Y": 135,
+          "Width": 1160,
+          "Height": 412
         },
         {
           "Type": "menu",
@@ -219,7 +240,7 @@
     },
     {
       "Name": "IPStream",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -257,7 +278,7 @@
           "X": 60,
           "Y": 180,
           "FontSize": 18,
-          "Color": "#9fb0c8"
+          "Color": "$labelColor"
         },
         {
           "Type": "menu",
@@ -269,7 +290,7 @@
     },
     {
       "Name": "FileExplorer",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -286,7 +307,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 480,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -353,7 +374,7 @@
     },
     {
       "Name": "LiveTV",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -370,7 +391,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 480,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -415,7 +436,7 @@
     },
     {
       "Name": "Podcasts",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -464,7 +485,7 @@
           "X": 60,
           "Y": 175,
           "FontSize": 16,
-          "Color": "#9fb0c8"
+          "Color": "$labelColor"
         },
         {
           "Type": "dynamiclist",
@@ -473,7 +494,7 @@
           "Y": 210,
           "Width": 1160,
           "Height": 390,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -496,7 +517,7 @@
     },
     {
       "Name": "Tickers",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -546,7 +567,7 @@
           "Y": 180,
           "Width": 1160,
           "Height": 420,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -580,7 +601,7 @@
     },
     {
       "Name": "Misc",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -697,7 +718,7 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:IPStream",
-          "BgColor": "#3b8bff",
+          "BgColor": "$buttonColor",
           "Color": "$labelColor"
         },
         {
@@ -730,8 +751,8 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:TextBrowser",
-          "BgColor": "#e67e22",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -741,8 +762,8 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:JukaLand",
-          "BgColor": "#2ecc71",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -752,8 +773,8 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "cache_clear",
-          "BgColor": "#e74c3c",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -763,8 +784,8 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:LiveTV",
-          "BgColor": "#9b59b6",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -774,8 +795,8 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:Podcasts",
-          "BgColor": "#e67e22",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -785,8 +806,8 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:Tickers",
-          "BgColor": "#1abc9c",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -796,8 +817,8 @@
           "Width": 220,
           "Height": 55,
           "Trigger": "change_scene:Weather",
-          "BgColor": "#3498db",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -820,7 +841,7 @@
     },
     {
       "Name": "Terminal",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -859,7 +880,7 @@
           "Y": 175,
           "Width": 1160,
           "Height": 425,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -882,7 +903,7 @@
     },
     {
       "Name": "Cron",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -899,7 +920,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 300,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "label",
@@ -916,7 +937,7 @@
           "Y": 468,
           "Width": 1160,
           "Height": 130,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -961,7 +982,7 @@
     },
     {
       "Name": "NetSpeed",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -978,7 +999,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 480,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -1012,7 +1033,7 @@
     },
     {
       "Name": "Benchmark",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1029,7 +1050,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 480,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -1074,7 +1095,7 @@
     },
     {
       "Name": "DiskSpace",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1112,7 +1133,7 @@
     },
     {
       "Name": "Weather",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1129,7 +1150,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 480,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -1152,7 +1173,7 @@
     },
     {
       "Name": "Hardware",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1169,7 +1190,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 480,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -1203,7 +1224,7 @@
     },
     {
       "Name": "LogExporter",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1220,7 +1241,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 480,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -1265,7 +1286,7 @@
     },
     {
       "Name": "Favorites",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1339,8 +1360,8 @@
           "Width": 120,
           "Height": 44,
           "Trigger": "fav_play",
-          "BgColor": "#2ecc71",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1350,8 +1371,8 @@
           "Width": 140,
           "Height": 44,
           "Trigger": "fav_remove",
-          "BgColor": "#c0392b",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1374,7 +1395,7 @@
     },
     {
       "Name": "UnitConverter",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1413,7 +1434,7 @@
     },
     {
       "Name": "Packages",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1421,7 +1442,7 @@
           "X": 40,
           "Y": 40,
           "FontSize": 40,
-          "Color": ""
+          "Color": "$labelColor"
         },
         {
           "Type": "packagelist",
@@ -1440,8 +1461,8 @@
           "Width": 140,
           "Height": 45,
           "Trigger": "packages_refresh",
-          "BgColor": "",
-          "Color": ""
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1451,8 +1472,8 @@
           "Width": 120,
           "Height": 45,
           "Trigger": "change_scene:Main",
-          "BgColor": "",
-          "Color": ""
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "menu",
@@ -1464,7 +1485,7 @@
     },
     {
       "Name": "Chat",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1501,8 +1522,8 @@
           "Width": 120,
           "Height": 45,
           "Trigger": "chat_send",
-          "BgColor": "#2ecc71",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1512,8 +1533,8 @@
           "Width": 110,
           "Height": 45,
           "Trigger": "groq_chat",
-          "BgColor": "#9b59b6",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1523,8 +1544,8 @@
           "Width": 100,
           "Height": 45,
           "Trigger": "chat_clear",
-          "BgColor": "#c0392b",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1547,7 +1568,7 @@
     },
     {
       "Name": "Shorts",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1597,7 +1618,7 @@
     },
     {
       "Name": "CanvasSandbox",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1634,8 +1655,8 @@
           "Width": 120,
           "Height": 45,
           "Trigger": "canvas_run",
-          "BgColor": "#2ecc71",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1645,8 +1666,8 @@
           "Width": 110,
           "Height": 45,
           "Trigger": "canvas_clear",
-          "BgColor": "#c0392b",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "button",
@@ -1669,7 +1690,7 @@
     },
     {
       "Name": "JukaLand",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "button",
@@ -1679,8 +1700,8 @@
           "Width": 160,
           "Height": 40,
           "Trigger": "jukaland_init",
-          "BgColor": "#c0392b",
-          "Color": "#ffffff"
+          "BgColor": "$buttonColor",
+          "Color": "$labelColor"
         },
         {
           "Type": "menu",
@@ -1692,7 +1713,7 @@
     },
     {
       "Name": "TextBrowser",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1777,7 +1798,7 @@
     },
     {
       "Name": "Settings",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -1852,7 +1873,7 @@
     },
     {
       "Name": "SettingsGeneral",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -2024,7 +2045,7 @@
     },
     {
       "Name": "SettingsAppearance",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -2123,7 +2144,7 @@
     },
     {
       "Name": "ThemePresets",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -2202,7 +2223,7 @@
     },
     {
       "Name": "Plugins",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",
@@ -2219,7 +2240,7 @@
           "Y": 120,
           "Width": 1160,
           "Height": 400,
-          "Color": "#0c0f16"
+          "Color": "#141B2B"
         },
         {
           "Type": "button",
@@ -2253,7 +2274,7 @@
     },
     {
       "Name": "Exit",
-      "Background": "#0f1115",
+      "Background": "#0B0F17",
       "Elements": [
         {
           "Type": "label",

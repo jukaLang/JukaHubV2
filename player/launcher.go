@@ -53,11 +53,9 @@ func tileIconKind(elem Element) string {
 
 // drawTileIcon renders a monochrome line icon centered in a box of the given
 // size using pure SDL primitives (no external art assets required).
-// The icon background is fully opaque to avoid blending artifacts.
-func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl.Color) {
-	// Use fully opaque alpha for icon backgrounds to avoid blending artifacts.
-	bgColor := sdl.Color{R: c.R, G: c.G, B: c.B, A: 255}
-	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
+// bg is the tile surface color used for filled icon backings so the icon reads
+// as a clean line drawing; fg is the icon stroke/highlight color.
+func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, fg, bg sdl.Color) {
 	u := size / 12
 	if u < 1 {
 		u = 1
@@ -65,36 +63,46 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl
 	s := size / 3
 
 	switch kind {
+	case "media", "video":
+		kind = "play"
+	}
+
+	switch kind {
 	case "play":
-		// play triangle inside a rounded rect frame
+		// play triangle inside a subtle circle
 		r := int32(4)
-		fillRoundedRect(renderer, cx-size/2, cy-size/2, size, size, r, bgColor)
-		renderer.DrawRect(&sdl.Rect{X: cx - size/2, Y: cy - size/2, W: size, H: size})
+		fillRoundedRect(renderer, cx-size/2, cy-size/2, size, size, r, bg)
+		strokeRoundedRect(renderer, cx-size/2, cy-size/2, size, size, r, 2, fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		a := pt{cx - s/2, cy - s/2 + 2}
 		b := pt{cx - s/2, cy + s/2 - 2}
 		cc := pt{cx + s/2 - 1, cy}
-		fillTriangleFilled(renderer, a, b, cc, c)
+		renderer.DrawLine(a.x, a.y, b.x, b.y)
+		renderer.DrawLine(b.x, b.y, cc.x, cc.y)
+		renderer.DrawLine(cc.x, cc.y, a.x, a.y)
 	case "chat":
 		bw := size - size/4
 		bh := size - size/4
 		bx := cx - bw/2
 		by := cy - bh/2 + size/10
-		fillRoundedRect(renderer, bx, by, bw, bh, 8, bgColor)
-		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: bw, H: bh})
+		fillRoundedRect(renderer, bx, by, bw, bh, 8, bg)
+		strokeRoundedRect(renderer, bx, by, bw, bh, 8, 2, fg)
 		// tail
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawLine(bx+size/8, by+bh-1, bx+size/8+4, by+bh+size/8)
 		renderer.DrawLine(bx+size/8+4, by+bh+size/8, bx+size/5, by+bh-2)
 		// dots
 		dotR := u
-		fillCircle(renderer, bx+bw/2-4*u, by+bh/2, dotR, c)
-		fillCircle(renderer, bx+bw/2, by+bh/2, dotR, c)
-		fillCircle(renderer, bx+bw/2+4*u, by+bh/2, dotR, c)
+		fillCircle(renderer, bx+bw/2-4*u, by+bh/2, dotR, fg)
+		fillCircle(renderer, bx+bw/2, by+bh/2, dotR, fg)
+		fillCircle(renderer, bx+bw/2+4*u, by+bh/2, dotR, fg)
 	case "files":
-		// folder
+		// folder outline
 		top := cy - size/3
 		bot := cy + size/3
-		fillRoundedRect(renderer, cx-size/2, top, size, bot-top, 4, bgColor)
-		renderer.DrawRect(&sdl.Rect{X: cx - size/2, Y: top, W: size, H: bot - top})
+		fillRoundedRect(renderer, cx-size/2, top, size, bot-top, 4, bg)
+		strokeRoundedRect(renderer, cx-size/2, top, size, bot-top, 4, 2, fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawLine(cx-size/2+2, top, cx-size/2+size/4, top-4)
 		renderer.DrawLine(cx-size/2+size/4, top-4, cx-size/2+size/2, top-4)
 	case "tv":
@@ -102,20 +110,22 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl
 		h := size - size/4
 		x := cx - w/2
 		y := cy - h/2 + size/12
-		fillRoundedRect(renderer, x, y, w, h, 5, bgColor)
-		renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
+		fillRoundedRect(renderer, x, y, w, h, 5, bg)
+		strokeRoundedRect(renderer, x, y, w, h, 5, 2, fg)
 		// stand
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawLine(cx, y+h, cx, y+h+size/6)
 		renderer.DrawLine(cx-size/5, y+h+size/6+2, cx+size/5, y+h+size/6+2)
 		// screen accent
-		renderer.DrawRect(&sdl.Rect{X: x + 6, Y: y + 5, W: w - 12, H: h - 12})
+		strokeRoundedRect(renderer, x+6, y+5, w-12, h-12, 2, 2, fg)
 	case "box":
 		w := size - size/6
 		h := size - size/6
 		x := cx - w/2
 		y := cy - h/2 + size/12
-		fillRoundedRect(renderer, x, y, w, h, 3, bgColor)
-		renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
+		fillRoundedRect(renderer, x, y, w, h, 3, bg)
+		strokeRoundedRect(renderer, x, y, w, h, 3, 2, fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawLine(x, y+h/3, x+w, y+h/3)
 		renderer.DrawLine(cx, y, cx, y+h/3)
 		// down arrow on the flap
@@ -127,13 +137,15 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl
 		bh := size - size/4
 		bx := cx - bw/2
 		by := cy - bh/2 + size/10
-		fillRoundedRect(renderer, bx, by, bw, bh, bw/2, bgColor)
-		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: bw, H: bh})
+		fillRoundedRect(renderer, bx, by, bw, bh, bw/2, bg)
+		strokeRoundedRect(renderer, bx, by, bw, bh, bw/2, 2, fg)
 		// stand
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawLine(cx, by+bh, cx, by+bh+size/8)
 		renderer.DrawLine(cx-size/4, by+bh+size/8, cx+size/4, by+bh+size/8)
 	case "chart":
-		// trending line
+		// trending line chart
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawLine(cx-size/2+4, cy+size/3-4, cx-size/8, cy-size/12)
 		renderer.DrawLine(cx-size/8, cy-size/12, cx+size/8, cy+size/6)
 		renderer.DrawLine(cx+size/8, cy+size/6, cx+size/2-4, cy-size/3+4)
@@ -155,19 +167,23 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl
 			rad := ang * 3.14159265 / 180.0
 			pts = append(pts, pt{x: int32(cx2 + r*cos64(rad)), y: int32(cy2 + r*sin64(rad))})
 		}
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		for i := 0; i < len(pts); i++ {
 			n := (i + 1) % len(pts)
 			renderer.DrawLine(pts[i].x, pts[i].y, pts[n].x, pts[n].y)
 		}
 	case "cloud":
 		// cloud: overlapping circles + base (no fill background)
-		fillCircle(renderer, cx-size/6, cy-size/8, size/7, c)
-		fillCircle(renderer, cx+size/8, cy-size/6, size/6, c)
+		fillCircle(renderer, cx-size/6, cy-size/8, size/7, bg)
+		fillCircle(renderer, cx+size/8, cy-size/6, size/6, bg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+		strokeCircle(renderer, cx, cy, size/3, fg)
 	case "gear":
 		// gear: circle + spokes (no fill background)
 		// inner circle cutout
 		gr := size / 4
-		fillCircle(renderer, cx, cy, gr/2, HomeCardColor())
+		fillCircle(renderer, cx, cy, gr/2, bg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		for i := 0; i < 8; i++ {
 			ang := float64(i) * 45.0 * 3.14159265 / 180.0
 			grf := float64(gr)
@@ -182,7 +198,8 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl
 		sq := size - size/3
 		x := cx - sq/2
 		y := cy - sq/2
-		fillRoundedRect(renderer, x, y, sq, sq, 4, bgColor)
+		fillRoundedRect(renderer, x, y, sq, sq, 4, bg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: sq, H: sq})
 		// pins
 		pin := size / 8
@@ -198,7 +215,8 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl
 		bh := size - size/6
 		bx := cx - bw/2
 		by := cy - bh/2
-		fillRoundedRect(renderer, bx, by, bw, bh, 4, c)
+		fillRoundedRect(renderer, bx, by, bw, bh, 4, bg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: bw, H: bh})
 		renderer.DrawLine(bx+size/6, by+bh/2, bx+size/3, by+bh/2)
 		renderer.DrawLine(bx+size/3, by+bh/2, bx+size/3+size/8, by+bh/2-size/8)
@@ -209,26 +227,29 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, c sdl
 		h := size - size/3
 		x := cx - w/2
 		y := cy - h/2 + size/8
-		fillRoundedRect(renderer, x, y, w, h, h/2, c)
+		fillRoundedRect(renderer, x, y, w, h, h/2, bg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		renderer.DrawRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
-		fillCircle(renderer, cx-w/4, cy+size/10, u, c)
-		fillCircle(renderer, cx+w/4, cy+size/10, u, c)
+		fillCircle(renderer, cx-w/4, cy+size/10, u, fg)
+		fillCircle(renderer, cx+w/4, cy+size/10, u, fg)
 	case "resume":
 		// play in circle (outline only)
-		fillCircle(renderer, cx, cy, size/2, c)
+		fillCircle(renderer, cx, cy, size/2, bg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		a := pt{cx - size/8, cy - size/6}
 		b := pt{cx - size/8, cy + size/6}
 		cc := pt{cx + size/5, cy}
-		fillTriangleFilled(renderer, a, b, cc, sdl.Color{R: 8, G: 10, B: 16, A: 255})
+		fillTriangleFilled(renderer, a, b, cc, fg)
 	default:
 		// app grid
-		g := size / 4
+		gap := size / 4
 		for i := int32(0); i < 2; i++ {
 			for j := int32(0); j < 2; j++ {
-				gx := cx - g - 3 + i*(g+6)
-				gy := cy - g - 3 + j*(g+6)
-				fillRoundedRect(renderer, gx, gy, g, g, 3, c)
-				renderer.DrawRect(&sdl.Rect{X: gx, Y: gy, W: g, H: g})
+				gx := cx - gap - 3 + i*(gap+6)
+				gy := cy - gap - 3 + j*(gap+6)
+				fillRoundedRect(renderer, gx, gy, gap, gap, 3, bg)
+				renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+				renderer.DrawRect(&sdl.Rect{X: gx, Y: gy, W: gap, H: gap})
 			}
 		}
 	}
@@ -239,12 +260,12 @@ func sin64(a float64) float64 { return math.Sin(a) }
 
 // fillTriangleFilled draws a solid triangle by scan-conversion using a dense
 // line fan so it reads as a filled shape (matching the renderCircleSector style).
-func fillTriangleFilled(renderer *sdl.Renderer, a, b, c pt, col sdl.Color) {
+func fillTriangleFilled(renderer *sdl.Renderer, a, b, fg pt, col sdl.Color) {
 	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
 	// rasterize per row between minY and maxY
 	minY := a.y
 	maxY := a.y
-	for _, p := range []pt{a, b, c} {
+	for _, p := range []pt{a, b, fg} {
 		if p.y < minY {
 			minY = p.y
 		}
@@ -254,7 +275,7 @@ func fillTriangleFilled(renderer *sdl.Renderer, a, b, c pt, col sdl.Color) {
 	}
 	for y := minY; y <= maxY; y++ {
 		var xs []int32
-		edges := [][2]pt{{a, b}, {b, c}, {c, a}}
+		edges := [][2]pt{{a, b}, {b, fg}, {fg, a}}
 		for _, e := range edges {
 			if e[0].y == e[1].y {
 				continue

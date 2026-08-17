@@ -14,10 +14,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // --- Chat System ---
@@ -147,6 +149,9 @@ const defaultDiscordChannel = "975787212954275916"
 // the chat UI.
 var discordStatus string
 
+// chatScrollOffset is the number of messages to skip from the end when scrolling.
+var chatScrollOffset int
+
 // groqStatus holds a short human-readable Groq AI connection status shown in
 // the chat UI.
 var groqStatus string
@@ -208,7 +213,11 @@ func discordConnect() error {
 		discordSession.Close()
 		discordSession = nil
 	}
-	dg, err := discordgo.New("Bot " + tok)
+	tokenPrefix := "Bot "
+	if tokenType, ok := appConfig.Variables.Custom["discord_token_type"].(string); ok && strings.EqualFold(tokenType, "user") {
+		tokenPrefix = ""
+	}
+	dg, err := discordgo.New(tokenPrefix + tok)
 	if err != nil {
 		discordStatus = "Discord: " + err.Error()
 		return err
@@ -459,130 +468,227 @@ func sendChatMessage(sender, text string) {
 	}
 }
 
+// senderColorForName returns a stable, readable accent color for a sender name.
+func senderColorForName(name string) sdl.Color {
+	colors := []sdl.Color{
+		{R: 85, G: 216, B: 255, A: 255},
+		{R: 139, G: 124, B: 255, A: 255},
+		{R: 72, G: 213, B: 151, A: 255},
+		{R: 255, G: 191, B: 105, A: 255},
+		{R: 226, G: 104, B: 120, A: 255},
+		{R: 255, G: 122, B: 122, A: 255},
+		{R: 173, G: 122, B: 255, A: 255},
+	}
+	h := 0
+	for _, r := range name {
+		h = h*31 + int(r)
+	}
+	if h < 0 {
+		h = -h
+	}
+	return colors[h%len(colors)]
+}
+
+// renderChatAvatar draws a small colored circle with the sender's first initial.
+func renderChatAvatar(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, size int32, name string, col sdl.Color) {
+	fillCircle(renderer, x+size/2, y+size/2, size/2, col)
+	initial := "?"
+	runes := []rune(name)
+	if len(runes) > 0 {
+		initial = string(runes[0])
+	}
+	fw, _, _ := font.SizeUTF8(initial)
+	textX := x + (size-int32(fw))/2
+	textY := y + (size-int32(font.Height()))/2
+	renderText(renderer, config, font, initial, sdl.Color{R: 255, G: 255, B: 255, A: 255}, textX, textY)
+}
+
 func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	font, _ := getCachedFont(config, element.Font)
 	if font == nil {
-		return
+		font, _ = getCachedFont(config, "small")
+	}
+	titleFont, _ := getCachedFont(config, "medium")
+	if titleFont == nil {
+		titleFont = font
 	}
 
-	listX := element.X + 10
-	listY := element.Y + 10
-	listW := getElementWidth(element, 1160) - 20
-	listH := getElementHeight(element, 480) - 60
+	listX := element.X + SpaceMD
+	listY := element.Y + SpaceMD
+	listW := getElementWidth(element, 1160) - 2*SpaceMD
+	listH := getElementHeight(element, 480) - 2*SpaceMD
 
-	drawPanel(renderer, listX, listY, listW, listH, PanelFill(220), accentColor)
+	const headerH = int32(44)
+	const inputH = int32(50)
+	msgAreaTop := listY + headerH + SpaceSM
+	msgAreaBottom := listY + listH - inputH - SpaceSM
 
-	var discordStatusW int32
-	// Discord connection status (top-right of the chat panel)
+	// Panel background with subtle border.
+	fillRoundedRect(renderer, listX, listY, listW, listH, RadiusMD, ColorSurfaceRaised)
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: listW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: 1, H: listH - 2})
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 60)
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + listH - 2, W: listW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: listX + listW - 2, Y: listY + 1, W: 1, H: listH - 2})
+
+	// Status indicators row.
+	statusY := listY + SpaceSM
+	statusFont, _ := getCachedFont(config, "small")
+	if statusFont == nil {
+		statusFont = font
+	}
+	statusRight := listX + listW - SpaceMD
+
+	// Discord status (right-aligned).
 	if discordStatus != "" {
-		statFont, _ := getCachedFont(config, "small")
-		if statFont == nil {
-			statFont = font
-		}
-		dsw, _, _ := statFont.SizeUTF8(discordStatus)
-		discordStatusW = int32(dsw)
-		renderText(renderer, config, statFont, discordStatus, ColorTextTertiary(), listX+listW-discordStatusW-12, listY+8)
+		dsw, _, _ := statusFont.SizeUTF8(discordStatus)
+		statusRight -= int32(dsw) + SpaceSM
+		renderText(renderer, config, statusFont, discordStatus, ColorTextTertiary(), statusRight, statusY)
+		statusRight -= SpaceSM
 	}
 
-	// Groq AI connection status (left of Discord status)
+	// Groq status (left of Discord).
 	if groqStatus != "" {
-		statFont, _ := getCachedFont(config, "small")
-		if statFont == nil {
-			statFont = font
+		gw, _, _ := statusFont.SizeUTF8(groqStatus)
+		groqX := statusRight - int32(gw) - SpaceSM
+		if groqX < listX+SpaceMD {
+			groqX = listX + SpaceMD
 		}
-		gw, _, _ := statFont.SizeUTF8(groqStatus)
-		startX := listX + listW - discordStatusW - 12 - int32(gw) - 16
-		if discordStatus != "" && startX < listX+listW-discordStatusW-12-int32(gw)-16 {
-			startX = listX + 8
-		}
-		if startX < listX+8 {
-			startX = listX + 8
-		}
-		renderText(renderer, config, statFont, groqStatus, sdl.Color{R: 100, G: 200, B: 120, A: 255}, startX, listY+8)
+		renderText(renderer, config, statusFont, groqStatus, ColorSuccess, groqX, statusY)
 	}
 
+	// Divider under status.
+	dividerY := statusY + int32(statusFont.Height()) + SpaceXS
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
+	renderer.FillRect(&sdl.Rect{X: listX + SpaceMD, Y: dividerY, W: listW - 2*SpaceMD, H: 1})
+
+	// Messages area.
 	chatMutex.Lock()
 	messages := chatMessages
 	chatMutex.Unlock()
 
-	lineH := int32(28)
-	maxVisible := int(listH / lineH)
-	if maxVisible < 1 {
-		maxVisible = 1
+	bubblePad := int32(12)
+	avatarSize := int32(28)
+	maxBubbleW := listW * 3 / 4
+	lineH := int32(font.Height())
+	bubbleGap := int32(10)
+
+	// Clamp scroll offset to a valid range.
+	if chatScrollOffset < 0 {
+		chatScrollOffset = 0
 	}
-	start := 0
-	if len(messages) > maxVisible {
-		start = len(messages) - maxVisible
+	if chatScrollOffset > len(messages)-1 {
+		chatScrollOffset = len(messages) - 1
 	}
-	end := len(messages)
-	if start < 0 {
-		start = 0
+	if chatScrollOffset < 0 {
+		chatScrollOffset = 0
 	}
 
-	for i := start; i < end; i++ {
+	// Render messages from the bottom up so the latest message sits at the bottom.
+	startY := msgAreaBottom
+	endIdx := len(messages) - 1 - chatScrollOffset
+	for i := endIdx; i >= 0 && startY > msgAreaTop; i-- {
 		msg := messages[i]
-		iy := listY + 10 + int32(i-start)*lineH
-		// subtle alternating row stripe
-		if (i-start)%2 == 0 {
-			fillRoundedRect(renderer, listX+4, iy, listW-8, lineH-2, 5, GlossFill(4))
-		}
-		timeStr := msg.Timestamp.Format("15:04")
-		prefix := fmt.Sprintf("[%s] %s:", timeStr, msg.Sender)
-		line := msg.Text
-		if len(line) > 70 {
-			line = line[:67] + "..."
-		}
-		if font != nil {
-			senderCol := ColorTextAccent()
-			if msg.Sender == "You" || strings.EqualFold(msg.Sender, "user") {
-				senderCol = ColorInfo
-			}
-			renderText(renderer, config, font, prefix, senderCol, listX+12, iy)
-			pw, _, _ := font.SizeUTF8(prefix)
-			textX := listX + 12 + int32(pw) + 1
+		isUser := strings.EqualFold(msg.Sender, "You") || strings.EqualFold(msg.Sender, "User")
+		isSystem := strings.EqualFold(msg.Sender, "System") || strings.EqualFold(msg.Sender, "Juka AI")
 
-			remaining := line
-			curX := textX
-			for {
-				match := urlRegex.FindStringIndex(remaining)
-				if match == nil {
-					break
-				}
-				startIdx := match[0]
-				endIdx := match[1]
-				if startIdx > 0 {
-					before := remaining[:startIdx]
-					renderText(renderer, config, font, before, ColorTextSecondary(), curX, iy)
-					bw, _, _ := font.SizeUTF8(before)
-					curX += int32(bw)
-				}
-				urlStr := remaining[startIdx:endIdx]
-				renderText(renderer, config, font, urlStr, sdl.Color{R: 100, G: 180, B: 255, A: 255}, curX, iy)
-				uw, _, _ := font.SizeUTF8(urlStr)
-				curX += int32(uw)
-				remaining = remaining[endIdx:]
-			}
-			if remaining != "" {
-				renderText(renderer, config, font, remaining, ColorTextSecondary(), curX, iy)
-			}
+		text := msg.Text
+		textW, _, _ := font.SizeUTF8(text)
+		bw := int32(textW) + bubblePad*2
+		if bw > maxBubbleW {
+			bw = maxBubbleW
+			text = fitTextWidth(renderer, config, font, text, bw-bubblePad*2)
 		}
+		bh := lineH + bubblePad*2
 
-		// Image thumbnail below the message
+		var imageH int32
+		var thumbTex *sdl.Texture
 		if msg.ImageURL != "" {
-			tex := getChatImageTexture(renderer, msg.ImageURL)
-			if tex != nil {
-				iw, ih := int32(160), int32(120)
-				ix := listX + 12
-				iy2 := iy + lineH + 4
-				fillRoundedRect(renderer, ix, iy2, iw, ih, 6, sdl.Color{R: 20, G: 24, B: 32, A: 255})
-				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 100)
-				renderer.DrawRect(&sdl.Rect{X: ix, Y: iy2, W: iw, H: ih})
-				renderer.Copy(tex, nil, &sdl.Rect{X: ix + 1, Y: iy2 + 1, W: iw - 2, H: ih - 2})
+			thumbTex = getChatImageTexture(renderer, msg.ImageURL)
+			if thumbTex != nil {
+				imageH = 80 + SpaceXS
 			}
 		}
+		bh += imageH
+
+		by := startY - bh
+		if by < msgAreaTop {
+			break
+		}
+
+		var bx int32
+		var senderCol sdl.Color
+		if isUser {
+			bx = listX + listW - bw - SpaceSM
+			senderCol = ColorInfo
+		} else if isSystem {
+			bx = listX + (listW-bw)/2
+			senderCol = ColorWarning
+		} else {
+			bx = listX + avatarSize + SpaceSM*2
+			senderCol = senderColorForName(msg.Sender)
+			// Avatar.
+			renderChatAvatar(renderer, config, font, listX+SpaceSM, by+(bh-avatarSize)/2, avatarSize, msg.Sender, senderCol)
+		}
+
+		// Bubble background.
+		bubbleCol := ColorSurface
+		if isUser {
+			bubbleCol = WithAlpha(ColorInfo, 60)
+		} else if isSystem {
+			bubbleCol = WithAlpha(ColorSurfaceAlt, 200)
+		}
+		fillRoundedRect(renderer, bx, by, bw, bh, RadiusMD, bubbleCol)
+		if isUser {
+			strokeRoundedRect(renderer, bx-1, by-1, bw+2, bh+2, RadiusMD+1, 1, WithAlpha(ColorInfo, 120))
+		}
+
+		// Sender name + timestamp above the bubble.
+		if !isSystem {
+			nameText := fmt.Sprintf("%s • %s", msg.Sender, msg.Timestamp.Format("15:04"))
+			nameX := bx
+			nameY := by - int32(statusFont.Height()) - 2
+			renderText(renderer, config, statusFont, nameText, senderCol, nameX, nameY)
+		}
+
+		// Message text.
+		renderText(renderer, config, font, text, ColorTextPrimary(), bx+bubblePad, by+bubblePad)
+
+		// Inline image thumbnail.
+		if thumbTex != nil {
+			iw := int32(120)
+			ih := int32(80)
+			ix := bx + bubblePad
+			iy2 := by + lineH + bubblePad + SpaceXS
+			fillRoundedRect(renderer, ix, iy2, iw, ih, RadiusSM, ColorSurface)
+			renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
+			renderer.DrawRect(&sdl.Rect{X: ix, Y: iy2, W: iw, H: ih})
+			renderer.Copy(thumbTex, nil, &sdl.Rect{X: ix + 1, Y: iy2 + 1, W: iw - 2, H: ih - 2})
+		}
+
+		startY = by - bubbleGap - int32(statusFont.Height()) - 2
 	}
 
 	processChatImageDownloads(renderer)
+
+	// Input box at the bottom.
+	inputY := listY + listH - inputH - SpaceSM
+	inputBorderCol := ColorBorder
+	if chatInputActive {
+		inputBorderCol = WithAlpha(ColorInfo, 160)
+	}
+	fillRoundedRect(renderer, listX+SpaceSM, inputY, listW-2*SpaceSM, inputH, RadiusMD, ColorSurfacePanel)
+	strokeRoundedRect(renderer, listX+SpaceSM, inputY, listW-2*SpaceSM, inputH, RadiusMD, 1, inputBorderCol)
+
+	if chatInputText == "" {
+		renderText(renderer, config, font, "Type a message and press ENTER...", ColorTextTertiary(), listX+SpaceMD, inputY+(inputH-lineH)/2)
+	} else {
+		renderText(renderer, config, font, chatInputText, ColorTextPrimary(), listX+SpaceMD, inputY+(inputH-lineH)/2)
+	}
+
+	// Input hint.
+	renderText(renderer, config, statusFont, "ENTER send • UP/DOWN scroll", ColorTextTertiary(), listX+SpaceMD, inputY+inputH+SpaceXS)
 }
 
 func handleChatInput(e *sdl.KeyboardEvent, config *Config) {
@@ -590,16 +696,24 @@ func handleChatInput(e *sdl.KeyboardEvent, config *Config) {
 		switch e.Keysym.Sym {
 		case sdl.K_RETURN:
 			if chatInputText != "" {
-				sendChatMessage("User", chatInputText)
+				sendChatMessage("You", chatInputText)
 				chatInputText = ""
 			}
 		case sdl.K_BACKSPACE:
 			if len(chatInputText) > 0 {
-				chatInputText = chatInputText[:len(chatInputText)-1]
+				// Remove the last complete rune, not just the last byte.
+				_, size := utf8.DecodeLastRuneInString(chatInputText)
+				if size > 0 {
+					chatInputText = chatInputText[:len(chatInputText)-size]
+				}
 			}
-		default:
-			if e.Keysym.Sym != 0 {
-				chatInputText += string(rune(e.Keysym.Sym))
+		case sdl.K_ESCAPE:
+			chatInputText = ""
+		case sdl.K_UP:
+			chatScrollOffset++
+		case sdl.K_DOWN:
+			if chatScrollOffset > 0 {
+				chatScrollOffset--
 			}
 		}
 	}

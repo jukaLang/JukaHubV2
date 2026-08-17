@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -569,7 +568,7 @@ func handleFavoritesMouseClick(mx, my int32, config *Config) {
 
 func openInExplorer(path string) {
 	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
+	if IsWindows() {
 		dir := filepath.Dir(path)
 		if _, err := os.Stat(dir); err != nil {
 			dir = "."

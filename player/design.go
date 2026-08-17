@@ -17,8 +17,8 @@ const (
 	HomeTopBarHSmall    int32 = 40
 	HomeFooterH         int32 = 48
 	HomeFooterHSmall    int32 = 42
-	HomeSectionGap      int32 = 18
-	HomeCardGap         int32 = 18
+	HomeSectionGap      int32 = 14
+	HomeCardGap         int32 = 14
 	HomeCols            int32 = 4
 	HomeColsSmall       int32 = 3
 	HomeColsTiny        int32 = 2

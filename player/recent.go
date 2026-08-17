@@ -12,6 +12,7 @@ import (
 var (
 	recentFocusIndex int
 	recentMutex      sync.Mutex
+	emptyActionRect  sdl.Rect // "Open Media" action button in empty Continue panel
 )
 
 func getRecentItems() []FavoriteItem {
@@ -89,11 +90,11 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 
 	items := getRecentItems()
 	if len(items) == 0 {
-		// Compact empty state: icon + message + action hint.
+		// Compact empty state: icon + message + action button.
 		iconSize := EmptyIconSize
 		iconCX := listX + listW/2
 		iconCY := listY + listH/2 + SpaceXS
-		drawTileIcon(renderer, iconCX, iconCY, iconSize, "media", ColorTextSecondary())
+		drawTileIcon(renderer, iconCX, iconCY, iconSize, "media", ColorTextSecondary(), HomeCardColor())
 		msg1 := "Nothing played recently"
 		msg2 := "Open Media to start watching or listening"
 		f, _ := getCachedFont(config, "small")
@@ -104,6 +105,24 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		mw2, _, _ := f.SizeUTF8(msg2)
 		renderText(renderer, config, f, msg1, ColorTextPrimary(), iconCX-int32(mw1)/2, iconCY+EmptyMsgOffset1)
 		renderText(renderer, config, f, msg2, ColorTextSecondary(), iconCX-int32(mw2)/2, iconCY+EmptyMsgOffset2)
+
+		// Action button.
+		btnLabel := "Open Media"
+		bwRaw, bhRaw, _ := f.SizeUTF8(btnLabel)
+		bw := int32(bwRaw) + SpaceLG*2
+		bh := int32(32)
+		if bw < 120 {
+			bw = 120
+		}
+		_ = bhRaw
+		bx := listX + (listW-bw)/2
+		by := iconCY + EmptyMsgOffset2 + SpaceMD
+		fillRoundedRect(renderer, bx, by, bw, bh, RadiusSM, focusColorForAccent(accentColor))
+		renderer.SetDrawColor(ColorTextInverse().R, ColorTextInverse().G, ColorTextInverse().B, ColorTextInverse().A)
+		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: bw, H: bh})
+		renderText(renderer, config, f, btnLabel, ColorTextInverse(), bx+SpaceLG, by+(bh-int32(f.Height()))/2)
+		emptyActionRect = sdl.Rect{X: bx, Y: by, W: bw, H: bh}
+
 		if homeLayoutActive {
 			focusCol := focusColorForAccent(accentColor)
 			strokeRoundedRect(renderer, listX, listY, listW, listH, RadiusLG, FocusRing, WithAlpha(focusCol, 180))
@@ -112,6 +131,7 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 
 	// Up to 3 recent items in a compact horizontal row.
+	emptyActionRect = sdl.Rect{}
 	cardCount := len(items)
 	if cardCount > 3 {
 		cardCount = 3
@@ -152,7 +172,7 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		chipX := sx + SpaceSM
 		chipY := sy + SpaceSM
 		fillRoundedRect(renderer, chipX, chipY, chipS, chipS, RadiusSM, WithAlpha(ColorSurfaceAlt, 200))
-		drawTileIcon(renderer, chipX+chipS/2, chipY+chipS/2, int32(float64(chipS)*0.55), icon, ColorTextPrimary())
+		drawTileIcon(renderer, chipX+chipS/2, chipY+chipS/2, int32(float64(chipS)*0.55), icon, ColorTextPrimary(), ColorSurfaceAlt)
 
 		// Label (clipped to a single line with ellipsis)
 		label := recentItemLabel(items[i])
@@ -266,8 +286,9 @@ func handleRecentMouseClick(mx, my int32, config *Config) {
 
 	items := getRecentItems()
 	if len(items) == 0 {
-		// Empty panel: any click opens Media (Tube).
-		if mx >= listX && mx <= listX+listW && my >= listY && my <= listY+listH {
+		// Empty panel: only the action button opens Media (Tube).
+		if mx >= emptyActionRect.X && mx <= emptyActionRect.X+emptyActionRect.W &&
+			my >= emptyActionRect.Y && my <= emptyActionRect.Y+emptyActionRect.H {
 			if idx := findSceneIndex(config, "Tube"); idx >= 0 {
 				changeSceneTo(config, idx)
 			}

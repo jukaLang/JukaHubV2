@@ -169,9 +169,10 @@ var (
 	unitResult     string
 
 	// Chat state
-	chatMessages  []ChatMessage
-	chatMutex     sync.Mutex
-	chatInputText string
+	chatMessages    []ChatMessage
+	chatMutex       sync.Mutex
+	chatInputText   string
+	chatInputActive bool
 
 	// Canvas Sandbox state
 	canvasCode    string
@@ -195,7 +196,51 @@ var (
 	// Logical screen size (configurable for devices like TrimuiSmartPro)
 	screenWidth  int32 = 1280
 	screenHeight int32 = 720
+
+	// Window scaling state for resizable Windows builds. The renderer renders
+	// into a fixed 1280x720 logical canvas and SDL letterboxes to the physical
+	// window. Mouse coordinates are converted from physical to logical so hit
+	// testing stays correct after resizing.
+	windowPhysicalW   int32   = 1280
+	windowPhysicalH   int32   = 720
+	windowScaleFactor float64 = 1.0
+	windowOffsetX     int32   = 0
+	windowOffsetY     int32   = 0
 )
+
+// updateWindowScale recalculates the scale and letterbox offsets used to map
+// physical mouse coordinates into the logical 1280x720 canvas. It should be
+// called whenever the SDL window is resized.
+func updateWindowScale(physicalW, physicalH int32) {
+	windowPhysicalW, windowPhysicalH = physicalW, physicalH
+	if windowPhysicalW <= 0 || windowPhysicalH <= 0 {
+		windowScaleFactor = 1.0
+		windowOffsetX, windowOffsetY = 0, 0
+		return
+	}
+	scaleW := float64(windowPhysicalW) / float64(screenWidth)
+	scaleH := float64(windowPhysicalH) / float64(screenHeight)
+	if scaleW < scaleH {
+		windowScaleFactor = scaleW
+	} else {
+		windowScaleFactor = scaleH
+	}
+	if windowScaleFactor < 0.0001 {
+		windowScaleFactor = 0.0001
+	}
+	logicalVisibleW := int32(float64(screenWidth) * windowScaleFactor)
+	logicalVisibleH := int32(float64(screenHeight) * windowScaleFactor)
+	windowOffsetX = (windowPhysicalW - logicalVisibleW) / 2
+	windowOffsetY = (windowPhysicalH - logicalVisibleH) / 2
+}
+
+// physicalToLogical converts physical (window-pixel) mouse coordinates into
+// the logical 1280x720 canvas, accounting for letterboxing on resize.
+func physicalToLogical(px, py int32) (int32, int32) {
+	sx := int32(float64(px-windowOffsetX) / windowScaleFactor)
+	sy := int32(float64(py-windowOffsetY) / windowScaleFactor)
+	return sx, sy
+}
 
 // --- Video info struct ---
 type VideoInfo struct {
@@ -260,10 +305,15 @@ type ChannelProfileConfig struct {
 }
 
 type Config struct {
+	AppName        string               `json:"AppName"`
+	Version        string               `json:"Version"`
+	Width          int                  `json:"Width"`
+	Height         int                  `json:"Height"`
+	Background     string               `json:"Background"`
+	FontPath       string               `json:"FontPath"`
 	Title          string               `json:"title"`
 	Author         string               `json:"author"`
 	Description    string               `json:"description"`
-	Version        string               `json:"version"`
 	Variables      Variables            `json:"variables"`
 	ChannelProfile ChannelProfileConfig `json:"channel_profile"`
 	Scenes         []SceneConfig        `json:"scenes"`
@@ -350,6 +400,8 @@ type Variables struct {
 	TSPUsername        string            `json:"tspUsername"`
 	PlaybackResolution string            `json:"playbackResolution"`
 	AudioBackend       string            `json:"audioBackend"`
+	ReducedMotion      bool              `json:"reducedMotion"`
+	LowPower           bool              `json:"lowPower"`
 	Custom             map[string]interface{}
 	LoadingSpinner     bool   `json:"-"`
 	SpinnerText        string `json:"-"`
@@ -655,7 +707,7 @@ func renderTextWithFallback(renderer *sdl.Renderer, config *Config, font *ttf.Fo
 	if color.A == 0 {
 		color = fallbackColor
 	}
-	w, h := renderText(renderer, config, font, text, color, x, y)
+	w, _ := renderText(renderer, config, font, text, color, x, y)
 	// If rendering failed, render with fallback color
 	if w == 0 && font != nil {
 		renderText(renderer, config, font, text, fallbackColor, x, y)
@@ -816,6 +868,24 @@ func lerpColor(a, b sdl.Color, t float32) sdl.Color {
 		G: clamp(int(a.G) + int(float32(b.G-a.G)*t)),
 		B: clamp(int(a.B) + int(float32(b.B-a.B)*t)),
 		A: a.A,
+	}
+}
+
+// strokeCircle draws an unfilled circle outline using an angle fan.
+func strokeCircle(renderer *sdl.Renderer, cx, cy, r int32, c sdl.Color) {
+	if r <= 0 {
+		return
+	}
+	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
+	steps := r * 8
+	if steps < 32 {
+		steps = 32
+	}
+	for i := int32(0); i < steps; i++ {
+		ang := float64(i) * 2 * math.Pi / float64(steps)
+		x := cx + int32(math.Round(float64(r)*math.Cos(ang)))
+		y := cy + int32(math.Round(float64(r)*math.Sin(ang)))
+		renderer.DrawPoint(x, y)
 	}
 }
 
@@ -1019,20 +1089,25 @@ func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
 // renderWithClip renders content within a clip rectangle to prevent overflow.
 // Automatically resets renderer state after rendering.
 func renderWithClip(renderer *sdl.Renderer, x, y, w, h int32, fn func(*sdl.Renderer)) {
-	// Save current state
+	// Save current clip rect and whether clipping was active.
 	oldClip := renderer.GetClipRect()
-	oldBlend := renderer.GetBlendMode()
-	oldColor := renderer.GetDrawColor()
+	hadClip := oldClip.W > 0 && oldClip.H > 0
+	// Save draw color (5 return values: r,g,b,a,err).
+	or, og, ob, oa, _ := renderer.GetDrawColor()
+	oldColor := sdl.Color{R: or, G: og, B: ob, A: oa}
 
-	// Apply clip
-	renderer.SetClip(&sdl.Rect{X: x, Y: y, W: w, H: h})
+	// Apply clip.
+	renderer.SetClipRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
 
-	// Render content
+	// Render content.
 	fn(renderer)
 
-	// Restore state
-	renderer.SetClip(oldClip)
-	renderer.SetBlendMode(oldBlend)
+	// Restore state.
+	if hadClip {
+		renderer.SetClipRect(&oldClip)
+	} else {
+		renderer.SetClipRect(nil)
+	}
 	renderer.SetDrawColor(oldColor.R, oldColor.G, oldColor.B, oldColor.A)
 }
 
@@ -1391,14 +1466,15 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 		strokeRoundedRect(renderer, ox-HoverRing, oy-HoverRing, cw+2*HoverRing, ch+2*HoverRing, r+HoverRing, HoverRing, WithAlpha(focusCol, a))
 	}
 
-	// Tile body: solid opaque dark surface (no gradient to avoid banding/washed-out).
-	base := HomeCardColor()
+	// Tile body: use the configured tile color when provided, otherwise fall
+	// back to the standard home card surface.
+	base := resolveColor(config, elem.BgColor, HomeCardColor())
 	if selected {
 		base = HomeCardFocusColor()
 	}
 	// Clip tile body to prevent overflow
-	renderWithClip(renderer, ox, oy, cw, ch, func(r *sdl.Renderer) {
-		fillRoundedRect(r, ox, oy, cw, ch, r, base)
+	renderWithClip(renderer, ox, oy, cw, ch, func(ren *sdl.Renderer) {
+		fillRoundedRect(ren, ox, oy, cw, ch, r, base)
 		// Hairline border using HomeBorderColor for consistency.
 		borderCol := HomeBorderColor()
 		if selected {
@@ -1406,15 +1482,17 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 		} else if hovered {
 			borderCol = WithAlpha(focusCol, 120)
 		}
-		strokeRoundedRect(r, ox, oy, cw, ch, r, 1, borderCol)
+		strokeRoundedRect(ren, ox, oy, cw, ch, r, 1, borderCol)
 	})
 
-	// Icon: consistent line icon, monochrome / two-tone.
+	// Icon and label use the configured tile text color so they read clearly
+	// against both dark and colored tile backgrounds.
 	iconKind := tileIconKind(elem)
-	iconCol := ColorTextSecondary()
+	iconCol := resolveColor(config, elem.Color, ColorTextPrimary())
 	if selected {
 		iconCol = focusCol
 	}
+	iconBg := base
 	iconSize := cw / 3
 	if iconSize > IconSizeMax {
 		iconSize = IconSizeMax
@@ -1422,7 +1500,7 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 	if iconSize < IconSizeMin {
 		iconSize = IconSizeMin
 	}
-	drawTileIcon(renderer, ox+cw/2, oy+int32(float64(ch)*0.36), iconSize, iconKind, iconCol)
+	drawTileIcon(renderer, ox+cw/2, oy+int32(float64(ch)*0.36), iconSize, iconKind, iconCol, iconBg)
 
 	// Label beneath the icon, single line, kept off the edges.
 	if labelFont != nil && elem.Text != "" {
@@ -1431,10 +1509,7 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 		if lw > int(maxLW) {
 			lw = int(maxLW)
 		}
-		txt := ColorTextPrimary()
-		if !selected {
-			txt = ColorTextSecondary()
-		}
+		txt := iconCol
 		lx := ox + (cw-int32(lw))/2
 		ly := oy + ch - int32(lh) - LabelBottomPad
 		renderText(renderer, config, labelFont, elem.Text, txt, lx, ly)
@@ -1457,7 +1532,7 @@ func renderLabelShadowed(renderer *sdl.Renderer, config *Config, elem Element) {
 // (fixes 0xc0000135 / STATUS_DLL_NOT_FOUND on some systems).
 func ffplayEnv(ffplayPath string) []string {
 	env := os.Environ()
-	if runtime.GOOS == "windows" {
+	if IsWindows() {
 		dir := filepath.Dir(ffplayPath)
 		if dir != "" && dir != "." {
 			path := os.Getenv("PATH")
@@ -1495,7 +1570,7 @@ func isMissingDLL(err error) bool {
 // --- Tool path resolution ---
 func getToolPath(tool string, config *Config) string {
 	exeName := tool
-	if runtime.GOOS == "windows" {
+	if IsWindows() {
 		exeName += ".exe"
 	}
 	// Resolve to an absolute path so the OS reliably locates the tool's
@@ -2108,7 +2183,7 @@ func playVideoURL(config *Config, url string) {
 
 		// On Windows, skip pipe mode entirely — it deadlocks due to SDL/pipe
 		// buffering. Use temp-file mode with ffplay (works on Trimui Smart Pro).
-		if runtime.GOOS == "windows" {
+		if IsWindows() {
 			log.Printf("[DEBUG] playVideoURL: Windows detected, using temp file mode")
 			playWithTempFile(config, ffplayPath, ytDlpPath, url)
 			recordPlayed(config, url)
@@ -2209,7 +2284,7 @@ func playWithDirectURL(config *Config, ffplayPath, ytDlpPath, url string) {
 		"-autoexit",
 		"-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	}
-	if runtime.GOOS == "windows" {
+	if IsWindows() {
 		args = append([]string{"-noborder", "-x", "1280", "-y", "720"}, args...)
 	} else {
 		args = append([]string{"-fs"}, args...)
@@ -2915,8 +2990,8 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 
 	// Reset renderer state after rendering to avoid state leakage
 	renderer.SetDrawColor(0, 0, 0, 255)
-	renderer.SetBlendMode(sdl.BLEND_MODE_BLEND)
-	renderer.SetClip(nil)
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetClipRect(nil)
 }
 
 func abs(x int) int {
@@ -3413,10 +3488,10 @@ func renderImageElement(renderer *sdl.Renderer, config *Config, elem Element) {
 }
 
 func renderVideoElement(renderer *sdl.Renderer, config *Config, elem Element) {
-	renderImageElement(renderer, config, elem)
-	if embeddedPlayer.phase != "idle" {
-		RenderVideoOverlay(renderer, config, elem)
+	if embeddedPlayer.phase == "idle" {
+		return
 	}
+	RenderVideoOverlay(renderer, config, elem)
 }
 
 // --- Trigger handling ---
@@ -3502,14 +3577,15 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	case "external_app":
 		if element.ExternalAppPath != "" {
 			go func() {
+				ctx := context.Background()
 				var cmd *exec.Cmd
-				if runtime.GOOS == "windows" {
-					cmd = exec.Command("cmd", "/c", element.ExternalAppPath)
+				if IsWindows() {
+					cmd = exec.CommandContext(ctx, "cmd", "/c", element.ExternalAppPath)
 				} else {
-					cmd = exec.Command("sh", "-c", element.ExternalAppPath)
+					cmd = exec.CommandContext(ctx, "sh", "-c", element.ExternalAppPath)
 				}
 				if err := cmd.Run(); err != nil {
-					log.Printf("External app error: %v", err)
+					LogSceneOp(config.Scenes[currentSceneIndex].Name, "external_app").Error("failed", "err", err)
 				}
 			}()
 		} else {
@@ -3914,7 +3990,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	case "textbrowser_copy":
 		if text, ok := config.Variables.Custom[element.Variable].(string); ok && text != "" {
-			if runtime.GOOS == "windows" {
+			if IsWindows() {
 				exec.Command("cmd", "/c", "echo", text).Run()
 			} else {
 				exec.Command("pbcopy").Run()
@@ -3936,7 +4012,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if strings.HasPrefix(element.Trigger, "http://") || strings.HasPrefix(element.Trigger, "https://") {
 			go func(url string) {
 				var cmd *exec.Cmd
-				if runtime.GOOS == "windows" {
+				if IsWindows() {
 					cmd = exec.Command("cmd", "/c", "start", "", url)
 				} else {
 					cmd = exec.Command("xdg-open", url)
@@ -4132,121 +4208,117 @@ func moveGridSelection(config *Config, dx, dy int) {
 	focusedResultIndex = newIdx
 }
 
+// handleSearchResultsAction applies a semantic action to the current
+// search-results grid. It is used by both keyboard and controller input so
+// the two paths stay in sync.
+func handleSearchResultsAction(action Action, config *Config) {
+	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	scene := config.Scenes[currentSceneIndex]
+	if !sceneHasSearchResults(scene) {
+		return
+	}
+
+	switch action {
+	case ActionNavigateUp:
+		moveGridSelection(config, 0, -1)
+	case ActionNavigateDown:
+		moveGridSelection(config, 0, 1)
+	case ActionNavigateLeft:
+		moveGridSelection(config, -1, 0)
+	case ActionNavigateRight:
+		moveGridSelection(config, 1, 0)
+	case ActionConfirm:
+		if focusedResultIndex < 0 {
+			focusedResultIndex = 0
+		}
+		if videos, ok := getSceneVideos(config, scene); ok && focusedResultIndex >= 0 && focusedResultIndex < len(videos) {
+			playVideoURL(config, videos[focusedResultIndex].GetURL())
+		}
+	case ActionBack:
+		// Leave the grid and move back to the previous element.
+		moveSelection(config, -1)
+	}
+}
+
 func moveSelection(config *Config, direction int) {
 	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return
 	}
-	// This is only for buttons/inputs when no grid is focused
 	currentScene := config.Scenes[currentSceneIndex]
-	var interactive []int
-	for i, el := range currentScene.Elements {
-		if el.Type == "button" || el.Type == "input" || el.Type == "searchresults" || el.Type == "dynamiclist" || el.Type == "recent" {
-			interactive = append(interactive, i)
+	focusEngine.SetGraph(currentScene.Name, focusEngine.BuildGraph(currentScene))
+
+	var action Action
+	if direction < 0 {
+		action = ActionNavigateUp
+	} else {
+		action = ActionNavigateDown
+	}
+
+	result := focusEngine.Navigate(action)
+	if result >= 0 {
+		selectedButtonIndex = result
+	} else {
+		// Fallback to linear wrap if graph has no neighbor in that direction.
+		var interactive []int
+		for i, el := range currentScene.Elements {
+			if el.Type == "button" || el.Type == "input" || el.Type == "searchresults" || el.Type == "dynamiclist" || el.Type == "recent" {
+				interactive = append(interactive, i)
+			}
 		}
-	}
-	if len(interactive) == 0 {
-		selectedButtonIndex = -1
-		return
-	}
-	currentIdx := -1
-	for idx, val := range interactive {
-		if val == selectedButtonIndex {
-			currentIdx = idx
-			break
+		if len(interactive) == 0 {
+			selectedButtonIndex = -1
+			return
 		}
+		currentIdx := -1
+		for idx, val := range interactive {
+			if val == selectedButtonIndex {
+				currentIdx = idx
+				break
+			}
+		}
+		if currentIdx == -1 {
+			selectedButtonIndex = interactive[0]
+			return
+		}
+		newIdx := currentIdx + direction
+		if newIdx >= len(interactive) {
+			newIdx = 0
+		} else if newIdx < 0 {
+			newIdx = len(interactive) - 1
+		}
+		selectedButtonIndex = interactive[newIdx]
 	}
-	if currentIdx == -1 {
-		selectedButtonIndex = interactive[0]
-		return
-	}
-	newIdx := currentIdx + direction
-	if newIdx >= len(interactive) {
-		newIdx = 0
-	} else if newIdx < 0 {
-		newIdx = len(interactive) - 1
-	}
-	selectedButtonIndex = interactive[newIdx]
 }
 
-// moveHomeSelection moves focus within the home tile grid using row/col math.
-// It treats the "recent" element as a row above the tiles: DOWN from recent
-// focuses the first tile, UP from the first row returns to recent.
+// moveHomeSelection moves focus within the home tile grid using the focus engine.
+// It treats the "recent" element and tile grid as a unified spatial graph.
 func moveHomeSelection(config *Config, dx, dy int) {
 	if !homeLayoutActive || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return
 	}
 	scene := config.Scenes[currentSceneIndex]
-	var tileSlots []int
-	recentIdx := -1
-	for i, el := range scene.Elements {
-		if el.Type == "button" && el.Style == "tile" {
-			tileSlots = append(tileSlots, i)
-		}
-		if el.Type == "recent" {
-			recentIdx = i
-		}
-	}
-	if len(tileSlots) == 0 {
-		return
-	}
-	cols := homeLayoutState.Cols
-	if cols < 1 {
-		cols = 4
-	}
+	focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))
 
-	// If recent is focused, DOWN moves to first tile; others cycle.
-	if selectedButtonIndex == recentIdx {
-		if dy > 0 {
-			selectedButtonIndex = tileSlots[0]
-		} else if dy < 0 {
-			selectedButtonIndex = tileSlots[len(tileSlots)-1]
-		} else if dx != 0 {
-			selectedButtonIndex = tileSlots[0]
-		}
+	var action Action
+	switch {
+	case dy < 0:
+		action = ActionNavigateUp
+	case dy > 0:
+		action = ActionNavigateDown
+	case dx < 0:
+		action = ActionNavigateLeft
+	case dx > 0:
+		action = ActionNavigateRight
+	default:
 		return
 	}
 
-	// Find current tile slot.
-	cur := -1
-	for i, idx := range tileSlots {
-		if idx == selectedButtonIndex {
-			cur = i
-			break
-		}
+	result := focusEngine.Navigate(action)
+	if result >= 0 {
+		selectedButtonIndex = result
 	}
-	if cur < 0 {
-		selectedButtonIndex = tileSlots[0]
-		return
-	}
-
-	row := cur / int(cols)
-	col := cur % int(cols)
-	row += dy
-	col += dx
-	if col < 0 {
-		col = int(cols) - 1
-		row--
-	} else if col >= int(cols) {
-		col = 0
-		row++
-	}
-	if row < 0 {
-		if recentIdx >= 0 {
-			selectedButtonIndex = recentIdx
-		} else {
-			selectedButtonIndex = tileSlots[0]
-		}
-		return
-	}
-	if row < 0 {
-		row = 0
-	}
-	newSlot := row*int(cols) + col
-	if newSlot >= len(tileSlots) {
-		// wrap within last row
-		newSlot = len(tileSlots) - 1
-	}
-	selectedButtonIndex = tileSlots[newSlot]
 }
 
 // --- Main ---
@@ -4277,9 +4349,14 @@ func main() {
 	sdl.StartTextInput()
 	defer img.Quit()
 
-	config, err := loadConfig("jukaconfig.json")
+	config, err := LoadLastKnownGood("jukaconfig.json")
 	if err != nil {
 		log.Fatal("Failed to load config:", err)
+	}
+
+	// Validate and apply defaults.
+	if err := NewConfigValidator().Validate(config); err != nil {
+		LogScene("init").Warn("config validation failed, applying defaults", "err", err)
 	}
 
 	// Merge mutable user settings from jukauser.json over design defaults.
@@ -4300,6 +4377,13 @@ func main() {
 	if config.Variables.WeatherUnit == "" {
 		config.Variables.WeatherUnit = "C"
 	}
+	// Default reduced-motion and low-power on handheld targets
+	// (e.g. Trimui Smart Pro) for a safer out-of-box experience. Windows
+	// development builds keep full animation.
+	if !IsWindows() && !config.Variables.ReducedMotion && !config.Variables.LowPower {
+		config.Variables.ReducedMotion = true
+		config.Variables.LowPower = true
+	}
 
 	// Load persisted Recently Played and start the (best-effort) weather fetch.
 	loadRecentlyPlayed()
@@ -4313,6 +4397,10 @@ func main() {
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
 
+	// Initialize scene index early so logging and window setup can safely
+	// reference the first scene.
+	currentSceneIndex = 0
+
 	// Optional resolution / fullscreen configuration (great for TrimuiSmartPro)
 	screenW, screenH := 1280, 720
 	if config.Variables.ScreenWidth > 0 {
@@ -4321,14 +4409,26 @@ func main() {
 	if config.Variables.ScreenHeight > 0 {
 		screenH = config.Variables.ScreenHeight
 	}
-	// Fullscreen is intended for the handheld device (Linux). On Windows we
+	// Fullscreen is intended for the handheld device. On Windows we
 	// always stay windowed so the app is usable during development.
-	fullscreen := config.Variables.Fullscreen && runtime.GOOS != "windows"
+	fullscreen := config.Variables.Fullscreen && P().FullscreenDefault()
 
 	windowFlags := sdl.WINDOW_SHOWN
 	if fullscreen {
 		windowFlags |= sdl.WINDOW_FULLSCREEN_DESKTOP
 	}
+	// Keep the window resizable on Windows so the logical 1280x720 canvas can
+	// be letterboxed to arbitrary window sizes for development/testing.
+	if P().ResizableDefault() {
+		windowFlags |= sdl.WINDOW_RESIZABLE
+	}
+	LogSceneOp(config.Scenes[currentSceneIndex].Name, "init").Info("creating window",
+		"platform", P().Name(),
+		"width", screenW,
+		"height", screenH,
+		"fullscreen", fullscreen,
+		"resizable", P().ResizableDefault(),
+	)
 	screenWidth, screenHeight = int32(screenW), int32(screenH)
 	window, err := sdl.CreateWindow(config.Title, sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED, screenWidth, screenHeight, uint32(windowFlags))
 	mainWindow = window
@@ -4339,9 +4439,19 @@ func main() {
 
 	renderer, err := sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
 	if err != nil {
-		log.Fatal("Renderer creation error:", err)
+		// Fall back to a software renderer when the accelerated backend is
+		// unavailable (e.g. dummy/offscreen drivers used in CI/headless).
+		renderer, err = sdl.CreateRenderer(window, -1, sdl.RENDERER_SOFTWARE)
+		if err != nil {
+			log.Fatal("Renderer creation error:", err)
+		}
 	}
 	defer renderer.Destroy()
+
+	// Render into a fixed logical 1280x720 coordinate system and let SDL
+	// letterbox to the physical window size. This preserves the Trimui layout
+	// on Windows when the window is resized.
+	renderer.SetLogicalSize(screenWidth, screenHeight)
 
 	// Enable alpha blending for draw operations (FillRect, etc.) so
 	// semi-transparent overlays/panels composite correctly over the
@@ -4429,6 +4539,11 @@ func main() {
 			switch e := event.(type) {
 			case *sdl.QuitEvent:
 				running = false
+			case *sdl.WindowEvent:
+				if e.Event == sdl.WINDOWEVENT_SIZE_CHANGED {
+					w, h := mainWindow.GetSize()
+					updateWindowScale(w, h)
+				}
 			case *sdl.KeyboardEvent:
 				if e.Type == sdl.KEYDOWN {
 					focusEngine.SyncSelected()
@@ -4462,27 +4577,20 @@ func main() {
 						}
 						curElem := curScene.Elements[selectedButtonIndex]
 						if curElem.Type == "searchresults" {
-							// Grid navigation
+							// Grid navigation via the semantic action handler.
 							switch e.Keysym.Sym {
 							case sdl.K_UP:
-								moveGridSelection(config, 0, -1)
+								handleSearchResultsAction(ActionNavigateUp, config)
 							case sdl.K_DOWN:
-								moveGridSelection(config, 0, 1)
+								handleSearchResultsAction(ActionNavigateDown, config)
 							case sdl.K_LEFT:
-								moveGridSelection(config, -1, 0)
+								handleSearchResultsAction(ActionNavigateLeft, config)
 							case sdl.K_RIGHT:
-								moveGridSelection(config, 1, 0)
+								handleSearchResultsAction(ActionNavigateRight, config)
 							case sdl.K_RETURN, sdl.K_SPACE:
-								// Play focused video
-								if focusedResultIndex < 0 {
-									focusedResultIndex = 0
-								}
-								if videos, ok := getSceneVideos(config, curScene); ok && focusedResultIndex >= 0 && focusedResultIndex < len(videos) {
-									playVideoURL(config, videos[focusedResultIndex].GetURL())
-								}
+								handleSearchResultsAction(ActionConfirm, config)
 							case sdl.K_ESCAPE:
-								// Leave the grid and move back to the previous element
-								moveSelection(config, -1)
+								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
 							entries, _ := getSceneFileEntries(config, curScene)
@@ -4598,16 +4706,38 @@ func main() {
 						case sdl.K_e:
 							changeScene(config, 1)
 						}
+						// Global search chord (Ctrl+K) jumps to the Tube/search scene.
+						if e.Keysym.Sym == sdl.K_k && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
+							if idx := findSceneIndex(config, "Tube"); idx >= 0 {
+								changeSceneTo(config, idx)
+							}
+						}
+						// Fullscreen toggle (F11 / Alt+Enter).
+						if e.Keysym.Sym == sdl.K_F11 || (e.Keysym.Sym == sdl.K_RETURN && (e.Keysym.Mod&sdl.KMOD_ALT) != 0) {
+							config.Variables.Fullscreen = !config.Variables.Fullscreen
+							if mainWindow != nil {
+								if config.Variables.Fullscreen {
+									mainWindow.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
+								} else {
+									mainWindow.SetFullscreen(0)
+								}
+							}
+						}
 					}
 					focusEngine.SyncSelected()
 				}
 			case *sdl.TextInputEvent:
 				if activeSceneIndex != -1 && activeElementIndex != -1 {
-					inputTextBuffer += string(e.Text[:])
-					updateInputVariable(config)
+					curElem := config.Scenes[activeSceneIndex].Elements[activeElementIndex]
+					if curElem.Type == "chat" {
+						chatInputText += string(e.Text[:])
+					} else {
+						inputTextBuffer += string(e.Text[:])
+						updateInputVariable(config)
+					}
 				}
 			case *sdl.MouseMotionEvent:
-				mouseX, mouseY = int32(e.X), int32(e.Y)
+				mouseX, mouseY = physicalToLogical(int32(e.X), int32(e.Y))
 				if isDraggingSeekBar {
 					fraction := float64(mouseX-seekBarDragRect.X) / float64(seekBarDragRect.W)
 					if fraction < 0 {
@@ -4661,7 +4791,7 @@ func main() {
 				}
 			case *sdl.MouseButtonEvent:
 				if e.Button == sdl.BUTTON_LEFT {
-					mx, my := int32(e.X), int32(e.Y)
+					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
 					if e.Type == sdl.MOUSEBUTTONDOWN {
 						// Check if clicking on seek bar for dragging
 						if pointInRect(mx, my, videoControlRects.progress) {
@@ -4849,26 +4979,23 @@ func main() {
 						}
 						curElem := curScene.Elements[selectedButtonIndex]
 						if curElem.Type == "searchresults" {
-							// Grid navigation with controller
+							// Grid navigation with controller via the semantic action handler.
 							if focusedResultIndex < 0 {
 								focusedResultIndex = 0
 							}
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_DPAD_UP:
-								moveGridSelection(config, 0, -1)
+								handleSearchResultsAction(ActionNavigateUp, config)
 							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-								moveGridSelection(config, 0, 1)
+								handleSearchResultsAction(ActionNavigateDown, config)
 							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-								moveGridSelection(config, -1, 0)
+								handleSearchResultsAction(ActionNavigateLeft, config)
 							case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-								moveGridSelection(config, 1, 0)
+								handleSearchResultsAction(ActionNavigateRight, config)
 							case sdl.CONTROLLER_BUTTON_A:
-								if videos, ok := getSceneVideos(config, curScene); ok && focusedResultIndex >= 0 && focusedResultIndex < len(videos) {
-									playVideoURL(config, videos[focusedResultIndex].GetURL())
-								}
+								handleSearchResultsAction(ActionConfirm, config)
 							case sdl.CONTROLLER_BUTTON_B:
-								// Leave the grid and move back to the previous element
-								moveSelection(config, -1)
+								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
 							entries, _ := getSceneFileEntries(config, curScene)
@@ -4970,8 +5097,18 @@ func main() {
 										handleTrigger(renderer, config, elem)
 									}
 								}
+							case sdl.CONTROLLER_BUTTON_X:
+								// Search shortcut: jump to the Tube/search scene.
+								if idx := findSceneIndex(config, "Tube"); idx >= 0 {
+									changeSceneTo(config, idx)
+								}
+							case sdl.CONTROLLER_BUTTON_BACK:
+								// Menu-style shortcut to the Settings scene.
+								if idx := findSceneIndex(config, "Settings"); idx >= 0 {
+									changeSceneTo(config, idx)
+								}
 							}
-							// Scene switching
+							// Scene switching (L1/R1 or L2/R2)
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 								changeScene(config, -1)
@@ -5047,19 +5184,32 @@ func main() {
 		if hoveredButtonIndex >= 0 {
 			targetHover = 1.0
 		}
-		hoverAnimProgress = lerp(hoverAnimProgress, targetHover, 0.2)
-		if hoverAnimProgress > targetHover-0.01 && hoverAnimProgress < targetHover+0.01 {
+		if config.Variables.ReducedMotion {
 			hoverAnimProgress = targetHover
+		} else {
+			hoverAnimProgress = lerp(hoverAnimProgress, targetHover, 0.2)
+			if hoverAnimProgress > targetHover-0.01 && hoverAnimProgress < targetHover+0.01 {
+				hoverAnimProgress = targetHover
+			}
 		}
 
-		// Clear press feedback after duration
-		if pressedButtonIndex >= 0 && sdl.GetTicks64()-pressStartTime > pressDuration {
-			pressedButtonIndex = -1
+		// Clear press feedback after duration (instantly in reduced-motion mode).
+		if pressedButtonIndex >= 0 {
+			if config.Variables.ReducedMotion || sdl.GetTicks64()-pressStartTime > pressDuration {
+				pressedButtonIndex = -1
+			}
 		}
 
 		renderScene(renderer, config, config.Scenes[currentSceneIndex])
 
 		// Scene transition effects
+		if config.Variables.ReducedMotion && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
+			if transitionPhase == "fade-out" {
+				completeSceneTransition(config)
+			} else {
+				transitionPhase = "none"
+			}
+		}
 		if transitionPhase == "fade-out" {
 			elapsed := float64(sdl.GetTicks64() - sceneFadeStart)
 			duration := float64(250)
@@ -5141,13 +5291,37 @@ func main() {
 			}
 		}
 
+		// Keep SDL text input on only while the chat element is focused so
+		// typing is routed to chat and not to other elements.
+		chatFocused := false
+		if activeSceneIndex != -1 && activeElementIndex != -1 && activeElementIndex < len(config.Scenes[currentSceneIndex].Elements) {
+			chatFocused = config.Scenes[currentSceneIndex].Elements[activeElementIndex].Type == "chat"
+		}
+		if chatFocused {
+			if !chatInputActive {
+				sdl.StartTextInput()
+				chatInputActive = true
+			}
+		} else {
+			if chatInputActive {
+				sdl.StopTextInput()
+				chatInputActive = false
+			}
+		}
+
 		renderToast(renderer, config)
 
 		renderPlaybackOverlay(renderer, config)
 
 		renderer.Present()
 		animTime = float64(sdl.GetTicks64()) / 1000.0
-		sdl.Delay(16)
+		// In low-power mode throttle the render loop when no transition or
+		// press feedback is active. Interaction still wakes the loop via events.
+		if config.Variables.LowPower && transitionPhase == "none" && pressedButtonIndex < 0 && hoverAnimProgress == 0 {
+			sdl.Delay(33)
+		} else {
+			sdl.Delay(16)
+		}
 	}
 
 	for _, tex := range textureCache {
