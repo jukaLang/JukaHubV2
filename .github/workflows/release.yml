@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: player/go.sum
+
+      - name: Install SDL2 development libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libsdl2-dev libsdl2-ttf-dev libsdl2-image-dev \
+            gcc-aarch64-linux-gnu \
+            zip python3
+
+      - name: Run release packaging
+        working-directory: player
+        run: bash ./release.sh
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            player/dist/JukaHub-trimui-smart-pro-linux-arm64.tar.gz
+            player/dist/JukaHub-win-x64.zip
+            player/dist/manifest.json
+            player/dist/SHA256SUMS
+          generate_release_notes: true

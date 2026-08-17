@@ -277,33 +277,12 @@ func homeViewData(config *Config) HomeViewData {
 		Greeting:     homeGreeting(""),
 		Subtitle:     "What do you want to do?",
 		Version:      versionString(config),
-		Network:      getWifiStatus(),
-		Clock:        time.Now(),
+		StatusParts:  headerStatusParts(config),
 		Pressed:      homePressedID,
 		ShowBackHint: true,
 	}
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok {
 		data.Greeting = homeGreeting(name)
-	}
-
-	wxMutex.Lock()
-	ready := weatherReady
-	var today WeatherDay
-	if len(weatherDaily) > 0 {
-		today = weatherDaily[0]
-	}
-	wxMutex.Unlock()
-	if ready && len(weatherDaily) > 0 {
-		hi := today.TMax
-		unit := config.Variables.WeatherUnit
-		if unit == "F" {
-			hi = hi*9/5 + 32
-		}
-		data.Weather = fmt.Sprintf("%d°", int(hi))
-	}
-
-	if bat := getBatteryPercent(); bat >= 0 {
-		data.Battery = fmt.Sprintf("%d%%", bat)
 	}
 
 	if items := getRecentItems(); len(items) > 0 {

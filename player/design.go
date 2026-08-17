@@ -18,7 +18,7 @@ type pt struct{ x, y int32 }
 // Home screen layout constants (px at 720p; reduced on smaller viewports).
 const (
 	HomeMargin          int32 = 28
-	HomeTopBarH         int32 = 46
+	HomeTopBarH         int32 = 56 // matches the home header height so the bar never shifts between screens
 	HomeTopBarHSmall    int32 = 40
 	HomeFooterH         int32 = 48
 	HomeFooterHSmall    int32 = 42
@@ -43,7 +43,7 @@ var (
 	Space2XL = int32(32)
 
 	// Layout tokens (safe margins, offsets, and component sizing)
-	StatusBarMargin   = int32(20)
+	StatusBarMargin   = int32(32) // matches the home header's 32px side margins
 	TitleCenterOffset = int32(10)
 	StatusPartGap     = int32(14)
 	ScenePad          = int32(16)

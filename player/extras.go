@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // --- System status helpers ---
@@ -338,6 +339,8 @@ func sceneDisplayName(name string) string {
 		return "Tools"
 	case "Apps":
 		return "Apps"
+	case "Patch":
+		return "Patch"
 	default:
 		return name
 	}
@@ -348,7 +351,10 @@ func sceneDisplayName(name string) string {
 // fallback in config_health); the prefix is normalized so the UI never shows
 // "vv0.4.0".
 func versionString(config *Config) string {
-	v := strings.TrimSpace(config.Version)
+	v := ""
+	if config != nil {
+		v = strings.TrimSpace(config.Version)
+	}
 	v = strings.TrimPrefix(v, "v")
 	if v == "" {
 		v = "0.4.0"
@@ -436,49 +442,22 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// Right-side grouped status: weather / date+time / battery / wifi.
-	now := time.Now()
-	clk := safeStatusText(now.Format("Mon 02, 2006 03:04 PM"))
-	wxMutex.Lock()
-	ready := weatherReady
-	var today WeatherDay
-	if len(weatherDaily) > 0 {
-		today = weatherDaily[0]
+	// Right-side status cluster in the canonical shared order (network,
+	// weather, time, battery) — identical to the home header so the right
+	// side of the top bar stays put across screens.
+	parts := headerStatusParts(config)
+	statusFont := headerStatusFont()
+	if statusFont == nil {
+		statusFont = font
 	}
-	wxMutex.Unlock()
-	wxText := ""
-	if ready && len(weatherDaily) > 0 {
-		unit := config.Variables.WeatherUnit
-		hi, lo := today.TMax, today.TMin
-		if unit == "F" {
-			hi = hi*9/5 + 32
-			lo = lo*9/5 + 32
-		}
-		wxText = safeStatusText(fmt.Sprintf("%dC / %dC", int(hi), int(lo)))
-	}
-
-	bat := getBatteryPercent()
-	wifi := getWifiStatus()
-
-	// Build right group: weather first, then date+time, then battery, then wifi.
 	rightX := screenWidth - StatusBarMargin
 	gap := StatusPartGap
-	parts := make([]string, 0, 4)
-	if wxText != "" {
-		parts = append(parts, wxText)
-	}
-	parts = append(parts, clk)
-	if bat >= 0 {
-		parts = append(parts, safeStatusText(fmt.Sprintf("%d%%", bat)))
-	}
-	if wifi != "" {
-		parts = append(parts, safeStatusText(wifi))
-	}
 
-	// Measure total width and drop least-important items if they don't fit.
+	// Measure total width and drop least-important items if they don't fit
+	// next to the brand/version/scene/back cluster.
 	totalW := int32(0)
 	for _, p := range parts {
-		pw, _, _ := font.SizeUTF8(p)
+		pw, _, _ := statusFont.SizeUTF8(p)
 		totalW += int32(pw)
 	}
 	if len(parts) > 1 {
@@ -489,19 +468,62 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		maxW = 120
 	}
 	for totalW > maxW && len(parts) > 1 {
-		pw, _, _ := font.SizeUTF8(parts[len(parts)-1])
+		pw, _, _ := statusFont.SizeUTF8(parts[len(parts)-1])
 		totalW -= int32(pw)
 		totalW -= gap
 		parts = parts[:len(parts)-1]
 	}
 
-	// Render right-aligned, left to right.
+	// Vertically center the cluster in the bar (same 16px font and position
+	// as the home header).
+	statusY := (barH - int32(statusFont.Height())) / 2
+	if statusY < 0 {
+		statusY = 0
+	}
 	startX := rightX - totalW
 	for _, p := range parts {
-		pw, _, _ := font.SizeUTF8(p)
-		renderText(renderer, config, font, p, secondary, startX, titleY+SpaceXS)
+		pw, _, _ := statusFont.SizeUTF8(p)
+		renderText(renderer, config, statusFont, p, secondary, startX, statusY)
 		startX += int32(pw) + gap
 	}
+}
+
+// headerStatusParts returns the right-side status cluster in one canonical
+// order shared by the home header and every scene's status bar: network,
+// weather (hi/lo), time (HH:MM), battery. Both headers draw this exact list,
+// so the right side of the top bar never shifts or reorders between screens.
+func headerStatusParts(config *Config) []string {
+	parts := make([]string, 0, 4)
+	if wifi := strings.TrimSpace(getWifiStatus()); wifi != "" {
+		parts = append(parts, safeStatusText(wifi))
+	}
+	wxMutex.Lock()
+	ready := weatherReady
+	var today WeatherDay
+	if len(weatherDaily) > 0 {
+		today = weatherDaily[0]
+	}
+	wxMutex.Unlock()
+	if ready && len(weatherDaily) > 0 {
+		unit := config.Variables.WeatherUnit
+		hi, lo := today.TMax, today.TMin
+		if unit == "F" {
+			hi = hi*9/5 + 32
+			lo = lo*9/5 + 32
+		}
+		parts = append(parts, safeStatusText(fmt.Sprintf("%dC / %dC", int(hi), int(lo))))
+	}
+	parts = append(parts, safeStatusText(time.Now().Format("15:04")))
+	if bat := getBatteryPercent(); bat >= 0 {
+		parts = append(parts, safeStatusText(fmt.Sprintf("%d%%", bat)))
+	}
+	return parts
+}
+
+// headerStatusFont returns the small 16px Inter font both headers use for the
+// right-side status cluster, so it renders at the same size everywhere.
+func headerStatusFont() *ttf.Font {
+	return loadHomeFonts().Small
 }
 
 // --- Footer rendering (controller hints) --
@@ -543,32 +565,27 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	if scene.Name == "FileExplorer" && feCurrentPath(config) != feRoot(config) {
 		backLabel = "Parent"
 	}
-	hints := []struct {
-		button string
-		label  string
-	}{
-		{button: "D-Pad", label: "Navigate"},
-		{button: "A", label: "Open"},
-		{button: "B", label: backLabel},
+	hints := []FooterHint{
+		{Button: "D-Pad", Label: "Navigate"},
+		{Button: "A", Label: "Open"},
+		{Button: "B", Label: backLabel},
 	}
 	if scene.Name == "Chat" {
 		// In Chat, A sends the typed message rather than opening anything.
-		hints[1] = struct {
-			button string
-			label  string
-		}{button: "A", label: "Send"}
+		hints[1] = FooterHint{Button: "A", Label: "Send"}
 	}
 	if scene.Name == "Tube" {
-		hints = append(hints, struct {
-			button string
-			label  string
-		}{button: "X", label: "Search"})
+		hints = append(hints, FooterHint{Button: "X", Label: "Search"})
 	}
 	if scene.Name == "Chat" {
-		hints = append(hints, struct {
-			button string
-			label  string
-		}{button: "Y", label: "Ask AI"})
+		hints = append(hints, FooterHint{Button: "Y", Label: "Ask AI"})
+	}
+	// Patch shows its own contextual hints (modal-aware) instead of the
+	// generic defaults.
+	if scene.Name == "Patch" {
+		if patchHints, ok := patchFooterHints(); ok {
+			hints = patchHints
+		}
 	}
 
 	// Distinct hint groups: a small button badge pill plus a separate label,
@@ -586,8 +603,8 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	groups := make([]group, 0, len(hints))
 	total := int32(0)
 	for _, g := range hints {
-		bw, _, _ := font.SizeUTF8(g.button)
-		lw, _, _ := font.SizeUTF8(g.label)
+		bw, _, _ := font.SizeUTF8(g.Button)
+		lw, _, _ := font.SizeUTF8(g.Label)
 		badgeW := int32(bw) + badgePad*2
 		w := badgeW + badgeGap + int32(lw)
 		groups = append(groups, group{badgeW: badgeW, w: w})
@@ -603,9 +620,9 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	for i, g := range hints {
 		badge := sdl.Rect{X: x, Y: badgeY, W: groups[i].badgeW, H: badgeH}
 		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, ColorIconSurface)
-		renderText(renderer, config, font, g.button, ColorTextPrimary(), badge.X+badgePad, textY)
+		renderText(renderer, config, font, g.Button, ColorTextPrimary(), badge.X+badgePad, textY)
 		labelX := badge.X + groups[i].badgeW + badgeGap
-		renderText(renderer, config, font, g.label, ColorTextSecondary(), labelX, textY)
+		renderText(renderer, config, font, g.Label, ColorTextSecondary(), labelX, textY)
 		x += groups[i].w + groupGap
 	}
 }

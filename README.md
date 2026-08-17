@@ -124,6 +124,183 @@ Created automatically. Stores mutable settings:
 
 ---
 
+## Patch & Updates (package manager)
+
+**Patch** lives under **MISC → Patch** ("Update and repair JukaHub"). It is a tiny, safe package manager for the TrimUI Smart Pro — like `apt-get` for your own files — plus JukaHub's own update flow.
+
+### The package index: `packages.json`
+
+Your packages live in one editable JSON index (inside the Patch state directory, next to the installation on the device):
+
+```json
+{
+  "schema": 1,
+  "packages": [
+    {
+      "id": "my-theme",
+      "name": "My theme",
+      "version": "1.0.0",
+      "description": "My custom JukaHub theme",
+      "root": "/mnt/SDCARD/JukaHub/packages/my-theme",
+      "dest_root": "/mnt/SDCARD",
+      "files": [
+        { "src": "theme.json", "dest": "/JukaHub/themes/my-theme.json", "sha256": "sha256:...", "keep_user": true },
+        { "src": "tool.sh", "dest": "/Tools/tool.sh", "executable": true }
+      ]
+    }
+  ]
+}
+```
+
+- **Local packages**: `root` points at a directory on the device; files are copied from there.
+- **Remote packages**: give `archive_url` (HTTPS, GitHub-only) + `archive_sha`; the archive is downloaded, verified and extracted into staging before install.
+- Destinations default to the SD-card root (or the app directory on desktop) and can be overridden per file. Installing into `Roms/`, `BIOS`, `Saves`, `States`, `jukauser.json` etc. is **refused**.
+
+### What Patch does
+
+- **Install / Update / Remove** packages from the index with a per-file action menu (A on a package row).
+- **Edit packages.json** — opens the patch state directory in the File Explorer.
+- **JukaHub bundled assets** starter package (fonts, background, default config) so you can restore JukaHub's own files.
+- **Check for updates** — JukaHub releases (checksum-verified via `manifest.json`; a release without a manifest is refused).
+- **Verify & repair** — validate config, tools and assets; clear stale downloads.
+- **Backups & Restore** — every install/update/remove is journaled; every replaced file is backed up; an interrupted operation is rolled back automatically at next launch.
+- **Export diagnostics** — redacted report.
+
+### Signed repository (trust model)
+
+Patch packages come from a JukaHub-maintained repository. The repository index is **Ed25519-signed** and the verification public key is embedded in the application (`patch_signed.go`). Every package archive is SHA-256-verified against the signed index before install; HTTPS alone is never treated as authenticity. The signing private key exists only in the offline repository tooling:
+
+```
+PATCH_SIGN_KEY=<hex private key> go run ./tools/build-patch-repo --src ./patch-packages --out ./patch-repo
+```
+
+The tool assembles deterministic package archives (`packages/<name>.zip` with `manifest.json` + `payload/`), computes digests, and signs `repository/index.json`. An example package (`jukahub-cache-clean`) ships in `player/patch-packages/`.
+
+### Package format
+
+A package is a zip with a declarative `manifest.json` (schema 1) and a `payload/` directory:
+
+```json
+{
+  "schema": 1, "name": "jukahub-cache-clean", "version": "1.0.0",
+  "architecture": "all", "devices": ["TG5040"], "os": ["trimui-stock"],
+  "risk": "low", "restart": "none",
+  "operations": [
+    { "kind": "install", "src": "jukahub-cache-clean.sh", "dest": "/JukaHub/tools/jukahub-cache-clean.sh" },
+    { "kind": "executable", "dest": "/JukaHub/tools/jukahub-cache-clean.sh" }
+  ],
+  "rollback": "automatic"
+}
+```
+
+Supported operations: `install`, `replace` (baseline-hash gated), `remove` (package-owned files only), `patch` (structured key/value), `executable`, `chmod`. No arbitrary lifecycle scripts are executed; unknown operations and unknown schema versions are rejected.
+
+### Apt-like operations
+
+- **Refresh** — download + verify the signed repository index (apt-get update equivalent; offline keeps the cached verified index).
+- **Browse / Install / Upgrade / Remove** — with dependency resolution (`depends`/`conflicts`/`provides`), cycle detection, reverse-dependency checks, plan preview, digest verification, and hold/unhold.
+- **Verify** — hash every installed managed file and report damage.
+- **History & Rollback** — a transaction log with rollback to the last committed backup set (user edits made after the transaction are never silently overwritten).
+- **Maintenance** — repair, cache clean, diagnostics.
+
+Every install/upgrade/remove is a journaled transaction: backups first, journal before mutation, rollback on failure or interruption (auto-recovered at next launch). The local package database (`db/db.json`) is written atomically.
+
+### Safety model
+
+### Safety model
+
+- Destructive steps are journaled **before** they happen; interruption rolls back automatically.
+- Archives are inspected (no traversal, absolute paths, symlinks, devices).
+- Checksums are enforced when declared; user-owned files (`keep_user`) are backed up before any change.
+- No firmware flashing, no SD-card reformatting, no ROM/BIOS/save access. JukaHub never touches system partitions.
+- Fully usable offline: local repair, backups, restore and diagnostics work with no network.
+
+### Releases
+
+Pushing a `vX.Y.Z` tag runs the release workflow (`.github/workflows/release.yml`), which builds the TrimUI ARM64 package and the Windows package and uploads `manifest.json` + `SHA256SUMS` — the machine-readable verification data the Patch update flow requires.
+
+---
+
+## GUI Design
+
+JukaHub uses a controller-first, dark design language optimized for a 1280×720 logical canvas read at arm's length. All rendering is SDL2 primitives — icons are drawn as vector geometry, never font glyphs, so nothing can render as a missing-glyph box.
+
+### Home Screen Layout
+
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│  JukaHub - v0.4.0                              Wi-Fi  24C/18C  16:47  82% │
+├──────────────────────────────────────────────────────────────────────────┤
+│  Good afternoon · What do you want to do?                                 │
+│  ┌───────────────────────┐  ┌─────────────┐ ┌─────────────┐              │
+│  │ CONTINUE              │  │    Media    │ │    Files    │              │
+│  │ Nothing played yet    │  └─────────────┘ └─────────────┘              │
+│  │ Open Media to start   │  ┌─────────────┐ ┌─────────────┐              │
+│  │               [A]     │  │  Packages   │ │     Apps    │              │
+│  └───────────────────────┘  └─────────────┘ └─────────────┘              │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐                 │
+│  │Favorites │ │  Chat    │ │  Tools   │ │  Settings    │                 │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘                 │
+├──────────────────────────────────────────────────────────────────────────┤
+│  D-Pad Navigate    A Open    B Back    L2/R2 Sections                    │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+### Scene Shell
+
+Every screen shares one frame:
+
+1. **Global header** (56 px) — brand, version, and the active scene on the left; network / weather / time / battery on the right. The right-side status cluster is produced by one shared helper, so it never shifts or reorders between screens.
+2. **Scene body** — only the active scene's content, clipped above the footer. Home is never rendered underneath another scene.
+3. **Contextual footer** (48 px) — controller hints that reflect real bindings (D-Pad Navigate, A Open/Send, B Back, X Search, Y Ask AI).
+4. Toasts and overlays render last, above the footer.
+
+### Ambient Animated Background
+
+A lightweight animated background drifts behind both Home and every scene: four large, soft color blobs (cyan, purple, blue, and soft white, tinted from the active theme) orbit and breathe on multi-minute cycles at low alpha. It is rendered from one cached radial-glow texture with a handful of texture copies per frame — no per-frame allocation, no blur shaders. Cards, text, and controls stay fully opaque and readable on top.
+
+### Color System
+
+| Token | Value |
+|-------|-------|
+| Background | `#090E19` |
+| Surface | `#121A2A` |
+| Card | `#172033` |
+| Card focused | `#22314B` |
+| Border | `#2A3953` |
+| Focus border | `#55D6FF` |
+| Text primary | `#F6F8FC` |
+| Text secondary | `#9CA9BD` |
+| Success / Warning / Error | `#57D68D` / `#FFCB66` / `#FF6B7A` |
+
+### Typography
+
+All text uses the bundled Inter font; `jukauser.json` can override the size per role.
+
+| Role | Size | Weight |
+|------|-----:|--------|
+| Brand | 25–27 px | Medium |
+| Greeting | 30–34 px | Medium/Bold |
+| Card title | 22–24 px | Medium |
+| Card helper | 16–18 px | Regular |
+| Status / footer | 15–17 px | Medium |
+
+### Focus Treatment
+
+- Selected cards use a 3 px cyan border (`#55D6FF`) on a raised surface — unmistakable in grayscale and from viewing distance.
+- Focus never changes card geometry. Pressed feedback darkens the card and shifts its content down 1–2 px for ~100 ms.
+- Every action card shares one horizontal layout: 20 px padding, a 56×56 icon tile on the left, then the title/subtitle stack.
+
+### Icons
+
+Menu, player, and file-browser icons are drawn with SDL geometry (rounded tiles, triangles, gears, speakers, folders) at a consistent optical size — never emoji, Font Awesome text, or Unicode glyphs that the bundled font may lack.
+
+### Themes
+
+Seven built-in presets (Dark, Light, OLED, Midnight, Hub, Ocean, Sunset) can be applied live from Settings → Themes and persist in `jukauser.json`. Each preset defines the background, surfaces, text, borders, and accent color across the whole app.
+
+---
+
 ## Features
 
 ### 🎬 Media Playback

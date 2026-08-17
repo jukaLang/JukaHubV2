@@ -104,6 +104,24 @@ if errorlevel 1 (
 )
 
 echo.
+echo Copying SDL runtime DLLs next to %OUT%...
+if defined SDL2_DIR (
+    if exist "%SDL2_DIR%\bin\SDL2.dll" (
+        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2.dll" "%~dp0" >nul
+        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2_image.dll" "%~dp0" >nul 2>nul
+        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2_ttf.dll" "%~dp0" >nul 2>nul
+    ) else (
+        echo  SDL2.dll not found under %%SDL2_DIR%%\bin — copy the SDL runtime DLLs manually.
+    )
+) else (
+    if exist "%SDLDIR%\%ARCH%\bin\SDL2.dll" (
+        xcopy /s /e /y "%SDLDIR%\%ARCH%\bin\*.dll" "%~dp0" >nul
+    ) else (
+        echo  SDL2.dll not found in %SDLDIR%\%ARCH%\bin — copy the SDL runtime DLLs manually.
+    )
+)
+
+echo.
 echo Build succeeded: %OUT%
 echo.
 if "%1"=="nobuild" goto :eof

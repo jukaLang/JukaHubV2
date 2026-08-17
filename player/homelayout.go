@@ -44,10 +44,7 @@ type HomeViewData struct {
 	Greeting     string
 	Subtitle     string
 	Version      string
-	Network      string
-	Weather      string
-	Battery      string
-	Clock        time.Time
+	StatusParts  []string // right-side header cluster, shared with scene headers
 	Continue     HomeContinueState
 	Pressed      HomeFocusID
 	ShowBackHint bool
@@ -196,16 +193,9 @@ func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	setDrawColor(renderer, ColorBackground)
 	_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: h.Width, H: h.Height})
-	// Low-alpha blue ambient glow (#182144) behind the primary grid.
-	fillRoundedRect(renderer,
-		scaleX(60, h.Width), scaleY(150, h.Height),
-		scaleX(560, h.Width), scaleY(430, h.Height), 200,
-		sdl.Color{R: 24, G: 33, B: 68, A: 26})
-	// Low-alpha purple ambient glow (#32164A) behind the bottom row.
-	fillRoundedRect(renderer,
-		scaleX(900, h.Width), scaleY(230, h.Height),
-		scaleX(480, h.Width), scaleY(370, h.Height), 190,
-		sdl.Color{R: 50, G: 22, B: 74, A: 22})
+	// Slow animated glow layer, shared with the scene screens. The blobs sit
+	// behind the cards and drift on multi-minute orbits at low alpha.
+	renderAmbientBackground(renderer)
 }
 
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
@@ -223,22 +213,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		drawText(renderer, fonts.Small, " - "+v, brandX+int32(bw)+scaleX(6, h.Width), scaleY(19, h.Height), ColorTextMuted(), textAlignLeft)
 	}
 
-	clock := data.Clock
-	if clock.IsZero() {
-		clock = time.Now()
-	}
-	parts := make([]string, 0, 4)
-	if strings.TrimSpace(data.Network) != "" {
-		parts = append(parts, strings.TrimSpace(data.Network))
-	}
-	if strings.TrimSpace(data.Weather) != "" {
-		parts = append(parts, strings.TrimSpace(data.Weather))
-	}
-	parts = append(parts, clock.Format("15:04"))
-	if strings.TrimSpace(data.Battery) != "" {
-		parts = append(parts, strings.TrimSpace(data.Battery))
-	}
-	status := strings.Join(parts, "   ")
+	// The right-side cluster comes from the shared headerStatusParts helper
+	// (network, weather, time, battery) so it is identical on every screen.
+	status := strings.Join(data.StatusParts, "   ")
 	drawText(renderer, fonts.Small, status, h.Width-scaleX(32, h.Width), scaleY(19, h.Height), ColorTextMuted(), textAlignRight)
 }
 

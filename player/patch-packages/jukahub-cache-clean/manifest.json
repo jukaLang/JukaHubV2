@@ -1,0 +1,25 @@
+{
+  "schema": 1,
+  "name": "jukahub-cache-clean",
+  "version": "1.0.0",
+  "title": "JukaHub Cache Cleaner",
+  "description": "Installs the JukaHub cache-clean helper tool and its documentation. Low risk: only JukaHub-owned paths are touched.",
+  "architecture": "all",
+  "devices": ["TG5040"],
+  "os": ["trimui-stock"],
+  "risk": "low",
+  "depends": [],
+  "conflicts": [],
+  "provides": [],
+  "restart": "none",
+  "operations": [
+    { "kind": "install", "src": "jukahub-cache-clean.sh", "dest": "/JukaHub/tools/jukahub-cache-clean.sh" },
+    { "kind": "install", "src": "README.txt", "dest": "/JukaHub/tools/cache-clean-README.txt" },
+    { "kind": "executable", "dest": "/JukaHub/tools/jukahub-cache-clean.sh" }
+  ],
+  "verify": [
+    "/JukaHub/tools/jukahub-cache-clean.sh",
+    "/JukaHub/tools/cache-clean-README.txt"
+  ],
+  "rollback": "automatic"
+}

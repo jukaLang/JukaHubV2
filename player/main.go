@@ -3212,6 +3212,17 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		renderStatusBar(renderer, config)
 		return
 	}
+	if scene.Name == "Patch" {
+		// The Patch scene owns its body (list, modals) but the shared header
+		// and footer are drawn at the bottom of this function.
+		renderPatchScene(renderer, config)
+		renderStatusBar(renderer, config)
+		renderFooter(renderer, config)
+		renderer.SetDrawColor(0, 0, 0, 255)
+		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		renderer.SetClipRect(nil)
+		return
+	}
 
 	ensureBackgroundTexture(renderer, config)
 
@@ -3253,8 +3264,12 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		W: screenWidth - panelMargin*2,
 		H: panelBottom - panelTop,
 	}
-	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusLG, WithAlpha(ColorSurface, 210))
+	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusLG, WithAlpha(ColorSurface, 200))
 	strokeRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusLG, 1, WithAlpha(ColorBorder, 120))
+
+	// Ambient animated background: slow drifting color blobs over the panel,
+	// under the scene elements, so the whole screen subtly breathes.
+	renderAmbientBackground(renderer)
 
 	for i, elem := range scene.Elements {
 		if homeLayoutActive && elem.Style == "tile" {
@@ -5146,6 +5161,10 @@ func main() {
 	// Non-fatal: if offline, the app falls back to system PATH.
 	ensureRequiredTools(config)
 
+	// Patch module: load persisted state and roll back any interrupted update
+	// transaction so JukaHub always launches in a consistent state.
+	InitPatchModule()
+
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
 
@@ -5320,6 +5339,12 @@ func main() {
 						// Home scene uses the dedicated focus graph + activation.
 						if homeLayoutActive && handleHomeKey(e, config) {
 							continue
+						}
+						// Patch scene owns its list + modals (no config elements).
+						if curSceneName := config.Scenes[currentSceneIndex].Name; curSceneName == "Patch" {
+							if handlePatchKey(e, config) {
+								continue
+							}
 						}
 						// Video control shortcuts (always active when video is playing)
 						HandleVideoKeyInput(e)
@@ -5820,6 +5845,12 @@ func main() {
 						if homeLayoutActive && handleHomeController(e, config) {
 							continue
 						}
+						// Patch scene owns its list + modals (no config elements).
+						if config.Scenes[currentSceneIndex].Name == "Patch" {
+							if handlePatchController(e, config) {
+								continue
+							}
+						}
 						// Video control shortcuts (always active when video is playing)
 						HandleVideoControllerInput(e)
 						// Handle navigation
@@ -6219,6 +6250,9 @@ func main() {
 				chatInputActive = false
 			}
 		}
+
+		// Patch scene: drain worker events and apply hold-to-confirm progress.
+		PatchSceneFrame()
 
 		renderToast(renderer, config)
 
