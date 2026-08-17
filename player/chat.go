@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -139,7 +138,10 @@ func processChatImageDownloads(renderer *sdl.Renderer) {
 	chatImageDLMutex.Unlock()
 }
 
-const chatJSON = "chat.json"
+// ChatSection is the chat history section persisted inside jukauser.json.
+type ChatSection struct {
+	Messages []ChatMessage `json:"messages"`
+}
 
 // defaultDiscordChannel is the JukaHub Discord channel the chat connects to when
 // no channel id is configured. Mirrors the channel id used by the original app.
@@ -151,6 +153,10 @@ var discordStatus string
 
 // chatScrollOffset is the number of messages to skip from the end when scrolling.
 var chatScrollOffset int
+
+// chatAskAIBtnRect is the "Ask Juka AI" pill inside the composer (mouse hit
+// target); the Y button is the controller/keyboard equivalent.
+var chatAskAIBtnRect sdl.Rect
 
 // groqStatus holds a short human-readable Groq AI connection status shown in
 // the chat UI.
@@ -171,6 +177,7 @@ func discordCreds() (string, string) {
 	if tok == "" {
 		tok = appConfig.ChannelProfile.Token
 	}
+	tok = strings.TrimSpace(tok)
 	if strings.HasPrefix(tok, "ENC:") {
 		decrypted, err := DecryptToken(tok)
 		if err != nil {
@@ -410,15 +417,9 @@ func sendGroqChatMessage(userText string) {
 func loadChatMessages() {
 	chatMutex.Lock()
 	defer chatMutex.Unlock()
-	data, err := os.ReadFile(chatJSON)
-	if err != nil {
-		return
-	}
-	var wrapper struct {
-		Messages []ChatMessage `json:"messages"`
-	}
-	if err := json.Unmarshal(data, &wrapper); err == nil {
-		chatMessages = wrapper.Messages
+	chatMessages = []ChatMessage{}
+	if userConfigCache != nil && userConfigCache.Chat != nil {
+		chatMessages = userConfigCache.Chat.Messages
 	}
 	if chatMessages == nil {
 		chatMessages = []ChatMessage{}
@@ -427,15 +428,13 @@ func loadChatMessages() {
 
 func saveChatMessages() {
 	chatMutex.Lock()
-	defer chatMutex.Unlock()
-	wrapper := struct {
-		Messages []ChatMessage `json:"messages"`
-	}{Messages: chatMessages}
-	data, err := json.MarshalIndent(wrapper, "", "  ")
-	if err != nil {
-		return
+	msgs := append([]ChatMessage(nil), chatMessages...)
+	chatMutex.Unlock()
+	if userConfigCache == nil {
+		userConfigCache = &UserConfig{Variables: UserVariables{Custom: make(map[string]interface{})}}
 	}
-	os.WriteFile(chatJSON, data, 0644)
+	userConfigCache.Chat = &ChatSection{Messages: msgs}
+	saveUserConfig(userConfigCache)
 }
 
 func sendChatMessage(sender, text string) {
@@ -672,7 +671,9 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 
 	processChatImageDownloads(renderer)
 
-	// Input box at the bottom.
+	// Single composer inside the panel (the config-driven input row was
+	// removed): type + ENTER to send, Y to ask Juka AI.
+	chatAskAIBtnRect = sdl.Rect{}
 	inputY := listY + listH - inputH - SpaceSM
 	inputBorderCol := ColorBorder
 	if chatInputActive {
@@ -682,13 +683,28 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	strokeRoundedRect(renderer, listX+SpaceSM, inputY, listW-2*SpaceSM, inputH, RadiusMD, 1, inputBorderCol)
 
 	if chatInputText == "" {
-		renderText(renderer, config, font, "Type a message and press ENTER...", ColorTextTertiary(), listX+SpaceMD, inputY+(inputH-lineH)/2)
+		renderText(renderer, config, font, "Type a message...", ColorTextTertiary(), listX+SpaceMD, inputY+(inputH-lineH)/2)
 	} else {
 		renderText(renderer, config, font, chatInputText, ColorTextPrimary(), listX+SpaceMD, inputY+(inputH-lineH)/2)
 	}
 
-	// Input hint.
-	renderText(renderer, config, statusFont, "ENTER send • UP/DOWN scroll", ColorTextTertiary(), listX+SpaceMD, inputY+inputH+SpaceXS)
+	// Compact "Ask Juka AI" pill on the right of the composer (mouse) / Y (controller).
+	if statusFont != nil {
+		aiLabel := "Ask Juka AI"
+		aw, _, _ := statusFont.SizeUTF8(aiLabel)
+		apad := int32(12)
+		ah := int32(28)
+		awAll := int32(aw) + apad*2
+		ax := listX + listW - SpaceSM - awAll
+		ay := inputY + (inputH-ah)/2
+		chatAskAIBtnRect = sdl.Rect{X: ax, Y: ay, W: awAll, H: ah}
+		fillRoundedRect(renderer, ax, ay, awAll, ah, ah/2, ColorIconSurface)
+		strokeRoundedRect(renderer, ax, ay, awAll, ah, ah/2, 1, WithAlpha(ColorInfo, 120))
+		renderText(renderer, config, statusFont, aiLabel, ColorTextPrimary(), ax+apad, ay+(ah-int32(statusFont.Height()))/2)
+	}
+
+	// The composer's controls are communicated once, by the shared footer
+	// (D-Pad Navigate / A Send / Y Ask AI / B Back); no second hint line here.
 }
 
 func handleChatInput(e *sdl.KeyboardEvent, config *Config) {
@@ -709,6 +725,11 @@ func handleChatInput(e *sdl.KeyboardEvent, config *Config) {
 			}
 		case sdl.K_ESCAPE:
 			chatInputText = ""
+		case sdl.K_y:
+			if strings.TrimSpace(chatInputText) != "" {
+				sendGroqChatMessage(chatInputText)
+				chatInputText = ""
+			}
 		case sdl.K_UP:
 			chatScrollOffset++
 		case sdl.K_DOWN:

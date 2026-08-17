@@ -163,7 +163,7 @@ func handleShortsInput(e *sdl.KeyboardEvent, config *Config) {
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
 		if currentShortIdx >= 0 && currentShortIdx < len(videos) {
-			playVideoURL(config, videos[currentShortIdx].GetURL())
+			playVideoInfo(config, videos[currentShortIdx])
 		}
 	case sdl.K_ESCAPE:
 		for _, scene := range config.Scenes {

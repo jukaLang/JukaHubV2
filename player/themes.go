@@ -112,6 +112,75 @@ var themePresets = map[string]ThemePreset{
 		Info:          "#6ee7ff",
 		Overlay:       "#05060bcc",
 	},
+	// hub matches the shipped home-screen palette so the whole app stays
+	// coherent with the TSP home design (#090E19 background, cyan accent).
+	"hub": {
+		Name:          "Hub",
+		Background:    "#090E19",
+		ButtonColor:   "#1E293B",
+		LabelColor:    "#F6F8FC",
+		InputColor:    "#0F1420",
+		Surface:       "#121A2A",
+		SurfaceAlt:    "#172033",
+		SurfaceRaised: "#22314B",
+		TextPrimary:   "#F6F8FC",
+		TextSecondary: "#9CA9BD",
+		TextTertiary:  "#66758B",
+		BorderSubtle:  "#ffffff10",
+		BorderDefault: "#2A3953",
+		BorderFocus:   "#55D6FF",
+		Success:       "#57D68D",
+		Warning:       "#FFCB66",
+		Danger:        "#FF6B7A",
+		Info:          "#55D6FF",
+		Overlay:       "#090E19cc",
+	},
+	// ocean is a deep blue palette with a cyan accent, built for long
+	// reading sessions on the TSP screen.
+	"ocean": {
+		Name:          "Ocean",
+		Background:    "#0B1526",
+		ButtonColor:   "#142740",
+		LabelColor:    "#E8F1FF",
+		InputColor:    "#0E1C31",
+		Surface:       "#0E1B30",
+		SurfaceAlt:    "#152943",
+		SurfaceRaised: "#1C3558",
+		TextPrimary:   "#F0F6FF",
+		TextSecondary: "#A9BFDD",
+		TextTertiary:  "#6E86A8",
+		BorderSubtle:  "#ffffff0e",
+		BorderDefault: "#2E4A73",
+		BorderFocus:   "#4FC3FF",
+		Success:       "#3DDC97",
+		Warning:       "#FFC864",
+		Danger:        "#FF6B7A",
+		Info:          "#4FC3FF",
+		Overlay:       "#0B1526cc",
+	},
+	// sunset is a warm dark palette with a coral accent; it keeps the deep
+	// background for contrast while giving the UI a warmer personality.
+	"sunset": {
+		Name:          "Sunset",
+		Background:    "#1A0F14",
+		ButtonColor:   "#2B1A24",
+		LabelColor:    "#FFF0F3",
+		InputColor:    "#201219",
+		Surface:       "#201219",
+		SurfaceAlt:    "#2B1A24",
+		SurfaceRaised: "#3A2531",
+		TextPrimary:   "#FFF5F7",
+		TextSecondary: "#E0B8C2",
+		TextTertiary:  "#A97E8B",
+		BorderSubtle:  "#ffffff12",
+		BorderDefault: "#4A2F3C",
+		BorderFocus:   "#FF9E7D",
+		Success:       "#6EE7A8",
+		Warning:       "#FFCB66",
+		Danger:        "#FF6B7A",
+		Info:          "#FF9E7D",
+		Overlay:       "#1A0F14cc",
+	},
 }
 
 // GetThemePreset returns a theme preset by name, or the dark preset if not found.
@@ -167,11 +236,33 @@ func ApplyThemePreset(config *Config, presetName string) {
 	showToast(fmt.Sprintf("Theme: %s", preset.Name), ToastInfo())
 }
 
-// ListThemePresets returns the names of all available theme presets.
+// themePresetOrder is the canonical, stable display order for the theme
+// gallery. Never derive this from map iteration: Go randomizes map order, so
+// iterating themePresets would make the gallery cards shuffle every frame.
+var themePresetOrder = []string{"dark", "light", "oled", "midnight", "hub", "ocean", "sunset"}
+
+// ListThemePresets returns the names of all available theme presets in a
+// stable, deterministic order (the order shown in the gallery).
 func ListThemePresets() []string {
-	names := make([]string, 0, len(themePresets))
+	names := make([]string, 0, len(themePresetOrder))
+	for _, name := range themePresetOrder {
+		if _, ok := themePresets[name]; ok {
+			names = append(names, name)
+		}
+	}
+	// Safety net: include any preset not in the canonical order (e.g. new
+	// themes added without updating themePresetOrder), still deterministically.
 	for name := range themePresets {
-		names = append(names, name)
+		found := false
+		for _, n := range names {
+			if n == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			names = append(names, name)
+		}
 	}
 	return names
 }

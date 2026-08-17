@@ -144,6 +144,19 @@ func feListDirectory(config *Config) {
 	}
 }
 
+// feBack handles B/Escape in the File Explorer: inside a directory it goes up
+// one level; at the root it returns to the previous scene/Home. It never
+// terminates the application.
+func feBack(config *Config) {
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+		config.Scenes[currentSceneIndex].Name == "FileExplorer" &&
+		feCurrentPath(config) != feRoot(config) {
+		feUp(config)
+		return
+	}
+	goBackScene(config)
+}
+
 // feUp moves one directory up.
 func feUp(config *Config) {
 	path := feCurrentPath(config)
@@ -246,9 +259,21 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 	elemH := getElementHeight(element, 500)
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
 
-	// header with path (drawn above the panel, not underneath it)
-	renderText(renderer, config, font, "Path: "+feCurrentPath(config),
-		ColorTextSecondary(), element.X+10, element.Y-20)
+	// File Explorer gets a compact path toolbar above the list: one dark flat
+	// field holding the current path (measured ellipsis, clipped). Other
+	// dynamic lists (Live TV, Podcasts) have no path concept and draw nothing.
+	isFileExplorer := currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+		config.Scenes[currentSceneIndex].Name == "FileExplorer"
+	if isFileExplorer {
+		toolbar := sdl.Rect{X: element.X, Y: element.Y - 52, W: elemW, H: 44}
+		fillRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, ColorCard)
+		strokeRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, 1, ColorBorder)
+		pathText := feCurrentPath(config)
+		renderWithClip(renderer, toolbar.X+12, toolbar.Y+4, toolbar.W-24, toolbar.H-8, func(ren *sdl.Renderer) {
+			drawText(ren, font, ellipsize(font, pathText, toolbar.W-30), toolbar.X+12, toolbar.Y+(toolbar.H-int32(font.Height()))/2,
+				ColorTextSecondary(), textAlignLeft)
+		})
+	}
 
 	lineH := int32(40)
 	maxVisible := int((elemH - 30) / lineH)
@@ -282,16 +307,15 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		prefix := ""
 		color := ColorTextSecondary()
 		if entries[i].IsDir {
-			prefix = "▸ "
+			// Use ▶ (U+25B6), which Inter contains — ▸ (U+25B8) does not exist
+			// in Inter and renders as a missing-glyph box.
+			prefix = "▶ "
 			color = sdl.Color{R: 255, G: 230, B: 120, A: 255}
 		} else if isMediaFile(entries[i].Name) {
 			prefix = "▶ "
 			color = ColorTextAccent()
 		}
-		txt := prefix + entries[i].Name
-		if len(txt) > 55 {
-			txt = txt[:52] + "..."
-		}
+		txt := ellipsize(font, prefix+entries[i].Name, rowW-40)
 		renderText(renderer, config, font, txt, color, rowX+14, rowY+9)
 	}
 

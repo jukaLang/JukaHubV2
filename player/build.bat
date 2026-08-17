@@ -87,11 +87,6 @@ if not defined CGO_CFLAGS (
     set "CGO_LDFLAGS=-L%SDLDIR%\%ARCH%\lib"
 )
 
-if not defined JUKAHUB_CRYPTO_KEY (
-    for /f "delims=" %%i in ('powershell -NoProfile -Command "[byte[]]$k=1..32; (Get-Random -Count 32 -Minimum 0 -Maximum 256 | ForEach-Object { $_.ToString('x2') }) -join ''"') do set "JUKAHUB_CRYPTO_KEY=%%i"
-    echo [build] Generated JUKAHUB_CRYPTO_KEY for this session.
-)
-
 echo.
 echo ============================================================
 echo  Building %OUT%

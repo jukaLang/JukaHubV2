@@ -94,7 +94,9 @@ func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 		gradientRoundedRect(renderer, bx, by, btnW, btnH, RadiusMD, lighten(ColorButtonRaised, 18), darken(ColorButtonRaised, 12))
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
 		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: btnW, H: btnH})
-		renderText(renderer, config, font, "Close  ✕", ColorTextPrimary(), bx+16, by+12)
+		// Use × (U+00D7), which Inter contains — ✕ (U+2715) is not in Inter and
+		// would render as a missing-glyph box.
+		renderText(renderer, config, font, "Close  ×", ColorTextPrimary(), bx+16, by+12)
 	}
 }
 

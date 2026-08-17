@@ -1,43 +1,56 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport"
-        content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+          content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>JukaHub Generator</title>
     <link data-rh="true" rel="icon" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&display=swap">
     <link rel="stylesheet" href="style.css">
 </head>
+<body class="theme-dark">
+    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
 
-<body>
-    <header>
-        <div class="header-content">
-            <div class="title-container">
-                <h1>JukaHub Generator</h1>
-                <p class="subtitle">The Ultimate Retro Handheld Device GUI Creator</p>
+    <div class="app-shell">
+        <!-- Top Application Bar -->
+        <header class="app-bar">
+            <div class="app-bar-brand">
+                <img src="favicon.png" alt="" class="app-bar-logo" aria-hidden="true">
+                <div class="app-bar-titles">
+                    <h1>JukaHub <span>Generator</span></h1>
+                    <p class="app-bar-subtitle" id="projectTitle">The Ultimate Retro Handheld Device GUI Creator</p>
+                </div>
             </div>
-            <div class="header-actions">
-                <button id="darkModeToggle" class="dark-mode-toggle">
-                    <i class="fas fa-moon"></i> Dark Mode
+            <div class="app-bar-actions">
+                <button id="toggleGuide" class="app-bar-button" type="button" aria-label="Getting Started Guide">
+                    <i class="fas fa-question-circle" aria-hidden="true"></i> <span>Guide</span>
                 </button>
-                <button id="toggleGuide" class="action-button">
-                    <i class="fas fa-question-circle"></i> Guide
+                <button id="darkModeToggle" class="app-bar-button dark-mode-toggle" type="button" aria-label="Toggle dark mode">
+                    <i class="fas fa-moon" aria-hidden="true"></i> <span>Dark Mode</span>
+                </button>
+                <label for="loadFile" class="app-bar-button load-button" role="button">
+                    <i class="fas fa-upload" aria-hidden="true"></i> <span>Load</span>
+                </label>
+                <input type="file" id="loadFile" accept="application/json" class="sr-only" aria-label="Load jukaconfig.json">
+                <button class="app-bar-button export-button" type="button" onclick="exportConfig()">
+                    <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
                 </button>
             </div>
-        </div>
+        </header>
 
-        <div id="guidePanel" class="steps-box">
-            <div class="steps-header">
-                <h2><i class="fas fa-lightbulb"></i> Getting Started Guide</h2>
-                <button id="closeGuide" class="close-button">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            <div class="steps-content">
-                <div class="steps-content">
+        <!-- Guide Modal -->
+        <div id="guidePanel" class="guide-modal steps-box" role="dialog" aria-modal="true" aria-labelledby="guideTitle" hidden>
+            <div class="guide-backdrop"></div>
+            <div class="guide-content">
+                <div class="guide-header">
+                    <h2 id="guideTitle"><i class="fas fa-lightbulb" aria-hidden="true"></i> Getting Started Guide</h2>
+                    <button id="closeGuide" class="close-button" type="button" aria-label="Close guide">
+                        <i class="fas fa-times" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="guide-body">
                     <ol>
                         <li>On desktop: Drag elements from the left sidebar to the canvas
                             <ul>
@@ -53,168 +66,205 @@
                             </ul>
                         </li>
                         <li>Select elements to edit properties in the right sidebar</li>
-                        <li>Use the "Download Config" button when finished</li>
-                        <li>Combine with the JukaHub template from <a
-                                href="https://github.com/jukaLang/JukaHubV2/releases">GitHub releases</a></li>
+                        <li>Use the "Export" button when finished to download <code>jukaconfig.json</code></li>
+                        <li>Combine with the JukaHub template from <a href="https://github.com/jukaLang/JukaHubV2/releases" target="_blank">GitHub releases</a></li>
                     </ol>
-                    Visit <a href="https://github.com/jukaLang/JukaHubV2/wiki"
-                        target="_blank">https://github.com/jukaLang/JukaHubV2/wiki</a> for more info
+                    <p>Visit <a href="https://github.com/jukaLang/JukaHubV2/wiki" target="_blank">https://github.com/jukaLang/JukaHubV2/wiki</a> for more info</p>
                 </div>
             </div>
         </div>
-    </header>
 
-    <main>
-        <div class="editor-container">
-            <!-- Left Sidebar - UI Elements -->
-            <div class="sidebar left-sidebar">
-                <div class="sidebar-header">
-                    <h3><i class="fas fa-shapes"></i> UI Elements</h3>
-                </div>
-                <div class="elements-container">
-                    <div class="element" draggable="true" data-type="button" title="Button">
-                        <i class="fas fa-square"></i> Button
-                    </div>
-                    <div class="element" draggable="true" data-type="label" title="Label">
-                        <i class="fas fa-font"></i> Label
-                    </div>
-                    <div class="element" draggable="true" data-type="image" title="Image">
-                        <i class="fas fa-image"></i> Image
-                    </div>
-                    <div class="element" draggable="true" data-type="input" title="Input">
-                        <i class="fas fa-edit"></i> Input
-                    </div>
-                    <div class="element" draggable="true" data-type="menu-element" title="Menu">
-                        <i class="fa-solid fa-bars-progress"></i> Menu
-                    </div>
-                    <div class="element" draggable="true" data-type="dynamiclist" title="Dynamic List">
-                        <i class="fas fa-list"></i> Dynamic List
-                    </div>
-                    <div class="element" draggable="true" data-type="searchresults" title="YouTube / Search Results">
-                        <i class="fas fa-th-large"></i> Search Results
-                    </div>
-                    <div class="element" draggable="true" data-type="textlog" title="Text Log (read-only)">
-                        <i class="fas fa-align-left"></i> Text Log
-                    </div>
-                    <div class="element" draggable="true" data-type="textbrowser" title="Text Browser">
-                        <i class="fas fa-globe"></i> Text Browser
-                    </div>
-                </div>
-                <div class="variables-panel">
-                    <div class="sidebar-header">
-                        <h3><i class="fas fa-code"></i> Variables</h3>
-                        <button id="addVariableButton" class="action-button small">
-                            <i class="fas fa-plus"></i>
-                        </button>
-                    </div>
-                    <div id="variablesList" class="variables-list">
-                        <!-- Variables will be added here -->
-                    </div>
-                </div>
+        <div class="editor-frame">
+            <!-- Mobile panel toggles -->
+            <div class="mobile-toolbar" role="tablist" aria-label="Panels">
+                <button class="mobile-tab" data-target="left" type="button" role="tab" aria-controls="leftSidebar">Library</button>
+                <button class="mobile-tab" data-target="canvas" type="button" role="tab" aria-controls="workspace">Canvas</button>
+                <button class="mobile-tab" data-target="right" type="button" role="tab" aria-controls="rightSidebar">Inspector</button>
             </div>
 
+            <!-- Left Sidebar - Component Library -->
+            <aside id="leftSidebar" class="sidebar left-sidebar" aria-label="Component library">
+                <div class="panel-header">
+                    <h3><i class="fas fa-shapes" aria-hidden="true"></i> Components</h3>
+                    <button id="leftSidebarToggle" class="panel-toggle" type="button" aria-label="Collapse library" aria-expanded="true" aria-controls="leftSidebarContent">
+                        <i class="fas fa-chevron-left" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div id="leftSidebarContent" class="sidebar-content">
+                    <div class="search-box">
+                        <i class="fas fa-search" aria-hidden="true"></i>
+                        <input type="search" id="componentSearch" placeholder="Filter components..." aria-label="Filter components">
+                    </div>
+                    <div class="component-section">
+                        <h4 class="component-section-title">Basic</h4>
+                        <div class="elements-container">
+                            <div class="element" draggable="true" data-type="button" title="Button">
+                                <i class="fas fa-square" aria-hidden="true"></i> <span>Button</span>
+                            </div>
+                            <div class="element" draggable="true" data-type="label" title="Label">
+                                <i class="fas fa-font" aria-hidden="true"></i> <span>Label</span>
+                            </div>
+                            <div class="element" draggable="true" data-type="image" title="Image">
+                                <i class="fas fa-image" aria-hidden="true"></i> <span>Image</span>
+                            </div>
+                            <div class="element" draggable="true" data-type="input" title="Input">
+                                <i class="fas fa-edit" aria-hidden="true"></i> <span>Input</span>
+                            </div>
+                            <div class="element" draggable="true" data-type="menu-element" title="Menu">
+                                <i class="fa-solid fa-bars-progress" aria-hidden="true"></i> <span>Menu</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="component-section">
+                        <h4 class="component-section-title">Data</h4>
+                        <div class="elements-container">
+                            <div class="element" draggable="true" data-type="dynamiclist" title="Dynamic List">
+                                <i class="fas fa-list" aria-hidden="true"></i> <span>Dynamic List</span>
+                            </div>
+                            <div class="element" draggable="true" data-type="textlog" title="Text Log">
+                                <i class="fas fa-align-left" aria-hidden="true"></i> <span>Text Log</span>
+                            </div>
+                            <div class="element" draggable="true" data-type="textbrowser" title="Text Browser">
+                                <i class="fas fa-globe" aria-hidden="true"></i> <span>Text Browser</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="component-section">
+                        <h4 class="component-section-title">Advanced</h4>
+                        <div class="elements-container">
+                            <div class="element" draggable="true" data-type="searchresults" title="YouTube / Search Results">
+                                <i class="fas fa-th-large" aria-hidden="true"></i> <span>Search Results</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="variables-panel">
+                    <div class="panel-header variables-header">
+                        <h3><i class="fas fa-code" aria-hidden="true"></i> Variables</h3>
+                        <button id="addVariableButton" class="action-button small" type="button" aria-label="Add variable">
+                            <i class="fas fa-plus" aria-hidden="true"></i>
+                        </button>
+                    </div>
+                    <div id="variablesList" class="variables-list" aria-live="polite">
+                        <!-- Variables will be added here -->
+                    </div>
+                    <div class="variables-empty">No variables yet. Click + to add one.</div>
+                </div>
+            </aside>
+
             <!-- Main Canvas Area -->
-            <div class="canvas-area">
+            <main id="workspace" class="canvas-area">
                 <div class="canvas-header">
                     <div class="canvas-controls">
                         <div class="scene-controls">
-                            <button class="action-button" onclick="addScene()">
-                                <i class="fas fa-plus"></i> Add Scene
+                            <button class="action-button" type="button" onclick="addScene()">
+                                <i class="fas fa-plus" aria-hidden="true"></i> <span>Add Scene</span>
                             </button>
-                            <select id="sceneSelector" onchange="changeScene()"></select>
-                            <button class="action-button" onclick="renameScene()">
-                                <i class="fas fa-edit"></i>
+                            <select id="sceneSelector" aria-label="Current scene" onchange="changeScene()"></select>
+                            <button class="action-button" type="button" onclick="renameScene()" aria-label="Rename scene">
+                                <i class="fas fa-edit" aria-hidden="true"></i>
                             </button>
-                            <button class="action-button danger" onclick="deleteScene()">
-                                <i class="fas fa-trash"></i>
+                            <button class="action-button danger" type="button" onclick="deleteScene()" aria-label="Delete scene">
+                                <i class="fas fa-trash" aria-hidden="true"></i>
                             </button>
-                            <button class="action-button" onclick="duplicateScene()">
-                                <i class="fas fa-copy"></i>
+                            <button class="action-button" type="button" onclick="duplicateScene()" aria-label="Duplicate scene">
+                                <i class="fas fa-copy" aria-hidden="true"></i>
                             </button>
                         </div>
                         <div class="file-controls">
-                            <button id="clearButton" class="action-button danger">
-                                <i class="fas fa-broom"></i> Clear All
+                            <button id="clearButton" class="action-button danger" type="button">
+                                <i class="fas fa-broom" aria-hidden="true"></i> <span>Clear All</span>
                             </button>
-                            <div class="file-input-container">
-                                <label for="loadFile" class="file-button">
-                                    <i class="fas fa-upload"></i> Load jukaconfig.json
-                                </label>
-                                <input type="file" id="loadFile" accept="application/json" style="display: none;">
-                            </div>
-                            <button class="action-button primary" onclick="exportConfig()">
-                                <i class="fas fa-download"></i> Download
+                            <button class="action-button primary" type="button" onclick="exportConfig()">
+                                <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
                             </button>
                         </div>
                     </div>
+                    <div class="scene-readout" aria-live="polite">
+                        <span id="sceneNameBadge">Scene 1</span>
+                    </div>
                 </div>
-                <div class="canvas-container">
+                <div class="canvas-container" id="canvasWrapper">
                     <div class="canvas" id="canvas"></div>
                 </div>
-            </div>
+                <div class="workspace-status">
+                    <span id="canvasSizeReadout">1280 x 720</span>
+                    <span id="zoomReadout" class="zoom-readout">100%</span>
+                </div>
+            </main>
 
             <!-- Right Sidebar - Properties -->
-            <div class="sidebar right-sidebar">
-                <div class="sidebar-header">
-                    <h3><i class="fas fa-sliders-h"></i> Properties</h3>
+            <aside id="rightSidebar" class="sidebar right-sidebar" aria-label="Inspector">
+                <div class="panel-header">
+                    <h3><i class="fas fa-sliders-h" aria-hidden="true"></i> Inspector</h3>
+                    <button id="rightSidebarToggle" class="panel-toggle" type="button" aria-label="Collapse inspector" aria-expanded="true" aria-controls="rightSidebarContent">
+                        <i class="fas fa-chevron-right" aria-hidden="true"></i>
+                    </button>
                 </div>
+                <div id="rightSidebarContent" class="sidebar-content">
+                    <div class="properties-tabs" role="tablist" aria-label="Inspector tabs">
+                        <button class="properties-tab active" data-tab="element-properties" type="button" role="tab" aria-selected="true">Element</button>
+                        <button class="properties-tab" data-tab="app-properties" type="button" role="tab" aria-selected="false">App Info</button>
+                    </div>
 
-                <div class="properties-tabs">
-                    <button class="properties-tab active" data-tab="element-properties">Element</button>
-                    <button class="properties-tab" data-tab="app-properties">App Info</button>
-                </div>
+                    <!-- Element Properties -->
+                    <div id="elementPropertiesPanel" class="properties-panel">
+                        <div id="elementProperties" class="element-properties">
+                            <div class="no-selection" id="noSelection">
+                                <i class="fas fa-mouse-pointer" aria-hidden="true"></i>
+                                <p>Select an element on the canvas to edit its properties.</p>
+                            </div>
 
-                <!-- Element Properties -->
-                <div id="elementPropertiesPanel" class="properties-panel">
-                    <div id="elementProperties" class="element-properties">
-                        <div class="position-controls">
-                            <div class="control-group">
-                                <label for="datax"><i class="fas fa-arrows-alt-h"></i> X:</label>
-                                <input type="number" id="datax" class="coordinate-input">
+                            <div class="position-controls">
+                                <div class="control-group">
+                                    <label for="datax"><i class="fas fa-arrows-alt-h" aria-hidden="true"></i> X</label>
+                                    <input type="number" id="datax" class="coordinate-input">
+                                </div>
+                                <div class="control-group">
+                                    <label for="datay"><i class="fas fa-arrows-alt-v" aria-hidden="true"></i> Y</label>
+                                    <input type="number" id="datay" class="coordinate-input">
+                                </div>
+                                <div class="control-group">
+                                    <label for="dataWidth"><i class="fas fa-arrows-alt-h" aria-hidden="true"></i> Width</label>
+                                    <input type="number" id="dataWidth" class="coordinate-input">
+                                </div>
+                                <div class="control-group">
+                                    <label for="dataHeight"><i class="fas fa-arrows-alt-v" aria-hidden="true"></i> Height</label>
+                                    <input type="number" id="dataHeight" class="coordinate-input">
+                                </div>
                             </div>
-                            <div class="control-group">
-                                <label for="datay"><i class="fas fa-arrows-alt-v"></i> Y:</label>
-                                <input type="number" id="datay" class="coordinate-input">
-                            </div>
-                            <div class="control-group">
-                                <label for="dataWidth"><i class="fas fa-arrows-alt-h"></i> Width:</label>
-                                <input type="number" id="dataWidth" class="coordinate-input">
-                            </div>
-                            <div class="control-group">
-                                <label for="dataHeight"><i class="fas fa-arrows-alt-v"></i> Height:</label>
-                                <input type="number" id="dataHeight" class="coordinate-input">
-                            </div>
-                        </div>
 
-                        <div class="style-controls">
-                            <div class="control-group">
-                                <label for="colorPicker"><i class="fas fa-palette"></i> Text Color:</label>
-                                <input type="color" id="colorPicker" class="color-picker" value="#000000">
+                            <div class="style-controls">
+                                <div class="control-group">
+                                    <label for="colorPicker"><i class="fas fa-palette" aria-hidden="true"></i> Text Color</label>
+                                    <input type="color" id="colorPicker" class="color-picker" value="#000000">
+                                </div>
+                                <div class="control-group">
+                                    <label for="bgColorPicker"><i class="fas fa-fill" aria-hidden="true"></i> BG Color</label>
+                                    <input type="color" id="bgColorPicker" class="bg-color-picker" value="#ffffff">
+                                </div>
+                                <div class="control-group">
+                                    <label for="fontSizePicker"><i class="fas fa-text-height" aria-hidden="true"></i> Font Size</label>
+                                    <select id="fontSizePicker" class="font-size-picker">
+                                        <option value="title">Title</option>
+                                        <option value="big">Big</option>
+                                        <option value="medium">Medium</option>
+                                        <option value="small">Small</option>
+                                    </select>
+                                </div>
+                                <div class="control-group">
+                                    <label for="opacitySlider"><i class="fas fa-adjust" aria-hidden="true"></i> Opacity</label>
+                                    <div class="range-row">
+                                        <input type="range" id="opacitySlider" min="0" max="100" value="100" class="opacity-slider">
+                                        <span id="opacityValue">100%</span>
+                                    </div>
+                                </div>
                             </div>
-                            <div class="control-group">
-                                <label for="bgColorPicker"><i class="fas fa-fill"></i> BG Color:</label>
-                                <input type="color" id="bgColorPicker" class="bg-color-picker" value="#ffffff">
-                            </div>
-                            <div class="control-group">
-                                <label for="fontSizePicker"><i class="fas fa-text-height"></i> Font Size:</label>
-                                <select id="fontSizePicker" class="font-size-picker">
-                                    <option value="title">Title</option>
-                                    <option value="big">Big</option>
-                                    <option value="medium">Medium</option>
-                                    <option value="small">Small</option>
-                                </select>
-                            </div>
-                            <div class="control-group">
-                                <label for="opacitySlider"><i class="fas fa-adjust"></i> Opacity:</label>
-                                <input type="range" id="opacitySlider" min="0" max="100" value="100"
-                                    class="opacity-slider">
-                                <span id="opacityValue">100%</span>
-                            </div>
-                        </div>
 
                             <div class="trigger-controls">
                                 <div class="control-group">
-                                    <label for="triggerSelector"><i class="fas fa-bolt"></i> Trigger:</label>
+                                    <label for="triggerSelector"><i class="fas fa-bolt" aria-hidden="true"></i> Trigger</label>
                                     <select id="triggerSelector" class="trigger-selector">
                                         <option value="">None</option>
                                         <option value="change_scene">Change Scene</option>
@@ -259,112 +309,109 @@
                                     </select>
                                 </div>
 
-                            <div id="triggerOptions">
-                                <select id="sceneChangeSelector" class="scene-change-selector"></select>
-                                <input type="text" id="externalAppPath" class="external-app-path"
-                                    placeholder="App path">
-                                <input type="text" id="externalAppReturnVar" class="external-app-return-var"
-                                    placeholder="Return variable">
-                                <select id="variableChangeSelector" class="variable-change-selector"></select>
-                                <input type="text" id="variableChangeValue" class="variable-change-value"
-                                    placeholder="New value">
-                                <select id="mediaVariableSelector" class="media-variable-selector"></select>
-                                <input type="text" id="ytSearchCommand" class="yt-search-command"
-                                    placeholder="yt-dlp command (use $search_query)">
-                                <input type="text" id="ytSearchResultVar" class="yt-search-result-var"
-                                    placeholder="Result variable (e.g. search_results)">
-                                <select id="playFromVarSelector" class="play-from-var-selector"></select>
-                            </div>
-                        </div>
-                        <div class="searchresults-properties" style="display: none;">
-                            <div class="control-group">
-                                <label for="resultsVariable"><i class="fas fa-code"></i> Results Variable:</label>
-                                <input type="text" id="resultsVariable" class="results-variable-input"
-                                    placeholder="search_results">
-                            </div>
-                            <div class="control-group">
-                                <label for="gridColumns"><i class="fas fa-columns"></i> Columns:</label>
-                                <input type="number" id="gridColumns" class="grid-columns-input"
-                                    min="1" max="8" placeholder="2">
-                            </div>
-                            <div class="control-group">
-                                <label for="gridRows"><i class="fas fa-th-list"></i> Rows:</label>
-                                <input type="number" id="gridRows" class="grid-rows-input"
-                                    min="1" max="12" placeholder="6">
-                            </div>
-                        </div>
-                        <div class="dynamic-list-properties" style="display: none;">
-                            <div class="control-group">
-                                <label for="dynamicVariable"><i class="fas fa-code"></i> Variable:</label>
-                                <select id="dynamicVariable" class="dynamic-variable-selector"></select>
-                            </div>
-                        </div>
-                        <div class="textbrowser-properties" style="display: none;">
-                            <div class="control-group">
-                                <label for="textBrowserVariable"><i class="fas fa-code"></i> Output Variable:</label>
-                                <select id="textBrowserVariable" class="dynamic-variable-selector"></select>
-                            </div>
-                            <div class="control-group">
-                                <label for="textBrowserSource"><i class="fas fa-globe"></i> Data Source:</label>
-                                <select id="textBrowserSource" class="textbrowser-source-selector">
-                                    <option value="system">🖥️ System Info (gopsutil)</option>
-                                    <option value="zeroconf">🔍 Zeroconf / mDNS</option>
-                                    <option value="json">📋 JSON (gjson)</option>
-                                </select>
-                                <div class="source-preview">
-                                    <span class="source-badge system" id="sourceBadgeSystem">System</span>
-                                    <span class="source-badge zeroconf" id="sourceBadgeZeroconf">Zeroconf</span>
-                                    <span class="source-badge json" id="sourceBadgeJson">JSON</span>
+                                <div id="triggerOptions">
+                                    <select id="sceneChangeSelector" class="scene-change-selector"></select>
+                                    <input type="text" id="externalAppPath" class="external-app-path" placeholder="App path">
+                                    <input type="text" id="externalAppReturnVar" class="external-app-return-var" placeholder="Return variable">
+                                    <select id="variableChangeSelector" class="variable-change-selector"></select>
+                                    <input type="text" id="variableChangeValue" class="variable-change-value" placeholder="New value">
+                                    <select id="mediaVariableSelector" class="media-variable-selector"></select>
+                                    <input type="text" id="ytSearchCommand" class="yt-search-command" placeholder="yt-dlp command (use $search_query)">
+                                    <input type="text" id="ytSearchResultVar" class="yt-search-result-var" placeholder="Result variable (e.g. search_results)">
+                                    <select id="playFromVarSelector" class="play-from-var-selector"></select>
                                 </div>
                             </div>
-                            <div class="control-group" id="textBrowserJsonPathGroup" style="display: none;">
-                                <label for="textBrowserJsonPath"><i class="fas fa-project-diagram"></i> JSON Path (gjson):</label>
-                                <input type="text" id="textBrowserJsonPath" class="textbrowser-json-path"
-                                    placeholder="e.g. .data.items or $.users">
-                                <small class="help-text">Use gjson syntax: .key, .array[0], or $.path</small>
-                            </div>
-                            <div class="control-group">
-                                <label class="toggle-label">
-                                    <input type="checkbox" id="textBrowserAutoRefresh" class="toggle-input">
-                                    <span class="toggle-slider"></span>
-                                    <span>Auto-refresh (5s)</span>
-                                </label>
-                            </div>
-                            <div class="control-group">
-                                <small class="help-text">
-                                    <i class="fas fa-keyboard"></i> Runtime shortcuts: ↑↓ scroll • PgUp/PgDn page • Home/End jump • Shoulders page scroll
-                                </small>
-                            </div>
-                        </div>
-                        <div class="input-properties" style="display: none;">
-                            <div class="control-group">
-                                <label for="inputVariable"><i class="fas fa-code"></i> Variable (config key for typed text):</label>
-                                <input type="text" id="inputVariable" class="input-variable-input"
-                                    placeholder="e.g. terminal_cmd">
-                            </div>
-                        </div>
 
+                            <div class="searchresults-properties" style="display: none;">
+                                <div class="control-group">
+                                    <label for="resultsVariable"><i class="fas fa-code" aria-hidden="true"></i> Results Variable</label>
+                                    <input type="text" id="resultsVariable" class="results-variable-input" placeholder="search_results">
+                                </div>
+                                <div class="control-group">
+                                    <label for="gridColumns"><i class="fas fa-columns" aria-hidden="true"></i> Columns</label>
+                                    <input type="number" id="gridColumns" class="grid-columns-input" min="1" max="8" placeholder="2">
+                                </div>
+                                <div class="control-group">
+                                    <label for="gridRows"><i class="fas fa-th-list" aria-hidden="true"></i> Rows</label>
+                                    <input type="number" id="gridRows" class="grid-rows-input" min="1" max="12" placeholder="6">
+                                </div>
+                            </div>
+
+                            <div class="dynamic-list-properties" style="display: none;">
+                                <div class="control-group">
+                                    <label for="dynamicVariable"><i class="fas fa-code" aria-hidden="true"></i> Variable</label>
+                                    <select id="dynamicVariable" class="dynamic-variable-selector"></select>
+                                </div>
+                                <div class="control-group">
+                                    <label for="dynamicCommand"><i class="fas fa-terminal" aria-hidden="true"></i> Command Path</label>
+                                    <input type="text" id="dynamicCommand" class="dynamic-command-input" placeholder="Path to executable">
+                                </div>
+                            </div>
+
+                            <div class="textbrowser-properties" style="display: none;">
+                                <div class="control-group">
+                                    <label for="textBrowserVariable"><i class="fas fa-code" aria-hidden="true"></i> Output Variable</label>
+                                    <select id="textBrowserVariable" class="dynamic-variable-selector"></select>
+                                </div>
+                                <div class="control-group">
+                                    <label for="textBrowserSource"><i class="fas fa-globe" aria-hidden="true"></i> Data Source</label>
+                                    <select id="textBrowserSource" class="textbrowser-source-selector">
+                                        <option value="system">System Info (gopsutil)</option>
+                                        <option value="zeroconf">Zeroconf / mDNS</option>
+                                        <option value="json">JSON (gjson)</option>
+                                    </select>
+                                    <div class="source-preview">
+                                        <span class="source-badge system" id="sourceBadgeSystem">System</span>
+                                        <span class="source-badge zeroconf" id="sourceBadgeZeroconf">Zeroconf</span>
+                                        <span class="source-badge json" id="sourceBadgeJson">JSON</span>
+                                    </div>
+                                </div>
+                                <div class="control-group" id="textBrowserJsonPathGroup" style="display: none;">
+                                    <label for="textBrowserJsonPath"><i class="fas fa-project-diagram" aria-hidden="true"></i> JSON Path (gjson)</label>
+                                    <input type="text" id="textBrowserJsonPath" class="textbrowser-json-path" placeholder="e.g. .data.items or $.path">
+                                    <small class="help-text">Use gjson syntax: .key, .array[0], or $.path</small>
+                                </div>
+                                <div class="control-group">
+                                    <label class="toggle-label">
+                                        <input type="checkbox" id="textBrowserAutoRefresh" class="toggle-input">
+                                        <span class="toggle-slider"></span>
+                                        <span>Auto-refresh (5s)</span>
+                                    </label>
+                                </div>
+                                <div class="control-group">
+                                    <small class="help-text">
+                                        <i class="fas fa-keyboard" aria-hidden="true"></i> Runtime shortcuts: ↑↓ scroll • PgUp/PgDn page • Home/End jump • Shoulders page scroll
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="input-properties" style="display: none;">
+                                <div class="control-group">
+                                    <label for="inputVariable"><i class="fas fa-code" aria-hidden="true"></i> Variable (config key for typed text)</label>
+                                    <input type="text" id="inputVariable" class="input-variable-input" placeholder="e.g. terminal_cmd">
+                                </div>
+                            </div>
+
+                        </div>
                     </div>
-                </div>
 
-                <!-- App Properties -->
-                <div id="appInfoPanel" class="properties-panel active">
-                    <div class="steps-content">
+                    <!-- App Properties -->
+                    <div id="appInfoPanel" class="properties-panel active">
                         <div class="input-container">
                             <div class="input-group">
-                                <label for="title"><i class="fas fa-heading"></i> Title:</label>
+                                <label for="title"><i class="fas fa-heading" aria-hidden="true"></i> Title</label>
                                 <input type="text" id="title" placeholder="App Title">
                             </div>
                             <div class="input-group">
-                                <label for="author"><i class="fas fa-user"></i> Author:</label>
+                                <label for="author"><i class="fas fa-user" aria-hidden="true"></i> Author</label>
                                 <input type="text" id="author" placeholder="Your Name">
                             </div>
                             <div class="input-group">
-                                <label for="description"><i class="fas fa-align-left"></i> Description:</label>
+                                <label for="description"><i class="fas fa-align-left" aria-hidden="true"></i> Description</label>
                                 <input type="text" id="description" placeholder="App description">
                             </div>
                             <div class="input-group">
-                                <label for="canvasSize"><i class="fas fa-mobile-alt"></i> Device:</label>
+                                <label for="canvasSize"><i class="fas fa-mobile-alt" aria-hidden="true"></i> Device</label>
                                 <select id="canvasSize">
                                     <option value="1280x720">TSP (1280 x 720)</option>
                                     <option value="1024x768">Brick (1024 x 768)</option>
@@ -377,112 +424,104 @@
                                 <input type="number" id="customHeight" placeholder="Height" min="1">
                             </div>
                             <div class="input-group">
-                                <label for="backgroundPathInput"><i class="fas fa-image"></i> Background Image Path:</label>
+                                <label for="backgroundPathInput"><i class="fas fa-image" aria-hidden="true"></i> Background Image Path</label>
                                 <input type="text" id="backgroundPathInput" placeholder="background.jpg">
                             </div>
+                            <input type="file" id="backgroundFile" accept="image/*" class="sr-only" aria-label="Background image file">
                         </div>
                         <div class="font-size-controls">
-                            <h4><i class="fas fa-text-height"></i> Font Sizes</h4>
+                            <h4><i class="fas fa-text-height" aria-hidden="true"></i> Font Sizes</h4>
                             <div class="size-inputs">
                                 <div class="size-group">
-                                    <label for="titleSize">Title:</label>
+                                    <label for="titleSize">Title</label>
                                     <input type="number" id="titleSize" value="48" min="10">
                                 </div>
                                 <div class="size-group">
-                                    <label for="bigSize">Big:</label>
+                                    <label for="bigSize">Big</label>
                                     <input type="number" id="bigSize" value="36" min="10">
                                 </div>
                                 <div class="size-group">
-                                    <label for="mediumSize">Medium:</label>
+                                    <label for="mediumSize">Medium</label>
                                     <input type="number" id="mediumSize" value="24" min="10">
                                 </div>
                                 <div class="size-group">
-                                    <label for="smallSize">Small:</label>
+                                    <label for="smallSize">Small</label>
                                     <input type="number" id="smallSize" value="18" min="10">
                                 </div>
                             </div>
-                            <div class="theme-controls">
-                                <h4><i class="fas fa-palette"></i> Theme &amp; Display</h4>
-                                <div class="size-inputs">
-                                    <div class="size-group">
-                                        <label for="buttonColorPicker">Button Color:</label>
-                                        <input type="color" id="buttonColorPicker" value="#3498db">
-                                    </div>
-                                    <div class="size-group">
-                                        <label for="labelColorPicker">Label Color:</label>
-                                        <input type="color" id="labelColorPicker" value="#ffffff">
-                                    </div>
+                        </div>
+                        <div class="theme-controls">
+                            <h4><i class="fas fa-palette" aria-hidden="true"></i> Theme &amp; Display</h4>
+                            <div class="size-inputs">
+                                <div class="size-group">
+                                    <label for="buttonColorPicker">Button Color</label>
+                                    <input type="color" id="buttonColorPicker" value="#3498db">
                                 </div>
-                                <div class="input-group">
-                                    <label for="toolsPath"><i class="fas fa-folder"></i> Tools Path:</label>
-                                    <input type="text" id="toolsPath" placeholder="./required" value="./required">
+                                <div class="size-group">
+                                    <label for="labelColorPicker">Label Color</label>
+                                    <input type="color" id="labelColorPicker" value="#ffffff">
                                 </div>
-                                <div class="size-inputs">
-                                    <div class="size-group">
-                                        <label for="fullscreenToggle"><input type="checkbox" id="fullscreenToggle"> Fullscreen</label>
-                                    </div>
+                            </div>
+                            <div class="input-group">
+                                <label for="toolsPath"><i class="fas fa-folder" aria-hidden="true"></i> Tools Path</label>
+                                <input type="text" id="toolsPath" placeholder="./required" value="./required">
+                            </div>
+                            <div class="size-inputs">
+                                <div class="size-group">
+                                    <label for="screenWidthInput">Screen W</label>
+                                    <input type="number" id="screenWidthInput" value="1280" min="1">
                                 </div>
-                                <div class="size-inputs">
-                                    <div class="size-group">
-                                        <label for="screenWidthInput">Screen W:</label>
-                                        <input type="number" id="screenWidthInput" value="1280" min="1">
-                                    </div>
-                                    <div class="size-group">
-                                        <label for="screenHeightInput">Screen H:</label>
-                                        <input type="number" id="screenHeightInput" value="720" min="1">
-                                    </div>
+                                <div class="size-group">
+                                    <label for="screenHeightInput">Screen H</label>
+                                    <input type="number" id="screenHeightInput" value="720" min="1">
                                 </div>
-                                <div class="input-group">
-                                    <label for="fileExplorerRoot"><i class="fas fa-hdd"></i> File Explorer Root:</label>
-                                    <input type="text" id="fileExplorerRoot" placeholder="/mnt">
+                            </div>
+                            <div class="input-group">
+                                <label for="fileExplorerRoot"><i class="fas fa-hdd" aria-hidden="true"></i> File Explorer Root</label>
+                                <input type="text" id="fileExplorerRoot" placeholder="/mnt">
+                            </div>
+                            <div class="size-inputs">
+                                <div class="size-group">
+                                    <label for="weatherUnit">Weather Units</label>
+                                    <select id="weatherUnit">
+                                        <option value="C">°C</option>
+                                        <option value="F">°F</option>
+                                    </select>
                                 </div>
-                                <div class="size-inputs">
-                                    <div class="size-group">
-                                        <label for="weatherUnit">Weather Units:</label>
-                                        <select id="weatherUnit">
-                                            <option value="C">°C</option>
-                                            <option value="F">°F</option>
-                                        </select>
-                                    </div>
+                                <div class="size-group">
+                                    <label for="fullscreenToggle" class="checkbox-label"><input type="checkbox" id="fullscreenToggle"> Fullscreen</label>
                                 </div>
-                                <h4><i class="fas fa-font"></i> Font Files</h4>
-                                <div class="size-inputs">
-                                    <div class="size-group">
-                                        <label for="titleFontFile">Title:</label>
-                                        <input type="text" id="titleFontFile" placeholder="Inter-Regular.ttf">
-                                    </div>
-                                    <div class="size-group">
-                                        <label for="bigFontFile">Big:</label>
-                                        <input type="text" id="bigFontFile" placeholder="Inter-Regular.ttf">
-                                    </div>
-                                    <div class="size-group">
-                                        <label for="mediumFontFile">Medium:</label>
-                                        <input type="text" id="mediumFontFile" placeholder="Inter-Regular.ttf">
-                                    </div>
-                                    <div class="size-group">
-                                        <label for="smallFontFile">Small:</label>
-                                        <input type="text" id="smallFontFile" placeholder="Inter-Regular.ttf">
-                                    </div>
+                            </div>
+                            <h4><i class="fas fa-font" aria-hidden="true"></i> Font Files</h4>
+                            <div class="size-inputs">
+                                <div class="size-group">
+                                    <label for="titleFontFile">Title</label>
+                                    <input type="text" id="titleFontFile" placeholder="Inter-Regular.ttf">
+                                </div>
+                                <div class="size-group">
+                                    <label for="bigFontFile">Big</label>
+                                    <input type="text" id="bigFontFile" placeholder="Inter-Regular.ttf">
+                                </div>
+                                <div class="size-group">
+                                    <label for="mediumFontFile">Medium</label>
+                                    <input type="text" id="mediumFontFile" placeholder="Inter-Regular.ttf">
+                                </div>
+                                <div class="size-group">
+                                    <label for="smallFontFile">Small</label>
+                                    <input type="text" id="smallFontFile" placeholder="Inter-Regular.ttf">
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
-            </div>
+            </aside>
         </div>
-    </main>
 
-    <footer>
-        <div class="contribute-banner">
-            <p>
-                Need help? Join us on <a href="https://discord.gg/R9qgJjh5jG"><i class="fab fa-discord"></i>
-                    Discord</a>!
-                Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2"><i
-                        class="fab fa-github"></i> GitHub</a>
-            </p>
-        </div>
-    </footer>
+        <footer class="app-footer">
+            <p>Need help? Join us on <a href="https://discord.gg/R9qgJjh5jG" target="_blank"><i class="fab fa-discord" aria-hidden="true"></i> Discord</a>.
+            Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2" target="_blank"><i class="fab fa-github" aria-hidden="true"></i> GitHub</a></p>
+        </footer>
+    </div>
     <script src="script.js"></script>
 </body>
-
 </html>

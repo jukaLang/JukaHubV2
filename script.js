@@ -66,8 +66,14 @@ document.addEventListener('DOMContentLoaded', () => {
   // Create global tooltip
   createGlobalTooltip();
 
+  // Load saved theme preference
+  loadTheme();
+
+  // Update readouts
+  updateCanvasReadout();
+
   loadDefaultConfig();
-  setupMobileElementAdding()
+  setupMobileElementAdding();
   setupMobileCanvasClick();
   setupMobileElementSelection();
 });
@@ -83,27 +89,46 @@ function createGlobalTooltip() {
 // Set up all event listeners
 function setupEventListeners() {
   // Dark mode toggle
-  darkModeToggle.addEventListener('click', () => {
-    const isDarkMode = !document.body.classList.contains('dark-mode');
-    document.body.classList.toggle('dark-mode');
-    darkModeToggle.innerHTML = isDarkMode ?
-      '<i class="fas fa-sun"></i> Light Mode' :
-      '<i class="fas fa-moon"></i> Dark Mode';
-
-    // Preserve canvas background in dark mode
-    if (isDarkMode) {
-      canvas.style.backgroundImage = canvas.style.backgroundImage;
-      canvas.style.backgroundSize = canvas.style.backgroundSize;
-    }
-  });
+  if (darkModeToggle) {
+    darkModeToggle.addEventListener('click', () => {
+      const isLight = document.body.classList.toggle('theme-light');
+      document.body.classList.toggle('theme-dark', !isLight);
+      darkModeToggle.innerHTML = isLight ?
+        '<i class="fas fa-sun" aria-hidden="true"></i> <span>Light Mode</span>' :
+        '<i class="fas fa-moon" aria-hidden="true"></i> <span>Dark Mode</span>';
+      localStorage.setItem('jukahub-theme', isLight ? 'light' : 'dark');
+    });
+  }
 
   // Guide panel toggle
-  toggleGuide.addEventListener('click', () => {
-    guidePanel.style.display = guidePanel.style.display === 'block' ? 'none' : 'block';
-  });
+  if (toggleGuide && guidePanel) {
+    toggleGuide.addEventListener('click', () => {
+      const isHidden = guidePanel.hasAttribute('hidden');
+      if (isHidden) openGuide(); else closeGuide();
+    });
+  }
 
-  closeGuide.addEventListener('click', () => {
-    guidePanel.style.display = 'none';
+  if (closeGuide) {
+    closeGuide.addEventListener('click', closeGuideFn);
+  }
+
+  // Escape key closes overlays
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (guidePanel && !guidePanel.hasAttribute('hidden')) {
+        closeGuideFn();
+        return;
+      }
+      // Deselect element on Escape
+      if (currentElement) {
+        currentElement = null;
+        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
+        document.body.classList.remove('element-selected');
+        const noSelection = document.getElementById('noSelection');
+        if (noSelection) noSelection.style.display = '';
+        switchTab('app-properties');
+      }
+    }
   });
 
   // Properties tabs
@@ -113,6 +138,56 @@ function setupEventListeners() {
       switchTab(tabId);
     });
   });
+
+  // Desktop sidebar toggles
+  const leftToggle = document.getElementById('leftSidebarToggle');
+  const rightToggle = document.getElementById('rightSidebarToggle');
+  if (leftToggle) {
+    leftToggle.addEventListener('click', () => {
+      const sb = document.getElementById('leftSidebar');
+      sb.classList.toggle('open');
+      const expanded = sb.classList.contains('open') || window.innerWidth > 992;
+      leftToggle.setAttribute('aria-expanded', String(expanded));
+    });
+  }
+  if (rightToggle) {
+    rightToggle.addEventListener('click', () => {
+      const sb = document.getElementById('rightSidebar');
+      sb.classList.toggle('open');
+      const expanded = sb.classList.contains('open') || window.innerWidth > 992;
+      rightToggle.setAttribute('aria-expanded', String(expanded));
+    });
+  }
+
+  // Mobile panel tabs
+  document.querySelectorAll('.mobile-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const target = tab.getAttribute('data-target');
+      document.querySelectorAll('.mobile-tab').forEach(t => {
+        t.classList.remove('active');
+        t.setAttribute('aria-selected', 'false');
+      });
+      tab.classList.add('active');
+      tab.setAttribute('aria-selected', 'true');
+      document.getElementById('leftSidebar').classList.remove('open');
+      document.getElementById('rightSidebar').classList.remove('open');
+      if (target === 'left') document.getElementById('leftSidebar').classList.add('open');
+      if (target === 'right') document.getElementById('rightSidebar').classList.add('open');
+    });
+  });
+
+  // Component filter
+  const componentSearch = document.getElementById('componentSearch');
+  if (componentSearch) {
+    componentSearch.addEventListener('input', (e) => {
+      const term = e.target.value.trim().toLowerCase();
+      document.querySelectorAll('.left-sidebar .element[data-type]').forEach(el => {
+        const text = (el.textContent || '').toLowerCase();
+        const type = (el.getAttribute('data-type') || '').toLowerCase();
+        el.hidden = term.length > 0 && !text.includes(term) && !type.includes(term);
+      });
+    });
+  }
 
   // Canvas drop zone
   canvas.addEventListener('dragover', e => e.preventDefault());
@@ -132,6 +207,8 @@ function setupEventListeners() {
       currentElement = null;
       document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
       document.body.classList.remove('element-selected');
+      const noSelection = document.getElementById('noSelection');
+      if (noSelection) noSelection.style.display = '';
       switchTab('app-properties');
     }
   });
@@ -148,8 +225,10 @@ function setupEventListeners() {
   customWidthInput.addEventListener('change', updateCanvasSize);
   customHeightInput.addEventListener('change', updateCanvasSize);
 
-  // Background image
-  backgroundFileInput.addEventListener('change', setBackground);
+  // Background image file input
+  if (backgroundFileInput) {
+    backgroundFileInput.addEventListener('change', setBackground);
+  }
 
   // Add variable button
   addVariableButton.addEventListener('click', addVariable);
@@ -166,8 +245,9 @@ function setupEventListeners() {
       try {
         const config = JSON.parse(e.target.result);
         loadJukaApp(config);
+        showToast('Configuration loaded', 'success');
       } catch (error) {
-        alert('Error loading config: ' + error.message);
+        showToast('Error loading config: ' + error.message, 'error');
       }
     };
     reader.readAsText(file);
@@ -175,6 +255,80 @@ function setupEventListeners() {
 
   // Clear button
   clearButton.addEventListener('click', clearAll);
+
+  // Close mobile sidebars when clicking outside on narrow screens
+  document.addEventListener('click', (e) => {
+    if (window.innerWidth > 992) return;
+    const left = document.getElementById('leftSidebar');
+    const right = document.getElementById('rightSidebar');
+    const leftToggle = document.getElementById('leftSidebarToggle');
+    const rightToggle = document.getElementById('rightSidebarToggle');
+    if (left && left.classList.contains('open') &&
+        !left.contains(e.target) &&
+        e.target !== leftToggle &&
+        !leftToggle.contains(e.target) &&
+        !e.target.closest('.mobile-tab')) {
+      left.classList.remove('open');
+    }
+    if (right && right.classList.contains('open') &&
+        !right.contains(e.target) &&
+        e.target !== rightToggle &&
+        !rightToggle.contains(e.target) &&
+        !e.target.closest('.mobile-tab')) {
+      right.classList.remove('open');
+    }
+  });
+}
+
+// Theme helpers
+function loadTheme() {
+  const saved = localStorage.getItem('jukahub-theme');
+  const prefersLight = saved === 'light';
+  document.body.classList.toggle('theme-light', prefersLight);
+  document.body.classList.toggle('theme-dark', !prefersLight);
+  if (darkModeToggle) {
+    darkModeToggle.innerHTML = prefersLight ?
+      '<i class="fas fa-sun" aria-hidden="true"></i> <span>Light Mode</span>' :
+      '<i class="fas fa-moon" aria-hidden="true"></i> <span>Dark Mode</span>';
+  }
+}
+
+function openGuide() {
+  if (!guidePanel) return;
+  guidePanel.removeAttribute('hidden');
+  guidePanel.setAttribute('aria-hidden', 'false');
+  guidePanel.querySelector('.close-button')?.focus();
+}
+
+function closeGuideFn() {
+  if (!guidePanel) return;
+  guidePanel.setAttribute('hidden', '');
+  guidePanel.setAttribute('aria-hidden', 'true');
+  toggleGuide?.focus();
+}
+
+function updateCanvasReadout() {
+  const readout = document.getElementById('canvasSizeReadout');
+  if (readout) readout.textContent = `${canvasWidth} x ${canvasHeight}`;
+}
+
+function updateSceneBadge() {
+  const badge = document.getElementById('sceneNameBadge');
+  if (badge) badge.textContent = currentScene;
+}
+
+function showToast(message, type = 'info') {
+  const container = document.getElementById('toastContainer');
+  if (!container) return;
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.addEventListener('transitionend', () => toast.remove(), { once: true });
+    setTimeout(() => toast.remove(), 500);
+  }, 3000);
 }
 
 // Set up font size change listeners
@@ -206,20 +360,22 @@ function updateAllFontSizes() {
 function switchTab(tabId) {
   // Update active tab
   propertiesTabs.forEach(tab => {
-    if (tab.getAttribute('data-tab') === tabId) {
-      tab.classList.add('active');
-    } else {
-      tab.classList.remove('active');
-    }
+    const isMatch = tab.getAttribute('data-tab') === tabId;
+    tab.classList.toggle('active', isMatch);
+    tab.setAttribute('aria-selected', String(isMatch));
   });
 
   // Show/hide panels
   if (tabId === 'app-properties') {
     appInfoPanel.style.display = 'block';
+    appInfoPanel.classList.add('active');
     elementPropertiesPanel.style.display = 'none';
+    elementPropertiesPanel.classList.remove('active');
   } else {
     appInfoPanel.style.display = 'none';
+    appInfoPanel.classList.remove('active');
     elementPropertiesPanel.style.display = 'block';
+    elementPropertiesPanel.classList.add('active');
   }
 }
 
@@ -239,6 +395,7 @@ function updateCanvasSize() {
   // Apply new size
   canvas.style.width = `${canvasWidth}px`;
   canvas.style.height = `${canvasHeight}px`;
+  updateCanvasReadout();
 
   // Update menu position
   document.querySelectorAll('.element[data-type="menu"]').forEach(menu => {
@@ -277,6 +434,7 @@ function addScene() {
 
   currentScene = newSceneName;
   loadScene(currentScene);
+  updateSceneBadge();
 
   // Add menu to new scene
   addElement('menu', 0, canvasHeight - 50);
@@ -287,6 +445,7 @@ function addScene() {
   // Update all menu scene buttons in all scenes
   updateAllMenuSceneButtons();
   updateAllStoredMenus();
+  showToast(`Scene "${newSceneName}" added`, 'success');
 }
 
 function updateAllMenuSceneButtons() {
@@ -320,6 +479,7 @@ function duplicateScene() {
   currentScene = newSceneName;
 
   loadScene(newSceneName);
+  updateSceneBadge();
 
   // Update scene change selector
   updateSceneChangeSelector();
@@ -327,12 +487,14 @@ function duplicateScene() {
   // Update all menu scene buttons
   updateAllMenuSceneButtons();
   updateAllStoredMenus();
+  showToast(`Scene "${newSceneName}" duplicated`, 'success');
 }
 
 function changeScene() {
   currentScene = sceneSelector.value;
   loadScene(currentScene);
   updateAllMenuSceneButtons();
+  updateSceneBadge();
 }
 
 function loadScene(sceneName) {
@@ -748,7 +910,8 @@ function handleResize(el, event) {
 
 
 function showElementProperties(el) {
-  document.querySelectorAll('.dynamic-list-properties input').forEach(input => input.remove());
+  const noSelection = document.getElementById('noSelection');
+  if (noSelection) noSelection.style.display = 'none';
 
   if (window.innerWidth <= 768) {
     document.getElementById('appInfoPanel').style.display = 'none';
@@ -1467,6 +1630,12 @@ function createJukaApp() {
   document.body.appendChild(downloadAnchorNode);
   downloadAnchorNode.click();
   downloadAnchorNode.remove();
+  showToast('Exported jukaconfig.json', 'success');
+}
+
+// Legacy alias for inline Export buttons
+function exportConfig() {
+  createJukaApp();
 }
 
 function clearAll() {
@@ -1497,6 +1666,7 @@ function clearAll() {
 
     updateCanvasSize();
     addElement('menu', 0, canvasHeight - 50);
+    updateSceneBadge();
 
     document.querySelectorAll('.menu').forEach(menu => {
       updateMenuSceneButtons(menu);
@@ -1504,6 +1674,7 @@ function clearAll() {
 
     updateSceneChangeSelector();
     updateVariableChangeSelector();
+    showToast('Project cleared', 'success');
   }
 }
 
@@ -1527,6 +1698,7 @@ function renameScene() {
 
   currentScene = newName;
   sceneSelector.value = newName;
+  updateSceneBadge();
 
   // Update all menu scene buttons
   updateAllMenuSceneButtons();
@@ -1534,6 +1706,7 @@ function renameScene() {
 
   // Update scene change selector
   updateSceneChangeSelector();
+  showToast(`Scene renamed to "${newName}"`, 'success');
 }
 
 function deleteScene() {
@@ -1559,6 +1732,7 @@ function deleteScene() {
     currentScene = nextScene;
     sceneSelector.value = nextScene;
     loadScene(nextScene);
+    updateSceneBadge();
 
     // Update all menu scene buttons
     updateAllMenuSceneButtons();
@@ -1566,6 +1740,7 @@ function deleteScene() {
 
     // Update scene change selector
     updateSceneChangeSelector();
+    showToast(`Scene "${currentScene}" deleted`, 'success');
   }
 }
 
@@ -1692,6 +1867,8 @@ function loadJukaApp(data) {
 
   // Update all menu scene buttons
   updateAllMenuSceneButtons();
+  updateSceneBadge();
+  updateCanvasReadout();
 }
 
 

@@ -7,20 +7,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 )
 
-// getCryptoKey returns the encryption key from environment or a dev default.
-// In production, set JUKAHUB_CRYPTO_KEY to a 32-byte hex string.
-func getCryptoKey() []byte {
-	if key := os.Getenv("JUKAHUB_CRYPTO_KEY"); key != "" {
-		if len(key) == 64 {
-			b, _ := hex.DecodeString(key)
-			return b
-		}
-	}
-	// Dev fallback - change this or set env var in production
+// discordCryptoKey is the fixed key baked into the player. The token stored in
+// jukaconfig.json is encrypted with this key; there is deliberately no
+// environment-variable override (JUKAHUB_CRYPTO_KEY was removed) so the
+// player always decrypts its own Discord credential.
+var discordCryptoKey = func() []byte {
 	devKey := "JukaHub-Discord-Token-Encryption-Key-2024"
 	if len(devKey) > 32 {
 		devKey = devKey[:32]
@@ -29,6 +23,11 @@ func getCryptoKey() []byte {
 		devKey += "0"
 	}
 	return []byte(devKey)
+}()
+
+// getCryptoKey returns the player's built-in decryption key.
+func getCryptoKey() []byte {
+	return discordCryptoKey
 }
 
 // EncryptToken encrypts a plaintext token using AES-GCM.

@@ -1,56 +1,71 @@
 {
   "variables": {
     "buttonColor": {
-      "r": 30,
-      "g": 41,
-      "b": 59
+      "r": 0,
+      "g": 0,
+      "b": 0
     },
     "labelColor": {
-      "r": 248,
-      "g": 250,
-      "b": 252
+      "r": 0,
+      "g": 0,
+      "b": 0
     },
     "inputColor": {
-      "r": 15,
-      "g": 20,
-      "b": 32
+      "r": 0,
+      "g": 0,
+      "b": 0
     },
     "fullscreen": false,
-    "fileExplorerRoot": "/media",
-    "weatherEnabled": true,
-    "weatherUnit": "C",
+    "fileExplorerRoot": "",
+    "weatherEnabled": false,
+    "weatherUnit": "",
     "tspUsername": "",
-    "playbackResolution": "720",
-    "audioBackend": "ffplay",
+    "playbackResolution": "",
+    "audioBackend": "",
     "reducedMotion": false,
     "lowPower": false,
-    "Custom": {
-      "AudioBackend": "ffplay",
-      "BackgroundImage": "background.jpg",
-      "ButtonColor": "#1E293B",
-      "Custom": {
-        "google_api_key": "",
-        "groq_api_key": "",
-        "groq_model": "llama-3.3-70b-versatile",
-        "youtube_cookies_file": ""
+    "Custom": {}
+  },
+  "favorites": {
+    "videos": [],
+    "recent": [
+      {
+        "Type": "video",
+        "Data": {
+          "id": "vt0i6nuqNEo",
+          "title": "The Weeknd, Madonna, Playboi Carti - Popular (Official Music Video)",
+          "uploader": "The Weeknd",
+          "channel": "The Weeknd",
+          "duration": 231,
+          "thumbnail": "https://i.ytimg.com/vi/vt0i6nuqNEo/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLCt0J3CHjwQACiA2eRCdYACEeK1Yg",
+          "description": "",
+          "view_count": 117422800,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=vt0i6nuqNEo",
+          "position": 62.849999999999994
+        },
+        "Timestamp": "2026-08-17T17:01:55.9353921-04:00"
       },
-      "FileExplorerRoot": "/media",
-      "Fullscreen": false,
-      "GridColumns": 5,
-      "InputColor": "#0F1420",
-      "LabelColor": "#F8FAFC",
-      "PlaybackResolution": "720",
-      "ScreenHeight": 720,
-      "ScreenWidth": 1280,
-      "SearchWidth": 940,
-      "TSPUsername": "",
-      "WeatherEnabled": true,
-      "WeatherUnit": "C",
-      "diskpie_data": {
-        "Total": 0,
-        "Used": 0,
-        "Pct": 0
+      {
+        "Type": "video",
+        "Data": {
+          "id": "1YnkZS9e8MA",
+          "title": "Moneybagg Yo - Trending [Federal 3]",
+          "uploader": "DatPiff",
+          "channel": "DatPiff",
+          "duration": 210,
+          "thumbnail": "https://i.ytimg.com/vi/1YnkZS9e8MA/hq720.jpg?sqp=-oaymwE6COgCEMoBSFXyq4qpAywIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhlIEsoSzAPuAL3GA==\u0026rs=AOn4CLDLLj5tM6L5mnz_j31zC5jps3m-ow",
+          "description": "",
+          "view_count": 10402354,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=1YnkZS9e8MA"
+        },
+        "Timestamp": "2026-08-17T17:01:42.7199396-04:00"
       }
-    }
+    ],
+    "files": [],
+    "iptv": []
   }
 }

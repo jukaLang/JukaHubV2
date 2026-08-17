@@ -5,10 +5,15 @@ import (
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // Design tokens for JukaHub.
 // Modern sleek design system with glass morphism and refined surfaces.
+
+// pt is a small 2D point used by the primitive drawing helpers (triangles,
+// circles, icons) across launcher.go and homelayout.go.
+type pt struct{ x, y int32 }
 
 // Home screen layout constants (px at 720p; reduced on smaller viewports).
 const (
@@ -85,17 +90,18 @@ var (
 	RadiusXL = int32(20)
 
 	// Surfaces - refined dark "Midnight" theme
-	// Background gradient (top to bottom)
-	ColorBackgroundTop    = sdl.Color{R: 9, G: 13, B: 24, A: 255}
-	ColorBackgroundBottom = sdl.Color{R: 16, G: 19, B: 38, A: 255}
+	// Background is nearly solid #090E19; ambient glow shapes are layered at
+	// low alpha by the home renderer so cards stay clearly separated.
+	ColorBackgroundTop    = sdl.Color{R: 9, G: 14, B: 25, A: 255}
+	ColorBackgroundBottom = sdl.Color{R: 9, G: 14, B: 25, A: 255}
 	ColorBackground       = ColorBackgroundBottom // default solid background
 	ColorTopBar           = sdl.Color{R: 17, G: 23, B: 37, A: 255}
-	ColorPanel            = sdl.Color{R: 21, G: 28, B: 43, A: 255}
+	ColorPanel            = sdl.Color{R: 18, G: 26, B: 42, A: 255} // #121A2A surface
 	ColorPanelRaised      = sdl.Color{R: 27, G: 37, B: 54, A: 255}
-	ColorCard             = sdl.Color{R: 24, G: 33, B: 49, A: 255}
-	ColorCardFocus        = sdl.Color{R: 32, G: 45, B: 66, A: 255}
-	ColorBorder           = sdl.Color{R: 42, G: 56, B: 80, A: 255}
-	ColorFooter           = sdl.Color{R: 16, G: 22, B: 34, A: 255}
+	ColorCard             = sdl.Color{R: 23, G: 32, B: 51, A: 255} // #172033 resting card
+	ColorCardFocus        = sdl.Color{R: 34, G: 49, B: 75, A: 255} // #22314B focused card
+	ColorBorder           = sdl.Color{R: 42, G: 57, B: 83, A: 255} // #2A3953 resting border
+	ColorFooter           = sdl.Color{R: 18, G: 26, B: 42, A: 255}
 
 	// Borders - subtle and refined
 	ColorBorderSubtle  = sdl.Color{R: 255, G: 255, B: 255, A: 8}
@@ -142,8 +148,8 @@ var (
 // retint the whole UI at runtime when the user picks a theme preset.
 
 var (
-	textPrimaryColor    = sdl.Color{R: 244, G: 247, B: 252, A: 255} // #F4F7FC
-	textSecondaryColor  = sdl.Color{R: 152, G: 167, B: 188, A: 255} // #98A7BC
+	textPrimaryColor    = sdl.Color{R: 246, G: 248, B: 252, A: 255} // #F6F8FC
+	textSecondaryColor  = sdl.Color{R: 156, G: 169, B: 189, A: 255} // #9CA9BD
 	textTertiaryColor   = sdl.Color{R: 102, G: 117, B: 139, A: 255} // #66758B
 	textInverseColor    = sdl.Color{R: 9, G: 11, B: 20, A: 255}
 	textAccentColor     = sdl.Color{R: 110, G: 231, B: 255, A: 255}
@@ -164,6 +170,9 @@ func ColorTextInverse() sdl.Color { return textInverseColor }
 
 // ColorTextAccent returns the accent-colored text.
 func ColorTextAccent() sdl.Color { return textAccentColor }
+
+// ColorTextMuted returns the muted/secondary text color.
+func ColorTextMuted() sdl.Color { return textSecondaryColor }
 
 // SetAccentColor updates the runtime accent color from config.
 func SetAccentColor(c sdl.Color) {
@@ -220,10 +229,33 @@ func ApplyThemeColors(p ThemePreset) {
 	textTertiaryColor = hexRGBA(p.TextTertiary)
 	textAccentColor = hexRGBA(p.Info)
 	SetAccentColor(hexRGBA(p.Info))
+	// Retint the home design tokens too, so a theme (e.g. Light) never leaves
+	// the home screen with a light background but dark cards.
+	ColorCard = hexRGBA(p.SurfaceAlt)
+	ColorCardFocus = hexRGBA(p.SurfaceRaised)
+	ColorCardFocused = ColorCardFocus
+	ColorBorder = hexRGBA(p.BorderDefault)
+	ColorAccent = hexRGBA(p.Info)
+	ColorIconSurface = hexRGBA(p.InputColor)
+	ColorIconDark = contrastText(ColorAccent)
+	ColorFooter = hexRGBA(p.Surface)
+	ColorBackgroundTop = hexRGBA(p.Background)
+	ColorBackgroundBottom = ColorBackgroundTop
+	ColorBackground = ColorBackgroundBottom
 	// Invalidate cached background/gradient textures so the new theme colors
 	// are picked up on the very next frame.
 	gradientTexture = nil
 	gradientSceneKey = ""
+}
+
+// contrastText returns a readable text color for the given background:
+// dark text on bright surfaces, light text on dark surfaces.
+func contrastText(bg sdl.Color) sdl.Color {
+	lum := int(bg.R)*299 + int(bg.G)*587 + int(bg.B)*114
+	if lum > 60000 {
+		return sdl.Color{R: 18, G: 22, B: 30, A: 255}
+	}
+	return sdl.Color{R: 245, G: 248, B: 255, A: 255}
 }
 
 // WithAlpha returns a copy of c with the alpha channel replaced.
@@ -314,4 +346,35 @@ func Danger() sdl.Color { return ColorDanger }
 // used for subtle top-edge sheen on cards and panels.
 func GlossFill(alpha uint8) sdl.Color {
 	return sdl.Color{R: 255, G: 255, B: 255, A: alpha}
+}
+
+// focusColorForAccent returns a focus ring color from the accent hue.
+func focusColorForAccent(accent sdl.Color) sdl.Color {
+	if int(accent.R)+int(accent.G) > 420 && int(accent.R) > int(accent.B) {
+		return sdl.Color{R: 139, G: 124, B: 255, A: 255}
+	}
+	return sdl.Color{R: 85, G: 216, B: 255, A: 255}
+}
+
+// fitTextWidth truncates `text` (single line) to fit within maxW using the
+// given font, appending an ellipsis when truncated.
+func fitTextWidth(renderer *sdl.Renderer, config *Config, font *ttf.Font, text string, maxW int32) string {
+	if font == nil || maxW <= 0 {
+		return text
+	}
+	tw, _, _ := font.SizeUTF8(text)
+	if int32(tw) <= maxW {
+		return text
+	}
+	runes := []rune(text)
+	cur := ""
+	for _, r := range runes {
+		test := cur + string(r) + "…"
+		tw, _, _ := font.SizeUTF8(test)
+		if int32(tw) > maxW {
+			break
+		}
+		cur += string(r)
+	}
+	return cur + "…"
 }

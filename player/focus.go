@@ -248,7 +248,7 @@ func (fe *FocusEngine) SetByElementIndex(idx int) bool {
 // isFocusableElement reports whether an element should participate in the focus graph.
 func isFocusableElement(el Element) bool {
 	switch el.Type {
-	case "button", "input", "searchresults", "dynamiclist", "recent", "favorites", "chat":
+	case "button", "input", "searchresults", "dynamiclist", "recent", "favorites", "chat", "themegallery", "toggle":
 		return true
 	}
 	return false
@@ -288,22 +288,86 @@ func buildSpatialEdges(nodes []FocusNode) map[int][]int {
 				continue
 			}
 
-			if adx > ady {
-				if dx > 0 {
-					edges[i] = append(edges[i], j)
-					edges[j] = append(edges[j], i)
-				} else {
-					edges[i] = append(edges[i], j)
-					edges[j] = append(edges[j], i)
-				}
+			if adx > ady || ady == 0 {
+				edges[i] = append(edges[i], j)
+				edges[j] = append(edges[j], i)
 			} else {
-				if dy > 0 {
-					edges[i] = append(edges[i], j)
-					edges[j] = append(edges[j], i)
-				} else {
-					edges[i] = append(edges[i], j)
-					edges[j] = append(edges[j], i)
+				edges[i] = append(edges[i], j)
+				edges[j] = append(edges[j], i)
+			}
+		}
+	}
+
+	// Fallback pass: the strict 1.5x bias rule above drops every edge when two
+	// nodes are diagonally offset (e.g. a controls row above a results grid),
+	// which traps focus. Guarantee each node keeps at least one neighbor in
+	// every cardinal direction where a candidate exists, choosing the nearest
+	// one so directional navigation never dead-ends.
+	center := func(i int) (int32, int32) {
+		return nodes[i].Rect.X + nodes[i].Rect.W/2, nodes[i].Rect.Y + nodes[i].Rect.H/2
+	}
+	dirs := []struct {
+		vx, vy int32 // unit vector of the direction we must find a neighbor for
+		idx    int   // index into a per-node hasDir mask
+	}{
+		{0, -1, 0}, // up
+		{0, 1, 1},  // down
+		{-1, 0, 2}, // left
+		{1, 0, 3},  // right
+	}
+	for i := 0; i < n; i++ {
+		var hasDir [4]bool
+		ci, di := center(i)
+		for _, j := range edges[i] {
+			cj, dj := center(j)
+			switch {
+			case dj-di < -2:
+				hasDir[0] = true
+			case dj-di > 2:
+				hasDir[1] = true
+			case cj-ci < -2:
+				hasDir[2] = true
+			case cj-ci > 2:
+				hasDir[3] = true
+			}
+		}
+		for _, d := range dirs {
+			if hasDir[d.idx] {
+				continue
+			}
+			best := -1
+			bestDist := int64(math.MaxInt64)
+			for j := 0; j < n; j++ {
+				if j == i {
+					continue
 				}
+				cj, dj := center(j)
+				dx := cj - ci
+				dy := dj - di
+				if d.vx == 0 {
+					if d.vy < 0 && dy >= -2 {
+						continue
+					}
+					if d.vy > 0 && dy <= 2 {
+						continue
+					}
+				} else {
+					if d.vx < 0 && dx >= -2 {
+						continue
+					}
+					if d.vx > 0 && dx <= 2 {
+						continue
+					}
+				}
+				dist := int64(dx)*int64(dx) + int64(dy)*int64(dy)
+				if dist < bestDist {
+					bestDist = dist
+					best = j
+				}
+			}
+			if best >= 0 {
+				edges[i] = append(edges[i], best)
+				edges[best] = append(edges[best], i)
 			}
 		}
 	}

@@ -40,7 +40,6 @@ JukaHub is a config-driven GUI framework for handheld gaming devices. Design you
 - Crossmix
 - Knulli
 - MinUI
-- Spruce
 - NextUI
 - Windows (development/testing)
 - macOS (development/testing)

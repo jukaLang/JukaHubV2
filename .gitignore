@@ -26,3 +26,6 @@ go.work.sum
 player/.sdl2
 player/required/.ffmpeg-static
 player/chat.json
+player/jukahub.cache
+player/jukauser.json
+.freebuff/project-id

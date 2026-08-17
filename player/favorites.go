@@ -121,7 +121,9 @@ func (f *FavoriteItem) Play(config *Config) {
 	switch f.Type {
 	case "video":
 		if v, ok := f.Data.(VideoInfo); ok {
-			playVideoURL(config, v.GetURL())
+			// v.Position flows through to the embedded player so the Continue
+			// card can truly resume where the user left off.
+			playVideoInfo(config, v)
 		}
 	case "iptv":
 		if fe, ok := f.Data.(FileEntry); ok {
@@ -143,10 +145,27 @@ var (
 	favoritesFocusIndex int
 )
 
-const favoritesJSON = "favorites.json"
-
 func loadFavorites() {
-	loadFavoritesFrom(favoritesJSON)
+	favoritesMutex.Lock()
+	defer favoritesMutex.Unlock()
+	if userConfigCache != nil && userConfigCache.Favorites != nil {
+		favoritesStore = *userConfigCache.Favorites
+	}
+	if favoritesStore.Videos == nil {
+		favoritesStore.Videos = []FavoriteItem{}
+	}
+	if favoritesStore.Recent == nil {
+		favoritesStore.Recent = []FavoriteItem{}
+	}
+	if favoritesStore.Files == nil {
+		favoritesStore.Files = []FavoriteItem{}
+	}
+	if favoritesStore.IPTV == nil {
+		favoritesStore.IPTV = []FavoriteItem{}
+	}
+	if favoritesFocusIndex < 0 {
+		favoritesFocusIndex = 0
+	}
 }
 
 func loadFavoritesFrom(path string) {
@@ -177,7 +196,14 @@ func loadFavoritesFrom(path string) {
 }
 
 func saveFavorites() {
-	saveFavoritesTo(favoritesJSON)
+	favoritesMutex.Lock()
+	fs := favoritesStore
+	favoritesMutex.Unlock()
+	if userConfigCache == nil {
+		userConfigCache = &UserConfig{Variables: UserVariables{Custom: make(map[string]interface{})}}
+	}
+	userConfigCache.Favorites = &fs
+	saveUserConfig(userConfigCache)
 }
 
 func saveFavoritesTo(path string) {
@@ -206,6 +232,51 @@ func addRecentFile(path string) {
 	fe := FileEntry{Name: filepath.Base(path), Path: path, IsDir: false}
 	favoritesStore.Recent = removeDuplicateFavorite(favoritesStore.Recent, path, "file", fe)
 	favoritesStore.Recent = append([]FavoriteItem{{Type: "file", Data: fe, Timestamp: time.Now()}}, favoritesStore.Recent...)
+}
+
+// addRecentVideo records a video at the top of the recently-played list. The
+// incoming VideoInfo keeps any Position it carries (the Continue card passes
+// the saved offset so resume survives a scene round-trip).
+func addRecentVideo(v VideoInfo) {
+	favoritesMutex.Lock()
+	defer favoritesMutex.Unlock()
+	if v.GetURL() == "" {
+		return
+	}
+	favoritesStore.Recent = removeDuplicateFavorite(favoritesStore.Recent, v.GetURL(), "video", v)
+	favoritesStore.Recent = append([]FavoriteItem{{Type: "video", Data: v, Timestamp: time.Now()}}, favoritesStore.Recent...)
+	const maxRecent = 20
+	if len(favoritesStore.Recent) > maxRecent {
+		favoritesStore.Recent = favoritesStore.Recent[:maxRecent]
+	}
+}
+
+// updateRecentPosition records how far into a video the user has watched so
+// the Continue card can show real resume progress. Videos watched to the end
+// reset to 0 so the next play starts fresh.
+func updateRecentPosition(url string, positionSec float64) {
+	if url == "" || positionSec < 0 {
+		return
+	}
+	favoritesMutex.Lock()
+	defer favoritesMutex.Unlock()
+	for i := range favoritesStore.Recent {
+		it := &favoritesStore.Recent[i]
+		if it.Type != "video" {
+			continue
+		}
+		v, ok := it.Data.(VideoInfo)
+		if !ok || v.GetURL() != url {
+			continue
+		}
+		if v.Duration > 0 && positionSec >= v.Duration*0.95 {
+			v.Position = 0
+		} else {
+			v.Position = positionSec
+		}
+		it.Data = v
+		return
+	}
 }
 
 func addRecentIPTV(ch FileEntry) {

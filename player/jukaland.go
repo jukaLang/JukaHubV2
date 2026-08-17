@@ -1,11 +1,9 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
-	"os"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -198,22 +196,20 @@ func resetJukaLand() {
 }
 
 func saveJukaLand() {
-	data, err := json.Marshal(jukaland)
-	if err != nil {
-		return
+	if userConfigCache == nil {
+		userConfigCache = &UserConfig{Variables: UserVariables{Custom: make(map[string]interface{})}}
 	}
-	os.WriteFile("jukaland.json", data, 0644)
+	js := jukaland
+	userConfigCache.JukaLand = &js
+	saveUserConfig(userConfigCache)
 }
 
 func loadJukaLand() {
-	data, err := os.ReadFile("jukaland.json")
-	if err != nil {
-		resetJukaLand()
+	if userConfigCache != nil && userConfigCache.JukaLand != nil {
+		jukaland = *userConfigCache.JukaLand
 		return
 	}
-	if err := json.Unmarshal(data, &jukaland); err != nil {
-		resetJukaLand()
-	}
+	resetJukaLand()
 }
 
 func isSolid(t uint8) bool {
@@ -613,7 +609,7 @@ func handleJukaLandInput(e *sdl.KeyboardEvent) {
 		} else {
 			jukaland.GameOver = true
 			saveJukaLand()
-			changeSceneTo(appConfig, findSceneIndex(appConfig, "Misc"))
+			changeSceneTo(appConfig, findSceneIndex(appConfig, "Apps"))
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
 		startJukaLandCraft()
@@ -690,7 +686,7 @@ func updateJukaLandInput() {
 		} else {
 			jukaland.GameOver = true
 			saveJukaLand()
-			changeSceneTo(appConfig, findSceneIndex(appConfig, "Misc"))
+			changeSceneTo(appConfig, findSceneIndex(appConfig, "Apps"))
 		}
 	}
 	if jukalandBtnCraft {

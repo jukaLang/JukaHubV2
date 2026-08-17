@@ -67,13 +67,6 @@ func getWifiStatus() string {
 	return ""
 }
 
-// topBarError is a short message shown centered in the top bar.
-var topBarError string
-
-func setTopBarError(msg string) {
-	topBarError = msg
-}
-
 // safeStatusText strips characters that Inter font may not render and
 // collapses whitespace so the status bar never shows missing-glyph boxes.
 func safeStatusText(s string) string {
@@ -309,9 +302,75 @@ func fetchWeatherOnce() {
 	wxMutex.Unlock()
 }
 
-// --- Top status bar (clock + weather + username) ---
+// sceneDisplayName maps internal scene identifiers to human-readable labels
+// shown in the header. The UI never prints a raw config/enum identifier.
+func sceneDisplayName(name string) string {
+	switch name {
+	case "FileExplorer":
+		return "Files"
+	case "SettingsGeneral":
+		return "General"
+	case "SettingsAppearance":
+		return "Appearance"
+	case "ThemePresets":
+		return "Themes"
+	case "UnitConverter":
+		return "Converter"
+	case "CanvasSandbox":
+		return "Canvas"
+	case "LogExporter":
+		return "Logs"
+	case "NetSpeed":
+		return "Network"
+	case "DiskSpace":
+		return "Storage"
+	case "Hardware":
+		return "Hardware"
+	case "TextBrowser":
+		return "Text"
+	case "IPStream":
+		return "Streams"
+	case "LiveTV":
+		return "Live TV"
+	case "Cron":
+		return "Tasks"
+	case "Misc":
+		return "Tools"
+	case "Apps":
+		return "Apps"
+	default:
+		return name
+	}
+}
+
+// versionString returns the canonical "vX.Y.Z" value. The repository's single
+// version source is config.Version (jukaconfig.json "Version", with a "0.4.0"
+// fallback in config_health); the prefix is normalized so the UI never shows
+// "vv0.4.0".
+func versionString(config *Config) string {
+	v := strings.TrimSpace(config.Version)
+	v = strings.TrimPrefix(v, "v")
+	if v == "" {
+		v = "0.4.0"
+	}
+	return "v" + v
+}
+
+// headerTitle is the single header line: "JukaHub - v0.4.0" on Home and
+// "JukaHub - v0.4.0 - <Scene>" on every other scene. The active scene appears
+// exactly once per frame, here.
+func headerTitle(config *Config, scene SceneConfig) string {
+	base := "JukaHub - " + versionString(config)
+	if scene.Layout == "home" {
+		return base
+	}
+	return base + " - " + sceneDisplayName(scene.Name)
+}
+
+// --- Top status bar (brand + version + scene + clock/weather/battery) ---
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
+	sceneTitleBackRect = sdl.Rect{}
 	barH := HomeTopBarH
 	if screenHeight < 600 {
 		barH = HomeTopBarHSmall
@@ -334,29 +393,47 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		titleFont = font
 	}
 
-	// Left: "JukaHub" only on non-Main scenes.
-	titleStr := "JukaHub"
-	sceneName := ""
+	scene := SceneConfig{}
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-		sceneName = config.Scenes[currentSceneIndex].Name
+		scene = config.Scenes[currentSceneIndex]
 	}
-	// Only show scene name on non-Main scenes.
-	if sceneName != "" && sceneName != "Main" {
-		titleStr = "JukaHub · " + sceneName
-	}
+
+	// Left cluster: brand (primary) + " - vX.Y.Z" and " - Scene" (muted),
+	// all on one line inside the single 56px header.
+	titleStr := "JukaHub"
 	titleW, _, _ := titleFont.SizeUTF8(titleStr)
 	titleX := StatusBarMargin
 	titleY := barH/2 - TitleCenterOffset
 	renderText(renderer, config, titleFont, titleStr, white, titleX, titleY)
 
-	// Username (compact, after title if space allows).
-	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok && name != "" {
-		userX := titleX + int32(titleW) + SpaceLG
-		if sceneName != "" && sceneName != "Main" {
-			sw, _, _ := font.SizeUTF8("· " + sceneName)
-			userX = titleX + int32(titleW) + int32(sw) + SpaceMD
+	restStr := " - " + versionString(config)
+	if scene.Layout != "home" && scene.Name != "" {
+		restStr += " - " + sceneDisplayName(scene.Name)
+	}
+	restW, _, _ := font.SizeUTF8(restStr)
+	restX := titleX + int32(titleW) + 8
+	renderText(renderer, config, font, restStr, secondary, restX, titleY+3)
+
+	headerTextW := int32(titleW) + 8 + int32(restW)
+
+	// Compact back pill for mouse users, right after the header text on every
+	// non-home scene. Controller/keyboard use B/Escape; the footer says so.
+	if scene.Layout != "home" && scene.Name != "" && scene.Name != "JukaLand" {
+		small, _ := getCachedFont(config, "small")
+		if small != nil {
+			label := "‹  Back"
+			bw, _, _ := small.SizeUTF8(label)
+			pad := int32(10)
+			bh := int32(26)
+			w := int32(bw) + pad*2
+			x := restX + int32(restW) + SpaceLG
+			y := (barH - bh) / 2
+			sceneTitleBackRect = sdl.Rect{X: x, Y: y, W: w, H: bh}
+			fillRoundedRect(renderer, x, y, w, bh, bh/2, ColorIconSurface)
+			strokeRoundedRect(renderer, x, y, w, bh, bh/2, 1, ColorBorder)
+			renderText(renderer, config, small, label, white, x+pad, y+(bh-int32(small.Height()))/2)
+			headerTextW += SpaceLG + w
 		}
-		renderText(renderer, config, font, "Hi "+name, secondary, userX, titleY+SpaceXS)
 	}
 
 	// Right-side grouped status: weather / date+time / battery / wifi.
@@ -407,7 +484,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if len(parts) > 1 {
 		totalW += gap * int32(len(parts)-1)
 	}
-	maxW := screenWidth - StatusBarMargin - titleX - int32(titleW) - Space2XL
+	maxW := screenWidth - StatusBarMargin - titleX - headerTextW - Space2XL
 	if maxW < 120 {
 		maxW = 120
 	}
@@ -427,35 +504,18 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	}
 }
 
-func renderBottomErrorBar(renderer *sdl.Renderer, config *Config) {
-	if topBarError == "" {
-		return
-	}
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		return
-	}
-	barH := int32(22)
-	y := screenHeight - barH
-	fillRoundedRect(renderer, 0, y, screenWidth, barH, 0, WithAlpha(ColorSurfaceRaised, 240))
-	renderer.SetDrawColor(255, 100, 100, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1})
-	ew, _, _ := font.SizeUTF8(topBarError)
-	ex := (screenWidth - int32(ew)) / 2
-	renderText(renderer, config, font, topBarError, sdl.Color{R: 255, G: 100, B: 100, A: 255}, ex, y+6)
-}
-
-// --- Footer rendering (controller hints) ---
+// --- Footer rendering (controller hints) --
 
 // renderFooter displays controller navigation hints pinned to the bottom of the viewport.
 // It shows only the bindings actually supported by the current input code.
 func renderFooter(renderer *sdl.Renderer, config *Config) {
-	// Only render footer on Home scene
+	// The home scene owns its footer inside HomeLayout; this shared footer
+	// serves every non-home scene as the single bottom hint bar.
 	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return
 	}
 	scene := config.Scenes[currentSceneIndex]
-	if scene.Layout != "home" {
+	if scene.Layout == "home" {
 		return
 	}
 
@@ -465,70 +525,88 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	}
 	y := screenHeight - barH
 
-	// Opaque footer surface.
+	// Opaque footer surface on the shared dark surface, 1px divider on top.
 	fillRoundedRect(renderer, 0, y, screenWidth, barH, 0, HomeFooterColor())
-	// Top hairline border.
-	renderer.SetDrawColor(HomeBorderColor().R, HomeBorderColor().G, HomeBorderColor().B, 180)
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 180)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1})
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
 		return
 	}
-	secondary := ColorTextSecondary()
 
-	// Build footer content: navigation hints + action binding.
-	// Based on actual keyboard mappings in main.go:
-	// - UP/DOWN: moveHomeSelection (vertical navigation)
-	// - LEFT/RIGHT: moveHomeSelection (horizontal navigation)
-	// - RETURN/SPACE: activate selected tile
-	// - ESCAPE: go back to previous element
-
-	// Calculate available width for content (with safe margins).
-	margin := int32(20)
-	availableW := screenWidth - 2*margin
-
-	// Build hint labels. Prefer controller-first labels; keyboard fallbacks are
-	// shown in parentheses for development on Windows.
-	hints := []string{
-		"A/Enter: Open",
-		"B/Esc: Back",
-		"X/Ctrl+K: Search",
-		"Menu: Settings",
-		"L2/R2: Switch Page",
+	// Contextual hints: every scene gets navigate + open + back. The File
+	// Explorer's B binding climbs the directory tree, so it is advertised as
+	// "Parent" inside a folder and "Back" at the root. Tube adds the X search
+	// shortcut that actually exists for it.
+	backLabel := "Back"
+	if scene.Name == "FileExplorer" && feCurrentPath(config) != feRoot(config) {
+		backLabel = "Parent"
+	}
+	hints := []struct {
+		button string
+		label  string
+	}{
+		{button: "D-Pad", label: "Navigate"},
+		{button: "A", label: "Open"},
+		{button: "B", label: backLabel},
+	}
+	if scene.Name == "Chat" {
+		// In Chat, A sends the typed message rather than opening anything.
+		hints[1] = struct {
+			button string
+			label  string
+		}{button: "A", label: "Send"}
+	}
+	if scene.Name == "Tube" {
+		hints = append(hints, struct {
+			button string
+			label  string
+		}{button: "X", label: "Search"})
+	}
+	if scene.Name == "Chat" {
+		hints = append(hints, struct {
+			button string
+			label  string
+		}{button: "Y", label: "Ask AI"})
 	}
 
-	// Measure total width of all hints.
-	totalW := int32(0)
-	for _, h := range hints {
-		hw, _, _ := font.SizeUTF8(h)
-		totalW += int32(hw) + int32(10) // 10px gap between hints
-	}
-	totalW -= int32(10) // subtract last gap
+	// Distinct hint groups: a small button badge pill plus a separate label,
+	// 32px group gaps, centered as one row inside the footer.
+	groupGap := int32(32)
+	badgeH := int32(20)
+	badgePad := int32(12)
+	badgeGap := int32(6)
+	fh := int32(font.Height())
 
-	// If hints don't fit, truncate to essential ones.
-	if totalW > availableW {
-		// Keep only essential hints: navigation + action
-		hints = []string{
-			"A/Enter: Open",
-			"B/Esc: Back",
-		}
-		totalW = int32(0)
-		for _, h := range hints {
-			hw, _, _ := font.SizeUTF8(h)
-			totalW += int32(hw) + int32(10)
-		}
-		totalW -= int32(10)
+	type group struct {
+		badgeW int32
+		w      int32
+	}
+	groups := make([]group, 0, len(hints))
+	total := int32(0)
+	for _, g := range hints {
+		bw, _, _ := font.SizeUTF8(g.button)
+		lw, _, _ := font.SizeUTF8(g.label)
+		badgeW := int32(bw) + badgePad*2
+		w := badgeW + badgeGap + int32(lw)
+		groups = append(groups, group{badgeW: badgeW, w: w})
+		total += w
+	}
+	if len(groups) > 1 {
+		total += groupGap * int32(len(groups)-1)
 	}
 
-	// Center the hints in the footer.
-	startX := (screenWidth - totalW) / 2
-	x := startX
-	for _, h := range hints {
-		hw, _, _ := font.SizeUTF8(h)
-		_, th, _ := font.SizeUTF8(h)
-		renderText(renderer, config, font, h, secondary, x, y+int32(th)+4)
-		x += int32(hw) + 10
+	x := (screenWidth - total) / 2
+	textY := y + (barH-fh)/2
+	badgeY := y + (barH-badgeH)/2
+	for i, g := range hints {
+		badge := sdl.Rect{X: x, Y: badgeY, W: groups[i].badgeW, H: badgeH}
+		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, ColorIconSurface)
+		renderText(renderer, config, font, g.button, ColorTextPrimary(), badge.X+badgePad, textY)
+		labelX := badge.X + groups[i].badgeW + badgeGap
+		renderText(renderer, config, font, g.label, ColorTextSecondary(), labelX, textY)
+		x += groups[i].w + groupGap
 	}
 }
 
@@ -543,8 +621,18 @@ var volatileCustomVars = map[string]bool{
 	"search_error":   true,
 }
 
+// userConfigCache holds the loaded jukauser.json (user settings + favorites +
+// chat history + jukaland save) so every save preserves all sections. The app
+// persists exactly two JSON files: jukaconfig.json (layout/design, editable
+// via the web editor) and jukauser.json (recently played, user settings,
+// favorites, chat, etc.).
+var userConfigCache *UserConfig
+
 type UserConfig struct {
-	Variables UserVariables `json:"variables"`
+	Variables UserVariables   `json:"variables"`
+	Favorites *FavoritesStore `json:"favorites,omitempty"`
+	Chat      *ChatSection    `json:"chat,omitempty"`
+	JukaLand  *JukaLandState  `json:"jukaland,omitempty"`
 }
 
 type UserVariables struct {
@@ -566,28 +654,72 @@ type UserVariables struct {
 func loadUserConfig() *UserConfig {
 	data, err := os.ReadFile("jukauser.json")
 	if err != nil {
-		return &UserConfig{
+		userConfigCache = &UserConfig{
 			Variables: UserVariables{
 				Custom: make(map[string]interface{}),
 			},
 		}
+	} else {
+		var uc UserConfig
+		if err := json.Unmarshal(data, &uc); err != nil {
+			log.Printf("loadUserConfig: parse error: %v", err)
+			uc = UserConfig{}
+		}
+		if uc.Variables.Custom == nil {
+			uc.Variables.Custom = make(map[string]interface{})
+		}
+		userConfigCache = &uc
 	}
-	var uc UserConfig
-	if err := json.Unmarshal(data, &uc); err != nil {
-		log.Printf("loadUserConfig: parse error: %v", err)
-		return &UserConfig{
-			Variables: UserVariables{
-				Custom: make(map[string]interface{}),
-			},
+	// One-time migration: fold the legacy per-feature JSON files into their
+	// jukauser.json sections, then delete them so only the two canonical JSON
+	// files remain on disk.
+	migrateLegacyUserFiles()
+	return userConfigCache
+}
+
+// migrateLegacyUserFiles folds any still-present legacy JSON files
+// (favorites.json, chat.json, jukaland.json) into jukauser.json sections and
+// removes them. Kept for users upgrading from older builds; new installs never
+// create these files.
+func migrateLegacyUserFiles() {
+	if userConfigCache == nil {
+		return
+	}
+	if userConfigCache.Favorites == nil {
+		if data, err := os.ReadFile("favorites.json"); err == nil {
+			var fs FavoritesStore
+			if json.Unmarshal(data, &fs) == nil {
+				userConfigCache.Favorites = &fs
+				_ = os.Remove("favorites.json")
+			}
 		}
 	}
-	if uc.Variables.Custom == nil {
-		uc.Variables.Custom = make(map[string]interface{})
+	if userConfigCache.Chat == nil {
+		if data, err := os.ReadFile("chat.json"); err == nil {
+			var w struct {
+				Messages []ChatMessage `json:"messages"`
+			}
+			if json.Unmarshal(data, &w) == nil {
+				userConfigCache.Chat = &ChatSection{Messages: w.Messages}
+				_ = os.Remove("chat.json")
+			}
+		}
 	}
-	return &uc
+	if userConfigCache.JukaLand == nil {
+		if data, err := os.ReadFile("jukaland.json"); err == nil {
+			var js JukaLandState
+			if json.Unmarshal(data, &js) == nil {
+				userConfigCache.JukaLand = &js
+				_ = os.Remove("jukaland.json")
+			}
+		}
+	}
 }
 
 func saveUserConfig(user *UserConfig) {
+	if user == nil {
+		return
+	}
 	userCopy := *user
 	userCopy.Variables.Custom = make(map[string]interface{})
 	for k, v := range user.Variables.Custom {
@@ -595,6 +727,25 @@ func saveUserConfig(user *UserConfig) {
 			continue
 		}
 		userCopy.Variables.Custom[k] = v
+	}
+	// Preserve sections (favorites / chat / jukaland) the caller didn't
+	// supply, so a settings-only save never drops user data.
+	if userConfigCache != nil {
+		if userCopy.Favorites == nil {
+			userCopy.Favorites = userConfigCache.Favorites
+		}
+		if userCopy.Chat == nil {
+			userCopy.Chat = userConfigCache.Chat
+		}
+		if userCopy.JukaLand == nil {
+			userCopy.JukaLand = userConfigCache.JukaLand
+		}
+	}
+	// Keep the in-memory cache in sync with what we just persisted.
+	if userConfigCache != nil {
+		userConfigCache.Favorites = userCopy.Favorites
+		userConfigCache.Chat = userCopy.Chat
+		userConfigCache.JukaLand = userCopy.JukaLand
 	}
 	data, err := json.MarshalIndent(userCopy, "", "  ")
 	if err != nil {
