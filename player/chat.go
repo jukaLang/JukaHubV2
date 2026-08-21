@@ -109,7 +109,7 @@ func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Textu
 			rgba.Set(x, y, img.At(x, y))
 		}
 	}
-	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_RGBA8888, sdl.TEXTUREACCESS_STATIC, int32(w), int32(h))
+	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STATIC, int32(w), int32(h))
 	if err != nil {
 		return nil
 	}
@@ -157,6 +157,10 @@ var chatScrollOffset int
 // chatAskAIBtnRect is the "Ask Juka AI" pill inside the composer (mouse hit
 // target); the Y button is the controller/keyboard equivalent.
 var chatAskAIBtnRect sdl.Rect
+var chatSendBtnRect sdl.Rect
+
+// chatInputRect tracks the chat text input area for mouse click detection.
+var chatInputRect sdl.Rect
 
 // groqStatus holds a short human-readable Groq AI connection status shown in
 // the chat UI.
@@ -671,16 +675,20 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 
 	processChatImageDownloads(renderer)
 
-	// Single composer inside the panel (the config-driven input row was
-	// removed): type + ENTER to send, Y to ask Juka AI.
+	// Single composer: click the input area to type, Send to send, Ask AI for Groq.
 	chatAskAIBtnRect = sdl.Rect{}
+	chatSendBtnRect = sdl.Rect{}
+	chatInputRect = sdl.Rect{}
 	inputY := listY + listH - inputH - SpaceSM
+	inputX := listX + SpaceSM
+	inputW := listW - 2*SpaceSM
 	inputBorderCol := ColorBorder
 	if chatInputActive {
 		inputBorderCol = WithAlpha(ColorInfo, 160)
 	}
-	fillRoundedRect(renderer, listX+SpaceSM, inputY, listW-2*SpaceSM, inputH, RadiusMD, ColorSurfacePanel)
-	strokeRoundedRect(renderer, listX+SpaceSM, inputY, listW-2*SpaceSM, inputH, RadiusMD, 1, inputBorderCol)
+	chatInputRect = sdl.Rect{X: inputX, Y: inputY, W: inputW, H: inputH}
+	fillRoundedRect(renderer, inputX, inputY, inputW, inputH, RadiusMD, ColorSurfacePanel)
+	strokeRoundedRect(renderer, inputX, inputY, inputW, inputH, RadiusMD, 1, inputBorderCol)
 
 	if chatInputText == "" {
 		renderText(renderer, config, font, "Type a message...", ColorTextTertiary(), listX+SpaceMD, inputY+(inputH-lineH)/2)
@@ -688,19 +696,34 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		renderText(renderer, config, font, chatInputText, ColorTextPrimary(), listX+SpaceMD, inputY+(inputH-lineH)/2)
 	}
 
-	// Compact "Ask Juka AI" pill on the right of the composer (mouse) / Y (controller).
+	// Send button + Ask Juka AI pill on the right of the composer.
 	if statusFont != nil {
-		aiLabel := "Ask Juka AI"
+		pad := int32(10)
+		ah := int32(32)
+		// Send button - always visible (grayed when empty).
+		sendLabel := "Send"
+		sw, _, _ := statusFont.SizeUTF8(sendLabel)
+		saw := int32(sw) + pad*2
+		sax := listX + listW - SpaceSM - saw
+		say := inputY + (inputH-ah)/2
+		chatSendBtnRect = sdl.Rect{X: sax, Y: say, W: saw, H: ah}
+		if chatInputText != "" {
+			fillRoundedRect(renderer, sax, say, saw, ah, ah/2, WithAlpha(ColorInfo, 200))
+			renderText(renderer, config, statusFont, sendLabel, sdl.Color{R: 255, G: 255, B: 255, A: 255}, sax+pad, say+(ah-int32(statusFont.Height()))/2)
+		} else {
+			fillRoundedRect(renderer, sax, say, saw, ah, ah/2, ColorIconSurface)
+			renderText(renderer, config, statusFont, sendLabel, ColorTextTertiary(), sax+pad, say+(ah-int32(statusFont.Height()))/2)
+		}
+		// Ask Juka AI pill.
+		aiLabel := "Ask AI"
 		aw, _, _ := statusFont.SizeUTF8(aiLabel)
-		apad := int32(12)
-		ah := int32(28)
-		awAll := int32(aw) + apad*2
-		ax := listX + listW - SpaceSM - awAll
-		ay := inputY + (inputH-ah)/2
-		chatAskAIBtnRect = sdl.Rect{X: ax, Y: ay, W: awAll, H: ah}
-		fillRoundedRect(renderer, ax, ay, awAll, ah, ah/2, ColorIconSurface)
-		strokeRoundedRect(renderer, ax, ay, awAll, ah, ah/2, 1, WithAlpha(ColorInfo, 120))
-		renderText(renderer, config, statusFont, aiLabel, ColorTextPrimary(), ax+apad, ay+(ah-int32(statusFont.Height()))/2)
+		aaw := int32(aw) + pad*2
+		aax := chatSendBtnRect.X - aaw - SpaceSM
+		aay := inputY + (inputH-ah)/2
+		chatAskAIBtnRect = sdl.Rect{X: aax, Y: aay, W: aaw, H: ah}
+		fillRoundedRect(renderer, aax, aay, aaw, ah, ah/2, ColorIconSurface)
+		strokeRoundedRect(renderer, aax, aay, aaw, ah, ah/2, 1, WithAlpha(ColorInfo, 120))
+		renderText(renderer, config, statusFont, aiLabel, ColorTextPrimary(), aax+pad, aay+(ah-int32(statusFont.Height()))/2)
 	}
 
 	// The composer's controls are communicated once, by the shared footer

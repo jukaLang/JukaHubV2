@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
@@ -51,6 +52,11 @@ var textBrowserAutoRefreshMutex sync.Mutex
 // renderTextBrowser renders a scrollable text browser panel that can display
 // system information, zeroconf discoveries, or parsed JSON content.
 func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[textbrowser] recovered panic in render: %v", r)
+		}
+	}()
 	elemW := getElementWidth(element, 1100)
 	elemH := getElementHeight(element, 480)
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(235), accentColor)
@@ -225,6 +231,21 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 }
 
+// findTextBrowserVariable returns the variable name of the first textbrowser
+// element in the current scene, or a sensible default. This lets trigger
+// buttons (which may have an empty variable) write to the correct place.
+func findTextBrowserVariable(config *Config) string {
+	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return "textbrowser_content"
+	}
+	for _, elem := range config.Scenes[currentSceneIndex].Elements {
+		if elem.Type == "textbrowser" && elem.Variable != "" {
+			return elem.Variable
+		}
+	}
+	return "textbrowser_content"
+}
+
 // textBrowserRefresh refreshes the text browser content based on the source
 // specified in element.Text (system, zeroconf, json).
 func textBrowserRefresh(config *Config, element Element) {
@@ -246,7 +267,13 @@ func textBrowserRefresh(config *Config, element Element) {
 
 // browseSystemInfo gathers system information using gopsutil and formats it
 // as a human-readable text block.
-func browseSystemInfo(element Element) string {
+func browseSystemInfo(element Element) (result string) {
+	// gopsutil can panic on unsupported platforms (e.g. ARM64 Trimui).
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("System info error: %v", r)
+		}
+	}()
 	mode := strings.ToLower(strings.TrimSpace(element.Variable))
 	if mode == "" {
 		mode = textBrowserModeSummary
@@ -366,13 +393,23 @@ func browseSystemInfo(element Element) string {
 
 // browseZeroconfServices performs an mDNS/Bonjour discovery scan using the
 // zeroconf library and returns formatted results.
-func browseZeroconfServices() string {
+func browseZeroconfServices() (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("Zeroconf error: %v", r)
+		}
+	}()
 	return browseZeroconfServicesWithTimeout(4 * time.Second)
 }
 
 // browseZeroconfServicesWithTimeout performs a real zeroconf scan with a
 // timeout and returns the discovered services as formatted text.
-func browseZeroconfServicesWithTimeout(timeout time.Duration) string {
+func browseZeroconfServicesWithTimeout(timeout time.Duration) (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("Zeroconf error: %v", r)
+		}
+	}()
 	var sb strings.Builder
 	sb.WriteString("=== Zeroconf / mDNS Discovery ===\n")
 	sb.WriteString(fmt.Sprintf("Scanning for services (%s)...\n\n", timeout))
@@ -461,7 +498,12 @@ func browseZeroconfServicesWithTimeout(timeout time.Duration) string {
 
 // browseJSONContent fetches JSON from a URL or uses a local variable, then
 // extracts and displays it using gjson paths.
-func browseJSONContent(element Element) string {
+func browseJSONContent(element Element) (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("JSON error: %v", r)
+		}
+	}()
 	var sb strings.Builder
 	sb.WriteString("=== JSON Browser ===\n")
 
@@ -495,18 +537,18 @@ func browseJSONContent(element Element) string {
 		path = "."
 	}
 
-	result := gjson.Get(jsonData, path)
-	if !result.Exists() {
+	jsonResult := gjson.Get(jsonData, path)
+	if !jsonResult.Exists() {
 		return fmt.Sprintf("Path '%s' not found in JSON.\n\nRaw JSON (first 500 chars):\n%s", path, truncate(jsonData, 500))
 	}
 
-	switch result.Type {
+	switch jsonResult.Type {
 	case gjson.JSON:
-		sb.WriteString(result.Raw)
+		sb.WriteString(jsonResult.Raw)
 	case gjson.String:
-		sb.WriteString(result.String())
+		sb.WriteString(jsonResult.String())
 	default:
-		sb.WriteString(result.Raw)
+		sb.WriteString(jsonResult.Raw)
 	}
 
 	return sb.String()
@@ -604,7 +646,12 @@ func getGPSUtilization() string {
 }
 
 // getRunningServices returns common running services/daemons on Linux.
-func getRunningServices() string {
+func getRunningServices() (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("Services error: %v", r)
+		}
+	}()
 	if runtime.GOOS != "linux" {
 		return "N/A (not Linux)"
 	}
@@ -632,7 +679,12 @@ func getRunningServices() string {
 }
 
 // getSystemTemperature returns a temperature summary.
-func getSystemTemperature() string {
+func getSystemTemperature() (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("Temp error: %v", r)
+		}
+	}()
 	var sb strings.Builder
 	sb.WriteString("=== Temperatures ===\n")
 
@@ -649,7 +701,12 @@ func getSystemTemperature() string {
 }
 
 // getProcessTree returns a simple process tree using ps.
-func getProcessTree() string {
+func getProcessTree() (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("Process error: %v", r)
+		}
+	}()
 	if runtime.GOOS != "linux" {
 		return "N/A (not Linux)"
 	}
@@ -673,7 +730,12 @@ func getProcessTree() string {
 }
 
 // scanLocalFiles scans a local directory and returns formatted entries.
-func scanLocalFiles(dir string) string {
+func scanLocalFiles(dir string) (result string) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = fmt.Sprintf("Files error: %v", r)
+		}
+	}()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Sprintf("Cannot read directory: %s\n%s", dir, err.Error())

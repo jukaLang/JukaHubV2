@@ -112,6 +112,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	// panel wrapper for consistency
 	elemW := getElementWidth(element, 1080)
 	elemH := getElementHeight(element, 500)
+	unitInputRect = sdl.Rect{}
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, WithAlpha(ColorSurfacePanel, 220), accentColor)
 
 	catStartX := element.X + 20
@@ -186,6 +187,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	renderer.DrawRect(&sdl.Rect{X: toX + 1, Y: rowY + rowH - 2, W: rowW - 2, H: 1})
 	fillRoundedRect(renderer, inputX+1, rowY+1, inputW, rowH, 10, ShadowFill(30))
 	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, ColorSurfaceRaised)
+	unitInputRect = sdl.Rect{X: inputX, Y: rowY, W: inputW, H: rowH}
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
 	renderer.FillRect(&sdl.Rect{X: inputX + 8, Y: rowY + rowH - 2, W: inputW - 16, H: 2})
 
@@ -210,8 +212,8 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	renderer.SetDrawColor(255, 255, 255, 30)
 	renderer.FillRect(&sdl.Rect{X: circleX + 4, Y: arrowY - circleR + 3, W: circleR*2 - 8, H: 1})
 	if font != nil {
-		gw, gh, _ := font.SizeUTF8("⇄")
-		renderText(renderer, config, font, "⇄", accentColor, circleX+(circleR*2-int32(gw))/2, arrowY-int32(gh)/2+1)
+		gw, gh, _ := font.SizeUTF8("<->")
+		renderText(renderer, config, font, "<->", accentColor, circleX+(circleR*2-int32(gw))/2, arrowY-int32(gh)/2+1)
 	}
 
 	resultY := rowY + rowH + 40

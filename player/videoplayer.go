@@ -153,9 +153,9 @@ func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec f
 	ctx, cancel := context.WithCancel(context.Background())
 	ffmpegCtx = cancel
 
-	args := []string{
-		"-re",
-	}
+	// No -re flag: wall-clock frame pacing below handles real-time output.
+	// -re interacts badly with pipe output on ARM64 Trimui builds.
+	args := []string{}
 	if startSec > 0 {
 		// Fast (keyframe-accurate) seek before the input so resume starts at
 		// the saved position instead of the beginning.
@@ -188,6 +188,17 @@ func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec f
 	}
 	buf := make([]byte, frameSize)
 	frameCount := 0
+	// Compute the target inter-frame duration from the detected fps.
+	// On ARM64 Trimui the -re flag may not pace reliably, so we do
+	// explicit wall-clock pacing as a safety net.
+	embeddedPlayer.mu.Lock()
+	fps := embeddedPlayer.frameRate
+	embeddedPlayer.mu.Unlock()
+	if fps <= 0 {
+		fps = 30
+	}
+	frameDuration := time.Duration(float64(time.Second) / fps)
+	frameDeadline := time.Now()
 
 	for {
 		// True pause: while paused, stop consuming the pipe so ffmpeg (-re)
@@ -214,8 +225,17 @@ func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec f
 		embeddedPlayer.lastFrameTime = time.Now()
 		embeddedPlayer.mu.Unlock()
 
-		if frameCount == 1 {
-			log.Printf("[VIDEO] First frame received: %dx%d, %d bytes", width, height, len(buf))
+		// Pace to exactly 1x speed: sleep until the next frame is due.
+		// This prevents the decoder from running ahead of real-time on
+		// fast machines and provides a consistent floor on slow ones.
+		if frameCount > 1 {
+			frameDeadline = frameDeadline.Add(frameDuration)
+			if wait := time.Until(frameDeadline); wait > 0 {
+				time.Sleep(wait)
+			}
+		} else {
+			frameDeadline = time.Now().Add(frameDuration)
+			log.Printf("[VIDEO] First frame received: %dx%d, %d bytes, fps=%.1f, frameDur=%v", width, height, len(buf), fps, frameDuration)
 		}
 	}
 
@@ -226,6 +246,10 @@ func startFFmpegAudio(ffmpegPath, path string, startSec float64) {
 	ctx, cancel := context.WithCancel(context.Background())
 	audioCtx = cancel
 
+	// Match the exact sample rate the SDL device obtained so there is
+	// zero resampling and perfect pitch. No -re: queue backpressure
+	// paces the decoder to real-time.
+	rate := GetVideoAudioRate()
 	args := []string{}
 	if startSec > 0 {
 		// Fast seek before the input so resume/seek starts at the right
@@ -235,7 +259,7 @@ func startFFmpegAudio(ffmpegPath, path string, startSec float64) {
 	args = append(args, "-i", path,
 		"-f", "s16le",
 		"-ac", "2",
-		"-ar", "44100",
+		"-ar", fmt.Sprintf("%d", rate),
 		"-",
 	)
 	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
@@ -573,8 +597,8 @@ func SeekVideo(fraction float64) {
 		// below actually starts (startFFmpegAudio blocks until audio EOF).
 		go startFFmpegAudio(ffmpegPath, url, seekSec)
 
+		// No -re: wall-clock pacing handles real-time output.
 		args := []string{
-			"-re",
 			"-ss", fmt.Sprintf("%.3f", seekSec),
 			"-i", url,
 			"-f", "rawvideo",

@@ -174,6 +174,11 @@ func recordPlayed(config *Config, key string) {
 		TSPUsername:        config.Variables.TSPUsername,
 		PlaybackResolution: config.Variables.PlaybackResolution,
 		AudioBackend:       config.Variables.AudioBackend,
+		GridColumns:        config.Variables.GridColumns,
+		SearchWidth:        config.Variables.SearchWidth,
+		DynamicBg:          config.Variables.DynamicBg,
+		ScreensaverTimeout: config.Variables.ScreensaverTimeout,
+		SocialNotifs:       config.Variables.SocialNotifs,
 		Custom:             config.Variables.Custom,
 	}})
 }
@@ -301,6 +306,10 @@ func fetchWeatherOnce() {
 	weatherDaily = days
 	weatherReady = len(days) > 0
 	wxMutex.Unlock()
+	// Update dynamic background with weather data.
+	if len(days) > 0 {
+		DynBGUpdateWeather(days[0].Code)
+	}
 }
 
 // sceneDisplayName maps internal scene identifiers to human-readable labels
@@ -383,8 +392,9 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	}
 	// Opaque top bar surface.
 	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, ColorTopBar)
-	// Bottom hairline.
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 180)
+	// Subtle bottom border.
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 40)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
 
 	font, _ := getCachedFont(config, "small")
@@ -427,18 +437,17 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if scene.Layout != "home" && scene.Name != "" && scene.Name != "JukaLand" {
 		small, _ := getCachedFont(config, "small")
 		if small != nil {
-			label := "‹  Back"
+			label := "<"
 			bw, _, _ := small.SizeUTF8(label)
-			pad := int32(10)
-			bh := int32(26)
+			pad := int32(8)
+			bh := int32(22)
 			w := int32(bw) + pad*2
-			x := restX + int32(restW) + SpaceLG
+			x := restX + int32(restW) + SpaceMD
 			y := (barH - bh) / 2
 			sceneTitleBackRect = sdl.Rect{X: x, Y: y, W: w, H: bh}
 			fillRoundedRect(renderer, x, y, w, bh, bh/2, ColorIconSurface)
-			strokeRoundedRect(renderer, x, y, w, bh, bh/2, 1, ColorBorder)
-			renderText(renderer, config, small, label, white, x+pad, y+(bh-int32(small.Height()))/2)
-			headerTextW += SpaceLG + w
+			renderText(renderer, config, small, label, secondary, x+pad, y+(bh-int32(small.Height()))/2)
+			headerTextW += SpaceMD + w
 		}
 	}
 
@@ -483,9 +492,14 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	startX := rightX - totalW
 	for _, p := range parts {
 		pw, _, _ := statusFont.SizeUTF8(p)
-		renderText(renderer, config, statusFont, p, secondary, startX, statusY)
+		col := secondary
+		if strings.HasPrefix(p, "! Offline") {
+			col = ColorWarning
+		}
+		renderText(renderer, config, statusFont, p, col, startX, statusY)
 		startX += int32(pw) + gap
 	}
+
 }
 
 // headerStatusParts returns the right-side status cluster in one canonical
@@ -493,8 +507,12 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 // weather (hi/lo), time (HH:MM), battery. Both headers draw this exact list,
 // so the right side of the top bar never shifts or reorders between screens.
 func headerStatusParts(config *Config) []string {
-	parts := make([]string, 0, 4)
-	if wifi := strings.TrimSpace(getWifiStatus()); wifi != "" {
+	parts := make([]string, 0, 5)
+	// Offline indicator takes priority over the SSID so the user instantly
+	// knows why network features are failing.
+	if !IsOnline() {
+		parts = append(parts, "! Offline")
+	} else if wifi := strings.TrimSpace(getWifiStatus()); wifi != "" {
 		parts = append(parts, safeStatusText(wifi))
 	}
 	wxMutex.Lock()
@@ -540,6 +558,10 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	if scene.Layout == "home" {
 		return
 	}
+	// When the OS taskbar renders instead, it replaces the footer entirely.
+	if sceneUsesTaskbar(scene.Name) {
+		return
+	}
 
 	barH := HomeFooterH
 	if screenHeight < 600 {
@@ -547,9 +569,10 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	}
 	y := screenHeight - barH
 
-	// Opaque footer surface on the shared dark surface, 1px divider on top.
+	// Opaque footer surface on the shared dark surface, accent divider on top.
 	fillRoundedRect(renderer, 0, y, screenWidth, barH, 0, HomeFooterColor())
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 180)
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 40)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1})
 
 	font, _ := getCachedFont(config, "small")
@@ -665,6 +688,11 @@ type UserVariables struct {
 	AudioBackend       string `json:"audioBackend"`
 	ReducedMotion      bool   `json:"reducedMotion"`
 	LowPower           bool   `json:"lowPower"`
+	GridColumns        int    `json:"gridColumns"`
+	SearchWidth        int    `json:"searchWidth"`
+	DynamicBg          bool   `json:"dynamicBg"`
+	ScreensaverTimeout int    `json:"screensaverTimeout"`
+	SocialNotifs       bool   `json:"socialNotifs"`
 	Custom             map[string]interface{}
 }
 

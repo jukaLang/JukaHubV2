@@ -33,10 +33,17 @@
                 <label for="loadFile" class="app-bar-button load-button" role="button">
                     <i class="fas fa-upload" aria-hidden="true"></i> <span>Load</span>
                 </label>
-                <input type="file" id="loadFile" accept="application/json" class="sr-only" aria-label="Load jukaconfig.json">
-                <button class="app-bar-button export-button" type="button" onclick="exportConfig()">
-                    <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
-                </button>
+                <input type="file" id="loadFile" accept=".json,.xml,application/json,application/xml,text/xml" class="sr-only" aria-label="Load jukaconfig.json or jukaconfig.xml">
+                <div class="export-dropdown-wrapper">
+                    <button class="app-bar-button export-button" type="button" id="headerExportBtn">
+                        <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
+                        <i class="fas fa-caret-down" style="margin-left:2px"></i>
+                    </button>
+                    <div class="export-dropdown" id="headerExportDropdown">
+                        <button type="button" onclick="exportConfig()"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
+                        <button type="button" onclick="exportConfigXml()"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
+                    </div>
+                </div>
             </div>
         </header>
 
@@ -66,9 +73,18 @@
                             </ul>
                         </li>
                         <li>Select elements to edit properties in the right sidebar</li>
-                        <li>Use the "Export" button when finished to download <code>jukaconfig.json</code></li>
+                        <li>Use the "Export" dropdown to download as <code>JSON</code> or <code>XML</code></li>
                         <li>Combine with the JukaHub template from <a href="https://github.com/jukaLang/JukaHubV2/releases" target="_blank">GitHub releases</a></li>
                     </ol>
+                    <h4 style="margin-top:1rem"><i class="fas fa-keyboard"></i> Keyboard Shortcuts</h4>
+                    <ul>
+                        <li><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Shift+Z</kbd> — Undo / Redo</li>
+                        <li><kbd>Delete</kbd> — Remove selected element</li>
+                        <li><kbd>Ctrl+D</kbd> — Duplicate selected element</li>
+                        <li><kbd>Ctrl+S</kbd> — Export JSON</li>
+                        <li><kbd>Ctrl+P</kbd> — Toggle Preview Mode</li>
+                        <li>Right-click elements for a context menu</li>
+                    </ul>
                     <p>Visit <a href="https://github.com/jukaLang/JukaHubV2/wiki" target="_blank">https://github.com/jukaLang/JukaHubV2/wiki</a> for more info</p>
                 </div>
             </div>
@@ -176,9 +192,16 @@
                             <button id="clearButton" class="action-button danger" type="button">
                                 <i class="fas fa-broom" aria-hidden="true"></i> <span>Clear All</span>
                             </button>
-                            <button class="action-button primary" type="button" onclick="exportConfig()">
-                                <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
-                            </button>
+                            <div class="export-dropdown-wrapper">
+                                <button class="action-button primary" type="button" id="canvasExportBtn">
+                                    <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
+                                    <i class="fas fa-caret-down" style="margin-left:2px"></i>
+                                </button>
+                                <div class="export-dropdown" id="canvasExportDropdown">
+                                    <button type="button" onclick="exportConfig()"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
+                                    <button type="button" onclick="exportConfigXml()"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     <div class="scene-readout" aria-live="polite">
@@ -522,6 +545,22 @@
             Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2" target="_blank"><i class="fab fa-github" aria-hidden="true"></i> GitHub</a></p>
         </footer>
     </div>
+    <!-- Element Context Menu -->
+    <div id="contextMenu" class="context-menu" style="display:none">
+        <button type="button" data-action="duplicate"><i class="fas fa-copy"></i> Duplicate</button>
+        <button type="button" data-action="delete"><i class="fas fa-trash"></i> Delete</button>
+        <div class="context-menu-sep"></div>
+        <button type="button" data-action="bring-front"><i class="fas fa-arrow-up"></i> Bring to Front</button>
+        <button type="button" data-action="send-back"><i class="fas fa-arrow-down"></i> Send to Back</button>
+        <div class="context-menu-sep"></div>
+        <button type="button" data-action="edit-text"><i class="fas fa-pen"></i> Edit Text</button>
+    </div>
+
+    <!-- Preview Mode Toggle -->
+    <button id="previewToggle" class="preview-toggle" type="button" title="Preview Mode (Ctrl+P)">
+        <i class="fas fa-eye"></i>
+    </button>
+
     <script src="script.js"></script>
 </body>
 </html>

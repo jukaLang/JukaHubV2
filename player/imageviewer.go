@@ -96,7 +96,7 @@ func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: btnW, H: btnH})
 		// Use × (U+00D7), which Inter contains — ✕ (U+2715) is not in Inter and
 		// would render as a missing-glyph box.
-		renderText(renderer, config, font, "Close  ×", ColorTextPrimary(), bx+16, by+12)
+		renderText(renderer, config, font, "Close  X", ColorTextPrimary(), bx+16, by+12)
 	}
 }
 

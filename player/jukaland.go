@@ -25,6 +25,15 @@ const tileSand = 6
 const tileBrick = 7
 const tilePlanks = 8
 const tileCobble = 9
+const tileWater = 10
+const tileTorch = 11
+const tileOreIron = 12
+const tileOreGold = 13
+const tileOreDiamond = 14
+const tileBed = 15
+const tileChest = 16
+const tileSnow = 17
+const tileMoss = 18
 
 const playerSpeed = 280.0
 const playerJump = 420.0
@@ -57,19 +66,47 @@ type JukaLandState struct {
 	GameOver bool
 	LastTime float64
 
-	Score  int
-	Health int
-	Slimes []Slime
+	Score      int
+	Health     int
+	Hunger     int
+	XP         int
+	Level      int
+	DayTime    float64 // 0-1 day cycle
+	Enemies    []Enemy
+	Particles  []Particle
+	HasBed     bool
+	BedX, BedY int
 }
 
-type Slime struct {
-	X     float64
-	Y     float64
-	VX    float64
-	Dir   float64
-	Alive bool
-	HP    int
-	MaxHP int
+type EnemyType int
+
+const (
+	EnemySlime EnemyType = iota
+	EnemySkeleton
+	EnemyBat
+	EnemySpider
+)
+
+type Enemy struct {
+	X        float64
+	Y        float64
+	VX       float64
+	VY       float64
+	Dir      float64
+	Alive    bool
+	HP       int
+	MaxHP    int
+	Type     EnemyType
+	FlyTimer float64
+	AtkTimer float64
+}
+
+type Particle struct {
+	X, Y   float64
+	VX, VY float64
+	Life   float64
+	Color  sdl.Color
+	Size   int32
 }
 
 var jukaland JukaLandState
@@ -102,15 +139,23 @@ func resetJukaLand() {
 	jukaland.Inventory = map[uint8]int{
 		tilePlanks: 4,
 		tileBrick:  2,
+		tileWood:   2,
+		tileTorch:  3,
 	}
 	jukaland.Selected = tilePlanks
 	jukaland.CraftOpen = false
 	jukaland.CraftSel = 0
 	jukaland.GameOver = false
 	jukaland.Health = 100
+	jukaland.Hunger = 100
+	jukaland.XP = 0
+	jukaland.Level = 1
+	jukaland.DayTime = 0.3 // start at morning
 	jukaland.Score = 0
 	jukaland.LastTime = float64(sdl.GetTicks64()) / 1000.0
-	jukaland.Slimes = nil
+	jukaland.Enemies = nil
+	jukaland.Particles = nil
+	jukaland.HasBed = false
 
 	for y := 0; y < worldH; y++ {
 		for x := 0; x < worldW; x++ {
@@ -131,14 +176,16 @@ func resetJukaLand() {
 		}
 	}
 
-	for i := 0; i < 20; i++ {
+	// Trees
+	for i := 0; i < 25; i++ {
 		tx := 5 + rand.Intn(worldW-10)
 		ty := worldH - 22 - rand.Intn(4)
 		if ty < 0 {
 			ty = 0
 		}
 		baseY := ty
-		for th := 3 + rand.Intn(2); th > 0; th-- {
+		trunkH := 3 + rand.Intn(3)
+		for th := 0; th < trunkH; th++ {
 			if baseY+th < worldH {
 				jukaland.TileMap[baseY+th][tx] = tileWood
 			}
@@ -153,6 +200,68 @@ func resetJukaLand() {
 						}
 					}
 				}
+			}
+		}
+	}
+
+	// Caves (carve out underground)
+	for i := 0; i < 15; i++ {
+		cx := rand.Intn(worldW)
+		cy := worldH - 10 - rand.Intn(10)
+		size := 3 + rand.Intn(4)
+		for dy := -size; dy <= size; dy++ {
+			for dx := -size; dx <= size; dx++ {
+				if dx*dx+dy*dy <= size*size {
+					tx, ty := cx+dx, cy+dy
+					if tx >= 0 && tx < worldW && ty >= 0 && ty < worldH {
+						t := jukaland.TileMap[ty][tx]
+						if t == tileDirt || t == tileStone {
+							jukaland.TileMap[ty][tx] = tileSky
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Ores
+	for i := 0; i < 12; i++ {
+		tx := 3 + rand.Intn(worldW-6)
+		ty := worldH - 8 - rand.Intn(12)
+		if ty >= 0 && ty < worldH && tx >= 0 && tx < worldW {
+			jukaland.TileMap[ty][tx] = tileOreIron
+		}
+	}
+	for i := 0; i < 5; i++ {
+		tx := 5 + rand.Intn(worldW-10)
+		ty := worldH - 4 - rand.Intn(6)
+		if ty >= 0 && ty < worldH && tx >= 0 && tx < worldW {
+			jukaland.TileMap[ty][tx] = tileOreGold
+		}
+	}
+	for i := 0; i < 2; i++ {
+		tx := 10 + rand.Intn(worldW-20)
+		ty := worldH - 2 - rand.Intn(3)
+		if ty >= 0 && ty < worldH && tx >= 0 && tx < worldW {
+			jukaland.TileMap[ty][tx] = tileOreDiamond
+		}
+	}
+
+	// Water pools
+	for i := 0; i < 4; i++ {
+		tx := 5 + rand.Intn(worldW-10)
+		// Find ground level
+		for ty := 0; ty < worldH; ty++ {
+			if isSolid(jukaland.TileMap[ty][tx]) {
+				for dx := -2; dx <= 2; dx++ {
+					if tx+dx >= 0 && tx+dx < worldW {
+						jukaland.TileMap[ty-1][tx+dx] = tileWater
+						if jukaland.TileMap[ty][tx+dx] == tileGrass {
+							jukaland.TileMap[ty][tx+dx] = tileSand
+						}
+					}
+				}
+				break
 			}
 		}
 	}
@@ -181,7 +290,7 @@ func resetJukaLand() {
 		if ty < 0 {
 			ty = 0
 		}
-		jukaland.Slimes = append(jukaland.Slimes, Slime{
+		jukaland.Enemies = append(jukaland.Enemies, Enemy{
 			X:     float64(tx * tileSize),
 			Y:     float64(ty * tileSize),
 			VX:    40 + float64(rand.Intn(60)),
@@ -189,6 +298,7 @@ func resetJukaLand() {
 			Alive: true,
 			HP:    30,
 			MaxHP: 30,
+			Type:  EnemySlime,
 		})
 	}
 
@@ -397,8 +507,8 @@ func updateJukaLand() {
 }
 
 func updateJukaLandEnemies(dt float64) {
-	for i := range jukaland.Slimes {
-		s := &jukaland.Slimes[i]
+	for i := range jukaland.Enemies {
+		s := &jukaland.Enemies[i]
 		if !s.Alive {
 			continue
 		}
@@ -495,7 +605,7 @@ func renderJukaLand(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	for _, s := range jukaland.Slimes {
+	for _, s := range jukaland.Enemies {
 		if !s.Alive {
 			continue
 		}

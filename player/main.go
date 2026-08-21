@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"math"
 	"net"
@@ -20,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -115,6 +115,9 @@ var (
 	// Simple animation state
 	animTime float64
 
+	// Frame counter for periodic tasks (memory checks, etc.)
+	frameCount uint64
+
 	// Mouse hover state
 	mouseX, mouseY     int32   = -100, -100
 	hoveredButtonIndex int     = -1
@@ -157,11 +160,13 @@ var (
 	jukalandBtnExit     bool
 
 	// Unit converter state
-	unitCategory   string = "length"
-	unitFrom       string = "m"
-	unitTo         string = "ft"
-	unitInputValue string
-	unitResult     string
+	unitCategory    string = "length"
+	unitFrom        string = "m"
+	unitTo          string = "ft"
+	unitInputValue  string
+	unitInputActive bool
+	unitInputRect   sdl.Rect
+	unitResult      string
 
 	// Chat state
 	chatMessages    []ChatMessage
@@ -401,16 +406,23 @@ type Variables struct {
 	AudioBackend       string            `json:"audioBackend"`
 	ReducedMotion      bool              `json:"reducedMotion"`
 	LowPower           bool              `json:"lowPower"`
+	GridColumns        int               `json:"gridColumns"`
+	SearchWidth        int               `json:"searchWidth"`
+	DynamicBg          bool              `json:"dynamicBg"`
+	ScreensaverTimeout int               `json:"screensaverTimeout"`
+	SocialNotifs       bool              `json:"socialNotifs"`
 	Custom             map[string]interface{}
 	LoadingSpinner     bool   `json:"-"`
 	SpinnerText        string `json:"-"`
 }
 
 type SceneConfig struct {
-	Name       string    `json:"name"`
-	Background string    `json:"background"`
-	Layout     string    `json:"layout"`
-	Elements   []Element `json:"elements"`
+	Name        string    `json:"name"`
+	Icon        string    `json:"icon"`
+	Description string    `json:"description"`
+	Background  string    `json:"background"`
+	Layout      string    `json:"layout"`
+	Elements    []Element `json:"elements"`
 }
 
 type StringOrInt string
@@ -496,6 +508,11 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"tspUsername":        true,
 		"playbackResolution": true,
 		"audioBackend":       true,
+		"gridColumns":        true,
+		"searchWidth":        true,
+		"dynamicBg":          true,
+		"screensaverTimeout": true,
+		"socialNotifs":       true,
 		"reducedMotion":      true,
 		"lowPower":           true,
 		"custom":             true,
@@ -717,34 +734,36 @@ func (v *Variables) Get(name string) string {
 }
 
 // Cache fonts
+// fontCache stores fonts keyed by "path\nsize" so the same font at
+// different sizes (e.g. "small"=16, "medium"=24, "big"=36) is cached
+// separately.  On TSP this avoids re-opening the same .ttf file dozens
+// of times per startup.
 var fontCache = make(map[string]*ttf.Font)
 
 func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
-	key := fontName
-	if font, ok := fontCache[key]; ok {
-		size := 24
-		for k, v := range config.Variables.FontSizes {
-			if strings.EqualFold(k, fontName) {
-				size = v
-				break
-			}
-		}
-		return font, size
-	}
+	// Resolve the path and size for this logical font name.
 	fontPath := "Inter-Regular.ttf"
 	size := 24
-	for key, path := range config.Variables.Fonts {
-		if strings.EqualFold(key, fontName) {
-			fontPath = path
+	for k, p := range config.Variables.Fonts {
+		if strings.EqualFold(k, fontName) {
+			fontPath = p
 			break
 		}
 	}
-	for key, val := range config.Variables.FontSizes {
-		if strings.EqualFold(key, fontName) {
-			size = val
+	for k, v := range config.Variables.FontSizes {
+		if strings.EqualFold(k, fontName) {
+			size = v
 			break
 		}
 	}
+
+	// Cache key includes both resolved path and size so we never serve
+	// the wrong size for a given font name.
+	key := fontPath + "\n" + strconv.Itoa(size)
+	if font, ok := fontCache[key]; ok {
+		return font, size
+	}
+
 	font, err := ttf.OpenFont(resolvePath(fontPath), size)
 	if err != nil {
 		// Fall back to a chain of likely-present fonts so text always renders.
@@ -771,6 +790,15 @@ func renderText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text str
 	if processed == "" || font == nil {
 		return 0, 0
 	}
+
+	// Try the text cache first (major perf win on TSP ARM64)
+	cache := GetTextCache()
+	if entry := cache.Get(font, processed, color); entry != nil {
+		renderer.Copy(entry.texture, nil, &sdl.Rect{X: x, Y: y, W: entry.width, H: entry.height})
+		return entry.width, entry.height
+	}
+
+	// Cache miss: render and cache
 	surface, err := font.RenderUTF8Blended(processed, color)
 	if err != nil {
 		return 0, 0
@@ -780,9 +808,9 @@ func renderText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text str
 	if err != nil {
 		return 0, 0
 	}
-	defer texture.Destroy()
 	_, _, w, h, _ := texture.Query()
 	renderer.Copy(texture, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
+	cache.Put(font, processed, color, texture, w, h)
 	return w, h
 }
 
@@ -1719,41 +1747,25 @@ func loadThumbnail(renderer *sdl.Renderer, url string) *sdl.Texture {
 }
 
 func loadThumbnailFromURLs(renderer *sdl.Renderer, urls []string) *sdl.Texture {
+	// Warm the disk cache for alternate URLs in the background so scrolling
+	// through a list never blocks on a cold network fetch.
+	for _, rawURL := range urls[1:] {
+		PrefetchThumbnail(rawURL)
+	}
 	for _, rawURL := range urls {
 		if rawURL == "" {
 			continue
 		}
-		// Strip query parameters — YouTube serves WebP with sqp params,
-		// but the bare .jpg URL works without libwebpdemux-2.dll.
-		url := rawURL
-		if i := strings.Index(url, "?"); i >= 0 {
-			url = url[:i]
-		}
-		// If the URL doesn't already point at a directly-loadable image
-		// extension, rewrite common patterns to .jpg for SDL2_image
-		// compatibility (avoids needing libwebpdemux-2.dll for WebP).
-		lower := strings.ToLower(url)
-		if !strings.HasSuffix(lower, ".jpg") && !strings.HasSuffix(lower, ".jpeg") && !strings.HasSuffix(lower, ".png") && !strings.HasSuffix(lower, ".bmp") {
-			url = strings.TrimSuffix(url, ".webp") + ".jpg"
-		}
+		url := normalizeThumbnailURL(rawURL)
 		if tex, ok := textureCache[url]; ok {
 			return tex
 		}
 
-		resp, err := httpClient.Get(url)
+		// Bytes come from memory → disk → network (with retry), so a warm
+		// cache never touches the network and a cold one survives restarts.
+		data, err := fetchThumbnailBytes(url)
 		if err != nil {
-			log.Printf("[DEBUG] loadThumbnail: HTTP GET failed for %s: %v", url, err)
-			continue
-		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			log.Printf("[DEBUG] loadThumbnail: HTTP %d for %s", resp.StatusCode, url)
-			continue
-		}
-		data, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[DEBUG] loadThumbnail: read body failed for %s: %v", url, err)
+			log.Printf("[DEBUG] loadThumbnail: fetch failed for %s: %v", url, err)
 			continue
 		}
 		if len(data) == 0 {
@@ -2106,6 +2118,19 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 		return
 	}
 
+	// Lookahead prefetch: warm the disk cache for the next few rows so
+	// scrolling never blocks on a cold network fetch (TSP WiFi is slow).
+	for i, vid := range videos {
+		y := element.Y + int32(i)*(rowH+gap) - scrollY
+		if y+rowH < element.Y || y > element.Y+elemHeight {
+			if i < focusedResultIndex+3 {
+				PrefetchThumbnail(vid.Thumbnail)
+			}
+			continue
+		}
+		PrefetchThumbnail(vid.Thumbnail)
+	}
+
 	renderWithClip(renderer, element.X, element.Y, elemWidth, elemHeight, func(r *sdl.Renderer) {
 		for i, vid := range videos {
 			y := element.Y + int32(i)*(rowH+gap) - scrollY
@@ -2447,7 +2472,6 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		pipeArgs := []string{
 			"-i", "pipe:0",
 			"-loglevel", "warning",
-			"-framedrop",
 			"-autoexit",
 		}
 		if runtime.GOOS == "windows" {
@@ -2521,7 +2545,6 @@ func playWithDirectURL(config *Config, ffplayPath, ytDlpPath, url string) {
 	args := []string{
 		"-loglevel", "error",
 		"-i", directURL,
-		"-framedrop",
 		"-autoexit",
 		"-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 	}
@@ -2792,11 +2815,15 @@ func handleInputElement(renderer *sdl.Renderer, config *Config) {
 						updateInputVariable(config)
 						exitInput = true
 					default:
-						// Physical keyboard typing (desktop) â€” convert the key
-						// to a character and accumulate into the buffer.
 						if ch, ok := keysymToChar(e.Keysym.Sym, e.Keysym.Mod&sdl.KMOD_SHIFT != 0); ok {
-							inputTextBuffer += ch
-							updateInputVariable(config)
+							if unitInputActive {
+								unitInputValue += ch
+							} else if chatInputActive {
+								chatInputText += ch
+							} else {
+								inputTextBuffer += ch
+								updateInputVariable(config)
+							}
 						}
 					}
 				}
@@ -2821,11 +2848,22 @@ func handleInputElement(renderer *sdl.Renderer, config *Config) {
 						}
 					case sdl.CONTROLLER_BUTTON_A:
 						handleKeyboardInput(config)
-						exitInput = true
+						// EXIT on action keys so the keyboard closes after send.
+						k := ""
+						if keyboardPosY >= 0 && keyboardPosY < len(keyboard) && keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
+							k = keyboard[keyboardPosY][keyboardPosX]
+						}
+						if k == "ENTER" || k == "SEND" || k == "ASK_AI" {
+							exitInput = true
+						}
 					case sdl.CONTROLLER_BUTTON_B:
 						exitInput = true
-					case sdl.CONTROLLER_BUTTON_BACK:
+					case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 						toggleKeyboardCase()
+					case sdl.CONTROLLER_BUTTON_Y:
+						// Enter / save
+						handleKeyboardInput(config)
+						exitInput = true
 					}
 				}
 			case *sdl.MouseButtonEvent:
@@ -2837,10 +2875,13 @@ func handleInputElement(renderer *sdl.Renderer, config *Config) {
 								keyboardPosY, keyboardPosX = keyboardRowCol[idx][0], keyboardRowCol[idx][1]
 							}
 							handleKeyboardInput(config)
+							// Exit on any action key (ENTER, SEND, ASK_AI).
 							if keyboardPosY >= 0 && keyboardPosY < len(keyboard) &&
-								keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) &&
-								keyboard[keyboardPosY][keyboardPosX] == "ENTER" {
-								exitInput = true
+								keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
+								k := keyboard[keyboardPosY][keyboardPosX]
+								if k == "ENTER" || k == "SEND" || k == "ASK_AI" {
+									exitInput = true
+								}
 							}
 							break
 						}
@@ -2855,9 +2896,85 @@ func handleInputElement(renderer *sdl.Renderer, config *Config) {
 	}
 }
 
+// isTerminalScene returns true if the current scene is Terminal.
+func isTerminalScene() bool {
+	if currentSceneIndex >= 0 && currentSceneIndex < len(appConfig.Scenes) {
+		return appConfig.Scenes[currentSceneIndex].Name == "Terminal"
+	}
+	return false
+}
+
 func handleKeyboardInput(config *Config) {
 	if keyboardPosY >= 0 && keyboardPosY < len(keyboard) && keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
 		key := keyboard[keyboardPosY][keyboardPosX]
+
+		// Route to unit converter input when unit input is active.
+		if unitInputActive {
+			switch key {
+			case "⇧":
+				toggleKeyboardCase()
+			case "SPACE":
+				unitInputValue += " "
+			case "BACK":
+				if len(unitInputValue) > 0 {
+					unitInputValue = unitInputValue[:len(unitInputValue)-1]
+				}
+			case "ENTER":
+				// Convert the value
+				unitInputActive = false
+			default:
+				unitInputValue += key
+			}
+			return
+		}
+		// Route to chat composer when chat is the active input target.
+		if chatInputActive {
+			switch key {
+			case "⇧":
+				toggleKeyboardCase()
+			case "SPACE":
+				chatInputText += " "
+			case "BACK":
+				if len(chatInputText) > 0 {
+					_, size := utf8.DecodeLastRuneInString(chatInputText)
+					if size > 0 {
+						chatInputText = chatInputText[:len(chatInputText)-size]
+					}
+				}
+			case "ENTER":
+				if chatInputText != "" {
+					if isTerminalScene() {
+						runTerminal(config, chatInputText)
+					} else {
+						sendChatMessage("You", chatInputText)
+					}
+					chatInputText = ""
+				}
+			case "SEND":
+				if chatInputText != "" {
+					if isTerminalScene() {
+						runTerminal(config, chatInputText)
+					} else {
+						sendChatMessage("You", chatInputText)
+					}
+					chatInputText = ""
+				}
+			case "ASK_AI":
+				if strings.TrimSpace(chatInputText) != "" {
+					if isTerminalScene() {
+						runTerminal(config, chatInputText)
+						chatInputText = ""
+					} else {
+						sendGroqChatMessage(chatInputText)
+						chatInputText = ""
+					}
+				}
+			default:
+				chatInputText += key
+			}
+			return
+		}
+
 		switch key {
 		case "⇧":
 			toggleKeyboardCase()
@@ -3066,6 +3183,34 @@ func syncVariableOverrides(config *Config) {
 	if v, ok := customString(c, "inputColor"); ok {
 		applyColorVar(config, "inputColor", v)
 	}
+	// New fields from jukaconfig.json
+	if v, ok := c["gridColumns"].(string); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			config.Variables.GridColumns = n
+		}
+	} else if v, ok := c["gridColumns"].(float64); ok {
+		config.Variables.GridColumns = int(v)
+	}
+	if v, ok := c["searchWidth"].(string); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			config.Variables.SearchWidth = n
+		}
+	} else if v, ok := c["searchWidth"].(float64); ok {
+		config.Variables.SearchWidth = int(v)
+	}
+	if v, ok := c["dynamicBg"].(string); ok {
+		config.Variables.DynamicBg = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	if v, ok := c["screensaverTimeout"].(string); ok {
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			config.Variables.ScreensaverTimeout = n
+		}
+	} else if v, ok := c["screensaverTimeout"].(float64); ok {
+		config.Variables.ScreensaverTimeout = int(v)
+	}
+	if v, ok := c["socialNotifs"].(string); ok {
+		config.Variables.SocialNotifs = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
 	saveUserConfigDebounced(&UserConfig{Variables: UserVariables{
 		ButtonColor:        config.Variables.ButtonColor,
 		LabelColor:         config.Variables.LabelColor,
@@ -3077,6 +3222,11 @@ func syncVariableOverrides(config *Config) {
 		TSPUsername:        config.Variables.TSPUsername,
 		PlaybackResolution: config.Variables.PlaybackResolution,
 		AudioBackend:       config.Variables.AudioBackend,
+		GridColumns:        config.Variables.GridColumns,
+		SearchWidth:        config.Variables.SearchWidth,
+		DynamicBg:          config.Variables.DynamicBg,
+		ScreensaverTimeout: config.Variables.ScreensaverTimeout,
+		SocialNotifs:       config.Variables.SocialNotifs,
 		Custom:             config.Variables.Custom,
 	}})
 }
@@ -3118,6 +3268,28 @@ func inputVariableValue(config *Config, variable string) string {
 			return "true"
 		}
 		return "false"
+	case "gridColumns":
+		return strconv.Itoa(config.Variables.GridColumns)
+	case "searchWidth":
+		return strconv.Itoa(config.Variables.SearchWidth)
+	case "dynamicBg":
+		if config.Variables.DynamicBg {
+			return "true"
+		}
+		return "false"
+	case "screensaverTimeout":
+		return strconv.Itoa(config.Variables.ScreensaverTimeout)
+	case "socialNotifs":
+		if config.Variables.SocialNotifs {
+			return "true"
+		}
+		return "false"
+	case "buttonColor":
+		return fmt.Sprintf("#%02x%02x%02x", config.Variables.ButtonColor.R, config.Variables.ButtonColor.G, config.Variables.ButtonColor.B)
+	case "labelColor":
+		return fmt.Sprintf("#%02x%02x%02x", config.Variables.LabelColor.R, config.Variables.LabelColor.G, config.Variables.LabelColor.B)
+	case "inputColor":
+		return fmt.Sprintf("#%02x%02x%02x", config.Variables.InputColor.R, config.Variables.InputColor.G, config.Variables.InputColor.B)
 	}
 	if val, ok := config.Variables.Custom[v]; ok {
 		return fmt.Sprintf("%v", val)
@@ -3212,6 +3384,54 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		renderStatusBar(renderer, config)
 		return
 	}
+	if scene.Name == "Pomodoro" {
+		renderPomodoro(renderer, config)
+		return
+	}
+	if scene.Name == "Calculator" {
+		renderCalculator(renderer, config)
+		return
+	}
+	if scene.Name == "Alarm" {
+		renderAlarmClock(renderer, config)
+		return
+	}
+	if scene.Name == "Terminal" {
+		renderTerminal(renderer, config)
+		return
+	}
+	if scene.Name == "Dashboard" {
+		renderDashboard(renderer, config)
+		return
+	}
+	if scene.Name == "About" {
+		renderAbout(renderer, config)
+		return
+	}
+	if scene.Name == "Dictionary" {
+		renderDictionary(renderer, config)
+		return
+	}
+	if scene.Name == "PDFReader" {
+		renderPDFReader(renderer, config)
+		return
+	}
+	if scene.Name == "MusicPlayer" {
+		renderMusicPlayer(renderer, config)
+		return
+	}
+	if scene.Name == "Notes" {
+		renderNotes(renderer, config)
+		return
+	}
+	if scene.Name == "Games" {
+		if activeGame != gameNone {
+			renderActiveGame(renderer, config)
+		} else {
+			renderGamesMenu(renderer, config)
+		}
+		return
+	}
 	if scene.Name == "Patch" {
 		// The Patch scene owns its body (list, modals) but the shared header
 		// and footer are drawn at the bottom of this function.
@@ -3257,7 +3477,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	// It ends 16px above the footer so no content can reach the footer band.
 	panelMargin := int32(24)
 	panelTop := HomeTopBarH + 8
-	panelBottom := screenHeight - HomeFooterH - 16
+	panelBottom := screenHeight - taskbarHeight(config.Scenes[currentSceneIndex].Name) - 16
 	panel := sdl.Rect{
 		X: panelMargin,
 		Y: panelTop,
@@ -3266,10 +3486,17 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	}
 	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusLG, WithAlpha(ColorSurface, 200))
 	strokeRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusLG, 1, WithAlpha(ColorBorder, 120))
+	// Subtle accent line at the top of the panel.
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 30)
+	renderer.FillRect(&sdl.Rect{X: panel.X + 20, Y: panel.Y, W: panel.W - 40, H: 1})
 
-	// Ambient animated background: slow drifting color blobs over the panel,
-	// under the scene elements, so the whole screen subtly breathes.
-	renderAmbientBackground(renderer)
+	// Dynamic animated background: time-aware, weather-reactive, living backdrop.
+	if config.Variables.DynamicBg {
+		renderDynamicBackground(renderer)
+	} else {
+		renderAmbientBackground(renderer)
+	}
 
 	for i, elem := range scene.Elements {
 		if homeLayoutActive && elem.Style == "tile" {
@@ -3605,6 +3832,9 @@ type ToastState struct {
 	linesW    int32
 }
 
+// toastRect stores the last-rendered toast bounds for dismiss-on-click.
+var toastRect sdl.Rect
+
 // toastDurationFor returns the display time for a toast kind: info/success
 // ~2.5s, warnings ~3.5s, errors ~5s.
 func toastDurationFor(kind ToastKind) uint64 {
@@ -3746,6 +3976,7 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	elapsed := sdl.GetTicks64() - t.StartedAt
 	if t.Duration == 0 || elapsed > t.Duration {
 		currentToast = ToastState{}
+		toastRect = sdl.Rect{}
 		return
 	}
 
@@ -3809,7 +4040,10 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	}
 
 	x := screenWidth - 24 - w + slide
-	y := screenHeight - HomeFooterH - 16 - h
+	y := screenHeight - taskbarH - 16 - h
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		y = screenHeight - taskbarHeight(config.Scenes[currentSceneIndex].Name) - 16 - h
+	}
 	if x < 16 {
 		x = 16
 	}
@@ -3844,6 +4078,9 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 			textY += lineH
 		}
 	})
+
+	// Store the rendered toast rect for dismiss-on-click
+	toastRect = sdl.Rect{X: x, Y: y, W: w, H: h}
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_NONE)
 }
@@ -3953,6 +4190,57 @@ func sinF(f float64) float64 {
 	return math.Sin(f)
 }
 
+// renderLoadingScreen draws a polished loading screen with the JukaHub logo,
+// an animated spinner, and a progress bar. ticks is the current SDL tick
+// count for animation; pass 0 for the initial static frame.
+func renderLoadingScreen(renderer *sdl.Renderer, config *Config, ticks uint64) {
+	renderer.SetDrawColor(15, 17, 21, 255)
+	renderer.Clear()
+
+	cx, cy := screenWidth/2, screenHeight/2
+
+	// Animated spinner ring
+	renderSpinner(renderer, cx, cy, 50, sdl.Color{R: 100, G: 180, B: 255, A: 255})
+
+	// Inner spinner ring (smaller, slower, different color)
+	if ticks > 0 {
+		t := float64(ticks) / 1000.0
+		innerAngle := t * -2.0
+		renderer.SetDrawColor(140, 200, 255, 120)
+		for a := innerAngle; a < innerAngle+math.Pi; a += 0.2 {
+			px := cx + int32(float32(math.Cos(a))*30)
+			py := cy + int32(float32(math.Sin(a))*30)
+			renderer.DrawPoint(px, py)
+		}
+	}
+
+	// Title
+	if font, _ := getCachedFont(config, "big"); font != nil {
+		tw, th, _ := font.SizeUTF8("JukaHub")
+		renderText(renderer, config, font, "JukaHub", sdl.Color{R: 220, G: 235, B: 255, A: 255}, cx-int32(tw)/2, cy-80-int32(th)/2)
+	}
+
+	// Loading text
+	if sf, _ := getCachedFont(config, "medium"); sf != nil {
+		lw, lh, _ := sf.SizeUTF8("Loading...")
+		renderText(renderer, config, sf, "Loading...", sdl.Color{R: 180, G: 200, B: 220, A: 255}, cx-int32(lw)/2, cy+60-int32(lh)/2)
+	}
+
+	// Animated progress bar
+	if ticks > 0 {
+		barW := int32(200)
+		barH := int32(4)
+		barX := cx - barW/2
+		barY := cy + 130
+		fillRoundedRect(renderer, barX, barY, barW, barH, 2, sdl.Color{R: 40, G: 50, B: 70, A: 255})
+		progress := float64(ticks%3000) / 3000.0
+		fillW := int32(float64(barW) * progress)
+		if fillW > 0 {
+			fillRoundedRect(renderer, barX, barY, fillW, barH, 2, sdl.Color{R: 100, G: 180, B: 255, A: 200})
+		}
+	}
+}
+
 func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 	if !virtualKeyboardActive {
 		return
@@ -4002,7 +4290,19 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 		}
 		display := inputTextBuffer + cursor
 		col := ColorTextPrimary()
-		if inputTextBuffer == "" {
+		if unitInputActive {
+			display = unitInputValue + cursor
+			if unitInputValue == "" {
+				display = "Enter number..." + cursor
+				col = ColorTextTertiary()
+			}
+		} else if chatInputActive {
+			display = chatInputText + cursor
+			if chatInputText == "" {
+				display = "Type a message..." + cursor
+				col = ColorTextTertiary()
+			}
+		} else if inputTextBuffer == "" {
 			display = "Type to search" + cursor
 			col = ColorTextTertiary()
 		}
@@ -4025,6 +4325,8 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 					w = keyWidth*4 + gap*3
 				case "BACK", "ENTER":
 					w = keyWidth*2 + gap
+				case "SEND", "ASK_AI":
+					w = keyWidth*2 + gap
 				}
 			}
 			widths[x] = w
@@ -4037,7 +4339,7 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 			kx := rx
 			w := widths[x]
 			isSelected := (x == keyboardPosX && y == keyboardPosY)
-			special := key == "SPACE" || key == "BACK" || key == "ENTER"
+			special := key == "SPACE" || key == "BACK" || key == "ENTER" || key == "SEND" || key == "ASK_AI"
 			r := int32(10)
 
 			miamiCyan := sdl.Color{R: 0, G: 220, B: 255, A: 255}
@@ -4073,6 +4375,10 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 				label = "DEL"
 			} else if key == "ENTER" {
 				label = "OK"
+			} else if key == "SEND" {
+				label = "SEND"
+			} else if key == "ASK_AI" {
+				label = "Ask AI"
 			}
 			if kfont != nil {
 				kw, kh, _ := kfont.SizeUTF8(label)
@@ -4093,7 +4399,13 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 
 	hintFont, _ := getCachedFont(config, "small")
 	if hintFont != nil {
-		renderText(renderer, config, hintFont, "Arrow keys to move · Enter to type · Esc to close", ColorTextTertiary(), margin, gridTop+totalH+14)
+		hintTxt := "Arrow keys to move . Enter to type . Esc to close"
+		if unitInputActive {
+			hintTxt = "Enter number . OK to convert"
+		} else if chatInputActive {
+			hintTxt = "Type message . SEND to send . Ask AI for Groq"
+		}
+		renderText(renderer, config, hintFont, hintTxt, ColorTextTertiary(), margin, gridTop+totalH+14)
 	}
 }
 
@@ -4117,7 +4429,11 @@ func buildKeyboard() {
 		keyboard[i] = make([]string, len(row))
 		copy(keyboard[i], row)
 	}
-	keyboard = append(keyboard, []string{"⇧", "SPACE", "BACK", "ENTER"})
+	bottomRow := []string{"⇧", "SPACE", "BACK", "ENTER"}
+	if chatInputActive {
+		bottomRow = []string{"⇧", "SPACE", "BACK", "SEND", "ASK_AI"}
+	}
+	keyboard = append(keyboard, bottomRow)
 	keyboardPosX, keyboardPosY = 0, 0
 }
 
@@ -4161,6 +4477,11 @@ func renderVideoElement(renderer *sdl.Renderer, config *Config, elem Element) {
 
 // --- Trigger handling ---
 func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[trigger] recovered panic: %v", r)
+		}
+	}()
 	if element.Trigger == "" {
 		return
 	}
@@ -4479,6 +4800,11 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 					TSPUsername:        config.Variables.TSPUsername,
 					PlaybackResolution: config.Variables.PlaybackResolution,
 					AudioBackend:       config.Variables.AudioBackend,
+					GridColumns:        config.Variables.GridColumns,
+					SearchWidth:        config.Variables.SearchWidth,
+					DynamicBg:          config.Variables.DynamicBg,
+					ScreensaverTimeout: config.Variables.ScreensaverTimeout,
+					SocialNotifs:       config.Variables.SocialNotifs,
 					Custom:             config.Variables.Custom,
 				},
 			}
@@ -4553,6 +4879,16 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			openFileInCanvasSandbox(entry.Path)
 		}
 	case "save_config":
+		// Apply any color variable inputs from the current scene before saving.
+		if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+			for _, e := range config.Scenes[currentSceneIndex].Elements {
+				if e.Type == "input" && e.Variable != "" {
+					if v, ok := config.Variables.Custom[e.Variable].(string); ok && v != "" {
+						applyColorVar(config, e.Variable, v)
+					}
+				}
+			}
+		}
 		syncVariableOverrides(config)
 		// Apply the Fullscreen setting live instead of only on restart.
 		if mainWindow != nil {
@@ -4562,6 +4898,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 				mainWindow.SetFullscreen(0)
 			}
 		}
+		// Apply theme colors live.
+		SetAccentColor(resolveColor(config, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
 		saveConfig(config)
 		showToast("Settings saved", ToastInfo())
 	case "theme_preset":
@@ -4595,79 +4933,103 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			startTextBrowserAutoRefresh(config, element)
 		}
 	case "textbrowser_system":
-		config.Variables.Custom[element.Variable] = browseSystemInfo(element)
+		tbVar := findTextBrowserVariable(config)
+		config.Variables.Custom[tbVar] = browseSystemInfo(element)
 		textBrowserLastUpdate = time.Now().Unix()
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
 	case "textbrowser_zeroconf":
+		tbVar := findTextBrowserVariable(config)
 		go func(v string, el Element) {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[textbrowser] zeroconf goroutine recovered: %v", r)
+					publishCustom(v, fmt.Sprintf("Zeroconf error: %v", r))
+				}
+			}()
 			publishCustom(v, browseZeroconfServicesWithTimeout(4*time.Second))
 			if el.AutoRefresh {
 				startTextBrowserAutoRefresh(config, el)
 			}
-		}(element.Variable, element)
+		}(tbVar, element)
 		textBrowserLastUpdate = time.Now().Unix()
 	case "textbrowser_json":
+		tbVar := findTextBrowserVariable(config)
 		go func(v string, el Element) {
 			publishCustom(v, browseJSONContent(el))
 			if el.AutoRefresh {
 				startTextBrowserAutoRefresh(config, el)
 			}
-		}(element.Variable, element)
+		}(tbVar, element)
 		textBrowserLastUpdate = time.Now().Unix()
 	case "textbrowser_processes":
-		config.Variables.Custom[element.Variable] = getProcessTree()
+		tbVar := findTextBrowserVariable(config)
+		config.Variables.Custom[tbVar] = getProcessTree()
 		textBrowserLastUpdate = time.Now().Unix()
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
 	case "textbrowser_network":
-		var sb strings.Builder
-		ifaces, err := net.Interfaces()
-		if err == nil {
-			for _, iface := range ifaces {
-				if iface.Flags&net.FlagLoopback != 0 {
-					continue
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[textbrowser] network trigger recovered: %v", r)
+					tbVar := findTextBrowserVariable(config)
+					config.Variables.Custom[tbVar] = fmt.Sprintf("Network error: %v", r)
 				}
-				addrs, _ := iface.Addrs()
-				var ips []string
-				for _, a := range addrs {
-					if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil {
-						ips = append(ips, ipnet.IP.String())
+			}()
+			var sb strings.Builder
+			ifaces, err := net.Interfaces()
+			if err == nil {
+				for _, iface := range ifaces {
+					if iface.Flags&net.FlagLoopback != 0 {
+						continue
 					}
+					addrs, _ := iface.Addrs()
+					var ips []string
+					for _, a := range addrs {
+						if ipnet, ok := a.(*net.IPNet); ok && ipnet.IP.To4() != nil {
+							ips = append(ips, ipnet.IP.String())
+						}
+					}
+					sb.WriteString(fmt.Sprintf("%s: %s (up=%v)\n", iface.Name, strings.Join(ips, ", "), iface.Flags&net.FlagUp != 0))
 				}
-				sb.WriteString(fmt.Sprintf("%s: %s (up=%v)\n", iface.Name, strings.Join(ips, ", "), iface.Flags&net.FlagUp != 0))
 			}
-		}
-		if sb.Len() == 0 {
-			sb.WriteString("No active network interfaces\n")
-		}
-		config.Variables.Custom[element.Variable] = sb.String()
-		textBrowserLastUpdate = time.Now().Unix()
-		if element.AutoRefresh {
-			startTextBrowserAutoRefresh(config, element)
-		}
+			if sb.Len() == 0 {
+				sb.WriteString("No active network interfaces\n")
+			}
+			tbVar := findTextBrowserVariable(config)
+			config.Variables.Custom[tbVar] = sb.String()
+			textBrowserLastUpdate = time.Now().Unix()
+			if element.AutoRefresh {
+				startTextBrowserAutoRefresh(config, element)
+			}
+		}()
 	case "textbrowser_temps":
-		config.Variables.Custom[element.Variable] = getSystemTemperature()
+		tbVar := findTextBrowserVariable(config)
+		config.Variables.Custom[tbVar] = getSystemTemperature()
 		textBrowserLastUpdate = time.Now().Unix()
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
 	case "textbrowser_services":
-		config.Variables.Custom[element.Variable] = getRunningServices()
+		tbVar := findTextBrowserVariable(config)
+		config.Variables.Custom[tbVar] = getRunningServices()
 		textBrowserLastUpdate = time.Now().Unix()
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
 	case "textbrowser_files":
-		config.Variables.Custom[element.Variable] = scanLocalFiles("/media")
+		tbVar := findTextBrowserVariable(config)
+		config.Variables.Custom[tbVar] = scanLocalFiles("/media")
 		textBrowserLastUpdate = time.Now().Unix()
 		if element.AutoRefresh {
 			startTextBrowserAutoRefresh(config, element)
 		}
 	case "textbrowser_copy":
-		if text, ok := config.Variables.Custom[element.Variable].(string); ok && text != "" {
+		tbVar := findTextBrowserVariable(config)
+		if text, ok := config.Variables.Custom[tbVar].(string); ok && text != "" {
 			if IsWindows() {
 				exec.Command("cmd", "/c", "echo", text).Run()
 			} else {
@@ -4676,7 +5038,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			showToast("Copied to clipboard", ToastInfo())
 		}
 	case "textbrowser_clear":
-		config.Variables.Custom[element.Variable] = ""
+		tbVar := findTextBrowserVariable(config)
+		config.Variables.Custom[tbVar] = ""
 		textBrowserScrollY = 0
 		textBrowserScrollVelocity = 0
 		textBrowserScrollCooldown = 0
@@ -4706,8 +5069,16 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 }
 
 func findFirstSelectableElement(scene SceneConfig) int {
+	// Prefer interactive elements (buttons, inputs) over display elements.
 	for i, e := range scene.Elements {
-		if e.Type == "button" || e.Type == "input" || e.Type == "searchresults" || e.Type == "dynamiclist" || e.Type == "favorites" || e.Type == "textbrowser" || e.Type == "packagelist" || e.Type == "recent" {
+		if e.Type == "button" || e.Type == "input" || e.Type == "searchresults" || e.Type == "dynamiclist" || e.Type == "favorites" || e.Type == "recent" {
+			return i
+		}
+	}
+	// Fallback: select the first focusable element even if it's display-only
+	// (textbrowser, shortslist, packagelist) so arrow navigation still works.
+	for i, e := range scene.Elements {
+		if e.Type == "textbrowser" || e.Type == "shortslist" || e.Type == "packagelist" {
 			return i
 		}
 	}
@@ -4856,6 +5227,34 @@ func completeSceneTransition(config *Config) {
 			config.Variables.Custom["plugin_list"] = strings.Join(list, "\n")
 		}
 	}
+	// Initialize alarm UI when entering the Alarm scene.
+	if config.Scenes[currentSceneIndex].Name == "Alarm" {
+		alarmInitUI()
+	}
+	// Initialize terminal when entering the Terminal scene.
+	if config.Scenes[currentSceneIndex].Name == "Terminal" {
+		termInit()
+	}
+	// Initialize dashboard when entering the Dashboard scene.
+	if config.Scenes[currentSceneIndex].Name == "Dashboard" {
+		dashInit()
+	}
+	// Initialize dictionary when entering.
+	if config.Scenes[currentSceneIndex].Name == "Dictionary" {
+		dictInit()
+	}
+	// Initialize PDF reader when entering.
+	if config.Scenes[currentSceneIndex].Name == "PDFReader" {
+		pdfInit()
+	}
+	// Initialize music player when entering.
+	if config.Scenes[currentSceneIndex].Name == "MusicPlayer" {
+		musicInit()
+	}
+	// Initialize notes when entering.
+	if config.Scenes[currentSceneIndex].Name == "Notes" {
+		notesInit()
+	}
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "textlog" && e.Variable == "weather_screen_text" {
 			go func() {
@@ -4870,6 +5269,26 @@ func completeSceneTransition(config *Config) {
 					log.Printf("[discord] connect failed: %v", err)
 				}
 			}()
+		}
+	}
+	// Auto-focus chat/terminal composer when entering Chat or Terminal scene.
+	if config.Scenes[currentSceneIndex].Name == "Chat" || config.Scenes[currentSceneIndex].Name == "Terminal" {
+		for i, e := range config.Scenes[currentSceneIndex].Elements {
+			if e.Type == "chat" {
+				selectedButtonIndex = i
+				chatInputActive = true
+				sdl.StartTextInput()
+				break
+			}
+		}
+	}
+	// Auto-fetch YouTube Shorts when entering the Shorts scene.
+	if config.Scenes[currentSceneIndex].Name == "Shorts" {
+		shortsMutex.Lock()
+		hasShorts := len(shortsList) > 0
+		shortsMutex.Unlock()
+		if !hasShorts {
+			go fetchYouTubeShorts(config, "shorts_list", snapshotVars(config))
 		}
 	}
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
@@ -5029,7 +5448,7 @@ func moveSelection(config *Config, direction int) {
 		// Fallback to linear wrap if graph has no neighbor in that direction.
 		var interactive []int
 		for i, el := range currentScene.Elements {
-			if el.Type == "button" || el.Type == "input" || el.Type == "searchresults" || el.Type == "dynamiclist" || el.Type == "recent" || el.Type == "themegallery" || el.Type == "toggle" {
+			if el.Type == "button" || el.Type == "input" || el.Type == "searchresults" || el.Type == "dynamiclist" || el.Type == "recent" || el.Type == "themegallery" || el.Type == "toggle" || el.Type == "textbrowser" || el.Type == "shortslist" || el.Type == "packagelist" {
 				interactive = append(interactive, i)
 			}
 		}
@@ -5116,10 +5535,12 @@ func main() {
 	sdl.StartTextInput()
 	defer img.Quit()
 
-	config, err := LoadLastKnownGood("jukaconfig.json")
+	// Try XML config first (exported by the web editor), then fall back to JSON.
+	config, configPath, err := LoadXMLConfigWithFallback("jukaconfig.json")
 	if err != nil {
 		log.Fatal("Failed to load config:", err)
 	}
+	LogScene("init").Info("config loaded", "path", configPath)
 
 	// Validate and apply defaults.
 	if err := NewConfigValidator().Validate(config); err != nil {
@@ -5155,6 +5576,10 @@ func main() {
 	// Load persisted Recently Played and start the (best-effort) weather fetch.
 	loadRecentlyPlayed()
 	loadFavorites()
+	initCalc()
+	alarmLoad()
+	notesInit()
+	qsInit()
 	startWeather(config)
 
 	// Auto-download yt-dlp / ffplay into tools_path if missing (OS-aware).
@@ -5167,6 +5592,32 @@ func main() {
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
+
+	// Start network connectivity monitoring and tool health checks.
+	startNetworkMonitor()
+	startToolHealthCheck()
+
+	// Start screensaver idle monitor.
+	// Set screensaver timeout from config
+	if config.Variables.ScreensaverTimeout > 0 {
+		screensaverIdleTimeout = time.Duration(config.Variables.ScreensaverTimeout) * time.Second
+	}
+	startScreensaverMonitor()
+
+	// Start periodic social notifications.
+	// Start periodic social notifications (if enabled)
+	if config.Variables.SocialNotifs {
+		startSocialNotifs()
+	}
+
+	// Game tick for Pong/Snake/Tetris.
+	go func() {
+		ticker := time.NewTicker(time.Second / 60)
+		defer ticker.Stop()
+		for range ticker.C {
+			tickActiveGame()
+		}
+	}()
 
 	// Initialize scene index early so logging and window setup can safely
 	// reference the first scene.
@@ -5229,24 +5680,9 @@ func main() {
 	// background image instead of painting opaque.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
-	// Show loading screen while initializing
-	config.Variables.LoadingSpinner = true
-	config.Variables.SpinnerText = "Loading..."
-	renderer.SetDrawColor(15, 17, 21, 255)
-	renderer.Clear()
-	renderSpinner(renderer, screenWidth/2, screenHeight/2, 50, sdl.Color{R: 100, G: 180, B: 255, A: 255})
-	font, _ := getCachedFont(config, "big")
-	if font != nil {
-		titleW, titleH, _ := font.SizeUTF8("JukaHub")
-		tw32, th32 := int32(titleW), int32(titleH)
-		renderText(renderer, config, font, "JukaHub", sdl.Color{R: 220, G: 235, B: 255, A: 255}, screenWidth/2-tw32/2, screenHeight/2-80-th32/2)
-
-		loadW, loadH, _ := font.SizeUTF8("Loading...")
-		lw32, lh32 := int32(loadW), int32(loadH)
-		renderText(renderer, config, font, "Loading...", sdl.Color{R: 180, G: 200, B: 220, A: 255}, screenWidth/2-lw32/2, screenHeight/2+60-lh32/2)
-	}
-	renderer.Present()
-	sdl.Delay(500)
+	// Animated particle splash: particles converge from screen edges,
+	// glow pulse reveals the JukaHub logo, then dissolves into the UI.
+	ShowSplash(renderer, config)
 	config.Variables.LoadingSpinner = false
 
 	// Create placeholder texture for missing thumbnails
@@ -5268,41 +5704,35 @@ func main() {
 	initKeyboard()
 
 	thumbnailDownloadCh = make(chan string, 256)
-	go func() {
-		for url := range thumbnailDownloadCh {
-			if url == "" {
-				continue
-			}
-			thumbnailCacheMutex.Lock()
-			if _, ok := textureCache[url]; ok {
-				thumbnailCacheMutex.Unlock()
-				continue
-			}
-			if _, ok := thumbnailDataCache[url]; ok {
-				thumbnailCacheMutex.Unlock()
-				continue
-			}
-			thumbnailCacheMutex.Unlock()
-
-			resp, err := httpClient.Get(url)
-			if err != nil {
-				continue
-			}
-			data, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if err != nil {
-				continue
-			}
-			thumbnailCacheMutex.Lock()
-			thumbnailDataCache[url] = data
-			thumbnailCacheMutex.Unlock()
-		}
-	}()
+	go thumbnailPrefetchWorker()
 
 	currentSceneIndex = 0
 	selectedButtonIndex = findFirstSelectableElement(config.Scenes[currentSceneIndex])
 	focusEngine.SetGraph(config.Scenes[currentSceneIndex].Name, focusEngine.BuildGraph(config.Scenes[currentSceneIndex]))
 	focusEngine.SyncSelected()
+
+	// Start config file watcher for hot-reload
+	StartConfigWatcher("jukaconfig.json", func(newCfg *Config) {
+		// Apply the reloaded config: merge user settings, refresh theme,
+		// and update the scene list. The render loop will pick up the new
+		// config on the next frame.
+		mergeUserConfig(newCfg, loadUserConfig())
+		if presetName, ok := newCfg.Variables.Custom["theme_preset"].(string); ok && presetName != "" {
+			ApplyThemeColors(GetThemePreset(presetName))
+		}
+		SetAccentColor(resolveColor(newCfg, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
+		// Update the global config pointer atomically
+		appConfig = newCfg
+		config = newCfg
+		showToast("Config reloaded", ColorToastSuccess)
+	})
+	defer StopConfigWatcher()
+
+	// Adaptive frame rate and memory monitoring for TSP ARM64 devices
+	frameRateCtrl := NewFrameRateController()
+	memMonitor := NewMemoryMonitor()
+	defer memMonitor.Stop()
+	LogDeviceDiagnostics()
 
 	running := true
 	for running {
@@ -5317,6 +5747,25 @@ func main() {
 				}
 			case *sdl.KeyboardEvent:
 				if e.Type == sdl.KEYDOWN {
+					frameRateCtrl.NotifyInput()
+					screensaverNotifyInput()
+					if shortcutsOpen {
+						handleShortcutsInput(e)
+						continue
+					}
+					if clipSearchOpen {
+						handleClipboardInput(e)
+						continue
+					}
+					if globalSearchOpen {
+						handleGSInput(e, config)
+						continue
+					}
+					// Quick Settings takes priority when open.
+					if qs.open {
+						handleQSInput(e, config)
+						continue
+					}
 					focusEngine.SyncSelected()
 					if imageViewerPath != "" {
 						handleImageViewerInput(e)
@@ -5429,7 +5878,18 @@ func main() {
 						} else if curElem.Type == "unitconverter" {
 							handleUnitInput(e, config)
 						} else if curElem.Type == "chat" {
-							handleChatInput(e, config)
+							// Pressing A/Enter/Space opens the virtual keyboard
+							// with chat routing (works for both controller and keyboard).
+							if e.Keysym.Sym == sdl.K_RETURN || e.Keysym.Sym == sdl.K_SPACE || e.Keysym.Sym == sdl.K_a {
+								chatInputActive = true
+								if !virtualKeyboardActive {
+									virtualKeyboardActive = true
+									sdl.StartTextInput()
+									buildKeyboard()
+								}
+							} else {
+								handleChatInput(e, config)
+							}
 						} else if curElem.Type == "shortslist" {
 							handleShortsInput(e, config)
 						} else if curElem.Type == "canvas" {
@@ -5472,6 +5932,36 @@ func main() {
 							handlePackageInput(e, config)
 						} else if curElem.Type == "recent" {
 							handleRecentInput(e, config)
+						} else if curScene.Name == "Pomodoro" {
+							handlePomodoroInput(e, config)
+						} else if curScene.Name == "Calculator" {
+							handleCalcInput(e)
+						} else if curScene.Name == "Alarm" {
+							handleAlarmInput(e, config)
+						} else if curScene.Name == "Terminal" {
+							handleTermInput(e, config)
+						} else if curScene.Name == "Dashboard" {
+							handleDashInput(e, config)
+						} else if curScene.Name == "About" {
+							handleAboutInput(e, config)
+						} else if curScene.Name == "Dictionary" {
+							handleDictInput(e, config)
+						} else if curScene.Name == "PDFReader" {
+							handlePDFInput(e, config)
+						} else if curScene.Name == "MusicPlayer" {
+							handleMusicInput(e, config)
+						} else if curScene.Name == "Notes" {
+							handleNotesInput(e, config)
+						} else if curScene.Name == "Games" {
+							if activeGame != gameNone {
+								handleActiveGameInput(e)
+							} else {
+								handleGamesMenuInput(e)
+							}
+						} else if socialNotifOpen {
+							handleSocialNotifInput(e)
+						} else if wpOpen {
+							handleWallpaperInput(e, config)
 						} else if curScene.Name == "JukaLand" {
 							handleJukaLandInput(e)
 						} else {
@@ -5529,6 +6019,32 @@ func main() {
 							if idx := findSceneIndex(config, "Tube"); idx >= 0 {
 								changeSceneTo(config, idx)
 							}
+						} // Quick Settings (Ctrl+Q).
+						if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
+							qsToggleOpen()
+						}
+						// Global shortcuts (F1 = help, F2 = global search, F12 = screenshot).
+						if e.Keysym.Sym == sdl.K_F1 {
+							shortcutsOpen = !shortcutsOpen
+							globalSearchOpen = false
+							continue
+						}
+						if e.Keysym.Sym == sdl.K_F2 {
+							globalSearchOpen = !globalSearchOpen
+							shortcutsOpen = false
+							continue
+						}
+						if e.Keysym.Sym == sdl.K_F12 {
+							captureScreenshot(renderer)
+							continue
+						}
+						// Clipboard manager (Ctrl+Shift+V).
+						if e.Keysym.Sym == sdl.K_v && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) != 0 {
+							clipSearchOpen = !clipSearchOpen
+							globalSearchOpen = false
+							shortcutsOpen = false
+							clipCursorIdx = 0
+							continue
 						}
 						// Fullscreen toggle (F11 / Alt+Enter).
 						if e.Keysym.Sym == sdl.K_F11 || (e.Keysym.Sym == sdl.K_RETURN && (e.Keysym.Mod&sdl.KMOD_ALT) != 0) {
@@ -5545,6 +6061,24 @@ func main() {
 					focusEngine.SyncSelected()
 				}
 			case *sdl.TextInputEvent:
+				frameRateCtrl.NotifyInput()
+				screensaverNotifyInput()
+				if clipSearchOpen {
+					handleClipboardTextInput(string(e.Text[:]))
+				} else if globalSearchOpen {
+					handleGlobalSearchTextInput(string(e.Text[:]))
+				} else if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+					// Route text input to scene-specific handlers.
+					if config.Scenes[currentSceneIndex].Name == "Alarm" {
+						handleAlarmTextInput(e)
+					} else if config.Scenes[currentSceneIndex].Name == "Terminal" {
+						handleTermTextInput(e)
+					} else if config.Scenes[currentSceneIndex].Name == "Dictionary" {
+						handleDictTextInput(e)
+					} else if config.Scenes[currentSceneIndex].Name == "Notes" {
+						handleNotesTextInput(e)
+					}
+				}
 				if activeSceneIndex != -1 && activeElementIndex != -1 {
 					curElem := config.Scenes[activeSceneIndex].Elements[activeElementIndex]
 					if curElem.Type == "chat" {
@@ -5561,6 +6095,8 @@ func main() {
 					}
 				}
 			case *sdl.MouseMotionEvent:
+				frameRateCtrl.NotifyInput()
+				screensaverNotifyInput()
 				mouseX, mouseY = physicalToLogical(int32(e.X), int32(e.Y))
 				// Hovering a home card focuses it so mouse users get the same
 				// highlight as D-pad navigation. A deliberate click remembers
@@ -5620,9 +6156,42 @@ func main() {
 					}
 				}
 			case *sdl.MouseButtonEvent:
+				frameRateCtrl.NotifyInput()
+				screensaverNotifyInput()
 				if e.Button == sdl.BUTTON_LEFT {
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
 					if e.Type == sdl.MOUSEBUTTONDOWN {
+						// Virtual keyboard: click on keyboard keys.
+						if virtualKeyboardActive {
+							mx, my := int32(e.X), int32(e.Y)
+							for idx, rect := range keyboardRects {
+								if mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H {
+									if idx < len(keyboardRowCol) {
+										keyboardPosY, keyboardPosX = keyboardRowCol[idx][0], keyboardRowCol[idx][1]
+									}
+									handleKeyboardInput(config)
+									// Close keyboard on action keys.
+									if keyboardPosY >= 0 && keyboardPosY < len(keyboard) &&
+										keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
+										k := keyboard[keyboardPosY][keyboardPosX]
+										if k == "ENTER" || k == "SEND" || k == "ASK_AI" {
+											if chatInputActive {
+												chatInputActive = false
+											}
+											virtualKeyboardActive = false
+										}
+									}
+									break
+								}
+							}
+							break
+						}
+						// Dismiss toast on click
+						if toastRect.W > 0 && toastRect.H > 0 && pointInRect(mx, my, toastRect) {
+							currentToast = ToastState{}
+							toastRect = sdl.Rect{}
+							break
+						}
 						// Check if clicking on seek bar for dragging
 						if pointInRect(mx, my, videoControlRects.progress) {
 							isDraggingSeekBar = true
@@ -5638,6 +6207,41 @@ func main() {
 							}
 							break
 						}
+
+						// Start menu click.
+						if tb.startOpen && startMenuIsPointIn(mx, my) {
+							startMenuHandleClick(mx, my, config)
+							break
+						}
+						// Start menu open -> click outside dismisses it.
+						if tb.startOpen {
+							startMenuDismiss()
+							break
+						}
+
+						// Notification dropdown click.
+						if notifIsPointInDrop(mx, my) {
+							break // consume click inside dropdown
+						}
+						// Notification dropdown open -> click outside dismisses it.
+						if nc.open {
+							notifDismiss()
+							break
+						}
+
+						// Taskbar Start button.
+						if mx >= tb.startRect.X && mx <= tb.startRect.X+tb.startRect.W &&
+							my >= tb.startRect.Y && my <= tb.startRect.Y+tb.startRect.H {
+							startMenuToggle()
+							break
+						}
+
+						// Notification bell.
+						if notifIsPointInBell(mx, my) {
+							notifToggle()
+							break
+						}
+
 						// Home cards: select + activate on click.
 						if homeLayoutActive && handleHomeMouseClick(mx, my, config) {
 							break
@@ -5649,7 +6253,39 @@ func main() {
 							goBackScene(config)
 							break
 						}
-						// Chat composer: "Ask Juka AI" pill (controller/keyboard use Y).
+						// Chat input area: clicking the text field opens the virtual keyboard.
+						if chatInputRect.W > 0 && mx >= chatInputRect.X && mx <= chatInputRect.X+chatInputRect.W &&
+							my >= chatInputRect.Y && my <= chatInputRect.Y+chatInputRect.H {
+							chatInputActive = true
+							if !virtualKeyboardActive {
+								virtualKeyboardActive = true
+								sdl.StartTextInput()
+								buildKeyboard()
+							}
+							break
+						}
+						// Unit converter input area.
+						if unitInputRect.W > 0 && mx >= unitInputRect.X && mx <= unitInputRect.X+unitInputRect.W &&
+							my >= unitInputRect.Y && my <= unitInputRect.Y+unitInputRect.H {
+							unitInputActive = true
+							chatInputActive = false
+							if !virtualKeyboardActive {
+								virtualKeyboardActive = true
+								sdl.StartTextInput()
+								buildKeyboard()
+							}
+							break
+						}
+						// Chat composer: Send button.
+						if chatSendBtnRect.W > 0 && mx >= chatSendBtnRect.X && mx <= chatSendBtnRect.X+chatSendBtnRect.W &&
+							my >= chatSendBtnRect.Y && my <= chatSendBtnRect.Y+chatSendBtnRect.H {
+							if chatInputText != "" {
+								sendChatMessage("You", chatInputText)
+								chatInputText = ""
+							}
+							break
+						}
+						// Chat composer: "Ask AI" pill (controller/keyboard use Y).
 						if chatAskAIBtnRect.W > 0 && mx >= chatAskAIBtnRect.X && mx <= chatAskAIBtnRect.X+chatAskAIBtnRect.W &&
 							my >= chatAskAIBtnRect.Y && my <= chatAskAIBtnRect.Y+chatAskAIBtnRect.H {
 							if strings.TrimSpace(chatInputText) != "" {
@@ -5699,15 +6335,17 @@ func main() {
 									}
 								} else if elem.Type == "chat" {
 									// Clicking the chat panel focuses the composer and
-									// starts text input so the user can type a message.
+									// opens the virtual keyboard so the user can type.
 									cw := getElementWidth(elem, 1160)
 									chh := getElementHeight(elem, 480)
 									if mx >= elem.X && mx <= elem.X+cw && my >= elem.Y && my <= elem.Y+chh {
 										selectedButtonIndex = i
 										focusEngine.SetByElementIndex(i)
-										if !chatInputActive {
+										chatInputActive = true
+										if !virtualKeyboardActive {
+											virtualKeyboardActive = true
 											sdl.StartTextInput()
-											chatInputActive = true
+											buildKeyboard()
 										}
 									}
 								} else if elem.Type == "themegallery" {
@@ -5800,8 +6438,40 @@ func main() {
 									}
 								} else if elem.Type == "favorites" {
 									handleFavoritesMouseClick(mx, my, config)
+								} else if elem.Type == "shortslist" {
+									// Click on a Shorts cell to play it.
+									shortsMutex.Lock()
+									vids := shortsList
+									shortsMutex.Unlock()
+									if len(vids) > 0 {
+										thumbW := int32(160)
+										cellW := thumbW + 20
+										elemW := getElementWidth(elem, 1080)
+										nCols := int32(elemW / cellW)
+										if nCols < 1 {
+											nCols = 1
+										}
+										cellH := int32(330)
+										for idx, vid := range vids {
+											col := int32(idx) % nCols
+											row := int32(idx) / nCols
+											xPos := elem.X + 20 + col*cellW
+											yPos := elem.Y + 10 + row*(cellH+10) - shortsScrollY
+											if mx >= xPos && mx <= xPos+thumbW && my >= yPos && my <= yPos+cellH {
+												currentShortIdx = idx
+												selectedButtonIndex = i
+												focusEngine.SetByElementIndex(i)
+												playVideoInfo(config, vid)
+												break
+											}
+										}
+									}
 								} else if elem.Type == "packagelist" {
 									handlePackageMouseClick(mx, my, config)
+								} else if elem.Type == "textbrowser" {
+									// Click inside textbrowser panel: select it for scroll focus.
+									selectedButtonIndex = i
+									focusEngine.SetByElementIndex(i)
 								}
 							}
 						}
@@ -5812,6 +6482,10 @@ func main() {
 				focusEngine.SyncSelected()
 			case *sdl.ControllerButtonEvent:
 				if e.Type == sdl.CONTROLLERBUTTONDOWN {
+					// Route overlays first (highest priority).
+					if handleControllerEvent(e, config) {
+						continue
+					}
 					focusEngine.SyncSelected()
 					if virtualKeyboardActive {
 						switch e.Button {
@@ -5831,12 +6505,19 @@ func main() {
 							if keyboardPosX < len(keyboard[keyboardPosY])-1 {
 								keyboardPosX++
 							}
-						case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B:
+						case sdl.CONTROLLER_BUTTON_A:
+							handleKeyboardInput(config) // types key or executes ENTER/BACK/SPACE/SHIFT
+						case sdl.CONTROLLER_BUTTON_B:
+							// Close keyboard without typing
+							virtualKeyboardActive = false
+							activeSceneIndex = -1
+						case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+							toggleKeyboardCase()
+						case sdl.CONTROLLER_BUTTON_Y:
+							// Shortcut: save and close (same as ENTER key)
+							keyboardPosY = len(keyboard) - 1
+							keyboardPosX = len(keyboard[keyboardPosY]) - 1
 							handleKeyboardInput(config)
-							if e.Button == sdl.CONTROLLER_BUTTON_B {
-								virtualKeyboardActive = false
-								activeSceneIndex = -1
-							}
 						}
 					} else if activeSceneIndex != -1 {
 						// Input field active - handled by virtualKeyboardActive
@@ -5850,6 +6531,10 @@ func main() {
 							if handlePatchController(e, config) {
 								continue
 							}
+						}
+						// Scene-specific controller routing.
+						if handleSceneController(e, config) {
+							continue
 						}
 						// Video control shortcuts (always active when video is playing)
 						HandleVideoControllerInput(e)
@@ -5992,6 +6677,50 @@ func main() {
 								textBrowserScrollVelocity = 0
 								textBrowserScrollCooldown = 0
 							}
+						} else if curElem.Type == "shortslist" {
+							switch e.Button {
+							case sdl.CONTROLLER_BUTTON_DPAD_UP:
+								if currentShortIdx > 0 {
+									currentShortIdx--
+								}
+							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+								shortsMutex.Lock()
+								vCount := len(shortsList)
+								shortsMutex.Unlock()
+								if currentShortIdx < vCount-1 {
+									currentShortIdx++
+								}
+							case sdl.CONTROLLER_BUTTON_A:
+								shortsMutex.Lock()
+								vs := shortsList
+								shortsMutex.Unlock()
+								if currentShortIdx >= 0 && currentShortIdx < len(vs) {
+									playVideoInfo(config, vs[currentShortIdx])
+								}
+							}
+						} else if curElem.Type == "packagelist" {
+							switch e.Button {
+							case sdl.CONTROLLER_BUTTON_DPAD_UP:
+								if packagesFocusIndex > 0 {
+									packagesFocusIndex--
+								}
+							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+								packagesMutex.Lock()
+								pCount := len(packagesList)
+								packagesMutex.Unlock()
+								if packagesFocusIndex < pCount-1 {
+									packagesFocusIndex++
+								}
+							case sdl.CONTROLLER_BUTTON_A:
+								packagesMutex.Lock()
+								if packagesFocusIndex >= 0 && packagesFocusIndex < len(packagesList) {
+									pkg := packagesList[packagesFocusIndex]
+									packagesMutex.Unlock()
+									go downloadAndInstallPackage(config, pkg)
+								} else {
+									packagesMutex.Unlock()
+								}
+							}
 						} else if curElem.Type == "chat" {
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -6001,9 +6730,12 @@ func main() {
 									chatScrollOffset--
 								}
 							case sdl.CONTROLLER_BUTTON_A:
-								if strings.TrimSpace(chatInputText) != "" {
-									sendChatMessage("You", chatInputText)
-									chatInputText = ""
+								// A opens the virtual keyboard to type a message.
+								chatInputActive = true
+								if !virtualKeyboardActive {
+									virtualKeyboardActive = true
+									sdl.StartTextInput()
+									buildKeyboard()
 								}
 							case sdl.CONTROLLER_BUTTON_Y:
 								if strings.TrimSpace(chatInputText) != "" {
@@ -6027,6 +6759,8 @@ func main() {
 									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
 									if elem.Type == "input" {
 										handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
+									} else if elem.Type == "textbrowser" || elem.Type == "shortslist" || elem.Type == "packagelist" {
+										// Display-only elements: A is a no-op (scroll with D-pad).
 									} else {
 										handleTrigger(renderer, config, elem)
 									}
@@ -6059,6 +6793,8 @@ func main() {
 						focusEngine.SyncSelected()
 					}
 				}
+			case *sdl.ControllerAxisEvent:
+				handleControllerAxis(e)
 			}
 		}
 
@@ -6140,7 +6876,12 @@ func main() {
 			}
 		}
 
-		renderScene(renderer, config, config.Scenes[currentSceneIndex])
+		// Screensaver takes over when idle.
+		if ss.active {
+			renderScreensaver(renderer, config, sdl.GetTicks64())
+		} else {
+			renderScene(renderer, config, config.Scenes[currentSceneIndex])
+		}
 
 		// Scene transition effects
 		if config.Variables.ReducedMotion && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
@@ -6252,24 +6993,71 @@ func main() {
 		}
 
 		// Patch scene: drain worker events and apply hold-to-confirm progress.
-		PatchSceneFrame()
+		PatchSceneFrame() // Bottom taskbar removed — the upper status bar already shows clock,
+		// battery, wifi, and notifications. No duplicate bottom bar needed.
+
+		// Quick Settings overlay.
+		if qs.open {
+			renderQuickSettings(renderer, config)
+		}
+
+		// Wallpaper picker overlay.
+		if wpOpen {
+			renderWallpaperPicker(renderer, config)
+		}
+
+		// Social notifications panel.
+		if socialNotifOpen {
+			renderSocialNotifPanel(renderer, config)
+		}
+
+		// Shortcut hint at bottom (hidden when overlays are open).
+		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open {
+			renderShortcutHint(renderer, config)
+		}
+
+		// Overlay renderers (rendered on top of everything).
+		if shortcutsOpen {
+			renderShortcutsOverlay(renderer, config)
+		}
+		if clipSearchOpen {
+			renderClipboardOverlay(renderer, config)
+		}
+		if globalSearchOpen {
+			renderGlobalSearch(renderer, config)
+		}
+		// Virtual keyboard overlay (open for chat and input elements).
+		if virtualKeyboardActive {
+			renderKeyboard(renderer, config)
+		}
 
 		renderToast(renderer, config)
 
 		renderer.Present()
 		animTime = float64(sdl.GetTicks64()) / 1000.0
-		// In low-power mode throttle the render loop when no transition or
-		// press feedback is active. Interaction still wakes the loop via events.
-		if config.Variables.LowPower && transitionPhase == "none" && pressedButtonIndex < 0 && hoverAnimProgress == 0 {
-			sdl.Delay(33)
-		} else {
-			sdl.Delay(16)
+
+		// Adaptive frame rate: 60fps while interacting/animating, 30fps idle, 20fps deep idle.
+		// LowPower forces 30fps unconditionally.
+		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0
+		frameRateCtrl.SetAnimationActive(animating || config.Variables.LowPower)
+		sdl.Delay(frameRateCtrl.Delay())
+
+		frameCount++
+		// Periodic memory pressure check (every ~10 frames on TSP)
+		if IsTSP() && memMonitor != nil && frameCount%10 == 0 {
+			EvictCachesForPressure(memMonitor)
+		}
+
+		// Check alarms every second.
+		if frameCount%60 == 0 {
+			alarmCheck(time.Now())
 		}
 	}
 
 	// Persist favorites and resume positions on every graceful quit path
 	// (window close, exit button, scene-exit trigger).
 	saveFavorites()
+	ClearTextCache()
 	for _, tex := range textureCache {
 		tex.Destroy()
 	}

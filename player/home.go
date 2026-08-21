@@ -184,6 +184,15 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || homeLayout == nil {
 		return false
 	}
+	// Easter egg: track J-U-K-A key sequence for firework animation.
+	if !fw.active {
+		keyMap := map[sdl.Keycode]string{
+			sdl.K_j: "j", sdl.K_u: "u", sdl.K_k: "k", sdl.K_a: "a",
+		}
+		if letter, ok := keyMap[e.Keysym.Sym]; ok {
+			onHomeKeyPress(letter)
+		}
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		if homeLayout.Focus.Current() != homeLayout.Move(FocusUp) {
@@ -388,6 +397,14 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 			_ = renderer.Clear()
 		}
 	}
+
+	// Easter egg fireworks: play explosive particle animation if active.
+	if fw.active {
+		renderFireworks(renderer, config, 0.016)
+	}
+
+	// Analog clock widget in the top-right corner (always visible on home).
+	renderAnalogClock(renderer, config)
 
 	_ = homeLayout.Render(renderer, loadHomeFonts(), homeViewData(config))
 }

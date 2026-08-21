@@ -53,6 +53,16 @@ func (cv *ConfigValidator) Validate(config *Config) error {
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = make(map[string]interface{})
 	}
+	// Defaults for new fields
+	if config.Variables.GridColumns == 0 {
+		config.Variables.GridColumns = 5
+	}
+	if config.Variables.SearchWidth == 0 {
+		config.Variables.SearchWidth = 940
+	}
+	if config.Variables.ScreensaverTimeout == 0 {
+		config.Variables.ScreensaverTimeout = 300 // 5 minutes
+	}
 
 	// Validate scenes.
 	if len(config.Scenes) == 0 {

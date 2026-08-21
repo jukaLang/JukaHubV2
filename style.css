@@ -1,5 +1,7 @@
 /* === JukaHub Generator — Design Tokens === */
 :root {
+  color-scheme: dark;
+
   /* Dark-first palette */
   --app-bg: #090b10;
   --surface-raised: #11151d;
@@ -88,20 +90,51 @@
   --tb-json-light: rgba(244, 184, 96, 0.12);
 }
 
-/* Light theme override */
+/* Light theme override — a full, coherent palette. Every surface uses a
+   slightly-cool neutral so whites stay consistent and components read as
+   raised layers instead of a patchwork of mismatched whites. */
 .theme-light {
-  --app-bg: #f4f6fa;
+  color-scheme: light;
+
+  --app-bg: #eceef4;
   --surface-raised: #ffffff;
-  --surface-secondary: #f8f9fc;
-  --surface-tertiary: #eef1f7;
-  --border: #d9dee8;
-  --border-subtle: #e4e8ef;
-  --text-main: #10141c;
+  --surface-secondary: #f6f7fb;
+  --surface-tertiary: #eceef5;
+  --border: #d5dae6;
+  --border-subtle: #dfe3ee;
+  --primary: #6a4fe0;
+  --primary-hover: #8267f5;
+  --primary-pressed: #5a3fc9;
+  --secondary: #16897a;
+  --secondary-hover: #1ca18e;
+  --danger: #d6455d;
+  --danger-hover: #e25a71;
+  --warning: #c98a1e;
+  --text-main: #1b2230;
   --text-muted: #5f6b80;
-  --canvas-bg: #e1e4ea;
-  --canvas-grid: #cfd4dd;
-  --canvas-device: #ffffff;
-  --panel-bg: #ffffff;
+  --text-on-primary: #ffffff;
+  --focus: #6a4fe0;
+
+  /* Semantic aliases */
+  --canvas-bg: #e2e5ee;
+  --canvas-grid: #cfd4e1;
+  --canvas-device: #f7f8fc;
+  --header-bg: var(--surface-raised);
+  --sidebar-bg: var(--surface-raised);
+  --panel-bg: var(--surface-secondary);
+
+  /* Softer shadows for a light background */
+  --shadow-sm: 0 2px 6px rgba(27, 34, 48, 0.08);
+  --shadow-md: 0 8px 24px rgba(27, 34, 48, 0.12);
+  --shadow-lg: 0 16px 48px rgba(27, 34, 48, 0.16);
+
+  /* Text Browser source colors — darkened for contrast on light surfaces */
+  --tb-system: #5a3fd8;
+  --tb-system-light: rgba(90, 63, 216, 0.10);
+  --tb-zeroconf: #12846e;
+  --tb-zeroconf-light: rgba(18, 132, 110, 0.10);
+  --tb-json: #b27a10;
+  --tb-json-light: rgba(178, 122, 16, 0.10);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -191,6 +224,18 @@ textarea {
   justify-content: space-between;
   gap: var(--space-lg);
   z-index: var(--z-sticky);
+  position: relative;
+}
+
+.app-bar::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--primary), var(--secondary), var(--primary));
+  opacity: 0.6;
 }
 
 .app-bar-brand {
@@ -219,7 +264,7 @@ textarea {
 
 .app-bar-titles h1 span {
   font-weight: 400;
-  color: var(--text-muted);
+  color: var(--primary);
 }
 
 .app-bar-subtitle {
@@ -275,6 +320,57 @@ textarea {
 .export-button:hover {
   background: var(--primary-hover);
   border-color: var(--primary-hover);
+}
+
+/* === Export Dropdown === */
+.export-dropdown-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.export-dropdown {
+  display: none;
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 180px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-dropdown);
+  overflow: hidden;
+  animation: dropdown-in 150ms ease;
+}
+
+.export-dropdown.open {
+  display: flex;
+  flex-direction: column;
+}
+
+.export-dropdown button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--transition-fast);
+}
+
+.export-dropdown button:hover {
+  background: var(--surface-tertiary);
+}
+
+@keyframes dropdown-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* === Editor Frame === */
@@ -644,6 +740,119 @@ textarea {
   overflow: hidden;
 }
 
+/* === Context Menu === */
+.context-menu {
+  position: fixed;
+  min-width: 180px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-dropdown);
+  overflow: hidden;
+  animation: dropdown-in 120ms ease;
+}
+
+.context-menu button {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-md) var(--space-lg);
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background var(--transition-fast);
+}
+
+.context-menu button:hover {
+  background: var(--surface-tertiary);
+}
+
+.context-menu button[data-action="delete"]:hover {
+  background: rgba(239, 91, 114, 0.12);
+  color: var(--danger);
+}
+
+.context-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: var(--space-xs) 0;
+}
+
+/* === Preview Toggle === */
+.preview-toggle {
+  position: fixed;
+  bottom: var(--space-xl);
+  left: var(--space-xl);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: var(--z-sticky);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.preview-toggle:hover {
+  background: var(--primary);
+  color: var(--text-on-primary);
+  transform: scale(1.08);
+}
+
+.preview-toggle.active {
+  background: var(--secondary);
+  color: var(--text-on-primary);
+  border-color: var(--secondary);
+}
+
+/* Preview mode: hide editing chrome */
+body.preview-mode .left-sidebar,
+body.preview-mode .right-sidebar,
+body.preview-mode .canvas-header,
+body.preview-mode .workspace-status,
+body.preview-mode .app-bar-actions,
+body.preview-mode .app-footer,
+body.preview-mode .preview-toggle {
+  display: none !important;
+}
+
+body.preview-mode .editor-frame {
+  grid-template-columns: 1fr !important;
+}
+
+body.preview-mode .canvas-container {
+  align-items: center;
+  justify-content: center;
+}
+
+body.preview-mode .element .remove-button {
+  display: none !important;
+}
+
+body.preview-mode .element {
+  cursor: default;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+body.preview-mode .element:hover {
+  box-shadow: none !important;
+}
+
+/* === Workspace Status === */
 .workspace-status {
   flex: 0 0 auto;
   display: flex;
@@ -1236,6 +1445,18 @@ textarea:focus {
   color: var(--text-muted);
 }
 
+.guide-body kbd {
+  display: inline-block;
+  padding: 1px 6px;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-main);
+  line-height: 1.6;
+}
+
 .close-button {
   width: 32px;
   height: 32px;
@@ -1516,6 +1737,86 @@ textarea:focus {
   .right-sidebar {
     width: 100vw;
   }
+}
+
+/* === Light Theme refinements === */
+/* Components that hardcode dark colors in the base theme need explicit
+   light overrides so nothing stays dark-on-light. */
+
+/* Canvas elements: lift them off the device surface with a distinct fill
+   and a soft shadow instead of relying on the (now light) device color. */
+.theme-light .element {
+  background: var(--surface-secondary);
+  border-color: var(--border);
+  box-shadow: 0 1px 3px rgba(27, 34, 48, 0.10);
+}
+
+.theme-light .element:hover {
+  box-shadow: 0 4px 12px rgba(27, 34, 48, 0.12);
+}
+
+.theme-light .element.selected {
+  box-shadow: 0 0 0 3px rgba(106, 79, 224, 0.25), 0 6px 20px rgba(27, 34, 48, 0.14);
+}
+
+/* Menu element: flip the always-dark bar to a light surface. */
+.theme-light .element[data-type="menu"] {
+  background: #eceef4;
+  color: var(--text-main);
+  border-top: 1px solid var(--border);
+}
+
+.theme-light .menu-scene-button {
+  background: #ffffff;
+  color: var(--text-main);
+  border: 1px solid var(--border);
+}
+
+.theme-light .menu-scene-button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.theme-light .menu-clock {
+  color: var(--text-muted);
+}
+
+/* Text Browser component card + its sidebar chip. */
+.theme-light .element[data-type="textbrowser"] {
+  border-color: rgba(90, 63, 216, 0.45);
+  background: rgba(90, 63, 216, 0.05);
+}
+
+.theme-light .left-sidebar .element[data-type="textbrowser"] {
+  background: linear-gradient(135deg, var(--tb-system-light), rgba(90, 63, 216, 0.02));
+}
+
+/* Source badges keep their accent hues but need light-friendly fills. */
+.theme-light .source-badge.system {
+  background: var(--tb-system-light);
+  border-color: rgba(90, 63, 216, 0.35);
+}
+
+.theme-light .source-badge.zeroconf {
+  background: var(--tb-zeroconf-light);
+  border-color: rgba(18, 132, 110, 0.35);
+}
+
+.theme-light .source-badge.json {
+  background: var(--tb-json-light);
+  border-color: rgba(178, 122, 16, 0.35);
+}
+
+/* Toggle switch off-track: slightly darker than the default border so the
+   knob stays visible on light surfaces. */
+.theme-light .toggle-slider {
+  background: #c6ccda;
+}
+
+/* The guide backdrop stays a dark dimmer in both themes. */
+.theme-light .guide-backdrop {
+  background: rgba(0, 0, 0, 0.55);
 }
 
 /* === Legacy / script-driven states === */

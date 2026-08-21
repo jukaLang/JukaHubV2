@@ -352,7 +352,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "*",
+      "description": "Home screen"
     },
     {
       "name": "Tube",
@@ -539,7 +541,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "~",
+      "description": "Video browser"
     },
     {
       "name": "IPStream",
@@ -636,7 +640,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": ">>",
+      "description": "IP video streams"
     },
     {
       "name": "FileExplorer",
@@ -793,7 +799,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "+",
+      "description": "Browse files"
     },
     {
       "name": "LiveTV",
@@ -890,7 +898,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "TV",
+      "description": "Live television"
     },
     {
       "name": "Podcasts",
@@ -1047,7 +1057,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "P",
+      "description": "Podcast player"
     },
     {
       "name": "Tickers",
@@ -1204,7 +1216,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "$",
+      "description": "Financial tickers"
     },
     {
       "name": "Misc",
@@ -1481,7 +1495,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": ":)",
+      "description": "Utilities and tools"
     },
     {
       "name": "Apps",
@@ -1818,7 +1834,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "A",
+      "description": "Application launcher"
     },
     {
       "name": "Terminal",
@@ -1826,7 +1844,7 @@
       "layout": "",
       "elements": [
         {
-          "type": "input",
+          "type": "chat",
           "text": "",
           "color": "$labelColor",
           "x": 24,
@@ -1840,7 +1858,7 @@
           "width": "700",
           "height": "48",
           "video": "",
-          "variable": "terminal_cmd",
+          "variable": "",
           "command": "",
           "listVariable": "",
           "columns": 0,
@@ -1898,7 +1916,7 @@
           "triggerValue": "",
           "image": "",
           "width": "1232",
-          "height": "520",
+          "height": 475,
           "video": "",
           "variable": "terminal_text",
           "command": "",
@@ -1915,7 +1933,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": ">_",
+      "description": "Command line"
     },
     {
       "name": "Cron",
@@ -2072,7 +2092,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "!",
+      "description": "Scheduled tasks"
     },
     {
       "name": "NetSpeed",
@@ -2139,7 +2161,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "net",
+      "description": "Network speed test"
     },
     {
       "name": "Benchmark",
@@ -2236,7 +2260,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "#",
+      "description": "System benchmark"
     },
     {
       "name": "DiskSpace",
@@ -2273,7 +2299,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "[D]",
+      "description": "Storage usage"
     },
     {
       "name": "Weather",
@@ -2310,7 +2338,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "@",
+      "description": "Weather forecast"
     },
     {
       "name": "Hardware",
@@ -2377,7 +2407,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "hw",
+      "description": "Hardware information"
     },
     {
       "name": "LogExporter",
@@ -2474,7 +2506,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "log",
+      "description": "System logs"
     },
     {
       "name": "Favorites",
@@ -2691,7 +2725,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "+",
+      "description": "Saved media"
     },
     {
       "name": "UnitConverter",
@@ -2728,7 +2764,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "=",
+      "description": "Unit converter"
     },
     {
       "name": "Packages",
@@ -2795,7 +2833,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "pkg",
+      "description": "Package manager"
     },
     {
       "name": "Chat",
@@ -2832,7 +2872,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "msg",
+      "description": "AI chat assistant"
     },
     {
       "name": "Shorts",
@@ -2899,7 +2941,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "[S]",
+      "description": "Short videos"
     },
     {
       "name": "CanvasSandbox",
@@ -3026,7 +3070,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "{}",
+      "description": "HTML/JS sandbox"
     },
     {
       "name": "JukaLand",
@@ -3063,7 +3109,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "G",
+      "description": "Sandbox game"
     },
     {
       "name": "TextBrowser",
@@ -3220,7 +3268,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "txt",
+      "description": "System info browser"
     },
     {
       "name": "Settings",
@@ -3347,7 +3397,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "%",
+      "description": "Application settings"
     },
     {
       "name": "SettingsGeneral",
@@ -3804,7 +3856,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "%",
+      "description": "General settings"
     },
     {
       "name": "SettingsAppearance",
@@ -4021,7 +4075,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "%",
+      "description": "Theme and appearance"
     },
     {
       "name": "ThemePresets",
@@ -4058,7 +4114,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "%",
+      "description": "Theme presets"
     },
     {
       "name": "Plugins",
@@ -4125,7 +4183,48 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "ext",
+      "description": "Plugin manager"
+    },
+    {
+      "name": "Patch",
+      "background": "#0B0F17",
+      "layout": "",
+      "elements": [
+        {
+          "type": "button",
+          "text": "Refresh",
+          "color": "$labelColor",
+          "x": 24,
+          "y": 72,
+          "font": "",
+          "bgColor": "$buttonColor",
+          "trigger": "",
+          "triggerTarget": "",
+          "triggerValue": "",
+          "image": "",
+          "width": "140",
+          "height": "45",
+          "video": "",
+          "variable": "",
+          "command": "",
+          "listVariable": "",
+          "columns": 0,
+          "rows": 0,
+          "placeholder": "",
+          "style": "",
+          "icon": "",
+          "jsonPath": "",
+          "autoRefresh": false,
+          "externalAppPath": "",
+          "externalAppReturn": "",
+          "variableChange": "",
+          "variableChangeValue": ""
+        }
+      ],
+      "icon": "[P]",
+      "description": "Update and repair JukaHub"
     },
     {
       "name": "Exit",
@@ -4162,7 +4261,9 @@
           "variableChange": "",
           "variableChangeValue": ""
         }
-      ]
+      ],
+      "icon": "X",
+      "description": "Exit JukaHub"
     }
   ]
 }

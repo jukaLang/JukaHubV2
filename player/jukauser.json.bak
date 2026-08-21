@@ -24,6 +24,11 @@
     "audioBackend": "",
     "reducedMotion": false,
     "lowPower": false,
+    "gridColumns": 0,
+    "searchWidth": 0,
+    "dynamicBg": false,
+    "screensaverTimeout": 0,
+    "socialNotifs": false,
     "Custom": {
       "AudioBackend": "ffplay",
       "BackgroundImage": "background.jpg",
@@ -42,16 +47,10 @@
       "WeatherUnit": "C",
       "chat_input": "hi",
       "diskpie_data": {
-        "Total": 240055742464,
-        "Used": 161145516032,
-        "Pct": 67
+        "Pct": 0,
+        "Total": 0,
+        "Used": 0
       }
     }
-  },
-  "favorites": {
-    "videos": [],
-    "recent": [],
-    "files": [],
-    "iptv": []
   }
 }

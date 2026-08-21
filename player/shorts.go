@@ -22,7 +22,11 @@ func fetchYouTubeShorts(config *Config, resultVar string, vars map[string]interf
 }
 
 func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
+	// Read from the config variable (published by executeYouTubeSearch).
 	shortsMutex.Lock()
+	if vs, ok := config.Variables.Custom["shorts_list"].([]VideoInfo); ok {
+		shortsList = vs
+	}
 	videos := shortsList
 	shortsMutex.Unlock()
 

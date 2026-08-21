@@ -218,10 +218,10 @@ func OpRepair(ctx context.Context, config *Config) error {
 	r := RepairJukaHub(config)
 	lines := make([]string, 0, len(r.Fixed)+len(r.Warned))
 	for _, f := range r.Fixed {
-		lines = append(lines, "✓ "+f)
+		lines = append(lines, "OK "+f)
 	}
 	for _, w := range r.Warned {
-		lines = append(lines, "⚠ "+w)
+		lines = append(lines, "WARN "+w)
 	}
 	if len(lines) == 0 {
 		lines = append(lines, "No issues found")

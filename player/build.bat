@@ -1,12 +1,17 @@
 @echo off
 REM ============================================================================
-REM  JukaHub / JukaHub - Windows build & run script
+REM  JukaHub - Windows build and launch script
+REM
+REM  Usage:
+REM    build.bat           Build and launch JukaHub
+REM    build.bat nobuild   Launch only (skip the build step)
 REM
 REM  What this does:
-REM    1. Installs the SDL2 development libraries (MinGW-w64) if missing, so the
+REM    1. Downloads the SDL2 development libraries (MinGW-w64) if missing, so the
 REM       "SDL2/SDL.h: No such file or directory" CGO errors go away.
-REM    2. Builds the player (JukaHub.exe) with CGO enabled.
-REM    3. Runs it.
+REM    2. Builds JukaHub.exe with CGO enabled.
+REM    3. Copies the SDL2 runtime DLLs next to the executable.
+REM    4. Launches JukaHub.
 REM
 REM  REQUIREMENTS:
 REM    - Go (https://go.dev/dl) on PATH.
@@ -19,10 +24,13 @@ setlocal
 cd /d "%~dp0"
 
 if exist "jukauser.json" del /f /q "jukauser.json"
+if exist "jukauser.json.bak" del /f /q "jukauser.json.bak"
 
 set OUT=JukaHub.exe
 set ARCH=x86_64-w64-mingw32
 
+REM --- SDL2 include/lib discovery ---
+REM If the user set SDL2_DIR, use that directly.
 if defined SDL2_DIR (
     set "CGO_CFLAGS=-I%SDL2_DIR%\include"
     set "CGO_LDFLAGS=-L%SDL2_DIR%\lib"
@@ -33,6 +41,7 @@ set SDLDIR=%cd%\.sdl2
 set HEADER=%SDLDIR%\%ARCH%\include\SDL2\SDL.h
 if exist "%HEADER%" goto :build
 
+REM --- Download SDL2 dev packages (only if not already present) ---
 echo.
 echo ============================================================
 echo  Downloading SDL2 development libraries for MinGW-w64
@@ -71,10 +80,12 @@ if errorlevel 1 goto :tar_fail
 if exist "%SDLDIR%" rmdir /s /q "%SDLDIR%"
 mkdir "%SDLDIR%\%ARCH%\include"
 mkdir "%SDLDIR%\%ARCH%\lib"
+mkdir "%SDLDIR%\%ARCH%\bin"
 
 for %%P in (SDL2-%SDL2_VER% SDL2_image-%IMG_VER% SDL2_ttf-%TTF_VER%) do (
     xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\include\*" "%SDLDIR%\%ARCH%\include\"
     xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\lib\*" "%SDLDIR%\%ARCH%\lib\"
+    xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\bin\*" "%SDLDIR%\%ARCH%\bin\"
 )
 
 :build
@@ -86,6 +97,9 @@ if not defined CGO_CFLAGS (
     set "CGO_CFLAGS=-I%SDLDIR%\%ARCH%\include"
     set "CGO_LDFLAGS=-L%SDLDIR%\%ARCH%\lib"
 )
+
+REM --- Skip build if "nobuild" argument was passed ---
+if /i "%1"=="nobuild" goto :after_build
 
 echo.
 echo ============================================================
@@ -103,41 +117,70 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo.
-echo Copying SDL runtime DLLs next to %OUT%...
-if defined SDL2_DIR (
+:after_build
+
+REM --- Verify the executable exists before launching ---
+if not exist "%OUT%" (
+    echo.
+    echo ERROR: %OUT% not found. Build may have failed silently.
+    pause
+    exit /b 1
+)
+
+REM --- Copy SDL runtime DLLs next to the executable ---
+REM The executable needs SDL2.dll, SDL2_image.dll, SDL2_ttf.dll at runtime.
+REM Check multiple possible locations in order of preference.
+
+set DLL_COPIED=0
+
+REM 1. Local player directory (already have them there)
+if exist "%~dp0SDL2.dll" set DLL_COPIED=1
+
+REM 2. From SDL2_DIR if provided
+if "%DLL_COPIED%"=="0" if defined SDL2_DIR (
     if exist "%SDL2_DIR%\bin\SDL2.dll" (
-        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2.dll" "%~dp0" >nul
+        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2.dll" "%~dp0" >nul 2>nul
         xcopy /s /e /y "%SDL2_DIR%\bin\SDL2_image.dll" "%~dp0" >nul 2>nul
         xcopy /s /e /y "%SDL2_DIR%\bin\SDL2_ttf.dll" "%~dp0" >nul 2>nul
-    ) else (
-        echo  SDL2.dll not found under %%SDL2_DIR%%\bin — copy the SDL runtime DLLs manually.
+        set DLL_COPIED=1
     )
-) else (
-    if exist "%SDLDIR%\%ARCH%\bin\SDL2.dll" (
-        xcopy /s /e /y "%SDLDIR%\%ARCH%\bin\*.dll" "%~dp0" >nul
-    ) else (
-        echo  SDL2.dll not found in %SDLDIR%\%ARCH%\bin — copy the SDL runtime DLLs manually.
-    )
+)
+
+REM 3. From the local .sdl2 cache
+if "%DLL_COPIED%"=="0" if exist "%SDLDIR%\%ARCH%\bin\SDL2.dll" (
+    xcopy /s /e /y "%SDLDIR%\%ARCH%\bin\*.dll" "%~dp0" >nul 2>nul
+    set DLL_COPIED=1
+)
+
+if "%DLL_COPIED%"=="0" (
+    echo.
+    echo WARNING: SDL2 runtime DLLs not found. %OUT% may fail to start.
+    echo  Place SDL2.dll, SDL2_image.dll, SDL2_ttf.dll next to %OUT%.
 )
 
 echo.
 echo Build succeeded: %OUT%
 echo.
-if "%1"=="nobuild" goto :eof
+
+REM --- CI guard: don't launch in CI environments ---
+if defined GITHUB_ACTIONS (
+    echo  Skipping launch in CI environment.
+    goto :eof
+)
+if defined CI (
+    echo  Skipping launch in CI environment.
+    goto :eof
+)
 
 echo Launching %OUT%...
 echo.
-
-REM In CI (e.g. GitHub Actions), skip launching the GUI.
-if defined GITHUB_ACTIONS goto :eof
 
 start "" "%OUT%"
 goto :eof
 
 :dl_fail
 echo.
-echo DOWNLOAD FAILED - could not download SDL2 dev libraries.
+echo DOWNLOAD FAILED - could not download SDL2 development libraries.
 echo  Set SDL2_DIR to an existing SDL2 MinGW dev install and re-run.
 pause
 exit /b 1

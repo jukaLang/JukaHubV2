@@ -208,6 +208,13 @@ func feEnterFocused(config *Config) {
 		openFileInCanvasSandbox(entry.Path)
 		return
 	}
+	if ext == ".pdf" {
+		pdfOpenFile(entry.Path)
+		if idx := findSceneIndex(config, "PDFReader"); idx >= 0 {
+			changeSceneTo(config, idx)
+		}
+		return
+	}
 	if isMediaFile(entry.Name) || hasMediaExtension(entry.Path) {
 		recordPlayed(config, entry.Path)
 		playSmartURL(config, entry.Path)
@@ -309,10 +316,10 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		if entries[i].IsDir {
 			// Use ▶ (U+25B6), which Inter contains — ▸ (U+25B8) does not exist
 			// in Inter and renders as a missing-glyph box.
-			prefix = "▶ "
+			prefix = "> "
 			color = sdl.Color{R: 255, G: 230, B: 120, A: 255}
 		} else if isMediaFile(entries[i].Name) {
-			prefix = "▶ "
+			prefix = "> "
 			color = ColorTextAccent()
 		}
 		txt := ellipsize(font, prefix+entries[i].Name, rowW-40)

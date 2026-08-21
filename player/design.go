@@ -239,6 +239,7 @@ func ApplyThemeColors(p ThemePreset) {
 	ColorIconSurface = hexRGBA(p.InputColor)
 	ColorIconDark = contrastText(ColorAccent)
 	ColorFooter = hexRGBA(p.Surface)
+	ColorTopBar = hexRGBA(p.Surface)
 	ColorBackgroundTop = hexRGBA(p.Background)
 	ColorBackgroundBottom = ColorBackgroundTop
 	ColorBackground = ColorBackgroundBottom

@@ -72,7 +72,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // Update readouts
   updateCanvasReadout();
 
-  loadDefaultConfig();
+  // Try auto-save first, then fall back to default config
+  if (!loadAutoSave()) {
+    loadDefaultConfig();
+  }
+
+  // New features
+  setupExportDropdowns();
+  setupContextMenu();
+  setupKeyboardShortcuts();
+
+  // Preview toggle button
+  const previewBtn = document.getElementById('previewToggle');
+  if (previewBtn) previewBtn.addEventListener('click', togglePreviewMode);
+
   setupMobileElementAdding();
   setupMobileCanvasClick();
   setupMobileElementSelection();
@@ -84,6 +97,433 @@ function createGlobalTooltip() {
   globalTooltip.className = 'variable-tooltip';
   globalTooltip.style.display = 'none';
   document.body.appendChild(globalTooltip);
+}
+
+// ─── Undo / Redo ──────────────────────────────────────────────────────────────
+
+const undoStack = [];
+const redoStack = [];
+const MAX_UNDO = 60;
+
+function pushUndo(label) {
+  saveCurrentScene();
+  const snapshot = {
+    label,
+    scenes: JSON.parse(JSON.stringify(
+      Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)]))
+    )),
+    currentScene,
+    variables: JSON.parse(JSON.stringify(variables)),
+    title: document.getElementById('title').value,
+    author: document.getElementById('author').value,
+    description: document.getElementById('description').value
+  };
+  undoStack.push(snapshot);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+}
+
+function restoreSnapshot(snapshot) {
+  // Restore scenes from HTML strings
+  scenes = {};
+  const sceneSelectorEl = document.getElementById('sceneSelector');
+  sceneSelectorEl.innerHTML = '';
+
+  for (const [name, htmlArr] of Object.entries(snapshot.scenes)) {
+    scenes[name] = htmlArr.map(html => {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      return tmp.firstChild;
+    });
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    sceneSelectorEl.appendChild(option);
+  }
+
+  currentScene = snapshot.currentScene;
+  sceneSelectorEl.value = currentScene;
+  variables = JSON.parse(JSON.stringify(snapshot.variables));
+  document.getElementById('title').value = snapshot.title;
+  document.getElementById('author').value = snapshot.author;
+  document.getElementById('description').value = snapshot.description;
+
+  // Rebuild variables UI
+  variablesList.innerHTML = '';
+  for (const [key, val] of Object.entries(variables)) {
+    const variableItem = document.createElement('div');
+    variableItem.className = 'variable-item';
+    variableItem.innerHTML = `
+      <div>
+        <span class="variable-name">${key}</span>
+        <span class="variable-value">${val}</span>
+      </div>
+      <div class="variable-actions">
+        <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
+        <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+      </div>
+    `;
+    variablesList.appendChild(variableItem);
+  }
+
+  loadScene(currentScene);
+  updateSceneBadge();
+  updateSceneChangeSelector();
+  updateVariableChangeSelector();
+  updateAllMenuSceneButtons();
+  updateAllStoredMenus();
+}
+
+function undo() {
+  if (undoStack.length === 0) return;
+  saveCurrentScene();
+  const current = {
+    label: 'redo',
+    scenes: JSON.parse(JSON.stringify(
+      Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)]))
+    )),
+    currentScene,
+    variables: JSON.parse(JSON.stringify(variables)),
+    title: document.getElementById('title').value,
+    author: document.getElementById('author').value,
+    description: document.getElementById('description').value
+  };
+  redoStack.push(current);
+  const snapshot = undoStack.pop();
+  restoreSnapshot(snapshot);
+  showToast('Undone: ' + (snapshot.label || 'action'), 'info');
+}
+
+function redo() {
+  if (redoStack.length === 0) return;
+  saveCurrentScene();
+  const current = {
+    label: 'undo',
+    scenes: JSON.parse(JSON.stringify(
+      Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)]))
+    )),
+    currentScene,
+    variables: JSON.parse(JSON.stringify(variables)),
+    title: document.getElementById('title').value,
+    author: document.getElementById('author').value,
+    description: document.getElementById('description').value
+  };
+  undoStack.push(current);
+  const snapshot = redoStack.pop();
+  restoreSnapshot(snapshot);
+  showToast('Redone: ' + (snapshot.label || 'action'), 'info');
+}
+
+// ─── Export Dropdown ───────────────────────────────────────────────────────────
+
+function setupExportDropdowns() {
+  const pairs = [
+    { btn: 'headerExportBtn', dd: 'headerExportDropdown' },
+    { btn: 'canvasExportBtn', dd: 'canvasExportDropdown' }
+  ];
+  pairs.forEach(({ btn, dd }) => {
+    const btnEl = document.getElementById(btn);
+    const ddEl = document.getElementById(dd);
+    if (!btnEl || !ddEl) return;
+    btnEl.addEventListener('click', (e) => {
+      e.stopPropagation();
+      // Close other dropdown
+      pairs.forEach(({ dd: otherDd }) => {
+        const el = document.getElementById(otherDd);
+        if (el && el !== ddEl) el.classList.remove('open');
+      });
+      ddEl.classList.toggle('open');
+    });
+  });
+  // Close dropdowns when clicking outside
+  document.addEventListener('click', () => {
+    document.querySelectorAll('.export-dropdown').forEach(dd => dd.classList.remove('open'));
+  });
+}
+
+// ─── Context Menu ─────────────────────────────────────────────────────────────
+
+let contextMenuTarget = null;
+
+function setupContextMenu() {
+  const menu = document.getElementById('contextMenu');
+  if (!menu) return;
+
+  canvas.addEventListener('contextmenu', (e) => {
+    const el = e.target.closest('.element');
+    if (!el || el.classList.contains('menu')) return;
+    e.preventDefault();
+    contextMenuTarget = el;
+
+    // Position the menu
+    const x = Math.min(e.clientX, window.innerWidth - 200);
+    const y = Math.min(e.clientY, window.innerHeight - 240);
+    menu.style.left = x + 'px';
+    menu.style.top = y + 'px';
+    menu.style.display = 'flex';
+    menu.style.flexDirection = 'column';
+  });
+
+  document.addEventListener('click', () => {
+    menu.style.display = 'none';
+    contextMenuTarget = null;
+  });
+
+  menu.querySelectorAll('button[data-action]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (!contextMenuTarget) return;
+      const action = btn.getAttribute('data-action');
+      pushUndo(action);
+
+      if (action === 'duplicate') {
+        duplicateElement(contextMenuTarget);
+      } else if (action === 'delete') {
+        contextMenuTarget.remove();
+        const sceneElements = scenes[currentScene];
+        const idx = sceneElements.findIndex(item => item.isEqualNode(contextMenuTarget));
+        if (idx > -1) sceneElements.splice(idx, 1);
+        currentElement = null;
+        showToast('Element deleted', 'info');
+      } else if (action === 'bring-front') {
+        contextMenuTarget.style.zIndex = '50';
+        showToast('Brought to front', 'info');
+      } else if (action === 'send-back') {
+        contextMenuTarget.style.zIndex = '0';
+        showToast('Sent to back', 'info');
+      } else if (action === 'edit-text') {
+        const type = contextMenuTarget.getAttribute('data-type');
+        if (['button', 'label'].includes(type)) {
+          const textSpan = contextMenuTarget.querySelector('.text-content');
+          const newText = prompt('Edit text:', textSpan?.textContent || '');
+          if (newText !== null && textSpan) textSpan.textContent = newText;
+        }
+      }
+      menu.style.display = 'none';
+      contextMenuTarget = null;
+    });
+  });
+}
+
+function duplicateElement(el) {
+  const clone = el.cloneNode(true);
+  clone.style.left = (parseInt(el.getAttribute('data-x')) + 20) + 'px';
+  clone.style.top = (parseInt(el.getAttribute('data-y')) + 20) + 'px';
+  clone.setAttribute('data-x', parseInt(el.getAttribute('data-x')) + 20);
+  clone.setAttribute('data-y', parseInt(el.getAttribute('data-y')) + 20);
+  canvas.appendChild(clone);
+  setupElementEvents(clone);
+  if (!scenes[currentScene]) scenes[currentScene] = [];
+  scenes[currentScene].push(clone);
+  showToast('Element duplicated', 'success');
+}
+
+// ─── Auto-Save ────────────────────────────────────────────────────────────────
+
+let autoSaveTimer = null;
+
+function scheduleAutoSave() {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  autoSaveTimer = setTimeout(() => {
+    saveCurrentScene();
+    const data = {
+      scenes: Object.fromEntries(
+        Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)])
+      ),
+      currentScene,
+      variables,
+      canvasWidth,
+      canvasHeight,
+      backgroundPath,
+      title: document.getElementById('title')?.value || '',
+      author: document.getElementById('author')?.value || '',
+      description: document.getElementById('description')?.value || '',
+      titleSize: titleSizeInput?.value || 48,
+      bigSize: bigSizeInput?.value || 36,
+      mediumSize: mediumSizeInput?.value || 24,
+      smallSize: smallSizeInput?.value || 18
+    };
+    try {
+      localStorage.setItem('jukahub-autosave', JSON.stringify(data));
+    } catch (e) { /* quota exceeded */ }
+  }, 1500);
+}
+
+function loadAutoSave() {
+  try {
+    const raw = localStorage.getItem('jukahub-autosave');
+    if (!raw) return false;
+    const data = JSON.parse(raw);
+    if (!data.scenes) return false;
+
+    // Restore scenes
+    scenes = {};
+    const sceneSelectorEl = document.getElementById('sceneSelector');
+    sceneSelectorEl.innerHTML = '';
+
+    for (const [name, htmlArr] of Object.entries(data.scenes)) {
+      scenes[name] = htmlArr.map(html => {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = html;
+        return tmp.firstChild;
+      });
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      sceneSelectorEl.appendChild(option);
+    }
+
+    currentScene = data.currentScene || Object.keys(scenes)[0];
+    sceneSelectorEl.value = currentScene;
+    variables = data.variables || {};
+    canvasWidth = data.canvasWidth || 1280;
+    canvasHeight = data.canvasHeight || 720;
+    backgroundPath = data.backgroundPath || '';
+
+    document.getElementById('title').value = data.title || '';
+    document.getElementById('author').value = data.author || '';
+    document.getElementById('description').value = data.description || '';
+    if (data.titleSize) titleSizeInput.value = data.titleSize;
+    if (data.bigSize) bigSizeInput.value = data.bigSize;
+    if (data.mediumSize) mediumSizeInput.value = data.mediumSize;
+    if (data.smallSize) smallSizeInput.value = data.smallSize;
+
+    if (backgroundPath) {
+      canvas.style.backgroundImage = `url(${backgroundPath})`;
+      canvas.style.backgroundSize = 'cover';
+    }
+
+    updateCanvasSize();
+    loadScene(currentScene);
+
+    // Rebuild variables UI
+    variablesList.innerHTML = '';
+    for (const [key, val] of Object.entries(variables)) {
+      const variableItem = document.createElement('div');
+      variableItem.className = 'variable-item';
+      variableItem.innerHTML = `
+        <div>
+          <span class="variable-name">${key}</span>
+          <span class="variable-value">${val}</span>
+        </div>
+        <div class="variable-actions">
+          <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
+          <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+        </div>
+      `;
+      variablesList.appendChild(variableItem);
+    }
+
+    updateSceneBadge();
+    updateSceneChangeSelector();
+    updateVariableChangeSelector();
+    updateAllMenuSceneButtons();
+    updateAllStoredMenus();
+    return true;
+  } catch (e) {
+    console.error('Failed to load auto-save:', e);
+    return false;
+  }
+}
+
+// ─── Preview Mode ─────────────────────────────────────────────────────────────
+
+let previewMode = false;
+
+function togglePreviewMode() {
+  previewMode = !previewMode;
+  document.body.classList.toggle('preview-mode', previewMode);
+  const btn = document.getElementById('previewToggle');
+  if (btn) {
+    btn.classList.toggle('active', previewMode);
+    btn.innerHTML = previewMode
+      ? '<i class="fas fa-pen"></i>'
+      : '<i class="fas fa-eye"></i>';
+  }
+  // Deselect any element
+  if (previewMode) {
+    currentElement = null;
+    document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
+    document.body.classList.remove('element-selected');
+  }
+  showToast(previewMode ? 'Preview mode on — click eye to exit' : 'Edit mode', 'info');
+}
+
+// ─── Keyboard Shortcuts ──────────────────────────────────────────────────────
+
+function setupKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    // Skip if inside an input/textarea/select
+    const tag = e.target.tagName;
+    const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable;
+
+    // Ctrl/Cmd + Z = Undo
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+      e.preventDefault();
+      undo();
+      return;
+    }
+
+    // Ctrl/Cmd + Shift + Z = Redo
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
+      e.preventDefault();
+      redo();
+      return;
+    }
+
+    // Ctrl/Cmd + Y = Redo
+    if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+      e.preventDefault();
+      redo();
+      return;
+    }
+
+    // Ctrl/Cmd + D = Duplicate selected element
+    if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+      e.preventDefault();
+      if (currentElement && !currentElement.classList.contains('menu')) {
+        pushUndo('duplicate');
+        duplicateElement(currentElement);
+      }
+      return;
+    }
+
+    // Ctrl/Cmd + S = Export JSON (save)
+    if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      e.preventDefault();
+      exportConfig();
+      return;
+    }
+
+    // Ctrl/Cmd + P = Toggle preview
+    if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+      e.preventDefault();
+      togglePreviewMode();
+      return;
+    }
+
+    // Delete / Backspace = Delete selected element (when not in input)
+    if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput) {
+      if (currentElement && !currentElement.classList.contains('menu')) {
+        e.preventDefault();
+        pushUndo('delete');
+        currentElement.remove();
+        const sceneElements = scenes[currentScene];
+        const idx = sceneElements.findIndex(item => item.isEqualNode(currentElement));
+        if (idx > -1) sceneElements.splice(idx, 1);
+        currentElement = null;
+        showToast('Element deleted', 'info');
+      }
+      return;
+    }
+
+    // Escape = Deselect or exit preview
+    if (e.key === 'Escape') {
+      if (previewMode) {
+        togglePreviewMode();
+        return;
+      }
+    }
+  });
 }
 
 // Set up all event listeners
@@ -115,6 +555,10 @@ function setupEventListeners() {
   // Escape key closes overlays
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+      // Close context menu
+      const ctxMenu = document.getElementById('contextMenu');
+      if (ctxMenu) ctxMenu.style.display = 'none';
+
       if (guidePanel && !guidePanel.hasAttribute('hidden')) {
         closeGuideFn();
         return;
@@ -243,8 +687,15 @@ function setupEventListeners() {
     const reader = new FileReader();
     reader.onload = e => {
       try {
-        const config = JSON.parse(e.target.result);
+        const text = e.target.result;
+        let config;
+        if (file.name.endsWith('.xml') || text.trim().startsWith('<?xml') || text.trim().startsWith('<')) {
+          config = xmlToJson(text);
+        } else {
+          config = JSON.parse(text);
+        }
         loadJukaApp(config);
+        scheduleAutoSave();
         showToast('Configuration loaded', 'success');
       } catch (error) {
         showToast('Error loading config: ' + error.message, 'error');
@@ -445,6 +896,7 @@ function addScene() {
   // Update all menu scene buttons in all scenes
   updateAllMenuSceneButtons();
   updateAllStoredMenus();
+  scheduleAutoSave();
   showToast(`Scene "${newSceneName}" added`, 'success');
 }
 
@@ -487,6 +939,7 @@ function duplicateScene() {
   // Update all menu scene buttons
   updateAllMenuSceneButtons();
   updateAllStoredMenus();
+  scheduleAutoSave();
   showToast(`Scene "${newSceneName}" duplicated`, 'success');
 }
 
@@ -678,6 +1131,7 @@ function addElement(type, x, y) {
   if (!scenes[currentScene]) scenes[currentScene] = [];
   scenes[currentScene].push(el.cloneNode(true));
 
+  scheduleAutoSave();
   return el;
 }
 
@@ -774,6 +1228,7 @@ function setupElementEvents(el) {
     if (isDragging) {
       isDragging = false;
       el.style.cursor = 'grab';
+      scheduleAutoSave();
     }
   });
 
@@ -868,10 +1323,12 @@ function setupElementEvents(el) {
   if (removeButton) {
     removeButton.addEventListener('click', (event) => {
       event.stopPropagation();
+      pushUndo('delete');
       el.remove();
       const sceneElements = scenes[currentScene];
       const index = sceneElements.findIndex(item => item.isEqualNode(el));
       if (index > -1) sceneElements.splice(index, 1);
+      scheduleAutoSave();
     });
   }
 
@@ -1638,6 +2095,273 @@ function exportConfig() {
   createJukaApp();
 }
 
+// ─── XML Export ───────────────────────────────────────────────────────────────
+
+function exportConfigXml() {
+  const config = {
+    title: document.getElementById('title').value,
+    author: document.getElementById('author').value,
+    description: document.getElementById('description').value,
+    variables: {
+      ...variables,
+      backgroundImage: backgroundPath,
+      fontSizes: {
+        title: parseInt(titleSizeInput.value, 10),
+        big: parseInt(bigSizeInput.value, 10),
+        medium: parseInt(mediumSizeInput.value, 10),
+        small: parseInt(smallSizeInput.value, 10)
+      }
+    },
+    scenes: Object.keys(scenes).map(sceneName => ({
+      name: sceneName,
+      elements: scenes[sceneName].map(el => {
+        const element = {
+          type: el.getAttribute('data-type'),
+          x: parseInt(el.getAttribute('data-x')),
+          y: parseInt(el.getAttribute('data-y')),
+          width: parseInt(el.getAttribute('data-width')),
+          height: parseInt(el.getAttribute('data-height'))
+        };
+
+        if (el.getAttribute('data-color')) element.color = el.getAttribute('data-color');
+        if (el.getAttribute('data-bg-color')) element.bgColor = el.getAttribute('data-bg-color');
+        if (el.getAttribute('data-font')) element.font = el.getAttribute('data-font');
+        if (el.getAttribute('data-opacity')) element.opacity = parseInt(el.getAttribute('data-opacity')) / 100;
+
+        if (el.getAttribute('data-trigger')) {
+          element.trigger = el.getAttribute('data-trigger');
+          if (element.trigger === 'change_scene') element.sceneChange = el.getAttribute('data-scene-change');
+          else if (element.trigger === 'external_app') {
+            element.externalAppPath = el.getAttribute('data-external-app-path');
+            element.externalAppReturn = el.getAttribute('data-external-app-return');
+          } else if (element.trigger === 'set_variable') {
+            element.variableChange = el.getAttribute('data-variable-change');
+            element.variableChangeValue = el.getAttribute('data-variable-change-value');
+          } else if (element.trigger === 'play_video' || element.trigger === 'play_image') {
+            element.mediaVariable = el.getAttribute('data-media-variable') || '';
+          }
+        }
+
+        const type = el.getAttribute('data-type');
+        if (type === 'input') {
+          const input = el.querySelector('.element-input');
+          if (input) element.text = input.value;
+        } else {
+          const textSpan = el.querySelector('.text-content');
+          if (textSpan) element.text = textSpan.textContent;
+        }
+
+        if (type === 'dynamiclist') {
+          element.command = el.getAttribute('data-command') || '';
+          element.variable = el.getAttribute('data-variable') || '';
+        }
+        if (type === 'textbrowser') {
+          element.variable = el.getAttribute('data-variable') || '';
+          element.source = el.getAttribute('data-source') || 'system';
+          element.jsonPath = el.getAttribute('data-json-path') || '';
+          element.autoRefresh = el.getAttribute('data-auto-refresh') === 'true';
+        }
+        if (type === 'image') {
+          const img = el.querySelector('.element-image');
+          if (img && img.src) element.image = img.src;
+        }
+        if (type === 'video') element.videoVariable = el.getAttribute('data-video-variable');
+
+        return element;
+      })
+    }))
+  };
+
+  const xmlStr = configToXml(config);
+  const dataStr = 'data:application/xml;charset=utf-8,' + encodeURIComponent(xmlStr);
+  const downloadAnchorNode = document.createElement('a');
+  downloadAnchorNode.href = dataStr;
+  downloadAnchorNode.download = 'jukaconfig.xml';
+  document.body.appendChild(downloadAnchorNode);
+  downloadAnchorNode.click();
+  downloadAnchorNode.remove();
+  showToast('Exported jukaconfig.xml', 'success');
+}
+
+// ─── XML ↔ JSON helpers ──────────────────────────────────────────────────────
+
+function escapeXml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function xmlEscapeKey(key) {
+  return key.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+function configToXml(config) {
+  let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<jukaconfig>\n';
+
+  // Top-level metadata
+  xml += '  <title>' + escapeXml(config.title) + '</title>\n';
+  xml += '  <author>' + escapeXml(config.author) + '</author>\n';
+  xml += '  <description>' + escapeXml(config.description) + '</description>\n';
+
+  // Variables
+  if (config.variables) {
+    xml += '  <variables>\n';
+    for (const [key, val] of Object.entries(config.variables)) {
+      if (key === 'fontSizes' && typeof val === 'object') {
+        xml += '    <fontSizes>\n';
+        for (const [sz, num] of Object.entries(val)) {
+          xml += '      <' + xmlEscapeKey(sz) + '>' + num + '</' + xmlEscapeKey(sz) + '>\n';
+        }
+        xml += '    </fontSizes>\n';
+      } else if (typeof val === 'object' && val !== null) {
+        // Generic nested object – serialise children
+        xml += '    <' + xmlEscapeKey(key) + '>\n';
+        for (const [k2, v2] of Object.entries(val)) {
+          xml += '      <' + xmlEscapeKey(k2) + '>' + escapeXml(v2) + '</' + xmlEscapeKey(k2) + '>\n';
+        }
+        xml += '    </' + xmlEscapeKey(key) + '>\n';
+      } else {
+        xml += '    <' + xmlEscapeKey(key) + '>' + escapeXml(val) + '</' + xmlEscapeKey(key) + '>\n';
+      }
+    }
+    xml += '  </variables>\n';
+  }
+
+  // Scenes
+  if (config.scenes) {
+    xml += '  <scenes>\n';
+    for (const scene of config.scenes) {
+      xml += '    <scene name="' + escapeXml(scene.name) + '">\n';
+      for (const el of scene.elements) {
+        xml += '      <element type="' + escapeXml(el.type) + '"';
+        xml += ' x="' + el.x + '"';
+        xml += ' y="' + el.y + '"';
+        xml += ' width="' + el.width + '"';
+        xml += ' height="' + el.height + '"';
+        if (el.color) xml += ' color="' + escapeXml(el.color) + '"';
+        if (el.bgColor) xml += ' bgColor="' + escapeXml(el.bgColor) + '"';
+        if (el.font) xml += ' font="' + escapeXml(el.font) + '"';
+        if (el.opacity != null) xml += ' opacity="' + el.opacity + '"';
+        if (el.trigger) xml += ' trigger="' + escapeXml(el.trigger) + '"';
+        if (el.sceneChange) xml += ' sceneChange="' + escapeXml(el.sceneChange) + '"';
+        if (el.externalAppPath) xml += ' externalAppPath="' + escapeXml(el.externalAppPath) + '"';
+        if (el.externalAppReturn) xml += ' externalAppReturn="' + escapeXml(el.externalAppReturn) + '"';
+        if (el.variableChange) xml += ' variableChange="' + escapeXml(el.variableChange) + '"';
+        if (el.variableChangeValue) xml += ' variableChangeValue="' + escapeXml(el.variableChangeValue) + '"';
+        if (el.mediaVariable) xml += ' mediaVariable="' + escapeXml(el.mediaVariable) + '"';
+        if (el.command != null) xml += ' command="' + escapeXml(el.command) + '"';
+        if (el.variable != null) xml += ' variable="' + escapeXml(el.variable) + '"';
+        if (el.source) xml += ' source="' + escapeXml(el.source) + '"';
+        if (el.jsonPath) xml += ' jsonPath="' + escapeXml(el.jsonPath) + '"';
+        if (el.autoRefresh != null) xml += ' autoRefresh="' + el.autoRefresh + '"';
+        if (el.image) xml += ' image="' + escapeXml(el.image) + '"';
+        if (el.videoVariable) xml += ' videoVariable="' + escapeXml(el.videoVariable) + '"';
+        if (el.text != null) {
+          xml += '>' + escapeXml(el.text) + '</element>\n';
+        } else {
+          xml += ' />\n';
+        }
+      }
+      xml += '    </scene>\n';
+    }
+    xml += '  </scenes>\n';
+  }
+
+  xml += '</jukaconfig>';
+  return xml;
+}
+
+// ─── XML → JSON parser ────────────────────────────────────────────────────────
+
+function xmlToJson(xmlStr) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(xmlStr, 'application/xml');
+  const parseError = doc.querySelector('parsererror');
+  if (parseError) {
+    throw new Error('Invalid XML: ' + parseError.textContent.substring(0, 120));
+  }
+
+  const root = doc.querySelector('jukaconfig');
+  if (!root) throw new Error('Root element <jukaconfig> not found');
+
+  function getText(el) { return el ? el.textContent : ''; }
+
+  const config = {
+    title: getText(root.querySelector(':scope > title')),
+    author: getText(root.querySelector(':scope > author')),
+    description: getText(root.querySelector(':scope > description')),
+    variables: {},
+    scenes: []
+  };
+
+  // Parse <variables>
+  const varsEl = root.querySelector(':scope > variables');
+  if (varsEl) {
+    for (const child of varsEl.children) {
+      if (child.tagName === 'fontSizes') {
+        config.variables.fontSizes = {};
+        for (const fs of child.children) {
+          config.variables.fontSizes[fs.tagName] = parseInt(getText(fs), 10) || 0;
+        }
+      } else {
+        // Check if it has children (nested object)
+        if (child.children.length > 0) {
+          const obj = {};
+          for (const nested of child.children) {
+            obj[nested.tagName] = getText(nested);
+          }
+          config.variables[child.tagName] = obj;
+        } else {
+          config.variables[child.tagName] = getText(child);
+        }
+      }
+    }
+  }
+
+  // Parse <scenes>
+  const scenesEl = root.querySelector(':scope > scenes');
+  if (scenesEl) {
+    for (const sceneEl of scenesEl.querySelectorAll(':scope > scene')) {
+      const scene = { name: sceneEl.getAttribute('name') || '', elements: [] };
+      for (const el of sceneEl.querySelectorAll(':scope > element')) {
+        const element = {
+          type: el.getAttribute('type') || '',
+          x: parseInt(el.getAttribute('x')) || 0,
+          y: parseInt(el.getAttribute('y')) || 0,
+          width: parseInt(el.getAttribute('width')) || 100,
+          height: parseInt(el.getAttribute('height')) || 40
+        };
+        if (el.getAttribute('color')) element.color = el.getAttribute('color');
+        if (el.getAttribute('bgColor')) element.bgColor = el.getAttribute('bgColor');
+        if (el.getAttribute('font')) element.font = el.getAttribute('font');
+        if (el.getAttribute('opacity')) element.opacity = parseFloat(el.getAttribute('opacity'));
+        if (el.getAttribute('trigger')) element.trigger = el.getAttribute('trigger');
+        if (el.getAttribute('sceneChange')) element.sceneChange = el.getAttribute('sceneChange');
+        if (el.getAttribute('externalAppPath')) element.externalAppPath = el.getAttribute('externalAppPath');
+        if (el.getAttribute('externalAppReturn')) element.externalAppReturn = el.getAttribute('externalAppReturn');
+        if (el.getAttribute('variableChange')) element.variableChange = el.getAttribute('variableChange');
+        if (el.getAttribute('variableChangeValue')) element.variableChangeValue = el.getAttribute('variableChangeValue');
+        if (el.getAttribute('mediaVariable')) element.mediaVariable = el.getAttribute('mediaVariable');
+        if (el.getAttribute('command') != null) element.command = el.getAttribute('command');
+        if (el.getAttribute('variable') != null) element.variable = el.getAttribute('variable');
+        if (el.getAttribute('source')) element.source = el.getAttribute('source');
+        if (el.getAttribute('jsonPath')) element.jsonPath = el.getAttribute('jsonPath');
+        if (el.getAttribute('autoRefresh')) element.autoRefresh = el.getAttribute('autoRefresh') === 'true';
+        if (el.getAttribute('image')) element.image = el.getAttribute('image');
+        if (el.getAttribute('videoVariable')) element.videoVariable = el.getAttribute('videoVariable');
+        element.text = getText(el);
+        scene.elements.push(element);
+      }
+      config.scenes.push(scene);
+    }
+  }
+
+  return config;
+}
 function clearAll() {
   if (confirm('Are you sure you want to clear everything and start new?')) {
     scenes = { 'Scene 1': [] };
@@ -1674,6 +2398,9 @@ function clearAll() {
 
     updateSceneChangeSelector();
     updateVariableChangeSelector();
+    undoStack.length = 0;
+    redoStack.length = 0;
+    try { localStorage.removeItem('jukahub-autosave'); } catch (e) {}
     showToast('Project cleared', 'success');
   }
 }
@@ -1706,6 +2433,7 @@ function renameScene() {
 
   // Update scene change selector
   updateSceneChangeSelector();
+  scheduleAutoSave();
   showToast(`Scene renamed to "${newName}"`, 'success');
 }
 
@@ -1740,6 +2468,7 @@ function deleteScene() {
 
     // Update scene change selector
     updateSceneChangeSelector();
+    scheduleAutoSave();
     showToast(`Scene "${currentScene}" deleted`, 'success');
   }
 }

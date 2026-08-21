@@ -248,7 +248,7 @@ func (fe *FocusEngine) SetByElementIndex(idx int) bool {
 // isFocusableElement reports whether an element should participate in the focus graph.
 func isFocusableElement(el Element) bool {
 	switch el.Type {
-	case "button", "input", "searchresults", "dynamiclist", "recent", "favorites", "chat", "themegallery", "toggle":
+	case "button", "input", "searchresults", "dynamiclist", "recent", "favorites", "chat", "themegallery", "toggle", "textbrowser", "shortslist", "packagelist":
 		return true
 	}
 	return false
