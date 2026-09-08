@@ -562,7 +562,7 @@ func getElementWidth(elem Element, defaultWidth int32) int32 {
 		return defaultWidth
 	}
 	s := string(elem.Width)
-	if val, err := strconv.Atoi(s); err == nil {
+	if val, err := strconv.ParseInt(s, 10, 32); err == nil {
 		return int32(val)
 	}
 	return defaultWidth
@@ -572,11 +572,29 @@ func getElementHeight(elem Element, defaultHeight int32) int32 {
 	if elem.Height == "" {
 		return defaultHeight
 	}
-	s := string(elem.Height)
-	if val, err := strconv.Atoi(s); err == nil {
-		return int32(val)
+	s := string(elem.Height)		if val, err := strconv.ParseInt(s, 10, 32); err == nil {
+			return int32(val)
+		}
+		return defaultHeight
+}
+
+// parsePosInt safely parses the given text as a non-negative int32, avoiding
+// silent truncation from very large values and non-numeric input.
+func parsePosInt(text string) (int32, bool) {
+	v, err := strconv.ParseInt(text, 10, 32)
+	if err != nil || v < 0 {
+		return 0, false
 	}
-	return defaultHeight
+	return int32(v), true
+}
+
+// parseNonNegFloat safely parses the given text as a non-negative float64.
+func parseNonNegFloat(text string) (float64, bool) {
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil || f < 0 || math.IsNaN(f) || math.IsInf(f, 0) {
+		return 0, false
+	}
+	return f, true
 }
 
 // --- Helper functions ---
@@ -627,13 +645,14 @@ func normalizeCacheKey(raw string) string {
 func resolveColor(config *Config, colorName string, defaultColor sdl.Color) sdl.Color {
 	if strings.HasPrefix(colorName, "$") {
 		colorValue := config.Variables.Get(colorName[1:])
-		parts := strings.Split(colorValue, ",")
-		if len(parts) == 3 {
-			r, _ := strconv.Atoi(parts[0])
-			g, _ := strconv.Atoi(parts[1])
-			b, _ := strconv.Atoi(parts[2])
-			return sdl.Color{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
-		}
+		parts := strings.Split(colorValue, ",")			if len(parts) == 3 {
+				r, errR := strconv.ParseInt(parts[0], 10, 8)
+				g, errG := strconv.ParseInt(parts[1], 10, 8)
+				b, errB := strconv.ParseInt(parts[2], 10, 8)
+				if errR == nil && errG == nil && errB == nil {
+					return sdl.Color{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
+				}
+			}
 		// Custom stores colors as "#rrggbb" strings; parse those too instead
 		// of silently falling back to the default.
 		if c, ok := parseHexColor(colorValue); ok {
@@ -3195,23 +3214,27 @@ func handleKeyboardInput(config *Config) {
 			virtualKeyboardActive = false
 			activeSceneIndex = -1
 			activeElementIndex = -1
-			// If the active scene is a search scene, trigger its search button
-			if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
-				sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+			// If the active scene is a search scene, trigger its search button				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+					sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+					if len(config.Scenes[currentSceneIndex].Elements) == 0 {
+						break
+					}
+				if len(config.Scenes[currentSceneIndex].Elements) == 0 {
+					break
+				}
 				for _, elem := range config.Scenes[currentSceneIndex].Elements {
 					if elem.Type == "button" && elem.Trigger == "yt_search" {
 						go executeYouTubeSearch(config, elem.TriggerTarget, elem.TriggerValue, snapshotVars(config))
 						break
 					}
+				}				}
+				default:
+					inputTextBuffer += key
+				}
+				if key != "ENTER" && key != "⇧" {
+					updateInputVariable(config)
 				}
 			}
-		default:
-			inputTextBuffer += key
-		}
-		if key != "ENTER" && key != "⇧" {
-			updateInputVariable(config)
-		}
-	}
 }
 
 func toggleKeyboardCase() {
@@ -3303,13 +3326,13 @@ func handleSwipe(direction string, config *Config) {
 	}
 	switch direction {
 	case "up":
-		if currentSceneIndex > 0 {
-			changeSceneTo(config, currentSceneIndex-1)
-		}
-	case "down":
-		if currentSceneIndex < len(config.Scenes)-1 {
-			changeSceneTo(config, currentSceneIndex+1)
-		}
+	if currentSceneIndex > 0 {
+		changeSceneTo(config, currentSceneIndex-1)
+	}
+case "down":
+	if currentSceneIndex < len(config.Scenes)-1 {
+		changeSceneTo(config, currentSceneIndex+1)
+	}
 	case "left":
 		handleSwipeLeft(config)
 	case "right":
@@ -6340,12 +6363,15 @@ func moveHomeSelection(config *Config, dx, dy int) {
 				}
 				if isDraggingSeekBar {
 					fraction := float64(mouseX-seekBarDragRect.X) / float64(seekBarDragRect.W)
-					if fraction < 0 {
-						fraction = 0
-					}
-					if fraction > 1 {
-						fraction = 1
-					}
+			if fraction < 0 {
+				fraction = 0
+			}
+			if fraction > 1 {
+				fraction = 1
+			}
+			if math.IsNaN(fraction) || math.IsInf(fraction, 0) {
+				fraction = 0
+			}
 					SeekVideo(fraction)
 				}
 			case *sdl.MouseWheelEvent:

@@ -103,7 +103,7 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 		log.Printf("[VIDEO] ffprobe failed: %v", err)
 		return 1280, 720, 0, 30
 	}
-	s := string(out)
+	s := strings.TrimSpace(string(out))
 	w, h, dur, fps := int32(1280), int32(720), 0.0, 30.0
 	avgFps := 0.0
 	parseRate := func(v string) float64 {
@@ -118,16 +118,23 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 		return 0
 	}
 	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
 		if strings.HasPrefix(line, "width=") {
-			if v, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "width="))); v > 0 {
+			raw := strings.TrimPrefix(line, "width=")
+			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); err == nil && v > 0 {
 				w = int32(v)
 			}
 		} else if strings.HasPrefix(line, "height=") {
-			if v, _ := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(line, "height="))); v > 0 {
+			raw := strings.TrimPrefix(line, "height=")
+			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); err == nil && v > 0 {
 				h = int32(v)
 			}
 		} else if strings.HasPrefix(line, "duration=") {
-			if v, _ := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "duration=")), 64); v > 0 {
+			raw := strings.TrimPrefix(line, "duration=")
+			if v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && v > 0 {
 				dur = v
 			}
 		} else if strings.HasPrefix(line, "r_frame_rate=") {

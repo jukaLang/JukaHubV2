@@ -122,7 +122,10 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	catGap := int32(10)
 
 	for i, cat := range categories {
-		cx := catStartX + int32(i)*(catW+catGap)
+		cx := catStartX + int32(i)*int(uint32(catW+catGap))
+		if cx < catStartX {
+			break
+		}
 		bg := ColorSurfaceRow
 		if cat == unitCategory {
 			bg = WithAlpha(accentColor, 90)
@@ -169,7 +172,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 
 	fromX := element.X + 40
 	toX := fromX + rowW + gap
-	inputX := toX + rowW + gap
+	inputX := toX + int32(int(rowW)+int(gap))
 	inputW := int32(0)
 	if w, err := strconv.Atoi(string(element.Width)); err == nil {
 		inputW = int32(w) - 260

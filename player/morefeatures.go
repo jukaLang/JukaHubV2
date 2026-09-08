@@ -566,13 +566,27 @@ func unzipFile(src string) error {
 		return err
 	}
 	for _, f := range r.File {
-		p := filepath.Join(dest, f.Name)
+		// Mitigate Zip Slip: refuse entries whose cleaned path escapes dest.
+		cleanedP := filepath.Join(dest, filepath.Clean(f.Name))
+		if !strings.HasPrefix(cleanedP, filepath.Clean(dest)+string(os.PathSeparator)) && cleanedP != filepath.Clean(dest) {
+			rc.Close()
+			return fmt.Errorf("refusing to extract zip entry with unsafe path %q", f.Name)
+		}
+
+		p := cleanedP
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(p, 0755)
+			if err := os.MkdirAll(p, 0755); err != nil {
+				rc.Close()
+				return err
+			}
 			continue
 		}
 		rc, err := f.Open()
 		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			rc.Close()
 			return err
 		}
 		out, err := os.Create(p)
@@ -580,7 +594,11 @@ func unzipFile(src string) error {
 			rc.Close()
 			return err
 		}
-		io.Copy(out, rc)
+		if _, err := io.Copy(out, rc); err != nil {
+			rc.Close()
+			out.Close()
+			return err
+		}
 		out.Close()
 		rc.Close()
 	}
