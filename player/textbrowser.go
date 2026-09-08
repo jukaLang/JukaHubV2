@@ -607,12 +607,23 @@ func formatTextRecords(records map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
-// truncate limits a string to maxLen characters.
+// truncate limits a string to maxLen characters (runes), appending "..." if truncated.
+// Unlike ellipsize, this operates on character count rather than rendered width,
+// making it suitable for log messages, labels, and non-rendered text.
+// Handles UTF-8 correctly by counting runes, not bytes.
 func truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	// Count runes to handle UTF-8 properly
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen]) + "..."
 }
 
 // ---------------------------------------------------------------------------

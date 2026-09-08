@@ -739,8 +739,10 @@ func fillQuad(renderer *sdl.Renderer, p1, p2, p3, p4 pt, color sdl.Color) {
 	fillTriangleFilled(renderer, p1, p3, p4, color)
 }
 
-// ellipsize shortens text so it fits within maxW pixels, appending an
-// ellipsis when truncated.
+// ellipsize shortens text to fit within a pixel width, appending an ellipsis.
+// This is used for UI rendering where text must fit in a fixed-width area.
+// Returns the original text if it already fits or if font/maxW is invalid.
+// The ellipsis character (U+2026) is used for a single-character ellipsis.
 func ellipsize(font *ttf.Font, text string, maxW int32) string {
 	if font == nil || maxW <= 0 {
 		return text

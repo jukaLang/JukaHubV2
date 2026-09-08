@@ -42,6 +42,13 @@ var (
 	SpaceXL  = int32(24)
 	Space2XL = int32(32)
 
+	// Enhanced spacing for airy, premium feel (used on larger screens)
+	SpaceAiryXS = int32(6)
+	SpaceAirySM = int32(10)
+	SpaceAiryMD = int32(14)
+	SpaceAiryLG = int32(20)
+	SpaceAiryXL = int32(28)
+
 	// Layout tokens (safe margins, offsets, and component sizing)
 	StatusBarMargin   = int32(32) // matches the home header's 32px side margins
 	TitleCenterOffset = int32(10)
@@ -83,11 +90,13 @@ var (
 	FontSizeXL  = int32(24)
 	FontSize2XL = int32(32)
 
-	// Border radius
-	RadiusSM = int32(6)
-	RadiusMD = int32(10)
-	RadiusLG = int32(14)
-	RadiusXL = int32(20)
+	// Border radius - refined, slightly softer for modern feel
+	RadiusSM = int32(8)
+	RadiusMD = int32(12)
+	RadiusLG = int32(16)
+	RadiusXL = int32(24)
+	RadiusXXL = int32(32)
+	RadiusRound = int32(9999) // fully round
 
 	// Surfaces - refined dark "Midnight" theme
 	// Background is nearly solid #090E19; ambient glow shapes are layered at
@@ -98,15 +107,17 @@ var (
 	ColorTopBar           = sdl.Color{R: 17, G: 23, B: 37, A: 255}
 	ColorPanel            = sdl.Color{R: 18, G: 26, B: 42, A: 255} // #121A2A surface
 	ColorPanelRaised      = sdl.Color{R: 27, G: 37, B: 54, A: 255}
-	ColorCard             = sdl.Color{R: 23, G: 32, B: 51, A: 255} // #172033 resting card
-	ColorCardFocus        = sdl.Color{R: 34, G: 49, B: 75, A: 255} // #22314B focused card
+	ColorCard             = sdl.Color{R: 24, G: 34, B: 54, A: 255} // #182236 resting card (slightly lighter)
+	ColorCardFocus        = sdl.Color{R: 36, G: 52, B: 78, A: 255} // #24344E focused card (more contrast)
+	ColorCardHover        = sdl.Color{R: 28, G: 39, B: 60, A: 255} // #1C273C hover state
 	ColorBorder           = sdl.Color{R: 42, G: 57, B: 83, A: 255} // #2A3953 resting border
 	ColorFooter           = sdl.Color{R: 18, G: 26, B: 42, A: 255}
 
 	// Borders - subtle and refined
-	ColorBorderSubtle  = sdl.Color{R: 255, G: 255, B: 255, A: 8}
-	ColorBorderDefault = sdl.Color{R: 255, G: 255, B: 255, A: 16}
-	ColorBorderFocus   = sdl.Color{R: 110, G: 231, B: 255, A: 60}
+	ColorBorderSubtle  = sdl.Color{R: 255, G: 255, B: 255, A: 10}
+	ColorBorderDefault = sdl.Color{R: 255, G: 255, B: 255, A: 18}
+	ColorBorderFocus   = sdl.Color{R: 110, G: 231, B: 255, A: 80}
+	ColorBorderHover   = sdl.Color{R: 255, G: 255, B: 255, A: 28}
 
 	// Semantic
 	ColorSuccess         = sdl.Color{R: 72, G: 213, B: 151, A: 255}
@@ -347,6 +358,50 @@ func Danger() sdl.Color { return ColorDanger }
 // used for subtle top-edge sheen on cards and panels.
 func GlossFill(alpha uint8) sdl.Color {
 	return sdl.Color{R: 255, G: 255, B: 255, A: alpha}
+}
+
+// CardHoverColor returns the hover state card color.
+func CardHoverColor() sdl.Color {
+	return ColorCardHover
+}
+
+// BorderHoverColor returns the hover state border color.
+func BorderHoverColor() sdl.Color {
+	return ColorBorderHover
+}
+
+// Spacing returns the appropriate spacing based on the density preference.
+// When airy is true, returns more generous spacing for a premium feel.
+func Spacing(airy bool, size string) int32 {
+	if airy {
+		switch size {
+		case "xs":
+			return SpaceAiryXS
+		case "sm":
+			return SpaceAirySM
+		case "md":
+			return SpaceAiryMD
+		case "lg":
+			return SpaceAiryLG
+		case "xl":
+			return SpaceAiryXL
+		}
+	}
+	switch size {
+	case "xs":
+		return SpaceXS
+	case "sm":
+		return SpaceSM
+	case "md":
+		return SpaceMD
+	case "lg":
+		return SpaceLG
+	case "xl":
+		return SpaceXL
+	case "2xl":
+		return Space2XL
+	}
+	return SpaceMD
 }
 
 // focusColorForAccent returns a focus ring color from the accent hue.

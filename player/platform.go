@@ -259,7 +259,20 @@ func IsTSP() bool { return P().Name() == "tsp" }
 // IsWindows returns true when running on Windows.
 func IsWindows() bool { return P().Name() == "windows" }
 
+// TryExecutableDir returns the executable directory, or an error if it can't be determined.
+// Use this instead of MustExecutableDir when you want to handle errors gracefully.
+func TryExecutableDir() (string, error) {
+	return P().ExecutableDir()
+}
+
+// TryDataDir returns the data directory, or an error if it can't be created.
+// Use this instead of MustDataDir when you want to handle errors gracefully.
+func TryDataDir() (string, error) {
+	return P().DataDir()
+}
+
 // MustExecutableDir returns the executable directory or panics.
+// Only use this during initialization when the error is unrecoverable.
 func MustExecutableDir() string {
 	dir, err := P().ExecutableDir()
 	if err != nil {
@@ -269,12 +282,24 @@ func MustExecutableDir() string {
 }
 
 // MustDataDir returns the data directory or panics.
+// Only use this during initialization when the error is unrecoverable.
 func MustDataDir() string {
 	dir, err := P().DataDir()
 	if err != nil {
 		panic(fmt.Sprintf("platform: cannot determine data dir: %v", err))
 	}
 	return dir
+}
+
+// SafeDir returns a directory path, creating it if necessary.
+// Returns an error if the directory can't be created.
+// Unlike MustDataDir, this returns errors instead of panicking.
+func SafeDir(create func() (string, error)) (string, error) {
+	dir, err := create()
+	if err != nil {
+		return "", fmt.Errorf("failed to get directory: %w", err)
+	}
+	return dir, nil
 }
 
 // ReplaceRuntimeGOOSCalls is a no-op migration helper. New code should call

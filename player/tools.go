@@ -287,13 +287,33 @@ func downloadStaticFFmpeg(requiredDir string) error {
 
 // latestGitHubReleaseAsset resolves the download URL for the first asset of the
 // given repo's latest GitHub release for which match(name) returns true.
+// Rate limit: GitHub allows 60 requests/hour unauthenticated, 5000/hour with token.
 func latestGitHubReleaseAsset(repo string, match func(string) bool) (string, error) {
 	apiURL := "https://api.github.com/repos/" + repo + "/releases/latest"
-	resp, err := http.Get(apiURL)
+	
+	// Use a client with timeout and proper headers
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	// Identify the client (GitHub encourages this)
+	req.Header.Set("User-Agent", "JukaHub-Patch-Tool/1.0")
+	// Accept JSON
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
+	
+	// Check for rate limiting
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("github api rate limit exceeded (retry after %s)", resp.Header.Get("Retry-After"))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("github api %s: unexpected status %d", apiURL, resp.StatusCode)
 	}

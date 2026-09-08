@@ -87,6 +87,135 @@ func (cv *ConfigValidator) Validate(config *Config) error {
 	return nil
 }
 
+// SecurityCheck scans the config for potential security issues like plaintext
+// secrets. It returns a list of warnings (not errors - the config will still
+// work, but users should be informed about security best practices).
+func (cv *ConfigValidator) SecurityCheck(config *Config) []string {
+	var warnings []string
+
+	if config == nil || config.Variables.Custom == nil {
+		return warnings
+	}
+
+	// List of sensitive config keys that should be encrypted
+	sensitiveKeys := []string{
+		"discord_token",
+		"groq_api_key",
+		"google_api_key",
+		"openai_api_key",
+		"anthropic_api_key",
+		"aws_access_key",
+		"aws_secret_key",
+	}
+
+	for _, key := range sensitiveKeys {
+		if val, ok := config.Variables.Custom[key]; ok {
+			if str, isStr := val.(string); isStr && str != "" {
+				// Check if it's encrypted (starts with ENC:)
+				if !strings.HasPrefix(str, "ENC:") {
+					// Check if it looks like a real secret (not empty, not a placeholder)
+					if !isPlaceholderSecret(str) {
+						warnings = append(warnings, fmt.Sprintf(
+							"Security: '%s' is stored in plaintext. Use encryption for better security.",
+							key,
+						))
+					}
+				}
+			}
+		}
+	}
+
+	// Check for discord_token_type that might expose user tokens
+	if tokenType, ok := config.Variables.Custom["discord_token_type"]; ok {
+		if str, isStr := tokenType.(string); isStr && strings.EqualFold(str, "user") {
+			warnings = append(warnings, "Security: Using user token type may expose personal Discord account. Consider using bot tokens instead.")
+		}
+	}
+
+	// Check for weak/default encryption key usage
+	if currentKeyInfo.IsDefault {
+		warnings = append(warnings, "Security: Using default encryption key. Set JUKAHUB_CRYPTO_KEY environment variable for production use.")
+	}
+
+	return warnings
+}
+
+// isPlaceholderSecret checks if a string looks like a placeholder or example
+// rather than a real secret.
+func isPlaceholderSecret(s string) bool {
+	lower := strings.ToLower(s)
+	placeholders := []string{
+		"",
+		"your-api-key",
+		"your_api_key",
+		"api-key-here",
+		"api_key_here",
+		"put-your-key-here",
+		"replace-with-your-key",
+		"sk-placeholder",
+		"demo",
+		"example",
+		"test",
+		"placeholder",
+		"changeme",
+		"changme",
+	}
+	for _, p := range placeholders {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	// Check for patterns like "xxx" or "***" that indicate redacted values
+	if strings.Contains(s, "xxx") || strings.Contains(s, "***") || strings.Contains(s, "---") {
+		return true
+	}
+	return false
+}
+
+// ValidateCustomString validates a custom config string value for safety.
+// It checks for common injection patterns and returns an error if the value
+// appears malicious.
+func ValidateCustomString(key, value string) error {
+	if value == "" {
+		return nil
+	}
+	
+	// Check for command injection patterns
+	dangerousPatterns := []struct {
+		pattern string
+		desc    string
+	}{
+		{"&&", "command chaining"},
+		{"||", "command alternation"},
+		{";", "command separator"},
+		{"|", "pipe to another command"},
+		{"$", "variable expansion"},
+		{"`", "command substitution"},
+		{">", "output redirection"},
+		{"<", "input redirection"},
+		{"\n", "newline injection"},
+		{"\r", "carriage return injection"},
+	}
+	
+	for _, dp := range dangerousPatterns {
+		if strings.Contains(value, dp.pattern) {
+			return fmt.Errorf("config value for %q contains potentially dangerous pattern: %s", key, dp.desc)
+		}
+	}
+	
+	return nil
+}
+
+// SanitizeCustomString removes potentially dangerous characters from a config value.
+// This is a best-effort sanitization - validation should be preferred.
+func SanitizeCustomString(value string) string {
+	// Remove null bytes
+	value = strings.ReplaceAll(value, "\x00", "")
+	// Trim whitespace
+	value = strings.TrimSpace(value)
+	return value
+}
+
 // --- Atomic config persistence ---
 
 // AtomicWrite writes data to filename atomically using a temp file + rename.

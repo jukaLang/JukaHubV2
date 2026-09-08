@@ -5,25 +5,69 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"strings"
 )
 
 var logger *slog.Logger
 
+// logLevelFromEnv reads the JUKAHUB_LOG_LEVEL env var (case-insensitive).
+// Valid values: debug, info, warn, error. Defaults to "info" on TSP, "debug" elsewhere.
+func logLevelFromEnv() slog.Level {
+	if env := os.Getenv("JUKAHUB_LOG_LEVEL"); env != "" {
+		switch strings.ToLower(env) {
+		case "debug":
+			return slog.LevelDebug
+		case "info":
+			return slog.LevelInfo
+		case "warn":
+			return slog.LevelWarn
+		case "error":
+			return slog.LevelError
+		case "none", "off":
+			return slog.LevelCrit
+		}
+	}
+	// Default: debug on desktop, info on TSP
+	if IsTSP() {
+		return slog.LevelInfo
+	}
+	return slog.LevelDebug
+}
+
 // InitLogging configures the structured logger.
 // On TSP it writes compact text; on Windows it writes JSON for tooling.
+// Log level can be controlled via JUKAHUB_LOG_LEVEL env var.
 func InitLogging() {
 	var handler slog.Handler
+	
+	// Choose format based on platform
 	if IsTSP() {
 		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+			Level: logLevelFromEnv(),
 		})
 	} else {
 		handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
+			Level: logLevelFromEnv(),
 		})
 	}
 	logger = slog.New(handler)
 	slog.SetDefault(logger)
+	
+	// Log the configured level
+	var levelName string
+	switch logLevelFromEnv() {
+	case slog.LevelDebug:
+		levelName = "debug"
+	case slog.LevelInfo:
+		levelName = "info"
+	case slog.LevelWarn:
+		levelName = "warn"
+	case slog.LevelError:
+		levelName = "error"
+	default:
+		levelName = "crit"
+	}
+	log.Printf("[LOG] Initializing logger: level=%s format=%s", levelName, map[bool]string{true: "JSON", false: "text"}[!IsTSP()])
 }
 
 // Log returns the structured logger.

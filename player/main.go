@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,9 +27,14 @@ import (
 	"github.com/veandco/go-sdl2/ttf"
 )
 
+// Cleanup is a list of functions to run on program exit for resource cleanup.
+// This includes security-sensitive cleanup like key zeroization.
+var Cleanup []func()
+
 // --- Global state for input and navigation ---
 var (
 	appConfig                  *Config
+	_                          = Cleanup // ensure Cleanup is used
 	currentSceneIndex          int = -1
 	selectedButtonIndex        int = -1
 	activeSceneIndex           int = -1
@@ -1357,24 +1363,35 @@ func drawRectOutline(renderer *sdl.Renderer, x, y, w, h int32, c sdl.Color) {
 	renderer.DrawRect(&sdl.Rect{X: x + w - 1, Y: y, W: 1, H: h})
 }
 
-// drawPanel renders a translucent panel with an accent border and soft shadow.
+// drawPanel renders a translucent panel with an accent border and premium shadow.
 func drawPanel(renderer *sdl.Renderer, x, y, w, h int32, fill, border sdl.Color) {
-	// layered soft shadow (growing offset, fading alpha)
-	fillRoundedRect(renderer, x+1, y+2, w, h, 10, ShadowFill(18))
-	fillRoundedRect(renderer, x+3, y+4, w, h, 10, ShadowFill(26))
-	fillRoundedRect(renderer, x+5, y+6, w, h, 10, ShadowFill(38))
+	radius := RadiusMD
+	// layered premium shadow (wider spread, softer falloff)
+	fillRoundedRect(renderer, x+2, y+4, w, h, radius, ShadowFill(12))
+	fillRoundedRect(renderer, x+4, y+8, w, h, radius, ShadowFill(20))
+	fillRoundedRect(renderer, x+6, y+12, w, h, radius, ShadowFill(28))
 	// fill
-	fillRoundedRect(renderer, x, y, w, h, 10, fill)
-	// subtle 1px top highlight line
-	renderer.SetDrawColor(255, 255, 255, 12)
+	fillRoundedRect(renderer, x, y, w, h, radius, fill)
+	// subtle gradient-like top sheen (two-tone highlight)
+	renderer.SetDrawColor(255, 255, 255, 16)
 	renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
-	// border
+	renderer.SetDrawColor(255, 255, 255, 6)
+	renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 2, W: w - 4, H: 1})
+	// border with subtle glow
 	renderer.SetDrawColor(border.R, border.G, border.B, border.A)
 	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: w - 2, H: 1})
 	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: 1, H: h - 2})
-	renderer.SetDrawColor(border.R, border.G, border.B, border.A/2)
+	renderer.SetDrawColor(border.R, border.G, border.B, border.A/3)
 	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + h - 2, W: w - 2, H: 1})
 	renderer.DrawRect(&sdl.Rect{X: x + w - 2, Y: y + 1, W: 1, H: h - 2})
+	// corner accent dots (subtle polish)
+	dotColor := sdl.Color{R: border.R, G: border.G, B: border.B, A: uint8(border.A / 2)}
+	cSize := int32(2)
+	renderer.SetDrawColor(dotColor.R, dotColor.G, dotColor.B, dotColor.A)
+	renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + 1, W: cSize, H: cSize})
+	renderer.FillRect(&sdl.Rect{X: x + w - 1 - cSize, Y: y + 1, W: cSize, H: cSize})
+	renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + h - 1 - cSize, W: cSize, H: cSize})
+	renderer.FillRect(&sdl.Rect{X: x + w - 1 - cSize, Y: y + h - 1 - cSize, W: cSize, H: cSize})
 }
 
 // drawCard renders a raised surface card: shadow, surface fill, subtle top
@@ -1397,18 +1414,29 @@ func drawCard(renderer *sdl.Renderer, x, y, w, h, r int32) {
 	renderer.DrawRect(&sdl.Rect{X: x + w - 2, Y: y + 1, W: 1, H: h - 2})
 }
 
-// drawRow renders a single list row with a consistent surface and optional
-// selection (accent tint + left accent bar + inner highlight) or hover state.
+// drawRow renders a single list row with premium polish.
 func drawRow(renderer *sdl.Renderer, x, y, w, h, r int32, selected, hovered bool) {
-	fillRoundedRect(renderer, x+1, y+1, w, h, r, ShadowFill(40))
+	// shadow layer
+	fillRoundedRect(renderer, x+1, y+2, w, h, r, ShadowFill(24))
+	// base surface
 	fillRoundedRect(renderer, x, y, w, h, r, ColorSurfaceRow)
 	if selected {
-		fillRoundedRect(renderer, x, y, w, h, r, WithAlpha(accentColor, 60))
+		// selected: accent tint + left accent bar + bottom sheen
+		fillRoundedRect(renderer, x, y, w, h, r, WithAlpha(accentColor, 50))
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-		renderer.FillRect(&sdl.Rect{X: x, Y: y, W: 4, H: h})
-		fillRoundedRect(renderer, x+1, y+1, w-2, h/2, r-1, GlossFill(10))
+		renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + 2, W: 3, H: h - 4})
+		// subtle top highlight
+		renderer.SetDrawColor(255, 255, 255, 20)
+		renderer.FillRect(&sdl.Rect{X: x + 4, Y: y + 1, W: w - 8, H: 1})
+		// bottom gradient fade
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 15)
+		renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + h - 2, W: w - 2, H: 1})
 	} else if hovered {
-		fillRoundedRect(renderer, x, y, w, h, r, GlossFill(6))
+		// hovered: subtle lift with sheen
+		fillRoundedRect(renderer, x, y, w, h, r, WithAlpha(ColorCardHover, 120))
+		// top sheen
+		renderer.SetDrawColor(255, 255, 255, 12)
+		renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
 	}
 }
 
@@ -1441,6 +1469,13 @@ func drawScrollbar(renderer *sdl.Renderer, x, y, w, h int32, thumbFrac, scrollFr
 
 // renderButtonElement draws a sleek glass-like button with soft shadows,
 // smooth hover/active transitions, and clear focus indication.
+//
+// Premium button features:
+//   - Layered shadows with soft falloff
+//   - Glass-like top sheen
+//   - Smooth hover glow (expanding ring)
+//   - Press feedback (subtle scale + darkening)
+//   - Clear 3px focus ring on selection
 func buttonHitSize(elem Element, font *ttf.Font) (int32, int32) {
 	textWidth, textHeight := int32(0), int32(0)
 	if font != nil {
@@ -1473,40 +1508,50 @@ func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, e
 	renderDarkButtonElement(renderer, config, elem, selected, hovered, pressed)
 }
 
-// renderDarkButtonElement renders a flat, compact dark button (used by the
-// Tube toolbar): no gradient, gloss, or drop shadow — just a dark neutral
-// surface, a thin border, and a strong cyan focus ring so it matches the home
-// design language instead of reading as a bright desktop widget.
+// renderDarkButtonElement renders a refined dark button with premium polish.
 func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Element, selected, hovered, pressed bool) {
 	font, _ := getCachedFont(config, elem.Font)
 	width, height := buttonHitSize(elem, font)
 	x, y := elem.X, elem.Y
-	r := int32(10)
+	r := RadiusMD
 
 	pressOffset := int32(0)
 	if pressed {
-		pressOffset = 2
+		pressOffset = PressOffset
 	}
 	ox := x + pressOffset
 	oy := y + pressOffset
 
 	fill := resolveColor(config, elem.BgColor, ColorCard)
-	border := ColorBorder
-	if selected || hovered {
+	border := ColorBorderDefault
+	if selected {
 		fill = ColorCardFocus
 		border = ColorAccent
+	} else if hovered {
+		fill = ColorCardHover
+		border = ColorBorderHover
 	}
 	if pressed {
 		fill = darken(fill, 18)
 	}
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	// shadow
+	fillRoundedRect(renderer, ox+1, oy+2, width, height, r, ShadowFill(16))
+	// surface
 	fillRoundedRect(renderer, ox, oy, width, height, r, fill)
-	thickness := int32(1)
+	// top sheen
+	renderer.SetDrawColor(255, 255, 255, 14)
+	renderer.FillRect(&sdl.Rect{X: ox + 2, Y: oy + 1, W: width - 4, H: 1})
+	// border
+	strokeRoundedRect(renderer, ox, oy, width, height, r, 1, border)
+	// focus ring
 	if selected {
-		thickness = 3
+		strokeColor := ColorAccent
+		strokeRoundedRect(renderer, ox-1, oy-1, width+2, height+2, r+1, 3, strokeColor)
+		// inner glow
+		fillRoundedRect(renderer, ox+1, oy+1, width-2, height/2, r-1, GlossFill(8))
 	}
-	strokeRoundedRect(renderer, ox, oy, width, height, r, thickness, border)
 
 	if font != nil {
 		txt := ColorTextPrimary()
@@ -1701,6 +1746,81 @@ func quotePath(path string) string {
 	return path
 }
 
+// decryptCustomString attempts to decrypt a custom config value if it's encrypted.
+// Returns the decrypted value, or the original if not encrypted or on error.
+func decryptCustomString(config *Config, key string) string {
+	if config == nil {
+		return ""
+	}
+	v, ok := config.Variables.Custom[key].(string)
+	if !ok || v == "" {
+		return ""
+	}
+	if !strings.HasPrefix(v, "ENC:") {
+		return v
+	}
+	decrypted, err := DecryptAPIToken(v, key)
+	if err != nil {
+		log.Printf("[SECURITY] Failed to decrypt %s: %v", key, err)
+		return ""
+	}
+	return decrypted
+}
+
+// sanitizeURL removes sensitive query parameters from URLs for safe logging.
+// This prevents API keys, tokens, and other secrets from appearing in logs.
+func sanitizeURL(url string) string {
+	if url == "" {
+		return ""
+	}
+	// Only process http/https URLs
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return url
+	}
+	
+	// Parse the URL and remove sensitive query params
+	if u, err := url.Parse(url); err == nil {
+		// Query parameters that might contain sensitive data
+		sensitiveParams := map[string]bool{
+			"key": true, "api_key": true, "apikey": true, "token": true,
+			"access_token": true, "auth": true, "password": true, "pass": true,
+			"secret": true, "signature": true, "sig": true,
+		}
+		
+		q := u.Query()
+		foundSensitive := false
+		for param := range q {
+			if sensitiveParams[strings.ToLower(param)] {
+				q.Del(param)
+				foundSensitive := true
+			}
+		}
+		
+		if foundSensitive {
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+	}
+	
+	return url
+}
+
+// sanitizeLogURL is a wrapper that logs a sanitized URL or "<hidden>" if sanitization removed params.
+func sanitizeLogURL(url string) string {
+	if url == "" {
+		return ""
+	}
+	sanitized := sanitizeURL(url)
+	// If the URL changed, indicate parameters were removed
+	if sanitized != url {
+		// Return just the base URL without query params for safety
+		if u, err := url.Parse(url); err == nil {
+			return u.Scheme + "://" + u.Host + u.Path
+		}
+	}
+	return sanitized
+}
+
 // ytDlpExtraArgs returns extra yt-dlp arguments based on config, such as
 // --cookies and --extractor-args for the YouTube extractor.
 func ytDlpExtraArgs(config *Config) string {
@@ -1708,9 +1828,12 @@ func ytDlpExtraArgs(config *Config) string {
 	if config == nil {
 		return ""
 	}
-	if v, ok := config.Variables.Custom["google_api_key"].(string); ok && v != "" {
-		parts = append(parts, "--extractor-args", "youtube:api_key="+v)
+	// Decrypt API key if encrypted
+	apiKey := decryptCustomString(config, "google_api_key")
+	if apiKey != "" {
+		parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
 	}
+	// Cookies file path - not encrypted (it's a file path, not a secret)
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
 		if _, err := os.Stat(v); err == nil {
 			parts = append(parts, "--cookies", v)
@@ -1726,9 +1849,12 @@ func ytDlpExtraArgsSlice(config *Config) []string {
 	if config == nil {
 		return nil
 	}
-	if v, ok := config.Variables.Custom["google_api_key"].(string); ok && v != "" {
-		parts = append(parts, "--extractor-args", "youtube:api_key="+v)
+	// Decrypt API key if encrypted
+	apiKey := decryptCustomString(config, "google_api_key")
+	if apiKey != "" {
+		parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
 	}
+	// Cookies file path - not encrypted (it's a file path, not a secret)
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
 		if _, err := os.Stat(v); err == nil {
 			parts = append(parts, "--cookies", v)
@@ -1740,6 +1866,85 @@ func ytDlpExtraArgsSlice(config *Config) []string {
 // --- Thumbnail loading with cache ---
 var httpClient = &http.Client{
 	Timeout: 8 * time.Second,
+}
+
+// requestDeduper prevents concurrent duplicate HTTP requests for the same URL.
+// When multiple goroutines request the same URL simultaneously, only one request
+// is made and all goroutines receive the same result.
+var requestDeduper = struct {
+	mu       sync.Mutex
+	requests map[string]chan struct {
+		body []byte
+		err  error
+	}
+}{
+	requests: make(map[string]chan struct {
+		body []byte
+		err  error
+	}),
+}
+
+// DedupFetch performs an HTTP GET, deduplicating concurrent requests for the same URL.
+// If another goroutine is already fetching the same URL, waits for and returns that result.
+func DedupFetch(url string, timeout time.Duration) ([]byte, error) {
+	requestDeduper.mu.Lock()
+	if ch, exists := requestDeduper.requests[url]; exists {
+		requestDeduper.mu.Unlock()
+		// Wait for existing request
+		result := <-ch
+		return result.body, result.err
+	}
+	
+	// Create channel for this request
+	ch := make(chan struct {
+		body []byte
+		err  error
+	}, 1)
+	requestDeduper.requests[url] = ch
+	requestDeduper.mu.Unlock()
+	
+	// Perform the request (non-blocking for other waiters)
+	client := &http.Client{Timeout: timeout}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		ch <- struct {
+			body []byte
+			err  error
+		}{nil, err}
+		return nil, err
+	}
+	req.Header.Set("User-Agent", "JukaHub/1.0")
+	resp, err := client.Do(req)
+	if err != nil {
+		ch <- struct {
+			body []byte
+			err  error
+		}{nil, err}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		ch <- struct {
+			body []byte
+			err  error
+		}{nil, err}
+		return nil, err
+	}
+	
+	ch <- struct {
+		body []byte
+		err  error
+	}{data, nil}
+	return data, nil
+}
+
+// RemoveRequest removes a URL from the deduplication map after its result is consumed.
+// Call this when you're done with a deduplicated request to prevent memory leaks.
+func RemoveRequest(url string) {
+	requestDeduper.mu.Lock()
+	delete(requestDeduper.requests, url)
+	requestDeduper.mu.Unlock()
 }
 
 func loadThumbnail(renderer *sdl.Renderer, url string) *sdl.Texture {
@@ -2445,7 +2650,7 @@ func playVideoInfo(config *Config, v VideoInfo) {
 			return
 		}
 
-		log.Printf("[DEBUG] playVideoURL: url=%q ffplay=%q yt-dlp=%q", url, ffplayPath, ytDlpPath)
+		log.Printf("[DEBUG] playVideoURL: url=%q ffplay=%q yt-dlp=%q", sanitizeLogURL(url), ffplayPath, ytDlpPath)
 
 		// On Windows, skip pipe mode entirely — it deadlocks due to SDL/pipe
 		// buffering. Use temp-file mode with ffplay (works on Trimui Smart Pro).
@@ -3786,6 +3991,7 @@ func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element
 	}
 }
 
+// abs returns the absolute value of x.
 func abs(x int) int {
 	if x < 0 {
 		return -x
@@ -3793,17 +3999,22 @@ func abs(x int) int {
 	return x
 }
 
-// easeOutCubic applies a smooth cubic easing to t (0..1).
+// easeOutCubic applies cubic easing-out to t (0..1).
+// Returns 0 when t=0, 1 when t=1, with ease-out curve in between.
+// Useful for smooth animations that decelerate toward the end.
 func easeOutCubic(t float64) float64 {
 	return 1 - math.Pow(1-t, 3)
 }
 
-// lerp linearly interpolates between a and b by t (0..1).
+// lerp linearly interpolates from a to b by factor t (typically 0..1).
+// When t=0 returns a, when t=1 returns b, linearly in between.
+// t may be outside [0,1] for extrapolation.
 func lerp(a, b, t float64) float64 {
 	return a + (b-a)*t
 }
 
-// lerpInt32 returns an int32 lerp.
+// lerpInt32 linearly interpolates between two int32 values.
+// The result is rounded toward zero.
 func lerpInt32(a, b int32, t float64) int32 {
 	return int32(lerp(float64(a), float64(b), t))
 }
@@ -5507,14 +5718,20 @@ func moveHomeSelection(config *Config, dx, dy int) {
 	}
 }
 
-// --- Main ---
-func main() {
+// --- Main ---func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("Panic: %v\n%s", r, debug.Stack())
 		}
 	}()
-
+	
+	// Register cleanup functions to run on exit
+	defer func() {
+		for _, fn := range Cleanup {
+			fn()
+		}
+	}()
+	
 	initLogging()
 
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
@@ -5693,12 +5910,29 @@ func main() {
 		placeholderSurface.Free()
 	}
 
+	// Add Xbox 360 controller mapping for Trimui Smart Pro / Linux
 	sdl.GameControllerAddMapping("030000005e0400008e02000014010000,X360 Controller,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,")
 
+	// Initialize gamepad support
 	if sdl.NumJoysticks() > 0 {
+		log.Printf("[GAMEPAD] Found %d joystick(s)", sdl.NumJoysticks())
+		for i := 0; i < sdl.NumJoysticks(); i++ {
+			if sdl.GameControllerFromIndex(i) != nil {
+				gc := sdl.GameControllerFromIndex(i)
+				log.Printf("[GAMEPAD] Controller %d: %s (GUID: %s)", i, sdl.GameControllerName(gc), sdl.GameControllerGetGUID(gc))
+				if i == 0 {
+					defer gc.Close()
+				}
+			} else {
+				log.Printf("[GAMEPAD] Joystick %d: %s (not a game controller)", i, sdl.JoystickNameForIndex(i))
+			}
+		}
 		if c := sdl.GameControllerOpen(0); c != nil {
 			defer c.Close()
+			log.Printf("[GAMEPAD] Opened controller 0: %s", sdl.GameControllerName(c))
 		}
+	} else {
+		log.Printf("[GAMEPAD] No joysticks/gamepads detected")
 	}
 
 	initKeyboard()

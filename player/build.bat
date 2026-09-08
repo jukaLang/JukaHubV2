@@ -1,93 +1,148 @@
 @echo off
-REM ============================================================================
-REM  JukaHub - Windows build and launch script
-REM
-REM  Usage:
-REM    build.bat           Build and launch JukaHub
-REM    build.bat nobuild   Launch only (skip the build step)
-REM
-REM  What this does:
-REM    1. Downloads the SDL2 development libraries (MinGW-w64) if missing, so the
-REM       "SDL2/SDL.h: No such file or directory" CGO errors go away.
-REM    2. Builds JukaHub.exe with CGO enabled.
-REM    3. Copies the SDL2 runtime DLLs next to the executable.
-REM    4. Launches JukaHub.
-REM
-REM  REQUIREMENTS:
-REM    - Go (https://go.dev/dl) on PATH.
-REM    - A MinGW-w64 C compiler on PATH (gcc.exe required by CGO). e.g. from
-REM      https://www.mingw-w64.org or MSYS2. If you already have an SDL2 dev
-REM      install, set SDL2_DIR to its folder and the download is skipped.
-REM ============================================================================
-
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-if exist "jukauser.json" del /f /q "jukauser.json"
-if exist "jukauser.json.bak" del /f /q "jukauser.json.bak"
+goto :main
 
-set OUT=JukaHub.exe
-set ARCH=x86_64-w64-mingw32
+REM ----------------------------------------------------------------------------
+REM  fail(message)
+REM ----------------------------------------------------------------------------
+:fail
+echo.
+echo ERROR: %~1
+echo.
+pause
+exit /b 1
 
-REM --- SDL2 include/lib discovery ---
-REM If the user set SDL2_DIR, use that directly.
-if defined SDL2_DIR (
-    set "CGO_CFLAGS=-I%SDL2_DIR%\include"
-    set "CGO_LDFLAGS=-L%SDL2_DIR%\lib"
-    goto :build
+REM ----------------------------------------------------------------------------
+REM  MAIN
+REM ----------------------------------------------------------------------------
+:main
+
+set "OUT=JukaHub.exe"
+set "ARCH=x86_64-w64-mingw32"
+set "SDLDIR=%cd%\.sdl2"
+set "PS=powershell -NoProfile -ExecutionPolicy Bypass -Command"
+
+echo Checking for GCC...
+where gcc.exe >nul 2>&1
+if errorlevel 1 goto install_gcc
+
+echo GCC found.
+goto sdl_check
+
+
+REM ============================================================================
+REM  AUTOMATIC GCC INSTALLER (MSYS2 UCRT64)
+REM ============================================================================
+:install_gcc
+echo.
+echo ============================================================
+echo  GCC NOT FOUND - Installing MSYS2 + UCRT64 GCC automatically
+echo ============================================================
+echo.
+
+set "MSYS_URL=https://github.com/msys2/msys2-installer/releases/latest/download/msys2-x86_64-latest.exe"
+
+set "MSYS_EXE=%TEMP%\msys2-installer.exe"
+
+echo Downloading MSYS2 installer...
+%PS% "Invoke-WebRequest -Uri '%MSYS_URL%' -OutFile '%MSYS_EXE%' -UseBasicParsing" || (
+    call :fail "Failed to download MSYS2 installer"
 )
 
-set SDLDIR=%cd%\.sdl2
-set HEADER=%SDLDIR%\%ARCH%\include\SDL2\SDL.h
-if exist "%HEADER%" goto :build
+echo Running MSYS2 installer silently...
+"%MSYS_EXE%" install --confirm-command --root C:\msys64 --default-answer=yes || (
+    call :fail "MSYS2 installation failed"
+)
 
-REM --- Download SDL2 dev packages (only if not already present) ---
+echo Updating MSYS2 packages...
+C:\msys64\usr\bin\bash -lc "pacman -Sy --noconfirm" || (
+    call :fail "MSYS2 update failed"
+)
+
+echo Installing UCRT64 GCC toolchain...
+C:\msys64\usr\bin\bash -lc "pacman -S --noconfirm mingw-w64-ucrt-x86_64-gcc" || (
+    call :fail "GCC installation failed"
+)
+
+echo Adding MSYS2 UCRT64 to PATH...
+setx PATH "%PATH%;C:\msys64\ucrt64\bin"
+
 echo.
 echo ============================================================
-echo  Downloading SDL2 development libraries for MinGW-w64
+echo  GCC installation complete!
+echo  Please restart your terminal and re-run build.bat
 echo ============================================================
 echo.
+pause
+exit /b 0
 
-set SDL2_VER=2.30.5
-set IMG_VER=2.8.2
-set TTF_VER=2.22.0
 
-set SDL2_URL=https://libsdl.org/release/SDL2-devel-%SDL2_VER%-mingw.tar.gz
-set IMG_URL=https://libsdl.org/projects/SDL_image/release/SDL2_image-devel-%IMG_VER%-mingw.tar.gz
-set TTF_URL=https://libsdl.org/projects/SDL_ttf/release/SDL2_ttf-devel-%TTF_VER%-mingw.tar.gz
+REM ============================================================================
+REM  SDL2 DISCOVERY + AUTO-DOWNLOAD
+REM ============================================================================
+:sdl_check
 
-set SDL2_TGZ=%TEMP%\jukasdl2.tar.gz
-set IMG_TGZ=%TEMP%\jukasdl2_image.tar.gz
-set TTF_TGZ=%TEMP%\jukasdl2_ttf.tar.gz
+if defined SDL2_DIR (
+    echo Using SDL2 from %SDL2_DIR%
+    set "CGO_CFLAGS=-I%SDL2_DIR%\include"
+    set "CGO_LDFLAGS=-L%SDL2_DIR%\lib"
+    goto build
+)
 
-powershell -NoProfile -Command "Invoke-WebRequest -Uri '%SDL2_URL%' -OutFile '%SDL2_TGZ%'"
-if errorlevel 1 goto :dl_fail
-powershell -NoProfile -Command "Invoke-WebRequest -Uri '%IMG_URL%' -OutFile '%IMG_TGZ%'"
-if errorlevel 1 goto :dl_fail
-powershell -NoProfile -Command "Invoke-WebRequest -Uri '%TTF_URL%' -OutFile '%TTF_TGZ%'"
-if errorlevel 1 goto :dl_fail
+set "HEADER=%SDLDIR%\%ARCH%\include\SDL2\SDL.h"
+if exist "%HEADER%" goto build
 
-echo Extracting SDL2 dev packages...
-if exist "%TEMP%\jukasdl2" rmdir /s /q "%TEMP%\jukasdl2"
+echo.
+echo ============================================================
+echo  Downloading SDL2 development libraries
+echo ============================================================
+
+set "SDL2_VER=2.30.5"
+set "IMG_VER=2.8.2"
+set "TTF_VER=2.22.0"
+
+set "SDL2_URL=https://libsdl.org/release/SDL2-devel-%SDL2_VER%-mingw.tar.gz"
+set "IMG_URL=https://libsdl.org/projects/SDL_image/release/SDL2_image-devel-%IMG_VER%-mingw.tar.gz"
+set "TTF_URL=https://libsdl.org/projects/SDL_ttf/release/SDL2_ttf-devel-%TTF_VER%-mingw.tar.gz"
+
+set "SDL2_TGZ=%TEMP%\jukasdl2.tar.gz"
+set "IMG_TGZ=%TEMP%\jukasdl2_image.tar.gz"
+set "TTF_TGZ=%TEMP%\jukasdl2_ttf.tar.gz"
+
+echo Downloading SDL2...
+%PS% "Invoke-WebRequest -Uri '%SDL2_URL%' -OutFile '%SDL2_TGZ%' -UseBasicParsing" || call :fail "SDL2 download failed"
+
+echo Downloading SDL2_image...
+%PS% "Invoke-WebRequest -Uri '%IMG_URL%' -OutFile '%IMG_TGZ%' -UseBasicParsing" || call :fail "SDL2_image download failed"
+
+echo Downloading SDL2_ttf...
+%PS% "Invoke-WebRequest -Uri '%TTF_URL%' -OutFile '%TTF_TGZ%' -UseBasicParsing" || call :fail "SDL2_ttf download failed"
+
+echo Extracting SDL2 packages...
+rmdir /s /q "%TEMP%\jukasdl2" 2>nul
 mkdir "%TEMP%\jukasdl2"
-tar -xzf "%SDL2_TGZ%" -C "%TEMP%\jukasdl2"
-if errorlevel 1 goto :tar_fail
-tar -xzf "%IMG_TGZ%" -C "%TEMP%\jukasdl2"
-if errorlevel 1 goto :tar_fail
-tar -xzf "%TTF_TGZ%" -C "%TEMP%\jukasdl2"
-if errorlevel 1 goto :tar_fail
 
-if exist "%SDLDIR%" rmdir /s /q "%SDLDIR%"
+for %%F in ("%SDL2_TGZ%" "%IMG_TGZ%" "%TTF_TGZ%") do (
+    tar -xzf "%%~F" -C "%TEMP%\jukasdl2" || call :fail "Extraction failed"
+)
+
+rmdir /s /q "%SDLDIR%" 2>nul
 mkdir "%SDLDIR%\%ARCH%\include"
 mkdir "%SDLDIR%\%ARCH%\lib"
 mkdir "%SDLDIR%\%ARCH%\bin"
 
 for %%P in (SDL2-%SDL2_VER% SDL2_image-%IMG_VER% SDL2_ttf-%TTF_VER%) do (
-    xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\include\*" "%SDLDIR%\%ARCH%\include\"
-    xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\lib\*" "%SDLDIR%\%ARCH%\lib\"
-    xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\bin\*" "%SDLDIR%\%ARCH%\bin\"
+    xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\include\*" "%SDLDIR%\%ARCH%\include\" >nul
+    xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\lib\*" "%SDLDIR%\%ARCH%\lib\" >nul
+    xcopy /s /e /y "%TEMP%\jukasdl2\%%P\%ARCH%\bin\*" "%SDLDIR%\%ARCH%\bin\" >nul
 )
 
+
+REM ============================================================================
+REM  BUILD
+REM ============================================================================
 :build
 set CGO_ENABLED=1
 set GOOS=windows
@@ -98,96 +153,44 @@ if not defined CGO_CFLAGS (
     set "CGO_LDFLAGS=-L%SDLDIR%\%ARCH%\lib"
 )
 
-REM --- Skip build if "nobuild" argument was passed ---
-if /i "%1"=="nobuild" goto :after_build
+if /i "%1"=="nobuild" goto after_build
 
 echo.
 echo ============================================================
 echo  Building %OUT%
 echo ============================================================
-echo.
 
 go build -o "%OUT%" .
-if errorlevel 1 (
-    echo.
-    echo BUILD FAILED
-    echo  Ensure a MinGW-w64 gcc.exe is on PATH and SDL2 headers are available.
-    echo  Tip: set SDL2_DIR to your SDL2 dev folder and re-run.
-    pause
-    exit /b 1
-)
+if errorlevel 1 call :fail "Build failed"
 
+
+REM ============================================================================
+REM  POST-BUILD
+REM ============================================================================
 :after_build
 
-REM --- Verify the executable exists before launching ---
-if not exist "%OUT%" (
-    echo.
-    echo ERROR: %OUT% not found. Build may have failed silently.
-    pause
-    exit /b 1
-)
-
-REM --- Copy SDL runtime DLLs next to the executable ---
-REM The executable needs SDL2.dll, SDL2_image.dll, SDL2_ttf.dll at runtime.
-REM Check multiple possible locations in order of preference.
+if not exist "%OUT%" call :fail "%OUT% missing"
 
 set DLL_COPIED=0
 
-REM 1. Local player directory (already have them there)
-if exist "%~dp0SDL2.dll" set DLL_COPIED=1
-
-REM 2. From SDL2_DIR if provided
-if "%DLL_COPIED%"=="0" if defined SDL2_DIR (
-    if exist "%SDL2_DIR%\bin\SDL2.dll" (
-        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2.dll" "%~dp0" >nul 2>nul
-        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2_image.dll" "%~dp0" >nul 2>nul
-        xcopy /s /e /y "%SDL2_DIR%\bin\SDL2_ttf.dll" "%~dp0" >nul 2>nul
-        set DLL_COPIED=1
-    )
-)
-
-REM 3. From the local .sdl2 cache
-if "%DLL_COPIED%"=="0" if exist "%SDLDIR%\%ARCH%\bin\SDL2.dll" (
-    xcopy /s /e /y "%SDLDIR%\%ARCH%\bin\*.dll" "%~dp0" >nul 2>nul
+if exist "%~dp0SDL2.dll" (
+    set DLL_COPIED=1
+) else if exist "%SDLDIR%\%ARCH%\bin\SDL2.dll" (
+    xcopy /y "%SDLDIR%\%ARCH%\bin\*.dll" "%~dp0" >nul
     set DLL_COPIED=1
 )
 
-if "%DLL_COPIED%"=="0" (
-    echo.
-    echo WARNING: SDL2 runtime DLLs not found. %OUT% may fail to start.
-    echo  Place SDL2.dll, SDL2_image.dll, SDL2_ttf.dll next to %OUT%.
+if "!DLL_COPIED!"=="0" (
+    echo WARNING: SDL2 runtime DLLs missing.
 )
 
 echo.
 echo Build succeeded: %OUT%
 echo.
 
-REM --- CI guard: don't launch in CI environments ---
-if defined GITHUB_ACTIONS (
-    echo  Skipping launch in CI environment.
-    goto :eof
-)
-if defined CI (
-    echo  Skipping launch in CI environment.
-    goto :eof
-)
+if defined GITHUB_ACTIONS goto :eof
+if defined CI goto :eof
 
 echo Launching %OUT%...
-echo.
-
 start "" "%OUT%"
-goto :eof
-
-:dl_fail
-echo.
-echo DOWNLOAD FAILED - could not download SDL2 development libraries.
-echo  Set SDL2_DIR to an existing SDL2 MinGW dev install and re-run.
-pause
-exit /b 1
-
-:tar_fail
-echo.
-echo EXTRACT FAILED - tar.exe could not extract the SDL2 packages.
-echo  Ensure tar.exe is available or set SDL2_DIR manually.
-pause
-exit /b 1
+exit /b 0

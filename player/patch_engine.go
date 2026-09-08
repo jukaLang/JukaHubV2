@@ -41,6 +41,44 @@ import (
 )
 
 // ---------------------------------------------------------------------------
+// File permission constants
+// ---------------------------------------------------------------------------
+
+const (
+	// PermDir is the permission for directories (rwxr-xr-x)
+	PermDir = 0o755
+	// PermExec is the permission for executable files (rwxr-xr-x)
+	PermExec = 0o755
+	// PermFile is the permission for regular files (rw-r-----)
+	PermFile = 0o600
+	// PermConfig is the permission for config files (rw-r--r--)
+	PermConfig = 0o644
+)
+
+// --- Sentinel errors for common failure cases ---
+
+// ErrNotFound is returned when a requested resource doesn't exist.
+var ErrNotFound = errors.New("resource not found")
+
+// ErrInvalidInput is returned when input validation fails.
+var ErrInvalidInput = errors.New("invalid input")
+
+// ErrNotSupported is returned when an operation isn't supported.
+var ErrNotSupported = errors.New("not supported")
+
+// ErrAlreadyExists is returned when trying to create something that exists.
+var ErrAlreadyExists = errors.New("already exists")
+
+// ErrPermissionDenied is returned when access is denied.
+var ErrPermissionDenied = errors.New("permission denied")
+
+// ErrTimeout is returned when an operation times out.
+var ErrTimeout = errors.New("operation timed out")
+
+// ErrCancelled is returned when an operation is cancelled.
+var ErrCancelled = errors.New("operation cancelled")
+
+// ---------------------------------------------------------------------------
 // Semantic version comparison (SemVer 2.0.0 subset with build metadata)
 // ---------------------------------------------------------------------------
 
@@ -1134,28 +1172,48 @@ func RestoreBackupSet(name string) error {
 	return journal.commit()
 }
 
+// copyFile copies a file from src to dst, creating directories as needed.
+// It ensures the copy is synced to disk before returning.
+// Returns an error if the source doesn't exist, can't be read, or the
+// destination can't be written/synced.
 func copyFile(src, dst string) error {
+	// Validate inputs
+	if src == "" || dst == "" {
+		return fmt.Errorf("copyFile: src and dst must be non-empty")
+	}
+	
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return fmt.Errorf("copyFile: open source %s: %w", src, err)
 	}
 	defer in.Close()
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
+	
+	// Create destination directory if needed
+	dstDir := filepath.Dir(dst)
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return fmt.Errorf("copyFile: create directory %s: %w", dstDir, err)
 	}
+	
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("copyFile: create destination %s: %w", dst, err)
 	}
+	defer func() {
+		// Best-effort close, but don't mask prior errors
+		if closeErr := out.Close(); closeErr != nil && err == nil {
+			log.Printf("[PATCH] copyFile: close error for %s: %v", dst, closeErr)
+		}
+	}()
+	
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
+		return fmt.Errorf("copyFile: copy %s -> %s: %w", src, dst, err)
 	}
+	
 	if err := out.Sync(); err != nil {
-		out.Close()
-		return err
+		return fmt.Errorf("copyFile: sync %s: %w", dst, err)
 	}
-	return out.Close()
+	
+	return nil
 }
 
 // ---------------------------------------------------------------------------

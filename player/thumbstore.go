@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"math/rand"
@@ -117,14 +118,44 @@ func httpGetWithRetry(url string, maxAttempts int, baseDelay time.Duration) ([]b
 	return nil, lastErr
 }
 
-// httpError is a minimal typed error for non-2xx responses.
+// httpError is a typed error for HTTP non-2xx responses.
 type httpError struct {
 	Code int
 	URL  string
+	Body []byte // response body if available (may contain error details)
 }
 
 func (e *httpError) Error() string {
-	return "HTTP " + http.StatusText(e.Code)
+	status := http.StatusText(e.Code)
+	if e.Body != nil && len(e.Body) > 0 {
+		// Include a snippet of the response body for debugging
+		snippet := string(e.Body)
+		if len(snippet) > 200 {
+			snippet = snippet[:200] + "..."
+		}
+		return fmt.Sprintf("HTTP %d %s: %s", e.Code, status, snippet)
+	}
+	return fmt.Sprintf("HTTP %d %s", e.Code, status)
+}
+
+// Unwrap returns the underlying error if any.
+func (e *httpError) Unwrap() error {
+	return nil
+}
+
+// IsHTTPError returns true if the error is an httpError.
+func IsHTTPError(err error) bool {
+	_, ok := err.(*httpError)
+	return ok
+}
+
+// HTTPStatusCode extracts the HTTP status code from an error if it's an httpError.
+// Returns 0 if the error is not an httpError.
+func HTTPStatusCode(err error) int {
+	if he, ok := err.(*httpError); ok {
+		return he.Code
+	}
+	return 0
 }
 
 // ──────────────────────────────────────────────────────────────────────

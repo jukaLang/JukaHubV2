@@ -71,7 +71,7 @@ func hasMediaExtension(s string) bool {
 func playStream(config *Config, url string) {
 	recordPlayed(config, url)
 	ff := getToolPath("ffplay", config)
-	log.Printf("playStream: %s", url)
+	log.Printf("playStream: %s", sanitizeLogURL(url))
 	go func() {
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
@@ -101,7 +101,7 @@ func playWithMPV(config *Config, url string) {
 	if runtime.GOOS == "windows" {
 		ipcSocket = filepath.Join(os.TempDir(), "mpv-socket")
 	}
-	log.Printf("playWithMPV: url=%s mpv=%s", url, mpv)
+	log.Printf("playWithMPV: url=%s mpv=%s", sanitizeLogURL(url), mpv)
 	go func() {
 		cmd := exec.Command(mpv,
 			"--fs",

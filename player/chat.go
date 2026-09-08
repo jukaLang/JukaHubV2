@@ -183,7 +183,7 @@ func discordCreds() (string, string) {
 	}
 	tok = strings.TrimSpace(tok)
 	if strings.HasPrefix(tok, "ENC:") {
-		decrypted, err := DecryptToken(tok)
+		decrypted, err := DecryptAPIToken(tok, "discord_token")
 		if err != nil {
 			log.Printf("[DISCORD] Failed to decrypt token: %v", err)
 			discordStatus = "Discord: failed to decrypt token"
@@ -332,9 +332,25 @@ func groqAPIKey() string {
 		return ""
 	}
 	if v, ok := appConfig.Variables.Custom["groq_api_key"].(string); ok && v != "" {
+		// Attempt to decrypt if the value is encrypted
+		if strings.HasPrefix(v, "ENC:") {
+			decrypted, err := DecryptAPIToken(v, "groq_api_key")
+			if err == nil {
+				return decrypted
+			}
+			return ""
+		}
 		return v
 	}
 	if v, ok := appConfig.Variables.Custom["GroqApiKey"].(string); ok {
+		// Attempt to decrypt if the value is encrypted
+		if strings.HasPrefix(v, "ENC:") {
+			decrypted, err := DecryptAPIToken(v, "GroqApiKey")
+			if err == nil {
+				return decrypted
+			}
+			return ""
+		}
 		return v
 	}
 	return ""

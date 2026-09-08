@@ -64,7 +64,7 @@ cd JukaHubV2/player
 # Install SDL2 dependencies (Ubuntu/Debian)
 sudo apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 
-# Build
+# Build (CGO must be able to find the SDL2 headers/libs from `build.bat` or a system install)
 go build -o JukaHub.exe .
 
 # Run
@@ -205,9 +205,7 @@ Supported operations: `install`, `replace` (baseline-hash gated), `remove` (pack
 
 Every install/upgrade/remove is a journaled transaction: backups first, journal before mutation, rollback on failure or interruption (auto-recovered at next launch). The local package database (`db/db.json`) is written atomically.
 
-### Safety model
-
-### Safety model
+### Safety model### Safety model
 
 - Destructive steps are journaled **before** they happen; interruption rolls back automatically.
 - Archives are inspected (no traversal, absolute paths, symlinks, devices).
@@ -442,6 +440,133 @@ JukaHubV2/
 
 ---
 
+## Security
+
+JukaHub includes encryption for sensitive credentials like API keys and Discord tokens.
+
+### Encryption Features
+
+- **AES-256-GCM encryption** for API keys and tokens stored in config files
+- **Configurable encryption key** via `JUKAHUB_CRYPTO_KEY` environment variable
+- **Automatic detection** of plaintext secrets with startup warnings
+- **Per-value salts and unique ciphertexts** (same plaintext encrypts differently each time)
+- **HMAC-authenticated encryption wrapper** available for defense-in-depth
+- **Encrypted data verification** without exposing plaintext
+- **Secure memory handling** (best-effort key zeroization on exit)
+
+### Encrypting API Keys
+
+Encrypt secrets at build time (or in a one-off Go helper) and store only the encrypted payload in `jukaconfig.json`.
+
+```bash
+# Set the same encryption key the player will use at runtime (do this once per session)
+export JUKAHUB_CRYPTO_KEY="your-64-char-hex-key-here"
+
+# Then use the Go encryption functions, or set the env var and restart the player.
+# Encrypted values in config look like: "ENC:default-v3-enhanced/..."
+```
+
+### Configuration Security
+
+1. **Never commit secrets to version control** — add `jukaconfig.json` to `.gitignore` if it contains real credentials
+2. **Use placeholder values in committed configs** — empty strings or `"your-api-key-here"`
+3. **Set file permissions** — `chmod 600 jukaconfig.json` on Linux/macOS, strict ACLs on Windows
+4. **Use environment variables for production** — set `JUKAHUB_CRYPTO_KEY` and optionally `JUKAHUB_CRYPTO_SALT` before launching
+5. **Gather config health at startup** — the player runs `ConfigValidator.SecurityCheck` and logs plaintext-secret and default-key warnings
+
+### Security Warnings
+
+JukaHub logs security warnings at startup if it detects:
+
+- Plaintext API keys in the config (should be encrypted)
+- Using the built-in default encryption key (not recommended for production)
+- Using Discord user tokens (bot tokens are safer)
+- Config values that fail input validation (potential injection patterns)
+
+See [`player/SECURITY.md`](player/SECURITY.md) for detailed security documentation.
+
+---
+
+## Building from Source (Windows)
+
+### Prerequisites
+
+1. **Go 1.25+** - Download from https://go.dev/dl/
+2. **MinGW-w64 GCC compiler** - Required for CGO (C interop with SDL2)
+
+### Installing GCC (Required)
+
+**Option A: MSYS2 (Recommended)**
+
+1. Download and install MSYS2 from https://www.msys2.org/
+2. Open the **MSYS2 UCRT64** shortcut from the Start menu
+3. In the MSYS2 terminal, run:
+   ```
+   pacman -S mingw-w64-ucrt-x86_64-gcc
+   ```
+4. Add the UCRT64 bin folder to your PATH:
+   ```
+   setx PATH "%PATH%;C:\msys64\ucrt64\bin"
+   ```
+   (Or add it via System Properties → Environment Variables)
+
+**Option B: WinLibs (No MSYS2 needed)**
+
+1. Download from https://winlibs.com/
+2. Choose the **Universal** or **UCRT** runtime build (x86_64)
+3. Extract the archive to a folder like `C:\mingw64`
+4. Add the `bin` folder to your PATH:
+   ```
+   setx PATH "%PATH%;C:\mingw64\bin"
+   ```
+
+**Verify GCC is installed:**
+```
+gcc --version
+```
+
+### Building
+
+```bash
+cd player
+.\\build.bat
+```
+
+This will:
+- Check for GCC and show installation instructions if missing
+- Download SDL2 development libraries if needed
+- Build `JukaHub.exe`
+- Copy SDL2 DLLs next to the executable
+- Launch the application
+
+### Manual Build (if you prefer)
+
+```bash
+cd player
+set CGO_ENABLED=1
+set GOOS=windows
+set GOARCH=amd64
+set CGO_CFLAGS=-I%CD%\\.sdl2\\x86_64-w64-mingw32\\include
+set CGO_LDFLAGS=-L%CD%\\.sdl2\\x86_64-w64-mingw32\\lib
+go build -o JukaHub.exe .
+```
+
+### Using Your Own SDL2 Installation
+
+If you already have SDL2 installed system-wide or in a custom location:
+
+```bash
+set SDL2_DIR=C:\Path\To\Your\SDL2
+cd player
+.\\build.bat
+```
+
+### Verifying the Config
+
+`jukaconfig.json` and `jukauser.json` are validated on load, and malformed files cause clear startup errors. To sanity-check a config file without launching the player, build and run a small validation helper (if one is provided in this repo) or inspect the logs after a startup attempt.
+
+---
+
 ## Contributing
 
 We welcome contributions. Please follow these steps:
@@ -496,3 +621,16 @@ AGPL-3.0 License. See the [LICENSE](https://github.com/jukaLang/JukaHubV2/blob/m
 - Arthur Gregorio for answering questions regarding Go structure
 - StarDrive and DigestPrism for supporting this app
 - All of Juka Discord channel for making this app possible
+
+## Key repository files
+
+| File | Purpose |
+|------|--------|
+| `player/main.go` | App entry point, SDL2 init, scene loop |
+| `player/crypto.go` | AES-256-GCM encryption, key derivation, key management |
+| `player/config_health.go` | `ConfigValidator` — input validation, security checks, config health |
+| `player/controller.go` | Gamepad / keyboard / touch input routing |
+| `player/tools.go` | Tool path resolution, downloads, GitHub API helpers |
+| `player/patch_engine.go` | Package install/update/verify/rollback engine |
+| `player/patch_signed.go` | Signed repository verification (Ed25519) |
+| `build.bat` | Windows build wrapper — GCC check, SDL2 staging, build, DLL copy, launch
