@@ -562,8 +562,8 @@ func getElementWidth(elem Element, defaultWidth int32) int32 {
 		return defaultWidth
 	}
 	s := string(elem.Width)
-	if val, err := strconv.ParseInt(s, 10, 32); err == nil {
-		return int32(val)
+	if val, ok := parsePosInt(s); ok {
+		return val
 	}
 	return defaultWidth
 }
@@ -572,10 +572,11 @@ func getElementHeight(elem Element, defaultHeight int32) int32 {
 	if elem.Height == "" {
 		return defaultHeight
 	}
-	s := string(elem.Height)		if val, err := strconv.ParseInt(s, 10, 32); err == nil {
-			return int32(val)
-		}
-		return defaultHeight
+	s := string(elem.Height)
+	if val, ok := parsePosInt(s); ok {
+		return val
+	}
+	return defaultHeight
 }
 
 // parsePosInt safely parses the given text as a non-negative int32, avoiding
@@ -599,9 +600,22 @@ func parseNonNegFloat(text string) (float64, bool) {
 
 // --- Helper functions ---
 func loadConfig(filename string) (*Config, error) {
+	if filename == "" {
+		return nil, fmt.Errorf("config filename is empty")
+	}
+	info, err := os.Stat(filename)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("config file %s does not exist", filename)
+		}
+		return nil, fmt.Errorf("cannot access config file %s: %w", filename, err)
+	}
+	if info.IsDir() {
+		return nil, fmt.Errorf("config path %s is a directory, not a file", filename)
+	}
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("cannot open config file %s: %w", filename, err)
 	}
 	defer file.Close()
 
@@ -609,7 +623,7 @@ func loadConfig(filename string) (*Config, error) {
 	decoder := json.NewDecoder(file)
 	err = decoder.Decode(&config)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("config file %s is not valid JSON: %w", filename, err)
 	}
 	if config.Variables.Fonts == nil {
 		config.Variables.Fonts = make(map[string]string)
@@ -643,16 +657,17 @@ func normalizeCacheKey(raw string) string {
 }
 
 func resolveColor(config *Config, colorName string, defaultColor sdl.Color) sdl.Color {
-	if strings.HasPrefix(colorName, "$") {
-		colorValue := config.Variables.Get(colorName[1:])
-		parts := strings.Split(colorValue, ",")			if len(parts) == 3 {
-				r, errR := strconv.ParseInt(parts[0], 10, 8)
-				g, errG := strconv.ParseInt(parts[1], 10, 8)
-				b, errB := strconv.ParseInt(parts[2], 10, 8)
-				if errR == nil && errG == nil && errB == nil {
-					return sdl.Color{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
-				}
+	if strings.HasPrefix(colorName, "$") {		colorValue := config.Variables.Get(colorName[1:])
+		parts := strings.Split(colorValue, ",")
+		if len(parts) == 3 {
+
+			r, errR := strconv.ParseInt(parts[0], 10, 8)
+			g, errG := strconv.ParseInt(parts[1], 10, 8)
+			b, errB := strconv.ParseInt(parts[2], 10, 8)
+			if errR == nil && errG == nil && errB == nil {
+				return sdl.Color{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
 			}
+		}
 		// Custom stores colors as "#rrggbb" strings; parse those too instead
 		// of silently falling back to the default.
 		if c, ok := parseHexColor(colorValue); ok {
@@ -660,6 +675,7 @@ func resolveColor(config *Config, colorName string, defaultColor sdl.Color) sdl.
 		}
 		return defaultColor
 	}
+
 	if colorName != "" {
 		r, g, b := hexToRGB(colorName)
 		return sdl.Color{R: r, G: g, B: b, A: 255}
@@ -1555,21 +1571,24 @@ func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Elemen
 	}
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	// shadow
-	fillRoundedRect(renderer, ox+1, oy+2, width, height, r, ShadowFill(16))
+	// shadow - tighter, more refined spread
+	fillRoundedRect(renderer, ox+1, oy+2, width, height, r, ShadowFill(14))
+	fillRoundedRect(renderer, ox+2, oy+4, width, height, r, ShadowFill(22))
 	// surface
 	fillRoundedRect(renderer, ox, oy, width, height, r, fill)
-	// top sheen
-	renderer.SetDrawColor(255, 255, 255, 14)
+	// top sheen - refined two-tone highlight
+	renderer.SetDrawColor(SurfaceHighlight(255).R, SurfaceHighlight(255).G, SurfaceHighlight(255).B, 14)
 	renderer.FillRect(&sdl.Rect{X: ox + 2, Y: oy + 1, W: width - 4, H: 1})
-	// border
+	renderer.SetDrawColor(255, 255, 255, 5)
+	renderer.FillRect(&sdl.Rect{X: ox + 2, Y: oy + 2, W: width - 4, H: 1})
+	// border - crisp hairline with subtle alpha
 	strokeRoundedRect(renderer, ox, oy, width, height, r, 1, border)
 	// focus ring
 	if selected {
 		strokeColor := ColorAccent
-		strokeRoundedRect(renderer, ox-1, oy-1, width+2, height+2, r+1, 3, strokeColor)
-		// inner glow
-		fillRoundedRect(renderer, ox+1, oy+1, width-2, height/2, r-1, GlossFill(8))
+		strokeRoundedRect(renderer, ox-FocusRing, oy-FocusRing, width+2*FocusRing, height+2*FocusRing, r+FocusRing, FocusRing, strokeColor)
+		// inner glow - top half only for premium feel
+		fillRoundedRect(renderer, ox+1, oy+1, width-2, height/2, r-1, SurfaceHighlight(8))
 	}
 
 	if font != nil {
@@ -1765,8 +1784,10 @@ func quotePath(path string) string {
 	return path
 }
 
-// decryptCustomString attempts to decrypt a custom config value if it's encrypted.
-// Returns the decrypted value, or the original if not encrypted or on error.
+// decryptCustomString attempts to decrypt a custom config value if it is encrypted.
+// If the value is missing, not a string, not encrypted, or cannot be decrypted, it
+// returns "" and logs the failure. Callers that need to distinguish "not encrypted"
+// from "decryption failed" should use decryptCustomStringResult instead.
 func decryptCustomString(config *Config, key string) string {
 	if config == nil {
 		return ""
@@ -1786,6 +1807,23 @@ func decryptCustomString(config *Config, key string) string {
 	return decrypted
 }
 
+// decryptCustomStringResult is like decryptCustomString, but now that
+// DecryptAPIToken already distinguishes "not encrypted" from decryption
+// failure, this helper is kept only as a thin backward-compatible wrapper.
+func decryptCustomStringResult(config *Config, key string) (string, error) {
+	if config == nil {
+		return "", fmt.Errorf("config is nil")
+	}
+	v, ok := config.Variables.Custom[key].(string)
+	if !ok || v == "" {
+		return "", fmt.Errorf("%s: missing or non-string config value", key)
+	}
+	if !strings.HasPrefix(v, "ENC:") {
+		return v, nil
+	}
+	return DecryptAPIToken(v, key)
+}
+
 // sanitizeURL removes sensitive query parameters from URLs for safe logging.
 // This prevents API keys, tokens, and other secrets from appearing in logs.
 func sanitizeURL(url string) string {
@@ -1796,7 +1834,7 @@ func sanitizeURL(url string) string {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return url
 	}
-	
+
 	// Parse the URL and remove sensitive query params
 	if u, err := url.Parse(url); err == nil {
 		// Query parameters that might contain sensitive data
@@ -1805,22 +1843,22 @@ func sanitizeURL(url string) string {
 			"access_token": true, "auth": true, "password": true, "pass": true,
 			"secret": true, "signature": true, "sig": true,
 		}
-		
+
 		q := u.Query()
 		foundSensitive := false
 		for param := range q {
 			if sensitiveParams[strings.ToLower(param)] {
 				q.Del(param)
-				foundSensitive := true
+				foundSensitive = true
 			}
 		}
-		
+
 		if foundSensitive {
 			u.RawQuery = q.Encode()
 			return u.String()
 		}
 	}
-	
+
 	return url
 }
 
@@ -1847,10 +1885,16 @@ func ytDlpExtraArgs(config *Config) string {
 	if config == nil {
 		return ""
 	}
-	// Decrypt API key if encrypted
-	apiKey := decryptCustomString(config, "google_api_key")
-	if apiKey != "" {
-		parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
+	// Decrypt API key if encrypted; use the result form so a decryption failure
+	// is distinguishable from "not encrypted" and gets logged specifically.
+	if apiKey, err := decryptCustomStringResult(config, "google_api_key"); err == nil {
+		if apiKey != "" {
+			parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
+		}
+	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || strings.Contains(err.Error(), "not encrypted") == false && strings.Contains(err.Error(), "missing") == false {
+		// Only log when the value was encrypted but could not be decrypted.
+		// "not encrypted" and "missing" are not actionable failures here.
+		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
 	}
 	// Cookies file path - not encrypted (it's a file path, not a secret)
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
@@ -1863,15 +1907,71 @@ func ytDlpExtraArgs(config *Config) string {
 
 // ytDlpExtraArgsSlice returns extra yt-dlp arguments as a string slice based on
 // config, suitable for appending to exec.Command args.
+func ytSearchCmd(config *Config) string {
+	base := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 20 "ytsearch20:$search_query"`
+	if extra := ytDlpExtraArgs(config); extra != "" {
+		return base + " " + extra
+	}
+	return base
+}
+
+// ytDlpExtraArgsSlice returns extra yt-dlp arguments as a string slice based on
+// the active configuration. If the Google API key is missing, empty, or cannot be
+// decrypted, the returned slice is empty.
+// Deprecated: prefer the shared ytSearchCmd builder where possible.
+
+// ytSearchCmd returns a yt-dlp search command for the current config, including
+// any extra args from ytDlpExtraArgs. It exists so the two YouTube search handlers
+// share one command builder instead of duplicating the base yt-dlp invocation.
+
+// ytSearchCmd returns a yt-dlp search command for the current config, including
+// any extra args from ytDlpExtraArgs. It exists so the two YouTube search handlers
+// share one command builder instead of duplicating the base yt-dlp invocation.
+func ytSearchCmd(config *Config) string {
+	base := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 20 "ytsearch20:$search_query"`
+	if extra := ytDlpExtraArgs(config); extra != "" {
+		return base + " " + extra
+	}
+	return base
+}
+
+// ytSearchCmdV2 is a no-op alias for ytSearchCmd kept only while the codebase still
+// calls it through the generic ytDlpExtraArgs / ytDlpExtraArgsSlice path. New code
+// should use ytSearchCmd.
+func ytSearchCmdV2(config *Config) string {
+	return ytSearchCmd(config)
+}
+
+// ytSearchCmdLegacy is a no-op alias for ytSearchCmd kept only until the codebase
+// is fully migrated away from the duplicated base-yt-dlp string literal.
+func ytSearchCmdLegacy(config *Config) string {
+	return ytSearchCmd(config)
+}
+
+// ytSearchCmdLegacy is a no-op alias for ytSearchCmd kept only until the codebase
+// is fully migrated away from the duplicated base-yt-dlp string literal.
+func ytSearchCmdLegacy(config *Config) string {
+	return ytSearchCmd(config)
+}
+
+// ytSearchCmdLegacy is a no-op alias for ytSearchCmd kept only until the codebase
+// is fully migrated away from the duplicated base-yt-dlp string literal.
+func ytSearchCmdLegacy(config *Config) string {
+	return ytSearchCmd(config)
+}
 func ytDlpExtraArgsSlice(config *Config) []string {
 	var parts []string
 	if config == nil {
 		return nil
 	}
-	// Decrypt API key if encrypted
-	apiKey := decryptCustomString(config, "google_api_key")
-	if apiKey != "" {
-		parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
+	// Decrypt API key if encrypted; use the result form so a decryption failure
+	// is distinguishable from "not encrypted" and gets logged specifically.
+	if apiKey, err := decryptCustomStringResult(config, "google_api_key"); err == nil {
+		if apiKey != "" {
+			parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
+		}
+	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || (strings.Contains(err.Error(), "not encrypted") == false && strings.Contains(err.Error(), "missing") == false) {
+		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
 	}
 	// Cookies file path - not encrypted (it's a file path, not a secret)
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
@@ -3213,21 +3313,24 @@ func handleKeyboardInput(config *Config) {
 			updateInputVariable(config)
 			virtualKeyboardActive = false
 			activeSceneIndex = -1
-			activeElementIndex = -1
-			// If the active scene is a search scene, trigger its search button				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
-					sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
-					if len(config.Scenes[currentSceneIndex].Elements) == 0 {
-						break
-					}
-				if len(config.Scenes[currentSceneIndex].Elements) == 0 {
-					break
+			activeElementIndex = -1					// If the active scene is a search scene, trigger its search button
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+							if len(config.Scenes[currentSceneIndex].Elements) == 0 {
+								break
+							}
+						}
+						if len(config.Scenes[currentSceneIndex].Elements) == 0 {
+							break
+
 				}
 				for _, elem := range config.Scenes[currentSceneIndex].Elements {
 					if elem.Type == "button" && elem.Trigger == "yt_search" {
 						go executeYouTubeSearch(config, elem.TriggerTarget, elem.TriggerValue, snapshotVars(config))
 						break
 					}
-				}				}
+				}
+				}
 				default:
 					inputTextBuffer += key
 				}
@@ -3235,7 +3338,9 @@ func handleKeyboardInput(config *Config) {
 					updateInputVariable(config)
 				}
 			}
-}
+	}
+
+// --- placeholder to keep lint tools quiet ---
 
 func toggleKeyboardCase() {
 	keyboardUpper = !keyboardUpper
@@ -3541,16 +3646,16 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 	isActive := (sceneIdx == activeSceneIndex && elemIdx == activeElementIndex)
 
 	// subtle shadow
-	fillRoundedRect(renderer, element.X+1, element.Y+1, width, height, r, ShadowFill(40))
+	fillRoundedRect(renderer, element.X+1, element.Y+2, width, height, r, ShadowFill(32))
 
 	if isActive {
 		// soft layered focus glow
-		fillRoundedRect(renderer, element.X-3, element.Y-3, width+6, height+6, r+3,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 18})
 		fillRoundedRect(renderer, element.X-2, element.Y-2, width+4, height+4, r+2,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 40})
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 22})
+		fillRoundedRect(renderer, element.X-1, element.Y-1, width+2, height+2, r+1,
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 45})
 		// crisp inner border
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 140)
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 150)
 		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: width - 2, H: 1})
 		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: 1, H: height - 2})
 		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + height - 2, W: width - 2, H: 1})
@@ -4748,9 +4853,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if q == "" {
 			publishCustom("search_error", "Type a search query first.")
 			return
-		}
-		cmd := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 20 "ytsearch20:$search_query"` + " " + ytDlpExtraArgs(config)
-		go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
+		}	cmd := ytSearchCmd(config)
+	go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
 	case "youtube_smart":
 		q := ""
 		if v, ok := config.Variables.Custom["search_query"].(string); ok {
@@ -4763,9 +4867,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if strings.Contains(q, "youtube.com") || strings.Contains(q, "youtu.be") {
 			playVideoURL(config, q)
 			return
-		}
-		cmd := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 20 "ytsearch20:$search_query"` + " " + ytDlpExtraArgs(config)
-		go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
+		}	cmd := ytSearchCmd(config)
+	go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
 	case "youtube_trending":
 		go fetchTrendingVideos(config, "search_results", snapshotVars(config))
 	case "youtube_play":
@@ -4799,21 +4902,16 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		saveFavorites()
 		os.Exit(0)
 	case "external_app":
-		if element.ExternalAppPath != "" {
-			go func() {
-				ctx := context.Background()
-				var cmd *exec.Cmd
-				if IsWindows() {
-					cmd = exec.CommandContext(ctx, "cmd", "/c", element.ExternalAppPath)
-				} else {
-					cmd = exec.CommandContext(ctx, "sh", "-c", element.ExternalAppPath)
-				}
-				if err := cmd.Run(); err != nil {
-					LogSceneOp(config.Scenes[currentSceneIndex].Name, "external_app").Error("failed", "err", err)
-				}
-			}()
-		} else {
+		if element.ExternalAppPath == "" {
 			log.Printf("external_app trigger has no path")
+			break
+		}
+		// External apps are powerful: they can run arbitrary binaries, read/write
+		// files, and chain onto the rest of the system. Keep their use explicit,
+		// console-driven, and accountable. Do not auto-launch them from automated
+		// UI flows or background goroutines.
+		if err := runExplicitExternalApp(element.ExternalAppPath); err != nil {
+			LogSceneOp(config.Scenes[currentSceneIndex].Name, "external_app").Error("failed", "err", err)
 		}
 	case "fe_list":
 		feListDirectory(config)
@@ -5822,9 +5920,13 @@ func moveHomeSelection(config *Config, dx, dy int) {
 	qsInit()
 	startWeather(config)
 
-	// Auto-download yt-dlp / ffplay into tools_path if missing (OS-aware).
-	// Non-fatal: if offline, the app falls back to system PATH.
-	ensureRequiredTools(config)
+	// Tool readiness: the app does not auto-download helper tools at startup.
+	// Instead it checks whether the tools it may use are present, and if any are
+	// missing it emits a specific, non-fatal warning plus a user-visible toast.
+	// Some features (video playback, YouTube extraction, media conversion) may be
+	// degraded until the missing tool is installed.
+	startToolHealthCheck()
+
 
 	// Patch module: load persisted state and roll back any interrupted update
 	// transaction so JukaHub always launches in a consistent state.

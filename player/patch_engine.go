@@ -390,10 +390,6 @@ func DetectDevice() DeviceModel {
 	switch {
 	case trimui && isTSP:
 		return DeviceTrimuiTSP
-	case sdcard && trimui && strings.Contains(strings.ToLower(dtModel), "trimui"):
-		// A generic Trimui model file without a positive TG5040 match is not
-		// enough to offer stock firmware staging.
-		return DeviceUnknown
 	case sdcard && trimui:
 		// Trimui tree exists but the model is unknown -> do not guess.
 		return DeviceUnknown
@@ -556,6 +552,7 @@ var (
 )
 
 // loadPatchState reads state.json from the patch directory (best effort).
+// Callers must follow load with savePatchState when they make changes.
 func loadPatchState() {
 	dir, err := PatchStateDir()
 	if err != nil {
@@ -575,17 +572,20 @@ func loadPatchState() {
 }
 
 // savePatchState persists the patch state atomically.
-func savePatchState() {
+func savePatchState() error {
 	patchStateMu.Lock()
 	defer patchStateMu.Unlock()
 	if patchStateDir == "" {
-		return
+		return fmt.Errorf("patch home unavailable; cannot persist state")
 	}
 	data, err := json.MarshalIndent(patchState, "", "  ")
 	if err != nil {
-		return
+		return fmt.Errorf("patch state marshal: %w", err)
 	}
-	_ = AtomicWrite(filepath.Join(patchStateDir, "state.json"), data, 0o600)
+	if err := AtomicWrite(filepath.Join(patchStateDir, "state.json"), data, 0o600); err != nil {
+		return fmt.Errorf("patch state persist: %w", err)
+	}
+	return nil
 }
 
 // InitPatchModule loads persisted state and runs the startup journal check.
@@ -594,7 +594,9 @@ func savePatchState() {
 func InitPatchModule() {
 	loadPatchState()
 	checkInterruptedJournal()
-	ensureDefaultRepo()
+	if err := ensureDefaultRepo(); err != nil {
+		logPatch("default patch repo setup failed: %v", err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -633,6 +635,190 @@ func installedPatchVersions(config *Config) map[PatchComponent]string {
 // helperToolVersion returns a short version string for a bundled helper tool
 // without executing it: it reads --version output only when the tool is known
 // and present, and failures return "".
+// EnsureHelperTool downloads and installs a helper tool (ffplay, ffmpeg, or yt-dlp) into the
+// application tools directory when it is missing. It is intentionally tolerant of
+// transient network failures so the app can still launch in offline environments and
+// retry later. For ffmpeg it currently only ensures ffplay is available.
+func EnsureHelperTool(tool string, config *Config) error {
+	return ensureHelperTool(tool, config)
+}
+
+func ensureHelperTool(tool string, config *Config) error {
+	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" {
+		return fmt.Errorf("unsupported helper tool %q (supported: ffplay, ffmpeg, yt-dlp)", tool)
+	}
+	dir, err := P().ToolsDir()
+	if err != nil {
+		return fmt.Errorf("tools directory unavailable: %w", err)
+	}
+	if dir == "" {
+		return fmt.Errorf("tools directory unavailable (empty path)")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("cannot create tools directory %s: %w", dir, err)
+	}
+	exeName := tool
+	if runtime.GOOS == "windows" {
+		exeName += ".exe"
+	}
+	target := filepath.Join(dir, exeName)
+	if _, err := os.Stat(target); err == nil {
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("tools directory check failed for %s: %w", target, err)
+	}
+	log.Printf("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
+	return downloadHelperTool(tool, target, config)
+}
+
+func downloadHelperTool(tool, target string, config *Config) error {
+	// ffmpeg/ffplay are delivered inside a zip; ffmpeg itself is large and
+	// device-specific, so we only auto-fetch ffplay for now.
+	if tool == "ffmpeg" || tool == "ffplay" {
+		return downloadFFmpegFFplay(target, config)
+	}
+	if tool == "yt-dlp" {
+		return downloadYtDlp(target, config)
+	}
+	return fmt.Errorf("no downloader implemented for %q", tool)
+}
+
+func downloadFFmpegFFplay(target string, config *Config) error {
+	arch := runtime.GOARCH
+	if arch != "arm64" && arch != "amd64" {
+		return fmt.Errorf("unsupported architecture %q for ffmpeg download (supported: arm64, amd64)", arch)
+	}
+	repo := "BtbN/FFmpeg-Builds"
+	variant := "release"
+	if runtime.GOOS != "windows" {
+		variant = "release"
+	}
+	pattern := func() string {
+		if arch == "arm64" {
+			return "ffmpeg-*arm64*-static.zip"
+		}
+		return "ffmpeg-*win64*-static.zip"
+	}()
+	url, err := resolveToolURL(repo, "", pattern)
+	if err != nil {
+		return fmt.Errorf("find ffmpeg release: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "ffmpeg-download-*.zip")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	log.Printf("[TOOLS] downloading ffmpeg from %s", url)
+	if err := downloadFile(url, tmp.Name()); err != nil {
+		return fmt.Errorf("download ffmpeg from %s: %w", url, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create tools directory %s: %w", dir, err)
+	}
+	if err := extractFilesFromZip(context.Background(), tmp.Name(), dir, []string{"ffplay.exe", "ffmpeg.exe"}); err != nil {
+		return fmt.Errorf("extract ffmpeg from %s: %w", url, err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(target, 0o755); err != nil {
+			log.Printf("[TOOLS] warn: cannot chmod ffplay: %v", err)
+		}
+	}
+	return nil
+}
+
+func downloadYtDlp(target string, config *Config) error {
+	if runtime.GOOS == "windows" {
+		// On Windows, prefer the self-contained exe when available.
+		url, err := resolveToolURL("yt-dlp/yt-dlp", "", "yt-dlp.exe")
+		if err == nil {
+			tmp, err2 := os.CreateTemp("", "yt-dlp-*.exe")
+			if err2 != nil {
+				return fmt.Errorf("create temp file: %w", err2)
+			}
+			defer os.Remove(tmp.Name())
+			defer tmp.Close()
+			log.Printf("[TOOLS] downloading yt-dlp.exe from %s", url)
+			if err2 := downloadFile(url, tmp.Name()); err2 != nil {
+				return fmt.Errorf("download yt-dlp from %s: %w", url, err2)
+			}
+			if err2 := tmp.Close(); err2 != nil {
+				return err2
+			}
+			if err2 := os.Rename(tmp.Name(), target); err2 != nil {
+				return fmt.Errorf("install yt-dlp to %s: %w", target, err2)
+			}
+			return nil
+		}
+		log.Printf("[TOOLS] warn: could not resolve yt-dlp.exe URL: %v", err)
+	}
+	// Fallback: download the py installer script and bundle a minimal runtime.
+	url, err := resolveToolURL("yt-dlp/yt-dlp", "", "yt-dlp")
+	if err != nil {
+		return fmt.Errorf("find yt-dlp release: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "yt-dlp-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	defer tmp.Close()
+	log.Printf("[TOOLS] downloading yt-dlp from %s", url)
+	if err := downloadFile(url, tmp.Name()); err != nil {
+		return fmt.Errorf("download yt-dlp from %s: %w", url, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp.Name(), target); err != nil {
+		return fmt.Errorf("install yt-dlp to %s: %w", target, err)
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(target, 0o755); err != nil {
+			log.Printf("[TOOLS] warn: cannot chmod yt-dlp: %v", err)
+		}
+	}
+	return nil
+}
+
+// helperToolPath returns the absolute path to a required helper tool, auto-downloading it
+// when missing. It is intentionally tolerant of transient network failures so the app
+// can still launch in offline environments and retry later.
+func helperToolPath(tool string, config *Config) (string, error) {
+	if tool == "" {
+		return "", fmt.Errorf("empty tool name")
+	}
+	toolPath := getToolPath(tool, config)
+	if toolPath == "" {
+		return "", fmt.Errorf("unable to resolve tools path for %s", tool)
+	}
+	if _, err := os.Stat(toolPath); err == nil {
+		return toolPath, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("tools path %s exists but is not accessible: %w", toolPath, err)
+	}
+	log.Printf("[TOOLS] %s missing at %q; attempting download", tool, toolPath)
+	if err := ensureHelperTool(tool, config); err != nil {
+		log.Printf("[TOOLS] auto-download of %s failed: %v", tool, err)
+		return "", fmt.Errorf("missing %s and auto-download failed: %w", tool, err)
+	}
+	verified := getToolPath(tool, config)
+	if verified == "" {
+		return "", fmt.Errorf("download reported success but %s path is still unavailable", tool)
+	}
+	if _, err := os.Stat(verified); err != nil {
+		return "", fmt.Errorf("download reported success but %s is still missing: %w", tool, err)
+	}
+	return verified, nil
+}
+
+// helperToolVersion returns the version string for a helper tool when available.
 func helperToolVersion(tool string) string {
 	if runtime.GOOS == "windows" && !strings.HasSuffix(tool, ".exe") {
 		tool += ".exe"
@@ -1396,15 +1582,15 @@ func logPatch(format string, args ...interface{}) {
 
 // MigrateConfigFile validates and migrates jukaconfig.json in place while
 // preserving unknown fields and user data. It never touches jukauser.json.
-// Returns a short human description of what changed.
+// Returns a short human description of what changed; missing files are
+// reported explicitly rather than as a generic read error.
 func MigrateConfigFile(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", err
-	}
-	var raw map[string]interface{}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return "", fmt.Errorf("jukaconfig.json is not valid JSON: %w", err)
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("config file missing: %s", path)
+		}
+		return "", fmt.Errorf("config read: %w", err)
 	}
 	before, err := json.Marshal(raw)
 	if err != nil {

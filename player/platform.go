@@ -114,7 +114,7 @@ func (tspPlatform) DataDir() (string, error) {
 		return "", err
 	}
 	dir := filepath.Join(exeDir, "data")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -189,7 +189,7 @@ func (windowsPlatform) DataDir() (string, error) {
 		appData = filepath.Join(os.Getenv("USERPROFILE"), "AppData", "Roaming")
 	}
 	dir := filepath.Join(appData, appName)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
 	return dir, nil

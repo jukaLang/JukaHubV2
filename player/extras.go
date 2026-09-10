@@ -697,8 +697,16 @@ type UserVariables struct {
 }
 
 func loadUserConfig() *UserConfig {
+	if userConfigCache != nil {
+		return userConfigCache
+	}
 	data, err := os.ReadFile("jukauser.json")
 	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[CONFIG] jukauser.json not found; starting with defaults")
+		} else {
+			log.Printf("[CONFIG] cannot read jukauser.json: %v", err)
+		}
 		userConfigCache = &UserConfig{
 			Variables: UserVariables{
 				Custom: make(map[string]interface{}),
@@ -707,7 +715,7 @@ func loadUserConfig() *UserConfig {
 	} else {
 		var uc UserConfig
 		if err := json.Unmarshal(data, &uc); err != nil {
-			log.Printf("loadUserConfig: parse error: %v", err)
+			log.Printf("[CONFIG] jukauser.json parse error: %v; starting with defaults", err)
 			uc = UserConfig{}
 		}
 		if uc.Variables.Custom == nil {

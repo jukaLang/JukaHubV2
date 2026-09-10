@@ -34,20 +34,24 @@ const (
 )
 
 var (
-	// Spacing (4pt grid for tighter, more modern layout)
+	// Spacing scale (4pt base grid). Every explicit gap in the UI should
+	// resolve to one of these values so the layout reads as a single system.
 	SpaceXS  = int32(4)
 	SpaceSM  = int32(8)
 	SpaceMD  = int32(12)
 	SpaceLG  = int32(16)
 	SpaceXL  = int32(24)
 	Space2XL = int32(32)
+	Space3XL = int32(40)
 
-	// Enhanced spacing for airy, premium feel (used on larger screens)
-	SpaceAiryXS = int32(6)
-	SpaceAirySM = int32(10)
-	SpaceAiryMD = int32(14)
-	SpaceAiryLG = int32(20)
-	SpaceAiryXL = int32(28)
+	// Density aliases. "Airy" is the relaxed premium variant used on larger
+	// screens; it is the same 4pt grid, just shifted up one step.
+	SpaceAiryXS  = int32(6)
+	SpaceAirySM  = int32(10)
+	SpaceAiryMD  = int32(14)
+	SpaceAiryLG  = int32(20)
+	SpaceAiryXL  = int32(28)
+	SpaceAiry2XL = int32(36)
 
 	// Layout tokens (safe margins, offsets, and component sizing)
 	StatusBarMargin   = int32(32) // matches the home header's 32px side margins
@@ -82,20 +86,32 @@ var (
 	IconSizeMin       = int32(44)
 	IconSizeMax       = int32(64)
 
-	// Typography sizes (approximate px)
-	FontSizeXS  = int32(10)
+	// Typography scale (approximate px). Every text size in the UI should
+	// come from here so headings, body, and labels stay proportional.
+	FontSizeXSS = int32(10)
 	FontSizeSM  = int32(12)
 	FontSizeMD  = int32(14)
 	FontSizeLG  = int32(18)
 	FontSizeXL  = int32(24)
 	FontSize2XL = int32(32)
+	FontSize3XL = int32(40)
 
-	// Border radius - refined, slightly softer for modern feel
-	RadiusSM = int32(8)
-	RadiusMD = int32(12)
-	RadiusLG = int32(16)
-	RadiusXL = int32(24)
-	RadiusXXL = int32(32)
+	// Motion tokens (approximate durations in milliseconds).
+	// Use these for any UI animations so motion feels consistent.
+	AnimDurationFast     = int32(100)
+	AnimDurationStandard = int32(200)
+	AnimDurationSlow     = int32(300)
+	AnimDurationSlower   = int32(400)
+	AnimDurationReduced  = int32(0)
+
+	// Border radius scale - softened for a modern glassy feel.
+	// Match card/tile radii to the spacing system: small = sm, medium = md, large = lg.
+	RadiusXS    = int32(6)
+	RadiusSM    = int32(8)
+	RadiusMD    = int32(12)
+	RadiusLG    = int32(16)
+	RadiusXL    = int32(24)
+	RadiusXXL   = int32(32)
 	RadiusRound = int32(9999) // fully round
 
 	// Surfaces - refined dark "Midnight" theme
@@ -149,6 +165,24 @@ var (
 	ColorToastInfo    = sdl.Color{R: 100, G: 200, B: 255, A: 255}
 	ColorToastSuccess = sdl.Color{R: 52, G: 211, B: 153, A: 255}
 
+	// Progress / track tokens
+	ColorTrack       = sdl.Color{R: 255, G: 255, B: 255, A: 22}
+	ColorProgress    = sdl.Color{R: 85, G: 216, B: 255, A: 255}
+	ColorProgressIntense = sdl.Color{R: 60, G: 190, B: 255, A: 255}
+
+	// Divider line
+	ColorDivider = sdl.Color{R: 255, G: 255, B: 255, A: 10}
+
+	// Icon tints for small glyph fills
+	ColorIconSurface = sdl.Color{R: 34, G: 46, B: 70, A: 255}
+	ColorIconDark    = sdl.Color{R: 7, G: 17, B: 31, A: 255}
+	ColorIconTertiary = sdl.Color{R: 255, G: 255, B: 255, A: 55}
+
+	// Chip / pill surface
+	ColorChip     = sdl.Color{R: 34, G: 46, B: 70, A: 255}
+	ColorChipHover = sdl.Color{R: 45, G: 60, B: 85, A: 255}
+	ColorChipFocus = sdl.Color{R: 55, G: 75, B: 105, A: 255}
+
 	// Accent (injected from config at runtime)
 	accentColor sdl.Color
 )
@@ -165,6 +199,10 @@ var (
 	textInverseColor    = sdl.Color{R: 9, G: 11, B: 20, A: 255}
 	textAccentColor     = sdl.Color{R: 110, G: 231, B: 255, A: 255}
 	textAccentSecondary = sdl.Color{R: 139, G: 124, B: 255, A: 255} // #8B7CFF
+
+	// Derived surface tints (set by ApplyThemeColors)
+	surfaceHighlightColor = sdl.Color{R: 255, G: 255, B: 255, A: 14}
+	topSheenColor         = sdl.Color{R: 255, G: 255, B: 255, A: 12}
 )
 
 // ColorTextPrimary returns the primary text color.
@@ -254,6 +292,16 @@ func ApplyThemeColors(p ThemePreset) {
 	ColorBackgroundTop = hexRGBA(p.Background)
 	ColorBackgroundBottom = ColorBackgroundTop
 	ColorBackground = ColorBackgroundBottom
+	// Retint the new systemic tokens that the rest of the UI may reference.
+	ColorProgress = hexRGBA(p.Info)
+	ColorProgressIntense = hexRGBA(p.Info)
+	ColorChip = hexRGBA(p.SurfaceAlt)
+	ColorChipHover = hexRGBA(p.SurfaceRaised)
+	ColorChipFocus = hexRGBA(p.SurfaceRaised)
+	ColorDivider = hexRGBA(p.BorderSubtle)
+	// Derive soft sheen colors so cards and panels share one highlight look.
+	surfaceHighlightColor = sdl.Color{R: 255, G: 255, B: 255, A: 14}
+	topSheenColor = sdl.Color{R: 255, G: 255, B: 255, A: 12}
 	// Invalidate cached background/gradient textures so the new theme colors
 	// are picked up on the very next frame.
 	gradientTexture = nil
@@ -289,6 +337,16 @@ func CardFill() sdl.Color {
 // ShadowFill returns a shadow color at the given alpha.
 func ShadowFill(alpha uint8) sdl.Color {
 	return WithAlpha(ColorShadow, alpha)
+}
+
+// SurfaceHighlight returns a soft white top sheen at the given alpha.
+func SurfaceHighlight(alpha uint8) sdl.Color {
+	return WithAlpha(surfaceHighlightColor, alpha)
+}
+
+// TopSheen returns the ultra-subtle top highlight used on cards/rows.
+func TopSheen(alpha uint8) sdl.Color {
+	return WithAlpha(topSheenColor, alpha)
 }
 
 // TextPrimary returns the primary text color.
@@ -369,6 +427,21 @@ func CardHoverColor() sdl.Color {
 func BorderHoverColor() sdl.Color {
 	return ColorBorderHover
 }
+
+// TrackColor returns the standard progress-track background color.
+func TrackColor() sdl.Color { return ColorTrack }
+
+// ProgressColor returns the standard progress-fill color.
+func ProgressColor() sdl.Color { return ColorProgress }
+
+// DividerColor returns the standard divider line color.
+func DividerColor() sdl.Color { return ColorDivider }
+
+// ChipColor returns the standard chip/pill surface color.
+func ChipColor() sdl.Color { return ColorChip }
+
+// IconSurfaceColor returns the standard small-icon fill color.
+func IconSurfaceColor() sdl.Color { return ColorIconSurface }
 
 // Spacing returns the appropriate spacing based on the density preference.
 // When airy is true, returns more generous spacing for a premium feel.

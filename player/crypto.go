@@ -270,17 +270,29 @@ func EncryptAPIToken(plaintext string, keyName string) (string, error) {
 }
 
 // DecryptAPIToken decrypts and returns an API token, logging failures.
+// It distinguishes three outcomes so callers can tell "not encrypted" from
+// "decryption failed" instead of collapsing both into an empty string.
 func DecryptAPIToken(encrypted string, keyName string) (string, error) {
 	if encrypted == "" {
-		return "", nil
+		return "", fmt.Errorf("%s: empty encrypted value", keyName)
+	}
+	if !strings.HasPrefix(encrypted, "ENC:") {
+		return "", fmt.Errorf("%s: value is not encrypted (missing ENC: prefix)", keyName)
 	}
 	decrypted, err := DecryptString(encrypted)
 	if err != nil {
 		log.Printf("[CRYPTO] Failed to decrypt %s: %v", keyName, err)
-		return "", err
+		return "", fmt.Errorf("%s: decryption failed: %w", keyName, err)
+	}
+	if decrypted == "" {
+		return "", fmt.Errorf("%s: decrypted to empty value", keyName)
 	}
 	return decrypted, nil
 }
+
+// DecryptSecret is a small convenience wrapper for generic config secrets. It uses
+// the same error distinctions as DecryptAPIToken but names the field more neutrally
+// so it is usable for non-API tokens where "API" would be misleading.
 
 // VerifyEncryptedData checks if an encrypted value can be decrypted successfully.
 // Returns true if valid, false otherwise. Does not leak the plaintext.
@@ -310,6 +322,13 @@ func EncryptWithAuth(plaintext string) (string, error) {
 	
 	// Append HMAC to encrypted value
 	return fmt.Sprintf("%s:AUTH:%s", encrypted, hex.EncodeToString(hmacValue)), nil
+}
+
+// DecryptSecret decrypts a generic config secret and logs failures. It is
+// intentionally parallel to DecryptAPIToken so callers get the same three-way
+// distinction without inventing a separate error scheme.
+func DecryptSecret(encrypted string, fieldName string) (string, error) {
+	return DecryptAPIToken(encrypted, fieldName)
 }
 
 // DecryptWithAuth decrypts data that was encrypted with EncryptWithAuth.

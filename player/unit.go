@@ -175,7 +175,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	inputX := toX + int32(int(rowW)+int(gap))
 	inputW := int32(0)
 	if w, err := strconv.Atoi(string(element.Width)); err == nil {
-		inputW = int32(w) - 260
+		inputW = clampInt32(int32(w)-260, 0, 4000)
 	}
 
 	fillRoundedRect(renderer, fromX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))

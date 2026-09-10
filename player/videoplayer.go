@@ -92,6 +92,7 @@ func clearVideoFrameQueue() {
 
 func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 	if ffprobePath == "" {
+		log.Printf("[VIDEO] ffprobe missing; using default 1280x720@30 probe values")
 		return 1280, 720, 0, 30
 	}
 	cmd := exec.Command(ffprobePath, "-v", "error",
@@ -100,7 +101,7 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 		"-of", "default=noprint_wrappers=1", path)
 	out, err := cmd.Output()
 	if err != nil {
-		log.Printf("[VIDEO] ffprobe failed: %v", err)
+		log.Printf("[VIDEO] ffprobe failed for %s: %v", sanitizeLogURL(path), err)
 		return 1280, 720, 0, 30
 	}
 	s := strings.TrimSpace(string(out))
@@ -125,12 +126,12 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 		if strings.HasPrefix(line, "width=") {
 			raw := strings.TrimPrefix(line, "width=")
 			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); err == nil && v > 0 {
-				w = int32(v)
+				w = int32(clampPosInt(v))
 			}
 		} else if strings.HasPrefix(line, "height=") {
 			raw := strings.TrimPrefix(line, "height=")
 			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); err == nil && v > 0 {
-				h = int32(v)
+				h = int32(clampPosInt(v))
 			}
 		} else if strings.HasPrefix(line, "duration=") {
 			raw := strings.TrimPrefix(line, "duration=")
@@ -782,14 +783,14 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	// Top / bottom gradients for readability.
 	topGradH := int32(70)
 	for s := int32(0); s < topGradH; s += 3 {
-		a := uint8(90 * (1.0 - float64(s)/float64(topGradH)))
+		a := uint8(clampInt32(90*(10-int32(float64(s)*10.0/float64(topGradH))), 0, 90))
 		renderer.SetDrawColor(0, 0, 0, a)
 		renderer.FillRect(&sdl.Rect{X: x, Y: y + s, W: w, H: 3})
 	}
 	bottomGradH := int32(140)
 	bottomY := y + h - bottomGradH
 	for s := int32(0); s < bottomGradH; s += 3 {
-		a := uint8(180 * (float64(s) / float64(bottomGradH)))
+		a := uint8(clampInt32(int32(180.0*float64(s)/float64(bottomGradH)), 0, 180))
 		renderer.SetDrawColor(0, 0, 0, a)
 		renderer.FillRect(&sdl.Rect{X: x, Y: bottomY + s, W: w, H: 3})
 	}
@@ -815,7 +816,7 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	phaseW, _, _ := font.SizeUTF8(phaseText)
 	badgeX := x + 16
 	badgeY := y + 12
-	fillRoundedRect(renderer, badgeX, badgeY, int32(phaseW)+18, 26, 13, WithAlpha(ColorSurfaceRaised, 230))
+	fillRoundedRect(renderer, badgeX, badgeY, clampInt32(int32(phaseW)+18, 1, 10000), 26, 13, WithAlpha(ColorSurfaceRaised, 230))
 	renderText(renderer, config, font, phaseText, phaseCol, badgeX+9, badgeY+6)
 
 	// Top-right: back (SDL-drawn X) and volume text.
@@ -837,7 +838,7 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	if state.progress > 0 {
 		filledW := int32(float64(seekBarW) * state.progress)
 		if filledW > 0 {
-			fillRoundedRect(renderer, seekBarX, seekBarY, filledW, seekBarH, seekBarH/2, accent)
+			fillRoundedRect(renderer, seekBarX, seekBarY, clampInt32(filledW, 0, seekBarW), seekBarH, seekBarH/2, accent)
 		}
 	}
 	renderer.SetDrawColor(255, 255, 255, 30)
@@ -1008,8 +1009,8 @@ func drawArc(renderer *sdl.Renderer, cx, cy, r int32, half float64, col sdl.Colo
 	for i := 0; i < steps; i++ {
 		a1 := -half + 2*half*float64(i)/float64(steps)
 		a2 := -half + 2*half*float64(i+1)/float64(steps)
-		renderer.DrawLine(cx+int32(float64(r)*math.Cos(a1)), cy+int32(float64(r)*math.Sin(a1)),
-			cx+int32(float64(r)*math.Cos(a2)), cy+int32(float64(r)*math.Sin(a2)))
+		renderer.DrawLine(clampInt32(cx+int32(float64(r)*math.Cos(a1)), -2000, 8000), clampInt32(cy+int32(float64(r)*math.Sin(a1)), -2000, 8000),
+			clampInt32(cx+int32(float64(r)*math.Cos(a2)), -2000, 8000), clampInt32(cy+int32(float64(r)*math.Sin(a2)), -2000, 8000))
 	}
 }
 

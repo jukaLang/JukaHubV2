@@ -43,7 +43,9 @@ tar -C "$OUT" -czf "$OUT/$ASSET" \
     Inter-Regular.ttf \
     background.jpg \
     jukaconfig.json \
-    launch.sh
+    launch.sh \
+    config.json \
+    JukaPlayer.png
 
 # --- Manifest + checksums ---
 SHA="$(sha256sum "$OUT/$ASSET" | cut -d' ' -f1)"
@@ -64,7 +66,7 @@ cat > "$OUT/manifest.json" <<EOF
       "sha256": "${SHA}",
       "size": ${SIZE},
       "min_firmware": "1.0.4",
-      "files": ["jukahub", "Inter-Regular.ttf", "background.jpg", "jukaconfig.json", "launch.sh"]
+      "files": ["jukahub", "Inter-Regular.ttf", "background.jpg", "jukaconfig.json", "launch.sh", "config.json", "JukaPlayer.png"]
     }
   ]
 }

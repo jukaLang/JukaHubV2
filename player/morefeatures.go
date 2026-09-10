@@ -562,21 +562,24 @@ func unzipFile(src string) error {
 	}
 	defer r.Close()
 	dest := strings.TrimSuffix(src, filepath.Ext(src)) + "_unzipped"
-	if err := os.MkdirAll(dest, 0755); err != nil {
+	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
+	destPrefix := filepath.Clean(dest) + string(os.PathSeparator)
 	for _, f := range r.File {
 		// Mitigate Zip Slip: refuse entries whose cleaned path escapes dest.
-		cleanedP := filepath.Join(dest, filepath.Clean(f.Name))
-		if !strings.HasPrefix(cleanedP, filepath.Clean(dest)+string(os.PathSeparator)) && cleanedP != filepath.Clean(dest) {
-			rc.Close()
+		cleanedP := filepath.Join(destPrefix, filepath.Clean(f.Name))
+		if !strings.HasPrefix(cleanedP, destPrefix) {
+			rc, openErr := f.Open()
+			if openErr == nil {
+				rc.Close()
+			}
 			return fmt.Errorf("refusing to extract zip entry with unsafe path %q", f.Name)
 		}
 
 		p := cleanedP
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(p, 0755); err != nil {
-				rc.Close()
+			if err := os.MkdirAll(p, 0o755); err != nil {
 				return err
 			}
 			continue
@@ -585,22 +588,21 @@ func unzipFile(src string) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
-			rc.Close()
+		defer rc.Close()
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}
 		out, err := os.Create(p)
 		if err != nil {
-			rc.Close()
 			return err
 		}
 		if _, err := io.Copy(out, rc); err != nil {
-			rc.Close()
 			out.Close()
 			return err
 		}
-		out.Close()
-		rc.Close()
+		if err := out.Close(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

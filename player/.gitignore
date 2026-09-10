@@ -1,0 +1,14 @@
+# Configs with secrets
+jukaconfig.json
+jukauser.json
+
+# Build output
+*.exe
+*.dll
+*.so
+*.o
+*.test
+
+# Build bootstrap temp items
+.msys2-installer.exe
+.sdl2/

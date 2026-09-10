@@ -21,7 +21,21 @@ import (
 
 // resolveToolURL returns the download URL for the first release asset whose
 // name matches one of the wanted strings (case-insensitive).
+//
+// IMPORTANT: repo must be a trusted GitHub repo, chosen from a small curated list
+// in this codebase. Arbitrary user-supplied repo names are not safe here because
+// the GitHub API can be abused to probe repo/release metadata and because a future
+// code path could be tempted to trust the returned download URL too much.
+var allowedToolRepos = map[string]bool{
+	"btbn/ffmpeg-builds":  true,
+	"yt-dlp/yt-dlp":       true,
+	"jukaLang/JukaHubV2":  true,
+}
+
 func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
+	if !allowedToolRepos[repo] {
+		return "", fmt.Errorf("tool repo %q is not in the approved download list", repo)
+	}
 	client := &http.Client{Timeout: 60 * time.Second}
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 	req, err := http.NewRequest("GET", apiURL, nil)
@@ -29,10 +43,10 @@ func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
 		return "", err
 	}
 	if apiToken != "" {
-		req.Header.Set("Authorization", "token "+apiToken)
+		req.Header.Set("Authorization", "Bearer "+apiToken)
 	}
 	req.Header.Set("User-Agent", "JukaHub-Patch-Tool/1.0")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
+	req.Header.Set("Accept", "application/vnd.github+json")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -56,6 +70,9 @@ func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
 		return "", err
 	}
+	if len(rel.Assets) == 0 {
+		return "", fmt.Errorf("no assets in %s latest release", repo)
+	}
 	for _, a := range rel.Assets {
 		for _, w := range wants {
 			if strings.EqualFold(a.Name, w) {
@@ -67,6 +84,7 @@ func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
 }
 
 // downloadFile downloads url to dest with a 60s timeout.
+// It also enforces a modest size cap and refuses obviously truncated files.
 func downloadFile(url, dest string) error {
 	client := &http.Client{Timeout: 60 * time.Second}
 	resp, err := client.Get(url)
@@ -77,210 +95,100 @@ func downloadFile(url, dest string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: unexpected status %d", url, resp.StatusCode)
 	}
+	rate := io.LimitReader(resp.Body, 512<<20+1)
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	if _, err = io.Copy(out, resp.Body); err != nil {
+	rw := &io.WriteCloserNW{w: out}
+	// Copy with a hard cap, then check whether the body was truncated.
+	n, err := io.Copy(rw, rate)
+	if err != nil {
+		out.Close()
 		return err
 	}
-	return out.Close()
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if n > 512<<20 {
+		_ = os.Remove(dest)
+		return fmt.Errorf("download %s exceeds 512 MiB limit", url)
+	}
+	if n < 4096 {
+		_ = os.Remove(dest)
+		return fmt.Errorf("download %s is suspiciously small (%d bytes)", url, n)
+	}
+	return nil
 }
 
-func extractFilesFromZip(archivePath, requiredDir string, wants []string) error {
-	r, err := zip.OpenReader(archivePath)
-	if err != nil {
+// ioWriteCloserNW is a thin wrapper so we can Close the underlying writer
+// after io.Copy without changing io.Copy's error semantics.
+type ioWriteCloserNW struct {
+	w io.Writer
+}
+
+func (c *ioWriteCloserNW) Write(p []byte) (int, error) {
+	return c.w.Write(p)
+}
+
+func (c *ioWriteCloserNW) Close() error {
+	if wc, ok := c.w.(io.Closer); ok {
+		return wc.Close()
+	}
+	return nil
+}
+
+func extractFilesFromZip(ctx context.Context, archivePath, requiredDir string, wants []string) error {
+	// Keep a small, targeted extraction path for bundled tool archives, but
+	// route the actual zip extraction through the project's shared safe helper so
+	// there is only one zip sanitization/escape path. After extraction, verify
+	// that any requested filenames are actually present.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	maxEntries := 256
+	maxTotalBytes := int64(1 << 30) // 1 GiB for large ffmpeg zip candidates
+	if err := extractZipSafe(ctx, archivePath, requiredDir, maxEntries, maxTotalBytes); err != nil {
 		return err
 	}
-	defer r.Close()
-
-	wantSet := make(map[string]bool, len(wants))
-	for _, w := range wants {
-		wantSet[strings.ToLower(w)] = true
+	if len(wants) == 0 {
+		return nil
 	}
-
-	found := 0
-	for _, f := range r.File {
-		base := filepath.Base(f.Name)
-		if !wantSet[strings.ToLower(base)] {
+	for _, w := range wants {
+		if w == "" {
 			continue
 		}
-
-		rc, err := f.Open()
-		if err != nil {
-			return err
+		if _, err := os.Stat(filepath.Join(requiredDir, filepath.FromSlash(w))); err != nil {
+			return fmt.Errorf("expected entry %q not found after extraction", w)
 		}
-
-		cleanedDest := filepath.Join(requiredDir, filepath.Clean(base))
-		if !strings.HasPrefix(cleanedDest, filepath.Clean(requiredDir)+string(os.PathSeparator)) &&
-			cleanedDest != filepath.Clean(requiredDir) {
-			rc.Close()
-			return fmt.Errorf("rejecting zip entry with unsafe path %q", f.Name)
-		}
-
-		if err := os.MkdirAll(filepath.Dir(cleanedDest), 0o755); err != nil {
-			rc.Close()
-			return err
-		}
-
-		out, err := os.OpenFile(cleanedDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		if _, err = io.Copy(out, rc); err != nil {
-			out.Close()
-			rc.Close()
-			return err
-		}
-		if err = out.Close(); err != nil {
-			rc.Close()
-			return err
-		}
-		if err = rc.Close(); err != nil {
-			return err
-		}
-
-		log.Printf("[TOOLS] extracted %s", base)
-		found++
-	}
-	if found == 0 {
-		return fmt.Errorf("none of %v found in archive", wants)
 	}
 	return nil
 }
 
+// extractFFmpegZip was previously a separate ffmpeg-zip extraction path that
+// reimplemented zip sanitization. It now routes through extractFilesFromZip via
+// extractZipSafe so there is a single safe-zip code path.
 func extractFFmpegZip(archivePath, requiredDir string) error {
-	r, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-
-	found := false
-	for _, f := range r.File {
-		base := filepath.Base(f.Name)
-		lower := strings.ToLower(base)
-
-		if lower == "ffplay.exe" || strings.HasSuffix(lower, ".dll") {
-			rc, err := f.Open()
-			if err != nil {
-				return err
-			}
-
-			cleanedDest := filepath.Join(requiredDir, filepath.Clean(base))
-			if !strings.HasPrefix(cleanedDest, filepath.Clean(requiredDir)+string(os.PathSeparator)) &&
-				cleanedDest != filepath.Clean(requiredDir) {
-				rc.Close()
-				return fmt.Errorf("refusing to extract ffmpeg zip entry with unsafe path %q", f.Name)
-			}
-
-			if err := os.MkdirAll(filepath.Dir(cleanedDest), 0o755); err != nil {
-				rc.Close()
-				return err
-			}
-
-			out, err := os.OpenFile(cleanedDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-			if err != nil {
-				rc.Close()
-				return err
-			}
-			if _, err = io.Copy(out, rc); err != nil {
-				out.Close()
-				rc.Close()
-				return err
-			}
-			if err = out.Close(); err != nil {
-				rc.Close()
-				return err
-			}
-			if err = rc.Close(); err != nil {
-				return err
-			}
-
-			log.Printf("[TOOLS] extracted %s", base)
-			if lower == "ffplay.exe" {
-				found = true
-			}
-		}
-	}
-	if !found {
-		return fmt.Errorf("ffplay.exe not found in ffmpeg zip")
-	}
-	return nil
+	return extractFilesFromZip(nil, archivePath, requiredDir, []string{"ffplay.exe", "ffmpeg.exe"})
 }
 
+// extractFFmpegTarXz downloads an archive to a temp file and then extracts it
+// through the shared safe-zip path. Despite the historical name, this helper does
+// not implement real tar/xz extraction; it is intentionally limited to the same
+// zip-based extraction the rest of the tool download path uses.
 func extractFFmpegTarXz(archivePath, requiredDir string) error {
-	tmp, err := os.MkdirTemp("", "ffmpeg-extract")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmp)
-
-	archivePath = filepath.Join(tmp, "archive")
-	if err := downloadFile(archivePath, archivePath); err != nil {
-		return err
-	}
-
-	return extractFilesFromZip(archivePath, requiredDir, "ffplay")
+	return extractFFmpegFromRemoteArchive(archivePath, requiredDir)
 }
 
 // unzipFile extracts a user-selected zip into a sibling folder named <src>_unzipped,
 // refusing any entry whose cleaned path escapes the destination.
 func unzipFile(src string) error {
-	r, err := zip.OpenReader(src)
-	if err != nil {
-		return err
-	}
-	defer r.Close()
-
+	ctx := context.Background()
 	dest := strings.TrimSuffix(src, filepath.Ext(src)) + "_unzipped"
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
-
-	for _, f := range r.File {
-		cleanedP := filepath.Join(dest, filepath.Clean(f.Name))
-		if !strings.HasPrefix(cleanedP, filepath.Clean(dest)+string(os.PathSeparator)) &&
-			cleanedP != filepath.Clean(dest) {
-			return fmt.Errorf("refusing to extract zip entry with unsafe path %q", f.Name)
-		}
-
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(cleanedP, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(cleanedP), 0o755); err != nil {
-			rc.Close()
-			return err
-		}
-		out, err := os.Create(cleanedP)
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		if _, err = io.Copy(out, rc); err != nil {
-			out.Close()
-			rc.Close()
-			return err
-		}
-		if err = out.Close(); err != nil {
-			rc.Close()
-			return err
-		}
-		if err = rc.Close(); err != nil {
-			return err
-		}
-	}
-	return nil
+	return extractZipSafe(ctx, src, dest, 1024, 1<<30)
 }
 
 // hashFile returns the SHA256 of path.

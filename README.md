@@ -456,13 +456,13 @@ JukaHub includes encryption for sensitive credentials like API keys and Discord 
 
 ### Encrypting API Keys
 
-Encrypt secrets at build time (or in a one-off Go helper) and store only the encrypted payload in `jukaconfig.json`.
+Encrypt secrets with the same encryption key the player will use at runtime, and store only the encrypted payload in `jukaconfig.json`.
 
 ```bash
-# Set the same encryption key the player will use at runtime (do this once per session)
+# Set the encryption key the player will use at runtime (do this in the same environment)
 export JUKAHUB_CRYPTO_KEY="your-64-char-hex-key-here"
 
-# Then use the Go encryption functions, or set the env var and restart the player.
+# Then encrypt with the player's Go helpers or a one-off tool.
 # Encrypted values in config look like: "ENC:default-v3-enhanced/..."
 ```
 
@@ -470,7 +470,7 @@ export JUKAHUB_CRYPTO_KEY="your-64-char-hex-key-here"
 
 1. **Never commit secrets to version control** — add `jukaconfig.json` to `.gitignore` if it contains real credentials
 2. **Use placeholder values in committed configs** — empty strings or `"your-api-key-here"`
-3. **Set file permissions** — `chmod 600 jukaconfig.json` on Linux/macOS, strict ACLs on Windows
+3. **Set file permissions** — `chmod 600 jukaconfig.json` on Linux/macOS, restrictive ACLs on Windows
 4. **Use environment variables for production** — set `JUKAHUB_CRYPTO_KEY` and optionally `JUKAHUB_CRYPTO_SALT` before launching
 5. **Gather config health at startup** — the player runs `ConfigValidator.SecurityCheck` and logs plaintext-secret and default-key warnings
 
