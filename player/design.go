@@ -173,9 +173,9 @@ var (
 	// Divider line
 	ColorDivider = sdl.Color{R: 255, G: 255, B: 255, A: 10}
 
-	// Icon tints for small glyph fills
-	ColorIconSurface = sdl.Color{R: 34, G: 46, B: 70, A: 255}
-	ColorIconDark    = sdl.Color{R: 7, G: 17, B: 31, A: 255}
+	// Icon tints for small glyph fills. ColorIconSurface and ColorIconDark are
+	// declared once in homelayout.go (home design tokens) and get retinted at
+	// runtime by ApplyDesignPalette.
 	ColorIconTertiary = sdl.Color{R: 255, G: 255, B: 255, A: 55}
 
 	// Chip / pill surface

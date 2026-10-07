@@ -86,6 +86,20 @@ export CC=aarch64-linux-gnu-gcc
 go build -o JukaHub .
 ```
 
+### TrimUI Smart Pro SD card build
+
+The TrimUI Smart Pro needs the official SDK sysroot (glibc 2.23, SDL2 2.26.1),
+so plain cross-compiling is not enough. Two supported routes:
+
+* **GitHub Actions** — push, run the *Build SD card package* workflow, download
+  the `JukaHub-SDCARD` artifact (already contains `yt-dlp`, `ffmpeg`, `ffprobe`,
+  `ffplay` for ARM64). No toolchain to install.
+* **Local / WSL / Docker** — `cd player && ./package-sdcard.sh` inside the
+  [TrimUI Smart Pro toolchain](https://github.com/anibaldeboni/trimui-smart-pro-toolchain).
+
+Installation steps, troubleshooting and device notes:
+**[player/trimui/README-ID.md](player/trimui/README-ID.md)**.
+
 ---
 
 ## Configuration

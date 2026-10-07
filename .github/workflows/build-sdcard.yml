@@ -1,0 +1,76 @@
+name: Build SD card package
+
+# Build the TrimUI Smart Pro (linux/arm64, CGO + SDL2) SD-card package.
+#
+# The job runs inside the community TrimUI Smart Pro toolchain image, which
+# already contains: the Allwinner A133P SDK sysroot, the linaro aarch64 gcc,
+# SDL2 2.26.1 (built for the GE8300 GPU) and Go.
+#
+# Run it:  Actions -> Build SD card package -> Run workflow
+# Result:  artifact "JukaHub-SDCARD" containing JukaHub-SDCARD.zip
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "player/**"
+      - ".github/workflows/build-sdcard.yml"
+  pull_request:
+    paths:
+      - "player/**"
+      - ".github/workflows/build-sdcard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sdcard:
+    name: linux/arm64 + SD card layout
+    runs-on: ubuntu-latest
+    container:
+      image: anibaldeboni/trimui-smart-pro-toolchain:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache Go modules and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/toolchain/go/pkg/mod
+            /home/toolchain/.cache/go-build
+          key: tspsdcard-${{ hashFiles('player/go.sum') }}
+          restore-keys: |
+            tspsdcard-
+
+      - name: Build and package
+        working-directory: player
+        env:
+          # Keep the package small on the CI run: the device can also fetch
+          # ffmpeg/yt-dlp on its own from MISC -> Tools.
+          WITH_FFMPEG: "1"
+          WITH_YTDLP: "1"
+        run: |
+          chmod +x package-sdcard.sh
+          ./package-sdcard.sh
+
+      - name: Upload SD card package
+        uses: actions/upload-artifact@v4
+        with:
+          name: JukaHub-SDCARD
+          if-no-files-found: error
+          path: |
+            player/dist/JukaHub-SDCARD.zip
+            player/dist/JukaHub-SDCARD/
+
+      - name: Summary
+        run: |
+          {
+            echo "### SD card package"
+            echo ""
+            echo '```'
+            cat player/dist/build-summary.txt 2>/dev/null || echo "no summary"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

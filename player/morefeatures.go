@@ -110,9 +110,13 @@ func playWithMPV(config *Config, url string) {
 			"--",
 			url,
 		)
-		cmd.Env = append(os.Environ(),
-			"SDL_AUDIODRIVER=directsound",
-		)
+		// SDL_AUDIODRIVER=directsound is Windows-only; on Linux it makes SDL
+		// fail to open audio. Handhelds pick their own driver (ALSA).
+		env := os.Environ()
+		if IsWindows() {
+			env = append(env, "SDL_AUDIODRIVER=directsound")
+		}
+		cmd.Env = env
 		if err := cmd.Run(); err != nil {
 			log.Printf("playWithMPV error: %v", err)
 		}

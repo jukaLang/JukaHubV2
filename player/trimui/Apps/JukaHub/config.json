@@ -1,0 +1,7 @@
+{
+  "label": "JukaHub",
+  "icon": "icon.png",
+  "iconsel": "icon.png",
+  "launch": "launch.sh",
+  "description": "YouTube player & media hub"
+}

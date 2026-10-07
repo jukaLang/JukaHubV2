@@ -594,9 +594,7 @@ func savePatchState() error {
 func InitPatchModule() {
 	loadPatchState()
 	checkInterruptedJournal()
-	if err := ensureDefaultRepo(); err != nil {
-		logPatch("default patch repo setup failed: %v", err)
-	}
+		ensureDefaultRepo()
 }
 
 // ---------------------------------------------------------------------------
@@ -647,10 +645,7 @@ func ensureHelperTool(tool string, config *Config) error {
 	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" {
 		return fmt.Errorf("unsupported helper tool %q (supported: ffplay, ffmpeg, yt-dlp)", tool)
 	}
-	dir, err := P().ToolsDir()
-	if err != nil {
-		return fmt.Errorf("tools directory unavailable: %w", err)
-	}
+		dir := P().ToolsDir()
 	if dir == "" {
 		return fmt.Errorf("tools directory unavailable (empty path)")
 	}
@@ -662,13 +657,14 @@ func ensureHelperTool(tool string, config *Config) error {
 		exeName += ".exe"
 	}
 	target := filepath.Join(dir, exeName)
-	if _, err := os.Stat(target); err == nil {
+	_, statErr := os.Stat(target)
+	if statErr == nil {
 		return nil
 	}
-	if !os.IsNotExist(err) {
-		return fmt.Errorf("tools directory check failed for %s: %w", target, err)
+	if !os.IsNotExist(statErr) {
+		return fmt.Errorf("tools directory check failed for %s: %w", target, statErr)
 	}
-	log.Printf("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
+	logPatch("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
 	return downloadHelperTool(tool, target, config)
 }
 
@@ -690,10 +686,6 @@ func downloadFFmpegFFplay(target string, config *Config) error {
 		return fmt.Errorf("unsupported architecture %q for ffmpeg download (supported: arm64, amd64)", arch)
 	}
 	repo := "BtbN/FFmpeg-Builds"
-	variant := "release"
-	if runtime.GOOS != "windows" {
-		variant = "release"
-	}
 	pattern := func() string {
 		if arch == "arm64" {
 			return "ffmpeg-*arm64*-static.zip"
@@ -710,7 +702,7 @@ func downloadFFmpegFFplay(target string, config *Config) error {
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
-	log.Printf("[TOOLS] downloading ffmpeg from %s", url)
+	logPatch("[TOOLS] downloading ffmpeg from %s", url)
 	if err := downloadFile(url, tmp.Name()); err != nil {
 		return fmt.Errorf("download ffmpeg from %s: %w", url, err)
 	}
@@ -726,7 +718,7 @@ func downloadFFmpegFFplay(target string, config *Config) error {
 	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(target, 0o755); err != nil {
-			log.Printf("[TOOLS] warn: cannot chmod ffplay: %v", err)
+			logPatch("[TOOLS] warn: cannot chmod ffplay: %v", err)
 		}
 	}
 	return nil
@@ -743,7 +735,7 @@ func downloadYtDlp(target string, config *Config) error {
 			}
 			defer os.Remove(tmp.Name())
 			defer tmp.Close()
-			log.Printf("[TOOLS] downloading yt-dlp.exe from %s", url)
+			logPatch("[TOOLS] downloading yt-dlp.exe from %s", url)
 			if err2 := downloadFile(url, tmp.Name()); err2 != nil {
 				return fmt.Errorf("download yt-dlp from %s: %w", url, err2)
 			}
@@ -755,7 +747,7 @@ func downloadYtDlp(target string, config *Config) error {
 			}
 			return nil
 		}
-		log.Printf("[TOOLS] warn: could not resolve yt-dlp.exe URL: %v", err)
+		logPatch("[TOOLS] warn: could not resolve yt-dlp.exe URL: %v", err)
 	}
 	// Fallback: download the py installer script and bundle a minimal runtime.
 	url, err := resolveToolURL("yt-dlp/yt-dlp", "", "yt-dlp")
@@ -768,7 +760,7 @@ func downloadYtDlp(target string, config *Config) error {
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
-	log.Printf("[TOOLS] downloading yt-dlp from %s", url)
+	logPatch("[TOOLS] downloading yt-dlp from %s", url)
 	if err := downloadFile(url, tmp.Name()); err != nil {
 		return fmt.Errorf("download yt-dlp from %s: %w", url, err)
 	}
@@ -780,7 +772,7 @@ func downloadYtDlp(target string, config *Config) error {
 	}
 	if runtime.GOOS != "windows" {
 		if err := os.Chmod(target, 0o755); err != nil {
-			log.Printf("[TOOLS] warn: cannot chmod yt-dlp: %v", err)
+			logPatch("[TOOLS] warn: cannot chmod yt-dlp: %v", err)
 		}
 	}
 	return nil
@@ -797,15 +789,16 @@ func helperToolPath(tool string, config *Config) (string, error) {
 	if toolPath == "" {
 		return "", fmt.Errorf("unable to resolve tools path for %s", tool)
 	}
-	if _, err := os.Stat(toolPath); err == nil {
+	_, statErr := os.Stat(toolPath)
+	if statErr == nil {
 		return toolPath, nil
 	}
-	if !os.IsNotExist(err) {
-		return "", fmt.Errorf("tools path %s exists but is not accessible: %w", toolPath, err)
+	if !os.IsNotExist(statErr) {
+		return "", fmt.Errorf("tools path %s exists but is not accessible: %w", toolPath, statErr)
 	}
-	log.Printf("[TOOLS] %s missing at %q; attempting download", tool, toolPath)
+	logPatch("[TOOLS] %s missing at %q; attempting download", tool, toolPath)
 	if err := ensureHelperTool(tool, config); err != nil {
-		log.Printf("[TOOLS] auto-download of %s failed: %v", tool, err)
+		logPatch("[TOOLS] auto-download of %s failed: %v", tool, err)
 		return "", fmt.Errorf("missing %s and auto-download failed: %w", tool, err)
 	}
 	verified := getToolPath(tool, config)
@@ -1387,7 +1380,7 @@ func copyFile(src, dst string) error {
 	defer func() {
 		// Best-effort close, but don't mask prior errors
 		if closeErr := out.Close(); closeErr != nil && err == nil {
-			log.Printf("[PATCH] copyFile: close error for %s: %v", dst, closeErr)
+			logPatch("[PATCH] copyFile: close error for %s: %v", dst, closeErr)
 		}
 	}()
 	
@@ -1591,6 +1584,11 @@ func MigrateConfigFile(path string) (string, error) {
 			return "", fmt.Errorf("config file missing: %s", path)
 		}
 		return "", fmt.Errorf("config read: %w", err)
+	}
+	// Decode into a generic map so unknown fields survive the migration.
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return "", fmt.Errorf("config is not valid JSON: %w", err)
 	}
 	before, err := json.Marshal(raw)
 	if err != nil {

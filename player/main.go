@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net"
@@ -1715,14 +1716,18 @@ func ffplayEnv(ffplayPath string) []string {
 			env = append(env, "PATH="+dir+string(os.PathListSeparator)+path)
 		}
 	}
-	env = append(env,
-		"SDL_AUDIODRIVER=directsound",
-	)
 	// NOTE: Do NOT force SDL_VIDEODRIVER=directx here. On some systems the
 	// DirectX SDL backend fails to initialize for the ffplay child process
 	// ("Could not initialize SDL - directx not available"), while the default
 	// auto-detected backend (which IPTV playback uses successfully) works.
 	// Letting SDL pick its own video driver is the reliable choice.
+	//
+	// The same goes for the audio driver: SDL_AUDIODRIVER=directsound only
+	// exists on Windows. On Linux handhelds (Trimui Smart Pro) it would make
+	// SDL fail to open audio at all, so it stays Windows-only.
+	if IsWindows() {
+		env = append(env, "SDL_AUDIODRIVER=directsound")
+	}
 	return env
 }
 
@@ -1826,17 +1831,19 @@ func decryptCustomStringResult(config *Config, key string) (string, error) {
 
 // sanitizeURL removes sensitive query parameters from URLs for safe logging.
 // This prevents API keys, tokens, and other secrets from appearing in logs.
-func sanitizeURL(url string) string {
-	if url == "" {
+// The parameter is deliberately not called "url" so the net/url package stays
+// reachable inside the function.
+func sanitizeURL(rawURL string) string {
+	if rawURL == "" {
 		return ""
 	}
 	// Only process http/https URLs
-	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		return url
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		return rawURL
 	}
 
 	// Parse the URL and remove sensitive query params
-	if u, err := url.Parse(url); err == nil {
+	if u, err := url.Parse(rawURL); err == nil {
 		// Query parameters that might contain sensitive data
 		sensitiveParams := map[string]bool{
 			"key": true, "api_key": true, "apikey": true, "token": true,
@@ -1859,19 +1866,19 @@ func sanitizeURL(url string) string {
 		}
 	}
 
-	return url
+	return rawURL
 }
 
 // sanitizeLogURL is a wrapper that logs a sanitized URL or "<hidden>" if sanitization removed params.
-func sanitizeLogURL(url string) string {
-	if url == "" {
+func sanitizeLogURL(rawURL string) string {
+	if rawURL == "" {
 		return ""
 	}
-	sanitized := sanitizeURL(url)
+	sanitized := sanitizeURL(rawURL)
 	// If the URL changed, indicate parameters were removed
-	if sanitized != url {
+	if sanitized != rawURL {
 		// Return just the base URL without query params for safety
-		if u, err := url.Parse(url); err == nil {
+		if u, err := url.Parse(rawURL); err == nil {
 			return u.Scheme + "://" + u.Host + u.Path
 		}
 	}
@@ -1905,8 +1912,10 @@ func ytDlpExtraArgs(config *Config) string {
 	return strings.Join(parts, " ")
 }
 
-// ytDlpExtraArgsSlice returns extra yt-dlp arguments as a string slice based on
-// config, suitable for appending to exec.Command args.
+// ytSearchCmd returns a yt-dlp search command for the current config, including
+// any extra args from ytDlpExtraArgs. It exists so the two YouTube search
+// handlers share one command builder instead of duplicating the base yt-dlp
+// invocation.
 func ytSearchCmd(config *Config) string {
 	base := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 20 "ytsearch20:$search_query"`
 	if extra := ytDlpExtraArgs(config); extra != "" {
@@ -1915,50 +1924,6 @@ func ytSearchCmd(config *Config) string {
 	return base
 }
 
-// ytDlpExtraArgsSlice returns extra yt-dlp arguments as a string slice based on
-// the active configuration. If the Google API key is missing, empty, or cannot be
-// decrypted, the returned slice is empty.
-// Deprecated: prefer the shared ytSearchCmd builder where possible.
-
-// ytSearchCmd returns a yt-dlp search command for the current config, including
-// any extra args from ytDlpExtraArgs. It exists so the two YouTube search handlers
-// share one command builder instead of duplicating the base yt-dlp invocation.
-
-// ytSearchCmd returns a yt-dlp search command for the current config, including
-// any extra args from ytDlpExtraArgs. It exists so the two YouTube search handlers
-// share one command builder instead of duplicating the base yt-dlp invocation.
-func ytSearchCmd(config *Config) string {
-	base := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 20 "ytsearch20:$search_query"`
-	if extra := ytDlpExtraArgs(config); extra != "" {
-		return base + " " + extra
-	}
-	return base
-}
-
-// ytSearchCmdV2 is a no-op alias for ytSearchCmd kept only while the codebase still
-// calls it through the generic ytDlpExtraArgs / ytDlpExtraArgsSlice path. New code
-// should use ytSearchCmd.
-func ytSearchCmdV2(config *Config) string {
-	return ytSearchCmd(config)
-}
-
-// ytSearchCmdLegacy is a no-op alias for ytSearchCmd kept only until the codebase
-// is fully migrated away from the duplicated base-yt-dlp string literal.
-func ytSearchCmdLegacy(config *Config) string {
-	return ytSearchCmd(config)
-}
-
-// ytSearchCmdLegacy is a no-op alias for ytSearchCmd kept only until the codebase
-// is fully migrated away from the duplicated base-yt-dlp string literal.
-func ytSearchCmdLegacy(config *Config) string {
-	return ytSearchCmd(config)
-}
-
-// ytSearchCmdLegacy is a no-op alias for ytSearchCmd kept only until the codebase
-// is fully migrated away from the duplicated base-yt-dlp string literal.
-func ytSearchCmdLegacy(config *Config) string {
-	return ytSearchCmd(config)
-}
 func ytDlpExtraArgsSlice(config *Config) []string {
 	var parts []string
 	if config == nil {
@@ -2788,7 +2753,7 @@ func playVideoInfo(config *Config, v VideoInfo) {
 			"--geo-bypass",
 			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 			"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
-			"-f", "best[height<=720]/best",
+			"-f", videoFormatSelector(config),
 			url,
 		}
 		ytArgs = append(ytArgs, ytDlpExtraArgsSlice(config)...)
@@ -2843,6 +2808,22 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	}()
 }
 
+// videoFormatSelector returns the yt-dlp format selector used for playback.
+// The ceiling comes from variables.playbackResolution (Settings → Playback
+// resolution) so slow devices such as the Trimui Smart Pro can request 360p
+// instead of always asking for 720p.
+func videoFormatSelector(config *Config) string {
+	maxHeight := 720
+	if config != nil {
+		if res := strings.TrimSpace(config.Variables.PlaybackResolution); res != "" && res != "best" {
+			if h, err := strconv.Atoi(res); err == nil && h > 0 {
+				maxHeight = h
+			}
+		}
+	}
+	return fmt.Sprintf("best[height<=%d]/best", maxHeight)
+}
+
 func playWithDirectURL(config *Config, ffplayPath, ytDlpPath, url string) {
 	log.Printf("[DEBUG] playWithDirectURL: trying --get-url for %s", url)
 	getArgs := []string{
@@ -2851,7 +2832,7 @@ func playWithDirectURL(config *Config, ffplayPath, ytDlpPath, url string) {
 		"--geo-bypass",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 		"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
-		"-f", "best[height<=720]/best",
+		"-f", videoFormatSelector(config),
 		url,
 	}
 	getArgs = append(getArgs, ytDlpExtraArgsSlice(config)...)
@@ -2922,7 +2903,7 @@ func playWithTempFile(config *Config, ffplayPath, ytDlpPath, url string, startSe
 		"--no-continue",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 		"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
-		"-f", "best[height<=720]/best",
+		"-f", videoFormatSelector(config),
 		url,
 	}
 	dlArgs = append(dlArgs, ytDlpExtraArgsSlice(config)...)
@@ -3313,16 +3294,12 @@ func handleKeyboardInput(config *Config) {
 			updateInputVariable(config)
 			virtualKeyboardActive = false
 			activeSceneIndex = -1
-			activeElementIndex = -1					// If the active scene is a search scene, trigger its search button
-						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
-							sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
-							if len(config.Scenes[currentSceneIndex].Elements) == 0 {
-								break
-							}
-						}
-						if len(config.Scenes[currentSceneIndex].Elements) == 0 {
-							break
-
+			activeElementIndex = -1
+			// If the active scene is a search scene, trigger its search button
+			if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+				sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+				if len(config.Scenes[currentSceneIndex].Elements) == 0 {
+					break
 				}
 				for _, elem := range config.Scenes[currentSceneIndex].Elements {
 					if elem.Type == "button" && elem.Trigger == "yt_search" {
@@ -3330,8 +3307,8 @@ func handleKeyboardInput(config *Config) {
 						break
 					}
 				}
-				}
-				default:
+			}
+		default:
 					inputTextBuffer += key
 				}
 				if key != "ENTER" && key != "⇧" {
@@ -4853,7 +4830,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if q == "" {
 			publishCustom("search_error", "Type a search query first.")
 			return
-		}	cmd := ytSearchCmd(config)
+		}
+		cmd := ytSearchCmd(config)
 	go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
 	case "youtube_smart":
 		q := ""
@@ -4867,7 +4845,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if strings.Contains(q, "youtube.com") || strings.Contains(q, "youtu.be") {
 			playVideoURL(config, q)
 			return
-		}	cmd := ytSearchCmd(config)
+		}
+		cmd := ytSearchCmd(config)
 	go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
 	case "youtube_trending":
 		go fetchTrendingVideos(config, "search_results", snapshotVars(config))
@@ -5839,7 +5818,9 @@ func moveHomeSelection(config *Config, dx, dy int) {
 	}
 }
 
-// --- Main ---func main() {
+// --- Main ---
+
+func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("Panic: %v\n%s", r, debug.Stack())
@@ -6042,19 +6023,19 @@ func moveHomeSelection(config *Config, dx, dy int) {
 	if sdl.NumJoysticks() > 0 {
 		log.Printf("[GAMEPAD] Found %d joystick(s)", sdl.NumJoysticks())
 		for i := 0; i < sdl.NumJoysticks(); i++ {
-			if sdl.GameControllerFromIndex(i) != nil {
-				gc := sdl.GameControllerFromIndex(i)
-				log.Printf("[GAMEPAD] Controller %d: %s (GUID: %s)", i, sdl.GameControllerName(gc), sdl.GameControllerGetGUID(gc))
-				if i == 0 {
-					defer gc.Close()
-				}
+			if sdl.IsGameController(i) {
+				// go-sdl2 has no GameControllerFromIndex: the name/ID are
+				// queried per index, and the handle comes from Open.
+				log.Printf("[GAMEPAD] Controller %d: %s (GUID: %s)", i,
+					sdl.GameControllerNameForIndex(i),
+					sdl.JoystickGetGUIDString(sdl.JoystickGetDeviceGUID(i)))
 			} else {
 				log.Printf("[GAMEPAD] Joystick %d: %s (not a game controller)", i, sdl.JoystickNameForIndex(i))
 			}
 		}
 		if c := sdl.GameControllerOpen(0); c != nil {
 			defer c.Close()
-			log.Printf("[GAMEPAD] Opened controller 0: %s", sdl.GameControllerName(c))
+			log.Printf("[GAMEPAD] Opened controller 0: %s", c.Name())
 		}
 	} else {
 		log.Printf("[GAMEPAD] No joysticks/gamepads detected")

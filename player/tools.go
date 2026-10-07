@@ -1,20 +1,17 @@
 package main
 
 import (
-	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"math"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -100,7 +97,7 @@ func downloadFile(url, dest string) error {
 	if err != nil {
 		return err
 	}
-	rw := &io.WriteCloserNW{w: out}
+	rw := &ioWriteCloserNW{w: out}
 	// Copy with a hard cap, then check whether the body was truncated.
 	n, err := io.Copy(rw, rate)
 	if err != nil {
@@ -137,6 +134,35 @@ func (c *ioWriteCloserNW) Close() error {
 	}
 	return nil
 }
+
+// findMPVPath returns the path to the mpv binary, searching the bundled
+// tools folder, the usual system locations, and finally PATH. It returns an
+// empty string when mpv is not installed.
+func findMPVPath() string {
+	candidates := []string{filepath.Join(".", "required", "mpv")}
+	if IsWindows() {
+		// Resolve Program Files instead of hard-coding a drive letter.
+		if pf := os.Getenv("ProgramFiles"); pf != "" {
+			candidates = append(candidates, filepath.Join(pf, "mpv", "mpv.exe"))
+		}
+		if pf := os.Getenv("ProgramFiles(x86)"); pf != "" {
+			candidates = append(candidates, filepath.Join(pf, "mpv", "mpv.exe"))
+		}
+		candidates = append(candidates, "mpv.exe")
+	} else {
+		candidates = append(candidates, "/usr/bin/mpv", "/usr/local/bin/mpv", "/bin/mpv", "mpv")
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(c); err == nil && !info.IsDir() {
+			return c
+		}
+	}
+	if p, err := exec.LookPath("mpv"); err == nil {
+		return p
+	}
+	return ""
+}
+
 
 func extractFilesFromZip(ctx context.Context, archivePath, requiredDir string, wants []string) error {
 	// Keep a small, targeted extraction path for bundled tool archives, but
@@ -177,18 +203,7 @@ func extractFFmpegZip(archivePath, requiredDir string) error {
 // not implement real tar/xz extraction; it is intentionally limited to the same
 // zip-based extraction the rest of the tool download path uses.
 func extractFFmpegTarXz(archivePath, requiredDir string) error {
-	return extractFFmpegFromRemoteArchive(archivePath, requiredDir)
-}
-
-// unzipFile extracts a user-selected zip into a sibling folder named <src>_unzipped,
-// refusing any entry whose cleaned path escapes the destination.
-func unzipFile(src string) error {
-	ctx := context.Background()
-	dest := strings.TrimSuffix(src, filepath.Ext(src)) + "_unzipped"
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	return extractZipSafe(ctx, src, dest, 1024, 1<<30)
+	return extractFFmpegZip(archivePath, requiredDir)
 }
 
 // hashFile returns the SHA256 of path.
@@ -214,24 +229,6 @@ func runCmd(name string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
-// httpGetText fetches url with timeout and returns the response body text, or "".
-func httpGetText(url string, timeout time.Duration) string {
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Get(url)
-	if err != nil {
-		return ""
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return ""
-	}
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(data))
-}
-
 // ensureDirPath is a no-op helper that normalizes paths across platforms.
 func ensureDirPath(dir string) string {
 	dir = filepath.Clean(dir)
@@ -244,8 +241,8 @@ func ensureDirPath(dir string) string {
 // safeInt converts a string to int32 without silent truncation. If the value
 // is too large or not a valid integer, it returns the fallback value.
 func safeInt(text string, fallback int32) int32 {
-	v, err := parsePosInt(text)
-	if err != nil {
+	v, ok := parsePosInt(text)
+	if !ok {
 		return fallback
 	}
 	return v
@@ -290,30 +287,6 @@ func firstExisting(candidates ...string) string {
 	return ""
 }
 
-// copyFile copies src to dst with 0o600 permissions for the destination.
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	if _, err = io.Copy(out, in); err != nil {
-		return err
-	}
-	return out.Close()
-}
-
 // retryDo retries fn up to maxAttempts times on transient errors.
 func retryDo(maxAttempts int, fn func() error) error {
 	var err error
@@ -327,12 +300,6 @@ func retryDo(maxAttempts int, fn func() error) error {
 		}
 	}
 	return fmt.Errorf("failed after %d attempts: %w", maxAttempts, err)
-}
-
-// sha256Hex returns the hex-encoded SHA256 of data.
-func sha256Hex(data []byte) string {
-	h := sha256.Sum256(data)
-	return hex.EncodeToString(h[:])
 }
 
 // containsIgnoreCase reports whether substr appears in s, ignoring case.
@@ -396,18 +363,6 @@ func clampAngle(deg float64) float64 {
 		deg += 360
 	}
 	return deg
-}
-
-// lerpInt32 linearly interpolates between a and b by t in [0,1].
-func lerpInt32(a, b, t int32) int32 {
-	if t <= 0 {
-		return a
-	}
-	if t >= 1 {
-		return b
-	}
-	diff := b - a
-	return a + int32(float64(diff)*float64(t))
 }
 
 // lerpFloat64 linearly interpolates between a and b by t in [0,1].
@@ -658,7 +613,12 @@ func latestFile(dir, filter string) (string, error) {
 		if err != nil {
 			continue
 		}
-		if !found || info.ModTime().After(best.Info().ModTime()) {
+		if !found {
+			best = e
+			found = true
+			continue
+		}
+		if bestInfo, berr := best.Info(); berr == nil && info.ModTime().After(bestInfo.ModTime()) {
 			best = e
 			found = true
 		}
@@ -729,15 +689,6 @@ func absPath(path string) (string, error) {
 		return filepath.Clean(path), nil
 	}
 	return filepath.Abs(path)
-}
-
-// resolvePath returns the cleaned absolute path for path.
-func resolvePath(path string) (string, error) {
-	p, err := absPath(path)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Clean(p), nil
 }
 
 // walkFiles walks root and calls fn for each file (not dir).

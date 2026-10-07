@@ -1,0 +1,6 @@
+# Shell scripts and CI definitions must keep LF endings: they run inside the
+# TrimUI Smart Pro (Linux) and inside the Linux build container.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf

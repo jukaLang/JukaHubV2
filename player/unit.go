@@ -122,7 +122,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	catGap := int32(10)
 
 	for i, cat := range categories {
-		cx := catStartX + int32(i)*int(uint32(catW+catGap))
+		cx := catStartX + int32(i)*(catW+catGap)
 		if cx < catStartX {
 			break
 		}

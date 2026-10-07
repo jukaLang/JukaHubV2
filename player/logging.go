@@ -24,7 +24,9 @@ func logLevelFromEnv() slog.Level {
 		case "error":
 			return slog.LevelError
 		case "none", "off":
-			return slog.LevelCrit
+			// log/slog has no LevelCrit; a level above Error silences the
+			// handlers completely (nothing is ever >= 12 in normal operation).
+			return slog.Level(12)
 		}
 	}
 	// Default: debug on desktop, info on TSP
