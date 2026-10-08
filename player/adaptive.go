@@ -44,7 +44,7 @@ func NewFrameRateController() *FrameRateController {
 		lastInputTime: sdl.GetTicks64(),
 		currentMode:   FrameRateActive,
 	}
-	if IsTSP() {
+	if IsTrimuiDevice() {
 		fc.idleThreshold = 3000  // 3s → 30fps
 		fc.deepThreshold = 10000 // 10s → 20fps
 	} else {
@@ -328,9 +328,9 @@ func LogDeviceDiagnostics() {
 			info.MemTotal/1024, info.MemAvail/1024)
 	}
 
-	if IsTSP() {
-		log.Printf("[device] TSP mode: text cache 512 entries, adaptive FPS enabled")
+	if IsTrimuiDevice() {
+		log.Printf("[device] TrimUI mode: text cache 512 entries, adaptive FPS enabled")
 	} else {
-		log.Printf("[device] Desktop mode: text cache 2048 entries, standard FPS")
+		log.Printf("[device] Non-TrimUI mode: text cache 2048 entries, standard FPS")
 	}
 }

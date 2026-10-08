@@ -7,6 +7,119 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
+func TestParsePosIntBounds(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int32
+		ok    bool
+	}{
+		{"2147483647", 2147483647, true},
+		{"2147483648", 0, false},
+		{"-1", 0, false},
+		{"0", 0, true},
+	}
+	for _, tt := range tests {
+		got, ok := parsePosInt(tt.input)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("parsePosInt(%q) = (%d, %t), want (%d, %t)", tt.input, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestParseInt32Bounds(t *testing.T) {
+	tests := []struct {
+		input string
+		want  int32
+		ok    bool
+	}{
+		{"2147483647", 2147483647, true},
+		{"-2147483648", -2147483648, true},
+		{"2147483648", 0, false},
+		{"-2147483649", 0, false},
+		{"not-an-int", 0, false},
+	}
+	for _, tt := range tests {
+		got, ok := parseInt32(tt.input)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("parseInt32(%q) = (%d, %t), want (%d, %t)", tt.input, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
+func TestResolveElementDimensionsBounds(t *testing.T) {
+	tests := []struct {
+		name          string
+		width         string
+		height        string
+		defaultWidth  int32
+		defaultHeight int32
+		wantWidth     int32
+		wantHeight    int32
+	}{
+		{"input defaults for empty values", "", "", 200, 40, 200, 40},
+		{"toggle defaults for empty values", "", "", 320, 48, 320, 48},
+		{"accept int32 limits", "2147483647", "-2147483648", 200, 40, 2147483647, -2147483648},
+		{"fallback on overflow independently", "2147483648", "64", 320, 48, 320, 64},
+		{"fallback on underflow independently", "320", "-2147483649", 320, 48, 320, 48},
+		{"fallback on malformed independently", "bad", "48px", 200, 40, 200, 40},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			element := Element{Width: StringOrInt(tt.width), Height: StringOrInt(tt.height)}
+			width, height := resolveElementDimensions(element, tt.defaultWidth, tt.defaultHeight)
+			if width != tt.wantWidth || height != tt.wantHeight {
+				t.Errorf("resolveElementDimensions() = (%d, %d), want (%d, %d)", width, height, tt.wantWidth, tt.wantHeight)
+			}
+		})
+	}
+}
+
+func TestResolveButtonDimensionsBounds(t *testing.T) {
+	const defaultWidth, defaultHeight = int32(156), int32(56)
+	tests := []struct {
+		name       string
+		width      string
+		height     string
+		wantWidth  int32
+		wantHeight int32
+	}{
+		{"defaults for missing values", "", "", defaultWidth, defaultHeight},
+		{"valid positive overrides", "320", "64", 320, 64},
+		{"int32 maximum override", "2147483647", "2147483647", 2147483647, 2147483647},
+		{"fallback for oversized width only", "2147483648", "64", defaultWidth, 64},
+		{"fallback for underflowed height only", "320", "-2147483649", 320, defaultHeight},
+		{"fallback for nonpositive values", "-1", "0", defaultWidth, defaultHeight},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			element := Element{Width: StringOrInt(tt.width), Height: StringOrInt(tt.height)}
+			width, height := resolveButtonDimensions(element, 100, 20)
+			if width != tt.wantWidth || height != tt.wantHeight {
+				t.Errorf("resolveButtonDimensions() = (%d, %d), want (%d, %d)", width, height, tt.wantWidth, tt.wantHeight)
+			}
+		})
+	}
+}
+
+func TestUnitConverterInputWidthBounds(t *testing.T) {
+	tests := []struct {
+		input int
+		want  int32
+	}{
+		{-1, 0},
+		{260, 0},
+		{261, 1},
+		{4259, 3999},
+		{4260, 4000},
+		{int(^uint(0) >> 1), 4000},
+	}
+	for _, tt := range tests {
+		if got := unitConverterInputWidth(tt.input); got != tt.want {
+			t.Errorf("unitConverterInputWidth(%d) = %d, want %d", tt.input, got, tt.want)
+		}
+	}
+}
+
 func TestSurfaceHighlight(t *testing.T) {
 	c := SurfaceHighlight(42)
 	if c.R != 255 || c.G != 255 || c.B != 255 {

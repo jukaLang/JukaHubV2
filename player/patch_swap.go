@@ -27,9 +27,33 @@ const (
 	patchMaxExpandBytes = 2 << 30 // 2 GiB staged expansion cap
 )
 
-// jukaHubAssetNames are the device/OS-specific archive names JukaHub publishes.
-func jukaHubAssetName(device, goos, arch string) string {
-	return fmt.Sprintf("JukaHub-%s-%s-%s.tar.gz", device, goos, arch)
+type jukaHubUpdateTarget struct {
+	Device DeviceModel
+	OS     string
+	Arch   string
+	Asset  string
+}
+
+// jukaHubUpdateTargetFor selects only explicitly supported runtime targets.
+// Unknown platforms/devices never fall through to the original Smart Pro build.
+func jukaHubUpdateTargetFor(device DeviceModel, goos, arch string) (jukaHubUpdateTarget, error) {
+	if device == DeviceDevBuild && goos == "windows" && arch == "amd64" {
+		return jukaHubUpdateTarget{Device: device, OS: goos, Arch: arch, Asset: "JukaHub-win-x64.zip"}, nil
+	}
+	if goos != "linux" || arch != "arm64" {
+		return jukaHubUpdateTarget{}, fmt.Errorf("no JukaHub update target for device %q on %s/%s", device, goos, arch)
+	}
+	switch device {
+	case DeviceTrimuiSmartPro, DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro:
+		return jukaHubUpdateTarget{
+			Device: device,
+			OS:     goos,
+			Arch:   arch,
+			Asset:  fmt.Sprintf("JukaHub-%s-%s-%s.tar.gz", device, goos, arch),
+		}, nil
+	default:
+		return jukaHubUpdateTarget{}, fmt.Errorf("no JukaHub update target for device %q on %s/%s", device, goos, arch)
+	}
 }
 
 // OpUpdateJukaHub performs the full JukaHub application update flow:
@@ -51,13 +75,12 @@ func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 	if !NewerVersion(installed, available) {
 		return fmt.Errorf("installed %s is already current", installed)
 	}
-	patchRowStatus(ComponentApp, StatusDownloading)
-
-	device := "dev-build"
-	if IsTSP() {
-		device = "trimui-smart-pro"
+	target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
 	}
-	assetName := jukaHubAssetName(device, runtime.GOOS, runtime.GOARCH)
+	patchRowStatus(ComponentApp, StatusDownloading)
+	assetName := target.Asset
 
 	// Prefer the machine-readable manifest when the release ships one; it
 	// carries the authoritative sha256. Without a manifest we refuse to label
@@ -72,12 +95,14 @@ func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 		if err != nil {
 			return fmt.Errorf("manifest rejected: %w", err)
 		}
-		target := manifest.ManifestTargetFor(device, runtime.GOOS, runtime.GOARCH)
-		if target == nil {
-			return fmt.Errorf("release manifest has no target for %s/%s/%s", device, runtime.GOOS, runtime.GOARCH)
+		manifestTarget := manifest.ManifestTargetFor(string(target.Device), target.OS, target.Arch)
+		if manifestTarget == nil {
+			return fmt.Errorf("release manifest has no target for %s/%s/%s", target.Device, target.OS, target.Arch)
 		}
-		assetName = target.Asset
-		expectSHA = target.SHA256
+		if manifestTarget.Asset != target.Asset {
+			return fmt.Errorf("release manifest asset %q does not match expected target asset %q", manifestTarget.Asset, target.Asset)
+		}
+		expectSHA = manifestTarget.SHA256
 	} else {
 		return errors.New("release does not publish manifest.json yet — update disabled until a signed manifest is available")
 	}

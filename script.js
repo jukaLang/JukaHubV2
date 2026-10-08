@@ -99,7 +99,7 @@ function createGlobalTooltip() {
   document.body.appendChild(globalTooltip);
 }
 
-// ─── Undo / Redo ──────────────────────────────────────────────────────────────
+// ---
 
 const undoStack = [];
 const redoStack = [];
@@ -214,7 +214,7 @@ function redo() {
   showToast('Redone: ' + (snapshot.label || 'action'), 'info');
 }
 
-// ─── Export Dropdown ───────────────────────────────────────────────────────────
+// ---
 
 function setupExportDropdowns() {
   const pairs = [
@@ -241,7 +241,7 @@ function setupExportDropdowns() {
   });
 }
 
-// ─── Context Menu ─────────────────────────────────────────────────────────────
+// ---
 
 let contextMenuTarget = null;
 
@@ -317,7 +317,7 @@ function duplicateElement(el) {
   showToast('Element duplicated', 'success');
 }
 
-// ─── Auto-Save ────────────────────────────────────────────────────────────────
+// ---
 
 let autoSaveTimer = null;
 
@@ -425,7 +425,7 @@ function loadAutoSave() {
   }
 }
 
-// ─── Preview Mode ─────────────────────────────────────────────────────────────
+// ---
 
 let previewMode = false;
 
@@ -448,7 +448,7 @@ function togglePreviewMode() {
   showToast(previewMode ? 'Preview mode on — click eye to exit' : 'Edit mode', 'info');
 }
 
-// ─── Keyboard Shortcuts ──────────────────────────────────────────────────────
+// ---
 
 function setupKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
@@ -2095,7 +2095,7 @@ function exportConfig() {
   createJukaApp();
 }
 
-// ─── XML Export ───────────────────────────────────────────────────────────────
+// ---
 
 function exportConfigXml() {
   const config = {
@@ -2183,7 +2183,7 @@ function exportConfigXml() {
   showToast('Exported jukaconfig.xml', 'success');
 }
 
-// ─── XML ↔ JSON helpers ──────────────────────────────────────────────────────
+// ---
 
 function escapeXml(str) {
   if (str == null) return '';
@@ -2275,7 +2275,7 @@ function configToXml(config) {
   return xml;
 }
 
-// ─── XML → JSON parser ────────────────────────────────────────────────────────
+// ---
 
 function xmlToJson(xmlStr) {
   const parser = new DOMParser();

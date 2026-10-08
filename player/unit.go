@@ -63,6 +63,16 @@ func convertTemperature(value float64, from, to string) (float64, bool) {
 	}
 }
 
+func unitConverterInputWidth(width int) int32 {
+	if width <= 260 {
+		return 0
+	}
+	if width >= 4260 {
+		return 4000
+	}
+	return int32(width - 260)
+}
+
 func convertUnit(value float64, from, to, category string) (float64, bool) {
 	if category == "temperature" {
 		return convertTemperature(value, from, to)
@@ -175,7 +185,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	inputX := toX + int32(int(rowW)+int(gap))
 	inputW := int32(0)
 	if w, err := strconv.Atoi(string(element.Width)); err == nil {
-		inputW = clampInt32(int32(w)-260, 0, 4000)
+		inputW = unitConverterInputWidth(w)
 	}
 
 	fillRoundedRect(renderer, fromX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))

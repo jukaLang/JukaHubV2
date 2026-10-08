@@ -30,7 +30,7 @@ func logLevelFromEnv() slog.Level {
 		}
 	}
 	// Default: debug on desktop, info on TSP
-	if IsTSP() {
+	if IsTrimuiDevice() {
 		return slog.LevelInfo
 	}
 	return slog.LevelDebug
@@ -43,7 +43,7 @@ func InitLogging() {
 	var handler slog.Handler
 	
 	// Choose format based on platform
-	if IsTSP() {
+	if IsTrimuiDevice() {
 		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 			Level: logLevelFromEnv(),
 		})
@@ -69,7 +69,7 @@ func InitLogging() {
 	default:
 		levelName = "crit"
 	}
-	log.Printf("[LOG] Initializing logger: level=%s format=%s", levelName, map[bool]string{true: "JSON", false: "text"}[!IsTSP()])
+	log.Printf("[LOG] Initializing logger: level=%s format=%s", levelName, map[bool]string{true: "JSON", false: "text"}[!IsTrimuiDevice()])
 }
 
 // Log returns the structured logger.

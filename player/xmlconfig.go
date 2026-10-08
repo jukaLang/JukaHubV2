@@ -168,6 +168,7 @@ func LoadXMLConfig(filename string) (*Config, error) {
 				VariableChangeValue: xe.VariableChangeValue,
 				Command:             xe.Command,
 				Variable:            xe.Variable,
+				Source:              xe.Source,
 				JsonPath:            xe.JsonPath,
 				AutoRefresh:         xe.AutoRefresh == "true",
 				Image:               xe.Image,

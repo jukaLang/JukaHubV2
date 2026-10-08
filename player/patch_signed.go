@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"runtime"
 	"time"
 )
 
@@ -276,10 +277,17 @@ func findRepoPkg(idx *SignedRepoIndex, name string) *RepoPkg {
 
 // repoPkgCompatible evaluates device/OS/architecture constraints.
 func repoPkgCompatible(p *RepoPkg) bool {
-	if p.Architecture != "arm64" && p.Architecture != "all" {
+	return signedRepoPackageCompatible(p, DetectDevice(), runtime.GOARCH, IsWindows())
+}
+
+func signedRepoPackageCompatible(p *RepoPkg, device DeviceModel, arch string, windows bool) bool {
+	if p == nil || (p.Architecture != "arm64" && p.Architecture != "all") {
 		return false
 	}
-	if p.Architecture == "arm64" && !IsTSP() {
+	if p.Architecture == "arm64" && (arch != "arm64" || !device.IsTrimui() || windows) {
+		return false
+	}
+	if len(p.Devices) > 0 && !device.IsTrimui() {
 		return false
 	}
 	// OS + device constraints.
@@ -289,18 +297,20 @@ func repoPkgCompatible(p *RepoPkg) bool {
 		}
 	}
 	if len(p.Devices) > 0 {
-		ok := false
-		for _, d := range p.Devices {
-			if d == "TG5040" {
-				ok = true
+		deviceID := device.hardwareModelID()
+		compatible := false
+		for _, allowedDevice := range p.Devices {
+			if deviceID != "" && allowedDevice == deviceID {
+				compatible = true
+				break
 			}
 		}
-		if !ok {
+		if !compatible {
 			return false
 		}
 	}
 	// On a dev build, only JukaHub-owned low-risk packages are allowed.
-	if IsWindows() {
+	if windows {
 		if p.Risk != "low" {
 			return false
 		}

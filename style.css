@@ -1657,6 +1657,18 @@ textarea:focus {
 
   .mobile-toolbar {
     display: flex;
+    position: fixed;
+    top: var(--header-height);
+    left: 0;
+    right: 0;
+    height: 48px;
+    z-index: calc(var(--z-sidebar) + 1);
+  }
+
+  #leftSidebar[hidden],
+  #workspace[hidden],
+  #rightSidebar[hidden] {
+    display: none !important;
   }
 
   .canvas-area {

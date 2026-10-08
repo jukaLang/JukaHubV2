@@ -12,7 +12,7 @@ import (
 
 // Platform abstracts OS-specific behavior so the rest of the app never
 // calls runtime.GOOS directly. Two implementations are provided:
-//   - tsp: Trimui Smart Pro (Linux/ARM64)
+//   - trimui-linux: TrimUI handhelds (Linux/ARM64)
 //   - win: Windows (x64)
 type Platform interface {
 	// Name returns a short platform identifier for logs/config.
@@ -23,7 +23,7 @@ type Platform interface {
 
 	// DataDir returns the preferred writable directory for user data.
 	// On Windows this uses SDL_GetPrefPath when available, otherwise %APPDATA%.
-	// On TSP it returns the app directory next to the binary.
+	// On TrimUI/Linux it returns the app directory next to the binary.
 	DataDir() (string, error)
 
 	// ConfigPath returns the full path to the main config file.
@@ -52,10 +52,10 @@ type Platform interface {
 	// or an empty string if not found.
 	LookPath(exe string) (string, error)
 
-	// OpenURL opens a URL in the system browser (no-op on TSP).
+	// OpenURL opens a URL in the system browser (no-op on TrimUI/Linux).
 	OpenURL(url string) error
 
-	// OpenFile opens a file with the system default application (no-op on TSP).
+	// OpenFile opens a file with the system default application (no-op on TrimUI/Linux).
 	OpenFile(path string) error
 
 	// Stat wraps os.Stat with platform-specific path handling.
@@ -82,7 +82,7 @@ func InitPlatform() {
 	if runtime.GOOS == "windows" {
 		platform = &windowsPlatform{}
 	} else {
-		platform = &tspPlatform{}
+		platform = &trimuiLinuxPlatform{}
 	}
 }
 
@@ -94,13 +94,14 @@ func P() Platform {
 	return platform
 }
 
-// --- TSP implementation ---
+// --- TrimUI/Linux implementation ---
+type trimuiLinuxPlatform struct{}
 
-type tspPlatform struct{}
+type tspPlatform = trimuiLinuxPlatform
 
-func (tspPlatform) Name() string { return "tsp" }
+func (trimuiLinuxPlatform) Name() string { return "trimui-linux" }
 
-func (tspPlatform) ExecutableDir() (string, error) {
+func (trimuiLinuxPlatform) ExecutableDir() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -108,8 +109,8 @@ func (tspPlatform) ExecutableDir() (string, error) {
 	return filepath.Dir(exe), nil
 }
 
-func (tspPlatform) DataDir() (string, error) {
-	exeDir, err := tspPlatform{}.ExecutableDir()
+func (trimuiLinuxPlatform) DataDir() (string, error) {
+	exeDir, err := trimuiLinuxPlatform{}.ExecutableDir()
 	if err != nil {
 		return "", err
 	}
@@ -130,7 +131,7 @@ func (tspPlatform) ResizableDefault() bool  { return false }
 
 func (tspPlatform) LookPath(exe string) (string, error) {
 	// TSP tools are expected in ./required/ relative to the binary.
-	exeDir, err := tspPlatform{}.ExecutableDir()
+	exeDir, err := trimuiLinuxPlatform{}.ExecutableDir()
 	if err != nil {
 		return "", err
 	}
@@ -253,8 +254,11 @@ func sdlGetPrefPath(org, app string) string {
 
 // --- Convenience helpers ---
 
-// IsTSP returns true when running on the Trimui Smart Pro platform.
-func IsTSP() bool { return P().Name() == "tsp" }
+// IsTSP reports only the original TrimUI Smart Pro (TG5040).
+func IsTSP() bool { return DetectDevice() == DeviceTrimuiSmartPro }
+
+// IsTrimuiDevice reports a positively identified supported TrimUI model.
+func IsTrimuiDevice() bool { return DetectDevice().IsTrimui() }
 
 // IsWindows returns true when running on Windows.
 func IsWindows() bool { return P().Name() == "windows" }

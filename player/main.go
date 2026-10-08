@@ -476,6 +476,7 @@ type Element struct {
 	Style         string      `json:"style"` // e.g. "tile" for OS-style app icons
 	Icon          string      `json:"icon"`  // monogram/short glyph for tile style
 	JsonPath      string      `json:"jsonPath"`
+	Source        string      `json:"source"`
 	AutoRefresh   bool        `json:"autoRefresh"`
 
 	// Extended trigger payloads (set by the GUI generator)
@@ -588,6 +589,38 @@ func parsePosInt(text string) (int32, bool) {
 		return 0, false
 	}
 	return int32(v), true
+}
+
+// parseInt32 parses a signed decimal integer only when it fits in int32.
+func parseInt32(text string) (int32, bool) {
+	v, err := strconv.ParseInt(text, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return int32(v), true
+}
+
+func resolveDimension(text string, fallback int32) int32 {
+	if v, ok := parseInt32(text); ok {
+		return v
+	}
+	return fallback
+}
+
+func resolveElementDimensions(e Element, width, height int32) (int32, int32) {
+	return resolveDimension(string(e.Width), width), resolveDimension(string(e.Height), height)
+}
+
+func resolveButtonDimensions(e Element, width, height int32) (int32, int32) {
+	width = resolveDimension(string(e.Width), width+56)
+	height = resolveDimension(string(e.Height), height+36)
+	if width <= 0 {
+		width = 56
+	}
+	if height <= 0 {
+		height = 36
+	}
+	return width, height
 }
 
 // parseNonNegFloat safely parses the given text as a non-negative float64.
@@ -1518,19 +1551,7 @@ func buttonHitSize(elem Element, font *ttf.Font) (int32, int32) {
 		w, h, _ := font.SizeUTF8(elem.Text)
 		textWidth, textHeight = int32(w), int32(h)
 	}
-	width := textWidth + 56
-	height := textHeight + 36
-	if string(elem.Width) != "" {
-		if w, _ := strconv.Atoi(string(elem.Width)); w > 0 {
-			width = int32(w)
-		}
-	}
-	if string(elem.Height) != "" {
-		if h, _ := strconv.Atoi(string(elem.Height)); h > 0 {
-			height = int32(h)
-		}
-	}
-	return width, height
+	return resolveButtonDimensions(elem,textWidth,textHeight)
 }
 
 func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, elemIndex int, selected bool, hovered bool, hoverProgress float64, pressed bool) {
@@ -3014,7 +3035,11 @@ func handleInputSelection(renderer *sdl.Renderer, config *Config, sceneIdx, elem
 	virtualKeyboardActive = true
 	sdl.StartTextInput()
 	inputTextBuffer = ""
-	if variable := config.Scenes[sceneIdx].Elements[elemIdx].Variable; variable != "" {
+	variable := config.Scenes[sceneIdx].Elements[elemIdx].Variable
+	if textBrowserAddressEditing {
+		variable = textBrowserURLVariable
+	}
+	if variable != "" {
 		inputTextBuffer = inputVariableValue(config, variable)
 	}
 	handleInputElement(renderer, config)
@@ -3117,6 +3142,9 @@ func handleInputElement(renderer *sdl.Renderer, config *Config) {
 					case sdl.K_RETURN:
 						// Submit the typed text and close the input (do not append
 						// the currently-highlighted virtual key).
+						if textBrowserAddressEditing {
+							textBrowserAddressSubmitted = true
+						}
 						updateInputVariable(config)
 						exitInput = true
 					default:
@@ -3291,6 +3319,9 @@ func handleKeyboardInput(config *Config) {
 			}
 		case "ENTER":
 			// Save the final input before clearing
+			if textBrowserAddressEditing {
+				textBrowserAddressSubmitted = true
+			}
 			updateInputVariable(config)
 			virtualKeyboardActive = false
 			activeSceneIndex = -1
@@ -3330,8 +3361,12 @@ func updateInputVariable(config *Config) {
 			return
 		}
 		elem := config.Scenes[activeSceneIndex].Elements[activeElementIndex]
-		if elem.Variable != "" {
-			config.Variables.Custom[elem.Variable] = inputTextBuffer
+		variable := elem.Variable
+		if textBrowserAddressEditing {
+			variable = textBrowserURLVariable
+		}
+		if variable != "" {
+			config.Variables.Custom[variable] = inputTextBuffer
 			syncVariableOverrides(config)
 		}
 	}
@@ -3607,17 +3642,8 @@ func inputVariableValue(config *Config, variable string) string {
 	return ""
 }
 
-func renderInputField(renderer *sdl.Renderer, config *Config, element Element, sceneIdx, elemIdx int) {
-	width := int32(200)
-	if string(element.Width) != "" {
-		w, _ := strconv.Atoi(string(element.Width))
-		width = int32(w)
-	}
-	height := int32(40)
-	if string(element.Height) != "" {
-		h, _ := strconv.Atoi(string(element.Height))
-		height = int32(h)
-	}
+func renderInputField(renderer *sdl.Renderer, config *Config, element Element, sceneIdx, elemIdx int) {				width, height := resolveElementDimensions(element, 200, 40)
+
 	bgColor := resolveColor(config, element.BgColor, sdl.Color{R: 20, G: 24, B: 34, A: 255})
 	r := int32(8)
 	isActive := (sceneIdx == activeSceneIndex && elemIdx == activeElementIndex)
@@ -4030,19 +4056,7 @@ func toggleVariable(config *Config, element Element) {
 // the left and an ON/OFF pill on the right, using the same resting/focused
 // card treatment as the rest of the design system. A/Enter or a click flips
 // the value.
-func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element, focused bool) {
-	width := int32(320)
-	if string(element.Width) != "" {
-		if w, err := strconv.Atoi(string(element.Width)); err == nil {
-			width = int32(w)
-		}
-	}
-	height := int32(48)
-	if string(element.Height) != "" {
-		if h, err := strconv.Atoi(string(element.Height)); err == nil {
-			height = int32(h)
-		}
-	}
+func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element, focused bool) {				width, height := resolveElementDimensions(element, 320, 48)
 
 	font, _ := getCachedFont(config, "medium")
 	small, _ := getCachedFont(config, "small")
@@ -4897,10 +4911,13 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	case "fe_up":
 		feUp(config)
 	case "ip_stream":
-		if url, ok := config.Variables.Custom["stream_url"].(string); ok && strings.TrimSpace(url) != "" {
-			playStream(config, strings.TrimSpace(url))
+		url := strings.TrimSpace(inputVariableValue(config, "stream_url"))
+		if url == "" {
+			showToast("Enter a stream URL first.", ToastError())
 		} else {
-			log.Printf("ip_stream: no URL in stream_url")
+			StartEmbeddedPlayback(config, url)
+			currentPlaybackURL = url
+			addRecentVideo(VideoInfo{URL: url, Title: url})
 		}
 	case "custom_link":
 		url := ""
@@ -5240,7 +5257,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		go fetchPackages(config)
 	case "textbrowser_refresh":
 		textBrowserRefresh(config, element)
-		if element.AutoRefresh {
+		if element.AutoRefresh && textBrowserElementSource(element) != textBrowserSourceWeb {
 			startTextBrowserAutoRefresh(config, element)
 		}
 	case "textbrowser_system":
@@ -6235,7 +6252,10 @@ func main() {
 						} else if curElem.Type == "canvas" {
 							handleCanvasInput(e, config)
 						} else if curElem.Type == "textbrowser" {
-							switch e.Keysym.Sym {
+							if e.Keysym.Sym == sdl.K_RETURN && textBrowserElementSource(curElem) == textBrowserSourceWeb {
+								handleTextBrowserAddressInput(renderer, config, curElem)
+							} else {
+								switch e.Keysym.Sym {
 							case sdl.K_UP:
 								textBrowserScrollVelocity -= textBrowserScrollAccel
 								if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
@@ -6268,7 +6288,9 @@ func main() {
 								textBrowserScrollVelocity = 0
 								textBrowserScrollCooldown = 0
 							}
-						} else if curElem.Type == "packagelist" {
+							}
+						}
+					} else if curElem.Type == "packagelist" {
 							handlePackageInput(e, config)
 						} else if curElem.Type == "recent" {
 							handleRecentInput(e, config)
@@ -6645,32 +6667,12 @@ func main() {
 						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 							for i, elem := range config.Scenes[currentSceneIndex].Elements {
 								if elem.Type == "input" {
-									width := int32(200)
-									if string(elem.Width) != "" {
-										w, _ := strconv.Atoi(string(elem.Width))
-										width = int32(w)
-									}
-									height := int32(40)
-									if string(elem.Height) != "" {
-										h, _ := strconv.Atoi(string(elem.Height))
-										height = int32(h)
-									}
+									width, height := resolveElementDimensions(elem, 200, 40)
 									if mx >= elem.X && mx <= elem.X+width && my >= elem.Y && my <= elem.Y+height {
 										handleInputSelection(renderer, config, currentSceneIndex, i)
 									}
 								} else if elem.Type == "toggle" {
-									tw := int32(320)
-									if string(elem.Width) != "" {
-										if w, err := strconv.Atoi(string(elem.Width)); err == nil {
-											tw = int32(w)
-										}
-									}
-									th := int32(48)
-									if string(elem.Height) != "" {
-										if h, err := strconv.Atoi(string(elem.Height)); err == nil {
-											th = int32(h)
-										}
-									}
+						tw, th := resolveElementDimensions(elem, 320, 48)
 									if mx >= elem.X && mx <= elem.X+tw && my >= elem.Y && my <= elem.Y+th {
 										selectedButtonIndex = i
 										focusEngine.SetByElementIndex(i)
@@ -6812,9 +6814,16 @@ func main() {
 								} else if elem.Type == "packagelist" {
 									handlePackageMouseClick(mx, my, config)
 								} else if elem.Type == "textbrowser" {
-									// Click inside textbrowser panel: select it for scroll focus.
 									selectedButtonIndex = i
 									focusEngine.SetByElementIndex(i)
+									if textBrowserElementSource(elem) == textBrowserSourceWeb {
+										addressRect, goRect := textBrowserToolbarRects(elem)
+										if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
+											handleTextBrowserAddressInput(renderer, config, elem)
+										} else if mx >= goRect.X && mx <= goRect.X+goRect.W && my >= goRect.Y && my <= goRect.Y+goRect.H {
+											loadTextBrowserURL(config, elem, textBrowserAddress(config))
+										}
+									}
 								}
 							}
 						}
@@ -7102,7 +7111,9 @@ func main() {
 									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
 									if elem.Type == "input" {
 										handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
-									} else if elem.Type == "textbrowser" || elem.Type == "shortslist" || elem.Type == "packagelist" {
+									} else if elem.Type == "textbrowser" && textBrowserElementSource(elem) == textBrowserSourceWeb {
+									handleTextBrowserAddressInput(renderer, config, elem)
+								} else if elem.Type == "textbrowser" || elem.Type == "shortslist" || elem.Type == "packagelist" {
 										// Display-only elements: A is a no-op (scroll with D-pad).
 									} else {
 										handleTrigger(renderer, config, elem)
@@ -7336,8 +7347,7 @@ func main() {
 		}
 
 		// Patch scene: drain worker events and apply hold-to-confirm progress.
-		PatchSceneFrame() // Bottom taskbar removed — the upper status bar already shows clock,
-		// battery, wifi, and notifications. No duplicate bottom bar needed.
+		PatchSceneFrame()
 
 		// Quick Settings overlay.
 		if qs.open {
@@ -7387,7 +7397,7 @@ func main() {
 
 		frameCount++
 		// Periodic memory pressure check (every ~10 frames on TSP)
-		if IsTSP() && memMonitor != nil && frameCount%10 == 0 {
+		if IsTrimuiDevice() && memMonitor != nil && frameCount%10 == 0 {
 			EvictCachesForPressure(memMonitor)
 		}
 

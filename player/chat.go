@@ -173,23 +173,64 @@ var discordSession *discordgo.Session
 // id comes from the explicit ChannelProfile (loaded from jukaconfig.json),
 // falling back to the runtime Custom value and finally the default JukaHub
 // channel. The token comes from ChannelProfile or the runtime Custom entry.
+//
+// This function never returns a usable token when the stored value is missing,
+// not encrypted, encrypted with the wrong key, or otherwise unusable. In those
+// cases it sets a clear status string and returns an empty token so the caller
+// can show a specific problem instead of failing later in a less helpful way.
 func discordCreds() (string, string) {
 	if appConfig == nil {
+		discordStatus = "Discord: config not loaded"
 		return "", defaultDiscordChannel
 	}
+
 	tok, _ := appConfig.Variables.Custom["discord_token"].(string)
 	if tok == "" {
 		tok = appConfig.ChannelProfile.Token
 	}
 	tok = strings.TrimSpace(tok)
-	if strings.HasPrefix(tok, "ENC:") {
-		decrypted, err := DecryptAPIToken(tok, "discord_token")
-		if err != nil {
-			log.Printf("[DISCORD] Failed to decrypt token: %v", err)
-			discordStatus = "Discord: failed to decrypt token"
-			return "", defaultDiscordChannel
+
+	if tok == "" {
+		discordStatus = "Discord: token is missing"
+		return "", defaultDiscordChannel
+	}
+
+	if !strings.HasPrefix(tok, "ENC:") {
+		discordStatus = "Discord: token is not encrypted"
+		log.Printf("[DISCORD] Stored discord_token does not have an ENC: prefix; rename it to an encrypted value before enabling Discord.")
+		return "", defaultDiscordChannel
+	}
+
+	decrypted, err := DecryptAPIToken(tok, "discord_token")
+	if err != nil {
+		log.Printf("[DISCORD] Failed to decrypt token: %v", err)
+		if strings.HasPrefix(err.Error(), "discord_token: value is not encrypted") {
+			discordStatus = "Discord: token is not encrypted"
+		} else if err.Error() == "discord_token: empty encrypted value" {
+			discordStatus = "Discord: token is empty"
+		} else if strings.HasPrefix(err.Error(), "discord_token: decryption failed") {
+			discordStatus = "Discord: token decryption failed"
+		} else {
+			discordStatus = "Discord: token is not usable"
 		}
-		tok = decrypted
+		return "", defaultDiscordChannel
+	}
+
+	if decrypted == "" {
+		discordStatus = "Discord: token decrypted to empty value"
+		return "", defaultDiscordChannel
+	}
+
+	discordStatus = ""
+	return decrypted, defaultDiscordChannel
+}
+
+// discordChannel returns the configured Discord channel id, falling back to
+// the explicit ChannelProfile, then a runtime Custom value, then the default
+// JukaHub channel.
+func discordChannel() string {
+	if appConfig == nil {
+		return defaultDiscordChannel
 	}
 	ch := strings.TrimSpace(appConfig.ChannelProfile.ChannelID)
 	if ch == "" {
@@ -199,7 +240,7 @@ func discordCreds() (string, string) {
 	if ch == "" {
 		ch = defaultDiscordChannel
 	}
-	return strings.TrimSpace(tok), ch
+	return ch
 }
 
 func extractImageURL(msg *discordgo.Message) string {
@@ -216,9 +257,12 @@ func extractImageURL(msg *discordgo.Message) string {
 // immediately; the connection is established in the background.
 func discordConnect() error {
 	tok, ch := discordCreds()
-	if tok == "" || ch == "" {
-		discordStatus = "Discord: token / channel not set"
-		return fmt.Errorf("discord not configured")
+	if tok == "" {
+		return fmt.Errorf("discord not configured: %s", discordStatus)
+	}
+	if ch == "" {
+		discordStatus = "Discord: channel not set"
+		return fmt.Errorf("discord not configured: channel not set")
 	}
 	if discordSession != nil {
 		discordSession.Close()
@@ -311,9 +355,12 @@ func discordConnect() error {
 // live gateway session. The sender is prefixed ("username: message") so the
 // message interoperates with the TSP bot bridge used elsewhere in the community.
 func discordSendMessage(sender, text string) error {
-	_, ch := discordCreds()
 	if discordSession == nil {
 		return fmt.Errorf("discord not connected")
+	}
+	ch := discordChannel()
+	if ch == "" {
+		return fmt.Errorf("discord not configured: channel not set")
 	}
 	payload := text
 	if sender != "" {

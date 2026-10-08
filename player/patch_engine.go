@@ -349,53 +349,109 @@ func validatePatchURL(raw string) error {
 // Device detection
 // ---------------------------------------------------------------------------
 
-// DeviceModel describes a positively identified target device.
+// DeviceModel describes a positively identified target device. Values for
+// TrimUI models use vendor-published IDs; runtime matching is fail-closed and
+// requires the device-tree model to contain the TrimUI brand and an exact known ID.
 type DeviceModel string
 
 const (
-	DeviceUnknown   DeviceModel = "unknown"
-	DeviceTrimuiTSP DeviceModel = "trimui-smart-pro" // TG5040 original Smart Pro
-	DeviceDevBuild  DeviceModel = "dev-build"        // Windows / other dev hosts
+	DeviceUnknown         DeviceModel = "unknown"
+	DeviceTrimuiSmartPro  DeviceModel = "trimui-smart-pro"   // TG5040
+	DeviceTrimuiSmartProS DeviceModel = "trimui-smart-pro-s" // TG5050
+	DeviceTrimuiBrick     DeviceModel = "trimui-brick"       // TG3040
+	DeviceTrimuiBrickPro  DeviceModel = "trimui-brick-pro"   // TG4040
+	DeviceDevBuild        DeviceModel = "dev-build"          // Windows development build
+
+	// DeviceTrimuiTSP is kept for source compatibility with the original model.
+	DeviceTrimuiTSP DeviceModel = DeviceTrimuiSmartPro
 )
 
-// deviceCheckPaths are the probe files used to positively identify the device.
-// Detection requires multiple corroborating signals on Linux/ARM64; /mnt/SDCARD
-// alone is never sufficient.
-var deviceCheckPaths = []string{
-	"/mnt/SDCARD",
-	"/usr/trimui",
-	"/proc/device-tree/model",
+// IsTrimui reports whether this is one of the explicitly supported TrimUI
+// models. Unknown devices are never treated as supported by default.
+func (d DeviceModel) IsTrimui() bool {
+	switch d {
+	case DeviceTrimuiSmartPro, DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro:
+		return true
+	default:
+		return false
+	}
 }
 
-// DetectDevice identifies the runtime device conservatively. When signals are
-// missing or contradictory the result is DeviceUnknown so system-level actions
-// stay disabled.
-func DetectDevice() DeviceModel {
-	if runtime.GOOS == "windows" {
-		return DeviceDevBuild
+// hardwareModelID returns the published hardware model code, if known.
+func (d DeviceModel) hardwareModelID() string {
+	switch d {
+	case DeviceTrimuiSmartPro:
+		return "TG5040"
+	case DeviceTrimuiSmartProS:
+		return "TG5050"
+	case DeviceTrimuiBrick:
+		return "TG3040"
+	case DeviceTrimuiBrickPro:
+		return "TG4040"
+	default:
+		return ""
 	}
-	if runtime.GOOS != "linux" {
-		return DeviceUnknown
-	}
-	if runtime.GOARCH != "arm64" {
-		return DeviceUnknown
-	}
-	sdcard := pathExists("/mnt/SDCARD")
-	trimui := pathExists("/usr/trimui")
-	dtModel := readTrimmedFile("/proc/device-tree/model")
-	isTSP := strings.Contains(strings.ToLower(dtModel), "tg5040") ||
-		strings.Contains(strings.ToLower(dtModel), "trimui smart pro") ||
-		strings.Contains(strings.ToLower(dtModel), "smart pro")
+}
 
-	switch {
-	case trimui && isTSP:
-		return DeviceTrimuiTSP
-	case sdcard && trimui:
-		// Trimui tree exists but the model is unknown -> do not guess.
-		return DeviceUnknown
+// DeviceModelForHardwareID returns the known JukaHub model corresponding to a
+// TrimUI hardware ID. Unknown IDs are not inferred from CPU or marketing name.
+func DeviceModelForHardwareID(id string) DeviceModel {
+	switch strings.ToUpper(strings.TrimSpace(id)) {
+	case "TG5040":
+		return DeviceTrimuiSmartPro
+	case "TG5050":
+		return DeviceTrimuiSmartProS
+	case "TG3040":
+		return DeviceTrimuiBrick
+	case "TG4040":
+		return DeviceTrimuiBrickPro
 	default:
 		return DeviceUnknown
 	}
+}
+
+// detectDeviceForSystem classifies a testable kernel device-tree model.
+// It requires both the TrimUI brand and an exact published model ID; marketing
+// name or compatible-string matches alone are deliberately insufficient.
+func detectDeviceForSystem(goos, model string) DeviceModel {
+	if goos == "windows" {
+		return DeviceDevBuild
+	}
+	if goos != "linux" || !strings.Contains(strings.ToUpper(model), "TRIMUI") {
+		return DeviceUnknown
+	}
+
+	found := DeviceUnknown
+	identifiers := strings.FieldsFunc(strings.ToUpper(model), func(r rune) bool {
+		return !((r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
+	})
+	for _, identifier := range identifiers {
+		candidate := DeviceModelForHardwareID(identifier)
+		if candidate == DeviceUnknown {
+			continue
+		}		if found != DeviceUnknown && found != candidate {
+			return DeviceUnknown
+		}
+		found = candidate
+	}
+	return found
+}
+
+// DetectDevice identifies a supported runtime device conservatively. It reads
+// the kernel device-tree model and accepts only a TrimUI brand plus an exact
+// known model ID. Missing, conflicting or unfamiliar IDs remain unknown;
+// actual model-string exposure must still be verified on each device.
+var (
+	detectedDeviceOnce sync.Once
+	detectedDevice     DeviceModel
+)
+
+func DetectDevice() DeviceModel {
+	detectedDeviceOnce.Do(func() {
+		model, _ := os.ReadFile("/proc/device-tree/model")
+		detectedDevice = detectDeviceForSystem(runtime.GOOS, string(model))
+	})
+	return detectedDevice
 }
 
 func pathExists(p string) bool {
@@ -403,19 +459,17 @@ func pathExists(p string) bool {
 	return err == nil
 }
 
-func readTrimmedFile(p string) string {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
 // deviceDisplayName returns a human label for the detected model.
 func deviceDisplayName(d DeviceModel) string {
 	switch d {
-	case DeviceTrimuiTSP:
+	case DeviceTrimuiSmartPro:
 		return "TrimUI Smart Pro (TG5040)"
+	case DeviceTrimuiSmartProS:
+		return "TrimUI Smart Pro S (TG5050)"
+	case DeviceTrimuiBrick:
+		return "TrimUI Brick (TG3040)"
+	case DeviceTrimuiBrickPro:
+		return "TrimUI Brick Pro (TG4040)"
 	case DeviceDevBuild:
 		return "Development build"
 	default:
@@ -431,7 +485,7 @@ func deviceDisplayName(d DeviceModel) string {
 // touched by the test suite.
 var patchStateDirFn = func() (string, error) {
 	var base string
-	if IsTSP() {
+	if DetectDevice().IsTrimui() {
 		dir, err := P().ExecutableDir()
 		if err != nil {
 			return "", err
@@ -1659,7 +1713,7 @@ func RepairJukaHub(config *Config) PatchRepairReport {
 		r.Warned = append(r.Warned, "patch state directory: "+err.Error())
 	}
 	// 3. Helper tool presence/architecture (without executing downloads).
-	if IsTSP() {
+	if DetectDevice().IsTrimui() {
 		for _, tool := range []string{"yt-dlp", "ffplay"} {
 			p, err := P().LookPath(tool)
 			if err != nil {
@@ -1794,7 +1848,6 @@ func BuildPatchSnapshot(config *Config) *PatchSnapshot {
 	backups, _ := ListBackupSets()
 	s.Backups = backups
 
-	device := s.Device
 	rows := make([]PatchRow, 0, 5)
 
 	// JukaHub app
@@ -1855,8 +1908,6 @@ func BuildPatchSnapshot(config *Config) *PatchSnapshot {
 	if repo, err := LoadPackageRepo(); err == nil {
 		s.Packages = repo.Packages
 	}
-	_ = device
-
 	// Diagnostics report path if one exists.
 	if dir, err := PatchStateDir(); err == nil {
 		if entries, err := os.ReadDir(filepath.Join(dir, "reports")); err == nil && len(entries) > 0 {

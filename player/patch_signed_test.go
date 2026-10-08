@@ -74,6 +74,38 @@ func TestRepoSignatureVerification(t *testing.T) {
 	}
 }
 
+func TestRepoPkgCompatibleByExactDevice(t *testing.T) {
+	pkg := &RepoPkg{Architecture: "arm64", OS: []string{"trimui-stock"}, Devices: []string{"TG5040"}, Risk: "low"}
+	for _, tc := range []struct {
+		device DeviceModel
+		want   bool
+	}{
+		{DeviceTrimuiSmartPro, true},
+		{DeviceTrimuiSmartProS, false},
+		{DeviceTrimuiBrick, false},
+		{DeviceTrimuiBrickPro, false},
+		{DeviceUnknown, false},
+	} {
+		if got := signedRepoPackageCompatible(pkg, tc.device, "arm64", false); got != tc.want {
+			t.Errorf("TG5040 package compatibility for %q = %t, want %t", tc.device, got, tc.want)
+		}
+	}
+
+	pkg.Devices = []string{"TG5050"}
+	if !signedRepoPackageCompatible(pkg, DeviceTrimuiSmartProS, "arm64", false) {
+		t.Error("TG5050 package must match Smart Pro S")
+	}
+	if signedRepoPackageCompatible(pkg, DeviceTrimuiSmartPro, "arm64", false) {
+		t.Error("TG5050 package must not match original Smart Pro")
+	}
+	if signedRepoPackageCompatible(pkg, DeviceUnknown, "arm64", false) {
+		t.Error("unknown device must not match a model-specific package")
+	}
+	if signedRepoPackageCompatible(pkg, DeviceDevBuild, "arm64", true) {
+		t.Error("Windows must not install the TrimUI arm64 package")
+	}
+}
+
 func TestManifestValidation(t *testing.T) {
 	good := &PackageManifest{
 		Schema: ManifestSchema, Name: "my-pkg", Version: "1.0.0",

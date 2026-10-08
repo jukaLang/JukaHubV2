@@ -528,7 +528,7 @@ func StopEmbeddedPlayback() {
 	embeddedPlaybackPath = ""
 	videoPlaybackMutex.Unlock()
 
-	if path != "" {
+	if path != "" && !strings.Contains(path, "://") {
 		os.Remove(path)
 	}
 }

@@ -182,7 +182,7 @@ func LoadPackageRepo() (*PackageRepo, error) {
 
 // packageInstallRoot returns the default destination root for packages.
 func packageInstallRoot() string {
-	if IsTSP() {
+	if IsTrimuiDevice() {
 		if pathExists("/mnt/SDCARD") {
 			return "/mnt/SDCARD"
 		}

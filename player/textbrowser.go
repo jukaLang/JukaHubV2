@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	htmlstd "html"
 	"io"
 	"log"
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
@@ -24,6 +26,7 @@ import (
 	"github.com/shirou/gopsutil/v3/process"
 	"github.com/tidwall/gjson"
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // textBrowserSource constants
@@ -31,6 +34,12 @@ const (
 	textBrowserSourceSystem   = "system"
 	textBrowserSourceZeroconf = "zeroconf"
 	textBrowserSourceJSON     = "json"
+	textBrowserSourceWeb      = "web"
+
+	textBrowserURLVariable  = "textbrowser_url"
+	textBrowserDefaultURL   = "https://example.com"
+	textBrowserMaxPageBytes = 2 << 20
+	textBrowserURLBarHeight = int32(36)
 )
 
 // textBrowserMode constants
@@ -48,9 +57,12 @@ const textBrowserAutoRefreshInterval = 5 * time.Second
 // name. Timers are stopped on scene transitions.
 var textBrowserAutoRefreshTimers = make(map[string]*time.Timer)
 var textBrowserAutoRefreshMutex sync.Mutex
+var textBrowserRequestSequence = make(map[string]uint64)
+var textBrowserRequestMutex sync.Mutex
+var textBrowserAddressEditing bool
+var textBrowserAddressSubmitted bool
 
-// renderTextBrowser renders a scrollable text browser panel that can display
-// system information, zeroconf discoveries, or parsed JSON content.
+// renderTextBrowser renders a scrollable text panel, including readable web pages.
 func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -68,10 +80,12 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 	}
 	if text == "" {
-		if element.AutoRefresh {
+		if textBrowserElementSource(element) == textBrowserSourceWeb {
+			text = "Enter a website address above and press Go."
+		} else if element.AutoRefresh {
 			text = "Auto-refreshing..."
 		} else {
-			text = "Press a trigger to load content.\nSources: system, zeroconf, json"
+			text = "Press a trigger to load content.\nSources: system, zeroconf, json, web"
 		}
 	}
 
@@ -85,17 +99,16 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 
 	headerH := int32(28)
 	headerY := element.Y + 4
-	source := strings.ToLower(strings.TrimSpace(element.Text))
-	if source == "" {
-		source = "system"
-	}
+	source := textBrowserElementSource(element)
 
 	var headerColor sdl.Color
 	switch source {
 	case "zeroconf":
 		headerColor = sdl.Color{R: 46, G: 204, B: 113, A: 255}
-	case "json":
+	case textBrowserSourceJSON:
 		headerColor = sdl.Color{R: 155, G: 89, B: 182, A: 255}
+	case textBrowserSourceWeb:
+		headerColor = sdl.Color{R: 24, G: 143, B: 173, A: 255}
 	default:
 		headerColor = sdl.Color{R: 67, G: 97, B: 238, A: 255}
 	}
@@ -110,15 +123,18 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	labelFont, _ := getCachedFont(config, "small")
 	if labelFont != nil {
 		sourceLabel := "SYSTEM"
-		if source == "zeroconf" {
+		switch source {
+		case textBrowserSourceZeroconf:
 			sourceLabel = "ZEROCONF"
-		} else if source == "json" {
+		case textBrowserSourceJSON:
 			sourceLabel = "JSON"
+		case textBrowserSourceWeb:
+			sourceLabel = "WEB"
 		}
 		lw, lh, _ := labelFont.SizeUTF8(sourceLabel)
 		renderText(renderer, config, labelFont, sourceLabel, sdl.Color{R: 255, G: 255, B: 255, A: 255}, element.X+12, headerY+(headerH-int32(lh))/2)
 
-		if text != "" && text != "Press a trigger to load content.\nSources: system, zeroconf, json" && totalLines > 0 {
+		if text != "" && totalLines > 0 {
 			lineInfo := ""
 			if totalLines > maxLines {
 				startLine := int(textBrowserScrollY) + 1
@@ -165,7 +181,31 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 	}
 
-	y := element.Y + 8 + headerH
+	contentTop := element.Y + 8 + headerH
+	if source == textBrowserSourceWeb {
+		addressRect, goRect := textBrowserToolbarRects(element)
+		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
+		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 93, G: 110, B: 138, A: 210})
+		address := textBrowserAddress(config)
+		if labelFont != nil {
+			renderText(renderer, config, labelFont, truncate(address, 90), ColorTextPrimary(), addressRect.X+10, addressRect.Y+9)
+			hint := "EDIT URL"
+			hw, _, _ := labelFont.SizeUTF8(hint)
+			renderText(renderer, config, labelFont, hint, sdl.Color{R: 155, G: 170, B: 195, A: 255}, addressRect.X+addressRect.W-int32(hw)-10, addressRect.Y+9)
+			tw, th, _ := labelFont.SizeUTF8("GO")
+			fillRoundedRect(renderer, goRect.X, goRect.Y, goRect.W, goRect.H, 6, accentColor)
+			renderText(renderer, config, labelFont, "GO", sdl.Color{R: 255, G: 255, B: 255, A: 255}, goRect.X+(goRect.W-int32(tw))/2, goRect.Y+(goRect.H-int32(th))/2)
+		}
+		contentTop += textBrowserURLBarHeight + 4
+	}
+	if source == textBrowserSourceWeb {
+		text = wrapTextBrowserContent(text, font, elemW-28)
+		lines = strings.Split(text, "\n")
+		totalLines = len(lines)
+		contentH = elemH - headerH - textBrowserURLBarHeight - 12
+		maxLines = int(contentH / lineH)
+	}
+	y := contentTop
 
 	scrollMax := int32(0)
 	if int32(totalLines) > int32(maxLines) {
@@ -246,23 +286,339 @@ func findTextBrowserVariable(config *Config) string {
 	return "textbrowser_content"
 }
 
-// textBrowserRefresh refreshes the text browser content based on the source
-// specified in element.Text (system, zeroconf, json).
-func textBrowserRefresh(config *Config, element Element) {
-	source := strings.ToLower(strings.TrimSpace(element.Text))
+// textBrowserElementSource resolves the source used by both exported configs
+// (source) and older hand-written configs (text).
+func textBrowserElementSource(element Element) string {
+	source := strings.ToLower(strings.TrimSpace(element.Source))
 	if source == "" {
-		source = textBrowserSourceSystem
+		source = strings.ToLower(strings.TrimSpace(element.Text))
 	}
+	switch {
+	case source == "", source == textBrowserSourceSystem, strings.Contains(source, "system"):
+		return textBrowserSourceSystem
+	case source == textBrowserSourceZeroconf, strings.Contains(source, "zeroconf"):
+		return textBrowserSourceZeroconf
+	case source == textBrowserSourceJSON, strings.Contains(source, "json"):
+		return textBrowserSourceJSON
+	case source == textBrowserSourceWeb, strings.Contains(source, "web") || strings.Contains(source, "browser"):
+		return textBrowserSourceWeb
+	default:
+		return textBrowserSourceSystem
+	}
+}
 
-	switch source {
+// textBrowserRefresh refreshes the source configured for a textbrowser element.
+func textBrowserRefresh(config *Config, element Element) {
+	switch textBrowserElementSource(element) {
 	case textBrowserSourceZeroconf:
 		publishCustom(element.Variable, browseZeroconfServices())
 	case textBrowserSourceJSON:
 		publishCustom(element.Variable, browseJSONContent(element))
+	case textBrowserSourceWeb:
+		loadTextBrowserURL(config, element, textBrowserAddress(config))
 	default:
 		publishCustom(element.Variable, browseSystemInfo(element))
 	}
 	textBrowserLastUpdate = time.Now().Unix()
+}
+
+func handleTextBrowserAddressInput(renderer *sdl.Renderer, config *Config, element Element) {
+	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	for i, current := range config.Scenes[currentSceneIndex].Elements {
+		if current.Type == "textbrowser" && current.Variable == element.Variable {
+			textBrowserAddressEditing = true
+			textBrowserAddressSubmitted = false
+			handleInputSelection(renderer, config, currentSceneIndex, i)
+			textBrowserAddressEditing = false
+			activeSceneIndex = -1
+			activeElementIndex = -1
+			if textBrowserAddressSubmitted {
+				loadTextBrowserURL(config, current, textBrowserAddress(config))
+			}
+			textBrowserAddressSubmitted = false
+			return
+		}
+	}
+}
+
+func textBrowserAddress(config *Config) string {
+	if config != nil {
+		if address, ok := config.Variables.Custom[textBrowserURLVariable].(string); ok && strings.TrimSpace(address) != "" {
+			return strings.TrimSpace(address)
+		}
+	}
+	return textBrowserDefaultURL
+}
+
+func textBrowserToolbarRects(element Element) (sdl.Rect, sdl.Rect) {
+	width := getElementWidth(element, 1100)
+	y := element.Y + 36
+	goWidth := int32(64)
+	gap := int32(8)
+	address := sdl.Rect{X: element.X + 8, Y: y, W: width - goWidth - gap - 16, H: textBrowserURLBarHeight - 4}
+	goButton := sdl.Rect{X: address.X + address.W + gap, Y: y, W: goWidth, H: textBrowserURLBarHeight - 4}
+	return address, goButton
+}
+
+func loadTextBrowserURL(config *Config, element Element, rawURL string) {
+	outputVariable := element.Variable
+	if outputVariable == "" {
+		outputVariable = findTextBrowserVariable(config)
+	}
+	address, err := normalizeTextBrowserURL(rawURL)
+	if err != nil {
+		config.Variables.Custom[outputVariable] = "Browser error: " + err.Error()
+		showToast("Enter a valid http:// or https:// address.", ToastError())
+		return
+	}
+	config.Variables.Custom[textBrowserURLVariable] = address
+	config.Variables.Custom[outputVariable] = "Loading " + address + " ..."
+	textBrowserScrollY = 0
+	textBrowserScrollVelocity = 0
+
+	textBrowserRequestMutex.Lock()
+	textBrowserRequestSequence[outputVariable]++
+	requestID := textBrowserRequestSequence[outputVariable]
+	textBrowserRequestMutex.Unlock()
+
+	go func(variable, pageURL string, id uint64) {
+		content := browseWebPage(pageURL)
+		textBrowserRequestMutex.Lock()
+		isCurrent := textBrowserRequestSequence[variable] == id
+		textBrowserRequestMutex.Unlock()
+		if isCurrent {
+			publishCustom(variable, content)
+		}
+	}(outputVariable, address, requestID)
+}
+
+func normalizeTextBrowserURL(rawURL string) (string, error) {
+	address := strings.TrimSpace(rawURL)
+	if address == "" {
+		return "", fmt.Errorf("address is empty")
+	}
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+	parsed, err := url.Parse(address)
+	if err != nil {
+		return "", fmt.Errorf("invalid address: %w", err)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("only http and https pages are supported")
+	}
+	if parsed.Hostname() == "" || parsed.User != nil {
+		return "", fmt.Errorf("address must contain a host and cannot include credentials")
+	}
+	return parsed.String(), nil
+}
+
+func browseWebPage(rawURL string) string {
+	address, err := normalizeTextBrowserURL(rawURL)
+	if err != nil {
+		return "Browser error: " + err.Error()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return "Browser error: " + err.Error()
+	}
+	req.Header.Set("User-Agent", "JukaHub Text Browser/1.0")
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+				return fmt.Errorf("redirected to an unsupported URL scheme")
+			}
+			if len(via) >= 5 {
+				return fmt.Errorf("too many redirects")
+			}
+			return nil
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Sprintf("Could not load %s\n%s", address, err.Error())
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Sprintf("Could not load %s\nHTTP %s", address, resp.Status)
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if contentType != "" && !strings.Contains(contentType, "html") {
+		return fmt.Sprintf("This page is not HTML (%s).\nTry a website that serves readable HTML.", contentType)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, textBrowserMaxPageBytes+1))
+	if err != nil {
+		return fmt.Sprintf("Could not read %s\n%s", address, err.Error())
+	}
+	if len(body) > textBrowserMaxPageBytes {
+		return "Page is larger than the 2 MiB text-browser limit."
+	}
+	title, pageText := extractTextBrowserHTML(string(body))
+	if title == "" {
+		title = resp.Request.URL.Hostname()
+	}
+	if pageText == "" {
+		pageText = "This page has no readable text content."
+	}
+	return fmt.Sprintf("Title: %s\nURL: %s\n\n%s", title, resp.Request.URL.String(), pageText)
+}
+
+func extractTextBrowserHTML(source string) (string, string) {
+	var body, title strings.Builder
+	var skipped []string
+	inTitle := false
+	for i := 0; i < len(source); {
+		if source[i] != '<' {
+			end := strings.IndexByte(source[i:], '<')
+			if end < 0 {
+				end = len(source)
+			} else {
+				end += i
+			}
+			text := source[i:end]
+			if inTitle {
+				title.WriteString(text)
+			} else if len(skipped) == 0 {
+				body.WriteString(text)
+			}
+			i = end
+			continue
+		}
+		if strings.HasPrefix(source[i:], "<!--") {
+			if end := strings.Index(source[i+4:], "-->"); end >= 0 {
+				i += 4 + end + 3
+			} else {
+				break
+			}
+			continue
+		}
+		end := findTextBrowserTagEnd(source, i+1)
+		if end < 0 {
+			if len(skipped) == 0 && !inTitle {
+				body.WriteByte(source[i])
+			}
+			i++
+			continue
+		}
+		tag := strings.TrimSpace(source[i+1 : end])
+		closing := strings.HasPrefix(tag, "/")
+		if closing {
+			tag = strings.TrimSpace(tag[1:])
+		}
+		nameEnd := strings.IndexAny(tag, " \t\r\n/>")
+		name := strings.ToLower(tag)
+		if nameEnd >= 0 {
+			name = strings.ToLower(tag[:nameEnd])
+		}
+		if name == "title" {
+			inTitle = !closing
+		} else if closing {
+			for j := len(skipped) - 1; j >= 0; j-- {
+				if skipped[j] == name {
+					skipped = skipped[:j]
+					break
+				}
+			}
+		}
+		if len(skipped) == 0 && !inTitle && isTextBrowserBlockTag(name) {
+			body.WriteByte('\n')
+		}
+		if !closing && isTextBrowserSuppressedTag(name) && !strings.HasSuffix(tag, "/") {
+			skipped = append(skipped, name)
+		}
+		i = end + 1
+	}
+	return cleanTextBrowserHTML(title.String()), cleanTextBrowserHTML(body.String())
+}
+
+func findTextBrowserTagEnd(source string, start int) int {
+	var quote byte
+	for i := start; i < len(source); i++ {
+		if quote != 0 {
+			if source[i] == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch source[i] {
+		case '\'', '"':
+			quote = source[i]
+		case '>':
+			return i
+		}
+	}
+	return -1
+}
+
+func isTextBrowserSuppressedTag(tag string) bool {
+	switch tag {
+	case "head", "script", "style", "noscript", "svg", "iframe", "template":
+		return true
+	default:
+		return false
+	}
+}
+
+func isTextBrowserBlockTag(tag string) bool {
+	switch tag {
+	case "address", "article", "blockquote", "br", "dd", "div", "dl", "dt", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "td", "th", "tr", "ul":
+		return true
+	default:
+		return false
+	}
+}
+
+func cleanTextBrowserHTML(raw string) string {
+	raw = strings.ReplaceAll(raw, "\u00a0", " ")
+	raw = htmlstd.UnescapeString(raw)
+	var lines []string
+	for _, line := range strings.Split(strings.ReplaceAll(raw, "\r", "\n"), "\n") {
+		line = strings.Join(strings.Fields(line), " ")
+		if line == "" {
+			if len(lines) > 0 && lines[len(lines)-1] != "" {
+				lines = append(lines, "")
+			}
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+func wrapTextBrowserContent(text string, font *ttf.Font, maxWidth int32) string {
+	if font == nil || maxWidth <= 0 {
+		return text
+	}
+	var output []string
+	for _, paragraph := range strings.Split(text, "\n") {
+		words := strings.Fields(paragraph)
+		if len(words) == 0 {
+			output = append(output, "")
+			continue
+		}
+		line := ""
+		for _, word := range words {
+			candidate := word
+			if line != "" {
+				candidate = line + " " + word
+			}
+			width, _, _ := font.SizeUTF8(candidate)
+			if line != "" && int32(width) > maxWidth {
+				output = append(output, line)
+				line = word
+			} else {
+				line = candidate
+			}
+		}
+		output = append(output, line)
+	}
+	return strings.Join(output, "\n")
 }
 
 // browseSystemInfo gathers system information using gopsutil and formats it
@@ -770,7 +1126,7 @@ func scanLocalFiles(dir string) (result string) {
 // startTextBrowserAutoRefresh starts a periodic refresh timer for a textbrowser
 // element. Any existing timer for the same variable is stopped first.
 func startTextBrowserAutoRefresh(config *Config, element Element) {
-	if !element.AutoRefresh || element.Variable == "" {
+	if !element.AutoRefresh || element.Variable == "" || textBrowserElementSource(element) == textBrowserSourceWeb {
 		return
 	}
 

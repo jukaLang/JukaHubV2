@@ -61,6 +61,102 @@ func TestCompareSemver(t *testing.T) {
 
 // --- Manifest parsing ---
 
+func TestDetectDeviceForSystem(t *testing.T) {
+	cases := []struct {
+		name, goos, model string
+		want              DeviceModel
+	}{
+		{"smart pro TG5040", "linux", "TRIMUI Smart Pro TG5040", DeviceTrimuiSmartPro},
+		{"smart pro s TG5050", "linux", "TrimUI Smart Pro S TG5050", DeviceTrimuiSmartProS},
+		{"brick TG3040", "linux", "TrimUI Brick TG3040", DeviceTrimuiBrick},
+		{"brick pro TG4040", "linux", "TrimUI Brick Pro TG4040", DeviceTrimuiBrickPro},
+		{"marketing name without model id", "linux", "TrimUI Smart Pro S", DeviceUnknown},
+		{"unknown model", "linux", "TrimUI TG9999", DeviceUnknown},
+		{"model ID must be a whole token", "linux", "TrimUI TG50401", DeviceUnknown},
+		{"model code without TrimUI model string", "linux", "TG5040", DeviceUnknown},
+		{"conflicting model ids", "linux", "TrimUI TG5040 TG5050", DeviceUnknown},
+		{"wrong operating system", "darwin", "TRIMUI TG5040", DeviceUnknown},
+		{"windows development build", "windows", "", DeviceDevBuild},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := detectDeviceForSystem(tc.goos, tc.model)
+			if got != tc.want {
+				t.Fatalf("detectDeviceForSystem() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDeviceModelForHardwareID(t *testing.T) {
+	for _, tc := range []struct {
+		id   string
+		want DeviceModel
+	}{
+		{"TG5040", DeviceTrimuiSmartPro},
+		{"tg5050", DeviceTrimuiSmartProS},
+		{" TG3040 ", DeviceTrimuiBrick},
+		{"TG4040", DeviceTrimuiBrickPro},
+		{"TG9999", DeviceUnknown},
+		{"", DeviceUnknown},
+	} {
+		if got := DeviceModelForHardwareID(tc.id); got != tc.want {
+			t.Errorf("DeviceModelForHardwareID(%q) = %q, want %q", tc.id, got, tc.want)
+		}
+	}
+}
+
+func TestJukaHubUpdateTargetSelection(t *testing.T) {
+	devices := []DeviceModel{
+		DeviceTrimuiSmartPro,
+		DeviceTrimuiSmartProS,
+		DeviceTrimuiBrick,
+		DeviceTrimuiBrickPro,
+	}
+	for _, device := range devices {
+		t.Run(string(device), func(t *testing.T) {
+			target, err := jukaHubUpdateTargetFor(device, "linux", "arm64")
+			if err != nil {
+				t.Fatalf("jukaHubUpdateTargetFor(): %v", err)
+			}
+			wantAsset := "JukaHub-" + string(device) + "-linux-arm64.tar.gz"
+			if target.Device != device || target.Asset != wantAsset {
+				t.Fatalf("target = %+v, want device %q asset %q", target, device, wantAsset)
+			}
+		})
+	}
+
+	windows, err := jukaHubUpdateTargetFor(DeviceDevBuild, "windows", "amd64")
+	if err != nil || windows.Asset != "JukaHub-win-x64.zip" {
+		t.Fatalf("windows target = %+v, %v", windows, err)
+	}
+	for _, tc := range []struct {
+		device DeviceModel
+		goos   string
+		arch   string
+	}{
+		{DeviceUnknown, "linux", "arm64"},
+		{DeviceDevBuild, "linux", "arm64"},
+		{DeviceTrimuiSmartPro, "windows", "amd64"},
+		{DeviceTrimuiBrick, "linux", "arm"},
+	} {
+		if target, err := jukaHubUpdateTargetFor(tc.device, tc.goos, tc.arch); err == nil {
+			t.Errorf("unexpected target for %q %s/%s: %+v", tc.device, tc.goos, tc.arch, target)
+		}
+	}
+
+	for _, device := range devices {
+		asset, err := jukaHubAssetName(device, "linux", "arm64")
+		wantAsset := "JukaHub-" + string(device) + "-linux-arm64.tar.gz"
+		if err != nil || asset != wantAsset {
+			t.Errorf("jukaHubAssetName(%q) = %q, %v; want %q", device, asset, err, wantAsset)
+		}
+	}
+	if _, err := jukaHubAssetName(DeviceUnknown, "linux", "arm64"); err == nil {
+		t.Error("unknown device must not select a release asset")
+	}
+}
+
 func TestParsePatchManifest(t *testing.T) {
 	good := `{
 		"schema": 1,
@@ -70,9 +166,19 @@ func TestParsePatchManifest(t *testing.T) {
 		"targets": [
 			{"device": "trimui-smart-pro", "os": "linux", "arch": "arm64",
 			 "asset": "JukaHub-trimui-smart-pro-linux-arm64.tar.gz",
-			 "sha256": "` + strings.Repeat("ab", 32) + `", "size": 1234}
+			 "sha256": "` + strings.Repeat("ab", 32) + `", "size": 1234},
+			{"device": "trimui-smart-pro-s", "os": "linux", "arch": "arm64",
+			 "asset": "JukaHub-trimui-smart-pro-s-linux-arm64.tar.gz",
+			 "sha256": "` + strings.Repeat("bc", 32) + `", "size": 1234},
+			{"device": "trimui-brick", "os": "linux", "arch": "arm64",
+			 "asset": "JukaHub-trimui-brick-linux-arm64.tar.gz",
+			 "sha256": "` + strings.Repeat("cd", 32) + `", "size": 1234},
+			{"device": "trimui-brick-pro", "os": "linux", "arch": "arm64",
+			 "asset": "JukaHub-trimui-brick-pro-linux-arm64.tar.gz",
+			 "sha256": "` + strings.Repeat("de", 32) + `", "size": 1234}
 		]
 	}`
+
 	m, err := ParsePatchManifest([]byte(good))
 	if err != nil {
 		t.Fatalf("good manifest rejected: %v", err)
@@ -83,6 +189,15 @@ func TestParsePatchManifest(t *testing.T) {
 	}
 	if m.ManifestTargetFor("brick", "linux", "arm64") != nil {
 		t.Fatal("wrong device must not match")
+	}
+	for _, device := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro} {
+		target, err := jukaHubUpdateTargetFor(device, "linux", "arm64")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if manifestTarget := m.ManifestTargetFor(string(device), target.OS, target.Arch); manifestTarget == nil || manifestTarget.Asset != target.Asset {
+			t.Errorf("manifest target does not match selected target for %q", device)
+		}
 	}
 
 	// Unknown schema fails closed.
