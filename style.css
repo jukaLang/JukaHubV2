@@ -732,12 +732,34 @@ textarea {
   background: var(--canvas-device);
   background-size: cover;
   background-position: center;
+  background-color: var(--canvas-bg);
   width: 1280px;
   height: 720px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(255,255,255,0.02) inset, 0 0 60px -20px rgba(0,0,0,0.6) inset;
   overflow: hidden;
+}
+
+/* Subtle device-edge highlight in the preview frame. The runtime itself uses the
+   plain Go-styled canvas; this is purely the web designer preview chrome. */
+.canvas::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.35) inset;
+  z-index: 1;
+}
+
+/* Soft startup glow behind an empty canvas so the preview doesn't look like a dead
+   gray rectangle when there is no background image yet. */
+.canvas:not([style*="background-image"]) {
+  background-image:
+    radial-gradient(900px 420px at 78% -10%, rgba(124,92,255,0.25), transparent 60%),
+    radial-gradient(720px 360px at 8% 110%, rgba(37,194,160,0.22), transparent 60%),
+    var(--canvas-device);
 }
 
 /* === Context Menu === */
@@ -1231,6 +1253,240 @@ textarea:focus {
   font-style: italic;
 }
 
+
+/* === AI Assistant Panel === */
+.ai-panel {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  background: var(--sidebar-bg);
+  min-height: 0;
+}
+
+.ai-content {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  min-height: 0;
+}
+
+.ai-notice {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.5;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.ai-provider-row,
+.ai-key-row,
+.ai-prompt-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.ai-select,
+.ai-input,
+.ai-textarea {
+  width: 100%;
+  padding: 0 var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--app-bg);
+  color: var(--text-main);
+  font-size: var(--text-sm);
+  font-family: inherit;
+}
+
+.ai-select {
+  height: var(--control-height);
+  cursor: pointer;
+}
+
+.ai-input {
+  height: var(--control-height);
+}
+
+.ai-textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.5;
+}
+
+.ai-input:focus,
+.ai-select:focus,
+.ai-textarea:focus {
+  border-color: var(--primary);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.2);
+}
+
+.ai-key-input-row {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: stretch;
+}
+
+.ai-key-input-row .action-button {
+  flex: 0 0 auto;
+  align-self: center;
+}
+
+.ai-hint {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.ai-actions {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+}
+
+.ai-actions .action-button {
+  flex: 1 1 auto;
+}
+
+.ai-output {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-height: 80px;
+}
+
+.ai-output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.ai-output-actions {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.ai-output-pre {
+  margin: 0;
+  padding: var(--space-md);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-main);
+  background: var(--app-bg);
+  max-height: 220px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-status {
+  font-size: var(--text-sm);
+  min-height: 1.2em;
+  color: var(--text-muted);
+}
+
+.ai-status.listening {
+  color: var(--danger);
+  font-weight: 500;
+}
+
+
+.ai-status.error {
+  color: var(--danger);
+}
+
+.ai-status.success {
+  color: var(--secondary);
+}
+
+/* When AI panel is the only sidebar content in compact view, keep it usable. */
+.sidebar-content:empty + .ai-panel {
+  flex: 1 1 auto;
+}
+
+
+
+.ai-voice-hint-row {
+  display: flex;
+  justify-content: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0 var(--space-sm);
+}
+
+.ai-voice-hint-row .ai-hint {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+/* AI voice control (optional, browser-dependent) */
+.ai-mic-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-xs) 0;
+}
+
+.ai-mic-row .action-button {
+  flex: 0 0 auto;
+}
+
+.ai-toggle-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  cursor: pointer;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.ai-toggle-label input[type="checkbox"] {
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.ai-voice-hint {
+  margin-left: auto;
+  opacity: 0.7;
+}
+
+.ai-mic-btn-listening {
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+  color: var(--text-on-primary) !important;
+  animation: pulse-mic 1s ease-in-out infinite;
+}
+
+@keyframes pulse-mic {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 91, 114, 0.6); }
+  50% { box-shadow: 0 0 0 8px rgba(239, 91, 114, 0); }
+}
+
+/* Mobile: AI panel behaves like the rest of the right sidebar. */
+@media (max-width: 992px) {
+  .ai-content {
+    padding: var(--space-md);
+  }
+}
+
 /* === Canvas Elements === */
 .element {
   position: absolute;
@@ -1316,53 +1572,70 @@ textarea:focus {
   transform: scale(1.1);
 }
 
-/* Menu element */
+/* Menu element — preview chrome only. Render as a translucent HUD strip so the
+   designer canvas feels closer to the runtime frame, not a placeholder bar. */
 .element[data-type="menu"] {
-  background: #1a1a1a;
+  background: rgba(9,11,16,0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 20px;
-  height: 50px;
-  color: #fff;
-  border-top: 1px solid #333;
+  padding: 0 22px;
+  height: 52px;
+  color: var(--text-main);
+  border-top: 1px solid var(--border);
   left: 0 !important;
   width: 100% !important;
   z-index: 100;
+  box-shadow: 0 -2px 10px rgba(0,0,0,0.4);
 }
 
 .menu-scene-buttons {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   overflow-x: auto;
   flex: 1;
-  padding: 0 15px;
+  padding: 0 6px;
   justify-content: flex-start;
+  scrollbar-width: none;
+}
+.menu-scene-buttons::-webkit-scrollbar {
+  display: none;
 }
 
 .menu-scene-button {
-  background: #333;
-  color: #fff;
-  border: none;
-  padding: 6px 15px;
-  border-radius: 20px;
-  font-size: 14px;
+  background: rgba(255,255,255,0.06);
+  color: var(--text-main);
+  border: 1px solid var(--border-subtle);
+  padding: 5px 14px;
+  border-radius: 999px;
+  font-size: var(--text-sm);
   white-space: nowrap;
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
-  transition: background var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.menu-scene-button:hover {
+  background: rgba(255,255,255,0.10);
+  border-color: var(--primary);
+  color: var(--text-main);
 }
 
 .menu-scene-button.active {
   background: var(--primary);
-  color: #fff;
+  border-color: var(--primary);
+  color: var(--text-on-primary);
 }
 
 .menu-clock {
-  color: #fff;
-  font-size: 14px;
-  min-width: 55px;
-  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  min-width: 62px;
+  text-align: right;
 }
 
 /* Text Browser element */

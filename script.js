@@ -3042,3 +3042,986 @@ function updateVariableSelector(selector, currentValue) {
     selector.appendChild(option);
   });
 }
+
+
+
+// ----- AI Assistant module (injected from ai-assistant.js) -----
+
+// AI Assistant (builder-only helper)
+// Suggests element placement and can generate a scene config JSON blob.
+// Uses a free provider by default; paid providers require an API key
+// that is stored only in browser localStorage (never committed).
+
+const AI = (() => {
+  const $ = (id) => document.getElementById(id);
+  const providerEl = $('aiProvider');
+  const keyEl = $('aiApiKey');
+  const keySaveBtn = $('aiKeySaveBtn');
+  const promptEl = $('aiPrompt');
+  const suggestBtn = $('aiSuggestBtn');
+  const generateBtn = $('aiGenerateBtn');
+  const clearBtn = $('aiClearBtn');
+  const outputEl = $('aiOutput');
+  const copyBtn = $('aiCopyBtn');
+  const applyBtn = $('aiApplyBtn');
+  const statusEl = $('aiStatus');
+
+  const LOCAL_KEY_NAME = 'jukahub-ai-key';
+  const LOCAL_PROVIDER_NAME = 'jukahub-ai-provider';
+
+  const FREE_PROVIDER = 'free';
+  const SUPPORTED_PROVIDERS = new Set([FREE_PROVIDER, 'openrouter', 'openai', 'anthropic']);
+
+  function status(msg, kind = '') {
+    if (!statusEl) return;
+    statusEl.textContent = msg;
+    statusEl.className = 'ai-status' + (kind ? ' ' + kind : '');
+  }
+
+  function kil(msg) { throw new Error(msg); }
+
+  function provider() {
+    const val = (providerEl && providerEl.value) || FREE_PROVIDER;
+    if (!SUPPORTED_PROVIDERS.has(val)) kil('Unsupported provider: ' + val);
+    return val;
+  }
+
+  function apiKey() {
+    if (provider() === FREE_PROVIDER) return null;
+    return (keyEl && keyEl.value.trim()) || loadStoredKey();
+  }
+
+
+  function loadStoredKey() {
+    try {
+      const stored = localStorage.getItem(LOCAL_KEY_NAME);
+      if (stored) {
+        if (keyEl) keyEl.value = stored;
+        const storedProvider = localStorage.getItem(LOCAL_PROVIDER_NAME);
+        if (storedProvider && providerEl) providerEl.value = storedProvider;
+      }
+    } catch (e) { /* private mode can deny localStorage */ }
+    return null;
+  }
+
+  function storeKey(key) {
+    try {
+      if (key) {
+        localStorage.setItem(LOCAL_KEY_NAME, key);
+        localStorage.setItem(LOCAL_PROVIDER_NAME, provider());
+      } else {
+        localStorage.removeItem(LOCAL_KEY_NAME);
+        localStorage.removeItem(LOCAL_PROVIDER_NAME);
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function showOutput(text) { if (!outputEl) return; outputEl.textContent = text; }
+
+  function showJsonOutput(obj) {
+    if (!outputEl) return;
+    const formatted =
+      typeof obj === 'string'
+        ? obj
+        : (() => { try { return JSON.stringify(obj, null, 2); } catch (e) { return String(obj); } })();
+    showOutput(formatted);
+  }
+
+  function extractJson(text) {
+    const candidates = [];
+    const seen = new Set();
+
+    const addCandidate = (chunk) => {
+      if (!chunk) return;
+      const trimmed = chunk.trim();
+      if (!trimmed || seen.has(trimmed)) return;
+      seen.add(trimmed);
+      candidates.push(trimmed);
+    };
+
+    // Prefer the largest balanced object near the end of the message, since
+    // provider replies often include explanation text before the JSON.
+    const objectMatches = [...text.matchAll(/\{(?:[^{}]|(?:\{[^{}]*\}))*\}/g)].map((m) => m[0]);
+    objectMatches.sort((a, b) => b.length - a.length);
+    objectMatches.forEach(addCandidate);
+
+    const arrayMatches = [...text.matchAll(/\[(?:[^\[\]]|(?:\[[^\[\]]*\]))*\]/g)].map((m) => m[0]);
+    arrayMatches.sort((a, b) => b.length - a.length);
+    arrayMatches.forEach(addCandidate);
+
+    // Also try the whole response trimmed, in case the model returned only JSON.
+    addCandidate(text);
+
+    for (const candidate of candidates) {
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === 'object') return parsed;
+      } catch (e) { /* not JSON */ }
+    }
+    return null;
+  }
+
+  function sanitizePromptForProvider(promptText) {
+    // Keep the prompt readable but avoid sending control characters that can
+    // confuse JSON-bodied HTTP requests or the provider parser.
+    if (typeof promptText !== 'string') return '';
+    return promptText.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ').slice(0, 4000);
+  }
+
+
+  async function freeGenerate(promptText) { return localSuggest(promptText); }
+
+  async function openrouterGenerate(promptText, key) {
+    if (!key) kil('OpenRouter key is required for this provider.');
+    return callJsonChat({
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      headers: {
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': window.location.href || 'https://generate.jukalang.com',
+        'X-Title': 'JukaHub Generator',
+      },
+      body: {
+        model: 'openai/gpt-oss-120b',
+        messages: [
+          { role: 'system', content: AI_SYSTEM },
+          { role: 'user', content: promptText },
+        ],
+        max_tokens: 2000,
+        temperature: 0.2,
+      },
+    });
+  }
+
+  async function openaiGenerate(promptText, key) {
+    if (!key) kil('OpenAI key is required for this provider.');
+    return callJsonChat({
+      url: 'https://api.openai.com/v1/chat/completions',
+      headers: {
+        Authorization: 'Bearer ' + key,
+        'Content-Type': 'application/json',
+      },
+      body: {
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: AI_SYSTEM },
+          { role: 'user', content: promptText },
+        ],
+        max_tokens: 2000,
+        temperature: 0.2,
+      },
+    });
+  }
+
+
+  async function anthropicGenerate(promptText, key) {
+    if (!key) kil('Anthropic key is required for this provider.');
+    return callJsonChat({
+      url: 'https://api.anthropic.com/v1/messages',
+      headers: {
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: {
+        model: 'claude-3-5-haiku-20241022',
+        max_tokens: 2000,
+        temperature: 0.2,
+        messages: [
+          { role: 'user', content: AI_SYSTEM + '\n\n' + promptText },
+        ],
+      },
+    });
+  }
+
+  async function callJsonChat(req) {
+    const res = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const errBody = await res.json();
+        if (errBody && errBody.error && errBody.error.message) detail = errBody.error.message;
+      } catch (e) { /* fallback to status text */ }
+      kil('Provider error: ' + detail);
+    }
+    const data = await res.json();
+    const answer =
+      req.url.includes('anthropic.com')
+        ? (data.content && data.content[0] && data.content[0].text) || ''
+        : (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
+    if (!answer.trim()) kil('Empty response from provider.');
+    return answer;
+  }
+
+
+  function localSuggest(promptText) {
+    const raw = promptText || '';
+    const lower = raw.toLowerCase();
+    const hasTitle = /title|app name|rename|named|call it/i.test(lower);
+    const titleText = extractTitleText(raw);
+    const hasMedia = /media|video|youtube|player|watch|films?/i.test(lower);
+    const hasFiles = /file|browse|explorer|folder|images?|gallery|photos?|samba|smb/i.test(lower);
+    const hasSearch = /search|search bar|searchbox|input at the top|search field|searchbox|search input/i.test(lower);
+    const hasSettings = /setting|config|gear|preferences|preference|options?|general/i.test(lower);
+    const hasChat = /chat|message|talk|assistant|ask|qa|copilot/i.test(lower);
+    const hasTools = /tool|terminal|net speed|benchmark|hardware|disk|log/i.test(lower);
+    const hasFavorites = /favorite|recent|saves?|bookmark/i.test(lower);
+    const hasPackages = /package|update|repair|patch|install/i.test(lower);
+    const hasGrid = /grid|tiles|rows?|columns?|panel/i.test(lower);
+    const addTop = /top|above|header|search bar|near the top|first/i.test(lower);
+    const addBottom = /bottom|footer|below|underneath|at the bottom/i.test(lower);
+    const wantsCompact = /compact|small|density|dense|narrow/i.test(lower);
+    const wantsRows = /row|single row|one row/i.test(lower);
+    const wantsTwoRows = /two rows?|2 row|top and bottom|double row/i.test(lower);
+    const wantsGrid = /grid|tiles?/i.test(lower) || hasGrid;
+
+    let titleY = 44;
+    let contentTopY = 128;
+    const canvasW = 1280;
+    const canvasH = 720;
+    const leftMargin = 36;
+    const gapX = 20;
+    const gapY = 22;
+
+    if (hasTitle) {
+      const labelBg = 'none';
+      elements.push(makeElement('label', titleText || 'My Retro GUI', '#F8FAFC', labelBg, 'title', 'center', canvasW - leftMargin * 2, 64, leftMargin, titleY, ''));
+      suggestions.push('Added a centered title near the top.');
+      contentTopY = 136;
+    }
+
+    if (addTop && hasSearch) {
+      const inputW = wantsCompact ? 560 : 720;
+      const btnW = 120;
+      const rowY = contentTopY;
+      elements.push(makeElement('input', 'Search or paste link', '$labelColor', '$inputColor', 'medium', 'left', inputW, 46, leftMargin, rowY, 'Search or paste YouTube link'));
+      elements.push(makeElement('button', 'Search', '$labelColor', '$buttonColor', 'medium', 'left', btnW, 46, leftMargin + inputW + 12, rowY, '', 'youtube_smart'));
+      suggestions.push('Added a search input + Search button near the top.');
+      contentTopY = rowY + 70;
+    }
+
+    const tileCatalog = [
+      { text: 'Media', trigger: 'change_scene:Tube', fg: '#F8FAFC', bg: '#1E3A8A' },
+      { text: 'Files', trigger: 'change_scene:FileExplorer', fg: '#F8FAFC', bg: '#0F766E' },
+      { text: 'Packages', trigger: 'change_scene:Packages', fg: '#F8FAFC', bg: '#9A3412' },
+      { text: 'Chat', trigger: 'change_scene:Chat', fg: '#F8FAFC', bg: '#5B21B6' },
+      { text: 'Favorites', trigger: 'change_scene:Favorites', fg: '#F8FAFC', bg: '#9D174D' },
+      { text: 'Apps', trigger: 'change_scene:Apps', fg: '#F8FAFC', bg: '#334155' },
+      { text: 'Settings', trigger: 'change_scene:Settings', fg: '#F8FAFC', bg: '#475569' },
+      { text: 'Search / Tools', trigger: 'change_scene:Misc', fg: '#F8FAFC', bg: '#0E7490' },
+    ];
+
+    const tileSizeMap = {
+      compact: { w: 180, h: 120, perRow: 6, gapX: 16, gapY: 18 },
+      narrow: { w: 220, h: 132, perRow: 5, gapX: 18, gapY: 20 },
+      default: { w: 260, h: 158, perRow: 4, gapX: 22, gapY: 24 },
+      spacious: { w: 300, h: 180, perRow: 3, gapX: 26, gapY: 26 },
+    };
+
+    function selectedTileStyle() {
+      if (wantsCompact) return tileSizeMap.compact;
+      if (wantsRows) return tileSizeMap.narrow;
+      if (wantsTwoRows) return tileSizeMap.default;
+      if (wantsGrid || hasGrid) return tileSizeMap.spacious;
+      return tileSizeMap.default;
+    }
+
+    const style = selectedTileStyle();
+    const tileW = style.w;
+    const tileH = style.h;
+    const perRow = style.perRow;
+    const tGapX = style.gapX;
+    const tGapY = style.gapY;
+
+    function resolveTileIndices() {
+      const chosen = [];
+      if (hasMedia) chosen.push(0);
+      if (hasFiles) chosen.push(1);
+      if (hasPackages) chosen.push(2);
+      if (hasChat) chosen.push(3);
+      if (hasFavorites) chosen.push(4);
+      if (hasApps || hasTools) chosen.push(5);
+      if (hasSettings) chosen.push(6);
+      if (hasPackages || hasTools) chosen.push(7);
+      return chosen;
+    }
+
+    let tileIndices = resolveTileIndices();
+
+    if (!tileIndices.length) {
+      if (wantsTwoRows || wantsRows) {
+        tileIndices = [0, 1, 2, 3, 4, 5, 6, 7];
+        suggestions.push('No specific tiles mentioned, so I filled a balanced 2-row grid with the common home actions.');
+      } else {
+        tileIndices = [0, 1, 6, 3];
+        suggestions.push('No specific tiles mentioned, so I started with a small set: Media, Files, Settings, Chat.');
+      }
+    }
+
+    let placed = 0;
+    function planTile(catalogIndex, rowOffset = 0) {
+      const catalog = tileCatalog[catalogIndex];
+      if (!catalog) return;
+      const col = placed % perRow;
+      const row = Math.floor(placed / perRow) + rowOffset;
+      const x = leftMargin + col * (tileW + tGapX);
+      const y = contentTopY + row * (tileH + tGapY);
+      if (y + tileH > canvasH - 8) {
+        suggestions.push('Not enough vertical space for every requested tile, so I dropped a few lower tiles.');
+        return;
+      }
+      elements.push(makeElement('button', catalog.text, catalog.fg, catalog.bg, 'big', 'left', tileW, tileH, x, y, '', catalog.trigger));
+      placed++;
+    }
+
+    tileIndices.forEach((idx) => planTile(idx, 0));
+
+    if (addBottom && elements.length) {
+      const hintText = 'Use D-Pad to navigate \u00b7 A to open \u00b7 B to back';
+      elements.push(makeElement('label', hintText, '#9AA6B6', 'none', 'small', 'center', canvasW - leftMargin * 2, 30, leftMargin, canvasH - 44, ''));
+      suggestions.push('Added a small control hint near the bottom.');
+    }
+
+    if (elements.length === 0) {
+      suggestions.push('I couldn\u2019t place anything from that request, so I added a minimal centered title so the scene isn\u2019t empty.');
+      elements.push(makeElement('label', titleText || 'My Retro GUI', '#F8FAFC', 'none', 'title', 'center', canvasW - leftMargin * 2, 64, leftMargin, contentTopY, ''));
+    }
+
+    const lines = [];
+    lines.push('AI suggestion (free local mode)');
+    lines.push('==============================');
+    if (suggestions.length) {
+      suggestions.forEach((s) => lines.push('\u2022 ' + s));
+      lines.push('');
+    } else {
+      lines.push('Quick edit tips:');
+      lines.push('\u2022 Say \u201cadd a Media tile\u201d to drop one tile.');
+      lines.push('\u2022 Say \u201csearch bar at the top\u201d to add an input + button.');
+      lines.push('\u2022 Say \u201ctitle: JukaHub\u201d to set the title text.');
+      lines.push('\u2022 Say \u201ctwo rows of tiles\u201d for a denser grid.');
+      lines.push('\u2022 Use the paid providers below for more varied layouts.');
+      lines.push('');
+    }
+    lines.push('Elements to add (' + elements.length + '):');
+    elements.forEach((e) => {
+      lines.push('- ' + e.type + ': "' + e.text + '" at x=' + e.x + ', y=' + e.y + ', w=' + e.w + ', h=' + e.h);
+    });
+
+    showOutput(lines.join('\n'));
+    status('Suggestion ready \u2014 click Apply to add these elements to the current scene.', 'success');
+    lastSuggestion = elements;
+    return elements;
+  }
+
+
+  function makeElement(type, text, color, bgColor, font, align, w, h, x, y, variableOrPlaceholder, trigger) {
+    return {
+      type: type,
+      text: text,
+      color: color,
+      bgColor: bgColor,
+      font: font,
+      align: align,
+      w: String(w),
+      h: String(h),
+      x: String(x),
+      y: String(y),
+      variable: variableOrPlaceholder || '',
+      placeholder: variableOrPlaceholder || '',
+      trigger: trigger || '',
+    };
+  }
+
+  function suggest() { return run('suggest'); }
+
+  function generate() {
+    const promptText = promptEl.value.trim();
+    if (!promptText) kil('Write what you want the scene to look like first.');
+    return run('generate');
+  }
+
+  async function run(mode) {
+    const providerName = provider();
+    const key = apiKey();
+    const promptText = promptEl.value.trim();
+    if (!promptText) kil('Write what you want first (for example: "add a Media tile and a search bar at the top").');
+    const safePromptText = sanitizePromptForProvider(promptText);
+    const builtPrompt = mode === 'suggest' ? SUGGEST_PROMPT(safePromptText) : GENERATE_PROMPT(safePromptText);
+
+    let answer;
+    try {
+      status('Thinking\u2026', '');
+      if (providerName === FREE_PROVIDER) {
+        answer = await freeGenerate(builtPrompt);
+        if (!answer) kil('Local suggestion returned nothing.');
+        showOutput(answer);
+        status('Suggestion ready \u2014 click Apply to add these elements to the current scene.', 'success');
+        return;
+      }
+
+      answer = await providerRoute(providerName, builtPrompt, key);
+      const parsed = extractJson(answer);
+      if (parsed && (parsed.scene || parsed.elements || Array.isArray(parsed))) {
+        showJsonOutput(parsed);
+        status('Config JSON generated \u2014 click Apply to import it.', 'success');
+        lastGenerated = parsed;
+        return;
+      }
+      showOutput(answer);
+      status('Got a text response \u2014 I tried to extract JSON, but it may need a manual copy.', 'warning');
+    } catch (err) {
+      status('AI error: ' + err.message, 'error');
+      showOutput('// Error\n' + err.message);
+      throw err;
+    }
+  }
+
+  async function providerRoute(providerName, promptText, key) {
+    if (providerName === 'openrouter') return openrouterGenerate(promptText, key);
+    if (providerName === 'openai') return openaiGenerate(promptText, key);
+    if (providerName === 'anthropic') return anthropicGenerate(promptText, key);
+    return freeGenerate(promptText);
+  }
+
+
+  function clear() {
+    promptEl.value = '';
+    showOutput('AI output will appear here.');
+    status('');
+    lastSuggestion = null;
+    lastGenerated = null;
+  }
+
+  function apply() {
+    const suggestion = lastSuggestion;
+    const generated = lastGenerated;
+
+    if (suggestion && Array.isArray(suggestion) && suggestion.length) {
+      addSuggestedElements(suggestion);
+      status('Applied ' + suggestion.length + ' element(s) to the current scene.', 'success');
+      return;
+    }
+
+    if (generated && typeof generated === 'object') {
+      applyGeneratedConfig(generated);
+      return;
+    }
+
+    kil('Nothing to apply \u2014 run Suggest Layout or Generate Config first.');
+  }
+
+  function addSuggestedElements(elements) {
+    if (!elements || !elements.length) return;
+    const canvasEl = document.getElementById('canvas');
+    if (!canvasEl) kil('Canvas not found.');
+
+    const applied = [];
+    elements.forEach((spec) => {
+      if (!spec || !spec.type) return;
+      const type = String(spec.type).toLowerCase();
+      if (!['button', 'label', 'input'].includes(type)) return;
+
+      const x = clampPos(parseInt(spec.x, 10) || 0, 1280);
+      const y = clampPos(parseInt(spec.y, 10) || 0, 720);
+      const w = Math.max(60, parseInt(spec.w, 10) || parseInt(spec.width, 10) || 120);
+      const h = Math.max(36, parseInt(spec.h, 10) || parseInt(spec.height, 10) || 48);
+
+      const existing = canvasEl.querySelector(
+        '.element[data-type="' + type + '"][data-text="' + escapeAttribute((spec.text || '').slice(0, 120)) + '"]'
+      ) ||
+        canvasEl.querySelector(
+          '.element[data-type="' + type + '"][data-text=""]'
+        );
+      if (existing) return;
+
+      const el = document.createElement('div');
+      el.className = 'element';
+      el.style.position = 'absolute';
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      el.style.width = w + 'px';
+      el.style.height = h + 'px';
+      el.setAttribute('data-x', x);
+      el.setAttribute('data-y', y);
+      el.setAttribute('data-width', w);
+      el.setAttribute('data-height', h);
+
+      const textColor = (spec.color || '').trim() || '#F8FAFC';
+      const bgColor = (spec.bgColor || '').trim() || 'transparent';
+
+      if (type === 'label') {
+        el.style.background = 'none';
+        el.style.color = textColor;
+      } else if (type === 'button') {
+        el.style.background = bgColor;
+        el.style.color = textColor;
+      } else if (type === 'input') {
+        el.style.background = bgColor || '#0F1420';
+        el.style.color = textColor || '#F8FAFC';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'element-input';
+        input.value = (spec.placeholder || '').slice(0, 200);
+        input.placeholder = (spec.placeholder || '').slice(0, 200);
+        el.appendChild(input);
+      } else {
+        el.style.background = bgColor || '#111';
+        el.style.color = textColor || '#F8FAFC';
+      }
+
+      const textSpan = document.createElement('span');
+      textSpan.className = 'text-content';
+      textSpan.textContent = (spec.text || '').slice(0, 120) || type;
+      el.appendChild(textSpan);
+
+      const removeButton = document.createElement('span');
+      removeButton.className = 'remove-button';
+      removeButton.textContent = '\u2715';
+      el.appendChild(removeButton);
+
+      el.setAttribute('data-type', type);
+      if (spec.trigger) el.setAttribute('data-trigger', String(spec.trigger).slice(0, 120));
+      if (spec.variable) el.setAttribute('data-variable', String(spec.variable).slice(0, 120));
+      if (spec.font) el.setAttribute('data-font', String(spec.font).slice(0, 40));
+
+      canvasEl.appendChild(el);
+      if (typeof setupElementEvents === 'function') setupElementEvents(el);
+      const sceneList = (typeof scenes !== 'undefined' && scenes[currentScene]) ? scenes[currentScene] : null;
+      if (!sceneList) scenes[currentScene] = [];
+      if (!scenes[currentScene].includes(el)) scenes[currentScene].push(el.cloneNode(true));
+      applied.push(el);
+    });
+
+    if (applied.length) {
+      if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+    }
+
+    return applied;
+  }
+
+  function escapeAttribute(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function clampPos(pos, max) { return Math.max(0, Math.min(pos, max - 60)); }
+
+
+  function applyGeneratedConfig(generated) {
+    const scene = generated.scene || generated;
+    const elements = scene.elements && Array.isArray(scene.elements) ? scene.elements : null;
+    if (!elements || !elements.length) kil('Generated config did not include any elements.');
+
+    const canvasEl = document.getElementById('canvas');
+    if (!canvasEl) kil('Canvas not found.');
+
+    let added = 0;
+    elements.forEach((spec) => {
+      if (!spec.type) return;
+      const existing = canvasEl.querySelector(
+        '.element[data-type="' + String(spec.type).toLowerCase() + '"][data-text="' + escapeAttribute((spec.text || '').slice(0, 120)) + '"]'
+      ) ||
+        canvasEl.querySelector(
+          '.element[data-type="' + String(spec.type).toLowerCase() + '"][data-text=""]'
+        );
+      if (existing) return;
+
+      const x = clampPos(parseInt(spec.x, 10) || 0, 1280);
+      const y = clampPos(parseInt(spec.y, 10) || 0, 720);
+      const w = Math.max(60, parseInt(spec.width, 10) || parseInt(spec.w, 10) || 120);
+      const h = Math.max(36, parseInt(spec.height, 10) || parseInt(spec.h, 10) || 48);
+
+      const el = document.createElement('div');
+      el.className = 'element';
+      el.style.position = 'absolute';
+      el.style.left = x + 'px';
+      el.style.top = y + 'px';
+      el.style.width = w + 'px';
+      el.style.height = h + 'px';
+      el.setAttribute('data-x', x);
+      el.setAttribute('data-y', y);
+      el.setAttribute('data-width', w);
+      el.setAttribute('data-height', h);
+
+      const type = String(spec.type).toLowerCase();
+      if (type === 'label') {
+        el.style.background = 'none';
+        el.style.color = (spec.color || '').trim() || '#F8FAFC';
+      } else if (type === 'button') {
+        el.style.background = (spec.bgColor || '').trim() || '#1E3A8A';
+        el.style.color = (spec.color || '').trim() || '#F8FAFC';
+      } else if (type === 'input') {
+        el.style.background = (spec.bgColor || '').trim() || '#0F1420';
+        el.style.color = (spec.color || '').trim() || '#F8FAFC';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'element-input';
+        input.value = (spec.text || spec.placeholder || '').slice(0, 200);
+        input.placeholder = (spec.placeholder || spec.text || '').slice(0, 200);
+        el.appendChild(input);
+      } else {
+        el.style.background = (spec.bgColor || '').trim() || '#111';
+        el.style.color = (spec.color || '').trim() || '#F8FAFC';
+      }
+
+      const textSpan = document.createElement('span');
+      textSpan.className = 'text-content';
+      textSpan.textContent = (spec.text || '').slice(0, 120) || type;
+      el.appendChild(textSpan);
+
+      const removeButton = document.createElement('span');
+      removeButton.className = 'remove-button';
+      removeButton.textContent = '\u2715';
+      el.appendChild(removeButton);
+
+      el.setAttribute('data-type', type);
+      if (spec.trigger) el.setAttribute('data-trigger', String(spec.trigger).slice(0, 120));
+      if (spec.variable) el.setAttribute('data-variable', String(spec.variable).slice(0, 120));
+      if (spec.font) el.setAttribute('data-font', String(spec.font).slice(0, 40));
+      if (spec.placeholder) el.setAttribute('data-placeholder', String(spec.placeholder).slice(0, 200));
+
+      canvasEl.appendChild(el);
+      if (typeof setupElementEvents === 'function') setupElementEvents(el);
+      const sceneList = (typeof scenes !== 'undefined' && scenes[currentScene]) ? scenes[currentScene] : null;
+      if (!sceneList) scenes[currentScene] = [];
+      if (!scenes[currentScene].includes(el)) scenes[currentScene].push(el.cloneNode(true));
+      added++;
+    });
+
+    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+    status('Imported ' + added + ' element(s) from generated config.', 'success');
+  }
+
+
+  function copyOutput() {
+    const text = outputEl ? outputEl.textContent : '';
+    if (!text || text === 'AI output will appear here.') { status('Nothing to copy yet.', 'warning'); return; }
+    try {
+      navigator.clipboard.writeText(text).then(
+        () => status('Copied to clipboard.', 'success'),
+        () => fallbackCopy(text)
+      );
+    } catch (e) { fallbackCopy(text); }
+  }
+
+  function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      document.execCommand('copy');
+      status('Copied to clipboard.', 'success');
+    } catch (e) { status('Copy failed \u2014 select the result text manually.', 'warning'); }
+    document.body.removeChild(ta);
+  }
+
+  let lastSuggestion = null;
+  let lastGenerated = null;
+
+  function init() {
+    loadStoredKey();
+
+    if (providerEl && keyEl) {
+      providerEl.addEventListener('change', () => {
+        if (provider() === FREE_PROVIDER) {
+          keyEl.parentElement.style.display = 'none';
+        } else {
+          keyEl.parentElement.style.display = 'flex';
+          if (!keyEl.value) status('Paste your ' + provider() + ' key above, then click Save key.', 'warning');
+        }
+        storeKey(keyEl.value.trim());
+      });
+
+      keySaveBtn.addEventListener('click', () => {
+        const key = (keyEl && keyEl.value.trim()) || '';
+        storeKey(key);
+        status(key ? 'API key saved locally.' : 'API key cleared.', key ? 'success' : 'warning');
+      });
+    }
+
+    if (suggestBtn) suggestBtn.addEventListener('click', suggest);
+    if (generateBtn) generateBtn.addEventListener('click', generate);
+    if (clearBtn) clearBtn.addEventListener('click', clear);
+    if (copyBtn) copyBtn.addEventListener('click', copyOutput);
+    if (applyBtn) applyBtn.addEventListener('click', apply);
+
+    if (promptEl) {
+      promptEl.addEventListener('focus', () => {
+        if (!promptEl.value) promptEl.placeholder = 'e.g. Add a Media tile and a search bar at the top';
+      });
+    }
+  }
+
+  // ---- Voice control (builder-only, browser speech recognition) ----
+  // This is intentionally optional. If the browser does not expose a speech
+  // recognition API, the mic button stays hidden and voice is a no-op.
+
+  function isSpeechAvailable() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    return Boolean(SR);
+  }
+
+  function detectVoiceSupport() {
+    if (!isSpeechAvailable()) return false;
+    try {
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      const r = new SR();
+      // Some environments throw on construction or on start without a user gesture.
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  let voiceSupported = null;
+  let voiceSession = null;
+  let voiceListening = false;
+
+  function getSpeechFactory() {
+    return (window.SpeechRecognition || window.webkitSpeechRecognition);
+  }
+
+  function startVoiceSession(autoRunSuggest) {
+    if (!voiceSupported) return false;
+    if (voiceListening) return false;
+
+    const SR = getSpeechFactory();
+    if (!SR) return false;
+
+    try {
+      const recognition = new SR();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = 'en-US';
+      recognition.maxAlternatives = 1;
+
+      let finalTranscript = '';
+      let interimTranscript = '';
+
+      recognition.onresult = (event) => {
+        interimTranscript = '';
+        finalTranscript = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            finalTranscript += result[0].transcript;
+          } else {
+            interimTranscript += result[0].transcript;
+          }
+        }
+
+        const display = finalTranscript || interimTranscript;
+        if (promptEl) {
+          if (finalTranscript) {
+            promptEl.value = finalTranscript;
+            status('Heard: ' + finalTranscript, 'success');
+          } else {
+            promptEl.value = interimTranscript;
+            status('Listening\u2026 ' + interimTranscript, '');
+          }
+        }
+      };
+
+      recognition.onerror = (event) => {
+        voiceListening = false;
+        if (event.error === 'no-speech') {
+          status('No speech heard \u2014 try again.', 'warning');
+        } else if (event.error === 'aborted') {
+          status('Voice input cancelled.', 'warning');
+        } else {
+          status('Voice error: ' + event.error, 'error');
+        }
+        voiceSession = null;
+      };
+
+      recognition.onend = () => {
+        voiceListening = false;
+        voiceSession = null;
+        if (finalTranscript) {
+          if (promptEl) promptEl.value = finalTranscript;
+          status('Voice input ready \u2014 edit or send.', 'success');
+          if (autoRunSuggest) {
+            try {
+              AI.suggest();
+            } catch (e) {
+              status('Voice auto-run failed: ' + e.message, 'error');
+            }
+          }
+        } else if (!finalTranscript && interimTranscript) {
+          // Session ended before a final result; keep what we heard so far.
+          status('Voice input ended early \u2014 edit what was heard.', 'warning');
+        } else {
+          status('Voice input finished.', '');
+        }
+      };
+
+      recognition.start();
+      voiceSession = recognition;
+      voiceListening = true;
+      status('Listening\u2026', '');
+      return true;
+    } catch (e) {
+      status('Voice start failed: ' + e.message, 'error');
+      voiceListening = false;
+      voiceSession = null;
+      return false;
+    }
+  }
+
+  function stopVoiceSession() {
+    if (!voiceSession) return;
+    try {
+      voiceSession.stop();
+    } catch (e) { /* ignore */ }
+    voiceSession = null;
+    voiceListening = false;
+  }
+
+  function toggleVoice(autoRunSuggest) {
+    if (voiceListening) {
+      stopVoiceSession();
+      return;
+    }
+    if (!voiceSupported) {
+      status('Voice input is not available in this browser.', 'warning');
+      return;
+    }
+    return startVoiceSession(autoRunSuggest);
+  }
+
+  function initVoiceUI() {
+    if (!voiceSupported) return;
+
+    const micBtn = document.getElementById('aiMicBtn');
+    const voiceToggleEl = document.getElementById('aiVoiceToggle');
+    const autoRunEl = document.getElementById('aiVoiceAutoRun');
+
+    if (micBtn) {
+      micBtn.addEventListener('click', () => {
+        toggleVoice(false);
+      });
+    }
+
+    if (voiceToggleEl) {
+      voiceToggleEl.addEventListener('change', () => {
+        voiceSupported = detectVoiceSupport();
+        if (!voiceSupported) {
+          voiceToggleEl.checked = false;
+          if (micBtn) micBtn.style.display = 'none';
+          status('Voice input unavailable on this browser.', 'warning');
+        } else {
+          if (micBtn) micBtn.style.display = '';
+          status('Voice input enabled.', 'success');
+        }
+      });
+    }
+
+    // If the user opts into auto-run, keep behavior explicit: one tap to listen,
+    // and if speech is recognized, AI.suggest() runs automatically.
+    if (autoRunEl) {
+      autoRunEl.addEventListener('change', () => {
+        // No immediate action; next voice session will respect this setting.
+        status(autoRunEl.checked ? 'Voice auto-run on.' : 'Voice auto-run off.', '');
+      });
+    }
+  }
+
+  function ensureVoiceUI() {
+    if (!document.getElementById('aiPanel')) return;
+    if (document.getElementById('aiMicBtn')) return;
+
+    const header = document.querySelector('#aiPanel .panel-header');
+    if (!header) return;
+
+    const micWrap = document.createElement('div');
+    micWrap.className = 'ai-mic-row';
+    micWrap.innerHTML =
+      '<button id="aiMicBtn" class="action-button small" type="button" title="Voice input">' +
+      '<i class="fa-solid fa-microphone" aria-hidden="true"></i></button>' +
+      '<label class="ai-toggle-label" title="Enable voice input">' +
+      '<input type="checkbox" id="aiVoiceToggle">' +
+      '<span>Voice</span>' +
+      '</label>' +
+      '<label class="ai-toggle-label ai-voice-hint" title="Auto-run suggest after voice input">' +
+      '<input type="checkbox" id="aiVoiceAutoRun">' +
+      '<span>Auto</span>' +
+      '</label>';
+
+    header.appendChild(micWrap);
+
+    if (!voiceSupported) {
+      voiceSupported = detectVoiceSupport();
+    }
+
+    initVoiceUI();
+
+    if (!voiceSupported && micBtn) {
+      micBtn.style.display = 'none';
+      status('Voice input is not available in this browser.', 'warning');
+    }
+  }
+
+  return { init, suggest, generate, clear, apply, copyOutput };
+})();
+
+
+const AI_SYSTEM = [
+  'You are a JukaHub GUI builder assistant.',
+  'JukaHub apps are defined by a JSON config with scenes and elements.',
+  'Each element has at least: type, text, x, y, width, height, color, bgColor, font.',
+  'Buttons commonly use type "button", inputs use "input", labels use "label".',
+  'Triggers are strings like "change_scene:Tube" or "youtube_smart".',
+  'Respond with valid JSON only when asked for config. When asked for layout advice, respond in plain text.',
+  'Keep coordinates inside a 1280x720 canvas and keep sizes realistic for a handheld UI.',
+].join('\n');
+
+function SUGGEST_PROMPT(userText) {
+  return [
+    AI_SYSTEM,
+    '',
+    'A user wrote: "' + userText + '"\n\n' +
+    'Give 3 to 6 concise suggestions for what to add or change, then list the specific elements to place ' +
+    'using this shape for each one:\n' +
+    '  { "type": "button", "text": "Media", "color": "#F8FAFC", "bgColor": "#1E3A8A", "font": "big", "align": "left", "w": 220, "h": 168, "x": 30, "y": 312 }\n\n' +
+    'Prefer types: button, label, input. Use sensible colors, not random ones.',
+  ].join('\n');
+}
+
+function GENERATE_PROMPT(userText) {
+  return [
+    AI_SYSTEM,
+    '',
+    'A user wrote: "' + userText + '"\n\n' +
+    'Generate a JSON scene object for a 1280x720 canvas. Use this exact shape, which matches the JukaHub runtime format:\n' +
+    '{\n' +
+    '  "scenes": [\n' +
+    '    {\n' +
+    '      "name": "Suggested Scene",\n' +
+    '      "background": "#0B0F17",\n' +
+    '      "elements": [\n' +
+    '        { "type": "button", "text": "Media", "color": "#F8FAFC", "bgColor": "#1E3A8A", "font": "big", "x": 30, "y": 312, "width": 220, "height": 168, "trigger": "change_scene:Tube", "placeholder": "", "variable": "", "command": "", "listVariable": "", "columns": 0, "rows": 0, "image": "", "jsonPath": "", "autoRefresh": false, "externalAppPath": "", "externalAppReturn": "", "variableChange": "", "variableChangeValue": "" },\n' +
+    '        { "type": "label", "text": "Home", "color": "#F8FAFC", "bgColor": "", "font": "title", "x": 36, "y": 44, "width": 1208, "height": 64, "trigger": "", "placeholder": "", "variable": "", "command": "", "listVariable": "", "columns": 0, "rows": 0, "image": "", "jsonPath": "", "autoRefresh": false, "externalAppPath": "", "externalAppReturn": "", "variableChange": "", "variableChangeValue": "" }\n' +
+    '      ]\n' +
+    '    }\n' +
+    '  ]\n' +
+    '}\n\n' +
+    'Rules:\n' +
+    ' - Return ONLY valid JSON. No markdown fences, no commentary.\n' +
+    ' - Keep elements inside x=36..1244 and y=44..672.\n' +
+    ' - Use only these types: button, label, input.\n' +
+    ' - Use realistic handheld sizes. Prefer bgColor for buttons, leave bgColor empty for labels.\n' +
+    ' - If the user asked for a title, include one label near the top.\n' +
+    ' - If the user asked for a search bar, include one input plus one button.\n' +
+    ' - Use clear text labels, not short codes.',
+  ].join('\n');
+}
+
+// Initialize AI panel once the DOM is ready.
+document.addEventListener('DOMContentLoaded', () => { if (typeof AI !== 'undefined' && typeof AI.init === 'function') { try { AI.init(); } catch (e) { console.warn('AI init failed:', e); } } });

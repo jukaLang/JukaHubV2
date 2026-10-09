@@ -217,6 +217,68 @@
                 </div>
             </main>
 
+<!-- AI Assistant Panel -->
+            <div id="aiPanel" class="ai-panel">
+                <div class="panel-header">
+                    <h3><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> AI Assistant</h3>
+                </div>
+                <div class="ai-content">
+                    <div class="ai-notice">
+                        AI can suggest button placement, text, triggers, and generate a scene config you can paste or import.
+                    </div>
+
+                    <div class="ai-provider-row">
+                        <label for="aiProvider">Provider</label>
+                        <select id="aiProvider" class="ai-select">
+                            <option value="free">Free option (no key needed)</option>
+                            <option value="openrouter">OpenRouter (API key)</option>
+                            <option value="openai">OpenAI (API key)</option>
+                            <option value="anthropic">Anthropic (API key)</option>
+                        </select>
+                    </div>
+
+                    <div id="aiKeyRow" class="ai-key-row" style="display:none">
+                        <label for="aiApiKey">API key <span class="ai-hint">(stored locally only)</span></label>
+                        <div class="ai-key-input-row">
+                            <input type="password" id="aiApiKey" class="ai-input" placeholder="Paste your API key">
+                            <button id="aiKeySaveBtn" class="action-button small" type="button" title="Remember key locally"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button>
+                        </div>
+                    </div>
+
+                    <div class="ai-voice-hint-row">
+                        <span class="ai-hint">Optional: tap the mic to speak a prompt. Works in some browsers only.</span>
+                    </div>
+
+                    <div class="ai-prompt-row">
+                        <label for="aiPrompt">Ask the assistant</label>
+                        <textarea id="aiPrompt" class="ai-textarea" rows="4" placeholder="e.g. Add a Media tile and a Files tile to the home scene, plus a search bar at the top"></textarea>
+                    </div>
+
+                    <div class="ai-actions">
+                        <button id="aiSuggestBtn" class="action-button primary" type="button">
+                            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Suggest Layout
+                        </button>
+                        <button id="aiGenerateBtn" class="action-button primary" type="button">
+                            <i class="fa-solid fa-file-code" aria-hidden="true"></i> Generate Config
+                        </button>
+                        <button id="aiClearBtn" class="action-button" type="button">Clear</button>
+                    </div>
+
+                    <div class="ai-output">
+                        <div class="ai-output-header">
+                            <span class="ai-output-label">Result</span>
+                            <div class="ai-output-actions">
+                                <button id="aiCopyBtn" class="action-button small" type="button"><i class="fa-regular fa-copy" aria-hidden="true"></i> Copy</button>
+                                <button id="aiApplyBtn" class="action-button small primary" type="button"><i class="fa-regular fa-hand-pointer" aria-hidden="true"></i> Apply</button>
+                            </div>
+                        </div>
+                        <pre id="aiOutput" class="ai-output-pre">AI output will appear here.</pre>
+                    </div>
+
+                    <div class="ai-status" id="aiStatus" role="status" aria-live="polite"></div>
+                </div>
+            </div>
+
             <!-- Right Sidebar - Properties -->
             <aside id="rightSidebar" class="sidebar right-sidebar" aria-label="Inspector">
                 <div class="panel-header">
