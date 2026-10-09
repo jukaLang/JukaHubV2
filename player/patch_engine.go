@@ -429,7 +429,8 @@ func detectDeviceForSystem(goos, model string) DeviceModel {
 		candidate := DeviceModelForHardwareID(identifier)
 		if candidate == DeviceUnknown {
 			continue
-		}		if found != DeviceUnknown && found != candidate {
+		}
+		if found != DeviceUnknown && found != candidate {
 			return DeviceUnknown
 		}
 		found = candidate

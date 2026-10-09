@@ -81,6 +81,8 @@ document.addEventListener('DOMContentLoaded', () => {
   setupExportDropdowns();
   setupContextMenu();
   setupKeyboardShortcuts();
+  setupAiPanelToggle();
+  setupFooterHeightTracking();
 
   // Preview toggle button
   const previewBtn = document.getElementById('previewToggle');
@@ -450,6 +452,74 @@ function togglePreviewMode() {
 
 // ---
 
+// The chatbox and its launcher float over the workspace, so they have to clear
+// the footer band that is pinned to the bottom of the 100dvh shell. How tall
+// that band is depends on how the help links wrap, so measure it.
+let footerResizeObserver = null;
+
+function syncFooterHeight() {
+  const footer = document.querySelector('.app-footer');
+  if (!footer) return;
+  const height = Math.round(footer.getBoundingClientRect().height);
+  document.documentElement.style.setProperty('--footer-height', height + 'px');
+}
+
+function setupFooterHeightTracking() {
+  syncFooterHeight();
+  window.addEventListener('resize', syncFooterHeight);
+  if (typeof ResizeObserver === 'function') {
+    const footer = document.querySelector('.app-footer');
+    if (footer && !footerResizeObserver) {
+      footerResizeObserver = new ResizeObserver(syncFooterHeight);
+      footerResizeObserver.observe(footer);
+    }
+  }
+}
+
+// AI assistant chatbox: floats over the workspace (bottom-right) and is opened
+// from the app-bar button or its launcher. Closed by default so the editor keeps
+// its classic three-column layout and the Inspector keeps its full height.
+let aiPanelOpen = false;
+
+function setAiPanelOpen(open) {
+  const panel = document.getElementById('aiPanel');
+  const btn = document.getElementById('aiToggleBtn');
+  const launcher = document.getElementById('aiLauncher');
+  aiPanelOpen = Boolean(open);
+  document.body.classList.toggle('ai-open', aiPanelOpen);
+  if (btn) {
+    btn.classList.toggle('active', aiPanelOpen);
+    btn.setAttribute('aria-expanded', String(aiPanelOpen));
+  }
+  if (launcher) launcher.setAttribute('aria-expanded', String(aiPanelOpen));
+  if (!aiPanelOpen && panel) panel.classList.remove('open');
+  try {
+    localStorage.setItem('jukahub-ai-open', aiPanelOpen ? '1' : '0');
+  } catch (e) { /* private mode can deny localStorage */ }
+  if (aiPanelOpen) {
+    const promptEl = document.getElementById('aiPrompt');
+    if (promptEl) setTimeout(() => promptEl.focus(), 30);
+  }
+}
+
+function setupAiPanelToggle() {
+  const btn = document.getElementById('aiToggleBtn');
+  const launcher = document.getElementById('aiLauncher');
+  const closeBtn = document.getElementById('aiPanelToggle');
+  const panel = document.getElementById('aiPanel');
+  if (!panel || (!btn && !launcher)) return;
+
+  let stored = false;
+  try { stored = localStorage.getItem('jukahub-ai-open') === '1'; } catch (e) { /* ignore */ }
+  setAiPanelOpen(stored);
+
+  if (btn) btn.addEventListener('click', () => setAiPanelOpen(!aiPanelOpen));
+  if (launcher) launcher.addEventListener('click', () => setAiPanelOpen(true));
+  if (closeBtn) closeBtn.addEventListener('click', () => setAiPanelOpen(false));
+}
+
+// ---
+
 function setupKeyboardShortcuts() {
   document.addEventListener('keydown', (e) => {
     // Skip if inside an input/textarea/select
@@ -583,25 +653,56 @@ function setupEventListeners() {
     });
   });
 
-  // Desktop sidebar toggles
+  // Sidebar panel toggles: off-canvas drawers on small screens, collapsible
+  // rails on desktop.
   const leftToggle = document.getElementById('leftSidebarToggle');
   const rightToggle = document.getElementById('rightSidebarToggle');
-  if (leftToggle) {
-    leftToggle.addEventListener('click', () => {
-      const sb = document.getElementById('leftSidebar');
-      sb.classList.toggle('open');
-      const expanded = sb.classList.contains('open') || window.innerWidth > 992;
-      leftToggle.setAttribute('aria-expanded', String(expanded));
-    });
+
+  function sidebarToggle(side) {
+    const sb = document.getElementById(side === 'left' ? 'leftSidebar' : 'rightSidebar');
+    const btn = side === 'left' ? leftToggle : rightToggle;
+    const label = side === 'left' ? 'library' : 'inspector';
+    if (!sb) return () => {};
+    return () => {
+      if (window.innerWidth <= 992) {
+        const open = sb.classList.toggle('open');
+        if (btn) btn.setAttribute('aria-expanded', String(open));
+        return;
+      }
+      const collapsed = sb.classList.toggle('collapsed');
+      document.body.classList.toggle(side + '-collapsed', collapsed);
+      if (btn) {
+        btn.setAttribute('aria-expanded', String(!collapsed));
+        btn.setAttribute('aria-label', (collapsed ? 'Expand ' : 'Collapse ') + label);
+        btn.setAttribute('title', (collapsed ? 'Expand ' : 'Collapse ') + label);
+      }
+      try {
+        localStorage.setItem('jukahub-' + side + '-collapsed', collapsed ? '1' : '0');
+      } catch (e) { /* private mode can deny localStorage */ }
+    };
   }
-  if (rightToggle) {
-    rightToggle.addEventListener('click', () => {
-      const sb = document.getElementById('rightSidebar');
-      sb.classList.toggle('open');
-      const expanded = sb.classList.contains('open') || window.innerWidth > 992;
-      rightToggle.setAttribute('aria-expanded', String(expanded));
-    });
-  }
+
+  if (leftToggle) leftToggle.addEventListener('click', sidebarToggle('left'));
+  if (rightToggle) rightToggle.addEventListener('click', sidebarToggle('right'));
+
+  // Restore collapsed rails from the last session (desktop only; the CSS that
+  // honours .collapsed is scoped to min-width: 993px).
+  ['left', 'right'].forEach((side) => {
+    let stored = false;
+    try { stored = localStorage.getItem('jukahub-' + side + '-collapsed') === '1'; } catch (e) { /* ignore */ }
+    if (!stored) return;
+    const sb = document.getElementById(side === 'left' ? 'leftSidebar' : 'rightSidebar');
+    const btn = side === 'left' ? leftToggle : rightToggle;
+    const label = side === 'left' ? 'library' : 'inspector';
+    if (!sb) return;
+    sb.classList.add('collapsed');
+    document.body.classList.add(side + '-collapsed');
+    if (btn) {
+      btn.setAttribute('aria-expanded', 'false');
+      btn.setAttribute('aria-label', 'Expand ' + label);
+      btn.setAttribute('title', 'Expand ' + label);
+    }
+  });
 
   // Mobile panel tabs
   document.querySelectorAll('.mobile-tab').forEach(tab => {
@@ -1984,101 +2085,261 @@ function getFontSize(fontSize) {
   return sizes[fontSize] || 24;
 }
 
-// Export functionality
-function createJukaApp() {
-  const config = {
+// === Config round-trip fidelity ===
+// The builder models only part of the player's config. Everything it does not
+// model is kept verbatim on import (per element, per scene, and at the top
+// level) so exporting can never silently drop part of a design it just loaded.
+
+const RAW_ELEMENT_ATTR = 'data-raw';
+let importedConfig = { top: {}, variables: {}, scenes: {} };
+
+const IMPORTED_TOP_KEYS = ['AppName', 'Version', 'Width', 'Height', 'Background', 'FontPath', 'channel_profile'];
+// Variables the builder edits through its own controls (background picker and
+// the font-size inputs). Every other imported variable is written back out
+// untouched: a fixed allow-list here used to drop settings the panel never
+// showed - inputColor, weatherUnit, screenWidth, fileExplorerRoot, and the
+// colour half of a config whose colours live under variables.Custom.
+const EDITOR_OWNED_VARIABLES = ['backgroundImage', 'fontSizes'];
+
+// The control default each font role starts with, so an untouched control is
+// not mistaken for a design decision.
+const DEFAULT_FONT_SIZES = { title: 48, big: 36, medium: 24, small: 18 };
+
+// Font sizes the design actually sets: a role is exported when the import had
+// it (the user may have edited the value since) or when the input no longer
+// holds the default. Writing all four unconditionally invented settings for a
+// config that never specified them.
+function exportFontSizes() {
+  const imported = (importedConfig.variables && importedConfig.variables.fontSizes) || {};
+  const out = {};
+  for (const role of Object.keys(DEFAULT_FONT_SIZES)) {
+    const input = document.getElementById(role + 'Size');
+    if (!input) continue;
+    const value = parseInt(input.value, 10);
+    if (Number.isNaN(value)) continue;
+    if (imported[role] !== undefined || value !== DEFAULT_FONT_SIZES[role]) out[role] = value;
+  }
+  return out;
+}
+
+function resetImportedConfig(data) {
+  importedConfig = { top: {}, variables: {}, scenes: {} };
+  if (!data || typeof data !== 'object') return;
+  IMPORTED_TOP_KEYS.forEach(key => {
+    if (data[key] !== undefined) importedConfig.top[key] = data[key];
+  });
+  if (data.variables && typeof data.variables === 'object') {
+    importedConfig.variables = JSON.parse(JSON.stringify(data.variables));
+  }
+  (data.scenes || []).forEach(scene => {
+    const extras = {};
+    Object.keys(scene || {}).forEach(key => {
+      if (key !== 'name' && key !== 'elements') extras[key] = scene[key];
+    });
+    importedConfig.scenes[scene.name] = extras;
+  });
+}
+
+function preservedVariables() {
+  const out = {};
+  const imported = importedConfig.variables || {};
+  for (const key of Object.keys(imported)) {
+    if (EDITOR_OWNED_VARIABLES.includes(key)) continue;
+    out[key] = imported[key];
+  }
+  return out;
+}
+
+function elementRawData(el) {
+  const raw = el.getAttribute(RAW_ELEMENT_ATTR);
+  if (!raw) return {};
+  try { return JSON.parse(decodeURIComponent(raw)) || {}; } catch (e) { return {}; }
+}
+
+function setElementRawData(el, data) {
+  try {
+    el.setAttribute(RAW_ELEMENT_ATTR, encodeURIComponent(JSON.stringify(data || {})));
+  } catch (e) { /* ignore oversized/unserialisable payloads */ }
+}
+
+// The label the canvas paints for an element that carries no text of its own.
+function synthesizedTextFor(el) {
+  const type = (el.getAttribute('data-type') || '').toLowerCase();
+  if (type === 'textbrowser') {
+    const source = el.getAttribute('data-source') || 'system';
+    const icons = { system: '🖥️', zeroconf: '🔍', json: '📋' };
+    const names = { system: 'System', zeroconf: 'Zeroconf', json: 'JSON' };
+    return `${icons[source] || '🌐'} ${names[source] || 'Text Browser'}`;
+  }
+  return type ? type.charAt(0).toUpperCase() + type.slice(1) : '';
+}
+
+// One config element built from the live DOM, starting from whatever the import
+// preserved so fields the builder does not model survive a round trip.
+function elementToConfig(el) {
+  const element = Object.assign({}, elementRawData(el));
+  const type = (el.getAttribute('data-type') || '').toLowerCase();
+  const attr = (name) => el.getAttribute(name);
+  const assign = (key, value) => {
+    if (value === null || value === undefined || value === '') delete element[key];
+    else element[key] = value;
+  };
+  const assignInt = (key, raw) => {
+    if (raw === null || raw === undefined || raw === '') { delete element[key]; return; }
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n)) delete element[key]; else element[key] = n;
+  };
+
+  assign('type', attr('data-type'));
+  if (attr('data-x') !== null) assignInt('x', attr('data-x'));
+  if (attr('data-y') !== null) assignInt('y', attr('data-y'));
+  // An empty data-width/height means "let the player size it", which is how a
+  // config that omits the size is represented.
+  if (el.hasAttribute('data-width')) assignInt('width', attr('data-width'));
+  if (el.hasAttribute('data-height')) assignInt('height', attr('data-height'));
+  assign('color', attr('data-color'));
+  assign('bgColor', attr('data-bg-color'));
+  // The font-role control defaults to "medium", and the player sizes an element
+  // with no role from its own default instead; the two agree only while the
+  // config defines no "medium" size, so a role the import never declared is not
+  // written back out.
+  const rawFont = elementRawData(el).font;
+  if (attr('data-font') !== null && (rawFont !== undefined || attr('data-font') !== 'medium')) {
+    assign('font', attr('data-font'));
+  }
+
+  // Opacity: the canvas always carries a value, so an untouched default (100%)
+  // is not a design decision and is left out - the player reads an absent
+  // opacity as fully opaque, exactly like 1.
+  const rawOpacity = elementRawData(el).opacity;
+  const opacity = attr('data-opacity');
+  if (opacity !== null && opacity !== '' && !(rawOpacity === undefined && opacity === '100')) {
+    element.opacity = parseInt(opacity, 10) / 100;
+  }
+
+  assign('trigger', attr('data-trigger'));
+  if (element.trigger === 'change_scene') {
+    assign('sceneChange', attr('data-scene-change'));
+  } else if (element.trigger === 'external_app') {
+    assign('externalAppPath', attr('data-external-app-path'));
+    assign('externalAppReturn', attr('data-external-app-return'));
+  } else if (element.trigger === 'set_variable') {
+    assign('variableChange', attr('data-variable-change'));
+    assign('variableChangeValue', attr('data-variable-change-value'));
+  } else if (element.trigger === 'play_video' || element.trigger === 'play_image') {
+    assign('mediaVariable', attr('data-media-variable'));
+  }
+
+  assign('triggerValue', attr('data-trigger-value'));
+  assign('variable', attr('data-variable'));
+  assign('command', attr('data-command'));
+  assign('listVariable', attr('data-list-variable'));
+  assign('placeholder', attr('data-placeholder'));
+  assign('style', attr('data-style'));
+  assign('icon', attr('data-icon'));
+  // A text browser's source control defaults to "system", which is what the
+  // player uses when the field is absent; only a declared or changed source is
+  // part of the design.
+  const rawSource = elementRawData(el).source;
+  if (attr('data-source') !== null && (rawSource !== undefined || attr('data-source') !== 'system')) {
+    assign('source', attr('data-source'));
+  }
+  assign('jsonPath', attr('data-json-path'));
+  assign('video', attr('data-video'));
+  assign('videoVariable', attr('data-video-variable'));
+  if (attr('data-auto-refresh') !== null) element.autoRefresh = attr('data-auto-refresh') === 'true';
+  if (attr('data-columns') !== null) assignInt('columns', attr('data-columns'));
+  if (attr('data-rows') !== null) assignInt('rows', attr('data-rows'));
+
+  // Text: a label the canvas synthesized is not part of the design.
+  if (type === 'input') {
+    const input = el.querySelector('.element-input');
+    if (input) assign('text', input.value);
+  } else {
+    const textSpan = el.querySelector('.text-content');
+    if (textSpan) {
+      const synthesized = el.getAttribute('data-text-auto') === '1' &&
+        textSpan.textContent === synthesizedTextFor(el);
+      if (synthesized) assign('text', elementRawData(el).text || '');
+      else assign('text', textSpan.textContent);
+    }
+  }
+
+  if (type === 'image') {
+    const img = el.querySelector('.element-image');
+    if (img && img.src) element.image = img.src;
+  }
+
+  return element;
+}
+
+// Every element attribute the builder owns, applied from the imported config.
+function applyElementConfigAttributes(el, data) {
+  const set = (name, value) => {
+    if (value === null || value === undefined) return;
+    if (value === '') { el.removeAttribute(name); return; }
+    el.setAttribute(name, String(value));
+  };
+
+  set('data-trigger', data.trigger);
+  set('data-trigger-value', data.triggerValue);
+  set('data-scene-change', data.sceneChange);
+  set('data-external-app-path', data.externalAppPath);
+  set('data-external-app-return', data.externalAppReturn);
+  set('data-variable-change', data.variableChange);
+  set('data-variable-change-value', data.variableChangeValue);
+  set('data-media-variable', data.mediaVariable);
+  set('data-video-variable', data.videoVariable);
+  set('data-video', data.video);
+  set('data-variable', data.variable);
+  set('data-list-variable', data.listVariable);
+  set('data-command', data.command);
+  set('data-placeholder', data.placeholder);
+  set('data-style', data.style);
+  set('data-icon', data.icon);
+  set('data-source', data.source);
+  set('data-json-path', data.jsonPath);
+  set('data-image', data.image);
+  if (data.autoRefresh !== undefined) set('data-auto-refresh', data.autoRefresh ? 'true' : 'false');
+  if (data.columns !== undefined) set('data-columns', data.columns);
+  if (data.rows !== undefined) set('data-rows', data.rows);
+
+  // Colours/fonts were previously only kept for buttons and labels, so every
+  // other element type lost them on export.
+  set('data-color', data.color);
+  set('data-bg-color', data.bgColor);
+  set('data-font', data.font);
+
+  if (data.color) el.style.color = data.color;
+  if (data.bgColor) el.style.background = data.bgColor;
+  if (data.font) el.style.fontSize = getFontSize(data.font) + 'px';
+}
+
+// The single source of truth for both exporters, so the JSON and XML exports can
+// never drift apart again.
+function buildEditorConfig() {
+  // Variables the panel owns are merged last so its current state wins; the
+  // rest comes back from the import unchanged.
+  const exportedVariables = Object.assign({}, preservedVariables(), variables);
+  if (backgroundPath) exportedVariables.backgroundImage = backgroundPath;
+  const fontSizes = exportFontSizes();
+  if (Object.keys(fontSizes).length > 0) exportedVariables.fontSizes = fontSizes;
+
+  return Object.assign({}, importedConfig.top, {
     title: document.getElementById('title').value,
     author: document.getElementById('author').value,
     description: document.getElementById('description').value,
-    variables: {
-      ...variables,
-      backgroundImage: backgroundPath,
-      fontSizes: {
-        title: parseInt(titleSizeInput.value, 10),
-        big: parseInt(bigSizeInput.value, 10),
-        medium: parseInt(mediumSizeInput.value, 10),
-        small: parseInt(smallSizeInput.value, 10)
-      }
-    },
-    scenes: Object.keys(scenes).map(sceneName => ({
+    variables: exportedVariables,
+    scenes: Object.keys(scenes).map(sceneName => Object.assign({}, importedConfig.scenes[sceneName] || {}, {
       name: sceneName,
-      elements: scenes[sceneName].map(el => {
-        const element = {
-          type: el.getAttribute('data-type'),
-          x: parseInt(el.getAttribute('data-x')),
-          y: parseInt(el.getAttribute('data-y')),
-          width: parseInt(el.getAttribute('data-width')),
-          height: parseInt(el.getAttribute('data-height'))
-        };
-
-        if (el.getAttribute('data-color')) {
-          element.color = el.getAttribute('data-color');
-        }
-
-        if (el.getAttribute('data-bg-color')) {
-          element.bgColor = el.getAttribute('data-bg-color');
-        }
-
-        if (el.getAttribute('data-font')) {
-          element.font = el.getAttribute('data-font');
-        }
-
-        if (el.getAttribute('data-opacity')) {
-          element.opacity = parseInt(el.getAttribute('data-opacity')) / 100;
-        }
-
-        // Add trigger data
-        if (el.getAttribute('data-trigger')) {
-          element.trigger = el.getAttribute('data-trigger');
-
-          if (element.trigger === 'change_scene') {
-            element.sceneChange = el.getAttribute('data-scene-change');
-          } else if (element.trigger === 'external_app') {
-            element.externalAppPath = el.getAttribute('data-external-app-path');
-            element.externalAppReturn = el.getAttribute('data-external-app-return');
-          } else if (element.trigger === 'set_variable') {
-            element.variableChange = el.getAttribute('data-variable-change');
-            element.variableChangeValue = el.getAttribute('data-variable-change-value');
-          } else if (element.trigger === 'play_video' || element.trigger === 'play_image') {
-            element.mediaVariable = el.getAttribute('data-media-variable') || '';
-          }
-        }
-
-        const type = el.getAttribute('data-type');
-        if (type === 'input') {
-          const input = el.querySelector('.element-input');
-          if (input) element.text = input.value;
-        } else {
-          const textSpan = el.querySelector('.text-content');
-          if (textSpan) element.text = textSpan.textContent;
-        }
-
-        if (type === 'dynamiclist') {
-          element.command = el.getAttribute('data-command') || '';
-          element.variable = el.getAttribute('data-variable') || '';
-        }
-
-        if (type === 'textbrowser') {
-          element.variable = el.getAttribute('data-variable') || '';
-          element.source = el.getAttribute('data-source') || 'system';
-          element.jsonPath = el.getAttribute('data-json-path') || '';
-          element.autoRefresh = el.getAttribute('data-auto-refresh') === 'true';
-        }
-
-
-        if (type === 'image') {
-          const img = el.querySelector('.element-image');
-          if (img && img.src) element.image = img.src;
-        }
-
-        if (type === 'video') {
-          element.videoVariable = el.getAttribute('data-video-variable');
-        }
-
-        return element;
-      })
+      elements: scenes[sceneName].map(el => elementToConfig(el))
     }))
-  };
+  });
+}
+
+// Export functionality
+function createJukaApp() {
+  const config = buildEditorConfig();
 
   const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config, null, 2));
   const downloadAnchorNode = document.createElement('a');
@@ -2098,79 +2359,7 @@ function exportConfig() {
 // ---
 
 function exportConfigXml() {
-  const config = {
-    title: document.getElementById('title').value,
-    author: document.getElementById('author').value,
-    description: document.getElementById('description').value,
-    variables: {
-      ...variables,
-      backgroundImage: backgroundPath,
-      fontSizes: {
-        title: parseInt(titleSizeInput.value, 10),
-        big: parseInt(bigSizeInput.value, 10),
-        medium: parseInt(mediumSizeInput.value, 10),
-        small: parseInt(smallSizeInput.value, 10)
-      }
-    },
-    scenes: Object.keys(scenes).map(sceneName => ({
-      name: sceneName,
-      elements: scenes[sceneName].map(el => {
-        const element = {
-          type: el.getAttribute('data-type'),
-          x: parseInt(el.getAttribute('data-x')),
-          y: parseInt(el.getAttribute('data-y')),
-          width: parseInt(el.getAttribute('data-width')),
-          height: parseInt(el.getAttribute('data-height'))
-        };
-
-        if (el.getAttribute('data-color')) element.color = el.getAttribute('data-color');
-        if (el.getAttribute('data-bg-color')) element.bgColor = el.getAttribute('data-bg-color');
-        if (el.getAttribute('data-font')) element.font = el.getAttribute('data-font');
-        if (el.getAttribute('data-opacity')) element.opacity = parseInt(el.getAttribute('data-opacity')) / 100;
-
-        if (el.getAttribute('data-trigger')) {
-          element.trigger = el.getAttribute('data-trigger');
-          if (element.trigger === 'change_scene') element.sceneChange = el.getAttribute('data-scene-change');
-          else if (element.trigger === 'external_app') {
-            element.externalAppPath = el.getAttribute('data-external-app-path');
-            element.externalAppReturn = el.getAttribute('data-external-app-return');
-          } else if (element.trigger === 'set_variable') {
-            element.variableChange = el.getAttribute('data-variable-change');
-            element.variableChangeValue = el.getAttribute('data-variable-change-value');
-          } else if (element.trigger === 'play_video' || element.trigger === 'play_image') {
-            element.mediaVariable = el.getAttribute('data-media-variable') || '';
-          }
-        }
-
-        const type = el.getAttribute('data-type');
-        if (type === 'input') {
-          const input = el.querySelector('.element-input');
-          if (input) element.text = input.value;
-        } else {
-          const textSpan = el.querySelector('.text-content');
-          if (textSpan) element.text = textSpan.textContent;
-        }
-
-        if (type === 'dynamiclist') {
-          element.command = el.getAttribute('data-command') || '';
-          element.variable = el.getAttribute('data-variable') || '';
-        }
-        if (type === 'textbrowser') {
-          element.variable = el.getAttribute('data-variable') || '';
-          element.source = el.getAttribute('data-source') || 'system';
-          element.jsonPath = el.getAttribute('data-json-path') || '';
-          element.autoRefresh = el.getAttribute('data-auto-refresh') === 'true';
-        }
-        if (type === 'image') {
-          const img = el.querySelector('.element-image');
-          if (img && img.src) element.image = img.src;
-        }
-        if (type === 'video') element.videoVariable = el.getAttribute('data-video-variable');
-
-        return element;
-      })
-    }))
-  };
+  const config = buildEditorConfig();
 
   const xmlStr = configToXml(config);
   const dataStr = 'data:application/xml;charset=utf-8,' + encodeURIComponent(xmlStr);
@@ -2199,6 +2388,42 @@ function xmlEscapeKey(key) {
   return key.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
+// Serialises attribute pairs, dropping the ones that are not set so an omitted
+// size stays omitted (the player reads that as "size it yourself").
+function xmlAttrs(pairs) {
+  return pairs
+    .filter(pair => pair[1] !== undefined && pair[1] !== null && pair[1] !== '')
+    .map(pair => ' ' + pair[0] + '="' + escapeXml(pair[1]) + '"')
+    .join('');
+}
+
+// Variables nest: the builder groups settings under <Custom> and colours can be
+// {r,g,b} objects. Recursing keeps every entry instead of writing the useless
+// "[object Object]" the flat writer produced for nested values.
+function variablesToXml(vars, indent) {
+  let xml = '';
+  for (const [key, val] of Object.entries(vars || {})) {
+    const tag = xmlEscapeKey(key);
+    if (val !== null && typeof val === 'object') {
+      // An empty block carries no information - and XML cannot express the
+      // difference between an empty string and an empty map - so it is skipped.
+      if (Object.keys(val).length === 0) continue;
+      xml += indent + '<' + tag + '>\n' + variablesToXml(val, indent + '  ') + indent + '</' + tag + '>\n';
+    } else {
+      xml += indent + '<' + tag + '>' + escapeXml(val) + '</' + tag + '>\n';
+    }
+  }
+  return xml;
+}
+
+const XML_ELEMENT_ATTRS = [
+  'type', 'x', 'y', 'width', 'height', 'color', 'bgColor', 'font', 'opacity',
+  'trigger', 'triggerValue', 'sceneChange', 'externalAppPath', 'externalAppReturn',
+  'variableChange', 'variableChangeValue', 'mediaVariable', 'videoVariable', 'video',
+  'command', 'variable', 'listVariable', 'columns', 'rows', 'placeholder', 'style',
+  'icon', 'source', 'jsonPath', 'autoRefresh', 'image'
+];
+
 function configToXml(config) {
   let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<jukaconfig>\n';
 
@@ -2207,63 +2432,43 @@ function configToXml(config) {
   xml += '  <author>' + escapeXml(config.author) + '</author>\n';
   xml += '  <description>' + escapeXml(config.description) + '</description>\n';
 
+  // Player metadata the builder does not edit, but must not drop: without these
+  // an XML export lost the app name, canvas size, background, font and the
+  // channel profile that the player needs.
+  if (config.AppName) xml += '  <appName>' + escapeXml(config.AppName) + '</appName>\n';
+  if (config.Version) xml += '  <version>' + escapeXml(config.Version) + '</version>\n';
+  if (config.Width) xml += '  <width>' + escapeXml(config.Width) + '</width>\n';
+  if (config.Height) xml += '  <height>' + escapeXml(config.Height) + '</height>\n';
+  if (config.Background) xml += '  <background>' + escapeXml(config.Background) + '</background>\n';
+  if (config.FontPath) xml += '  <fontPath>' + escapeXml(config.FontPath) + '</fontPath>\n';
+  if (config.channel_profile) {
+    xml += '  <channelProfile channelId="' + escapeXml(config.channel_profile.channel_id || '') +
+      '" token="' + escapeXml(config.channel_profile.token || '') + '" />\n';
+  }
+
   // Variables
   if (config.variables) {
-    xml += '  <variables>\n';
-    for (const [key, val] of Object.entries(config.variables)) {
-      if (key === 'fontSizes' && typeof val === 'object') {
-        xml += '    <fontSizes>\n';
-        for (const [sz, num] of Object.entries(val)) {
-          xml += '      <' + xmlEscapeKey(sz) + '>' + num + '</' + xmlEscapeKey(sz) + '>\n';
-        }
-        xml += '    </fontSizes>\n';
-      } else if (typeof val === 'object' && val !== null) {
-        // Generic nested object – serialise children
-        xml += '    <' + xmlEscapeKey(key) + '>\n';
-        for (const [k2, v2] of Object.entries(val)) {
-          xml += '      <' + xmlEscapeKey(k2) + '>' + escapeXml(v2) + '</' + xmlEscapeKey(k2) + '>\n';
-        }
-        xml += '    </' + xmlEscapeKey(key) + '>\n';
-      } else {
-        xml += '    <' + xmlEscapeKey(key) + '>' + escapeXml(val) + '</' + xmlEscapeKey(key) + '>\n';
-      }
-    }
-    xml += '  </variables>\n';
+    xml += '  <variables>\n' + variablesToXml(config.variables, '    ') + '  </variables>\n';
   }
 
   // Scenes
   if (config.scenes) {
     xml += '  <scenes>\n';
     for (const scene of config.scenes) {
-      xml += '    <scene name="' + escapeXml(scene.name) + '">\n';
+      xml += '    <scene' + xmlAttrs([
+        ['name', scene.name],
+        ['icon', scene.icon],
+        ['description', scene.description],
+        ['background', scene.background],
+        ['layout', scene.layout]
+      ]) + '>\n';
+
       for (const el of scene.elements) {
-        xml += '      <element type="' + escapeXml(el.type) + '"';
-        xml += ' x="' + el.x + '"';
-        xml += ' y="' + el.y + '"';
-        xml += ' width="' + el.width + '"';
-        xml += ' height="' + el.height + '"';
-        if (el.color) xml += ' color="' + escapeXml(el.color) + '"';
-        if (el.bgColor) xml += ' bgColor="' + escapeXml(el.bgColor) + '"';
-        if (el.font) xml += ' font="' + escapeXml(el.font) + '"';
-        if (el.opacity != null) xml += ' opacity="' + el.opacity + '"';
-        if (el.trigger) xml += ' trigger="' + escapeXml(el.trigger) + '"';
-        if (el.sceneChange) xml += ' sceneChange="' + escapeXml(el.sceneChange) + '"';
-        if (el.externalAppPath) xml += ' externalAppPath="' + escapeXml(el.externalAppPath) + '"';
-        if (el.externalAppReturn) xml += ' externalAppReturn="' + escapeXml(el.externalAppReturn) + '"';
-        if (el.variableChange) xml += ' variableChange="' + escapeXml(el.variableChange) + '"';
-        if (el.variableChangeValue) xml += ' variableChangeValue="' + escapeXml(el.variableChangeValue) + '"';
-        if (el.mediaVariable) xml += ' mediaVariable="' + escapeXml(el.mediaVariable) + '"';
-        if (el.command != null) xml += ' command="' + escapeXml(el.command) + '"';
-        if (el.variable != null) xml += ' variable="' + escapeXml(el.variable) + '"';
-        if (el.source) xml += ' source="' + escapeXml(el.source) + '"';
-        if (el.jsonPath) xml += ' jsonPath="' + escapeXml(el.jsonPath) + '"';
-        if (el.autoRefresh != null) xml += ' autoRefresh="' + el.autoRefresh + '"';
-        if (el.image) xml += ' image="' + escapeXml(el.image) + '"';
-        if (el.videoVariable) xml += ' videoVariable="' + escapeXml(el.videoVariable) + '"';
-        if (el.text != null) {
-          xml += '>' + escapeXml(el.text) + '</element>\n';
+        const attrs = xmlAttrs(XML_ELEMENT_ATTRS.map(name => [name, el[name]]));
+        if (el.text !== undefined && el.text !== null && el.text !== '') {
+          xml += '      <element' + attrs + '>' + escapeXml(el.text) + '</element>\n';
         } else {
-          xml += ' />\n';
+          xml += '      <element' + attrs + ' />\n';
         }
       }
       xml += '    </scene>\n';
@@ -2276,6 +2481,35 @@ function configToXml(config) {
 }
 
 // ---
+
+// <variables> entries are all text, so a value's type has to be recovered. This
+// mirrors the player's own XML loader: booleans and numbers come back typed so
+// an XML import never turns a number into a string that a later JSON export
+// would hand to the player in the wrong type. Anything else (including leading
+// zeros and empty text) stays exactly as written.
+function coerceXmlValue(text) {
+  const raw = String(text);
+  const trimmed = raw.trim();
+  if (/^(true|false)$/i.test(trimmed)) return trimmed.toLowerCase() === 'true';
+  if (/^[+-]?\d+$/.test(trimmed)) {
+    const n = parseInt(trimmed, 10);
+    if (String(n) === trimmed) return n;
+  }
+  if (/^[+-]?(\d+\.\d*|\.\d+)([eE][+-]?\d+)?$/.test(trimmed)) {
+    const f = parseFloat(trimmed);
+    if (!Number.isNaN(f)) return f;
+  }
+  return raw;
+}
+
+function xmlVariablesToObject(el) {
+  const out = {};
+  for (const child of el.children) {
+    if (child.children.length > 0) out[child.tagName] = xmlVariablesToObject(child);
+    else out[child.tagName] = coerceXmlValue(child.textContent);
+  }
+  return out;
+}
 
 function xmlToJson(xmlStr) {
   const parser = new DOMParser();
@@ -2298,62 +2532,73 @@ function xmlToJson(xmlStr) {
     scenes: []
   };
 
-  // Parse <variables>
-  const varsEl = root.querySelector(':scope > variables');
-  if (varsEl) {
-    for (const child of varsEl.children) {
-      if (child.tagName === 'fontSizes') {
-        config.variables.fontSizes = {};
-        for (const fs of child.children) {
-          config.variables.fontSizes[fs.tagName] = parseInt(getText(fs), 10) || 0;
-        }
-      } else {
-        // Check if it has children (nested object)
-        if (child.children.length > 0) {
-          const obj = {};
-          for (const nested of child.children) {
-            obj[nested.tagName] = getText(nested);
-          }
-          config.variables[child.tagName] = obj;
-        } else {
-          config.variables[child.tagName] = getText(child);
-        }
-      }
-    }
+  // Optional player metadata (only present when exported by a builder/player
+  // that supports it) is read back so a round trip keeps it.
+  const metaText = (tag) => {
+    const el = root.querySelector(':scope > ' + tag);
+    return el ? getText(el) : '';
+  };
+  const metaInt = (tag) => {
+    const value = parseInt(metaText(tag), 10);
+    return Number.isNaN(value) ? '' : value;
+  };
+  const appName = metaText('appName');
+  if (appName) config.AppName = appName;
+  const version = metaText('version');
+  if (version) config.Version = version;
+  const width = metaInt('width');
+  if (width !== '') config.Width = width;
+  const height = metaInt('height');
+  if (height !== '') config.Height = height;
+  const background = metaText('background');
+  if (background) config.Background = background;
+  const fontPath = metaText('fontPath');
+  if (fontPath) config.FontPath = fontPath;
+  const channel = root.querySelector(':scope > channelProfile');
+  if (channel) {
+    config.channel_profile = {
+      channel_id: channel.getAttribute('channelId') || '',
+      token: channel.getAttribute('token') || ''
+    };
   }
+
+  // Parse <variables> (recursively: values may be nested blocks)
+  const varsEl = root.querySelector(':scope > variables');
+  if (varsEl) config.variables = xmlVariablesToObject(varsEl);
 
   // Parse <scenes>
   const scenesEl = root.querySelector(':scope > scenes');
   if (scenesEl) {
     for (const sceneEl of scenesEl.querySelectorAll(':scope > scene')) {
       const scene = { name: sceneEl.getAttribute('name') || '', elements: [] };
+      ['icon', 'description', 'background', 'layout'].forEach(key => {
+        if (sceneEl.getAttribute(key)) scene[key] = sceneEl.getAttribute(key);
+      });
+
       for (const el of sceneEl.querySelectorAll(':scope > element')) {
         const element = {
           type: el.getAttribute('type') || '',
-          x: parseInt(el.getAttribute('x')) || 0,
-          y: parseInt(el.getAttribute('y')) || 0,
-          width: parseInt(el.getAttribute('width')) || 100,
-          height: parseInt(el.getAttribute('height')) || 40
+          x: parseInt(el.getAttribute('x'), 10) || 0,
+          y: parseInt(el.getAttribute('y'), 10) || 0
         };
-        if (el.getAttribute('color')) element.color = el.getAttribute('color');
-        if (el.getAttribute('bgColor')) element.bgColor = el.getAttribute('bgColor');
-        if (el.getAttribute('font')) element.font = el.getAttribute('font');
-        if (el.getAttribute('opacity')) element.opacity = parseFloat(el.getAttribute('opacity'));
-        if (el.getAttribute('trigger')) element.trigger = el.getAttribute('trigger');
-        if (el.getAttribute('sceneChange')) element.sceneChange = el.getAttribute('sceneChange');
-        if (el.getAttribute('externalAppPath')) element.externalAppPath = el.getAttribute('externalAppPath');
-        if (el.getAttribute('externalAppReturn')) element.externalAppReturn = el.getAttribute('externalAppReturn');
-        if (el.getAttribute('variableChange')) element.variableChange = el.getAttribute('variableChange');
-        if (el.getAttribute('variableChangeValue')) element.variableChangeValue = el.getAttribute('variableChangeValue');
-        if (el.getAttribute('mediaVariable')) element.mediaVariable = el.getAttribute('mediaVariable');
-        if (el.getAttribute('command') != null) element.command = el.getAttribute('command');
-        if (el.getAttribute('variable') != null) element.variable = el.getAttribute('variable');
-        if (el.getAttribute('source')) element.source = el.getAttribute('source');
-        if (el.getAttribute('jsonPath')) element.jsonPath = el.getAttribute('jsonPath');
-        if (el.getAttribute('autoRefresh')) element.autoRefresh = el.getAttribute('autoRefresh') === 'true';
-        if (el.getAttribute('image')) element.image = el.getAttribute('image');
-        if (el.getAttribute('videoVariable')) element.videoVariable = el.getAttribute('videoVariable');
-        element.text = getText(el);
+        // Only keep sizes the element actually declares; an omitted/empty size
+        // means the player sizes the element itself.
+        if (el.hasAttribute('width') && el.getAttribute('width') !== '') element.width = parseInt(el.getAttribute('width'), 10);
+        if (el.hasAttribute('height') && el.getAttribute('height') !== '') element.height = parseInt(el.getAttribute('height'), 10);
+
+        XML_ELEMENT_ATTRS.forEach(name => {
+          if (name === 'type' || name === 'x' || name === 'y' || name === 'width' || name === 'height') return;
+          if (!el.hasAttribute(name)) return;
+          const value = el.getAttribute(name);
+          if (value === '') return;
+          if (name === 'opacity') element.opacity = parseFloat(value);
+          else if (name === 'columns' || name === 'rows') element[name] = parseInt(value, 10);
+          else if (name === 'autoRefresh') element.autoRefresh = value === 'true';
+          else element[name] = value;
+        });
+
+        const text = getText(el);
+        if (text) element.text = text;
         scene.elements.push(element);
       }
       config.scenes.push(scene);
@@ -2499,6 +2744,9 @@ function loadDefaultConfig() {
 
 
 function loadJukaApp(data) {
+  // Remember everything the builder does not model, so the export keeps it.
+  resetImportedConfig(data);
+
   // Clear existing elements
   variableChangeSelector.innerHTML = '';
   canvas.innerHTML = '';
@@ -2623,6 +2871,10 @@ function createElementFromData(elementData) {
   el.setAttribute('data-x', elementData.x);
   el.setAttribute('data-y', elementData.y);
 
+  // Keep the config entry this element came from: anything the builder does not
+  // model is written back verbatim on export.
+  setElementRawData(el, elementData);
+
   // Fix opacity handling
   if (elementData.opacity !== undefined) {
     const opacityValue = Math.round(elementData.opacity * 100);
@@ -2681,13 +2933,18 @@ function createElementFromData(elementData) {
 
   el.style.width = `${width}px`;
   el.style.height = `${height}px`;
-  el.setAttribute('data-width', width);
-  el.setAttribute('data-height', height);
+  // The canvas needs a concrete box to draw, but a config that omitted the size
+  // ("width": "" means "player decides") must export that way again.
+  const explicitWidth = elementData.width !== null && elementData.width !== undefined && elementData.width !== '';
+  const explicitHeight = elementData.height !== null && elementData.height !== undefined && elementData.height !== '';
+  el.setAttribute('data-width', explicitWidth ? width : '');
+  el.setAttribute('data-height', explicitHeight ? height : '');
 
   // Add text content
   const textSpan = document.createElement('span');
   textSpan.className = 'text-content';
   textSpan.textContent = elementData.text || elementData.type.charAt(0).toUpperCase() + elementData.type.slice(1);
+  if (!elementData.text) el.setAttribute('data-text-auto', '1');
   el.appendChild(textSpan);
 
   // Add remove button
@@ -2719,24 +2976,36 @@ function createElementFromData(elementData) {
     };
     const textContent = el.querySelector('.text-content');
     if (textContent) {
+      el.setAttribute('data-text-auto', '1');
       const source = elementData.source || 'system';
       textContent.textContent = `${sourceIcons[source] || '🌐'} ${sourceNames[source] || 'Text Browser'}`;
     }
   }
+  // The canvas needs concrete colours and a font size to draw, but a default it
+  // applied itself is presentation, not design: only values the config declared
+  // become attributes, so they are what the export writes back out.
+  const declared = (name, value) => {
+    if (value === undefined || value === null || value === '') el.removeAttribute(name);
+    else el.setAttribute(name, String(value));
+  };
   if (elementData.type === 'button') {
-    el.setAttribute('data-color', elementData.color || '#000000');
     el.style.color = elementData.color || '#000000';
-    el.setAttribute('data-bg-color', elementData.bgColor || '#ffffff');
     el.style.backgroundColor = elementData.bgColor || '#ffffff';
-    el.setAttribute('data-font', elementData.font || 'medium');
     el.style.fontSize = getFontSize(elementData.font || 'medium') + 'px';
+    declared('data-color', elementData.color);
+    declared('data-bg-color', elementData.bgColor);
+    declared('data-font', elementData.font);
   } else if (elementData.type === 'label') {
-    el.setAttribute('data-color', elementData.color || '#000000');
     el.style.color = elementData.color || '#000000';
-    el.setAttribute('data-font', elementData.font || 'medium');
     el.style.fontSize = getFontSize(elementData.font || 'medium') + 'px';
     el.style.background = 'none';
+    declared('data-color', elementData.color);
+    declared('data-font', elementData.font);
   }
+
+  // Everything else the player supports (triggers, variables, style, grid sizes,
+  // ...) has to reach the export too, not just the two types above.
+  applyElementConfigAttributes(el, elementData);
 
   return el;
 }
@@ -2830,13 +3099,7 @@ window.addEventListener('resize', () => {
   // Update mobile interface when switching to mobile size
   if (window.innerWidth <= 768) {
     setupMobileElementAdding();
-
-    // Ensure left sidebar is hidden
-    document.querySelector('.left-sidebar').style.display = 'none';
   } else {
-    // Show left sidebar when not on mobile
-    document.querySelector('.left-sidebar').style.display = 'flex';
-
     // Remove mobile buttons
     const mobileButton = document.querySelector('.mobile-add-button');
     if (mobileButton) mobileButton.remove();
@@ -3057,6 +3320,7 @@ const AI = (() => {
   const providerEl = $('aiProvider');
   const keyEl = $('aiApiKey');
   const keySaveBtn = $('aiKeySaveBtn');
+  const keyRowEl = $('aiKeyRow');
   const promptEl = $('aiPrompt');
   const suggestBtn = $('aiSuggestBtn');
   const generateBtn = $('aiGenerateBtn');
@@ -3070,7 +3334,14 @@ const AI = (() => {
   const LOCAL_PROVIDER_NAME = 'jukahub-ai-provider';
 
   const FREE_PROVIDER = 'free';
-  const SUPPORTED_PROVIDERS = new Set([FREE_PROVIDER, 'openrouter', 'openai', 'anthropic']);
+  const CHROME_PROVIDER = 'chrome';
+  const SUPPORTED_PROVIDERS = new Set([FREE_PROVIDER, CHROME_PROVIDER, 'openrouter', 'openai', 'anthropic']);
+
+  // Chrome on-device Gemini Nano (Prompt API). This is a progressive enhancement:
+  // it only appears as an option when the browser exposes LanguageModel and the
+  // model is (or can become) available. No API key, no network for inference.
+  let chromeAvailability = null; // 'available' | 'downloaded' | 'downloading' | 'unavailable' | null
+  let chromeSession = null;
 
   function status(msg, kind = '') {
     if (!statusEl) return;
@@ -3078,16 +3349,59 @@ const AI = (() => {
     statusEl.className = 'ai-status' + (kind ? ' ' + kind : '');
   }
 
+  // Providers without a key keep the row hidden. The row itself carries the
+  // inline display:none, so it has to be the element we toggle -- toggling the
+  // input's parent left the key field unreachable behind a hidden row.
+  function syncKeyRowVisibility() {
+    if (!keyRowEl) return;
+    const p = provider();
+    keyRowEl.style.display = (p === FREE_PROVIDER || p === CHROME_PROVIDER) ? 'none' : 'flex';
+  }
+
+  const modelStatusEl = $('aiModelStatus');
+  const modelStatusRowEl = $('aiModelStatusRow');
+
+  function setModelStatus(kind, msg) {
+    if (!modelStatusEl) return;
+    modelStatusEl.className = 'ai-model-status' + (kind ? ' ' + kind : '');
+    modelStatusEl.textContent = '';
+    if (msg) {
+      // The stylesheet styles a .ai-model-dot status indicator; build it here.
+      const dot = document.createElement('span');
+      dot.className = 'ai-model-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      modelStatusEl.appendChild(dot);
+      modelStatusEl.appendChild(document.createTextNode(msg));
+    }
+    if (modelStatusRowEl) {
+      modelStatusRowEl.style.display = msg ? 'flex' : 'none';
+    }
+  }
+
+  function chromeStatusMessage(avail) {
+    if (avail === 'available') return 'On-device AI ready — runs Gemini Nano locally, no key needed.';
+    if (avail === 'downloaded') return 'On-device AI model downloaded — ready to use.';
+    if (avail === 'downloading') return 'On-device AI model is downloading (this can take a few minutes).';
+    if (avail === 'unavailable') return 'On-device AI is not available in this browser or on this device.';
+    return '';
+  }
+
   function kil(msg) { throw new Error(msg); }
 
   function provider() {
     const val = (providerEl && providerEl.value) || FREE_PROVIDER;
     if (!SUPPORTED_PROVIDERS.has(val)) kil('Unsupported provider: ' + val);
+    // Hide the Chrome option if the browser does not expose LanguageModel at all.
+    if (val === CHROME_PROVIDER && !isChromePromptApiPresent()) {
+      // Best-effort: fall back to free mode rather than failing.
+      if (providerEl) providerEl.value = FREE_PROVIDER;
+    }
     return val;
   }
 
   function apiKey() {
-    if (provider() === FREE_PROVIDER) return null;
+    const p = provider();
+    if (p === FREE_PROVIDER || p === CHROME_PROVIDER) return null;
     return (keyEl && keyEl.value.trim()) || loadStoredKey();
   }
 
@@ -3116,27 +3430,111 @@ const AI = (() => {
     } catch (e) { /* ignore */ }
   }
 
-  function showOutput(text) { if (!outputEl) return; outputEl.textContent = text; }
+  let lastReplyText = '';
 
-  function showJsonOutput(obj) {
+  // Append one chat bubble. The transcript is a message list so the panel reads
+  // as a conversation instead of a single result box.
+  function bubble(role, text, kind) {
     if (!outputEl) return;
-    const formatted =
-      typeof obj === 'string'
-        ? obj
-        : (() => { try { return JSON.stringify(obj, null, 2); } catch (e) { return String(obj); } })();
-    showOutput(formatted);
+    const placeholder = outputEl.querySelector('.ai-msg-placeholder');
+    if (placeholder) placeholder.remove();
+
+    const msg = document.createElement('div');
+    msg.className = 'ai-msg ai-msg-' + role;
+
+    const b = document.createElement('div');
+    b.className = 'ai-bubble' + (kind ? ' is-' + kind : '');
+    b.textContent = text == null ? '' : String(text);
+    msg.appendChild(b);
+    outputEl.appendChild(msg);
+    outputEl.scrollTop = outputEl.scrollHeight;
+
+    if (role === 'ai') lastReplyText = b.textContent;
+  }
+
+  function showWelcome() {
+    if (!outputEl) return;
+    outputEl.textContent = '';
+    const msg = document.createElement('div');
+    msg.className = 'ai-msg ai-msg-ai ai-msg-placeholder';
+    const b = document.createElement('div');
+    b.className = 'ai-bubble';
+    b.textContent = 'Hi! Tell me what to build \u2014 for example \u201cadd a Media tile, a Files tile, and a search bar at the top\u201d. I can suggest a layout or generate a scene config you can Apply.';
+    msg.appendChild(b);
+    outputEl.appendChild(msg);
+    lastReplyText = '';
+  }
+
+  function showOutput(text) {
+    if (text == null) return;
+    const isError = /^\/\/\s*Error/i.test(String(text));
+    bubble('ai', text, isError ? 'error' : '');
+  }
+
+  // One-line human summary of a generated config, so the reply is readable
+  // before the raw JSON is unfolded.
+  function describeConfig(parsed) {
+    const { elements, name } = configElements(parsed);
+    let what;
+    if (elements) {
+      what = 'Generated ' + elements.length + ' element' + (elements.length === 1 ? '' : 's');
+      if (name) what += ' for \u201c' + name.slice(0, 40) + '\u201d';
+    } else {
+      what = 'Generated a config';
+    }
+    return what + '. Click Apply to import it into this scene.';
+  }
+
+  // A generated config can be thousands of characters, which would flood the
+  // transcript, so show the summary and fold the JSON behind a disclosure.
+  function showConfigOutput(parsed) {
+    if (!outputEl) return;
+    const summary = describeConfig(parsed);
+    let json = '';
+    try { json = JSON.stringify(parsed, null, 2); } catch (e) { json = String(parsed); }
+
+    const placeholder = outputEl.querySelector('.ai-msg-placeholder');
+    if (placeholder) placeholder.remove();
+
+    const msg = document.createElement('div');
+    msg.className = 'ai-msg ai-msg-ai';
+
+    const b = document.createElement('div');
+    b.className = 'ai-bubble';
+    b.appendChild(document.createTextNode(summary));
+
+    const det = document.createElement('details');
+    det.className = 'ai-json';
+    const sum = document.createElement('summary');
+    sum.textContent = 'Show config JSON';
+    const pre = document.createElement('pre');
+    pre.className = 'ai-json-code';
+    pre.textContent = json;
+    det.appendChild(sum);
+    det.appendChild(pre);
+    b.appendChild(det);
+
+    msg.appendChild(b);
+    outputEl.appendChild(msg);
+    outputEl.scrollTop = outputEl.scrollHeight;
+
+    lastReplyText = summary + '\n\n' + json;
   }
 
   function extractJson(text) {
+    if (typeof text !== 'string' || !text) return null;
     const candidates = [];
     const seen = new Set();
+    const parsedCache = new Map();
 
     const addCandidate = (chunk) => {
       if (!chunk) return;
       const trimmed = chunk.trim();
+      // Skip markdown-fenced or obviously non-JSON wrappers.
+      if (/^```/.test(trimmed)) return;
       if (!trimmed || seen.has(trimmed)) return;
       seen.add(trimmed);
-      candidates.push(trimmed);
+      candidates.push({ text: trimmed, length: trimmed.length });
     };
 
     // Prefer the largest balanced object near the end of the message, since
@@ -3152,9 +3550,31 @@ const AI = (() => {
     // Also try the whole response trimmed, in case the model returned only JSON.
     addCandidate(text);
 
+    // Score a parsed value by how well it matches the shape we expect.
+    function shapeScore(parsed) {
+      if (!parsed || typeof parsed !== 'object') return 0;
+      if (Array.isArray(parsed)) {
+        if (parsed.length && typeof parsed[0] === 'object' && parsed[0].type) return 60;
+        if (parsed.length && typeof parsed[0] === 'object' && parsed[0].scenes) return 100;
+        return 5;
+      }
+      if (Array.isArray(parsed.scenes)) return 100;
+      if (Array.isArray(parsed.elements)) return 50;
+      return 10;
+    }
+
+    // Prefer bigger candidates, then better-shaped ones.
+    candidates.sort((a, b) => {
+      const sa = shapeScore(parsedCache.get(a.text));
+      const sb = shapeScore(parsedCache.get(b.text));
+      if (sb !== sa) return sb - sa;
+      return b.length - a.length;
+    });
+
     for (const candidate of candidates) {
       try {
-        const parsed = JSON.parse(candidate);
+        const parsed = JSON.parse(candidate.text);
+        parsedCache.set(candidate.text, parsed);
         if (parsed && typeof parsed === 'object') return parsed;
       } catch (e) { /* not JSON */ }
     }
@@ -3170,6 +3590,75 @@ const AI = (() => {
 
 
   async function freeGenerate(promptText) { return localSuggest(promptText); }
+
+  function isChromePromptApiPresent() {
+    try {
+      // The Prompt API global is LanguageModel (a WICG proposal, currently Chrome-only).
+      return Boolean(window.LanguageModel && typeof window.LanguageModel.create === 'function');
+    } catch (e) {
+      return false;
+    }
+  }
+
+  async function detectChromeAvailability() {
+    if (!isChromePromptApiPresent()) {
+      chromeAvailability = 'unavailable';
+      return chromeAvailability;
+    }
+    try {
+      chromeAvailability = await window.LanguageModel.availability();
+      return chromeAvailability;
+    } catch (e) {
+      chromeAvailability = 'unavailable';
+      return chromeAvailability;
+    }
+  }
+
+  async function ensureChromeSession() {
+    if (!isChromePromptApiPresent()) return null;
+    if (chromeSession) {
+      try {
+        const info = chromeSession; // session object; we only reuse if still valid
+        return chromeSession;
+      } catch (e) {
+        chromeSession = null;
+      }
+    }
+    try {
+      chromeSession = await window.LanguageModel.create({
+        systemPrompt: AI_SYSTEM,
+      });
+      return chromeSession;
+    } catch (e) {
+      chromeSession = null;
+      return null;
+    }
+  }
+
+  async function chromeGenerate(promptText) {
+    if (!isChromePromptApiPresent()) kil('On-device AI is not available in this browser.');
+    const avail = await detectChromeAvailability();
+    if (avail === 'unavailable') kil('On-device AI is not available on this device (unsupported hardware, or the model is disabled in chrome://flags).');
+    if (avail === 'downloading') {
+      // The model is still downloading. Try once more after a short wait; if still
+      // downloading, give a helpful error pointing at chrome://on-device-internals.
+      await new Promise((r) => setTimeout(r, 3500));
+      const recheck = await detectChromeAvailability();
+      if (recheck === 'downloading' || recheck === 'unavailable') {
+        kil('On-device AI model is still downloading. Wait a few minutes and try again, or visit chrome://on-device-internals to check progress.');
+      }
+    }
+    const session = await ensureChromeSession();
+    if (!session) kil('Could not create an on-device AI session.');
+    try {
+      const answer = await session.prompt(promptText);
+      if (!answer || !answer.trim()) kil('Empty response from on-device AI.');
+      return answer;
+    } finally {
+      // Free the session/gpu ram promptly. We recreate next call.
+      try { chromeSession = null; } catch (e) { /* ignore */ }
+    }
+  }
 
   async function openrouterGenerate(promptText, key) {
     if (!key) kil('OpenRouter key is required for this provider.');
@@ -3227,8 +3716,9 @@ const AI = (() => {
         model: 'claude-3-5-haiku-20241022',
         max_tokens: 2000,
         temperature: 0.2,
+        system: AI_SYSTEM,
         messages: [
-          { role: 'user', content: AI_SYSTEM + '\n\n' + promptText },
+          { role: 'user', content: promptText },
         ],
       },
     });
@@ -3247,7 +3737,7 @@ const AI = (() => {
     const data = await res.json();
     const answer =
       req.url.includes('anthropic.com')
-        ? (data.content && data.content[0] && data.content[0].text) || ''
+        ? (data.content && Array.isArray(data.content) && data.content[0] && data.content[0].text) || ''
         : (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
     if (!answer.trim()) kil('Empty response from provider.');
     return answer;
@@ -3257,73 +3747,151 @@ const AI = (() => {
   function localSuggest(promptText) {
     const raw = promptText || '';
     const lower = raw.toLowerCase();
-    const hasTitle = /title|app name|rename|named|call it/i.test(lower);
+
+    // --- Title extraction (handles 'title: X', 'call it X', 'named X', 'rename to X',
+    // 'app name is X', quoted titles, and 'JukaHub' style names) ---
+    function extractTitleText(text) {
+      if (!text) return '';
+      const t = text.trim();
+      // Explicit label: 'title: ...' or 'title is ...'
+      const explicit = /^(?:title|app name|named|call it|rename(?:d?)\s*to|name is|caption)\b\s*[:=]?\s*/i.exec(t);
+      if (explicit) {
+        const after = t.slice(explicit[0].length).trim();
+        // Stop the title at the first separator so "title: X, add tiles" -> "X".
+        const namePart = after.split(/[,;.\u2022]|\s+(?:add|plus|with|then)\s+/i)[0].trim();
+        const q = namePart.match(/^["']?([^"']+)["']?$/);
+        if (q && q[1].trim()) return q[1].trim().slice(0, 80);
+        return namePart.slice(0, 80);
+      }
+      // Quoted title anywhere: "My App" or 'My App'
+      const quoted = t.match(/"([^"]{1,80})"|'([^']{1,80})'/);
+      if (quoted) return (quoted[1] || quoted[2] || '').trim();
+      // 'Name: rest of the request' -> treat the leading segment as the title.
+      const colonMatch = t.match(/^([^:]{2,40}):\s+\S/);
+      if (colonMatch) {
+        const leading = colonMatch[1].trim();
+        if (leading && !/^\d+$/.test(leading)) return leading.slice(0, 80);
+      }
+      return '';
+    }
+
     const titleText = extractTitleText(raw);
-    const hasMedia = /media|video|youtube|player|watch|films?/i.test(lower);
-    const hasFiles = /file|browse|explorer|folder|images?|gallery|photos?|samba|smb/i.test(lower);
-    const hasSearch = /search|search bar|searchbox|input at the top|search field|searchbox|search input/i.test(lower);
-    const hasSettings = /setting|config|gear|preferences|preference|options?|general/i.test(lower);
-    const hasChat = /chat|message|talk|assistant|ask|qa|copilot/i.test(lower);
-    const hasTools = /tool|terminal|net speed|benchmark|hardware|disk|log/i.test(lower);
-    const hasFavorites = /favorite|recent|saves?|bookmark/i.test(lower);
-    const hasPackages = /package|update|repair|patch|install/i.test(lower);
-    const hasGrid = /grid|tiles|rows?|columns?|panel/i.test(lower);
-    const addTop = /top|above|header|search bar|near the top|first/i.test(lower);
-    const addBottom = /bottom|footer|below|underneath|at the bottom/i.test(lower);
+    const hasTitle = titleText.length > 0 || /title|app name|rename|named|call it|caption/i.test(lower);
+
+    // --- Intent detection (richer patterns) ---
+    const hasMedia = /media|video|youtube|player|watch|films?|movie|stream|tube|trending|shorts?/i.test(lower);
+    const hasShorts = /shorts?/i.test(lower);
+    const hasIptv = /iptv|live tv|live tv|tv channel|m3u|channel list/i.test(lower);
+    const hasPodcast = /podcast|podcasts|rss feed/i.test(lower);
+    const hasFiles = /file|browse|explorer|folder|images?|gallery|photos?|samba|smb|file manager/i.test(lower);
+    const hasSearch = /search|search bar|searchbox|search field|search box|search input|searchbar|paste link|url|link/i.test(lower);
+    const hasSmartSearch = /smart|smart search|ai search|search with ai|auto|auto search/i.test(lower);
+    const hasSettings = /setting|config|gear|preferences?|preference|options?|general|appearance|theme/i.test(lower);
+    const hasChat = /chat|message|talk|assistant|ask|qa|copilot|discord|slack/i.test(lower);
+    const hasTools = /tool|terminal|net speed|benchmark|hardware|disk|log|shell|command|console/i.test(lower);
+    const hasFavorites = /favorite|recent|saves?|bookmark|continue|resume|history/i.test(lower);
+    const hasPackages = /package|update|repair|patch|install|upgrade|apt/i.test(lower);
+    const hasApps = /app|apps|launcher|open|run|start|launch/i.test(lower);
+    const hasHome = /home|main|landing|welcome|hello|good (morning|afternoon|evening)/i.test(lower);
+    const hasGrid = /grid|tiles?|rows?|columns?|panel|cards?/i.test(lower);
     const wantsCompact = /compact|small|density|dense|narrow/i.test(lower);
     const wantsRows = /row|single row|one row/i.test(lower);
     const wantsTwoRows = /two rows?|2 row|top and bottom|double row/i.test(lower);
     const wantsGrid = /grid|tiles?/i.test(lower) || hasGrid;
+    const addTop = /top|above|header|search bar|near the top|first|up top/i.test(lower);
+    const addBottom = /bottom|footer|below|underneath|at the bottom|footer/i.test(lower);
+
+    // --- Ask-AI / chatbot intent: if user wants an assistant in the scene, add a Chat tile ---
+    const hasAskAi = /ask (the )?ai|ai assistant|ask ai|chat with ai|ai chat|copilot|hey ai/i.test(lower);
+
+    const elements = [];
+    const suggestions = [];
 
     let titleY = 44;
     let contentTopY = 128;
     const canvasW = 1280;
     const canvasH = 720;
     const leftMargin = 36;
-    const gapX = 20;
-    const gapY = 22;
+    const rightMargin = 36;
 
-    if (hasTitle) {
-      const labelBg = 'none';
-      elements.push(makeElement('label', titleText || 'My Retro GUI', '#F8FAFC', labelBg, 'title', 'center', canvasW - leftMargin * 2, 64, leftMargin, titleY, ''));
+    // --- Title (only when explicitly requested, or as a last-resort fallback) ---
+    if (hasTitle && titleText.length) {
+      elements.push(makeElement('label', titleText, '#F8FAFC', 'none', 'title', 'center', canvasW - leftMargin - rightMargin, 64, leftMargin, titleY, ''));
+      suggestions.push('Added a centered title \"' + titleText + '\" near the top.');
+      contentTopY = 136;
+    } else if (hasTitle) {
+      elements.push(makeElement('label', 'My Retro GUI', '#F8FAFC', 'none', 'title', 'center', canvasW - leftMargin - rightMargin, 64, leftMargin, titleY, ''));
       suggestions.push('Added a centered title near the top.');
       contentTopY = 136;
     }
 
+    // --- Search bar (smart vs plain) ---
     if (addTop && hasSearch) {
       const inputW = wantsCompact ? 560 : 720;
       const btnW = 120;
       const rowY = contentTopY;
-      elements.push(makeElement('input', 'Search or paste link', '$labelColor', '$inputColor', 'medium', 'left', inputW, 46, leftMargin, rowY, 'Search or paste YouTube link'));
-      elements.push(makeElement('button', 'Search', '$labelColor', '$buttonColor', 'medium', 'left', btnW, 46, leftMargin + inputW + 12, rowY, '', 'youtube_smart'));
-      suggestions.push('Added a search input + Search button near the top.');
+      const placeholder = hasSmartSearch ? 'Search or paste a link' : 'Search or paste YouTube link';
+      const trigger = hasSmartSearch ? 'youtube_smart' : 'youtube_search';
+      elements.push(makeElement('input', '', '#F8FAFC', '#0F1420', 'medium', 'left', inputW, 46, leftMargin, rowY, placeholder));
+      elements.push(makeElement('button', 'Search', '#F8FAFC', '#1E3A8A', 'medium', 'left', btnW, 46, leftMargin + inputW + 12, rowY, '', trigger));
+      suggestions.push('Added a search input + Search button near the top' + (hasSmartSearch ? ' (smart search mode)' : '') + '.');
       contentTopY = rowY + 70;
     }
 
+    // --- Tile catalog (expanded: IPTV, podcasts, shorts, home) ---
     const tileCatalog = [
-      { text: 'Media', trigger: 'change_scene:Tube', fg: '#F8FAFC', bg: '#1E3A8A' },
-      { text: 'Files', trigger: 'change_scene:FileExplorer', fg: '#F8FAFC', bg: '#0F766E' },
-      { text: 'Packages', trigger: 'change_scene:Packages', fg: '#F8FAFC', bg: '#9A3412' },
-      { text: 'Chat', trigger: 'change_scene:Chat', fg: '#F8FAFC', bg: '#5B21B6' },
-      { text: 'Favorites', trigger: 'change_scene:Favorites', fg: '#F8FAFC', bg: '#9D174D' },
-      { text: 'Apps', trigger: 'change_scene:Apps', fg: '#F8FAFC', bg: '#334155' },
-      { text: 'Settings', trigger: 'change_scene:Settings', fg: '#F8FAFC', bg: '#475569' },
-      { text: 'Search / Tools', trigger: 'change_scene:Misc', fg: '#F8FAFC', bg: '#0E7490' },
+      { text: 'Media', trigger: 'change_scene:Tube', fg: '#F8FAFC', bg: '#1E3A8A', keywords: ['media','video','youtube','player','watch','films','movie','stream','tube'] },
+      { text: 'Shorts', trigger: 'change_scene:Shorts', fg: '#F8FAFC', bg: '#7C3AED', keywords: ['shorts'] },
+      { text: 'Live TV', trigger: 'change_scene:IPTV', fg: '#F8FAFC', bg: '#0E7490', keywords: ['iptv','live tv','tv channel','m3u','channel list'] },
+      { text: 'Podcasts', trigger: 'change_scene:Podcasts', fg: '#F8FAFC', bg: '#B45309', keywords: ['podcast','podcasts','rss feed'] },
+      { text: 'Files', trigger: 'change_scene:FileExplorer', fg: '#F8FAFC', bg: '#0F766E', keywords: ['file','browse','explorer','folder','images','gallery','photos','samba','smb'] },
+      { text: 'Packages', trigger: 'change_scene:Packages', fg: '#F8FAFC', bg: '#9A3412', keywords: ['package','update','repair','patch','install','upgrade'] },
+      { text: 'Chat', trigger: 'change_scene:Chat', fg: '#F8FAFC', bg: '#5B21B6', keywords: ['chat','message','talk','discord','slack'] },
+      { text: 'Favorites', trigger: 'change_scene:Favorites', fg: '#F8FAFC', bg: '#9D174D', keywords: ['favorite','recent','saves','bookmark','continue','resume','history'] },
+      { text: 'Apps', trigger: 'change_scene:Apps', fg: '#F8FAFC', bg: '#334155', keywords: ['app','apps','launcher','open','run','start','launch'] },
+      { text: 'Settings', trigger: 'change_scene:Settings', fg: '#F8FAFC', bg: '#475569', keywords: ['setting','config','gear','preferences','preference','options','general','appearance','theme'] },
+      { text: 'Tools', trigger: 'change_scene:Misc', fg: '#F8FAFC', bg: '#0E7490', keywords: ['tool','terminal','net speed','benchmark','hardware','disk','log','shell','command'] },
+      { text: 'Ask AI', trigger: 'change_scene:Chat', fg: '#F8FAFC', bg: '#16A34A', keywords: ['ask ai','ai assistant','ai chat','copilot','hey ai'] },
     ];
 
-    const tileSizeMap = {
-      compact: { w: 180, h: 120, perRow: 6, gapX: 16, gapY: 18 },
-      narrow: { w: 220, h: 132, perRow: 5, gapX: 18, gapY: 20 },
-      default: { w: 260, h: 158, perRow: 4, gapX: 22, gapY: 24 },
-      spacious: { w: 300, h: 180, perRow: 3, gapX: 26, gapY: 26 },
-    };
+    // --- Dedupe tile catalog into a priority list based on what the user asked for.
+    // Each requested keyword picks the matching tile; the first match wins so we don't
+    // add the same tile twice.
+    const chosenCatalog = [];
+    const usedIndices = new Set();
+    function tryAddTileByKeywords(keywords) {
+      for (let i = 0; i < tileCatalog.length; i++) {
+        if (usedIndices.has(i)) continue;
+        if (keywords.some(kw => tileCatalog[i].keywords.includes(kw))) {
+          usedIndices.add(i);
+          chosenCatalog.push(i);
+          return true;
+        }
+      }
+      return false;
+    }
 
+    // Priority order: most-specific first. Each helper returns true if it added a tile.
+    if (hasShorts && tryAddTileByKeywords(['shorts'])) suggestions.push('Added a Shorts tile.');
+    if (hasIptv && tryAddTileByKeywords(['iptv','live tv','tv channel','m3u','channel list'])) suggestions.push('Added a Live TV tile.');
+    if (hasPodcast && tryAddTileByKeywords(['podcast','rss feed'])) suggestions.push('Added a Podcasts tile.');
+    if (hasMedia && tryAddTileByKeywords(['media','video','youtube','player','watch','films','movie','stream','tube'])) suggestions.push('Added a Media tile.');
+    if (hasFiles && tryAddTileByKeywords(['file','browse','explorer','folder','images','gallery','photos','samba','smb'])) suggestions.push('Added a Files tile.');
+    if (hasPackages && tryAddTileByKeywords(['package','update','repair','patch','install','upgrade'])) suggestions.push('Added a Packages tile.');
+    if (hasChat && !hasAskAi && tryAddTileByKeywords(['chat','message','talk','discord','slack'])) suggestions.push('Added a Chat tile.');
+    if (hasAskAi && tryAddTileByKeywords(['ask ai','ai assistant','ai chat','copilot','hey ai'])) suggestions.push('Added an Ask AI tile (opens Chat).');
+    if (hasFavorites && tryAddTileByKeywords(['favorite','recent','saves','bookmark','continue','resume','history'])) suggestions.push('Added a Favorites tile.');
+    if (hasApps && tryAddTileByKeywords(['app','apps','launcher','open','run','start','launch'])) suggestions.push('Added an Apps tile.');
+    if (hasSettings && tryAddTileByKeywords(['setting','config','gear','preferences','preference','options','general','appearance','theme'])) suggestions.push('Added a Settings tile.');
+    if (hasTools && tryAddTileByKeywords(['tool','terminal','net speed','benchmark','hardware','disk','log','shell','command'])) suggestions.push('Added a Tools tile.');
+
+    // --- Determine layout style ---
     function selectedTileStyle() {
-      if (wantsCompact) return tileSizeMap.compact;
-      if (wantsRows) return tileSizeMap.narrow;
-      if (wantsTwoRows) return tileSizeMap.default;
-      if (wantsGrid || hasGrid) return tileSizeMap.spacious;
-      return tileSizeMap.default;
+      if (wantsCompact) return { w: 180, h: 120, perRow: 6, gapX: 16, gapY: 18 };
+      if (wantsRows) return { w: 220, h: 132, perRow: 5, gapX: 18, gapY: 20 };
+      if (wantsTwoRows) return { w: 260, h: 158, perRow: 4, gapX: 22, gapY: 24 };
+      if (wantsGrid || hasGrid) return { w: 300, h: 180, perRow: 3, gapX: 26, gapY: 26 };
+      return { w: 260, h: 158, perRow: 4, gapX: 22, gapY: 24 };
     }
 
     const style = selectedTileStyle();
@@ -3333,31 +3901,7 @@ const AI = (() => {
     const tGapX = style.gapX;
     const tGapY = style.gapY;
 
-    function resolveTileIndices() {
-      const chosen = [];
-      if (hasMedia) chosen.push(0);
-      if (hasFiles) chosen.push(1);
-      if (hasPackages) chosen.push(2);
-      if (hasChat) chosen.push(3);
-      if (hasFavorites) chosen.push(4);
-      if (hasApps || hasTools) chosen.push(5);
-      if (hasSettings) chosen.push(6);
-      if (hasPackages || hasTools) chosen.push(7);
-      return chosen;
-    }
-
-    let tileIndices = resolveTileIndices();
-
-    if (!tileIndices.length) {
-      if (wantsTwoRows || wantsRows) {
-        tileIndices = [0, 1, 2, 3, 4, 5, 6, 7];
-        suggestions.push('No specific tiles mentioned, so I filled a balanced 2-row grid with the common home actions.');
-      } else {
-        tileIndices = [0, 1, 6, 3];
-        suggestions.push('No specific tiles mentioned, so I started with a small set: Media, Files, Settings, Chat.');
-      }
-    }
-
+    // --- Place tiles ---
     let placed = 0;
     function planTile(catalogIndex, rowOffset = 0) {
       const catalog = tileCatalog[catalogIndex];
@@ -3374,38 +3918,59 @@ const AI = (() => {
       placed++;
     }
 
-    tileIndices.forEach((idx) => planTile(idx, 0));
+    chosenCatalog.forEach((idx) => planTile(idx, 0));
 
+    // --- Fallback: if nothing was placed, give a minimal sensible home screen ---
+    if (chosenCatalog.length === 0) {
+      if (wantsTwoRows || wantsRows) {
+        // Fill a balanced grid with the most common home actions
+        [0, 4, 7, 5, 6, 3].forEach((idx) => {
+          if (placed < perRow * 2) planTile(idx, 0);
+        });
+        suggestions.push('No specific tiles mentioned, so I filled a balanced grid with common home actions.');
+      } else if (hasHome) {
+        // Home/landing: Media + Files + Settings + Chat
+        [0, 4, 6, 3].forEach((idx) => planTile(idx, 0));
+        suggestions.push('Added a small home set: Media, Files, Settings, Chat.');
+      } else {
+        // Smallest meaningful screen: Media + Files + Settings
+        [0, 4, 6].forEach((idx) => planTile(idx, 0));
+        suggestions.push('Added a minimal set: Media, Files, Settings.');
+      }
+    }
+
+    // --- Control hint at the bottom ---
     if (addBottom && elements.length) {
       const hintText = 'Use D-Pad to navigate \u00b7 A to open \u00b7 B to back';
-      elements.push(makeElement('label', hintText, '#9AA6B6', 'none', 'small', 'center', canvasW - leftMargin * 2, 30, leftMargin, canvasH - 44, ''));
+      elements.push(makeElement('label', hintText, '#9AA6B6', 'none', 'small', 'center', canvasW - leftMargin - rightMargin, 30, leftMargin, canvasH - 44, ''));
       suggestions.push('Added a small control hint near the bottom.');
     }
 
+    // --- If still empty (shouldn't happen now), force a title ---
     if (elements.length === 0) {
       suggestions.push('I couldn\u2019t place anything from that request, so I added a minimal centered title so the scene isn\u2019t empty.');
-      elements.push(makeElement('label', titleText || 'My Retro GUI', '#F8FAFC', 'none', 'title', 'center', canvasW - leftMargin * 2, 64, leftMargin, contentTopY, ''));
+      elements.push(makeElement('label', titleText || 'My Retro GUI', '#F8FAFC', 'none', 'title', 'center', canvasW - leftMargin - rightMargin, 64, leftMargin, contentTopY, ''));
     }
 
+    // --- Build output ---
+    // Rendered as a short chat reply: the per-element coordinates used to be
+    // dumped here too, which buried the answer in developer noise.
     const lines = [];
-    lines.push('AI suggestion (free local mode)');
-    lines.push('==============================');
     if (suggestions.length) {
+      lines.push('Here\u2019s what I\u2019d add:');
       suggestions.forEach((s) => lines.push('\u2022 ' + s));
-      lines.push('');
     } else {
-      lines.push('Quick edit tips:');
-      lines.push('\u2022 Say \u201cadd a Media tile\u201d to drop one tile.');
-      lines.push('\u2022 Say \u201csearch bar at the top\u201d to add an input + button.');
-      lines.push('\u2022 Say \u201ctitle: JukaHub\u201d to set the title text.');
-      lines.push('\u2022 Say \u201ctwo rows of tiles\u201d for a denser grid.');
-      lines.push('\u2022 Use the paid providers below for more varied layouts.');
-      lines.push('');
+      lines.push('I didn\u2019t spot a specific layout in that request. Things you can say:');
+      lines.push('\u2022 \u201cadd a Media tile\u201d to drop one tile.');
+      lines.push('\u2022 \u201csearch bar at the top\u201d to add an input + button.');
+      lines.push('\u2022 \u201ctitle: JukaHub\u201d to set the title text.');
+      lines.push('\u2022 \u201ctwo rows of tiles\u201d for a denser grid.');
+      lines.push('\u2022 \u201cask ai\u201d to add an Ask AI tile.');
+      lines.push('\u2022 Pick another provider under Settings for more varied layouts.');
     }
-    lines.push('Elements to add (' + elements.length + '):');
-    elements.forEach((e) => {
-      lines.push('- ' + e.type + ': "' + e.text + '" at x=' + e.x + ', y=' + e.y + ', w=' + e.w + ', h=' + e.h);
-    });
+    lines.push('');
+    lines.push(elements.length + ' element' + (elements.length === 1 ? '' : 's') +
+      ' ready \u2014 click Apply to add them to this scene.');
 
     showOutput(lines.join('\n'));
     status('Suggestion ready \u2014 click Apply to add these elements to the current scene.', 'success');
@@ -3445,6 +4010,9 @@ const AI = (() => {
     const key = apiKey();
     const promptText = promptEl.value.trim();
     if (!promptText) kil('Write what you want first (for example: "add a Media tile and a search bar at the top").');
+    // Echo the request into the transcript and clear the composer, chat-style.
+    bubble('user', promptText);
+    promptEl.value = '';
     const safePromptText = sanitizePromptForProvider(promptText);
     const builtPrompt = mode === 'suggest' ? SUGGEST_PROMPT(safePromptText) : GENERATE_PROMPT(safePromptText);
 
@@ -3452,17 +4020,20 @@ const AI = (() => {
     try {
       status('Thinking\u2026', '');
       if (providerName === FREE_PROVIDER) {
-        answer = await freeGenerate(builtPrompt);
+        // localSuggest() is a keyword matcher, so it must see the user's own words
+        // (not the instruction prompt, whose example JSON would match everything).
+        // It also returns element objects and already rendered a readable summary
+        // into the output pane, so don't overwrite it with the raw array.
+        answer = await freeGenerate(safePromptText);
         if (!answer) kil('Local suggestion returned nothing.');
-        showOutput(answer);
         status('Suggestion ready \u2014 click Apply to add these elements to the current scene.', 'success');
         return;
       }
 
       answer = await providerRoute(providerName, builtPrompt, key);
       const parsed = extractJson(answer);
-      if (parsed && (parsed.scene || parsed.elements || Array.isArray(parsed))) {
-        showJsonOutput(parsed);
+      if (parsed && (parsed.scene || parsed.elements || parsed.scenes || Array.isArray(parsed))) {
+        showConfigOutput(parsed);
         status('Config JSON generated \u2014 click Apply to import it.', 'success');
         lastGenerated = parsed;
         return;
@@ -3477,6 +4048,7 @@ const AI = (() => {
   }
 
   async function providerRoute(providerName, promptText, key) {
+    if (providerName === CHROME_PROVIDER) return chromeGenerate(promptText);
     if (providerName === 'openrouter') return openrouterGenerate(promptText, key);
     if (providerName === 'openai') return openaiGenerate(promptText, key);
     if (providerName === 'anthropic') return anthropicGenerate(promptText, key);
@@ -3486,10 +4058,11 @@ const AI = (() => {
 
   function clear() {
     promptEl.value = '';
-    showOutput('AI output will appear here.');
     status('');
     lastSuggestion = null;
     lastGenerated = null;
+    showWelcome();
+    if (promptEl) promptEl.focus();
   }
 
   function apply() {
@@ -3497,8 +4070,13 @@ const AI = (() => {
     const generated = lastGenerated;
 
     if (suggestion && Array.isArray(suggestion) && suggestion.length) {
-      addSuggestedElements(suggestion);
-      status('Applied ' + suggestion.length + ' element(s) to the current scene.', 'success');
+      const applied = addSuggestedElements(suggestion) || [];
+      if (applied.length) {
+        status('Applied ' + applied.length + ' of ' + suggestion.length +
+          ' element(s) to the current scene.', 'success');
+      } else {
+        status('Those elements are already in this scene \u2014 nothing new to add.', 'warning');
+      }
       return;
     }
 
@@ -3569,6 +4147,14 @@ const AI = (() => {
         el.style.color = textColor || '#F8FAFC';
       }
 
+      // Persist what the assistant chose. The exporter reads these attributes
+      // rather than the inline CSS, so without them an imported element lost
+      // its colours on export, and the duplicate check below never matched.
+      el.setAttribute('data-color', textColor);
+      const declaredBg = (spec.bgColor || '').trim();
+      if (declaredBg && declaredBg !== 'transparent') el.setAttribute('data-bg-color', declaredBg);
+      el.setAttribute('data-text', (spec.text || '').slice(0, 120));
+
       const textSpan = document.createElement('span');
       textSpan.className = 'text-content';
       textSpan.textContent = (spec.text || '').slice(0, 120) || type;
@@ -3611,10 +4197,31 @@ const AI = (() => {
   function clampPos(pos, max) { return Math.max(0, Math.min(pos, max - 60)); }
 
 
+  // The generate prompt asks for { "scenes": [ { "name", "elements": [...] } ] },
+  // but a reply can also be { "scene": {...} }, { "elements": [...] } or a bare
+  // array. Normalise all of those so Apply always has something to import -- the
+  // scenes shape used to be rejected with "did not include any elements".
+  function configElements(generated) {
+    if (!generated) return { elements: null, name: '' };
+    if (Array.isArray(generated)) return { elements: generated, name: '' };
+    if (Array.isArray(generated.scenes)) {
+      const scene = generated.scenes.find((s) => s && Array.isArray(s.elements));
+      if (!scene) return { elements: null, name: '' };
+      return { elements: scene.elements, name: scene.name ? String(scene.name) : '' };
+    }
+    if (generated.scene && Array.isArray(generated.scene.elements)) {
+      const scene = generated.scene;
+      return { elements: scene.elements, name: scene.name ? String(scene.name) : '' };
+    }
+    if (Array.isArray(generated.elements)) {
+      return { elements: generated.elements, name: generated.name ? String(generated.name) : '' };
+    }
+    return { elements: null, name: '' };
+  }
+
   function applyGeneratedConfig(generated) {
-    const scene = generated.scene || generated;
-    const elements = scene.elements && Array.isArray(scene.elements) ? scene.elements : null;
-    if (!elements || !elements.length) kil('Generated config did not include any elements.');
+    const { elements, name } = configElements(generated);
+    if (!elements || !elements.length) kil('That reply had no elements to import \u2014 ask the assistant to generate a scene config.');
 
     const canvasEl = document.getElementById('canvas');
     if (!canvasEl) kil('Canvas not found.');
@@ -3668,6 +4275,13 @@ const AI = (() => {
         el.style.color = (spec.color || '').trim() || '#F8FAFC';
       }
 
+      // See addSuggestedElements(): keep the colours in the attributes the
+      // exporter reads, and give the element a text hook for de-duplication.
+      el.setAttribute('data-color', (spec.color || '').trim() || '#F8FAFC');
+      const declaredBg = (spec.bgColor || '').trim();
+      if (declaredBg && declaredBg !== 'transparent') el.setAttribute('data-bg-color', declaredBg);
+      el.setAttribute('data-text', (spec.text || '').slice(0, 120));
+
       const textSpan = document.createElement('span');
       textSpan.className = 'text-content';
       textSpan.textContent = (spec.text || '').slice(0, 120) || type;
@@ -3693,13 +4307,18 @@ const AI = (() => {
     });
 
     if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
-    status('Imported ' + added + ' element(s) from generated config.', 'success');
+    if (!added) {
+      status('Those elements are already in this scene \u2014 nothing new to add.', 'warning');
+      return;
+    }
+    status('Imported ' + added + ' element(s) into this scene' +
+      (name ? ' (from \u201c' + name + '\u201d)' : '') + '.', 'success');
   }
 
 
   function copyOutput() {
-    const text = outputEl ? outputEl.textContent : '';
-    if (!text || text === 'AI output will appear here.') { status('Nothing to copy yet.', 'warning'); return; }
+    const text = lastReplyText || (outputEl ? outputEl.textContent : '');
+    if (!text || !String(text).trim()) { status('Nothing to copy yet.', 'warning'); return; }
     try {
       navigator.clipboard.writeText(text).then(
         () => status('Copied to clipboard.', 'success'),
@@ -3727,14 +4346,17 @@ const AI = (() => {
 
   function init() {
     loadStoredKey();
+    showWelcome();
 
     if (providerEl && keyEl) {
+      // A provider restored from localStorage must reveal the key row too.
+      syncKeyRowVisibility();
+
       providerEl.addEventListener('change', () => {
-        if (provider() === FREE_PROVIDER) {
-          keyEl.parentElement.style.display = 'none';
-        } else {
-          keyEl.parentElement.style.display = 'flex';
-          if (!keyEl.value) status('Paste your ' + provider() + ' key above, then click Save key.', 'warning');
+        syncKeyRowVisibility();
+        const p = provider();
+        if (p !== FREE_PROVIDER && p !== CHROME_PROVIDER && !keyEl.value) {
+          status('Paste your ' + p + ' key above, then click Save key.', 'warning');
         }
         storeKey(keyEl.value.trim());
       });
@@ -3746,17 +4368,114 @@ const AI = (() => {
       });
     }
 
-    if (suggestBtn) suggestBtn.addEventListener('click', suggest);
-    if (generateBtn) generateBtn.addEventListener('click', generate);
-    if (clearBtn) clearBtn.addEventListener('click', clear);
-    if (copyBtn) copyBtn.addEventListener('click', copyOutput);
-    if (applyBtn) applyBtn.addEventListener('click', apply);
+    // Click handlers report failures through the status line instead of leaving
+    // an unhandled promise rejection in the console.
+    const guard = (fn) => () => {
+      try {
+        const result = fn();
+        if (result && typeof result.catch === 'function') {
+          result.catch((err) => { if (err && err.message) status('AI error: ' + err.message, 'error'); });
+        }
+      } catch (err) {
+        if (err && err.message) status('AI error: ' + err.message, 'error');
+      }
+    };
+
+    if (suggestBtn) suggestBtn.addEventListener('click', guard(suggest));
+    if (generateBtn) generateBtn.addEventListener('click', guard(generate));
+    if (clearBtn) clearBtn.addEventListener('click', guard(clear));
+    if (copyBtn) copyBtn.addEventListener('click', guard(copyOutput));
+    if (applyBtn) applyBtn.addEventListener('click', guard(apply));
+
+    // Chat composer behaviour: Enter sends, Shift+Enter adds a line, and the
+    // send buttons stay disabled while there is nothing to send.
+    if (promptEl) {
+      const syncComposer = () => {
+        const empty = !promptEl.value.trim();
+        [suggestBtn, generateBtn].forEach((b) => { if (b) b.disabled = empty; });
+      };
+      promptEl.addEventListener('input', syncComposer);
+      promptEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          if (promptEl.value.trim()) guard(suggest)();
+        }
+      });
+      syncComposer();
+    }
+
+    // Wire voice controls if the browser supports them (elements may be static HTML
+    // or created by ensureVoiceUIElements()).
+    ensureVoiceUIElements();
+    if (!voiceSupported) {
+      voiceSupported = detectVoiceSupport();
+    }
+    wireVoiceUI();
+    if (!voiceSupported) {
+      const micBtn = document.getElementById('aiMicBtn');
+      if (micBtn) micBtn.style.display = 'none';
+      status('Voice input is not available in this browser.', 'warning');
+    }
+
+    // Chrome on-device AI (Prompt API): detect availability and surface it.
+    const chromePresent = isChromePromptApiPresent();
+    if (chromePresent) {
+      // Show the status row and probe availability in the background.
+      setModelStatus('downloading', 'Checking on-device AI availability…');
+      detectChromeAvailability().then((avail) => {
+        // Keep the option enabled whenever the API surface exists; the generate step
+        // will still give a clear error if the model is unavailable/unsupported.
+        if (avail === 'available' || avail === 'downloaded') {
+          setModelStatus('ready', chromeStatusMessage(avail));
+        } else if (avail === 'downloading') {
+          setModelStatus('downloading', chromeStatusMessage(avail));
+          // Keep enabled so a user can pick it and wait, or switch away.
+        } else {
+          setModelStatus('unavailable', chromeStatusMessage(avail));
+        }
+      }).catch(() => {
+        setModelStatus('unavailable', chromeStatusMessage('unavailable'));
+      });
+    } else {
+      setModelStatus('unavailable', 'On-device AI (Chrome Gemini Nano) is not available in this browser.');
+    }
+
+    // Disable the Chrome option when the Prompt API isn't exposed at all, so users
+    // don't pick a provider that can't work. Re-evaluate on provider change too.
+    function updateChromeOptionDisabled() {
+      if (!providerEl) return;
+      const opt = providerEl.querySelector('option[value="' + CHROME_PROVIDER + '"]');
+      if (opt) opt.disabled = !isChromePromptApiPresent();
+    }
+    updateChromeOptionDisabled();
+    providerEl.addEventListener('change', updateChromeOptionDisabled);
+
+    // Re-probe whenever the user picks the Chrome provider, since download state
+    // can change between visits.
+    if (providerEl) {
+      providerEl.addEventListener('change', () => {
+        if (provider() === CHROME_PROVIDER) {
+          detectChromeAvailability().then((avail) => {
+            if (avail === 'available' || avail === 'downloaded') {
+              setModelStatus('ready', chromeStatusMessage(avail));
+            } else if (avail === 'downloading') {
+              setModelStatus('downloading', chromeStatusMessage(avail));
+            } else {
+              setModelStatus('unavailable', chromeStatusMessage(avail));
+            }
+          }).catch(() => {
+            setModelStatus('unavailable', chromeStatusMessage('unavailable'));
+          });
+        }
+      });
+    }
 
     if (promptEl) {
       promptEl.addEventListener('focus', () => {
         if (!promptEl.value) promptEl.placeholder = 'e.g. Add a Media tile and a search bar at the top';
       });
     }
+
   }
 
   // ---- Voice control (builder-only, browser speech recognition) ----
@@ -3896,9 +4615,31 @@ const AI = (() => {
     return startVoiceSession(autoRunSuggest);
   }
 
-  function initVoiceUI() {
-    if (!voiceSupported) return;
+  function ensureVoiceUIElements() {
+    if (!document.getElementById('aiPanel')) return;
+    if (document.getElementById('aiMicBtn')) return; // already in DOM (e.g. static HTML)
 
+    const header = document.querySelector('#aiPanel .panel-header');
+    if (!header) return;
+
+    const micWrap = document.createElement('div');
+    micWrap.className = 'ai-mic-row';
+    micWrap.innerHTML =
+      '<button id="aiMicBtn" class="action-button small" type="button" title="Voice input">' +
+      '<i class="fa-solid fa-microphone" aria-hidden="true"></i></button>' +
+      '<label class="ai-toggle-label" title="Enable voice input">' +
+      '<input type="checkbox" id="aiVoiceToggle">' +
+      '<span>Voice</span>' +
+      '</label>' +
+      '<label class="ai-toggle-label ai-voice-hint" title="Auto-run suggest after voice input">' +
+      '<input type="checkbox" id="aiVoiceAutoRun">' +
+      '<span>Auto</span>' +
+      '</label>';
+
+    header.appendChild(micWrap);
+  }
+
+  function wireVoiceUI() {
     const micBtn = document.getElementById('aiMicBtn');
     const voiceToggleEl = document.getElementById('aiVoiceToggle');
     const autoRunEl = document.getElementById('aiVoiceAutoRun');
@@ -3934,36 +4675,17 @@ const AI = (() => {
   }
 
   function ensureVoiceUI() {
-    if (!document.getElementById('aiPanel')) return;
-    if (document.getElementById('aiMicBtn')) return;
-
-    const header = document.querySelector('#aiPanel .panel-header');
-    if (!header) return;
-
-    const micWrap = document.createElement('div');
-    micWrap.className = 'ai-mic-row';
-    micWrap.innerHTML =
-      '<button id="aiMicBtn" class="action-button small" type="button" title="Voice input">' +
-      '<i class="fa-solid fa-microphone" aria-hidden="true"></i></button>' +
-      '<label class="ai-toggle-label" title="Enable voice input">' +
-      '<input type="checkbox" id="aiVoiceToggle">' +
-      '<span>Voice</span>' +
-      '</label>' +
-      '<label class="ai-toggle-label ai-voice-hint" title="Auto-run suggest after voice input">' +
-      '<input type="checkbox" id="aiVoiceAutoRun">' +
-      '<span>Auto</span>' +
-      '</label>';
-
-    header.appendChild(micWrap);
-
+    ensureVoiceUIElements();
     if (!voiceSupported) {
       voiceSupported = detectVoiceSupport();
     }
+    wireVoiceUI();
 
-    initVoiceUI();
-
-    if (!voiceSupported && micBtn) {
-      micBtn.style.display = 'none';
+    if (!voiceSupported) {
+      const micBtn = document.getElementById('aiMicBtn');
+      if (micBtn) {
+        micBtn.style.display = 'none';
+      }
       status('Voice input is not available in this browser.', 'warning');
     }
   }
@@ -3973,13 +4695,19 @@ const AI = (() => {
 
 
 const AI_SYSTEM = [
-  'You are a JukaHub GUI builder assistant.',
-  'JukaHub apps are defined by a JSON config with scenes and elements.',
+  'You are a JukaHub GUI builder assistant. JukaHub is a config-driven GUI framework for handheld retro gaming devices (TrimUI, RK2020, etc.).',
+  'Apps are defined by a JSON config with one or more scenes. Each scene has a name, an optional background color, and an array of elements.',
   'Each element has at least: type, text, x, y, width, height, color, bgColor, font.',
-  'Buttons commonly use type "button", inputs use "input", labels use "label".',
-  'Triggers are strings like "change_scene:Tube" or "youtube_smart".',
-  'Respond with valid JSON only when asked for config. When asked for layout advice, respond in plain text.',
-  'Keep coordinates inside a 1280x720 canvas and keep sizes realistic for a handheld UI.',
+  'Element types you may use: button, label, input. (If asked for more, use only these three — do not invent new types.)',
+  'Buttons commonly use type "button". Input fields use "input". Titles and hints use "label".',
+  'Coordinates are pixels on a 1280x720 logical canvas. Keep x between 36 and 1244, y between 44 and 672. Keep sizes realistic for a handheld UI held at arm\'s length: buttons 120-300px wide, tiles 180-300px, titles ~64px tall, inputs ~46px tall.',
+  'Font roles: title (biggest, for the app/title), big (card titles), medium (body), small (captions/hints). Pick one per element.',
+  'Alignment: "left", "center", or "right". Most tiles are left-aligned text on a colored background.',
+  'Triggers are strings that tell the runtime what to do when the element is activated. Common triggers: "change_scene:Tube", "change_scene:FileExplorer", "change_scene:Packages", "change_scene:Chat", "change_scene:Favorites", "change_scene:Settings", "change_scene:Misc", "youtube_smart", "youtube_search", "youtube_play", "youtube_trending", "play_focused", "play_video_from_var", "custom_link", "ip_stream", "iptv_load", "podcast_load", "fe_list", "fe_up", "netspeed_run", "benchmark_run", "terminal_run", "hw_load", "save_config", "cache_clear", "" (none).',
+  'Colors: use readable dark-surface backgrounds for buttons (e.g. #1E3A8A, #0F766E, #9A3412, #5B21B6, #334155, #0E7490, #475569) and light text (#F8FAFC). Labels usually have no background (bgColor "") and use #F8FAFC or #9AA6B6.',
+  'When asked for a scene config, return ONLY valid JSON. No markdown fences, no commentary before or after. Use this exact top-level shape: { "scenes": [ { "name": "...", "background": "#0B0F17", "elements": [ ... ] } ] }.',
+  'When asked for layout advice (not a config), respond in plain text with concise, actionable suggestions.',
+  'Be conservative: if the request is ambiguous, add a small sensible set rather than a huge screen. Prefer a title near the top, tiles in a grid, and a small control hint near the bottom.',
 ].join('\n');
 
 function SUGGEST_PROMPT(userText) {
@@ -3989,8 +4717,13 @@ function SUGGEST_PROMPT(userText) {
     'A user wrote: "' + userText + '"\n\n' +
     'Give 3 to 6 concise suggestions for what to add or change, then list the specific elements to place ' +
     'using this shape for each one:\n' +
-    '  { "type": "button", "text": "Media", "color": "#F8FAFC", "bgColor": "#1E3A8A", "font": "big", "align": "left", "w": 220, "h": 168, "x": 30, "y": 312 }\n\n' +
-    'Prefer types: button, label, input. Use sensible colors, not random ones.',
+    '  { "type": "button", "text": "Media", "color": "#F8FAFC", "bgColor": "#1E3A8A", "font": "big", "align": "left", "w": 220, "h": 168, "x": 30, "y": 312, "trigger": "change_scene:Tube" }\n\n' +
+    'Rules:\n' +
+    ' - Prefer types: button, label, input only. Do not invent new types.\n' +
+    ' - Use sensible colors for button backgrounds (#1E3A8A, #0F766E, #9A3412, #5B21B6, #334155, #0E7490, #475569); labels usually have no background (bgColor "").\n' +
+    ' - Keep coordinates inside x=36..1244, y=44..672 and sizes realistic for a handheld UI.\n' +
+    ' - If a search bar is requested, include both an input (placeholder "Search or paste a link") and a Search button.\n' +
+    ' - Respond in plain text: a short bulleted suggestion list, then an "Elements to add" list with the JSON shapes above.',
   ].join('\n');
 }
 
@@ -3999,27 +4732,29 @@ function GENERATE_PROMPT(userText) {
     AI_SYSTEM,
     '',
     'A user wrote: "' + userText + '"\n\n' +
-    'Generate a JSON scene object for a 1280x720 canvas. Use this exact shape, which matches the JukaHub runtime format:\n' +
+    'Generate a JSON scene object for a 1280x720 canvas. Return a single scene with this exact top-level shape:\n' +
     '{\n' +
     '  "scenes": [\n' +
     '    {\n' +
     '      "name": "Suggested Scene",\n' +
     '      "background": "#0B0F17",\n' +
     '      "elements": [\n' +
-    '        { "type": "button", "text": "Media", "color": "#F8FAFC", "bgColor": "#1E3A8A", "font": "big", "x": 30, "y": 312, "width": 220, "height": 168, "trigger": "change_scene:Tube", "placeholder": "", "variable": "", "command": "", "listVariable": "", "columns": 0, "rows": 0, "image": "", "jsonPath": "", "autoRefresh": false, "externalAppPath": "", "externalAppReturn": "", "variableChange": "", "variableChangeValue": "" },\n' +
-    '        { "type": "label", "text": "Home", "color": "#F8FAFC", "bgColor": "", "font": "title", "x": 36, "y": 44, "width": 1208, "height": 64, "trigger": "", "placeholder": "", "variable": "", "command": "", "listVariable": "", "columns": 0, "rows": 0, "image": "", "jsonPath": "", "autoRefresh": false, "externalAppPath": "", "externalAppReturn": "", "variableChange": "", "variableChangeValue": "" }\n' +
+    '        { "type": "label", "text": "Home", "color": "#F8FAFC", "bgColor": "", "font": "title", "align": "center", "x": 36, "y": 44, "width": 1208, "height": 64 },\n' +
+    '        { "type": "button", "text": "Media", "color": "#F8FAFC", "bgColor": "#1E3A8A", "font": "big", "align": "left", "x": 36, "y": 150, "width": 220, "height": 168, "trigger": "change_scene:Tube" }\n' +
     '      ]\n' +
     '    }\n' +
     '  ]\n' +
     '}\n\n' +
     'Rules:\n' +
-    ' - Return ONLY valid JSON. No markdown fences, no commentary.\n' +
-    ' - Keep elements inside x=36..1244 and y=44..672.\n' +
-    ' - Use only these types: button, label, input.\n' +
-    ' - Use realistic handheld sizes. Prefer bgColor for buttons, leave bgColor empty for labels.\n' +
-    ' - If the user asked for a title, include one label near the top.\n' +
-    ' - If the user asked for a search bar, include one input plus one button.\n' +
-    ' - Use clear text labels, not short codes.',
+    ' - Return ONLY a single JSON object. No markdown fences (no ```json ... ```), no commentary before or after, no trailing text.\n' +
+    ' - The response must parse as JSON with JSON.parse(). Do not include explanatory prose.\n' +
+    ' - Use only these element types: button, label, input. Do not invent new types.\n' +
+    ' - For each element, include only the fields you need. A label needs: type, text, color, bgColor (often ""), font, align, x, y, width, height. A button adds: trigger. An input adds: placeholder. Do not pad every element with empty placeholder/variable/command/listVariable/columns/rows/image/jsonPath/autoRefresh/externalAppPath/externalAppReturn/variableChange/variableChangeValue fields.\n' +
+    ' - Keep x between 36 and 1244, y between 44 and 672. Keep sizes realistic for a handheld UI: buttons/tiles 180-300px wide and 120-180px tall, titles ~64px tall, inputs ~46px tall.\n' +
+    ' - Title label near the top (y ~44), tiles in a grid below, optional control hint near the bottom (y ~672).\n' +
+    ' - Use clear text labels, not short codes. Use a sensible dark surface color for button backgrounds (#1E3A8A, #0F766E, #9A3412, #5B21B6, #334155, #0E7490, #475569, #7C3AED) and light text (#F8FAFC). Labels usually have no background.\n' +
+    ' - If the user asked for a search bar, include one input (placeholder "Search or paste a link") plus one button ("Search", trigger "youtube_search").\n' +
+    ' - Be conservative: for an ambiguous request, add a small sensible set (title + 3-5 tiles), not a huge screen.',
   ].join('\n');
 }
 

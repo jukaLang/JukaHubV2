@@ -3,41 +3,63 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
 
-// ConfigWatcher monitors a config file for changes and triggers a reload.
+// ConfigWatcher monitors the project's config files for changes and triggers a
+// reload. It watches jukaconfig.json and jukaconfig.xml together and resolves
+// between them with ResolveConfigPath, so a hot reload picks exactly the same
+// file (and therefore the same design) as a restart would.
 type ConfigWatcher struct {
 	mu       sync.Mutex
-	path     string
-	lastMod  time.Time
+	path     string // primary config path (jukaconfig.json)
+	paths    []string
+	lastMod  map[string]time.Time
 	running  bool
 	stopCh   chan struct{}
 	reloadCh chan struct{}
 	onReload func(*Config)
+	onSource func(string)
 	debounce *time.Timer
 }
 
-// NewConfigWatcher creates a watcher for the given config path.
+// NewConfigWatcher creates a watcher for the given config path. Its XML sibling
+// is watched too, so exporting jukaconfig.xml from the builder is picked up.
 func NewConfigWatcher(path string) *ConfigWatcher {
+	xmlPath := XMLSidecarPath(path)
+	paths := []string{path}
+	if xmlPath != path {
+		paths = append(paths, xmlPath)
+	}
 	return &ConfigWatcher{
 		path:     path,
+		paths:    paths,
+		lastMod:  make(map[string]time.Time),
 		stopCh:   make(chan struct{}),
 		reloadCh: make(chan struct{}, 1),
 	}
 }
 
-// SetOnReload sets the callback invoked when a config change is detected.
+// SetOnReload sets the callback invoked with the reloaded config.
 func (cw *ConfigWatcher) SetOnReload(fn func(*Config)) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	cw.onReload = fn
 }
 
-// Start begins the background file watcher. It polls the file's modification
-// time every 2 seconds and debounces changes for 500ms to avoid rapid
-// reloads during file writes.
+// SetOnSource sets an optional callback invoked with the path the config was
+// loaded from (useful for diagnostics and UI hints).
+func (cw *ConfigWatcher) SetOnSource(fn func(string)) {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	cw.onSource = fn
+}
+
+// Start begins the background file watcher. It polls the modification times
+// every 2 seconds and debounces changes for 500ms to avoid rapid reloads while
+// a file is still being written.
 func (cw *ConfigWatcher) Start() {
 	cw.mu.Lock()
 	if cw.running {
@@ -45,17 +67,15 @@ func (cw *ConfigWatcher) Start() {
 		return
 	}
 	cw.running = true
+	for _, p := range cw.paths {
+		if info, err := os.Stat(p); err == nil {
+			cw.lastMod[p] = info.ModTime()
+		}
+	}
 	cw.mu.Unlock()
 
-	// Capture initial modification time
-	if info, err := os.Stat(cw.path); err == nil {
-		cw.mu.Lock()
-		cw.lastMod = info.ModTime()
-		cw.mu.Unlock()
-	}
-
 	go cw.watchLoop()
-	log.Printf("[hotreload] watching %s for changes", cw.path)
+	log.Printf("[hotreload] watching %s for changes", strings.Join(cw.paths, ", "))
 }
 
 // Stop halts the background file watcher.
@@ -69,7 +89,7 @@ func (cw *ConfigWatcher) Stop() {
 	close(cw.stopCh)
 }
 
-// watchLoop polls the config file every 2 seconds.
+// watchLoop polls the config files every 2 seconds.
 func (cw *ConfigWatcher) watchLoop() {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -86,28 +106,37 @@ func (cw *ConfigWatcher) watchLoop() {
 	}
 }
 
-// checkFile checks if the config file has been modified since last check.
+// checkFile checks whether any watched config file changed since the last check
+// (including a file that has just been created - the editor's first XML export,
+// for example, which previously was ignored until a restart).
 func (cw *ConfigWatcher) checkFile() {
-	info, err := os.Stat(cw.path)
-	if err != nil {
-		return
-	}
+	changed := false
 
 	cw.mu.Lock()
-	modTime := info.ModTime()
-	lastMod := cw.lastMod
-	cw.mu.Unlock()
-
-	if !modTime.After(lastMod) {
+	for _, p := range cw.paths {
+		info, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		modTime := info.ModTime()
+		lastMod, seen := cw.lastMod[p]
+		if seen && !modTime.After(lastMod) {
+			continue
+		}
+		cw.lastMod[p] = modTime
+		// A file seen for the first time starts a reload only when another
+		// watched file already existed, so Start() recording an absent sibling
+		// cannot trigger a spurious reload.
+		if seen || modTime.After(activeStart) {
+			changed = true
+		}
+	}
+	if !changed {
+		cw.mu.Unlock()
 		return
 	}
-
-	cw.mu.Lock()
-	cw.lastMod = modTime
-	cw.mu.Unlock()
 
 	// Debounce: wait 500ms after the last detected change
-	cw.mu.Lock()
 	if cw.debounce != nil {
 		cw.debounce.Stop()
 	}
@@ -120,17 +149,19 @@ func (cw *ConfigWatcher) checkFile() {
 	cw.mu.Unlock()
 }
 
-// performReload loads the config and invokes the callback.
+// performReload loads the newest config and invokes the callback.
 func (cw *ConfigWatcher) performReload() {
 	cw.mu.Lock()
 	fn := cw.onReload
+	srcFn := cw.onSource
+	primary := cw.path
 	cw.mu.Unlock()
 
 	if fn == nil {
 		return
 	}
 
-	cfg, err := LoadLastKnownGood(cw.path)
+	cfg, source, err := LoadXMLConfigWithFallback(primary)
 	if err != nil {
 		log.Printf("[hotreload] reload failed: %v", err)
 		return
@@ -142,9 +173,16 @@ func (cw *ConfigWatcher) performReload() {
 		return
 	}
 
+	if srcFn != nil {
+		srcFn(source)
+	}
 	fn(cfg)
-	log.Printf("[hotreload] config reloaded successfully from %s", cw.path)
+	log.Printf("[hotreload] config reloaded successfully from %s", source)
 }
+
+// activeStart is when the process started; a config file created after this
+// point is a genuine edit rather than an already-present sibling.
+var activeStart = time.Now()
 
 // globalConfigWatcher is the shared instance used by main.
 var globalConfigWatcher *ConfigWatcher

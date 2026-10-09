@@ -44,6 +44,8 @@
   --right-sidebar-width: 340px;
   --sidebar-collapsed: 52px;
   --control-height: 36px;
+  /* Measured in JS: the pinned footer's height, so floating controls clear it. */
+  --footer-height: 0px;
 
   /* Typography */
   --font-sans: 'Inter', Arial, sans-serif;
@@ -79,7 +81,7 @@
   --z-modal-backdrop: 40;
   --z-modal: 50;
   --z-toast: 60;
-  --z-mobile-fab: 55;
+  --z-mobile-fab: 35;
 
   /* Text Browser source colors */
   --tb-system: #7c5cff;
@@ -252,6 +254,12 @@ textarea {
   border-radius: var(--radius-sm);
 }
 
+.app-bar-titles {
+  /* Let the title shrink so its ellipsis works instead of pushing the
+     action buttons off the bar on narrow screens. */
+  min-width: 0;
+}
+
 .app-bar-titles h1 {
   font-size: var(--text-lg);
   font-weight: 700;
@@ -385,6 +393,8 @@ textarea {
   overflow: hidden;
   position: relative;
 }
+
+
 
 /* === Sidebars === */
 .sidebar {
@@ -843,6 +853,8 @@ textarea {
 /* Preview mode: hide editing chrome */
 body.preview-mode .left-sidebar,
 body.preview-mode .right-sidebar,
+body.preview-mode .ai-panel,
+body.preview-mode .ai-launcher,
 body.preview-mode .canvas-header,
 body.preview-mode .workspace-status,
 body.preview-mode .app-bar-actions,
@@ -942,9 +954,27 @@ body.preview-mode .element:hover {
 }
 
 .action-button.small {
-  width: 28px;
+  /* Grow with the label: forcing a square box clipped text on buttons such as
+     the AI Copy/Apply actions, so they overlapped their neighbours. */
+  min-width: 28px;
   height: 28px;
-  padding: 0;
+  padding: 0 var(--space-sm);
+}
+
+/* Empty-composer send buttons stay visible but clearly inert. */
+.action-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.action-button:disabled:hover {
+  background: var(--surface-secondary);
+  border-color: var(--border);
+}
+
+.action-button.primary:disabled:hover {
+  background: var(--primary);
+  border-color: var(--primary);
 }
 
 /* === Properties / Inspector === */
@@ -1254,39 +1284,218 @@ textarea:focus {
 }
 
 
-/* === AI Assistant Panel === */
+/* === AI Assistant — floating chatbox (bottom-right) ===
+   Deliberately outside the editor grid: it overlays the workspace so the
+   Inspector keeps its full height and the canvas keeps its column. */
 .ai-panel {
+  position: fixed;
+  right: var(--space-lg);
+  bottom: calc(var(--footer-height) + var(--space-md));
+  /* Above the drawers and the mobile FAB, below the Guide modal and toasts so
+     those overlays cover the chatbox instead of the other way round. */
+  z-index: var(--z-modal-backdrop);
+  display: none;
+  flex-direction: column;
+  width: min(380px, calc(100vw - var(--space-lg) * 2));
+  height: min(560px, calc(100dvh - var(--header-height) - var(--footer-height) - var(--space-md) * 2));
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+body.ai-open .ai-panel {
+  display: flex;
+}
+
+.ai-panel-header {
   flex: 0 0 auto;
+}
+
+/* Floating launcher for the chatbox. Declared here, before the layout media
+   queries, so their smaller-screen positions can override it. */
+.ai-launcher {
+  position: fixed;
+  right: var(--space-lg);
+  bottom: calc(var(--footer-height) + var(--space-md));
+  z-index: var(--z-modal-backdrop);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  height: 46px;
+  padding: 0 var(--space-lg);
+  border: 1px solid var(--primary);
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--text-on-primary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--shadow-lg);
+  transition: background var(--transition-fast), transform var(--transition-fast);
+}
+
+.ai-launcher:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+}
+
+body.ai-open .ai-launcher {
+  display: none;
+}
+
+/* Collapsible provider / voice configuration, closed by default. */
+.ai-settings {
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+}
+
+.ai-settings > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ai-settings > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-settings > summary:hover {
+  color: var(--text-main);
+}
+
+.ai-settings-body {
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--border);
-  background: var(--sidebar-bg);
-  min-height: 0;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg) var(--space-lg);
+  max-height: 42vh;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .ai-content {
   flex: 1 1 auto;
-  overflow-y: auto;
-  padding: var(--space-lg);
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* --- Conversation transcript --- */
+.ai-transcript {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  overflow-y: auto;
   min-height: 0;
 }
 
-.ai-notice {
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-  line-height: 1.5;
+.ai-msg {
+  display: flex;
+}
+
+.ai-msg-user {
+  justify-content: flex-end;
+}
+
+.ai-bubble {
+  max-width: 86%;
   padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ai-msg-ai .ai-bubble {
   background: var(--surface-secondary);
   border: 1px solid var(--border-subtle);
+  color: var(--text-main);
+}
+
+.ai-msg-user .ai-bubble {
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  color: var(--text-on-primary);
+}
+
+.ai-msg-ai .ai-bubble.is-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Generated config folded away behind a disclosure, so a long JSON reply does
+   not bury the conversation. */
+.ai-json {
+  margin-top: var(--space-sm);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-xs);
+}
+
+.ai-json > summary {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+
+.ai-json > summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-json > summary::before {
+  content: '\25B8';
+  display: inline-block;
+  margin-right: var(--space-xs);
+  transition: transform var(--transition-fast);
+}
+
+.ai-json[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.ai-json > summary:hover {
+  color: var(--text-main);
+}
+
+.ai-json-code {
+  margin-top: var(--space-sm);
+  max-height: 200px;
+  overflow: auto;
+  padding: var(--space-sm);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
+  background: var(--app-bg);
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  white-space: pre;
+}
+
+/* --- Composer pinned to the bottom of the chatbox --- */
+.ai-composer {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--border);
+  background: var(--surface-raised);
 }
 
 .ai-provider-row,
-.ai-key-row,
-.ai-prompt-row {
+.ai-key-row {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
@@ -1345,60 +1554,44 @@ textarea:focus {
   font-size: var(--text-xs);
 }
 
+/* Two deterministic rows instead of a ragged flex wrap: the two send buttons
+   share the first row, the three icon actions split the second. */
 .ai-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: var(--space-sm);
-  flex-wrap: wrap;
 }
 
-.ai-actions .action-button {
+.ai-actions .action-button.primary:not(.small) {
+  grid-column: span 3;
+}
+
+.ai-actions .action-button.small {
+  grid-column: span 2;
+}
+
+.ai-composer .ai-textarea {
+  min-height: 44px;
+  max-height: 140px;
+  padding: var(--space-sm) var(--space-md);
+  resize: none;
+}
+
+.ai-composer .ai-actions {
+  align-items: center;
+}
+
+.ai-composer .ai-actions .action-button:not(.small) {
   flex: 1 1 auto;
 }
 
-.ai-output {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-  background: var(--surface-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  min-height: 80px;
-}
-
-.ai-output-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-sm) var(--space-md);
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: var(--text-xs);
-  color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: 600;
-}
-
-.ai-output-actions {
-  display: flex;
-  gap: var(--space-xs);
-}
-
-.ai-output-pre {
-  margin: 0;
-  padding: var(--space-md);
-  overflow: auto;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 1.5;
-  color: var(--text-main);
-  background: var(--app-bg);
-  max-height: 220px;
-  white-space: pre-wrap;
-  word-break: break-word;
+.ai-composer .ai-actions .action-button.small {
+  flex: 0 0 auto;
 }
 
 .ai-status {
-  font-size: var(--text-sm);
+  padding: 0 var(--space-lg) var(--space-xs);
+  font-size: var(--text-xs);
   min-height: 1.2em;
   color: var(--text-muted);
 }
@@ -1417,23 +1610,22 @@ textarea:focus {
   color: var(--secondary);
 }
 
-/* When AI panel is the only sidebar content in compact view, keep it usable. */
-.sidebar-content:empty + .ai-panel {
-  flex: 1 1 auto;
-}
-
-
-
-.ai-voice-hint-row {
+.ai-voice-row {
   display: flex;
-  justify-content: flex-start;
+  align-items: center;
   gap: var(--space-sm);
   padding: var(--space-xs) 0 var(--space-sm);
+  flex-wrap: wrap;
 }
 
-.ai-voice-hint-row .ai-hint {
+.ai-voice-row .ai-hint {
   font-size: var(--text-xs);
   color: var(--text-muted);
+  flex-basis: 100%;
+}
+
+.ai-voice-row .ai-toggle-label {
+  font-size: var(--text-xs);
 }
 
 /* AI voice control (optional, browser-dependent) */
@@ -1466,6 +1658,56 @@ textarea:focus {
 .ai-voice-hint {
   margin-left: auto;
   opacity: 0.7;
+}
+
+.ai-model-status-row {
+  padding: var(--space-xs) 0 var(--space-sm);
+}
+
+.ai-model-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.ai-model-status .ai-model-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--text-muted);
+}
+
+.ai-model-status.ready .ai-model-dot {
+  background: var(--success);
+}
+
+.ai-model-status.ready {
+  color: var(--success);
+}
+
+.ai-model-status.downloading .ai-model-dot {
+  background: var(--warning);
+  animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.ai-model-status.downloading {
+  color: var(--warning);
+}
+
+.ai-model-status.unavailable {
+  color: var(--danger);
+}
+
+.ai-model-status.unavailable .ai-model-dot {
+  background: var(--danger);
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .ai-mic-btn-listening {
@@ -1864,7 +2106,8 @@ textarea:focus {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
-  z-index: var(--z-mobile-fab);
+  /* Above the FAB it was opened from, below the modal layer. */
+  z-index: calc(var(--z-mobile-fab) + 1);
   padding: var(--space-md);
   display: none;
 }
@@ -1895,6 +2138,7 @@ textarea:focus {
   .editor-frame {
     grid-template-columns: 220px 1fr 300px;
   }
+
 }
 
 @media (max-width: 992px) {
@@ -1983,6 +2227,19 @@ textarea:focus {
     display: none;
   }
 
+  /* Clear the two floating controls (preview eye bottom-left, add button
+     bottom-right) so neither sits on top of the help links. */
+  .app-footer {
+    padding: var(--space-sm) 76px;
+    font-size: var(--text-xs);
+  }
+
+  /* Sit above the mobile element "+" button, which owns the corner. */
+  .ai-launcher {
+    right: var(--space-md);
+    bottom: max(152px, calc(var(--footer-height) + var(--space-md)));
+  }
+
   .canvas-controls {
     flex-direction: column;
     align-items: stretch;
@@ -2022,6 +2279,31 @@ textarea:focus {
   .right-sidebar {
     width: 100vw;
   }
+
+  /* The chatbox becomes a bottom sheet on phones. */
+  .ai-panel {
+    left: var(--space-sm);
+    right: var(--space-sm);
+    bottom: calc(var(--footer-height) + var(--space-sm));
+    width: auto;
+    height: min(76dvh, calc(100dvh - var(--header-height) - var(--footer-height) - var(--space-md)));
+  }
+
+  /* Keep the header on one line: shorten the wordmark instead of clipping it. */
+  .app-bar-titles h1 {
+    font-size: var(--text-sm);
+  }
+
+  .app-bar-titles h1 span {
+    display: none;
+  }
+}
+
+/* App-bar toggle for the AI assistant. */
+.ai-toggle-button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--text-on-primary);
 }
 
 /* === Light Theme refinements === */
@@ -2134,4 +2416,68 @@ body.element-selected #elementPropertiesPanel {
 /* Ensure left sidebar draggable elements still have data-type hooks */
 .left-sidebar .element[data-type] {
   cursor: grab;
+}
+
+/* === Desktop sidebar collapse (icon rail) ===
+   The panel-header chevrons in the Library and Inspector headers used to be
+   inert on desktop (they only toggled the mobile drawer class). They now
+   collapse their panel down to a rail so the canvas can reclaim the space.
+   Placed last so these templates win over the earlier width media queries. */
+@media (min-width: 993px) {
+  body.left-collapsed .editor-frame {
+    grid-template-columns: var(--sidebar-collapsed) 1fr var(--right-sidebar-width);
+  }
+
+  body.right-collapsed .editor-frame {
+    grid-template-columns: var(--left-sidebar-width) 1fr var(--sidebar-collapsed);
+  }
+
+  body.left-collapsed.right-collapsed .editor-frame {
+    grid-template-columns: var(--sidebar-collapsed) 1fr var(--sidebar-collapsed);
+  }
+
+  .sidebar.collapsed .sidebar-content,
+  .sidebar.collapsed .variables-panel {
+    display: none;
+  }
+
+  .sidebar.collapsed .panel-header {
+    height: auto;
+    min-height: 52px;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--space-sm);
+    padding: var(--space-md) var(--space-xs);
+  }
+
+  .sidebar.collapsed .panel-header h3 {
+    flex-direction: column;
+    gap: var(--space-xs);
+    font-size: 0; /* hides the text label while keeping the icon */
+  }
+
+  .sidebar.collapsed .panel-header h3 i {
+    font-size: var(--text-md);
+  }
+
+  .sidebar.collapsed .panel-toggle i {
+    transform: rotate(180deg);
+  }
+
+  /* Keep the floating AI chatbox over the workspace and clear of the Inspector,
+     which is a narrow form column that is easy to cover by accident. It tracks
+     the Inspector's width, including when it is collapsed to a rail. */
+  .ai-panel,
+  .ai-launcher {
+    right: calc(var(--right-sidebar-width) + var(--space-md));
+  }
+
+  .ai-panel {
+    width: min(380px, calc(100vw - var(--left-sidebar-width) - var(--right-sidebar-width) - var(--space-xl)));
+  }
+
+  body.right-collapsed .ai-panel,
+  body.right-collapsed .ai-launcher {
+    right: calc(var(--sidebar-collapsed) + var(--space-md));
+  }
 }

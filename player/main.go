@@ -432,6 +432,46 @@ type SceneConfig struct {
 	Elements    []Element `json:"elements"`
 }
 
+// intOrString accepts a JSON number or a numeric string, so a config written by
+// the web builder ("x": "30") parses exactly like one written by the player,
+// which emits numbers. Coordinates used to be plain int32: a single quoted
+// coordinate made json.Decode fail, which rejected the whole config and left
+// the player unable to start.
+type intOrString int32
+
+func (n *intOrString) UnmarshalJSON(data []byte) error {
+	s := strings.TrimSpace(string(data))
+	if s == "" || s == "null" {
+		*n = 0
+		return nil
+	}
+	if s[0] == '"' {
+		var str string
+		if err := json.Unmarshal(data, &str); err != nil {
+			return err
+		}
+		str = strings.TrimSpace(str)
+		str = strings.TrimSuffix(str, "px")
+		str = strings.TrimSpace(str)
+		if str == "" {
+			*n = 0
+			return nil
+		}
+		f, err := strconv.ParseFloat(str, 64)
+		if err != nil {
+			return fmt.Errorf("intOrString: %q is not a number", str)
+		}
+		*n = intOrString(f)
+		return nil
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return fmt.Errorf("intOrString: expected number or numeric string, got %q", s)
+	}
+	*n = intOrString(f)
+	return nil
+}
+
 type StringOrInt string
 
 func (s *StringOrInt) UnmarshalJSON(data []byte) error {
@@ -484,6 +524,39 @@ type Element struct {
 	ExternalAppReturn   string `json:"externalAppReturn"`
 	VariableChange      string `json:"variableChange"`
 	VariableChangeValue string `json:"variableChangeValue"`
+
+	// SceneChange is the target of the builder's "change_scene" dropdown trigger.
+	SceneChange string `json:"sceneChange"`
+	// Opacity is the web builder's per-element alpha (0..1, 1 = fully opaque). Nil
+	// means "not set in the config", which is different from an explicit 0.
+	Opacity *float64 `json:"opacity"`
+	// MediaVariable / VideoVariable name the variable holding the media URL for
+	// the builder's play_video / play_image triggers ("video"): both used to be
+	// dropped on load, so those elements could never resolve their source.
+	MediaVariable string `json:"mediaVariable"`
+	VideoVariable string `json:"videoVariable"`
+}
+
+// UnmarshalJSON keeps the default decoding for every field but tolerates quoted
+// numbers for the pixel/grid fields, which the web builder emits as strings.
+func (e *Element) UnmarshalJSON(data []byte) error {
+	type elementAlias Element
+	aux := struct {
+		*elementAlias
+		X       intOrString `json:"x"`
+		Y       intOrString `json:"y"`
+		Columns intOrString `json:"columns"`
+		Rows    intOrString `json:"rows"`
+	}{elementAlias: (*elementAlias)(e)}
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	e.X = int32(aux.X)
+	e.Y = int32(aux.Y)
+	e.Columns = int32(aux.Columns)
+	e.Rows = int32(aux.Rows)
+	return nil
 }
 
 // UnmarshalJSON for Variables captures known fields into the struct and any
@@ -536,22 +609,10 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		}
 		v.Custom[k] = decoded
 	}
-	// The web editor's config regeneration nests settings under a capitalized
-	// "Custom" key (variables.Custom.Custom["ButtonColor"] etc.). Flatten any
-	// such nested blocks into the top level so Get/substitution resolve them
-	// exactly like the legacy flat format.
-	for depth := 0; depth < 4; depth++ {
-		nested, ok := v.Custom["Custom"].(map[string]interface{})
-		if !ok {
-			break
-		}
-		for k, val := range nested {
-			if _, exists := v.Custom[k]; !exists {
-				v.Custom[k] = val
-			}
-		}
-		delete(v.Custom, "Custom")
-	}
+	// The web builder regenerates settings under a capitalized "Custom" key
+	// (variables.Custom.Custom["ButtonColor"] etc.); flatten those blocks so
+	// Get/$-substitution resolve them like the legacy flat format.
+	flattenCustomBlocks(v.Custom)
 	tmp := &Config{Variables: *v}
 	syncVariableOverrides(tmp)
 	*v = tmp.Variables
@@ -668,6 +729,7 @@ func loadConfig(filename string) (*Config, error) {
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = make(map[string]interface{})
 	}
+	finalizeConfig(&config)
 	return &config, nil
 }
 
@@ -752,6 +814,167 @@ func parseHexColor(s string) (sdl.Color, bool) {
 // customString returns a Custom map value under the given name, accepting any
 // key casing (the web editor emits capitalized keys like ButtonColor). String
 // values win over non-strings when casing collides.
+// customValue resolves a custom variable by exact key, then case-insensitively
+// (the web builder capitalises keys: ButtonColor, GridColumns, ...). A string
+// value wins over a non-string one when both spellings are present, because the
+// string form is the real value.
+func customValue(m map[string]interface{}, name string) (interface{}, bool) {
+	if v, ok := m[name]; ok {
+		return v, true
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, name) {
+			if _, isStr := v.(string); isStr {
+				return v, true
+			}
+		}
+	}
+	for k, v := range m {
+		if strings.EqualFold(k, name) {
+			return v, true
+		}
+	}
+	return nil, false
+}
+
+// coerceBool reads the several shapes a variable value arrives in: a real bool
+// from JSON, a "true"/"false" string, or a number (non-zero is true).
+func coerceBool(v interface{}) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return strings.EqualFold(strings.TrimSpace(t), "true")
+	case int:
+		return t != 0
+	case int64:
+		return t != 0
+	case float64:
+		return t != 0
+	}
+	return false
+}
+
+// coerceInt accepts numbers, numeric strings and booleans.
+func coerceInt(v interface{}) (int, bool) {
+	switch t := v.(type) {
+	case int:
+		return t, true
+	case int64:
+		return int(t), true
+	case float64:
+		return int(t), true
+	case bool:
+		if t {
+			return 1, true
+		}
+		return 0, true
+	case string:
+		if n, err := strconv.Atoi(strings.TrimSpace(t)); err == nil {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+func coerceString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// flattenCustomBlocks merges nested "Custom" blocks (the shape the web builder
+// regenerates) into the top level so every setting resolves the same way.
+func flattenCustomBlocks(custom map[string]interface{}) {
+	for depth := 0; depth < 4; depth++ {
+		nested, ok := custom["Custom"].(map[string]interface{})
+		if !ok {
+			break
+		}
+		for k, val := range nested {
+			if _, exists := custom[k]; !exists {
+				custom[k] = val
+			}
+		}
+		delete(custom, "Custom")
+	}
+	// A <Custom/> block can also arrive as an empty string rather than a map.
+	if _, ok := custom["Custom"].(string); ok {
+		delete(custom, "Custom")
+	}
+}
+
+// finalizeConfig applies the defaults and normalisations that must hold for
+// every config source, so a config loaded from XML behaves exactly like one
+// loaded from JSON.
+func finalizeConfig(config *Config) {
+	if config == nil {
+		return
+	}
+	if config.AppName == "" {
+		config.AppName = "JukaHub"
+	}
+	if config.Version == "" {
+		config.Version = "0.4.0"
+	}
+	if config.Width <= 0 {
+		config.Width = 1280
+	}
+	if config.Height <= 0 {
+		config.Height = 720
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = make(map[string]interface{})
+	}
+	if config.Variables.Fonts == nil {
+		config.Variables.Fonts = make(map[string]string)
+	}
+	if config.Variables.FontSizes == nil {
+		config.Variables.FontSizes = make(map[string]int)
+	}
+	if config.Variables.BackgroundImage == "" {
+		if v, ok := customValue(config.Variables.Custom, "backgroundImage"); ok {
+			config.Variables.BackgroundImage = coerceString(v)
+		}
+	}
+	for i := range config.Scenes {
+		for j := range config.Scenes[i].Elements {
+			elem := &config.Scenes[i].Elements[j]
+			// Both trigger spellings the builder emits resolve to a scene target.
+			if elem.TriggerTarget == "" && elem.SceneChange != "" {
+				elem.TriggerTarget = elem.SceneChange
+			}
+			if strings.HasPrefix(elem.Trigger, "change_scene:") {
+				elem.TriggerTarget = strings.TrimPrefix(elem.Trigger, "change_scene:")
+			}
+			// The web builder stores a trigger's single argument in triggerValue
+			// (it has no triggerTarget field). Handlers that read TriggerTarget
+			// therefore used to see an empty target for every element built in
+			// the editor; filling it in here fixes the JSON and XML loaders at
+			// once, and leaves configs that set both fields untouched.
+			if elem.TriggerTarget == "" && elem.TriggerValue != "" {
+				elem.TriggerTarget = elem.TriggerValue
+			}
+		}
+	}
+}
+
+// Alpha is the element's opacity clamped to 0..1; an unset value is opaque.
+func (e Element) Alpha() float64 {
+	if e.Opacity == nil {
+		return 1
+	}
+	v := *e.Opacity
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
 func customString(m map[string]interface{}, name string) (string, bool) {
 	if v, ok := m[name]; ok {
 		return fmt.Sprintf("%v", v), true
@@ -3498,63 +3721,51 @@ func absFloat(x float64) float64 {
 // behavior (fullscreen, weather, resolution, paths, colors).
 func syncVariableOverrides(config *Config) {
 	c := config.Variables.Custom
-	if v, ok := c["fullscreen"].(string); ok {
-		config.Variables.Fullscreen = strings.EqualFold(strings.TrimSpace(v), "true")
-	}
-	if v, ok := c["weatherEnabled"].(string); ok {
-		config.Variables.WeatherEnabled = strings.EqualFold(strings.TrimSpace(v), "true")
-	}
-	if v, ok := c["weatherUnit"].(string); ok {
-		config.Variables.WeatherUnit = strings.TrimSpace(v)
-	}
-	if v, ok := c["tspUsername"].(string); ok {
-		config.Variables.TSPUsername = strings.TrimSpace(v)
-	}
-	if v, ok := c["playbackResolution"].(string); ok {
-		config.Variables.PlaybackResolution = strings.TrimSpace(v)
-	}
-	if v, ok := c["audioBackend"].(string); ok {
-		config.Variables.AudioBackend = strings.TrimSpace(v)
-	}
-	if v, ok := c["fileExplorerRoot"].(string); ok {
-		config.Variables.FileExplorerRoot = strings.TrimSpace(v)
-	}
-	if v, ok := customString(c, "buttonColor"); ok {
-		applyColorVar(config, "buttonColor", v)
-	}
-	if v, ok := customString(c, "labelColor"); ok {
-		applyColorVar(config, "labelColor", v)
-	}
-	if v, ok := customString(c, "inputColor"); ok {
-		applyColorVar(config, "inputColor", v)
-	}
-	// New fields from jukaconfig.json
-	if v, ok := c["gridColumns"].(string); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			config.Variables.GridColumns = n
+	// Lookups are case-insensitive and accept strings, numbers or bools: the web
+	// builder emits capitalised keys ("GridColumns") and type-coerced numbers, so
+	// the old exact-key, string-only lookups silently dropped those settings.
+	setBool := func(name string, dst *bool) {
+		if v, ok := customValue(c, name); ok {
+			*dst = coerceBool(v)
 		}
-	} else if v, ok := c["gridColumns"].(float64); ok {
-		config.Variables.GridColumns = int(v)
 	}
-	if v, ok := c["searchWidth"].(string); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			config.Variables.SearchWidth = n
+	setInt := func(name string, dst *int) {
+		if v, ok := customValue(c, name); ok {
+			if n, ok := coerceInt(v); ok {
+				*dst = n
+			}
 		}
-	} else if v, ok := c["searchWidth"].(float64); ok {
-		config.Variables.SearchWidth = int(v)
 	}
-	if v, ok := c["dynamicBg"].(string); ok {
-		config.Variables.DynamicBg = strings.EqualFold(strings.TrimSpace(v), "true")
-	}
-	if v, ok := c["screensaverTimeout"].(string); ok {
-		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
-			config.Variables.ScreensaverTimeout = n
+	setStr := func(name string, dst *string) {
+		if v, ok := customValue(c, name); ok {
+			*dst = coerceString(v)
 		}
-	} else if v, ok := c["screensaverTimeout"].(float64); ok {
-		config.Variables.ScreensaverTimeout = int(v)
 	}
-	if v, ok := c["socialNotifs"].(string); ok {
-		config.Variables.SocialNotifs = strings.EqualFold(strings.TrimSpace(v), "true")
+	setBool("fullscreen", &config.Variables.Fullscreen)
+	setBool("weatherEnabled", &config.Variables.WeatherEnabled)
+	setBool("reducedMotion", &config.Variables.ReducedMotion)
+	setBool("lowPower", &config.Variables.LowPower)
+	setBool("dynamicBg", &config.Variables.DynamicBg)
+	setBool("socialNotifs", &config.Variables.SocialNotifs)
+	setStr("weatherUnit", &config.Variables.WeatherUnit)
+	setStr("tspUsername", &config.Variables.TSPUsername)
+	setStr("playbackResolution", &config.Variables.PlaybackResolution)
+	setStr("audioBackend", &config.Variables.AudioBackend)
+	setStr("fileExplorerRoot", &config.Variables.FileExplorerRoot)
+	setStr("tools_path", &config.Variables.ToolsPath)
+	setInt("gridColumns", &config.Variables.GridColumns)
+	setInt("searchWidth", &config.Variables.SearchWidth)
+	setInt("screenWidth", &config.Variables.ScreenWidth)
+	setInt("screenHeight", &config.Variables.ScreenHeight)
+	setInt("screensaverTimeout", &config.Variables.ScreensaverTimeout)
+	// Colors come through customString so a string value ("#0F1420") wins over a
+	// struct-shaped sibling that some builder versions emit as {r,g,b} zeroes.
+	for _, name := range []string{"buttonColor", "labelColor", "inputColor"} {
+		if s, ok := customString(c, name); ok {
+			if strings.Contains(s, ",") || strings.HasPrefix(s, "#") {
+				applyColorVar(config, name, s)
+			}
+		}
 	}
 	saveUserConfigDebounced(&UserConfig{Variables: UserVariables{
 		ButtonColor:        config.Variables.ButtonColor,
@@ -6288,137 +6499,136 @@ func main() {
 								textBrowserScrollVelocity = 0
 								textBrowserScrollCooldown = 0
 							}
-							}
 						}
 					} else if curElem.Type == "packagelist" {
-							handlePackageInput(e, config)
-						} else if curElem.Type == "recent" {
-							handleRecentInput(e, config)
-						} else if curScene.Name == "Pomodoro" {
-							handlePomodoroInput(e, config)
-						} else if curScene.Name == "Calculator" {
-							handleCalcInput(e)
-						} else if curScene.Name == "Alarm" {
-							handleAlarmInput(e, config)
-						} else if curScene.Name == "Terminal" {
-							handleTermInput(e, config)
-						} else if curScene.Name == "Dashboard" {
-							handleDashInput(e, config)
-						} else if curScene.Name == "About" {
-							handleAboutInput(e, config)
-						} else if curScene.Name == "Dictionary" {
-							handleDictInput(e, config)
-						} else if curScene.Name == "PDFReader" {
-							handlePDFInput(e, config)
-						} else if curScene.Name == "MusicPlayer" {
-							handleMusicInput(e, config)
-						} else if curScene.Name == "Notes" {
-							handleNotesInput(e, config)
-						} else if curScene.Name == "Games" {
-							if activeGame != gameNone {
-								handleActiveGameInput(e)
-							} else {
-								handleGamesMenuInput(e)
-							}
-						} else if socialNotifOpen {
-							handleSocialNotifInput(e)
-						} else if wpOpen {
-							handleWallpaperInput(e, config)
-						} else if curScene.Name == "JukaLand" {
-							handleJukaLandInput(e)
+						handlePackageInput(e, config)
+					} else if curElem.Type == "recent" {
+						handleRecentInput(e, config)
+					} else if curScene.Name == "Pomodoro" {
+						handlePomodoroInput(e, config)
+					} else if curScene.Name == "Calculator" {
+						handleCalcInput(e)
+					} else if curScene.Name == "Alarm" {
+						handleAlarmInput(e, config)
+					} else if curScene.Name == "Terminal" {
+						handleTermInput(e, config)
+					} else if curScene.Name == "Dashboard" {
+						handleDashInput(e, config)
+					} else if curScene.Name == "About" {
+						handleAboutInput(e, config)
+					} else if curScene.Name == "Dictionary" {
+						handleDictInput(e, config)
+					} else if curScene.Name == "PDFReader" {
+						handlePDFInput(e, config)
+					} else if curScene.Name == "MusicPlayer" {
+						handleMusicInput(e, config)
+					} else if curScene.Name == "Notes" {
+						handleNotesInput(e, config)
+					} else if curScene.Name == "Games" {
+						if activeGame != gameNone {
+							handleActiveGameInput(e)
 						} else {
-							// Normal button/input navigation
-							switch e.Keysym.Sym {
-							case sdl.K_UP, sdl.K_DOWN:
-								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
-									moveHomeSelection(config, 0, map[sdl.Keycode]int{
-										sdl.K_UP: -1, sdl.K_DOWN: 1,
-									}[e.Keysym.Sym])
-								} else {
-									moveSelection(config, map[sdl.Keycode]int{
-										sdl.K_UP: -1, sdl.K_DOWN: 1,
-									}[e.Keysym.Sym])
-								}
-							case sdl.K_LEFT, sdl.K_RIGHT:
-								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
-									moveHomeSelection(config, map[sdl.Keycode]int{
-										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
-									}[e.Keysym.Sym], 0)
-								} else {
-									moveSelection(config, map[sdl.Keycode]int{
-										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
-									}[e.Keysym.Sym])
-								}
-							case sdl.K_RETURN, sdl.K_SPACE:
-								if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
-									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
-									if elem.Type == "input" {
-										handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
-									} else if elem.Type == "button" {
-										pressedButtonIndex = selectedButtonIndex
-										pressStartTime = sdl.GetTicks64()
-										handleTrigger(renderer, config, elem)
-									}
-								}
-							case sdl.K_ESCAPE:
-								// Generic back on non-home scenes: returns to the
-								// previous scene (or Home). Never exits the app.
-								if !homeLayoutActive {
-									goBackScene(config)
-								}
-							}
+							handleGamesMenuInput(e)
 						}
-						focusEngine.SyncSelected()
-						// Scene switching keys
+					} else if socialNotifOpen {
+						handleSocialNotifInput(e)
+					} else if wpOpen {
+						handleWallpaperInput(e, config)
+					} else if curScene.Name == "JukaLand" {
+						handleJukaLandInput(e)
+					} else {
+						// Normal button/input navigation
 						switch e.Keysym.Sym {
-						case sdl.K_q:
-							changeScene(config, -1)
-						case sdl.K_e:
-							changeScene(config, 1)
-						}
-						// Global search chord (Ctrl+K) jumps to the Tube/search scene.
-						if e.Keysym.Sym == sdl.K_k && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
-							if idx := findSceneIndex(config, "Tube"); idx >= 0 {
-								changeSceneTo(config, idx)
+						case sdl.K_UP, sdl.K_DOWN:
+							if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
+								moveHomeSelection(config, 0, map[sdl.Keycode]int{
+									sdl.K_UP: -1, sdl.K_DOWN: 1,
+								}[e.Keysym.Sym])
+							} else {
+								moveSelection(config, map[sdl.Keycode]int{
+									sdl.K_UP: -1, sdl.K_DOWN: 1,
+								}[e.Keysym.Sym])
 							}
-						} // Quick Settings (Ctrl+Q).
-						if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
-							qsToggleOpen()
-						}
-						// Global shortcuts (F1 = help, F2 = global search, F12 = screenshot).
-						if e.Keysym.Sym == sdl.K_F1 {
-							shortcutsOpen = !shortcutsOpen
-							globalSearchOpen = false
-							continue
-						}
-						if e.Keysym.Sym == sdl.K_F2 {
-							globalSearchOpen = !globalSearchOpen
-							shortcutsOpen = false
-							continue
-						}
-						if e.Keysym.Sym == sdl.K_F12 {
-							captureScreenshot(renderer)
-							continue
-						}
-						// Clipboard manager (Ctrl+Shift+V).
-						if e.Keysym.Sym == sdl.K_v && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) != 0 {
-							clipSearchOpen = !clipSearchOpen
-							globalSearchOpen = false
-							shortcutsOpen = false
-							clipCursorIdx = 0
-							continue
-						}
-						// Fullscreen toggle (F11 / Alt+Enter).
-						if e.Keysym.Sym == sdl.K_F11 || (e.Keysym.Sym == sdl.K_RETURN && (e.Keysym.Mod&sdl.KMOD_ALT) != 0) {
-							config.Variables.Fullscreen = !config.Variables.Fullscreen
-							if mainWindow != nil {
-								if config.Variables.Fullscreen {
-									mainWindow.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
-								} else {
-									mainWindow.SetFullscreen(0)
+						case sdl.K_LEFT, sdl.K_RIGHT:
+							if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
+								moveHomeSelection(config, map[sdl.Keycode]int{
+									sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
+								}[e.Keysym.Sym], 0)
+							} else {
+								moveSelection(config, map[sdl.Keycode]int{
+									sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
+								}[e.Keysym.Sym])
+							}
+						case sdl.K_RETURN, sdl.K_SPACE:
+							if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
+								elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
+								if elem.Type == "input" {
+									handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
+								} else if elem.Type == "button" {
+									pressedButtonIndex = selectedButtonIndex
+									pressStartTime = sdl.GetTicks64()
+									handleTrigger(renderer, config, elem)
 								}
 							}
+						case sdl.K_ESCAPE:
+							// Generic back on non-home scenes: returns to the
+							// previous scene (or Home). Never exits the app.
+							if !homeLayoutActive {
+								goBackScene(config)
+							}
 						}
+					}
+					focusEngine.SyncSelected()
+					// Scene switching keys
+					switch e.Keysym.Sym {
+					case sdl.K_q:
+						changeScene(config, -1)
+					case sdl.K_e:
+						changeScene(config, 1)
+					}
+					// Global search chord (Ctrl+K) jumps to the Tube/search scene.
+					if e.Keysym.Sym == sdl.K_k && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
+						if idx := findSceneIndex(config, "Tube"); idx >= 0 {
+							changeSceneTo(config, idx)
+						}
+					} // Quick Settings (Ctrl+Q).
+					if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
+						qsToggleOpen()
+					}
+					// Global shortcuts (F1 = help, F2 = global search, F12 = screenshot).
+					if e.Keysym.Sym == sdl.K_F1 {
+						shortcutsOpen = !shortcutsOpen
+						globalSearchOpen = false
+						continue
+					}
+					if e.Keysym.Sym == sdl.K_F2 {
+						globalSearchOpen = !globalSearchOpen
+						shortcutsOpen = false
+						continue
+					}
+					if e.Keysym.Sym == sdl.K_F12 {
+						captureScreenshot(renderer)
+						continue
+					}
+					// Clipboard manager (Ctrl+Shift+V).
+					if e.Keysym.Sym == sdl.K_v && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) != 0 {
+						clipSearchOpen = !clipSearchOpen
+						globalSearchOpen = false
+						shortcutsOpen = false
+						clipCursorIdx = 0
+						continue
+					}
+					// Fullscreen toggle (F11 / Alt+Enter).
+					if e.Keysym.Sym == sdl.K_F11 || (e.Keysym.Sym == sdl.K_RETURN && (e.Keysym.Mod&sdl.KMOD_ALT) != 0) {
+						config.Variables.Fullscreen = !config.Variables.Fullscreen
+						if mainWindow != nil {
+							if config.Variables.Fullscreen {
+								mainWindow.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
+							} else {
+								mainWindow.SetFullscreen(0)
+							}
+						}
+					}
 					}
 					focusEngine.SyncSelected()
 				}

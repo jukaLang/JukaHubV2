@@ -24,6 +24,9 @@
                 </div>
             </div>
             <div class="app-bar-actions">
+                <button id="aiToggleBtn" class="app-bar-button ai-toggle-button" type="button" aria-label="Toggle AI assistant" aria-expanded="false" aria-controls="aiPanel">
+                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span>AI</span>
+                </button>
                 <button id="toggleGuide" class="app-bar-button" type="button" aria-label="Getting Started Guide">
                     <i class="fas fa-question-circle" aria-hidden="true"></i> <span>Guide</span>
                 </button>
@@ -216,68 +219,6 @@
                     <span id="zoomReadout" class="zoom-readout">100%</span>
                 </div>
             </main>
-
-<!-- AI Assistant Panel -->
-            <div id="aiPanel" class="ai-panel">
-                <div class="panel-header">
-                    <h3><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> AI Assistant</h3>
-                </div>
-                <div class="ai-content">
-                    <div class="ai-notice">
-                        AI can suggest button placement, text, triggers, and generate a scene config you can paste or import.
-                    </div>
-
-                    <div class="ai-provider-row">
-                        <label for="aiProvider">Provider</label>
-                        <select id="aiProvider" class="ai-select">
-                            <option value="free">Free option (no key needed)</option>
-                            <option value="openrouter">OpenRouter (API key)</option>
-                            <option value="openai">OpenAI (API key)</option>
-                            <option value="anthropic">Anthropic (API key)</option>
-                        </select>
-                    </div>
-
-                    <div id="aiKeyRow" class="ai-key-row" style="display:none">
-                        <label for="aiApiKey">API key <span class="ai-hint">(stored locally only)</span></label>
-                        <div class="ai-key-input-row">
-                            <input type="password" id="aiApiKey" class="ai-input" placeholder="Paste your API key">
-                            <button id="aiKeySaveBtn" class="action-button small" type="button" title="Remember key locally"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button>
-                        </div>
-                    </div>
-
-                    <div class="ai-voice-hint-row">
-                        <span class="ai-hint">Optional: tap the mic to speak a prompt. Works in some browsers only.</span>
-                    </div>
-
-                    <div class="ai-prompt-row">
-                        <label for="aiPrompt">Ask the assistant</label>
-                        <textarea id="aiPrompt" class="ai-textarea" rows="4" placeholder="e.g. Add a Media tile and a Files tile to the home scene, plus a search bar at the top"></textarea>
-                    </div>
-
-                    <div class="ai-actions">
-                        <button id="aiSuggestBtn" class="action-button primary" type="button">
-                            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Suggest Layout
-                        </button>
-                        <button id="aiGenerateBtn" class="action-button primary" type="button">
-                            <i class="fa-solid fa-file-code" aria-hidden="true"></i> Generate Config
-                        </button>
-                        <button id="aiClearBtn" class="action-button" type="button">Clear</button>
-                    </div>
-
-                    <div class="ai-output">
-                        <div class="ai-output-header">
-                            <span class="ai-output-label">Result</span>
-                            <div class="ai-output-actions">
-                                <button id="aiCopyBtn" class="action-button small" type="button"><i class="fa-regular fa-copy" aria-hidden="true"></i> Copy</button>
-                                <button id="aiApplyBtn" class="action-button small primary" type="button"><i class="fa-regular fa-hand-pointer" aria-hidden="true"></i> Apply</button>
-                            </div>
-                        </div>
-                        <pre id="aiOutput" class="ai-output-pre">AI output will appear here.</pre>
-                    </div>
-
-                    <div class="ai-status" id="aiStatus" role="status" aria-live="polite"></div>
-                </div>
-            </div>
 
             <!-- Right Sidebar - Properties -->
             <aside id="rightSidebar" class="sidebar right-sidebar" aria-label="Inspector">
@@ -602,6 +543,7 @@
                     </div>
                 </div>
             </aside>
+
         </div>
 
         <footer class="app-footer">
@@ -609,6 +551,82 @@
             Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2" target="_blank"><i class="fab fa-github" aria-hidden="true"></i> GitHub</a></p>
         </footer>
     </div>
+    <!-- AI Assistant — floating chatbox (bottom-right) -->
+    <div id="aiPanel" class="ai-panel" role="dialog" aria-label="AI assistant">
+        <div class="panel-header ai-panel-header">
+            <h3><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> AI Assistant</h3>
+            <button id="aiPanelToggle" class="panel-toggle" type="button" aria-label="Close AI assistant" title="Close AI assistant">
+                <i class="fas fa-times" aria-hidden="true"></i>
+            </button>
+        </div>
+
+        <details class="ai-settings">
+            <summary><i class="fas fa-sliders-h" aria-hidden="true"></i> Settings</summary>
+            <div class="ai-settings-body">
+                <div class="ai-provider-row">
+                    <label for="aiProvider">Provider</label>
+                    <select id="aiProvider" class="ai-select">
+                        <option value="free">Offline suggestion (no key, keyword mode)</option>
+                        <option value="chrome">On-device AI (Chrome Gemini Nano, no key)</option>
+                        <option value="openrouter">OpenRouter (API key)</option>
+                        <option value="openai">OpenAI (API key)</option>
+                        <option value="anthropic">Anthropic (API key)</option>
+                    </select>
+                </div>
+
+                <div id="aiKeyRow" class="ai-key-row" style="display:none">
+                    <label for="aiApiKey">API key <span class="ai-hint">(stored locally only)</span></label>
+                    <div class="ai-key-input-row">
+                        <input type="password" id="aiApiKey" class="ai-input" placeholder="Paste your API key">
+                        <button id="aiKeySaveBtn" class="action-button small" type="button" title="Remember key locally"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button>
+                    </div>
+                </div>
+
+                <div id="aiModelStatusRow" class="ai-model-status-row" style="display:none">
+                    <span id="aiModelStatus" class="ai-model-status" role="status" aria-live="polite"></span>
+                </div>
+
+                <div class="ai-voice-row">
+                    <button id="aiMicBtn" class="action-button small" type="button" title="Start voice input">
+                        <i class="fa-solid fa-microphone" aria-hidden="true"></i> <span>Voice</span>
+                    </button>
+                    <label class="ai-toggle-label" title="Enable or disable voice input">
+                        <input type="checkbox" id="aiVoiceToggle">
+                        <span>Enable</span>
+                    </label>
+                    <label class="ai-toggle-label ai-voice-hint" title="Auto-run suggest after voice input">
+                        <input type="checkbox" id="aiVoiceAutoRun">
+                        <span>Auto-run</span>
+                    </label>
+                </div>
+            </div>
+        </details>
+
+        <div id="aiPanelContent" class="ai-content">
+            <div id="aiOutput" class="ai-transcript" role="log" aria-live="polite"></div>
+            <div class="ai-status" id="aiStatus" role="status" aria-live="polite"></div>
+            <div class="ai-composer">
+                <label class="sr-only" for="aiPrompt">Ask the assistant</label>
+                <textarea id="aiPrompt" class="ai-textarea" rows="2" placeholder="Ask the assistant… e.g. Add a Media tile and a search bar at the top"></textarea>
+                <div class="ai-actions">
+                    <button id="aiSuggestBtn" class="action-button primary" type="button">
+                        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> Suggest
+                    </button>
+                    <button id="aiGenerateBtn" class="action-button primary" type="button">
+                        <i class="fa-solid fa-file-code" aria-hidden="true"></i> Generate
+                    </button>
+                    <button id="aiCopyBtn" class="action-button small" type="button" title="Copy the last reply"><i class="fa-regular fa-copy" aria-hidden="true"></i></button>
+                    <button id="aiApplyBtn" class="action-button small primary" type="button" title="Apply the last suggestion"><i class="fa-regular fa-hand-pointer" aria-hidden="true"></i></button>
+                    <button id="aiClearBtn" class="action-button small" type="button" title="Clear the conversation"><i class="fas fa-eraser" aria-hidden="true"></i></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <button id="aiLauncher" class="ai-launcher" type="button" aria-label="Open AI assistant" aria-expanded="false" aria-controls="aiPanel">
+        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span>AI</span>
+    </button>
+
     <!-- Element Context Menu -->
     <div id="contextMenu" class="context-menu" style="display:none">
         <button type="button" data-action="duplicate"><i class="fas fa-copy"></i> Duplicate</button>
