@@ -93,16 +93,16 @@ func clearVideoFrameQueue() {
 // clampPosInt keeps a probed frame dimension inside a sane range so a bad or
 // hostile ffprobe header can never allocate a giant texture.
 func clampPosInt(v int64) int {
-const (
-	maxVideoDimension = 16384
-)
-if v < 1 {
-	return 1
-}
-if v > maxVideoDimension {
-	return maxVideoDimension
-}
-return int(v)
+	const (
+		maxVideoDimension = 16384
+	)
+	if v < 1 {
+		return 1
+	}
+	if v > maxVideoDimension {
+		return maxVideoDimension
+	}
+	return int(v)
 }
 
 func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {

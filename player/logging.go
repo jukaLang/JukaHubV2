@@ -41,7 +41,7 @@ func logLevelFromEnv() slog.Level {
 // Log level can be controlled via JUKAHUB_LOG_LEVEL env var.
 func InitLogging() {
 	var handler slog.Handler
-	
+
 	// Choose format based on platform
 	if IsTrimuiDevice() {
 		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -54,7 +54,7 @@ func InitLogging() {
 	}
 	logger = slog.New(handler)
 	slog.SetDefault(logger)
-	
+
 	// Log the configured level
 	var levelName string
 	switch logLevelFromEnv() {

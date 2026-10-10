@@ -865,7 +865,10 @@ func saveConfig(config *Config) {
 	}
 	if err := AtomicWrite("jukaconfig.json", data, 0644); err != nil {
 		log.Printf("saveConfig: write error: %v", err)
+		configHealth.RecordSave("jukaconfig.json", fmt.Errorf("write error: %w", err))
 		return
 	}
+	configHealth.RecordSave("jukaconfig.json", nil)
+	configHealth.MarkSaveOK()
 	LogScene("config").Info("design config saved")
 }

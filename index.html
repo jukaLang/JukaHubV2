@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport"
           content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>JukaHub Generator</title>
+    <title>JukaHub</title>
     <link data-rh="true" rel="icon" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;700&display=swap">
@@ -20,7 +20,7 @@
                 <img src="favicon.png" alt="" class="app-bar-logo" aria-hidden="true">
                 <div class="app-bar-titles">
                     <h1>JukaHub <span>Generator</span></h1>
-                    <p class="app-bar-subtitle" id="projectTitle">The Ultimate Retro Handheld Device GUI Creator</p>
+                    <p class="app-bar-subtitle" id="projectTitle">Retro handheld GUI builder</p>
                 </div>
             </div>
             <div class="app-bar-actions">
@@ -37,6 +37,9 @@
                     <i class="fas fa-upload" aria-hidden="true"></i> <span>Load</span>
                 </label>
                 <input type="file" id="loadFile" accept=".json,.xml,application/json,application/xml,text/xml" class="sr-only" aria-label="Load jukaconfig.json or jukaconfig.xml">
+                <button id="reloadConfigBtn" class="app-bar-button reload-button" type="button" title="Restore the last loaded JSON or XML config" aria-label="Reload imported config" disabled>
+                    <i class="fas fa-sync-alt" aria-hidden="true"></i> <span>Reload config</span>
+                </button>
                 <div class="export-dropdown-wrapper">
                     <button class="app-bar-button export-button" type="button" id="headerExportBtn">
                         <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
@@ -85,7 +88,7 @@
                         <li><kbd>Delete</kbd> — Remove selected element</li>
                         <li><kbd>Ctrl+D</kbd> — Duplicate selected element</li>
                         <li><kbd>Ctrl+S</kbd> — Export JSON</li>
-                        <li><kbd>Ctrl+P</kbd> — Toggle Preview Mode</li>
+                        <li><kbd>Ctrl+P</kbd> — Toggle Preview Mode; <kbd>Esc</kbd> — Exit Preview Mode</li>
                         <li>Right-click elements for a context menu</li>
                     </ul>
                     <p>Visit <a href="https://github.com/jukaLang/JukaHubV2/wiki" target="_blank">https://github.com/jukaLang/JukaHubV2/wiki</a> for more info</p>
@@ -639,8 +642,8 @@
     </div>
 
     <!-- Preview Mode Toggle -->
-    <button id="previewToggle" class="preview-toggle" type="button" title="Preview Mode (Ctrl+P)">
-        <i class="fas fa-eye"></i>
+    <button id="previewToggle" class="preview-toggle" type="button" title="Preview Mode (Ctrl+P)" aria-label="Preview" aria-pressed="false">
+        <i class="fas fa-eye" aria-hidden="true"></i><span>Preview</span>
     </button>
 
     <script src="script.js"></script>

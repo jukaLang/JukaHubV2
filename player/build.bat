@@ -95,10 +95,16 @@ if exist "%TEMP%\jukasdl2" (
 )
 exit /b
 
-REM ----------------------------------------------------------------------------
-REM  Go bootstrap. Prefer any usable Go >= 1.25.0 already installed; otherwise
-REM  verify and unpack the official Go archive under the current user's profile.
-REM ----------------------------------------------------------------------------
+REM ============================================================================
+REM  GO BOOTSTRAP
+REM
+REM  Goal: make sure we have a usable Go 1.25+ toolchain on amd64/windows.
+REM  Strategy:
+REM   1. Look for any usable Go already on PATH.
+REM   2. Look in the usual user-local and system install locations.
+REM   3. If nothing works, download and verify the official Go archive into a
+REM      per-user directory and verify it again before using it.
+REM ============================================================================
 :ensure_go
 set "GO_TOOL="
 set "GO_VERSION="
@@ -120,6 +126,8 @@ if not defined GO_TOOL exit /b 1
 goto go_ready
 
 :probe_go
+REM Probe a single Go candidate and accept it only if it is a real Windows
+REM amd64 toolchain at Go 1.25+.
 set "GO_CANDIDATE=%~1"
 
 set "GO_VERSION="
@@ -659,11 +667,24 @@ if not "!SDL_OK!"=="1" (
 goto sdl_ready
 
 :validate_sdl
+REM Validate that the resolved SDL2 tree has the headers, link libraries,
+REM and runtime DLLs we need for a CGo SDL build.
 set "SDL_OK=1"
-for %%H in (SDL.h SDL_image.h SDL_ttf.h) do if not exist "%SDL2_ROOT%\include\SDL2\%%H" if not exist "%SDL2_ROOT%\include\%%H" (
-    echo Missing SDL header: %%H under %SDL2_ROOT%\include
-    set "SDL_OK=0"
+
+REM Required headers.
+for %%H in (SDL.h SDL_image.h SDL_ttf.h) do (
+    if exist "%SDL2_ROOT%\include\SDL2\%%H" (
+        rem found in the normal SDL2 subdirectory
+    ) else if exist "%SDL2_ROOT%\include\%%H" (
+        rem found directly under include, in case a tree is laid out differently
+    ) else (
+        echo Missing SDL header: %%H under %SDL2_ROOT%\include
+        set "SDL_OK=0"
+    )
 )
+
+REM Required link libraries. We accept either lib/ or lib64/ because some
+REM extracted archives lay them out one way or the other.
 for %%L in (SDL2 SDL2_image SDL2_ttf) do (
     set "SDL_LIB_OK=0"
     for %%F in (lib%%L.a lib%%L.dll.a) do (
@@ -675,13 +696,26 @@ for %%L in (SDL2 SDL2_image SDL2_ttf) do (
         set "SDL_OK=0"
     )
 )
+
+REM SDL2main is expected by the go-sdl2 bindings.
 if not exist "%SDL2_ROOT%\lib\libSDL2main.a" if not exist "%SDL2_ROOT%\lib64\libSDL2main.a" (
     echo Missing SDL2 main library under %SDL2_ROOT%\lib or lib64
     set "SDL_OK=0"
 )
-for %%D in (SDL2.dll SDL2_image.dll SDL2_ttf.dll) do if not exist "%SDL2_ROOT%\bin\%%D" if not exist "%SDL2_ROOT%\%%D" if not exist "%~dp0%%D" (
-    echo Missing SDL runtime file: %%D
-    set "SDL_OK=0"
+
+REM Runtime DLLs. The build script will copy them next to the executable,
+REM so we also accept them if they are already beside the script.
+for %%D in (SDL2.dll SDL2_image.dll SDL2_ttf.dll) do (
+    if exist "%SDL2_ROOT%\bin\%%D" (
+        rem found in the bin directory
+    ) else if exist "%SDL2_ROOT%\%%D" (
+        rem found directly under the root tree
+    ) else if exist "%~dp0%%D" (
+        rem already staged next to the build script
+    ) else (
+        echo Missing SDL runtime file: %%D
+        set "SDL_OK=0"
+    )
 )
 exit /b 0
 

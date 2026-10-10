@@ -24,14 +24,17 @@ import (
 // the GitHub API can be abused to probe repo/release metadata and because a future
 // code path could be tempted to trust the returned download URL too much.
 var allowedToolRepos = map[string]bool{
-	"btbn/ffmpeg-builds":  true,
-	"yt-dlp/yt-dlp":       true,
-	"jukaLang/JukaHubV2":  true,
+	"btbn/ffmpeg-builds": true,
+	"yt-dlp/yt-dlp":      true,
+	"jukaLang/JukaHubV2": true,
 }
 
 func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
 	if !allowedToolRepos[repo] {
 		return "", fmt.Errorf("tool repo %q is not in the approved download list", repo)
+	}
+	if len(wants) == 0 {
+		return "", fmt.Errorf("resolveToolURL called without any wanted asset names")
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
@@ -77,7 +80,11 @@ func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("no matching asset found in %s latest release", repo)
+	names := make([]string, 0, len(wants))
+	for _, w := range wants {
+		names = append(names, fmt.Sprintf("%q", w))
+	}
+	return "", fmt.Errorf("no matching asset found in %s latest release (wanted %s)", repo, strings.Join(names, ", "))
 }
 
 // downloadFile downloads url to dest with a 60s timeout.
@@ -102,10 +109,12 @@ func downloadFile(url, dest string) error {
 	n, err := io.Copy(rw, rate)
 	if err != nil {
 		out.Close()
-		return err
+		_ = os.Remove(dest)
+		return fmt.Errorf("download %s: write failed: %w", url, err)
 	}
 	if err := out.Close(); err != nil {
-		return err
+		_ = os.Remove(dest)
+		return fmt.Errorf("download %s: close failed: %w", url, err)
 	}
 	if n > 512<<20 {
 		_ = os.Remove(dest)
@@ -162,7 +171,6 @@ func findMPVPath() string {
 	}
 	return ""
 }
-
 
 func extractFilesFromZip(ctx context.Context, archivePath, requiredDir string, wants []string) error {
 	// Keep a small, targeted extraction path for bundled tool archives, but

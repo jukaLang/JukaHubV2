@@ -291,7 +291,8 @@ textarea {
 }
 
 .app-bar-button,
-.load-button {
+.load-button,
+.reload-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -309,9 +310,29 @@ textarea {
 }
 
 .app-bar-button:hover,
-.load-button:hover {
+.load-button:hover,
+.reload-button:hover {
   background: var(--surface-tertiary);
-  border-color: var(--primary);
+  border-color: var(--secondary);
+}
+
+.app-bar-button:active,
+.load-button:active,
+.reload-button:active {
+  transform: translateY(1px);
+}
+
+.reload-button {
+  animation: spin 1s linear infinite;
+  animation-play-state: paused;
+}
+
+.reload-button.spinning {
+  animation-play-state: running;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .app-bar-button:active,
@@ -850,7 +871,7 @@ textarea {
   border-color: var(--secondary);
 }
 
-/* Preview mode: hide editing chrome */
+/* Preview mode: hide editing chrome while keeping a clear, visible exit. */
 body.preview-mode .left-sidebar,
 body.preview-mode .right-sidebar,
 body.preview-mode .ai-panel,
@@ -858,10 +879,35 @@ body.preview-mode .ai-launcher,
 body.preview-mode .canvas-header,
 body.preview-mode .workspace-status,
 body.preview-mode .app-bar-actions,
-body.preview-mode .app-footer,
-body.preview-mode .preview-toggle {
+body.preview-mode .app-footer {
   display: none !important;
 }
+
+body.preview-mode .preview-toggle {
+  display: inline-flex !important;
+  position: fixed;
+  bottom: var(--space-lg);
+  right: var(--space-lg);
+  z-index: 1000;
+  background: var(--primary);
+  color: var(--text-on-primary);
+  border-color: var(--primary);
+}
+
+body.preview-mode .preview-toggle i {
+  font-size: 1em;
+}
+
+/* Reload control disabled state, shown when no file has been loaded. */
+.reload-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.reload-button.spinning i {
+  animation: spin 1s linear infinite;
+}
+
 
 body.preview-mode .editor-frame {
   grid-template-columns: 1fr !important;

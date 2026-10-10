@@ -148,7 +148,8 @@ func OpCheckUpdates(ctx context.Context, config *Config) error {
 }
 
 // OpVerifyAssets validates and migrates jukaconfig.json in place (backup via
-// journal is implicit through AtomicWrite's .bak file).
+// journal is implicit through AtomicWrite's .bak file). The operation is
+// intentionally narrow: it fixes only the project config, never user data.
 func OpVerifyAssets(ctx context.Context, config *Config) error {
 	select {
 	case <-ctx.Done():
@@ -159,7 +160,7 @@ func OpVerifyAssets(ctx context.Context, config *Config) error {
 	msg, err := MigrateConfigFile(P().ConfigPath())
 	if err != nil {
 		patchRowStatus(ComponentAssets, StatusFailed)
-		return err
+		return fmt.Errorf("config verification failed: %w", err)
 	}
 	patchRowStatus(ComponentAssets, StatusCurrent)
 	// Surface the outcome to the scene.

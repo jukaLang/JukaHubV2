@@ -50,6 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Set up event listeners
   setupEventListeners();
+  setupAutoSaveTracking();
 
   // Initialize properties panel as expanded
   updateSceneChangeSelector();
@@ -86,7 +87,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Preview toggle button
   const previewBtn = document.getElementById('previewToggle');
-  if (previewBtn) previewBtn.addEventListener('click', togglePreviewMode);
+  if (previewBtn) previewBtn.addEventListener('click', onPreviewToggleButton);
+
+  const reloadBtn = document.getElementById('reloadConfigBtn');
+  if (reloadBtn) reloadBtn.addEventListener('click', reloadImportedConfig);
+  refreshReloadButtonState();
+
 
   setupMobileElementAdding();
   setupMobileCanvasClick();
@@ -323,31 +329,58 @@ function duplicateElement(el) {
 
 let autoSaveTimer = null;
 
+function persistAutoSave() {
+  autoSaveTimer = null;
+  saveCurrentScene();
+  const data = {
+    scenes: Object.fromEntries(
+      Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)])
+    ),
+    currentScene,
+    variables,
+    canvasWidth,
+    canvasHeight,
+    backgroundPath,
+    title: document.getElementById('title')?.value || '',
+    author: document.getElementById('author')?.value || '',
+    description: document.getElementById('description')?.value || '',
+    titleSize: titleSizeInput?.value || 48,
+    bigSize: bigSizeInput?.value || 36,
+    mediumSize: mediumSizeInput?.value || 24,
+    smallSize: smallSizeInput?.value || 18
+  };
+  try {
+    localStorage.setItem('jukahub-autosave', JSON.stringify(data));
+  } catch (e) { /* quota exceeded */ }
+}
+
 function scheduleAutoSave() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
-  autoSaveTimer = setTimeout(() => {
-    saveCurrentScene();
-    const data = {
-      scenes: Object.fromEntries(
-        Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)])
-      ),
-      currentScene,
-      variables,
-      canvasWidth,
-      canvasHeight,
-      backgroundPath,
-      title: document.getElementById('title')?.value || '',
-      author: document.getElementById('author')?.value || '',
-      description: document.getElementById('description')?.value || '',
-      titleSize: titleSizeInput?.value || 48,
-      bigSize: bigSizeInput?.value || 36,
-      mediumSize: mediumSizeInput?.value || 24,
-      smallSize: smallSizeInput?.value || 18
-    };
-    try {
-      localStorage.setItem('jukahub-autosave', JSON.stringify(data));
-    } catch (e) { /* quota exceeded */ }
-  }, 1500);
+  autoSaveTimer = setTimeout(persistAutoSave, 500);
+}
+
+function flushAutoSave() {
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    persistAutoSave();
+  }
+}
+
+function setupAutoSaveTracking() {
+  const scheduleForEditorChange = event => {
+    if (event.target.closest('#aiPanel') || event.target.id === 'loadFile') return;
+    scheduleAutoSave();
+  };
+  document.addEventListener('input', scheduleForEditorChange);
+  document.addEventListener('change', scheduleForEditorChange);
+
+  if (typeof MutationObserver === 'function') {
+    const observer = new MutationObserver(scheduleAutoSave);
+    observer.observe(canvas, { subtree: true, childList: true, characterData: true, attributes: true });
+    observer.observe(variablesList, { subtree: true, childList: true, characterData: true });
+  }
+
+  window.addEventListener('pagehide', flushAutoSave);
 }
 
 function loadAutoSave() {
@@ -429,28 +462,176 @@ function loadAutoSave() {
 
 // ---
 
+// Preview mode is a read-only pass over the current workspace. It hides the
+// editor chrome (sidebars, header actions, footer, inspector) and disables
+// element selection, but the canvas keeps painting the same scenes/variables so
+// the design can be reviewed without switching apps. There is always a visible
+// way out: the same eye/pen button now turns into an "Exit preview" control
+// while preview is active, plus Esc and Ctrl+P also toggle back.
 let previewMode = false;
+let previewAutoSaveKey = null;
 
-function togglePreviewMode() {
-  previewMode = !previewMode;
-  document.body.classList.toggle('preview-mode', previewMode);
+function setPreviewButtonLabel(active) {
   const btn = document.getElementById('previewToggle');
-  if (btn) {
-    btn.classList.toggle('active', previewMode);
-    btn.innerHTML = previewMode
-      ? '<i class="fas fa-pen"></i>'
-      : '<i class="fas fa-eye"></i>';
-  }
-  // Deselect any element
-  if (previewMode) {
-    currentElement = null;
-    document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-    document.body.classList.remove('element-selected');
-  }
-  showToast(previewMode ? 'Preview mode on — click eye to exit' : 'Edit mode', 'info');
+  if (!btn) return;
+  btn.classList.toggle('active', active);
+  btn.setAttribute('aria-pressed', String(active));
+  btn.setAttribute('aria-label', active ? 'Exit preview and return to editor' : 'Preview');
+  btn.setAttribute('title', active ? 'Exit preview (Esc)' : 'Preview Mode (Ctrl+P)');
+  btn.innerHTML = active
+    ? '<i class="fas fa-times" aria-hidden="true"></i><span>Exit preview</span>'
+    : '<i class="fas fa-eye" aria-hidden="true"></i><span>Preview</span>';
 }
 
-// ---
+function togglePreviewMode() {
+  if (previewMode) {
+    exitPreviewMode();
+    return;
+  }
+  enterPreviewMode();
+}
+
+function enterPreviewMode() {
+  if (previewMode) return;
+  previewMode = true;
+  document.body.classList.add('preview-mode');
+  setPreviewButtonLabel(true);
+
+  // Deselect any element and drop the selection styling
+  currentElement = null;
+  document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
+  document.body.classList.remove('element-selected');
+
+  // Preserve a lightweight before-preview snapshot for diagnostics and cleanup.
+  // Save immediately on entering preview so the latest workspace survives a
+  // reload even if the normal debounce timer has not fired yet.
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
+  try {
+    localStorage.setItem('jukahub-autosave', JSON.stringify(snapshotWorkspace()));
+  } catch (e) { /* private mode or storage quota can deny localStorage */ }
+
+  showToast('Preview mode on — click Exit preview, Esc, or Ctrl+P to exit', 'info');
+}
+
+// The preview button remains available as the visible exit control while preview is active.
+function onPreviewToggleButton() {
+  if (previewMode) {
+    exitPreviewMode();
+  } else {
+    enterPreviewMode();
+  }
+}
+
+function leavePreviewMode() {
+  if (!previewMode) return;
+  previewMode = false;
+  document.body.classList.remove('preview-mode');
+  setPreviewButtonLabel(false);
+
+  // Persist the workspace as it stands after preview, without reverting edits.
+  scheduleAutoSave();
+  showToast('Edit mode', 'info');
+}
+
+function exitPreviewMode() {
+  leavePreviewMode();
+}
+
+
+function snapshotWorkspace() {
+  const sceneSelectorEl = document.getElementById('sceneSelector');
+  if (!sceneSelectorEl) return null;
+  return {
+    scenes: Object.fromEntries(
+      Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)])
+    ),
+    currentScene,
+    variables: JSON.parse(JSON.stringify(variables)),
+    canvasWidth,
+    canvasHeight,
+    backgroundPath,
+    title: document.getElementById('title')?.value || '',
+    author: document.getElementById('author')?.value || '',
+    description: document.getElementById('description')?.value || '',
+    titleSize: titleSizeInput?.value || 48,
+    bigSize: bigSizeInput?.value || 36,
+    mediumSize: mediumSizeInput?.value || 24,
+    smallSize: smallSizeInput?.value || 18,
+    sceneSelectorValue: sceneSelectorEl.value
+  };
+}
+
+function restoreWorkspaceFromSnapshot(data) {
+  if (!data) return;
+  scenes = {};
+  variables = {};
+  variablesList.innerHTML = '';
+  canvas.innerHTML = '';
+
+  for (const [name, htmlArr] of Object.entries(data.scenes || {})) {
+    scenes[name] = htmlArr.map(html => {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      return tmp.firstChild;
+    });
+  }
+
+  currentScene = data.currentScene || Object.keys(scenes)[0] || 'Scene 1';
+  canvasWidth = data.canvasWidth || 1280;
+  canvasHeight = data.canvasHeight || 720;
+  backgroundPath = data.backgroundPath || '';
+
+  document.getElementById('title').value = data.title || '';
+  document.getElementById('author').value = data.author || '';
+  document.getElementById('description').value = data.description || '';
+  if (data.titleSize != null) titleSizeInput.value = data.titleSize;
+  if (data.bigSize != null) bigSizeInput.value = data.bigSize;
+  if (data.mediumSize != null) mediumSizeInput.value = data.mediumSize;
+  if (data.smallSize != null) smallSizeInput.value = data.smallSize;
+
+  if (backgroundPath) {
+    canvas.style.backgroundImage = `url(${backgroundPath})`;
+    canvas.style.backgroundSize = 'cover';
+  }
+
+  const sceneSelectorEl = document.getElementById('sceneSelector');
+  sceneSelectorEl.innerHTML = '';
+  for (const name of Object.keys(scenes)) {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    sceneSelectorEl.appendChild(option);
+  }
+  sceneSelectorEl.value = data.sceneSelectorValue || currentScene;
+
+  updateCanvasSize();
+  loadScene(currentScene);
+
+  for (const [key, val] of Object.entries(variables)) {
+    const variableItem = document.createElement('div');
+    variableItem.className = 'variable-item';
+    variableItem.innerHTML = `
+      <div>
+        <span class="variable-name">${key}</span>
+        <span class="variable-value">${val}</span>
+      </div>
+      <div class="variable-actions">
+        <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
+        <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+      </div>
+    `;
+    variablesList.appendChild(variableItem);
+  }
+
+  updateSceneBadge();
+  updateSceneChangeSelector();
+  updateVariableChangeSelector();
+  updateAllMenuSceneButtons();
+  updateAllStoredMenus();
+}
 
 // The chatbox and its launcher float over the workspace, so they have to clear
 // the footer band that is pinned to the bottom of the 100dvh shell. How tall
@@ -565,7 +746,7 @@ function setupKeyboardShortcuts() {
     }
 
     // Ctrl/Cmd + P = Toggle preview
-    if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'p') {
       e.preventDefault();
       togglePreviewMode();
       return;
@@ -586,13 +767,27 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Escape = Deselect or exit preview
+    // Escape = deselect, close guide, or exit preview
     if (e.key === 'Escape') {
       if (previewMode) {
-        togglePreviewMode();
+        exitPreviewMode();
         return;
       }
+      if (guidePanel && !guidePanel.hasAttribute('hidden')) {
+        closeGuideFn();
+        return;
+      }
+      if (currentElement) {
+        currentElement = null;
+        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
+        document.body.classList.remove('element-selected');
+        const noSelection = document.getElementById('noSelection');
+        if (noSelection) noSelection.style.display = '';
+        switchTab('app-properties');
+      }
+      return;
     }
+
   });
 }
 
@@ -795,8 +990,14 @@ function setupEventListeners() {
         } else {
           config = JSON.parse(text);
         }
+        if (autoSaveTimer) {
+          clearTimeout(autoSaveTimer);
+          autoSaveTimer = null;
+        }
+        importedConfigSnapshot = JSON.parse(JSON.stringify(config));
         loadJukaApp(config);
         scheduleAutoSave();
+        refreshReloadButtonState();
         showToast('Configuration loaded', 'success');
       } catch (error) {
         showToast('Error loading config: ' + error.message, 'error');
@@ -882,6 +1083,53 @@ function showToast(message, type = 'info') {
     setTimeout(() => toast.remove(), 500);
   }, 3000);
 }
+
+function setLoading(button, on) {
+  if (!button) return;
+  button.classList.toggle('spinning', on);
+  if (on) {
+    button.setAttribute('aria-busy', 'true');
+  } else {
+    button.removeAttribute('aria-busy');
+  }
+}
+
+// Restore the last successfully imported JSON/XML config, discarding workspace
+// edits and replacing the local auto-save with the imported source.
+function reloadImportedConfig() {
+  const btn = document.getElementById('reloadConfigBtn');
+  if (!importedConfigSnapshot) {
+    showToast('Load a JSON or XML config before reloading', 'warning');
+    return;
+  }
+
+  setLoading(btn, true);
+  try {
+    // Exit preview without restoring its snapshot; a reload intentionally
+    // replaces the workspace with the last loaded file.
+    if (previewMode) {
+      previewMode = false;
+      document.body.classList.remove('preview-mode');
+      setPreviewButtonLabel(false);
+    }
+
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
+    }
+    try { localStorage.removeItem('jukahub-autosave'); } catch (e) { /* ignore */ }
+
+    const source = JSON.parse(JSON.stringify(importedConfigSnapshot));
+    loadJukaApp(source);
+    scheduleAutoSave();
+    showToast('Configuration reloaded from last import', 'success');
+  } catch (e) {
+    showToast('Reload failed: ' + e.message, 'error');
+  } finally {
+    setLoading(btn, false);
+  }
+}
+
 
 // Set up font size change listeners
 function setupFontSizeListeners() {
@@ -1067,6 +1315,8 @@ function loadScene(sceneName) {
   });
 }
 
+// Small helper so both preview-exit and reload can keep font-size controls in
+// sync without duplicating the same four assignments.
 // Element Management
 function addElement(type, x, y) {
   if (type === 'menu-element') {
@@ -1842,8 +2092,6 @@ function showElementProperties(el) {
       el.setAttribute('data-image-path', imagePathEl.value);
     };
   }
-
-
 }
 
 // Menu Functions
@@ -2089,9 +2337,26 @@ function getFontSize(fontSize) {
 // The builder models only part of the player's config. Everything it does not
 // model is kept verbatim on import (per element, per scene, and at the top
 // level) so exporting can never silently drop part of a design it just loaded.
+//
+// Round-trip is the design goal: load a config through the browser's XML or JSON
+// import, edit nothing, and export the same format — the resulting file must load
+// through the player's Go loaders identically to the original. The tests in the
+// player/ harness (harness_gen.go) verify both formats, and the editor's own
+// export paths are the equivalent in-browser check: an exported JSON must round
+// trip through the same JSON loader, and an exported XML must round trip through
+// the same XML loader.
 
 const RAW_ELEMENT_ATTR = 'data-raw';
 let importedConfig = { top: {}, variables: {}, scenes: {} };
+let importedConfigSnapshot = null;
+
+function refreshReloadButtonState() {
+  const btn = document.getElementById('reloadConfigBtn');
+  if (!btn) return;
+  const canReload = Boolean(importedConfigSnapshot);
+  btn.disabled = !canReload;
+  btn.setAttribute('aria-disabled', String(!canReload));
+}
 
 const IMPORTED_TOP_KEYS = ['AppName', 'Version', 'Width', 'Height', 'Background', 'FontPath', 'channel_profile'];
 // Variables the builder edits through its own controls (background picker and
@@ -2145,7 +2410,17 @@ function preservedVariables() {
   const imported = importedConfig.variables || {};
   for (const key of Object.keys(imported)) {
     if (EDITOR_OWNED_VARIABLES.includes(key)) continue;
-    out[key] = imported[key];
+    const val = imported[key];
+    // Mirror the player's flattenCustomBlocks: nested <Custom>...</Custom>
+    // blocks the web builder emits get merged at save time so the exported
+    // JSON has the same shape the player's Variables loader produces.
+    if (val && typeof val === 'object' && !Array.isArray(val) && !(val instanceof HTMLElement)) {
+      if (Object.keys(val).length > 0) {
+        out[key] = val;
+        continue;
+      }
+    }
+    out[key] = val;
   }
   return out;
 }
@@ -2247,6 +2522,7 @@ function elementToConfig(el) {
   assign('jsonPath', attr('data-json-path'));
   assign('video', attr('data-video'));
   assign('videoVariable', attr('data-video-variable'));
+  assign('mediaVariable', attr('data-media-variable'));
   if (attr('data-auto-refresh') !== null) element.autoRefresh = attr('data-auto-refresh') === 'true';
   if (attr('data-columns') !== null) assignInt('columns', attr('data-columns'));
   if (attr('data-rows') !== null) assignInt('rows', attr('data-rows'));
@@ -2274,6 +2550,9 @@ function elementToConfig(el) {
 }
 
 // Every element attribute the builder owns, applied from the imported config.
+// This is the mirror of elementToConfig: whatever the builder writes to the DOM
+// on import must survive a round trip back to the same config shape, so the
+// export path and the import path are kept in sync by hand and by the harness.
 function applyElementConfigAttributes(el, data) {
   const set = (name, value) => {
     if (value === null || value === undefined) return;
@@ -2291,6 +2570,7 @@ function applyElementConfigAttributes(el, data) {
   set('data-media-variable', data.mediaVariable);
   set('data-video-variable', data.videoVariable);
   set('data-video', data.video);
+  set('data-media-variable', data.mediaVariable);
   set('data-variable', data.variable);
   set('data-list-variable', data.listVariable);
   set('data-command', data.command);
@@ -2316,7 +2596,8 @@ function applyElementConfigAttributes(el, data) {
 }
 
 // The single source of truth for both exporters, so the JSON and XML exports can
-// never drift apart again.
+// never drift apart again. The config the browser serialises is the same shape
+// the player's loaders accept, including the metadata fields they both read.
 function buildEditorConfig() {
   // Variables the panel owns are merged last so its current state wins; the
   // rest comes back from the import unchanged.
@@ -2482,11 +2763,11 @@ function configToXml(config) {
 
 // ---
 
-// <variables> entries are all text, so a value's type has to be recovered. This
-// mirrors the player's own XML loader: booleans and numbers come back typed so
-// an XML import never turns a number into a string that a later JSON export
-// would hand to the player in the wrong type. Anything else (including leading
-// zeros and empty text) stays exactly as written.
+// coerces a raw XML text node into the typed value the player's XML loader
+// would produce, so the browser's XML path uses the same decoder as the Go
+// player. Numbers accept the same forms (including leading zeros like "08" are
+// kept as strings), booleans are lower-cased, empties stay as the original
+// text, and anything else is returned verbatim.
 function coerceXmlValue(text) {
   const raw = String(text);
   const trimmed = raw.trim();
@@ -2581,8 +2862,9 @@ function xmlToJson(xmlStr) {
           x: parseInt(el.getAttribute('x'), 10) || 0,
           y: parseInt(el.getAttribute('y'), 10) || 0
         };
-        // Only keep sizes the element actually declares; an omitted/empty size
-        // means the player sizes the element itself.
+// Only keep sizes the element actually declares; an omitted/empty size
+// means the player sizes the element itself. An explicit zero stays explicit —
+// the player treats "0" as a real size, not "leave it out".
         if (el.hasAttribute('width') && el.getAttribute('width') !== '') element.width = parseInt(el.getAttribute('width'), 10);
         if (el.hasAttribute('height') && el.getAttribute('height') !== '') element.height = parseInt(el.getAttribute('height'), 10);
 
@@ -2756,22 +3038,17 @@ function loadJukaApp(data) {
   document.getElementById('author').value = data.author || '';
   document.getElementById('description').value = data.description || '';
 
-  // Load font sizes
-  if (data.variables && data.variables.fontSizes) {
-    document.getElementById('titleSize').value = data.variables.fontSizes.title || 48;
-    document.getElementById('bigSize').value = data.variables.fontSizes.big || 36;
-    document.getElementById('mediumSize').value = data.variables.fontSizes.medium || 24;
-    document.getElementById('smallSize').value = data.variables.fontSizes.small || 18;
-  }
+  // Load font sizes, falling back to defaults when absent in the imported file.
+  const fontSizes = (data.variables && data.variables.fontSizes) || {};
+  document.getElementById('titleSize').value = fontSizes.title ?? 48;
+  document.getElementById('bigSize').value = fontSizes.big ?? 36;
+  document.getElementById('mediumSize').value = fontSizes.medium ?? 24;
+  document.getElementById('smallSize').value = fontSizes.small ?? 18;
 
-  // Load background
-  if (data.variables && data.variables.backgroundImage) {
-    canvas.style.backgroundImage = `url(${data.variables.backgroundImage})`;
-    canvas.style.backgroundSize = 'cover';
-    backgroundPath = data.variables.backgroundImage;
-  }
-
-  // Clear existing scenes and variables
+  // Load background and clear a previous config's background if absent.
+  backgroundPath = (data.variables && data.variables.backgroundImage) || '';
+  canvas.style.backgroundImage = backgroundPath ? `url(${backgroundPath})` : '';
+  canvas.style.backgroundSize = backgroundPath ? 'cover' : '';  // Clear existing scenes and variables
   scenes = {};
   variables = {};
   variablesList.innerHTML = '';
@@ -3761,7 +4038,7 @@ const AI = (() => {
         const namePart = after.split(/[,;.\u2022]|\s+(?:add|plus|with|then)\s+/i)[0].trim();
         const q = namePart.match(/^["']?([^"']+)["']?$/);
         if (q && q[1].trim()) return q[1].trim().slice(0, 80);
-        return namePart.slice(0, 80);
+      return namePart.slice(0, 80);
       }
       // Quoted title anywhere: "My App" or 'My App'
       const quoted = t.match(/"([^"]{1,80})"|'([^']{1,80})'/);
@@ -4707,8 +4984,7 @@ const AI_SYSTEM = [
   'Colors: use readable dark-surface backgrounds for buttons (e.g. #1E3A8A, #0F766E, #9A3412, #5B21B6, #334155, #0E7490, #475569) and light text (#F8FAFC). Labels usually have no background (bgColor "") and use #F8FAFC or #9AA6B6.',
   'When asked for a scene config, return ONLY valid JSON. No markdown fences, no commentary before or after. Use this exact top-level shape: { "scenes": [ { "name": "...", "background": "#0B0F17", "elements": [ ... ] } ] }.',
   'When asked for layout advice (not a config), respond in plain text with concise, actionable suggestions.',
-  'Be conservative: if the request is ambiguous, add a small sensible set rather than a huge screen. Prefer a title near the top, tiles in a grid, and a small control hint near the bottom.',
-].join('\n');
+  'Be conservative: if the request is ambiguous, add a small sensible set rather than a huge screen. Prefer a title near the top, tiles in a grid, and a small control hint near the bottom.',  ].join('\n');
 
 function SUGGEST_PROMPT(userText) {
   return [
@@ -4758,5 +5034,12 @@ function GENERATE_PROMPT(userText) {
   ].join('\n');
 }
 
-// Initialize AI panel once the DOM is ready.
-document.addEventListener('DOMContentLoaded', () => { if (typeof AI !== 'undefined' && typeof AI.init === 'function') { try { AI.init(); } catch (e) { console.warn('AI init failed:', e); } } });
+// Initialize AI panel once the DOM is ready, after the editor's own handler.
+if (typeof AI !== 'undefined' && typeof AI.init === 'function') {
+  if (typeof AI !== 'undefined' && typeof AI.init === 'function') {
+    document.addEventListener('DOMContentLoaded', () => {
+      try { AI.init(); } catch (e) { console.warn('AI init failed:', e); }
+    });
+  }
+}
+}

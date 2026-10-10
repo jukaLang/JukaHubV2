@@ -649,7 +649,7 @@ func savePatchState() error {
 func InitPatchModule() {
 	loadPatchState()
 	checkInterruptedJournal()
-		ensureDefaultRepo()
+	ensureDefaultRepo()
 }
 
 // ---------------------------------------------------------------------------
@@ -700,7 +700,7 @@ func ensureHelperTool(tool string, config *Config) error {
 	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" {
 		return fmt.Errorf("unsupported helper tool %q (supported: ffplay, ffmpeg, yt-dlp)", tool)
 	}
-		dir := P().ToolsDir()
+	dir := P().ToolsDir()
 	if dir == "" {
 		return fmt.Errorf("tools directory unavailable (empty path)")
 	}
@@ -1415,19 +1415,19 @@ func copyFile(src, dst string) error {
 	if src == "" || dst == "" {
 		return fmt.Errorf("copyFile: src and dst must be non-empty")
 	}
-	
+
 	in, err := os.Open(src)
 	if err != nil {
 		return fmt.Errorf("copyFile: open source %s: %w", src, err)
 	}
 	defer in.Close()
-	
+
 	// Create destination directory if needed
 	dstDir := filepath.Dir(dst)
 	if err := os.MkdirAll(dstDir, 0o755); err != nil {
 		return fmt.Errorf("copyFile: create directory %s: %w", dstDir, err)
 	}
-	
+
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("copyFile: create destination %s: %w", dst, err)
@@ -1438,15 +1438,15 @@ func copyFile(src, dst string) error {
 			logPatch("[PATCH] copyFile: close error for %s: %v", dst, closeErr)
 		}
 	}()
-	
+
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("copyFile: copy %s -> %s: %w", src, dst, err)
 	}
-	
+
 	if err := out.Sync(); err != nil {
 		return fmt.Errorf("copyFile: sync %s: %w", dst, err)
 	}
-	
+
 	return nil
 }
 
@@ -1733,15 +1733,16 @@ func RepairJukaHub(config *Config) PatchRepairReport {
 	if dir, err := PatchStateDir(); err == nil {
 		removed := 0
 		for _, sub := range []string{"downloads", "staging"} {
-			entries, _ := os.ReadDir(filepath.Join(dir, sub))
-			for _, e := range entries {
-				if e.IsDir() {
-					if os.RemoveAll(filepath.Join(dir, sub, e.Name())) == nil {
-						removed++
-					}
-				} else {
-					if os.Remove(filepath.Join(dir, sub, e.Name())) == nil {
-						removed++
+			if entries, err := os.ReadDir(filepath.Join(dir, sub)); err == nil {
+				for _, e := range entries {
+					if e.IsDir() {
+						if os.RemoveAll(filepath.Join(dir, sub, e.Name())) == nil {
+							removed++
+						}
+					} else {
+						if os.Remove(filepath.Join(dir, sub, e.Name())) == nil {
+							removed++
+						}
 					}
 				}
 			}

@@ -166,8 +166,8 @@ var (
 	ColorToastSuccess = sdl.Color{R: 52, G: 211, B: 153, A: 255}
 
 	// Progress / track tokens
-	ColorTrack       = sdl.Color{R: 255, G: 255, B: 255, A: 22}
-	ColorProgress    = sdl.Color{R: 85, G: 216, B: 255, A: 255}
+	ColorTrack           = sdl.Color{R: 255, G: 255, B: 255, A: 22}
+	ColorProgress        = sdl.Color{R: 85, G: 216, B: 255, A: 255}
 	ColorProgressIntense = sdl.Color{R: 60, G: 190, B: 255, A: 255}
 
 	// Divider line
@@ -179,7 +179,7 @@ var (
 	ColorIconTertiary = sdl.Color{R: 255, G: 255, B: 255, A: 55}
 
 	// Chip / pill surface
-	ColorChip     = sdl.Color{R: 34, G: 46, B: 70, A: 255}
+	ColorChip      = sdl.Color{R: 34, G: 46, B: 70, A: 255}
 	ColorChipHover = sdl.Color{R: 45, G: 60, B: 85, A: 255}
 	ColorChipFocus = sdl.Color{R: 55, G: 75, B: 105, A: 255}
 

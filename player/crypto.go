@@ -18,9 +18,9 @@ import (
 
 // Key metadata for tracking encryption key versions
 type KeyInfo struct {
-	ID        string
-	CreatedAt time.Time
-	IsDefault bool
+	ID         string
+	CreatedAt  time.Time
+	IsDefault  bool
 	IsEnhanced bool // Enhanced encryption uses per-value salts
 }
 
@@ -56,12 +56,12 @@ func deriveKeyFromSecret(secret, salt []byte) []byte {
 	mac := hmac.New(sha256.New, salt)
 	mac.Write(secret)
 	hmacResult := mac.Sum(nil)
-	
+
 	// If we need more than 32 bytes, do another iteration
 	if len(hmacResult) >= 32 {
 		return hmacResult[:32]
 	}
-	
+
 	// Expand further if needed (HKDF-Expand style)
 	key := make([]byte, 32)
 	copy(key, hmacResult)
@@ -84,7 +84,7 @@ func deriveKeyFromSecret(secret, salt []byte) []byte {
 //   export JUKAHUB_CRYPTO_KEY="$(openssl rand -hex 32)"
 var cryptoKey = func() []byte {
 	now := time.Now()
-	
+
 	// Check for environment variable override first
 	if envKey := os.Getenv("JUKAHUB_CRYPTO_KEY"); envKey != "" {
 		// Try to decode as hex (64 hex chars = 32 bytes)
@@ -92,9 +92,9 @@ var cryptoKey = func() []byte {
 			key, err := hex.DecodeString(envKey)
 			if err == nil && len(key) == 32 {
 				currentKeyInfo = KeyInfo{
-					ID:        "env-" + envKey[:8],
-					CreatedAt: now,
-					IsDefault: false,
+					ID:         "env-" + envKey[:8],
+					CreatedAt:  now,
+					IsDefault:  false,
 					IsEnhanced: true,
 				}
 				log.Printf("[CRYPTO] Using encryption key from JUKAHUB_CRYPTO_KEY env var (key ID: %s, enhanced: %v)", currentKeyInfo.ID, currentKeyInfo.IsEnhanced)
@@ -104,9 +104,9 @@ var cryptoKey = func() []byte {
 		// If not valid hex, derive key from it using HKDF
 		key := deriveKeyFromSecret([]byte(envKey), encryptionSalt)
 		currentKeyInfo = KeyInfo{
-			ID:        "env-derived",
-			CreatedAt: now,
-			IsDefault: false,
+			ID:         "env-derived",
+			CreatedAt:  now,
+			IsDefault:  false,
 			IsEnhanced: true,
 		}
 		log.Printf("[CRYPTO] Using derived key from JUKAHUB_CRYPTO_KEY (key ID: %s)", currentKeyInfo.ID)
@@ -118,9 +118,9 @@ var cryptoKey = func() []byte {
 	secret := []byte("JukaHub-Secure-Encryption-Key-2024-v2")
 	key := deriveKeyFromSecret(secret, encryptionSalt)
 	currentKeyInfo = KeyInfo{
-		ID:        "default-v3-enhanced",
-		CreatedAt: now,
-		IsDefault: true,
+		ID:         "default-v3-enhanced",
+		CreatedAt:  now,
+		IsDefault:  true,
 		IsEnhanced: true,
 	}
 	log.Printf("[CRYPTO] Using enhanced built-in encryption key (NOT recommended for production) (key ID: %s)", currentKeyInfo.ID)
@@ -195,9 +195,9 @@ func DecryptString(token string) (string, error) {
 	if !strings.HasPrefix(token, "ENC:") {
 		return token, nil
 	}
-	
+
 	cipherData := strings.TrimPrefix(token, "ENC:")
-	
+
 	// Parse new format: ENC:<keyID>/<hex>
 	if idx := strings.Index(cipherData, "/"); idx > 0 {
 		// New format with key ID
@@ -216,7 +216,7 @@ func DecryptString(token string) (string, error) {
 		plaintext = nil // Help GC
 		return string(result), nil
 	}
-	
+
 	// Legacy format: ENC:<hex> - no key ID prefix
 	data, err := hex.DecodeString(cipherData)
 	if err != nil {
@@ -313,13 +313,13 @@ func EncryptWithAuth(plaintext string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	// Additional HMAC over the encrypted value (excluding ENC: prefix)
 	mac := hmac.New(sha256.New, key)
 	dataToAuth := []byte(encrypted[4:]) // Skip "ENC:"
 	mac.Write(dataToAuth)
 	hmacValue := mac.Sum(nil)
-	
+
 	// Append HMAC to encrypted value
 	return fmt.Sprintf("%s:AUTH:%s", encrypted, hex.EncodeToString(hmacValue)), nil
 }
@@ -336,27 +336,27 @@ func DecryptWithAuth(encrypted string) (string, error) {
 	if !strings.HasPrefix(encrypted, "ENC:AUTH:") {
 		return "", errors.New("not an authenticated encrypted value")
 	}
-	
+
 	// Parse: ENC:AUTH:<keyID>/<hex>:<hmac>
 	parts := strings.SplitN(encrypted[9:], ":", 2)
 	if len(parts) != 2 {
 		return "", errors.New("invalid authenticated encrypted format")
 	}
-	
+
 	encryptedData := "ENC:" + parts[0]
 	providedHMAC := parts[1]
-	
+
 	// Verify HMAC first
 	key := getCryptoKey()
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(encryptedData[4:]))
 	expectedHMAC := mac.Sum(nil)
-	
+
 	if !hmac.Equal([]byte(providedHMAC), expectedHMAC) {
 		log.Printf("[CRYPTO] HMAC verification failed - data may be tampered")
 		return "", errors.New("authentication failed - data may be tampered")
 	}
-	
+
 	// HMAC valid, proceed with decryption
 	return DecryptString(encryptedData)
 }

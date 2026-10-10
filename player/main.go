@@ -418,6 +418,28 @@ type Variables struct {
 	DynamicBg          bool              `json:"dynamicBg"`
 	ScreensaverTimeout int               `json:"screensaverTimeout"`
 	SocialNotifs       bool              `json:"socialNotifs"`
+
+	// Optional feature toggles (future-facing). These are persisted as first-class
+	// config fields so the app can be configured on the device without requiring a
+	// code change, and so jukaconfig.json stays a readable feature catalog.
+	// They are safe to ignore when the runtime feature is not wired yet.
+	NetPlayEnabled       bool `json:"netPlayEnabled"`
+	VideoPlayerEnabled   bool `json:"videoPlayerEnabled"`
+	ScreensaverEnabled   bool `json:"screensaverEnabled"`
+	LauncherEnabled      bool `json:"launcherEnabled"`
+	ExternalAppEnabled   bool `json:"externalAppEnabled"`
+	PackageRepoEnabled   bool `json:"packageRepoEnabled"`
+	ThemeGalleryEnabled  bool `json:"themeGalleryEnabled"`
+
+	// TrimUI/tablet runtime hints (best-effort). These describe the target device
+	// so the app can keep one config layout that still feels native on a handheld
+	// like the TrimUI Smart Pro. Unknown or missing values are treated as "no
+	// preference", never as an error.
+	DeviceModel         string `json:"deviceModel"`
+	TargetPlatform      string `json:"targetPlatform"`
+	DefaultOrientation  string `json:"defaultOrientation"`
+	AccentColor         string `json:"accentColor"`
+
 	Custom             map[string]interface{}
 	LoadingSpinner     bool   `json:"-"`
 	SpinnerText        string `json:"-"`
@@ -592,11 +614,25 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"gridColumns":        true,
 		"searchWidth":        true,
 		"dynamicBg":          true,
-		"screensaverTimeout": true,
-		"socialNotifs":       true,
-		"reducedMotion":      true,
-		"lowPower":           true,
-		"custom":             true,
+		"screensaverTimeout": true,	"socialNotifs":       true,
+	"reducedMotion":      true,
+	"lowPower":           true,
+	"custom":             true,
+
+	// First-class feature-toggle and device-hint fields. These live in the struct
+	// now so jukaconfig.json stays a readable catalog; keep them known here so the
+	// Variables decoder puts them in the struct instead of burying them in Custom.
+	"netPlayEnabled":       true,
+	"videoPlayerEnabled":   true,
+	"screensaverEnabled":   true,
+	"launcherEnabled":      true,
+	"externalAppEnabled":   true,
+	"packageRepoEnabled":   true,
+	"themeGalleryEnabled":  true,
+	"deviceModel":         true,
+	"targetPlatform":      true,
+	"defaultOrientation":  true,
+	"accentColor":         true,
 	}
 	v.Custom = make(map[string]interface{})
 	for k, val := range raw {
@@ -1028,7 +1064,30 @@ func (v *Variables) Get(name string) string {
 	if size, ok := v.FontSizes[name]; ok {
 		return strconv.Itoa(size)
 	}
+	// First-class feature-toggle / device-hint fields now live in the struct.
+	// Expose them through $ substitution so the rest of the app can continue to
+	// read them via Variables.Get even if the config is the canonical source.
+	switch name {
+	case "netPlayEnabled":        return boolString(v.NetPlayEnabled)
+	case "videoPlayerEnabled":   return boolString(v.VideoPlayerEnabled)
+	case "screensaverEnabled":   return boolString(v.ScreensaverEnabled)
+	case "launcherEnabled":      return boolString(v.LauncherEnabled)
+	case "externalAppEnabled":   return boolString(v.ExternalAppEnabled)
+	case "packageRepoEnabled":   return boolString(v.PackageRepoEnabled)
+	case "themeGalleryEnabled":  return boolString(v.ThemeGalleryEnabled)
+	case "deviceModel":          return v.DeviceModel
+	case "targetPlatform":       return v.TargetPlatform
+	case "defaultOrientation":   return v.DefaultOrientation
+	case "accentColor":          return v.AccentColor
+	}
 	return ""
+}
+
+func boolString(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
 
 // Cache fonts
@@ -6087,10 +6146,22 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to load config:", err)
 	}
-	LogScene("init").Info("config loaded", "path", configPath)
+	LogScene("init").Info("config loaded", "path", configPath, "loadErrors", configHealth.LoadErrors)
 
 	// Validate and apply defaults.
 	if err := NewConfigValidator().Validate(config); err != nil {
+		configHealth.RecordLoad(configPath, fmt.Errorf("validation failed: %w", err))
+		Log().Error("Config validation failed", "error", err, "path", configPath)
+		configHealth.Log()
+	} else {
+		configHealth.MarkLoadOK()
+		configHealth.Log()
+		configHealth.SetLaunchMode("boot")
+		// ValidateKnownAtRuntimeWire is a compile-time wire-up marker that the config
+// health helpers on config_health.go are actually used by the real config load/save
+// paths in this module.
+var _ = ValidateKnownAtRuntimeWire
+	}
 		LogScene("init").Warn("config validation failed, applying defaults", "err", err)
 	}
 

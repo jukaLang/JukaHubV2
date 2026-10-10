@@ -37,19 +37,19 @@ import (
 const manifestSchema = 1
 
 type pkgManifest struct {
-	Schema       int    `json:"schema"`
-	Name         string `json:"name"`
-	Version      string `json:"version"`
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	Architecture string `json:"architecture"`
+	Schema       int      `json:"schema"`
+	Name         string   `json:"name"`
+	Version      string   `json:"version"`
+	Title        string   `json:"title"`
+	Description  string   `json:"description"`
+	Architecture string   `json:"architecture"`
 	Devices      []string `json:"devices"`
 	OS           []string `json:"os"`
-	Risk         string `json:"risk"`
+	Risk         string   `json:"risk"`
 	Depends      []string `json:"depends,omitempty"`
 	Conflicts    []string `json:"conflicts,omitempty"`
 	Provides     []string `json:"provides,omitempty"`
-	Restart      string `json:"restart"`
+	Restart      string   `json:"restart"`
 	Operations   []struct {
 		Kind string `json:"kind"`
 		Src  string `json:"src,omitempty"`

@@ -57,9 +57,9 @@ func jukaHubUpdateTargetFor(device DeviceModel, goos, arch string) (jukaHubUpdat
 }
 
 // OpUpdateJukaHub performs the full JukaHub application update flow:
-// fetch release metadata -> resolve manifest -> download -> verify -> stage
-// -> backup -> swap script. The user confirms the swap through the modal;
-// this operation stops at staging.
+// fetch release metadata -> validate pre-flight -> resolve manifest -> download
+// -> verify -> stage -> backup -> swap script. The user confirms the swap through
+// the modal; this operation stops at staging.
 func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 	dir, err := PatchStateDir()
 	if err != nil {
@@ -86,6 +86,7 @@ func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 	// carries the authoritative sha256. Without a manifest we refuse to label
 	// the download "verified" and stop before the swap.
 	var expectSHA string
+	var expectName string
 	if mAsset := rel.FindManifestAsset(); mAsset != nil {
 		mData, err := fetchBounded(ctx, client, mAsset.BrowserDownloadURL, patchMaxMetadata)
 		if err != nil {
@@ -103,8 +104,17 @@ func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 			return fmt.Errorf("release manifest asset %q does not match expected target asset %q", manifestTarget.Asset, target.Asset)
 		}
 		expectSHA = manifestTarget.SHA256
+		expectName = manifestTarget.Asset
 	} else {
 		return errors.New("release does not publish manifest.json yet — update disabled until a signed manifest is available")
+	}
+
+	// Pre-flight check before downloading anything: the manifest tells us what
+	// the release claims to contain, so verify the filenames line up before we
+	// pay the download cost. This catches mismatched assets early rather than
+	// discovering the mismatch only after the archive is staged.
+	if err := validateUpdateAssetNames(rel, assetName, expectName); err != nil {
+		return err
 	}
 
 	// Locate the asset on the release.
@@ -202,6 +212,31 @@ func findStagedBinary(staging string) string {
 		return nil
 	})
 	return found
+}
+
+// validateUpdateAssetNames checks that the manifest's expected asset name and
+// the release asset we intend to download agree before we pay for the download.
+// It is a lightweight pre-flight guard: if the release ships a manifest but the
+// filenames disagree, we fail early rather than staging the wrong artifact.
+func validateUpdateAssetNames(rel *githubRelease, wantAsset, expectAsset string) error {
+	if expectAsset == "" {
+		return nil
+	}
+	if wantAsset != expectAsset {
+		return fmt.Errorf(
+			"manifest expects %q but update target needs %q",
+			expectAsset,
+			wantAsset,
+		)
+	}
+	// Also confirm the manifest target asset actually exists on the release so a
+	// stale manifest cannot advertise a target that the release never shipped.
+	for _, a := range rel.Assets {
+		if a.Name == expectAsset {
+			return nil
+		}
+	}
+	return fmt.Errorf("manifest expects asset %q but release does not contain it", expectAsset)
 }
 
 // swapScriptPath returns where the swap helper should be written.

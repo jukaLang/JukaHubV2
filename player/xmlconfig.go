@@ -156,6 +156,10 @@ func LoadXMLConfig(filename string) (*Config, error) {
 	} else if err := json.Unmarshal(data, &config.Variables); err != nil {
 		log.Printf("[config] reading <variables>: %v", err)
 	}
+	// XML attribute round-trip can leave the first-class bool/int/color fields as
+	// zero if the builder omits them; re-derive the cheap overlays from the parsed
+	// variables so XML and JSON keep one visible behavior for the runtime.
+	syncVariableOverrides(config)
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = make(map[string]interface{})
 	}
@@ -209,6 +213,9 @@ func LoadXMLConfig(filename string) (*Config, error) {
 			if v, ok := xmlParseFloat(xe.Opacity); ok {
 				elem.Opacity = &v
 			}
+			// Pipe the XML post-load normalization through the same path the JSON
+			// loader uses so element semantics stay consistent across formats.
+			syncVariableOverrides(&Config{Variables: config.Variables})
 			scene.Elements = append(scene.Elements, elem)
 		}
 		config.Scenes = append(config.Scenes, scene)
@@ -383,7 +390,198 @@ func xmlCustomString(m map[string]interface{}, key string) string {
 	return ""
 }
 
+// setCustomBool / clearCustomBool / setCustomString are shared helpers used by
+// both the JSON and XML config paths to keep the new first-class feature-toggle
+// and device-hint fields consistent between Variables struct fields and the flat
+// Custom map.
+func setCustomBool(m map[string]interface{}, key string, val bool) {
+	m[key] = val
+}
+
+func clearCustomBool(m map[string]interface{}, key string) {
+	delete(m, key)
+}
+
+func setCustomString(m map[string]interface{}, key, val string) {
+	m[key] = val
+}
+
+// boolString is defined in player/main.go as part of the Variables helpers.
+// This declaration exists only so the XML config path compiles as part of the same
+// package without importing a separate helper file.
+func boolString(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
 // IsXMLConfig returns true if the given filename has an .xml extension.
 func IsXMLConfig(filename string) bool {
 	return strings.HasSuffix(strings.ToLower(filename), ".xml")
+}
+
+// syncVariableOverrides normalizes Variables after they are loaded from either
+// JSON or XML so the runtime sees one consistent view. It is intentionally pure
+// input-to-output: it does not persist, and it is safe to call on any config
+// that has already been parsed.
+func syncVariableOverrides(config *Config) {
+
+	if config == nil {
+		return
+	}
+	v := &config.Variables
+	if v.Custom == nil {
+		return
+	}
+	// Mirror the canonical struct fields back into the flat Custom map so the rest
+	// of the app can keep using $ substitution for settings that were originally
+	// stored under both keys. This keeps legacy configs (buttonColor: "#94a3b8")
+	// and regenerated configs (Custom.ButtonColor: "#94a3b8") behaving the same.
+	if s, ok := v.Custom["buttonColor"]; ok {
+		// Prefer a string value when both a string and a struct mirror are present.
+		if str, isStr := s.(string); isStr && str != "" {
+			// Only overwrite when the struct field is effectively empty.
+			if v.ButtonColor.R == 0 && v.ButtonColor.G == 0 && v.ButtonColor.B == 0 {
+				if c, ok := parseHexColor(str); ok {
+					v.ButtonColor = c
+				}
+			}
+		}
+	}
+	if v.ButtonColor.R != 0 || v.ButtonColor.G != 0 || v.ButtonColor.B != 0 {
+		v.Custom["buttonColor"] = fmt.Sprintf("#%02X%02X%02X", v.ButtonColor.R, v.ButtonColor.G, v.ButtonColor.B)
+	}
+	if s, ok := v.Custom["labelColor"]; ok {
+		if str, isStr := s.(string); isStr && str != "" {
+			if v.LabelColor.R == 0 && v.LabelColor.G == 0 && v.LabelColor.B == 0 {
+				if c, ok := parseHexColor(str); ok {
+					v.LabelColor = c
+				}
+			}
+		}
+	}
+	if v.LabelColor.R != 0 || v.LabelColor.G != 0 || v.LabelColor.B != 0 {
+		v.Custom["labelColor"] = fmt.Sprintf("#%02X%02X%02X", v.LabelColor.R, v.LabelColor.G, v.LabelColor.B)
+	}
+	if s, ok := v.Custom["inputColor"]; ok {
+		if str, isStr := s.(string); isStr && str != "" {
+			if v.InputColor.R == 0 && v.InputColor.G == 0 && v.InputColor.B == 0 {
+				if c, ok := parseHexColor(str); ok {
+					v.InputColor = c
+				}
+			}
+		}
+	}
+	if v.InputColor.R != 0 || v.InputColor.G != 0 || v.InputColor.B != 0 {
+		v.Custom["inputColor"] = fmt.Sprintf("#%02X%02X%02X", v.InputColor.R, v.InputColor.G, v.InputColor.B)
+	}
+	// Forward the designer-facing size map out of the struct so code that looks up
+	// font sizes by role (title/big/medium/small) still finds them.
+	if len(v.FontSizes) > 0 {
+		for k, sz := range v.FontSizes {
+			v.Custom[fmt.Sprintf("fontSize_%s", k)] = sz
+		}
+	}
+	// Push the current theme preset back into the custom map so scene code that
+	// reads $theme_preset / $theme_background etc. sees the active values.
+	if preset, ok := v.Custom["theme_preset"]; ok {
+		if name, isStr := preset.(string); isStr && name != "" {
+			p := GetThemePreset(name)
+			v.Custom["theme_background"] = p.Background
+			v.Custom["theme_button"] = p.ButtonColor
+			v.Custom["theme_label"] = p.LabelColor
+			v.Custom["theme_input"] = p.InputColor
+			v.Custom["theme_surface"] = p.Surface
+			v.Custom["theme_surface_alt"] = p.SurfaceAlt
+			v.Custom["theme_surface_raised"] = p.SurfaceRaised
+			v.Custom["theme_text_primary"] = p.TextPrimary
+			v.Custom["theme_text_secondary"] = p.TextSecondary
+			v.Custom["theme_text_tertiary"] = p.TextTertiary
+			v.Custom["theme_border_subtle"] = p.BorderSubtle
+			v.Custom["theme_border_default"] = p.BorderDefault
+			v.Custom["theme_border_focus"] = p.BorderFocus
+			v.Custom["theme_success"] = p.Success
+			v.Custom["theme_warning"] = p.Warning
+			v.Custom["theme_danger"] = p.Danger
+			v.Custom["theme_info"] = p.Info
+			v.Custom["theme_overlay"] = p.Overlay
+		}
+	}
+
+	// Reconcile the new first-class feature-toggle / device-hint fields with the
+	// existing Custom map so the app can read them either as struct fields or via
+	// $ substitution and neither view gets out of sync.
+	if v.NetPlayEnabled {
+		setCustomBool(v.Custom, "netPlayEnabled", true)
+	} else {
+		clearCustomBool(v.Custom, "netPlayEnabled")
+	}
+	if v.VideoPlayerEnabled {
+		setCustomBool(v.Custom, "videoPlayerEnabled", true)
+	} else {
+		clearCustomBool(v.Custom, "videoPlayerEnabled")
+	}
+	if v.ScreensaverEnabled {
+		setCustomBool(v.Custom, "screensaverEnabled", true)
+	} else {
+		clearCustomBool(v.Custom, "screensaverEnabled")
+	}
+	if v.LauncherEnabled {
+		setCustomBool(v.Custom, "launcherEnabled", true)
+	} else {
+		clearCustomBool(v.Custom, "launcherEnabled")
+	}
+	if v.ExternalAppEnabled {
+		setCustomBool(v.Custom, "externalAppEnabled", true)
+	} else {
+		clearCustomBool(v.Custom, "externalAppEnabled")
+	}
+	if v.PackageRepoEnabled {
+		setCustomBool(v.Custom, "packageRepoEnabled", true)
+	} else {
+		clearCustomBool(v.Custom, "packageRepoEnabled")
+	}
+	if v.ThemeGalleryEnabled {
+		setCustomBool(v.Custom, "themeGalleryEnabled", true)
+	} else {
+		clearCustomBool(v.Custom, "themeGalleryEnabled")
+	}
+	if v.DeviceModel != "" {
+		setCustomString(v.Custom, "deviceModel", v.DeviceModel)
+	}
+	if v.TargetPlatform != "" {
+		setCustomString(v.Custom, "targetPlatform", v.TargetPlatform)
+	}
+	if v.DefaultOrientation != "" {
+		setCustomString(v.Custom, "defaultOrientation", v.DefaultOrientation)
+	}
+	if v.AccentColor != "" {
+		setCustomString(v.Custom, "accentColor", v.AccentColor)
+	}
+}
+
+// setCustomBool / clearCustomBool / setCustomString are shared helpers used by
+// both the JSON and XML config paths to keep the new first-class feature-toggle
+// and device-hint fields consistent between Variables struct fields and the flat
+// Custom map.
+func setCustomBool(m map[string]interface{}, key string, val bool) {
+	m[key] = val
+}
+
+func clearCustomBool(m map[string]interface{}, key string) {
+	delete(m, key)
+}
+
+func setCustomString(m map[string]interface{}, key, val string) {
+	m[key] = val
+}
+
+// boolString is defined in player/main.go; this declaration keeps the XML config
+// path compilable as part of the same package without a separate helper file.
+func boolString(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
 }
