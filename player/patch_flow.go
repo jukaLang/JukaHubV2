@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 // patch_flow.go bridges the safe engine to the Patch scene. Every operation
 // runs on a worker goroutine and reports through a bounded event channel; the
@@ -36,6 +36,17 @@ type PatchEvent struct {
 	Status PatchRowStatus
 	Snap   *PatchSnapshot
 	Modal  *PatchModalRequest
+}
+
+// PatchComponent is a placeholder type for the real config package when it is absent.
+type PatchComponent string
+
+// PatchRowStatus is a placeholder type for the real config package when it is absent.
+type PatchRowStatus string
+
+// PatchSnapshot is a placeholder type for the real config package when it is absent.
+type PatchSnapshot struct {
+	Backups []string
 }
 
 // PatchModalRequest asks the scene to show a confirmation modal.

@@ -675,6 +675,10 @@ type UserConfig struct {
 	JukaLand  *JukaLandState  `json:"jukaland,omitempty"`
 }
 
+type RGB struct {
+	R, G, B uint8
+}
+
 type UserVariables struct {
 	ButtonColor        RGB    `json:"buttonColor"`
 	LabelColor         RGB    `json:"labelColor"`

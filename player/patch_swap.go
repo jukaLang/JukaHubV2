@@ -1,4 +1,4 @@
-package main
+﻿package main
 
 // patch_swap.go implements the JukaHub application self-update. The running
 // process cannot replace its own binary, so the swap is delegated to a tiny
@@ -106,7 +106,7 @@ func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 		expectSHA = manifestTarget.SHA256
 		expectName = manifestTarget.Asset
 	} else {
-		return errors.New("release does not publish manifest.json yet — update disabled until a signed manifest is available")
+		return errors.New("release does not publish manifest.json yet â€” update disabled until a signed manifest is available")
 	}
 
 	// Pre-flight check before downloading anything: the manifest tells us what
@@ -212,31 +212,6 @@ func findStagedBinary(staging string) string {
 		return nil
 	})
 	return found
-}
-
-// validateUpdateAssetNames checks that the manifest's expected asset name and
-// the release asset we intend to download agree before we pay for the download.
-// It is a lightweight pre-flight guard: if the release ships a manifest but the
-// filenames disagree, we fail early rather than staging the wrong artifact.
-func validateUpdateAssetNames(rel *githubRelease, wantAsset, expectAsset string) error {
-	if expectAsset == "" {
-		return nil
-	}
-	if wantAsset != expectAsset {
-		return fmt.Errorf(
-			"manifest expects %q but update target needs %q",
-			expectAsset,
-			wantAsset,
-		)
-	}
-	// Also confirm the manifest target asset actually exists on the release so a
-	// stale manifest cannot advertise a target that the release never shipped.
-	for _, a := range rel.Assets {
-		if a.Name == expectAsset {
-			return nil
-		}
-	}
-	return fmt.Errorf("manifest expects asset %q but release does not contain it", expectAsset)
 }
 
 // swapScriptPath returns where the swap helper should be written.

@@ -123,8 +123,15 @@ func (trimuiLinuxPlatform) DataDir() (string, error) {
 
 func (tspPlatform) ConfigPath() string      { return "jukaconfig.json" }
 func (tspPlatform) UserConfigPath() string  { return "jukauser.json" }
-func (tspPlatform) ToolsDir() string        { return filepath.Join(".", "required") }
-func (tspPlatform) RequiredDir() string     { return filepath.Join(".", "required") }
+func (tspPlatform) ToolsDir() string {
+	// Resolve relative to the binary dir, not CWD, so the app works when
+	// launched from a different working directory.
+	if exeDir, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exeDir), "required")
+	}
+	return filepath.Join(".", "required")
+}
+func (tspPlatform) RequiredDir() string { return tspPlatform{}.ToolsDir() }
 func (tspPlatform) IsHandheld() bool        { return true }
 func (tspPlatform) FullscreenDefault() bool { return true }
 func (tspPlatform) ResizableDefault() bool  { return false }
@@ -156,7 +163,10 @@ func (tspPlatform) MkdirAll(path string, perm os.FileMode) error { return os.Mkd
 func (tspPlatform) CommandContext(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
 	// TSP tools in ./required/ may need the directory on PATH.
-	if dir := filepath.Join(".", "required"); dir != "" {
+	// Resolve relative to the binary dir, not CWD, so the app works when
+	// launched from a different working directory.
+	if exeDir, err := os.Executable(); err == nil {
+		dir := filepath.Join(filepath.Dir(exeDir), "required")
 		cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 	return cmd

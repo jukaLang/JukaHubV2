@@ -17,6 +17,21 @@ const textBrowserURLVariable = "textbrowser_url"
 // normalizeTextBrowserURL is the public surface used by the runtime and the
 // web page fetcher. It accepts user-typed input and returns a clean HTTP/HTTPS
 // URL or an explanatory error, without side effects.
+func parseHTTPURL(rawURL string) (*http.URL, error) {
+	address := strings.TrimSpace(rawURL)
+	if address == "" {
+		return nil, fmt.Errorf("address is empty")
+	}
+	if !strings.Contains(address, "://") {
+		address = "https://" + address
+	}
+	parsed, err := http.ParseURL(address)
+	if err != nil {
+		return nil, fmt.Errorf("invalid address: %w", err)
+	}
+	return parsed, nil
+}
+
 func normalizeTextBrowserURL(rawURL string) (string, error) {
 	address := strings.TrimSpace(rawURL)
 	if address == "" {
@@ -25,7 +40,7 @@ func normalizeTextBrowserURL(rawURL string) (string, error) {
 	if !strings.Contains(address, "://") {
 		address = "https://" + address
 	}
-	parsed, err := http.ParseURL(address)
+	parsed, err := parseHTTPURL(address)
 	if err != nil {
 		return "", fmt.Errorf("invalid address: %w", err)
 	}

@@ -270,7 +270,7 @@ func SaveConfig(filename string, config *Config) error {
 // primary file is corrupt or missing. It returns the loaded config and the
 // path from which it was loaded.
 func LoadLastKnownGood(filename string) (*Config, error) {
-	if cfg, parseErr := loadConfig(filename); parseErr == nil {
+	if cfg, err := loadConfig(filename); err == nil {
 		configHealth.RecordLoad(filename, nil)
 		configHealth.MarkLoadOK()
 		return cfg, nil
@@ -278,8 +278,8 @@ func LoadLastKnownGood(filename string) (*Config, error) {
 
 	// Try backup.
 	backup := filename + ".bak"
-	Log().Warn("primary config failed, trying backup", "path", filename, "err", parseErr)
-	if cfg, backupErr := loadConfig(backup); cfg != nil {
+	Log().Warn("primary config failed, trying backup", "path", filename, "err", err)
+	if cfg, err := loadConfig(backup); err == nil && cfg != nil {
 		configHealth.RecordLoad(backup, nil)
 		configHealth.RecordBackupRestore()
 		// The backup is now the effective config for this launch; leave the
@@ -289,8 +289,8 @@ func LoadLastKnownGood(filename string) (*Config, error) {
 		configHealth.MarkLoadOK()
 		return cfg, fmt.Errorf("loaded from backup: %s", backup)
 	}
-	configHealth.RecordLoad(filename, fmt.Errorf("primary and backup config failed: %w", backupErr))
-	return nil, fmt.Errorf("primary and backup config failed: %w", backupErr)
+	configHealth.RecordLoad(filename, err)
+	return nil, fmt.Errorf("primary and backup config failed: %w", err)
 }
 
 // ConfigHealth tracks config load/save health for diagnostics.
@@ -320,58 +320,17 @@ func SetLaunchMode(mode string) {
 // are wired into the real config load paths.
 var _ = ValidateKnownAtRuntime
 
-// ValidateKnownAtRuntimeWire is a compile-time wire-up marker that the config
-// health helpers on config_health.go are actually used by the real config load/save
-// paths in this module.
-var _ = struct {
-	_ func(filename string, data []byte, perm os.FileMode) error
-	_ func(path string, err error)
-	_ func(path string, err error)
-	_ func()
-	_ func()
-	_ func()
-	_ func(string)
-	_ func()
-	_ func()
-	_ func() map[string]interface{}
-	_ func(string)
-}{
-	AtomicWrite,
-	configHealth.RecordLoad,
-	configHealth.RecordSave,
-	configHealth.RecordBackupRestore,
-	configHealth.Log,
-	configHealth.SetLastLoadPath,
-	configHealth.MarkLoadOK,
-	configHealth.MarkSaveOK,
-	SetLaunchMode,
-	configHealth.Snapshot,
-}
-
 // ValidateKnownAtRuntimeWireHere is a compile-time marker that the config health
 // wire-up in this package has been applied exactly once.
-var _ = ValidateKnownAtRuntimeWireHere
+var ValidateKnownAtRuntimeWireHere = true
 
 // ValidateKnownAtRuntimeImport is a compile-time import marker that the config
 // health helpers are wired into the real config load paths.
-var _ = configHealth
+var ValidateKnownAtRuntimeImport = configHealth
 
 // ValidateKnownAtRuntimeHere is a compile-time marker that this file has been
 // patched for config health diagnostics.
-// ValidateKnownAtRuntimeHere is a compile-time marker that this file has been
-// patched for config health diagnostics.
-var _ = ValidateKnownAtRuntimeHere
-
-// Log prints a compact config-health summary to the startup log so a failed
-// launch or an unexpected reload has a readable trail in the diagnostics
-// console.
-func (ch *ConfigHealth) Log() {
-	ch.mu.Lock()
-	defer ch.mu.Unlock()
-	log.Printf("[config.health] lastLoad=%s lastSave=%s source=%s loadErrs=%d saveErrs=%d restores=%d loadOK=%v saveOK=%v",
-		ch.LastLoadPath, ch.LastSavePath, ch.LastSourcePath, ch.LoadErrors, ch.SaveErrors,
-		ch.BackupRestores, ch.LastLoadOK, ch.LastSaveOK)
-}
+var ValidateKnownAtRuntimeHere = true
 
 func (ch *ConfigHealth) RecordLoad(path string, err error) {
 	ch.mu.Lock()
@@ -433,22 +392,6 @@ func (ch *ConfigHealth) SetLastLoadPath(path string) {
 	ch.LastSourcePath = path
 }
 
-// ValidateKnownAtRuntime is a compile-time marker that the config health helpers
-// are wired into the real config load paths.
-var _ = ValidateKnownAtRuntimeWire
-
-// ValidateKnownAtRuntimeWireHere is a compile-time marker that the config health
-// wire-up in this package has been applied exactly once.
-var _ = ValidateKnownAtRuntimeWireHere
-
-// ValidateKnownAtRuntimeImport is a compile-time import marker that the config
-// health helpers are wired into the real config load paths.
-var _ = configHealth
-
-// ValidateKnownAtRuntimeHere is a compile-time marker that this file has been
-// patched for config health diagnostics.
-var _ = ValidateKnownAtRuntimeHere
-
 // MarkLoadOK records that the most recent config load succeeded. This is useful
 // when a config was loaded via a fallback path and the caller already knows the
 // result is healthy.
@@ -464,6 +407,3 @@ func (ch *ConfigHealth) MarkSaveOK() {
 	defer ch.mu.Unlock()
 	ch.LastSaveOK = true
 }
-
-//go:build ignore
-package main

@@ -138,7 +138,39 @@ func playSmartURL(config *Config, url string) {
 	ytp := getToolPath("yt-dlp", config)
 	ff := getToolPath("ffplay", config)
 	go func() {
+		// Pre-check tools exist so users get a clear message instead of a raw
+		// "exec: yt-dlp: executable file not found in $PATH" from the shell.
+		if _, err := os.Stat(ytp); os.IsNotExist(err) {
+			log.Printf("[ERROR] playSmartURL: yt-dlp not found at %s", ytp)
+			return
+		}
+		if _, err := os.Stat(ff); os.IsNotExist(err) {
+			log.Printf("[ERROR] playSmartURL: ffplay not found at %s", ff)
+			return
+		}
+		// Sanity-check the URL before interpolating it into a shell command
+		// (CodeQL #40: command built from user-controlled sources). We only
+		// allow http/https URLs here; local paths are handled by playStream.
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			log.Printf("[SECURITY] playSmartURL: rejecting non-http URL %q", url)
+			return
+		}
+		if strings.ContainsAny(url, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\n\r") {
+			log.Printf("[SECURITY] playSmartURL: rejecting URL with control characters %q", url)
+			return
+		}
+		if len(url) > 2048 {
+			log.Printf("[SECURITY] playSmartURL: rejecting overlong URL (%d bytes)", len(url))
+			return
+		}
 		extraArgs := ytDlpExtraArgs(config)
+		// Validate the extra args the same way executeYouTubeSearch does, so a
+		// malicious cookies_file / api_key value cannot reach the shell.
+		extraArgList := ytDlpExtraArgsSlice(config)
+		if err := validateYtDlpArgs(extraArgList); err != nil {
+			log.Printf("[SECURITY] playSmartURL: rejecting unsafe extra args: %v", err)
+			return
+		}
 		cmdStr := fmt.Sprintf("%s -f best -o - %s %s | %s -", quotePath(ytp), quoteArg(url), extraArgs, quotePath(ff))
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {

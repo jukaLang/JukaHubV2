@@ -280,6 +280,21 @@ func repoPkgCompatible(p *RepoPkg) bool {
 	return signedRepoPackageCompatible(p, DetectDevice(), runtime.GOARCH, IsWindows())
 }
 
+// repoPkgCompatibleWithDevice is the testable entry point of the repo package
+// compatibility gate. It exists so the signed-package tests can exercise device,
+// architecture and OS constraints without calling DetectDevice() at test time.
+func repoPkgCompatibleWithDevice(p *RepoPkg, device DeviceModel, arch string, windows bool) bool {
+	return signedRepoPackageCompatible(p, device, arch, windows)
+}
+
+// repoPkgCompatibleWithDeviceExactSameDevice is a mirror of the repo gate that
+// exists only to make the exact-device regression tests read like the rest of
+// the suite. It returns the same answer as repoPkgCompatibleWithDevice.
+func repoPkgCompatibleWithDeviceExactSameDevice(p *RepoPkg, device DeviceModel, arch string, windows bool) bool {
+	return repoPkgCompatibleWithDevice(p, device, arch, windows)
+}
+
+// signedRepoPackageCompatible evaluates device/OS/architecture constraints.
 func signedRepoPackageCompatible(p *RepoPkg, device DeviceModel, arch string, windows bool) bool {
 	if p == nil || (p.Architecture != "arm64" && p.Architecture != "all") {
 		return false

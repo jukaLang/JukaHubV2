@@ -19,13 +19,13 @@
             <div class="app-bar-brand">
                 <img src="favicon.png" alt="" class="app-bar-logo" aria-hidden="true">
                 <div class="app-bar-titles">
-                    <h1>JukaHub <span>Generator</span></h1>
-                    <p class="app-bar-subtitle" id="projectTitle">Retro handheld GUI builder</p>
+                    <h1>JukaHub <span>Generator</span> — TrimUI Edition</h1>
+                    <p class="app-bar-subtitle" id="projectTitle">Handheld GUI builder — TrimUI Smart Pro (TG5040)</p>
                 </div>
             </div>
             <div class="app-bar-actions">
                 <button id="aiToggleBtn" class="app-bar-button ai-toggle-button" type="button" aria-label="Toggle AI assistant" aria-expanded="false" aria-controls="aiPanel">
-                    <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span>AI</span>
+                    <span class="ai-toggle-icon"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i></span> <span>AI</span>
                 </button>
                 <button id="toggleGuide" class="app-bar-button" type="button" aria-label="Getting Started Guide">
                     <i class="fas fa-question-circle" aria-hidden="true"></i> <span>Guide</span>
@@ -58,12 +58,56 @@
             <div class="guide-backdrop"></div>
             <div class="guide-content">
                 <div class="guide-header">
-                    <h2 id="guideTitle"><i class="fas fa-lightbulb" aria-hidden="true"></i> Getting Started Guide</h2>
+                    <h2 id="guideTitle"><i class="fas fa-lightbulb" aria-hidden="true"></i> Welcome to JukaHub</h2>
+                    <p class="guide-subtitle">A drag-and-drop GUI builder for your TrimUI handheld.</p>
+                    <div class="welcome-quick-starts">
+                        <button type="button" class="welcome-card" data-start="blank">
+                            <h5><i class="fas fa-file" aria-hidden="true"></i> Start blank</h5>
+                            <p>Build a fresh interface from scratch on this device.</p>
+                        </button>
+                        <button type="button" class="welcome-card" data-start="template">
+                            <h5><i class="fas fa-layer-group" aria-hidden="true"></i> Start from template</h5>
+                            <p>Load a ready-made multi-scene project to remix.</p>
+                        </button>
+                        <button type="button" class="welcome-card" data-start="load">
+                            <h5><i class="fas fa-upload" aria-hidden="true"></i> Load config</h5>
+                            <p>Import a <code>jukaconfig.json</code> or <code>jukaconfig.xml</code> you already have.</p>
+                        </button>
+                    </div>
+                    <div class="welcome-quick-starts">
+                        <button type="button" class="welcome-card" data-start="blank">
+                            <h5><i class="fas fa-file" aria-hidden="true"></i> Start blank</h5>
+                            <p>Build a fresh interface from scratch on this device.</p>
+                        </button>
+                        <button type="button" class="welcome-card" data-start="template">
+                            <h5><i class="fas fa-layer-group" aria-hidden="true"></i> Start from template</h5>
+                            <p>Load a ready-made multi-scene project to remix.</p>
+                        </button>
+                        <button type="button" class="welcome-card" data-start="load">
+                            <h5><i class="fas fa-upload" aria-hidden="true"></i> Load config</h5>
+                            <p>Import a <code>jukaconfig.json</code> or <code>jukaconfig.xml</code> you already have.</p>
+                        </button>
+                    </div>
+                    <div class="welcome-quick-starts">
+                        <button type="button" class="welcome-card" data-start="blank">
+                            <h5><i class="fas fa-file" aria-hidden="true"></i> Start blank</h5>
+                            <p>Build a fresh interface from scratch on this device.</p>
+                        </button>
+                        <button type="button" class="welcome-card" data-start="template">
+                            <h5><i class="fas fa-layer-group" aria-hidden="true"></i> Start from template</h5>
+                            <p>Load a ready-made multi-scene project to remix.</p>
+                        </button>
+                        <button type="button" class="welcome-card" data-start="load">
+                            <h5><i class="fas fa-upload" aria-hidden="true"></i> Load config</h5>
+                            <p>Import a <code>jukaconfig.json</code> or <code>jukaconfig.xml</code> you already have.</p>
+                        </button>
+                    </div>
                     <button id="closeGuide" class="close-button" type="button" aria-label="Close guide">
                         <i class="fas fa-times" aria-hidden="true"></i>
                     </button>
                 </div>
                 <div class="guide-body">
+                    <ol>
                     <ol>
                         <li>On desktop: Drag elements from the left sidebar to the canvas
                             <ul>
@@ -88,7 +132,7 @@
                         <li><kbd>Delete</kbd> — Remove selected element</li>
                         <li><kbd>Ctrl+D</kbd> — Duplicate selected element</li>
                         <li><kbd>Ctrl+S</kbd> — Export JSON</li>
-                        <li><kbd>Ctrl+P</kbd> — Toggle Preview Mode; <kbd>Esc</kbd> — Exit Preview Mode</li>
+                        <li><kbd>Ctrl+Shift+P</kbd> — Toggle Preview Mode ; <kbd>Esc</kbd> — Exit Preview</li>
                         <li>Right-click elements for a context menu</li>
                     </ul>
                     <p>Visit <a href="https://github.com/jukaLang/JukaHubV2/wiki" target="_blank">https://github.com/jukaLang/JukaHubV2/wiki</a> for more info</p>
@@ -195,7 +239,8 @@
                             </button>
                         </div>
                         <div class="file-controls">
-                            <button id="clearButton" class="action-button danger" type="button">
+                        <div class="file-controls">
+                            <button id="clearButton" class="action-button danger" type="button" aria-label="Clear all scenes, elements and variables" title="Clear all — removes every scene, element and variable; Undo restores the previous project">
                                 <i class="fas fa-broom" aria-hidden="true"></i> <span>Clear All</span>
                             </button>
                             <div class="export-dropdown-wrapper">
@@ -234,6 +279,7 @@
                 <div id="rightSidebarContent" class="sidebar-content">
                     <div class="properties-tabs" role="tablist" aria-label="Inspector tabs">
                         <button class="properties-tab active" data-tab="element-properties" type="button" role="tab" aria-selected="true">Element</button>
+                        <button class="properties-tab" data-tab="scenes" type="button" role="tab" aria-selected="false">Scenes</button>
                         <button class="properties-tab" data-tab="app-properties" type="button" role="tab" aria-selected="false">App Info</button>
                     </div>
 
@@ -242,7 +288,12 @@
                         <div id="elementProperties" class="element-properties">
                             <div class="no-selection" id="noSelection">
                                 <i class="fas fa-mouse-pointer" aria-hidden="true"></i>
-                                <p>Select an element on the canvas to edit its properties.</p>
+                                <p>Select an element on the canvas to edit its properties, or pick a tab above.</p>
+                                <ul class="empty-hints">
+                                    <li><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Shift+Z</kbd> redo</li>
+                                    <li>Drag from the Library to add elements</li>
+                                    <li>Double-click text to edit it</li>
+                                </ul>
                             </div>
 
                             <div class="position-controls">
@@ -381,26 +432,22 @@
                                 <div class="control-group">
                                     <label for="textBrowserVariable"><i class="fas fa-code" aria-hidden="true"></i> Output Variable</label>
                                     <select id="textBrowserVariable" class="dynamic-variable-selector"></select>
+                                    <small class="field-help">Variable that stores the loaded text so other elements can show it.</small>
                                 </div>
                                 <div class="control-group">
                                     <label for="textBrowserSource"><i class="fas fa-globe" aria-hidden="true"></i> Data Source</label>
-                                    <select id="textBrowserSource" class="textbrowser-source-selector">
-                                        <option value="system">System Info (gopsutil)</option>
-                                        <option value="zeroconf">Zeroconf / mDNS</option>
-                                        <option value="json">JSON (gjson)</option>
-                                        <option value="web">Web Page (readable text)</option>
-                                    </select>
-                                    <div class="source-preview">
-                                        <span class="source-badge system" id="sourceBadgeSystem">System</span>
-                                        <span class="source-badge zeroconf" id="sourceBadgeZeroconf">Zeroconf</span>
-                                        <span class="source-badge json" id="sourceBadgeJson">JSON</span>
-                                        <span class="source-badge web" id="sourceBadgeWeb">Web</span>
+                                    <div class="source-segmented" role="group" aria-label="Text browser data source">
+                                        <button type="button" class="source-segment active" data-source="system" aria-pressed="true">System</button>
+                                        <button type="button" class="source-segment" data-source="zeroconf" aria-pressed="false">Zeroconf</button>
+                                        <button type="button" class="source-segment" data-source="json" aria-pressed="false">JSON</button>
+                                        <button type="button" class="source-segment" data-source="web" aria-pressed="false">Web</button>
                                     </div>
+                                    <small class="field-help">Where the text browser reads its content from. System and Zeroconf are local; JSON parses a path from the output; Web fetches a readable page.</small>
                                 </div>
                                 <div class="control-group" id="textBrowserJsonPathGroup" style="display: none;">
                                     <label for="textBrowserJsonPath"><i class="fas fa-project-diagram" aria-hidden="true"></i> JSON Path (gjson)</label>
                                     <input type="text" id="textBrowserJsonPath" class="textbrowser-json-path" placeholder="e.g. .data.items or $.path">
-                                    <small class="help-text">Use gjson syntax: .key, .array[0], or $.path</small>
+                                    <small class="help-text">Use gjson syntax: .key, .array[0], or $.path. Only used when the source is JSON.</small>
                                 </div>
                                 <div class="control-group">
                                     <label class="toggle-label">
@@ -429,60 +476,86 @@
                     <!-- App Properties -->
                     <div id="appInfoPanel" class="properties-panel active">
                         <div class="input-container">
-                            <div class="input-group">
-                                <label for="title"><i class="fas fa-heading" aria-hidden="true"></i> Title</label>
-                                <input type="text" id="title" placeholder="App Title">
-                            </div>
-                            <div class="input-group">
-                                <label for="author"><i class="fas fa-user" aria-hidden="true"></i> Author</label>
-                                <input type="text" id="author" placeholder="Your Name">
-                            </div>
-                            <div class="input-group">
-                                <label for="description"><i class="fas fa-align-left" aria-hidden="true"></i> Description</label>
-                                <input type="text" id="description" placeholder="App description">
-                            </div>
-                            <div class="input-group">
-                                <label for="canvasSize"><i class="fas fa-mobile-alt" aria-hidden="true"></i> Device</label>
-                                <select id="canvasSize">
-                                    <option value="1280x720">TSP (1280 x 720)</option>
-                                    <option value="1024x768">Brick (1024 x 768)</option>
-                                    <option value="custom">Custom</option>
-                                </select>
-                            </div>
-                            <div id="customSizeFields" class="custom-size-fields">
-                                <input type="number" id="customWidth" placeholder="Width" min="1">
-                                <span>x</span>
-                                <input type="number" id="customHeight" placeholder="Height" min="1">
-                            </div>
+                            <fieldset class="app-fieldset">                                <legend class="app-fieldset-legend">General</legend>
+                                <div class="input-group">
+                                    <label for="title"><i class="fas fa-heading" aria-hidden="true"></i> Title</label>
+                                    <input type="text" id="title" placeholder="App Title">
+                                </div>
+                                <div class="input-group">
+                                    <label for="author"><i class="fas fa-user" aria-hidden="true"></i> Author</label>
+                                    <input type="text" id="author" placeholder="Your Name">
+                                </div>
+                                <div class="input-group">
+                                    <label for="description"><i class="fas fa-align-left" aria-hidden="true"></i> Description</label>
+                                    <input type="text" id="description" placeholder="App description">
+                                </div>
+                                <div class="input-group">
+                                    <label for="canvasSize"><i class="fas fa-mobile-alt" aria-hidden="true"></i> Device</label>
+                                    <select id="canvasSize">
+                                        <option value="1280x720">TSP (1280 &times; 720)</option>
+                                        <option value="1024x768">Brick (1024 &times; 768)</option>
+                                        <option value="custom">Custom</option>
+                                    </select>
+                                    <small class="field-help">The canvas resolution JukaHub exports. Device presets match common TrimUI screen sizes; custom is for other targets.</small>
+                                </div>
+                                <div id="customSizeFields" class="custom-size-fields" style="display:none">
+                                    <div class="custom-size-row">
+                                        <label for="customWidth" class="custom-size-label">Width (px)</label>
+                                        <input type="number" id="customWidth" class="custom-size-input" placeholder="1280" min="1">
+                                    </div>
+                                    <span class="custom-size-x" aria-hidden="true">&times;</span>
+                                    <div class="custom-size-row">
+                                        <label for="customHeight" class="custom-size-label">Height (px)</label>
+                                        <input type="number" id="customHeight" class="custom-size-input" placeholder="720" min="1">
+                                    </div>
+                                </div>                                <div id="customSizeFields" class="custom-size-fields" style="display:none">
+                                    <div class="custom-size-row">
+                                        <label for="customWidth" class="custom-size-label">Width (px)</label>
+                                        <input type="number" id="customWidth" class="custom-size-input" placeholder="1280" min="1">
+                                    </div>
+                                    <span class="custom-size-x" aria-hidden="true">&times;</span>
+                                    <div class="custom-size-row">
+                                        <label for="customHeight" class="custom-size-label">Height (px)</label>
+                                        <input type="number" id="customHeight" class="custom-size-input" placeholder="720" min="1">
+                                    </div>
+                                </div>
                             <div class="input-group">
                                 <label for="backgroundPathInput"><i class="fas fa-image" aria-hidden="true"></i> Background Image Path</label>
-                                <input type="text" id="backgroundPathInput" placeholder="background.jpg">
-                            </div>
-                            <input type="file" id="backgroundFile" accept="image/*" class="sr-only" aria-label="Background image file">
-                        </div>
-                        <div class="font-size-controls">
-                            <h4><i class="fas fa-text-height" aria-hidden="true"></i> Font Sizes</h4>
-                            <div class="size-inputs">
-                                <div class="size-group">
-                                    <label for="titleSize">Title</label>
-                                    <input type="number" id="titleSize" value="48" min="10">
+                                    <input type="text" id="backgroundPathInput" placeholder="background.jpg">
                                 </div>
-                                <div class="size-group">
+                                <input type="file" id="backgroundFile" accept="image/*" class="sr-only" aria-label="Background image file">
+                            </div>
+
+                            <fieldset class="app-fieldset">
+                                <legend class="app-fieldset-legend">Display</legend>
+                                <div class="font-size-controls">
+                                <h4><i class="fas fa-text-height" aria-hidden="true"></i> Font Sizes</h4>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="titleSize">Title</label>
+                                        <input type="number" id="titleSize" value="48" min="10">
+                                        <span class="size-units">px</span>
+                                    </div>
+                                    <div class="size-group">
                                     <label for="bigSize">Big</label>
                                     <input type="number" id="bigSize" value="36" min="10">
+                                    <span class="size-units">px</span>
                                 </div>
                                 <div class="size-group">
                                     <label for="mediumSize">Medium</label>
                                     <input type="number" id="mediumSize" value="24" min="10">
+                                    <span class="size-units">px</span>
                                 </div>
                                 <div class="size-group">
                                     <label for="smallSize">Small</label>
                                     <input type="number" id="smallSize" value="18" min="10">
+                                    <span class="size-units">px</span>
                                 </div>
+                                </div>
+                                <small class="field-help">Font roles map to the player's font system. Title is for the app name, Big for card headers, Medium for body text, Small for captions.</small>
                             </div>
-                        </div>
                         <div class="theme-controls">
-                            <h4><i class="fas fa-palette" aria-hidden="true"></i> Theme &amp; Display</h4>
+                            <h4><i class="fas fa-palette" aria-hidden="true"></i> Theme &amp; Colors</h4>
                             <div class="size-inputs">
                                 <div class="size-group">
                                     <label for="buttonColorPicker">Button Color</label>
@@ -493,53 +566,59 @@
                                     <input type="color" id="labelColorPicker" value="#ffffff">
                                 </div>
                             </div>
-                            <div class="input-group">
-                                <label for="toolsPath"><i class="fas fa-folder" aria-hidden="true"></i> Tools Path</label>
-                                <input type="text" id="toolsPath" placeholder="./required" value="./required">
-                            </div>
-                            <div class="size-inputs">
-                                <div class="size-group">
-                                    <label for="screenWidthInput">Screen W</label>
-                                    <input type="number" id="screenWidthInput" value="1280" min="1">
+                            <small class="field-help">These colors are exported into the app theme. Button Color is used by pressable elements; Label Color is used by text labels on colored backgrounds.</small>
+                            <fieldset class="app-fieldset">
+                                <legend class="app-fieldset-legend">Paths</legend>
+                                <div class="input-group">
+                                    <label for="toolsPath"><i class="fas fa-folder" aria-hidden="true"></i> Tools Path</label>
+                                    <input type="text" id="toolsPath" placeholder="./required" value="./required">
                                 </div>
-                                <div class="size-group">
-                                    <label for="screenHeightInput">Screen H</label>
-                                    <input type="number" id="screenHeightInput" value="720" min="1">
+                                <small class="field-help">Folder where JukaHub looks for external tools such as terminal commands and media helpers. Leave as <code>./required</code> unless you moved the tools bundle.</small>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="screenWidthInput">Screen W</label>
+                                        <input type="number" id="screenWidthInput" value="1280" min="1">
+                                    </div>
+                                    <div class="size-group">
+                                        <label for="screenHeightInput">Screen H</label>
+                                        <input type="number" id="screenHeightInput" value="720" min="1">
+                                    </div>
                                 </div>
-                            </div>
-                            <div class="input-group">
-                                <label for="fileExplorerRoot"><i class="fas fa-hdd" aria-hidden="true"></i> File Explorer Root</label>
-                                <input type="text" id="fileExplorerRoot" placeholder="/mnt">
-                            </div>
-                            <div class="size-inputs">
-                                <div class="size-group">
-                                    <label for="weatherUnit">Weather Units</label>
-                                    <select id="weatherUnit">
-                                        <option value="C">°C</option>
-                                        <option value="F">°F</option>
-                                    </select>
+                                <div class="input-group">
+                                    <label for="fileExplorerRoot"><i class="fas fa-hdd" aria-hidden="true"></i> File Explorer Root</label>
+                                    <input type="text" id="fileExplorerRoot" placeholder="/mnt">
                                 </div>
-                                <div class="size-group">
-                                    <label for="fullscreenToggle" class="checkbox-label"><input type="checkbox" id="fullscreenToggle"> Fullscreen</label>
+                                <div class="size-inputs">
+                                    <div class="size-group">
+                                        <label for="weatherUnit">Weather Units</label>
+                                        <select id="weatherUnit">
+                                            <option value="C">°C</option>
+                                            <option value="F">°F</option>
+                                        </select>
+                                    </div>
+                                    <div class="size-group">
+                                        <label for="fullscreenToggle" class="checkbox-label"><input type="checkbox" id="fullscreenToggle"> Fullscreen</label>
+                                    </div>
                                 </div>
-                            </div>
+                            </fieldset>
                             <h4><i class="fas fa-font" aria-hidden="true"></i> Font Files</h4>
+                            <small class="field-help">Paths relative to the app folder. Leave blank to use the device default. Used at runtime, not by the builder.</small>
                             <div class="size-inputs">
                                 <div class="size-group">
                                     <label for="titleFontFile">Title</label>
-                                    <input type="text" id="titleFontFile" placeholder="Inter-Regular.ttf">
+                                    <input type="text" id="titleFontFile" class="font-file-input" placeholder="Inter-Regular.ttf">
                                 </div>
                                 <div class="size-group">
                                     <label for="bigFontFile">Big</label>
-                                    <input type="text" id="bigFontFile" placeholder="Inter-Regular.ttf">
+                                    <input type="text" id="bigFontFile" class="font-file-input" placeholder="Inter-Regular.ttf">
                                 </div>
                                 <div class="size-group">
                                     <label for="mediumFontFile">Medium</label>
-                                    <input type="text" id="mediumFontFile" placeholder="Inter-Regular.ttf">
+                                    <input type="text" id="mediumFontFile" class="font-file-input" placeholder="Inter-Regular.ttf">
                                 </div>
                                 <div class="size-group">
                                     <label for="smallFontFile">Small</label>
-                                    <input type="text" id="smallFontFile" placeholder="Inter-Regular.ttf">
+                                    <input type="text" id="smallFontFile" class="font-file-input" placeholder="Inter-Regular.ttf">
                                 </div>
                             </div>
                         </div>
@@ -552,10 +631,8 @@
         <footer class="app-footer">
             <p>Need help? Join us on <a href="https://discord.gg/R9qgJjh5jG" target="_blank"><i class="fab fa-discord" aria-hidden="true"></i> Discord</a>.
             Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2" target="_blank"><i class="fab fa-github" aria-hidden="true"></i> GitHub</a></p>
-        </footer>
-    </div>
-    <!-- AI Assistant — floating chatbox (bottom-right) -->
-    <div id="aiPanel" class="ai-panel" role="dialog" aria-label="AI assistant">
+        </footer>        </div>
+        <div id="aiPanel" class="ai-panel" role="dialog" aria-label="AI assistant" aria-hidden="true" hidden>
         <div class="panel-header ai-panel-header">
             <h3><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> AI Assistant</h3>
             <button id="aiPanelToggle" class="panel-toggle" type="button" aria-label="Close AI assistant" title="Close AI assistant">
@@ -626,26 +703,4 @@
         </div>
     </div>
 
-    <button id="aiLauncher" class="ai-launcher" type="button" aria-label="Open AI assistant" aria-expanded="false" aria-controls="aiPanel">
-        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> <span>AI</span>
-    </button>
-
     <!-- Element Context Menu -->
-    <div id="contextMenu" class="context-menu" style="display:none">
-        <button type="button" data-action="duplicate"><i class="fas fa-copy"></i> Duplicate</button>
-        <button type="button" data-action="delete"><i class="fas fa-trash"></i> Delete</button>
-        <div class="context-menu-sep"></div>
-        <button type="button" data-action="bring-front"><i class="fas fa-arrow-up"></i> Bring to Front</button>
-        <button type="button" data-action="send-back"><i class="fas fa-arrow-down"></i> Send to Back</button>
-        <div class="context-menu-sep"></div>
-        <button type="button" data-action="edit-text"><i class="fas fa-pen"></i> Edit Text</button>
-    </div>
-
-    <!-- Preview Mode Toggle -->
-    <button id="previewToggle" class="preview-toggle" type="button" title="Preview Mode (Ctrl+P)" aria-label="Preview" aria-pressed="false">
-        <i class="fas fa-eye" aria-hidden="true"></i><span>Preview</span>
-    </button>
-
-    <script src="script.js"></script>
-</body>
-</html>

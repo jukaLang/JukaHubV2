@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/grandcat/zeroconf v1.0.0
+	github.com/mattn/go-sqlite3 v1.14.52
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/tidwall/gjson v1.17.0
 	github.com/veandco/go-sdl2 v0.4.40

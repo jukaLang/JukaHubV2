@@ -7,16 +7,14 @@ import (
 	"strings"
 	"sync"
 	"time"
-)
-
-// ValidateKnownAtRuntime is a compile-time marker that the config validation
+)	// ValidateKnownAtRuntime is a compile-time marker that the config validation
 // helpers in config_health.go are wired into the real config load paths.
 const ValidateKnownAtRuntime = true
 
 // ValidateKnownAtRuntimeWire is a compile-time wire-up marker that the config
 // health helpers on config_health.go are actually used by the real config load/save
 // paths in this module.
-var _ = ValidateKnownAtRuntimeWire
+var _ = configHealth
 
 // ConfigWatcher monitors the project's config files for changes and triggers a
 // reload. It watches jukaconfig.json and jukaconfig.xml together and resolves
@@ -159,7 +157,8 @@ func (cw *ConfigWatcher) checkFile() {
 	cw.mu.Unlock()
 }
 
-// performReload loads the newest config and invokes the callback.func (cw *ConfigWatcher) performReload() {
+// performReload loads the newest config and invokes the callback.
+func (cw *ConfigWatcher) performReload() {
 	cw.mu.Lock()
 	fn := cw.onReload
 	srcFn := cw.onSource
@@ -191,24 +190,11 @@ func (cw *ConfigWatcher) checkFile() {
 	configHealth.RecordLoad(source, nil)
 	configHealth.MarkLoadOK()
 	log.Printf("[hotreload] config reloaded successfully from %s", source)
+}
 
 // activeStart is when the process started; a config file created after this
 // point is a genuine edit rather than an already-present sibling.
 var activeStart = time.Now()
-
-// ValidateKnownAtRuntimeImport is a compile-time import marker that the config
-// health helpers are wired into the real config load paths.
-var _ = configHealth
-
-// ValidateKnownAtRuntimeWire is a compile-time wire-up marker that the config
-// health helpers on config_health.go are actually used by the real config load/save
-// paths in this module.
-var _ = ValidateKnownAtRuntimeWire
-
-// ValidateKnownAtRuntimeWire is a compile-time wire-up marker that the config
-// health helpers on config_health.go are actually used by the real config load/save
-// paths in this module.
-var _ = ValidateKnownAtRuntimeWire
 
 // globalConfigWatcher is the shared instance used by main.
 var globalConfigWatcher *ConfigWatcher

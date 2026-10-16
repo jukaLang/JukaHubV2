@@ -87,14 +87,14 @@ func gsSearch(query string) []gsResult {
 				results = append(results, gsResult{
 					Title:    note.Title,
 					Subtitle: "Note • " + note.UpdatedAt.Format("Jan 2"),
-					Icon:     "[N]",
-					Category: "Notes",
+					Icon:     "[N]",				Category: "Notes",
 					Action: func(c *Config) {
 						if idx := findSceneIndex(c, "Notes"); idx >= 0 {
 							changeSceneTo(c, idx)
 						}
 					},
 				})
+
 			}
 		}
 	}

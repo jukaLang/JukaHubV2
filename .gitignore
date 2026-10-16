@@ -14,11 +14,15 @@
 *.out
 
 # Dependency directories (remove the comment below to include it)
-# vendor/
+vendor/
 
 # Go workspace file
 go.work
 go.work.sum
+
+# Go install/stage leftovers (e.g. from go install or build scripts)
+*\.stage-*
+%GO_STAGE%
 
 # env file
 .env
