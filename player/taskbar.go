@@ -290,7 +290,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 
 	// Version at bottom.
 	if smallFont != nil {
-		ver := versionString(config)
+		ver := versionDisplayString(config)
 		vw, _, _ := smallFont.SizeUTF8(ver)
 		renderText(renderer, config, smallFont, ver,
 			sdl.Color{R: 60, G: 70, B: 90, A: 120},

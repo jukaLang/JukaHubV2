@@ -2,14 +2,15 @@ package main
 
 import (
 	"fmt"
-	"log"
-	"math"
-	"runtime/debug"
-	"strings"
-	"time"
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
+	"log"
+	"math"
+	"os"
+	"runtime/debug"
+	"strings"
+	"time"
 )
 
 func main() {
@@ -18,14 +19,20 @@ func main() {
 			log.Printf("Panic: %v\n%s", r, debug.Stack())
 		}
 	}()
-	
+
+	// Secret management (set/check encrypted config values) runs before SDL so
+	// it works without a display, e.g. over SSH on the handheld.
+	if handled, code := handleSecretCommand(os.Args[1:]); handled {
+		os.Exit(code)
+	}
+
 	// Register cleanup functions to run on exit
 	defer func() {
 		for _, fn := range Cleanup {
 			fn()
 		}
 	}()
-	
+
 	initLogging()
 
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
@@ -100,24 +107,26 @@ func main() {
 	qsInit()
 	startWeather(config)
 
-	// Tool readiness: the app does not auto-download helper tools at startup.
-	// Instead it checks whether the tools it may use are present, and if any are
-	// missing it emits a specific, non-fatal warning plus a user-visible toast.
-	// Some features (video playback, YouTube extraction, media conversion) may be
-	// degraded until the missing tool is installed.
+	// Tool readiness: check whether the helper tools (yt-dlp, ffmpeg/ffplay) are
+	// present and auto-install the missing ones, showing the install bar while
+	// they download. This is non-fatal: offline launches stay usable and retry
+	// on the next run.
 	startToolHealthCheck()
-
 
 	// Patch module: load persisted state and roll back any interrupted update
 	// transaction so JukaHub always launches in a consistent state.
 	InitPatchModule()
 
+	// Automatic updater: check the release feed in the background, stage a newer
+	// build, and (for released installs) apply it and restart.
+	startAutoUpdateCheck(config)
+
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
 
-	// Start network connectivity monitoring and tool health checks.
+	// Start network connectivity monitoring (tool health is already started
+	// above; running it twice would double the startup probes).
 	startNetworkMonitor()
-	startToolHealthCheck()
 
 	// Start screensaver idle monitor.
 	// Set screensaver timeout from config
@@ -276,6 +285,7 @@ func main() {
 	running := true
 	for running {
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+			applyButtonSwap(config, event)
 			switch e := event.(type) {
 			case *sdl.QuitEvent:
 				running = false
@@ -345,7 +355,13 @@ func main() {
 							continue
 						}
 						curElem := curScene.Elements[selectedButtonIndex]
-						if curElem.Type == "searchresults" {
+						// The terminal renders its own screen and owns its keys. The chat
+						// element left in its config used to intercept Enter/Escape, which
+						// left no way to run a command or leave the scene.
+						inTerminal := curScene.Name == "Terminal"
+						if inTerminal {
+							handleTermInput(e, config)
+						} else if curElem.Type == "searchresults" {
 							// Grid navigation via the semantic action handler.
 							switch e.Keysym.Sym {
 							case sdl.K_UP:
@@ -420,12 +436,7 @@ func main() {
 							// Pressing A/Enter/Space opens the virtual keyboard
 							// with chat routing (works for both controller and keyboard).
 							if e.Keysym.Sym == sdl.K_RETURN || e.Keysym.Sym == sdl.K_SPACE || e.Keysym.Sym == sdl.K_a {
-								chatInputActive = true
-								if !virtualKeyboardActive {
-									virtualKeyboardActive = true
-									sdl.StartTextInput()
-									buildKeyboard()
-								}
+								vkOpenChat()
 							} else {
 								handleChatInput(e, config)
 							}
@@ -438,168 +449,169 @@ func main() {
 								handleTextBrowserAddressInput(renderer, config, curElem)
 							} else {
 								switch e.Keysym.Sym {
-							case sdl.K_UP:
-								textBrowserScrollVelocity -= textBrowserScrollAccel
-								if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
-									textBrowserScrollVelocity = -textBrowserScrollMaxVel
-								}
-								textBrowserScrollCooldown = 8
-							case sdl.K_DOWN:
-								textBrowserScrollVelocity += textBrowserScrollAccel
-								if textBrowserScrollVelocity > textBrowserScrollMaxVel {
-									textBrowserScrollVelocity = textBrowserScrollMaxVel
-								}
-								textBrowserScrollCooldown = 8
-							case sdl.K_PAGEUP:
-								textBrowserScrollY -= 10
-								if textBrowserScrollY < 0 {
+								case sdl.K_UP:
+									textBrowserScrollVelocity -= textBrowserScrollAccel
+									if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
+										textBrowserScrollVelocity = -textBrowserScrollMaxVel
+									}
+									textBrowserScrollCooldown = 8
+								case sdl.K_DOWN:
+									textBrowserScrollVelocity += textBrowserScrollAccel
+									if textBrowserScrollVelocity > textBrowserScrollMaxVel {
+										textBrowserScrollVelocity = textBrowserScrollMaxVel
+									}
+									textBrowserScrollCooldown = 8
+								case sdl.K_PAGEUP:
+									textBrowserScrollY -= 10
+									if textBrowserScrollY < 0 {
+										textBrowserScrollY = 0
+									}
+									textBrowserScrollVelocity = 0
+									textBrowserScrollCooldown = 0
+								case sdl.K_PAGEDOWN:
+									textBrowserScrollY += 10
+									textBrowserScrollVelocity = 0
+									textBrowserScrollCooldown = 0
+								case sdl.K_HOME:
 									textBrowserScrollY = 0
+									textBrowserScrollVelocity = 0
+									textBrowserScrollCooldown = 0
+								case sdl.K_END:
+									textBrowserScrollY = 1 << 30
+									textBrowserScrollVelocity = 0
+									textBrowserScrollCooldown = 0
 								}
-								textBrowserScrollVelocity = 0
-								textBrowserScrollCooldown = 0
-							case sdl.K_PAGEDOWN:
-								textBrowserScrollY += 10
-								textBrowserScrollVelocity = 0
-								textBrowserScrollCooldown = 0
-							case sdl.K_HOME:
-								textBrowserScrollY = 0
-								textBrowserScrollVelocity = 0
-								textBrowserScrollCooldown = 0
-							case sdl.K_END:
-								textBrowserScrollY = 1 << 30
-								textBrowserScrollVelocity = 0
-								textBrowserScrollCooldown = 0
 							}
-						}
-					} else if curElem.Type == "packagelist" {
-						handlePackageInput(e, config)
-					} else if curElem.Type == "recent" {
-						handleRecentInput(e, config)
-					} else if curScene.Name == "Pomodoro" {
-						handlePomodoroInput(e, config)
-					} else if curScene.Name == "Calculator" {
-						handleCalcInput(e)
-					} else if curScene.Name == "Alarm" {
-						handleAlarmInput(e, config)
-					} else if curScene.Name == "Terminal" {
-						handleTermInput(e, config)
-					} else if curScene.Name == "Dashboard" {
-						handleDashInput(e, config)
-					} else if curScene.Name == "About" {
-						handleAboutInput(e, config)
-					} else if curScene.Name == "Dictionary" {
-						handleDictInput(e, config)
-					} else if curScene.Name == "PDFReader" {
-						handlePDFInput(e, config)
-					} else if curScene.Name == "MusicPlayer" {
-						handleMusicInput(e, config)
-					} else if curScene.Name == "Notes" {
-						handleNotesInput(e, config)
-					} else if curScene.Name == "Games" {
-						if activeGame != gameNone {
-							handleActiveGameInput(e)
+						} else if curElem.Type == "packagelist" {
+							handlePackageInput(e, config)
+						} else if curElem.Type == "recent" {
+							handleRecentInput(e, config)
+						} else if curScene.Name == "Pomodoro" {
+							handlePomodoroInput(e, config)
+						} else if curScene.Name == "Calculator" {
+							handleCalcInput(e)
+						} else if curScene.Name == "Alarm" {
+							handleAlarmInput(e, config)
+						} else if curScene.Name == "Dashboard" {
+							handleDashInput(e, config)
+						} else if curScene.Name == "About" {
+							handleAboutInput(e, config)
+						} else if curScene.Name == "Dictionary" {
+							handleDictInput(e, config)
+						} else if curScene.Name == "PDFReader" {
+							handlePDFInput(e, config)
+						} else if curScene.Name == "MusicPlayer" {
+							handleMusicInput(e, config)
+						} else if curScene.Name == "Notes" {
+							handleNotesInput(e, config)
+						} else if curScene.Name == "Games" {
+							if activeGame != gameNone {
+								handleActiveGameInput(e)
+							} else {
+								handleGamesMenuInput(e)
+							}
+						} else if socialNotifOpen {
+							handleSocialNotifInput(e)
+						} else if wpOpen {
+							handleWallpaperInput(e, config)
+						} else if curScene.Name == "JukaLand" {
+							handleJukaLandInput(e)
 						} else {
-							handleGamesMenuInput(e)
-						}
-					} else if socialNotifOpen {
-						handleSocialNotifInput(e)
-					} else if wpOpen {
-						handleWallpaperInput(e, config)
-					} else if curScene.Name == "JukaLand" {
-						handleJukaLandInput(e)
-					} else {
-						// Normal button/input navigation
-						switch e.Keysym.Sym {
-						case sdl.K_UP, sdl.K_DOWN:
-							if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
-								moveHomeSelection(config, 0, map[sdl.Keycode]int{
-									sdl.K_UP: -1, sdl.K_DOWN: 1,
-								}[e.Keysym.Sym])
-							} else {
-								moveSelection(config, map[sdl.Keycode]int{
-									sdl.K_UP: -1, sdl.K_DOWN: 1,
-								}[e.Keysym.Sym])
-							}
-						case sdl.K_LEFT, sdl.K_RIGHT:
-							if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
-								moveHomeSelection(config, map[sdl.Keycode]int{
-									sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
-								}[e.Keysym.Sym], 0)
-							} else {
-								moveSelection(config, map[sdl.Keycode]int{
-									sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
-								}[e.Keysym.Sym])
-							}
-						case sdl.K_RETURN, sdl.K_SPACE:
-							if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
-								elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
-								if elem.Type == "input" {
-									handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
-								} else if elem.Type == "button" {
-									pressedButtonIndex = selectedButtonIndex
-									pressStartTime = sdl.GetTicks64()
-									handleTrigger(renderer, config, elem)
+							// Normal button/input navigation
+							switch e.Keysym.Sym {
+							case sdl.K_UP, sdl.K_DOWN:
+								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
+									moveHomeSelection(config, 0, map[sdl.Keycode]int{
+										sdl.K_UP: -1, sdl.K_DOWN: 1,
+									}[e.Keysym.Sym])
+								} else {
+									moveSelection(config, map[sdl.Keycode]int{
+										sdl.K_UP: -1, sdl.K_DOWN: 1,
+									}[e.Keysym.Sym])
+								}
+							case sdl.K_LEFT, sdl.K_RIGHT:
+								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
+									moveHomeSelection(config, map[sdl.Keycode]int{
+										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
+									}[e.Keysym.Sym], 0)
+								} else {
+									moveSelection(config, map[sdl.Keycode]int{
+										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
+									}[e.Keysym.Sym])
+								}
+							case sdl.K_RETURN, sdl.K_SPACE:
+								if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
+									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
+									if elem.Type == "input" {
+										handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
+									} else if elem.Type == "button" {
+										pressedButtonIndex = selectedButtonIndex
+										pressStartTime = sdl.GetTicks64()
+										handleTrigger(renderer, config, elem)
+									}
+								}
+							case sdl.K_ESCAPE:
+								// Generic back on non-home scenes: returns to the
+								// previous scene (or Home). Never exits the app.
+								if !homeLayoutActive {
+									goBackScene(config)
 								}
 							}
-						case sdl.K_ESCAPE:
-							// Generic back on non-home scenes: returns to the
-							// previous scene (or Home). Never exits the app.
-							if !homeLayoutActive {
-								goBackScene(config)
+						}
+						focusEngine.SyncSelected()
+						// Scene switching keys — not in the terminal, where q/e are
+						// ordinary characters in a command.
+						if !inTerminal {
+							switch e.Keysym.Sym {
+							case sdl.K_q:
+								changeScene(config, -1)
+							case sdl.K_e:
+								changeScene(config, 1)
 							}
 						}
-					}
-					focusEngine.SyncSelected()
-					// Scene switching keys
-					switch e.Keysym.Sym {
-					case sdl.K_q:
-						changeScene(config, -1)
-					case sdl.K_e:
-						changeScene(config, 1)
-					}
-					// Global search chord (Ctrl+K) jumps to the Tube/search scene.
-					if e.Keysym.Sym == sdl.K_k && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
-						if idx := findSceneIndex(config, "Tube"); idx >= 0 {
-							changeSceneTo(config, idx)
+						// Global search chord (Ctrl+K) jumps to the Tube/search scene.
+						if e.Keysym.Sym == sdl.K_k && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
+							if idx := findSceneIndex(config, "Tube"); idx >= 0 {
+								changeSceneTo(config, idx)
+							}
+						} // Quick Settings (Ctrl+Q).
+						if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
+							qsToggleOpen()
 						}
-					} // Quick Settings (Ctrl+Q).
-					if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
-						qsToggleOpen()
-					}
-					// Global shortcuts (F1 = help, F2 = global search, F12 = screenshot).
-					if e.Keysym.Sym == sdl.K_F1 {
-						shortcutsOpen = !shortcutsOpen
-						globalSearchOpen = false
-						continue
-					}
-					if e.Keysym.Sym == sdl.K_F2 {
-						globalSearchOpen = !globalSearchOpen
-						shortcutsOpen = false
-						continue
-					}
-					if e.Keysym.Sym == sdl.K_F12 {
-						captureScreenshot(renderer)
-						continue
-					}
-					// Clipboard manager (Ctrl+Shift+V).
-					if e.Keysym.Sym == sdl.K_v && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) != 0 {
-						clipSearchOpen = !clipSearchOpen
-						globalSearchOpen = false
-						shortcutsOpen = false
-						clipCursorIdx = 0
-						continue
-					}
-					// Fullscreen toggle (F11 / Alt+Enter).
-					if e.Keysym.Sym == sdl.K_F11 || (e.Keysym.Sym == sdl.K_RETURN && (e.Keysym.Mod&sdl.KMOD_ALT) != 0) {
-						config.Variables.Fullscreen = !config.Variables.Fullscreen
-						if mainWindow != nil {
-							if config.Variables.Fullscreen {
-								mainWindow.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
-							} else {
-								mainWindow.SetFullscreen(0)
+						// Global shortcuts (F1 = help, F2 = global search, F12 = screenshot).
+						if e.Keysym.Sym == sdl.K_F1 {
+							shortcutsOpen = !shortcutsOpen
+							globalSearchOpen = false
+							continue
+						}
+						if e.Keysym.Sym == sdl.K_F2 {
+							globalSearchOpen = !globalSearchOpen
+							shortcutsOpen = false
+							continue
+						}
+						if e.Keysym.Sym == sdl.K_F12 {
+							captureScreenshot(renderer)
+							continue
+						}
+						// Clipboard manager (Ctrl+Shift+V).
+						if e.Keysym.Sym == sdl.K_v && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) != 0 {
+							clipSearchOpen = !clipSearchOpen
+							globalSearchOpen = false
+							shortcutsOpen = false
+							clipCursorIdx = 0
+							continue
+						}
+						// Fullscreen toggle (F11 / Alt+Enter).
+						if e.Keysym.Sym == sdl.K_F11 || (e.Keysym.Sym == sdl.K_RETURN && (e.Keysym.Mod&sdl.KMOD_ALT) != 0) {
+							config.Variables.Fullscreen = !config.Variables.Fullscreen
+							if mainWindow != nil {
+								if config.Variables.Fullscreen {
+									mainWindow.SetFullscreen(sdl.WINDOW_FULLSCREEN_DESKTOP)
+								} else {
+									mainWindow.SetFullscreen(0)
+								}
 							}
 						}
-					}
 					}
 					focusEngine.SyncSelected()
 				}
@@ -610,31 +622,27 @@ func main() {
 					handleClipboardTextInput(string(e.Text[:]))
 				} else if globalSearchOpen {
 					handleGlobalSearchTextInput(string(e.Text[:]))
-				} else if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-					// Route text input to scene-specific handlers.
-					if config.Scenes[currentSceneIndex].Name == "Alarm" {
-						handleAlarmTextInput(e)
-					} else if config.Scenes[currentSceneIndex].Name == "Terminal" {
-						handleTermTextInput(e)
-					} else if config.Scenes[currentSceneIndex].Name == "Dictionary" {
-						handleDictTextInput(e)
-					} else if config.Scenes[currentSceneIndex].Name == "Notes" {
-						handleNotesTextInput(e)
+				} else if virtualKeyboardActive {
+					// While the keyboard is open its target owns the text, so
+					// scene-specific handlers must not also consume it.
+					vkInsertText(string(e.Text[:]), config)
+				} else {
+					if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+						// Route text input to scene-specific handlers.
+						switch config.Scenes[currentSceneIndex].Name {
+						case "Alarm":
+							handleAlarmTextInput(e)
+						case "Terminal":
+							handleTermTextInput(e)
+						case "Dictionary":
+							handleDictTextInput(e)
+						case "Notes":
+							handleNotesTextInput(e)
+						}
 					}
-				}
-				if activeSceneIndex != -1 && activeElementIndex != -1 {
-					curElem := config.Scenes[activeSceneIndex].Elements[activeElementIndex]
-					if curElem.Type == "chat" {
-						chatInputText += string(e.Text[:])
-					} else {
-						inputTextBuffer += string(e.Text[:])
-						updateInputVariable(config)
-					}
-				} else if currentSceneIndex >= 0 && selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
-					// Chat is not a modal input: route typed text straight to the
-					// composer whenever the chat element is the focused element.
-					if config.Scenes[currentSceneIndex].Elements[selectedButtonIndex].Type == "chat" {
-						chatInputText += string(e.Text[:])
+					// Chat composer and unit converter typing without the modal.
+					if unitInputActive || chatInputActive || activeSceneIndex != -1 {
+						vkInsertText(string(e.Text[:]), config)
 					}
 				}
 			case *sdl.MouseMotionEvent:
@@ -649,18 +657,23 @@ func main() {
 				}
 				if isDraggingSeekBar {
 					fraction := float64(mouseX-seekBarDragRect.X) / float64(seekBarDragRect.W)
-			if fraction < 0 {
-				fraction = 0
-			}
-			if fraction > 1 {
-				fraction = 1
-			}
-			if math.IsNaN(fraction) || math.IsInf(fraction, 0) {
-				fraction = 0
-			}
+					if fraction < 0 {
+						fraction = 0
+					}
+					if fraction > 1 {
+						fraction = 1
+					}
+					if math.IsNaN(fraction) || math.IsInf(fraction, 0) {
+						fraction = 0
+					}
 					SeekVideo(fraction)
 				}
 			case *sdl.MouseWheelEvent:
+				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+					config.Scenes[currentSceneIndex].Name == "Terminal" {
+					handleTermWheel(e.Y)
+					continue
+				}
 				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 					for _, elem := range config.Scenes[currentSceneIndex].Elements {
 						if elem.Type == "textbrowser" {
@@ -707,35 +720,41 @@ func main() {
 				if e.Button == sdl.BUTTON_LEFT {
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
 					if e.Type == sdl.MOUSEBUTTONDOWN {
-						// Virtual keyboard: click on keyboard keys.
 						if virtualKeyboardActive {
-							mx, my := int32(e.X), int32(e.Y)
-							for idx, rect := range keyboardRects {
-								if mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H {
-									if idx < len(keyboardRowCol) {
-										keyboardPosY, keyboardPosX = keyboardRowCol[idx][0], keyboardRowCol[idx][1]
-									}
-									handleKeyboardInput(config)
-									// Close keyboard on action keys.
-									if keyboardPosY >= 0 && keyboardPosY < len(keyboard) &&
-										keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
-										k := keyboard[keyboardPosY][keyboardPosX]
-										if k == "ENTER" || k == "SEND" || k == "ASK_AI" {
-											if chatInputActive {
-												chatInputActive = false
-											}
-											virtualKeyboardActive = false
-										}
-									}
-									break
+							kmx, kmy := physicalToLogical(int32(e.X), int32(e.Y))
+							if vkCloseHit(kmx, kmy) {
+								vkCloseKeyboard()
+								break
+							}
+							if row, col, ok := vkHitTest(kmx, kmy); ok {
+								keyboardPosY, keyboardPosX = row, col
+								key := vkFocusedKey()
+								vkActivateFocused(config)
+								if vkIsActionKey(key) {
+									vkCloseKeyboard()
 								}
+								break
+							}
+							// A click on the dimmed content behind the panel dismisses it.
+							if vkOutsidePanel(kmx, kmy) {
+								vkCloseKeyboard()
+								break
 							}
 							break
 						}
+
 						// Dismiss toast on click
 						if toastRect.W > 0 && toastRect.H > 0 && pointInRect(mx, my, toastRect) {
 							currentToast = ToastState{}
 							toastRect = sdl.Rect{}
+							break
+						}
+						// The terminal owns every click on its screen: its Back and
+						// Keyboard controls are drawn by the terminal renderer, not by
+						// config elements.
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == "Terminal" {
+							handleTermMouseClick(mx, my, config)
 							break
 						}
 						// Check if clicking on seek bar for dragging
@@ -802,24 +821,13 @@ func main() {
 						// Chat input area: clicking the text field opens the virtual keyboard.
 						if chatInputRect.W > 0 && mx >= chatInputRect.X && mx <= chatInputRect.X+chatInputRect.W &&
 							my >= chatInputRect.Y && my <= chatInputRect.Y+chatInputRect.H {
-							chatInputActive = true
-							if !virtualKeyboardActive {
-								virtualKeyboardActive = true
-								sdl.StartTextInput()
-								buildKeyboard()
-							}
+							vkOpenChat()
 							break
 						}
 						// Unit converter input area.
 						if unitInputRect.W > 0 && mx >= unitInputRect.X && mx <= unitInputRect.X+unitInputRect.W &&
 							my >= unitInputRect.Y && my <= unitInputRect.Y+unitInputRect.H {
-							unitInputActive = true
-							chatInputActive = false
-							if !virtualKeyboardActive {
-								virtualKeyboardActive = true
-								sdl.StartTextInput()
-								buildKeyboard()
-							}
+							vkOpenUnit()
 							break
 						}
 						// Chat composer: Send button.
@@ -851,9 +859,11 @@ func main() {
 									width, height := resolveElementDimensions(elem, 200, 40)
 									if mx >= elem.X && mx <= elem.X+width && my >= elem.Y && my <= elem.Y+height {
 										handleInputSelection(renderer, config, currentSceneIndex, i)
+										// The keyboard owns input now; do not also run the clicks below.
+										break
 									}
 								} else if elem.Type == "toggle" {
-						tw, th := resolveElementDimensions(elem, 320, 48)
+									tw, th := resolveElementDimensions(elem, 320, 48)
 									if mx >= elem.X && mx <= elem.X+tw && my >= elem.Y && my <= elem.Y+th {
 										selectedButtonIndex = i
 										focusEngine.SetByElementIndex(i)
@@ -867,12 +877,7 @@ func main() {
 									if mx >= elem.X && mx <= elem.X+cw && my >= elem.Y && my <= elem.Y+chh {
 										selectedButtonIndex = i
 										focusEngine.SetByElementIndex(i)
-										chatInputActive = true
-										if !virtualKeyboardActive {
-											virtualKeyboardActive = true
-											sdl.StartTextInput()
-											buildKeyboard()
-										}
+										vkOpenChat()
 									}
 								} else if elem.Type == "themegallery" {
 									if idx := themeGalleryCardAt(elem, mx, my); idx >= 0 {
@@ -1021,37 +1026,46 @@ func main() {
 					}
 					focusEngine.SyncSelected()
 					if virtualKeyboardActive {
+
 						switch e.Button {
+
 						case sdl.CONTROLLER_BUTTON_DPAD_UP:
-							if keyboardPosY > 0 {
-								keyboardPosY--
-							}
+
+							vkMoveFocus(0, -1)
+
 						case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-							if keyboardPosY < len(keyboard)-1 {
-								keyboardPosY++
-							}
+
+							vkMoveFocus(0, 1)
+
 						case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-							if keyboardPosX > 0 {
-								keyboardPosX--
-							}
+
+							vkMoveFocus(-1, 0)
+
 						case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-							if keyboardPosX < len(keyboard[keyboardPosY])-1 {
-								keyboardPosX++
-							}
+
+							vkMoveFocus(1, 0)
+
 						case sdl.CONTROLLER_BUTTON_A:
-							handleKeyboardInput(config) // types key or executes ENTER/BACK/SPACE/SHIFT
-						case sdl.CONTROLLER_BUTTON_B:
-							// Close keyboard without typing
-							virtualKeyboardActive = false
-							activeSceneIndex = -1
+
+							vkActivateFocused(config)
+
+						case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+
+							vkCloseKeyboard()
+
 						case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+
 							toggleKeyboardCase()
+
 						case sdl.CONTROLLER_BUTTON_Y:
-							// Shortcut: save and close (same as ENTER key)
-							keyboardPosY = len(keyboard) - 1
-							keyboardPosX = len(keyboard[keyboardPosY]) - 1
-							handleKeyboardInput(config)
+							if vkTarget == vkTargetChat {
+								vkSubmit(config, true)
+							} else {
+								vkSubmit(config, false)
+							}
+
 						}
+
 					} else if activeSceneIndex != -1 {
 						// Input field active - handled by virtualKeyboardActive
 					} else {
@@ -1264,12 +1278,7 @@ func main() {
 								}
 							case sdl.CONTROLLER_BUTTON_A:
 								// A opens the virtual keyboard to type a message.
-								chatInputActive = true
-								if !virtualKeyboardActive {
-									virtualKeyboardActive = true
-									sdl.StartTextInput()
-									buildKeyboard()
-								}
+								vkOpenChat()
 							case sdl.CONTROLLER_BUTTON_Y:
 								if strings.TrimSpace(chatInputText) != "" {
 									sendGroqChatMessage(chatInputText)
@@ -1293,8 +1302,8 @@ func main() {
 									if elem.Type == "input" {
 										handleInputSelection(renderer, config, currentSceneIndex, selectedButtonIndex)
 									} else if elem.Type == "textbrowser" && textBrowserElementSource(elem) == textBrowserSourceWeb {
-									handleTextBrowserAddressInput(renderer, config, elem)
-								} else if elem.Type == "textbrowser" || elem.Type == "shortslist" || elem.Type == "packagelist" {
+										handleTextBrowserAddressInput(renderer, config, elem)
+									} else if elem.Type == "textbrowser" || elem.Type == "shortslist" || elem.Type == "packagelist" {
 										// Display-only elements: A is a no-op (scroll with D-pad).
 									} else {
 										handleTrigger(renderer, config, elem)
@@ -1507,28 +1516,28 @@ func main() {
 			}
 		}
 
-		// Keep SDL text input on only while the chat element is the focused
-		// element so typing is routed to the chat composer. Chat is focused
-		// via the normal selection graph (selectedButtonIndex), not the input
-		// modal's activeElementIndex.
-		chatFocused := false
-		if currentSceneIndex >= 0 && selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
-			chatFocused = config.Scenes[currentSceneIndex].Elements[selectedButtonIndex].Type == "chat"
-		}
-		if chatFocused {
-			if !chatInputActive {
-				sdl.StartTextInput()
-				chatInputActive = true
-			}
-		} else {
-			if chatInputActive {
-				sdl.StopTextInput()
-				chatInputActive = false
-			}
+		// SDL text input stays enabled for the whole session: the on-screen
+		// keyboard, the chat composer and the unit converter all depend on
+		// text-input events, and the keyboard target decides where each
+		// character lands. Toggling it per frame used to swallow keystrokes.
+		if !virtualKeyboardActive {
+			chatFocused := currentSceneIndex >= 0 && selectedButtonIndex >= 0 &&
+				selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) &&
+				config.Scenes[currentSceneIndex].Elements[selectedButtonIndex].Type == "chat" &&
+				// The terminal's prompt row is not the chat composer, even though
+				// its scene config still contains a chat element.
+				!isTerminalScene()
+			chatInputActive = chatFocused
 		}
 
 		// Patch scene: drain worker events and apply hold-to-confirm progress.
 		PatchSceneFrame()
+		if appRestartRequested.Load() {
+			// A staged update was handed to the swap helper; quit so it can
+			// replace the executable and relaunch JukaHub.
+			running = false
+			continue
+		}
 
 		// Quick Settings overlay.
 		if qs.open {
@@ -1566,6 +1575,7 @@ func main() {
 		}
 
 		renderToast(renderer, config)
+		renderInstallBar(renderer, config)
 
 		renderer.Present()
 		animTime = float64(sdl.GetTicks64()) / 1000.0

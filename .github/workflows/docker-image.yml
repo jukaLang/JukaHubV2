@@ -166,7 +166,7 @@ jobs:
           GOOS=linux \
           CGO_CFLAGS="-I${SYSROOT}/usr/include -I/usr/aarch64-linux-gnu/include -I/usr/aarch64-linux-gnu/include/SDL2 -I/usr/include/SDL2 -D_REENTRANT" \
           CGO_LDFLAGS="-L${SYSROOT}/usr/lib -L/usr/lib/aarch64-linux-gnu -lSDL2_image -lSDL2_ttf -lSDL2 -ldl -lpthread -lm" \
-          go build -tags dynamic -o ../JukaHub-Trimui/JukaHub ./
+          go build -tags dynamic -ldflags "-X main.buildDate=$(date -u +%Y-%m-%d)" -o ../JukaHub-Trimui/JukaHub ./
           echo "Build completed."
 
       - name: Package Artifacts
@@ -178,6 +178,9 @@ jobs:
           cp player/config.json JukaHub-Trimui/
           cp player/background.jpg JukaHub-Trimui/
           cp player/JukaPlayer.png JukaHub-Trimui/
+          # Release stamp: the app shows this date and the auto updater uses it
+          # to decide whether a newer release exists.
+          printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "$TAG_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui/release-info.json
           zip -r JukaHub-Trimui.zip JukaHub-Trimui/
 
       - name: Upload Release Assets
@@ -273,7 +276,7 @@ jobs:
           echo "CXX: $CXX"
           echo "CGO_CFLAGS: $CGO_CFLAGS"
           echo "CGO_LDFLAGS: $CGO_LDFLAGS"
-          go build -o ../JukaHub-Trimui-Windows/JukaHub.exe ./
+          go build -ldflags "-X main.buildDate=$(date -u +%Y-%m-%d)" -o ../JukaHub-Trimui-Windows/JukaHub.exe ./
           echo "Build completed."
 
       - name: Package Artifacts
@@ -281,6 +284,8 @@ jobs:
           cd player
           cp jukaconfig.json Inter-Regular.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
           cd ..
+          # Release stamp: shown in the UI and used by the auto updater.
+          printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "$TAG_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui-Windows/release-info.json
           zip -r JukaHub-Windows.zip JukaHub-Trimui-Windows/
 
       - name: Upload Release Assets

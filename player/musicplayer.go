@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -131,27 +132,20 @@ func musicPlayTrack(index int) {
 }
 
 func musicPlayFile(path string) {
-	// Use ffplay or mpv for playback.
-	player := "ffplay"
-	playerPath := ""
-	if p, err := lookPath(player); err == nil {
-		playerPath = p
-	} else if p, err := lookPath("mpv"); err == nil {
-		playerPath = p
-		player = "mpv"
+	// ffplay is the only audio backend. helperToolPath installs it (with the
+	// install card) if it is missing, so music never needs an external player.
+	cfg := appConfig
+	if cfg == nil {
+		cfg = &Config{}
 	}
-
-	if playerPath == "" {
-		showToast("No audio player found (ffplay/mpv)", ToastError())
+	playerPath, err := helperToolPath("ffplay", cfg)
+	if err != nil {
+		log.Printf("[ERROR] musicPlayFile: ffplay unavailable: %v", err)
+		showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
 		return
 	}
 
-	args := []string{"-nodisp", "-autoexit", path}
-	if player == "mpv" {
-		args = []string{"--no-video", "--really-quiet", path}
-	}
-
-	cmd := execCommand(playerPath, args...)
+	cmd := execCommand(playerPath, "-nodisp", "-autoexit", path)
 	if cmd == nil {
 		return
 	}
@@ -571,10 +565,6 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 // ──────────────────────────────────────────────────────────────────────
 // Helper stubs for audio control
 // ──────────────────────────────────────────────────────────────────────
-
-func lookPath(name string) (string, error) {
-	return P().LookPath(name)
-}
 
 func execCommand(name string, args ...string) *exec.Cmd {
 	return P().CommandContext(context.Background(), name, args...)

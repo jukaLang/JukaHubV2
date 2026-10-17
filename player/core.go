@@ -27,7 +27,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -41,7 +40,7 @@ var Cleanup []func()
 // --- Global state for input and navigation ---
 var (
 	appConfig                  *Config
-	_                          = Cleanup // ensure Cleanup is used
+	_                              = Cleanup // ensure Cleanup is used
 	currentSceneIndex          int = -1
 	selectedButtonIndex        int = -1
 	activeSceneIndex           int = -1
@@ -256,11 +255,6 @@ func physicalToLogical(px, py int32) (int32, int32) {
 	return sx, sy
 }
 
-
-
-
-
-
 // Background goroutines (search, tickers, podcasts, ...) must not touch the
 // shared Variables.Custom map directly — the render loop and event handlers
 // read it on the main thread, and a plain map is not safe for concurrent
@@ -300,17 +294,6 @@ func snapshotVars(config *Config) map[string]interface{} {
 	}
 	return m
 }
-
-
-
-
-
-
-
-
-
-
-
 
 // --- Helper functions for dimensions ---
 func getElementWidth(elem Element, defaultWidth int32) int32 {
@@ -450,13 +433,17 @@ func normalizeCacheKey(raw string) string {
 }
 
 func resolveColor(config *Config, colorName string, defaultColor sdl.Color) sdl.Color {
-	if strings.HasPrefix(colorName, "$") {		colorValue := config.Variables.Get(colorName[1:])
+	if strings.HasPrefix(colorName, "$") {
+		colorValue := config.Variables.Get(colorName[1:])
 		parts := strings.Split(colorValue, ",")
 		if len(parts) == 3 {
 
-			r, errR := strconv.ParseInt(parts[0], 10, 8)
-			g, errG := strconv.ParseInt(parts[1], 10, 8)
-			b, errB := strconv.ParseInt(parts[2], 10, 8)
+			// Channels are unsigned bytes: a signed 8-bit parse rejected every
+			// value above 127, so "52,152,219" silently fell back to the
+			// default colour instead of the configured one.
+			r, errR := strconv.ParseUint(parts[0], 10, 8)
+			g, errG := strconv.ParseUint(parts[1], 10, 8)
+			b, errB := strconv.ParseUint(parts[2], 10, 8)
 			if errR == nil && errG == nil && errB == nil {
 				return sdl.Color{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
 			}
@@ -657,7 +644,6 @@ func finalizeConfig(config *Config) {
 	}
 }
 
-
 func customString(m map[string]interface{}, name string) (string, bool) {
 	if v, ok := m[name]; ok {
 		return fmt.Sprintf("%v", v), true
@@ -676,7 +662,6 @@ func customString(m map[string]interface{}, name string) (string, bool) {
 	}
 	return "", false
 }
-
 
 func boolString(b bool) string {
 	if b {
@@ -1428,7 +1413,7 @@ func buttonHitSize(elem Element, font *ttf.Font) (int32, int32) {
 		w, h, _ := font.SizeUTF8(elem.Text)
 		textWidth, textHeight = int32(w), int32(h)
 	}
-	return resolveButtonDimensions(elem,textWidth,textHeight)
+	return resolveButtonDimensions(elem, textWidth, textHeight)
 }
 
 func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, elemIndex int, selected bool, hovered bool, hoverProgress float64, pressed bool) {
@@ -1670,12 +1655,20 @@ func getToolPath(tool string, config *Config) string {
 			return resolve(config.Variables.ToolsPath)
 		}
 	}
-	// Check ./required/ subfolder
-	commonPath := filepath.Join(".", "required", exeName)
+	// Check the platform tools dir ("required" next to the binary) — the same
+	// location EnsureHelperTool installs into.
+	commonPath := filepath.Join(P().ToolsDir(), exeName)
 	if _, err := os.Stat(commonPath); err == nil {
 		return resolve(commonPath)
 	}
-	// Fallback to system PATH
+	// Fallback to system PATH: resolve the actual binary so callers can stat
+	// it (a bare "ffplay.exe" only stats against the working directory).
+	if p, err := exec.LookPath(exeName); err == nil {
+		if abs, err := filepath.Abs(p); err == nil {
+			return abs
+		}
+		return p
+	}
 	return exeName
 }
 
@@ -1903,7 +1896,7 @@ func DedupFetch(url string, timeout time.Duration) ([]byte, error) {
 		result := <-ch
 		return result.body, result.err
 	}
-	
+
 	// Create channel for this request
 	ch := make(chan struct {
 		body []byte
@@ -1911,7 +1904,7 @@ func DedupFetch(url string, timeout time.Duration) ([]byte, error) {
 	}, 1)
 	requestDeduper.requests[url] = ch
 	requestDeduper.mu.Unlock()
-	
+
 	// Perform the request (non-blocking for other waiters)
 	client := &http.Client{Timeout: timeout}
 	req, err := http.NewRequest("GET", url, nil)
@@ -1940,7 +1933,7 @@ func DedupFetch(url string, timeout time.Duration) ([]byte, error) {
 		}{nil, err}
 		return nil, err
 	}
-	
+
 	ch <- struct {
 		body []byte
 		err  error
@@ -2622,6 +2615,46 @@ func playVideoURL(config *Config, url string) {
 	playVideoInfo(config, VideoInfo{URL: url})
 }
 
+// sceneWithVideoElement returns the index of the scene that can show the
+// embedded player, preferring the scene already on screen. The `video` element
+// is what draws the player, so it has to be on screen for playback to be
+// visible.
+func sceneWithVideoElement(config *Config) int {
+	if config == nil {
+		return -1
+	}
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		for _, el := range config.Scenes[currentSceneIndex].Elements {
+			if el.Type == "video" {
+				return currentSceneIndex
+			}
+		}
+	}
+	for i, scene := range config.Scenes {
+		for _, el := range scene.Elements {
+			if el.Type == "video" {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// ensureVideoScene moves to a scene that can draw the embedded player when the
+// current scene cannot. The decoder only renders into a `video` element, and
+// that element exists on the player scenes alone; starting a video from Home
+// (Continue card), Favorites or Shorts used to decode with nothing on screen —
+// audio only, which looked like Continue doing nothing after backing out of a
+// video. It reports whether a scene change was started.
+func ensureVideoScene(config *Config) bool {
+	idx := sceneWithVideoElement(config)
+	if idx < 0 || idx == currentSceneIndex {
+		return false
+	}
+	changeSceneTo(config, idx)
+	return true
+}
+
 // playVideoInfo starts playback for a video and records it in the recently-
 // played store. A nonzero v.Position (set by the Continue card) resumes the
 // embedded player from that offset.
@@ -2631,31 +2664,26 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		log.Printf("playVideoInfo: empty URL, nothing to play")
 		return
 	}
+	ensureVideoScene(config)
 	PlayActivateSound()
 	addRecentVideo(v)
 	currentPlaybackURL = url
 
-	backend := strings.TrimSpace(config.Variables.AudioBackend)
-	if backend == "" {
-		backend = "ffplay"
-	}
-	if strings.EqualFold(backend, "mpv") {
-		playWithMPV(config, url)
-		return
-	}
-
+	// ffplay is the only playback backend (yt-dlp feeds it the stream). Both
+	// binaries are installed on demand by the helper-tool installer below.
 	go func() {
-		ffplayPath := getToolPath("ffplay", config)
-		ytDlpPath := getToolPath("yt-dlp", config)
-
-		if _, err := os.Stat(ffplayPath); os.IsNotExist(err) {
-			log.Printf("[ERROR] playVideoURL: ffplay not found at %s", ffplayPath)
-			showToast("ffplay not found. Check tools path.", ToastError())
+		// Missing helper tools are downloaded on demand (the install card
+		// shows progress) before playback starts.
+		ffplayPath, err := helperToolPath("ffplay", config)
+		if err != nil {
+			log.Printf("[ERROR] playVideoURL: ffplay unavailable: %v", err)
+			showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
 			return
 		}
-		if _, err := os.Stat(ytDlpPath); os.IsNotExist(err) {
-			log.Printf("[ERROR] playVideoURL: yt-dlp not found at %s", ytDlpPath)
-			showToast("yt-dlp not found. Check tools path.", ToastError())
+		ytDlpPath, err := helperToolPath("yt-dlp", config)
+		if err != nil {
+			log.Printf("[ERROR] playVideoURL: yt-dlp unavailable: %v", err)
+			showToast("yt-dlp not found and auto-install failed. Try again later.", ToastError())
 			return
 		}
 
@@ -2897,7 +2925,9 @@ func playWithTempFile(config *Config, ffplayPath, ytDlpPath, url string, startSe
 	videoPlaybackProgress = 1.0
 	videoPlaybackMutex.Unlock()
 
-	StartEmbeddedPlaybackAt(config, tempPath, startSec)
+	// tempFile=true: this session owns the downloaded copy and removes it when
+	// playback ends. User media files are never deleted.
+	startEmbeddedPlayback(config, tempPath, startSec, true)
 	log.Printf("[DEBUG] playWithTempFile: embedded playback started for %s (resume %.1fs)", tempPath, startSec)
 }
 
@@ -2934,19 +2964,11 @@ func handleInputSelection(renderer *sdl.Renderer, config *Config, sceneIdx, elem
 	if elemIdx < 0 || elemIdx >= len(config.Scenes[sceneIdx].Elements) {
 		return
 	}
-	activeSceneIndex = sceneIdx
-	activeElementIndex = elemIdx
-	virtualKeyboardActive = true
-	sdl.StartTextInput()
-	inputTextBuffer = ""
-	variable := config.Scenes[sceneIdx].Elements[elemIdx].Variable
-	if textBrowserAddressEditing {
-		variable = textBrowserURLVariable
-	}
-	if variable != "" {
-		inputTextBuffer = inputVariableValue(config, variable)
-	}
-	handleInputElement(renderer, config)
+	// Open the keyboard and return. Running a second, nested event loop here
+	// duplicated every input path and could leave the app stuck in the modal
+	// when playback/network callbacks changed focus; the main loop already
+	// routes keyboard, mouse, controller and touch events to the keyboard.
+	vkOpenSceneInput(config, sceneIdx, elemIdx)
 }
 
 // keysymToChar maps an SDL keycode to its character, honouring Shift. This is
@@ -3000,132 +3022,112 @@ func keysymToChar(sym sdl.Keycode, shifted bool) (string, bool) {
 	return "", false
 }
 
-func handleInputElement(renderer *sdl.Renderer, config *Config) {
+// runInputModal blocks until the keyboard closes. Only the text-browser address
+// bar uses it: it needs the submitted value before it can load the page.
+func runInputModal(renderer *sdl.Renderer, config *Config) {
 	defer func() { virtualKeyboardActive = false }()
+	vkEnsureLayout()
 	exitInput := false
 	for !exitInput {
-		renderer.SetDrawColor(249, 249, 249, 255)
-		renderer.Clear()
 		drainCustom(config)
-		renderScene(renderer, config, config.Scenes[currentSceneIndex])
-		renderKeyboard(renderer, config)
-
-		// Prominent display of the text being typed so it is clearly visible
-		// (the underlying input field can be small / easy to miss).
-		bigFont, _ := getCachedFont(config, "big")
-		if bigFont != nil {
-			boxW := int32(900)
-			boxX := (screenWidth - boxW) / 2
-			boxY := int32(36)
-			fillRoundedRect(renderer, boxX, boxY, boxW, 64, 10, WithAlpha(ColorSurfaceCard, 235))
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-			renderer.FillRect(&sdl.Rect{X: boxX, Y: boxY, W: boxW, H: 3})
-			display := inputTextBuffer
-			if len(display) == 0 {
-				display = "Type here..."
-			} else if uint32(sdl.GetTicks64()/500)%2 == 0 {
-				display += "_"
-			}
-			renderText(renderer, config, bigFont, display, sdl.Color{R: 235, G: 238, B: 245, A: 255}, boxX+18, boxY+16)
+		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
+		renderer.Clear()
+		if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+			renderScene(renderer, config, config.Scenes[currentSceneIndex])
 		}
-
+		renderKeyboard(renderer, config)
 		renderer.Present()
 
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+			applyButtonSwap(config, event)
 			switch e := event.(type) {
 			case *sdl.KeyboardEvent:
-				if e.Type == sdl.KEYDOWN {
-					switch e.Keysym.Sym {
-					case sdl.K_ESCAPE:
-						exitInput = true
-					case sdl.K_BACKSPACE:
-						if len(inputTextBuffer) > 0 {
-							inputTextBuffer = inputTextBuffer[:len(inputTextBuffer)-1]
-							updateInputVariable(config)
-						}
-					case sdl.K_RETURN:
-						// Submit the typed text and close the input (do not append
-						// the currently-highlighted virtual key).
-						if textBrowserAddressEditing {
-							textBrowserAddressSubmitted = true
-						}
-						updateInputVariable(config)
-						exitInput = true
-					default:
-						if ch, ok := keysymToChar(e.Keysym.Sym, e.Keysym.Mod&sdl.KMOD_SHIFT != 0); ok {
-							if unitInputActive {
-								unitInputValue += ch
-							} else if chatInputActive {
-								chatInputText += ch
-							} else {
-								inputTextBuffer += ch
-								updateInputVariable(config)
-							}
-						}
-					}
+				if e.Type != sdl.KEYDOWN {
+					continue
 				}
+				switch e.Keysym.Sym {
+				case sdl.K_ESCAPE:
+					vkCloseKeyboard()
+					exitInput = true
+				case sdl.K_BACKSPACE, sdl.K_DELETE:
+					vkBackspace(config)
+				case sdl.K_RETURN, sdl.K_KP_ENTER:
+					vkSubmit(config, false)
+					exitInput = true
+				case sdl.K_TAB:
+					vkMoveFocus(1, 0)
+				case sdl.K_UP:
+					vkMoveFocus(0, -1)
+				case sdl.K_DOWN:
+					vkMoveFocus(0, 1)
+				case sdl.K_LEFT:
+					vkMoveFocus(-1, 0)
+				case sdl.K_RIGHT:
+					vkMoveFocus(1, 0)
+				}
+				// Printable characters arrive through the text-input event below.
+			case *sdl.TextInputEvent:
+				vkInsertText(string(e.Text[:]), config)
 			case *sdl.ControllerButtonEvent:
-				if e.Type == sdl.CONTROLLERBUTTONDOWN {
-					switch e.Button {
-					case sdl.CONTROLLER_BUTTON_DPAD_UP:
-						if keyboardPosY > 0 {
-							keyboardPosY--
-						}
-					case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-						if keyboardPosY < len(keyboard)-1 {
-							keyboardPosY++
-						}
-					case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-						if keyboardPosX > 0 {
-							keyboardPosX--
-						}
-					case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-						if keyboardPosX < len(keyboard[keyboardPosY])-1 {
-							keyboardPosX++
-						}
-					case sdl.CONTROLLER_BUTTON_A:
-						handleKeyboardInput(config)
-						// EXIT on action keys so the keyboard closes after send.
-						k := ""
-						if keyboardPosY >= 0 && keyboardPosY < len(keyboard) && keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
-							k = keyboard[keyboardPosY][keyboardPosX]
-						}
-						if k == "ENTER" || k == "SEND" || k == "ASK_AI" {
-							exitInput = true
-						}
-					case sdl.CONTROLLER_BUTTON_B:
-						exitInput = true
-					case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-						toggleKeyboardCase()
-					case sdl.CONTROLLER_BUTTON_Y:
-						// Enter / save
-						handleKeyboardInput(config)
+				if e.Type != sdl.CONTROLLERBUTTONDOWN {
+					continue
+				}
+				switch e.Button {
+				case sdl.CONTROLLER_BUTTON_DPAD_UP:
+					vkMoveFocus(0, -1)
+				case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+					vkMoveFocus(0, 1)
+				case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+					vkMoveFocus(-1, 0)
+				case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+					vkMoveFocus(1, 0)
+				case sdl.CONTROLLER_BUTTON_A:
+					key := vkFocusedKey()
+					vkActivateFocused(config)
+					if vkIsActionKey(key) {
 						exitInput = true
 					}
+				case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+					vkCloseKeyboard()
+					exitInput = true
+				case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+					toggleKeyboardCase()
+				case sdl.CONTROLLER_BUTTON_Y:
+					if vkTarget == vkTargetChat {
+						vkSubmit(config, true)
+					} else {
+						vkSubmit(config, false)
+					}
+					exitInput = true
 				}
 			case *sdl.MouseButtonEvent:
 				if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
-					mx, my := int32(e.X), int32(e.Y)
-					for idx, rect := range keyboardRects {
-						if mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H {
-							if idx < len(keyboardRowCol) {
-								keyboardPosY, keyboardPosX = keyboardRowCol[idx][0], keyboardRowCol[idx][1]
-							}
-							handleKeyboardInput(config)
-							// Exit on any action key (ENTER, SEND, ASK_AI).
-							if keyboardPosY >= 0 && keyboardPosY < len(keyboard) &&
-								keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
-								k := keyboard[keyboardPosY][keyboardPosX]
-								if k == "ENTER" || k == "SEND" || k == "ASK_AI" {
-									exitInput = true
-								}
-							}
-							break
+					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
+					if vkCloseHit(mx, my) {
+						vkCloseKeyboard()
+						exitInput = true
+						break
+					}
+					if row, col, ok := vkHitTest(mx, my); ok {
+						keyboardPosY, keyboardPosX = row, col
+						key := vkFocusedKey()
+						vkActivateFocused(config)
+						if vkIsActionKey(key) {
+							exitInput = true
 						}
+						break
+					}
+					// Clicking the dimmed content behind the panel closes it.
+					if vkOutsidePanel(mx, my) {
+						vkCloseKeyboard()
+						exitInput = true
 					}
 				}
 			case *sdl.TouchFingerEvent:
 				handleTouchGesture(e, config)
+				if !virtualKeyboardActive {
+					exitInput = true
+				}
 			case *sdl.MultiGestureEvent:
 				handleMultiGesture(e, config)
 			}
@@ -3139,124 +3141,6 @@ func isTerminalScene() bool {
 		return appConfig.Scenes[currentSceneIndex].Name == "Terminal"
 	}
 	return false
-}
-
-func handleKeyboardInput(config *Config) {
-	if keyboardPosY >= 0 && keyboardPosY < len(keyboard) && keyboardPosX >= 0 && keyboardPosX < len(keyboard[keyboardPosY]) {
-		key := keyboard[keyboardPosY][keyboardPosX]
-
-		// Route to unit converter input when unit input is active.
-		if unitInputActive {
-			switch key {
-			case "⇧":
-				toggleKeyboardCase()
-			case "SPACE":
-				unitInputValue += " "
-			case "BACK":
-				if len(unitInputValue) > 0 {
-					unitInputValue = unitInputValue[:len(unitInputValue)-1]
-				}
-			case "ENTER":
-				// Convert the value
-				unitInputActive = false
-			default:
-				unitInputValue += key
-			}
-			return
-		}
-		// Route to chat composer when chat is the active input target.
-		if chatInputActive {
-			switch key {
-			case "⇧":
-				toggleKeyboardCase()
-			case "SPACE":
-				chatInputText += " "
-			case "BACK":
-				if len(chatInputText) > 0 {
-					_, size := utf8.DecodeLastRuneInString(chatInputText)
-					if size > 0 {
-						chatInputText = chatInputText[:len(chatInputText)-size]
-					}
-				}
-			case "ENTER":
-				if chatInputText != "" {
-					if isTerminalScene() {
-						runTerminal(config, chatInputText)
-					} else {
-						sendChatMessage("You", chatInputText)
-					}
-					chatInputText = ""
-				}
-			case "SEND":
-				if chatInputText != "" {
-					if isTerminalScene() {
-						runTerminal(config, chatInputText)
-					} else {
-						sendChatMessage("You", chatInputText)
-					}
-					chatInputText = ""
-				}
-			case "ASK_AI":
-				if strings.TrimSpace(chatInputText) != "" {
-					if isTerminalScene() {
-						runTerminal(config, chatInputText)
-						chatInputText = ""
-					} else {
-						sendGroqChatMessage(chatInputText)
-						chatInputText = ""
-					}
-				}
-			default:
-				chatInputText += key
-			}
-			return
-		}
-
-		switch key {
-		case "⇧":
-			toggleKeyboardCase()
-		case "SPACE":
-			inputTextBuffer += " "
-		case "BACK":
-			if len(inputTextBuffer) > 0 {
-				inputTextBuffer = inputTextBuffer[:len(inputTextBuffer)-1]
-			}
-		case "ENTER":
-			// Save the final input before clearing
-			if textBrowserAddressEditing {
-				textBrowserAddressSubmitted = true
-			}
-			updateInputVariable(config)
-			virtualKeyboardActive = false
-			activeSceneIndex = -1
-			activeElementIndex = -1
-			// If the active scene is a search scene, trigger its search button
-			if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
-				sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
-				if len(config.Scenes[currentSceneIndex].Elements) == 0 {
-					break
-				}
-				for _, elem := range config.Scenes[currentSceneIndex].Elements {
-					if elem.Type == "button" && elem.Trigger == "yt_search" {
-						go executeYouTubeSearch(config, elem.TriggerTarget, elem.TriggerValue, snapshotVars(config))
-						break
-					}
-				}
-			}
-		default:
-					inputTextBuffer += key
-				}
-				if key != "ENTER" && key != "⇧" {
-					updateInputVariable(config)
-				}
-			}
-	}
-
-// --- placeholder to keep lint tools quiet ---
-
-func toggleKeyboardCase() {
-	keyboardUpper = !keyboardUpper
-	buildKeyboard()
 }
 
 func updateInputVariable(config *Config) {
@@ -3279,6 +3163,12 @@ func updateInputVariable(config *Config) {
 // --- Touch gesture handling ---
 
 func handleTouchGesture(e *sdl.TouchFingerEvent, config *Config) {
+	if virtualKeyboardActive {
+		// The keyboard owns the screen while it is open: taps press keys or
+		// dismiss it, and swipes must not change the scene underneath.
+		vkHandleTouchEvent(e, config)
+		return
+	}
 	if e.Type == sdl.FINGERDOWN {
 		touchStartX = float64(e.X)
 		touchStartY = float64(e.Y)
@@ -3347,13 +3237,13 @@ func handleSwipe(direction string, config *Config) {
 	}
 	switch direction {
 	case "up":
-	if currentSceneIndex > 0 {
-		changeSceneTo(config, currentSceneIndex-1)
-	}
-case "down":
-	if currentSceneIndex < len(config.Scenes)-1 {
-		changeSceneTo(config, currentSceneIndex+1)
-	}
+		if currentSceneIndex > 0 {
+			changeSceneTo(config, currentSceneIndex-1)
+		}
+	case "down":
+		if currentSceneIndex < len(config.Scenes)-1 {
+			changeSceneTo(config, currentSceneIndex+1)
+		}
 	case "left":
 		handleSwipeLeft(config)
 	case "right":
@@ -3431,7 +3321,6 @@ func syncVariableOverrides(config *Config) {
 	setStr("weatherUnit", &config.Variables.WeatherUnit)
 	setStr("tspUsername", &config.Variables.TSPUsername)
 	setStr("playbackResolution", &config.Variables.PlaybackResolution)
-	setStr("audioBackend", &config.Variables.AudioBackend)
 	setStr("fileExplorerRoot", &config.Variables.FileExplorerRoot)
 	setStr("tools_path", &config.Variables.ToolsPath)
 	setInt("gridColumns", &config.Variables.GridColumns)
@@ -3458,7 +3347,6 @@ func syncVariableOverrides(config *Config) {
 		WeatherUnit:        config.Variables.WeatherUnit,
 		TSPUsername:        config.Variables.TSPUsername,
 		PlaybackResolution: config.Variables.PlaybackResolution,
-		AudioBackend:       config.Variables.AudioBackend,
 		GridColumns:        config.Variables.GridColumns,
 		SearchWidth:        config.Variables.SearchWidth,
 		DynamicBg:          config.Variables.DynamicBg,
@@ -3491,8 +3379,6 @@ func inputVariableValue(config *Config, variable string) string {
 		return config.Variables.TSPUsername
 	case "playbackResolution":
 		return config.Variables.PlaybackResolution
-	case "audioBackend":
-		return config.Variables.AudioBackend
 	case "fileExplorerRoot":
 		return config.Variables.FileExplorerRoot
 	case "reducedMotion":
@@ -3534,7 +3420,8 @@ func inputVariableValue(config *Config, variable string) string {
 	return ""
 }
 
-func renderInputField(renderer *sdl.Renderer, config *Config, element Element, sceneIdx, elemIdx int) {				width, height := resolveElementDimensions(element, 200, 40)
+func renderInputField(renderer *sdl.Renderer, config *Config, element Element, sceneIdx, elemIdx int) {
+	width, height := resolveElementDimensions(element, 200, 40)
 
 	bgColor := resolveColor(config, element.BgColor, sdl.Color{R: 20, G: 24, B: 34, A: 255})
 	r := int32(8)
@@ -3576,6 +3463,39 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 	textColor := resolveColor(config, element.Color, sdl.Color{R: 220, G: 226, B: 240, A: 255})
 	font, _ := getCachedFont(config, element.Font)
 
+	// Color settings render the picked color itself. A bare "#3498db" told the
+	// user nothing about what they had chosen, and the swatch follows the live
+	// buffer so it previews as the value is typed.
+	textX := element.X + 14
+	maxTextW := int32(0)
+	if col, ok, isColorField := settingsFieldColor(config, element, isActive); isColorField {
+		size := height - 16
+		if size > 32 {
+			size = 32
+		}
+		if size < 14 {
+			size = 14
+		}
+		sx := element.X + 10
+		sy := element.Y + (height-size)/2
+		radius := size / 4
+		// A light outer ring keeps dark picks visible on the dark panel.
+		strokeRoundedRect(renderer, sx-1, sy-1, size+2, size+2, radius+1, 1, sdl.Color{R: 255, G: 255, B: 255, A: 46})
+		if ok {
+			fillRoundedRect(renderer, sx, sy, size, size, radius, col)
+			fillRoundedRect(renderer, sx, sy, size, size/2, radius, sdl.Color{R: 255, G: 255, B: 255, A: 18})
+		} else {
+			// Mid-typing or invalid: show an empty slot, never a wrong color.
+			fillRoundedRect(renderer, sx, sy, size, size, radius, WithAlpha(ColorSurfaceRaised, 220))
+			strokeRoundedRect(renderer, sx, sy, size, size, radius, 1, WithAlpha(ColorTextTertiary(), 150))
+		}
+		textX = sx + size + 12
+		maxTextW = width - (textX - element.X) - 14
+		if maxTextW < 40 {
+			maxTextW = 40
+		}
+	}
+
 	// Show the focused input's live buffer; every other field shows its own
 	// persisted value (never the shared global buffer).
 	text := ""
@@ -3590,7 +3510,11 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 		text = inputTextBuffer
 	}
 	if font != nil && text != "" {
-		renderText(renderer, config, font, text, textColor, element.X+14, element.Y+12)
+		draw := text
+		if maxTextW > 0 {
+			draw = ellipsize(font, text, maxTextW)
+		}
+		renderText(renderer, config, font, draw, textColor, textX, element.Y+12)
 	}
 
 	// placeholder
@@ -3600,7 +3524,10 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 			placeholder = "Type here..."
 		}
 		phColor := ColorTextTertiary()
-		renderText(renderer, config, font, placeholder, phColor, element.X+14, element.Y+12)
+		if maxTextW > 0 && font != nil {
+			placeholder = ellipsize(font, placeholder, maxTextW)
+		}
+		renderText(renderer, config, font, placeholder, phColor, textX, element.Y+12)
 	}
 }
 
@@ -3774,6 +3701,11 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		}
 	}
 
+	// Settings → Appearance shows the palette itself, not just its hex codes.
+	if scene.Name == "SettingsAppearance" {
+		renderAppearancePreview(renderer, config)
+	}
+
 	// Single global header: brand + version + active scene + status.
 	renderStatusBar(renderer, config)
 
@@ -3923,6 +3855,41 @@ func toggleValue(config *Config, element Element) bool {
 	return d == "true" || d == "1" || d == "yes" || d == "on"
 }
 
+// abButtonsSwapped reports whether the A/B face buttons should be treated as
+// flipped. Some pads and firmwares (Nintendo-style layouts, certain TrimUI
+// builds) report A/B inverted relative to the SDL Xbox-style mapping the scene
+// handlers assume, so the "swapABButtons" setting flips them at the event entry
+// point instead of in every handler.
+func abButtonsSwapped(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	if v, ok := customValue(config.Variables.Custom, "swapABButtons"); ok {
+		return coerceBool(v)
+	}
+	return false
+}
+
+// applyButtonSwap normalizes A/B face-button events against the
+// "swapABButtons" setting so every scene and overlay sees one consistent
+// mapping. All controller input flows through the PollEvent loops, so
+// swapping here covers the whole app.
+func applyButtonSwap(config *Config, event sdl.Event) {
+	if !abButtonsSwapped(config) {
+		return
+	}
+	ce, ok := event.(*sdl.ControllerButtonEvent)
+	if !ok {
+		return
+	}
+	switch ce.Button {
+	case sdl.CONTROLLER_BUTTON_A:
+		ce.Button = sdl.CONTROLLER_BUTTON_B
+	case sdl.CONTROLLER_BUTTON_B:
+		ce.Button = sdl.CONTROLLER_BUTTON_A
+	}
+}
+
 // toggleVariable flips a boolean setting, persists it, and applies live side
 // effects (e.g. Fullscreen on desktop builds).
 func toggleVariable(config *Config, element Element) {
@@ -3948,7 +3915,8 @@ func toggleVariable(config *Config, element Element) {
 // the left and an ON/OFF pill on the right, using the same resting/focused
 // card treatment as the rest of the design system. A/Enter or a click flips
 // the value.
-func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element, focused bool) {				width, height := resolveElementDimensions(element, 320, 48)
+func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element, focused bool) {
+	width, height := resolveElementDimensions(element, 320, 48)
 
 	font, _ := getCachedFont(config, "medium")
 	small, _ := getCachedFont(config, "small")
@@ -4463,207 +4431,6 @@ func renderLoadingScreen(renderer *sdl.Renderer, config *Config, ticks uint64) {
 	}
 }
 
-func renderKeyboard(renderer *sdl.Renderer, config *Config) {
-	if !virtualKeyboardActive {
-		return
-	}
-
-	// frosted backdrop covering the whole screen
-	fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, WithAlpha(ColorBackground, 235))
-
-	margin := int32(40)
-	availW := screenWidth - 2*margin
-	gap := int32(10)
-	keyHeight := int32(58)
-	maxCols := 10
-	keyWidth := (availW - int32(maxCols-1)*gap) / int32(maxCols)
-	if keyWidth > 92 {
-		keyWidth = 92
-	}
-	if keyWidth < 40 {
-		keyWidth = 40
-	}
-	panelPad := int32(20)
-	rows := len(keyboard)
-	totalH := int32(rows)*keyHeight + int32(rows-1)*gap
-	panelX := margin - panelPad
-	panelY := int32(170) - panelPad
-	panelW := availW + 2*panelPad
-	panelH := totalH + 2*panelPad + 96
-	drawCard(renderer, panelX, panelY, panelW, panelH, 16)
-
-	// live input display bar
-	barX := panelX + panelPad
-	barY := panelY + panelPad
-	barW := panelW - 2*panelPad
-	barH := int32(48)
-	fillRoundedRect(renderer, barX, barY, barW, barH, 10, ColorSurfaceRaised)
-	renderer.SetDrawColor(ColorBorderDefault.R, ColorBorderDefault.G, ColorBorderDefault.B, ColorBorderDefault.A)
-	renderer.DrawRect(&sdl.Rect{X: barX + 1, Y: barY + 1, W: barW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: barX + 1, Y: barY + 1, W: 1, H: barH - 2})
-	kfont, _ := getCachedFont(config, "medium")
-	if kfont == nil {
-		kfont, _ = getCachedFont(config, "small")
-	}
-	if kfont != nil {
-		cursor := ""
-		if uint32(sdl.GetTicks64()/500)%2 == 0 {
-			cursor = "_"
-		}
-		display := inputTextBuffer + cursor
-		col := ColorTextPrimary()
-		if unitInputActive {
-			display = unitInputValue + cursor
-			if unitInputValue == "" {
-				display = "Enter number..." + cursor
-				col = ColorTextTertiary()
-			}
-		} else if chatInputActive {
-			display = chatInputText + cursor
-			if chatInputText == "" {
-				display = "Type a message..." + cursor
-				col = ColorTextTertiary()
-			}
-		} else if inputTextBuffer == "" {
-			display = "Type to search" + cursor
-			col = ColorTextTertiary()
-		}
-		renderText(renderer, config, kfont, display, col, barX+16, barY+(barH-14)/2)
-	}
-
-	// key grid
-	keyboardRects = nil
-	keyboardKeys = nil
-	keyboardRowCol = nil
-	gridTop := barY + barH + 24
-	for y, row := range keyboard {
-		widths := make([]int32, len(row))
-		var rowWidth int32
-		for x, key := range row {
-			w := keyWidth
-			if y == 3 {
-				switch key {
-				case "SPACE":
-					w = keyWidth*4 + gap*3
-				case "BACK", "ENTER":
-					w = keyWidth*2 + gap
-				case "SEND", "ASK_AI":
-					w = keyWidth*2 + gap
-				}
-			}
-			widths[x] = w
-			rowWidth += w
-		}
-		rowWidth += int32(len(row)-1) * gap
-		rx := (screenWidth - rowWidth) / 2
-		ky := gridTop + int32(y)*(keyHeight+gap)
-		for x, key := range row {
-			kx := rx
-			w := widths[x]
-			isSelected := (x == keyboardPosX && y == keyboardPosY)
-			special := key == "SPACE" || key == "BACK" || key == "ENTER" || key == "SEND" || key == "ASK_AI"
-			r := int32(10)
-
-			miamiCyan := sdl.Color{R: 0, G: 220, B: 255, A: 255}
-			miamiPink := sdl.Color{R: 255, G: 0, B: 200, A: 255}
-			miamiPurple := sdl.Color{R: 100, G: 0, B: 255, A: 255}
-			miamiDarkPurple := sdl.Color{R: 60, G: 0, B: 180, A: 255}
-
-			fillRoundedRect(renderer, kx+2, ky+3, w, keyHeight, r, sdl.Color{R: 40, G: 0, B: 100, A: 180})
-			if isSelected || (key == "⇧" && keyboardUpper) {
-				fillRoundedRect(renderer, kx-3, ky-3, w+6, keyHeight+6, r+3, WithAlpha(miamiPink, 170))
-				fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiPink)
-				fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(50))
-			} else if special {
-				fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiPurple)
-				fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(10))
-				renderer.SetDrawColor(miamiDarkPurple.R, miamiDarkPurple.G, miamiDarkPurple.B, 255)
-				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: w - 2, H: 1})
-				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: 1, H: keyHeight - 2})
-			} else {
-				fillRoundedRect(renderer, kx, ky, w, keyHeight, r, miamiCyan)
-				fillRoundedRect(renderer, kx+1, ky+1, w-2, keyHeight/2, r-1, GlossFill(8))
-				renderer.SetDrawColor(miamiPurple.R, miamiPurple.G, miamiPurple.B, 255)
-				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: w - 2, H: 1})
-				renderer.DrawRect(&sdl.Rect{X: kx + 1, Y: ky + 1, W: 1, H: keyHeight - 2})
-			}
-
-			keyboardRects = append(keyboardRects, sdl.Rect{X: kx, Y: ky, W: w, H: keyHeight})
-			keyboardKeys = append(keyboardKeys, key)
-			keyboardRowCol = append(keyboardRowCol, [2]int{y, x})
-
-			label := key
-			if key == "BACK" {
-				label = "DEL"
-			} else if key == "ENTER" {
-				label = "OK"
-			} else if key == "SEND" {
-				label = "SEND"
-			} else if key == "ASK_AI" {
-				label = "Ask AI"
-			}
-			if kfont != nil {
-				kw, kh, _ := kfont.SizeUTF8(label)
-				tx := kx + (w-int32(kw))/2
-				ty := ky + (keyHeight-int32(kh))/2
-				switch {
-				case isSelected || (key == "⇧" && keyboardUpper):
-					renderText(renderer, config, kfont, label, ColorTextInverse(), tx, ty)
-				case special:
-					renderText(renderer, config, kfont, label, ColorTextInverse(), tx, ty)
-				default:
-					renderText(renderer, config, kfont, label, sdl.Color{R: 0, G: 20, B: 40, A: 255}, tx, ty)
-				}
-			}
-			rx += w + gap
-		}
-	}
-
-	hintFont, _ := getCachedFont(config, "small")
-	if hintFont != nil {
-		hintTxt := "Arrow keys to move . Enter to type . Esc to close"
-		if unitInputActive {
-			hintTxt = "Enter number . OK to convert"
-		} else if chatInputActive {
-			hintTxt = "Type message . SEND to send . Ask AI for Groq"
-		}
-		renderText(renderer, config, hintFont, hintTxt, ColorTextTertiary(), margin, gridTop+totalH+14)
-	}
-}
-
-func buildKeyboard() {
-	lower := [][]string{
-		{"q", "w", "e", "r", "t", "y", "u", "i", "o", "p"},
-		{"a", "s", "d", "f", "g", "h", "j", "k", "l"},
-		{"z", "x", "c", "v", "b", "n", "m"},
-	}
-	upper := [][]string{
-		{"Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"},
-		{"A", "S", "D", "F", "G", "H", "J", "K", "L"},
-		{"Z", "X", "C", "V", "B", "N", "M"},
-	}
-	letters := lower
-	if keyboardUpper {
-		letters = upper
-	}
-	keyboard = make([][]string, len(letters))
-	for i, row := range letters {
-		keyboard[i] = make([]string, len(row))
-		copy(keyboard[i], row)
-	}
-	bottomRow := []string{"⇧", "SPACE", "BACK", "ENTER"}
-	if chatInputActive {
-		bottomRow = []string{"⇧", "SPACE", "BACK", "SEND", "ASK_AI"}
-	}
-	keyboard = append(keyboard, bottomRow)
-	keyboardPosX, keyboardPosY = 0, 0
-}
-
-func initKeyboard() {
-	keyboardUpper = false
-	buildKeyboard()
-}
-
 // --- Image / Video element rendering ---
 func renderImageElement(renderer *sdl.Renderer, config *Config, elem Element) {
 	if elem.Image == "" && elem.Video == "" {
@@ -4691,7 +4458,7 @@ func renderImageElement(renderer *sdl.Renderer, config *Config, elem Element) {
 }
 
 func renderVideoElement(renderer *sdl.Renderer, config *Config, elem Element) {
-	if embeddedPlayer.phase == "idle" {
+	if playerPhase() == "idle" {
 		return
 	}
 	RenderVideoOverlay(renderer, config, elem)
@@ -4738,7 +4505,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			return
 		}
 		cmd := ytSearchCmd(config)
-	go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
+		go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
 	case "youtube_smart":
 		q := ""
 		if v, ok := config.Variables.Custom["search_query"].(string); ok {
@@ -4753,7 +4520,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			return
 		}
 		cmd := ytSearchCmd(config)
-	go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
+		go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
 	case "youtube_trending":
 		go fetchTrendingVideos(config, "search_results", snapshotVars(config))
 	case "youtube_play":
@@ -4802,6 +4569,12 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		feListDirectory(config)
 	case "fe_up":
 		feUp(config)
+	case triggerAppRefresh:
+		scanInstalledApps(config)
+		focusedFileIndex = 0
+		showToast("App list refreshed", ToastSuccess())
+	case triggerAppOpenFolder:
+		openAppsFolder()
 	case "ip_stream":
 		url := strings.TrimSpace(inputVariableValue(config, "stream_url"))
 		if url == "" {
@@ -5019,7 +4792,6 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 					WeatherUnit:        config.Variables.WeatherUnit,
 					TSPUsername:        config.Variables.TSPUsername,
 					PlaybackResolution: config.Variables.PlaybackResolution,
-					AudioBackend:       config.Variables.AudioBackend,
 					GridColumns:        config.Variables.GridColumns,
 					SearchWidth:        config.Variables.SearchWidth,
 					DynamicBg:          config.Variables.DynamicBg,
@@ -5431,6 +5203,8 @@ func completeSceneTransition(config *Config) {
 			loadIPTV(config)
 		case "podcast_entries":
 			go loadPodcasts(config)
+		case appsEntriesVar:
+			scanInstalledApps(config)
 		case "plugin_list":
 			LoadPlugins(config)
 			var list []string
@@ -5485,14 +5259,21 @@ func completeSceneTransition(config *Config) {
 		if e.Type == "chat" {
 			loadChatMessages()
 			go func() {
-				if err := discordConnect(); err != nil && err.Error() != "discord not configured" {
+				if err := discordConnect(); err != nil {
 					log.Printf("[discord] connect failed: %v", err)
+					// "not configured" is a setup state, not something to
+					// interrupt the user about every time chat opens.
+					if !strings.HasPrefix(err.Error(), "discord not configured") && discordStatus != "" {
+						showToast(discordStatus, ColorToastWarn)
+					}
 				}
 			}()
 		}
 	}
-	// Auto-focus chat/terminal composer when entering Chat or Terminal scene.
-	if config.Scenes[currentSceneIndex].Name == "Chat" || config.Scenes[currentSceneIndex].Name == "Terminal" {
+	// Auto-focus the chat composer when entering the Chat scene. The terminal
+	// draws its own prompt row (see terminal.go) and must not route typing
+	// through the chat element its config still carries.
+	if config.Scenes[currentSceneIndex].Name == "Chat" {
 		for i, e := range config.Scenes[currentSceneIndex].Elements {
 			if e.Type == "chat" {
 				selectedButtonIndex = i
@@ -5727,26 +5508,29 @@ func moveHomeSelection(config *Config, dx, dy int) {
 	}
 }
 
-
+// handleVirtualKeyboardInput bridges physical keys to the on-screen keyboard
+// while it is open: arrows/Tab move the highlight, Enter activates a key,
+// Backspace deletes, Esc closes. Printable characters are delivered by SDL's
+// text-input event so nothing is inserted twice.
 func handleVirtualKeyboardInput(e *sdl.KeyboardEvent, config *Config) {
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
-		if keyboardPosY > 0 {
-			keyboardPosY--
-		}
+		vkMoveFocus(0, -1)
 	case sdl.K_DOWN:
-		if keyboardPosY < len(keyboard)-1 {
-			keyboardPosY++
-		}
+		vkMoveFocus(0, 1)
 	case sdl.K_LEFT:
-		if keyboardPosX > 0 {
-			keyboardPosX--
-		}
+		vkMoveFocus(-1, 0)
 	case sdl.K_RIGHT:
-		if keyboardPosX < len(keyboard[keyboardPosY])-1 {
-			keyboardPosX++
-		}
-	case sdl.K_RETURN:
-		handleKeyboardInput(config)
+		vkMoveFocus(1, 0)
+	case sdl.K_TAB:
+		vkMoveFocus(1, 0)
+	case sdl.K_BACKSPACE, sdl.K_DELETE:
+		vkBackspace(config)
+	case sdl.K_ESCAPE:
+		vkCloseKeyboard()
+	case sdl.K_RETURN, sdl.K_KP_ENTER:
+		// Physical keyboards expect Enter to commit the text; the controller
+		// uses A to activate the highlighted key (Xbox-style).
+		vkSubmit(config, false)
 	}
 }

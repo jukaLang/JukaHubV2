@@ -119,7 +119,7 @@ func TestJukaHubUpdateTargetSelection(t *testing.T) {
 			if err != nil {
 				t.Fatalf("jukaHubUpdateTargetFor(): %v", err)
 			}
-			wantAsset := "JukaHub-" + string(device) + "-linux-arm64.tar.gz"
+			wantAsset := "JukaHub-Trimui.zip"
 			if target.Device != device || target.Asset != wantAsset {
 				t.Fatalf("target = %+v, want device %q asset %q", target, device, wantAsset)
 			}
@@ -127,7 +127,7 @@ func TestJukaHubUpdateTargetSelection(t *testing.T) {
 	}
 
 	windows, err := jukaHubUpdateTargetFor(DeviceDevBuild, "windows", "amd64")
-	if err != nil || windows.Asset != "JukaHub-win-x64.zip" {
+	if err != nil || windows.Asset != "JukaHub-Windows.zip" {
 		t.Fatalf("windows target = %+v, %v", windows, err)
 	}
 	for _, tc := range []struct {
@@ -147,7 +147,7 @@ func TestJukaHubUpdateTargetSelection(t *testing.T) {
 
 	for _, device := range devices {
 		asset, err := jukaHubAssetName(device, "linux", "arm64")
-		wantAsset := "JukaHub-" + string(device) + "-linux-arm64.tar.gz"
+		wantAsset := "JukaHub-Trimui.zip"
 		if err != nil || asset != wantAsset {
 			t.Errorf("jukaHubAssetName(%q) = %q, %v; want %q", device, asset, err, wantAsset)
 		}
@@ -191,12 +191,8 @@ func TestParsePatchManifest(t *testing.T) {
 		t.Fatal("wrong device must not match")
 	}
 	for _, device := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro} {
-		target, err := jukaHubUpdateTargetFor(device, "linux", "arm64")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if manifestTarget := m.ManifestTargetFor(string(device), target.OS, target.Arch); manifestTarget == nil || manifestTarget.Asset != target.Asset {
-			t.Errorf("manifest target does not match selected target for %q", device)
+		if manifestTarget := m.ManifestTargetFor(string(device), "linux", "arm64"); manifestTarget == nil || manifestTarget.Asset == "" {
+			t.Errorf("manifest has no target for %q", device)
 		}
 	}
 

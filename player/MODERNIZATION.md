@@ -211,7 +211,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 **Status**: ⏳ Pending
 
 #### 5.1 Media
-- [ ] Add media-backend interface (ffplay/MPV)
+- [ ] Add media-backend interface (ffplay today; keep it swappable)
 - [ ] Add playback queue
 - [ ] Add resume position
 - [ ] Add progress display

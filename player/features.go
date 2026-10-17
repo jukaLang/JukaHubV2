@@ -177,6 +177,12 @@ func feEnterFocused(config *Config) {
 		return
 	}
 	entry := entries[focusedFileIndex]
+	// The Apps list is a program launcher: entries open a built-in scene or
+	// start an external application instead of browsing files.
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == appsEntriesVar {
+		launchAppEntry(config, entry)
+		return
+	}
 	if entry.IsDir {
 		config.Variables.Custom["fe_path"] = entry.Path
 		focusedFileIndex = 0
@@ -337,13 +343,45 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 }
 
+// colorSettingVariables are the theme colors edited from Settings → Appearance.
+// Their fields always render a swatch, even before the value is valid.
+var colorSettingVariables = map[string]bool{
+	"buttonColor": true,
+	"labelColor":  true,
+	"inputColor":  true,
+}
+
+// settingsFieldColor resolves the color a settings input currently represents.
+// editing makes it follow the live text buffer, so the swatch updates while the
+// value is typed rather than only after the config is saved.
+func settingsFieldColor(config *Config, element Element, editing bool) (sdl.Color, bool, bool) {
+	if element.Type != "input" || element.Variable == "" {
+		return sdl.Color{}, false, false
+	}
+	isColorField := colorSettingVariables[element.Variable]
+	value := inputVariableValue(config, element.Variable)
+	if editing {
+		value = inputTextBuffer
+	}
+	c, ok := parseHexColor(value)
+	if ok {
+		// Any field holding a valid #rrggbb gets a swatch, so custom color
+		// variables added by a config get the same treatment.
+		isColorField = true
+	}
+	return c, ok, isColorField
+}
+
 // applyColorVar parses an "r,g,b" or "#rrggbb" string and updates a named
 // theme variable.
 func applyColorVar(config *Config, name, value string) {
 	value = strings.TrimSpace(value)
-	if strings.HasPrefix(value, "#") {
-		r, g, b := hexToRGB(value)
-		value = fmt.Sprintf("%d,%d,%d", r, g, b)
+	// Accept "#rrggbb" and the bare "rrggbb" form the swatch preview already
+	// understands, so a typo-free value never previews but fails to save.
+	if strings.HasPrefix(value, "#") || (!strings.Contains(value, ",") && len(value) == 6) {
+		if c, ok := parseHexColor(value); ok {
+			value = fmt.Sprintf("%d,%d,%d", c.R, c.G, c.B)
+		}
 	}
 	parts := strings.Split(value, ",")
 	if len(parts) != 3 {

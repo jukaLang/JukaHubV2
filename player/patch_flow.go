@@ -127,26 +127,39 @@ func patchRowStatus(c PatchComponent, s PatchRowStatus) {
 
 // --- Operations ---
 
-// OpCheckUpdates checks the JukaHub release feed.
+// OpCheckUpdates checks the JukaHub release feed and, when a newer release
+// exists, downloads and stages it so it can be applied with one press.
+// Releases are timestamped (JukaHub-20261017120000), so freshness is decided
+// by release time, not by semantic version.
 func OpCheckUpdates(ctx context.Context, config *Config) error {
 	patchRowStatus(ComponentApp, StatusChecking)
 	rel, err := FetchLatestJukaHubRelease(ctx)
 	if err != nil {
 		patchRowStatus(ComponentApp, StatusOffline)
+		patchStateMu.Lock()
+		patchState.LastCheckError = err.Error()
+		patchStateMu.Unlock()
+		savePatchState()
 		return fmt.Errorf("checking JukaHub releases: %w", err)
-	}
-	installed := installedPatchVersions(config)[ComponentApp]
-	available := strings.TrimPrefix(rel.TagName, "v")
-	if NewerVersion(installed, available) {
-		patchRowStatus(ComponentApp, StatusAvailable)
-	} else {
-		patchRowStatus(ComponentApp, StatusCurrent)
 	}
 	patchStateMu.Lock()
 	patchState.LastCheckAt = time.Now().UTC().Format(time.RFC3339)
 	patchState.LastCheckError = ""
 	patchStateMu.Unlock()
+
+	if !releaseIsNewerThanInstalled(rel) {
+		patchRowStatus(ComponentApp, StatusCurrent)
+		savePatchState()
+		return nil
+	}
+	patchRowStatus(ComponentApp, StatusAvailable)
+	if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
+		savePatchState()
+		return err
+	}
 	savePatchState()
+	patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub " + rel.TagName + " is staged — press A on JukaHub to apply"})
+	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }
 
@@ -180,7 +193,7 @@ func OpVerifyTools(ctx context.Context, config *Config) error {
 	}
 	patchRowStatus(ComponentTools, StatusChecking)
 	var missing []string
-	for _, tool := range []string{"yt-dlp", "ffplay", "mpv"} {
+	for _, tool := range []string{"yt-dlp", "ffplay", "ffmpeg"} {
 		if runtime.GOOS == "windows" && !strings.HasSuffix(tool, ".exe") {
 			tool += ".exe"
 		}

@@ -916,7 +916,7 @@ func patchDrainEvents() {
 	DrainPatchEvents(func(ev PatchEvent) {
 		switch ev.Kind {
 		case PatchEventState:
-			if ev.Row != "" {
+			if ev.Row != "" && patchSnap != nil {
 				for i := range patchSnap.Rows {
 					if patchSnap.Rows[i].Component == ev.Row && ev.Status != "" {
 						patchSnap.Rows[i].Status = ev.Status
@@ -948,12 +948,12 @@ func patchDrainEvents() {
 	handlePatchHoldUpdate()
 }
 
-// PatchSceneFrame is a convenience called from the main loop every frame when
-// the current scene is Patch: drains events and refreshes the busy label.
+// PatchSceneFrame is called from the main loop every frame. It drains Patch
+// worker events on every scene so background work (including the automatic
+// updater) can publish toasts and snapshots no matter where the user is; the
+// hold-to-confirm progress only advances while Patch owns the modal.
 func PatchSceneFrame() {
-	if currentSceneIndex >= 0 && currentSceneIndex < len(appConfig.Scenes) && appConfig.Scenes[currentSceneIndex].Name == "Patch" {
-		patchDrainEvents()
-	}
+	patchDrainEvents()
 }
 
 // patchFooterHints returns the footer hint override for Patch (nil, false

@@ -1,16 +1,20 @@
-﻿package main
+package main
 
 // patch_swap.go implements the JukaHub application self-update. The running
-// process cannot replace its own binary, so the swap is delegated to a tiny
-// external helper script (bash on the device, batch on Windows) that:
+// process cannot replace its own files, so the swap is delegated to a tiny
+// detached helper script (sh on the device, .bat on Windows) that:
 //
-//   1. moves the current binary to a backup name,
-//   2. renames the staged new binary into place (same filesystem),
-//   3. marks the journal committed, then relaunches JukaHub.
+//  1. waits for this process to exit,
+//  2. copies the staged files over the installation (binary, SDL DLLs,
+//     config, fonts, background) with retries while the old binary is locked,
+//  3. deletes the journal, then relaunches JukaHub.
 //
 // The journal is written BEFORE the destructive step, so an interruption at
 // any point is detected at next startup (checkInterruptedJournal) and rolled
 // back automatically. A failing swap is never left half-applied.
+//
+// Release archives are the ones published by the release workflow:
+// JukaHub-Windows.zip (Windows x64) and JukaHub-Trimui.zip (TrimUI arm64).
 
 import (
 	"context"
@@ -20,12 +24,17 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 )
 
 const (
 	patchMaxEntries     = 50000
 	patchMaxExpandBytes = 2 << 30 // 2 GiB staged expansion cap
 )
+
+// appRestartRequested tells the render loop to exit after the swap helper was
+// started, freeing the executable for replacement.
+var appRestartRequested atomic.Bool
 
 type jukaHubUpdateTarget struct {
 	Device DeviceModel
@@ -37,23 +46,15 @@ type jukaHubUpdateTarget struct {
 // jukaHubUpdateTargetFor selects only explicitly supported runtime targets.
 // Unknown platforms/devices never fall through to the original Smart Pro build.
 func jukaHubUpdateTargetFor(device DeviceModel, goos, arch string) (jukaHubUpdateTarget, error) {
-	if device == DeviceDevBuild && goos == "windows" && arch == "amd64" {
-		return jukaHubUpdateTarget{Device: device, OS: goos, Arch: arch, Asset: "JukaHub-win-x64.zip"}, nil
+	if goos == "windows" && arch == "amd64" {
+		// The Windows build is shared by every desktop install.
+		return jukaHubUpdateTarget{Device: device, OS: goos, Arch: arch, Asset: "JukaHub-Windows.zip"}, nil
 	}
-	if goos != "linux" || arch != "arm64" {
-		return jukaHubUpdateTarget{}, fmt.Errorf("no JukaHub update target for device %q on %s/%s", device, goos, arch)
+	if goos == "linux" && arch == "arm64" && device.IsTrimui() {
+		// Every supported TrimUI model uses the same arm64 archive.
+		return jukaHubUpdateTarget{Device: device, OS: goos, Arch: arch, Asset: "JukaHub-Trimui.zip"}, nil
 	}
-	switch device {
-	case DeviceTrimuiSmartPro, DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro:
-		return jukaHubUpdateTarget{
-			Device: device,
-			OS:     goos,
-			Arch:   arch,
-			Asset:  fmt.Sprintf("JukaHub-%s-%s-%s.tar.gz", device, goos, arch),
-		}, nil
-	default:
-		return jukaHubUpdateTarget{}, fmt.Errorf("no JukaHub update target for device %q on %s/%s", device, goos, arch)
-	}
+	return jukaHubUpdateTarget{}, fmt.Errorf("no JukaHub update target for device %q on %s/%s", device, goos, arch)
 }
 
 // jukaHubAssetName returns the release asset filename for a supported device
@@ -66,133 +67,28 @@ func jukaHubAssetName(device DeviceModel, goos, arch string) (string, error) {
 	return target.Asset, nil
 }
 
-// OpUpdateJukaHub performs the full JukaHub application update flow:
-// fetch release metadata -> validate pre-flight -> resolve manifest -> download
-// -> verify -> stage -> backup -> swap script. The user confirms the swap through
-// the modal; this operation stops at staging.
+// OpUpdateJukaHub checks the release feed and stages the newest archive for
+// this device. The user confirms the swap through the modal; this operation
+// stops at staging.
 func OpUpdateJukaHub(ctx context.Context, config *Config) error {
-	dir, err := PatchStateDir()
-	if err != nil {
-		return err
-	}
-	client := newPatchClient()
 	rel, err := FetchLatestJukaHubRelease(ctx)
 	if err != nil {
 		return err
 	}
-	installed := installedPatchVersions(config)[ComponentApp]
-	available := strings.TrimPrefix(rel.TagName, "v")
-	if !NewerVersion(installed, available) {
-		return fmt.Errorf("installed %s is already current", installed)
+	if !releaseIsNewerThanInstalled(rel) {
+		installed := installedBuildDate()
+		if installed == "" {
+			installed = versionString(config)
+		}
+		return fmt.Errorf("already up to date (%s)", installed)
 	}
-	target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH)
-	if err != nil {
+	if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
 		return err
 	}
-	patchRowStatus(ComponentApp, StatusDownloading)
-	assetName := target.Asset
-
-	// Prefer the machine-readable manifest when the release ships one; it
-	// carries the authoritative sha256. Without a manifest we refuse to label
-	// the download "verified" and stop before the swap.
-	var expectSHA string
-	var expectName string
-	if mAsset := rel.FindManifestAsset(); mAsset != nil {
-		mData, err := fetchBounded(ctx, client, mAsset.BrowserDownloadURL, patchMaxMetadata)
-
-		if err != nil {
-			return fmt.Errorf("fetching manifest: %w", err)
-		}
-		manifest, err := ParsePatchManifest(mData)
-		if err != nil {
-			return fmt.Errorf("manifest rejected: %w", err)
-		}
-		manifestTarget := manifest.ManifestTargetFor(string(target.Device), target.OS, target.Arch)
-		if manifestTarget == nil {
-			return fmt.Errorf("release manifest has no target for %s/%s/%s", target.Device, target.OS, target.Arch)
-		}
-		if manifestTarget.Asset != target.Asset {
-			return fmt.Errorf("release manifest asset %q does not match expected target asset %q", manifestTarget.Asset, target.Asset)
-		}
-		expectSHA = manifestTarget.SHA256
-		expectName = manifestTarget.Asset
-	} else {
-		return errors.New("release does not publish manifest.json yet — update disabled until a signed manifest is available")
-	}
-
-	// Pre-flight check before downloading anything: the manifest tells us what
-	// the release claims to contain, so verify the filenames line up before we
-	// pay the download cost. This catches mismatched assets early rather than
-	// discovering the mismatch only after the archive is staged.
-	if err := validateUpdateAssetNames(rel, assetName, expectName); err != nil {
-		return err
-	}
-
-	// Locate the asset on the release.
-	var assetURL string
-	var assetSize int64
-	found := false
-	for _, a := range rel.Assets {
-		if a.Name == assetName {
-			assetURL = a.BrowserDownloadURL
-			assetSize = a.Size
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("release %q does not contain asset %q", rel.TagName, assetName)
-	}
-	_ = assetSize
-
-	// Free-space sanity check before downloading.
-	if free, err := freeBytes(dir); err == nil && free < 64<<20 {
-		return fmt.Errorf("insufficient free space for update staging (%d bytes free)", free)
-	}
-
-	archivePath := filepath.Join(dir, "downloads", sanitizeFileName(assetName))
-	if err := downloadToFile(ctx, client, assetURL, archivePath, expectSHA, patchMaxDownload); err != nil {
-		patchRowStatus(ComponentApp, StatusFailed)
-		return fmt.Errorf("download/verify failed: %w", err)
-	}
-	patchRowStatus(ComponentApp, StatusVerified)
-
-	// Stage: extract into a fresh staging dir.
-	staging := filepath.Join(dir, "staging", "app-"+rel.TagName)
-	_ = os.RemoveAll(staging)
-	if err := os.MkdirAll(staging, 0o700); err != nil {
-		return err
-	}
-	if err := extractSafe(ctx, archivePath, staging, patchMaxEntries, patchMaxExpandBytes); err != nil {
-		patchRowStatus(ComponentApp, StatusFailed)
-		return fmt.Errorf("staging failed: %w", err)
-	}
-
-	// Locate the new binary inside the staged tree.
-	newBin := findStagedBinary(staging)
-	if newBin == "" {
-		patchRowStatus(ComponentApp, StatusFailed)
-		return errors.New("staged package contains no JukaHub executable")
-	}
-	// Validate: must be a regular executable file.
-	info, err := os.Stat(newBin)
-	if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
-		patchRowStatus(ComponentApp, StatusFailed)
-		return errors.New("staged binary is not an executable regular file")
-	}
-
-	// Persist the staged-update marker for the confirm modal.
-	patchStateMu.Lock()
-	patchState.LastUpdateVer = rel.TagName
-	patchState.LastUpdateAt = rel.TagName
-	patchStateMu.Unlock()
-	savePatchState()
-
-	patchRowStatus(ComponentApp, StatusStaged)
 	patchEventSafe(PatchEvent{Kind: PatchEventModal, Modal: &PatchModalRequest{
 		ID:       "confirm-swap",
 		Title:    "Update JukaHub to " + rel.TagName + "?",
-		Body:     "The new binary is staged and verified. Applying replaces the running executable and restarts JukaHub.\n\nBackup and rollback are automatic.",
+		Body:     "The new build is staged. Applying replaces the JukaHub files and restarts the app.\n\nBackup and rollback are automatic.",
 		Confirm:  "Apply & Restart",
 		HighRisk: true,
 	}})
@@ -218,40 +114,14 @@ func findStagedBinary(staging string) string {
 		}
 		if name == "jukahub" {
 			found = p
-			return nil
 		}
 		return nil
 	})
 	return found
 }
 
-// validateUpdateAssetNames checks that the manifest's expected asset name and
-// the release asset we intend to download agree before we pay for the download.
-// It is a lightweight pre-flight guard: if the release ships a manifest but the
-// filenames disagree, we fail early rather than staging the wrong artifact.
-func validateUpdateAssetNames(rel *githubRelease, wantAsset, expectAsset string) error {
-	if expectAsset == "" {
-		return nil
-	}
-	if wantAsset != expectAsset {
-		return fmt.Errorf(
-			"manifest expects %q but update target needs %q",
-			expectAsset,
-			wantAsset,
-		)
-	}
-	// Also confirm the manifest target asset actually exists on the release so a
-	// stale manifest cannot advertise a target that the release never shipped.
-	for _, a := range rel.Assets {
-		if a.Name == expectAsset {
-			return nil
-		}
-	}
-	return fmt.Errorf("manifest expects asset %q but release does not contain it", expectAsset)
-}
-
 // swapScriptPath returns where the swap helper should be written.
-func swapScriptPath(staging, tag string) string {
+func swapScriptPath(staging string) string {
 	ext := ".sh"
 	if runtime.GOOS == "windows" {
 		ext = ".bat"
@@ -259,61 +129,9 @@ func swapScriptPath(staging, tag string) string {
 	return filepath.Join(staging, "apply-update"+ext)
 }
 
-// writeSwapScript writes the platform-specific swap helper. It returns the
-// script path. The script performs the swap, commits the journal, and
-// relaunches JukaHub. It never uses shell interpolation for paths (argument
-// arrays / quoted env vars only).
-func writeSwapScript(staging, tag, newBin, journalPath string) (string, error) {
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	backupPath := exePath + ".bak-v" + sanitizeFileName(tag)
-	script := swapScriptPath(staging, tag)
-	quoted := func(p string) string { return "'" + strings.ReplaceAll(p, "'", "'\\''") + "'" }
-
-	var content string
-	if runtime.GOOS == "windows" {
-		content = `@echo off
-rem JukaHub apply-update helper (generated by Patch; do not edit)
-setlocal
-set "OLD=` + quoted(exePath) + `"
-set "NEW=` + quoted(newBin) + `"
-set "BAK=` + quoted(backupPath) + `"
-set "JOURNAL=` + quoted(journalPath) + `"
-if not exist "%NEW%" exit /b 2
-if exist "%BAK%" del /f /q "%BAK%"
-move /y "%OLD%" "%BAK%" >nul || exit /b 3
-copy /y "%NEW%" "%OLD%" >nul || exit /b 4
-del /f /q "%JOURNAL%" >nul 2>nul
-start "" "%OLD%"
-`
-	} else {
-		content = `#!/bin/sh
-# JukaHub apply-update helper (generated by Patch; do not edit)
-OLD=` + quoted(exePath) + `
-NEW=` + quoted(newBin) + `
-BAK=` + quoted(backupPath) + `
-JOURNAL=` + quoted(journalPath) + `
-[ -f "$NEW" ] || exit 2
-[ -f "$OLD" ] || exit 3
-if [ -f "$BAK" ]; then rm -f "$BAK" || exit 4; fi
-mv -f "$OLD" "$BAK" || exit 5
-cp -f "$NEW" "$OLD" || exit 6
-chmod 755 "$OLD" || exit 7
-rm -f "$JOURNAL" || true
-nohup "$OLD" >/dev/null 2>&1 &
-exit 0
-`
-	}
-	if err := os.WriteFile(script, []byte(content), 0o700); err != nil {
-		return "", err
-	}
-	return script, nil
-}
-
-// OpApplyStagedSwap moves the staged new binary into place using the swap
-// helper. The journal guarantees automatic rollback on interruption.
+// OpApplyStagedSwap replaces the installation files with the staged release
+// using the detached swap helper. The journal guarantees automatic rollback on
+// interruption.
 func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 	dir, err := PatchStateDir()
 	if err != nil {
@@ -325,35 +143,53 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 	if tag == "" {
 		return errors.New("no staged update")
 	}
-	staging := filepath.Join(dir, "staging", "app-"+tag)
+	staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag))
 	newBin := findStagedBinary(staging)
 	if newBin == "" {
-		return errors.New("staged binary missing")
+		return errors.New("staged files are missing — check for updates again")
 	}
+	installRoot := filepath.Dir(newBin)
+
 	exePath, err := os.Executable()
 	if err != nil {
 		return err
 	}
+	exePath, err = filepath.Abs(exePath)
+	if err != nil {
+		return err
+	}
+	exeDir := filepath.Dir(exePath)
+
+	files, err := stagedInstallFiles(installRoot, exeDir)
+	if err != nil {
+		return err
+	}
+	if len(files) == 0 {
+		return errors.New("staged update contains no files")
+	}
 
 	patchRowStatus(ComponentApp, StatusBackingUp)
 	journal := newJournal("juka-update", tag)
-	// Record the replace so rollback restores the original binary.
-	if err := journal.recordReplace(exePath); err != nil {
-		return err
+	for _, f := range files {
+		if err := journal.recordReplace(f.Dest); err != nil {
+			_ = journal.rollback()
+			return err
+		}
 	}
-	// Also back up the user config separately (never deleted).
+	// Also back up the user config separately (never replaced by an update).
 	if _, err := os.Stat(P().UserConfigPath()); err == nil {
-		if _, _, err := CreateBackupSet("pre-juka-update", []string{exePath, P().ConfigPath()}); err != nil {
+		if _, _, err := CreateBackupSet("pre-juka-update", []string{P().UserConfigPath()}); err != nil {
 			logPatch("backup warning: %v", err)
 		}
 	}
 
 	patchRowStatus(ComponentApp, StatusApplying)
-	script, err := writeSwapScript(staging, tag, newBin, journal.path)
-	if err != nil {
+	script := swapScriptPath(staging)
+	if err := writeSwapScript(script, exePath, files, journal.path); err != nil {
 		_ = journal.rollback()
 		return err
 	}
+
 	// Run the helper detached: the running process exits as part of the swap.
 	cmd := P().CommandContext(ctx, script)
 	if err := cmd.Start(); err != nil {
@@ -361,6 +197,8 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 		return fmt.Errorf("starting swap helper: %w", err)
 	}
 	patchRowStatus(ComponentApp, StatusRestartReq)
+	// Let the render loop quit so the helper can replace the executable.
+	appRestartRequested.Store(true)
 	return nil
 }
 
@@ -374,9 +212,9 @@ func OpCancelStagedSwap(ctx context.Context, config *Config) error {
 	tag := patchState.LastUpdateVer
 	patchState.LastUpdateVer = ""
 	patchStateMu.Unlock()
-	savePatchState()
+	_ = savePatchState()
 	if tag != "" {
-		_ = os.RemoveAll(filepath.Join(dir, "staging", "app-"+tag))
+		_ = os.RemoveAll(filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag)))
 	}
 	patchRowStatus(ComponentApp, StatusCurrent)
 	return nil

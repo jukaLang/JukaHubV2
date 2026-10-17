@@ -330,7 +330,8 @@ func handleTextBrowserAddressInput(renderer *sdl.Renderer, config *Config, eleme
 		if current.Type == "textbrowser" && current.Variable == element.Variable {
 			textBrowserAddressEditing = true
 			textBrowserAddressSubmitted = false
-			handleInputSelection(renderer, config, currentSceneIndex, i)
+			vkOpenSceneInput(config, currentSceneIndex, i)
+			runInputModal(renderer, config)
 			textBrowserAddressEditing = false
 			activeSceneIndex = -1
 			activeElementIndex = -1

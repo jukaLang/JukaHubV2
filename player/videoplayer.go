@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +29,8 @@ type VideoPlayerState struct {
 	speed               float64
 	current             *sdl.Texture
 	currentRaw          []byte
+	frameSeq            uint64 // incremented by the decoder for every new frame
+	uploadedSeq         uint64 // last frame seq copied into the texture
 	width               int32
 	height              int32
 	lastErr             string
@@ -69,9 +72,196 @@ var videoControlRects = struct {
 	back        sdl.Rect
 }{}
 
-// ffmpegCtx is used to cancel the ffmpeg decoder when playback stops.
-var ffmpegCtx context.CancelFunc
-var ffmpegCmd *exec.Cmd
+// A playback session owns one decode pipeline. Every start, seek or restart
+// gets a new generation, and a stopped or superseded session can never touch
+// the processes or UI state of a newer one. Without this, the goroutine for a
+// finished video called StopEmbeddedPlayback() a moment later, tearing down
+// the video that had just been started (the "video closes after a second"
+// bug), and seeking killed the restarted pipeline the same way.
+type playbackSession struct {
+	id       uint64
+	source   string // file path or URL being decoded
+	pageURL  string // page the user opened (used for resume positions)
+	tempFile bool   // downloaded copy owned by playWithTempFile
+
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	mu       sync.Mutex
+	videoCmd *exec.Cmd
+	audioCmd *exec.Cmd
+}
+
+var (
+	playbackMu      sync.Mutex
+	playbackCurrent *playbackSession
+	playbackSeq     uint64
+)
+
+// beginPlaybackSession supersedes the running pipeline (if any) and returns the
+// new one. The previous session is stopped, and its downloaded copy removed
+// unless the new playback uses the same file.
+func beginPlaybackSession(source, pageURL string, tempFile bool) *playbackSession {
+	persistSessionProgress(playbackCurrentSession())
+
+	playbackMu.Lock()
+	prev := playbackCurrent
+	playbackSeq++
+	s := &playbackSession{id: playbackSeq, source: source, pageURL: pageURL, tempFile: tempFile}
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	playbackCurrent = s
+	playbackMu.Unlock()
+
+	if prev != nil {
+		prev.stop()
+		if prev.tempFile && !samePlaybackSource(prev.source, source) {
+			removeTempVideo(prev.source)
+		}
+	}
+	return s
+}
+
+func playbackCurrentSession() *playbackSession {
+	playbackMu.Lock()
+	defer playbackMu.Unlock()
+	return playbackCurrent
+}
+
+func samePlaybackSource(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		return strings.EqualFold(filepath.Clean(aa), filepath.Clean(bb))
+	}
+	return strings.EqualFold(a, b)
+}
+
+// isCurrent reports whether this session is still the one on screen.
+func (s *playbackSession) isCurrent() bool {
+	if s == nil {
+		return false
+	}
+	playbackMu.Lock()
+	defer playbackMu.Unlock()
+	return playbackCurrent == s
+}
+
+func (s *playbackSession) registerVideoCmd(cmd *exec.Cmd) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctx.Err() != nil {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		return false
+	}
+	s.videoCmd = cmd
+	return true
+}
+
+func (s *playbackSession) registerAudioCmd(cmd *exec.Cmd) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ctx.Err() != nil {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		return false
+	}
+	s.audioCmd = cmd
+	return true
+}
+
+func (s *playbackSession) clearVideoCmd(cmd *exec.Cmd) {
+	s.mu.Lock()
+	if s.videoCmd == cmd {
+		s.videoCmd = nil
+	}
+	s.mu.Unlock()
+}
+
+func (s *playbackSession) clearAudioCmd(cmd *exec.Cmd) {
+	s.mu.Lock()
+	if s.audioCmd == cmd {
+		s.audioCmd = nil
+	}
+	s.mu.Unlock()
+}
+
+// stop cancels the session and kills its processes. The goroutines that own the
+// commands call Wait exactly once, so stop never calls it (a double Wait would
+// race with the decoder's own defer).
+func (s *playbackSession) stop() {
+	if s == nil {
+		return
+	}
+	s.cancel()
+	s.mu.Lock()
+	vc, ac := s.videoCmd, s.audioCmd
+	s.videoCmd, s.audioCmd = nil, nil
+	s.mu.Unlock()
+	if vc != nil && vc.Process != nil {
+		vc.Process.Kill()
+	}
+	if ac != nil && ac.Process != nil {
+		ac.Process.Kill()
+	}
+}
+
+// finish is called by the pipeline goroutine when decoding ends. It only resets
+// the UI when this session is still the active one; a superseded session must
+// leave the newer playback untouched.
+func (s *playbackSession) finish() {
+	if !s.isCurrent() {
+		return
+	}
+	StopEmbeddedPlayback()
+}
+
+// persistSessionProgress stores the resume position of a session before it is
+// replaced. It uses the session's own page URL so a new video never overwrites
+// the previous video's position.
+func persistSessionProgress(s *playbackSession) {
+	if s == nil || s.pageURL == "" {
+		return
+	}
+	embeddedPlayer.mu.Lock()
+	phase := embeddedPlayer.phase
+	progress := embeddedPlayer.progress
+	duration := embeddedPlayer.duration
+	embeddedPlayer.mu.Unlock()
+	if phase == "idle" || duration <= 0 {
+		return
+	}
+	updateRecentPosition(s.pageURL, progress*duration)
+	saveFavorites()
+}
+
+// removeTempVideo deletes a downloaded playback copy. Only files created by
+// playWithTempFile are touched: stopping a video played from the SD card used
+// to delete the user's own media file.
+func removeTempVideo(path string) {
+	if path == "" {
+		return
+	}
+	base := filepath.Base(path)
+	if !strings.HasPrefix(base, "jukahub-video-") || !strings.HasSuffix(strings.ToLower(base), ".mp4") {
+		return
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		log.Printf("[VIDEO] could not remove temp download: %v", err)
+	}
+}
+
+// playerPhase returns the current phase under the state lock.
+func playerPhase() string {
+	embeddedPlayer.mu.Lock()
+	defer embeddedPlayer.mu.Unlock()
+	return embeddedPlayer.phase
+}
 
 func ensureVideoFrameQueue() {
 	if videoFrameQueue == nil {
@@ -172,10 +362,7 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 	return w, h, dur, fps
 }
 
-func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec float64) {
-	ctx, cancel := context.WithCancel(context.Background())
-	ffmpegCtx = cancel
-
+func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, height int32, startSec float64) {
 	// No -re flag: wall-clock frame pacing below handles real-time output.
 	// -re interacts badly with pipe output on ARM64 Trimui builds.
 	args := []string{}
@@ -190,7 +377,7 @@ func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec f
 		"-s", fmt.Sprintf("%dx%d", width, height),
 		"-",
 	)
-	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("[VIDEO] ffmpeg stdout pipe failed: %v", err)
@@ -202,11 +389,15 @@ func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec f
 		log.Printf("[VIDEO] ffmpeg failed to start: %v", err)
 		return
 	}
-	ffmpegCmd = cmd
+	if !sess.registerVideoCmd(cmd) {
+		cmd.Wait()
+		return
+	}
+	defer sess.clearVideoCmd(cmd)
+	defer cmd.Wait()
 
 	frameSize := int(width * height * 4)
 	if frameSize <= 0 {
-		cmd.Wait()
 		return
 	}
 	buf := make([]byte, frameSize)
@@ -222,30 +413,50 @@ func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec f
 	}
 	frameDuration := time.Duration(float64(time.Second) / fps)
 	frameDeadline := time.Now()
+	wasPaused := false
 
 	for {
-		// True pause: while paused, stop consuming the pipe so ffmpeg (-re)
-		// blocks and the video source stands still; on resume it continues
-		// exactly where it left off, keeping A/V in sync with the audio.
+		select {
+		case <-sess.ctx.Done():
+			return
+		default:
+		}
+		// True pause: while paused, stop consuming the pipe so ffmpeg blocks
+		// and the video source stands still; on resume it continues exactly
+		// where it left off, keeping A/V in sync with the audio.
 		embeddedPlayer.mu.Lock()
 		paused := embeddedPlayer.phase == "paused"
 		embeddedPlayer.mu.Unlock()
 		if paused {
+			wasPaused = true
 			time.Sleep(15 * time.Millisecond)
 			continue
 		}
-		_, err := io.ReadFull(pipe, buf)
-		if err != nil {
+		if wasPaused {
+			// Resume from now: otherwise the deadline is far in the past and
+			// the decoder bursts through a second of frames to catch up.
+			frameDeadline = time.Now().Add(frameDuration)
+			wasPaused = false
+		}
+		if _, err := io.ReadFull(pipe, buf); err != nil {
 			break
 		}
 		frameCount++
 
+		// Reuse the frame buffer instead of allocating 3-8 MB per frame; this
+		// keeps the GC from stuttering playback. The upload path holds the same
+		// mutex while copying into the texture, so no torn frames.
 		embeddedPlayer.mu.Lock()
-		embeddedPlayer.currentRaw = make([]byte, len(buf))
-		copy(embeddedPlayer.currentRaw, buf)
+		if cap(embeddedPlayer.currentRaw) < len(buf) {
+			embeddedPlayer.currentRaw = make([]byte, len(buf))
+		}
+		raw := embeddedPlayer.currentRaw[:len(buf)]
+		copy(raw, buf)
+		embeddedPlayer.currentRaw = raw
 		embeddedPlayer.width = width
 		embeddedPlayer.height = height
 		embeddedPlayer.lastFrameTime = time.Now()
+		embeddedPlayer.frameSeq++
 		embeddedPlayer.mu.Unlock()
 
 		// Pace to exactly 1x speed: sleep until the next frame is due.
@@ -253,22 +464,22 @@ func startFFmpegDecoder(ffmpegPath, path string, width, height int32, startSec f
 		// fast machines and provides a consistent floor on slow ones.
 		if frameCount > 1 {
 			frameDeadline = frameDeadline.Add(frameDuration)
-			if wait := time.Until(frameDeadline); wait > 0 {
+			wait := time.Until(frameDeadline)
+			if wait > 0 {
 				time.Sleep(wait)
+			} else if -wait > 250*time.Millisecond {
+				// Fell far behind (slow decode or a stall). Resync the clock
+				// instead of playing a burst of frames to catch up.
+				frameDeadline = time.Now()
 			}
 		} else {
 			frameDeadline = time.Now().Add(frameDuration)
 			log.Printf("[VIDEO] First frame received: %dx%d, %d bytes, fps=%.1f, frameDur=%v", width, height, len(buf), fps, frameDuration)
 		}
 	}
-
-	cmd.Wait()
 }
 
-func startFFmpegAudio(ffmpegPath, path string, startSec float64) {
-	ctx, cancel := context.WithCancel(context.Background())
-	audioCtx = cancel
-
+func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec float64) {
 	// Match the exact sample rate the SDL device obtained so there is
 	// zero resampling and perfect pitch. No -re: queue backpressure
 	// paces the decoder to real-time.
@@ -285,7 +496,7 @@ func startFFmpegAudio(ffmpegPath, path string, startSec float64) {
 		"-ar", fmt.Sprintf("%d", rate),
 		"-",
 	)
-	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
 		log.Printf("[AUDIO] ffmpeg audio pipe failed: %v", err)
@@ -297,7 +508,12 @@ func startFFmpegAudio(ffmpegPath, path string, startSec float64) {
 		log.Printf("[AUDIO] ffmpeg audio failed to start: %v", err)
 		return
 	}
-	audioCmd = cmd
+	if !sess.registerAudioCmd(cmd) {
+		cmd.Wait()
+		return
+	}
+	defer sess.clearAudioCmd(cmd)
+	defer cmd.Wait()
 
 	// Feed decoded s16le stereo PCM straight to the dedicated video audio
 	// device (same format, no resampling). The queue helper blocks when the
@@ -306,6 +522,11 @@ func startFFmpegAudio(ffmpegPath, path string, startSec float64) {
 	buf := make([]byte, audioBufferSize)
 
 	for {
+		select {
+		case <-sess.ctx.Done():
+			return
+		default:
+		}
 		embeddedPlayer.mu.Lock()
 		vol := embeddedPlayer.volume
 		paused := embeddedPlayer.phase == "paused"
@@ -325,45 +546,34 @@ func startFFmpegAudio(ffmpegPath, path string, startSec float64) {
 			break
 		}
 	}
-
-	cmd.Wait()
 }
 
-var audioCtx context.CancelFunc
-var audioCmd *exec.Cmd
-
 // UpdateCurrentTexture uploads the current raw RGBA frame to an SDL2 texture.
+// The copy runs under the state lock: the decoder writes the same buffer, and
+// uploading it without the lock produced torn frames (the flicker/glitch users
+// saw). Uploading only when frameSeq changed also avoids redundant work when
+// the render loop runs faster than the video.
 func UpdateCurrentTexture(renderer *sdl.Renderer) {
 	if renderer == nil {
 		return
 	}
-	videoTextureLogCount++
-	if videoTextureLogCount%120 == 0 {
-		log.Printf("[VIDEO] UpdateCurrentTexture called, raw=%v, w=%d, h=%d", embeddedPlayer.currentRaw != nil, embeddedPlayer.width, embeddedPlayer.height)
-	}
 	embeddedPlayer.mu.Lock()
-	if embeddedPlayer.currentRaw == nil {
-		embeddedPlayer.mu.Unlock()
-		return
-	}
+	defer embeddedPlayer.mu.Unlock()
+
+	raw := embeddedPlayer.currentRaw
 	w := embeddedPlayer.width
 	h := embeddedPlayer.height
-	raw := embeddedPlayer.currentRaw
-	tex := embeddedPlayer.current
-	phase := embeddedPlayer.phase
-	embeddedPlayer.mu.Unlock()
-
-	// While paused, keep the last decoded frame on screen instead of
-	// continuing to advance the picture.
-	if phase == "paused" {
+	if raw == nil || w <= 0 || h <= 0 || len(raw) != int(w*h*4) {
+		return
+	}
+	if embeddedPlayer.phase == "paused" {
+		return
+	}
+	if embeddedPlayer.frameSeq == embeddedPlayer.uploadedSeq && embeddedPlayer.current != nil {
 		return
 	}
 
-	if w <= 0 || h <= 0 || len(raw) != int(w*h*4) {
-		return
-	}
-
-	if tex == nil {
+	if embeddedPlayer.current == nil {
 		// ffmpeg's "rgba" pixel format writes bytes in memory order R,G,B,A.
 		// SDL_PIXELFORMAT_RGBA32 is the native-endian RGBA format: on the
 		// little-endian hardware this project targets (TrimUI Smart Pro,
@@ -371,37 +581,23 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 		// exactly what ffmpeg emits. Plain RGBA8888 would expect B,G,R,A in
 		// memory, putting the alpha byte (255) in the red channel and making
 		// the whole frame render red.
-		newTex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA32), sdl.TEXTUREACCESS_STREAMING, w, h)
+		tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA32), sdl.TEXTUREACCESS_STREAMING, w, h)
 		if err != nil {
 			log.Printf("[VIDEO] CreateTexture failed: %v (w=%d h=%d)", err, w, h)
 			return
 		}
-		tex = newTex
+		embeddedPlayer.current = tex
 		log.Printf("[VIDEO] Created texture %dx%d", w, h)
-		embeddedPlayer.mu.Lock()
-		if embeddedPlayer.current == nil {
-			embeddedPlayer.current = tex
-		} else {
-			tex.Destroy()
-			tex = embeddedPlayer.current
-		}
-		embeddedPlayer.mu.Unlock()
 	}
 
+	tex := embeddedPlayer.current
 	if err := tex.Update(nil, unsafe.Pointer(&raw[0]), int(w)*4); err != nil {
 		log.Printf("[VIDEO] Update texture failed: %v", err)
 		tex.Destroy()
-		embeddedPlayer.mu.Lock()
-		if embeddedPlayer.current == tex {
-			embeddedPlayer.current = nil
-		}
-		embeddedPlayer.mu.Unlock()
-	} else {
-		videoTextureLogCount++
-		if videoTextureLogCount%120 == 0 {
-			log.Printf("[VIDEO] Updated texture with %d bytes", len(raw))
-		}
+		embeddedPlayer.current = nil
+		return
 	}
+	embeddedPlayer.uploadedSeq = embeddedPlayer.frameSeq
 }
 
 // StartEmbeddedPlayback begins the embedded FFmpeg decoder pipeline for the
@@ -413,7 +609,22 @@ func StartEmbeddedPlayback(config *Config, url string) {
 // StartEmbeddedPlaybackAt begins the embedded FFmpeg decoder pipeline for the
 // given URL, seeking to startSec when nonzero so the Continue card can resume.
 func StartEmbeddedPlaybackAt(config *Config, url string, startSec float64) {
-	StopEmbeddedPlayback()
+	startEmbeddedPlayback(config, url, startSec, false)
+}
+
+// startEmbeddedPlayback starts a new session. tempFile marks a downloaded copy
+// that this session owns and may delete when it ends.
+func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFile bool) {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return
+	}
+	pageURL := currentPlaybackURL
+	if pageURL == "" {
+		pageURL = url
+	}
+	sess := beginPlaybackSession(url, pageURL, tempFile)
+
 	videoPlaybackMutex.Lock()
 	embeddedPlaybackPath = url
 	videoPlaybackMutex.Unlock()
@@ -428,6 +639,10 @@ func StartEmbeddedPlaybackAt(config *Config, url string, startSec float64) {
 	embeddedPlayer.lastErr = ""
 	embeddedPlayer.duration = 0
 	embeddedPlayer.currentRaw = nil
+	embeddedPlayer.frameSeq = 0
+	embeddedPlayer.uploadedSeq = 0
+	embeddedPlayer.totalPausedDuration = 0
+	embeddedPlayer.pauseStartTime = time.Time{}
 	embeddedPlayer.mu.Unlock()
 
 	go func() {
@@ -435,6 +650,11 @@ func StartEmbeddedPlaybackAt(config *Config, url string, startSec float64) {
 		ffprobePath := getToolPath("ffprobe", config)
 
 		w, h, dur, fps := probeVideoInfo(ffprobePath, url)
+		if !sess.isCurrent() {
+			// A newer session (seek, restart or stop) took over while probing:
+			// do not touch its state or start orphan processes.
+			return
+		}
 
 		videoPlaybackMutex.Lock()
 		videoPlaybackPhase = "playing"
@@ -467,33 +687,29 @@ func StartEmbeddedPlaybackAt(config *Config, url string, startSec float64) {
 		// Audio and video are separate blocking decode loops. The audio
 		// pipeline runs on its own goroutine — calling it inline here would
 		// block until the audio ends and the video decoder would never start.
-		go startFFmpegAudio(ffmpegPath, url, startSec)
-		startFFmpegDecoder(ffmpegPath, url, w, h, startSec)
+		go startFFmpegAudio(sess, ffmpegPath, url, startSec)
+		startFFmpegDecoder(sess, ffmpegPath, url, w, h, startSec)
 
-		// If decoder exits, stop playback
-		StopEmbeddedPlayback()
+		// The pipeline ended (EOF, stop, or a newer session). finish() only
+		// resets the UI when this session still owns the screen, so a stale
+		// decoder can never tear down the video the user is watching.
+		sess.finish()
 	}()
 }
 
 // StopEmbeddedPlayback halts the embedded decoder and clears state.
 func StopEmbeddedPlayback() {
-	if ffmpegCtx != nil {
-		ffmpegCtx()
-		ffmpegCtx = nil
-	}
-	if audioCtx != nil {
-		audioCtx()
-		audioCtx = nil
-	}
-	if ffmpegCmd != nil {
-		ffmpegCmd.Process.Kill()
-		ffmpegCmd.Wait()
-		ffmpegCmd = nil
-	}
-	if audioCmd != nil {
-		audioCmd.Process.Kill()
-		audioCmd.Wait()
-		audioCmd = nil
+	playbackMu.Lock()
+	sess := playbackCurrent
+	playbackCurrent = nil
+	playbackMu.Unlock()
+
+	if sess != nil {
+		persistSessionProgress(sess)
+		sess.stop()
+		if sess.tempFile {
+			removeTempVideo(sess.source)
+		}
 	}
 	// Drop any audio still queued from the stopped video so it never bleeds
 	// into the next playback.
@@ -501,22 +717,16 @@ func StopEmbeddedPlayback() {
 
 	embeddedPlayer.mu.Lock()
 	prevPhase := embeddedPlayer.phase
-	progress := embeddedPlayer.progress
-	duration := embeddedPlayer.duration
 	embeddedPlayer.phase = "idle"
 	embeddedPlayer.currentRaw = nil
+	embeddedPlayer.frameSeq = 0
+	embeddedPlayer.uploadedSeq = 0
 	embeddedPlayer.mu.Unlock()
 
 	if prevPhase != "idle" {
 		clearVideoFrameQueue()
 	}
 
-	// Persist the resume position before clearing playback state so the
-	// Continue card shows real progress after the video ends or is stopped.
-	if src := currentPlaybackURL; src != "" && prevPhase != "idle" && duration > 0 {
-		updateRecentPosition(src, progress*duration)
-		saveFavorites()
-	}
 	currentPlaybackURL = ""
 
 	videoPlaybackMutex.Lock()
@@ -524,13 +734,8 @@ func StopEmbeddedPlayback() {
 	videoPlaybackPhaseAt = sdl.GetTicks64()
 	videoPlaybackProgress = 0
 	videoPlaybackCmd = nil
-	path := embeddedPlaybackPath
 	embeddedPlaybackPath = ""
 	videoPlaybackMutex.Unlock()
-
-	if path != "" && !strings.Contains(path, "://") {
-		os.Remove(path)
-	}
 }
 
 // stopVideoPlayback is the unexported alias used by main.go menu buttons.
@@ -561,11 +766,15 @@ func toggleVideoPlayback() {
 	ToggleVideoPlayback()
 }
 
-// SeekVideo seeks to the given fraction (0..1) by restarting ffmpeg with -ss.
+// SeekVideo seeks to the given fraction (0..1) by restarting the pipeline with
+// -ss. The seek is a new session: the old decoder is superseded, so when its
+// loop exits it cannot stop the restarted playback (which used to make seeking
+// end the video a second later).
 func SeekVideo(fraction float64) {
-	videoPlaybackMutex.Lock()
-	url := embeddedPlaybackPath
-	videoPlaybackMutex.Unlock()
+	prev := playbackCurrentSession()
+	if prev == nil {
+		return
+	}
 
 	embeddedPlayer.mu.Lock()
 	if embeddedPlayer.phase == "idle" {
@@ -577,8 +786,14 @@ func SeekVideo(fraction float64) {
 	duration := embeddedPlayer.duration
 	embeddedPlayer.mu.Unlock()
 
-	if url == "" || width <= 0 || height <= 0 {
+	if width <= 0 || height <= 0 || duration <= 0 || appConfig == nil {
 		return
+	}
+	if fraction < 0 {
+		fraction = 0
+	}
+	if fraction > 1 {
+		fraction = 1
 	}
 
 	ffmpegPath := getToolPath("ffmpeg", appConfig)
@@ -586,83 +801,27 @@ func SeekVideo(fraction float64) {
 		return
 	}
 
-	if ffmpegCtx != nil {
-		ffmpegCtx()
-		ffmpegCtx = nil
-	}
+	seekSec := fraction * duration
+	next := beginPlaybackSession(prev.source, prev.pageURL, prev.tempFile)
 
 	embeddedPlayer.mu.Lock()
+	embeddedPlayer.phase = "playing"
+	embeddedPlayer.decoderStartTime = time.Now()
+	embeddedPlayer.pauseStartTime = time.Time{}
+	embeddedPlayer.totalPausedDuration = 0
+	embeddedPlayer.progressBase = fraction
 	embeddedPlayer.progress = fraction
-	if embeddedPlayer.progress < 0 {
-		embeddedPlayer.progress = 0
-	}
-	if embeddedPlayer.progress > 1 {
-		embeddedPlayer.progress = 1
-	}
-	embeddedPlayer.progressBase = embeddedPlayer.progress
 	embeddedPlayer.mu.Unlock()
 
+	// The restarted decoders must not run on the caller's goroutine: SeekVideo
+	// is invoked from the render loop, and decoding inline froze the whole UI
+	// (no overlay, no input) for the rest of the video.
 	go func() {
-		seekSec := fraction * duration
 		// Restart audio at the seek position so sound stays in sync with the
 		// restarted video decoder.
-		if audioCtx != nil {
-			audioCtx()
-			audioCtx = nil
-		}
-		if audioCmd != nil {
-			audioCmd.Process.Kill()
-			audioCmd.Wait()
-			audioCmd = nil
-		}
-		ClearVideoAudioQueue()
-		// Run the audio pipeline on its own goroutine so the video decoder
-		// below actually starts (startFFmpegAudio blocks until audio EOF).
-		go startFFmpegAudio(ffmpegPath, url, seekSec)
-
-		// No -re: wall-clock pacing handles real-time output.
-		args := []string{
-			"-ss", fmt.Sprintf("%.3f", seekSec),
-			"-i", url,
-			"-f", "rawvideo",
-			"-pix_fmt", "rgba",
-			"-s", fmt.Sprintf("%dx%d", width, height),
-			"-",
-		}
-		cmd := exec.Command(ffmpegPath, args...)
-		pipe, err := cmd.StdoutPipe()
-		if err != nil {
-			return
-		}
-		cmd.Stderr = os.Stderr
-		if err := cmd.Start(); err != nil {
-			return
-		}
-		ffmpegCmd = cmd
-
-		embeddedPlayer.mu.Lock()
-		embeddedPlayer.decoderStartTime = time.Now()
-		embeddedPlayer.mu.Unlock()
-
-		frameSize := int(width * height * 4)
-		buf := make([]byte, frameSize)
-
-		for {
-			_, err := io.ReadFull(pipe, buf)
-			if err != nil {
-				break
-			}
-
-			embeddedPlayer.mu.Lock()
-			embeddedPlayer.currentRaw = make([]byte, len(buf))
-			copy(embeddedPlayer.currentRaw, buf)
-			embeddedPlayer.width = width
-			embeddedPlayer.height = height
-			embeddedPlayer.lastFrameTime = time.Now()
-			embeddedPlayer.mu.Unlock()
-		}
-
-		cmd.Wait()
+		go startFFmpegAudio(next, ffmpegPath, prev.source, seekSec)
+		startFFmpegDecoder(next, ffmpegPath, prev.source, width, height, seekSec)
+		next.finish()
 	}()
 }
 
@@ -698,6 +857,43 @@ func GetEmbeddedPlayerState() *VideoPlayerState {
 	return embeddedPlayer
 }
 
+// videoStateSnapshot is a consistent copy of the player state for the render
+// and input paths. Reading the live fields directly raced with the decoder:
+// a half-updated progress/phase made the overlay flicker and the seek bar jump.
+type videoStateSnapshot struct {
+	phase               string
+	progress            float64
+	progressBase        float64
+	duration            float64
+	volume              float64
+	speed               float64
+	width               int32
+	height              int32
+	hasRaw              bool
+	decoderStartTime    time.Time
+	pauseStartTime      time.Time
+	totalPausedDuration float64
+}
+
+func snapshotVideoState() videoStateSnapshot {
+	embeddedPlayer.mu.Lock()
+	defer embeddedPlayer.mu.Unlock()
+	return videoStateSnapshot{
+		phase:               embeddedPlayer.phase,
+		progress:            embeddedPlayer.progress,
+		progressBase:        embeddedPlayer.progressBase,
+		duration:            embeddedPlayer.duration,
+		volume:              embeddedPlayer.volume,
+		speed:               embeddedPlayer.speed,
+		width:               embeddedPlayer.width,
+		height:              embeddedPlayer.height,
+		hasRaw:              embeddedPlayer.currentRaw != nil,
+		decoderStartTime:    embeddedPlayer.decoderStartTime,
+		pauseStartTime:      embeddedPlayer.pauseStartTime,
+		totalPausedDuration: embeddedPlayer.totalPausedDuration,
+	}
+}
+
 // formatTime converts seconds to MM:SS.
 func formatTime(seconds float64) string {
 	if seconds < 0 {
@@ -717,7 +913,7 @@ func pad2(n int) string {
 
 // RenderVideoOverlay renders the current video frame and on-screen controls.
 func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
-	state := GetEmbeddedPlayerState()
+	state := snapshotVideoState()
 	if state.phase == "idle" {
 		return
 	}
@@ -740,6 +936,9 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		embeddedPlayer.mu.Lock()
 		embeddedPlayer.progress = fraction
 		embeddedPlayer.mu.Unlock()
+		// Draw this frame with the value just computed instead of the snapshot
+		// taken before it, so the bar never lags a frame behind the picture.
+		state.progress = fraction
 
 		// Throttled safety net: write the resume position every ~5s so an app
 		// crash does not lose the watch position (StopEmbeddedPlayback always
@@ -768,7 +967,7 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	if currentTex == nil && state.phase == "playing" {
 		videoTextureLogCount++
 		if videoTextureLogCount%120 == 0 {
-			log.Printf("[VIDEO] currentTex is nil after UpdateCurrentTexture, raw=%v, w=%d, h=%d", state.currentRaw != nil, state.width, state.height)
+			log.Printf("[VIDEO] currentTex is nil after UpdateCurrentTexture, raw=%v, w=%d, h=%d", state.hasRaw, state.width, state.height)
 		}
 	}
 
@@ -1049,7 +1248,7 @@ func formatPercentSimple(v float64) string {
 
 // HandleVideoControlClick processes mouse clicks on the video overlay controls.
 func HandleVideoControlClick(mx, my int32) {
-	state := GetEmbeddedPlayerState()
+	state := snapshotVideoState()
 	if state.phase == "idle" {
 		return
 	}
@@ -1095,7 +1294,7 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) {
 	if e.Type != sdl.KEYDOWN {
 		return
 	}
-	state := GetEmbeddedPlayerState()
+	state := snapshotVideoState()
 	if state.phase == "idle" {
 		return
 	}
@@ -1129,7 +1328,7 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) {
 	if e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return
 	}
-	state := GetEmbeddedPlayerState()
+	state := snapshotVideoState()
 	if state.phase == "idle" {
 		return
 	}

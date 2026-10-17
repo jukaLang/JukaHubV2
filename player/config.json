@@ -1,6 +1,6 @@
 {
-    "label":	"JukaPlayer",
+    "label":	"JukaHub",
     "icon":	"JukaPlayer.png",
     "launch":	"launch.sh",
-    "description":	"JukaPlayer by JukaLang.com"
+    "description":	"YouTube & media hub"
 }

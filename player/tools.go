@@ -1,16 +1,19 @@
 package main
 
 import (
+	"archive/zip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -26,11 +29,11 @@ import (
 var allowedToolRepos = map[string]bool{
 	"btbn/ffmpeg-builds": true,
 	"yt-dlp/yt-dlp":      true,
-	"jukaLang/JukaHubV2": true,
+	"jukalang/jukahubv2": true,
 }
 
 func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
-	if !allowedToolRepos[repo] {
+	if !allowedToolRepos[strings.ToLower(repo)] {
 		return "", fmt.Errorf("tool repo %q is not in the approved download list", repo)
 	}
 	if len(wants) == 0 {
@@ -87,10 +90,18 @@ func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
 	return "", fmt.Errorf("no matching asset found in %s latest release (wanted %s)", repo, strings.Join(names, ", "))
 }
 
-// downloadFile downloads url to dest with a 60s timeout.
+// downloadFile downloads url to dest.
 // It also enforces a modest size cap and refuses obviously truncated files.
 func downloadFile(url, dest string) error {
-	client := &http.Client{Timeout: 60 * time.Second}
+	return downloadFileWithProgress(url, dest, nil)
+}
+
+// downloadFileWithProgress downloads url to dest and reports progress in
+// bytes (done, total) while streaming. total is <= 0 when the server did not
+// send a Content-Length. The request timeout is generous because helper-tool
+// bundles (ffmpeg) are large; the size cap still applies.
+func downloadFileWithProgress(url, dest string, progress func(done, total int64)) error {
+	client := &http.Client{Timeout: 15 * time.Minute}
 	resp, err := client.Get(url)
 	if err != nil {
 		return err
@@ -99,14 +110,19 @@ func downloadFile(url, dest string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download %s: unexpected status %d", url, resp.StatusCode)
 	}
-	rate := io.LimitReader(resp.Body, 512<<20+1)
+	const maxDownload = int64(512 << 20)
+	total := resp.ContentLength
+	if total > maxDownload {
+		return fmt.Errorf("download %s: declared size %d exceeds %d bytes", url, total, maxDownload)
+	}
+	rate := io.LimitReader(resp.Body, maxDownload+1)
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
 	rw := &ioWriteCloserNW{w: out}
-	// Copy with a hard cap, then check whether the body was truncated.
-	n, err := io.Copy(rw, rate)
+	// Copy with a hard cap, reporting progress as bytes stream in.
+	n, err := io.Copy(rw, &progressReader{r: rate, total: total, fn: progress})
 	if err != nil {
 		out.Close()
 		_ = os.Remove(dest)
@@ -116,15 +132,37 @@ func downloadFile(url, dest string) error {
 		_ = os.Remove(dest)
 		return fmt.Errorf("download %s: close failed: %w", url, err)
 	}
-	if n > 512<<20 {
+	if n > maxDownload {
 		_ = os.Remove(dest)
-		return fmt.Errorf("download %s exceeds 512 MiB limit", url)
+		return fmt.Errorf("download %s exceeds %d bytes", url, maxDownload)
 	}
 	if n < 4096 {
 		_ = os.Remove(dest)
 		return fmt.Errorf("download %s is suspiciously small (%d bytes)", url, n)
 	}
+	if progress != nil {
+		progress(n, n)
+	}
 	return nil
+}
+
+// progressReader forwards reads to a progress callback. The callback is
+// throttled by the caller's state (installBarProgress rate-limits itself), so
+// this stays a thin pass-through.
+type progressReader struct {
+	r     io.Reader
+	total int64
+	fn    func(done, total int64)
+	done  int64
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.done += int64(n)
+	if p.fn != nil && n > 0 {
+		p.fn(p.done, p.total)
+	}
+	return n, err
 }
 
 // ioWriteCloserNW is a thin wrapper so we can Close the underlying writer
@@ -144,32 +182,132 @@ func (c *ioWriteCloserNW) Close() error {
 	return nil
 }
 
-// findMPVPath returns the path to the mpv binary, searching the bundled
-// tools folder, the usual system locations, and finally PATH. It returns an
-// empty string when mpv is not installed.
-func findMPVPath() string {
-	candidates := []string{filepath.Join(".", "required", "mpv")}
-	if IsWindows() {
-		// Resolve Program Files instead of hard-coding a drive letter.
-		if pf := os.Getenv("ProgramFiles"); pf != "" {
-			candidates = append(candidates, filepath.Join(pf, "mpv", "mpv.exe"))
+// extractToolFiles pulls specific files out of a tool archive and places them
+// at the top of destDir regardless of how deeply the archive nests them
+// (BtbN ffmpeg zips ship bin/ffplay.exe inside a versioned folder). Only the
+// requested base names are written, so archive traversal is impossible by
+// construction. Returns the base names actually extracted.
+func extractToolFiles(archivePath, destDir string, names []string) ([]string, error) {
+	want := make(map[string]bool, len(names))
+	for _, n := range names {
+		want[strings.ToLower(n)] = true
+	}
+	found := make([]string, 0, len(names))
+	if strings.HasSuffix(strings.ToLower(archivePath), ".zip") {
+		zr, err := zip.OpenReader(archivePath)
+		if err != nil {
+			return nil, fmt.Errorf("open archive %s: %w", archivePath, err)
 		}
-		if pf := os.Getenv("ProgramFiles(x86)"); pf != "" {
-			candidates = append(candidates, filepath.Join(pf, "mpv", "mpv.exe"))
+		defer zr.Close()
+		for _, f := range zr.File {
+			if f.FileInfo().IsDir() {
+				continue
+			}
+			base := strings.ToLower(path.Base(filepath.ToSlash(f.Name)))
+			if !want[base] {
+				continue
+			}
+			if err := extractZipEntryTo(f, filepath.Join(destDir, filepath.FromSlash(base))); err != nil {
+				return found, err
+			}
+			delete(want, base)
+			found = append(found, base)
 		}
-		candidates = append(candidates, "mpv.exe")
 	} else {
-		candidates = append(candidates, "/usr/bin/mpv", "/usr/local/bin/mpv", "/bin/mpv", "mpv")
-	}
-	for _, c := range candidates {
-		if info, err := os.Stat(c); err == nil && !info.IsDir() {
-			return c
+		// tar.xz (and friends): use the system tar, which is present on Linux
+		// and on Windows 10+ (bsdtar). Stage first, then copy by base name.
+		stage, err := os.MkdirTemp("", "tool-extract-*")
+		if err != nil {
+			return nil, err
+		}
+		defer os.RemoveAll(stage)
+		if err := runTarExtract(archivePath, stage); err != nil {
+			return nil, err
+		}
+		err = filepath.Walk(stage, func(p string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return err
+			}
+			base := strings.ToLower(info.Name())
+			if !want[base] {
+				return nil
+			}
+			// Stream the copy: ffmpeg binaries are large and handhelds are
+			// memory constrained, so never buffer a whole binary in RAM.
+			dest := filepath.Join(destDir, filepath.FromSlash(base))
+			if err := copyFileStream(p, dest, PermExec); err != nil {
+				return err
+			}
+			delete(want, base)
+			found = append(found, base)
+			return nil
+		})
+		if err != nil {
+			return found, err
 		}
 	}
-	if p, err := exec.LookPath("mpv"); err == nil {
-		return p
+	return found, nil
+}
+
+// copyFileStream copies src to dst with a fixed buffer, creating dst with perm.
+func copyFileStream(src, dst string, perm os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
 	}
-	return ""
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
+		return err
+	}
+	return out.Close()
+}
+
+// extractZipEntryTo writes a single zip entry to dest with a size cap.
+func extractZipEntryTo(f *zip.File, dest string) error {
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, PermExec)
+	if err != nil {
+		return err
+	}
+	n, err := io.Copy(out, io.LimitReader(rc, 1<<30))
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("extract %s: %w", f.Name, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("extract %s: empty entry", f.Name)
+	}
+	return nil
+}
+
+// runTarExtract extracts an archive into dstDir using the system tar.
+func runTarExtract(archivePath, dstDir string) error {
+	tarPath, err := exec.LookPath("tar")
+	if err != nil {
+		return fmt.Errorf("no tar available to extract %s (install manually)", filepath.Base(archivePath))
+	}
+	// -xJf handles .tar.xz explicitly; -xf is the bsdtar fallback that
+	// auto-detects compression.
+	for _, args := range [][]string{{"-xJf", archivePath, "-C", dstDir}, {"-xf", archivePath, "-C", dstDir}} {
+		if out, err := exec.Command(tarPath, args...).CombinedOutput(); err == nil {
+			return nil
+		} else {
+			log.Printf("[tools] tar %v failed: %v (%s)", args, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return fmt.Errorf("tar could not extract %s (xz support missing? install manually)", filepath.Base(archivePath))
 }
 
 func extractFilesFromZip(ctx context.Context, archivePath, requiredDir string, wants []string) error {

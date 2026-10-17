@@ -15,6 +15,7 @@ $keep = @(
     "Main",
     "Tube",
     "Shorts",
+    "Apps",
     "Favorites",
     "Settings",
     "SettingsGeneral",
@@ -31,7 +32,7 @@ foreach ($name in $keep) {
     $scenes += $s
 }
 
-# --- Home screen: 6 tiles that all point at scenes kept above ---------------
+# --- Home screen: 7 tiles that all point at scenes kept above ---------------
 $main = $scenes | Where-Object { $_.name -eq "Main" }
 $recent = $main.elements | Where-Object { $_.type -eq "recent" }
 
@@ -49,6 +50,7 @@ $main.elements = @(
     $recent,
     (New-Tile "Media"    "#1D4ED8" 30  324 "Tube"),
     (New-Tile "Shorts"   "#0891B2" 280 324 "Shorts"),
+    (New-Tile "Apps"     "#15803D" 530 324 "Apps"),
     (New-Tile "Favorites" "#BE185D" 30 524 "Favorites"),
     (New-Tile "Settings" "#475569" 280 524 "Settings"),
     (New-Tile "Logs"     "#B45309" 530 524 "LogExporter"),
@@ -64,13 +66,11 @@ $cfg.variables.fullscreen = $true
 $cfg.variables.weatherEnabled = $false
 $cfg.variables.screenWidth = 1280
 $cfg.variables.screenHeight = 720
-$cfg.variables.audioBackend = "ffplay"
 $cfg.variables.playbackResolution = "720"
 $cfg.variables.reducedMotion = $true
 $cfg.variables.lowPower = $true
 $cfg.variables.Custom.Fullscreen = $true
 $cfg.variables.Custom.WeatherEnabled = $false
-$cfg.variables.Custom.AudioBackend = "ffplay"
 $cfg.variables.Custom.PlaybackResolution = "720"
 $cfg.variables.Custom.ScreenWidth = 1280
 $cfg.variables.Custom.ScreenHeight = 720

@@ -173,7 +173,6 @@ func recordPlayed(config *Config, key string) {
 		WeatherUnit:        config.Variables.WeatherUnit,
 		TSPUsername:        config.Variables.TSPUsername,
 		PlaybackResolution: config.Variables.PlaybackResolution,
-		AudioBackend:       config.Variables.AudioBackend,
 		GridColumns:        config.Variables.GridColumns,
 		SearchWidth:        config.Variables.SearchWidth,
 		DynamicBg:          config.Variables.DynamicBg,
@@ -371,11 +370,22 @@ func versionString(config *Config) string {
 	return "v" + v
 }
 
+// versionDisplayString is the UI form of the version: the release build date
+// follows the version when it is known (from release-info.json, the release
+// build stamp, or the last applied update).
+//
+//	"v0.4.0 · 2026-10-17"
+//
+// Without a known build date it is exactly versionString.
+func versionDisplayString(config *Config) string {
+	return formatBuildLabel(versionString(config), installedBuildDate())
+}
+
 // headerTitle is the single header line: "JukaHub - v0.4.0" on Home and
 // "JukaHub - v0.4.0 - <Scene>" on every other scene. The active scene appears
 // exactly once per frame, here.
 func headerTitle(config *Config, scene SceneConfig) string {
-	base := "JukaHub - " + versionString(config)
+	base := "JukaHub - " + versionDisplayString(config)
 	if scene.Layout == "home" {
 		return base
 	}
@@ -422,7 +432,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	titleY := barH/2 - TitleCenterOffset
 	renderText(renderer, config, titleFont, titleStr, white, titleX, titleY)
 
-	restStr := " - " + versionString(config)
+	restStr := " - " + versionDisplayString(config)
 	if scene.Layout != "home" && scene.Name != "" {
 		restStr += " - " + sceneDisplayName(scene.Name)
 	}
@@ -654,6 +664,7 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 // disk. They are reconstructed each session rather than saved.
 var volatileCustomVars = map[string]bool{
 	"search_results": true,
+	"app_entries":    true,
 	"fe_entries":     true,
 	"fe_path":        true,
 	"stream_url":     true,
@@ -685,7 +696,6 @@ type UserVariables struct {
 	WeatherUnit        string `json:"weatherUnit"`
 	TSPUsername        string `json:"tspUsername"`
 	PlaybackResolution string `json:"playbackResolution"`
-	AudioBackend       string `json:"audioBackend"`
 	ReducedMotion      bool   `json:"reducedMotion"`
 	LowPower           bool   `json:"lowPower"`
 	GridColumns        int    `json:"gridColumns"`
@@ -825,7 +835,6 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	config.Variables.WeatherUnit = user.Variables.WeatherUnit
 	config.Variables.TSPUsername = user.Variables.TSPUsername
 	config.Variables.PlaybackResolution = user.Variables.PlaybackResolution
-	config.Variables.AudioBackend = user.Variables.AudioBackend
 	config.Variables.ReducedMotion = user.Variables.ReducedMotion
 	config.Variables.LowPower = user.Variables.LowPower
 	for k, v := range user.Variables.Custom {
@@ -856,7 +865,6 @@ func saveConfig(config *Config) {
 	saved.Variables.WeatherUnit = ""
 	saved.Variables.TSPUsername = ""
 	saved.Variables.PlaybackResolution = ""
-	saved.Variables.AudioBackend = ""
 
 	data, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {

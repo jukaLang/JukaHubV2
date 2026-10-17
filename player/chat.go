@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 	"unsafe"
@@ -184,9 +186,11 @@ func discordCreds() (string, string) {
 		return "", defaultDiscordChannel
 	}
 
-	tok, _ := appConfig.Variables.Custom["discord_token"].(string)
+	// channel_profile is the documented location (and what -set-secret writes),
+	// so it wins over a possibly stale copy in the variables map.
+	tok := appConfig.ChannelProfile.Token
 	if tok == "" {
-		tok = appConfig.ChannelProfile.Token
+		tok, _ = appConfig.Variables.Custom["discord_token"].(string)
 	}
 	tok = strings.TrimSpace(tok)
 
@@ -243,6 +247,111 @@ func discordChannel() string {
 	return ch
 }
 
+// discordAPIBase is the REST root used to validate the token before opening the
+// gateway. It is a variable so tests can point it at a stub server.
+var discordAPIBase = "https://discord.com/api/v10"
+
+// discordTokenType returns the configured token type. Bot is the default: a
+// user (self-bot) token violates Discord's terms, so it must be opt-in.
+func discordTokenType() string {
+	if appConfig == nil {
+		return "bot"
+	}
+	if t, ok := appConfig.Variables.Custom["discord_token_type"].(string); ok {
+		if t = strings.TrimSpace(t); t != "" {
+			return t
+		}
+	}
+	return "bot"
+}
+
+// discordAuthCandidates lists the Authorization header values to try, best
+// first. Discord expects "Bot <token>" for bot tokens and a bare token for user
+// tokens. A bot token stored with type "user" is a common misconfiguration and
+// would otherwise fail with a bare 401, so the other form is always tried too.
+func discordAuthCandidates(token, tokenType string) []string {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil
+	}
+	if strings.HasPrefix(token, "Bot ") || strings.HasPrefix(token, "Bearer ") {
+		return []string{token}
+	}
+	bot := "Bot " + token
+	if strings.EqualFold(tokenType, "user") {
+		return []string{token, bot}
+	}
+	return []string{bot, token}
+}
+
+// discordTokenWorks performs a read-only GET /users/@me with one header value.
+// ok=false means Discord rejected the credentials; an error means the check
+// could not be completed (offline, HTTP 5xx, rate limit).
+func discordTokenWorks(auth string) (bool, error) {
+	req, err := http.NewRequest(http.MethodGet, discordAPIBase+"/users/@me", nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", auth)
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("cannot reach Discord: %v", err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	switch {
+	case resp.StatusCode == http.StatusOK:
+		return true, nil
+	case resp.StatusCode == http.StatusUnauthorized, resp.StatusCode == http.StatusForbidden:
+		return false, nil
+	default:
+		return false, fmt.Errorf("Discord returned HTTP %d while checking the token", resp.StatusCode)
+	}
+}
+
+// discordValidateToken returns the Authorization header value Discord accepts,
+// or an error whose text can be shown to the user. Without this check a bad
+// token only surfaces later as an unexplained "connecting..." in the UI.
+func discordValidateToken(token, tokenType string) (string, error) {
+	candidates := discordAuthCandidates(token, tokenType)
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("token is empty")
+	}
+	for _, auth := range candidates {
+		ok, err := discordTokenWorks(auth)
+		if err != nil {
+			return "", err
+		}
+		if ok {
+			if strings.HasPrefix(auth, "Bot ") && strings.EqualFold(tokenType, "user") {
+				log.Printf("[DISCORD] Token is configured as a user token but Discord accepted it as a bot token")
+			}
+			return auth, nil
+		}
+	}
+	return "", fmt.Errorf("token rejected by Discord (revoked, or not a valid bot token)")
+}
+
+// discordMessageParts returns the sender and text for a Discord message,
+// unwrapping the bridge format the TSP bot uses ("username: message"). Live
+// messages and fetched history both go through it so the same message does not
+// render differently depending on how it arrived.
+func discordMessageParts(m *discordgo.Message) (string, string) {
+	sender := "unknown"
+	if m.Author != nil {
+		sender = m.Author.Username
+	}
+	text := m.Content
+	if m.Author != nil && strings.HasPrefix(strings.ToLower(m.Author.Username), "trimuismartprojuka") {
+		if idx := strings.Index(text, ":"); idx > 0 {
+			sender = strings.TrimSpace(text[:idx])
+			text = strings.TrimSpace(text[idx+1:])
+		}
+	}
+	return sender, text
+}
+
 func extractImageURL(msg *discordgo.Message) string {
 	for _, att := range msg.Attachments {
 		if strings.HasPrefix(att.ContentType, "image/") {
@@ -268,11 +377,12 @@ func discordConnect() error {
 		discordSession.Close()
 		discordSession = nil
 	}
-	tokenPrefix := "Bot "
-	if tokenType, ok := appConfig.Variables.Custom["discord_token_type"].(string); ok && strings.EqualFold(tokenType, "user") {
-		tokenPrefix = ""
+	auth, authErr := discordValidateToken(tok, discordTokenType())
+	if authErr != nil {
+		discordStatus = "Discord: " + authErr.Error()
+		return authErr
 	}
-	dg, err := discordgo.New(tokenPrefix + tok)
+	dg, err := discordgo.New(auth)
 	if err != nil {
 		discordStatus = "Discord: " + err.Error()
 		return err
@@ -286,18 +396,7 @@ func discordConnect() error {
 		if m.Author != nil && m.Author.Bot && s.State != nil && s.State.User != nil && m.Author.ID == s.State.User.ID {
 			return
 		}
-		sender := "unknown"
-		if m.Author != nil {
-			sender = m.Author.Username
-		}
-		text := m.Content
-		// Bridge: messages from the TSP bot are formatted "username: message".
-		if m.Author != nil && strings.HasPrefix(strings.ToLower(m.Author.Username), "trimuismartprojuka") {
-			if idx := strings.Index(text, ":"); idx > 0 {
-				sender = strings.TrimSpace(text[:idx])
-				text = strings.TrimSpace(text[idx+1:])
-			}
-		}
+		sender, text := discordMessageParts(m.Message)
 		chatMutex.Lock()
 		chatMessages = append(chatMessages, ChatMessage{
 			ID:        m.ID,
@@ -328,14 +427,11 @@ func discordConnect() error {
 		chatMutex.Lock()
 		chatMessages = chatMessages[:0]
 		for _, m := range msgs {
-			sender := "unknown"
-			if m.Author != nil {
-				sender = m.Author.Username
-			}
+			sender, text := discordMessageParts(m)
 			chatMessages = append(chatMessages, ChatMessage{
 				ID:        m.ID,
 				Sender:    sender,
-				Text:      m.Content,
+				Text:      text,
 				Timestamp: time.Time(m.Timestamp),
 				ImageURL:  extractImageURL(m),
 			})
@@ -374,6 +470,33 @@ func discordSendMessage(sender, text string) error {
 	return nil
 }
 
+// Groq Cloud models. Groq retired llama-3.3-70b-versatile and
+// llama-3.1-8b-instant on 2026-08-16; gpt-oss-120b is the recommended
+// replacement, with gpt-oss-20b and qwen3.8-27b as fallbacks.
+const (
+	groqEndpoint      = "https://api.groq.com/openai/v1/chat/completions"
+	groqDefaultModel  = "openai/gpt-oss-120b"
+	groqFallbackModel = "openai/gpt-oss-20b"
+	groqThirdModel    = "qwen/qwen3.8-27b"
+
+	groqSystemPrompt = "You are Juka, the built-in assistant on JukaHub, a handheld media launcher. " +
+		"Answer briefly and concretely in a few short sentences of plain text. " +
+		"Help with device features, media and search ideas, settings and general questions."
+)
+
+// groqRetiredModels maps ids that no longer answer on Groq Cloud to the
+// replacement Groq recommends.
+var groqRetiredModels = map[string]string{
+	"llama-3.3-70b-versatile":                       groqDefaultModel,
+	"llama-3.1-8b-instant":                          "openai/gpt-oss-20b",
+	"qwen/qwen3-32b":                                "qwen/qwen3.8-27b",
+	"qwen/qwen3.6-27b":                              "qwen/qwen3.8-27b",
+	"meta-llama/llama-4-scout-17b-16e-instruct":     "qwen/qwen3.8-27b",
+	"meta-llama/llama-4-maverick-17b-128e-instruct": "qwen/qwen3.8-27b",
+	"groq/compound":                                 groqDefaultModel,
+	"groq/compound-mini":                            "openai/gpt-oss-20b",
+}
+
 func groqAPIKey() string {
 	if appConfig == nil {
 		return ""
@@ -404,16 +527,218 @@ func groqAPIKey() string {
 }
 
 func groqModel() string {
-	if appConfig == nil {
-		return "llama-3.3-70b-versatile"
+	configured := ""
+	if appConfig != nil {
+		if v, ok := appConfig.Variables.Custom["groq_model"].(string); ok {
+			configured = strings.TrimSpace(v)
+		}
 	}
-	if v, ok := appConfig.Variables.Custom["groq_model"].(string); ok && v != "" {
-		return v
-	}
-	return "llama-3.3-70b-versatile"
+	return normalizeGroqModel(configured)
 }
 
+// normalizeGroqModel maps empty or retired model ids onto a model that Groq
+// currently serves. Groq shut down llama-3.3-70b-versatile and
+// llama-3.1-8b-instant on 2026-08-16, so saved configs keep working without
+// asking the user to edit JSON.
+func normalizeGroqModel(model string) string {
+	if model == "" {
+		return groqDefaultModel
+	}
+	if replacement, ok := groqRetiredModels[strings.ToLower(model)]; ok {
+		log.Printf("[groq] model %q was retired; using %q", model, replacement)
+		return replacement
+	}
+	return model
+}
+
+// groqCandidates returns the configured model followed by the current
+// production lineup, so a single unavailable model does not break the
+// assistant.
+func groqCandidates() []string {
+	first := groqModel()
+	chain := []string{first}
+	for _, candidate := range []string{groqDefaultModel, groqFallbackModel, groqThirdModel} {
+		if !strings.EqualFold(candidate, first) {
+			chain = append(chain, candidate)
+		}
+	}
+	return chain
+}
+
+// groqError carries the HTTP status so callers can decide whether another
+// model is worth trying.
+type groqError struct {
+	status int
+	msg    string
+	model  bool // model-specific failure (retired / not enabled)
+}
+
+func (e *groqError) Error() string { return e.msg }
+
+func groqErrorFromResponse(status int, body []byte) *groqError {
+	apiMsg := ""
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		apiMsg = strings.TrimSpace(payload.Error.Message)
+	}
+	modelErr := status == http.StatusNotFound ||
+		(status == http.StatusBadRequest &&
+			(strings.Contains(strings.ToLower(apiMsg), "model") ||
+				strings.Contains(strings.ToLower(apiMsg), "decommission") ||
+				strings.Contains(strings.ToLower(apiMsg), "not found")))
+
+	var msg string
+	switch {
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		msg = "Groq rejected the API key. Check groq_api_key in Settings."
+	case status == http.StatusTooManyRequests:
+		msg = "Groq rate limit reached. Wait a moment and try again."
+	case modelErr:
+		msg = "Groq model unavailable: " + apiMsg
+	case status >= 500:
+		msg = fmt.Sprintf("Groq is unavailable right now (HTTP %d).", status)
+	case apiMsg != "":
+		msg = "Groq error: " + apiMsg
+	default:
+		msg = fmt.Sprintf("Groq error: HTTP %d", status)
+	}
+	return &groqError{status: status, msg: msg, model: modelErr}
+}
+
+// buildGroqMessages assembles a short conversation so the assistant keeps
+// context instead of answering every message from scratch.
+func buildGroqMessages(userText string) []map[string]string {
+	messages := []map[string]string{{"role": "system", "content": groqSystemPrompt}}
+
+	chatMutex.Lock()
+	history := append([]ChatMessage(nil), chatMessages...)
+	chatMutex.Unlock()
+
+	// sendGroqChatMessage stores the prompt before requesting, so drop the
+	// trailing copy to avoid sending it twice.
+	if n := len(history); n > 0 && strings.EqualFold(history[n-1].Sender, "You") &&
+		strings.TrimSpace(history[n-1].Text) == userText {
+		history = history[:n-1]
+	}
+	if len(history) > 12 {
+		history = history[len(history)-12:]
+	}
+
+	total := 0
+	for _, msg := range history {
+		role := ""
+		switch {
+		case strings.EqualFold(msg.Sender, "You"), strings.EqualFold(msg.Sender, "User"):
+			role = "user"
+		case strings.EqualFold(msg.Sender, "Juka AI"):
+			role = "assistant"
+		default:
+			continue // Discord chatter and system notices are not Juka's words
+		}
+		text := strings.TrimSpace(msg.Text)
+		if text == "" {
+			continue
+		}
+		if len(text) > 1200 {
+			text = text[:1200]
+		}
+		if total+len(text) > 6000 {
+			break
+		}
+		total += len(text)
+		messages = append(messages, map[string]string{"role": role, "content": text})
+	}
+	return append(messages, map[string]string{"role": "user", "content": userText})
+}
+
+// groqRequestModel performs one chat completion against a single model.
+func groqRequestModel(client *http.Client, key, model string, messages []map[string]string) (string, error) {
+	payload := map[string]interface{}{
+		"model":                 model,
+		"messages":              messages,
+		"temperature":           0.6,
+		"max_completion_tokens": 1024,
+	}
+	// gpt-oss models are reasoning models; low effort keeps replies snappy on
+	// handheld hardware without truncating the visible answer.
+	if strings.HasPrefix(model, "openai/gpt-oss") {
+		payload["reasoning_effort"] = "low"
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequest("POST", groqEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("Groq request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return "", groqErrorFromResponse(resp.StatusCode, raw)
+	}
+	var result struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return "", fmt.Errorf("Groq returned an unreadable response: %v", err)
+	}
+	if len(result.Choices) == 0 {
+		return "", errors.New("Groq returned no response.")
+	}
+	return strings.TrimSpace(result.Choices[0].Message.Content), nil
+}
+
+// groqComplete asks each candidate model until one answers.
+func groqComplete(key, userText string) (string, error) {
+	client := &http.Client{Timeout: 45 * time.Second}
+	messages := buildGroqMessages(userText)
+	var lastErr error
+	for _, model := range groqCandidates() {
+		reply, err := groqRequestModel(client, key, model, messages)
+		if err == nil {
+			if reply == "" {
+				return "", errors.New("Groq returned an empty reply.")
+			}
+			return reply, nil
+		}
+		lastErr = err
+		var apiErr *groqError
+		if errors.As(err, &apiErr) && apiErr.model {
+			log.Printf("[groq] model %s unavailable: %s", model, apiErr.msg)
+			continue
+		}
+		return "", err
+	}
+	return "", lastErr
+}
+
+// groqPending counts in-flight assistant requests (rendered as a typing row).
+var groqPending int32
+
+func groqIsPending() bool { return atomic.LoadInt32(&groqPending) == 1 }
+
 func sendGroqChatMessage(userText string) {
+	userText = strings.TrimSpace(userText)
+	if userText == "" {
+		return
+	}
 	key := groqAPIKey()
 	if key == "" {
 		groqStatus = "Groq: no API key"
@@ -422,63 +747,30 @@ func sendGroqChatMessage(userText string) {
 	}
 	sendChatMessage("You", userText)
 	groqStatus = "Groq: thinking..."
+	atomic.StoreInt32(&groqPending, 1)
 	go func() {
-		client := &http.Client{Timeout: 30 * time.Second}
-		messages := []map[string]string{
-			{"role": "system", "content": "You are Juka, helpful assistant for JukaHub handheld device"},
-			{"role": "user", "content": userText},
-		}
-		body, err := json.Marshal(map[string]interface{}{
-			"model":       groqModel(),
-			"messages":    messages,
-			"temperature": 0.7,
-		})
+		defer atomic.StoreInt32(&groqPending, 0)
+		reply, err := groqComplete(key, userText)
 		if err != nil {
 			groqStatus = "Groq: error"
-			sendChatMessage("System", "Groq request error: "+err.Error())
+			log.Printf("[groq] request failed: %v", err)
+			sendChatMessage("System", err.Error())
 			return
 		}
-		req, err := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewReader(body))
-		if err != nil {
-			groqStatus = "Groq: error"
-			sendChatMessage("System", "Groq request error: "+err.Error())
-			return
-		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+key)
-		resp, err := client.Do(req)
-		if err != nil {
-			groqStatus = "Groq: error"
-			sendChatMessage("System", "Groq request error: "+err.Error())
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			groqStatus = "Groq: error"
-			sendChatMessage("System", fmt.Sprintf("Groq error: HTTP %d", resp.StatusCode))
-			return
-		}
-		var result struct {
-			Choices []struct {
-				Message struct {
-					Content string `json:"content"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			groqStatus = "Groq: error"
-			sendChatMessage("System", "Groq parse error: "+err.Error())
-			return
-		}
-		if len(result.Choices) > 0 {
-			aiText := result.Choices[0].Message.Content
-			groqStatus = "Groq: connected"
-			sendChatMessage("Juka AI", aiText)
-		} else {
-			groqStatus = "Groq: empty"
-			sendChatMessage("System", "Groq returned no response.")
-		}
+		groqStatus = "Groq: connected"
+		sendChatMessage("Juka AI", reply)
 	}()
+}
+
+// groqStatusColor tints the status label according to its state.
+func groqStatusColor() sdl.Color {
+	switch {
+	case strings.Contains(groqStatus, "error"), strings.Contains(groqStatus, "no API key"):
+		return ColorDanger
+	case strings.Contains(groqStatus, "thinking"):
+		return ColorWarning
+	}
+	return ColorSuccess
 }
 
 func loadChatMessages() {
@@ -621,7 +913,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		if groqX < listX+SpaceMD {
 			groqX = listX + SpaceMD
 		}
-		renderText(renderer, config, statusFont, groqStatus, ColorSuccess, groqX, statusY)
+		renderText(renderer, config, statusFont, groqStatus, groqStatusColor(), groqX, statusY)
 	}
 
 	// Divider under status.
@@ -657,16 +949,25 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	for i := endIdx; i >= 0 && startY > msgAreaTop; i-- {
 		msg := messages[i]
 		isUser := strings.EqualFold(msg.Sender, "You") || strings.EqualFold(msg.Sender, "User")
-		isSystem := strings.EqualFold(msg.Sender, "System") || strings.EqualFold(msg.Sender, "Juka AI")
+		isAI := strings.EqualFold(msg.Sender, "Juka AI")
+		isSystem := strings.EqualFold(msg.Sender, "System") && !isAI
 
 		text := msg.Text
-		textW, _, _ := font.SizeUTF8(text)
-		bw := int32(textW) + bubblePad*2
+		lines := wrapChatLines(font, text, maxBubbleW-bubblePad*2, 8)
+		bw := int32(0)
+		for _, line := range lines {
+			if w, _, _ := font.SizeUTF8(line); int32(w) > bw {
+				bw = int32(w)
+			}
+		}
+		bw += bubblePad * 2
+		if bw < 120 {
+			bw = 120
+		}
 		if bw > maxBubbleW {
 			bw = maxBubbleW
-			text = fitTextWidth(renderer, config, font, text, bw-bubblePad*2)
 		}
-		bh := lineH + bubblePad*2
+		bh := int32(len(lines))*lineH + bubblePad*2
 
 		var imageH int32
 		var thumbTex *sdl.Texture
@@ -688,6 +989,10 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		if isUser {
 			bx = listX + listW - bw - SpaceSM
 			senderCol = ColorInfo
+		} else if isAI {
+			bx = listX + avatarSize + SpaceSM*2
+			senderCol = ColorTextAccent()
+			renderChatAvatar(renderer, config, font, listX+SpaceSM, by+(bh-avatarSize)/2, avatarSize, "J", uiHighlightColor())
 		} else if isSystem {
 			bx = listX + (listW-bw)/2
 			senderCol = ColorWarning
@@ -702,12 +1007,17 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		bubbleCol := ColorSurface
 		if isUser {
 			bubbleCol = WithAlpha(ColorInfo, 60)
+		} else if isAI {
+			bubbleCol = WithAlpha(ColorSurfaceAlt, 240)
 		} else if isSystem {
 			bubbleCol = WithAlpha(ColorSurfaceAlt, 200)
 		}
 		fillRoundedRect(renderer, bx, by, bw, bh, RadiusMD, bubbleCol)
 		if isUser {
 			strokeRoundedRect(renderer, bx-1, by-1, bw+2, bh+2, RadiusMD+1, 1, WithAlpha(ColorInfo, 120))
+		} else if isAI {
+			// Accent spine marks assistant replies without shouting.
+			fillRoundedRect(renderer, bx, by+8, 3, bh-16, 2, uiHighlightColor())
 		}
 
 		// Sender name + timestamp above the bubble.
@@ -718,15 +1028,17 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			renderText(renderer, config, statusFont, nameText, senderCol, nameX, nameY)
 		}
 
-		// Message text.
-		renderText(renderer, config, font, text, ColorTextPrimary(), bx+bubblePad, by+bubblePad)
+		// Message text (wrapped so long AI answers stay readable).
+		for li, line := range lines {
+			renderText(renderer, config, font, line, ColorTextPrimary(), bx+bubblePad, by+bubblePad+int32(li)*lineH)
+		}
 
 		// Inline image thumbnail.
 		if thumbTex != nil {
 			iw := int32(120)
 			ih := int32(80)
 			ix := bx + bubblePad
-			iy2 := by + lineH + bubblePad + SpaceXS
+			iy2 := by + bubblePad + int32(len(lines))*lineH + SpaceXS
 			fillRoundedRect(renderer, ix, iy2, iw, ih, RadiusSM, ColorSurface)
 			renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
 			renderer.DrawRect(&sdl.Rect{X: ix, Y: iy2, W: iw, H: ih})
@@ -734,6 +1046,19 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 
 		startY = by - bubbleGap - int32(statusFont.Height()) - 2
+	}
+
+	// Assistant typing indicator.
+	if groqIsPending() && startY-lineH-bubblePad*2 > msgAreaTop {
+		tipW := int32(200)
+		tipH := lineH + bubblePad*2
+		tipY := startY - tipH
+		tipX := listX + avatarSize + SpaceSM*2
+		fillRoundedRect(renderer, tipX, tipY, tipW, tipH, RadiusMD, WithAlpha(ColorSurfaceAlt, 220))
+		fillRoundedRect(renderer, tipX, tipY+8, 3, tipH-16, 2, WithAlpha(uiHighlightColor(), 170))
+		dots := strings.Repeat("•", 1+int((sdl.GetTicks64()/350)%3))
+		renderText(renderer, config, font, "Juka is typing "+dots, ColorTextSecondary(), tipX+bubblePad, tipY+bubblePad)
+		startY = tipY - bubbleGap
 	}
 
 	processChatImageDownloads(renderer)
@@ -824,4 +1149,93 @@ func handleChatInput(e *sdl.KeyboardEvent, config *Config) {
 			}
 		}
 	}
+}
+
+// wrapChatLines word-wraps chat text into at most maxLines lines, adding an
+// ellipsis when the message is longer. Long AI answers used to be cut off
+// after a single line by fitTextWidth.
+func wrapChatLines(font *ttf.Font, text string, maxW int32, maxLines int) []string {
+	if font == nil || maxW <= 0 {
+		return []string{text}
+	}
+	joined := strings.Join(strings.Fields(strings.ReplaceAll(text, string(rune(10)), " ")), " ")
+	if joined == "" {
+		return []string{""}
+	}
+	measure := func(v string) int32 {
+		w, _, _ := font.SizeUTF8(v)
+		return int32(w)
+	}
+	var lines []string
+	cur := ""
+	flush := func() {
+		if cur != "" {
+			lines = append(lines, cur)
+			cur = ""
+		}
+	}
+	overflow := false
+	for _, word := range strings.Split(joined, " ") {
+		if word == "" {
+			continue
+		}
+		for measure(word) > maxW && len([]rune(word)) > 1 {
+			flush()
+			if len(lines) >= maxLines {
+				overflow = true
+				break
+			}
+			runes := []rune(word)
+			i := len(runes)
+			for i > 1 && measure(string(runes[:i])) > maxW {
+				i--
+			}
+			lines = append(lines, string(runes[:i]))
+			word = strings.TrimLeft(string(runes[i:]), " ")
+		}
+		if overflow {
+			break
+		}
+		candidate := word
+		if cur != "" {
+			candidate = cur + " " + word
+		}
+		if measure(candidate) <= maxW {
+			cur = candidate
+			continue
+		}
+		flush()
+		if len(lines) >= maxLines {
+			overflow = true
+			break
+		}
+		cur = word
+	}
+	if !overflow {
+		flush()
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+		overflow = true
+	}
+	if overflow && len(lines) > 0 {
+		lines[len(lines)-1] = ellipsizeLine(font, lines[len(lines)-1], maxW)
+	}
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+// ellipsizeLine trims a line until it fits with a trailing ellipsis.
+func ellipsizeLine(font *ttf.Font, line string, maxW int32) string {
+	measure := func(v string) int32 {
+		w, _, _ := font.SizeUTF8(v)
+		return int32(w)
+	}
+	runes := []rune(line)
+	for len(runes) > 0 && measure(string(runes)+"…") > maxW {
+		runes = runes[:len(runes)-1]
+	}
+	return string(runes) + "…"
 }

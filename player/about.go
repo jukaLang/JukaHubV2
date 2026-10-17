@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"runtime"
-	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -44,7 +43,7 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Version.
-	ver := versionString(config)
+	ver := versionDisplayString(config)
 	if medFont != nil {
 		vw, _, _ := medFont.SizeUTF8(ver)
 		renderText(renderer, config, medFont, ver,
@@ -73,13 +72,22 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		y := cardY + 20
 		lineH := int32(24)
 
+		build := installedBuildDate()
+		if build == "" {
+			build = "unknown (source build)"
+		}
+		release := readInstalledReleaseInfo().Tag
+		if release == "" {
+			release = "—"
+		}
 		lines := []string{
-			fmt.Sprintf("Version:    %s", config.Version),
+			fmt.Sprintf("Version:    %s", versionString(config)),
+			fmt.Sprintf("Build date: %s", build),
+			fmt.Sprintf("Release:    %s", release),
 			fmt.Sprintf("Platform:   %s", P().Name()),
 			fmt.Sprintf("OS:         %s/%s", runtime.GOOS, runtime.GOARCH),
 			fmt.Sprintf("CPUs:       %d", runtime.NumCPU()),
 			fmt.Sprintf("Renderer:   SDL2"),
-			fmt.Sprintf("Build:      %s", time.Now().Format("2006-01-02")),
 		}
 		for _, line := range lines {
 			renderText(renderer, config, font, line,

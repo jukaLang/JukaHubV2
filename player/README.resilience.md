@@ -23,5 +23,5 @@ This doc tracks the concrete failure modes the current code is meant to handle b
 
 - Windows build/bootstrap behavior depends on MSYS2 installer switch acceptance, PATH timing, and AV/permissions/proxy conditions that cannot be proven from code alone here.
 - Trimui Smart Pro gamepad behavior depends on the actual controller mapping shipped by the device firmware and SDL2 joystick/gamecontroller database in that environment.
-- Any feature that relies on yt-dlp / ffplay / mpv depends on those tools being reachable and functional on the target machine.
+- Any feature that relies on yt-dlp / ffplay / ffmpeg depends on those tools being reachable and functional on the target machine (JukaHub downloads them on first run when they are missing).
 - Runtime config-driven automation (for example external app triggers) is now more guarded, but the remaining trusted-config assumptions still need human review on the target device.

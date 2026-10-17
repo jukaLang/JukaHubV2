@@ -36,9 +36,9 @@ The following configuration fields should be encrypted:
 
 Encrypted values use the format: `ENC:<keyID>/<hex-encoded ciphertext>`
 
-Example:
+Example (illustrative only — replace with your own value):
 ```
-"groq_api_key": "ENC:default-v3-enhanced/985e49a4a499a71e1683dff6e5174bdc024f5f3c267d2622c01228ae887d7f2bebcd484ff75984ed2a5f62a4caa8e2d73f0aa9470d28dffc83f1d5f4fe1fc5ce0c1401552d81c5e2aa7e9464d86e68558a97ffe0389a5958955f74ef4acd31d7a0b16300"
+"groq_api_key": "ENC:default-v3-enhanced/00112233445566778899aabbccddeeff..."
 ```
 
 The `keyID` prefix enables future key rotation support. Legacy format `ENC:<hex>` is also supported for backward compatibility.
@@ -50,10 +50,30 @@ The enhanced format uses per-value random nonces plus an HMAC-derived key from a
 For additional defense-in-depth, an HMAC-verified wrapper is available:
 
 ```
-"ENC:default-v3-enhanced/<hex>:AUTH:<hmac hex>"
+"ENC:AUTH:<keyID>/<hex>:<hmac hex>"
 ```
 
 This lets the player detect tampering with the encrypted blob itself, not just GCM authentication.
+
+### Setting a secret from the command line
+
+The player can encrypt a value with exactly the key it will use at runtime, so
+the result can be prepared on a PC and copied to the handheld:
+
+```bash
+# Reads the token from stdin so it never lands in shell history.
+./JukaHub -set-secret discord_token
+
+# Verify every encrypted value in the config (never prints plaintext).
+./JukaHub -check-secrets
+```
+
+`-set-secret discord_token` writes `channel_profile.token`;
+`-set-secret discord_channel` writes the (unencrypted) channel id; any other
+name is stored under `variables`. Use `-config <file>` to target a config other
+than `jukaconfig.json` in the current directory. If `JUKAHUB_CRYPTO_KEY` or
+`JUKAHUB_CRYPTO_SALT` are set, they must be set the same way when the player
+runs, or the value will not decrypt.
 
 ## Encryption Key Management
 
@@ -229,6 +249,10 @@ When configuring Discord:
 2. **Store tokens encrypted**
    - If your deployment stores config values with the built-in encryption helpers, keep those values encrypted
    - Verify any stored secret you care about is not left as plaintext in config
+   - Rotate any token that has ever been committed: the default key is built
+     into the binary, so a ciphertext in a public repository is as good as
+     plaintext. Use `-set-secret` with a fresh token and never commit the result
+     if it points at your own bot.
 
 3. **Limit bot permissions**
    - Only grant necessary permissions

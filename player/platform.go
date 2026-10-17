@@ -32,8 +32,8 @@ type Platform interface {
 	// UserConfigPath returns the full path to the mutable user config.
 	UserConfigPath() string
 
-	// ToolsDir returns the directory where external tools (yt-dlp, mpv, etc.)
-	// are expected to live.
+	// ToolsDir returns the directory where external tools (yt-dlp, ffmpeg,
+	// ffplay, ffprobe) are expected to live.
 	ToolsDir() string
 
 	// RequiredDir returns the directory for bundled/extracted dependencies.
@@ -208,21 +208,36 @@ func (windowsPlatform) DataDir() (string, error) {
 
 func (windowsPlatform) ConfigPath() string      { return filepath.Join(".", "jukaconfig.json") }
 func (windowsPlatform) UserConfigPath() string  { return filepath.Join(".", "jukauser.json") }
-func (windowsPlatform) ToolsDir() string        { return filepath.Join(".", "required") }
-func (windowsPlatform) RequiredDir() string     { return filepath.Join(".", "required") }
+func (windowsPlatform) ToolsDir() string {
+	// Resolve relative to the binary dir, not CWD (same as tspPlatform), so
+	// install and lookup agree when the app is launched from elsewhere.
+	if exeDir, err := os.Executable(); err == nil {
+		return filepath.Join(filepath.Dir(exeDir), "required")
+	}
+	return filepath.Join(".", "required")
+}
+func (windowsPlatform) RequiredDir() string { return windowsPlatform{}.ToolsDir() }
 func (windowsPlatform) IsHandheld() bool        { return false }
 func (windowsPlatform) FullscreenDefault() bool { return false }
 func (windowsPlatform) ResizableDefault() bool  { return true }
 
 func (windowsPlatform) LookPath(exe string) (string, error) {
-	// On Windows, tools may be in ./required/ or on PATH.
+	// On Windows, tools may be in <exedir>\required\ or on PATH. Try the name
+	// as given and with the .exe suffix so callers can pass either "yt-dlp" or
+	// "yt-dlp.exe" and still find the installed binary.
 	exeDir, err := windowsPlatform{}.ExecutableDir()
 	if err != nil {
 		return "", err
 	}
-	candidate := filepath.Join(exeDir, "required", exe)
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate, nil
+	names := []string{exe}
+	if !strings.HasSuffix(strings.ToLower(exe), ".exe") {
+		names = append(names, exe+".exe")
+	}
+	for _, name := range names {
+		candidate := filepath.Join(exeDir, "required", name)
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate, nil
+		}
 	}
 	return exec.LookPath(exe)
 }

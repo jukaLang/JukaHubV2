@@ -75,7 +75,6 @@ type Variables struct {
 	WeatherUnit        string            `json:"weatherUnit"`
 	TSPUsername        string            `json:"tspUsername"`
 	PlaybackResolution string            `json:"playbackResolution"`
-	AudioBackend       string            `json:"audioBackend"`
 	ReducedMotion      bool              `json:"reducedMotion"`
 	LowPower           bool              `json:"lowPower"`
 	GridColumns        int               `json:"gridColumns"`
@@ -208,7 +207,6 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"weatherUnit":        true,
 		"tspUsername":        true,
 		"playbackResolution": true,
-		"audioBackend":       true,
 		"gridColumns":        true,
 		"searchWidth":        true,
 		"dynamicBg":          true,
@@ -227,10 +225,15 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 	"externalAppEnabled":   true,
 	"packageRepoEnabled":   true,
 	"themeGalleryEnabled":  true,
-	"deviceModel":         true,
-	"targetPlatform":      true,
-	"defaultOrientation":  true,
-	"accentColor":         true,
+	"deviceModel":         true,		"targetPlatform":      true,
+		"defaultOrientation":  true,
+		"accentColor":         true,
+
+	// Retired settings. Older configs still carry these; they no longer control
+	// anything (playback is always ffplay), so drop them instead of parking them
+	// in Custom where they would be re-saved forever.
+	"audioBackend": true,
+	"AudioBackend": true,
 	}
 	v.Custom = make(map[string]interface{})
 	for k, val := range raw {

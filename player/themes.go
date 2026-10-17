@@ -228,7 +228,6 @@ func ApplyThemePreset(config *Config, presetName string) {
 			WeatherUnit:        config.Variables.WeatherUnit,
 			TSPUsername:        config.Variables.TSPUsername,
 			PlaybackResolution: config.Variables.PlaybackResolution,
-			AudioBackend:       config.Variables.AudioBackend,
 			Custom:             config.Variables.Custom,
 		},
 	}

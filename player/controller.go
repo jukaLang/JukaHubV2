@@ -285,7 +285,7 @@ func handleSceneController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case "MusicPlayer":
 		return ctrlMusicPlayer(e)
 	case "Terminal":
-		return ctrlTerminal(e)
+		return ctrlTerminal(e, config)
 	case "Dashboard":
 		return ctrlDashboard(e, config)
 	case "About":
@@ -572,29 +572,30 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 
 // ── Terminal ──
 
-func ctrlTerminal(e *sdl.ControllerButtonEvent) bool {
+func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A:
 		if term.input != "" {
-			termExecute(term.input)
+			input := term.input
 			term.input = ""
 			term.cursor = 0
-			term.scrollY = 0
+			termExecute(input)
 		}
+	case sdl.CONTROLLER_BUTTON_Y, sdl.CONTROLLER_BUTTON_X:
+		// Open the on-screen keyboard: without it a controller-only device
+		// cannot type a command at all.
+		vkOpenTerminal()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		// goBackScene plays the back sound itself.
+		goBackScene(config)
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		term.scrollY -= 40
-		if term.scrollY < 0 {
-			term.scrollY = 0
-		}
+		termScroll(3)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		term.scrollY += 40
+		termScroll(-3)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		term.scrollY -= 200
-		if term.scrollY < 0 {
-			term.scrollY = 0
-		}
+		termScroll(10)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		term.scrollY += 200
+		termScroll(-10)
 	default:
 		return false
 	}

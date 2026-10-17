@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -159,6 +160,7 @@ func homeActivate(config *Config) {
 	}
 	PlayActivateSound()
 	id := homeLayout.Focus.Current()
+	log.Printf("[home] activate card %s", id)
 	homePressedID = id
 	homePressedAt = sdl.GetTicks64()
 
@@ -173,7 +175,9 @@ func homeActivate(config *Config) {
 	if target == "" {
 		return
 	}
-	if idx := findSceneIndex(config, target); idx >= 0 {
+	idx := findSceneIndex(config, target)
+	log.Printf("[home] %s -> scene %q (index %d)", id, target, idx)
+	if idx >= 0 {
 		changeSceneTo(config, idx)
 	}
 }
@@ -213,7 +217,11 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_RETURN, sdl.K_SPACE:
 		homeActivate(config)
 	case sdl.K_ESCAPE:
-		// Home is the root scene; nothing to go back to.
+		// Home is the root scene, but a video left playing from another scene
+		// must still be closable instead of swallowing the key.
+		if snapshotVideoState().phase != "idle" {
+			StopEmbeddedPlayback()
+		}
 	default:
 		return false
 	}
@@ -246,7 +254,10 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		homeActivate(config)
 	case sdl.CONTROLLER_BUTTON_B:
-		// Home is the root scene; nothing to go back to.
+		// Home is the root scene; a playing video is the only thing to close.
+		if snapshotVideoState().phase != "idle" {
+			StopEmbeddedPlayback()
+		}
 	default:
 		return false
 	}
@@ -285,7 +296,7 @@ func homeViewData(config *Config) HomeViewData {
 	data := HomeViewData{
 		Greeting:     homeGreeting(""),
 		Subtitle:     "What do you want to do?",
-		Version:      versionString(config),
+		Version:      versionDisplayString(config),
 		StatusParts:  headerStatusParts(config),
 		Pressed:      homePressedID,
 		ShowBackHint: true,

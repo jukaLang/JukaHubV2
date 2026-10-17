@@ -481,6 +481,12 @@ type PatchState struct {
 	LastUpdateVer  string `json:"last_update_version,omitempty"`
 	LastUpdateAt   string `json:"last_update_at,omitempty"`
 	StagedFWName   string `json:"staged_firmware,omitempty"`
+	// Release tracking for the automatic updater and the build-date display.
+	LastUpdatePublishedAt string `json:"last_update_published_at,omitempty"`
+	LastUpdateAsset       string `json:"last_update_asset,omitempty"`
+	InstalledReleaseTag   string `json:"installed_release_tag,omitempty"`
+	InstalledReleaseAt    string `json:"installed_release_at,omitempty"`
+	AutoUpdateCheckedAt   string `json:"auto_update_checked_at,omitempty"`
 }
 
 var (
@@ -532,6 +538,7 @@ func savePatchState() error {
 func InitPatchModule() {
 	loadPatchState()
 	checkInterruptedJournal()
+	confirmAppliedUpdate()
 	ensureDefaultRepo()
 }
 
@@ -579,10 +586,16 @@ func EnsureHelperTool(tool string, config *Config) error {
 	return ensureHelperTool(tool, config)
 }
 
+// helperInstallMu serializes installs so the install bar only ever shows one
+// download at a time.
+var helperInstallMu sync.Mutex
+
 func ensureHelperTool(tool string, config *Config) error {
-	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" {
-		return fmt.Errorf("unsupported helper tool %q (supported: ffplay, ffmpeg, yt-dlp)", tool)
+	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" && tool != "ffprobe" {
+		return fmt.Errorf("unsupported helper tool %q (supported: ffplay, ffmpeg, ffprobe, yt-dlp)", tool)
 	}
+	helperInstallMu.Lock()
+	defer helperInstallMu.Unlock()
 	dir := P().ToolsDir()
 	if dir == "" {
 		return fmt.Errorf("tools directory unavailable (empty path)")
@@ -603,14 +616,31 @@ func ensureHelperTool(tool string, config *Config) error {
 		return fmt.Errorf("tools directory check failed for %s: %w", target, statErr)
 	}
 	logPatch("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
-	return downloadHelperTool(tool, target, config)
+	installBarBegin(tool)
+	if err := downloadHelperTool(tool, target, config); err != nil {
+		installBarFail(firstLine(err.Error()))
+		return err
+	}
+	installBarDone()
+	return nil
+}
+
+// firstLine shortens an error for the install card.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 96 {
+		s = s[:93] + "..."
+	}
+	return s
 }
 
 func downloadHelperTool(tool, target string, config *Config) error {
-	// ffmpeg/ffplay are delivered inside a zip; ffmpeg itself is large and
-	// device-specific, so we only auto-fetch ffplay for now.
-	if tool == "ffmpeg" || tool == "ffplay" {
-		return downloadFFmpegFFplay(target, config)
+	// ffplay/ffmpeg/ffprobe ship together in one FFmpeg bundle, so a single
+	// download installs the whole family.
+	if tool == "ffmpeg" || tool == "ffplay" || tool == "ffprobe" {
+		return downloadFFmpegBundle(target, config)
 	}
 	if tool == "yt-dlp" {
 		return downloadYtDlp(target, config)
@@ -618,30 +648,67 @@ func downloadHelperTool(tool, target string, config *Config) error {
 	return fmt.Errorf("no downloader implemented for %q", tool)
 }
 
-func downloadFFmpegFFplay(target string, config *Config) error {
-	arch := runtime.GOARCH
-	if arch != "arm64" && arch != "amd64" {
-		return fmt.Errorf("unsupported architecture %q for ffmpeg download (supported: arm64, amd64)", arch)
-	}
-	repo := "BtbN/FFmpeg-Builds"
-	pattern := func() string {
-		if arch == "arm64" {
-			return "ffmpeg-*arm64*-static.zip"
+// ffmpegAssetNames maps a platform to the exact BtbN/FFmpeg-Builds release
+// asset names that work there, preferred first. The GPL build carries the
+// fullest codec set (x264/x265 encoders for yt-dlp merges); the LGPL build is
+// the fallback if the GPL asset ever disappears.
+func ffmpegAssetNames(goos, goarch string) ([]string, error) {
+	switch goos {
+	case "windows":
+		switch goarch {
+		case "amd64":
+			return []string{"ffmpeg-master-latest-win64-gpl.zip", "ffmpeg-master-latest-win64-lgpl.zip"}, nil
+		case "arm64":
+			return []string{"ffmpeg-master-latest-winarm64-gpl.zip", "ffmpeg-master-latest-winarm64-lgpl.zip"}, nil
 		}
-		return "ffmpeg-*win64*-static.zip"
-	}()
-	url, err := resolveToolURL(repo, "", pattern)
+	case "linux":
+		switch goarch {
+		case "amd64":
+			return []string{"ffmpeg-master-latest-linux64-gpl.tar.xz", "ffmpeg-master-latest-linux64-lgpl.tar.xz"}, nil
+		case "arm64":
+			// TrimUI Smart Pro and other aarch64 handhelds.
+			return []string{"ffmpeg-master-latest-linuxarm64-gpl.tar.xz", "ffmpeg-master-latest-linuxarm64-lgpl.tar.xz"}, nil
+		}
+	}
+	return nil, fmt.Errorf("no ffmpeg build for %s/%s (supported: windows/linux on amd64, arm64)", goos, goarch)
+}
+
+// ffmpegArchiveExt returns the archive extension used in a release asset URL
+// (BtbN ships .zip for Windows and .tar.xz for Linux builds).
+func ffmpegArchiveExt(url string) string {
+	lower := strings.ToLower(url)
+	for _, ext := range []string{".tar.xz", ".tar.gz", ".zip"} {
+		if strings.HasSuffix(lower, ext) {
+			return ext
+		}
+	}
+	return ".zip"
+}
+
+// downloadFFmpegBundle downloads the FFmpeg build for this platform and
+// installs ffplay, ffmpeg and ffprobe into the tools directory. The archive
+// nests the binaries a few folders deep, so extraction is by base name.
+func downloadFFmpegBundle(target string, config *Config) error {
+	assets, err := ffmpegAssetNames(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	installBarPhase(installPhaseResolving)
+	url, err := resolveToolURL("BtbN/FFmpeg-Builds", "", assets...)
 	if err != nil {
 		return fmt.Errorf("find ffmpeg release: %w", err)
 	}
-	tmp, err := os.CreateTemp("", "ffmpeg-download-*.zip")
+	// The temp file keeps the real asset extension: extraction picks zip vs
+	// tar.xz from the name, and the Linux/handheld builds are tar.xz.
+	tmp, err := os.CreateTemp("", "ffmpeg-download-*"+ffmpegArchiveExt(url))
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 	logPatch("[TOOLS] downloading ffmpeg from %s", url)
-	if err := downloadFile(url, tmp.Name()); err != nil {
+	installBarPhase(installPhaseDownload)
+	if err := downloadFileWithProgress(url, tmp.Name(), installBarProgress); err != nil {
 		return fmt.Errorf("download ffmpeg from %s: %w", url, err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -651,68 +718,148 @@ func downloadFFmpegFFplay(target string, config *Config) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create tools directory %s: %w", dir, err)
 	}
-	if err := extractFilesFromZip(context.Background(), tmp.Name(), dir, []string{"ffplay.exe", "ffmpeg.exe"}); err != nil {
+	installBarPhase(installPhaseExtract)
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	wanted := []string{"ffplay" + suffix, "ffmpeg" + suffix, "ffprobe" + suffix}
+	found, err := extractToolFiles(tmp.Name(), dir, wanted)
+	if err != nil {
 		return fmt.Errorf("extract ffmpeg from %s: %w", url, err)
 	}
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(target, 0o755); err != nil {
-			logPatch("[TOOLS] warn: cannot chmod ffplay: %v", err)
+		for _, name := range found {
+			if err := os.Chmod(filepath.Join(dir, name), PermExec); err != nil {
+				logPatch("[TOOLS] warn: cannot chmod %s: %v", name, err)
+			}
 		}
+	}
+	// The tool that triggered this download must actually be in the bundle.
+	need := strings.ToLower(filepath.Base(target))
+	hasNeed := false
+	for _, name := range found {
+		if name == need {
+			hasNeed = true
+			break
+		}
+	}
+	if !hasNeed {
+		return fmt.Errorf("ffmpeg bundle does not contain %s (found %v)", need, found)
+	}
+	installBarPhase(installPhaseVerify)
+	for _, name := range found {
+		if err := verifyHelperTool(filepath.Join(dir, name)); err != nil {
+			os.Remove(filepath.Join(dir, name))
+			return fmt.Errorf("%s verification failed, removed broken download: %w", name, err)
+		}
+		logPatch("[TOOLS] %s installed and verified", name)
 	}
 	return nil
 }
 
-func downloadYtDlp(target string, config *Config) error {
-	if runtime.GOOS == "windows" {
-		// On Windows, prefer the self-contained exe when available.
-		url, err := resolveToolURL("yt-dlp/yt-dlp", "", "yt-dlp.exe")
-		if err == nil {
-			tmp, err2 := os.CreateTemp("", "yt-dlp-*.exe")
-			if err2 != nil {
-				return fmt.Errorf("create temp file: %w", err2)
-			}
-			defer os.Remove(tmp.Name())
-			defer tmp.Close()
-			logPatch("[TOOLS] downloading yt-dlp.exe from %s", url)
-			if err2 := downloadFile(url, tmp.Name()); err2 != nil {
-				return fmt.Errorf("download yt-dlp from %s: %w", url, err2)
-			}
-			if err2 := tmp.Close(); err2 != nil {
-				return err2
-			}
-			if err2 := os.Rename(tmp.Name(), target); err2 != nil {
-				return fmt.Errorf("install yt-dlp to %s: %w", target, err2)
-			}
-			return nil
+// ytDlpAssetName maps a platform to the official yt-dlp release asset that runs
+// standalone there. TrimUI devices have no Python runtime, so the self-contained
+// linux builds (not the "yt-dlp" python zipimport script) are the correct
+// choice. The downloaded asset is renamed to the canonical tool name
+// ("yt-dlp" / "yt-dlp.exe") so every caller can rely on it.
+func ytDlpAssetName(goos, goarch string) (string, error) {
+	switch goos {
+	case "windows":
+		switch goarch {
+		case "amd64", "arm64":
+			return "yt-dlp.exe", nil
+		case "386":
+			return "yt-dlp_x86.exe", nil
 		}
-		logPatch("[TOOLS] warn: could not resolve yt-dlp.exe URL: %v", err)
+	case "linux":
+		switch goarch {
+		case "arm64":
+			// TrimUI Smart Pro and other aarch64 handhelds.
+			return "yt-dlp_linux_aarch64", nil
+		case "arm":
+			return "yt-dlp_linux_armv7l", nil
+		case "amd64":
+			return "yt-dlp_linux", nil
+		}
+	case "darwin":
+		return "yt-dlp_macos", nil
 	}
-	// Fallback: download the py installer script and bundle a minimal runtime.
-	url, err := resolveToolURL("yt-dlp/yt-dlp", "", "yt-dlp")
+	return "", fmt.Errorf("no standalone yt-dlp build for %s/%s", goos, goarch)
+}
+
+// versionProbeArgs returns the version flag the given tool understands:
+// the ffmpeg family takes a single-dash "-version", yt-dlp takes "--version".
+func versionProbeArgs(base string) []string {
+	name := strings.ToLower(strings.TrimSuffix(filepath.Base(base), ".exe"))
+	switch name {
+	case "ffmpeg", "ffplay", "ffprobe":
+		return []string{"-version"}
+	}
+	return []string{"--version"}
+}
+
+// verifyHelperTool runs the freshly installed binary with its version flag to
+// make sure it actually executes on this machine before it is trusted. A
+// download that does not run (wrong architecture, truncated file, missing
+// glibc) is reported so the broken file can be removed and retried later.
+func verifyHelperTool(target string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	args := versionProbeArgs(target)
+	out, err := exec.CommandContext(ctx, target, args...).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("find yt-dlp release: %w", err)
+		return fmt.Errorf("%s %s failed: %v (output: %s)", filepath.Base(target), strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
-	tmp, err := os.CreateTemp("", "yt-dlp-*.tmp")
+	if strings.TrimSpace(string(out)) == "" {
+		return fmt.Errorf("%s %s produced no output", filepath.Base(target), strings.Join(args, " "))
+	}
+	return nil
+}
+
+// downloadYtDlp downloads the platform-appropriate standalone yt-dlp build,
+// renames it to the canonical tool name, makes it executable on Unix, and
+// verifies it runs ("--version") before reporting success.
+func downloadYtDlp(target string, config *Config) error {
+	asset, err := ytDlpAssetName(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	installBarPhase(installPhaseResolving)
+	url, err := resolveToolURL("yt-dlp/yt-dlp", "", asset)
+	if err != nil {
+		return fmt.Errorf("find yt-dlp release asset %q: %w", asset, err)
+	}
+	tmp, err := os.CreateTemp("", "yt-dlp-*.download")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
-	logPatch("[TOOLS] downloading yt-dlp from %s", url)
-	if err := downloadFile(url, tmp.Name()); err != nil {
+	logPatch("[TOOLS] downloading %s from %s", asset, url)
+	installBarPhase(installPhaseDownload)
+	if err := downloadFileWithProgress(url, tmp.Name(), installBarProgress); err != nil {
 		return fmt.Errorf("download yt-dlp from %s: %w", url, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	// Rename the release asset to the canonical tool name that getToolPath and
+	// the shell command builders expect.
 	if err := os.Rename(tmp.Name(), target); err != nil {
 		return fmt.Errorf("install yt-dlp to %s: %w", target, err)
 	}
 	if runtime.GOOS != "windows" {
-		if err := os.Chmod(target, 0o755); err != nil {
+		if err := os.Chmod(target, PermExec); err != nil {
 			logPatch("[TOOLS] warn: cannot chmod yt-dlp: %v", err)
 		}
 	}
+	installBarPhase(installPhaseVerify)
+	if err := verifyHelperTool(target); err != nil {
+		os.Remove(target)
+		return fmt.Errorf("yt-dlp verification failed, removed broken download: %w", err)
+	}
+	logPatch("[TOOLS] yt-dlp installed and verified at %s (asset %s)", target, asset)
 	return nil
 }
 
@@ -932,9 +1079,10 @@ type githubAsset struct {
 
 // githubRelease is a minimal GitHub release record.
 type githubRelease struct {
-	TagName string        `json:"tag_name"`
-	Name    string        `json:"name"`
-	Assets  []githubAsset `json:"assets"`
+	TagName     string        `json:"tag_name"`
+	Name        string        `json:"name"`
+	PublishedAt string        `json:"published_at"`
+	Assets      []githubAsset `json:"assets"`
 }
 
 // FetchLatestJukaHubRelease returns the latest JukaHub release metadata.

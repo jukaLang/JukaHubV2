@@ -142,6 +142,13 @@ type toolHealth struct {
 
 var toolHealthState = &toolHealth{status: make(map[string]string)}
 
+// toolsAutoAttempted limits each tool's auto-download to one attempt per app
+// run so offline launches stay quiet instead of retry-looping.
+var toolsAutoAttempted = make(map[string]bool)
+
+// autoInstallTools are the tools JukaHub can fetch by itself when missing.
+var autoInstallTools = []string{"yt-dlp", "ffplay", "ffmpeg", "ffprobe"}
+
 // checkToolPresence verifies that the given tool is available either in the
 // required/ folder or on PATH. Returns the resolved path (or the tool name if
 // only on PATH) and whether it was found.
@@ -162,7 +169,7 @@ func checkToolPresence(tool string) (string, bool) {
 // refreshToolHealth re-checks the required tools and publishes a summary
 // variable plus per-tool status entries.
 func refreshToolHealth() {
-	tools := []string{"yt-dlp", "ffplay", "mpv"}
+	tools := []string{"yt-dlp", "ffplay", "ffmpeg", "ffprobe"}
 	toolHealthState.mu.Lock()
 	toolHealthState.status = make(map[string]string)
 	var missing []string
@@ -179,6 +186,16 @@ func refreshToolHealth() {
 	if len(missing) > 0 {
 		summary = "Missing: " + strings.Join(missing, ", ")
 	}
+	// Auto-provision any missing tool JukaHub can fetch itself (yt-dlp,
+	// ffplay, ffmpeg). One attempt per tool per app run; installs run
+	// sequentially so the install bar shows one download at a time.
+	var toFetch []string
+	for _, t := range autoInstallTools {
+		if toolHealthState.status[t] == "missing" && !toolsAutoAttempted[t] {
+			toolsAutoAttempted[t] = true
+			toFetch = append(toFetch, t)
+		}
+	}
 	toolHealthState.mu.Unlock()
 
 	publishCustom("tools_status", summary)
@@ -188,6 +205,18 @@ func refreshToolHealth() {
 	log.Printf("[tools] health: %s", summary)
 	if len(missing) > 0 {
 		showToast("Missing tools: "+strings.Join(missing, ", "), ToastWarn())
+	}
+	if len(toFetch) > 0 {
+		go func(list []string) {
+			for _, t := range list {
+				if err := EnsureHelperTool(t, appConfig); err != nil {
+					log.Printf("[tools] %s auto-download failed: %v", t, err)
+					continue
+				}
+				log.Printf("[tools] %s installed and verified", t)
+			}
+			refreshToolHealth()
+		}(toFetch)
 	}
 }
 

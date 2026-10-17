@@ -13,6 +13,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,6 +28,15 @@ type KeyInfo struct {
 // Global key info (set at initialization)
 var currentKeyInfo KeyInfo
 
+// Default key material. These literals are intentionally public: every copy of
+// the binary derives the same key, which is what lets a config encrypted on a
+// PC decrypt on the handheld. They are obfuscation, not a security boundary.
+const (
+	defaultSecretText = "JukaHub-Secure-Encryption-Key-2024-v2"
+
+	defaultSaltText = "JukaHub-Salt-2024-Secure-Enhancement-v3"
+)
+
 // encryptionSalt is a global salt used for key derivation (not per-value)
 // This adds an extra layer of protection against precomputed attacks
 var encryptionSalt = func() []byte {
@@ -38,7 +48,7 @@ var encryptionSalt = func() []byte {
 		}
 	}
 	// Default: use a built-in salt (NOT ideal for production, set JUKAHUB_CRYPTO_SALT)
-	defaultSalt := []byte("JukaHub-Salt-2024-Secure-Enhancement-v3")
+	defaultSalt := []byte(defaultSaltText)
 	if len(defaultSalt) > 32 {
 		defaultSalt = defaultSalt[:32]
 	}
@@ -81,7 +91,8 @@ func deriveKeyFromSecret(secret, salt []byte) []byte {
 //
 // IMPORTANT: For production use, set JUKAHUB_CRYPTO_KEY to a strong random 32-byte
 // hex string. Example:
-//   export JUKAHUB_CRYPTO_KEY="$(openssl rand -hex 32)"
+//
+//	export JUKAHUB_CRYPTO_KEY="$(openssl rand -hex 32)"
 var cryptoKey = func() []byte {
 	now := time.Now()
 
@@ -115,7 +126,7 @@ var cryptoKey = func() []byte {
 
 	// Enhanced default key derivation using HKDF-like expansion
 	// This is more secure than the old simple XOR method
-	secret := []byte("JukaHub-Secure-Encryption-Key-2024-v2")
+	secret := []byte(defaultSecretText)
 	key := deriveKeyFromSecret(secret, encryptionSalt)
 	currentKeyInfo = KeyInfo{
 		ID:         "default-v3-enhanced",
@@ -126,6 +137,31 @@ var cryptoKey = func() []byte {
 	log.Printf("[CRYPTO] Using enhanced built-in encryption key (NOT recommended for production) (key ID: %s)", currentKeyInfo.ID)
 	return key
 }()
+
+// legacyDecryptionKeys returns keys that earlier builds used for the same key
+// ID ("default-v3-enhanced"). The salt literal used to be fed to the KDF
+// untrimmed; a later change normalised it to 32 bytes, which silently changed
+// the derived key. Configs written by the older builds therefore fail with a
+// bare "message authentication failed" even though the value is intact, so
+// decryption retries with the original derivation.
+//
+// Custom key material (JUKAHUB_CRYPTO_KEY / JUKAHUB_CRYPTO_SALT) is never
+// guessed: those values can only come from the user who set them.
+func legacyDecryptionKeys() [][]byte {
+	legacyKeysOnce.Do(func() {
+		if os.Getenv("JUKAHUB_CRYPTO_KEY") != "" || os.Getenv("JUKAHUB_CRYPTO_SALT") != "" {
+			return
+		}
+		legacyKeys = append(legacyKeys,
+			deriveKeyFromSecret([]byte(defaultSecretText), []byte(defaultSaltText)))
+	})
+	return legacyKeys
+}
+
+var (
+	legacyKeysOnce sync.Once
+	legacyKeys     [][]byte
+)
 
 // getCryptoKey returns the player's encryption key.
 func getCryptoKey() []byte {
@@ -197,43 +233,63 @@ func DecryptString(token string) (string, error) {
 	}
 
 	cipherData := strings.TrimPrefix(token, "ENC:")
+	keyID := ""
+	cipherHex := cipherData
+	legacyFormat := true
 
 	// Parse new format: ENC:<keyID>/<hex>
 	if idx := strings.Index(cipherData, "/"); idx > 0 {
-		// New format with key ID
-		cipherHex := cipherData[idx+1:]
-		data, err := hex.DecodeString(cipherHex)
-		if err != nil {
-			return "", fmt.Errorf("invalid encrypted token format: %v", err)
-		}
-		key := getCryptoKey()
-		plaintext, err := decryptAESGCM(key, data)
-		if err != nil {
-			return "", fmt.Errorf("decryption failed: %v", err)
-		}
-		// Zeroize the plaintext after use (caller should copy if needed)
-		result := plaintext
-		plaintext = nil // Help GC
-		return string(result), nil
+		keyID = cipherData[:idx]
+		cipherHex = cipherData[idx+1:]
+		legacyFormat = false
 	}
 
-	// Legacy format: ENC:<hex> - no key ID prefix
-	data, err := hex.DecodeString(cipherData)
+	data, err := hex.DecodeString(cipherHex)
 	if err != nil {
 		return "", fmt.Errorf("invalid encrypted token format: %v", err)
 	}
-	key := getCryptoKey()
-	plaintext, err := decryptAESGCM(key, data)
+	plaintext, err := decryptData(data)
 	if err != nil {
-		return "", fmt.Errorf("decryption failed (legacy format): %v", err)
+		if hint := keyMismatchHint(keyID); hint != "" {
+			return "", fmt.Errorf("decryption failed: %s", hint)
+		}
+		if legacyFormat {
+			return "", fmt.Errorf("decryption failed (legacy format): %v", err)
+		}
+		return "", fmt.Errorf("decryption failed: %v", err)
 	}
-	result := plaintext
-	plaintext = nil
-	return string(result), nil
+	return string(plaintext), nil
 }
 
-// decryptAESGCM performs AES-GCM decryption with the given key.
-// Returns the plaintext and zeroes it from memory after use.
+// keyMismatchHint explains a decryption failure when the value names a key the
+// running build is not using. Without it, a wrong JUKAHUB_CRYPTO_KEY looks like
+// corrupted data and sends people looking for the wrong problem.
+func keyMismatchHint(keyID string) string {
+	if keyID == "" || keyID == currentKeyInfo.ID {
+		return ""
+	}
+	return fmt.Sprintf("value was encrypted with key %q but this build uses %q; start the app with the JUKAHUB_CRYPTO_KEY (and salt) that created it", keyID, currentKeyInfo.ID)
+}
+
+// decryptData opens AES-GCM data with the active key and then with the keys of
+// earlier builds that share the same key ID. Only the active key is ever used
+// for encryption.
+func decryptData(data []byte) ([]byte, error) {
+	plaintext, currentErr := decryptAESGCM(getCryptoKey(), data)
+	if currentErr == nil {
+		return plaintext, nil
+	}
+	for _, key := range legacyDecryptionKeys() {
+		if plaintext, err := decryptAESGCM(key, data); err == nil {
+			log.Printf("[CRYPTO] Decrypted a value written with the legacy default salt")
+			return plaintext, nil
+		}
+	}
+	return nil, currentErr
+}
+
+// decryptAESGCM performs AES-GCM decryption with the given key. Errors carry no
+// "decryption failed" prefix so callers can add their own context.
 func decryptAESGCM(key, data []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -250,7 +306,7 @@ func decryptAESGCM(key, data []byte) ([]byte, error) {
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return nil, fmt.Errorf("decryption failed: %v", err)
+		return nil, fmt.Errorf("cipher: %v", err)
 	}
 	return plaintext, nil
 }
@@ -282,6 +338,9 @@ func DecryptAPIToken(encrypted string, keyName string) (string, error) {
 	decrypted, err := DecryptString(encrypted)
 	if err != nil {
 		log.Printf("[CRYPTO] Failed to decrypt %s: %v", keyName, err)
+		if strings.HasPrefix(err.Error(), "decryption failed") {
+			return "", fmt.Errorf("%s: %w", keyName, err)
+		}
 		return "", fmt.Errorf("%s: decryption failed: %w", keyName, err)
 	}
 	if decrypted == "" {
@@ -314,14 +373,15 @@ func EncryptWithAuth(plaintext string) (string, error) {
 		return "", err
 	}
 
-	// Additional HMAC over the encrypted value (excluding ENC: prefix)
+	// Additional HMAC over the encrypted value (excluding the ENC: prefix).
 	mac := hmac.New(sha256.New, key)
-	dataToAuth := []byte(encrypted[4:]) // Skip "ENC:"
-	mac.Write(dataToAuth)
+	body := encrypted[4:] // "<keyID>/<hex>"
+	mac.Write([]byte(body))
 	hmacValue := mac.Sum(nil)
 
-	// Append HMAC to encrypted value
-	return fmt.Sprintf("%s:AUTH:%s", encrypted, hex.EncodeToString(hmacValue)), nil
+	// Format: ENC:AUTH:<keyID>/<hex>:<hmac>. DecryptWithAuth parses exactly
+	// this shape, so the AUTH: marker has to sit right after ENC:.
+	return fmt.Sprintf("ENC:AUTH:%s:%s", body, hex.EncodeToString(hmacValue)), nil
 }
 
 // DecryptSecret decrypts a generic config secret and logs failures. It is
@@ -344,15 +404,18 @@ func DecryptWithAuth(encrypted string) (string, error) {
 	}
 
 	encryptedData := "ENC:" + parts[0]
-	providedHMAC := parts[1]
+	providedMAC, err := hex.DecodeString(parts[1])
+	if err != nil {
+		return "", errors.New("invalid authenticated encrypted format: malformed HMAC")
+	}
 
-	// Verify HMAC first
+	// Verify HMAC first (compare raw bytes, not hex text).
 	key := getCryptoKey()
 	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(encryptedData[4:]))
 	expectedHMAC := mac.Sum(nil)
 
-	if !hmac.Equal([]byte(providedHMAC), expectedHMAC) {
+	if !hmac.Equal(providedMAC, expectedHMAC) {
 		log.Printf("[CRYPTO] HMAC verification failed - data may be tampered")
 		return "", errors.New("authentication failed - data may be tampered")
 	}

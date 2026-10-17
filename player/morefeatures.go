@@ -70,9 +70,16 @@ func hasMediaExtension(s string) bool {
 // or any URL ffplay understands) without going through yt-dlp.
 func playStream(config *Config, url string) {
 	recordPlayed(config, url)
-	ff := getToolPath("ffplay", config)
 	log.Printf("playStream: %s", sanitizeLogURL(url))
 	go func() {
+		// Resolve (and install, if needed) before playing: a missing ffplay
+		// shows the install card instead of a silent exec failure.
+		ff, err := helperToolPath("ffplay", config)
+		if err != nil {
+			log.Printf("[ERROR] playStream: ffplay unavailable: %v", err)
+			showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
+			return
+		}
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
 			cmd = exec.Command("cmd", "/c", ff, "-fs", "-autoexit", url)
@@ -82,43 +89,6 @@ func playStream(config *Config, url string) {
 		cmd.Env = ffplayEnv(ff)
 		if err := cmd.Run(); err != nil {
 			log.Printf("playStream error: %v", err)
-		}
-	}()
-}
-
-// playWithMPV plays a URL through the MPV media player as an alternative
-// backend to ffplay. MPV is launched fullscreen with no OSC and an IPC
-// socket so the app can communicate with it if needed in the future.
-func playWithMPV(config *Config, url string) {
-	recordPlayed(config, url)
-	mpv := findMPVPath()
-	if mpv == "" {
-		log.Printf("playWithMPV: mpv not found on this system")
-		showToast("MPV not found. Install MPV or switch audio backend in Settings.", ToastError())
-		return
-	}
-	ipcSocket := "/tmp/mpv-socket"
-	if runtime.GOOS == "windows" {
-		ipcSocket = filepath.Join(os.TempDir(), "mpv-socket")
-	}
-	log.Printf("playWithMPV: url=%s mpv=%s", sanitizeLogURL(url), mpv)
-	go func() {
-		cmd := exec.Command(mpv,
-			"--fs",
-			"--no-osc",
-			"--input-ipc-server="+ipcSocket,
-			"--",
-			url,
-		)
-		// SDL_AUDIODRIVER=directsound is Windows-only; on Linux it makes SDL
-		// fail to open audio. Handhelds pick their own driver (ALSA).
-		env := os.Environ()
-		if IsWindows() {
-			env = append(env, "SDL_AUDIODRIVER=directsound")
-		}
-		cmd.Env = env
-		if err := cmd.Run(); err != nil {
-			log.Printf("playWithMPV error: %v", err)
 		}
 	}()
 }
@@ -135,17 +105,20 @@ func playSmartURL(config *Config, url string) {
 		return
 	}
 	recordPlayed(config, url)
-	ytp := getToolPath("yt-dlp", config)
-	ff := getToolPath("ffplay", config)
 	go func() {
-		// Pre-check tools exist so users get a clear message instead of a raw
-		// "exec: yt-dlp: executable file not found in $PATH" from the shell.
-		if _, err := os.Stat(ytp); os.IsNotExist(err) {
-			log.Printf("[ERROR] playSmartURL: yt-dlp not found at %s", ytp)
+		// Resolve both tools first: helperToolPath downloads and verifies a
+		// missing yt-dlp/ffplay (with the install card) instead of leaving the
+		// user with a raw "executable file not found" later.
+		ytp, err := helperToolPath("yt-dlp", config)
+		if err != nil {
+			log.Printf("[ERROR] playSmartURL: yt-dlp unavailable: %v", err)
+			showToast("yt-dlp not found and auto-install failed. Try again later.", ToastError())
 			return
 		}
-		if _, err := os.Stat(ff); os.IsNotExist(err) {
-			log.Printf("[ERROR] playSmartURL: ffplay not found at %s", ff)
+		ff, err := helperToolPath("ffplay", config)
+		if err != nil {
+			log.Printf("[ERROR] playSmartURL: ffplay unavailable: %v", err)
+			showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
 			return
 		}
 		// Sanity-check the URL before interpolating it into a shell command
