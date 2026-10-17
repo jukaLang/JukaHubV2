@@ -185,7 +185,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	if source == textBrowserSourceWeb {
 		addressRect, goRect := textBrowserToolbarRects(element)
 		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
-		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 93, G: 110, B: 138, A: 210})
+		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, 1, sdl.Color{R: 93, G: 110, B: 138, A: 210})
 		address := textBrowserAddress(config)
 		if labelFont != nil {
 			renderText(renderer, config, labelFont, truncate(address, 90), ColorTextPrimary(), addressRect.X+10, addressRect.Y+9)

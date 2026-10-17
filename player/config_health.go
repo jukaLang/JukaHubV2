@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -270,7 +271,8 @@ func SaveConfig(filename string, config *Config) error {
 // primary file is corrupt or missing. It returns the loaded config and the
 // path from which it was loaded.
 func LoadLastKnownGood(filename string) (*Config, error) {
-	if cfg, err := loadConfig(filename); err == nil {
+	cfg, err := loadConfig(filename)
+	if err == nil {
 		configHealth.RecordLoad(filename, nil)
 		configHealth.MarkLoadOK()
 		return cfg, nil
@@ -279,7 +281,8 @@ func LoadLastKnownGood(filename string) (*Config, error) {
 	// Try backup.
 	backup := filename + ".bak"
 	Log().Warn("primary config failed, trying backup", "path", filename, "err", err)
-	if cfg, err := loadConfig(backup); err == nil && cfg != nil {
+	cfg, err = loadConfig(backup)
+	if err == nil && cfg != nil {
 		configHealth.RecordLoad(backup, nil)
 		configHealth.RecordBackupRestore()
 		// The backup is now the effective config for this launch; leave the
@@ -331,6 +334,17 @@ var ValidateKnownAtRuntimeImport = configHealth
 // ValidateKnownAtRuntimeHere is a compile-time marker that this file has been
 // patched for config health diagnostics.
 var ValidateKnownAtRuntimeHere = true
+
+// Log prints a compact config-health summary to the startup log so a failed
+// launch or an unexpected reload has a readable trail in the diagnostics
+// console.
+func (ch *ConfigHealth) Log() {
+	ch.mu.Lock()
+	defer ch.mu.Unlock()
+	log.Printf("[config.health] lastLoad=%s lastSave=%s source=%s loadErrs=%d saveErrs=%d restores=%d loadOK=%v saveOK=%v",
+		ch.LastLoadPath, ch.LastSavePath, ch.LastSourcePath, ch.LoadErrors, ch.SaveErrors,
+		ch.BackupRestores, ch.LastLoadOK, ch.LastSaveOK)
+}
 
 func (ch *ConfigHealth) RecordLoad(path string, err error) {
 	ch.mu.Lock()

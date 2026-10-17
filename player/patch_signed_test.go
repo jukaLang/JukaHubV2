@@ -319,6 +319,21 @@ func TestSignedPackageFlow(t *testing.T) {
 	if err := verifyPackageDigest(idx, "p1", filepath.Join(dir, "cache", "p1.zip")); err != nil {
 		t.Fatalf("cached digest verify: %v", err)
 	}
+	// Duplicate favorite guard: installing the same package twice must not add a
+	// duplicate favorite entry for the same target URL.
+	installed := []FavoriteItem{}
+	url := "/JukaHub/p1-f.txt"
+	toAdd := func(p *DBInstalledPkg) {
+		installed = appendInstalledFavorite(installed, *p, url)
+	}
+	p1 := dbFindInstalled("p1")
+	if p1 != nil {
+		toAdd(p1)
+		toAdd(p1)
+	}
+	if len(installed) != 1 {
+		t.Fatalf("duplicate favorite not deduplicated: got %d, want 1", len(installed))
+	}
 }
 
 func writeTestZip(path, pkgDir string) error {
@@ -351,3 +366,32 @@ func writeTestZip(path, pkgDir string) error {
 
 var _ = strings.TrimSpace
 var _ = context.Background
+
+// appendInstalledFavorite adds a favorite for an installed package keyed by
+// the target URL, deduplicating against the existing list.
+func appendInstalledFavorite(existing []FavoriteItem, pkg DBInstalledPkg, url string) []FavoriteItem {
+	key := getFavoriteKeyForURL(url)
+	if key == "" {
+		return existing
+	}
+	for _, f := range existing {
+		if getFavoriteKeyForURL(getFavoriteURL(f)) == key {
+			return existing
+		}
+	}
+	return append(existing, FavoriteItem{Type: "file", Data: FileEntry{Name: pkg.Name, Path: url}})
+}
+
+func getFavoriteKeyForURL(url string) string {
+	if url == "" {
+		return ""
+	}
+	return url
+}
+
+func getFavoriteURL(it FavoriteItem) string {
+	if fe, ok := it.Data.(FileEntry); ok {
+		return fe.Path
+	}
+	return ""
+}

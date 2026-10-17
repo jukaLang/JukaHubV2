@@ -17,6 +17,7 @@ var globalSearchOpen bool
 var gsQuery string
 var gsCursor int
 var gsResults []gsResult
+var gsApps []gsApp
 
 type gsResult struct {
 	Title    string
@@ -39,9 +40,16 @@ func handleGlobalSearchTextInput(text string) {
 	gsCursor = 0
 }
 
+type gsApp struct {
+	Name  string
+	Icon  string
+	Scene string
+	Desc  string
+}
+
 // gsPopulateApps lazily fills gsApps from the loaded config.
 func gsPopulateApps() {
-	if gsApps != nil || appConfig == nil {
+	if len(gsApps) > 0 || appConfig == nil {
 		return
 	}
 	gsApps = gsBuildApps(appConfig)
@@ -53,7 +61,6 @@ func gsSearch(query string) []gsResult {
 	q := strings.ToLower(strings.TrimSpace(query))
 
 	if q == "" {
-		// Show apps when empty
 		for _, app := range gsApps {
 			results = append(results, gsResult{
 				Title:    app.Name,
@@ -66,7 +73,6 @@ func gsSearch(query string) []gsResult {
 		return results
 	}
 
-	// Search apps
 	for _, app := range gsApps {
 		if strings.Contains(strings.ToLower(app.Name), q) || strings.Contains(strings.ToLower(app.Desc), q) {
 			results = append(results, gsResult{
@@ -79,7 +85,6 @@ func gsSearch(query string) []gsResult {
 		}
 	}
 
-	// Search notes
 	if len(notes.store.Notes) > 0 {
 		for _, n := range notes.store.Notes {
 			if strings.Contains(strings.ToLower(n.Title), q) || strings.Contains(strings.ToLower(n.Content), q) {
@@ -87,19 +92,18 @@ func gsSearch(query string) []gsResult {
 				results = append(results, gsResult{
 					Title:    note.Title,
 					Subtitle: "Note • " + note.UpdatedAt.Format("Jan 2"),
-					Icon:     "[N]",				Category: "Notes",
+					Icon:     "[N]",
+					Category: "Notes",
 					Action: func(c *Config) {
 						if idx := findSceneIndex(c, "Notes"); idx >= 0 {
 							changeSceneTo(c, idx)
 						}
 					},
 				})
-
 			}
 		}
 	}
 
-	// Search files (if query is >= 2 chars)
 	if len(q) >= 2 {
 		entries, _ := os.ReadDir(".")
 		count := 0
@@ -128,13 +132,6 @@ func gsSearch(query string) []gsResult {
 	return results
 }
 
-type gsApp struct {
-	Name  string
-	Icon  string
-	Scene string
-	Desc  string
-}
-
 // gsBuildApps builds the global search app list from config.
 func gsBuildApps(config *Config) []gsApp {
 	var apps []gsApp
@@ -154,13 +151,10 @@ func gsBuildApps(config *Config) []gsApp {
 		})
 		seen[sc.Name] = true
 	}
-	// Add special entries.
 	apps = append(apps, gsApp{Name: "Wallpapers", Icon: "P", Scene: "Wallpapers", Desc: "Set custom wallpaper"})
 	apps = append(apps, gsApp{Name: "Quick Settings", Icon: "Q", Scene: "QuickSettings", Desc: "Quick toggles"})
 	return apps
 }
-
-var gsApps []gsApp // populated lazily from config
 
 func gsMakeLauncher(scene string) func(*Config) {
 	return func(c *Config) {

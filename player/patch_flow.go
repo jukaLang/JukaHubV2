@@ -38,16 +38,8 @@ type PatchEvent struct {
 	Modal  *PatchModalRequest
 }
 
-// PatchComponent is a placeholder type for the real config package when it is absent.
-type PatchComponent string
-
-// PatchRowStatus is a placeholder type for the real config package when it is absent.
-type PatchRowStatus string
-
-// PatchSnapshot is a placeholder type for the real config package when it is absent.
-type PatchSnapshot struct {
-	Backups []string
-}
+// PatchComponent / PatchRowStatus / PatchSnapshot are defined in patch.go
+// (the shared patch-scene types file).
 
 // PatchModalRequest asks the scene to show a confirmation modal.
 type PatchModalRequest struct {
@@ -278,6 +270,7 @@ func OpRestoreBackup(ctx context.Context, config *Config, name string) error {
 	patchRowStatus(ComponentApp, StatusCurrent)
 	return nil
 }
+
 
 // --- Package operations (apt-style) ---
 

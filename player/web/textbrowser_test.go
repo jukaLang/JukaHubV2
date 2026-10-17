@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,7 @@ const textBrowserURLVariable = "textbrowser_url"
 // normalizeTextBrowserURL is the public surface used by the runtime and the
 // web page fetcher. It accepts user-typed input and returns a clean HTTP/HTTPS
 // URL or an explanatory error, without side effects.
-func parseHTTPURL(rawURL string) (*http.URL, error) {
+func parseHTTPURL(rawURL string) (*url.URL, error) {
 	address := strings.TrimSpace(rawURL)
 	if address == "" {
 		return nil, fmt.Errorf("address is empty")
@@ -25,7 +26,7 @@ func parseHTTPURL(rawURL string) (*http.URL, error) {
 	if !strings.Contains(address, "://") {
 		address = "https://" + address
 	}
-	parsed, err := http.ParseURL(address)
+	parsed, err := url.Parse(address)
 	if err != nil {
 		return nil, fmt.Errorf("invalid address: %w", err)
 	}
@@ -47,7 +48,7 @@ func normalizeTextBrowserURL(rawURL string) (string, error) {
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
 		return "", fmt.Errorf("only http and https pages are supported")
 	}
-	if _, err := parsed.Hostname(); err != nil || parsed.Hostname() == "" {
+	if parsed.Hostname() == "" {
 		return "", fmt.Errorf("address must contain a host")
 	}
 	if parsed.User != nil {
@@ -219,9 +220,6 @@ func normalizeTextBrowserWhitespace(raw string) string {
 	for _, line := range strings.Split(raw, "\n") {
 		line = strings.Join(strings.Fields(line), " ")
 		if line == "" {
-			if len(lines) > 0 && lines[len(lines)-1] != "" {
-				lines = append(lines, "")
-			}
 			continue
 		}
 		lines = append(lines, line)

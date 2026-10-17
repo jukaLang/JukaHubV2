@@ -125,6 +125,10 @@ func (f *FavoriteItem) Play(config *Config) {
 			// card can truly resume where the user left off.
 			playVideoInfo(config, v)
 		}
+	case "audio":
+		if fe, ok := f.Data.(FileEntry); ok {
+			playStream(config, fe.Path)
+		}
 	case "iptv":
 		if fe, ok := f.Data.(FileEntry); ok {
 			playStream(config, fe.Path)

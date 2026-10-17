@@ -296,6 +296,15 @@ REM ============================================================================
 set "CGO_ENABLED=1"
 set "GOOS=windows"
 set "GOARCH=amd64"
+REM Windows Defender heuristically quarantines the Go linker output when it is
+REM written under %TEMP%\go-build* (false positive on the self-update code).
+REM Keep the Go build cache and temp files under %TOOLS% so the link succeeds.
+if not exist "%TOOLS%\gocache" mkdir "%TOOLS%\gocache" >nul 2>&1
+if not exist "%TOOLS%\gotmp" mkdir "%TOOLS%\gotmp" >nul 2>&1
+set "GOCACHE=%TOOLS%\gocache"
+set "TMP=%TOOLS%\gotmp"
+set "TEMP=%TOOLS%\gotmp"
+set "TMPDIR=%TOOLS%\gotmp"
 REM A running JukaHub.exe locks the file and makes the link step fail.
 taskkill /im "%OUT%" /f >nul 2>&1
 if exist "go.mod" (

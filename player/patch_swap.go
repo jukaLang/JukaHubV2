@@ -56,6 +56,16 @@ func jukaHubUpdateTargetFor(device DeviceModel, goos, arch string) (jukaHubUpdat
 	}
 }
 
+// jukaHubAssetName returns the release asset filename for a supported device
+// target, or an error when the device/platform has no published build.
+func jukaHubAssetName(device DeviceModel, goos, arch string) (string, error) {
+	target, err := jukaHubUpdateTargetFor(device, goos, arch)
+	if err != nil {
+		return "", err
+	}
+	return target.Asset, nil
+}
+
 // OpUpdateJukaHub performs the full JukaHub application update flow:
 // fetch release metadata -> validate pre-flight -> resolve manifest -> download
 // -> verify -> stage -> backup -> swap script. The user confirms the swap through
@@ -89,6 +99,7 @@ func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 	var expectName string
 	if mAsset := rel.FindManifestAsset(); mAsset != nil {
 		mData, err := fetchBounded(ctx, client, mAsset.BrowserDownloadURL, patchMaxMetadata)
+
 		if err != nil {
 			return fmt.Errorf("fetching manifest: %w", err)
 		}
@@ -106,7 +117,7 @@ func OpUpdateJukaHub(ctx context.Context, config *Config) error {
 		expectSHA = manifestTarget.SHA256
 		expectName = manifestTarget.Asset
 	} else {
-		return errors.New("release does not publish manifest.json yet â€” update disabled until a signed manifest is available")
+		return errors.New("release does not publish manifest.json yet — update disabled until a signed manifest is available")
 	}
 
 	// Pre-flight check before downloading anything: the manifest tells us what
@@ -212,6 +223,31 @@ func findStagedBinary(staging string) string {
 		return nil
 	})
 	return found
+}
+
+// validateUpdateAssetNames checks that the manifest's expected asset name and
+// the release asset we intend to download agree before we pay for the download.
+// It is a lightweight pre-flight guard: if the release ships a manifest but the
+// filenames disagree, we fail early rather than staging the wrong artifact.
+func validateUpdateAssetNames(rel *githubRelease, wantAsset, expectAsset string) error {
+	if expectAsset == "" {
+		return nil
+	}
+	if wantAsset != expectAsset {
+		return fmt.Errorf(
+			"manifest expects %q but update target needs %q",
+			expectAsset,
+			wantAsset,
+		)
+	}
+	// Also confirm the manifest target asset actually exists on the release so a
+	// stale manifest cannot advertise a target that the release never shipped.
+	for _, a := range rel.Assets {
+		if a.Name == expectAsset {
+			return nil
+		}
+	}
+	return fmt.Errorf("manifest expects asset %q but release does not contain it", expectAsset)
 }
 
 // swapScriptPath returns where the swap helper should be written.

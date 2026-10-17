@@ -64,7 +64,8 @@ func TestRepoPkgCompatibleByExactDeviceIsTheOnlyExactDeviceTest(t *testing.T) {
 	// The exact-device mirror and the marketing-only regression test are the
 	// two distinct targets in this file. I keep them separate so a future
 	// refactoring cannot silently merge them.
-	if repoPkgCompatibleWithDeviceExactSameDevice == nil {
+	mirror := repoPkgCompatibleWithDeviceExactSameDevice
+	if mirror == nil {
 		t.Fatal("exact-device mirror missing")
 	}
 }

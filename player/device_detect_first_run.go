@@ -12,7 +12,7 @@ import (
 )
 
 var (
-	detectedDevice      string
+	detectedDevice      DeviceModel
 	detectedDeviceOnce sync.Once
 	detectOnceInit      sync.Once
 )

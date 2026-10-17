@@ -211,7 +211,7 @@ func TestDesignTokenColorConversion(t *testing.T) {
 	}
 
 	for i, c := range tokens {
-		gc := color.Color(c)
+		gc := color.Color(color.RGBA{R: c.R, G: c.G, B: c.B, A: c.A})
 		r, g, b, a := gc.RGBA()
 		// RGBA returns values in [0, 0xFFFF], so check they're in range.
 		if r > 0xFFFF || g > 0xFFFF || b > 0xFFFF || a > 0xFFFF {

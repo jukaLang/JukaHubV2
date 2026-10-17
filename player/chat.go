@@ -579,8 +579,8 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		titleFont = font
 	}
 
-	listX := element.X + SpaceMD
-	listY := element.Y + SpaceMD
+	listX := int32(element.X) + SpaceMD
+	listY := int32(element.Y) + SpaceMD
 	listW := getElementWidth(element, 1160) - 2*SpaceMD
 	listH := getElementHeight(element, 480) - 2*SpaceMD
 
