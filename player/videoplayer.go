@@ -240,6 +240,10 @@ func persistSessionProgress(s *playbackSession) {
 	saveFavorites()
 }
 
+// videoTempDir is the directory playWithTempFile stages downloads in.
+// Overridable in tests; production always uses the system temp directory.
+var videoTempDir = os.TempDir
+
 // removeTempVideo deletes a downloaded playback copy. Only files created by
 // playWithTempFile are touched: stopping a video played from the SD card used
 // to delete the user's own media file.
@@ -249,6 +253,15 @@ func removeTempVideo(path string) {
 	}
 	base := filepath.Base(path)
 	if !strings.HasPrefix(base, "jukahub-video-") || !strings.HasSuffix(strings.ToLower(base), ".mp4") {
+		return
+	}
+	// Only files this player created in the system temp directory are removed.
+	tempDir, err := filepath.Abs(videoTempDir())
+	if err != nil {
+		return
+	}
+	fileDir, err := filepath.Abs(filepath.Dir(path))
+	if err != nil || fileDir != tempDir {
 		return
 	}
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

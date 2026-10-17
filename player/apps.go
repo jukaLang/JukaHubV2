@@ -221,8 +221,15 @@ func scanAppSubdir(dir string) (FileEntry, bool) {
 	if launch == "" {
 		launch = "launch.sh"
 	}
-	launchPath := filepath.Join(dir, launch)
-	if _, err := os.Stat(launchPath); err != nil {
+	// The launch value comes from the app's own config.json; it must name a
+	// regular file inside the app folder, never "../.." or an absolute path.
+	launchPath, err := resolveWithinRoot(dir, launch)
+	if err != nil {
+		log.Printf("[SECURITY] [apps] %s has an unsafe launch path: %v", cfgPath, err)
+		return FileEntry{}, false
+	}
+	info, err := os.Stat(launchPath)
+	if err != nil || !info.Mode().IsRegular() {
 		return FileEntry{}, false
 	}
 	name := strings.TrimSpace(cfg.Label)
@@ -293,27 +300,64 @@ func launchAppEntry(config *Config, entry FileEntry) {
 	launchInstalledApp(external)
 }
 
+// isLaunchableAppPath reports whether path lives below one of the folders the
+// Apps list is scanned from. Every launcher row is produced from those folders,
+// so a tampered or stale row cannot start an arbitrary executable.
+func isLaunchableAppPath(path string) bool {
+	for _, root := range append([]string{appsFolder()}, systemAppDirs()...) {
+		if isPathWithin(path, root) {
+			return true
+		}
+	}
+	return false
+}
+
 // launchInstalledApp starts an external program detached from JukaHub. .lnk,
 // .exe, .bat and .url files go through the shell so shortcuts resolve their
 // targets; shell scripts run with their folder as the working directory.
 func launchInstalledApp(path string) {
-	if strings.TrimSpace(path) == "" {
+	// Only an existing regular file with a launchable extension is started.
+	// The launcher deliberately runs user-installed programs, but a malformed
+	// list entry must never point at an arbitrary command or a directory.
+	clean, err := cleanUserPath(path)
+	if err != nil {
 		return
 	}
-	log.Printf("[apps] launching %s", path)
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/c", "start", "", path)
-	} else if strings.HasSuffix(strings.ToLower(path), ".sh") {
-		cmd = exec.Command("sh", path)
-		cmd.Dir = filepath.Dir(path)
-	} else {
-		cmd = exec.Command(path)
-		cmd.Dir = filepath.Dir(path)
+	if !isLaunchableAppPath(clean) {
+		log.Printf("[SECURITY] [apps] refusing to launch %q: outside the app folders", clean)
+		showToast("Refusing to launch an app outside the app folders", ToastError())
+		return
 	}
-	if err := cmd.Start(); err != nil {
-		log.Printf("[apps] launch failed for %s: %v", path, err)
+	info, err := os.Stat(clean)
+	if err != nil || !info.Mode().IsRegular() {
 		showToast("Could not launch "+filepath.Base(path), ToastError())
+		return
+	}
+	ext := strings.ToLower(filepath.Ext(clean))
+	switch ext {
+	case ".exe", ".bat", ".cmd", ".lnk", ".url", ".sh":
+	default:
+		log.Printf("[apps] refusing to launch unsupported file type %q", ext)
+		showToast("Unsupported app type "+ext, ToastError())
+		return
+	}
+	log.Printf("[apps] launching %s", clean)
+	var cmd *exec.Cmd
+	switch {
+	case runtime.GOOS == "windows" && (ext == ".lnk" || ext == ".url"):
+		// Shortcuts are resolved by the shell handler, not executed directly.
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", clean)
+	case runtime.GOOS == "windows" && (ext == ".bat" || ext == ".cmd"):
+		cmd = exec.Command("cmd", "/c", clean)
+	case ext == ".sh":
+		cmd = exec.Command("sh", clean)
+	default:
+		cmd = exec.Command(clean)
+	}
+	cmd.Dir = filepath.Dir(clean)
+	if err := cmd.Start(); err != nil {
+		log.Printf("[apps] launch failed for %s: %v", clean, err)
+		showToast("Could not launch "+filepath.Base(clean), ToastError())
 		return
 	}
 	go func() { _ = cmd.Wait() }() // reap the child, keep JukaHub responsive

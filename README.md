@@ -100,8 +100,19 @@ Turn Wi-Fi on before using YouTube or weather. Your settings are stored in
 
 ## Updating
 
-Download the new package and extract it over `Apps/JukaHub`, replacing the
-`JukaHub` file. Your `jukauser.json` settings and your media are untouched.
+JukaHub updates itself. On launch it checks the latest release on GitHub and,
+when a newer build exists, downloads the archive for the platform
+(`JukaHub-Windows.zip` on Windows, `JukaHub-Trimui.zip` on TrimUI), replaces the
+app files and restarts. Your `jukauser.json` settings, favorites and media are
+untouched, and an interrupted update is rolled back automatically at next
+launch.
+
+The version line shows the release build date, e.g. `v0.4.0 · 2026-10-17`, so
+you can tell which build is installed. **MISC → Patch → Check for updates**
+runs the same check manually.
+
+You can also update by extracting a release archive over `Apps/JukaHub` by
+hand. Set `JUKAHUB_NO_AUTOUPDATE=1` to disable automatic updates.
 
 To uninstall, delete the `Apps/JukaHub` folder.
 

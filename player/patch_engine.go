@@ -320,10 +320,11 @@ func (m *PatchManifest) ManifestTargetFor(device, goos, arch string) *ManifestTa
 // allowedPatchHosts is the complete allowlist of download hosts. Anything else
 // (including redirect targets) is rejected.
 var allowedPatchHosts = map[string]bool{
-	"github.com":                    true,
-	"api.github.com":                true,
-	"objects.githubusercontent.com": true,
-	"codeload.github.com":           true,
+	"github.com":                           true,
+	"api.github.com":                       true,
+	"objects.githubusercontent.com":        true,
+	"release-assets.githubusercontent.com": true,
+	"codeload.github.com":                  true,
 }
 
 // validatePatchURL rejects non-HTTPS URLs and URLs whose host is not on the
@@ -560,6 +561,11 @@ func installedPatchVersions(config *Config) map[PatchComponent]string {
 		if m[ComponentApp] == "" {
 			m[ComponentApp] = "0.4.0"
 		}
+		// Show the release build date next to the version (the tag alone is
+		// a timestamp, so the semantic version goes stale between releases).
+		if build := installedBuildDate(); build != "" {
+			m[ComponentApp] += " · " + build
+		}
 		m[ComponentAssets] = m[ComponentApp]
 	}
 	if repo, err := LoadPackageRepo(); err == nil {
@@ -608,11 +614,22 @@ func ensureHelperTool(tool string, config *Config) error {
 		exeName += ".exe"
 	}
 	target := filepath.Join(dir, exeName)
-	_, statErr := os.Stat(target)
+	info, statErr := os.Stat(target)
 	if statErr == nil {
-		return nil
-	}
-	if !os.IsNotExist(statErr) {
+		if info.Size() == 0 {
+			// A previously interrupted install left an empty placeholder;
+			// remove it so the download runs again.
+			logPatch("[TOOLS] %s is empty at %s; reinstalling", tool, target)
+			_ = os.Remove(target)
+		} else {
+			if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
+				if err := os.Chmod(target, PermExec); err != nil {
+					logPatch("[TOOLS] warn: cannot chmod %s: %v", target, err)
+				}
+			}
+			return nil
+		}
+	} else if !os.IsNotExist(statErr) {
 		return fmt.Errorf("tools directory check failed for %s: %w", target, statErr)
 	}
 	logPatch("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
@@ -698,11 +715,17 @@ func downloadFFmpegBundle(target string, config *Config) error {
 	if err != nil {
 		return fmt.Errorf("find ffmpeg release: %w", err)
 	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create tools directory %s: %w", dir, err)
+	}
+	// Stage the archive next to the tools, not in the system temp dir: on
+	// TrimUI /tmp is a small tmpfs on a different filesystem from the SD card.
 	// The temp file keeps the real asset extension: extraction picks zip vs
 	// tar.xz from the name, and the Linux/handheld builds are tar.xz.
-	tmp, err := os.CreateTemp("", "ffmpeg-download-*"+ffmpegArchiveExt(url))
+	tmp, err := os.CreateTemp(dir, ".ffmpeg-download-*"+ffmpegArchiveExt(url))
 	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+		return fmt.Errorf("create temp file in %s: %w", dir, err)
 	}
 	defer os.Remove(tmp.Name())
 	defer tmp.Close()
@@ -713,10 +736,6 @@ func downloadFFmpegBundle(target string, config *Config) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return err
-	}
-	dir := filepath.Dir(target)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create tools directory %s: %w", dir, err)
 	}
 	installBarPhase(installPhaseExtract)
 	suffix := ""
@@ -818,8 +837,14 @@ func verifyHelperTool(target string) error {
 }
 
 // downloadYtDlp downloads the platform-appropriate standalone yt-dlp build,
-// renames it to the canonical tool name, makes it executable on Unix, and
+// installs it under the canonical tool name, makes it executable on Unix, and
 // verifies it runs ("--version") before reporting success.
+//
+// The download is staged *inside the tools directory*, not the system temp
+// directory: on TrimUI, /tmp is a different filesystem from the SD card, so
+// renaming a temp file into place fails with EXDEV (invalid cross-device
+// link). That left yt-dlp downloaded but never installed, while the ffmpeg
+// bundle (which is copied, not renamed) worked.
 func downloadYtDlp(target string, config *Config) error {
 	asset, err := ytDlpAssetName(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
@@ -830,23 +855,30 @@ func downloadYtDlp(target string, config *Config) error {
 	if err != nil {
 		return fmt.Errorf("find yt-dlp release asset %q: %w", asset, err)
 	}
-	tmp, err := os.CreateTemp("", "yt-dlp-*.download")
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create tools directory %s: %w", dir, err)
 	}
-	defer os.Remove(tmp.Name())
+	tmp, err := os.CreateTemp(dir, ".yt-dlp-*.part")
+	if err != nil {
+		return fmt.Errorf("create temp file in %s: %w", dir, err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
 	defer tmp.Close()
 	logPatch("[TOOLS] downloading %s from %s", asset, url)
 	installBarPhase(installPhaseDownload)
-	if err := downloadFileWithProgress(url, tmp.Name(), installBarProgress); err != nil {
+	if err := downloadFileWithProgress(url, tmpPath, installBarProgress); err != nil {
 		return fmt.Errorf("download yt-dlp from %s: %w", url, err)
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// Rename the release asset to the canonical tool name that getToolPath and
-	// the shell command builders expect.
-	if err := os.Rename(tmp.Name(), target); err != nil {
+	if err := os.Chmod(tmpPath, PermExec); err != nil {
+		logPatch("[TOOLS] warn: cannot chmod staged yt-dlp: %v", err)
+	}
+	// Same directory, so this rename never crosses a filesystem.
+	if err := os.Rename(tmpPath, target); err != nil {
 		return fmt.Errorf("install yt-dlp to %s: %w", target, err)
 	}
 	if runtime.GOOS != "windows" {
@@ -874,9 +906,14 @@ func helperToolPath(tool string, config *Config) (string, error) {
 	if toolPath == "" {
 		return "", fmt.Errorf("unable to resolve tools path for %s", tool)
 	}
-	_, statErr := os.Stat(toolPath)
-	if statErr == nil {
+	info, statErr := os.Stat(toolPath)
+	if statErr == nil && info.Mode().IsRegular() && info.Size() > 0 {
 		return toolPath, nil
+	}
+	if statErr == nil && info.Size() == 0 {
+		// Broken placeholder from an interrupted install.
+		_ = os.Remove(toolPath)
+		statErr = os.ErrNotExist
 	}
 	if !os.IsNotExist(statErr) {
 		return "", fmt.Errorf("tools path %s exists but is not accessible: %w", toolPath, statErr)

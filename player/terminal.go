@@ -177,7 +177,12 @@ func termExecute(input string) {
 			}
 			return
 		}
-		if err := os.Chdir(args[0]); err != nil {
+		dir, pathErr := cleanUserPath(args[0])
+		if pathErr != nil {
+			termPushLine("Error: "+pathErr.Error(), true)
+			return
+		}
+		if err := os.Chdir(dir); err != nil {
 			termPushLine(fmt.Sprintf("Error: %v", err), true)
 		}
 
@@ -186,7 +191,14 @@ func termExecute(input string) {
 			termPushLine("Usage: cat <filename>", true)
 			return
 		}
-		data, err := os.ReadFile(args[0])
+		// The terminal is an intentional user shell: `cat` reads the path the
+		// user typed. Reject malformed paths (empty/NUL) before the OS call.
+		file, pathErr := cleanUserPath(args[0])
+		if pathErr != nil {
+			termPushLine("Error: "+pathErr.Error(), true)
+			return
+		}
+		data, err := os.ReadFile(file)
 		if err != nil {
 			termPushLine(fmt.Sprintf("Error: %v", err), true)
 			return

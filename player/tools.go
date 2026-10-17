@@ -207,7 +207,11 @@ func extractToolFiles(archivePath, destDir string, names []string) ([]string, er
 			if !want[base] {
 				continue
 			}
-			if err := extractZipEntryTo(f, filepath.Join(destDir, filepath.FromSlash(base))); err != nil {
+			dest, err := safeJoinFile(destDir, base)
+			if err != nil {
+				return found, err
+			}
+			if err := extractZipEntryTo(f, dest); err != nil {
 				return found, err
 			}
 			delete(want, base)
@@ -234,7 +238,10 @@ func extractToolFiles(archivePath, destDir string, names []string) ([]string, er
 			}
 			// Stream the copy: ffmpeg binaries are large and handhelds are
 			// memory constrained, so never buffer a whole binary in RAM.
-			dest := filepath.Join(destDir, filepath.FromSlash(base))
+			dest, err := safeJoinFile(destDir, base)
+			if err != nil {
+				return err
+			}
 			if err := copyFileStream(p, dest, PermExec); err != nil {
 				return err
 			}

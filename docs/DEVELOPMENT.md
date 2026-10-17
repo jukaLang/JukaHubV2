@@ -186,8 +186,11 @@ the installation:
   Explorer.
 - **JukaHub bundled assets** starter package (fonts, background, default
   config), to restore JukaHub's own files.
-- **Check for updates** — JukaHub releases, checksum-verified via
-  `manifest.json` (a release without a manifest is refused).
+- **Check for updates** — downloads the release archive for this platform
+  (`JukaHub-Windows.zip` / `JukaHub-Trimui.zip`) and stages it; one more press
+  applies it and restarts. The same check runs automatically at launch, at
+  most once a day, and applies without prompting on installed releases
+  (`JUKAHUB_NO_AUTOUPDATE=1` disables that).
 - **Verify & repair** — validate config, tools and assets; clear stale
   downloads.
 - **Backups & Restore** — every install/update/remove is journaled, every
@@ -267,10 +270,19 @@ next launch). The local package database (`db/db.json`) is written atomically.
 
 ### Releases
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds the
-TrimUI ARM64 packages and the Windows package and uploads `manifest.json` +
-`SHA256SUMS` — the machine-readable verification data the Patch update flow
-requires.
+Every push to `main` runs `.github/workflows/docker-image.yml`, which creates a
+`JukaHub-<timestamp>` release with two assets:
+
+- `JukaHub-Windows.zip` — `JukaHub.exe`, the SDL DLLs, fonts/background and the
+  config.
+- `JukaHub-Trimui.zip` — the ARM64 binary, `launch.sh`, fonts/background and the
+  config for every supported TrimUI model.
+
+Both archives include `release-info.json` (`tag` + RFC3339 `date`). The app
+reads it to show the release build date and to decide whether a newer release
+exists; the build also embeds the date with
+`-ldflags "-X main.buildDate=YYYY-MM-DD"`. Release tags are timestamps, so the
+updater compares release times rather than semantic versions.
 
 ---
 
@@ -283,7 +295,7 @@ length.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  JukaHub - v0.4.0                              Wi-Fi  24C/18C  16:47  82% │
+│  JukaHub - v0.4.0 · 2026-10-17                 Wi-Fi  24C/18C  16:47  82% │
 ├──────────────────────────────────────────────────────────────────────────┤
 │  Good afternoon · What do you want to do?                                 │
 │  ┌───────────────────────┐  ┌─────────────┐ ┌─────────────┐              │

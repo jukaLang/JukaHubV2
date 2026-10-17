@@ -737,7 +737,35 @@ func loadUserConfig() *UserConfig {
 	// jukauser.json sections, then delete them so only the two canonical JSON
 	// files remain on disk.
 	migrateLegacyUserFiles()
+	// The handheld face-button fix is persisted once so the setting the user
+	// sees matches how the buttons actually behave.
+	if migrateHandheldButtonMapping(userConfigCache, P().IsHandheld()) {
+		saveUserConfig(userConfigCache)
+	}
 	return userConfigCache
+}
+
+// abSwapMigrationKey marks that the one-time handheld A/B default was applied.
+const abSwapMigrationKey = "_abSwapLayoutApplied"
+
+// migrateHandheldButtonMapping fixes the saved A/B setting on first run after
+// the handheld mapping fix. Older builds shipped swapABButtons=false, but
+// TrimUI firmware reports physical A as SDL B (and vice versa), so untouched
+// installations had A going Back and B selecting. The marker keeps later user
+// choices (including deliberately turning the swap off) intact.
+func migrateHandheldButtonMapping(user *UserConfig, handheld bool) bool {
+	if user == nil || !handheld {
+		return false
+	}
+	if user.Variables.Custom == nil {
+		user.Variables.Custom = make(map[string]interface{})
+	}
+	if _, done := user.Variables.Custom[abSwapMigrationKey]; done {
+		return false
+	}
+	user.Variables.Custom["swapABButtons"] = true
+	user.Variables.Custom[abSwapMigrationKey] = true
+	return true
 }
 
 // migrateLegacyUserFiles folds any still-present legacy JSON files

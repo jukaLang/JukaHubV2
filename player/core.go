@@ -1645,14 +1645,16 @@ func getToolPath(tool string, config *Config) string {
 		}
 		return p
 	}
-	// Check tools_path variable (config-driven)
-	if config.Variables.ToolsPath != "" {
-		fullPath := filepath.Join(config.Variables.ToolsPath, exeName)
-		if _, err := os.Stat(fullPath); err == nil {
+	// Check tools_path variable (config-driven). It may name a directory that
+	// holds the tools or the tool binary itself; never return a directory as
+	// the executable path, or exec would fail with "is a directory".
+	if tp := strings.TrimSpace(config.Variables.ToolsPath); tp != "" {
+		fullPath := filepath.Join(tp, exeName)
+		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
 			return resolve(fullPath)
 		}
-		if _, err := os.Stat(config.Variables.ToolsPath); err == nil {
-			return resolve(config.Variables.ToolsPath)
+		if info, err := os.Stat(tp); err == nil && !info.IsDir() {
+			return resolve(tp)
 		}
 	}
 	// Check the platform tools dir ("required" next to the binary) — the same
@@ -1670,6 +1672,38 @@ func getToolPath(tool string, config *Config) string {
 		return p
 	}
 	return exeName
+}
+
+// helperExecutable resolves a built-in helper tool to a concrete executable.
+// The name is first matched against a fixed allowlist and the path is built
+// from the tools directory / a PATH lookup of that constant name, so a
+// user-supplied command string can never select an arbitrary program.
+func helperExecutable(name string, config *Config) (string, error) {
+	switch name {
+	case "yt-dlp", "ffplay", "ffmpeg", "ffprobe":
+	default:
+		return "", fmt.Errorf("unsupported helper tool %q", name)
+	}
+	exe := name
+	if IsWindows() {
+		exe += ".exe"
+	}
+	var candidates []string
+	if config != nil {
+		if tp, err := cleanUserPath(config.Variables.ToolsPath); err == nil {
+			candidates = append(candidates, filepath.Join(tp, exe))
+		}
+	}
+	candidates = append(candidates, filepath.Join(P().ToolsDir(), exe))
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			return candidate, nil
+		}
+	}
+	if p, err := exec.LookPath(exe); err == nil {
+		return p, nil
+	}
+	return "", fmt.Errorf("%s is not installed", name)
 }
 
 // --- Quote path if it contains spaces ---
@@ -1794,10 +1828,12 @@ func ytDlpExtraArgs(config *Config) string {
 		// "not encrypted" and "missing" are not actionable failures here.
 		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
 	}
-	// Cookies file path - not encrypted (it's a file path, not a secret)
+	// Cookies file path - not encrypted (it's a file path, not a secret).
+	// Normalize it and require a real regular file; helper args are resolved
+	// from config, so never hand a malformed path to a subprocess.
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
-		if _, err := os.Stat(v); err == nil {
-			parts = append(parts, "--cookies", v)
+		if cookies, err := existingRegularFile(v); err == nil {
+			parts = append(parts, "--cookies", cookies)
 		}
 	}
 	return strings.Join(parts, " ")
@@ -1829,10 +1865,10 @@ func ytDlpExtraArgsSlice(config *Config) []string {
 	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || (strings.Contains(err.Error(), "not encrypted") == false && strings.Contains(err.Error(), "missing") == false) {
 		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
 	}
-	// Cookies file path - not encrypted (it's a file path, not a secret)
+	// Cookies file path - not encrypted (it's a file path, not a secret).
 	if v, ok := config.Variables.Custom["youtube_cookies_file"].(string); ok && v != "" {
-		if _, err := os.Stat(v); err == nil {
-			parts = append(parts, "--cookies", v)
+		if cookies, err := existingRegularFile(v); err == nil {
+			parts = append(parts, "--cookies", cookies)
 		}
 	}
 	return parts
@@ -1846,20 +1882,55 @@ func validateYtDlpArgs(args []string) error {
 	if len(args) > 32 {
 		return fmt.Errorf("too many extra yt-dlp arguments (%d)", len(args))
 	}
-	for _, a := range args {
+	for i, a := range args {
 		if a == "" {
-			return fmt.Errorf("empty extra yt-dlp argument")
+			return fmt.Errorf("empty extra yt-dlp argument #%d", i)
 		}
 		if len(a) > 2048 {
-			return fmt.Errorf("extra yt-dlp argument too long (%d bytes)", len(a))
+			return fmt.Errorf("extra yt-dlp argument #%d is too long (%d bytes)", i, len(a))
 		}
 		for _, r := range a {
 			if r < 0x20 || r == 0x7f {
-				return fmt.Errorf("control character in extra yt-dlp argument")
+				return fmt.Errorf("control character in extra yt-dlp argument #%d", i)
 			}
 		}
 		if strings.ContainsAny(a, ";|&$`><(){}[]!*?~\"'%^#\n\r\t ") {
-			return fmt.Errorf("shell metacharacter in extra yt-dlp argument %q", a)
+			// Never echo the argument: it can hold an API key or cookie path.
+			return fmt.Errorf("shell metacharacter in extra yt-dlp argument #%d", i)
+		}
+	}
+	return nil
+}
+
+// ytDlpExecFlags are yt-dlp options that launch another program or load extra
+// configuration instead of just fetching metadata. The YouTube search command
+// comes from the scene config, so editing that config must not escalate into
+// arbitrary command execution.
+var ytDlpExecFlags = []string{
+	"--exec",
+	"--exec-before-download",
+	"--downloader",
+	"--external-downloader",
+	"--postprocessor-args",
+	"--ppa",
+	"--update",
+	"--update-to",
+	"--config-location",
+}
+
+// rejectYtDlpExecFlags refuses execution-capable options in a config-supplied
+// yt-dlp command line. Both "--flag value" and "--flag=value" are caught
+// because the flag name is compared before the first '='.
+func rejectYtDlpExecFlags(args []string) error {
+	for _, a := range args {
+		flag := a
+		if i := strings.IndexByte(flag, '='); i >= 0 {
+			flag = flag[:i]
+		}
+		for _, bad := range ytDlpExecFlags {
+			if flag == bad {
+				return fmt.Errorf("yt-dlp option %s is not allowed in a search command", bad)
+			}
 		}
 	}
 	return nil
@@ -2063,9 +2134,40 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 		publishCustom(resultVar, []VideoInfo{})
 		return
 	}
-	tool := tokens[0]
+	tool := strings.ToLower(strings.TrimSuffix(filepath.Base(tokens[0]), ".exe"))
 	args := tokens[1:]
-	fullToolPath := getToolPath(tool, config)
+	// A search command may only invoke the bundled yt-dlp. The executable path
+	// is then derived from that fixed name, never from the command text.
+	if tool != "yt-dlp" {
+		log.Printf("[SECURITY] executeYouTubeSearch: refusing tool %q", tool)
+		publishCustom("search_error", "Unsupported search command")
+		publishCustom(resultVar, []VideoInfo{})
+		return
+	}
+	if err := rejectYtDlpExecFlags(args); err != nil {
+		log.Printf("[SECURITY] executeYouTubeSearch: %v", err)
+		publishCustom("search_error", "Unsupported search command")
+		publishCustom(resultVar, []VideoInfo{})
+		return
+	}
+	// Resolve before searching. If the tool is missing, start the repair in
+	// the background instead of blocking the render loop on a download; the
+	// startup tool-health check may already be installing it.
+	fullToolPath, toolErr := helperExecutable("yt-dlp", config)
+	if toolErr != nil {
+		go func() {
+			if err := EnsureHelperTool("yt-dlp", config); err != nil {
+				log.Printf("[ERROR] yt-dlp install failed: %v", err)
+				return
+			}
+			refreshToolHealth()
+		}()
+		log.Printf("[WARN] yt-dlp is not installed yet; install started")
+		publishCustom("search_error", "yt-dlp is being installed — try the search again in a moment.")
+		publishCustom(resultVar, []VideoInfo{})
+		showToast("Installing yt-dlp…", ToastInfo())
+		return
+	}
 
 	// Check bbolt cache for YouTube search results before hitting yt-dlp.
 	cacheKey := "ytsearch:" + normalizeCacheKey(cmdWithVars)
@@ -3867,7 +3969,11 @@ func abButtonsSwapped(config *Config) bool {
 	if v, ok := customValue(config.Variables.Custom, "swapABButtons"); ok {
 		return coerceBool(v)
 	}
-	return false
+	// Handheld firmware (TrimUI) reports the face buttons inverted relative to
+	// SDL's Xbox-style mapping: physical A arrives as CONTROLLER_BUTTON_B.
+	// Without the swap, A would go Back and B would select. Desktops keep the
+	// SDL mapping as-is.
+	return P().IsHandheld()
 }
 
 // applyButtonSwap normalizes A/B face-button events against the
@@ -4830,7 +4936,12 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			entry := entries[focusedFileIndex]
 			ext := strings.ToLower(filepath.Ext(entry.Path))
 			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
-				imageViewerPath = entry.Path
+				imagePath, err := resolveExplorerEntry(config, entry.Path)
+				if err != nil {
+					showToast("Cannot open image: "+err.Error(), ToastError())
+					break
+				}
+				imageViewerPath = imagePath
 				if imageViewerTexture != nil {
 					imageViewerTexture.Destroy()
 					imageViewerTexture = nil
@@ -4850,7 +4961,14 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
 				sendChatMessage("User", "[Image: "+entry.Name+"]")
 			} else if ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".js" || ext == ".html" {
-				data, err := os.ReadFile(entry.Path)
+				// The row comes from a dynamic list, not from the filesystem:
+				// resolve it under the explorer root before reading.
+				resolved, resolveErr := resolveExplorerEntry(config, entry.Path)
+				if resolveErr != nil {
+					sendChatMessage("System", "Cannot read file: "+resolveErr.Error())
+					break
+				}
+				data, err := os.ReadFile(resolved)
 				if err != nil {
 					sendChatMessage("System", "Failed to read file: "+err.Error())
 				} else {

@@ -30,6 +30,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -61,22 +62,32 @@ func releaseInfoPath(dir string) string {
 	return filepath.Join(dir, releaseInfoFileName)
 }
 
+// releaseInfoOnce caches the installation stamp: it cannot change while the
+// process runs, and the UI reads it every frame.
+var (
+	releaseInfoOnce  sync.Once
+	releaseInfoCache releaseInfo
+)
+
 // readInstalledReleaseInfo reads the stamp file next to the executable.
 // A missing or malformed file is simply an unknown stamp.
 func readInstalledReleaseInfo() releaseInfo {
-	dir, err := P().ExecutableDir()
-	if err != nil || dir == "" {
-		return releaseInfo{}
-	}
-	data, err := os.ReadFile(releaseInfoPath(dir))
-	if err != nil {
-		return releaseInfo{}
-	}
-	var info releaseInfo
-	if json.Unmarshal(data, &info) != nil {
-		return releaseInfo{}
-	}
-	return info
+	releaseInfoOnce.Do(func() {
+		dir, err := P().ExecutableDir()
+		if err != nil || dir == "" {
+			return
+		}
+		data, err := os.ReadFile(releaseInfoPath(dir))
+		if err != nil {
+			return
+		}
+		var info releaseInfo
+		if json.Unmarshal(data, &info) != nil {
+			return
+		}
+		releaseInfoCache = info
+	})
+	return releaseInfoCache
 }
 
 // writeReleaseInfo writes the stamp file into dir atomically.
@@ -165,8 +176,11 @@ func releaseStampISO(rel *githubRelease) string {
 // The second result is false when no stamp is known (a fresh source build or a
 // pre-stamp installation).
 func installedReleaseTime() (time.Time, bool) {
-	if info := readInstalledReleaseInfo(); info.Date != "" {
+	if info := readInstalledReleaseInfo(); info.Date != "" || info.Tag != "" {
 		if t, ok := parseReleaseTimestamp(info.Date); ok {
+			return t, true
+		}
+		if t, ok := releaseTimeFromTag(info.Tag); ok {
 			return t, true
 		}
 	}
@@ -177,6 +191,11 @@ func installedReleaseTime() (time.Time, bool) {
 		return t, true
 	}
 	if t, ok := parseReleaseTimestamp(buildDate); ok {
+		// A build stamp is date-only: treat it as the end of that day so a
+		// release published earlier the same day is not "newer".
+		if len(strings.TrimSpace(buildDate)) == len("2006-01-02") {
+			t = t.Add(24*time.Hour - time.Nanosecond)
+		}
 		return t, true
 	}
 	return time.Time{}, false
@@ -206,20 +225,29 @@ func releaseIsNewerThanInstalled(rel *githubRelease) bool {
 }
 
 // autoUpdateCanApply reports whether this installation may replace itself
-// automatically. Only stamped installations (a shipped release, or a build
-// where an update already ran) auto-apply; source/dev builds stage the update
-// and let the user apply it from MISC -> Patch.
+// automatically. Release installs (they ship jukaconfig.json / release-info.json
+// next to the executable) and already-stamped installs update themselves;
+// anything else only stages the release and lets the user apply it from
+// MISC -> Patch. JUKAHUB_NO_AUTOUPDATE=1 disables the automatic apply.
 func autoUpdateCanApply() bool {
 	if strings.TrimSpace(os.Getenv("JUKAHUB_NO_AUTOUPDATE")) != "" {
 		return false
 	}
-	info := readInstalledReleaseInfo()
-	if info.Tag != "" {
+	if readInstalledReleaseInfo().Tag != "" {
 		return true
 	}
 	patchStateMu.Lock()
-	defer patchStateMu.Unlock()
-	return patchState.InstalledReleaseAt != ""
+	stamped := patchState.InstalledReleaseAt != ""
+	patchStateMu.Unlock()
+	if stamped {
+		return true
+	}
+	if dir, err := P().ExecutableDir(); err == nil {
+		if info, err := os.Stat(filepath.Join(dir, "jukaconfig.json")); err == nil && info.Mode().IsRegular() {
+			return true
+		}
+	}
+	return false
 }
 
 // startAutoUpdateCheck runs the startup update check in the background. It is
@@ -330,13 +358,25 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	patchRowStatus(ComponentApp, StatusVerified)
 
 	staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(rel.TagName))
-	_ = os.RemoveAll(staging)
-	if err := os.MkdirAll(staging, 0o700); err != nil {
-		return err
+	// Reuse a complete staging tree: startup checks must not redownload the
+	// same release after a failed or postponed apply.
+	reused := false
+	if bin := findStagedBinary(staging); bin != "" {
+		if info, err := os.Stat(releaseInfoPath(filepath.Dir(bin))); err == nil && info.Mode().IsRegular() {
+			reused = true
+		}
 	}
-	if err := extractSafe(ctx, archivePath, staging, patchMaxEntries, patchMaxExpandBytes); err != nil {
-		patchRowStatus(ComponentApp, StatusFailed)
-		return fmt.Errorf("extracting update: %w", err)
+	if !reused {
+		_ = os.RemoveAll(staging)
+		if err := os.MkdirAll(staging, 0o700); err != nil {
+			return err
+		}
+		if err := extractSafe(ctx, archivePath, staging, patchMaxEntries, patchMaxExpandBytes); err != nil {
+			patchRowStatus(ComponentApp, StatusFailed)
+			return fmt.Errorf("extracting update: %w", err)
+		}
+	} else {
+		logPatch("reusing staged release %s", rel.TagName)
 	}
 	newBin := findStagedBinary(staging)
 	if newBin == "" {
@@ -361,6 +401,8 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	if err := writeReleaseInfo(filepath.Dir(newBin), stamp); err != nil {
 		logPatch("staged release stamp: %v", err)
 	}
+	// AtomicWrite keeps a .bak of the previous stamp; never ship that copy.
+	_ = os.Remove(releaseInfoPath(filepath.Dir(newBin)) + ".bak")
 
 	patchStateMu.Lock()
 	patchState.LastUpdateVer = rel.TagName
@@ -392,6 +434,10 @@ func stagedInstallFiles(installRoot, exeDir string) ([]stagedInstallFile, error)
 			return walkErr
 		}
 		if d.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(d.Name(), "apply-update") {
+			// Generated swap helper, never part of the installation.
 			return nil
 		}
 		info, err := d.Info()
@@ -454,7 +500,7 @@ func writeSwapScript(scriptPath, exePath string, files []stagedInstallFile, jour
 		b.WriteString("set \"JOURNAL=" + strings.ReplaceAll(journalPath, `"`, ``) + "\"\r\n")
 		b.WriteString("timeout /t 2 /nobreak >nul\r\n")
 		for _, f := range files {
-			b.WriteString("call :copyloop " + quoteWindowsArg(f.Src) + " " + quoteWindowsArg(f.Dest) + "\r\n")
+			b.WriteString("call :copyloop " + quoteWindowsArg(f.Src) + " " + quoteWindowsArg(f.Dest) + " || goto fail\r\n")
 		}
 		b.WriteString("del /f /q \"%JOURNAL%\" >nul 2>nul\r\n")
 		b.WriteString("start \"\" \"%EXE%\"\r\n")
@@ -467,18 +513,30 @@ func writeSwapScript(scriptPath, exePath string, files []stagedInstallFile, jour
 		b.WriteString("if %tries% geq 30 exit /b 9\r\n")
 		b.WriteString("timeout /t 1 /nobreak >nul\r\n")
 		b.WriteString("goto retry\r\n")
+		b.WriteString(":fail\r\n")
+		b.WriteString("exit /b 9\r\n")
 	} else {
 		b.WriteString("#!/bin/sh\n")
 		b.WriteString("# JukaHub apply-update helper (generated by Patch; do not edit)\n")
+		launcher := filepath.Join(filepath.Dir(exePath), "launch.sh")
 		b.WriteString("EXE=" + quotePOSIXArg(exePath) + "\n")
+		b.WriteString("LAUNCHER=" + quotePOSIXArg(launcher) + "\n")
 		b.WriteString("JOURNAL=" + quotePOSIXArg(journalPath) + "\n")
 		b.WriteString("sleep 2\n")
 		for _, f := range files {
-			b.WriteString("cp -f " + quotePOSIXArg(f.Src) + " " + quotePOSIXArg(f.Dest) + " || exit 5\n")
+			// Write next to the target and rename: works even if the old binary
+			// is still mapped by the exiting process.
+			b.WriteString("cp -f " + quotePOSIXArg(f.Src) + " " + quotePOSIXArg(f.Dest+".new") + " || exit 5\n")
+			b.WriteString("mv -f " + quotePOSIXArg(f.Dest+".new") + " " + quotePOSIXArg(f.Dest) + " || exit 6\n")
 		}
-		b.WriteString("chmod 755 \"$EXE\" || exit 7\n")
+		// FAT-formatted SD cards may not support chmod; the extracted mode is
+		// already executable there, so never fail the swap on it.
+		b.WriteString("chmod 755 \"$EXE\" 2>/dev/null || true\n")
 		b.WriteString("rm -f \"$JOURNAL\" || true\n")
-		b.WriteString("nohup \"$EXE\" >/dev/null 2>&1 &\n")
+		// The device launcher exports LD_LIBRARY_PATH before starting JukaHub;
+		// restart through it when present.
+		b.WriteString("if [ -f \"$LAUNCHER\" ]; then nohup sh \"$LAUNCHER\" >/dev/null 2>&1 &\n")
+		b.WriteString("else nohup \"$EXE\" >/dev/null 2>&1 & fi\n")
 		b.WriteString("exit 0\n")
 	}
 	return os.WriteFile(scriptPath, []byte(b.String()), 0o700)

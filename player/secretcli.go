@@ -206,7 +206,10 @@ func replaceJSONStringField(raw []byte, section, key, value string) ([]byte, boo
 
 	fieldStart, fieldEnd, found := jsonStringFieldRange(raw[start:end], key)
 	if found {
-		out := make([]byte, 0, len(raw)+(len(encoded)-fieldEnd+fieldStart))
+		// Grow with append instead of computing a capacity: the offset math is
+		// attacker-influenced (via the config file), and an overflowed size
+		// expression would panic or under-allocate.
+		var out []byte
 		out = append(out, raw[:start+fieldStart]...)
 		out = append(out, encoded...)
 		out = append(out, raw[start+fieldEnd:]...)
@@ -220,7 +223,7 @@ func replaceJSONStringField(raw []byte, section, key, value string) ([]byte, boo
 	if !strings.HasSuffix(strings.TrimSpace(trimmed), "{") {
 		prefix = ", "
 	}
-	out := make([]byte, 0, len(raw)+len(encoded)+len(key)+8)
+	var out []byte
 	out = append(out, raw[:insertAt]...)
 	out = append(out, []byte(prefix+"\""+key+"\": "+string(encoded))...)
 	out = append(out, raw[insertAt:]...)

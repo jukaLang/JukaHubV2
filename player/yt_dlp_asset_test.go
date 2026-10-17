@@ -25,3 +25,34 @@ func TestYtDlpAssetName(t *testing.T) {
 		t.Error("unsupported platform must return an error")
 	}
 }
+
+// A search command is config-supplied, so it must not be able to hand yt-dlp
+// an option that runs another program.
+func TestRejectYtDlpExecFlags(t *testing.T) {
+	allowed := []string{
+		"--flat-playlist",
+		"--dump-single-json",
+		"--default-search", "ytsearch",
+		"--playlist-end", "20",
+		"ytsearch20:funny cats",
+		"--cookies", "/tmp/cookies.txt",
+		"--extractor-args", "youtube:api_key=abc=",
+	}
+	if err := rejectYtDlpExecFlags(allowed); err != nil {
+		t.Fatalf("benign search command rejected: %v", err)
+	}
+
+	for _, args := range [][]string{
+		{"--exec", "rm -rf /"},
+		{"--exec-before-download=sh -c id"},
+		{"--downloader", "curl"},
+		{"--external-downloader=wget"},
+		{"--postprocessor-args", "-i"},
+		{"--ppa=ffmpeg:-i"},
+		{"--update"},
+	} {
+		if err := rejectYtDlpExecFlags(args); err == nil {
+			t.Errorf("execution-capable args %v were accepted", args)
+		}
+	}
+}

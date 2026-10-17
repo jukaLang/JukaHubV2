@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -56,6 +57,13 @@ func pdfInit() {
 // pdfExtractText extracts text from a PDF file using raw parsing.
 // This is a simplified extractor that handles most common PDFs.
 func pdfExtractText(path string) pdfDoc {
+	// PDFs open from the File Explorer list; only files inside that tree are
+	// read, never an arbitrary path value from the list variable.
+	resolved, guardErr := resolveExplorerEntry(appConfig, path)
+	if guardErr != nil {
+		return pdfDoc{Path: path, Error: "Cannot open file: " + guardErr.Error()}
+	}
+	path = resolved
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return pdfDoc{Path: path, Error: "Cannot open file: " + err.Error()}
@@ -473,13 +481,19 @@ func handlePDFInput(e *sdl.KeyboardEvent, config *Config) {
 	}
 }
 
-// pdfOpenFile opens a PDF file from the file explorer.
+// pdfOpenFile opens a PDF file from the file explorer. The path comes from a
+// scene list, so it is resolved against the explorer root before reading.
 func pdfOpenFile(path string) {
 	if !strings.HasSuffix(strings.ToLower(path), ".pdf") {
 		return
 	}
+	resolved, err := resolveExplorerEntry(appConfig, path)
+	if err != nil {
+		log.Printf("[SECURITY] pdfOpenFile: refusing %q: %v", path, err)
+		return
+	}
 	pdfInit()
-	pdf.doc = pdfExtractText(path)
+	pdf.doc = pdfExtractText(resolved)
 	pdf.page = 1
 	pdf.scrollY = 0
 }

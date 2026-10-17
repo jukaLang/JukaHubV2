@@ -218,6 +218,7 @@ func TestValidatePatchURL(t *testing.T) {
 		"https://github.com/jukaLang/JukaHubV2/releases/download/v0.4.1/manifest.json",
 		"https://api.github.com/repos/jukaLang/JukaHubV2/releases/latest",
 		"https://objects.githubusercontent.com/github-production-release-asset-2e65be/1",
+		"https://release-assets.githubusercontent.com/github-production-release-asset/1/x.zip?sp=r",
 	}
 	for _, u := range allowed {
 		if err := validatePatchURL(u); err != nil {

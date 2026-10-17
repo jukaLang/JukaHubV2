@@ -46,7 +46,7 @@ type jukaHubUpdateTarget struct {
 // jukaHubUpdateTargetFor selects only explicitly supported runtime targets.
 // Unknown platforms/devices never fall through to the original Smart Pro build.
 func jukaHubUpdateTargetFor(device DeviceModel, goos, arch string) (jukaHubUpdateTarget, error) {
-	if goos == "windows" && arch == "amd64" {
+	if device == DeviceDevBuild && goos == "windows" && arch == "amd64" {
 		// The Windows build is shared by every desktop install.
 		return jukaHubUpdateTarget{Device: device, OS: goos, Arch: arch, Asset: "JukaHub-Windows.zip"}, nil
 	}

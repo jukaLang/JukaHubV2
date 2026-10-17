@@ -231,6 +231,33 @@ func TestGetToolPathFindsPATHInstall(t *testing.T) {
 	}
 }
 
+func TestGetToolPathNeverReturnsDirectory(t *testing.T) {
+	// A configured tools_path that exists but does not contain the tool must
+	// fall through, not return the directory itself (exec would fail with
+	// "is a directory").
+	dir := t.TempDir()
+	got := getToolPath("jukahub-test-probe", &Config{Variables: Variables{ToolsPath: dir}})
+	if info, err := os.Stat(got); err == nil && info.IsDir() {
+		t.Fatalf("getToolPath returned the directory %q", got)
+	}
+}
+
+func TestGetToolPathAcceptsBinaryToolsPath(t *testing.T) {
+	dir := t.TempDir()
+	name := "jukahub-test-probe"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	full := filepath.Join(dir, name)
+	if err := os.WriteFile(full, []byte("stub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := getToolPath("jukahub-test-probe", &Config{Variables: Variables{ToolsPath: full}})
+	if absGot, err := filepath.Abs(got); err != nil || absGot != full {
+		t.Fatalf("getToolPath = %q, want %q", got, full)
+	}
+}
+
 func TestVersionProbeArgs(t *testing.T) {
 	cases := map[string]string{
 		"ffmpeg":              "-version",

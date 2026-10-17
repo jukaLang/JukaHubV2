@@ -69,6 +69,9 @@ func TestStoppedSessionRejectsNewCommands(t *testing.T) {
 // be removed.
 func TestRemoveTempVideoLeavesUserMedia(t *testing.T) {
 	dir := t.TempDir()
+	prevTempDir := videoTempDir
+	videoTempDir = func() string { return dir }
+	t.Cleanup(func() { videoTempDir = prevTempDir })
 
 	userFile := filepath.Join(dir, "holiday.mp4")
 	if err := os.WriteFile(userFile, []byte("user media"), 0o644); err != nil {
@@ -77,6 +80,17 @@ func TestRemoveTempVideoLeavesUserMedia(t *testing.T) {
 	removeTempVideo(userFile)
 	if _, err := os.Stat(userFile); err != nil {
 		t.Fatalf("removeTempVideo deleted a user file: %v", err)
+	}
+
+	// A same-named file outside the download directory is not ours either.
+	outside := t.TempDir()
+	foreign := filepath.Join(outside, "jukahub-video-456.mp4")
+	if err := os.WriteFile(foreign, []byte("not ours"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removeTempVideo(foreign)
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("removeTempVideo deleted a file outside the temp dir: %v", err)
 	}
 
 	tempFile := filepath.Join(dir, "jukahub-video-123.mp4")

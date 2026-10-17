@@ -70,13 +70,23 @@ func GetPlugins() map[string]*PluginInfo {
 
 // ExecutePluginAction runs a plugin-defined action by name.
 func ExecutePluginAction(pluginName, action string, vars map[string]interface{}) string {
+	// A plugin name is a single directory below the plugins root; anything else
+	// (separators, "..", absolute paths) is rejected before touching disk.
+	if pluginName == "" || filepath.Base(pluginName) != pluginName || strings.ContainsAny(pluginName, `\/`) {
+		return fmt.Sprintf("Plugin %q not found", pluginName)
+	}
 	plugin, ok := plugins[pluginName]
 	if !ok {
 		return fmt.Sprintf("Plugin %q not found", pluginName)
 	}
-	entryPath := filepath.Join(pluginDir, pluginName, plugin.Entry)
-	if _, err := os.Stat(entryPath); err != nil {
-		return fmt.Sprintf("Plugin entry %q not found", entryPath)
+	pluginRoot := filepath.Join(pluginDir, pluginName)
+	entryPath, err := resolveWithinRoot(pluginRoot, plugin.Entry)
+	if err != nil {
+		return fmt.Sprintf("Plugin %q has an unsafe entry path", pluginName)
+	}
+	info, statErr := os.Stat(entryPath)
+	if statErr != nil || !info.Mode().IsRegular() {
+		return fmt.Sprintf("Plugin entry %q not found", plugin.Entry)
 	}
 	if strings.HasSuffix(entryPath, ".py") || strings.HasSuffix(entryPath, ".sh") {
 		return runPluginScript(entryPath, action, vars)
@@ -108,7 +118,16 @@ func InstallPlugin(sourcePath, destName string) error {
 	if destName == "" {
 		destName = filepath.Base(sourcePath)
 	}
-	destDir := filepath.Join(pluginDir, destName)
+	// Install into exactly one new directory directly below the plugins root.
+	base, err := safeArchiveBaseName(destName)
+	if err != nil {
+		return err
+	}
+	destName = base
+	destDir, err := safeJoinFile(pluginDir, destName)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(destDir); err == nil {
 		return fmt.Errorf("plugin %q already installed", destName)
 	}

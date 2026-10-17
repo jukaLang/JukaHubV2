@@ -6,6 +6,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -52,6 +53,25 @@ func TestReleasePublishedTimeAndLabel(t *testing.T) {
 	}
 }
 
+func TestInstalledBuildDateAndNewerRelease(t *testing.T) {
+	old := buildDate
+	buildDate = "2026-10-17"
+	defer func() { buildDate = old }()
+
+	if got := installedBuildDate(); got != "2026-10-17" {
+		t.Fatalf("installedBuildDate = %q, want the build stamp", got)
+	}
+	if releaseIsNewerThanInstalled(&githubRelease{TagName: "JukaHub-20261017090000"}) {
+		t.Error("a same-day release before the build must not be newer")
+	}
+	if !releaseIsNewerThanInstalled(&githubRelease{TagName: "JukaHub-20261018120000"}) {
+		t.Error("a later release must be newer")
+	}
+	if releaseIsNewerThanInstalled(&githubRelease{TagName: "not-a-release"}) {
+		t.Error("a release without a timestamp must never trigger an update")
+	}
+}
+
 func TestFormatBuildLabel(t *testing.T) {
 	if got := formatBuildLabel("v0.4.0", "2026-10-17"); got != "v0.4.0 · 2026-10-17" {
 		t.Fatalf("formatBuildLabel = %q", got)
@@ -93,6 +113,78 @@ func TestStagedInstallFilesOrdersReleaseStampLast(t *testing.T) {
 func TestStagedInstallFilesRejectsEmptyTree(t *testing.T) {
 	if _, err := stagedInstallFiles(t.TempDir(), t.TempDir()); err == nil {
 		t.Fatal("an empty staged tree must be rejected")
+	}
+}
+
+// TestSwapScriptReplacesFiles executes the generated Windows helper against a
+// throwaway installation. The relaunch line is removed so the test never
+// starts a real JukaHub process.
+func TestSwapScriptReplacesFiles(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("the generated helper is a .bat on Windows")
+	}
+	dir := t.TempDir()
+	staged := filepath.Join(dir, "staged")
+	install := filepath.Join(dir, "install")
+	for _, d := range []string{staged, install} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(dir, name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(staged, "JukaHub.exe", "new-binary")
+	write(staged, "SDL2.dll", "new-dll")
+	write(staged, releaseInfoFileName, `{"tag":"JukaHub-20261017120000"}`)
+	write(install, "JukaHub.exe", "old-binary")
+	write(install, "SDL2.dll", "old-dll")
+
+	journal := filepath.Join(dir, "journal.json")
+	write(dir, "journal.json", "{}")
+
+	files, err := stagedInstallFiles(staged, install)
+	if err != nil {
+		t.Fatalf("stagedInstallFiles: %v", err)
+	}
+	script := filepath.Join(dir, "apply-update.bat")
+	if err := writeSwapScript(script, filepath.Join(install, "JukaHub.exe"), files, journal); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Drop the relaunch line only.
+	var kept []string
+	for _, line := range strings.Split(string(data), "\r\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "start ") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(script, []byte(strings.Join(kept, "\r\n")), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if out, err := exec.Command("cmd", "/c", script).CombinedOutput(); err != nil {
+		t.Fatalf("swap helper failed: %v\n%s", err, out)
+	}
+	for name, want := range map[string]string{
+		"JukaHub.exe":       "new-binary",
+		"SDL2.dll":          "new-dll",
+		releaseInfoFileName: `{"tag":"JukaHub-20261017120000"}`,
+	} {
+		data, err := os.ReadFile(filepath.Join(install, name))
+		if err != nil || string(data) != want {
+			t.Errorf("%s = %q, %v; want %q", name, data, err, want)
+		}
+	}
+	if _, err := os.Stat(journal); !os.IsNotExist(err) {
+		t.Error("journal must be removed after a successful swap")
 	}
 }
 

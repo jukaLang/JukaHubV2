@@ -308,6 +308,43 @@ To rotate encryption keys:
 
 Note: Key rotation requires access to both the old and new keys during the transition.
 
+## Static-analysis triage (CodeQL)
+
+CodeQL reports on `main` flagged a set of path, command and allocation sinks. They
+are handled in one of two ways:
+
+**Fixed in code**
+
+- Paths read from a config value or a scene row are resolved against a known
+  root before use: File Explorer navigation and listing, PDF opening, chat file
+  attachment, archive extraction and app launch entries (`paths.go`).
+- Archive entries (tool downloads and File Explorer unzip) are reduced to a
+  plain base name or checked to stay below the destination directory, so a
+  hostile archive cannot write outside it.
+- `removeTempVideo` only deletes `jukahub-video-*.mp4` files in the player's own
+  temp directory; stopping a video no longer removes user media.
+- Editing a secret in `jukaconfig.json` rebuilds the byte slice with `append`
+  rather than a computed capacity, so the offset math cannot overflow.
+- yt-dlp search commands from the scene config run without a shell, and options
+  that launch other programs (`--exec`, `--downloader`, `--postprocessor-args`,
+  `--update`, ...) are rejected before the process starts.
+
+**Accepted by design**
+
+These sinks take input the user typed or installed on purpose. They are still
+validated (path cleaning, extension allowlists, containment below the relevant
+folder), but running the program is the feature:
+
+- the built-in terminal (`cd`, `cat`, `sh -c`/`cmd /c` for typed commands);
+- plugin scripts, whose entry file must resolve inside the plugin's own folder;
+- the Apps launcher, which starts installed programs from the scanned app
+  folders only (extension allowlist: `.exe`, `.lnk`, `.bat`, `.cmd`, `.url`,
+  `.sh`).
+
+If one of these is ever exposed to content the device owner does not control
+(for example a remotely supplied config), remove that feature from the input
+path instead of weakening the guard.
+
 ## Security Limitations
 
 1. **Config file encryption is obfuscation, not strong security**

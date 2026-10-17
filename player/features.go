@@ -20,6 +20,11 @@ func openFileInCanvasSandbox(path string) {
 		showToast("Only .html and .js files can open in Canvas Sandbox", ToastError())
 		return
 	}
+	path, pathErr := resolveExplorerEntry(appConfig, path)
+	if pathErr != nil {
+		showToast("Cannot open file: "+pathErr.Error(), ToastError())
+		return
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		showToast("Failed to read file: "+err.Error(), ToastError())
@@ -96,12 +101,33 @@ func feRoot(config *Config) string {
 	return root
 }
 
-// feCurrentPath returns the directory currently being browsed.
-func feCurrentPath(config *Config) string {
-	if p, ok := config.Variables.Custom["fe_path"].(string); ok && p != "" {
-		return p
+// resolveExplorerEntry validates a FileEntry path selected from a scene list:
+// it must be an existing regular file below the File Explorer root. Callers
+// use the returned (absolute) path for the actual open so a tampered list
+// value cannot reach outside the browsable tree.
+func resolveExplorerEntry(config *Config, path string) (string, error) {
+	root := "."
+	if config != nil {
+		root = feRoot(config)
 	}
-	return feRoot(config)
+	return regularFileWithin(root, path)
+}
+
+// feCurrentPath returns the directory currently being browsed. The stored
+// fe_path is validated against the File Explorer root on every read, so a
+// tampered or stale value falls back to the root instead of listing an
+// arbitrary directory.
+func feCurrentPath(config *Config) string {
+	root := feRoot(config)
+	if config == nil {
+		return root
+	}
+	if p, ok := config.Variables.Custom["fe_path"].(string); ok && strings.TrimSpace(p) != "" {
+		if dir, err := existingDirWithin(root, p); err == nil {
+			return dir
+		}
+	}
+	return root
 }
 
 // feListDirectory reads the current path and stores its entries in fe_entries.
@@ -184,7 +210,13 @@ func feEnterFocused(config *Config) {
 		return
 	}
 	if entry.IsDir {
-		config.Variables.Custom["fe_path"] = entry.Path
+		// Only a directory that really lives below the explorer root is entered.
+		dir, err := existingDirWithin(feRoot(config), entry.Path)
+		if err != nil {
+			showToast("Cannot open folder: "+err.Error(), ToastError())
+			return
+		}
+		config.Variables.Custom["fe_path"] = dir
 		focusedFileIndex = 0
 		feListDirectory(config)
 		return
@@ -200,7 +232,12 @@ func feEnterFocused(config *Config) {
 	}
 	ext := strings.ToLower(filepath.Ext(entry.Path))
 	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
-		imageViewerPath = entry.Path
+		imagePath, err := resolveExplorerEntry(config, entry.Path)
+		if err != nil {
+			showToast("Cannot open image: "+err.Error(), ToastError())
+			return
+		}
+		imageViewerPath = imagePath
 		if imageViewerTexture != nil {
 			imageViewerTexture.Destroy()
 			imageViewerTexture = nil

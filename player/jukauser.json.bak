@@ -1,32 +1,32 @@
 {
   "variables": {
     "buttonColor": {
-      "r": 0,
-      "g": 0,
-      "b": 0
+      "r": 30,
+      "g": 41,
+      "b": 59
     },
     "labelColor": {
-      "r": 0,
-      "g": 0,
-      "b": 0
+      "r": 248,
+      "g": 250,
+      "b": 252
     },
     "inputColor": {
-      "r": 0,
-      "g": 0,
-      "b": 0
+      "r": 15,
+      "g": 20,
+      "b": 32
     },
     "fullscreen": false,
-    "fileExplorerRoot": "",
-    "weatherEnabled": false,
+    "fileExplorerRoot": "/media",
+    "weatherEnabled": true,
     "weatherUnit": "C",
     "tspUsername": "",
-    "playbackResolution": "",
+    "playbackResolution": "720",
     "reducedMotion": false,
     "lowPower": false,
     "gridColumns": 5,
     "searchWidth": 940,
     "dynamicBg": false,
-    "screensaverTimeout": 300,
+    "screensaverTimeout": 0,
     "socialNotifs": false,
     "Custom": {
       "BackgroundImage": "background.jpg",
@@ -45,21 +45,11 @@
       "WeatherUnit": "C",
       "chat_input": "hi",
       "diskpie_data": {
-        "Total": 510718431232,
-        "Used": 332379643904,
-        "Pct": 65
+        "Pct": 0,
+        "Total": 0,
+        "Used": 0
       },
-      "network_status": "online",
-      "recently_played": [
-        "https://www.youtube.com/watch?v=-KPeZqUch08",
-        "https://www.youtube.com/watch?v=WXPfcRnz9Z8"
-      ],
-      "swapABButtons": false,
-      "tool_ffmpeg": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffmpeg.exe",
-      "tool_ffplay": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffplay.exe",
-      "tool_ffprobe": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffprobe.exe",
-      "tool_yt-dlp": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\yt-dlp.exe",
-      "tools_status": "All tools available"
+      "swapABButtons": false
     }
   },
   "favorites": {
@@ -68,55 +58,38 @@
       {
         "Type": "video",
         "Data": {
-          "id": "WXPfcRnz9Z8",
-          "title": "Trending - Dei V (Official Video)",
-          "uploader": "Dei V",
-          "channel": "Dei V",
-          "duration": 159,
-          "thumbnail": "https://i.ytimg.com/vi/WXPfcRnz9Z8/hq720.jpg?sqp=-oaymwE2COgCEMoBSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARgTIEYofzAP\u0026rs=AOn4CLDyEyfWHSB7yro2sAaDqxohvYWuHQ",
-          "description": "Trending - Dei V (Official Video) Directed By: Jonah Diaz Third Eye Productions Suscríbete: ...",
-          "view_count": 27620030,
+          "id": "1YnkZS9e8MA",
+          "title": "Moneybagg Yo - Trending [Federal 3]",
+          "uploader": "DatPiff",
+          "channel": "DatPiff",
+          "duration": 210,
+          "thumbnail": "https://i.ytimg.com/vi/1YnkZS9e8MA/hq720.jpg?sqp=-oaymwE2COgCEMoBSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhlIEsoSzAP\u0026rs=AOn4CLBNJnRfkz4I6F8704V9w-8VAmWH3w",
+          "description": "Listen \u0026 Subscribe to Datpiff's Official Spotify Playlist: https://spoti.fi/2OVygic Download: http://piff.me/2785754 Download: ...",
+          "view_count": 10456710,
           "upload_date": "",
           "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=WXPfcRnz9Z8",
-          "position": 1.7362074
+          "url": "https://www.youtube.com/watch?v=1YnkZS9e8MA",
+          "position": 5.1162136
         },
-        "Timestamp": "2026-10-17T16:53:55.3506763-04:00"
+        "Timestamp": "2026-10-17T18:05:08.9436378-04:00"
       },
       {
         "Type": "video",
         "Data": {
-          "id": "-KPeZqUch08",
-          "title": "Trending",
-          "uploader": "Miguel Cornejo - Topic",
-          "channel": "Miguel Cornejo - Topic",
-          "duration": 142,
-          "thumbnail": "https://i.ytimg.com/vi/-KPeZqUch08/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLCMbzG-Y3BWOTOPRfndgHdeLGDIfA",
-          "description": "Provided to YouTube by KM Records/Sony Music Latin Trending · Miguel Cornejo · El Makako · VAD BOYZ Trending ℗ 2026 KM ...",
-          "view_count": 959476,
+          "id": "Y7kBmcWKLxg",
+          "title": "New Crime Trend You NEED To Know About",
+          "uploader": "TheDC Shorts",
+          "channel": "TheDC Shorts",
+          "duration": 190,
+          "thumbnail": "https://i.ytimg.com/vi/Y7kBmcWKLxg/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLAKuY4np1k2fQX_5ZVbYlW4-b1Okg",
+          "description": "Add this one to the list of scams you need to watch out for! Check out our Twitter: https://goo.gl/fnYe4v And Facebook: ...",
+          "view_count": 1418976,
           "upload_date": "",
           "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=-KPeZqUch08"
+          "url": "https://www.youtube.com/watch?v=Y7kBmcWKLxg",
+          "position": 5.0359343
         },
-        "Timestamp": "2026-10-17T16:53:54.3034843-04:00"
-      },
-      {
-        "Type": "video",
-        "Data": {
-          "id": "ceKMnyMYIMo",
-          "title": "hi.",
-          "uploader": "Colleen Vlogs",
-          "channel": "Colleen Vlogs",
-          "duration": 620,
-          "thumbnail": "https://i.ytimg.com/vi/ceKMnyMYIMo/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLAVp6nUeInS9vYKjG5_LU9zQfN2lw",
-          "description": "I do not condone or support any kind of online bullying or hate towards anyone. ever.",
-          "view_count": 20874080,
-          "upload_date": "",
-          "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=ceKMnyMYIMo",
-          "position": 5.0488669
-        },
-        "Timestamp": "2026-10-17T16:47:18.0759825-04:00"
+        "Timestamp": "2026-10-17T18:00:05.1383365-04:00"
       }
     ],
     "files": [],
@@ -124,12 +97,6 @@
   },
   "chat": {
     "messages": [
-      {
-        "id": "1557617598286528545",
-        "sender": "jukalang",
-        "text": "Fixing patch engine n JukaHub...Also, been experimenting with Android loaders",
-        "timestamp": "2026-10-08T04:56:14.567Z"
-      },
       {
         "id": "1557913747748561056",
         "sender": "jukalang",
@@ -187,6 +154,12 @@
         "text": "",
         "timestamp": "2026-10-17T20:24:14.39Z",
         "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561112626833133598/image.png?ex=6ad52aee\u0026is=6ad3d96e\u0026hm=2e3344c195c82b14c49670c556b99e7c59fd4e18be4d0785173c5fe876372c88\u0026"
+      },
+      {
+        "id": "1561114969196732537",
+        "sender": "jukalang",
+        "text": "Will be releasing a new version in a few. just doing final tests and testing on TSP",
+        "timestamp": "2026-10-17T20:33:32.77Z"
       }
     ]
   }

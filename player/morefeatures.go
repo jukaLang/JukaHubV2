@@ -43,13 +43,6 @@ func httpGetText(url string, timeout time.Duration) string {
 	return string(data)
 }
 
-func quoteArg(s string) string {
-	if runtime.GOOS == "windows" {
-		return "\"" + strings.ReplaceAll(s, "\"", "\\\"") + "\""
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
-
 // hasMediaExtension reports whether a URL/path points at a directly playable
 // media file (ignoring any query string).
 func hasMediaExtension(s string) bool {
@@ -125,35 +118,62 @@ func playSmartURL(config *Config, url string) {
 		// (CodeQL #40: command built from user-controlled sources). We only
 		// allow http/https URLs here; local paths are handled by playStream.
 		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-			log.Printf("[SECURITY] playSmartURL: rejecting non-http URL %q", url)
+			// Never log the raw URL: it can carry tokens in its query string.
+			log.Printf("[SECURITY] playSmartURL: rejecting non-http URL %q", sanitizeLogURL(url))
 			return
 		}
 		if strings.ContainsAny(url, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\n\r") {
-			log.Printf("[SECURITY] playSmartURL: rejecting URL with control characters %q", url)
+			log.Printf("[SECURITY] playSmartURL: rejecting URL with control characters %q", sanitizeLogURL(url))
 			return
 		}
 		if len(url) > 2048 {
 			log.Printf("[SECURITY] playSmartURL: rejecting overlong URL (%d bytes)", len(url))
 			return
 		}
-		extraArgs := ytDlpExtraArgs(config)
 		// Validate the extra args the same way executeYouTubeSearch does, so a
-		// malicious cookies_file / api_key value cannot reach the shell.
+		// malicious cookies_file / api_key value cannot alter the invocation.
 		extraArgList := ytDlpExtraArgsSlice(config)
 		if err := validateYtDlpArgs(extraArgList); err != nil {
 			log.Printf("[SECURITY] playSmartURL: rejecting unsafe extra args: %v", err)
 			return
 		}
-		cmdStr := fmt.Sprintf("%s -f best -o - %s %s | %s -", quotePath(ytp), quoteArg(url), extraArgs, quotePath(ff))
-		var cmd *exec.Cmd
-		if runtime.GOOS == "windows" {
-			cmd = exec.Command("cmd", "/c", cmdStr)
+		// Two processes joined by an OS pipe instead of `sh -c "... | ..."`.
+		// No shell parses the URL or any argument, so quoting can never turn
+		// into command injection (CodeQL #40).
+		ytArgs := []string{"-f", "best", "-o", "-"}
+		ytArgs = append(ytArgs, extraArgList...)
+		ytArgs = append(ytArgs, url)
+		ytCmd := exec.Command(ytp, ytArgs...)
+
+		ffArgs := []string{"-i", "pipe:0", "-autoexit"}
+		if IsWindows() {
+			ffArgs = append([]string{"-noborder", "-x", "1280", "-y", "720"}, ffArgs...)
 		} else {
-			cmd = exec.Command("sh", "-c", cmdStr)
+			ffArgs = append([]string{"-fs"}, ffArgs...)
 		}
-		if err := cmd.Run(); err != nil {
-			log.Printf("playSmartURL error: %v", err)
+		ffCmd := exec.Command(ff, ffArgs...)
+		ffCmd.Env = ffplayEnv(ff)
+
+		pipe, err := ytCmd.StdoutPipe()
+		if err != nil {
+			log.Printf("playSmartURL: stdout pipe: %v", err)
+			return
 		}
+		ffCmd.Stdin = pipe
+		ytCmd.Stderr = os.Stderr
+		ffCmd.Stderr = os.Stderr
+		if err := ffCmd.Start(); err != nil {
+			log.Printf("playSmartURL: ffplay start: %v", err)
+			return
+		}
+		if err := ytCmd.Start(); err != nil {
+			log.Printf("playSmartURL: yt-dlp start: %v", err)
+			_ = ffCmd.Process.Kill()
+			_ = ffCmd.Wait()
+			return
+		}
+		_ = ytCmd.Wait()
+		_ = ffCmd.Wait()
 	}()
 }
 
@@ -565,6 +585,12 @@ func loadCron(config *Config) {
 // ---------------------------------------------------------------------------
 
 func unzipFile(src string) error {
+	// Only archives selected inside the browsable File Explorer tree are opened.
+	resolved, err := resolveExplorerEntry(appConfig, src)
+	if err != nil {
+		return err
+	}
+	src = resolved
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
