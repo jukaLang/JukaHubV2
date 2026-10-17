@@ -642,6 +642,9 @@ func finalizeConfig(config *Config) {
 			}
 		}
 	}
+	// Make the network/FTP tools reachable from the classic Tools (Misc)
+	// screen without editing configs on disk.
+	ensureToolsMenuEntry(config)
 }
 
 func customString(m map[string]interface{}, name string) (string, bool) {
@@ -5171,6 +5174,19 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			cacheClear(db)
 			db.Close()
 			showToast("Cache cleared", ToastInfo())
+		}
+	case "tools_open":
+		openToolsPanel()
+	case "ftp_toggle":
+		toggleFTPServer()
+	case "ftp_start":
+		if !ftpSrv.Running() {
+			toggleFTPServer()
+		}
+	case "ftp_stop":
+		if ftpSrv.Running() {
+			ftpSrv.Stop()
+			showToast("FTP server stopped", ToastInfo())
 		}
 	default:
 		if strings.HasPrefix(element.Trigger, "http://") || strings.HasPrefix(element.Trigger, "https://") {

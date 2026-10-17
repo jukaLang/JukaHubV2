@@ -62,9 +62,25 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 * **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather).
 * **Settings** — playback resolution, themes, weather and more.
 * **Logs** — view or export the app log if something misbehaves.
+* **Tools** — this device's IP address and a built-in FTP server for copying
+  files over Wi-Fi (also under **MISC → FTP & IP**).
 
 Turn Wi-Fi on before using YouTube or weather. Your settings are stored in
 `Apps/JukaHub/jukauser.json` and survive updates.
+
+## Copy files from your PC
+
+1. Connect the handheld to the same Wi-Fi as your PC.
+2. Open **Tools** and note the **IP address** (press A to copy it).
+3. Start the **FTP server**. The panel shows the address to type, such as
+   `ftp://192.168.1.42:2121`.
+4. On your PC, paste that address into Explorer/Finder (or any FTP client) and
+   drop files into the SD card (on Windows the share is a `shared` folder next
+   to the app, so your settings and saved logins are never exposed).
+
+The server stays on until you stop it or close JukaHub. Turn it on only on a
+network you trust: while it runs, anyone on the same Wi-Fi can read and write
+the shared folder. Login accepts any username and password by design.
 
 ## Controls
 

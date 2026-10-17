@@ -125,7 +125,7 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 32, Y: 454, W: 292, H: 158})
 	card(HomeFocusChat, "Chat", "Messages and sharing", "chat", HomeActionChat,
 		sdl.Rect{X: 340, Y: 454, W: 292, H: 158})
-	card(HomeFocusTools, "Tools", "System utilities", "tools", HomeActionTools,
+	card(HomeFocusTools, "Tools", "Network and utilities", "tools", HomeActionTools,
 		sdl.Rect{X: 648, Y: 454, W: 292, H: 158})
 	card(HomeFocusSettings, "Settings", "Personalize JukaHub", "settings", HomeActionSettings,
 		sdl.Rect{X: 956, Y: 454, W: 292, H: 158})

@@ -175,10 +175,17 @@ func homeActivate(config *Config) {
 	if target == "" {
 		return
 	}
-	idx := findSceneIndex(config, target)
+	// findSceneIndex falls back to 0 when the scene is missing, so check the
+	// exact name here: a build without the classic "Misc" scene (the handheld
+	// config) must still open Tools instead of quietly returning to Home.
+	idx := sceneIndexExact(config, target)
 	log.Printf("[home] %s -> scene %q (index %d)", id, target, idx)
 	if idx >= 0 {
 		changeSceneTo(config, idx)
+		return
+	}
+	if id == HomeFocusTools {
+		openToolsPanel()
 	}
 }
 

@@ -29,6 +29,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 
 	// ── Overlay priority (highest to lowest) ──
+	// Tools is modal: nothing underneath may react while it is open.
+	if toolsPanel.open {
+		return ctrlToolsPanel(e, config)
+	}
 	if shortcutsOpen {
 		return ctrlShortcuts(e)
 	}

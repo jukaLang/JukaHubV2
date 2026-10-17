@@ -103,6 +103,12 @@ func (m *netMonitor) update() {
 
 	// Publish for UI elements (textlog/textbrowser display this variable).
 	publishCustom("network_status", NetworkStatus())
+	// Refresh the LAN address so the Tools panel and config text elements
+	// follow DHCP/WiFi changes without a restart.
+	publishCustom("local_ip", localIPv4())
+	if ftpSrv.Running() {
+		publishCustom("ftp_address", ftpSrv.Address())
+	}
 
 	switch {
 	case changed && online:

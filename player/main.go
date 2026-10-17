@@ -129,6 +129,11 @@ func main() {
 	// above; running it twice would double the startup probes).
 	startNetworkMonitor()
 
+	// Tools panel / FTP: publish the initial IP and server state, and make sure
+	// the listener never outlives the app.
+	initToolsModule()
+	defer ftpSrv.Stop()
+
 	// Start screensaver idle monitor.
 	// Set screensaver timeout from config
 	if config.Variables.ScreensaverTimeout > 0 {
@@ -309,6 +314,10 @@ func main() {
 					}
 					if globalSearchOpen {
 						handleGSInput(e, config)
+						continue
+					}
+					// Tools is modal and consumes all keys while open.
+					if toolsPanel.open && handleToolsKey(e, config) {
 						continue
 					}
 					// Quick Settings takes priority when open.
@@ -750,6 +759,13 @@ func main() {
 							toastRect = sdl.Rect{}
 							break
 						}
+						// Tools panel is modal: a click selects a row, a click outside
+						// closes it, and nothing reaches the scene underneath.
+						if toolsPanel.open {
+							handleToolsMouse(mx, my, config)
+							break
+						}
+
 						// The terminal owns every click on its screen: its Back and
 						// Keyboard controls are drawn by the terminal renderer, not by
 						// config elements.
@@ -1543,6 +1559,11 @@ func main() {
 		// Quick Settings overlay.
 		if qs.open {
 			renderQuickSettings(renderer, config)
+		}
+
+		// Tools overlay (IP address + FTP server).
+		if toolsPanel.open {
+			renderToolsPanel(renderer, config)
 		}
 
 		// Wallpaper picker overlay.
