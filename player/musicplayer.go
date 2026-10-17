@@ -141,7 +141,7 @@ func musicPlayFile(path string) {
 	playerPath, err := helperToolPath("ffplay", cfg)
 	if err != nil {
 		log.Printf("[ERROR] musicPlayFile: ffplay unavailable: %v", err)
-		showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
+		showToast(toolUnavailableMessage("ffplay", err), ToastError())
 		return
 	}
 

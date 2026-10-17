@@ -70,7 +70,7 @@ func playStream(config *Config, url string) {
 		ff, err := helperToolPath("ffplay", config)
 		if err != nil {
 			log.Printf("[ERROR] playStream: ffplay unavailable: %v", err)
-			showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
+			showToast(toolUnavailableMessage("ffplay", err), ToastError())
 			return
 		}
 		var cmd *exec.Cmd
@@ -105,13 +105,13 @@ func playSmartURL(config *Config, url string) {
 		ytp, err := helperToolPath("yt-dlp", config)
 		if err != nil {
 			log.Printf("[ERROR] playSmartURL: yt-dlp unavailable: %v", err)
-			showToast("yt-dlp not found and auto-install failed. Try again later.", ToastError())
+			showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
 			return
 		}
 		ff, err := helperToolPath("ffplay", config)
 		if err != nil {
 			log.Printf("[ERROR] playSmartURL: ffplay unavailable: %v", err)
-			showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
+			showToast(toolUnavailableMessage("ffplay", err), ToastError())
 			return
 		}
 		// Sanity-check the URL before interpolating it into a shell command
@@ -144,6 +144,7 @@ func playSmartURL(config *Config, url string) {
 		ytArgs = append(ytArgs, extraArgList...)
 		ytArgs = append(ytArgs, url)
 		ytCmd := exec.Command(ytp, ytArgs...)
+		ytCmd.Env = helperToolEnv(ytp)
 
 		ffArgs := []string{"-i", "pipe:0", "-autoexit"}
 		if IsWindows() {

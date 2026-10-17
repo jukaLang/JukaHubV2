@@ -72,7 +72,7 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		y := cardY + 20
 		lineH := int32(24)
 
-		build := installedBuildDate()
+		build := installedBuildTimeLabel()
 		if build == "" {
 			build = "unknown (source build)"
 		}
@@ -82,7 +82,7 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		}
 		lines := []string{
 			fmt.Sprintf("Version:    %s", versionString(config)),
-			fmt.Sprintf("Build date: %s", build),
+			fmt.Sprintf("Compiled:   %s", build),
 			fmt.Sprintf("Release:    %s", release),
 			fmt.Sprintf("Platform:   %s", P().Name()),
 			fmt.Sprintf("OS:         %s/%s", runtime.GOOS, runtime.GOARCH),

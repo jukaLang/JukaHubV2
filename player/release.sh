@@ -30,13 +30,19 @@ if [ -z "$VERSION" ]; then
 fi
 echo "Packaging JukaHub v${VERSION}"
 
+# Stamp the compile time into every binary so an installation can compare its
+# own build against a release published later the same day.
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+BUILD_DATE="${BUILD_TIME:0:10}"
+LDFLAGS="-s -w -X main.buildDate=${BUILD_DATE} -X main.buildTime=${BUILD_TIME}"
+
 OUT="dist"
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
 # --- Windows x64 ---
 echo "Building Windows x64..."
-GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -trimpath -o "$OUT/JukaHub.exe" .
+GOOS=windows GOARCH=amd64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/JukaHub.exe" .
 (cd "$OUT" && zip -q -r "JukaHub-win-x64.zip" JukaHub.exe)
 WINDOWS_SHA="$(sha256sum "$OUT/JukaHub-win-x64.zip" | cut -d' ' -f1)"
 WINDOWS_SIZE="$(stat -c %s "$OUT/JukaHub-win-x64.zip")"
@@ -49,7 +55,7 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     echo "Building TrimUI target ${device} (Linux arm64, CGO + SDL2)..."
     TARGET_DIR="$OUT/$device"
     mkdir -p "$TARGET_DIR"
-    GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -trimpath -o "$TARGET_DIR/JukaHub" .
+    GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$TARGET_DIR/JukaHub" .
     cp Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png "$TARGET_DIR/"
 
     ASSET="JukaHub-${device}-linux-arm64.tar.gz"

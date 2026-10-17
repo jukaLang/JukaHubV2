@@ -72,6 +72,91 @@ func TestInstalledBuildDateAndNewerRelease(t *testing.T) {
 	}
 }
 
+// A compile stamp with a time is compared at full precision, so a release
+// published later on the same day is still offered.
+func TestBuildTimeStampedUpdateDecision(t *testing.T) {
+	oldTime, oldDate := buildTime, buildDate
+	buildTime, buildDate = "2026-10-17T09:00:00Z", "2026-10-17"
+	defer func() { buildTime, buildDate = oldTime, oldDate }()
+
+	after := &githubRelease{TagName: "JukaHub-20261017120000", PublishedAt: "2026-10-17T12:00:00Z"}
+	if !releaseIsNewerThanInstalled(after) {
+		t.Fatal("a release published after the compile time must be newer")
+	}
+	if got := installedBuildTimeLabel(); got != "2026-10-17 09:00 UTC" {
+		t.Fatalf("installedBuildTimeLabel = %q, want the compile time", got)
+	}
+
+	buildTime = "2026-10-17T23:00:00Z"
+	if releaseIsNewerThanInstalled(after) {
+		t.Fatal("a release published before the compile time must not be newer")
+	}
+}
+
+// The automatic check only advertises a release: it must not download, stage
+// or replace anything before the user confirms in the Patch scene.
+func TestAvailableUpdateIsAdvertisedWithoutStaging(t *testing.T) {
+	patchStateMu.Lock()
+	prev := *patchState
+	patchStateMu.Unlock()
+	t.Cleanup(func() {
+		patchStateMu.Lock()
+		*patchState = prev
+		patchStateMu.Unlock()
+	})
+
+	rel := &githubRelease{TagName: "JukaHub-20261018120000", PublishedAt: "2026-10-18T12:00:00Z"}
+	markUpdateAvailable(rel)
+
+	if got := availableUpdateTag(); got != rel.TagName {
+		t.Fatalf("availableUpdateTag = %q, want %q", got, rel.TagName)
+	}
+	if got := availableUpdateLabel(); got != "2026-10-18" {
+		t.Fatalf("availableUpdateLabel = %q", got)
+	}
+	patchStateMu.Lock()
+	staged := patchState.LastUpdateVer
+	patchStateMu.Unlock()
+	if staged != "" {
+		t.Fatalf("an available release was staged without confirmation (%q)", staged)
+	}
+
+	found := false
+	for _, a := range patchActions() {
+		if a.ID == "install" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Patch does not offer an install action for the advertised release")
+	}
+
+	clearAvailableUpdate()
+	if availableUpdateTag() != "" {
+		t.Fatal("clearAvailableUpdate left the tag behind")
+	}
+	for _, a := range patchActions() {
+		if a.ID == "install" {
+			t.Fatal("install action still offered after the release was cleared")
+		}
+	}
+}
+
+// The build scripts must stamp the compile time, otherwise a local or release
+// build falls back to a date-only stamp and hides same-day releases.
+func TestBuildScriptsStampCompileTime(t *testing.T) {
+	for _, name := range []string{"build.bat", "release.sh"} {
+		data, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		body := string(data)
+		if !strings.Contains(body, "main.buildTime") {
+			t.Errorf("%s does not stamp main.buildTime", name)
+		}
+	}
+}
+
 func TestFormatBuildLabel(t *testing.T) {
 	if got := formatBuildLabel("v0.4.0", "2026-10-17"); got != "v0.4.0 · 2026-10-17" {
 		t.Fatalf("formatBuildLabel = %q", got)

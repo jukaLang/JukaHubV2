@@ -71,6 +71,8 @@ func patchActions() []patchAction {
 	}
 	if patchState.LastUpdateVer != "" {
 		actions = append(actions, patchAction{ID: "apply", Label: "Apply staged update", Sub: patchState.LastUpdateVer + " is staged and verified"})
+	} else if patchState.AvailableUpdateTag != "" {
+		actions = append(actions, patchAction{ID: "install", Label: "Install JukaHub update", Sub: availableUpdateLabel() + " · download & restart after you confirm"})
 	}
 	if patchSnap != nil && len(patchSnap.Backups) > 0 {
 		actions = append(actions, patchAction{ID: "restore", Label: "Restore latest backup", Sub: "Reverts the most recent backup set"})
@@ -647,6 +649,19 @@ func handlePatchHoldUpdate() {
 	}
 }
 
+// openInstallUpdateModal asks for confirmation before anything is downloaded.
+// The automatic check only advertises a release; this modal is the point where
+// the user says yes.
+func openInstallUpdateModal() {
+	patchModal = &patchModalState{
+		ID:       "confirm-install-app",
+		Title:    "Install JukaHub " + availableUpdateLabel() + "?",
+		Body:     "Downloads the release, replaces the JukaHub files and restarts the app.\n\nNothing is installed until you confirm. Backup and rollback are automatic.",
+		Confirm:  "Download & Install",
+		HighRisk: true,
+	}
+}
+
 // patchConfirmModal executes the confirmed modal action.
 func patchConfirmModal() {
 	m := patchModal
@@ -695,6 +710,10 @@ func patchConfirmModal() {
 		return
 	}
 	switch m.ID {
+	case "confirm-install-app":
+		RunPatchOp("Installing JukaHub update", func(ctx context.Context) error {
+			return InstallAvailableJukaHubUpdate(ctx, appConfig)
+		})
 	case "confirm-swap":
 		RunPatchOp("Applying staged update", func(ctx context.Context) error {
 			return OpApplyStagedSwap(ctx, appConfig)
@@ -796,6 +815,8 @@ func patchActivate(config *Config) {
 				Confirm:  "Apply & Restart",
 				HighRisk: true,
 			}
+		case "install":
+			openInstallUpdateModal()
 		case "restore":
 			if len(patchSnap.Backups) > 0 {
 				name := patchSnap.Backups[0]
@@ -866,6 +887,10 @@ func patchRowActivate(config *Config, comp PatchComponent) {
 				Confirm:  "Apply & Restart",
 				HighRisk: true,
 			}
+			return
+		}
+		if patchState.AvailableUpdateTag != "" {
+			openInstallUpdateModal()
 			return
 		}
 		RunPatchOp("Checking for updates", func(ctx context.Context) error { return OpCheckUpdates(ctx, config) })

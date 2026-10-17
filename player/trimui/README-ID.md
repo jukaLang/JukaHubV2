@@ -78,7 +78,13 @@ lagi (launcher stock membaca folder `Apps` saat boot).
 | App muncul tapi langsung keluar | Cek `errors.txt` — biasanya `JukaHub` belum executable (`chmod +x`) atau library kurang. |
 | Huruf tidak tampil / kotak-kotak | `Inter-Regular.ttf` hilang dari folder app. |
 | Pencarian YouTube gagal | Cek `required/yt-dlp` ada; butuh Wi-Fi. Lihat juga `logs.txt` (scene **Logs** di Beranda). |
+| Baru buka app, Wi-Fi belum tersambung | Akan muncul pesan **Offline — connect WiFi**. Sambungkan Wi-Fi; tool yang belum ada diunduh otomatis setelah koneksi kembali. |
+| `yt-dlp` / `ffmpeg` gagal diunduh | Kartu unduhan menampilkan `Could not install …` dengan tombol **A: retry**. Tekan **A** untuk mengulang; kalau sudah berhasil, restart JukaHub supaya tool baru dipakai. |
 | Video lambat / tersendat | Turunkan playback resolution di Settings ke `360` atau `240`. |
+
+Semua tool bantu dipasang ke folder `Apps/JukaHub/required/` di kartu SD
+(bukan `/tmp`), dan JukaHub tidak menjalankan `--version` saat memasang tool —
+file yang sudah ada tidak ditimpa dan unduhan yang benar tidak dihapus.
 
 Semua log aplikasi disimpan di:
 

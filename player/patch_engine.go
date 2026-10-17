@@ -488,6 +488,11 @@ type PatchState struct {
 	InstalledReleaseTag   string `json:"installed_release_tag,omitempty"`
 	InstalledReleaseAt    string `json:"installed_release_at,omitempty"`
 	AutoUpdateCheckedAt   string `json:"auto_update_checked_at,omitempty"`
+	// A newer release that was detected but deliberately not downloaded or
+	// staged: installing waits for the user to confirm in the Patch scene.
+	AvailableUpdateTag   string `json:"available_update_tag,omitempty"`
+	AvailableUpdateAt    string `json:"available_update_published_at,omitempty"`
+	AvailableUpdateAsset string `json:"available_update_asset,omitempty"`
 }
 
 var (
@@ -581,13 +586,11 @@ func installedPatchVersions(config *Config) map[PatchComponent]string {
 	return m
 }
 
-// helperToolVersion returns a short version string for a bundled helper tool
-// without executing it: it reads --version output only when the tool is known
-// and present, and failures return "".
-// EnsureHelperTool downloads and installs a helper tool (ffplay, ffmpeg, or yt-dlp) into the
-// application tools directory when it is missing. It is intentionally tolerant of
-// transient network failures so the app can still launch in offline environments and
-// retry later. For ffmpeg it currently only ensures ffplay is available.
+// EnsureHelperTool downloads and installs a helper tool (yt-dlp, ffplay,
+// ffmpeg or ffprobe) into the application tools directory (the "required"
+// folder next to the binary) when it is missing. It is intentionally tolerant
+// of transient network failures so the app can still launch offline; failures
+// are reported with a retry action instead of aborting the app.
 func EnsureHelperTool(tool string, config *Config) error {
 	return ensureHelperTool(tool, config)
 }
@@ -595,6 +598,14 @@ func EnsureHelperTool(tool string, config *Config) error {
 // helperInstallMu serializes installs so the install bar only ever shows one
 // download at a time.
 var helperInstallMu sync.Mutex
+
+// errToolsOffline is returned instead of starting a download when the device
+// has no connectivity. The install card shows the retry hint for it.
+var errToolsOffline = errors.New("offline: connect to WiFi to install helper tools")
+
+// minHelperToolBytes rejects obviously truncated downloads without executing
+// them. Every bundled tool (yt-dlp, ffmpeg, ffplay, ffprobe) is megabytes large.
+const minHelperToolBytes = 256 << 10
 
 func ensureHelperTool(tool string, config *Config) error {
 	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" && tool != "ffprobe" {
@@ -632,14 +643,93 @@ func ensureHelperTool(tool string, config *Config) error {
 	} else if !os.IsNotExist(statErr) {
 		return fmt.Errorf("tools directory check failed for %s: %w", target, statErr)
 	}
+	// Do not start a download that cannot succeed: on the TrimUI the app may be
+	// launched before WiFi is connected. The card keeps the retry action so a
+	// single A press after joining a network installs the tool.
+	if !IsOnline() {
+		logPatch("[TOOLS] %s missing but the device is offline; not downloading", tool)
+		installBarBegin(tool)
+		installBarFailRetry(tool, "No internet — connect WiFi, then press A")
+		return errToolsOffline
+	}
 	logPatch("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
 	installBarBegin(tool)
 	if err := downloadHelperTool(tool, target, config); err != nil {
-		installBarFail(firstLine(err.Error()))
+		logPatch("[TOOLS] %s install failed: %v", tool, err)
+		installBarFailRetry(tool, toolInstallFailureReason(err))
 		return err
 	}
 	installBarDone()
+	logPatch("[TOOLS] %s installed at %s", tool, target)
 	return nil
+}
+
+// toolInstallFailureReason renders an install error as one short, actionable
+// line for the install card and toast.
+func toolInstallFailureReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	if !IsOnline() {
+		return "No internet — connect WiFi, then press A"
+	}
+	return firstLine(err.Error())
+}
+
+// helperToolEnv builds the environment for a helper-tool child process.
+// yt-dlp's standalone build is a PyInstaller one-file program that unpacks
+// itself into TMPDIR before it can run; on the TrimUI /tmp is a small tmpfs, so
+// that unpack failed and looked like a broken download. Point TMPDIR at a
+// writable folder next to the tools (on the SD card) instead.
+func helperToolEnv(toolPath string, extra ...string) []string {
+	env := make([]string, 0, len(os.Environ())+2)
+	for _, kv := range os.Environ() {
+		// Drop any inherited TMPDIR: duplicates would leave the child's
+		// choice of temp directory up to the loader instead of ours.
+		if runtime.GOOS != "windows" && strings.HasPrefix(kv, "TMPDIR=") {
+			continue
+		}
+		env = append(env, kv)
+	}
+	env = append(env, extra...)
+	if runtime.GOOS != "windows" && toolPath != "" {
+		tmp := filepath.Join(filepath.Dir(toolPath), ".tmp")
+		if err := os.MkdirAll(tmp, 0o755); err == nil {
+			env = append(env, "TMPDIR="+tmp)
+		}
+	}
+	return env
+}
+
+// retryHelperToolInstall starts a fresh background install after a failure.
+// It is triggered from the install card (A) so a dropped connection does not
+// force the user to restart the app.
+func retryHelperToolInstall(tool string) {
+	if tool == "" {
+		return
+	}
+	installBarBegin(tool)
+	go func() {
+		if err := EnsureHelperTool(tool, appConfig); err != nil {
+			logPatch("[TOOLS] retry of %s failed: %v", tool, err)
+			ShowToast("Could not install "+tool+" — "+toolInstallFailureReason(err), ToastKindError)
+			refreshToolHealth()
+			return
+		}
+		if _, ok := checkToolPresence(tool); !ok {
+			ShowToast("Could not install "+tool+" — press A to retry", ToastKindError)
+			refreshToolHealth()
+			return
+		}
+		ShowToast(tool+" installed — restart JukaHub to use it", ToastKindSuccess)
+		refreshToolHealth()
+	}()
+}
+
+// helperFileUsable reports whether path already holds a non-empty tool binary.
+func helperFileUsable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
 }
 
 // firstLine shortens an error for the install card.
@@ -742,7 +832,17 @@ func downloadFFmpegBundle(target string, config *Config) error {
 	if runtime.GOOS == "windows" {
 		suffix = ".exe"
 	}
-	wanted := []string{"ffplay" + suffix, "ffmpeg" + suffix, "ffprobe" + suffix}
+	family := []string{"ffplay" + suffix, "ffmpeg" + suffix, "ffprobe" + suffix}
+	// Only install the members that are actually missing. Replacing a tool
+	// that is already present is unnecessary and can clash with a copy that a
+	// running player still uses.
+	var wanted []string
+	for _, name := range family {
+		if helperFileUsable(filepath.Join(dir, name)) {
+			continue
+		}
+		wanted = append(wanted, name)
+	}
 	found, err := extractToolFiles(tmp.Name(), dir, wanted)
 	if err != nil {
 		return fmt.Errorf("extract ffmpeg from %s: %w", url, err)
@@ -767,12 +867,21 @@ func downloadFFmpegBundle(target string, config *Config) error {
 		return fmt.Errorf("ffmpeg bundle does not contain %s (found %v)", need, found)
 	}
 	installBarPhase(installPhaseVerify)
+	var broken []string
 	for _, name := range found {
-		if err := verifyHelperTool(filepath.Join(dir, name)); err != nil {
-			os.Remove(filepath.Join(dir, name))
-			return fmt.Errorf("%s verification failed, removed broken download: %w", name, err)
+		p := filepath.Join(dir, name)
+		if err := verifyHelperTool(p); err != nil {
+			// A file that is the wrong format or truncated is worse than no
+			// file: remove it so the next attempt downloads again.
+			_ = os.Remove(p)
+			broken = append(broken, name)
+			logPatch("[TOOLS] %s failed validation and was removed: %v", name, err)
+			continue
 		}
-		logPatch("[TOOLS] %s installed and verified", name)
+		logPatch("[TOOLS] %s installed in %s (%d bytes)", name, dir, fileSize(p))
+	}
+	if len(broken) > 0 {
+		return fmt.Errorf("could not install %s (check free space in %s, then retry)", strings.Join(broken, ", "), dir)
 	}
 	return nil
 }
@@ -818,27 +927,59 @@ func versionProbeArgs(base string) []string {
 	return []string{"--version"}
 }
 
-// verifyHelperTool runs the freshly installed binary with its version flag to
-// make sure it actually executes on this machine before it is trusted. A
-// download that does not run (wrong architecture, truncated file, missing
-// glibc) is reported so the broken file can be removed and retried later.
+// verifyHelperTool validates a freshly installed binary without executing it.
+//
+// Running the tool here was the failure mode on the TrimUI: yt-dlp's
+// standalone build unpacks itself into TMPDIR, so a perfectly good download
+// failed its --version probe (small or read-only /tmp) and was deleted, only to
+// be downloaded again on the next launch. Presence, a plausible size and a
+// valid executable header are enough to accept an install; if the binary
+// cannot run for some other reason, the error surfaces when the tool is used
+// and the file stays on disk instead of silently disappearing.
 func verifyHelperTool(target string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	args := versionProbeArgs(target)
-	out, err := exec.CommandContext(ctx, target, args...).CombinedOutput()
+	info, err := os.Stat(target)
 	if err != nil {
-		return fmt.Errorf("%s %s failed: %v (output: %s)", filepath.Base(target), strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return err
 	}
-	if strings.TrimSpace(string(out)) == "" {
-		return fmt.Errorf("%s %s produced no output", filepath.Base(target), strings.Join(args, " "))
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", filepath.Base(target))
+	}
+	if info.Size() < minHelperToolBytes {
+		return fmt.Errorf("%s looks truncated (%d bytes)", filepath.Base(target), info.Size())
+	}
+	f, err := os.Open(target)
+	if err != nil {
+		return err
+	}
+	header := make([]byte, 8)
+	n, readErr := io.ReadFull(f, header)
+	f.Close()
+	if readErr != nil && readErr != io.ErrUnexpectedEOF {
+		return readErr
+	}
+	if !executableHeaderOK(header[:n]) {
+		return fmt.Errorf("%s is not a valid executable for this platform", filepath.Base(target))
 	}
 	return nil
 }
 
+// executableHeaderOK checks the magic bytes of a downloaded binary. It only
+// validates the platform formats JukaHub ships for (ELF on Linux, PE on
+// Windows); other platforms accept any non-empty file.
+func executableHeaderOK(header []byte) bool {
+	switch runtime.GOOS {
+	case "windows":
+		return len(header) >= 2 && header[0] == 'M' && header[1] == 'Z'
+	case "linux":
+		return len(header) >= 4 && header[0] == 0x7f && header[1] == 'E' && header[2] == 'L' && header[3] == 'F'
+	default:
+		return true
+	}
+}
+
 // downloadYtDlp downloads the platform-appropriate standalone yt-dlp build,
 // installs it under the canonical tool name, makes it executable on Unix, and
-// verifies it runs ("--version") before reporting success.
+// validates the file (size and ELF/PE header) before reporting success.
 //
 // The download is staged *inside the tools directory*, not the system temp
 // directory: on TrimUI, /tmp is a different filesystem from the SD card, so
@@ -888,10 +1029,10 @@ func downloadYtDlp(target string, config *Config) error {
 	}
 	installBarPhase(installPhaseVerify)
 	if err := verifyHelperTool(target); err != nil {
-		os.Remove(target)
-		return fmt.Errorf("yt-dlp verification failed, removed broken download: %w", err)
+		_ = os.Remove(target)
+		return fmt.Errorf("yt-dlp download is unusable and was removed: %w", err)
 	}
-	logPatch("[TOOLS] yt-dlp installed and verified at %s (asset %s)", target, asset)
+	logPatch("[TOOLS] yt-dlp installed at %s (asset %s, %d bytes)", target, asset, fileSize(target))
 	return nil
 }
 
@@ -952,7 +1093,9 @@ func helperToolVersion(tool string) string {
 func toolVersionFromPath(path string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "--version")
+	// The ffmpeg family only understands "-version"; yt-dlp takes "--version".
+	cmd := exec.CommandContext(ctx, path, versionProbeArgs(path)...)
+	cmd.Env = helperToolEnv(path)
 	out, err := cmd.Output()
 	if err != nil {
 		return ""
@@ -1920,15 +2063,30 @@ func BuildPatchSnapshot(config *Config) *PatchSnapshot {
 
 	rows := make([]PatchRow, 0, 5)
 
-	// JukaHub app
+	// JukaHub app. A staged update or an advertised-but-unconfirmed release
+	// is reflected in the row so the scene offers the right action.
+	patchStateMu.Lock()
+	stagedTag := patchState.LastUpdateVer
+	availableTag := patchState.AvailableUpdateTag
+	patchStateMu.Unlock()
+	appStatus := StatusCurrent
+	appAction := "Check for updates"
+	switch {
+	case stagedTag != "":
+		appStatus = StatusStaged
+		appAction = "Apply staged update"
+	case availableTag != "":
+		appStatus = StatusAvailable
+		appAction = "Install update"
+	}
 	rows = append(rows, PatchRow{
 		Component:   ComponentApp,
 		Installed:   s.Installed[ComponentApp],
 		Source:      "JukaHub",
-		Status:      StatusCurrent,
+		Status:      appStatus,
 		Risk:        ComponentRisk(ComponentApp),
 		Enabled:     true,
-		ActionLabel: "Check for updates",
+		ActionLabel: appAction,
 	})
 
 	// Config & assets

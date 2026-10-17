@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
@@ -481,19 +480,14 @@ func handlePDFInput(e *sdl.KeyboardEvent, config *Config) {
 	}
 }
 
-// pdfOpenFile opens a PDF file from the file explorer. The path comes from a
-// scene list, so it is resolved against the explorer root before reading.
+// pdfOpenFile opens a PDF file from the file explorer. pdfExtractText resolves
+// the path against the explorer root before reading it.
 func pdfOpenFile(path string) {
 	if !strings.HasSuffix(strings.ToLower(path), ".pdf") {
 		return
 	}
-	resolved, err := resolveExplorerEntry(appConfig, path)
-	if err != nil {
-		log.Printf("[SECURITY] pdfOpenFile: refusing %q: %v", path, err)
-		return
-	}
 	pdfInit()
-	pdf.doc = pdfExtractText(resolved)
+	pdf.doc = pdfExtractText(path)
 	pdf.page = 1
 	pdf.scrollY = 0
 }

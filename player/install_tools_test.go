@@ -308,6 +308,7 @@ func resetInstallBar() {
 	installBar.message = ""
 	installBar.endedAt = time.Time{}
 	installBar.animAt = time.Time{}
+	installBar.retryable = false
 	installBar.mu.Unlock()
 }
 
@@ -361,6 +362,133 @@ func TestInstallBarFailureCarriesReason(t *testing.T) {
 	visible, _, phase, detail, _, _, _, _, _ := installBarSnapshot()
 	if !visible || phase != installPhaseError || detail != "download timed out" {
 		t.Fatalf("failure state = visible:%v phase:%q detail:%q", visible, phase, detail)
+	}
+	if _, ok := installBarRetryPending(); ok {
+		t.Error("a plain failure must not advertise an A: retry action")
+	}
+}
+
+func TestInstallBarFailureOffersRetry(t *testing.T) {
+	t.Cleanup(resetInstallBar)
+
+	installBarBegin("ffmpeg")
+	installBarPhase(installPhaseDownload)
+	installBarFailRetry("ffmpeg", "No internet — connect WiFi, then press A")
+
+	tool, ok := installBarRetryPending()
+	if !ok || tool != "ffmpeg" {
+		t.Fatalf("retry pending = (%q, %v), want (ffmpeg, true)", tool, ok)
+	}
+	visible, _, phase, detail, _, _, _, _, _ := installBarSnapshot()
+	if !visible || phase != installPhaseError || !strings.Contains(detail, "WiFi") {
+		t.Fatalf("retry state = visible:%v phase:%q detail:%q", visible, phase, detail)
+	}
+
+	// Starting the retry clears the card's failed state.
+	installBarBegin("ffmpeg")
+	if _, ok := installBarRetryPending(); ok {
+		t.Error("retry must stop being offered once a new install starts")
+	}
+}
+
+func TestInstallCardDetailTruncatesLongErrors(t *testing.T) {
+	if got := installCardDetail("download timed out"); got != "download timed out" {
+		t.Errorf("short detail = %q, want it unchanged", got)
+	}
+	got := installCardDetail(strings.Repeat("x", 200))
+	if runes := []rune(got); len(runes) != 64 || runes[len(runes)-1] != '…' {
+		t.Errorf("long detail = %q (%d runes), want 64 runes ending in an ellipsis", got, len([]rune(got)))
+	}
+}
+
+func TestVerifyHelperToolChecksFileWithoutExecuting(t *testing.T) {
+	dir := t.TempDir()
+	valid := make([]byte, minHelperToolBytes+64)
+	switch runtime.GOOS {
+	case "windows":
+		copy(valid, []byte("MZ"))
+	case "linux":
+		copy(valid, []byte{0x7f, 'E', 'L', 'F'})
+	}
+	good := filepath.Join(dir, "ffplay")
+	if err := os.WriteFile(good, valid, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHelperTool(good); err != nil {
+		t.Errorf("valid binary rejected: %v", err)
+	}
+
+	truncated := filepath.Join(dir, "truncated")
+	if err := os.WriteFile(truncated, valid[:4096], 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyHelperTool(truncated); err == nil {
+		t.Error("a 4 KB download must be rejected as truncated")
+	}
+
+	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+		junk := filepath.Join(dir, "junk")
+		if err := os.WriteFile(junk, make([]byte, minHelperToolBytes+64), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyHelperTool(junk); err == nil {
+			t.Error("a file without an executable header must be rejected")
+		}
+	}
+}
+
+func TestExtractToolFilesKeepsExistingBinary(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "ffmpeg.zip")
+	out := t.TempDir()
+
+	zw := zip.NewWriter(mustCreate(t, archive))
+	for name, body := range map[string]string{
+		"ffmpeg-master/bin/ffplay.exe": "new-ffplay",
+		"ffmpeg-master/bin/ffmpeg.exe": "new-ffmpeg",
+	} {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// A copy that is already installed (possibly the executable of a running
+	// player) must be left untouched: rewriting it would fail with ETXTBSY.
+	existing := filepath.Join(out, "ffplay.exe")
+	if err := os.WriteFile(existing, []byte("running-copy"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	found, err := extractToolFiles(archive, out, []string{"ffplay.exe", "ffmpeg.exe"})
+	if err != nil {
+		t.Fatalf("extractToolFiles: %v", err)
+	}
+	if len(found) != 2 {
+		t.Errorf("found = %v, want both binaries", found)
+	}
+	if data, err := os.ReadFile(existing); err != nil || string(data) != "running-copy" {
+		t.Errorf("existing ffplay.exe was modified: %q (err %v)", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(out, "ffmpeg.exe")); err != nil || string(data) != "new-ffmpeg" {
+		t.Errorf("ffmpeg.exe = %q (err %v), want new-ffmpeg", data, err)
+	}
+
+	// The staging directory must not be left behind in the tools folder.
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			t.Errorf("staging directory %q left behind in the tools folder", e.Name())
+		}
 	}
 }
 

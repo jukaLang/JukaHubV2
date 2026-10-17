@@ -50,6 +50,17 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if imageViewerPath != "" {
 		return ctrlImageViewer(e)
 	}
+
+	// A failed helper-tool install keeps its card on screen with an
+	// "A: retry" hint; A starts the download again instead of activating the
+	// scene underneath (the usual failure is launching before WiFi is joined).
+	if e.Button == sdl.CONTROLLER_BUTTON_A {
+		if tool, ok := installBarRetryPending(); ok {
+			PlayActivateSound()
+			retryHelperToolInstall(tool)
+			return true
+		}
+	}
 	return false
 }
 

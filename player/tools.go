@@ -187,12 +187,28 @@ func (c *ioWriteCloserNW) Close() error {
 // (BtbN ffmpeg zips ship bin/ffplay.exe inside a versioned folder). Only the
 // requested base names are written, so archive traversal is impossible by
 // construction. Returns the base names actually extracted.
+//
+// Everything is unpacked into a staging directory *inside destDir*, never the
+// system temp dir: on TrimUI /tmp is a small tmpfs while an ffmpeg archive
+// expands to several hundred megabytes. Keeping the stage on the same
+// filesystem also lets each finished binary be renamed into place instead of
+// being written over, which avoids ETXTBSY when a copy is already running.
 func extractToolFiles(archivePath, destDir string, names []string) ([]string, error) {
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create tools directory %s: %w", destDir, err)
+	}
 	want := make(map[string]bool, len(names))
 	for _, n := range names {
 		want[strings.ToLower(n)] = true
 	}
-	found := make([]string, 0, len(names))
+	stage, err := os.MkdirTemp(destDir, ".tool-stage-*")
+	if err != nil {
+		return nil, fmt.Errorf("create staging dir in %s: %w", destDir, err)
+	}
+	defer os.RemoveAll(stage)
+
+	// Base name -> path inside the staging dir.
+	staged := make(map[string]string, len(names))
 	if strings.HasSuffix(strings.ToLower(archivePath), ".zip") {
 		zr, err := zip.OpenReader(archivePath)
 		if err != nil {
@@ -207,28 +223,25 @@ func extractToolFiles(archivePath, destDir string, names []string) ([]string, er
 			if !want[base] {
 				continue
 			}
-			dest, err := safeJoinFile(destDir, base)
+			if _, done := staged[base]; done {
+				continue
+			}
+			dest, err := safeJoinFile(stage, base)
 			if err != nil {
-				return found, err
+				return nil, err
 			}
 			if err := extractZipEntryTo(f, dest); err != nil {
-				return found, err
+				return nil, err
 			}
-			delete(want, base)
-			found = append(found, base)
+			staged[base] = dest
 		}
 	} else {
 		// tar.xz (and friends): use the system tar, which is present on Linux
-		// and on Windows 10+ (bsdtar). Stage first, then copy by base name.
-		stage, err := os.MkdirTemp("", "tool-extract-*")
-		if err != nil {
-			return nil, err
-		}
-		defer os.RemoveAll(stage)
+		// and on Windows 10+ (bsdtar).
 		if err := runTarExtract(archivePath, stage); err != nil {
 			return nil, err
 		}
-		err = filepath.Walk(stage, func(p string, info os.FileInfo, err error) error {
+		err := filepath.Walk(stage, func(p string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() {
 				return err
 			}
@@ -236,21 +249,44 @@ func extractToolFiles(archivePath, destDir string, names []string) ([]string, er
 			if !want[base] {
 				return nil
 			}
-			// Stream the copy: ffmpeg binaries are large and handhelds are
-			// memory constrained, so never buffer a whole binary in RAM.
-			dest, err := safeJoinFile(destDir, base)
-			if err != nil {
-				return err
+			if _, done := staged[base]; !done {
+				staged[base] = p
 			}
-			if err := copyFileStream(p, dest, PermExec); err != nil {
-				return err
-			}
-			delete(want, base)
-			found = append(found, base)
 			return nil
 		})
 		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Move the staged binaries into place. A destination that already has
+	// content is left untouched: it may be a newer copy, or the executable a
+	// running player was started from (rewriting it would fail with ETXTBSY).
+	found := make([]string, 0, len(names))
+	for _, name := range names {
+		base := strings.ToLower(name)
+		src, ok := staged[base]
+		if !ok {
+			continue
+		}
+		dst, err := safeJoinFile(destDir, base)
+		if err != nil {
 			return found, err
+		}
+		found = append(found, base)
+		if info, err := os.Stat(dst); err == nil && info.Size() > 0 {
+			continue
+		}
+		if err := os.Chmod(src, PermExec); err != nil {
+			log.Printf("[tools] warn: cannot chmod staged %s: %v", base, err)
+		}
+		if err := os.Rename(src, dst); err != nil {
+			// Different filesystem (should not happen: both live in destDir's
+			// tree) or a stale directory entry. Fall back to a streamed copy.
+			if err := copyFileStream(src, dst, PermExec); err != nil {
+				return found, err
+			}
+			_ = os.Remove(src)
 		}
 	}
 	return found, nil
@@ -299,22 +335,112 @@ func extractZipEntryTo(f *zip.File, dest string) error {
 	return nil
 }
 
-// runTarExtract extracts an archive into dstDir using the system tar.
+// runTarExtract extracts an archive into dstDir using the system tar, with a
+// decompress-then-untar fallback for busybox/tar builds without xz support.
 func runTarExtract(archivePath, dstDir string) error {
-	tarPath, err := exec.LookPath("tar")
-	if err != nil {
-		return fmt.Errorf("no tar available to extract %s (install manually)", filepath.Base(archivePath))
+	base := filepath.Base(archivePath)
+	tarPath, tarErr := exec.LookPath("tar")
+	busyboxPath, _ := exec.LookPath("busybox")
+
+	// Forward slashes keep GNU tar from reading "C:\..." as a remote
+	// host:path spec (bsdtar accepts them too).
+	dstArg := filepath.ToSlash(dstDir)
+
+	untar := func(archive string) error {
+		// Run tar from the archive's own directory and pass only its base name:
+		// GNU tar (Git Bash / MinGW) reads "C:/..." as a remote host:path
+		// spec and fails with "Cannot connect to C:".
+		cmdDir := filepath.Dir(archive)
+		name := filepath.Base(archive)
+		var lastErr error
+		if tarPath != "" {
+			// -xJf unpacks .tar.xz directly; -xf is the bsdtar fallback that
+			// auto-detects compression.
+			for _, args := range [][]string{{"-xJf", name, "-C", dstArg}, {"-xf", name, "-C", dstArg}} {
+				cmd := exec.Command(tarPath, args...)
+				cmd.Dir = cmdDir
+				out, err := cmd.CombinedOutput()
+				if err == nil {
+					return nil
+				}
+				lastErr = fmt.Errorf("%v (%s)", err, strings.TrimSpace(string(out)))
+				log.Printf("[tools] tar %v failed: %v", args, lastErr)
+			}
+		}
+		if busyboxPath != "" {
+			for _, args := range [][]string{{"tar", "-xJf", name, "-C", dstArg}, {"tar", "-xf", name, "-C", dstArg}} {
+				cmd := exec.Command(busyboxPath, args...)
+				cmd.Dir = cmdDir
+				out, err := cmd.CombinedOutput()
+				if err == nil {
+					return nil
+				}
+				lastErr = fmt.Errorf("%v (%s)", err, strings.TrimSpace(string(out)))
+				log.Printf("[tools] busybox %v failed: %v", args, lastErr)
+			}
+		}
+		if lastErr == nil {
+			lastErr = fmt.Errorf("no tar available: %v", tarErr)
+		}
+		return lastErr
 	}
-	// -xJf handles .tar.xz explicitly; -xf is the bsdtar fallback that
-	// auto-detects compression.
-	for _, args := range [][]string{{"-xJf", archivePath, "-C", dstDir}, {"-xf", archivePath, "-C", dstDir}} {
-		if out, err := exec.Command(tarPath, args...).CombinedOutput(); err == nil {
+
+	if err := untar(archivePath); err == nil {
+		return nil
+	}
+
+	// Last resort for tar builds without xz: decompress with an external xz
+	// (or busybox's xz applet) and untar the plain archive.
+	if strings.HasSuffix(strings.ToLower(archivePath), ".xz") {
+		plainTar := filepath.Join(dstDir, "archive.tar")
+		defer os.Remove(plainTar)
+		if err := decompressXZ(archivePath, plainTar); err != nil {
+			return fmt.Errorf("could not unpack %s: %v", base, err)
+		}
+		if err := untar(plainTar); err == nil {
 			return nil
-		} else {
-			log.Printf("[tools] tar %v failed: %v (%s)", args, err, strings.TrimSpace(string(out)))
 		}
 	}
-	return fmt.Errorf("tar could not extract %s (xz support missing? install manually)", filepath.Base(archivePath))
+	return fmt.Errorf("could not unpack %s: xz support missing from tar/xz (copy ffmpeg, ffplay and ffprobe into the required folder manually)", base)
+}
+
+// decompressXZ writes the decompressed contents of an .xz file to dst using
+// the first available xz implementation.
+func decompressXZ(src, dst string) error {
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	srcArg := filepath.ToSlash(src)
+	var candidates [][]string
+	if p, err := exec.LookPath("xz"); err == nil {
+		candidates = append(candidates, []string{p, "-dc", srcArg})
+	}
+	if p, err := exec.LookPath("busybox"); err == nil {
+		candidates = append(candidates, []string{p, "xz", "-dc", srcArg})
+	}
+	var lastErr error
+	for _, argv := range candidates {
+		if _, err := out.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		if err := out.Truncate(0); err != nil {
+			return err
+		}
+		cmd := exec.Command(argv[0], argv[1:]...)
+		cmd.Stdout = out
+		if err := cmd.Run(); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			log.Printf("[tools] %v failed: %v", argv, err)
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no xz decompressor available")
+	}
+	return lastErr
 }
 
 func extractFilesFromZip(ctx context.Context, archivePath, requiredDir string, wants []string) error {

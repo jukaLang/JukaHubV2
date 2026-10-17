@@ -128,7 +128,8 @@ func patchRowStatus(c PatchComponent, s PatchRowStatus) {
 // --- Operations ---
 
 // OpCheckUpdates checks the JukaHub release feed and, when a newer release
-// exists, downloads and stages it so it can be applied with one press.
+// exists, advertises it so the Patch scene can offer an install the user must
+// confirm. It never downloads, stages or applies anything.
 // Releases are timestamped (JukaHub-20261017120000), so freshness is decided
 // by release time, not by semantic version.
 func OpCheckUpdates(ctx context.Context, config *Config) error {
@@ -148,17 +149,19 @@ func OpCheckUpdates(ctx context.Context, config *Config) error {
 	patchStateMu.Unlock()
 
 	if !releaseIsNewerThanInstalled(rel) {
+		clearAvailableUpdate()
 		patchRowStatus(ComponentApp, StatusCurrent)
 		savePatchState()
 		return nil
 	}
-	patchRowStatus(ComponentApp, StatusAvailable)
-	if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
-		savePatchState()
-		return err
+	label := releaseDateLabel(rel)
+	if label == "" {
+		label = rel.TagName
 	}
+	markUpdateAvailable(rel)
+	patchRowStatus(ComponentApp, StatusAvailable)
 	savePatchState()
-	patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub " + rel.TagName + " is staged — press A on JukaHub to apply"})
+	patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub " + label + " is available — press A on Install update to install it"})
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }

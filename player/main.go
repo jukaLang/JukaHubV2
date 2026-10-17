@@ -117,8 +117,9 @@ func main() {
 	// transaction so JukaHub always launches in a consistent state.
 	InitPatchModule()
 
-	// Automatic updater: check the release feed in the background, stage a newer
-	// build, and (for released installs) apply it and restart.
+	// Automatic updater: check the release feed in the background and offer a
+	// newer build in Patch. It never downloads or installs without the user
+	// confirming there.
 	startAutoUpdateCheck(config)
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).

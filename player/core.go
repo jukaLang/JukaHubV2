@@ -2158,8 +2158,10 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 		go func() {
 			if err := EnsureHelperTool("yt-dlp", config); err != nil {
 				log.Printf("[ERROR] yt-dlp install failed: %v", err)
+				showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
 				return
 			}
+			showToast("yt-dlp installed — restart JukaHub to use it", ToastSuccess())
 			refreshToolHealth()
 		}()
 		log.Printf("[WARN] yt-dlp is not installed yet; install started")
@@ -2188,6 +2190,7 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	// Run the tool directly (no shell) so special characters are not
 	// interpreted by cmd.exe / sh (e.g. "<" as input redirection).
 	cmd := exec.Command(fullToolPath, args...)
+	cmd.Env = helperToolEnv(fullToolPath)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -2198,7 +2201,11 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 		log.Printf("[ERROR] stderr: %s", stderr.String())
 		publishCustom("search_error", fmt.Sprintf("yt-dlp error: %v\n%s", err, stderr.String()))
 		publishCustom(resultVar, []VideoInfo{})
-		showToast("Search failed. Check network.", ToastError())
+		if !IsOnline() {
+			showToast("Search failed — offline, connect WiFi", ToastWarn())
+		} else {
+			showToast("Search failed. Check network.", ToastError())
+		}
 		return
 	}
 
@@ -2779,13 +2786,13 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		ffplayPath, err := helperToolPath("ffplay", config)
 		if err != nil {
 			log.Printf("[ERROR] playVideoURL: ffplay unavailable: %v", err)
-			showToast("ffplay not found and auto-install failed. Try again later.", ToastError())
+			showToast(toolUnavailableMessage("ffplay", err), ToastError())
 			return
 		}
 		ytDlpPath, err := helperToolPath("yt-dlp", config)
 		if err != nil {
 			log.Printf("[ERROR] playVideoURL: yt-dlp unavailable: %v", err)
-			showToast("yt-dlp not found and auto-install failed. Try again later.", ToastError())
+			showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
 			return
 		}
 
@@ -2813,6 +2820,7 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		}
 		ytArgs = append(ytArgs, ytDlpExtraArgsSlice(config)...)
 		ytCmd := exec.Command(ytDlpPath, ytArgs...)
+		ytCmd.Env = helperToolEnv(ytDlpPath)
 		pipeArgs := []string{
 			"-i", "pipe:0",
 			"-loglevel", "warning",
@@ -2892,7 +2900,7 @@ func playWithDirectURL(config *Config, ffplayPath, ytDlpPath, url string) {
 	}
 	getArgs = append(getArgs, ytDlpExtraArgsSlice(config)...)
 	getCmd := exec.Command(ytDlpPath, getArgs...)
-	getCmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	getCmd.Env = helperToolEnv(ytDlpPath, "PYTHONUNBUFFERED=1")
 	getCmd.Stderr = os.Stderr
 	directURLBytes, err := getCmd.Output()
 	directURL := strings.TrimSpace(string(directURLBytes))
@@ -2963,6 +2971,7 @@ func playWithTempFile(config *Config, ffplayPath, ytDlpPath, url string, startSe
 	}
 	dlArgs = append(dlArgs, ytDlpExtraArgsSlice(config)...)
 	dlCmd := exec.CommandContext(ctx, ytDlpPath, dlArgs...)
+	dlCmd.Env = helperToolEnv(ytDlpPath)
 	dlCmd.Stdout = os.Stdout
 	dlCmd.Stderr = &stderrBuf
 
@@ -2989,7 +2998,11 @@ func playWithTempFile(config *Config, ffplayPath, ytDlpPath, url string, startSe
 			if err != nil {
 				log.Printf("[ERROR] playWithTempFile: download failed: %v", err)
 				log.Printf("[ERROR] playWithTempFile: stderr: %s", stderrBuf.String())
-				showToast("Download failed. Check network.", ToastError())
+				if !IsOnline() {
+					showToast("Download failed — offline, connect WiFi", ToastWarn())
+				} else {
+					showToast("Download failed. Check network.", ToastError())
+				}
 				videoPlaybackMutex.Lock()
 				videoPlaybackPhase = "error"
 				videoPlaybackPhaseAt = sdl.GetTicks64()

@@ -12,6 +12,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,9 @@ type installBarState struct {
 	message string // error detail or status override
 	endedAt time.Time
 	animAt  time.Time // first show, for the slide/fade animation
+	// retryable keeps a failed install on screen (with an A: retry hint) so a
+	// dropped connection or an offline launch does not need an app restart.
+	retryable bool
 }
 
 var installBar installBarState
@@ -63,6 +67,7 @@ func installBarBegin(tool string) {
 	installBar.lastLen = 0
 	installBar.endedAt = time.Time{}
 	installBar.animAt = now
+	installBar.retryable = false
 }
 
 // installBarPhase updates the status line ("Downloading", "Installing", ...).
@@ -113,6 +118,7 @@ func installBarDone() {
 	installBar.phase = installPhaseDone
 	installBar.message = ""
 	installBar.endedAt = time.Now()
+	installBar.retryable = false
 }
 
 // installBarFail marks the install failed; the card shows the reason briefly.
@@ -122,6 +128,43 @@ func installBarFail(reason string) {
 	installBar.phase = installPhaseError
 	installBar.message = reason
 	installBar.endedAt = time.Now()
+	installBar.retryable = false
+}
+
+// installCardDetail trims a failure reason to what fits the card's detail
+// row, so a long wrapped error cannot spill outside the panel.
+func installCardDetail(reason string) string {
+	const limit = 64
+	r := strings.TrimSpace(reason)
+	runes := []rune(r)
+	if len(runes) <= limit {
+		return r
+	}
+	return string(runes[:limit-1]) + "…"
+}
+
+// installBarFailRetry marks the install failed and keeps the card up with an
+// "A: retry" hint so the user can redownload after reconnecting.
+func installBarFailRetry(tool, reason string) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	installBar.visible = true
+	installBar.tool = tool
+	installBar.phase = installPhaseError
+	installBar.message = installCardDetail(reason)
+	installBar.endedAt = time.Now()
+	installBar.retryable = true
+}
+
+// installBarRetryPending reports the tool whose failed install can be retried
+// right now (the card is on screen in its error state).
+func installBarRetryPending() (string, bool) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if !installBar.visible || installBar.phase != installPhaseError || !installBar.retryable || installBar.tool == "" {
+		return "", false
+	}
+	return installBar.tool, true
 }
 
 // installBarSnapshot returns the values the renderer needs.
@@ -131,11 +174,15 @@ func installBarSnapshot() (visible bool, tool, phase, detail string, done, total
 	if !installBar.visible {
 		return false, "", "", "", 0, 0, 0, 0, false
 	}
-	// Auto-hide some time after the install settles.
+	// Auto-hide some time after the install settles. A retryable failure
+	// stays long enough to read and act on.
 	if !installBar.endedAt.IsZero() {
 		hold := 2 * time.Second
 		if installBar.phase == installPhaseError {
 			hold = 4 * time.Second
+			if installBar.retryable {
+				hold = 20 * time.Second
+			}
 		}
 		if time.Since(installBar.endedAt) > hold {
 			installBar.visible = false
@@ -322,6 +369,9 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 	if speed > 0 && phase == installPhaseDownload {
 		status = formatInstallSpeed(speed)
 	}
+	if phase == installPhaseError && installBar.retryable {
+		status = "A: retry"
+	}
 	if status != "" {
 		pw, _, _ := font.SizeUTF8(status)
 		renderText(renderer, config, font, status, installPhaseTint(phase),
@@ -384,7 +434,7 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 		detail = "Preparing package"
 	}
 	if phase == installPhaseDone {
-		detail = "Ready to use"
+		detail = "Ready — restart JukaHub to use it"
 		detailColor = ColorTextSecondary()
 	}
 	if d, _, _ := font.SizeUTF8(detail); d > 0 {

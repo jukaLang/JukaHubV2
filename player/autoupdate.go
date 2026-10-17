@@ -4,16 +4,18 @@ package main
 // stamp shown in the UI.
 //
 // On startup (and from MISC -> Patch) the app asks GitHub for the latest
-// JukaHub release, compares its publication time with the build stamp of the
-// running installation, downloads the platform archive
+// JukaHub release and compares its publication time with the compile stamp of
+// the running installation. A newer release is only advertised: nothing is
+// downloaded, staged or installed until the user confirms the install in the
+// Patch scene. After that confirmation the platform archive
 //
 //	JukaHub-Windows.zip   (Windows x64)
 //	JukaHub-Trimui.zip    (TrimUI Linux arm64)
 //
-// extracts it into the Patch staging area, and hands the replacement of the
-// files (binary, SDL DLLs, config, fonts, backgrounds) to a detached helper
-// script that restarts JukaHub. A journal is written before any destructive
-// step, so an interrupted update is rolled back at next startup.
+// is extracted into the Patch staging area, and the replacement of the files
+// (binary, SDL DLLs, config, fonts, backgrounds) is handed to a detached
+// helper script that restarts JukaHub. A journal is written before any
+// destructive step, so an interrupted update is rolled back at next startup.
 //
 // GitHub release tags in this repository are timestamps (JukaHub-20261017…),
 // not semantic versions, so update decisions compare release times, not
@@ -34,13 +36,19 @@ import (
 	"time"
 )
 
-// buildDate is stamped by the release build:
+// buildDate and buildTime are stamped by the release build and by build.bat:
 //
-//	go build -ldflags "-X main.buildDate=2026-10-17"
+//	go build -ldflags "-X main.buildDate=2026-10-17 -X main.buildTime=2026-10-17T18:30:00Z"
 //
-// It is optional: release-info.json (bundled in the archive and written on
-// every update) is the primary source.
-var buildDate string
+// buildTime is the precise UTC compile time, so update decisions can compare
+// against a same-day release instead of assuming the build happened at the end
+// of the day. buildDate is kept for builds that only carry a date.
+// release-info.json (bundled in the archive and written on every update) is
+// still the primary source when it exists.
+var (
+	buildDate string
+	buildTime string
+)
 
 const (
 	jukaHubReleaseDownloadBase = "https://github.com/jukaLang/JukaHubV2/releases/latest/download/"
@@ -190,6 +198,10 @@ func installedReleaseTime() (time.Time, bool) {
 	if t, ok := parseReleaseTimestamp(stamp); ok {
 		return t, true
 	}
+	// The compile stamp is last: it describes a source build, not a release.
+	if t, ok := parseReleaseTimestamp(buildTime); ok {
+		return t, true
+	}
 	if t, ok := parseReleaseTimestamp(buildDate); ok {
 		// A build stamp is date-only: treat it as the end of that day so a
 		// release published earlier the same day is not "newer".
@@ -224,35 +236,90 @@ func releaseIsNewerThanInstalled(rel *githubRelease) bool {
 	return relTime.After(installed)
 }
 
-// autoUpdateCanApply reports whether this installation may replace itself
-// automatically. Release installs (they ship jukaconfig.json / release-info.json
-// next to the executable) and already-stamped installs update themselves;
-// anything else only stages the release and lets the user apply it from
-// MISC -> Patch. JUKAHUB_NO_AUTOUPDATE=1 disables the automatic apply.
-func autoUpdateCanApply() bool {
-	if strings.TrimSpace(os.Getenv("JUKAHUB_NO_AUTOUPDATE")) != "" {
-		return false
+// markUpdateAvailable records that a newer release exists. It deliberately does
+// not download or stage anything: the Patch scene turns this into an "Install
+// update" action that only runs after the user confirms.
+func markUpdateAvailable(rel *githubRelease) {
+	if rel == nil {
+		return
 	}
-	if readInstalledReleaseInfo().Tag != "" {
-		return true
+	asset := ""
+	if target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH); err == nil {
+		asset = target.Asset
 	}
 	patchStateMu.Lock()
-	stamped := patchState.InstalledReleaseAt != ""
+	patchState.AvailableUpdateTag = rel.TagName
+	patchState.AvailableUpdateAt = releaseStampISO(rel)
+	patchState.AvailableUpdateAsset = asset
 	patchStateMu.Unlock()
-	if stamped {
-		return true
+	_ = savePatchState()
+}
+
+// clearAvailableUpdate forgets an advertised release (already current, or the
+// install has been applied).
+func clearAvailableUpdate() {
+	patchStateMu.Lock()
+	had := patchState.AvailableUpdateTag != ""
+	patchState.AvailableUpdateTag = ""
+	patchState.AvailableUpdateAt = ""
+	patchState.AvailableUpdateAsset = ""
+	patchStateMu.Unlock()
+	if had {
+		_ = savePatchState()
 	}
-	if dir, err := P().ExecutableDir(); err == nil {
-		if info, err := os.Stat(filepath.Join(dir, "jukaconfig.json")); err == nil && info.Mode().IsRegular() {
-			return true
+}
+
+// availableUpdateTag returns the advertised release tag, if any.
+func availableUpdateTag() string {
+	patchStateMu.Lock()
+	defer patchStateMu.Unlock()
+	return patchState.AvailableUpdateTag
+}
+
+// availableUpdateLabel is the short human label for an advertised release
+// ("2026-10-18", falling back to the tag).
+func availableUpdateLabel() string {
+	patchStateMu.Lock()
+	tag, at := patchState.AvailableUpdateTag, patchState.AvailableUpdateAt
+	patchStateMu.Unlock()
+	if t, ok := parseReleaseTimestamp(at); ok {
+		return t.Format("2006-01-02")
+	}
+	if t, ok := releaseTimeFromTag(tag); ok {
+		return t.Format("2006-01-02")
+	}
+	if tag != "" {
+		return tag
+	}
+	return "new release"
+}
+
+// InstallAvailableJukaHubUpdate downloads, stages and applies the newest release.
+// It runs only after the user confirms in the Patch scene; nothing in the
+// background path calls it.
+func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
+	rel, err := FetchLatestJukaHubRelease(ctx)
+	if err != nil {
+		return fmt.Errorf("checking JukaHub releases: %w", err)
+	}
+	if !releaseIsNewerThanInstalled(rel) {
+		clearAvailableUpdate()
+		installed := installedBuildDate()
+		if installed == "" {
+			installed = versionString(config)
 		}
+		return fmt.Errorf("already up to date (%s)", installed)
 	}
-	return false
+	if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
+		return err
+	}
+	return OpApplyStagedSwap(ctx, config)
 }
 
 // startAutoUpdateCheck runs the startup update check in the background. It is
-// best-effort: offline launches and API failures are logged, never surfaced as
-// startup errors.
+// best-effort and never installs: a newer release is only advertised, and the
+// Patch scene asks the user before anything is downloaded. Offline launches and
+// API failures are logged, never surfaced as startup errors.
 func startAutoUpdateCheck(config *Config) {
 	go func() {
 		time.Sleep(autoUpdateStartupDelay)
@@ -270,7 +337,7 @@ func startAutoUpdateCheck(config *Config) {
 		}
 		defer endPatchOp()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 
 		rel, err := FetchLatestJukaHubRelease(ctx)
@@ -281,9 +348,10 @@ func startAutoUpdateCheck(config *Config) {
 		patchStateMu.Lock()
 		patchState.AutoUpdateCheckedAt = time.Now().UTC().Format(time.RFC3339)
 		patchStateMu.Unlock()
-		_ = savePatchState()
 
 		if !releaseIsNewerThanInstalled(rel) {
+			clearAvailableUpdate()
+			_ = savePatchState()
 			logPatch("auto-update: %s is current", versionString(nil))
 			return
 		}
@@ -291,23 +359,10 @@ func startAutoUpdateCheck(config *Config) {
 		if label == "" {
 			label = rel.TagName
 		}
-		setPatchBusy("Updating JukaHub to " + label + "…")
-		defer clearPatchBusy()
-		if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
-			logPatch("auto-update staging failed: %v", err)
-			patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub update failed: " + err.Error()})
-			return
-		}
-		if !autoUpdateCanApply() {
-			patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub " + label + " is ready — apply it from Patch"})
-			return
-		}
-		patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "Installing JukaHub " + label + " — restarting…"})
-		// Give the toast a moment to render before the swap helper stops us.
-		time.Sleep(1500 * time.Millisecond)
-		if err := OpApplyStagedSwap(ctx, config); err != nil {
-			logPatch("auto-update apply failed: %v", err)
-		}
+		markUpdateAvailable(rel)
+		logPatch("auto-update: %s is available; waiting for the user to confirm", rel.TagName)
+		patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub " + label + " is available — install it from Patch"})
+		patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	}()
 }
 
@@ -572,12 +627,25 @@ func confirmAppliedUpdate() {
 		patchState.InstalledReleaseAt = stagedAt
 	}
 	patchState.LastUpdateVer = ""
+	patchState.AvailableUpdateTag = ""
+	patchState.AvailableUpdateAt = ""
+	patchState.AvailableUpdateAsset = ""
 	patchStateMu.Unlock()
 	_ = savePatchState()
 	if dir, err := PatchStateDir(); err == nil {
 		_ = os.RemoveAll(filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag)))
 	}
 	logPatch("JukaHub updated to release %s", tag)
+}
+
+// installedBuildTimeLabel renders the compile stamp for About: full UTC time
+// when the build carried one, otherwise the release/build date, or "" when
+// unknown.
+func installedBuildTimeLabel() string {
+	if t, ok := parseReleaseTimestamp(buildTime); ok {
+		return t.Format("2006-01-02 15:04 UTC")
+	}
+	return installedBuildDate()
 }
 
 // formatBuildLabel renders the version display suffix ("v0.4.0 · 2026-10-17").

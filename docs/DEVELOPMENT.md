@@ -36,7 +36,7 @@ JukaHubV2/
 │   ├── jukaconfig.json                # design config (generated)
 │   ├── trimui/                        # device package assets and notes
 │   └── build.bat, release.sh, package-sdcard.sh
-├── .github/workflows/                 # CI: SD-card package, releases
+├── .github/workflows/                 # CI: CodeQL, SD-card package, releases
 └── docs/                              # developer documentation
 ```
 
@@ -186,11 +186,14 @@ the installation:
   Explorer.
 - **JukaHub bundled assets** starter package (fonts, background, default
   config), to restore JukaHub's own files.
-- **Check for updates** — downloads the release archive for this platform
-  (`JukaHub-Windows.zip` / `JukaHub-Trimui.zip`) and stages it; one more press
-  applies it and restarts. The same check runs automatically at launch, at
-  most once a day, and applies without prompting on installed releases
-  (`JUKAHUB_NO_AUTOUPDATE=1` disables that).
+- **Check for updates** — compares the latest release's publication time with
+  the build's compile stamp (`main.buildTime`, stamped by `build.bat` and
+  `release.sh`). A newer release only adds an **Install update** action; no
+  archive is downloaded until you confirm it, then it downloads, stages,
+  applies and restarts.
+- The same check runs automatically at launch, at most once a day, and only
+  advertises the release: it never downloads or installs on its own
+  (`JUKAHUB_NO_AUTOUPDATE=1` disables the check).
 - **Verify & repair** — validate config, tools and assets; clear stale
   downloads.
 - **Backups & Restore** — every install/update/remove is journaled, every
@@ -280,9 +283,23 @@ Every push to `main` runs `.github/workflows/docker-image.yml`, which creates a
 
 Both archives include `release-info.json` (`tag` + RFC3339 `date`). The app
 reads it to show the release build date and to decide whether a newer release
-exists; the build also embeds the date with
-`-ldflags "-X main.buildDate=YYYY-MM-DD"`. Release tags are timestamps, so the
-updater compares release times rather than semantic versions.
+exists; the build also embeds the compile stamp with
+`-ldflags "-X main.buildDate=YYYY-MM-DD -X main.buildTime=<RFC3339 UTC>"`.
+Release tags are timestamps, so the updater compares release times rather than
+semantic versions.
+
+### CodeQL
+
+`.github/workflows/codeql.yml` scans `player/` on every pull request that
+touches the Go sources. It analyzes the base commit and the PR head, then the
+`Fail on new high-severity findings` job compares the two SARIF reports and
+fails only when the PR adds a finding rated high or critical
+(`security-severity >= 7.0`). The existing alert backlog does not block PRs.
+
+Advanced setup means default setup must be turned off under
+**Settings → Code security**. The comparison is implemented in
+`.github/codeql/check_new_alerts.py`; findings are matched by rule, file and
+message (not line number), so moved code is not reported as new.
 
 ---
 

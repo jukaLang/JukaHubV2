@@ -311,12 +311,23 @@ if exist "go.mod" (
     echo Downloading Go modules ...
     "%GO_EXE%" mod download || (set "ERR=go mod download failed - check network / GOPROXY." & exit /b 1)
 )
+REM Stamp the compile time into the binary. The updater compares a release's
+REM publication time with this stamp, so a same-day release published after
+REM this build is still offered (a date-only stamp would hide it).
+REM %PS% lives under System32 and has no spaces, so it is used unquoted:
+REM for /f already wraps the command in quotes, and quoting the exe as well
+REM makes cmd /c strip the wrong quotes.
+set "BUILD_TIME="
+for /f "delims=" %%T in ('%PS% -NoProfile -Command "[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')"') do set "BUILD_TIME=%%T"
+if not defined BUILD_TIME (set "ERR=Could not read the current time for the build stamp." & exit /b 1)
+set "BUILD_DATE=%BUILD_TIME:~0,10%"
+
 echo.
 echo Building %OUT% ...
 echo   NOTE: the FIRST build compiles the SDL2 cgo bindings and can take
 echo   3-10 minutes. Later builds use the Go cache and take seconds.
 echo.
-"%GO_EXE%" build -v -ldflags "-s -w" -o "%OUT%" . || (set "ERR=go build failed - see the compiler output above." & exit /b 1)
+"%GO_EXE%" build -v -ldflags "-s -w -X main.buildDate=%BUILD_DATE% -X main.buildTime=%BUILD_TIME%" -o "%OUT%" . || (set "ERR=go build failed - see the compiler output above." & exit /b 1)
 if not exist "%OUT%" (set "ERR=go build reported success but %OUT% is missing." & exit /b 1)
 exit /b 0
 

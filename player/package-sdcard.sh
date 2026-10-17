@@ -93,7 +93,9 @@ if [ "$WITH_YTDLP" = "1" ]; then
     say "Downloading yt-dlp (ARM64 static, no Python needed)"
     fetch "$YTDLP_URL" "$REQ/yt-dlp"
     chmod +x "$REQ/yt-dlp"
-    "$REQ/yt-dlp" --version 2>/dev/null || true
+    # Never probe --version here: this script runs on an x86 build host, so the
+    # ARM64 binary cannot execute and a failed probe says nothing about it.
+    ls -l "$REQ/yt-dlp"
 fi
 
 if [ "$WITH_FFMPEG" = "1" ]; then
