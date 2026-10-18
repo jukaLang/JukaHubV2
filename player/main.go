@@ -107,10 +107,10 @@ func main() {
 	qsInit()
 	startWeather(config)
 
-	// Tool readiness: check whether the helper tools (yt-dlp, ffmpeg/ffplay) are
-	// present and auto-install the missing ones, showing the install bar while
-	// they download. This is non-fatal: offline launches stay usable and retry
-	// on the next run.
+	// Tool readiness: check whether the helper tools (yt-dlp, ffmpeg, ffprobe)
+	// are present and auto-install the missing ones, showing the install bar
+	// while they download. This is non-fatal: offline launches stay usable and
+	// retry on the next run.
 	startToolHealthCheck()
 
 	// Patch module: load persisted state and roll back any interrupted update
@@ -1036,6 +1036,11 @@ func main() {
 				}
 				focusEngine.SyncSelected()
 			case *sdl.ControllerButtonEvent:
+				// Controller input counts as activity too, otherwise a user
+				// navigating with the D-pad sat at the idle cadence and every
+				// press felt late (the frame rate never woke up).
+				frameRateCtrl.NotifyInput()
+				screensaverNotifyInput()
 				if e.Type == sdl.CONTROLLERBUTTONDOWN {
 					// Route overlays first (highest priority).
 					if handleControllerEvent(e, config) {
@@ -1100,7 +1105,10 @@ func main() {
 						if handleSceneController(e, config) {
 							continue
 						}
-						// Video control shortcuts (always active when video is playing)
+						// Video control shortcuts (always active when video is playing).
+						// Remember whether the press was consumed by a player: B there
+						// stops playback instead of also leaving the scene.
+						videoWasPlaying := snapshotVideoState().phase != "idle"
 						HandleVideoControllerInput(e)
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
@@ -1108,9 +1116,29 @@ func main() {
 							selectedButtonIndex = findFirstSelectableElement(curScene)
 						}
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
+							// Scenes drawn without config elements (Video, Pomodoro, ...)
+							// have no element branch above, but B still has to leave them.
+							if !homeLayoutActive && (e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK) {
+								goBackScene(config)
+							}
 							continue
 						}
 						curElem := curScene.Elements[selectedButtonIndex]
+						// B/BACK always leaves the scene unless a deeper view owns it.
+						// Handling it once, before the per-element switches, means no
+						// element type can silently swallow the back button.
+						if !homeLayoutActive && !videoWasPlaying && (e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK) {
+							switch {
+							case curElem.Type == "searchresults":
+								handleSearchResultsAction(ActionBack, config)
+							case curScene.Name == "FileExplorer":
+								feBack(config)
+							default:
+								goBackScene(config)
+							}
+							focusEngine.SyncSelected()
+							continue
+						}
 						if curElem.Type == "searchresults" {
 							// Grid navigation with controller via the semantic action handler.
 							if focusedResultIndex < 0 {
@@ -1147,13 +1175,15 @@ func main() {
 								}
 							case sdl.CONTROLLER_BUTTON_A:
 								feEnterFocused(config)
-							case sdl.CONTROLLER_BUTTON_B:
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 								// File Explorer: B climbs the directory tree; at the root
-								// it returns to the previous scene.
+								// it returns to the previous scene. Every other list
+								// treats B as back instead of "move up", which looked
+								// like the button did nothing at the top of a list.
 								if curScene.Name == "FileExplorer" {
 									feBack(config)
 								} else {
-									moveSelection(config, -1)
+									goBackScene(config)
 								}
 							}
 						} else if curElem.Type == "themegallery" {
@@ -1171,15 +1201,15 @@ func main() {
 								if themeGalleryIndex >= 0 && themeGalleryIndex < len(presets) {
 									ApplyThemePreset(config, presets[themeGalleryIndex])
 								}
-							case sdl.CONTROLLER_BUTTON_B:
-								moveSelection(config, -1)
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+								goBackScene(config)
 							}
 						} else if curElem.Type == "toggle" {
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 								toggleVariable(config, curElem)
-							case sdl.CONTROLLER_BUTTON_B:
-								moveSelection(config, -1)
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+								goBackScene(config)
 							}
 						} else if curElem.Type == "favorites" {
 							items := getCurrentFavorites()
@@ -1207,13 +1237,8 @@ func main() {
 								if favoritesFocusIndex >= 0 && favoritesFocusIndex < n {
 									items[favoritesFocusIndex].Play(config)
 								}
-							case sdl.CONTROLLER_BUTTON_B:
-								for _, scene := range config.Scenes {
-									if scene.Name == "Main" {
-										changeSceneTo(config, findSceneIndex(config, "Main"))
-										break
-									}
-								}
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+								goBackScene(config)
 							}
 						} else if curElem.Type == "textbrowser" {
 							switch e.Button {
@@ -1240,6 +1265,8 @@ func main() {
 								textBrowserScrollY += 10
 								textBrowserScrollVelocity = 0
 								textBrowserScrollCooldown = 0
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+								goBackScene(config)
 							}
 						} else if curElem.Type == "shortslist" {
 							switch e.Button {
@@ -1261,6 +1288,8 @@ func main() {
 								if currentShortIdx >= 0 && currentShortIdx < len(vs) {
 									playVideoInfo(config, vs[currentShortIdx])
 								}
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+								goBackScene(config)
 							}
 						} else if curElem.Type == "packagelist" {
 							switch e.Button {
@@ -1284,6 +1313,8 @@ func main() {
 								} else {
 									packagesMutex.Unlock()
 								}
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+								goBackScene(config)
 							}
 						} else if curElem.Type == "chat" {
 							switch e.Button {
@@ -1301,6 +1332,8 @@ func main() {
 									sendGroqChatMessage(chatInputText)
 									chatInputText = ""
 								}
+							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+								goBackScene(config)
 							}
 						} else {
 							// Normal button/input navigation
@@ -1338,10 +1371,9 @@ func main() {
 									changeSceneTo(config, idx)
 								}
 							case sdl.CONTROLLER_BUTTON_BACK:
-								// Menu-style shortcut to the Settings scene.
-								if idx := findSceneIndex(config, "Settings"); idx >= 0 {
-									changeSceneTo(config, idx)
-								}
+								// BACK is the handheld's back button too: leaving the
+								// scene is what users expect, not a jump to Settings.
+								goBackScene(config)
 							}
 							// Scene switching (L1/R1 or L2/R2)
 							switch e.Button {
@@ -1355,6 +1387,8 @@ func main() {
 					}
 				}
 			case *sdl.ControllerAxisEvent:
+				frameRateCtrl.NotifyInput()
+				screensaverNotifyInput()
 				handleControllerAxis(e)
 			}
 		}
@@ -1602,10 +1636,11 @@ func main() {
 		renderer.Present()
 		animTime = float64(sdl.GetTicks64()) / 1000.0
 
-		// Adaptive frame rate: 60fps while interacting/animating, 30fps idle, 20fps deep idle.
-		// LowPower forces 30fps unconditionally.
+		// Adaptive frame rate: faster while interacting/animating, slower when
+		// idle. LowPower picks the slowest cadence instead of forcing 60fps.
 		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0
-		frameRateCtrl.SetAnimationActive(animating || config.Variables.LowPower)
+		frameRateCtrl.SetAnimationActive(animating)
+		frameRateCtrl.SetLowPower(config.Variables.LowPower)
 		sdl.Delay(frameRateCtrl.Delay())
 
 		frameCount++
@@ -1624,6 +1659,7 @@ func main() {
 	// (window close, exit button, scene-exit trigger).
 	saveFavorites()
 	ClearTextCache()
+	DestroyVKStaticCache()
 	for _, tex := range textureCache {
 		tex.Destroy()
 	}

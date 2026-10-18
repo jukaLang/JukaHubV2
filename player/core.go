@@ -22,7 +22,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1590,33 +1589,6 @@ func renderLabelShadowed(renderer *sdl.Renderer, config *Config, elem Element) {
 	renderText(renderer, config, font, elem.Text, color, elem.X, elem.Y)
 }
 
-// ffplayEnv returns an environment for ffplay that includes the directory
-// containing ffplay.exe on Windows. This ensures dependent DLLs are found
-// (fixes 0xc0000135 / STATUS_DLL_NOT_FOUND on some systems).
-func ffplayEnv(ffplayPath string) []string {
-	env := os.Environ()
-	if IsWindows() {
-		dir := filepath.Dir(ffplayPath)
-		if dir != "" && dir != "." {
-			path := os.Getenv("PATH")
-			env = append(env, "PATH="+dir+string(os.PathListSeparator)+path)
-		}
-	}
-	// NOTE: Do NOT force SDL_VIDEODRIVER=directx here. On some systems the
-	// DirectX SDL backend fails to initialize for the ffplay child process
-	// ("Could not initialize SDL - directx not available"), while the default
-	// auto-detected backend (which IPTV playback uses successfully) works.
-	// Letting SDL pick its own video driver is the reliable choice.
-	//
-	// The same goes for the audio driver: SDL_AUDIODRIVER=directsound only
-	// exists on Windows. On Linux handhelds (Trimui Smart Pro) it would make
-	// SDL fail to open audio at all, so it stays Windows-only.
-	if IsWindows() {
-		env = append(env, "SDL_AUDIODRIVER=directsound")
-	}
-	return env
-}
-
 // isMissingDLL reports whether err indicates the process failed to start
 // because a required DLL could not be found. On Windows this is
 // STATUS_DLL_NOT_FOUND (exit code 0xc0000135).
@@ -2781,96 +2753,34 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	addRecentVideo(v)
 	currentPlaybackURL = url
 
-	// ffplay is the only playback backend (yt-dlp feeds it the stream). Both
-	// binaries are installed on demand by the helper-tool installer below.
+	// The embedded player is the only playback backend: yt-dlp downloads the
+	// stream and ffmpeg decodes it into the scene's `video` element. The old
+	// ffplay pipe is gone because the bundled ffplay is linked against X11 and
+	// aborts on the handheld ("libX11.so.6: cannot open shared object file"),
+	// which left every video stuck on a black screen.
 	go func() {
 		// Missing helper tools are downloaded on demand (the install card
 		// shows progress) before playback starts.
-		ffplayPath, err := helperToolPath("ffplay", config)
-		if err != nil {
-			log.Printf("[ERROR] playVideoURL: ffplay unavailable: %v", err)
-			showToast(toolUnavailableMessage("ffplay", err), ToastError())
-			return
-		}
 		ytDlpPath, err := helperToolPath("yt-dlp", config)
 		if err != nil {
-			log.Printf("[ERROR] playVideoURL: yt-dlp unavailable: %v", err)
+			log.Printf("[ERROR] playVideoInfo: yt-dlp unavailable: %v", err)
 			showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
 			return
 		}
-
-		log.Printf("[DEBUG] playVideoURL: url=%q ffplay=%q yt-dlp=%q", sanitizeLogURL(url), ffplayPath, ytDlpPath)
-
-		// On Windows, skip pipe mode entirely — it deadlocks due to SDL/pipe
-		// buffering. Use temp-file mode with ffplay (works on Trimui Smart Pro).
-		if IsWindows() {
-			log.Printf("[DEBUG] playVideoInfo: Windows detected, using temp file mode")
-			playWithTempFile(config, ffplayPath, ytDlpPath, url, v.Position)
-			recordPlayed(config, url)
+		if _, err := helperToolPath("ffmpeg", config); err != nil {
+			log.Printf("[ERROR] playVideoInfo: ffmpeg unavailable: %v", err)
+			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
 			return
 		}
-
-		// Pipe mode for Linux/other platforms
-		pipeSuccess := false
-		ytArgs := []string{
-			"-o", "-",
-			"--no-check-certificate",
-			"--geo-bypass",
-			"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-			"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
-			"-f", videoFormatSelector(config),
-			url,
-		}
-		ytArgs = append(ytArgs, ytDlpExtraArgsSlice(config)...)
-		ytCmd := exec.Command(ytDlpPath, ytArgs...)
-		ytCmd.Env = helperToolEnv(ytDlpPath)
-		pipeArgs := []string{
-			"-i", "pipe:0",
-			"-loglevel", "warning",
-			"-autoexit",
-		}
-		if runtime.GOOS == "windows" {
-			pipeArgs = append([]string{"-noborder", "-x", "1280", "-y", "720"}, pipeArgs...)
-		} else {
-			pipeArgs = append([]string{"-fs"}, pipeArgs...)
-		}
-		ffCmd := exec.Command(ffplayPath, pipeArgs...)
-		ffCmd.Env = ffplayEnv(ffplayPath)
-
-		pipe, err := ytCmd.StdoutPipe()
-		if err == nil {
-			ffCmd.Stdin = pipe
-			ytCmd.Stderr = os.Stderr
-			ffCmd.Stderr = os.Stderr
-			// Start ffplay FIRST so it's ready to read from the pipe before
-			// yt-dlp starts producing data. On Windows the pipe buffer is small,
-			// so starting yt-dlp first causes it to block immediately.
-			if err := ffCmd.Start(); err == nil {
-				// Brief pause to let ffplay open its stdin before yt-dlp writes.
-				time.Sleep(300 * time.Millisecond)
-				if err := ytCmd.Start(); err == nil {
-					ytCmd.Wait()
-					ffCmd.Wait()
-					pipeSuccess = true
-				} else {
-					log.Printf("[DEBUG] playVideoURL: yt-dlp.Start failed in pipe mode: %v", err)
-					ffCmd.Process.Kill()
-					ffCmd.Wait()
-				}
-			} else {
-				log.Printf("[DEBUG] playVideoURL: ffplay.Start failed in pipe mode: %v", err)
-			}
-		} else {
-			log.Printf("[DEBUG] playVideoURL: StdoutPipe failed: %v", err)
+		// ffprobe only supplies duration/fps; probeVideoInfo falls back to safe
+		// defaults, so a missing ffprobe must not block playback.
+		if _, err := helperToolPath("ffprobe", config); err != nil {
+			log.Printf("[DEBUG] playVideoInfo: ffprobe unavailable, using defaults: %v", err)
 		}
 
-		if !pipeSuccess {
-			log.Printf("[DEBUG] playVideoInfo: pipe mode failed, trying temp file fallback")
-			playWithTempFile(config, ffplayPath, ytDlpPath, url, v.Position)
-			recordPlayed(config, url)
-		} else {
-			recordPlayed(config, url)
-		}
+		log.Printf("[DEBUG] playVideoInfo: url=%q yt-dlp=%q", sanitizeLogURL(url), ytDlpPath)
+		playWithTempFile(config, ytDlpPath, url, v.Position)
+		recordPlayed(config, url)
 	}()
 }
 
@@ -2890,59 +2800,10 @@ func videoFormatSelector(config *Config) string {
 	return fmt.Sprintf("best[height<=%d]/best", maxHeight)
 }
 
-func playWithDirectURL(config *Config, ffplayPath, ytDlpPath, url string) {
-	log.Printf("[DEBUG] playWithDirectURL: trying --get-url for %s", url)
-	getArgs := []string{
-		"--get-url",
-		"--no-check-certificate",
-		"--geo-bypass",
-		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
-		"-f", videoFormatSelector(config),
-		url,
-	}
-	getArgs = append(getArgs, ytDlpExtraArgsSlice(config)...)
-	getCmd := exec.Command(ytDlpPath, getArgs...)
-	getCmd.Env = helperToolEnv(ytDlpPath, "PYTHONUNBUFFERED=1")
-	getCmd.Stderr = os.Stderr
-	directURLBytes, err := getCmd.Output()
-	directURL := strings.TrimSpace(string(directURLBytes))
-	if err != nil || directURL == "" || !strings.HasPrefix(directURL, "http") {
-		log.Printf("[DEBUG] playWithDirectURL: get-url failed or empty (err=%v), using original URL", err)
-		directURL = url
-	}
-	log.Printf("[DEBUG] playWithDirectURL: directURL=%q", directURL)
-
-	args := []string{
-		"-loglevel", "error",
-		"-i", directURL,
-		"-autoexit",
-		"-user_agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-	}
-	if IsWindows() {
-		args = append([]string{"-noborder", "-x", "1280", "-y", "720"}, args...)
-	} else {
-		args = append([]string{"-fs"}, args...)
-	}
-	ffCmd2 := exec.Command(ffplayPath, args...)
-	ffCmd2.Env = ffplayEnv(ffplayPath)
-
-	var stderrBuf bytes.Buffer
-	ffCmd2.Stderr = &stderrBuf
-	if err := ffCmd2.Start(); err != nil {
-		log.Printf("[ERROR] playWithDirectURL: ffplay.Start failed: %v", err)
-		showToast("Playback failed. Check ffplay in required/.", ToastError())
-		return
-	}
-	log.Printf("[DEBUG] playWithDirectURL: ffplay started, waiting...")
-	ffCmd2.Wait()
-	log.Printf("[DEBUG] playWithDirectURL: ffplay finished")
-	if stderrBuf.Len() > 0 {
-		log.Printf("[ERROR] playWithDirectURL: ffplay stderr: %s", stderrBuf.String())
-	}
-}
-
-func playWithTempFile(config *Config, ffplayPath, ytDlpPath, url string, startSec float64) {
+// playWithTempFile downloads the stream with yt-dlp and hands the file to the
+// embedded player. Downloading first (instead of piping) keeps seeking and
+// resume positions working and avoids holding two decoders in memory.
+func playWithTempFile(config *Config, ytDlpPath, url string, startSec float64) {
 	log.Printf("[DEBUG] playWithTempFile: downloading to temp file for %s (resume %.1fs)", url, startSec)
 
 	videoPlaybackMutex.Lock()
@@ -2954,7 +2815,10 @@ func playWithTempFile(config *Config, ffplayPath, ytDlpPath, url string, startSe
 	videoPlaybackError = ""
 	videoPlaybackMutex.Unlock()
 
-	tempPath := filepath.Join(os.TempDir(), fmt.Sprintf("jukahub-video-%d.mp4", time.Now().UnixNano()))
+	// Stage the download where removeTempVideo will look for it. On the
+	// handheld that is the SD card (see defaultVideoTempDir), not /tmp: the
+	// tmpfs is RAM-backed and a video there can get the app killed.
+	tempPath := tempVideoPath()
 
 	// Clean up any stale temp file from a previous attempt
 	os.Remove(tempPath)
@@ -3996,21 +3860,42 @@ func abButtonsSwapped(config *Config) bool {
 // "swapABButtons" setting so every scene and overlay sees one consistent
 // mapping. All controller input flows through the PollEvent loops, so
 // swapping here covers the whole app.
+//
+// It also folds the auxiliary buttons some handheld firmwares use for the B
+// face button (GUIDE / MISC1) into BACK, and logs each press while running on
+// a handheld. That log is the only way to tell a wrongly mapped B button apart
+// from a handler that ignored it.
 func applyButtonSwap(config *Config, event sdl.Event) {
-	if !abButtonsSwapped(config) {
-		return
-	}
 	ce, ok := event.(*sdl.ControllerButtonEvent)
 	if !ok {
 		return
 	}
-	switch ce.Button {
-	case sdl.CONTROLLER_BUTTON_A:
-		ce.Button = sdl.CONTROLLER_BUTTON_B
-	case sdl.CONTROLLER_BUTTON_B:
-		ce.Button = sdl.CONTROLLER_BUTTON_A
+	raw := ce.Button
+	handheld := P().IsHandheld()
+	ce.Button = normalizeHandheldBackButton(ce.Button, handheld)
+	if abButtonsSwapped(config) {
+		switch ce.Button {
+		case sdl.CONTROLLER_BUTTON_A:
+			ce.Button = sdl.CONTROLLER_BUTTON_B
+		case sdl.CONTROLLER_BUTTON_B:
+			ce.Button = sdl.CONTROLLER_BUTTON_A
+		}
+	}
+	if ce.Type == sdl.CONTROLLERBUTTONDOWN && handheld && controllerInputLogs < controllerInputLogLimit {
+		controllerInputLogs++
+		scene := ""
+		if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+			scene = config.Scenes[currentSceneIndex].Name
+		}
+		log.Printf("[input] pad button raw=%d mapped=%d scene=%q", raw, ce.Button, scene)
 	}
 }
+
+// Keep the input trace short: it exists to identify a mis-mapped back button,
+// not to log every navigation press for a whole session on the SD card.
+const controllerInputLogLimit = 60
+
+var controllerInputLogs int
 
 // toggleVariable flips a boolean setting, persists it, and applies live side
 // effects (e.g. Fullscreen on desktop builds).
@@ -5249,17 +5134,68 @@ func popSceneHistory() (int, bool) {
 	return last, true
 }
 
-// goBackScene returns to the previous scene in history, falling back to Home
-// ("Main"). B / Escape on any non-home scene routes through here; it never
-// terminates the application.
+// normalizeHandheldBackButton folds the auxiliary buttons some handheld
+// firmwares use for their B face button into BACK, so every menu closes with
+// the same button regardless of the raw SDL mapping.
+func normalizeHandheldBackButton(button uint8, handheld bool) uint8 {
+	if !handheld {
+		return button
+	}
+	if button == sdl.CONTROLLER_BUTTON_GUIDE {
+		return sdl.CONTROLLER_BUTTON_BACK
+	}
+	return button
+}
+
+// homeSceneIndex returns the scene that acts as Home: the one using the home
+// layout first, then a scene called Main or Home, then the first scene. Older
+// configs are not guaranteed to call the entry scene "Main", and goBackScene
+// used to fail silently in that case.
+func homeSceneIndex(config *Config) int {
+	if config == nil || len(config.Scenes) == 0 {
+		return -1
+	}
+	for i, scene := range config.Scenes {
+		if scene.Layout == "home" {
+			return i
+		}
+	}
+	for _, name := range []string{"Main", "Home"} {
+		for i, scene := range config.Scenes {
+			if scene.Name == name {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+// goBackScene returns to the previous scene in history, falling back to Home.
+// B / Escape on any non-home scene routes through here; it never terminates
+// the application. Stale history entries that point at the current scene are
+// skipped instead of silently consuming the press, and a busy transition keeps
+// the entry so the next press still works.
 func goBackScene(config *Config) {
 	PlayBackSound()
-	if prev, ok := popSceneHistory(); ok {
+	for {
+		prev, ok := popSceneHistory()
+		if !ok {
+			break
+		}
+		if prev < 0 || prev >= len(config.Scenes) || prev == currentSceneIndex {
+			continue
+		}
 		switchScene(config, prev, false)
+		if pendingSceneIndex == prev {
+			return
+		}
+		// A scene transition was already running; keep the destination for the
+		// next press instead of dropping it.
+		pushSceneHistory(prev)
 		return
 	}
-	if idx := findSceneIndex(config, "Main"); idx >= 0 {
-		switchScene(config, idx, false)
+	if home := homeSceneIndex(config); home >= 0 && home != currentSceneIndex {
+		switchScene(config, home, false)
 	}
 }
 

@@ -230,8 +230,8 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"accentColor":         true,
 
 	// Retired settings. Older configs still carry these; they no longer control
-	// anything (playback is always ffplay), so drop them instead of parking them
-	// in Custom where they would be re-saved forever.
+	// anything (video always uses the embedded ffmpeg decoder), so drop them
+	// instead of parking them in Custom where they would be re-saved forever.
 	"audioBackend": true,
 	"AudioBackend": true,
 	}

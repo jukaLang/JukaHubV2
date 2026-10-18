@@ -58,6 +58,49 @@ func TestMigrateHandheldButtonMapping(t *testing.T) {
 	}
 }
 
+// Some handheld firmwares expose the B face button as GUIDE rather than B.
+// It must still reach the back handlers, which only know B and BACK.
+func TestNormalizeHandheldBackButton(t *testing.T) {
+	if got := normalizeHandheldBackButton(sdl.CONTROLLER_BUTTON_GUIDE, true); got != sdl.CONTROLLER_BUTTON_BACK {
+		t.Errorf("handheld GUIDE = %d, want BACK", got)
+	}
+	if got := normalizeHandheldBackButton(sdl.CONTROLLER_BUTTON_GUIDE, false); got != sdl.CONTROLLER_BUTTON_GUIDE {
+		t.Errorf("desktop GUIDE must stay untouched, got %d", got)
+	}
+	if got := normalizeHandheldBackButton(sdl.CONTROLLER_BUTTON_A, true); got != sdl.CONTROLLER_BUTTON_A {
+		t.Errorf("A must not be remapped, got %d", got)
+	}
+	if got := normalizeHandheldBackButton(sdl.CONTROLLER_BUTTON_B, true); got != sdl.CONTROLLER_BUTTON_B {
+		t.Errorf("B must not be remapped, got %d", got)
+	}
+}
+
+// The back fallback must find Home even when the config does not name it
+// "Main" (older exported configs keep a different first-scene name).
+func TestHomeSceneIndex(t *testing.T) {
+	home := &Config{Scenes: []SceneConfig{
+		{Name: "Intro"},
+		{Name: "Dashboard", Layout: "home"},
+		{Name: "Settings"},
+	}}
+	if got := homeSceneIndex(home); got != 1 {
+		t.Fatalf("homeSceneIndex with a layout scene = %d, want 1", got)
+	}
+
+	named := &Config{Scenes: []SceneConfig{{Name: "Intro"}, {Name: "Main"}}}
+	if got := homeSceneIndex(named); got != 1 {
+		t.Fatalf("homeSceneIndex with Main = %d, want 1", got)
+	}
+
+	unnamed := &Config{Scenes: []SceneConfig{{Name: "Intro"}, {Name: "Settings"}}}
+	if got := homeSceneIndex(unnamed); got != 0 {
+		t.Fatalf("homeSceneIndex fallback = %d, want 0", got)
+	}
+	if got := homeSceneIndex(nil); got != -1 {
+		t.Fatalf("homeSceneIndex(nil) = %d, want -1", got)
+	}
+}
+
 func TestApplyButtonSwapFlipsABOnly(t *testing.T) {
 	on := &Config{Variables: Variables{Custom: map[string]interface{}{"swapABButtons": true}}}
 

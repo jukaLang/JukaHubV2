@@ -21,6 +21,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"unicode/utf8"
 
@@ -84,6 +85,9 @@ func vkFocusColor() sdl.Color {
 	if vkAbsDiff(lum(h), lum(base)) < 45 {
 		h = sdl.Color{R: 96, G: 165, B: 250, A: 255}
 	}
+	// The focus fill must be opaque: with alpha 0 the cap under the ring would
+	// stay transparent and the whole key would read as the ring colour.
+	h.A = 255
 	return h
 }
 
@@ -735,6 +739,10 @@ func vkSubmit(config *Config, askAI bool) {
 		}
 	case vkTargetChat:
 		vkSetText("", config)
+		// Close first: sending writes the chat log to the SD card (and may
+		// queue a network call), and the panel used to stay on screen until
+		// that finished, which looked like the keyboard ignoring the button.
+		vkCloseKeyboard()
 		if text != "" {
 			if askAI {
 				// sendGroqChatMessage records the user bubble itself.
@@ -743,7 +751,6 @@ func vkSubmit(config *Config, askAI bool) {
 				sendChatMessage("You", text)
 			}
 		}
-		vkCloseKeyboard()
 	default:
 		if textBrowserAddressEditing {
 			textBrowserAddressSubmitted = true
@@ -797,6 +804,130 @@ func vkEaseOut(t float64) float64 {
 	return 1 - (1-t)*(1-t)*(1-t)
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Static layer cache (panel, header, footer, keys)
+// ──────────────────────────────────────────────────────────────────────
+
+// Only the focused key changes while navigating. Redrawing the panel, header,
+// footer and all ~40 key caps every frame was the most expensive part of typing
+// on the handheld, so the static layer is rendered once into a texture and
+// reused until the layout, screen, theme or header/footer text changes. A
+// full-screen texture is
+// used so the cached pixels live in the same coordinate space as the renderer's
+// logical size (a smaller target would be scaled by SDL's logical-size
+// transform). The text field stays live because it follows typing.
+type vkStaticLayerState struct {
+	layout    string
+	panel     sdl.Rect
+	panelFill sdl.Color
+	shadow    sdl.Color
+	icon      sdl.Color
+	raised    sdl.Color
+	text      sdl.Color
+	text2     sdl.Color
+	text3     sdl.Color
+	border    sdl.Color
+	highlight sdl.Color
+	title     string
+	hints     string
+}
+
+var (
+	vkStaticTex    *sdl.Texture
+	vkStaticState  vkStaticLayerState
+	vkStaticValid  bool
+	vkStaticBroken bool // renderer has no render-target support: draw live
+	vkStaticBuilds int  // rebuild count, used by tests and diagnostics
+)
+
+func vkStaticLayerStateNow(panel sdl.Rect) vkStaticLayerState {
+	return vkStaticLayerState{
+		layout:    vkLayoutSig,
+		panel:     panel,
+		panelFill: ColorSurfacePanel,
+		shadow:    ColorShadow,
+		icon:      ColorIconSurface,
+		raised:    ColorSurfaceRaised,
+		text:      ColorTextPrimary(),
+		text2:     ColorTextSecondary(),
+		text3:     ColorTextTertiary(),
+		border:    ColorBorderSubtle,
+		highlight: vkFocusColor(),
+		title:     vkTitle(),
+		hints:     vkHints(),
+	}
+}
+
+// DestroyVKStaticCache frees the cached static layer. It is safe to call when
+// no cache exists and is used on shutdown and on layout/theme changes.
+func DestroyVKStaticCache() {
+	if vkStaticTex != nil {
+		vkStaticTex.Destroy()
+		vkStaticTex = nil
+	}
+	vkStaticValid = false
+	vkStaticBroken = false
+}
+
+// vkEnsureStaticLayer returns the cached panel + header + footer + unfocused
+// keys, rebuilding it only when the layout, screen geometry, theme colours or
+// header/footer text changed.
+func vkEnsureStaticLayer(renderer *sdl.Renderer, config *Config, font, smallFont *ttf.Font) *sdl.Texture {
+	state := vkStaticLayerStateNow(vkPanelRect)
+	if vkStaticValid && vkStaticTex != nil && vkStaticState == state {
+		return vkStaticTex
+	}
+	// Checked before the destroy below (which clears the flag): a renderer
+	// without render-target support must not retry and log every frame.
+	if vkStaticBroken || screenWidth <= 0 || screenHeight <= 0 {
+		return nil
+	}
+	DestroyVKStaticCache()
+
+	tex, err := renderer.CreateTexture(0, sdl.TEXTUREACCESS_TARGET, screenWidth, screenHeight)
+	if err != nil || tex == nil {
+		vkStaticBroken = true
+		log.Printf("[vk] keyboard cache disabled: %v", err)
+		return nil
+	}
+	if err := tex.SetBlendMode(sdl.BLENDMODE_BLEND); err != nil {
+		tex.Destroy()
+		vkStaticBroken = true
+		log.Printf("[vk] keyboard cache blend mode: %v", err)
+		return nil
+	}
+
+	prevTarget := renderer.GetRenderTarget()
+	var prevBlend sdl.BlendMode
+	_ = renderer.GetDrawBlendMode(&prevBlend)
+	if err := renderer.SetRenderTarget(tex); err != nil {
+		tex.Destroy()
+		vkStaticBroken = true
+		log.Printf("[vk] keyboard cache target: %v", err)
+		return nil
+	}
+	// The keyboard is drawn last, so no clip should be active; make sure the
+	// cached layer is not clipped by a leftover scene rect.
+	_ = renderer.SetClipRect(nil)
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(0, 0, 0, 0)
+	renderer.Clear()
+	// Panel, header and footer never change while navigating, and every cap is
+	// rendered in its resting state: focus is an overlay.
+	vkDrawPanel(renderer, vkPanelRect)
+	vkDrawHeader(renderer, config, smallFont, vkPanelRect, vkCloseRect)
+	vkDrawKeys(renderer, config, font, 0, false)
+	vkDrawFooter(renderer, config, smallFont, vkPanelRect)
+
+	_ = renderer.SetRenderTarget(prevTarget)
+	_ = renderer.SetDrawBlendMode(prevBlend)
+	vkStaticTex = tex
+	vkStaticState = state
+	vkStaticValid = true
+	vkStaticBuilds++
+	return tex
+}
+
 // renderKeyboard draws the panel when the keyboard is open.
 func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 	if !virtualKeyboardActive {
@@ -818,7 +949,36 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 	fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, WithAlpha(ColorBackground, 190))
 	fillRoundedRect(renderer, 0, 0, screenWidth, panel.Y, 0, WithAlpha(ColorBackground, 60))
 
-	// Panel shadow, body and hairline border.
+	font, _ := getCachedFont(config, "medium")
+	if font == nil {
+		font, _ = getCachedFont(config, "small")
+	}
+	smallFont, _ := getCachedFont(config, "small")
+	if smallFont == nil {
+		smallFont = font
+	}
+
+	if cache := vkEnsureStaticLayer(renderer, config, font, smallFont); cache != nil {
+		// Once per navigation frame: copy the cached layer, then draw only the
+		// field (typing) and the cap that moved. The layer is offset as a whole
+		// so the slide-in animation also moves panel, header and footer.
+		src := sdl.Rect{X: vkPanelRect.X, Y: vkPanelRect.Y, W: vkPanelRect.W, H: vkPanelRect.H}
+		dst := sdl.Rect{X: panel.X, Y: panel.Y, W: panel.W, H: panel.H}
+		_ = renderer.Copy(cache, &src, &dst)
+		vkDrawField(renderer, config, font, field)
+		vkDrawFocusedKey(renderer, config, font, offset)
+	} else {
+		vkDrawPanel(renderer, panel)
+		vkDrawHeader(renderer, config, smallFont, panel, closeBtn)
+		vkDrawField(renderer, config, font, field)
+		vkDrawKeys(renderer, config, font, offset, true)
+		vkDrawFooter(renderer, config, smallFont, panel)
+	}
+}
+
+// vkDrawPanel paints the panel shadow, body, sheen and hairline borders. It is
+// shared by the live path and the cached-layer build so both look identical.
+func vkDrawPanel(renderer *sdl.Renderer, panel sdl.Rect) {
 	for i := int32(1); i <= 3; i++ {
 		fillRoundedRect(renderer, panel.X-i*2, panel.Y+i*3, panel.W, panel.H, RadiusXL+i, ShadowFill(uint8(10+i*6)))
 	}
@@ -829,20 +989,6 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 	renderer.DrawRect(&sdl.Rect{X: panel.X, Y: panel.Y, W: panel.W, H: panel.H})
 	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 60)
 	renderer.DrawRect(&sdl.Rect{X: panel.X + 1, Y: panel.Y + 1, W: panel.W - 2, H: panel.H - 2})
-
-	font, _ := getCachedFont(config, "medium")
-	if font == nil {
-		font, _ = getCachedFont(config, "small")
-	}
-	smallFont, _ := getCachedFont(config, "small")
-	if smallFont == nil {
-		smallFont = font
-	}
-
-	vkDrawHeader(renderer, config, smallFont, panel, closeBtn)
-	vkDrawField(renderer, config, font, field)
-	vkDrawKeys(renderer, config, font, offset)
-	vkDrawFooter(renderer, config, smallFont, panel)
 }
 
 func vkDrawHeader(renderer *sdl.Renderer, config *Config, font *ttf.Font, panel, closeBtn sdl.Rect) {
@@ -963,81 +1109,121 @@ func vkFitTail(font *ttf.Font, text string, maxW int32) (string, int32) {
 	return string(runes[start:]), lastW
 }
 
-func vkDrawKeys(renderer *sdl.Renderer, config *Config, font *ttf.Font, offset int32) {
+// vkKeyStyle is the per-key drawing state that depends only on the label and
+// the current layer/shift state, not on focus.
+type vkKeyStyle struct {
+	primary   bool
+	secondary bool
+	shiftOn   bool
+	layerOn   bool
+	utility   bool
+}
+
+func vkStyleForKey(key string) vkKeyStyle {
+	return vkKeyStyle{
+		primary:   key == "ENTER" || key == "SEND",
+		secondary: key == "ASK_AI",
+		shiftOn:   key == "⇧" && keyboardUpper,
+		layerOn:   (key == "123" && vkLayer == vkLayerSymbols) || (key == "ABC" && vkLayer == vkLayerLetters),
+		utility:   key == "⇧" || key == "BACK" || key == "123" || key == "ABC",
+	}
+}
+
+// vkDrawSingleKey draws one cap. focused selects the highlight fill; every
+// other property comes from the current layout.
+func vkDrawSingleKey(renderer *sdl.Renderer, config *Config, font *ttf.Font, r sdl.Rect, key, label string, focused bool) {
 	highlight := vkFocusColor()
 	highlightText := contrastText(highlight)
 	ring := WithAlpha(highlight, 200)
+	style := vkStyleForKey(key)
 
+	radius := RadiusMD
+	// Base surface.
+	base := ColorIconSurface
+	if style.utility {
+		base = ColorSurfaceRaised
+	}
+	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, base)
+
+	// Top sheen + border give keys a crisp, modern edge.
+	renderer.SetDrawColor(255, 255, 255, 10)
+	renderer.FillRect(&sdl.Rect{X: r.X + 6, Y: r.Y + 1, W: r.W - 12, H: 1})
+	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 110)
+	renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
+
+	textColor := ColorTextPrimary()
+	switch {
+	case focused || style.primary:
+		// Focus ring behind the filled key.
+		fillRoundedRect(renderer, r.X-2, r.Y-2, r.W+4, r.H+4, radius+2, ring)
+		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, highlight)
+		textColor = highlightText
+	case style.secondary:
+		renderer.SetDrawColor(highlight.R, highlight.G, highlight.B, 160)
+		renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
+		textColor = highlight
+	case style.shiftOn || style.layerOn:
+		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, WithAlpha(highlight, 70))
+		renderer.SetDrawColor(highlight.R, highlight.G, highlight.B, 180)
+		renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
+		textColor = highlight
+	case style.utility:
+		textColor = ColorTextSecondary()
+	}
+
+	if font == nil || label == "" {
+		return
+	}
+	// Multi-letter caps ("SHIFT", "space", "Done") must never spill over
+	// the key edge, and single letters should use the larger face.
+	labelFont, fitted := vkLabelFont(config, label, r.W-14)
+	if labelFont == nil || fitted == "" {
+		return
+	}
+	w, h, _ := labelFont.SizeUTF8(fitted)
+	tx := r.X + (r.W-int32(w))/2
+	ty := r.Y + (r.H-int32(h))/2
+	renderText(renderer, config, labelFont, fitted, textColor, tx, ty)
+}
+
+// vkDrawKeys draws the key layer. With drawFocus=false every key is drawn in
+// its resting state, which is the focus-independent layer that gets cached;
+// the highlighted cap is then drawn on top each frame.
+func vkDrawKeys(renderer *sdl.Renderer, config *Config, font *ttf.Font, offset int32, drawFocus bool) {
 	for i, rect := range keyboardRects {
-		r := rect
-		r.Y += offset
-		key := ""
-		if i < len(keyboardKeys) {
-			key = keyboardKeys[i]
-		}
-		label := vkKeyLabel(key)
 		row, col := 0, 0
 		if i < len(keyboardRowCol) {
 			row, col = keyboardRowCol[i][0], keyboardRowCol[i][1]
 		}
-		focused := row == keyboardPosY && col == keyboardPosX
-		primary := key == "ENTER" || key == "SEND"
-		secondary := key == "ASK_AI"
-		shiftOn := key == "⇧" && keyboardUpper
-		layerOn := (key == "123" && vkLayer == vkLayerSymbols) || (key == "ABC" && vkLayer == vkLayerLetters)
-		utility := key == "⇧" || key == "BACK" || key == "123" || key == "ABC"
-
-		radius := RadiusMD
-		if primary {
-			radius = RadiusMD
+		focused := drawFocus && row == keyboardPosY && col == keyboardPosX
+		key := ""
+		if i < len(keyboardKeys) {
+			key = keyboardKeys[i]
 		}
+		r := rect
+		r.Y += offset
+		vkDrawSingleKey(renderer, config, font, r, key, vkKeyLabel(key), focused)
+	}
+}
 
-		// Base surface.
-		base := ColorIconSurface
-		if utility {
-			base = ColorSurfaceRaised
+// vkDrawFocusedKey redraws only the highlighted cap on top of the cached layer.
+func vkDrawFocusedKey(renderer *sdl.Renderer, config *Config, font *ttf.Font, offset int32) {
+	for i, rect := range keyboardRects {
+		row, col := 0, 0
+		if i < len(keyboardRowCol) {
+			row, col = keyboardRowCol[i][0], keyboardRowCol[i][1]
 		}
-		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, base)
-
-		// Top sheen + border give keys a crisp, modern edge.
-		renderer.SetDrawColor(255, 255, 255, 10)
-		renderer.FillRect(&sdl.Rect{X: r.X + 6, Y: r.Y + 1, W: r.W - 12, H: 1})
-		renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 110)
-		renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
-
-		textColor := ColorTextPrimary()
-		switch {
-		case focused || primary:
-			// Focus ring behind the filled key.
-			fillRoundedRect(renderer, r.X-2, r.Y-2, r.W+4, r.H+4, radius+2, ring)
-			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, highlight)
-			textColor = highlightText
-		case secondary:
-			renderer.SetDrawColor(highlight.R, highlight.G, highlight.B, 160)
-			renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
-			textColor = highlight
-		case shiftOn || layerOn:
-			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, WithAlpha(highlight, 70))
-			renderer.SetDrawColor(highlight.R, highlight.G, highlight.B, 180)
-			renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
-			textColor = highlight
-		case utility:
-			textColor = ColorTextSecondary()
-		}
-
-		if font == nil || label == "" {
+		if row != keyboardPosY || col != keyboardPosX {
 			continue
 		}
-		// Multi-letter caps ("SHIFT", "space", "Done") must never spill over
-		// the key edge, and single letters should use the larger face.
-		labelFont, fitted := vkLabelFont(config, label, r.W-14)
-		if labelFont == nil || fitted == "" {
-			continue
+		key := ""
+		if i < len(keyboardKeys) {
+			key = keyboardKeys[i]
 		}
-		w, h, _ := labelFont.SizeUTF8(fitted)
-		tx := r.X + (r.W-int32(w))/2
-		ty := r.Y + (r.H-int32(h))/2
-		renderText(renderer, config, labelFont, fitted, textColor, tx, ty)
+		r := rect
+		r.Y += offset
+		vkDrawSingleKey(renderer, config, font, r, key, vkKeyLabel(key), true)
+		return
 	}
 }
 

@@ -201,6 +201,111 @@ func TestStagedInstallFilesRejectsEmptyTree(t *testing.T) {
 	}
 }
 
+// TestAppUpdateKeepsInstalledTools is the updater contract for required/: an
+// app update may ship a placeholder tool folder, but the tools already on the
+// device (yt-dlp, ffmpeg, ...) must survive the swap untouched.
+func TestAppUpdateKeepsInstalledTools(t *testing.T) {
+	exe := "JukaHub"
+	if runtime.GOOS == "windows" {
+		exe = "JukaHub.exe"
+	}
+	staged := t.TempDir()
+	install := t.TempDir()
+
+	write := func(dir, rel, body string, mode os.FileMode) {
+		t.Helper()
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The release carries its own copies of the tools (a placeholder set that
+	// must not replace what the device already downloaded).
+	write(staged, exe, "new-binary", 0o755)
+	write(staged, releaseInfoFileName, `{"tag":"JukaHub-20261018120000"}`, 0o644)
+	write(staged, "required/yt-dlp", "archive-ytdlp", 0o755)
+	write(staged, "required/ffmpeg", "archive-ffmpeg", 0o755)
+
+	write(install, exe, "old-binary", 0o755)
+	write(install, "required/yt-dlp", "installed-ytdlp", 0o755)
+	write(install, "required/ffmpeg", "installed-ffmpeg", 0o755)
+	write(install, "required/local-tool", "installed-local", 0o755)
+
+	files, err := stagedInstallFiles(staged, install)
+	if err != nil {
+		t.Fatalf("stagedInstallFiles: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("planned %d files, want the binary and the release stamp: %v", len(files), files)
+	}
+	for _, f := range files {
+		if isPreservedInstallPath(f.Name) {
+			t.Fatalf("update plans to overwrite %q inside %s/", f.Name, preservedInstallDir)
+		}
+	}
+
+	// Run the real swap helper (minus its relaunch) so the test covers the
+	// same copy path the device uses.
+	journal := filepath.Join(t.TempDir(), "journal.json")
+	if err := os.WriteFile(journal, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(t.TempDir(), "apply-update")
+	if runtime.GOOS == "windows" {
+		script += ".bat"
+	}
+	if err := writeSwapScript(script, filepath.Join(install, exe), files, journal); err != nil {
+		t.Fatalf("writeSwapScript: %v", err)
+	}
+	data, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sep := "\n"
+	if runtime.GOOS == "windows" {
+		sep = "\r\n"
+	}
+	var kept []string
+	for _, line := range strings.Split(string(data), sep) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "start ") || strings.Contains(trimmed, "nohup") ||
+			trimmed == "sleep 2" || strings.HasPrefix(trimmed, "timeout /t 2") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	if err := os.WriteFile(script, []byte(strings.Join(kept, sep)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/c", script)
+	} else {
+		cmd = exec.Command(script)
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("swap helper failed: %v\n%s", err, out)
+	}
+
+	for rel, want := range map[string]string{
+		exe:                   "new-binary",
+		"required/yt-dlp":     "installed-ytdlp",
+		"required/ffmpeg":     "installed-ffmpeg",
+		"required/local-tool": "installed-local",
+		releaseInfoFileName:   `{"tag":"JukaHub-20261018120000"}`,
+	} {
+		got, err := os.ReadFile(filepath.Join(install, filepath.FromSlash(rel)))
+		if err != nil || string(got) != want {
+			t.Errorf("%s = %q, %v; want %q", rel, got, err, want)
+		}
+	}
+}
+
 // TestSwapScriptReplacesFiles executes the generated Windows helper against a
 // throwaway installation. The relaunch line is removed so the test never
 // starts a real JukaHub process.

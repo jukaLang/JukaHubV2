@@ -26,7 +26,7 @@
     "gridColumns": 5,
     "searchWidth": 940,
     "dynamicBg": false,
-    "screensaverTimeout": 0,
+    "screensaverTimeout": 300,
     "socialNotifs": false,
     "Custom": {
       "BackgroundImage": "background.jpg",
@@ -45,17 +45,171 @@
       "WeatherUnit": "C",
       "chat_input": "hi",
       "diskpie_data": {
-        "Pct": 0,
-        "Total": 0,
-        "Used": 0
+        "Pct": 62,
+        "Total": 510718431232,
+        "Used": 320529195008
       },
-      "swapABButtons": false
+      "ftp_address": "",
+      "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
+      "ftp_status": "stopped",
+      "local_ip": "192.168.68.57",
+      "network_status": "online",
+      "recently_played": [
+        "https://www.youtube.com/watch?v=Y7kBmcWKLxg",
+        "https://www.youtube.com/watch?v=lcjGBhLi_qQ",
+        "https://www.youtube.com/watch?v=f2HPVr2apPs",
+        "https://www.youtube.com/watch?v=_Nw4qDYtncU"
+      ],
+      "swapABButtons": false,
+      "tool_ffmpeg": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffmpeg.exe",
+      "tool_ffplay": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffplay.exe",
+      "tool_ffprobe": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffprobe.exe",
+      "tool_yt-dlp": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\yt-dlp.exe",
+      "tools_status": "All tools available"
     }
   },
   "favorites": {
     "videos": [],
-    "recent": [],
+    "recent": [
+      {
+        "Type": "video",
+        "Data": {
+          "id": "lcjGBhLi_qQ",
+          "title": "This viral TikTok trend just got 12 people arrested | FOX 5 News",
+          "uploader": "FOX 5 Atlanta",
+          "channel": "FOX 5 Atlanta",
+          "duration": 172,
+          "thumbnail": "https://i.ytimg.com/vi/lcjGBhLi_qQ/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLCrrUukWB2t6urb5goH7Pcu43QKyQ",
+          "description": "Gwinnett County police arrested five adults and charged seven juveniles after a viral TikTok trend led intruders to break into an ...",
+          "view_count": 939698,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=lcjGBhLi_qQ",
+          "position": 20.1654304
+        },
+        "Timestamp": "2026-10-17T20:13:07.2566311-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "Y7kBmcWKLxg",
+          "title": "New Crime Trend You NEED To Know About",
+          "uploader": "TheDC Shorts",
+          "channel": "TheDC Shorts",
+          "duration": 190,
+          "thumbnail": "https://i.ytimg.com/vi/Y7kBmcWKLxg/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLCl3CSLli_BXniIxHVzLfFifgjw1A",
+          "description": "Add this one to the list of scams you need to watch out for! Check out our Twitter: https://goo.gl/fnYe4v And Facebook: ...",
+          "view_count": 1419312,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=Y7kBmcWKLxg"
+        },
+        "Timestamp": "2026-10-17T20:08:35.4829638-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "f2HPVr2apPs",
+          "title": "IYE - Babatunde Aderinoye, Irewole Olaniyan,Oyindamola Sanni Latest 2026 YorubaDrama Movie#trending",
+          "uploader": "ADEKAZ PREMIUM TV",
+          "channel": "ADEKAZ PREMIUM TV",
+          "duration": 7554,
+          "thumbnail": "https://i.ytimg.com/vi/f2HPVr2apPs/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLBeRr4kMM67ux9xISRZSq83mIW4LA",
+          "description": "Every choice comes with a price, every desire has a cost and every secret leaves a mark. But when the price is too high, what are ...",
+          "view_count": 343336,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=f2HPVr2apPs"
+        },
+        "Timestamp": "2026-10-17T20:08:32.145083-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "_Nw4qDYtncU",
+          "title": "Controlling Mom FORCES DAUGHTER To Be Popular Ft. Gia Rose | Dhar Mann Studios",
+          "uploader": "Dhar Mann Studios",
+          "channel": "Dhar Mann Studios",
+          "duration": 1722,
+          "thumbnail": "https://i.ytimg.com/vi/_Nw4qDYtncU/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLAXRUCQ0phKy-aZYhanL2BRk_hVOg",
+          "description": "Join the Dhar Mann Studios Discord! Meet the community, talk episodes, participate in fun polls and more!",
+          "view_count": 2144529,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=_Nw4qDYtncU",
+          "position": 55.3844742
+        },
+        "Timestamp": "2026-10-17T20:07:15.4515882-04:00"
+      }
+    ],
     "files": [],
     "iptv": []
+  },
+  "chat": {
+    "messages": [
+      {
+        "id": "1557923849209651290",
+        "sender": "jukalang",
+        "text": "",
+        "timestamp": "2026-10-09T01:13:10.477Z",
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1557923848819712051/image.png?ex=6ad4c5e6\u0026is=6ad37466\u0026hm=29be12cf22ba41688a7a814ac48a32fb5f24b935040aa9e83509108d703b74f5\u0026"
+      },
+      {
+        "id": "1558136255923888240",
+        "sender": "jukalang",
+        "text": "Making fixes for JukaMix",
+        "timestamp": "2026-10-09T15:17:12.184Z"
+      },
+      {
+        "id": "1561112067929276427",
+        "sender": "You",
+        "text": "hello",
+        "timestamp": "2026-10-17T20:22:01.054Z"
+      },
+      {
+        "id": "1561112258510065777",
+        "sender": "System",
+        "text": "Groq API key not configured. Set groq_api_key in config.",
+        "timestamp": "2026-10-17T20:22:46.492Z"
+      },
+      {
+        "id": "1561112385052217496",
+        "sender": "jukalang",
+        "text": "",
+        "timestamp": "2026-10-17T20:23:16.662Z",
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561112384569868298/image.png?ex=6ad52ab4\u0026is=6ad3d934\u0026hm=a170d63ef26e134d30205e0fd0e6964a0945b23b6d7cbc5b22f4bc4b0c95dafa\u0026"
+      },
+      {
+        "id": "1561112409232379967",
+        "sender": "jukalang",
+        "text": "chat working again",
+        "timestamp": "2026-10-17T20:23:22.427Z"
+      },
+      {
+        "id": "1561112623095881822",
+        "sender": "jukalang",
+        "text": "Video Working",
+        "timestamp": "2026-10-17T20:24:13.416Z"
+      },
+      {
+        "id": "1561112627181264986",
+        "sender": "jukalang",
+        "text": "",
+        "timestamp": "2026-10-17T20:24:14.39Z",
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561112626833133598/image.png?ex=6ad52aee\u0026is=6ad3d96e\u0026hm=2e3344c195c82b14c49670c556b99e7c59fd4e18be4d0785173c5fe876372c88\u0026"
+      },
+      {
+        "id": "1561114969196732537",
+        "sender": "jukalang",
+        "text": "Will be releasing a new version in a few. just doing final tests and testing on TSP",
+        "timestamp": "2026-10-17T20:33:32.77Z"
+      },
+      {
+        "id": "1561159141764894831",
+        "sender": "jukalang",
+        "text": "I am fixing a few video bugs and will release it soon",
+        "timestamp": "2026-10-17T23:29:04.331Z"
+      }
+    ]
   }
 }

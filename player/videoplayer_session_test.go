@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -61,6 +62,33 @@ func TestStoppedSessionRejectsNewCommands(t *testing.T) {
 	}
 	if sess.registerAudioCmd(&exec.Cmd{}) {
 		t.Fatal("stopped session accepted an audio command")
+	}
+}
+
+// Downloads must be staged in the directory cleanup checks, otherwise files
+// pile up on the SD card (and on the handheld /tmp used to be RAM-backed, which
+// got the app killed while downloading).
+func TestTempVideoPathUsesVideoTempDir(t *testing.T) {
+	dir := t.TempDir()
+	prevTempDir := videoTempDir
+	videoTempDir = func() string { return dir }
+	t.Cleanup(func() { videoTempDir = prevTempDir })
+
+	path := tempVideoPath()
+	if filepath.Dir(path) != dir {
+		t.Fatalf("tempVideoPath() = %q, want it inside %q", path, dir)
+	}
+	if base := filepath.Base(path); !strings.HasPrefix(base, "jukahub-video-") || !strings.HasSuffix(base, ".mp4") {
+		t.Fatalf("tempVideoPath() base = %q, want a downloadable mp4 name", base)
+	}
+
+	// The file it names must be the file cleanup removes.
+	if err := os.WriteFile(path, []byte("download"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	removeTempVideo(path)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("removeTempVideo did not remove %q: %v", path, err)
 	}
 }
 

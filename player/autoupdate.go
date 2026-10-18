@@ -480,10 +480,30 @@ type stagedInstallFile struct {
 	Dest string // absolute destination path
 }
 
+// preservedInstallDir is the helper-tool folder next to the executable. A
+// release archive may ship a placeholder (or no tools at all), but the tools on
+// the device were either downloaded by the user or installed with the package
+// and are expensive to re-fetch on handheld Wi-Fi. An app update must leave
+// them exactly as they are.
+const preservedInstallDir = "required"
+
+// isPreservedInstallPath reports whether a staged relative path belongs to a
+// folder the updater keeps untouched.
+func isPreservedInstallPath(rel string) bool {
+	clean := filepath.ToSlash(filepath.Clean(rel))
+	if clean == "." || clean == "" {
+		return false
+	}
+	first, _, _ := strings.Cut(clean, "/")
+	return strings.EqualFold(first, preservedInstallDir)
+}
+
 // stagedInstallFiles lists the regular files of a staged release, in copy
 // order (release-info.json last, so it only marks a completed replacement).
+// Files under required/ are skipped: installed helper tools survive an update.
 func stagedInstallFiles(installRoot, exeDir string) ([]stagedInstallFile, error) {
 	var files []stagedInstallFile
+	keptTools := 0
 	err := filepath.WalkDir(installRoot, func(p string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -509,6 +529,10 @@ func stagedInstallFiles(installRoot, exeDir string) ([]stagedInstallFile, error)
 		if rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
 			return fmt.Errorf("unexpected staged path %q", p)
 		}
+		if isPreservedInstallPath(rel) {
+			keptTools++
+			return nil
+		}
 		files = append(files, stagedInstallFile{
 			Src:  p,
 			Name: rel,
@@ -518,6 +542,9 @@ func stagedInstallFiles(installRoot, exeDir string) ([]stagedInstallFile, error)
 	})
 	if err != nil {
 		return nil, err
+	}
+	if keptTools > 0 {
+		logPatch("update: preserving %d installed tool file(s) in %s/", keptTools, preservedInstallDir)
 	}
 	if len(files) == 0 {
 		return nil, errors.New("staged release is empty")

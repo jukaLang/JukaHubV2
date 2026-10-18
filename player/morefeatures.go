@@ -59,30 +59,26 @@ func hasMediaExtension(s string) bool {
 	return false
 }
 
-// playStream launches ffplay directly on a stream URL (rtsp://, http://,
-// or any URL ffplay understands) without going through yt-dlp.
+// playStream plays a direct stream URL (rtsp://, http://, ...) in the
+// embedded player. ffmpeg reads the stream itself; ffplay is no longer used
+// because the bundled binary needs X11, which the handheld does not have.
 func playStream(config *Config, url string) {
 	recordPlayed(config, url)
 	log.Printf("playStream: %s", sanitizeLogURL(url))
+	ensureVideoScene(config)
+	currentPlaybackURL = url
 	go func() {
-		// Resolve (and install, if needed) before playing: a missing ffplay
-		// shows the install card instead of a silent exec failure.
-		ff, err := helperToolPath("ffplay", config)
-		if err != nil {
-			log.Printf("[ERROR] playStream: ffplay unavailable: %v", err)
-			showToast(toolUnavailableMessage("ffplay", err), ToastError())
+		// Resolve (and install, if needed) before playing: a missing ffmpeg
+		// shows the install card instead of failing silently in the decoder.
+		if _, err := helperToolPath("ffmpeg", config); err != nil {
+			log.Printf("[ERROR] playStream: ffmpeg unavailable: %v", err)
+			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
 			return
 		}
-		var cmd *exec.Cmd
-		if runtime.GOOS == "windows" {
-			cmd = exec.Command("cmd", "/c", ff, "-fs", "-autoexit", url)
-		} else {
-			cmd = exec.Command(ff, "-fs", "-autoexit", url)
+		if _, err := helperToolPath("ffprobe", config); err != nil {
+			log.Printf("[DEBUG] playStream: ffprobe unavailable, using defaults: %v", err)
 		}
-		cmd.Env = ffplayEnv(ff)
-		if err := cmd.Run(); err != nil {
-			log.Printf("playStream error: %v", err)
-		}
+		StartEmbeddedPlayback(config, url)
 	}()
 }
 
@@ -97,85 +93,30 @@ func playSmartURL(config *Config, url string) {
 		playStream(config, url)
 		return
 	}
-	recordPlayed(config, url)
-	go func() {
-		// Resolve both tools first: helperToolPath downloads and verifies a
-		// missing yt-dlp/ffplay (with the install card) instead of leaving the
-		// user with a raw "executable file not found" later.
-		ytp, err := helperToolPath("yt-dlp", config)
-		if err != nil {
-			log.Printf("[ERROR] playSmartURL: yt-dlp unavailable: %v", err)
-			showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
-			return
-		}
-		ff, err := helperToolPath("ffplay", config)
-		if err != nil {
-			log.Printf("[ERROR] playSmartURL: ffplay unavailable: %v", err)
-			showToast(toolUnavailableMessage("ffplay", err), ToastError())
-			return
-		}
-		// Sanity-check the URL before interpolating it into a shell command
-		// (CodeQL #40: command built from user-controlled sources). We only
-		// allow http/https URLs here; local paths are handled by playStream.
-		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-			// Never log the raw URL: it can carry tokens in its query string.
-			log.Printf("[SECURITY] playSmartURL: rejecting non-http URL %q", sanitizeLogURL(url))
-			return
-		}
-		if strings.ContainsAny(url, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\n\r") {
-			log.Printf("[SECURITY] playSmartURL: rejecting URL with control characters %q", sanitizeLogURL(url))
-			return
-		}
-		if len(url) > 2048 {
-			log.Printf("[SECURITY] playSmartURL: rejecting overlong URL (%d bytes)", len(url))
-			return
-		}
-		// Validate the extra args the same way executeYouTubeSearch does, so a
-		// malicious cookies_file / api_key value cannot alter the invocation.
-		extraArgList := ytDlpExtraArgsSlice(config)
-		if err := validateYtDlpArgs(extraArgList); err != nil {
-			log.Printf("[SECURITY] playSmartURL: rejecting unsafe extra args: %v", err)
-			return
-		}
-		// Two processes joined by an OS pipe instead of `sh -c "... | ..."`.
-		// No shell parses the URL or any argument, so quoting can never turn
-		// into command injection (CodeQL #40).
-		ytArgs := []string{"-f", "best", "-o", "-"}
-		ytArgs = append(ytArgs, extraArgList...)
-		ytArgs = append(ytArgs, url)
-		ytCmd := exec.Command(ytp, ytArgs...)
-		ytCmd.Env = helperToolEnv(ytp)
-
-		ffArgs := []string{"-i", "pipe:0", "-autoexit"}
-		if IsWindows() {
-			ffArgs = append([]string{"-noborder", "-x", "1280", "-y", "720"}, ffArgs...)
-		} else {
-			ffArgs = append([]string{"-fs"}, ffArgs...)
-		}
-		ffCmd := exec.Command(ff, ffArgs...)
-		ffCmd.Env = ffplayEnv(ff)
-
-		pipe, err := ytCmd.StdoutPipe()
-		if err != nil {
-			log.Printf("playSmartURL: stdout pipe: %v", err)
-			return
-		}
-		ffCmd.Stdin = pipe
-		ytCmd.Stderr = os.Stderr
-		ffCmd.Stderr = os.Stderr
-		if err := ffCmd.Start(); err != nil {
-			log.Printf("playSmartURL: ffplay start: %v", err)
-			return
-		}
-		if err := ytCmd.Start(); err != nil {
-			log.Printf("playSmartURL: yt-dlp start: %v", err)
-			_ = ffCmd.Process.Kill()
-			_ = ffCmd.Wait()
-			return
-		}
-		_ = ytCmd.Wait()
-		_ = ffCmd.Wait()
-	}()
+	// Sanity-check the URL before handing it to yt-dlp (CodeQL #40). We only
+	// allow http/https URLs here; local paths are handled by playStream.
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		// Never log the raw URL: it can carry tokens in its query string.
+		log.Printf("[SECURITY] playSmartURL: rejecting non-http URL %q", sanitizeLogURL(url))
+		return
+	}
+	if strings.ContainsAny(url, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0b\x0c\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\n\r") {
+		log.Printf("[SECURITY] playSmartURL: rejecting URL with control characters %q", sanitizeLogURL(url))
+		return
+	}
+	if len(url) > 2048 {
+		log.Printf("[SECURITY] playSmartURL: rejecting overlong URL (%d bytes)", len(url))
+		return
+	}
+	// Validate the extra args the same way executeYouTubeSearch does, so a
+	// malicious cookies_file / api_key value cannot alter the invocation.
+	if err := validateYtDlpArgs(ytDlpExtraArgsSlice(config)); err != nil {
+		log.Printf("[SECURITY] playSmartURL: rejecting unsafe extra args: %v", err)
+		return
+	}
+	// playVideoInfo downloads with yt-dlp and decodes in the embedded player,
+	// which is the same path YouTube search results use.
+	playVideoInfo(config, VideoInfo{URL: url})
 }
 
 // ---------------------------------------------------------------------------

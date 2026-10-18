@@ -26,27 +26,75 @@ const (
 	FrameRateDeepIdle                      // 20 fps – no input for a long time
 )
 
+// frameProfile holds the render delay (ms) for each cadence mode.
+type frameProfile struct {
+	Active uint32
+	Idle   uint32
+	Deep   uint32
+}
+
+// frameProfileFor returns the cadence for the target platform. The handheld
+// caps at 30fps: the TSP cannot sustain 60fps while drawing menus, the
+// on-screen keyboard or decoded video, so the extra frames only cost battery
+// and heat and make input feel later than it is.
+func frameProfileFor(handheld bool) frameProfile {
+	if handheld {
+		return frameProfile{Active: 33, Idle: 42, Deep: 66} // ~30 / 24 / 15 fps
+	}
+	return frameProfile{Active: 16, Idle: 33, Deep: 50} // ~60 / 30 / 20 fps
+}
+
+// delayFor returns the sleep for a mode. LowPower caps the cadence at the idle
+// profile instead of the fastest one; it must never be passed to
+// SetAnimationActive, which would turn the battery setting into 60fps.
+func (p frameProfile) delayFor(mode FrameRateMode, lowPower bool) uint32 {
+	if lowPower {
+		return p.Idle
+	}
+	switch mode {
+	case FrameRateActive:
+		return p.Active
+	case FrameRateIdle:
+		return p.Idle
+	default:
+		return p.Deep
+	}
+}
+
+// fps reports the approximate frames per second of a mode (for diagnostics).
+func (p frameProfile) fps(mode FrameRateMode) int {
+	d := p.delayFor(mode, false)
+	if d == 0 {
+		return 0
+	}
+	return int(1000 / d)
+}
+
 // FrameRateController dynamically adjusts the render delay based on user
-// activity. On TSP (ARM64, battery-powered), going from 60→20 fps when idle
-// halves GPU/CPU utilisation and noticeably extends battery life.
+// activity. On TSP (ARM64, battery-powered), slowing down when idle halves
+// GPU/CPU utilisation and noticeably extends battery life.
 type FrameRateController struct {
 	mu              sync.Mutex
 	lastInputTime   uint64
 	idleThreshold   uint64 // ms before switching to Idle
 	deepThreshold   uint64 // ms before switching to DeepIdle
 	currentMode     FrameRateMode
-	animationActive bool // transitions, hover anims, etc. keep us at 60
+	animationActive bool // transitions, hover anims, etc. keep the fastest mode
+	lowPower        bool // user setting: always use the slowest cadence
+	profile         frameProfile
 }
 
 // NewFrameRateController creates a controller tuned for the given platform.
 func NewFrameRateController() *FrameRateController {
+	handheld := IsTrimuiDevice()
 	fc := &FrameRateController{
 		lastInputTime: sdl.GetTicks64(),
 		currentMode:   FrameRateActive,
+		profile:       frameProfileFor(handheld),
 	}
-	if IsTrimuiDevice() {
-		fc.idleThreshold = 3000  // 3s → 30fps
-		fc.deepThreshold = 10000 // 10s → 20fps
+	if handheld {
+		fc.idleThreshold = 3000  // 3s → 24fps
+		fc.deepThreshold = 10000 // 10s → 15fps
 	} else {
 		fc.idleThreshold = 5000
 		fc.deepThreshold = 20000
@@ -60,15 +108,24 @@ func (fc *FrameRateController) NotifyInput() {
 	fc.lastInputTime = sdl.GetTicks64()
 	if fc.currentMode != FrameRateActive {
 		fc.currentMode = FrameRateActive
-		log.Printf("[framerate] → Active (60 fps)")
+		log.Printf("[framerate] → Active (%d fps)", fc.profile.fps(FrameRateActive))
 	}
 	fc.mu.Unlock()
 }
 
-// SetAnimationActive forces 60fps while transitions/animations are running.
+// SetAnimationActive selects the fastest cadence while transitions or
+// animations are running.
 func (fc *FrameRateController) SetAnimationActive(active bool) {
 	fc.mu.Lock()
 	fc.animationActive = active
+	fc.mu.Unlock()
+}
+
+// SetLowPower caps the cadence at the idle profile regardless of activity.
+// This is what the LowPower setting means; it is not an animation trigger.
+func (fc *FrameRateController) SetLowPower(low bool) {
+	fc.mu.Lock()
+	fc.lowPower = low
 	fc.mu.Unlock()
 }
 
@@ -79,10 +136,13 @@ func (fc *FrameRateController) Delay() uint32 {
 	now := sdl.GetTicks64()
 	elapsed := now - fc.lastInputTime
 	animation := fc.animationActive
+	lowPower := fc.lowPower
 	fc.mu.Unlock()
 
 	var mode FrameRateMode
 	switch {
+	case lowPower && elapsed < fc.deepThreshold:
+		mode = FrameRateIdle
 	case animation || elapsed < fc.idleThreshold:
 		mode = FrameRateActive
 	case elapsed < fc.deepThreshold:
@@ -94,19 +154,11 @@ func (fc *FrameRateController) Delay() uint32 {
 	fc.mu.Lock()
 	if mode != fc.currentMode {
 		fc.currentMode = mode
-		fps := map[FrameRateMode]int{FrameRateActive: 60, FrameRateIdle: 30, FrameRateDeepIdle: 20}
-		log.Printf("[framerate] → %v (%d fps, idle %dms)", mode, fps[mode], elapsed)
+		log.Printf("[framerate] → %v (%d fps, idle %dms)", mode, fc.profile.fps(mode), elapsed)
 	}
 	fc.mu.Unlock()
 
-	switch mode {
-	case FrameRateActive:
-		return 16 // ~60 fps
-	case FrameRateIdle:
-		return 33 // ~30 fps
-	default:
-		return 50 // ~20 fps
-	}
+	return fc.profile.delayFor(mode, lowPower)
 }
 
 // CurrentMode returns the current frame rate mode (for diagnostics).

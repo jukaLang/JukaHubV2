@@ -241,8 +241,32 @@ func persistSessionProgress(s *playbackSession) {
 }
 
 // videoTempDir is the directory playWithTempFile stages downloads in.
-// Overridable in tests; production always uses the system temp directory.
-var videoTempDir = os.TempDir
+// Overridable in tests.
+var videoTempDir = defaultVideoTempDir
+
+// defaultVideoTempDir keeps downloads off the handheld's tmpfs: /tmp on the
+// TrimUI lives in RAM, and a multi-megabyte video staged there used to fill
+// memory and get the app killed mid-download. On the handheld the file goes to
+// the app's data folder on the SD card instead; desktops keep using the
+// system temp directory.
+func defaultVideoTempDir() string {
+	if P().IsHandheld() {
+		if dir, err := P().DataDir(); err == nil && dir != "" {
+			videos := filepath.Join(dir, "video")
+			if err := os.MkdirAll(videos, 0o755); err == nil {
+				return videos
+			}
+		}
+	}
+	return os.TempDir()
+}
+
+// tempVideoPath builds the staging path for one download. Creation and cleanup
+// both derive it from videoTempDir, so a file we make is always a file we may
+// delete (and a user's own media never is).
+func tempVideoPath() string {
+	return filepath.Join(videoTempDir(), fmt.Sprintf("jukahub-video-%d.mp4", time.Now().UnixNano()))
+}
 
 // removeTempVideo deletes a downloaded playback copy. Only files created by
 // playWithTempFile are touched: stopping a video played from the SD card used

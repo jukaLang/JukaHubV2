@@ -343,6 +343,8 @@ func ctrlCalculator(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		calcHandleFunc("<")
 		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
 	default:
 		return false
 	}
@@ -362,6 +364,8 @@ func ctrlPomodoro(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_X:
 		pomodoroSkip()
 		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
 	default:
 		return false
 	}
@@ -434,9 +438,10 @@ func ctrlNotes(e *sdl.ControllerButtonEvent) bool {
 				}
 			}
 		}
-	case sdl.CONTROLLER_BUTTON_B:
-		notes.tab = 0
-		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		// The list is the top level of the scene, so B leaves Notes instead of
+		// silently staying on the list (the old handler looked like a no-op).
+		goBackScene(appConfig)
 	case sdl.CONTROLLER_BUTTON_Y:
 		notes.tab = 3
 		notes.editTitle = ""
@@ -514,6 +519,8 @@ func ctrlDictionary(e *sdl.ControllerButtonEvent) bool {
 			dict.result = dictLookup(word)
 			PlayActivateSound()
 		}
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
 	default:
 		return false
 	}
@@ -621,8 +628,7 @@ func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
 
 func ctrlDashboard(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK {
-		goBackScene(config)
-		PlayBackSound()
+		goBackScene(config) // plays the back sound itself
 		return true
 	}
 	return false
@@ -632,8 +638,7 @@ func ctrlDashboard(e *sdl.ControllerButtonEvent, config *Config) bool {
 
 func ctrlAbout(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK {
-		goBackScene(config)
-		PlayBackSound()
+		goBackScene(config) // plays the back sound itself
 		return true
 	}
 	return false
@@ -662,6 +667,8 @@ func ctrlPDFReader(e *sdl.ControllerButtonEvent) bool {
 			pdf.scrollY = 0
 			PlayNavSound()
 		}
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
 	default:
 		return false
 	}
@@ -703,8 +710,7 @@ func ctrlGamesMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
 		startGame(gameList[gameMenuCursor].id)
 		PlayActivateSound()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		goBackScene(config)
-		PlayBackSound()
+		goBackScene(config) // plays the back sound itself
 	default:
 		return false
 	}
@@ -712,8 +718,10 @@ func ctrlGamesMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
 }
 
 func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
-	// Universal game controls
-	if e.Button == sdl.CONTROLLER_BUTTON_B && gameOver {
+	// Universal game controls: B always leaves the game and returns to the
+	// game list. It used to work only on the Game Over screen, so a running
+	// game could not be exited with the back button at all.
+	if e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK {
 		activeGame = gameNone
 		gameOver = false
 		PlayBackSound()
@@ -877,7 +885,7 @@ var lastStickTime uint64
 
 func handleStickDpad(btn uint8) bool {
 	now := sdl.GetTicks64()
-	if btn == lastStickBtn && now-lastStickTime < 150 {
+	if btn == lastStickBtn && now-lastStickTime < 120 {
 		return false // repeat rate limiter
 	}
 	lastStickBtn = btn
@@ -885,6 +893,14 @@ func handleStickDpad(btn uint8) bool {
 	fakeEvent := &sdl.ControllerButtonEvent{
 		Type:   sdl.CONTROLLERBUTTONDOWN,
 		Button: btn,
+	}
+	// Re-queue the synthetic press instead of routing it here: the main loop
+	// is the only place that knows about the virtual keyboard and the scene
+	// handlers, and handleControllerEvent covers overlays only. Calling the
+	// overlay router directly left the left stick unable to move focus in
+	// menus or on the on-screen keyboard.
+	if _, err := sdl.PushEvent(fakeEvent); err == nil {
+		return true
 	}
 	return handleControllerEvent(fakeEvent, appConfig)
 }
