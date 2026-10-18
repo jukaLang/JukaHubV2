@@ -26,7 +26,7 @@
     "gridColumns": 5,
     "searchWidth": 940,
     "dynamicBg": false,
-    "screensaverTimeout": 300,
+    "screensaverTimeout": 0,
     "socialNotifs": false,
     "Custom": {
       "BackgroundImage": "background.jpg",
@@ -45,27 +45,12 @@
       "WeatherUnit": "C",
       "chat_input": "hi",
       "diskpie_data": {
-        "Pct": 62,
-        "Total": 510718431232,
-        "Used": 320529195008
+        "Pct": 0,
+        "Total": 0,
+        "Used": 0
       },
-      "ftp_address": "",
-      "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
-      "ftp_status": "stopped",
-      "local_ip": "192.168.68.57",
-      "network_status": "online",
-      "recently_played": [
-        "https://www.youtube.com/watch?v=Y7kBmcWKLxg",
-        "https://www.youtube.com/watch?v=lcjGBhLi_qQ",
-        "https://www.youtube.com/watch?v=f2HPVr2apPs",
-        "https://www.youtube.com/watch?v=_Nw4qDYtncU"
-      ],
       "swapABButtons": false,
-      "tool_ffmpeg": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffmpeg.exe",
-      "tool_ffplay": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffplay.exe",
-      "tool_ffprobe": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffprobe.exe",
-      "tool_yt-dlp": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\yt-dlp.exe",
-      "tools_status": "All tools available"
+      "theme": "dark"
     }
   },
   "favorites": {
@@ -74,20 +59,37 @@
       {
         "Type": "video",
         "Data": {
-          "id": "lcjGBhLi_qQ",
-          "title": "This viral TikTok trend just got 12 people arrested | FOX 5 News",
-          "uploader": "FOX 5 Atlanta",
-          "channel": "FOX 5 Atlanta",
-          "duration": 172,
-          "thumbnail": "https://i.ytimg.com/vi/lcjGBhLi_qQ/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLCrrUukWB2t6urb5goH7Pcu43QKyQ",
-          "description": "Gwinnett County police arrested five adults and charged seven juveniles after a viral TikTok trend led intruders to break into an ...",
-          "view_count": 939698,
+          "id": "1YnkZS9e8MA",
+          "title": "Moneybagg Yo - Trending [Federal 3]",
+          "uploader": "DatPiff",
+          "channel": "DatPiff",
+          "duration": 210,
+          "thumbnail": "https://i.ytimg.com/vi/1YnkZS9e8MA/hq720.jpg?sqp=-oaymwE2COgCEMoBSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhlIEsoSzAP\u0026rs=AOn4CLBNJnRfkz4I6F8704V9w-8VAmWH3w",
+          "description": "Listen \u0026 Subscribe to Datpiff's Official Spotify Playlist: https://spoti.fi/2OVygic Download: http://piff.me/2785754 Download: ...",
+          "view_count": 10457315,
           "upload_date": "",
           "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=lcjGBhLi_qQ",
-          "position": 20.1654304
+          "url": "https://www.youtube.com/watch?v=1YnkZS9e8MA"
         },
-        "Timestamp": "2026-10-17T20:13:07.2566311-04:00"
+        "Timestamp": "2026-10-18T11:44:24.6101317-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "WXPfcRnz9Z8",
+          "title": "Trending - Dei V (Official Video)",
+          "uploader": "Dei V",
+          "channel": "Dei V",
+          "duration": 159,
+          "thumbnail": "https://i.ytimg.com/vi/WXPfcRnz9Z8/hq720.jpg?sqp=-oaymwE2COgCEMoBSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARgTIEYofzAPovOX_wMOCOObqp4GGODqBCDgqAE=\u0026rs=AOn4CLACSQl3wrwmqxrehW6QcsEB5uXqnQ\u0026usqp=CBU",
+          "description": "Trending - Dei V (Official Video) Directed By: Jonah Diaz Third Eye Productions Suscríbete: ...",
+          "view_count": 27636181,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=WXPfcRnz9Z8",
+          "position": 2.0090937
+        },
+        "Timestamp": "2026-10-18T11:44:16.1708146-04:00"
       },
       {
         "Type": "video",
@@ -97,49 +99,68 @@
           "uploader": "TheDC Shorts",
           "channel": "TheDC Shorts",
           "duration": 190,
-          "thumbnail": "https://i.ytimg.com/vi/Y7kBmcWKLxg/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLCl3CSLli_BXniIxHVzLfFifgjw1A",
+          "thumbnail": "https://i.ytimg.com/vi/Y7kBmcWKLxg/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBqLzl_8DDgicprHUBhjg6gQg4KgB\u0026rs=AOn4CLD6m-8sjgNHVZI_NRQNbXmDKrpx9Q\u0026usqp=CBU",
           "description": "Add this one to the list of scams you need to watch out for! Check out our Twitter: https://goo.gl/fnYe4v And Facebook: ...",
-          "view_count": 1419312,
+          "view_count": 1423247,
           "upload_date": "",
           "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=Y7kBmcWKLxg"
+          "url": "https://www.youtube.com/watch?v=Y7kBmcWKLxg",
+          "position": 32.795712699999996
         },
-        "Timestamp": "2026-10-17T20:08:35.4829638-04:00"
+        "Timestamp": "2026-10-18T11:43:49.9679684-04:00"
       },
       {
         "Type": "video",
         "Data": {
-          "id": "f2HPVr2apPs",
-          "title": "IYE - Babatunde Aderinoye, Irewole Olaniyan,Oyindamola Sanni Latest 2026 YorubaDrama Movie#trending",
-          "uploader": "ADEKAZ PREMIUM TV",
-          "channel": "ADEKAZ PREMIUM TV",
-          "duration": 7554,
-          "thumbnail": "https://i.ytimg.com/vi/f2HPVr2apPs/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLBeRr4kMM67ux9xISRZSq83mIW4LA",
-          "description": "Every choice comes with a price, every desire has a cost and every secret leaves a mark. But when the price is too high, what are ...",
-          "view_count": 343336,
+          "id": "tmO47RyW4wo",
+          "title": "Breaking down early voting trends in North Carolina, Georgia and Florida",
+          "uploader": "CBS News",
+          "channel": "CBS News",
+          "duration": 139,
+          "thumbnail": "https://i.ytimg.com/vi/tmO47RyW4wo/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLBho_44FaGk3frD1m_6_s4lTHNxAg",
+          "description": "Early voting data indicates some potentially promising signs for Democrats, particularly in North Carolina and Georgia. VoteHub ...",
+          "view_count": 100598,
           "upload_date": "",
           "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=f2HPVr2apPs"
+          "url": "https://www.youtube.com/watch?v=tmO47RyW4wo",
+          "position": 21.6179075
         },
-        "Timestamp": "2026-10-17T20:08:32.145083-04:00"
+        "Timestamp": "2026-10-18T02:33:47.5051445-04:00"
       },
       {
         "Type": "video",
         "Data": {
-          "id": "_Nw4qDYtncU",
-          "title": "Controlling Mom FORCES DAUGHTER To Be Popular Ft. Gia Rose | Dhar Mann Studios",
-          "uploader": "Dhar Mann Studios",
-          "channel": "Dhar Mann Studios",
-          "duration": 1722,
-          "thumbnail": "https://i.ytimg.com/vi/_Nw4qDYtncU/hq720.jpg?sqp=-oaymwEgCOgCEMoBSFXyq4qpAxIIARUAAIhCGAFwAcABBrgC9xg=\u0026rs=AOn4CLAXRUCQ0phKy-aZYhanL2BRk_hVOg",
-          "description": "Join the Dhar Mann Studios Discord! Meet the community, talk episodes, participate in fun polls and more!",
-          "view_count": 2144529,
+          "id": "9nSqpx2_g44",
+          "title": "AUGUST Trending Dances On TikTok || WARNING!! (Not Clean) MOST ICONIC TIKTOK DANCE Part 4 #2026",
+          "uploader": "ℛ",
+          "channel": "ℛ",
+          "duration": 192,
+          "thumbnail": "https://i.ytimg.com/vi/9nSqpx2_g44/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLBDi-mT57BqH3N8CgG65nat0IHARQ",
+          "description": "I spent an hour plus editing this. Please show some love by clicking the like and subscribe button. Also, don't forget to leave a ...",
+          "view_count": 566410,
           "upload_date": "",
           "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=_Nw4qDYtncU",
-          "position": 55.3844742
+          "url": "https://www.youtube.com/watch?v=9nSqpx2_g44",
+          "position": 38.3841446
         },
-        "Timestamp": "2026-10-17T20:07:15.4515882-04:00"
+        "Timestamp": "2026-10-18T01:58:30.3395311-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "-KPeZqUch08",
+          "title": "Trending",
+          "uploader": "Miguel Cornejo - Topic",
+          "channel": "Miguel Cornejo - Topic",
+          "duration": 142,
+          "thumbnail": "https://i.ytimg.com/vi/-KPeZqUch08/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLCMbzG-Y3BWOTOPRfndgHdeLGDIfA",
+          "description": "Provided to YouTube by KM Records/Sony Music Latin Trending · Miguel Cornejo · El Makako · VAD BOYZ Trending ℗ 2026 KM ...",
+          "view_count": 961825,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=-KPeZqUch08"
+        },
+        "Timestamp": "2026-10-18T01:57:42.5717966-04:00"
       }
     ],
     "files": [],
@@ -147,31 +168,6 @@
   },
   "chat": {
     "messages": [
-      {
-        "id": "1557923849209651290",
-        "sender": "jukalang",
-        "text": "",
-        "timestamp": "2026-10-09T01:13:10.477Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1557923848819712051/image.png?ex=6ad4c5e6\u0026is=6ad37466\u0026hm=29be12cf22ba41688a7a814ac48a32fb5f24b935040aa9e83509108d703b74f5\u0026"
-      },
-      {
-        "id": "1558136255923888240",
-        "sender": "jukalang",
-        "text": "Making fixes for JukaMix",
-        "timestamp": "2026-10-09T15:17:12.184Z"
-      },
-      {
-        "id": "1561112067929276427",
-        "sender": "You",
-        "text": "hello",
-        "timestamp": "2026-10-17T20:22:01.054Z"
-      },
-      {
-        "id": "1561112258510065777",
-        "sender": "System",
-        "text": "Groq API key not configured. Set groq_api_key in config.",
-        "timestamp": "2026-10-17T20:22:46.492Z"
-      },
       {
         "id": "1561112385052217496",
         "sender": "jukalang",
@@ -209,6 +205,38 @@
         "sender": "jukalang",
         "text": "I am fixing a few video bugs and will release it soon",
         "timestamp": "2026-10-17T23:29:04.331Z"
+      },
+      {
+        "id": "1561181707242311733",
+        "sender": "jukalang",
+        "text": "",
+        "timestamp": "2026-10-18T00:58:44.36Z",
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561181706722091178/rn_image_picker_lib_temp_c0ff7bab-49ee-4fa5-b7a0-f1262cecca3c.jpg?ex=6ad56b44\u0026is=6ad419c4\u0026hm=2e37a7d5e1991aab350d402a623f5abbfb76c22db443e62c87fecd2908a24234\u0026"
+      },
+      {
+        "id": "1561181754021249086",
+        "sender": "jukalang",
+        "text": "Yes the latest version now works...albeit there is a bit delay",
+        "timestamp": "2026-10-18T00:58:55.513Z"
+      },
+      {
+        "id": "1561184112016887960",
+        "sender": "jukalang",
+        "text": "If anybody wants to try it: https://github.com/jukaLang/JukaHubV2/releases",
+        "timestamp": "2026-10-18T01:08:17.703Z"
+      },
+      {
+        "id": "1561257675436597310",
+        "sender": "jukalang",
+        "text": "",
+        "timestamp": "2026-10-18T06:00:36.589Z",
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561257675575140413/image.png?ex=6ad5b204\u0026is=6ad46084\u0026hm=b9773d04ce6fdf9b80814ac1e46229a65ec6b466c490d364f926d8c2af3361ec\u0026"
+      },
+      {
+        "id": "1561260072422867087",
+        "sender": "jukalang",
+        "text": "New JukaHub v0.4 is 10x smaller than v0.3, is 3 seconds faster in startup, features more modular design, removes dependency on old players and instead uses a custom built from scratch player. There are still many features missing, but feel free to send me a message...Chat is back online, and videos play, tools someone work. FTP server has been added, file manager seems to be working...PDF reader and image viewer are built-in",
+        "timestamp": "2026-10-18T06:10:08.075Z"
       }
     ]
   }

@@ -612,6 +612,7 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	}
 	if scene.Name == "Chat" {
 		hints = append(hints, FooterHint{Button: "Y", Label: "Ask AI"})
+		hints = append(hints, FooterHint{Button: "X", Label: "Rename"})
 	}
 	// Patch shows its own contextual hints (modal-aware) instead of the
 	// generic defaults.

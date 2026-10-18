@@ -145,15 +145,38 @@ func homeSceneTarget(config *Config, id HomeFocusID) string {
 		return "Chat"
 	case HomeFocusTools:
 		return "Misc"
+	case HomeFocusEmulator:
+		return "Emulator"
 	case HomeFocusSettings:
 		return "Settings"
+	case HomeFocusExit:
+		// Exit is handled by requestAppExit before any scene lookup.
+		return ""
 	}
 	return ""
+}
+
+// homeCalendarOpen tracks the header clock's toggle_calendar state: while
+// set, the mini calendar popover shows under the clock in the top-right.
+var homeCalendarOpen bool
+
+// homeCalendarRect is the mini calendar popover's anchor: a panel directly
+// under the header clock, right-aligned with the header status cluster. Both
+// the renderer and the click hit-testing use this one rect.
+func homeCalendarRect() sdl.Rect {
+	w, h := miniCalendarSize()
+	return sdl.Rect{
+		X: screenWidth - scaleX(32, screenWidth) - w,
+		Y: scaleY(64, screenHeight),
+		W: w,
+		H: h,
+	}
 }
 
 // homeActivate triggers the action for the currently focused home item.
 // Continue resumes the most recent item when one exists, otherwise it opens
 // Media. Every other item performs a scene change using its configured target.
+// The Clock has a dedicated trigger: toggle_calendar.
 func homeActivate(config *Config) {
 	if homeLayout == nil {
 		return
@@ -170,6 +193,29 @@ func homeActivate(config *Config) {
 			return
 		}
 		id = HomeFocusMedia
+	}
+	// Exit powers down: stop any embedded playback, then run the goodbye
+	// sequence and quit through the main loop's clean shutdown.
+	if id == HomeFocusExit {
+		if snapshotVideoState().phase != "idle" {
+			StopEmbeddedPlayback()
+		}
+		requestAppExit()
+		return
+	}
+	// The Clock never maps to a scene: its dedicated trigger
+	// (toggle_calendar) runs before the scene lookup.
+	if id == HomeFocusClock {
+		homeCalendarOpen = !homeCalendarOpen
+		return
+	}
+	// The Emulator card opens the availability panel on every platform: the
+	// desktop config has no "Emulator" scene (the card used to dead-end), and
+	// on the handheld the panel lists every emulator with its availability
+	// instead of a static launcher label.
+	if id == HomeFocusEmulator {
+		openEmulatorPanel()
+		return
 	}
 	target := homeSceneTarget(config, id)
 	if target == "" {
@@ -224,6 +270,11 @@ func handleHomeKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_RETURN, sdl.K_SPACE:
 		homeActivate(config)
 	case sdl.K_ESCAPE:
+		// Escape dismisses the calendar popover first.
+		if homeCalendarOpen {
+			homeCalendarOpen = false
+			break
+		}
 		// Home is the root scene, but a video left playing from another scene
 		// must still be closable instead of swallowing the key.
 		if snapshotVideoState().phase != "idle" {
@@ -261,6 +312,11 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		homeActivate(config)
 	case sdl.CONTROLLER_BUTTON_B:
+		// B dismisses the calendar popover first.
+		if homeCalendarOpen {
+			homeCalendarOpen = false
+			break
+		}
 		// Home is the root scene; a playing video is the only thing to close.
 		if snapshotVideoState().phase != "idle" {
 			StopEmbeddedPlayback()
@@ -275,6 +331,22 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	if homeLayout == nil {
 		return false
+	}
+	// With the calendar popover open, a click inside it is consumed, a click
+	// on the clock toggles it closed, and any other click dismisses it without
+	// activating whatever lies underneath - standard dropdown behaviour.
+	if homeCalendarOpen {
+		if pointInRect(mx, my, homeCalendarRect()) {
+			return true
+		}
+		if homeLayout.FocusAt(mx, my) && homeLayout.Focus.Current() == HomeFocusClock {
+			// Clicking the clock again runs the same toggle and closes it.
+			homeLayout.Focus.Remember()
+			homeActivate(config)
+			return true
+		}
+		homeCalendarOpen = false
+		return true
 	}
 	if homeLayout.FocusAt(mx, my) {
 		// A clicked card is a deliberate choice, so it becomes the card
@@ -421,10 +493,15 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 		renderFireworks(renderer, config, 0.016)
 	}
 
-	// Analog clock widget in the top-right corner (always visible on home).
-	renderAnalogClock(renderer, config)
-
 	_ = homeLayout.Render(renderer, loadHomeFonts(), homeViewData(config))
+
+	// The header clock toggles the mini calendar (trigger: toggle_calendar).
+	// It draws after the layout so the popover floats above the cards instead
+	// of being painted over by the layout backdrop.
+	if homeCalendarOpen {
+		r := homeCalendarRect()
+		renderMiniCalendarAt(renderer, config, r.X, r.Y)
+	}
 }
 
 // loadHomeFonts opens the bundled Inter font at the home-screen sizes,

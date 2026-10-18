@@ -31,6 +31,9 @@ type ChatMessage struct {
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
 	ImageURL  string    `json:"image_url,omitempty"`
+	// Own marks messages sent from this device so the user's bubbles stay
+	// right-aligned (and styled as "me") even after a display-name change.
+	Own bool `json:"own,omitempty"`
 }
 
 // LinkPreview holds metadata for a URL link
@@ -143,6 +146,36 @@ func processChatImageDownloads(renderer *sdl.Renderer) {
 // ChatSection is the chat history section persisted inside jukauser.json.
 type ChatSection struct {
 	Messages []ChatMessage `json:"messages"`
+	// Name is the display name the local user chats under (default "You").
+	Name string `json:"name,omitempty"`
+}
+
+// chatDisplayName returns the name the local user's messages are signed with.
+func chatDisplayName() string {
+	if userConfigCache != nil && userConfigCache.Chat != nil {
+		if n := strings.TrimSpace(userConfigCache.Chat.Name); n != "" {
+			return n
+		}
+	}
+	return "You"
+}
+
+// setChatDisplayName updates and persists the local user's chat name. An empty
+// (or whitespace-only) name resets to the default.
+func setChatDisplayName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "You"
+	}
+	if userConfigCache == nil {
+		userConfigCache = &UserConfig{Variables: UserVariables{Custom: make(map[string]interface{})}}
+	}
+	if userConfigCache.Chat == nil {
+		userConfigCache.Chat = &ChatSection{}
+	}
+	userConfigCache.Chat.Name = name
+	saveUserConfig(userConfigCache)
+	return name
 }
 
 // defaultDiscordChannel is the JukaHub Discord channel the chat connects to when
@@ -161,8 +194,16 @@ var chatScrollOffset int
 var chatAskAIBtnRect sdl.Rect
 var chatSendBtnRect sdl.Rect
 
+// chatAttachBtnRect is the "Attach image" pill inside the composer (mouse hit
+// target).
+var chatAttachBtnRect sdl.Rect
+
 // chatInputRect tracks the chat text input area for mouse click detection.
 var chatInputRect sdl.Rect
+
+// chatNameRect is the display-name pill in the chat header (mouse hit target);
+// clicking it opens the keyboard to rename the local chat user.
+var chatNameRect sdl.Rect
 
 // groqStatus holds a short human-readable Groq AI connection status shown in
 // the chat UI.
@@ -745,7 +786,7 @@ func sendGroqChatMessage(userText string) {
 		sendChatMessage("System", "Groq API key not configured. Set groq_api_key in config.")
 		return
 	}
-	sendChatMessage("You", userText)
+	sendChatMessage(chatDisplayName(), userText)
 	groqStatus = "Groq: thinking..."
 	atomic.StoreInt32(&groqPending, 1)
 	go func() {
@@ -792,7 +833,12 @@ func saveChatMessages() {
 	if userConfigCache == nil {
 		userConfigCache = &UserConfig{Variables: UserVariables{Custom: make(map[string]interface{})}}
 	}
-	userConfigCache.Chat = &ChatSection{Messages: msgs}
+	// Preserve the display name: rebuilding the section must not drop it.
+	name := ""
+	if userConfigCache.Chat != nil {
+		name = userConfigCache.Chat.Name
+	}
+	userConfigCache.Chat = &ChatSection{Messages: msgs, Name: name}
 	saveUserConfig(userConfigCache)
 }
 
@@ -808,6 +854,7 @@ func sendChatMessage(sender, text string) {
 		Sender:    sender,
 		Text:      strings.TrimSpace(text),
 		Timestamp: time.Now(),
+		Own:       isLocalChatSender(sender),
 	}
 	chatMessages = append(chatMessages, msg)
 	if len(chatMessages) > 500 {
@@ -824,6 +871,14 @@ func sendChatMessage(sender, text string) {
 			}
 		}()
 	}
+}
+
+// isLocalChatSender reports whether a sender name is this device's user (the
+// current display name or one of the legacy defaults).
+func isLocalChatSender(sender string) bool {
+	return strings.EqualFold(sender, chatDisplayName()) ||
+		strings.EqualFold(sender, "You") ||
+		strings.EqualFold(sender, "User")
 }
 
 // senderColorForName returns a stable, readable accent color for a sender name.
@@ -916,6 +971,17 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		renderText(renderer, config, statusFont, groqStatus, groqStatusColor(), groqX, statusY)
 	}
 
+	// Display-name pill (left of the status labels): tap to rename the local
+	// chat user. The label shows the active name so the change is discoverable.
+	nameLabel := chatDisplayName() + " ✎"
+	nw, _, _ := statusFont.SizeUTF8(nameLabel)
+	npad := int32(10)
+	nph := int32(statusFont.Height()) + SpaceXS*2
+	chatNameRect = sdl.Rect{X: listX + SpaceMD, Y: statusY - SpaceXS, W: int32(nw) + npad*2, H: nph}
+	fillRoundedRect(renderer, chatNameRect.X, chatNameRect.Y, chatNameRect.W, chatNameRect.H, nph/2, WithAlpha(ColorInfo, 45))
+	strokeRoundedRect(renderer, chatNameRect.X, chatNameRect.Y, chatNameRect.W, chatNameRect.H, nph/2, 1, WithAlpha(ColorInfo, 120))
+	renderText(renderer, config, statusFont, nameLabel, ColorTextSecondary(), chatNameRect.X+npad, statusY)
+
 	// Divider under status.
 	dividerY := statusY + int32(statusFont.Height()) + SpaceXS
 	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
@@ -948,7 +1014,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	endIdx := len(messages) - 1 - chatScrollOffset
 	for i := endIdx; i >= 0 && startY > msgAreaTop; i-- {
 		msg := messages[i]
-		isUser := strings.EqualFold(msg.Sender, "You") || strings.EqualFold(msg.Sender, "User")
+		isUser := msg.Own || isLocalChatSender(msg.Sender)
 		isAI := strings.EqualFold(msg.Sender, "Juka AI")
 		isSystem := strings.EqualFold(msg.Sender, "System") && !isAI
 
@@ -1066,7 +1132,9 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	// Single composer: click the input area to type, Send to send, Ask AI for Groq.
 	chatAskAIBtnRect = sdl.Rect{}
 	chatSendBtnRect = sdl.Rect{}
+	chatAttachBtnRect = sdl.Rect{}
 	chatInputRect = sdl.Rect{}
+	chatNameRect = sdl.Rect{}
 	inputY := listY + listH - inputH - SpaceSM
 	inputX := listX + SpaceSM
 	inputW := listW - 2*SpaceSM
@@ -1112,6 +1180,17 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		fillRoundedRect(renderer, aax, aay, aaw, ah, ah/2, ColorIconSurface)
 		strokeRoundedRect(renderer, aax, aay, aaw, ah, ah/2, 1, WithAlpha(ColorInfo, 120))
 		renderText(renderer, config, statusFont, aiLabel, ColorTextPrimary(), aax+pad, aay+(ah-int32(statusFont.Height()))/2)
+		// Attach image pill (left of Ask AI); the composer hit-test in main.go
+		// reads chatAttachBtnRect to trigger the image picker.
+		attachLabel := "Attach"
+		attw, _, _ := statusFont.SizeUTF8(attachLabel)
+		attaw := int32(attw) + pad*2
+		attax := aax - attaw - SpaceSM
+		attay := inputY + (inputH-ah)/2
+		chatAttachBtnRect = sdl.Rect{X: attax, Y: attay, W: attaw, H: ah}
+		fillRoundedRect(renderer, attax, attay, attaw, ah, ah/2, ColorIconSurface)
+		strokeRoundedRect(renderer, attax, attay, attaw, ah, ah/2, 1, WithAlpha(ColorInfo, 120))
+		renderText(renderer, config, statusFont, attachLabel, ColorTextPrimary(), attax+pad, attay+(ah-int32(statusFont.Height()))/2)
 	}
 
 	// The composer's controls are communicated once, by the shared footer
@@ -1123,7 +1202,7 @@ func handleChatInput(e *sdl.KeyboardEvent, config *Config) {
 		switch e.Keysym.Sym {
 		case sdl.K_RETURN:
 			if chatInputText != "" {
-				sendChatMessage("You", chatInputText)
+				sendChatMessage(chatDisplayName(), chatInputText)
 				chatInputText = ""
 			}
 		case sdl.K_BACKSPACE:

@@ -13,15 +13,18 @@ import (
 type HomeAction string
 
 const (
-	HomeActionContinue  HomeAction = "continue"
-	HomeActionMedia     HomeAction = "media"
-	HomeActionFiles     HomeAction = "files"
-	HomeActionPackages  HomeAction = "packages"
-	HomeActionApps      HomeAction = "apps"
-	HomeActionFavorites HomeAction = "favorites"
-	HomeActionChat      HomeAction = "chat"
-	HomeActionTools     HomeAction = "tools"
-	HomeActionSettings  HomeAction = "settings"
+	HomeActionContinue       HomeAction = "continue"
+	HomeActionMedia          HomeAction = "media"
+	HomeActionFiles          HomeAction = "files"
+	HomeActionPackages       HomeAction = "packages"
+	HomeActionApps           HomeAction = "apps"
+	HomeActionFavorites      HomeAction = "favorites"
+	HomeActionChat           HomeAction = "chat"
+	HomeActionTools          HomeAction = "tools"
+	HomeActionEmulator       HomeAction = "emulator"
+	HomeActionSettings       HomeAction = "settings"
+	HomeActionExit           HomeAction = "exit"
+	HomeActionToggleCalendar HomeAction = "toggle_calendar"
 )
 
 type HomeFonts struct {
@@ -79,11 +82,12 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 		Width:  width,
 		Height: height,
 		Focus:  NewHomeFocusController(),
-		Items:  make(map[HomeFocusID]HomeItem, 9),
+		Items:  make(map[HomeFocusID]HomeItem, 11),
 		Order: []HomeFocusID{
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
-			HomeFocusChat, HomeFocusTools, HomeFocusSettings,
+			HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
+			HomeFocusSettings, HomeFocusClock, HomeFocusExit,
 		},
 	}
 	layout.rebuildItems()
@@ -111,12 +115,16 @@ func (h *HomeLayout) rebuildItems() {
 		}
 	}
 
+	// Continue spans both left-column rows: its own row plus the slot the
+	// Settings card used to occupy.
 	card(HomeFocusContinue, "Continue", "Resume your latest activity", "continue", HomeActionContinue,
 		sdl.Rect{X: 32, Y: 164, W: 480, H: 258})
 	card(HomeFocusMedia, "Media", "Watch and listen", "media", HomeActionMedia,
 		sdl.Rect{X: 536, Y: 164, W: 348, H: 121})
+	// Files shrinks to half its old width so Settings fits beside it in the
+	// same top-right slot.
 	card(HomeFocusFiles, "Files", "Browse storage", "files", HomeActionFiles,
-		sdl.Rect{X: 900, Y: 164, W: 348, H: 121})
+		sdl.Rect{X: 900, Y: 164, W: 174, H: 121})
 	card(HomeFocusPackages, "Packages", "Discover content", "packages", HomeActionPackages,
 		sdl.Rect{X: 536, Y: 301, W: 348, H: 121})
 	card(HomeFocusApps, "Apps", "Launch installed apps", "apps", HomeActionApps,
@@ -127,8 +135,20 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 340, Y: 454, W: 292, H: 158})
 	card(HomeFocusTools, "Tools", "Network and utilities", "tools", HomeActionTools,
 		sdl.Rect{X: 648, Y: 454, W: 292, H: 158})
-	card(HomeFocusSettings, "Settings", "Personalize JukaHub", "settings", HomeActionSettings,
+	card(HomeFocusEmulator, "Emulator", "Launch games and emulators", "emulator", HomeActionEmulator,
 		sdl.Rect{X: 956, Y: 454, W: 292, H: 158})
+	card(HomeFocusSettings, "Settings", "Personalize JukaHub", "settings", HomeActionSettings,
+		sdl.Rect{X: 1074, Y: 164, W: 174, H: 121})
+	// The Clock is the header time itself - no separate button is drawn.
+	// drawHeader replaces this rect with the measured clock text every frame,
+	// so focus and clicks land on the actual clock in the top right.
+	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
+		sdl.Rect{X: 1120, Y: 10, W: 76, H: 36})
+	// Exit sits on the footer's left end (drawn above the footer band so it
+	// stays visible) and is the primary way to quit from the home screen.
+	// Back stays available through B/Esc and the footer hint.
+	card(HomeFocusExit, "Exit", "Power down", "exit", HomeActionExit,
+		sdl.Rect{X: 8, Y: 678, W: 116, H: 36})
 }
 
 func (h *HomeLayout) CurrentItem() HomeItem {
@@ -173,17 +193,25 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	h.drawHeader(renderer, fonts, data)
 	h.drawGreeting(renderer, fonts, data)
 
+	// The footer is plain chrome: corner chips draw after it on top of its
+	// band instead of disappearing behind it.
+	h.drawFooter(renderer, fonts, data.ShowBackHint)
+
 	focused := h.Focus.Current()
 	for _, id := range h.Order {
 		item := h.Items[id]
-		if id == HomeFocusContinue {
+		switch id {
+		case HomeFocusContinue:
 			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, data.Continue)
-		} else {
+		case HomeFocusExit:
+			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id)
+		case HomeFocusClock:
+			// The header clock is the button; drawHeader draws its focus ring.
+		default:
 			h.drawActionCard(renderer, fonts, item, id == focused, data.Pressed == id)
 		}
 	}
 
-	h.drawFooter(renderer, fonts, data.ShowBackHint)
 	return nil
 }
 
@@ -215,8 +243,67 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 
 	// The right-side cluster comes from the shared headerStatusParts helper
 	// (network, weather, time, battery) so it is identical on every screen.
-	status := strings.Join(data.StatusParts, "   ")
-	drawText(renderer, fonts.Small, status, h.Width-scaleX(32, h.Width), scaleY(19, h.Height), ColorTextMuted(), textAlignRight)
+	// It is drawn part by part so the clock's rect is known: the clock doubles
+	// as the home screen's calendar button (a click or A toggles the popover),
+	// so its rect is what focus, hit-testing and the focus ring use.
+	if fonts.Small == nil {
+		return
+	}
+	sep := "   "
+	sepWi, _, _ := fonts.Small.SizeUTF8(sep)
+	sepW := int32(sepWi)
+	total := int32(0)
+	for i, part := range data.StatusParts {
+		w, _, _ := fonts.Small.SizeUTF8(part)
+		total += int32(w)
+		if i > 0 {
+			total += sepW
+		}
+	}
+	x := h.Width - scaleX(32, h.Width) - total
+	y := scaleY(19, h.Height)
+	for _, part := range data.StatusParts {
+		w, _, _ := fonts.Small.SizeUTF8(part)
+		if isClockStatusPart(part) {
+			item := h.Items[HomeFocusClock]
+			item.Rect = sdl.Rect{
+				X: x - scaleX(8, h.Width),
+				Y: y - scaleY(6, h.Height),
+				W: int32(w) + scaleX(16, h.Width),
+				H: int32(fonts.Small.Height()) + scaleY(12, h.Height),
+			}
+			h.Items[HomeFocusClock] = item
+		}
+		drawText(renderer, fonts.Small, part, x, y, ColorTextMuted(), textAlignLeft)
+		x += int32(w) + sepW
+	}
+	if h.Focus.Current() == HomeFocusClock {
+		r := h.Items[HomeFocusClock].Rect
+		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 2, ColorAccent)
+	}
+}
+
+// isClockStatusPart reports whether a header status part is the clock text
+// ("15:04"). The clock is the home screen's calendar button, so the header
+// must know which of the status parts is the clock.
+func isClockStatusPart(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) < 4 || len(s) > 5 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if i == len(s)-3 {
+			if s[i] != ':' {
+				return false
+			}
+			continue
+		}
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
@@ -376,6 +463,45 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 	}
 	fillRoundedRect(renderer, chip.X, chip.Y, chip.W, chip.H, chip.H/2, chipColor)
 	drawText(renderer, fonts.Small, action, chip.X+chip.W/2, chip.Y+(chip.H-int32(fonts.Small.Height()))/2, chipText, textAlignCenter)
+}
+
+// drawChipButton renders a compact pill for the corner buttons (Exit, Back):
+// a small glyph followed by a single label, sized so the text stays readable
+// where the full action card would be too cramped.
+func (h *HomeLayout) drawChipButton(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool) {
+	if fonts.Small == nil {
+		return
+	}
+	rect := item.Rect
+	bg := ColorIconSurface
+	fg := ColorTextPrimary()
+	if focused {
+		bg = ColorAccent
+		fg = ColorIconDark
+	}
+	if pressed {
+		bg = darken(bg, 18)
+	}
+
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, bg)
+	if focused {
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 2, ColorAccent)
+	} else {
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, ColorBorder)
+	}
+
+	// Small glyph on the left, then the label.
+	glyph := rect.H - 16
+	if glyph < 12 {
+		glyph = 12
+	}
+	iconRect := sdl.Rect{X: rect.X + 12, Y: rect.Y + (rect.H-glyph)/2, W: glyph, H: glyph}
+	DrawHomeIcon(renderer, item.Icon, iconRect, focused)
+
+	labelX := iconRect.X + iconRect.W + 8
+	drawText(renderer, fonts.Small, item.Title, labelX,
+		rect.Y+(rect.H-int32(fonts.Small.Height()))/2, fg, textAlignLeft)
 }
 
 // footerHint pairs a controller button label with the action it performs.
@@ -698,6 +824,27 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 			ty := cy + int32(float64(w/3)*math.Sin(a))
 			fillCircle(renderer, tx, ty, 3, color)
 		}
+	case "clock":
+		// Clock face with hour and minute hands.
+		strokeCircle(renderer, cx, cy, w/2-1, color)
+		drawClockHand(renderer, cx, cy, -math.Pi/2+0.7, w/4, 2, color)
+		drawClockHand(renderer, cx, cy, -math.Pi/2+2.4, w/3, 2, color)
+		fillCircle(renderer, cx, cy, 2, color)
+	case "exit":
+		// Power icon: a ring with a vertical bar through the top.
+		tileBG := ColorIconSurface
+		if focused {
+			tileBG = ColorAccent
+		}
+		fillCircle(renderer, cx, cy, w/3, color)
+		fillCircle(renderer, cx, cy, w/6, tileBG)
+		fillRoundedRect(renderer, cx-2, rect.Y, 4, h/2, 2, color)
+	case "back":
+		// Left-pointing arrow head.
+		fillTriangleFilled(renderer,
+			pt{x: rect.X + w/5, y: cy},
+			pt{x: cx + w/8, y: cy - h/3},
+			pt{x: cx + w/8, y: cy + h/3}, color)
 	default:
 		// Safe visible fallback for any unknown non-empty icon name: a filled
 		// ring inside the glyph box. An unrecognized key must never render an

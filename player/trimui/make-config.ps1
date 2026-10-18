@@ -10,13 +10,18 @@ $ErrorActionPreference = "Stop"
 $cfg = Get-Content $Src -Raw | ConvertFrom-Json
 
 # Scenes that stay on the handheld build: YouTube first, everything that needs a
-# heavy dependency (terminal, file explorer, chat, IPTV, ...) is dropped.
+# heavy dependency (terminal, file explorer, IPTV, ...) is dropped.
+# Chat, Misc (Tools) and Emulator are kept because the home screen tiles
+# reference them.
 $keep = @(
     "Main",
     "Tube",
     "Shorts",
     "Apps",
     "Favorites",
+    "Chat",
+    "Misc",
+    "Emulator",
     "Settings",
     "SettingsGeneral",
     "SettingsAppearance",
@@ -32,7 +37,9 @@ foreach ($name in $keep) {
     $scenes += $s
 }
 
-# --- Home screen: 7 tiles that all point at scenes kept above ---------------
+# --- Home screen: 2x4 tile grid + Clock + Back -----------------------------
+# Top row:    Media  Shorts  Apps  Settings
+# Bottom row: Favorites  Chat  Tools  Emulator
 $main = $scenes | Where-Object { $_.name -eq "Main" }
 $recent = $main.elements | Where-Object { $_.type -eq "recent" }
 
@@ -46,22 +53,39 @@ function New-Tile($text, $bg, $x, $y, $target) {
     return $e
 }
 
+function New-DarkButton($text, $x, $y, $w, $h, $trigger) {
+    $e = $main.elements[1] | Select-Object *
+    $e.text = $text
+    $e.bgColor = "#1E293B"
+    $e.color = "#F8FAFC"
+    $e.x = $x
+    $e.y = $y
+    $e.width = $w
+    $e.height = $h
+    $e.trigger = $trigger
+    $e.style = "dark"
+    return $e
+}
+
 $main.elements = @(
     $recent,
-    (New-Tile "Media"    "#1D4ED8" 30  324 "Tube"),
-    (New-Tile "Shorts"   "#0891B2" 280 324 "Shorts"),
-    (New-Tile "Apps"     "#15803D" 530 324 "Apps"),
-    (New-Tile "Favorites" "#BE185D" 30 524 "Favorites"),
-    (New-Tile "Settings" "#475569" 280 524 "Settings"),
-    (New-Tile "Logs"     "#B45309" 530 524 "LogExporter"),
-    (New-Tile "Exit"     "#7F1D1D" 780 524 "Exit")
+    (New-Tile "Media"     "#1D4ED8" 30  324 "Tube"),
+    (New-Tile "Shorts"    "#0891B2" 280 324 "Shorts"),
+    (New-Tile "Apps"      "#15803D" 530 324 "Apps"),
+    (New-Tile "Settings"  "#475569" 780 324 "Settings"),
+    (New-Tile "Favorites" "#BE185D" 30  524 "Favorites"),
+    (New-Tile "Chat"      "#10B981" 340 524 "Chat"),
+    (New-Tile "Tools"     "#6B46C1" 648 524 "Misc"),
+    (New-Tile "Emulator"  "#DC2626" 956 524 "Emulator"),
+    (New-DarkButton "Clock" 1100 30  80 80 "toggle_calendar"),
+    (New-DarkButton "Back"  0    672 60 36 "go_back")
 )
 
 # --- Settings menu: drop the Plugins entry (needs the network) -------------
 $set = $scenes | Where-Object { $_.name -eq "Settings" }
 $set.elements = @($set.elements | Where-Object { $_.trigger -ne "change_scene:Plugins" })
 
-# --- Variables: device defaults --------------------------------------------
+# --- Variables: device defaults -------------------------------------------
 $cfg.variables.fullscreen = $true
 $cfg.variables.weatherEnabled = $false
 $cfg.variables.screenWidth = 1280

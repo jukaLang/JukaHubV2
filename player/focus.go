@@ -45,6 +45,7 @@ type FocusGraph struct {
 // It is safe for single-threaded SDL use; no internal locking required.
 type FocusEngine struct {
 	graph        *FocusGraph
+	scene        string         // scene name the installed graph was built for
 	current      int            // index into graph.Nodes (-1 = none)
 	persistFocus map[string]int // scene name -> last focused element index
 	mu           sync.RWMutex
@@ -93,6 +94,7 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 func (fe *FocusEngine) SetGraph(sceneName string, graph *FocusGraph) {
 	fe.mu.Lock()
 	fe.graph = graph
+	fe.scene = sceneName
 	fe.current = -1
 
 	if graph != nil && len(graph.Nodes) > 0 {
@@ -110,6 +112,25 @@ func (fe *FocusEngine) SetGraph(sceneName string, graph *FocusGraph) {
 		}
 	}
 	fe.mu.Unlock()
+}
+
+// SceneName returns the scene the installed graph was built for ("" if none).
+// Callers use it to avoid reinstalling the graph on every key press: SetGraph
+// restores persisted focus, so reinstalling resets navigation progress.
+func (fe *FocusEngine) SceneName() string {
+	fe.mu.RLock()
+	defer fe.mu.RUnlock()
+	return fe.scene
+}
+
+// NodeCount returns how many nodes the installed graph has (0 if none).
+func (fe *FocusEngine) NodeCount() int {
+	fe.mu.RLock()
+	defer fe.mu.RUnlock()
+	if fe.graph == nil {
+		return 0
+	}
+	return len(fe.graph.Nodes)
 }
 
 // Current returns the current FocusNode and its scene element index.

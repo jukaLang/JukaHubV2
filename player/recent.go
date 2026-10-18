@@ -235,13 +235,13 @@ func handleRecentInput(e *sdl.KeyboardEvent, config *Config) {
 		if homeLayoutActive {
 			moveHomeSelection(config, 0, -1)
 		} else {
-			moveSelection(config, -1)
+			moveSelection(config, ActionNavigateUp)
 		}
 	case sdl.K_DOWN:
 		if homeLayoutActive {
 			moveHomeSelection(config, 0, 1)
 		} else {
-			moveSelection(config, 1)
+			moveSelection(config, ActionNavigateDown)
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
 		if len(items) == 0 {

@@ -12,9 +12,13 @@ const (
 	HomeFocusFavorites HomeFocusID = "favorites"
 	HomeFocusChat      HomeFocusID = "chat"
 	HomeFocusTools     HomeFocusID = "tools"
+	HomeFocusEmulator  HomeFocusID = "emulator"
 	HomeFocusSettings  HomeFocusID = "settings"
+	HomeFocusClock     HomeFocusID = "clock"
+	HomeFocusExit      HomeFocusID = "exit"
 )
 
+// FocusDirection indicates the direction to move focus.
 type FocusDirection uint8
 
 const (
@@ -24,6 +28,7 @@ const (
 	FocusRight
 )
 
+// homeNeighbors holds the focus navigation neighbors for each home focus ID.
 type homeNeighbors struct {
 	Up    HomeFocusID
 	Down  HomeFocusID
@@ -31,51 +36,69 @@ type homeNeighbors struct {
 	Right HomeFocusID
 }
 
+// homeFocusGraph maps each HomeFocusID to its focus neighbors for D-pad/controller navigation.
 var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	HomeFocusContinue: {
-		Up: HomeFocusContinue, Down: HomeFocusFavorites,
-		Left: HomeFocusContinue, Right: HomeFocusMedia,
+		Up:    HomeFocusContinue, Down: HomeFocusFavorites,
+		Left:  HomeFocusContinue, Right: HomeFocusMedia,
 	},
 	HomeFocusMedia: {
-		Up: HomeFocusMedia, Down: HomeFocusPackages,
-		Left: HomeFocusContinue, Right: HomeFocusFiles,
+		Up:    HomeFocusClock, Down: HomeFocusPackages,
+		Left:  HomeFocusContinue, Right: HomeFocusFiles,
 	},
 	HomeFocusFiles: {
-		Up: HomeFocusFiles, Down: HomeFocusApps,
-		Left: HomeFocusMedia, Right: HomeFocusFiles,
+		Up:    HomeFocusClock, Down: HomeFocusApps,
+		Left:  HomeFocusMedia, Right: HomeFocusSettings,
 	},
 	HomeFocusPackages: {
-		Up: HomeFocusMedia, Down: HomeFocusTools,
-		Left: HomeFocusContinue, Right: HomeFocusApps,
+		Up:    HomeFocusMedia, Down: HomeFocusTools,
+		Left:  HomeFocusContinue, Right: HomeFocusApps,
 	},
 	HomeFocusApps: {
-		Up: HomeFocusFiles, Down: HomeFocusSettings,
-		Left: HomeFocusPackages, Right: HomeFocusApps,
+		Up:    HomeFocusFiles, Down: HomeFocusEmulator,
+		Left:  HomeFocusPackages, Right: HomeFocusApps,
 	},
 	HomeFocusFavorites: {
-		Up: HomeFocusContinue, Down: HomeFocusFavorites,
-		Left: HomeFocusFavorites, Right: HomeFocusChat,
+		Up:    HomeFocusContinue, Down: HomeFocusExit,
+		Left:  HomeFocusFavorites, Right: HomeFocusChat,
 	},
 	HomeFocusChat: {
-		Up: HomeFocusPackages, Down: HomeFocusChat,
-		Left: HomeFocusFavorites, Right: HomeFocusTools,
+		Up:    HomeFocusContinue, Down: HomeFocusChat,
+		Left:  HomeFocusFavorites, Right: HomeFocusTools,
 	},
 	HomeFocusTools: {
-		Up: HomeFocusPackages, Down: HomeFocusTools,
-		Left: HomeFocusChat, Right: HomeFocusSettings,
+		Up:    HomeFocusPackages, Down: HomeFocusTools,
+		Left:  HomeFocusChat, Right: HomeFocusEmulator,
+	},
+	HomeFocusEmulator: {
+		Up:    HomeFocusApps, Down: HomeFocusEmulator,
+		Left:  HomeFocusTools, Right: HomeFocusEmulator,
 	},
 	HomeFocusSettings: {
-		Up: HomeFocusApps, Down: HomeFocusSettings,
-		Left: HomeFocusTools, Right: HomeFocusSettings,
+		Up:    HomeFocusClock, Down: HomeFocusApps,
+		Left:  HomeFocusFiles, Right: HomeFocusSettings,
+	},
+	// The Clock is the header time in the top-right corner: the top-right
+	// cards reach it Up and it drops back Down to Settings.
+	HomeFocusClock: {
+		Up:    HomeFocusClock, Down: HomeFocusSettings,
+		Left:  HomeFocusMedia, Right: HomeFocusClock,
+	},
+	// Exit sits on the footer's left end; Favorites drops down to it.
+	HomeFocusExit: {
+		Up:    HomeFocusFavorites, Down: HomeFocusExit,
+		Left:  HomeFocusExit, Right: HomeFocusExit,
 	},
 }
 
+// HomeFocusController manages focus state for the home screen layout.
 type HomeFocusController struct {
 	current  HomeFocusID
 	lastHome HomeFocusID
 	enabled  map[HomeFocusID]bool
 }
 
+// NewHomeFocusController creates a new HomeFocusController with all focus IDs enabled.
 func NewHomeFocusController() *HomeFocusController {
 	f := &HomeFocusController{
 		current:  HomeFocusContinue,
@@ -88,6 +111,7 @@ func NewHomeFocusController() *HomeFocusController {
 	return f
 }
 
+// Current returns the currently focused HomeFocusID.
 func (f *HomeFocusController) Current() HomeFocusID {
 	if f == nil || f.current == "" {
 		return HomeFocusContinue
@@ -95,6 +119,7 @@ func (f *HomeFocusController) Current() HomeFocusID {
 	return f.current
 }
 
+// Set sets the currently focused HomeFocusID.
 func (f *HomeFocusController) Set(id HomeFocusID) bool {
 	if f == nil || !f.IsEnabled(id) {
 		return false
@@ -102,13 +127,11 @@ func (f *HomeFocusController) Set(id HomeFocusID) bool {
 	if _, ok := homeFocusGraph[id]; !ok {
 		return false
 	}
-	// Set is used for programmatic placement (mouse clicks, restore). It does
-	// NOT update lastHome so returning to Home restores the card the user last
-	// navigated to, not whatever was focused programmatically.
 	f.current = id
 	return true
 }
 
+// SetEnabled enables or disables a focus ID.
 func (f *HomeFocusController) SetEnabled(id HomeFocusID, enabled bool) {
 	if f == nil {
 		return
@@ -120,6 +143,7 @@ func (f *HomeFocusController) SetEnabled(id HomeFocusID, enabled bool) {
 	}
 }
 
+// IsEnabled reports whether a focus ID is enabled.
 func (f *HomeFocusController) IsEnabled(id HomeFocusID) bool {
 	if f == nil {
 		return false
@@ -128,6 +152,7 @@ func (f *HomeFocusController) IsEnabled(id HomeFocusID) bool {
 	return exists && enabled
 }
 
+// Move moves focus in the given direction, respecting the focus graph.
 func (f *HomeFocusController) Move(direction FocusDirection) HomeFocusID {
 	if f == nil {
 		return HomeFocusContinue
@@ -135,7 +160,6 @@ func (f *HomeFocusController) Move(direction FocusDirection) HomeFocusID {
 	if f.current == "" || !f.IsEnabled(f.current) {
 		f.current = f.firstEnabled()
 	}
-
 	candidate := f.neighbor(f.current, direction)
 	visited := map[HomeFocusID]bool{f.current: true}
 	for candidate != "" && !visited[candidate] {
@@ -150,6 +174,7 @@ func (f *HomeFocusController) Move(direction FocusDirection) HomeFocusID {
 	return f.current
 }
 
+// Remember saves the current focus as the "last home" position.
 func (f *HomeFocusController) Remember() {
 	if f == nil || !f.IsEnabled(f.current) {
 		return
@@ -157,6 +182,7 @@ func (f *HomeFocusController) Remember() {
 	f.lastHome = f.current
 }
 
+// Restore returns focus to the last home position.
 func (f *HomeFocusController) Restore() HomeFocusID {
 	if f == nil {
 		return HomeFocusContinue
@@ -170,6 +196,7 @@ func (f *HomeFocusController) Restore() HomeFocusID {
 	return f.current
 }
 
+// neighbor returns the neighbor HomeFocusID in the given direction.
 func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection) HomeFocusID {
 	n, ok := homeFocusGraph[id]
 	if !ok {
@@ -189,11 +216,13 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 	}
 }
 
+// firstEnabled returns the first enabled focus ID in the default order.
 func (f *HomeFocusController) firstEnabled() HomeFocusID {
 	order := []HomeFocusID{
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
+		HomeFocusClock, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

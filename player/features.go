@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -232,6 +233,21 @@ func feEnterFocused(config *Config) {
 	}
 	ext := strings.ToLower(filepath.Ext(entry.Path))
 	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
+		if config.Variables.Custom["chat_attach_image"] == "1" {
+			// Send image as chat message attachment
+			config.Variables.Custom["chat_attach_image"] = ""
+			// Create a ChatMessage with ImageURL set to the file path
+			chatMessages = append(chatMessages, ChatMessage{
+				ID:        fmt.Sprintf("%x", []byte{}),
+				Sender:    "You",
+				Text:      "",
+				Timestamp: time.Now(),
+				ImageURL:  entry.Path,
+			})
+			saveChatMessages()
+			showToast("Image attached to chat", ToastSuccess())
+			return
+		}
 		imagePath, err := resolveExplorerEntry(config, entry.Path)
 		if err != nil {
 			showToast("Cannot open image: "+err.Error(), ToastError())

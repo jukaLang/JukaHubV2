@@ -27,10 +27,11 @@ type VideoPlayerState struct {
 	progressBase        float64
 	volume              float64
 	speed               float64
+	downloadSpeed       float64 // bytes per second, 0 when unknown
 	current             *sdl.Texture
 	currentRaw          []byte
-	frameSeq            uint64 // incremented by the decoder for every new frame
-	uploadedSeq         uint64 // last frame seq copied into the texture
+	frameSeq            uint64
+	uploadedSeq         uint64
 	width               int32
 	height              int32
 	lastErr             string
@@ -44,20 +45,20 @@ type VideoPlayerState struct {
 	dragStartX          int32
 }
 
-// Global embedded video player state
-var embeddedPlayer = &VideoPlayerState{phase: "idle"}
+// Global embedded video player state.
+var embeddedPlayer = &VideoPlayerState{phase: "idle", volume: 1.0, speed: 1.0}
 
-// lastResumeSaveTicks throttles periodic resume-position writes so the recent
-// store survives a crash without writing to disk every frame.
+// lastResumeSaveTicks throttles periodic resume-position writes.
 var lastResumeSaveTicks uint64
 
 var videoTextureLogCount int
 
-// Video frame queue for decoder → renderer handoff.
+// Video frame queue (kept for compatibility; decoder currently writes
+// directly into currentRaw).
 var videoFrameQueue chan *sdl.Texture
 var videoFrameQueueSize = 4
 
-// Control button hitboxes for the video overlay
+// Control button hitboxes for the video overlay.
 var videoControlRects = struct {
 	playPause   sdl.Rect
 	overlayPlay sdl.Rect
@@ -72,17 +73,12 @@ var videoControlRects = struct {
 	back        sdl.Rect
 }{}
 
-// A playback session owns one decode pipeline. Every start, seek or restart
-// gets a new generation, and a stopped or superseded session can never touch
-// the processes or UI state of a newer one. Without this, the goroutine for a
-// finished video called StopEmbeddedPlayback() a moment later, tearing down
-// the video that had just been started (the "video closes after a second"
-// bug), and seeking killed the restarted pipeline the same way.
+// playbackSession owns one decode pipeline.
 type playbackSession struct {
 	id       uint64
-	source   string // file path or URL being decoded
-	pageURL  string // page the user opened (used for resume positions)
-	tempFile bool   // downloaded copy owned by playWithTempFile
+	source   string
+	pageURL  string
+	tempFile bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -98,9 +94,6 @@ var (
 	playbackSeq     uint64
 )
 
-// beginPlaybackSession supersedes the running pipeline (if any) and returns the
-// new one. The previous session is stopped, and its downloaded copy removed
-// unless the new playback uses the same file.
 func beginPlaybackSession(source, pageURL string, tempFile bool) *playbackSession {
 	persistSessionProgress(playbackCurrentSession())
 
@@ -139,7 +132,6 @@ func samePlaybackSource(a, b string) bool {
 	return strings.EqualFold(a, b)
 }
 
-// isCurrent reports whether this session is still the one on screen.
 func (s *playbackSession) isCurrent() bool {
 	if s == nil {
 		return false
@@ -191,9 +183,6 @@ func (s *playbackSession) clearAudioCmd(cmd *exec.Cmd) {
 	s.mu.Unlock()
 }
 
-// stop cancels the session and kills its processes. The goroutines that own the
-// commands call Wait exactly once, so stop never calls it (a double Wait would
-// race with the decoder's own defer).
 func (s *playbackSession) stop() {
 	if s == nil {
 		return
@@ -211,9 +200,6 @@ func (s *playbackSession) stop() {
 	}
 }
 
-// finish is called by the pipeline goroutine when decoding ends. It only resets
-// the UI when this session is still the active one; a superseded session must
-// leave the newer playback untouched.
 func (s *playbackSession) finish() {
 	if !s.isCurrent() {
 		return
@@ -221,9 +207,6 @@ func (s *playbackSession) finish() {
 	StopEmbeddedPlayback()
 }
 
-// persistSessionProgress stores the resume position of a session before it is
-// replaced. It uses the session's own page URL so a new video never overwrites
-// the previous video's position.
 func persistSessionProgress(s *playbackSession) {
 	if s == nil || s.pageURL == "" {
 		return
@@ -240,15 +223,8 @@ func persistSessionProgress(s *playbackSession) {
 	saveFavorites()
 }
 
-// videoTempDir is the directory playWithTempFile stages downloads in.
-// Overridable in tests.
 var videoTempDir = defaultVideoTempDir
 
-// defaultVideoTempDir keeps downloads off the handheld's tmpfs: /tmp on the
-// TrimUI lives in RAM, and a multi-megabyte video staged there used to fill
-// memory and get the app killed mid-download. On the handheld the file goes to
-// the app's data folder on the SD card instead; desktops keep using the
-// system temp directory.
 func defaultVideoTempDir() string {
 	if P().IsHandheld() {
 		if dir, err := P().DataDir(); err == nil && dir != "" {
@@ -261,16 +237,10 @@ func defaultVideoTempDir() string {
 	return os.TempDir()
 }
 
-// tempVideoPath builds the staging path for one download. Creation and cleanup
-// both derive it from videoTempDir, so a file we make is always a file we may
-// delete (and a user's own media never is).
 func tempVideoPath() string {
 	return filepath.Join(videoTempDir(), fmt.Sprintf("jukahub-video-%d.mp4", time.Now().UnixNano()))
 }
 
-// removeTempVideo deletes a downloaded playback copy. Only files created by
-// playWithTempFile are touched: stopping a video played from the SD card used
-// to delete the user's own media file.
 func removeTempVideo(path string) {
 	if path == "" {
 		return
@@ -279,7 +249,6 @@ func removeTempVideo(path string) {
 	if !strings.HasPrefix(base, "jukahub-video-") || !strings.HasSuffix(strings.ToLower(base), ".mp4") {
 		return
 	}
-	// Only files this player created in the system temp directory are removed.
 	tempDir, err := filepath.Abs(videoTempDir())
 	if err != nil {
 		return
@@ -293,7 +262,6 @@ func removeTempVideo(path string) {
 	}
 }
 
-// playerPhase returns the current phase under the state lock.
 func playerPhase() string {
 	embeddedPlayer.mu.Lock()
 	defer embeddedPlayer.mu.Unlock()
@@ -317,12 +285,8 @@ func clearVideoFrameQueue() {
 	}
 }
 
-// clampPosInt keeps a probed frame dimension inside a sane range so a bad or
-// hostile ffprobe header can never allocate a giant texture.
 func clampPosInt(v int64) int {
-	const (
-		maxVideoDimension = 16384
-	)
+	const maxVideoDimension = 16384
 	if v < 1 {
 		return 1
 	}
@@ -390,8 +354,6 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 			}
 		}
 	}
-	// avg_frame_rate reflects the true playback rate for VFR content, whereas
-	// r_frame_rate can be a nominal maximum that makes playback run too fast.
 	if avgFps > 0 {
 		fps = avgFps
 	}
@@ -400,12 +362,8 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 }
 
 func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, height int32, startSec float64) {
-	// No -re flag: wall-clock frame pacing below handles real-time output.
-	// -re interacts badly with pipe output on ARM64 Trimui builds.
 	args := []string{}
 	if startSec > 0 {
-		// Fast (keyframe-accurate) seek before the input so resume starts at
-		// the saved position instead of the beginning.
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
 	args = append(args, "-i", path,
@@ -439,9 +397,7 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	}
 	buf := make([]byte, frameSize)
 	frameCount := 0
-	// Compute the target inter-frame duration from the detected fps.
-	// On ARM64 Trimui the -re flag may not pace reliably, so we do
-	// explicit wall-clock pacing as a safety net.
+
 	embeddedPlayer.mu.Lock()
 	fps := embeddedPlayer.frameRate
 	embeddedPlayer.mu.Unlock()
@@ -452,15 +408,17 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	frameDeadline := time.Now()
 	wasPaused := false
 
+	// NOTE: playback speed is intentionally kept at 1x here. Applying
+	// embeddedPlayer.speed to the frame pacing without also re-timing the
+	// audio decoder causes progressive A/V drift, so real speed support
+	// requires restarting both pipelines (a seek). The speed field remains
+	// cosmetic until that is implemented.
 	for {
 		select {
 		case <-sess.ctx.Done():
 			return
 		default:
 		}
-		// True pause: while paused, stop consuming the pipe so ffmpeg blocks
-		// and the video source stands still; on resume it continues exactly
-		// where it left off, keeping A/V in sync with the audio.
 		embeddedPlayer.mu.Lock()
 		paused := embeddedPlayer.phase == "paused"
 		embeddedPlayer.mu.Unlock()
@@ -470,8 +428,6 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 			continue
 		}
 		if wasPaused {
-			// Resume from now: otherwise the deadline is far in the past and
-			// the decoder bursts through a second of frames to catch up.
 			frameDeadline = time.Now().Add(frameDuration)
 			wasPaused = false
 		}
@@ -480,9 +436,6 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		}
 		frameCount++
 
-		// Reuse the frame buffer instead of allocating 3-8 MB per frame; this
-		// keeps the GC from stuttering playback. The upload path holds the same
-		// mutex while copying into the texture, so no torn frames.
 		embeddedPlayer.mu.Lock()
 		if cap(embeddedPlayer.currentRaw) < len(buf) {
 			embeddedPlayer.currentRaw = make([]byte, len(buf))
@@ -496,17 +449,12 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		embeddedPlayer.frameSeq++
 		embeddedPlayer.mu.Unlock()
 
-		// Pace to exactly 1x speed: sleep until the next frame is due.
-		// This prevents the decoder from running ahead of real-time on
-		// fast machines and provides a consistent floor on slow ones.
 		if frameCount > 1 {
 			frameDeadline = frameDeadline.Add(frameDuration)
 			wait := time.Until(frameDeadline)
 			if wait > 0 {
 				time.Sleep(wait)
 			} else if -wait > 250*time.Millisecond {
-				// Fell far behind (slow decode or a stall). Resync the clock
-				// instead of playing a burst of frames to catch up.
 				frameDeadline = time.Now()
 			}
 		} else {
@@ -517,14 +465,9 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 }
 
 func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec float64) {
-	// Match the exact sample rate the SDL device obtained so there is
-	// zero resampling and perfect pitch. No -re: queue backpressure
-	// paces the decoder to real-time.
 	rate := GetVideoAudioRate()
 	args := []string{}
 	if startSec > 0 {
-		// Fast seek before the input so resume/seek starts at the right
-		// audio position instead of the beginning.
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
 	args = append(args, "-i", path,
@@ -552,9 +495,6 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 	defer sess.clearAudioCmd(cmd)
 	defer cmd.Wait()
 
-	// Feed decoded s16le stereo PCM straight to the dedicated video audio
-	// device (same format, no resampling). The queue helper blocks when the
-	// device is ~0.75 s behind, which paces ffmpeg to roughly realtime.
 	const audioBufferSize = 8192
 	buf := make([]byte, audioBufferSize)
 
@@ -568,9 +508,6 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 		vol := embeddedPlayer.volume
 		paused := embeddedPlayer.phase == "paused"
 		embeddedPlayer.mu.Unlock()
-		// While paused, stop consuming the pipe (ffmpeg blocks) and stop
-		// queueing; the device drains and goes quiet. On resume both continue
-		// from the pause point so sound stays in sync with the picture.
 		if paused {
 			time.Sleep(15 * time.Millisecond)
 			continue
@@ -586,10 +523,6 @@ func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec f
 }
 
 // UpdateCurrentTexture uploads the current raw RGBA frame to an SDL2 texture.
-// The copy runs under the state lock: the decoder writes the same buffer, and
-// uploading it without the lock produced torn frames (the flicker/glitch users
-// saw). Uploading only when frameSeq changed also avoids redundant work when
-// the render loop runs faster than the video.
 func UpdateCurrentTexture(renderer *sdl.Renderer) {
 	if renderer == nil {
 		return
@@ -611,13 +544,6 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 	}
 
 	if embeddedPlayer.current == nil {
-		// ffmpeg's "rgba" pixel format writes bytes in memory order R,G,B,A.
-		// SDL_PIXELFORMAT_RGBA32 is the native-endian RGBA format: on the
-		// little-endian hardware this project targets (TrimUI Smart Pro,
-		// x86/ARM desktops) it is ABGR8888, whose memory order is R,G,B,A —
-		// exactly what ffmpeg emits. Plain RGBA8888 would expect B,G,R,A in
-		// memory, putting the alpha byte (255) in the red channel and making
-		// the whole frame render red.
 		tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA32), sdl.TEXTUREACCESS_STREAMING, w, h)
 		if err != nil {
 			log.Printf("[VIDEO] CreateTexture failed: %v (w=%d h=%d)", err, w, h)
@@ -637,20 +563,14 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 	embeddedPlayer.uploadedSeq = embeddedPlayer.frameSeq
 }
 
-// StartEmbeddedPlayback begins the embedded FFmpeg decoder pipeline for the
-// given URL from the beginning.
 func StartEmbeddedPlayback(config *Config, url string) {
 	StartEmbeddedPlaybackAt(config, url, 0)
 }
 
-// StartEmbeddedPlaybackAt begins the embedded FFmpeg decoder pipeline for the
-// given URL, seeking to startSec when nonzero so the Continue card can resume.
 func StartEmbeddedPlaybackAt(config *Config, url string, startSec float64) {
 	startEmbeddedPlayback(config, url, startSec, false)
 }
 
-// startEmbeddedPlayback starts a new session. tempFile marks a downloaded copy
-// that this session owns and may delete when it ends.
 func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFile bool) {
 	url = strings.TrimSpace(url)
 	if url == "" {
@@ -673,6 +593,7 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	embeddedPlayer.progressBase = 0
 	embeddedPlayer.volume = 1.0
 	embeddedPlayer.speed = 1.0
+	embeddedPlayer.downloadSpeed = 0
 	embeddedPlayer.lastErr = ""
 	embeddedPlayer.duration = 0
 	embeddedPlayer.currentRaw = nil
@@ -688,8 +609,6 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 
 		w, h, dur, fps := probeVideoInfo(ffprobePath, url)
 		if !sess.isCurrent() {
-			// A newer session (seek, restart or stop) took over while probing:
-			// do not touch its state or start orphan processes.
 			return
 		}
 
@@ -721,20 +640,13 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		embeddedPlayer.progress = progressBase
 		embeddedPlayer.mu.Unlock()
 
-		// Audio and video are separate blocking decode loops. The audio
-		// pipeline runs on its own goroutine — calling it inline here would
-		// block until the audio ends and the video decoder would never start.
 		go startFFmpegAudio(sess, ffmpegPath, url, startSec)
 		startFFmpegDecoder(sess, ffmpegPath, url, w, h, startSec)
 
-		// The pipeline ended (EOF, stop, or a newer session). finish() only
-		// resets the UI when this session still owns the screen, so a stale
-		// decoder can never tear down the video the user is watching.
 		sess.finish()
 	}()
 }
 
-// StopEmbeddedPlayback halts the embedded decoder and clears state.
 func StopEmbeddedPlayback() {
 	playbackMu.Lock()
 	sess := playbackCurrent
@@ -748,8 +660,6 @@ func StopEmbeddedPlayback() {
 			removeTempVideo(sess.source)
 		}
 	}
-	// Drop any audio still queued from the stopped video so it never bleeds
-	// into the next playback.
 	ClearVideoAudioQueue()
 
 	embeddedPlayer.mu.Lock()
@@ -758,6 +668,7 @@ func StopEmbeddedPlayback() {
 	embeddedPlayer.currentRaw = nil
 	embeddedPlayer.frameSeq = 0
 	embeddedPlayer.uploadedSeq = 0
+	embeddedPlayer.downloadSpeed = 0
 	embeddedPlayer.mu.Unlock()
 
 	if prevPhase != "idle" {
@@ -775,12 +686,10 @@ func StopEmbeddedPlayback() {
 	videoPlaybackMutex.Unlock()
 }
 
-// stopVideoPlayback is the unexported alias used by main.go menu buttons.
 func stopVideoPlayback() {
 	StopEmbeddedPlayback()
 }
 
-// ToggleVideoPlayback switches between playing and paused.
 func ToggleVideoPlayback() {
 	embeddedPlayer.mu.Lock()
 	defer embeddedPlayer.mu.Unlock()
@@ -798,15 +707,10 @@ func ToggleVideoPlayback() {
 	}
 }
 
-// toggleVideoPlayback is the unexported alias used by main.go menu buttons.
 func toggleVideoPlayback() {
 	ToggleVideoPlayback()
 }
 
-// SeekVideo seeks to the given fraction (0..1) by restarting the pipeline with
-// -ss. The seek is a new session: the old decoder is superseded, so when its
-// loop exits it cannot stop the restarted playback (which used to make seeking
-// end the video a second later).
 func SeekVideo(fraction float64) {
 	prev := playbackCurrentSession()
 	if prev == nil {
@@ -850,19 +754,13 @@ func SeekVideo(fraction float64) {
 	embeddedPlayer.progress = fraction
 	embeddedPlayer.mu.Unlock()
 
-	// The restarted decoders must not run on the caller's goroutine: SeekVideo
-	// is invoked from the render loop, and decoding inline froze the whole UI
-	// (no overlay, no input) for the rest of the video.
 	go func() {
-		// Restart audio at the seek position so sound stays in sync with the
-		// restarted video decoder.
 		go startFFmpegAudio(next, ffmpegPath, prev.source, seekSec)
 		startFFmpegDecoder(next, ffmpegPath, prev.source, width, height, seekSec)
 		next.finish()
 	}()
 }
 
-// AdjustVolume changes volume by delta and clamps to 0..1.
 func AdjustVolume(delta float64) {
 	embeddedPlayer.mu.Lock()
 	defer embeddedPlayer.mu.Unlock()
@@ -875,7 +773,6 @@ func AdjustVolume(delta float64) {
 	}
 }
 
-// SetPlaybackSpeed sets the playback speed (0.5, 1.0, 1.5, 2.0).
 func SetPlaybackSpeed(speed float64) {
 	embeddedPlayer.mu.Lock()
 	defer embeddedPlayer.mu.Unlock()
@@ -888,15 +785,10 @@ func SetPlaybackSpeed(speed float64) {
 	embeddedPlayer.speed = speed
 }
 
-// GetEmbeddedPlayerState returns a borrowed pointer to the current player
-// state. The caller must not mutate fields without holding embeddedPlayer.mu.
 func GetEmbeddedPlayerState() *VideoPlayerState {
 	return embeddedPlayer
 }
 
-// videoStateSnapshot is a consistent copy of the player state for the render
-// and input paths. Reading the live fields directly raced with the decoder:
-// a half-updated progress/phase made the overlay flicker and the seek bar jump.
 type videoStateSnapshot struct {
 	phase               string
 	progress            float64
@@ -904,6 +796,7 @@ type videoStateSnapshot struct {
 	duration            float64
 	volume              float64
 	speed               float64
+	downloadSpeed       float64
 	width               int32
 	height              int32
 	hasRaw              bool
@@ -922,6 +815,7 @@ func snapshotVideoState() videoStateSnapshot {
 		duration:            embeddedPlayer.duration,
 		volume:              embeddedPlayer.volume,
 		speed:               embeddedPlayer.speed,
+		downloadSpeed:       embeddedPlayer.downloadSpeed,
 		width:               embeddedPlayer.width,
 		height:              embeddedPlayer.height,
 		hasRaw:              embeddedPlayer.currentRaw != nil,
@@ -931,7 +825,6 @@ func snapshotVideoState() videoStateSnapshot {
 	}
 }
 
-// formatTime converts seconds to MM:SS.
 func formatTime(seconds float64) string {
 	if seconds < 0 {
 		seconds = 0
@@ -948,6 +841,57 @@ func pad2(n int) string {
 	return strconv.Itoa(n)
 }
 
+// computeVideoControlLayout fills videoControlRects for the given geometry.
+// It runs every frame regardless of the overlay cache, so mouse/touch hit
+// testing keeps working when the cached overlay path is used.
+func computeVideoControlLayout(x, y, w, h int32, state videoStateSnapshot) {
+	barH := int32(72)
+	barY := y + h - barH
+
+	backBtnSize := int32(30)
+	badgeY := y + 12
+	backX := x + w - backBtnSize - 18
+	videoControlRects.back = sdl.Rect{X: backX, Y: badgeY - 2, W: backBtnSize, H: backBtnSize}
+
+	seekBarY := barY - 16
+	seekBarW := w - 48
+	seekBarX := x + 24
+	videoControlRects.progress = sdl.Rect{X: seekBarX, Y: seekBarY - 8, W: seekBarW, H: 20}
+
+	btnSize := int32(36)
+	gap := int32(10)
+	groupW := 5*btnSize + 4*gap
+	startX := x + (w-groupW)/2
+	btnY := barY + (barH-btnSize)/2
+
+	videoControlRects.stop = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
+	startX += btnSize + gap
+	videoControlRects.seekBack = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
+	startX += btnSize + gap
+	videoControlRects.playPause = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
+	startX += btnSize + gap
+	videoControlRects.seekFwd = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
+	startX += btnSize + gap
+	videoControlRects.speed = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
+	videoControlRects.speedCycle = videoControlRects.speed
+
+	volX := x + 18
+	videoControlRects.volDown = sdl.Rect{X: volX, Y: btnY, W: btnSize, H: btnSize}
+	videoControlRects.volUp = sdl.Rect{X: volX + btnSize + 6, Y: btnY, W: btnSize, H: btnSize}
+
+	if state.phase == "paused" {
+		overlayBtnSize := int32(80)
+		videoControlRects.overlayPlay = sdl.Rect{
+			X: x + (w-overlayBtnSize)/2,
+			Y: y + (h-overlayBtnSize)/2,
+			W: overlayBtnSize,
+			H: overlayBtnSize,
+		}
+	} else {
+		videoControlRects.overlayPlay = sdl.Rect{}
+	}
+}
+
 // RenderVideoOverlay renders the current video frame and on-screen controls.
 func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	state := snapshotVideoState()
@@ -955,7 +899,44 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		return
 	}
 
-	// Update playback progress based on elapsed time
+	// Full-screen loader shown during video download.
+	if state.phase == "downloading" {
+		renderer.SetDrawColor(0, 0, 0, 180)
+		renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+
+		font, _ := getCachedFont(config, "small")
+		if font == nil {
+			return
+		}
+
+		loaderText := fmt.Sprintf("Downloading... %d%%", int(state.progress*100))
+		textW, textH, _ := font.SizeUTF8(loaderText)
+		renderText(renderer, config, font, loaderText, ColorTextPrimary(),
+			(screenWidth-int32(textW))/2, (screenHeight-int32(textH))/2)
+
+		// Estimated time remaining (guard against division by zero).
+		if state.duration > 0 && state.progress > 0 {
+			etaSec := int(state.duration * (1 - state.progress) / state.progress)
+			if etaSec > 0 {
+				etaText := formatTime(float64(etaSec))
+				renderText(renderer, config, font, "ETA: "+etaText, ColorTextTertiary(),
+					(screenWidth-int32(textW))/2, (screenHeight-int32(textH))/2+40)
+			}
+		}
+
+		// Download speed.
+		if spd := formatDownloadSpeed(state.downloadSpeed); spd != "" {
+			renderText(renderer, config, font, "Downloading at "+spd, ColorTextTertiary(),
+				(screenWidth-int32(textW))/2, (screenHeight-int32(textH))/2+70)
+		}
+		return
+	}
+
+	x, y := elem.X, elem.Y
+	w := getElementWidth(elem, screenWidth)
+	h := getElementHeight(elem, screenHeight)
+
+	// Update playback progress from elapsed wall time.
 	if state.duration > 0 && state.phase == "playing" {
 		elapsed := time.Since(state.decoderStartTime).Seconds()
 		pausedTime := state.totalPausedDuration
@@ -973,13 +954,9 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		embeddedPlayer.mu.Lock()
 		embeddedPlayer.progress = fraction
 		embeddedPlayer.mu.Unlock()
-		// Draw this frame with the value just computed instead of the snapshot
-		// taken before it, so the bar never lags a frame behind the picture.
 		state.progress = fraction
 
-		// Throttled safety net: write the resume position every ~5s so an app
-		// crash does not lose the watch position (StopEmbeddedPlayback always
-		// writes the final position).
+		// Throttled resume-position safety net.
 		if now := sdl.GetTicks64(); now-lastResumeSaveTicks > 5000 {
 			lastResumeSaveTicks = now
 			if src := currentPlaybackURL; src != "" && state.duration > 0 {
@@ -989,14 +966,12 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		}
 	}
 
-	x, y := elem.X, elem.Y
-	w := getElementWidth(elem, screenWidth)
-	h := getElementHeight(elem, screenHeight)
+	// Layout the controls first so hit testing works even when the cached
+	// overlay texture is used.
+	computeVideoControlLayout(x, y, w, h, state)
 
-	// Upload raw frame to texture if needed
 	UpdateCurrentTexture(renderer)
 
-	// Re-read texture pointer after potential creation
 	embeddedPlayer.mu.Lock()
 	currentTex := embeddedPlayer.current
 	embeddedPlayer.mu.Unlock()
@@ -1004,52 +979,91 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	if currentTex == nil && state.phase == "playing" {
 		videoTextureLogCount++
 		if videoTextureLogCount%120 == 0 {
-			log.Printf("[VIDEO] currentTex is nil after UpdateCurrentTexture, raw=%v, w=%d, h=%d", state.hasRaw, state.width, state.height)
+			log.Printf("[VIDEO] currentTex is nil after UpdateCurrentTexture, raw=%v, w=%d, h=%d",
+				state.hasRaw, state.width, state.height)
 		}
 	}
 
-	// Video frame area
+	cachedOverlay := vkEnsureVideoOverlayCache(renderer, config, w, h)
+	if cachedOverlay != nil {
+		// Live video frame first, then the cached static layer over it, then
+		// the state-dependent controls on top of both.
+		drawVideoFrameArea(renderer, currentTex, x, y, w, h)
+		renderer.Copy(cachedOverlay,
+			&sdl.Rect{X: 0, Y: 0, W: w, H: h},
+			&sdl.Rect{X: x, Y: y, W: w, H: h})
+		drawVideoOverlayLive(renderer, config, state, x, y, w, h)
+	} else {
+		drawVideoOverlayFallback(renderer, config, state, currentTex, x, y, w, h)
+	}
+}
+
+// drawVideoFrameArea draws the current video frame, or a dark backdrop with a
+// spinner while the decoder has not produced one yet (downloading or buffering),
+// so playback never looks like a dead black rectangle.
+func drawVideoFrameArea(renderer *sdl.Renderer, currentTex *sdl.Texture, x, y, w, h int32) {
 	if currentTex != nil {
 		renderer.Copy(currentTex, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
-	} else if state.phase == "downloading" || state.phase == "error" {
-		renderer.SetDrawColor(8, 10, 16, 220)
-		renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
-		if state.phase == "downloading" {
-			renderSpinner(renderer, x+w/2, y+h/2, 40, ColorTextPrimary())
-		}
-	} else {
-		renderer.SetDrawColor(8, 10, 16, 220)
-		renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
-	}
-
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
 		return
 	}
+	renderer.SetDrawColor(8, 10, 16, 220)
+	renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
+	renderSpinner(renderer, x+w/2, y+h/2, 40, ColorTextPrimary())
+}
 
-	// Use a cool cyan/blue accent for the video player so it never looks red,
-	// regardless of the global theme accent color.
-	accent := ColorInfo
-
+// drawVideoOverlayStatic draws the part of the overlay that never changes while
+// a video is on screen: readability gradients, the control bar and the seek
+// track. The overlay cache renders this once per element size and theme change;
+// everything state-dependent is drawn per frame by drawVideoOverlayLive.
+// (ox, oy) is the origin the layer is drawn at: the element position on screen,
+// or (0, 0) when rendering into the element-sized cache texture.
+func drawVideoOverlayStatic(renderer *sdl.Renderer, ox, oy, w, h int32) {
 	// Top / bottom gradients for readability.
 	topGradH := int32(70)
 	for s := int32(0); s < topGradH; s += 3 {
 		a := uint8(clampInt32(90*(10-int32(float64(s)*10.0/float64(topGradH))), 0, 90))
 		renderer.SetDrawColor(0, 0, 0, a)
-		renderer.FillRect(&sdl.Rect{X: x, Y: y + s, W: w, H: 3})
+		renderer.FillRect(&sdl.Rect{X: ox, Y: oy + s, W: w, H: 3})
 	}
 	bottomGradH := int32(140)
-	bottomY := y + h - bottomGradH
+	bottomY := oy + h - bottomGradH
 	for s := int32(0); s < bottomGradH; s += 3 {
 		a := uint8(clampInt32(int32(180.0*float64(s)/float64(bottomGradH)), 0, 180))
 		renderer.SetDrawColor(0, 0, 0, a)
-		renderer.FillRect(&sdl.Rect{X: x, Y: bottomY + s, W: w, H: 3})
+		renderer.FillRect(&sdl.Rect{X: ox, Y: bottomY + s, W: w, H: 3})
 	}
 
 	// Bottom control bar.
 	barH := int32(72)
+	barY := oy + h - barH
+	fillRoundedRect(renderer, ox+8, barY, w-16, barH, 16, WithAlpha(ColorSurfacePanel, 220))
+
+	// Seek track; the filled part and thumb change every frame and are drawn
+	// by drawVideoOverlayLive.
+	seekBarH := int32(6)
+	seekBarY := barY - 16
+	seekBarW := w - 48
+	seekBarX := ox + 24
+	fillRoundedRect(renderer, seekBarX, seekBarY, seekBarW, seekBarH, seekBarH/2,
+		sdl.Color{R: 40, G: 40, B: 50, A: 255})
+	renderer.SetDrawColor(255, 255, 255, 30)
+	renderer.FillRect(&sdl.Rect{X: seekBarX, Y: seekBarY, W: seekBarW, H: 1})
+}
+
+// drawVideoOverlayLive draws everything that changes while a video plays: the
+// phase badge, back button, volume, seek fill and thumb, the transport buttons
+// (stop, rewind, play/pause, forward, speed), the time readout and the big play
+// button while paused. It is drawn every frame on top of the static layer.
+func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoStateSnapshot, x, y, w, h int32) {
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+
+	accent := ColorInfo
+
+	barH := int32(72)
 	barY := y + h - barH
-	fillRoundedRect(renderer, x+8, barY, w-16, barH, 16, WithAlpha(ColorSurfacePanel, 220))
 
 	// Top-left phase badge.
 	phaseText := "PLAYING"
@@ -1067,86 +1081,65 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	phaseW, _, _ := font.SizeUTF8(phaseText)
 	badgeX := x + 16
 	badgeY := y + 12
-	fillRoundedRect(renderer, badgeX, badgeY, clampInt32(int32(phaseW)+18, 1, 10000), 26, 13, WithAlpha(ColorSurfaceRaised, 230))
+	fillRoundedRect(renderer, badgeX, badgeY, clampInt32(int32(phaseW)+18, 1, 10000), 26, 13,
+		WithAlpha(ColorSurfaceRaised, 230))
 	renderText(renderer, config, font, phaseText, phaseCol, badgeX+9, badgeY+6)
 
-	// Top-right: back (SDL-drawn X) and volume text.
+	// Top-right: back button + volume text.
 	volText := formatPercentSimple(state.volume)
 	volW, _, _ := font.SizeUTF8(volText)
-	backBtnSize := int32(30)
-	backX := x + w - backBtnSize - 18
-	fillRoundedRect(renderer, backX, badgeY-2, backBtnSize, backBtnSize, 8, WithAlpha(ColorSurfaceRaised, 180))
-	drawCloseIcon(renderer, backX+backBtnSize/2, badgeY-2+backBtnSize/2, 11, ColorTextPrimary())
-	videoControlRects.back = sdl.Rect{X: backX, Y: badgeY - 2, W: backBtnSize, H: backBtnSize}
+	backRect := videoControlRects.back
+	fillRoundedRect(renderer, backRect.X, backRect.Y, backRect.W, backRect.H, 8,
+		WithAlpha(ColorSurfaceRaised, 180))
+	drawCloseIcon(renderer, backRect.X+backRect.W/2, backRect.Y+backRect.H/2, 11, ColorTextPrimary())
 	renderText(renderer, config, font, volText, ColorTextPrimary(), x+w-int32(volW)-58, y+18)
 
-	// Progress bar sits just above the control bar.
+	// Seek fill + thumb.
 	seekBarH := int32(6)
 	seekBarY := barY - 16
 	seekBarW := w - 48
 	seekBarX := x + 24
-	fillRoundedRect(renderer, seekBarX, seekBarY, seekBarW, seekBarH, seekBarH/2, sdl.Color{R: 40, G: 40, B: 50, A: 255})
 	if state.progress > 0 {
 		filledW := int32(float64(seekBarW) * state.progress)
 		if filledW > 0 {
-			fillRoundedRect(renderer, seekBarX, seekBarY, clampInt32(filledW, 0, seekBarW), seekBarH, seekBarH/2, accent)
+			fillRoundedRect(renderer, seekBarX, seekBarY, clampInt32(filledW, 0, seekBarW),
+				seekBarH, seekBarH/2, accent)
 		}
 	}
-	renderer.SetDrawColor(255, 255, 255, 30)
-	renderer.FillRect(&sdl.Rect{X: seekBarX, Y: seekBarY, W: seekBarW, H: 1})
 	thumbX := seekBarX + int32(float64(seekBarW)*state.progress)
 	fillCircle(renderer, thumbX, seekBarY+seekBarH/2, 7, accent)
-	videoControlRects.progress = sdl.Rect{X: seekBarX, Y: seekBarY - 8, W: seekBarW, H: 20}
 
-	// Control buttons row, centered within the bar. Icons are SDL-drawn
-	// geometry (never font glyphs: Inter has no media/emoji symbols, so
-	// text-drawn buttons rendered as blank squares).
-	btnSize := int32(36)
-	gap := int32(10)
-	// Order: stop, seek back, play/pause, seek forward, speed.
-	groupW := 5*btnSize + 4*gap
-	startX := x + (w-groupW)/2
-	btnY := barY + (barH-btnSize)/2
-
-	videoControlRects.stop = drawIconBtn(renderer, iconStop, startX, btnY, btnSize)
-	startX += btnSize + gap
-	videoControlRects.seekBack = drawIconBtn(renderer, iconSeekBack, startX, btnY, btnSize)
-	startX += btnSize + gap
+	// Control buttons.
+	drawIconBtn(renderer, iconStop, videoControlRects.stop.X, videoControlRects.stop.Y, videoControlRects.stop.W)
+	drawIconBtn(renderer, iconSeekBack, videoControlRects.seekBack.X, videoControlRects.seekBack.Y, videoControlRects.seekBack.W)
 	if state.phase == "paused" {
-		videoControlRects.playPause = drawIconBtn(renderer, iconPlay, startX, btnY, btnSize)
+		drawIconBtn(renderer, iconPlay, videoControlRects.playPause.X, videoControlRects.playPause.Y, videoControlRects.playPause.W)
 	} else {
-		videoControlRects.playPause = drawIconBtn(renderer, iconPause, startX, btnY, btnSize)
+		drawIconBtn(renderer, iconPause, videoControlRects.playPause.X, videoControlRects.playPause.Y, videoControlRects.playPause.W)
 	}
-	startX += btnSize + gap
-	videoControlRects.seekFwd = drawIconBtn(renderer, iconSeekFwd, startX, btnY, btnSize)
-	startX += btnSize + gap
+	drawIconBtn(renderer, iconSeekFwd, videoControlRects.seekFwd.X, videoControlRects.seekFwd.Y, videoControlRects.seekFwd.W)
 	speedLabel := fmt.Sprintf("%.1fx", state.speed)
-	videoControlRects.speed = drawSpeedBtn(renderer, config, font, speedLabel, startX, btnY, btnSize)
-	videoControlRects.speedCycle = videoControlRects.speed
+	drawSpeedBtn(renderer, config, font, speedLabel,
+		videoControlRects.speed.X, videoControlRects.speed.Y, videoControlRects.speed.W)
 
-	// Volume +/- on the left of the bar.
-	volX := x + 18
-	videoControlRects.volDown = drawIconBtn(renderer, iconVolLow, volX, btnY, btnSize)
-	videoControlRects.volUp = drawIconBtn(renderer, iconVolHigh, volX+btnSize+6, btnY, btnSize)
+	drawIconBtn(renderer, iconVolLow, videoControlRects.volDown.X, videoControlRects.volDown.Y, videoControlRects.volDown.W)
+	drawIconBtn(renderer, iconVolHigh, videoControlRects.volUp.X, videoControlRects.volUp.Y, videoControlRects.volUp.W)
 
-	// Time on the right of the bar.
+	// Time on the right.
 	currentTime := state.progress * state.duration
 	timeText := formatTime(currentTime) + " / " + formatTime(state.duration)
 	tw, th, _ := font.SizeUTF8(timeText)
-	renderText(renderer, config, font, timeText, ColorTextPrimary(), x+w-int32(tw)-18, barY+(barH-int32(th))/2)
+	renderText(renderer, config, font, timeText, ColorTextPrimary(),
+		x+w-int32(tw)-18, barY+(barH-int32(th))/2)
 
-	// Big centered play/pause button when paused.
+	// Big centered play button when paused.
 	if state.phase == "paused" {
-		overlayBtnSize := int32(80)
-		overlayBtnX := x + (w-overlayBtnSize)/2
-		overlayBtnY := y + (h-overlayBtnSize)/2
-		videoControlRects.overlayPlay = sdl.Rect{X: overlayBtnX, Y: overlayBtnY, W: overlayBtnSize, H: overlayBtnSize}
-		fillCircle(renderer, overlayBtnX+overlayBtnSize/2, overlayBtnY+overlayBtnSize/2, overlayBtnSize/2, WithAlpha(ColorSurfacePanel, 200))
-		strokeCircle(renderer, overlayBtnX+overlayBtnSize/2, overlayBtnY+overlayBtnSize/2, overlayBtnSize/2, WithAlpha(accent, 180))
-		// play triangle
-		cx := overlayBtnX + overlayBtnSize/2
-		cy := overlayBtnY + overlayBtnSize/2
-		s := overlayBtnSize / 5
+		overlayBtn := videoControlRects.overlayPlay
+		cx := overlayBtn.X + overlayBtn.W/2
+		cy := overlayBtn.Y + overlayBtn.H/2
+		fillCircle(renderer, cx, cy, overlayBtn.W/2, WithAlpha(ColorSurfacePanel, 200))
+		strokeCircle(renderer, cx, cy, overlayBtn.W/2, WithAlpha(accent, 180))
+		s := overlayBtn.W / 5
 		renderer.SetDrawColor(accent.R, accent.G, accent.B, accent.A)
 		renderer.DrawLine(cx-s, cy-s, cx-s, cy+s)
 		renderer.DrawLine(cx-s, cy+s, cx+s-2, cy)
@@ -1154,9 +1147,16 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	}
 }
 
-// playerIcon identifies a geometry-drawn control icon. Icons are rendered with
-// SDL primitives only — never text glyphs — so they cannot turn into missing-
-// glyph boxes when the font lacks media/emoji symbols.
+// drawVideoOverlayFallback draws the entire overlay from scratch. Used when
+// the cached overlay texture is unavailable.
+func drawVideoOverlayFallback(renderer *sdl.Renderer, config *Config, state videoStateSnapshot,
+	currentTex *sdl.Texture, x, y, w, h int32) {
+	drawVideoFrameArea(renderer, currentTex, x, y, w, h)
+	drawVideoOverlayStatic(renderer, x, y, w, h)
+	drawVideoOverlayLive(renderer, config, state, x, y, w, h)
+}
+
+// playerIcon identifies a geometry-drawn control icon.
 type playerIcon int
 
 const (
@@ -1169,13 +1169,10 @@ const (
 	iconVolHigh
 )
 
-// iconCol returns the icon color, brightening for contrast on the dark buttons.
 func iconCol() sdl.Color {
 	return ColorTextPrimary()
 }
 
-// drawIconBtn draws a square control button with a geometric icon and returns
-// its rect (mouse hit target).
 func drawIconBtn(renderer *sdl.Renderer, icon playerIcon, x, y, size int32) sdl.Rect {
 	fillRoundedRect(renderer, x, y, size, size, size/5, WithAlpha(ColorSurfaceRaised, 180))
 	renderer.SetDrawColor(255, 255, 255, 25)
@@ -1219,30 +1216,26 @@ func drawIconBtn(renderer *sdl.Renderer, icon playerIcon, x, y, size int32) sdl.
 	return sdl.Rect{X: x, Y: y, W: size, H: size}
 }
 
-// drawSpeedBtn draws the play-speed button (its label is real text, not a
-// symbol, so it renders fine through the font).
 func drawSpeedBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, label string, x, y, size int32) sdl.Rect {
 	fillRoundedRect(renderer, x, y, size, size, size/5, WithAlpha(ColorSurfaceRaised, 180))
 	renderer.SetDrawColor(255, 255, 255, 25)
 	renderer.FillRect(&sdl.Rect{X: x + 3, Y: y + 1, W: size - 6, H: 1})
 	if font != nil {
 		lw, lh, _ := font.SizeUTF8(label)
-		renderText(renderer, config, font, label, ColorTextPrimary(), x+(size-int32(lw))/2, y+(size-int32(lh))/2)
+		renderText(renderer, config, font, label, ColorTextPrimary(),
+			x+(size-int32(lw))/2, y+(size-int32(lh))/2)
 	}
 	return sdl.Rect{X: x, Y: y, W: size, H: size}
 }
 
-// drawSpeaker draws a small speaker body (rect + cone) plus n sound-wave arcs.
 func drawSpeaker(renderer *sdl.Renderer, cx, cy, size int32, col sdl.Color, arcs int) {
 	s := size / 3
 	bodyW := s * 3 / 4
 	bodyH := s * 3 / 2
 	bodyX := cx - s*3/2 + s/3
 	fillRoundedRect(renderer, bodyX, cy-bodyH/2, bodyW, bodyH, 2, col)
-	// cone
 	cone := [3]pt{{x: bodyX + bodyW, y: cy - bodyH/2}, {x: bodyX + bodyW, y: cy + bodyH/2}, {x: bodyX + bodyW + s, y: cy}}
 	fillTriangleFilled(renderer, cone[0], cone[1], cone[2], col)
-	// arcs (sound waves)
 	arcX := bodyX + bodyW + s
 	if arcs >= 1 {
 		drawArc(renderer, arcX, cy, s*3/4, 0.9, col)
@@ -1252,20 +1245,20 @@ func drawSpeaker(renderer *sdl.Renderer, cx, cy, size int32, col sdl.Color, arcs
 	}
 }
 
-// drawArc draws a short circular arc as dense line segments (radius r, angles
-// from -half to +half radians around the +x axis).
 func drawArc(renderer *sdl.Renderer, cx, cy, r int32, half float64, col sdl.Color) {
 	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
 	steps := 10
 	for i := 0; i < steps; i++ {
 		a1 := -half + 2*half*float64(i)/float64(steps)
 		a2 := -half + 2*half*float64(i+1)/float64(steps)
-		renderer.DrawLine(clampInt32(cx+int32(float64(r)*math.Cos(a1)), -2000, 8000), clampInt32(cy+int32(float64(r)*math.Sin(a1)), -2000, 8000),
-			clampInt32(cx+int32(float64(r)*math.Cos(a2)), -2000, 8000), clampInt32(cy+int32(float64(r)*math.Sin(a2)), -2000, 8000))
+		renderer.DrawLine(
+			clampInt32(cx+int32(float64(r)*math.Cos(a1)), -2000, 8000),
+			clampInt32(cy+int32(float64(r)*math.Sin(a1)), -2000, 8000),
+			clampInt32(cx+int32(float64(r)*math.Cos(a2)), -2000, 8000),
+			clampInt32(cy+int32(float64(r)*math.Sin(a2)), -2000, 8000))
 	}
 }
 
-// drawCloseIcon draws an X (close) glyph from two diagonal lines.
 func drawCloseIcon(renderer *sdl.Renderer, cx, cy, r int32, col sdl.Color) {
 	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
 	renderer.DrawLine(cx-r, cy-r, cx+r, cy+r)
@@ -1281,6 +1274,25 @@ func formatPercentSimple(v float64) string {
 		p = 100
 	}
 	return strconv.Itoa(p) + "%"
+}
+
+// formatDownloadSpeed formats a bytes-per-second value for the loader text.
+func formatDownloadSpeed(bytesPerSec float64) string {
+	if bytesPerSec <= 0 {
+		return ""
+	}
+	const (
+		kib = 1024.0
+		mib = 1024.0 * 1024.0
+	)
+	switch {
+	case bytesPerSec >= mib:
+		return fmt.Sprintf("%.1f MiB/s", bytesPerSec/mib)
+	case bytesPerSec >= kib:
+		return fmt.Sprintf("%.1f KiB/s", bytesPerSec/kib)
+	default:
+		return fmt.Sprintf("%.0f B/s", bytesPerSec)
+	}
 }
 
 // HandleVideoControlClick processes mouse clicks on the video overlay controls.

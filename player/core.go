@@ -65,6 +65,28 @@ var (
 		"JukaHub: powered by JukaLang and questionable life choices.",
 		"In JukaLang we trust. Everything else is a runtime error.",
 		"Loading... JukaLang is secretly writing your code for you.",
+		"Please wait. Even JukaLang needs a moment to feel dramatic.",
+		"Loading: because instant gratification takes time.",
+		"Reticulating splines... wrong game, still loading.",
+		"This loading screen contains no artificial preservatives.",
+		"If loading takes long, blame the semicolons. There are none.",
+		"One bytecode to rule them all, one runtime to bind them.",
+		"Still faster than a Windows update.",
+		"0 errors, 0 warnings, 100% vibes.",
+		"JukaLang never sleeps. It just reloads.",
+		"The progress bar is the main character of this story.",
+		"Your SD card believes in you. So do we.",
+		"Warning: side effects may include actual productivity.",
+		"Meanwhile, in the runtime: absolutely everything.",
+		"Counting to infinity. We got as far as 'loading'.",
+		"JukaLang is doing its best. Its best is quite good.",
+		"Do not adjust your screen. The progress is real.",
+		"Now with 47% fewer mystery crashes!",
+		"This app was made with love and stack traces.",
+		"Warming up the pixels. The pixels are shy.",
+		"JukaHub: your games, your media, your late-night excuses.",
+		"Even the loading bar needs moral support.",
+		"Compiling vibes. Optimizing fun. Shipping joy.",
 	}
 
 	// Home screen layout state (shared between render and mouse hit-testing)
@@ -2929,6 +2951,9 @@ func parseDownloadProgress(stderr string) {
 				}
 				if strings.HasSuffix(part, "MiB/s") || strings.HasSuffix(part, "KiB/s") {
 					videoPlaybackSpeed = part
+					embeddedPlayer.mu.Lock()
+					embeddedPlayer.downloadSpeed = parseSpeedToken(part)
+					embeddedPlayer.mu.Unlock()
 				}
 				if strings.HasPrefix(part, "ETA") {
 					videoPlaybackETA = part
@@ -2936,6 +2961,21 @@ func parseDownloadProgress(stderr string) {
 			}
 		}
 	}
+}
+
+// parseSpeedToken converts a yt-dlp speed token such as "1.20MiB/s" or
+// "850.5KiB/s" into bytes per second.
+func parseSpeedToken(token string) float64 {
+	mult := 1024.0
+	if strings.HasSuffix(token, "MiB/s") {
+		mult = 1024.0 * 1024.0
+	}
+	num := strings.TrimSuffix(strings.TrimSuffix(token, "MiB/s"), "KiB/s")
+	f, err := strconv.ParseFloat(num, 64)
+	if err != nil {
+		return 0
+	}
+	return f * mult
 }
 
 // --- Input handling ---
@@ -3119,7 +3159,7 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 
 // isTerminalScene returns true if the current scene is Terminal.
 func isTerminalScene() bool {
-	if currentSceneIndex >= 0 && currentSceneIndex < len(appConfig.Scenes) {
+	if appConfig != nil && currentSceneIndex >= 0 && currentSceneIndex < len(appConfig.Scenes) {
 		return appConfig.Scenes[currentSceneIndex].Name == "Terminal"
 	}
 	return false
@@ -4557,9 +4597,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			log.Printf("play_focused: no focused video to play")
 		}
 	case "exit":
-		// Persist favorites (incl. resume positions) before a hard exit.
-		saveFavorites()
-		os.Exit(0)
+		// Play the goodbye sequence and quit gracefully via the main loop,
+		// which persists favorites and runs the deferred cleanup on the way
+		// out (a hard os.Exit would skip that cleanup).
+		requestAppExit()
 	case "external_app":
 		if element.ExternalAppPath == "" {
 			log.Printf("external_app trigger has no path")
@@ -4616,6 +4657,11 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		} else {
 			loadPodcasts(config)
 		}
+	case "attach_image":
+		// Set config variable to indicate we're in image attach mode.
+		config.Variables.Custom["chat_attach_image"] = "1"
+		showToast("Select an image to attach to your message", ToastInfo())
+		return
 	case "tick":
 		fetchTickers(config)
 	case "add_ticker":
@@ -4656,6 +4702,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		runRandomBenchmark(config)
 	case "terminal_run":
 		if cmd, ok := config.Variables.Custom["terminal_cmd"].(string); ok {
+			runTerminal(config, cmd)
+		}
+	case "emulator_run":
+		if cmd, ok := config.Variables.Custom["emulator_cmd"].(string); ok {
 			runTerminal(config, cmd)
 		}
 	case "cron_load":
@@ -4778,7 +4828,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		unitResult = ""
 	case "chat_send":
 		if inputTextBuffer != "" {
-			sendChatMessage("User", inputTextBuffer)
+			sendChatMessage(chatDisplayName(), inputTextBuffer)
 			inputTextBuffer = ""
 		}
 	case "discord_connect":
@@ -4860,7 +4910,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			entry := entries[focusedFileIndex]
 			ext := strings.ToLower(filepath.Ext(entry.Path))
 			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
-				sendChatMessage("User", "[Image: "+entry.Name+"]")
+				sendChatMessage(chatDisplayName(), "[Image: "+entry.Name+"]")
 			} else if ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".js" || ext == ".html" {
 				// The row comes from a dynamic list, not from the filesystem:
 				// resolve it under the explorer root before reading.
@@ -4877,10 +4927,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 					if len(content) > 500 {
 						content = content[:500] + "..."
 					}
-					sendChatMessage("User", content)
+					sendChatMessage(chatDisplayName(), content)
 				}
 			} else {
-				sendChatMessage("User", "Sent file: "+entry.Name)
+				sendChatMessage(chatDisplayName(), "Sent file: "+entry.Name)
 			}
 		}
 	case "canvas_open":
@@ -5312,6 +5362,10 @@ func completeSceneTransition(config *Config) {
 	if config.Scenes[currentSceneIndex].Name == "Terminal" {
 		termInit()
 	}
+	// Initialize emulator when entering the Emulator scene.
+	if config.Scenes[currentSceneIndex].Name == "Emulator" {
+		// Emulator scene initialized - label displays launcher info
+	}
 	// Initialize dashboard when entering the Dashboard scene.
 	if config.Scenes[currentSceneIndex].Name == "Dashboard" {
 		dashInit()
@@ -5478,7 +5532,7 @@ func handleSearchResultsAction(action Action, config *Config) {
 				row = focusedResultIndex / int(cols)
 			}
 			if focusedResultIndex <= 0 || row <= 0 {
-				moveSelection(config, -1)
+				moveSelection(config, ActionNavigateUp)
 				return
 			}
 		}
@@ -5498,22 +5552,37 @@ func handleSearchResultsAction(action Action, config *Config) {
 		}
 	case ActionBack:
 		// Leave the grid and move back to the previous element.
-		moveSelection(config, -1)
+		moveSelection(config, ActionNavigateUp)
 	}
 }
 
-func moveSelection(config *Config, direction int) {
+// countFocusable returns how many elements of a scene participate in the focus
+// graph (BuildGraph includes exactly these).
+func countFocusable(scene SceneConfig) int {
+	n := 0
+	for _, el := range scene.Elements {
+		if isFocusableElement(el) {
+			n++
+		}
+	}
+	return n
+}
+
+// moveSelection moves focus to the neighboring selectable element along the
+// semantic axis of the given action (Up/Down move rows, Left/Right move
+// columns).
+//
+// The focus graph is reinstalled only when it is missing, stale (elements were
+// added at runtime), or belongs to another scene: SetGraph restores persisted
+// focus, so reinstalling it on every press used to reset navigation to the
+// first node and trap keyboard/D-pad users on the first two buttons.
+func moveSelection(config *Config, action Action) {
 	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return
 	}
 	currentScene := config.Scenes[currentSceneIndex]
-	focusEngine.SetGraph(currentScene.Name, focusEngine.BuildGraph(currentScene))
-
-	var action Action
-	if direction < 0 {
-		action = ActionNavigateUp
-	} else {
-		action = ActionNavigateDown
+	if focusEngine.SceneName() != currentScene.Name || focusEngine.NodeCount() != countFocusable(currentScene) {
+		focusEngine.SetGraph(currentScene.Name, focusEngine.BuildGraph(currentScene))
 	}
 
 	result := focusEngine.Navigate(action)
@@ -5530,6 +5599,10 @@ func moveSelection(config *Config, direction int) {
 		}
 	} else {
 		// Fallback to linear wrap if graph has no neighbor in that direction.
+		direction := 1
+		if action == ActionNavigateUp || action == ActionNavigateLeft {
+			direction = -1
+		}
 		var interactive []int
 		for i, el := range currentScene.Elements {
 			if el.Type == "button" || el.Type == "input" || el.Type == "searchresults" || el.Type == "dynamiclist" || el.Type == "recent" || el.Type == "themegallery" || el.Type == "toggle" || el.Type == "textbrowser" || el.Type == "shortslist" || el.Type == "packagelist" {
@@ -5568,7 +5641,9 @@ func moveHomeSelection(config *Config, dx, dy int) {
 		return
 	}
 	scene := config.Scenes[currentSceneIndex]
-	focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))
+	if focusEngine.SceneName() != scene.Name || focusEngine.NodeCount() != countFocusable(scene) {
+		focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))
+	}
 
 	var action Action
 	switch {

@@ -74,40 +74,11 @@
                             <p>Import a <code>jukaconfig.json</code> or <code>jukaconfig.xml</code> you already have.</p>
                         </button>
                     </div>
-                    <div class="welcome-quick-starts">
-                        <button type="button" class="welcome-card" data-start="blank">
-                            <h5><i class="fas fa-file" aria-hidden="true"></i> Start blank</h5>
-                            <p>Build a fresh interface from scratch on this device.</p>
-                        </button>
-                        <button type="button" class="welcome-card" data-start="template">
-                            <h5><i class="fas fa-layer-group" aria-hidden="true"></i> Start from template</h5>
-                            <p>Load a ready-made multi-scene project to remix.</p>
-                        </button>
-                        <button type="button" class="welcome-card" data-start="load">
-                            <h5><i class="fas fa-upload" aria-hidden="true"></i> Load config</h5>
-                            <p>Import a <code>jukaconfig.json</code> or <code>jukaconfig.xml</code> you already have.</p>
-                        </button>
-                    </div>
-                    <div class="welcome-quick-starts">
-                        <button type="button" class="welcome-card" data-start="blank">
-                            <h5><i class="fas fa-file" aria-hidden="true"></i> Start blank</h5>
-                            <p>Build a fresh interface from scratch on this device.</p>
-                        </button>
-                        <button type="button" class="welcome-card" data-start="template">
-                            <h5><i class="fas fa-layer-group" aria-hidden="true"></i> Start from template</h5>
-                            <p>Load a ready-made multi-scene project to remix.</p>
-                        </button>
-                        <button type="button" class="welcome-card" data-start="load">
-                            <h5><i class="fas fa-upload" aria-hidden="true"></i> Load config</h5>
-                            <p>Import a <code>jukaconfig.json</code> or <code>jukaconfig.xml</code> you already have.</p>
-                        </button>
-                    </div>
                     <button id="closeGuide" class="close-button" type="button" aria-label="Close guide">
                         <i class="fas fa-times" aria-hidden="true"></i>
                     </button>
                 </div>
                 <div class="guide-body">
-                    <ol>
                     <ol>
                         <li>On desktop: Drag elements from the left sidebar to the canvas
                             <ul>
@@ -239,7 +210,6 @@
                             </button>
                         </div>
                         <div class="file-controls">
-                        <div class="file-controls">
                             <button id="clearButton" class="action-button danger" type="button" aria-label="Clear all scenes, elements and variables" title="Clear all — removes every scene, element and variable; Undo restores the previous project">
                                 <i class="fas fa-broom" aria-hidden="true"></i> <span>Clear All</span>
                             </button>
@@ -279,7 +249,6 @@
                 <div id="rightSidebarContent" class="sidebar-content">
                     <div class="properties-tabs" role="tablist" aria-label="Inspector tabs">
                         <button class="properties-tab active" data-tab="element-properties" type="button" role="tab" aria-selected="true">Element</button>
-                        <button class="properties-tab" data-tab="scenes" type="button" role="tab" aria-selected="false">Scenes</button>
                         <button class="properties-tab" data-tab="app-properties" type="button" role="tab" aria-selected="false">App Info</button>
                     </div>
 
@@ -436,11 +405,17 @@
                                 </div>
                                 <div class="control-group">
                                     <label for="textBrowserSource"><i class="fas fa-globe" aria-hidden="true"></i> Data Source</label>
-                                    <div class="source-segmented" role="group" aria-label="Text browser data source">
-                                        <button type="button" class="source-segment active" data-source="system" aria-pressed="true">System</button>
-                                        <button type="button" class="source-segment" data-source="zeroconf" aria-pressed="false">Zeroconf</button>
-                                        <button type="button" class="source-segment" data-source="json" aria-pressed="false">JSON</button>
-                                        <button type="button" class="source-segment" data-source="web" aria-pressed="false">Web</button>
+                                                                        <select id="textBrowserSource" class="textbrowser-source-selector">
+                                        <option value="system">System Info (gopsutil)</option>
+                                        <option value="zeroconf">Zeroconf / mDNS</option>
+                                        <option value="json">JSON (gjson)</option>
+                                        <option value="web">Web Page (readable text)</option>
+                                    </select>
+                                    <div class="source-preview">
+                                        <span class="source-badge system" id="sourceBadgeSystem">System</span>
+                                        <span class="source-badge zeroconf" id="sourceBadgeZeroconf">Zeroconf</span>
+                                        <span class="source-badge json" id="sourceBadgeJson">JSON</span>
+                                        <span class="source-badge web" id="sourceBadgeWeb">Web</span>
                                     </div>
                                     <small class="field-help">Where the text browser reads its content from. System and Zeroconf are local; JSON parses a path from the output; Web fetches a readable page.</small>
                                 </div>
@@ -499,16 +474,6 @@
                                     <small class="field-help">The canvas resolution JukaHub exports. Device presets match common TrimUI screen sizes; custom is for other targets.</small>
                                 </div>
                                 <div id="customSizeFields" class="custom-size-fields" style="display:none">
-                                    <div class="custom-size-row">
-                                        <label for="customWidth" class="custom-size-label">Width (px)</label>
-                                        <input type="number" id="customWidth" class="custom-size-input" placeholder="1280" min="1">
-                                    </div>
-                                    <span class="custom-size-x" aria-hidden="true">&times;</span>
-                                    <div class="custom-size-row">
-                                        <label for="customHeight" class="custom-size-label">Height (px)</label>
-                                        <input type="number" id="customHeight" class="custom-size-input" placeholder="720" min="1">
-                                    </div>
-                                </div>                                <div id="customSizeFields" class="custom-size-fields" style="display:none">
                                     <div class="custom-size-row">
                                         <label for="customWidth" class="custom-size-label">Width (px)</label>
                                         <input type="number" id="customWidth" class="custom-size-input" placeholder="1280" min="1">
@@ -704,3 +669,21 @@
     </div>
 
     <!-- Element Context Menu -->
+    <div id="contextMenu" class="context-menu" style="display:none">
+        <button type="button" data-action="duplicate"><i class="fas fa-copy"></i> Duplicate</button>
+        <button type="button" data-action="delete"><i class="fas fa-trash"></i> Delete</button>
+        <div class="context-menu-sep"></div>
+        <button type="button" data-action="bring-front"><i class="fas fa-arrow-up"></i> Bring to Front</button>
+        <button type="button" data-action="send-back"><i class="fas fa-arrow-down"></i> Send to Back</button>
+        <div class="context-menu-sep"></div>
+        <button type="button" data-action="edit-text"><i class="fas fa-pen"></i> Edit Text</button>
+    </div>
+
+    <!-- Preview Mode Toggle -->
+    <button id="previewToggle" class="preview-toggle" type="button" title="Preview Mode (Ctrl+Shift+P)" aria-label="Preview" aria-pressed="false">
+        <i class="fas fa-eye" aria-hidden="true"></i><span>Preview</span>
+    </button>
+
+    <script src="script.js"></script>
+</body>
+</html>

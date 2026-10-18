@@ -574,25 +574,48 @@ const (
 	calCellH = 22
 	calPadX  = 8
 	calPadY  = 6
+
+	calHeaderH    = 28
+	calDayHeaderH = 18
 )
 
+// renderMiniCalendar draws the mini month grid at the alarm scene's anchor in
+// the top-right corner. The home screen places its own copy with
+// renderMiniCalendarAt so the popover can sit under its header clock.
 func renderMiniCalendar(renderer *sdl.Renderer, config *Config) {
-	now := alarmUI.now
+	renderMiniCalendarAt(renderer, config, int32(calX), int32(calY))
+}
+
+// miniCalendarSize returns the card size of the mini month grid for the
+// current month: the row count depends on how the month's days fall.
+func miniCalendarSize() (int32, int32) {
+	now := time.Now()
+	year, month := now.Year(), now.Month()
+	firstDay := time.Date(year, month, 1, 0, 0, 0, 0, now.Location()).Weekday()
+	daysInMonth := time.Date(year, month+1, 0, 0, 0, 0, 0, now.Location()).Day()
+	numRows := (int(firstDay) + daysInMonth + 6) / 7
+	return int32(calCellW*7 + calPadX*2),
+		int32(calHeaderH + calDayHeaderH + numRows*calCellH + calPadY*2)
+}
+
+// renderMiniCalendarAt draws the mini month grid with its top-left corner at
+// (cx, cy).
+func renderMiniCalendarAt(renderer *sdl.Renderer, config *Config, cx, cy int32) {
+	// Always draw the current date: alarmUI.now is only refreshed while the
+	// alarm scene renders, and the home scene reuses this widget too.
+	now := time.Now()
 	year, month, day := now.Date()
 	weekday := now.Weekday()
 
 	// Calendar card dimensions.
-	cardW := int32(calCellW*7 + calPadX*2)
-	headerH := int32(28)
-	dayHeaderH := int32(18)
+	cardW, cardH := miniCalendarSize()
+	headerH := int32(calHeaderH)
+	dayHeaderH := int32(calDayHeaderH)
 	firstDay := time.Date(year, month, 1, 0, 0, 0, 0, now.Location()).Weekday()
 	daysInMonth := time.Date(year, month+1, 0, 0, 0, 0, 0, now.Location()).Day()
 	numRows := (int(firstDay) + daysInMonth + 6) / 7
-	cardH := headerH + dayHeaderH + int32(numRows)*calCellH + calPadY*2
 
 	// Card background.
-	cx := int32(calX)
-	cy := int32(calY)
 	fillRoundedRect(renderer, cx, cy, cardW, cardH, 12, sdl.Color{R: 12, G: 16, B: 28, A: 230})
 	strokeRoundedRect(renderer, cx, cy, cardW, cardH, 12, 1, ColorBorder)
 

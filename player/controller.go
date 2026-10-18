@@ -33,6 +33,9 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if toolsPanel.open {
 		return ctrlToolsPanel(e, config)
 	}
+	if emuPanel.open {
+		return ctrlEmuPanel(e, config)
+	}
 	if shortcutsOpen {
 		return ctrlShortcuts(e)
 	}

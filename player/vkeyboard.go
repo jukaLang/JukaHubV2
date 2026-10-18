@@ -45,7 +45,12 @@ const (
 	vkTargetChat
 	vkTargetUnit
 	vkTargetTerm // terminal command line
+	vkTargetName // chat display name
 )
+
+// vkNameBuffer holds the chat display name while it is being edited; it is
+// committed to the user config when the keyboard submits.
+var vkNameBuffer string
 
 var (
 	vkLayer     = vkLayerLetters
@@ -454,6 +459,8 @@ func vkCurrentText() string {
 	switch vkTarget {
 	case vkTargetChat:
 		return chatInputText
+	case vkTargetName:
+		return vkNameBuffer
 	case vkTargetUnit:
 		return unitInputValue
 	case vkTargetTerm:
@@ -466,6 +473,8 @@ func vkSetText(text string, config *Config) {
 	switch vkTarget {
 	case vkTargetChat:
 		chatInputText = text
+	case vkTargetName:
+		vkNameBuffer = text
 	case vkTargetUnit:
 		unitInputValue = text
 	case vkTargetTerm:
@@ -508,6 +517,8 @@ func vkBackspace(config *Config) {
 // vkTitle / vkPlaceholder describe the field for the active target.
 func vkTitle() string {
 	switch vkTarget {
+	case vkTargetName:
+		return "DISPLAY NAME"
 	case vkTargetChat:
 		if isTerminalScene() {
 			return "TERMINAL"
@@ -530,6 +541,8 @@ func vkTitle() string {
 
 func vkPlaceholder() string {
 	switch vkTarget {
+	case vkTargetName:
+		return "Enter a display name"
 	case vkTargetChat:
 		if isTerminalScene() {
 			return "Enter a command"
@@ -548,6 +561,8 @@ func vkPlaceholder() string {
 
 func vkHints() string {
 	switch vkTarget {
+	case vkTargetName:
+		return "A type    Y save    B / Esc close"
 	case vkTargetChat:
 		return "A type    Y ask AI    B / Esc close"
 	case vkTargetUnit:
@@ -568,6 +583,22 @@ func vkOpenChat() {
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenName opens the keyboard aimed at the chat display-name field. The
+// current name seeds the buffer so it can be edited rather than retyped.
+func vkOpenName() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetName
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	vkNameBuffer = chatDisplayName()
 	virtualKeyboardActive = true
 	vkAnimStart = sdl.GetTicks64()
 	sdl.StartTextInput()
@@ -737,6 +768,11 @@ func vkSubmit(config *Config, askAI bool) {
 		if text != "" {
 			termExecute(text)
 		}
+	case vkTargetName:
+		// Empty input resets to the default name ("You").
+		name := setChatDisplayName(text)
+		vkCloseKeyboard()
+		showToast("Chat name set to "+name, ToastInfo())
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may
@@ -748,7 +784,7 @@ func vkSubmit(config *Config, askAI bool) {
 				// sendGroqChatMessage records the user bubble itself.
 				sendGroqChatMessage(text)
 			} else {
-				sendChatMessage("You", text)
+				sendChatMessage(chatDisplayName(), text)
 			}
 		}
 	default:
@@ -869,9 +905,188 @@ func DestroyVKStaticCache() {
 	vkStaticBroken = false
 }
 
-// vkEnsureStaticLayer returns the cached panel + header + footer + unfocused
-// keys, rebuilding it only when the layout, screen geometry, theme colours or
-// header/footer text changed.
+// Chat cache state and ensure function
+var (
+	vkChatStaticTex    *sdl.Texture
+	vkChatStaticState  vkStaticLayerState
+	vkChatStaticValid  bool
+	vkChatStaticBroken bool // renderer has no render-target support: draw live
+	vkChatStaticBuilds int  // rebuild count, used by tests and diagnostics
+)
+
+func DestroyVKChatCache() {
+	if vkChatStaticTex != nil {
+		vkChatStaticTex.Destroy()
+		vkChatStaticTex = nil
+	}
+	vkChatStaticValid = false
+	vkChatStaticBroken = false
+}
+
+// Video overlay cache state and ensure function
+var (
+	vkVideoOverlayTex    *sdl.Texture
+	vkVideoOverlayState  vkStaticLayerState
+	vkVideoOverlayValid  bool
+	vkVideoOverlayBroken bool // renderer has no render-target support: draw live
+	vkVideoOverlayBuilds int  // rebuild count, used by tests and diagnostics
+)
+
+func DestroyVKVideoOverlayCache() {
+	if vkVideoOverlayTex != nil {
+		vkVideoOverlayTex.Destroy()
+		vkVideoOverlayTex = nil
+	}
+	vkVideoOverlayValid = false
+	vkVideoOverlayBroken = false
+}
+
+// vkEnsureVideoOverlayCache returns the cached static layer of the video
+// overlay (gradients, control bar, seek track) sized to the video element,
+// rebuilding it only when the element size or theme changes. The parts that
+// change while a video plays (badge, progress, transport buttons, time) are
+// drawn every frame by drawVideoOverlayLive on top of this layer, so the cache
+// must never bake them in.
+func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int32) *sdl.Texture {
+	state := vkStaticLayerStateNow(sdl.Rect{X: 0, Y: 0, W: w, H: h})
+	if vkVideoOverlayValid && vkVideoOverlayTex != nil && vkVideoOverlayState == state {
+		return vkVideoOverlayTex
+	}
+	// Checked before the destroy below (which clears the flag): a renderer
+	// without render-target support must not retry and log every frame.
+	if vkVideoOverlayBroken || w <= 0 || h <= 0 {
+		return nil
+	}
+	DestroyVKVideoOverlayCache()
+
+	tex, err := renderer.CreateTexture(0, sdl.TEXTUREACCESS_TARGET, w, h)
+	if err != nil || tex == nil {
+		vkVideoOverlayBroken = true
+		log.Printf("[vk] video overlay cache disabled: %v", err)
+		return nil
+	}
+	if err := tex.SetBlendMode(sdl.BLENDMODE_BLEND); err != nil {
+		tex.Destroy()
+		vkVideoOverlayBroken = true
+		log.Printf("[vk] video overlay cache blend mode: %v", err)
+		return nil
+	}
+
+	prevTarget := renderer.GetRenderTarget()
+	var prevBlend sdl.BlendMode
+	_ = renderer.GetDrawBlendMode(&prevBlend)
+	if err := renderer.SetRenderTarget(tex); err != nil {
+		tex.Destroy()
+		vkVideoOverlayBroken = true
+		log.Printf("[vk] video overlay cache target: %v", err)
+		return nil
+	}
+	// The overlay is drawn last, so no clip should be active; make sure the
+	// cached layer is not clipped by a leftover scene rect.
+	_ = renderer.SetClipRect(nil)
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(0, 0, 0, 0)
+	renderer.Clear()
+	// Only the unchanging layer goes in the cache, in local coordinates
+	// because the texture is exactly the size of the video element.
+	drawVideoOverlayStatic(renderer, 0, 0, w, h)
+	_ = renderer.SetRenderTarget(prevTarget)
+	_ = renderer.SetDrawBlendMode(prevBlend)
+	vkVideoOverlayTex = tex
+	vkVideoOverlayState = state
+	vkVideoOverlayValid = true
+	vkVideoOverlayBuilds++
+	return tex
+}
+
+// vkEnsureChatCache returns the cached chat panel + status bar,
+// rebuilding it only when the panel geometry, screen dimensions, theme colours
+// or header/footer text changed. The cache is drawn once per frame and only the
+// message bubbles (which change with each message) are redrawn on top.
+func vkEnsureChatCache(renderer *sdl.Renderer, config *Config, listX, listY, listW, listH int32) *sdl.Texture {
+	state := vkStaticLayerStateNow(sdl.Rect{X: listX, Y: listY, W: listW, H: listH})
+	if vkChatStaticValid && vkChatStaticTex != nil && vkChatStaticState == state {
+		return vkChatStaticTex
+	}
+	// Checked before the destroy below (which clears the flag): a renderer
+	// without render-target support must not retry and log every frame.
+	if vkChatStaticBroken || listW <= 0 || listH <= 0 {
+		return nil
+	}
+	statusFont, _ := getCachedFont(config, "small")
+	if statusFont == nil {
+		return nil
+	}
+	DestroyVKChatCache()
+
+	tex, err := renderer.CreateTexture(0, sdl.TEXTUREACCESS_TARGET, listW, listH)
+	if err != nil || tex == nil {
+		vkChatStaticBroken = true
+		log.Printf("[vk] chat cache disabled: %v", err)
+		return nil
+	}
+	if err := tex.SetBlendMode(sdl.BLENDMODE_BLEND); err != nil {
+		tex.Destroy()
+		vkChatStaticBroken = true
+		log.Printf("[vk] chat cache blend mode: %v", err)
+		return nil
+	}
+	prevTarget := renderer.GetRenderTarget()
+	var prevBlend sdl.BlendMode
+	_ = renderer.GetDrawBlendMode(&prevBlend)
+	if err := renderer.SetRenderTarget(tex); err != nil {
+		tex.Destroy()
+		vkChatStaticBroken = true
+		log.Printf("[vk] chat cache target: %v", err)
+		return nil
+	}
+	// The chat is drawn last, so no clip should be active; make sure the
+	// cached layer is not clipped by a leftover scene rect.
+	_ = renderer.SetClipRect(nil)
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(0, 0, 0, 0)
+	renderer.Clear()
+	// Panel background with subtle border.
+	fillRoundedRect(renderer, listX, listY, listW, listH, RadiusMD, ColorSurfaceRaised)
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: listW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: 1, H: listH - 2})
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 60)
+	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + listH - 2, W: listW - 2, H: 1})
+	renderer.DrawRect(&sdl.Rect{X: listX + listW - 2, Y: listY + 1, W: 1, H: listH - 2})
+	// Header.
+	const headerH = int32(44)
+	vkDrawPanel(renderer, sdl.Rect{X: listX, Y: listY, W: listW, H: headerH})
+	// Status bar area.
+	statusY := listY + int32(8)
+	statusRight := listX + listW - int32(12)
+	if discordStatus != "" {
+		dsw, _, _ := statusFont.SizeUTF8(discordStatus)
+		statusRight -= int32(dsw) + int32(8)
+		renderText(renderer, config, statusFont, discordStatus, ColorTextTertiary(), statusRight, statusY)
+		statusRight -= int32(8)
+	}
+	if groqStatus != "" {
+		gw, _, _ := statusFont.SizeUTF8(groqStatus)
+		groqX := statusRight - int32(gw) - int32(8)
+		if groqX < listX + int32(12) {
+			groqX = listX + int32(12)
+		}
+		renderText(renderer, config, statusFont, groqStatus, groqStatusColor(), groqX, statusY)
+	}
+	// Divider under status.
+	dividerY := statusY + int32(statusFont.Height()) + int32(2)
+	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
+	renderer.FillRect(&sdl.Rect{X: listX + int32(12), Y: dividerY, W: listW - 2*int32(12), H: 1})
+	_ = renderer.SetRenderTarget(prevTarget)
+	_ = renderer.SetDrawBlendMode(prevBlend)
+	vkChatStaticState = state
+	vkChatStaticTex = tex
+	vkChatStaticValid = true
+	vkChatStaticBuilds++
+	return tex
+}
+
 func vkEnsureStaticLayer(renderer *sdl.Renderer, config *Config, font, smallFont *ttf.Font) *sdl.Texture {
 	state := vkStaticLayerStateNow(vkPanelRect)
 	if vkStaticValid && vkStaticTex != nil && vkStaticState == state {

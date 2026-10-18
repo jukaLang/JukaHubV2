@@ -290,6 +290,15 @@ func main() {
 
 	running := true
 	for running {
+		// Exit request (home Exit button or config "exit" trigger): play the
+		// farewell sequence, then shut down through the deferred cleanup below
+		// (persist favorites, free textures/fonts, sdl.Quit).
+		if exitRequested && !goodbyePlayed {
+			goodbyePlayed = true
+			ShowGoodbye(renderer, config)
+			running = false
+			continue
+		}
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 			applyButtonSwap(config, event)
 			switch e := event.(type) {
@@ -318,6 +327,10 @@ func main() {
 					}
 					// Tools is modal and consumes all keys while open.
 					if toolsPanel.open && handleToolsKey(e, config) {
+						continue
+					}
+					// The Emulators panel is modal too.
+					if emuPanel.open && handleEmuKey(e, config) {
 						continue
 					}
 					// Quick Settings takes priority when open.
@@ -410,7 +423,7 @@ func main() {
 								if curScene.Name == "FileExplorer" {
 									feBack(config)
 								} else {
-									moveSelection(config, -1)
+									moveSelection(config, ActionNavigateUp)
 								}
 							}
 						} else if curElem.Type == "themegallery" {
@@ -429,14 +442,14 @@ func main() {
 									ApplyThemePreset(config, presets[themeGalleryIndex])
 								}
 							case sdl.K_ESCAPE:
-								moveSelection(config, -1)
+								moveSelection(config, ActionNavigateUp)
 							}
 						} else if curElem.Type == "toggle" {
 							switch e.Keysym.Sym {
 							case sdl.K_RETURN, sdl.K_SPACE, sdl.K_LEFT, sdl.K_RIGHT:
 								toggleVariable(config, curElem)
 							case sdl.K_ESCAPE:
-								moveSelection(config, -1)
+								moveSelection(config, ActionNavigateUp)
 							}
 						} else if curElem.Type == "favorites" {
 							handleFavoritesInput(e, config)
@@ -535,9 +548,7 @@ func main() {
 										sdl.K_UP: -1, sdl.K_DOWN: 1,
 									}[e.Keysym.Sym])
 								} else {
-									moveSelection(config, map[sdl.Keycode]int{
-										sdl.K_UP: -1, sdl.K_DOWN: 1,
-									}[e.Keysym.Sym])
+									moveSelection(config, map[sdl.Keycode]Action{sdl.K_UP: ActionNavigateUp, sdl.K_DOWN: ActionNavigateDown}[e.Keysym.Sym])
 								}
 							case sdl.K_LEFT, sdl.K_RIGHT:
 								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
@@ -545,9 +556,7 @@ func main() {
 										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
 									}[e.Keysym.Sym], 0)
 								} else {
-									moveSelection(config, map[sdl.Keycode]int{
-										sdl.K_LEFT: -1, sdl.K_RIGHT: 1,
-									}[e.Keysym.Sym])
+									moveSelection(config, map[sdl.Keycode]Action{sdl.K_LEFT: ActionNavigateLeft, sdl.K_RIGHT: ActionNavigateRight}[e.Keysym.Sym])
 								}
 							case sdl.K_RETURN, sdl.K_SPACE:
 								if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
@@ -560,8 +569,9 @@ func main() {
 										handleTrigger(renderer, config, elem)
 									}
 								}
-							case sdl.K_ESCAPE:
-								// Generic back on non-home scenes: returns to the
+							case sdl.K_ESCAPE, sdl.K_b:
+								// Generic back on non-home scenes (Escape or B, matching every
+								// other screen and the footer's "B Back" hint): returns to the
 								// previous scene (or Home). Never exits the app.
 								if !homeLayoutActive {
 									goBackScene(config)
@@ -765,6 +775,11 @@ func main() {
 							handleToolsMouse(mx, my, config)
 							break
 						}
+						// Emulators panel is modal the same way.
+						if emuPanel.open {
+							handleEmuMouse(mx, my, config)
+							break
+						}
 
 						// The terminal owns every click on its screen: its Back and
 						// Keyboard controls are drawn by the terminal renderer, not by
@@ -835,6 +850,12 @@ func main() {
 							goBackScene(config)
 							break
 						}
+						// Chat header: the display-name pill renames the local chat user.
+						if chatNameRect.W > 0 && mx >= chatNameRect.X && mx <= chatNameRect.X+chatNameRect.W &&
+							my >= chatNameRect.Y && my <= chatNameRect.Y+chatNameRect.H {
+							vkOpenName()
+							break
+						}
 						// Chat input area: clicking the text field opens the virtual keyboard.
 						if chatInputRect.W > 0 && mx >= chatInputRect.X && mx <= chatInputRect.X+chatInputRect.W &&
 							my >= chatInputRect.Y && my <= chatInputRect.Y+chatInputRect.H {
@@ -851,7 +872,7 @@ func main() {
 						if chatSendBtnRect.W > 0 && mx >= chatSendBtnRect.X && mx <= chatSendBtnRect.X+chatSendBtnRect.W &&
 							my >= chatSendBtnRect.Y && my <= chatSendBtnRect.Y+chatSendBtnRect.H {
 							if chatInputText != "" {
-								sendChatMessage("You", chatInputText)
+								sendChatMessage(chatDisplayName(), chatInputText)
 								chatInputText = ""
 							}
 							break
@@ -863,6 +884,13 @@ func main() {
 								sendGroqChatMessage(chatInputText)
 								chatInputText = ""
 							}
+							break
+						}
+						// Chat composer: Attach image pill.
+						if chatAttachBtnRect.W > 0 && mx >= chatAttachBtnRect.X && mx <= chatAttachBtnRect.X+chatAttachBtnRect.W &&
+							my >= chatAttachBtnRect.Y && my <= chatAttachBtnRect.Y+chatAttachBtnRect.H {
+							config.Variables.Custom["chat_attach_image"] = "1"
+							showToast("Browse to attach an image to your message", ToastInfo())
 							break
 						}
 						// Check video controls
@@ -1332,6 +1360,9 @@ func main() {
 									sendGroqChatMessage(chatInputText)
 									chatInputText = ""
 								}
+							case sdl.CONTROLLER_BUTTON_X:
+								// X renames the local chat user.
+								vkOpenName()
 							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 								goBackScene(config)
 							}
@@ -1339,13 +1370,13 @@ func main() {
 							// Normal button/input navigation
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_DPAD_UP:
-								moveSelection(config, -1)
+								moveSelection(config, ActionNavigateUp)
 							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-								moveSelection(config, 1)
+								moveSelection(config, ActionNavigateDown)
 							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-								moveSelection(config, -1)
+								moveSelection(config, ActionNavigateLeft)
 							case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-								moveSelection(config, 1)
+								moveSelection(config, ActionNavigateRight)
 							case sdl.CONTROLLER_BUTTON_A:
 								if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
 									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
@@ -1598,6 +1629,11 @@ func main() {
 		// Tools overlay (IP address + FTP server).
 		if toolsPanel.open {
 			renderToolsPanel(renderer, config)
+		}
+
+		// Emulators overlay (availability list).
+		if emuPanel.open {
+			renderEmuPanel(renderer, config)
 		}
 
 		// Wallpaper picker overlay.
