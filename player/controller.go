@@ -29,6 +29,14 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 
 	// ── Overlay priority (highest to lowest) ──
+	// The IPStream library is modal: nothing underneath may react.
+	if ipPanelOpen {
+		return ctrlIPPanel(e, config)
+	}
+	// The process list is modal: nothing underneath may react while it is open.
+	if processPanel.open {
+		return ctrlProcessPanel(e, config)
+	}
 	// Tools is modal: nothing underneath may react while it is open.
 	if toolsPanel.open {
 		return ctrlToolsPanel(e, config)
@@ -535,58 +543,40 @@ func ctrlDictionary(e *sdl.ControllerButtonEvent) bool {
 func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		music.mu.Lock()
 		if music.cursor > 0 {
 			music.cursor--
 		}
+		music.mu.Unlock()
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if music.cursor < len(music.fileList)-1 {
+		music.mu.Lock()
+		if music.cursor < len(music.tracks)-1 {
 			music.cursor++
 		}
+		music.mu.Unlock()
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_A:
-		// Select current file/directory
-		if music.cursor >= 0 && music.cursor < len(music.fileList) {
-			entry := music.fileList[music.cursor]
-			if entry.IsDir {
-				musicScanDir(entry.Path)
-				music.cursor = 0
-			} else {
-				// Find track index and play
-				for i, t := range music.tracks {
-					if t.Path == entry.Path {
-						musicPlayTrack(i)
-						break
-					}
-				}
-			}
-			PlayActivateSound()
-		}
-	case sdl.CONTROLLER_BUTTON_B:
-		// Go up one directory
-		if music.dir != "." && music.dir != "" {
-			parent := ""
-			for i := len(music.dir) - 2; i >= 0; i-- {
-				if music.dir[i] == '/' || music.dir[i] == '\\' {
-					parent = music.dir[:i]
-					break
-				}
-			}
-			if parent != "" {
-				musicScanDir(parent)
-				music.cursor = 0
-			} else {
-				goBackScene(appConfig)
-			}
-			PlayBackSound()
-		} else {
-			goBackScene(appConfig)
-			PlayBackSound()
-		}
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		// A plays the highlighted playlist row.
+		music.mu.Lock()
+		idx := music.cursor
+		music.mu.Unlock()
+		musicPlayTrack(idx)
+	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
+		musicTogglePause()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
+		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		musicSeekBy(-10)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		musicSeekBy(10)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		musicPrev()
 		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		musicNext()
 		PlayNavSound()
 	default:

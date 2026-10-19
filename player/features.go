@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // openFileInCanvasSandbox loads a .html or .js file into the Canvas Sandbox.
@@ -210,6 +211,14 @@ func feEnterFocused(config *Config) {
 		launchAppEntry(config, entry)
 		return
 	}
+	// Live TV channels are stream URLs, and many playlists use extension-less
+	// URLs (http://host:8080/user/pass/1234). They must play even though the
+	// media-extension check below cannot recognize them.
+	if el, ok := sceneDynamicListElement(config.Scenes[currentSceneIndex]); ok && el.Variable == tvEntriesVar {
+		recordPlayed(config, entry.Path)
+		playSmartURL(config, entry.Path)
+		return
+	}
 	if entry.IsDir {
 		// Only a directory that really lives below the explorer root is entered.
 		dir, err := existingDirWithin(feRoot(config), entry.Path)
@@ -276,6 +285,13 @@ func feEnterFocused(config *Config) {
 	}
 	if isMediaFile(entry.Name) || hasMediaExtension(entry.Path) {
 		recordPlayed(config, entry.Path)
+		// Audio files open the audio player instead of the video decoder: it
+		// builds a playlist from the folder and keeps the track list usable
+		// while the song plays.
+		if isAudioFile(entry.Name) {
+			openAudioPlayer(config, entry.Path)
+			return
+		}
 		playSmartURL(config, entry.Path)
 	} else {
 		log.Printf("[DEBUG] File Explorer: skipping non-media file: %s", entry.Name)
@@ -300,6 +316,43 @@ func getSceneFileEntries(config *Config, scene SceneConfig) ([]FileEntry, bool) 
 	}
 	entries, ok := config.Variables.Custom[e.Variable].([]FileEntry)
 	return entries, ok
+}
+
+// dynamicListRowH is the height of one row including the gap under it.
+const dynamicListRowH = int32(40)
+
+// dynamicListListOffset is where the first row starts inside a dynamic list.
+// Live TV reserves the space for its filter bar; every other list leaves a
+// small top margin. Rendering and click hit-testing share it so the two can
+// never drift apart.
+func dynamicListListOffset(element Element) int32 {
+	if element.Variable == tvEntriesVar {
+		return 8 + tvFilterBarH + 6
+	}
+	return 30
+}
+
+// dynamicListMaxVisible is how many rows fit in the element.
+func dynamicListMaxVisible(element Element) int {
+	elemH := getElementHeight(element, 500)
+	n := int((elemH - dynamicListListOffset(element) - 4) / dynamicListRowH)
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// dynamicListRowAt reports which row a click at my selects, or -1 when the
+// click lands above the first row (the filter bar or the list's top margin).
+func dynamicListRowAt(element Element, start, end int, my int32) int {
+	top := element.Y + dynamicListListOffset(element)
+	for i := start; i < end; i++ {
+		y := top + int32(i-start)*dynamicListRowH
+		if my >= y-2 && my <= y+dynamicListRowH-2 {
+			return i
+		}
+	}
+	return -1
 }
 
 // renderDynamicList draws a vertical, scrollable list of file entries.
@@ -341,11 +394,17 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		})
 	}
 
-	lineH := int32(40)
-	maxVisible := int((elemH - 30) / lineH)
-	if maxVisible < 1 {
-		maxVisible = 1
+	// Live TV adds a category/search bar inside the panel. It is drawn before
+	// the rows so the list starts below it, and it must stay visible even when
+	// the current filter has no matches.
+	isLiveTV := element.Variable == tvEntriesVar
+	if isLiveTV {
+		renderTVFilterBar(renderer, config, element.X+8, element.Y+8, elemW-16)
 	}
+	listOffset := dynamicListListOffset(element)
+
+	lineH := dynamicListRowH
+	maxVisible := dynamicListMaxVisible(element)
 
 	start := 0
 	if focusedFileIndex >= maxVisible {
@@ -356,8 +415,12 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		end = len(entries)
 	}
 
+	if isLiveTV && len(entries) == 0 {
+		renderTVEmptyState(renderer, config, font, element, elemW, element.Y+listOffset)
+	}
+
 	for i := start; i < end; i++ {
-		y := element.Y + 30 + int32(i-start)*lineH
+		y := element.Y + listOffset + int32(i-start)*lineH
 		rowW := elemW - 16
 		rowH := lineH - 4
 		rowX := element.X + 8
@@ -372,6 +435,7 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 
 		prefix := ""
 		color := ColorTextSecondary()
+		nameMaxW := rowW - 40
 		if entries[i].IsDir {
 			// Use ▶ (U+25B6), which Inter contains — ▸ (U+25B8) does not exist
 			// in Inter and renders as a missing-glyph box.
@@ -381,7 +445,26 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 			prefix = "> "
 			color = ColorTextAccent()
 		}
-		txt := ellipsize(font, prefix+entries[i].Name, rowW-40)
+		if isLiveTV {
+			// Favorites are marked with an asterisk (Inter has no star glyph)
+			// and the channel's category sits on the right, so a long "All"
+			// list still shows where each channel belongs.
+			group, fav := tvRowMeta(entries[i].Path)
+			if fav {
+				prefix = "* "
+				color = ColorTextAccent()
+			}
+			if group != "" {
+				g := ellipsize(font, group, rowW/4)
+				gw, _, _ := font.SizeUTF8(g)
+				if int32(gw)+80 < rowW {
+					renderText(renderer, config, font, g, ColorTextTertiary(),
+						rowX+rowW-int32(gw)-14, rowY+9)
+					nameMaxW = rowW - int32(gw) - 48
+				}
+			}
+		}
+		txt := ellipsize(font, prefix+entries[i].Name, nameMaxW)
 		renderText(renderer, config, font, txt, color, rowX+14, rowY+9)
 	}
 
@@ -392,7 +475,31 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		if len(entries) > maxVisible {
 			scrollFrac = float64(start) / float64(len(entries)-maxVisible)
 		}
-		drawScrollbar(renderer, element.X+elemW-6, element.Y+30, 3, elemH-30, thumbFrac, scrollFrac)
+		drawScrollbar(renderer, element.X+elemW-6, element.Y+listOffset, 3, elemH-listOffset-4, thumbFrac, scrollFrac)
+	}
+}
+
+// renderTVEmptyState explains an empty filtered list instead of leaving a
+// blank panel: the user needs to know whether to load a playlist, relax the
+// search, or star something first.
+func renderTVEmptyState(renderer *sdl.Renderer, config *Config, font *ttf.Font, element Element, elemW, top int32) {
+	msg := "No channels found. Put an .m3u playlist in the tv/ folder, then press Load Playlist."
+	switch {
+	case tvQuery() != "":
+		msg = "No channels match \"" + tvQuery() + "\". Press X to change the search."
+	case tvCategory() == tvFavoritesCategory:
+		msg = "No favorites yet. Highlight a channel and press Y to star it."
+	}
+	wrapped := wrapMeasured([]rune(msg), elemW-56, func(s string) int32 {
+		w, _, _ := font.SizeUTF8(s)
+		return int32(w)
+	})
+	y := top + 8
+	for _, line := range wrapped {
+		w, _, _ := font.SizeUTF8(line)
+		renderText(renderer, config, font, line, ColorTextTertiary(),
+			element.X+(elemW-int32(w))/2, y)
+		y += int32(font.Height()) + 4
 	}
 }
 

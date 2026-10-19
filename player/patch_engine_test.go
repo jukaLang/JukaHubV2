@@ -418,6 +418,69 @@ func TestPackageRefusesProtectedDirs(t *testing.T) {
 	}
 }
 
+// TestInterruptedJournalIsCleanedUpOnce guards the recovery loop: a journal
+// read back from disk has no runtime path, so rollback used to leave both the
+// journal and its backup folder behind and replay the update on every launch —
+// restoring the old jukaconfig.json (and the previous binary) each time.
+func TestInterruptedJournalIsCleanedUpOnce(t *testing.T) {
+	origStateDir := patchStateDir
+	origFn := patchStateDirFn
+	dir := t.TempDir()
+	patchStateDir = dir
+	patchStateDirFn = func() (string, error) { return dir, nil }
+	defer func() {
+		patchStateDir = origStateDir
+		patchStateDirFn = origFn
+	}()
+	journals := filepath.Join(dir, "journals")
+	if err := os.MkdirAll(journals, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(dir, "jukaconfig.json")
+	backup := filepath.Join(journals, "files", "juka-update-test", "jukaconfig.json")
+	mustWrite(t, backup, `{"scenes":["old"]}`)
+	mustWrite(t, target, `{"scenes":["new"]}`)
+
+	journalPath := filepath.Join(journals, "juka-update-test.json")
+	j := journal{
+		ID:     "juka-update-test",
+		Kind:   "juka-update",
+		Target: "test",
+		Entries: []journalEntry{{
+			Kind:   "replace",
+			Path:   target,
+			Backup: backup,
+		}},
+	}
+	data, err := json.Marshal(&j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, journalPath, string(data))
+
+	checkInterruptedJournal()
+
+	restored, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read restored config: %v", err)
+	}
+	if !strings.Contains(string(restored), "old") {
+		t.Errorf("rollback did not restore the backup, got %q", restored)
+	}
+	if _, err := os.Stat(journalPath); !os.IsNotExist(err) {
+		t.Errorf("journal %s still present: recovery would replay on every launch", journalPath)
+	}
+	if _, err := os.Stat(filepath.Dir(backup)); !os.IsNotExist(err) {
+		t.Errorf("journal backup folder still present")
+	}
+
+	// A second launch must not find anything to recover.
+	if left := pendingJournals(); len(left) != 0 {
+		t.Errorf("pending journals after recovery: %v", left)
+	}
+}
+
 func TestPackageRepoValidation(t *testing.T) {
 	// Point the patch state dir at a temp location so packages.json is read
 	// from there and the real data directory is never touched.

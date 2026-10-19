@@ -78,6 +78,11 @@ func main() {
 	// Expose the active config for sub-packages (Discord chat, canvas, ...).
 	appConfig = config
 
+	// The alarm UI renders through the scene pipeline; register its scene at
+	// startup (in-memory, never written back) so the status-bar clock and the
+	// Start menu can open it on every config. The loader stays pure.
+	ensureAlarmScene(config)
+
 	SetAccentColor(resolveColor(config, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
 
 	// Reapply the persisted theme preset (if any) so the chosen theme is
@@ -325,6 +330,14 @@ func main() {
 						handleGSInput(e, config)
 						continue
 					}
+					// IPStream library is modal and consumes all keys while open.
+					if ipPanelOpen && handleIPPanelKey(e, config) {
+						continue
+					}
+					// Process list is modal and consumes all keys while open.
+					if processPanel.open && handleProcessKey(e, config) {
+						continue
+					}
 					// Tools is modal and consumes all keys while open.
 					if toolsPanel.open && handleToolsKey(e, config) {
 						continue
@@ -357,6 +370,11 @@ func main() {
 							activeElementIndex = -1
 						}
 					} else {
+						// The app menu and notification center are modal:
+						// while one is open it owns the D-pad and Confirm/Back keys.
+						if handleChromeOverlayKey(e, config) {
+							continue
+						}
 						// Home scene uses the dedicated focus graph + activation.
 						if homeLayoutActive && handleHomeKey(e, config) {
 							continue
@@ -366,6 +384,19 @@ func main() {
 							if handlePatchKey(e, config) {
 								continue
 							}
+						}
+						// The Alarm scene owns its keys like Patch does: it has no
+						// config elements, so the element dispatch below would never
+						// reach its handler.
+						if curSceneName := config.Scenes[currentSceneIndex].Name; curSceneName == "Alarm" {
+							handleAlarmInput(e, config)
+							continue
+						}
+						// Top-bar chrome (back pill, status clock) is focusable on
+						// non-home scenes; while it holds focus it owns the keys so
+						// the element dispatch cannot steal the focus back.
+						if handleChromeKey(e, config) {
+							continue
 						}
 						// Video control shortcuts (always active when video is playing)
 						HandleVideoKeyInput(e)
@@ -401,6 +432,11 @@ func main() {
 								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
+							// Live TV: Left/Right switch category, X searches, Y stars
+							// the highlighted channel. Other lists keep their keys.
+							if curElem.Variable == tvEntriesVar && tvListKeyAction(e.Keysym.Sym, config) {
+								continue
+							}
 							entries, _ := getSceneFileEntries(config, curScene)
 							n := 0
 							if entries != nil {
@@ -430,13 +466,17 @@ func main() {
 							presets := ListThemePresets()
 							switch e.Keysym.Sym {
 							case sdl.K_LEFT:
-								if themeGalleryIndex > 0 {
-									themeGalleryIndex--
-								}
+								themeGalleryMove(curElem, -1)
+								PlayNavSound()
 							case sdl.K_RIGHT:
-								if themeGalleryIndex < len(presets)-1 {
-									themeGalleryIndex++
-								}
+								themeGalleryMove(curElem, 1)
+								PlayNavSound()
+							case sdl.K_UP:
+								themeGalleryMove(curElem, -themeGalleryColumns(curElem))
+								PlayNavSound()
+							case sdl.K_DOWN:
+								themeGalleryMove(curElem, themeGalleryColumns(curElem))
+								PlayNavSound()
 							case sdl.K_RETURN, sdl.K_SPACE:
 								if themeGalleryIndex >= 0 && themeGalleryIndex < len(presets) {
 									ApplyThemePreset(config, presets[themeGalleryIndex])
@@ -769,6 +809,16 @@ func main() {
 							toastRect = sdl.Rect{}
 							break
 						}
+						// IPStream library panel is modal the same way.
+						if ipPanelOpen {
+							handleIPPanelMouse(mx, my, config)
+							break
+						}
+						// Process panel is modal the same way.
+						if processPanel.open {
+							handleProcessMouse(mx, my, config)
+							break
+						}
 						// Tools panel is modal: a click selects a row, a click outside
 						// closes it, and nothing reaches the scene underneath.
 						if toolsPanel.open {
@@ -778,6 +828,13 @@ func main() {
 						// Emulators panel is modal the same way.
 						if emuPanel.open {
 							handleEmuMouse(mx, my, config)
+							break
+						}
+
+						// Full screen video owns every click: the player covers the whole
+						// panel, so nothing underneath may react through it.
+						if videoFullscreen && playerPhase() != "idle" {
+							HandleVideoControlClick(mx, my)
 							break
 						}
 
@@ -816,9 +873,10 @@ func main() {
 							break
 						}
 
-						// Notification dropdown click.
-						if notifIsPointInDrop(mx, my) {
-							break // consume click inside dropdown
+						// Notification dropdown click (Clear All, or swallow the click
+						// so it cannot reach the scene underneath).
+						if notifHandleClick(mx, my) {
+							break
 						}
 						// Notification dropdown open -> click outside dismisses it.
 						if nc.open {
@@ -826,8 +884,8 @@ func main() {
 							break
 						}
 
-						// Taskbar Start button.
-						if mx >= tb.startRect.X && mx <= tb.startRect.X+tb.startRect.W &&
+						// Apps pill in the top bar (opens the app menu).
+						if tb.startRect.W > 0 && mx >= tb.startRect.X && mx <= tb.startRect.X+tb.startRect.W &&
 							my >= tb.startRect.Y && my <= tb.startRect.Y+tb.startRect.H {
 							startMenuToggle()
 							break
@@ -839,15 +897,18 @@ func main() {
 							break
 						}
 
+						// Live TV filter bar: category arrows and the search pill are
+						// touch targets on the handheld.
+						if handleTVFilterMouse(mx, my, config) {
+							break
+						}
 						// Home cards: select + activate on click.
 						if homeLayoutActive && handleHomeMouseClick(mx, my, config) {
 							break
 						}
-						// Scene-title-row back affordance (mouse-only back for scenes
-						// without an explicit Back button; controller/keyboard use B/Esc).
-						if sceneTitleBackRect.W > 0 && mx >= sceneTitleBackRect.X && mx <= sceneTitleBackRect.X+sceneTitleBackRect.W &&
-							my >= sceneTitleBackRect.Y && my <= sceneTitleBackRect.Y+sceneTitleBackRect.H {
-							goBackScene(config)
+						// Top-bar chrome buttons: the back pill and the status clock
+						// activate on click/touch like any focused button would.
+						if handleChromeBarClick(mx, my, config) {
 							break
 						}
 						// Chat header: the display-name pill renames the local chat user.
@@ -893,8 +954,19 @@ func main() {
 							showToast("Browse to attach an image to your message", ToastInfo())
 							break
 						}
-						// Check video controls
-						HandleVideoControlClick(mx, my)
+						// The audio player draws its own transport, so it owns clicks
+						// while it is on screen.
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == "MusicPlayer" {
+							if HandleMusicClick(mx, my) {
+								break
+							}
+						}
+						// Check video controls (a consumed click must not fall through
+						// to the scene elements drawn underneath the player).
+						if HandleVideoControlClick(mx, my) {
+							break
+						}
 						// Check recent panel (Continue cards)
 						handleRecentMouseClick(mx, my, config)
 						// Check other elements (input, button, searchresults)
@@ -986,12 +1058,7 @@ func main() {
 									entries, ok := config.Variables.Custom[elem.Variable].([]FileEntry)
 									if ok {
 										elemW := getElementWidth(elem, 600)
-										elemH := getElementHeight(elem, 500)
-										lineH := int32(40)
-										maxVisible := int((elemH - 30) / lineH)
-										if maxVisible < 1 {
-											maxVisible = 1
-										}
+										maxVisible := dynamicListMaxVisible(elem)
 										start := 0
 										if focusedFileIndex >= maxVisible {
 											start = focusedFileIndex - maxVisible + 1
@@ -1000,16 +1067,14 @@ func main() {
 										if end > len(entries) {
 											end = len(entries)
 										}
-										listY := elem.Y + 30
-										for i2 := start; i2 < end; i2++ {
-											y := listY + int32(i2-start)*lineH
-											if mx >= elem.X && mx <= elem.X+elemW && my >= y-2 && my <= y+lineH-2 {
-												selectedButtonIndex = i
-												focusEngine.SetByElementIndex(i)
-												focusedFileIndex = i2
-												feEnterFocused(config)
-												break
-											}
+										// The row map is shared with renderDynamicList, so the
+										// Live TV filter bar cannot shift clicks onto the row
+										// above.
+										if i2 := dynamicListRowAt(elem, start, end, my); i2 >= 0 && mx >= elem.X && mx <= elem.X+elemW {
+											selectedButtonIndex = i
+											focusEngine.SetByElementIndex(i)
+											focusedFileIndex = i2
+											feEnterFocused(config)
 										}
 									}
 								} else if elem.Type == "favorites" {
@@ -1187,6 +1252,11 @@ func main() {
 								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
+							// Live TV: D-pad Left/Right switch category, X searches,
+							// Y stars the highlighted channel.
+							if curElem.Variable == tvEntriesVar && tvListControllerAction(e.Button, config) {
+								continue
+							}
 							entries, _ := getSceneFileEntries(config, curScene)
 							n := 0
 							if entries != nil {
@@ -1218,13 +1288,17 @@ func main() {
 							presets := ListThemePresets()
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-								if themeGalleryIndex > 0 {
-									themeGalleryIndex--
-								}
+								themeGalleryMove(curElem, -1)
+								PlayNavSound()
 							case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-								if themeGalleryIndex < len(presets)-1 {
-									themeGalleryIndex++
-								}
+								themeGalleryMove(curElem, 1)
+								PlayNavSound()
+							case sdl.CONTROLLER_BUTTON_DPAD_UP:
+								themeGalleryMove(curElem, -themeGalleryColumns(curElem))
+								PlayNavSound()
+							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+								themeGalleryMove(curElem, themeGalleryColumns(curElem))
+								PlayNavSound()
 							case sdl.CONTROLLER_BUTTON_A:
 								if themeGalleryIndex >= 0 && themeGalleryIndex < len(presets) {
 									ApplyThemePreset(config, presets[themeGalleryIndex])
@@ -1378,6 +1452,9 @@ func main() {
 							case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 								moveSelection(config, ActionNavigateRight)
 							case sdl.CONTROLLER_BUTTON_A:
+								if activateChromeFocus(config) {
+									break
+								}
 								if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
 									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
 									if elem.Type == "input" {
@@ -1500,14 +1577,17 @@ func main() {
 			if config.Variables.ReducedMotion || sdl.GetTicks64()-pressStartTime > pressDuration {
 				pressedButtonIndex = -1
 			}
-		}
+		}			// Screensaver takes over when idle.
+			if ss.active {
+				renderScreensaver(renderer, config, sdl.GetTicks64())
+			} else {
+				renderScene(renderer, config, config.Scenes[currentSceneIndex])
+			}
 
-		// Screensaver takes over when idle.
-		if ss.active {
-			renderScreensaver(renderer, config, sdl.GetTicks64())
-		} else {
-			renderScene(renderer, config, config.Scenes[currentSceneIndex])
-		}
+			// Full screen video covers the scene and its chrome entirely.
+			if videoFullscreen && playerPhase() != "idle" {
+				renderVideoFullscreen(renderer, config)
+			}
 
 		// Scene transition effects
 		if config.Variables.ReducedMotion && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
@@ -1554,48 +1634,9 @@ func main() {
 			renderImageViewer(renderer, config, imageViewerPath)
 		}
 
-		// Loading overlay
+		// Loading overlay (spinner, status line and a wrapped JukaLang slogan).
 		if config.Variables.LoadingSpinner || transitionPhase != "none" {
-			// frosted backdrop
-			fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, sdl.Color{R: 6, G: 8, B: 14, A: 200})
-			// centered glass card
-			cardW := int32(340)
-			cardH := int32(220)
-			cardX := (screenWidth - cardW) / 2
-			cardY := (screenHeight - cardH) / 2
-			fillRoundedRect(renderer, cardX+4, cardY+6, cardW, cardH, 20, ShadowFill(80))
-			fillRoundedRect(renderer, cardX, cardY, cardW, cardH, 20, sdl.Color{R: 18, G: 24, B: 36, A: 235})
-			renderer.SetDrawColor(255, 255, 255, 14)
-			renderer.FillRect(&sdl.Rect{X: cardX + 12, Y: cardY + 1, W: cardW - 24, H: 1})
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 80)
-			renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + 1, W: cardW - 2, H: 1})
-			renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + 1, W: 1, H: cardH - 2})
-			renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + cardH - 2, W: cardW - 2, H: 1})
-			renderer.DrawRect(&sdl.Rect{X: cardX + cardW - 2, Y: cardY + 1, W: 1, H: cardH - 2})
-			renderSpinner(renderer, cardX+cardW/2, cardY+60, 40, sdl.Color{R: 140, G: 180, B: 255, A: 220})
-			font, _ := getCachedFont(config, "medium")
-			if font == nil {
-				font, _ = getCachedFont(config, "small")
-			}
-			if font != nil {
-				loadingTxt := config.Variables.SpinnerText
-				if loadingTxt == "" {
-					loadingTxt = "Loading..."
-				}
-				lw, _, _ := font.SizeUTF8(loadingTxt)
-				renderText(renderer, config, font, loadingTxt, sdl.Color{R: 220, G: 230, B: 245, A: 255}, cardX+(cardW-int32(lw))/2, cardY+120)
-				// Rotating Juka / JukaLang themed joke
-				if len(loadingJokes) > 0 {
-					ji := int(sdl.GetTicks64() / 2800 % uint64(len(loadingJokes)))
-					joke := loadingJokes[ji]
-					smallFont, _ := getCachedFont(config, "small")
-					if smallFont == nil {
-						smallFont = font
-					}
-					jw, _, _ := smallFont.SizeUTF8(joke)
-					renderText(renderer, config, smallFont, joke, sdl.Color{R: 150, G: 170, B: 200, A: 200}, cardX+(cardW-int32(jw))/2, cardY+155)
-				}
-			}
+			renderLoadingCard(renderer, config)
 		}
 
 		// SDL text input stays enabled for the whole session: the on-screen
@@ -1629,6 +1670,16 @@ func main() {
 		// Tools overlay (IP address + FTP server).
 		if toolsPanel.open {
 			renderToolsPanel(renderer, config)
+		}
+
+		// Process list overlay (inspect and kill processes).
+		if processPanel.open {
+			renderProcessPanel(renderer, config)
+		}
+
+		// IPStream library overlay.
+		if ipPanelOpen {
+			renderIPPanel(renderer, config)
 		}
 
 		// Emulators overlay (availability list).

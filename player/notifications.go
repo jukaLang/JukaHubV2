@@ -28,11 +28,12 @@ type notification struct {
 }
 
 type notifCenter struct {
-	history  []notification
-	open     bool // dropdown visible
-	cursor   int  // focused row in dropdown
-	bellRect sdl.Rect
-	dropRect sdl.Rect
+	history   []notification
+	open      bool // dropdown visible
+	cursor    int  // focused row in dropdown
+	bellRect  sdl.Rect
+	dropRect  sdl.Rect
+	clearRect sdl.Rect // "Clear All" hit area
 }
 
 var nc notifCenter
@@ -70,28 +71,46 @@ func notifUnreadCount() int {
 	return n
 }
 
-// renderNotifBell draws the bell icon in the status bar area. Returns its rect for hit testing.
+// notifBellSize returns the bell pill's width and height for the active font,
+// so the top bar can reserve its corner before drawing.
+func notifBellSize(config *Config) (int32, int32) {
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return 0, 0
+	}
+	bw, bh, _ := font.SizeUTF8("(*)")
+	return int32(bw) + 16, int32(bh) + 8
+}
+
+// renderNotifBell draws the bell icon at the top-right of the status bar.
+// Returns its rect for hit testing.
 func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rect {
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
 		return sdl.Rect{}
 	}
+	bellW, bellH := notifBellSize(config)
+	if bellW <= 0 {
+		return sdl.Rect{}
+	}
 	bellStr := "(*)"
-	bw, bh, _ := font.SizeUTF8(bellStr)
-	bellW := int32(bw) + 16
-	bellH := int32(bh) + 8
 	bellX := x - bellW
 	bellY := y
 	rect := sdl.Rect{X: bellX, Y: bellY, W: bellW, H: bellH}
 
-	// Background pill.
-	fillRoundedRect(renderer, bellX, bellY, bellW, bellH, bellH/2,
-		sdl.Color{R: 20, G: 24, B: 34, A: 200})
+	// Background pill in the active theme's input surface.
+	fillRoundedRect(renderer, bellX, bellY, bellW, bellH, bellH/2, ColorIconSurface)
+	if nc.open {
+		strokeRoundedRect(renderer, bellX, bellY, bellW, bellH, bellH/2, 1, accentColor)
+	}
+
+	// Focus ring when the D-pad/arrows sit on the bell.
+	if focusEngine.ElementIndex() == ChromeBellIndex {
+		strokeRoundedRect(renderer, bellX-2, bellY-2, bellW+4, bellH+4, (bellH+4)/2, 2, accentColor)
+	}
 
 	// Bell icon.
-	renderText(renderer, config, font, bellStr,
-		sdl.Color{R: 200, G: 210, B: 230, A: 220},
-		bellX+8, bellY+4)
+	renderText(renderer, config, font, bellStr, ColorTextSecondary(), bellX+8, bellY+4)
 
 	// Unread count badge.
 	unread := notifUnreadCount()
@@ -160,12 +179,15 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, title,
 		sdl.Color{R: 200, G: 210, B: 230, A: 220}, bx+16, by+12)
 
+	nc.clearRect = sdl.Rect{}
 	if len(nc.history) > 0 {
 		clearStr := "Clear All"
-		cw, _, _ := font.SizeUTF8(clearStr)
+		cw, ch, _ := font.SizeUTF8(clearStr)
+		clearX := bx + dropW - int32(cw) - 16
+		nc.clearRect = sdl.Rect{X: clearX - 8, Y: by + 6, W: int32(cw) + 16, H: int32(ch) + 12}
 		renderText(renderer, config, font, clearStr,
 			sdl.Color{R: 220, G: 100, B: 100, A: 200},
-			bx+dropW-int32(cw)-16, by+12)
+			clearX, by+12)
 	}
 
 	// Notification rows.
@@ -236,11 +258,14 @@ func notifToggle() {
 	nc.open = !nc.open
 	nc.cursor = 0
 	if nc.open {
+		// The two top-bar overlays are exclusive.
+		tb.startOpen = false
 		// Mark all as read.
 		for i := range nc.history {
 			nc.history[i].Read = true
 		}
 	}
+	PlayActivateSound()
 }
 
 // notifNavigate moves the cursor in the dropdown.
@@ -261,10 +286,11 @@ func notifNavigate(dr int) {
 	}
 }
 
-// notifClearAll clears all notifications.
+// notifClearAll clears all notifications. The dropdown stays open so the
+// empty state is visible (touch users get direct feedback).
 func notifClearAll() {
 	nc.history = nc.history[:0]
-	nc.open = false
+	nc.cursor = 0
 }
 
 // notifDismiss closes the dropdown.
@@ -285,6 +311,22 @@ func notifIsPointInDrop(x, y int32) bool {
 func notifIsPointInBell(x, y int32) bool {
 	return x >= nc.bellRect.X && x <= nc.bellRect.X+nc.bellRect.W &&
 		y >= nc.bellRect.Y && y <= nc.bellRect.Y+nc.bellRect.H
+}
+
+// notifHandleClick consumes clicks on the open dropdown: the header's "Clear
+// All" clears the history, any other click inside the card is swallowed so it
+// cannot reach the scene underneath. It reports whether the click was inside
+// the open dropdown.
+func notifHandleClick(x, y int32) bool {
+	if !nc.open || !notifIsPointInDrop(x, y) {
+		return false
+	}
+	if nc.clearRect.W > 0 && x >= nc.clearRect.X && x <= nc.clearRect.X+nc.clearRect.W &&
+		y >= nc.clearRect.Y && y <= nc.clearRect.Y+nc.clearRect.H {
+		notifClearAll()
+		PlayActivateSound()
+	}
+	return true
 }
 
 // renderNotifCenter renders both the bell and dropdown. Call this from the

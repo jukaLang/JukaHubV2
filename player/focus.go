@@ -35,6 +35,34 @@ type FocusNode struct {
 	Label string   // display text for debugging/logging
 }
 
+// Chrome focus indices identify the buttons that are not config elements: the
+// top-bar back pill, status-bar clock, Apps pill and notification bell. They
+// join the focus graph so the D-pad and arrow keys can reach every button on
+// screen. ElementIndex reports -1 for "no focus", so chrome uses deeper
+// sentinels.
+const (
+	ChromeBackIndex  = -2
+	ChromeClockIndex = -3
+	ChromeStartIndex = -4
+	ChromeBellIndex  = -5
+	ChromeBackType   = "back"
+	ChromeClockType  = "clock"
+	ChromeStartType  = "start"
+	ChromeBellType   = "bell"
+)
+
+// chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
+// Apps pill, status clock, notification bell); tier 0 is scene content. The
+// tiers are hand-wired instead of spatial, and StepChrome moves between them.
+// The bottom of the screen is now the hint bar only, so there is no tier 2.
+func chromeTier(idx int) int {
+	switch idx {
+	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex:
+		return 1
+	}
+	return 0
+}
+
 // FocusGraph is the explicit focus graph for one scene.
 type FocusGraph struct {
 	Nodes []FocusNode
@@ -87,23 +115,104 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 	})
 
 	edges := buildSpatialEdges(nodes)
+
+	// Top-bar chrome: the back pill, Apps pill, status clock and notification
+	// bell are buttons too and must stay reachable. Their rects are measured
+	// while the bar renders. The home screen draws its own focusable clock card
+	// and footer instead, so it stays element-only.
+	//
+	// Chrome is hand-wired instead of spatial: the bar sits above the content at
+	// shallow angles whose vectors would hijack Left/Right along the grid rows.
+	// The four bar buttons connect left-to-right in their measured order; Up/
+	// Down between the content and the bar is routed by StepChrome.
+	if scene.Layout != "home" {
+		var chromeIdx []int
+		addNode := func(idx int, rect sdl.Rect, typ, label string) {
+			nodes = append(nodes, FocusNode{Index: idx, Rect: rect, Type: typ, Label: label})
+			chromeIdx = append(chromeIdx, len(nodes)-1)
+		}
+		if sceneTitleBackRect.W > 0 {
+			addNode(ChromeBackIndex, sceneTitleBackRect, ChromeBackType, "Back")
+		}
+		// Stale rects from a previous scene must not become phantom targets; the
+		// status bar and home header clear theirs when they are not drawn.
+		if tb.startRect.W > 0 {
+			addNode(ChromeStartIndex, tb.startRect, ChromeStartType, "Apps")
+		}
+		if statusClockRect.W > 0 {
+			addNode(ChromeClockIndex, statusClockRect, ChromeClockType, "Clock")
+		}
+		if nc.bellRect.W > 0 {
+			addNode(ChromeBellIndex, nc.bellRect, ChromeBellType, "Notifications")
+		}
+		// Cut the spatial edges chrome picked up while the graph was built, so
+		// a diagonal vector can never pull Left/Right off a content row.
+		chromeSet := map[int]bool{}
+		for _, n := range chromeIdx {
+			chromeSet[n] = true
+			edges[n] = []int{}
+		}
+		for i := range nodes {
+			if chromeSet[i] {
+				continue
+			}
+			kept := edges[i][:0]
+			for _, j := range edges[i] {
+				if !chromeSet[j] {
+					kept = append(kept, j)
+				}
+			}
+			edges[i] = kept
+		}
+		sort.Slice(chromeIdx, func(i, j int) bool {
+			return nodes[chromeIdx[i]].Rect.X < nodes[chromeIdx[j]].Rect.X
+		})
+		for i := 0; i+1 < len(chromeIdx); i++ {
+			a, b := chromeIdx[i], chromeIdx[i+1]
+			edges[a] = append(edges[a], b)
+			edges[b] = append(edges[b], a)
+		}
+	}
+
 	return &FocusGraph{Nodes: nodes, Edges: edges}
 }
 
 // SetGraph installs a new focus graph and restores persisted focus if available.
+// Reinstalling a graph for the same scene keeps the currently focused node
+// (matched by element index) instead of resetting: key handlers rebuild the
+// graph on every press to pick up dynamic buttons and the measured top-bar
+// chrome rects, and losing the user's place on each reinstall trapped
+// navigation on the first buttons.
 func (fe *FocusEngine) SetGraph(sceneName string, graph *FocusGraph) {
 	fe.mu.Lock()
+	defer fe.mu.Unlock()
+
+	keepIndex, keep := 0, false
+	if fe.scene == sceneName && fe.graph != nil && fe.current >= 0 && fe.current < len(fe.graph.Nodes) {
+		keepIndex, keep = fe.graph.Nodes[fe.current].Index, true
+	}
+
 	fe.graph = graph
 	fe.scene = sceneName
 	fe.current = -1
 
 	if graph != nil && len(graph.Nodes) > 0 {
-		// Restore persisted focus or default to first node.
-		if persisted, ok := fe.persistFocus[sceneName]; ok {
+		if keep {
 			for i, node := range graph.Nodes {
-				if node.Index == persisted {
+				if node.Index == keepIndex {
 					fe.current = i
 					break
+				}
+			}
+		}
+		if fe.current == -1 {
+			// Restore persisted focus or default to first node.
+			if persisted, ok := fe.persistFocus[sceneName]; ok {
+				for i, node := range graph.Nodes {
+					if node.Index == persisted {
+						fe.current = i
+						break
+					}
 				}
 			}
 		}
@@ -111,7 +220,6 @@ func (fe *FocusEngine) SetGraph(sceneName string, graph *FocusGraph) {
 			fe.current = 0
 		}
 	}
-	fe.mu.Unlock()
 }
 
 // SceneName returns the scene the installed graph was built for ("" if none).
@@ -196,6 +304,59 @@ func (fe *FocusEngine) Navigate(action Action) int {
 		return fe.graph.Nodes[best].Index
 	}
 	return curNode.Index
+}
+
+// StepChrome bridges the focus grid and the hand-wired chrome buttons. The bar
+// sits above the content area at a shallow angle the spatial cones reject, so
+// Up dead-ending at the grid's top row steps onto the nearest top-bar button
+// and Down from the bar steps back into the content. It reports the
+// element/chrome index to move to and whether one exists.
+func (fe *FocusEngine) StepChrome(action Action) (int, bool) {
+	fe.mu.RLock()
+	defer fe.mu.RUnlock()
+	if fe.graph == nil || fe.current < 0 || fe.current >= len(fe.graph.Nodes) {
+		return 0, false
+	}
+	cur := fe.graph.Nodes[fe.current]
+	cx := int64(cur.Rect.X + cur.Rect.W/2)
+	cy := int64(cur.Rect.Y + cur.Rect.H/2)
+	curTier := chromeTier(cur.Index)
+
+	// Up targets the top bar; Down leaves it for the content.
+	var wantTier int
+	switch action {
+	case ActionNavigateUp:
+		wantTier = 1
+	case ActionNavigateDown:
+		wantTier = 0
+	default:
+		return 0, false
+	}
+	if curTier == wantTier {
+		return 0, false
+	}
+
+	best, bestDist := -1, int64(math.MaxInt64)
+	for i, n := range fe.graph.Nodes {
+		if chromeTier(n.Index) != wantTier {
+			continue
+		}
+		dx := int64(n.Rect.X+n.Rect.W/2) - cx
+		dy := int64(n.Rect.Y+n.Rect.H/2) - cy
+		if action == ActionNavigateUp && dy >= -2 {
+			continue
+		}
+		if action == ActionNavigateDown && dy <= 2 {
+			continue
+		}
+		if d := dx*dx + dy*dy; d < bestDist {
+			bestDist, best = d, i
+		}
+	}
+	if best < 0 {
+		return 0, false
+	}
+	return fe.graph.Nodes[best].Index, true
 }
 
 // Confirm returns the current focused scene element index for activation.

@@ -127,7 +127,8 @@ func (f *FavoriteItem) Play(config *Config) {
 		}
 	case "audio":
 		if fe, ok := f.Data.(FileEntry); ok {
-			playStream(config, fe.Path)
+			// Songs open the audio player with the whole folder as playlist.
+			openAudioPlayer(config, fe.Path)
 		}
 	case "iptv":
 		if fe, ok := f.Data.(FileEntry); ok {

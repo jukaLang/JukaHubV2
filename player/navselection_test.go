@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"testing"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 // useNavScene points the package navigation globals at a synthetic scene for
@@ -12,12 +14,15 @@ func useNavScene(t *testing.T, scene SceneConfig) *Config {
 	t.Helper()
 	prevSceneIdx, prevSel := currentSceneIndex, selectedButtonIndex
 	prevEngine := focusEngine
+	prevBack, prevClock := sceneTitleBackRect, statusClockRect
 	currentSceneIndex = 0
 	selectedButtonIndex = 0
 	focusEngine = NewFocusEngine()
+	sceneTitleBackRect, statusClockRect = sdl.Rect{}, sdl.Rect{}
 	t.Cleanup(func() {
 		currentSceneIndex, selectedButtonIndex = prevSceneIdx, prevSel
 		focusEngine = prevEngine
+		sceneTitleBackRect, statusClockRect = prevBack, prevClock
 	})
 	return &Config{Scenes: []SceneConfig{scene}}
 }
@@ -144,6 +149,14 @@ func TestRealToolsSceneEveryButtonReachable(t *testing.T) {
 	// reach the button directly below and Right the button directly beside it.
 	build()
 	start := focusEngine.ElementIndex()
+	// Installing a graph preserves focus across reinstalls (by design), so
+	// pin the walk's starting node explicitly.
+	refocus := func() {
+		build()
+		if !focusEngine.SetByElementIndex(start) {
+			t.Fatalf("cannot focus start button %d", start)
+		}
+	}
 	startEl := scene.Elements[start]
 	below, right := -1, -1
 	for _, b := range buttons {
@@ -158,17 +171,17 @@ func TestRealToolsSceneEveryButtonReachable(t *testing.T) {
 	if below < 0 || right < 0 {
 		t.Fatalf("Tools scene is not a grid: below=%d right=%d", below, right)
 	}
-	build()
+	refocus()
 	if got := focusEngine.Navigate(ActionNavigateDown); got != below {
 		t.Errorf("Down from %q selects %q, want %q", startEl.Text, scene.Elements[got].Text, scene.Elements[below].Text)
 	}
-	build()
+	refocus()
 	if got := focusEngine.Navigate(ActionNavigateRight); got != right {
 		t.Errorf("Right from %q selects %q, want %q", startEl.Text, scene.Elements[got].Text, scene.Elements[right].Text)
 	}
 
 	// Every button must be reachable from the initial focus through key actions.
-	build()
+	refocus()
 	reached := map[int]bool{focusEngine.ElementIndex(): true}
 	queue := []int{focusEngine.ElementIndex()}
 	for len(queue) > 0 {

@@ -402,3 +402,63 @@ func TestWriteSwapScriptIncludesEveryFile(t *testing.T) {
 		t.Error("POSIX helper must be a shell script")
 	}
 }
+
+// TestAutoUpdateCheckDue pins the throttle: only a recent, sane, past stamp
+// may suppress a check, so a device with a reset clock still checks.
+func TestAutoUpdateCheckDue(t *testing.T) {
+	now := time.Date(2026, 10, 18, 16, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		last string
+		want bool
+	}{
+		{"missing stamp checks", "", true},
+		{"garbled stamp checks", "not-a-time", true},
+		{"recent past stamp suppresses", now.Add(-10 * time.Minute).Format(time.RFC3339), false},
+		{"stale past stamp checks", now.Add(-2 * time.Hour).Format(time.RFC3339), true},
+		{"future stamp (clock rolled back) checks", now.Add(3 * time.Hour).Format(time.RFC3339), true},
+		{"pre-sane clock stamp checks", "2001-01-01T00:00:00Z", true},
+	}
+	for _, tc := range cases {
+		if got := autoUpdateCheckDue(tc.last, now); got != tc.want {
+			t.Errorf("%s: autoUpdateCheckDue(%q) = %v, want %v", tc.name, tc.last, got, tc.want)
+		}
+	}
+}
+
+// TestAnnounceAvailableUpdateRepeatsEveryBoot covers the reported symptom: a
+// pending release must be offered again on later boots, through both the toast
+// and the notification center that keeps it visible after the toast fades.
+func TestAnnounceAvailableUpdateRepeatsEveryBoot(t *testing.T) {
+	patchStateMu.Lock()
+	prevTag, prevAt := patchState.AvailableUpdateTag, patchState.AvailableUpdateAt
+	patchState.AvailableUpdateTag = "JukaHub-20261018154556"
+	patchState.AvailableUpdateAt = "2026-10-18T15:45:57Z"
+	patchStateMu.Unlock()
+	t.Cleanup(func() {
+		patchStateMu.Lock()
+		patchState.AvailableUpdateTag, patchState.AvailableUpdateAt = prevTag, prevAt
+		patchStateMu.Unlock()
+	})
+
+	prevHistory := nc.history
+	nc.history = nil
+	t.Cleanup(func() { nc.history = prevHistory })
+
+	announceAvailableUpdate()
+	if len(nc.history) != 1 {
+		t.Fatalf("first announcement pushed %d notifications, want 1", len(nc.history))
+	}
+	msg := nc.history[0].Message
+	if !strings.Contains(msg, "2026-10-18") {
+		t.Errorf("offer %q lacks the release date", msg)
+	}
+	if !strings.Contains(msg, "Patch") {
+		t.Errorf("offer %q does not tell the user where to install it", msg)
+	}
+
+	announceAvailableUpdate()
+	if len(nc.history) != 2 {
+		t.Fatalf("second boot pushed %d notifications total, want 2", len(nc.history))
+	}
+}

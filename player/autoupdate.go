@@ -53,9 +53,12 @@ var (
 const (
 	jukaHubReleaseDownloadBase = "https://github.com/jukaLang/JukaHubV2/releases/latest/download/"
 	releaseInfoFileName        = "release-info.json"
-	autoUpdateCheckInterval    = 24 * time.Hour
-	autoUpdateMaxFiles         = 128
-	autoUpdateStartupDelay     = 4 * time.Second
+	// autoUpdateCheckInterval is the anti-flap cooldown between background
+	// release checks. The check itself runs at every startup; the cooldown
+	// only stops a crash-restart loop from hammering the GitHub API.
+	autoUpdateCheckInterval = 30 * time.Minute
+	autoUpdateMaxFiles      = 128
+	autoUpdateStartupDelay  = 4 * time.Second
 )
 
 // releaseInfo records the release an installation was built from or updated to.
@@ -178,6 +181,27 @@ func releaseStampISO(rel *githubRelease) string {
 		return t.Format(time.RFC3339)
 	}
 	return ""
+}
+
+// minSaneClock is the oldest timestamp believed to come from a correct clock.
+// The handheld has no RTC battery: after a power cycle its clock can sit at a
+// factory epoch until NTP catches up, and a stamp taken from such a clock must
+// never suppress a check.
+var minSaneClock = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// autoUpdateCheckDue reports whether the background release check may run,
+// given the stamp of the last successful check. Only a recent, sane, past
+// stamp suppresses a check: a missing, garbled, future (a clock that rolled
+// backwards after a power cycle) or implausibly old stamp all allow it.
+func autoUpdateCheckDue(last string, now time.Time) bool {
+	t, ok := parseReleaseTimestamp(last)
+	if !ok {
+		return true
+	}
+	if now.Before(t) || t.Before(minSaneClock) || now.Before(minSaneClock) {
+		return true
+	}
+	return now.Sub(t) >= autoUpdateCheckInterval
 }
 
 // installedReleaseTime returns the stamped release of the running install.
@@ -316,6 +340,15 @@ func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
 	return OpApplyStagedSwap(ctx, config)
 }
 
+// announceAvailableUpdate surfaces a pending update: an immediate toast plus a
+// notification that stays in the bell until read, so a missed toast still
+// leaves a visible sign that an update is waiting. notifPush draws the toast.
+func announceAvailableUpdate() {
+	label := availableUpdateLabel()
+	logPatch("auto-update: offering %s", label)
+	notifPush("JukaHub "+label+" is available — install it from Patch", notifInfo)
+}
+
 // startAutoUpdateCheck runs the startup update check in the background. It is
 // best-effort and never installs: a newer release is only advertised, and the
 // Patch scene asks the user before anything is downloaded. Offline launches and
@@ -324,15 +357,29 @@ func startAutoUpdateCheck(config *Config) {
 	go func() {
 		time.Sleep(autoUpdateStartupDelay)
 		if strings.TrimSpace(os.Getenv("JUKAHUB_NO_AUTOUPDATE")) != "" {
+			logPatch("auto-update: disabled by JUKAHUB_NO_AUTOUPDATE")
 			return
 		}
+		logPatch("auto-update: startup check")
 		patchStateMu.Lock()
 		last := patchState.AutoUpdateCheckedAt
+		pending := patchState.AvailableUpdateTag != ""
 		patchStateMu.Unlock()
-		if t, err := time.Parse(time.RFC3339, last); err == nil && time.Since(t) < autoUpdateCheckInterval {
+
+		// Offer a known update on every boot. The toast used to fire only at
+		// discovery time, so one missed toast left nothing visible and the
+		// device looked like it never offered the release at all.
+		if pending {
+			announceAvailableUpdate()
+		}
+
+		if !autoUpdateCheckDue(last, time.Now()) {
 			return
 		}
 		if !tryBeginPatchOp() {
+			// Worth a log line: a skipped check means this boot never reaches
+			// the release feed, which otherwise looks like a silent updater.
+			logPatch("auto-update: check skipped, another Patch operation is running")
 			return
 		}
 		defer endPatchOp()
@@ -355,13 +402,11 @@ func startAutoUpdateCheck(config *Config) {
 			logPatch("auto-update: %s is current", versionString(nil))
 			return
 		}
-		label := releaseDateLabel(rel)
-		if label == "" {
-			label = rel.TagName
-		}
 		markUpdateAvailable(rel)
 		logPatch("auto-update: %s is available; waiting for the user to confirm", rel.TagName)
-		patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub " + label + " is available — install it from Patch"})
+		if !pending {
+			announceAvailableUpdate()
+		}
 		patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	}()
 }

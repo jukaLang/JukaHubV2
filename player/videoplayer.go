@@ -71,7 +71,48 @@ var videoControlRects = struct {
 	speed       sdl.Rect
 	speedCycle  sdl.Rect
 	back        sdl.Rect
+	subs        sdl.Rect
+	settings    sdl.Rect
+	fullscreen  sdl.Rect
 }{}
+
+// Video chrome state: full screen hides the controls until the user interacts,
+// and the settings sheet lists subtitles / full screen / speed.
+var (
+	videoFullscreen   bool
+	videoChromeUntil  uint64
+	videoSettingsOpen bool
+	videoSettingsItem int
+)
+
+// videoChromeVisible reports whether the controls should be drawn. While not in
+// full screen they are always visible; in full screen they fade after a moment.
+func videoChromeVisible() bool {
+	if !videoFullscreen {
+		return true
+	}
+	return sdl.GetTicks64() < videoChromeUntil
+}
+
+// revealVideoChrome shows the controls in full screen for a few seconds.
+func revealVideoChrome() {
+	videoChromeUntil = sdl.GetTicks64() + 3000
+}
+
+// toggleVideoFullscreen switches between the scene element and full screen.
+func toggleVideoFullscreen() {
+	videoFullscreen = !videoFullscreen
+	videoSettingsOpen = false
+	if videoFullscreen {
+		revealVideoChrome()
+	}
+}
+
+// toggleVideoSettings opens or closes the settings sheet.
+func toggleVideoSettings() {
+	videoSettingsOpen = !videoSettingsOpen
+	videoSettingsItem = 0
+}
 
 // playbackSession owns one decode pipeline.
 type playbackSession struct {
@@ -640,6 +681,10 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		embeddedPlayer.progress = progressBase
 		embeddedPlayer.mu.Unlock()
 
+		// Sidecar / embedded subtitle tracks belong to this source; load them
+		// before the first frame so the CC button knows what it can turn on.
+		prepareVideoSubtitles(config, url)
+
 		go startFFmpegAudio(sess, ffmpegPath, url, startSec)
 		startFFmpegDecoder(sess, ffmpegPath, url, w, h, startSec)
 
@@ -676,6 +721,10 @@ func StopEmbeddedPlayback() {
 	}
 
 	currentPlaybackURL = ""
+	// Leaving playback also leaves full screen and the settings sheet behind.
+	videoFullscreen = false
+	videoSettingsOpen = false
+	setSubtitlesEnabled(false)
 
 	videoPlaybackMutex.Lock()
 	videoPlaybackPhase = "idle"
@@ -860,7 +909,7 @@ func computeVideoControlLayout(x, y, w, h int32, state videoStateSnapshot) {
 
 	btnSize := int32(36)
 	gap := int32(10)
-	groupW := 5*btnSize + 4*gap
+	groupW := 8*btnSize + 7*gap
 	startX := x + (w-groupW)/2
 	btnY := barY + (barH-btnSize)/2
 
@@ -874,6 +923,12 @@ func computeVideoControlLayout(x, y, w, h int32, state videoStateSnapshot) {
 	startX += btnSize + gap
 	videoControlRects.speed = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
 	videoControlRects.speedCycle = videoControlRects.speed
+	startX += btnSize + gap
+	videoControlRects.subs = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
+	startX += btnSize + gap
+	videoControlRects.settings = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
+	startX += btnSize + gap
+	videoControlRects.fullscreen = sdl.Rect{X: startX, Y: btnY, W: btnSize, H: btnSize}
 
 	volX := x + 18
 	videoControlRects.volDown = sdl.Rect{X: volX, Y: btnY, W: btnSize, H: btnSize}
@@ -935,6 +990,10 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	x, y := elem.X, elem.Y
 	w := getElementWidth(elem, screenWidth)
 	h := getElementHeight(elem, screenHeight)
+	// Full screen ignores the element frame and uses the whole panel.
+	if videoFullscreen {
+		x, y, w, h = 0, 0, screenWidth, screenHeight
+	}
 
 	// Update playback progress from elapsed wall time.
 	if state.duration > 0 && state.phase == "playing" {
@@ -984,6 +1043,13 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 		}
 	}
 
+	// Full screen with the chrome faded out: just the picture and subtitles.
+	if videoFullscreen && !videoChromeVisible() {
+		drawVideoFrameArea(renderer, currentTex, x, y, w, h)
+		renderVideoSubtitles(renderer, config, x, y, w, h, state.progress*state.duration, 48)
+		return
+	}
+
 	cachedOverlay := vkEnsureVideoOverlayCache(renderer, config, w, h)
 	if cachedOverlay != nil {
 		// Live video frame first, then the cached static layer over it, then
@@ -996,6 +1062,17 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	} else {
 		drawVideoOverlayFallback(renderer, config, state, currentTex, x, y, w, h)
 	}
+}
+
+// renderVideoFullscreen draws the embedded player over the entire panel, hiding
+// the scene header, elements and footer behind it.
+func renderVideoFullscreen(renderer *sdl.Renderer, config *Config) {
+	if renderer == nil {
+		return
+	}
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	RenderVideoOverlay(renderer, config, Element{Type: "video", X: 0, Y: 0})
 }
 
 // drawVideoFrameArea draws the current video frame, or a dark backdrop with a
@@ -1125,8 +1202,23 @@ func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoSta
 	drawIconBtn(renderer, iconVolLow, videoControlRects.volDown.X, videoControlRects.volDown.Y, videoControlRects.volDown.W)
 	drawIconBtn(renderer, iconVolHigh, videoControlRects.volUp.X, videoControlRects.volUp.Y, videoControlRects.volUp.W)
 
-	// Time on the right.
+	// Subtitles / settings / full screen buttons.
+	drawCCBtn(renderer, config, font, videoControlRects.subs.X, videoControlRects.subs.Y,
+		videoControlRects.subs.W, subtitlesEnabled())
+	drawIconBtn(renderer, iconSettings, videoControlRects.settings.X, videoControlRects.settings.Y,
+		videoControlRects.settings.W)
+	drawIconBtn(renderer, iconFullscreen, videoControlRects.fullscreen.X, videoControlRects.fullscreen.Y,
+		videoControlRects.fullscreen.W)
+
+	// Active subtitle cue above the control bar.
 	currentTime := state.progress * state.duration
+	renderVideoSubtitles(renderer, config, x, y, w, h, currentTime, barH+28)
+
+	// Settings sheet sits above the control bar.
+	if videoSettingsOpen {
+		drawVideoSettingsSheet(renderer, config, x, y, w, h)
+	}
+
 	timeText := formatTime(currentTime) + " / " + formatTime(state.duration)
 	tw, th, _ := font.SizeUTF8(timeText)
 	renderText(renderer, config, font, timeText, ColorTextPrimary(),
@@ -1167,6 +1259,8 @@ const (
 	iconSeekFwd
 	iconVolLow
 	iconVolHigh
+	iconSettings
+	iconFullscreen
 )
 
 func iconCol() sdl.Color {
@@ -1212,8 +1306,126 @@ func drawIconBtn(renderer *sdl.Renderer, icon playerIcon, x, y, size int32) sdl.
 		drawSpeaker(renderer, cx, cy, size, col, 1)
 	case iconVolHigh:
 		drawSpeaker(renderer, cx, cy, size, col, 2)
+	case iconSettings:
+		// Three sliders with offset knobs.
+		s := size / 3
+		w := s * 2
+		left := cx - s
+		for i, off := range []int32{-s / 2, s / 4, -s / 6} {
+			y := cy - s + int32(i)*s
+			fillRoundedRect(renderer, left, y, w, 2, 1, col)
+			knobOff := off
+			if knobOff < -s+3 {
+				knobOff = -s + 3
+			}
+			if knobOff > s-3 {
+				knobOff = s - 3
+			}
+			fillCircle(renderer, cx+knobOff, y+1, 2, col)
+		}
+	case iconFullscreen:
+		// Four corner brackets.
+		s := size / 3
+		arm := s / 2
+		for _, c := range [4][2]int32{{-1, -1}, {1, -1}, {-1, 1}, {1, 1}} {
+			px := cx + c[0]*s
+			py := cy + c[1]*s
+			fillRoundedRect(renderer, px-c[0]*arm, py-1, arm, 2, 1, col)
+			fillRoundedRect(renderer, px-1, py-c[1]*arm, 2, arm, 1, col)
+		}
 	}
 	return sdl.Rect{X: x, Y: y, W: size, H: size}
+}
+
+// drawCCBtn draws the closed-caption toggle; it lights up when subtitles are on.
+func drawCCBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, size int32, on bool) {
+	bg := WithAlpha(ColorSurfaceRaised, 180)
+	fg := ColorTextPrimary()
+	if on {
+		bg = WithAlpha(ColorInfo, 220)
+		fg = sdl.Color{R: 12, G: 14, B: 20, A: 255}
+	}
+	fillRoundedRect(renderer, x, y, size, size, size/5, bg)
+	renderer.SetDrawColor(255, 255, 255, 25)
+	renderer.FillRect(&sdl.Rect{X: x + 3, Y: y + 1, W: size - 6, H: 1})
+	if font != nil {
+		lw, lh, _ := font.SizeUTF8("CC")
+		renderText(renderer, config, font, "CC", fg, x+(size-int32(lw))/2, y+(size-int32(lh))/2)
+	}
+}
+
+// Layout of the settings sheet. The row metrics are shared by the renderer and
+// the click hit test, so a tap always lands on the row it is drawn over.
+const (
+	videoSettingsSheetRows = 4
+	videoSettingsRowH      = int32(48)
+	videoSettingsTopPad    = int32(20)
+)
+
+// videoSettingsSheetRect places the sheet in the bottom-right corner of the
+// video element, leaving room for the control bar underneath.
+func videoSettingsSheetRect(x, y, w, h int32) sdl.Rect {
+	sheetW := int32(360)
+	// Top padding, the rows, then a caption line and bottom padding.
+	sheetH := int32(videoSettingsSheetRows)*videoSettingsRowH + 68
+	if sheetW > w-32 {
+		sheetW = w - 32
+	}
+	sheetX := x + w - sheetW - 24
+	sheetY := y + h - 72 - sheetH - 16
+	if sheetY < y+16 {
+		sheetY = y + 16
+	}
+	return sdl.Rect{X: sheetX, Y: sheetY, W: sheetW, H: sheetH}
+}
+
+// drawVideoSettingsSheet draws the subtitles / full screen / speed sheet.
+func drawVideoSettingsSheet(renderer *sdl.Renderer, config *Config, x, y, w, h int32) {
+	sheet := videoSettingsSheetRect(x, y, w, h)
+	fillRoundedRect(renderer, sheet.X, sheet.Y, sheet.W, sheet.H, 14, WithAlpha(ColorSurfacePanel, 240))
+	strokeRoundedRect(renderer, sheet.X, sheet.Y, sheet.W, sheet.H, 14, 1, WithAlpha(ColorBorder, 160))
+
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	subState := "Off"
+	if subtitlesEnabled() {
+		subState = "On"
+	}
+	if !subtitlesAvailable() {
+		subState = "none found"
+	}
+	fullscreenState := "Off"
+	if videoFullscreen {
+		fullscreenState = "On"
+	}
+	rows := []string{
+		"Subtitles: " + subState,
+		"Full screen: " + fullscreenState,
+		fmt.Sprintf("Speed: %.2gx", snapshotVideoState().speed),
+		"Close",
+	}
+	for i, label := range rows {
+		rowY := sheet.Y + videoSettingsTopPad + int32(i)*videoSettingsRowH
+		row := sdl.Rect{X: sheet.X + 10, Y: rowY, W: sheet.W - 20, H: videoSettingsRowH - 6}
+		if i == videoSettingsItem {
+			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 8, WithAlpha(accentColor, 60))
+		}
+		renderText(renderer, config, font, label, ColorTextPrimary(), row.X+14, row.Y+(row.H-int32(font.Height()))/2)
+	}
+
+	// The source line explains what was loaded (sidecar name or "embedded").
+	// It sits inside the sheet so it can never overlap the control bar.
+	status := subtitleStatusLine()
+	statusFont, _ := getCachedFont(config, "small")
+	if statusFont != nil {
+		if sw, _, _ := statusFont.SizeUTF8(status); int32(sw) > sheet.W-28 {
+			status = ellipsize(statusFont, status, sheet.W-28)
+		}
+		statusY := sheet.Y + videoSettingsTopPad + int32(videoSettingsSheetRows)*videoSettingsRowH + 8
+		renderText(renderer, config, statusFont, status, ColorTextTertiary(), sheet.X+14, statusY)
+	}
 }
 
 func drawSpeedBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, label string, x, y, size int32) sdl.Rect {
@@ -1296,10 +1508,61 @@ func formatDownloadSpeed(bytesPerSec float64) string {
 }
 
 // HandleVideoControlClick processes mouse clicks on the video overlay controls.
-func HandleVideoControlClick(mx, my int32) {
+// It reports whether the click was consumed, so callers can stop a click from
+// reaching the scene elements underneath the player.
+func HandleVideoControlClick(mx, my int32) bool {
 	state := snapshotVideoState()
 	if state.phase == "idle" {
-		return
+		return false
+	}
+
+	// In full screen a tap anywhere brings the controls back first.
+	if videoFullscreen && !videoChromeVisible() {
+		revealVideoChrome()
+		return true
+	}
+	if videoFullscreen {
+		revealVideoChrome()
+	}
+
+	// The settings sheet owns every click while it is open.
+	if videoSettingsOpen {
+		sheet := videoSettingsSheetRect(0, 0, screenWidth, screenHeight)
+		if pointInRect(mx, my, sheet) {
+			idx := int((my - (sheet.Y + videoSettingsTopPad)) / videoSettingsRowH)
+			if idx < 0 {
+				idx = 0
+			}
+			if idx >= videoSettingsSheetRows {
+				idx = videoSettingsSheetRows - 1
+			}
+			videoSettingsItem = idx
+			videoSettingsActivate(idx)
+			return true
+		}
+		videoSettingsOpen = false
+		return true
+	}
+
+	if pointInRect(mx, my, videoControlRects.subs) {
+		if subtitlesAvailable() {
+			on := toggleSubtitles()
+			if on {
+				showToast("Subtitles on", ToastInfo())
+			} else {
+				showToast("Subtitles off", ToastInfo())
+			}
+		} else {
+			showToast("No subtitles found for this video", ToastInfo())
+		}
+		return true
+	} else if pointInRect(mx, my, videoControlRects.settings) {
+		videoSettingsOpen = true
+		videoSettingsItem = 0
+		return true
+	} else if pointInRect(mx, my, videoControlRects.fullscreen) {
+		toggleVideoFullscreen()
+		return true
 	}
 
 	if pointInRect(mx, my, videoControlRects.overlayPlay) {
@@ -1336,6 +1599,38 @@ func HandleVideoControlClick(mx, my int32) {
 	} else if pointInRect(mx, my, videoControlRects.back) {
 		StopEmbeddedPlayback()
 	}
+	return true
+}
+
+// videoSettingsActivate runs the action for one settings sheet row.
+func videoSettingsActivate(idx int) {
+	switch idx {
+	case 0:
+		if subtitlesAvailable() {
+			toggleSubtitles()
+		} else {
+			showToast("No subtitles found for this video", ToastInfo())
+		}
+	case 1:
+		toggleVideoFullscreen()
+		videoSettingsOpen = !videoSettingsOpen
+		if videoSettingsOpen {
+			revealVideoChrome()
+		}
+	case 2:
+		speeds := []float64{0.5, 0.75, 1.0, 1.25, 1.5, 2.0}
+		current := snapshotVideoState().speed
+		next := speeds[0]
+		for _, s := range speeds {
+			if s > current {
+				next = s
+				break
+			}
+		}
+		SetPlaybackSpeed(next)
+	case 3:
+		videoSettingsOpen = false
+	}
 }
 
 // HandleVideoKeyInput processes keyboard input for video controls.
@@ -1351,7 +1646,30 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) {
 	switch e.Keysym.Sym {
 	case sdl.K_SPACE, sdl.K_RETURN:
 		ToggleVideoPlayback()
-	case sdl.K_ESCAPE, sdl.K_q:
+	case sdl.K_f:
+		toggleVideoFullscreen()
+	case sdl.K_c:
+		if subtitlesAvailable() {
+			toggleSubtitles()
+		} else {
+			showToast("No subtitles found for this video", ToastInfo())
+		}
+	case sdl.K_s:
+		videoSettingsOpen = !videoSettingsOpen
+		videoSettingsItem = 0
+	case sdl.K_ESCAPE:
+		// Escape leaves full screen (and the settings sheet) before it ends
+		// playback, so a mistaken tap does not kill the video.
+		if videoSettingsOpen {
+			videoSettingsOpen = false
+			return
+		}
+		if videoFullscreen {
+			videoFullscreen = false
+			return
+		}
+		StopEmbeddedPlayback()
+	case sdl.K_q:
 		StopEmbeddedPlayback()
 	case sdl.K_LEFT:
 		SeekVideo(state.progress - 0.02)

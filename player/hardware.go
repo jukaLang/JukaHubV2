@@ -269,6 +269,15 @@ func getHardwareInfo() string {
 	sb.WriteString("\n=== Network ===\n")
 	sb.WriteString(getNetworkInfo())
 
+	// Active processes: the list the Processes panel manages interactively.
+	sb.WriteString("\n=== Active Processes ===\n")
+	if rows, err := collectProcesses(processHardwarePreview); err == nil {
+		sb.WriteString(formatProcessList(rows))
+		sb.WriteString("* protected - cannot be killed\n")
+	} else {
+		sb.WriteString("Process list unavailable: " + firstLine(err.Error()) + "\n")
+	}
+
 	return sb.String()
 }
 

@@ -1682,6 +1682,7 @@ type journal struct {
 	Target   string
 	Entries  []journalEntry
 	path     string
+	skipPath string // running executable: never restored by a startup rollback
 	commited bool
 }
 
@@ -1762,6 +1763,12 @@ func (j *journal) rollback() error {
 	var firstErr error
 	for i := len(j.Entries) - 1; i >= 0; i-- {
 		e := j.Entries[i]
+		if j.skipPath != "" && sameFilePath(e.Path, j.skipPath) {
+			// The journal is being replayed by that very executable. Online
+			// replacement of a running image fails on Windows (and would throw
+			// away a successful update anyway), so leave it alone.
+			continue
+		}
 		if e.Kind == "replace" && e.Backup != "" {
 			if _, err := os.Stat(e.Backup); err == nil {
 				if err := copyFile(e.Backup, e.Path); err != nil && firstErr == nil {
@@ -1780,6 +1787,20 @@ func (j *journal) rollback() error {
 		_ = os.Remove(j.path)
 	}
 	return firstErr
+}
+
+// sameFilePath reports whether two paths name the same file, tolerating
+// relative paths and Windows casing.
+func sameFilePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA == nil && errB == nil {
+		return strings.EqualFold(filepath.Clean(aa), filepath.Clean(bb))
+	}
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
 }
 
 // pendingJournals lists journal files that were not committed (interrupted).
@@ -1810,6 +1831,7 @@ func checkInterruptedJournal() {
 	if len(pending) == 0 {
 		return
 	}
+	self, _ := os.Executable()
 	recovered := 0
 	for _, p := range pending {
 		data, err := os.ReadFile(p)
@@ -1820,8 +1842,16 @@ func checkInterruptedJournal() {
 		if json.Unmarshal(data, &j) != nil {
 			continue
 		}
+		// path is runtime state, so a journal read back from disk has none.
+		// Without it rollback can neither delete the journal nor its backup
+		// folder, and the same interrupted update replays on every launch,
+		// silently restoring the old binary and jukaconfig.json each time.
+		j.path = p
+		j.skipPath = self
 		if err := j.rollback(); err == nil {
 			recovered++
+		} else {
+			logPatch("journal %s rolled back with errors: %v", filepath.Base(p), err)
 		}
 	}
 	if recovered > 0 {

@@ -95,6 +95,38 @@ func alarmInitUI() {
 	}
 }
 
+// ensureAlarmScene gives the alarm UI a home. The full-screen alarm editor is
+// rendered through the scene pipeline (renderScene case "Alarm"), but no
+// shipped config defines that scene, so the UI had no entry point at all.
+// Like ensureToolsMenuEntry the edit is in-memory only: the user's config file
+// is never rewritten.
+func ensureAlarmScene(config *Config) {
+	if config == nil {
+		return
+	}
+	for i := range config.Scenes {
+		if config.Scenes[i].Name == "Alarm" {
+			return
+		}
+	}
+	config.Scenes = append(config.Scenes, SceneConfig{Name: "Alarm", Icon: "A"})
+}
+
+// openAlarmScene switches to the Alarm scene so the status-bar clock (and the
+// Start menu) can reach the alarm UI. It reports whether the scene opened.
+func openAlarmScene(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	ensureAlarmScene(config)
+	idx := sceneIndexExact(config, "Alarm")
+	if idx < 0 {
+		return false
+	}
+	changeSceneTo(config, idx)
+	return true
+}
+
 // --- Navigation ---
 
 func alarmNavigate(dr int) {

@@ -87,6 +87,26 @@ var (
 		"JukaHub: your games, your media, your late-night excuses.",
 		"Even the loading bar needs moral support.",
 		"Compiling vibes. Optimizing fun. Shipping joy.",
+		"JukaLang compiles your dreams. Syntax errors first, dreams later.",
+		"Somewhere a garbage collector is humming your favourite tune.",
+		"JukaHub: turning SD cards into tiny arcades since day one.",
+		"Loading the fun. Please keep your hands inside the runtime.",
+		"Every byte here was typed by a human who believed in semicolons.",
+		"JukaLang: the language your emulator dreams in.",
+		"We measured twice, compiled once and blamed the linker anyway.",
+		"This screen is fully recyclable. The wait is not.",
+		"JukaHub: now with fewer loading screens, including this one.",
+		"Warming up the CPU. It insists it is not a morning person.",
+		"Your playlist and your patience are both buffering.",
+		"JukaLang tip: name variables like someone will read them.",
+		"Almost there. Almost is a unit of time measured in vibes.",
+		"The runtime is thinking. It is not used to it, give it a second.",
+		"Fun detected. Deploying the appropriate amount of loading bar.",
+		"If you can read this, the semicolons have not won yet.",
+		"JukaHub: retro hardware, futurist excuses.",
+		"Loading assets, opinions and one very stubborn font.",
+		"There is no place like 127.0.0.1, and we are nearly there.",
+		"Brought to you by the Society for Fewer Mystery Crashes.",
 	}
 
 	// Home screen layout state (shared between render and mouse hit-testing)
@@ -102,6 +122,7 @@ var (
 
 	// Scene-title-row back affordance (populated each frame by renderSceneTitleRow).
 	sceneTitleBackRect sdl.Rect
+	statusClockRect    sdl.Rect // status-bar clock hit/focus area (measured each frame)
 
 	// Scene history for B/Esc back navigation on non-home scenes.
 	sceneHistory []int
@@ -666,6 +687,10 @@ func finalizeConfig(config *Config) {
 	// Make the network/FTP tools reachable from the classic Tools (Misc)
 	// screen without editing configs on disk.
 	ensureToolsMenuEntry(config)
+	// Give the Hardware screen its interactive process list entry point.
+	ensureHardwareProcessEntry(config)
+	// IPStream library entry points (IPStream screen + Media page).
+	ensureIPStreamEntries(config)
 }
 
 func customString(m map[string]interface{}, name string) (string, bool) {
@@ -978,9 +1003,38 @@ func fillCircle(renderer *sdl.Renderer, cx, cy, r int32, c sdl.Color) {
 	}
 }
 
+// diskPieRadius returns the donut radius that fits the card: inside its padding
+// and clear of the two usage lines in the bottom-left corner.
+func diskPieRadius(elemW, elemH int32) int32 {
+	r := int32(120)
+	if r > elemW/2-20 {
+		r = elemW/2 - 20
+	}
+	if r > elemH/2-88 {
+		r = elemH/2 - 88
+	}
+	if r < 20 {
+		r = 20
+	}
+	return r
+}
+
+// diskPieUsageLayout places the used/free figures in the bottom-left corner of
+// the chart card. Pure geometry so a test can pin that the numbers never sit on
+// top of the centred percentage.
+func diskPieUsageLayout(element Element, elemH, lineH int32) (x, y int32) {
+	x = element.X + 24
+	y = element.Y + elemH - 2*lineH - 26
+	if y < element.Y+12 {
+		y = element.Y + 12
+	}
+	return x, y
+}
+
 // renderDiskPieChart draws a donut-style pie chart showing used vs free disk
 // space. The used slice uses the provided color; the free slice is drawn in a
-// darker shade. Used/total text is rendered in the center.
+// darker shade. Only the percentage sits in the ring; the used/free figures are
+// written in the bottom-left corner.
 func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element) {
 	elemW := getElementWidth(element, 500)
 	elemH := getElementHeight(element, 400)
@@ -993,16 +1047,7 @@ func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element)
 
 	cx := element.X + elemW/2
 	cy := element.Y + elemH/2
-	radius := int32(120)
-	if radius > elemW/2-20 {
-		radius = elemW/2 - 20
-	}
-	if radius > elemH/2-40 {
-		radius = elemH/2 - 40
-	}
-	if radius < 20 {
-		radius = 20
-	}
+	radius := diskPieRadius(elemW, elemH)
 	innerR := radius / 2
 
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, WithAlpha(ColorSurfacePanel, 235), accentColor)
@@ -1051,23 +1096,30 @@ func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element)
 	centerColor := ColorSurfacePanel
 	fillCircle(renderer, cx, cy, innerR, centerColor)
 
-	// Center text
+	// Center text: the percentage alone. The used/total lines used to be
+	// stacked under it inside the ring, where the big number and the small
+	// lines overprinted each other.
 	usedMB := float64(used) / (1024 * 1024)
 	totalMB := float64(total) / (1024 * 1024)
+	freeMB := float64(total-used) / (1024 * 1024)
 	centerFont, _ := getCachedFont(config, "big")
 	if centerFont == nil {
 		centerFont = font
 	}
 	if centerFont != nil {
 		pctStr := fmt.Sprintf("%d%%", pct)
-		usedStr := fmt.Sprintf("%.1f MB", usedMB)
-		totalStr := fmt.Sprintf("/ %.1f MB", totalMB)
-		pw, _, _ := centerFont.SizeUTF8(pctStr)
-		uw, _, _ := centerFont.SizeUTF8(usedStr)
-		tw, _, _ := centerFont.SizeUTF8(totalStr)
-		renderText(renderer, config, centerFont, pctStr, ColorTextPrimary(), cx-int32(pw)/2, cy-int32(32))
-		renderText(renderer, config, font, usedStr, ColorTextSecondary(), cx-int32(uw)/2, cy-6)
-		renderText(renderer, config, font, totalStr, ColorTextTertiary(), cx-int32(tw)/2, cy+16)
+		pw, ph, _ := centerFont.SizeUTF8(pctStr)
+		renderText(renderer, config, centerFont, pctStr, ColorTextPrimary(), cx-int32(pw)/2, cy-int32(ph)/2)
+	}
+
+	// Usage figures are anchored bottom-left, clear of the ring.
+	if font != nil {
+		lineH := int32(font.Height())
+		usageX, usageY := diskPieUsageLayout(element, elemH, lineH)
+		usage := fmt.Sprintf("Used %.1f MB    Free %.1f MB", usedMB, freeMB)
+		total := fmt.Sprintf("Total %.1f MB", totalMB)
+		renderText(renderer, config, font, usage, ColorTextSecondary(), usageX, usageY)
+		renderText(renderer, config, font, total, ColorTextTertiary(), usageX, usageY+lineH+6)
 	}
 }
 
@@ -2178,6 +2230,7 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 				publishCustom(resultVar, videos)
 				publishCustom("search_error", nil)
 				focusedResultIndex = -1
+				prefetchFirstResult(config, videos)
 				return
 			}
 		}
@@ -2281,6 +2334,7 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	publishCustom(resultVar, videos)
 	publishCustom("search_error", nil)
 	focusedResultIndex = -1
+	prefetchFirstResult(config, videos)
 }
 
 // --- Fetch trending videos (2 columns x 6 rows = 12 videos) ---
@@ -2721,6 +2775,48 @@ func playVideoURL(config *Config, url string) {
 	playVideoInfo(config, VideoInfo{URL: url})
 }
 
+// looksLikeStreamURL reports whether s is a playable link rather than a search
+// phrase. Only explicit schemes count: "cats" stays a search query.
+func looksLikeStreamURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.ContainsAny(s, " \t\r\n") {
+		return false
+	}
+	lower := strings.ToLower(s)
+	for _, scheme := range []string{"http://", "https://", "rtsp://", "rtmp://", "udp://", "mms://", "rtp://"} {
+		if strings.HasPrefix(lower, scheme) {
+			return true
+		}
+	}
+	return false
+}
+
+// sceneInputURL returns the link typed into a scene's text field. The Tube and
+// IPStream screens drive playback from a URL box, so their buttons must read it
+// instead of silently doing nothing when no result is highlighted.
+func sceneInputURL(config *Config, scene SceneConfig) string {
+	if config == nil {
+		return ""
+	}
+	for i, el := range scene.Elements {
+		if el.Type != "input" {
+			continue
+		}
+		val := ""
+		if i == activeElementIndex {
+			// The field is being edited: its live buffer is ahead of the
+			// variable, which only updates on commit.
+			val = inputTextBuffer
+		} else if v, ok := config.Variables.Custom[el.Variable].(string); ok {
+			val = v
+		}
+		if looksLikeStreamURL(val) {
+			return strings.TrimSpace(val)
+		}
+	}
+	return ""
+}
+
 // sceneWithVideoElement returns the index of the scene that can show the
 // embedded player, preferring the scene already on screen. The `video` element
 // is what draws the player, so it has to be on screen for playback to be
@@ -2770,6 +2866,8 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		log.Printf("playVideoInfo: empty URL, nothing to play")
 		return
 	}
+	// Video and music share one audio device: silence the playlist first.
+	musicStopIfPlaying()
 	ensureVideoScene(config)
 	PlayActivateSound()
 	addRecentVideo(v)
@@ -2801,6 +2899,13 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		}
 
 		log.Printf("[DEBUG] playVideoInfo: url=%q yt-dlp=%q", sanitizeLogURL(url), ytDlpPath)
+		// Stream straight from the CDN when possible: ffmpeg reads the media
+		// URL directly, so the first frame arrives without waiting for a full
+		// download. Anything ffmpeg cannot open falls back to the download path.
+		if tryStreamPlayback(config, ytDlpPath, url, v.Position) {
+			recordPlayed(config, url)
+			return
+		}
 		playWithTempFile(config, ytDlpPath, url, v.Position)
 		recordPlayed(config, url)
 	}()
@@ -3184,6 +3289,42 @@ func updateInputVariable(config *Config) {
 
 // --- Touch gesture handling ---
 
+// touchTapMaxDrift is the largest finger movement (window pixels) still
+// counted as a tap rather than a swipe.
+const touchTapMaxDrift = 60
+
+// touchToWindow converts a touch coordinate to window pixels. SDL reports
+// touch positions normalized to 0..1, but some handheld backends hand out
+// pixels; both conventions are accepted so hit-testing lands on the control
+// that was actually touched.
+func touchToWindow(x, y float32) (int32, int32) {
+	w, h := screenWidth, screenHeight
+	if mainWindow != nil {
+		if ww, wh := mainWindow.GetSize(); ww > 0 && wh > 0 {
+			w, h = ww, wh
+		}
+	}
+	px, py := float64(x), float64(y)
+	if px >= 0 && px <= 1 && py >= 0 && py <= 1 {
+		px *= float64(w)
+		py *= float64(h)
+	}
+	return int32(px), int32(py)
+}
+
+// touchTapSink receives taps as synthetic left clicks. Tests replace it to
+// assert the dispatch without a real SDL event queue.
+var touchTapSink = pushTapClick
+
+// pushTapClick replays a tap through the mouse pipeline. Touch used to be
+// understood only as a swipe, so on the handheld a tap on the top-bar back
+// pill - or on any other on-screen control - did nothing at all.
+func pushTapClick(px, py int32) {
+	sdl.PushEvent(&sdl.MouseMotionEvent{Type: sdl.MOUSEMOTION, X: px, Y: py})
+	sdl.PushEvent(&sdl.MouseButtonEvent{Type: sdl.MOUSEBUTTONDOWN, Button: sdl.BUTTON_LEFT, State: sdl.PRESSED, Clicks: 1, X: px, Y: py})
+	sdl.PushEvent(&sdl.MouseButtonEvent{Type: sdl.MOUSEBUTTONUP, Button: sdl.BUTTON_LEFT, State: sdl.RELEASED, Clicks: 1, X: px, Y: py})
+}
+
 func handleTouchGesture(e *sdl.TouchFingerEvent, config *Config) {
 	if virtualKeyboardActive {
 		// The keyboard owns the screen while it is open: taps press keys or
@@ -3192,34 +3333,45 @@ func handleTouchGesture(e *sdl.TouchFingerEvent, config *Config) {
 		return
 	}
 	if e.Type == sdl.FINGERDOWN {
-		touchStartX = float64(e.X)
-		touchStartY = float64(e.Y)
+		startX, startY := touchToWindow(e.X, e.Y)
+		touchStartX = float64(startX)
+		touchStartY = float64(startY)
 		touchStartTime = sdl.GetTicks64()
 		touchActive = true
 		touchPinchActive = false
 	} else if e.Type == sdl.FINGERUP && touchActive {
-		dx := float64(e.X) - touchStartX
-		dy := float64(e.Y) - touchStartY
+		touchActive = false
+		if touchPinchActive {
+			return
+		}
+		px, py := touchToWindow(e.X, e.Y)
+		dx := float64(px) - touchStartX
+		dy := float64(py) - touchStartY
 		dt := float64(sdl.GetTicks64() - touchStartTime)
-		if dt > 0 && dt < 500 {
-			dist := dx*dx + dy*dy
-			if dist > 3600 {
-				if absFloat(dx) > absFloat(dy) {
-					if dx > 0 {
-						handleSwipe("right", config)
-					} else {
-						handleSwipe("left", config)
-					}
-				} else {
-					if dy > 0 {
-						handleSwipe("down", config)
-					} else {
-						handleSwipe("up", config)
-					}
-				}
+		if dt >= 500 {
+			// A long press is neither a tap nor a swipe.
+			return
+		}
+		if dx*dx+dy*dy <= float64(touchTapMaxDrift*touchTapMaxDrift) {
+			// A tap, not a swipe: hand it to the mouse pipeline so buttons,
+			// overlays and the top-bar back pill react to a finger exactly as
+			// they do to a pointer click.
+			touchTapSink(px, py)
+			return
+		}
+		if absFloat(dx) > absFloat(dy) {
+			if dx > 0 {
+				handleSwipe("right", config)
+			} else {
+				handleSwipe("left", config)
+			}
+		} else {
+			if dy > 0 {
+				handleSwipe("down", config)
+			} else {
+				handleSwipe("up", config)
 			}
 		}
-		touchActive = false
 	}
 }
 
@@ -3643,7 +3795,14 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	// use its own header, Continue card, focus treatment, and footer hints.
 	// Generic config-driven element rendering stays for every other scene.
 	if homeLayoutActive {
+		// Home draws its own header (with the same status cluster and the
+		// notification bell) and its own footer, so the shared bars must not
+		// leave stale hit areas behind for this frame.
+		sceneTitleBackRect = sdl.Rect{}
+		statusClockRect = sdl.Rect{}
+		tb.startRect = sdl.Rect{}
 		renderHomeModern(renderer, config)
+		renderNotifDropdown(renderer, config)
 		renderer.SetDrawColor(0, 0, 0, 255)
 		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 		renderer.SetClipRect(nil)
@@ -3654,7 +3813,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	// It ends 16px above the footer so no content can reach the footer band.
 	panelMargin := int32(24)
 	panelTop := HomeTopBarH + 8
-	panelBottom := screenHeight - taskbarHeight(config.Scenes[currentSceneIndex].Name) - 16
+	panelBottom := screenHeight - bottomBarHeight(config.Scenes[currentSceneIndex].Name) - 16
 	panel := sdl.Rect{
 		X: panelMargin,
 		Y: panelTop,
@@ -3728,11 +3887,15 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		renderAppearancePreview(renderer, config)
 	}
 
-	// Single global header: brand + version + active scene + status.
+	// Single global header: brand + version + active scene, the Apps pill and
+	// the right-side system cluster (network, weather, clock, battery, bell).
 	renderStatusBar(renderer, config)
 
-	// Shared footer with contextual controller hints.
+	// The bottom of every menu is reserved for buttons now: the controller
+	// hint bar, plus the app menu overlay when it is open.
 	renderFooter(renderer, config)
+	renderStartMenu(renderer, config)
+	renderNotifDropdown(renderer, config)
 
 	// Reset renderer state after rendering to avoid state leakage
 	renderer.SetDrawColor(0, 0, 0, 255)
@@ -3755,29 +3918,125 @@ func sceneHasBackButton(scene SceneConfig) bool {
 // themeGalleryIndex is the focused card in a themegallery element.
 var themeGalleryIndex int
 
-// themeGalleryCardAt returns the preset index under (mx, my) or -1. The card
-// width is derived from the element width so any preset count fits.
+// The gallery is a scrolling grid now that there are more presets than fit on
+// one row. Card size, column count, scroll row and hit-testing all come from
+// themeGalleryMetrics so rendering and clicks can never disagree.
+const (
+	themeGalleryGap  = int32(16)
+	themeGalleryMinW = int32(230)
+	themeGalleryH    = int32(168)
+)
+
+// themeGalleryScroll is the first visible row.
+var themeGalleryScroll int
+
+// themeGalleryMetrics returns the grid geometry for an element.
+func themeGalleryMetrics(element Element) (cols int, cardW int32, visibleRows int) {
+	elemW := getElementWidth(element, 1160)
+	elemH := getElementHeight(element, 560)
+	cols = int((elemW + themeGalleryGap) / (themeGalleryMinW + themeGalleryGap))
+	if cols < 1 {
+		cols = 1
+	}
+	cardW = (elemW - themeGalleryGap*int32(cols-1)) / int32(cols)
+	visibleRows = int((elemH + themeGalleryGap) / (themeGalleryH + themeGalleryGap))
+	if visibleRows < 1 {
+		visibleRows = 1
+	}
+	return cols, cardW, visibleRows
+}
+
+// themeGalleryColumns is the number of cards per row (used for Up/Down).
+func themeGalleryColumns(element Element) int {
+	cols, _, _ := themeGalleryMetrics(element)
+	return cols
+}
+
+// themeGalleryScrollFor keeps the focused row on screen and returns the first
+// visible row. The scroll only moves when the focus leaves the visible band, so
+// a short nav does not jerk the grid around.
+func themeGalleryScrollFor(element Element, focus int) int {
+	cols, _, visibleRows := themeGalleryMetrics(element)
+	rows := (len(ListThemePresets()) + cols - 1) / cols
+	row := 0
+	if focus > 0 {
+		row = focus / cols
+	}
+	maxFirst := rows - visibleRows
+	if maxFirst < 0 {
+		maxFirst = 0
+	}
+	if themeGalleryScroll > maxFirst {
+		themeGalleryScroll = maxFirst
+	}
+	if themeGalleryScroll < 0 {
+		themeGalleryScroll = 0
+	}
+	if row < themeGalleryScroll {
+		themeGalleryScroll = row
+	}
+	if row >= themeGalleryScroll+visibleRows {
+		themeGalleryScroll = row - visibleRows + 1
+	}
+	return themeGalleryScroll
+}
+
+// themeGalleryMove shifts the focused card by delta cards inside the grid and
+// reports whether the focus moved. Up/Down pass ±columns, Left/Right ±1.
+func themeGalleryMove(element Element, delta int) bool {
+	n := len(ListThemePresets())
+	if n == 0 {
+		return false
+	}
+	next := themeGalleryIndex + delta
+	if next < 0 {
+		next = 0
+	}
+	if next > n-1 {
+		next = n - 1
+	}
+	if next == themeGalleryIndex {
+		return false
+	}
+	themeGalleryIndex = next
+	themeGalleryScrollFor(element, next)
+	return true
+}
+
+// themeGalleryCardAt returns the preset index under (mx, my) or -1.
 func themeGalleryCardAt(element Element, mx, my int32) int {
 	presets := ListThemePresets()
 	if len(presets) == 0 {
 		return -1
 	}
-	gap := int32(20)
-	cardW := (getElementWidth(element, 1160) - gap*int32(len(presets)-1)) / int32(len(presets))
-	cardH := int32(190)
-	for i := range presets {
-		x := element.X + int32(i)*(cardW+gap)
-		if mx >= x && mx < x+cardW && my >= element.Y && my < element.Y+cardH {
-			return i
-		}
+	cols, cardW, _ := themeGalleryMetrics(element)
+	scroll := themeGalleryScrollFor(element, themeGalleryIndex)
+	relX := mx - element.X
+	relY := my - element.Y
+	if relX < 0 || relY < 0 {
+		return -1
 	}
-	return -1
+	col := int(relX / (cardW + themeGalleryGap))
+	row := int(relY / (themeGalleryH + themeGalleryGap))
+	if col < 0 || col >= cols || row < 0 {
+		return -1
+	}
+	// Reject the gutter between two cards.
+	if relX-(int32(col)*(cardW+themeGalleryGap)) > cardW ||
+		relY-(int32(row)*(themeGalleryH+themeGalleryGap)) > themeGalleryH {
+		return -1
+	}
+	idx := (scroll+row)*cols + col
+	if idx < 0 || idx >= len(presets) {
+		return -1
+	}
+	return idx
 }
 
-// renderThemeGallery draws the theme presets as preview cards: each shows the
-// theme name, its background/surface/accent swatches, and a Current badge on
-// the active preset. The focused card uses the same 3px cyan ring as home
-// cards so selection is unmistakable.
+// renderThemeGallery draws the theme presets as a scrolling grid of preview
+// cards: each shows the theme name, its background/surface/accent swatches,
+// and a Current badge on the active preset. The focused card uses the same 3px
+// accent ring as home cards so selection is unmistakable.
 func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element) {
 	presets := ListThemePresets()
 	if len(presets) == 0 {
@@ -3800,64 +4059,86 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		return
 	}
 
-	gap := int32(20)
-	cardW := (getElementWidth(element, 1160) - gap*int32(len(presets)-1)) / int32(len(presets))
-	cardH := int32(190)
+	elemW := getElementWidth(element, 1160)
+	elemH := getElementHeight(element, 560)
+	cols, cardW, visibleRows := themeGalleryMetrics(element)
+	scroll := themeGalleryScrollFor(element, themeGalleryIndex)
+	rows := (len(presets) + cols - 1) / cols
 
-	for i, name := range presets {
+	drawCard := func(i int) {
+		name := presets[i]
 		p := GetThemePreset(name)
-		x := element.X + int32(i)*(cardW+gap)
-		y := element.Y
+		row, col := i/cols, i%cols
+		x := element.X + int32(col)*(cardW+themeGalleryGap)
+		y := element.Y + int32(row-scroll)*(themeGalleryH+themeGalleryGap)
 		focused := i == themeGalleryIndex
 
 		fill := ColorCard
 		if focused {
 			fill = ColorCardFocus
 		}
-		fillRoundedRect(renderer, x, y, cardW, cardH, 16, fill)
+		fillRoundedRect(renderer, x, y, cardW, themeGalleryH, 16, fill)
 		if focused {
-			strokeRoundedRect(renderer, x, y, cardW, cardH, 16, 3, ColorAccent)
+			strokeRoundedRect(renderer, x, y, cardW, themeGalleryH, 16, 3, ColorAccent)
 		} else {
-			strokeRoundedRect(renderer, x, y, cardW, cardH, 16, 1, ColorBorder)
+			strokeRoundedRect(renderer, x, y, cardW, themeGalleryH, 16, 1, ColorBorder)
 		}
 
 		// Theme preview panel: the preset's background with an "Aa" text
-		// sample and an accent strip, so each card reads like a real screen.
+		// sample, its raised surface and an accent strip, so each card reads
+		// like a real screen of that theme.
 		prevX := x + 12
 		prevY := y + 12
 		prevW := cardW - 24
-		prevH := int32(84)
+		prevH := int32(74)
 		fillRoundedRect(renderer, prevX, prevY, prevW, prevH, 10, hexRGBA(p.Background))
 		strokeRoundedRect(renderer, prevX, prevY, prevW, prevH, 10, 1, hexRGBA(p.BorderDefault))
-		drawText(renderer, font, "Aa", prevX+14, prevY+8, hexRGBA(p.TextPrimary), textAlignLeft)
+		// A sample card inside the preview shows the theme's surface + text.
+		fillRoundedRect(renderer, prevX+10, prevY+8, prevW-20, prevH-24, 6, hexRGBA(p.SurfaceRaised))
+		drawText(renderer, small, "Aa", prevX+18, prevY+14, hexRGBA(p.TextPrimary), textAlignLeft)
 		// Accent strip along the preview's bottom edge.
 		fillRoundedRect(renderer, prevX, prevY+prevH-7, prevW, 7, 3, hexRGBA(p.Info))
 
 		// Current badge on the preview corner.
 		if name == current {
-			badgeW := int32(86)
-			badgeH := int32(24)
-			badgeX := prevX + prevW - badgeW - 10
-			badgeY := prevY + 8
+			badgeW := int32(74)
+			badgeH := int32(20)
+			badgeX := prevX + prevW - badgeW - 8
+			badgeY := prevY + 6
 			fillRoundedRect(renderer, badgeX, badgeY, badgeW, badgeH, badgeH/2, hexRGBA(p.Info))
 			drawText(renderer, small, "Current", badgeX+badgeW/2, badgeY+(badgeH-int32(small.Height()))/2,
 				contrastText(hexRGBA(p.Info)), textAlignCenter)
 		}
 
 		// Theme name below the preview.
-		nameY := prevY + prevH + 12
-		drawText(renderer, font, p.Name, x+18, nameY, ColorTextPrimary(), textAlignLeft)
+		nameY := prevY + prevH + 8
+		drawText(renderer, font, ellipsize(font, p.Name, cardW-36), x+18, nameY, ColorTextPrimary(), textAlignLeft)
 
 		// Mini palette chips: Surface, Text, Focus border.
-		chipY := nameY + int32(font.Height()) + 10
-		chipH := int32(16)
-		chipW := (cardW - 36 - 2*8) / 3
+		chipY := nameY + int32(font.Height()) + 6
+		chipH := int32(12)
+		chipW := (cardW - 36 - 16) / 3
 		chips := []string{p.SurfaceAlt, p.TextPrimary, p.BorderFocus}
-		for i, c := range chips {
-			cx := x + 18 + int32(i)*(chipW+8)
+		for j, c := range chips {
+			cx := x + 18 + int32(j)*(chipW+8)
 			fillRoundedRect(renderer, cx, chipY, chipW, chipH, 4, hexRGBA(c))
 			strokeRoundedRect(renderer, cx, chipY, chipW, chipH, 4, 1, ColorBorder)
 		}
+	}
+
+	renderWithClip(renderer, element.X, element.Y, elemW, elemH, func(ren *sdl.Renderer) {
+		for i := scroll * cols; i < len(presets) && i/cols < scroll+visibleRows; i++ {
+			drawCard(i)
+		}
+	})
+
+	if rows > visibleRows {
+		thumbFrac := float64(visibleRows) / float64(rows)
+		scrollFrac := 0.0
+		if rows > visibleRows {
+			scrollFrac = float64(scroll) / float64(rows-visibleRows)
+		}
+		drawScrollbar(renderer, element.X+elemW-4, element.Y, 3, elemH, thumbFrac, scrollFrac)
 	}
 }
 
@@ -4277,9 +4558,9 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	}
 
 	x := screenWidth - 24 - w + slide
-	y := screenHeight - taskbarH - 16 - h
+	y := screenHeight - HomeFooterH - 16 - h
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-		y = screenHeight - taskbarHeight(config.Scenes[currentSceneIndex].Name) - 16 - h
+		y = screenHeight - bottomBarHeight(config.Scenes[currentSceneIndex].Name) - 16 - h
 	}
 	if x < 16 {
 		x = 16
@@ -4574,9 +4855,26 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		videos, ok := getSceneVideos(config, config.Scenes[currentSceneIndex])
 		if ok && focusedResultIndex >= 0 && focusedResultIndex < len(videos) {
 			playVideoInfo(config, videos[focusedResultIndex])
-		} else {
-			log.Printf("youtube_play: no focused video to play")
+			return
 		}
+		// "Play Link" is also the way to play whatever was typed into the
+		// scene's URL field: with no highlighted result the button used to do
+		// nothing at all, which read as a dead button.
+		if url := sceneInputURL(config, config.Scenes[currentSceneIndex]); url != "" {
+			log.Printf("youtube_play: playing the typed link")
+			playVideoURL(config, url)
+			return
+		}
+		log.Printf("youtube_play: no focused video and no link typed")
+		ShowToast("Type a video link or pick a result first", ToastKindInfo)
+	case "music_player":
+		// Opens the audio player on the folder the Files scene is browsing.
+		dir := feCurrentPath(config)
+		if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) ||
+			config.Scenes[currentSceneIndex].Name != "FileExplorer" {
+			dir = musicCurrentDir()
+		}
+		openAudioPlayerBrowser(config, dir)
 	case "play_video_from_var":
 		url, ok := config.Variables.Custom[element.TriggerTarget].(string)
 		if !ok {
@@ -5112,6 +5410,18 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	case "tools_open":
 		openToolsPanel()
+	case "processes_open":
+		openProcessPanel()
+	case "ip_open":
+		openIPStreamPanel()
+	case "ip_add":
+		ipPanelSaveCurrentLink(config)
+	case "ip_fetch":
+		ipPanelImport()
+	case "back", "go_back":
+		// Body-level Back affordances resolve to the same navigation as the
+		// header pill, B and Escape.
+		goBackScene(config)
 	case "ftp_toggle":
 		toggleFTPServer()
 	case "ftp_start":
@@ -5273,6 +5583,10 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	transitionPhase = "fade-out"
 	sceneFadeStart = sdl.GetTicks64()
 	sceneFadeAlpha = 0
+	// Top-bar overlays belong to the scene that opened them; leaving must not
+	// float the Start menu or the notification center over the next one.
+	startMenuDismiss()
+	notifDismiss()
 }
 
 func changeSceneTo(config *Config, targetIdx int) {
@@ -5308,6 +5622,12 @@ func completeSceneTransition(config *Config) {
 
 	stopAllTextBrowserAutoRefresh()
 	refreshSceneTextBrowsers(config)
+
+	// The Hardware screen shows a live snapshot: refresh it on entry so the
+	// process list is not stale from the last visit (or empty on first open).
+	if scene.Name == "Hardware" {
+		go func() { publishCustom("hw_text", getHardwareInfo()) }()
+	}
 
 	if sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
 		queryVar := ""
@@ -5378,9 +5698,10 @@ func completeSceneTransition(config *Config) {
 	if config.Scenes[currentSceneIndex].Name == "PDFReader" {
 		pdfInit()
 	}
-	// Initialize music player when entering.
+	// Prepare the audio player when entering. An active playlist is kept, so
+	// coming back from Files does not restart the song.
 	if config.Scenes[currentSceneIndex].Name == "MusicPlayer" {
-		musicInit()
+		musicSceneEnter()
 	}
 	// Initialize notes when entering.
 	if config.Scenes[currentSceneIndex].Name == "Notes" {
@@ -5556,44 +5877,159 @@ func handleSearchResultsAction(action Action, config *Config) {
 	}
 }
 
-// countFocusable returns how many elements of a scene participate in the focus
-// graph (BuildGraph includes exactly these).
-func countFocusable(scene SceneConfig) int {
-	n := 0
-	for _, el := range scene.Elements {
-		if isFocusableElement(el) {
-			n++
+// activateChromeFocus presses the focused chrome button: the back pill leaves
+// the scene, the status clock opens the Alarm Clock UI, the Apps pill
+// button toggles the app menu and the notification bell toggles the
+// notification center. It reports whether a chrome button held the focus.
+func activateChromeFocus(config *Config) bool {
+	switch focusEngine.ElementIndex() {
+	case ChromeBackIndex:
+		PlayActivateSound()
+		goBackScene(config)
+		return true
+	case ChromeClockIndex:
+		PlayActivateSound()
+		openAlarmScene(config)
+		return true
+	case ChromeStartIndex:
+		// startMenuToggle plays its own activation sound.
+		if tb.startOpen {
+			startMenuDismiss()
+		} else {
+			startMenuToggle()
+		}
+		return true
+	case ChromeBellIndex:
+		// notifToggle plays its own activation sound.
+		notifToggle()
+		return true
+	}
+	return false
+}
+
+// handleChromeBarClick activates a top-bar chrome button under the pointer:
+// the back pill leaves the scene, the status clock opens the Alarm Clock UI.
+// It reports whether a chrome button was hit.
+func handleChromeBarClick(mx, my int32, config *Config) bool {
+	if sceneTitleBackRect.W > 0 && mx >= sceneTitleBackRect.X && mx <= sceneTitleBackRect.X+sceneTitleBackRect.W &&
+		my >= sceneTitleBackRect.Y && my <= sceneTitleBackRect.Y+sceneTitleBackRect.H {
+		goBackScene(config)
+		return true
+	}
+	if statusClockRect.W > 0 && mx >= statusClockRect.X && mx <= statusClockRect.X+statusClockRect.W &&
+		my >= statusClockRect.Y && my <= statusClockRect.Y+statusClockRect.H {
+		openAlarmScene(config)
+		return true
+	}
+	return false
+}
+
+// handleChromeKey processes input while a chrome button (the back pill, the
+// status clock, the Apps pill or the notification bell) is focused
+// on a non-home scene. Chrome consumes every key while focused so the element
+// dispatch cannot steal the focus back.
+func handleChromeKey(e *sdl.KeyboardEvent, config *Config) bool {
+	if e == nil || e.Type != sdl.KEYDOWN || homeLayoutActive {
+		return false
+	}
+	switch chromeTier(focusEngine.ElementIndex()) {
+	case 1, 2:
+	default:
+		return false
+	}
+	switch e.Keysym.Sym {
+	case sdl.K_UP:
+		moveSelection(config, ActionNavigateUp)
+	case sdl.K_DOWN:
+		moveSelection(config, ActionNavigateDown)
+	case sdl.K_LEFT:
+		moveSelection(config, ActionNavigateLeft)
+	case sdl.K_RIGHT:
+		moveSelection(config, ActionNavigateRight)
+	case sdl.K_RETURN, sdl.K_SPACE:
+		activateChromeFocus(config)
+	case sdl.K_ESCAPE, sdl.K_b:
+		// Back over an open top-bar overlay closes it first.
+		if tb.startOpen {
+			startMenuDismiss()
+		} else if nc.open {
+			notifDismiss()
+		} else {
+			goBackScene(config)
 		}
 	}
-	return n
+	return true
+}
+
+// handleChromeOverlayKey routes input to an open top-bar overlay: the app menu
+// and the notification center. Both are modal, so while one is open it owns the
+// D-pad and Confirm/Back keys no matter where the scene focus sits (they can
+// also be opened by tapping the Apps pill or the bell).
+func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
+	if e == nil || e.Type != sdl.KEYDOWN {
+		return false
+	}
+	if tb.startOpen {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			startMenuNavigate(-1, config)
+		case sdl.K_DOWN:
+			startMenuNavigate(1, config)
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+			startMenuActivate(config)
+		case sdl.K_ESCAPE, sdl.K_b:
+			startMenuDismiss()
+		}
+		return true
+	}
+	if nc.open {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			notifNavigate(-1)
+		case sdl.K_DOWN:
+			notifNavigate(1)
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a, sdl.K_ESCAPE, sdl.K_b:
+			notifDismiss()
+		}
+		return true
+	}
+	return false
 }
 
 // moveSelection moves focus to the neighboring selectable element along the
 // semantic axis of the given action (Up/Down move rows, Left/Right move
 // columns).
 //
-// The focus graph is reinstalled only when it is missing, stale (elements were
-// added at runtime), or belongs to another scene: SetGraph restores persisted
-// focus, so reinstalling it on every press used to reset navigation to the
-// first node and trap keyboard/D-pad users on the first two buttons.
+// The graph is rebuilt on every press so dynamic buttons and the measured
+// top-bar chrome rects stay fresh; SetGraph keeps the focused node across
+// reinstalls of the same scene, so this does not reset navigation progress
+// (reinstalling used to snap focus back to the first button on every press).
 func moveSelection(config *Config, action Action) {
 	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return
 	}
 	currentScene := config.Scenes[currentSceneIndex]
-	if focusEngine.SceneName() != currentScene.Name || focusEngine.NodeCount() != countFocusable(currentScene) {
-		focusEngine.SetGraph(currentScene.Name, focusEngine.BuildGraph(currentScene))
-	}
+	focusEngine.SetGraph(currentScene.Name, focusEngine.BuildGraph(currentScene))
 
+	before := focusEngine.ElementIndex()
 	result := focusEngine.Navigate(action)
-	if result >= 0 {
+	if result == before {
+		// Dead-end: bridge between the grid's top row and the top-bar chrome
+		// (back pill / status clock), which the spatial cones cannot reach.
+		if alt, ok := focusEngine.StepChrome(action); ok && focusEngine.SetByElementIndex(alt) {
+			result = alt
+		}
+	}
+	// -1 means "no focus possible"; the top-bar chrome buttons use negative
+	// sentinel indices and are valid results too.
+	if result != -1 {
 		if result != selectedButtonIndex {
 			PlayNavSound()
 		}
 		selectedButtonIndex = result
 		// First time focus enters a search-results grid, highlight the first
 		// result so navigation is immediately visible (instead of an odd wrap).
-		if focusedResultIndex < 0 && result < len(currentScene.Elements) &&
+		if focusedResultIndex < 0 && result >= 0 && result < len(currentScene.Elements) &&
 			currentScene.Elements[result].Type == "searchresults" {
 			focusedResultIndex = 0
 		}
@@ -5641,9 +6077,7 @@ func moveHomeSelection(config *Config, dx, dy int) {
 		return
 	}
 	scene := config.Scenes[currentSceneIndex]
-	if focusEngine.SceneName() != scene.Name || focusEngine.NodeCount() != countFocusable(scene) {
-		focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))
-	}
+	focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))
 
 	var action Action
 	switch {

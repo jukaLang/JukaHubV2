@@ -119,82 +119,8 @@ func playSmartURL(config *Config, url string) {
 	playVideoInfo(config, VideoInfo{URL: url})
 }
 
-// ---------------------------------------------------------------------------
-// IPTV (Live TV) - parse .m3u playlists from a tv/ folder
-// ---------------------------------------------------------------------------
-
-func parseM3U(path string) []FileEntry {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	return parseM3UContent(string(data))
-}
-
-func parseM3UContent(data string) []FileEntry {
-	lines := strings.Split(data, "\n")
-	var entries []FileEntry
-	var curName string
-	reExt := regexp.MustCompile(`(?i)#EXTINF.*,(.*)$`)
-	reURL := regexp.MustCompile(`(?i)^https?://`)
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#EXTM3U") {
-			continue
-		}
-		if m := reExt.FindStringSubmatch(line); m != nil {
-			curName = strings.TrimSpace(m[1])
-			continue
-		}
-		if reURL.MatchString(line) {
-			name := curName
-			if name == "" {
-				name = line
-			}
-			entries = append(entries, FileEntry{Name: name, Path: line})
-			curName = ""
-		}
-	}
-	return entries
-}
-
-func loadIPTV(config *Config) {
-	tvDir := "tv"
-	entries := []FileEntry{}
-	if fis, err := os.ReadDir(tvDir); err == nil {
-		for _, f := range fis {
-			if f.IsDir() {
-				continue
-			}
-			lower := strings.ToLower(f.Name())
-			if strings.HasSuffix(lower, ".m3u") || strings.HasSuffix(lower, ".m3u8") {
-				entries = append(entries, parseM3U(filepath.Join(tvDir, f.Name()))...)
-			}
-		}
-	}
-	// Fall back to (or supplement with) the public iptv-org playlist when no
-	// local playlists are present.
-	if len(entries) == 0 {
-		url := "https://iptv-org.github.io/iptv/index.m3u"
-		if db, err := cacheOpen("jukahub.cache"); err == nil {
-			if cached, cErr := cacheGet(db, "iptv:"+url); cErr == nil && cached != nil {
-				entries = append(entries, parseM3UContent(string(cached))...)
-			} else {
-				if data := httpGetText(url, 20*time.Second); data != "" {
-					entries = append(entries, parseM3UContent(data)...)
-					cacheSet(db, "iptv:"+url, []byte(data), 6*time.Hour)
-				}
-			}
-			db.Close()
-		} else {
-			if data := httpGetText(url, 20*time.Second); data != "" {
-				entries = append(entries, parseM3UContent(data)...)
-			}
-		}
-	}
-	publishCustom("iptv_entries", entries)
-	focusedFileIndex = 0
-}
+// Live TV playlist parsing, categorisation, search and favorites live in
+// tvchannels.go (loadIPTV is the scene entry point).
 
 // ---------------------------------------------------------------------------
 // Podcasts (RSS)

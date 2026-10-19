@@ -50,6 +50,7 @@ var builtinApplets = []struct {
 	{"Canvas Sandbox", "CanvasSandbox"},
 	{"Text Browser", "TextBrowser"},
 	{"IP Stream", "IPStream"},
+	{"Audio Player", "MusicPlayer"},
 }
 
 // maxAppEntries caps a single source so a huge Start Menu cannot flood the
@@ -290,6 +291,12 @@ func appEntryTarget(entry FileEntry) (scene string, external string) {
 func launchAppEntry(config *Config, entry FileEntry) {
 	scene, external := appEntryTarget(entry)
 	if scene != "" {
+		// The audio player is created on demand: older jukaconfig.json files do
+		// not list a MusicPlayer scene.
+		if scene == "MusicPlayer" {
+			openAudioPlayerBrowser(config, musicDefaultDir(config))
+			return
+		}
 		if idx := findSceneIndex(config, scene); idx >= 0 && config.Scenes[idx].Name == scene {
 			changeSceneTo(config, idx)
 			return

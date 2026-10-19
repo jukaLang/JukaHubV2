@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -246,6 +247,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// It is drawn part by part so the clock's rect is known: the clock doubles
 	// as the home screen's calendar button (a click or A toggles the popover),
 	// so its rect is what focus, hit-testing and the focus ring use.
+	//
+	// The notification bell owns the far-right corner on every screen, so the
+	// cluster is laid out to its left.
 	if fonts.Small == nil {
 		return
 	}
@@ -260,7 +264,15 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			total += sepW
 		}
 	}
-	x := h.Width - scaleX(32, h.Width) - total
+	bellGlyphW, bellGlyphH, _ := fonts.Small.SizeUTF8("(*)")
+	bellW := int32(bellGlyphW) + 16
+	bellH := int32(bellGlyphH) + 8
+	bellRight := h.Width - scaleX(32, h.Width)
+	bellX := bellRight - bellW
+	bellY := (header.H - bellH) / 2
+	renderHomeBell(renderer, fonts, bellX, bellY, bellW, bellH)
+
+	x := bellX - scaleX(12, h.Width) - total
 	y := scaleY(19, h.Height)
 	for _, part := range data.StatusParts {
 		w, _, _ := fonts.Small.SizeUTF8(part)
@@ -304,6 +316,32 @@ func isClockStatusPart(s string) bool {
 		}
 	}
 	return true
+}
+
+// renderHomeBell draws the notification bell in the home header's top-right
+// corner. It mirrors the status-bar bell so the system corner is identical on
+// every screen, and it records the rect the click handler uses.
+func renderHomeBell(renderer *sdl.Renderer, fonts HomeFonts, x, y, w, h int32) {
+	if fonts.Small == nil {
+		return
+	}
+	fillRoundedRect(renderer, x, y, w, h, h/2, ColorIconSurface)
+	if nc.open {
+		strokeRoundedRect(renderer, x, y, w, h, h/2, 1, ColorAccent)
+	}
+	drawText(renderer, fonts.Small, "(*)", x+8, y+4, ColorTextSecondary(), textAlignLeft)
+	unread := notifUnreadCount()
+	if unread > 0 {
+		badgeR := int32(8)
+		badgeX := x + w - 4
+		badgeY := y - 2
+		fillCircle(renderer, badgeX, badgeY, badgeR, sdl.Color{R: 220, G: 60, B: 60, A: 240})
+		num := strconv.Itoa(unread)
+		nw, _, _ := fonts.Small.SizeUTF8(num)
+		drawText(renderer, fonts.Small, num, badgeX-int32(nw)/2, badgeY-6,
+			sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
+	}
+	nc.bellRect = sdl.Rect{X: x, Y: y, W: w, H: h}
 }
 
 func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {

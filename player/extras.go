@@ -396,6 +396,7 @@ func headerTitle(config *Config, scene SceneConfig) string {
 
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	sceneTitleBackRect = sdl.Rect{}
+	statusClockRect = sdl.Rect{}
 	barH := HomeTopBarH
 	if screenHeight < 600 {
 		barH = HomeTopBarHSmall
@@ -457,19 +458,58 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 			sceneTitleBackRect = sdl.Rect{X: x, Y: y, W: w, H: bh}
 			fillRoundedRect(renderer, x, y, w, bh, bh/2, ColorIconSurface)
 			renderText(renderer, config, small, label, secondary, x+pad, y+(bh-int32(small.Height()))/2)
+			// Focus ring when the D-pad/arrows hold the pill.
+			if focusEngine.ElementIndex() == ChromeBackIndex {
+				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+				renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: w + 6, H: bh + 6})
+			}
 			headerTextW += SpaceMD + w
 		}
 	}
 
+	// Apps pill (the old taskbar Start button): opens the app menu. The
+	// rect is measured here so the focus graph, keyboard activation and
+	// mouse hit-testing all agree on where it is.
+	if font != nil {
+		label := "Apps"
+		aw, _, _ := font.SizeUTF8(label)
+		pad := int32(10)
+		ah := int32(22)
+		w := int32(aw) + pad*2
+		x := restX + int32(restW) + SpaceMD
+		if sceneTitleBackRect.W > 0 {
+			x = sceneTitleBackRect.X + sceneTitleBackRect.W + SpaceSM
+		}
+		y := (barH - ah) / 2
+		tb.startRect = sdl.Rect{X: x, Y: y, W: w, H: ah}
+		fill := ColorIconSurface
+		if tb.startOpen {
+			fill = WithAlpha(accentColor, 70)
+		}
+		fillRoundedRect(renderer, x, y, w, ah, ah/2, fill)
+		strokeRoundedRect(renderer, x, y, w, ah, ah/2, 1, ColorBorder)
+		renderText(renderer, config, font, label, ColorTextSecondary(), x+pad, y+(ah-int32(font.Height()))/2)
+		if focusEngine.ElementIndex() == ChromeStartIndex {
+			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+			renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: w + 6, H: ah + 6})
+		}
+		headerTextW += SpaceSM + w
+	}
+
 	// Right-side status cluster in the canonical shared order (network,
 	// weather, time, battery) — identical to the home header so the right
-	// side of the top bar stays put across screens.
+	// side of the top bar stays put across screens. The notification bell
+	// sits to the right of the cluster as the top-right system corner.
 	parts := headerStatusParts(config)
 	statusFont := headerStatusFont()
 	if statusFont == nil {
 		statusFont = font
 	}
+	bellW, bellH := notifBellSize(config)
 	rightX := screenWidth - StatusBarMargin
+	if bellW > 0 {
+		rightX -= bellW + SpaceLG
+	}
 	gap := StatusPartGap
 
 	// Measure total width and drop least-important items if they don't fit
@@ -507,9 +547,25 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 			col = ColorWarning
 		}
 		renderText(renderer, config, statusFont, p, col, startX, statusY)
+		if isClockStatusPart(p) {
+			// Measure the clock so it can hold focus like any other button.
+			statusClockRect = sdl.Rect{
+				X: startX - 6, Y: statusY - 6,
+				W: int32(pw) + 12, H: int32(statusFont.Height()) + 12,
+			}
+		}
 		startX += int32(pw) + gap
 	}
+	if focusEngine.ElementIndex() == ChromeClockIndex && statusClockRect.W > 0 {
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+		renderer.DrawRect(&statusClockRect)
+	}
 
+	// Notification bell: top-right corner, always reachable with the D-pad.
+	if bellW > 0 {
+		by := (barH - bellH) / 2
+		renderNotifBell(renderer, config, screenWidth-StatusBarMargin, by)
+	}
 }
 
 // headerStatusParts returns the right-side status cluster in one canonical
@@ -566,10 +622,6 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 	}
 	scene := config.Scenes[currentSceneIndex]
 	if scene.Layout == "home" {
-		return
-	}
-	// When the OS taskbar renders instead, it replaces the footer entirely.
-	if sceneUsesTaskbar(scene.Name) {
 		return
 	}
 

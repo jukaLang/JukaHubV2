@@ -46,6 +46,7 @@ const (
 	vkTargetUnit
 	vkTargetTerm // terminal command line
 	vkTargetName // chat display name
+	vkTargetTV   // Live TV channel search
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -242,6 +243,8 @@ func vkEnsureLayout() {
 		target = 1
 	case vkTargetUnit:
 		target = 2
+	case vkTargetTV:
+		target = 3
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -465,6 +468,8 @@ func vkCurrentText() string {
 		return unitInputValue
 	case vkTargetTerm:
 		return term.input
+	case vkTargetTV:
+		return tvQuery()
 	}
 	return inputTextBuffer
 }
@@ -481,6 +486,10 @@ func vkSetText(text string, config *Config) {
 		term.input = text
 		term.cursor = len(text)
 		term.histIdx = -1
+	case vkTargetTV:
+		// The list re-filters on every keystroke, so the user sees matches
+		// appear while typing instead of after submitting.
+		tvSetQuery(text)
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -528,6 +537,8 @@ func vkTitle() string {
 		return "NUMBER"
 	case vkTargetTerm:
 		return "COMMAND"
+	case vkTargetTV:
+		return "CHANNEL SEARCH"
 	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
@@ -552,6 +563,8 @@ func vkPlaceholder() string {
 		return "Enter a number"
 	case vkTargetTerm:
 		return "Type a command"
+	case vkTargetTV:
+		return "Search channels"
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -569,6 +582,8 @@ func vkHints() string {
 		return "A type    Y convert    B / Esc close"
 	case vkTargetTerm:
 		return "A type    Done run    B / Esc close"
+	case vkTargetTV:
+		return "A type    live filter    B / Esc close"
 	}
 	return "A type    Y save    B / Esc close"
 }
@@ -626,6 +641,21 @@ func vkOpenTerminal() {
 	chatInputActive = false
 	unitInputActive = false
 	vkTarget = vkTargetTerm
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenTVSearch opens the keyboard aimed at the Live TV channel search. The
+// current query seeds the buffer so a typo can be corrected instead of retyped.
+func vkOpenTVSearch() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetTV
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
@@ -761,6 +791,9 @@ func vkSubmit(config *Config, askAI bool) {
 	text := strings.TrimSpace(vkCurrentText())
 	switch vkTarget {
 	case vkTargetUnit:
+		vkCloseKeyboard()
+	case vkTargetTV:
+		// The filter already applied while typing; submitting just dismisses.
 		vkCloseKeyboard()
 	case vkTargetTerm:
 		vkSetText("", config)

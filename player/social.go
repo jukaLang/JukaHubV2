@@ -94,7 +94,7 @@ func fireSocialNotif() {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-// Social notifications panel (accessible from taskbar bell or notification center)
+// Social notifications panel (accessible from the top-bar bell or notification center)
 // ──────────────────────────────────────────────────────────────────────
 
 func renderSocialNotifPanel(renderer *sdl.Renderer, config *Config) {

@@ -154,14 +154,12 @@ func OpCheckUpdates(ctx context.Context, config *Config) error {
 		savePatchState()
 		return nil
 	}
-	label := releaseDateLabel(rel)
-	if label == "" {
-		label = rel.TagName
-	}
 	markUpdateAvailable(rel)
 	patchRowStatus(ComponentApp, StatusAvailable)
 	savePatchState()
-	patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "JukaHub " + label + " is available — press A on Install update to install it"})
+	// Same announcement as the startup check, so a manual check also leaves a
+	// notification behind after its toast fades.
+	announceAvailableUpdate()
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }

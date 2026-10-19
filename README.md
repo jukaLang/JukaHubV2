@@ -20,7 +20,7 @@ saved favourites and a few handy tools, in one controller-friendly app.
 Works on the stock OS and on CrossMix. You need the handheld, its SD card, and
 Wi-Fi.
 
-1. Download **`JukaHub-trimui-smart-pro-linux-arm64.tar.gz`** from
+1. Download **`JukaHub-Trimui.zip`** from
    [Releases](https://github.com/jukaLang/JukaHubV2/releases/latest).
 2. Turn the device off and put the SD card in your computer.
 3. On the card, open the **`Apps`** folder and create a folder named
@@ -60,7 +60,8 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 * **Media / Tube** — YouTube search and trending.
 * **Favorites** — save links and reopen them later.
 * **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather).
-* **Settings** — playback resolution, themes, weather and more.
+* **Settings** — playback resolution, weather and 25 colour themes
+  (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address and a built-in FTP server for copying
   files over Wi-Fi (also under **MISC → FTP & IP**).
@@ -84,6 +85,11 @@ the shared folder. Login accepts any username and password by design.
 
 ## Controls
 
+The top bar holds the system status: network, weather, clock, battery and the
+notification bell at the top right, with the **Apps** pill and a **back** pill on
+the left. The bottom of every menu is reserved for controller-hint buttons, so
+there is no second clock or battery indicator down there.
+
 **Menus**
 
 | Button | Action |
@@ -93,6 +99,24 @@ the shared folder. Login accepts any username and password by design.
 | B | Back |
 | L1 / R1 | Previous / next section |
 | X | Secondary action |
+
+**Live TV**
+
+Put `.m3u` / `.m3u8` playlists in the `tv` folder next to the app, or press
+**Load Playlist** to fetch the public iptv-org list (cached for six hours).
+Channels are grouped by their playlist category, so a long file no longer has
+to be scrolled channel by channel.
+
+| Button | Action |
+|--------|--------|
+| Left / Right | Previous / next category (**All**, **Favorites**, then groups) |
+| Up / Down | Move through the channel list |
+| A | Play the highlighted channel |
+| X | Search channels (filters while you type) |
+| Y | Add / remove the channel from Favorites |
+
+Favorites are saved in the app data folder (`data/tvfavorites.json` on the
+handheld), so they survive playlist reloads and app updates.
 
 **Video player**
 
