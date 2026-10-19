@@ -549,6 +549,15 @@ func weatherScreenText(config *Config) string {
 // textlog element (multi-line read-only display)
 // ---------------------------------------------------------------------------
 
+// tailLines returns the last max lines so a fixed-height log panel shows the
+// most recent entries instead of pinning the view to the oldest ones.
+func tailLines(lines []string, max int) []string {
+	if max <= 0 || len(lines) <= max {
+		return lines
+	}
+	return lines[len(lines)-max:]
+}
+
 func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	elemW := getElementWidth(element, 1100)
 	elemH := getElementHeight(element, 480)
@@ -576,6 +585,13 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	lines := strings.Split(text, "\n")
 	y := element.Y + 8
 	lineH := int32(22)
+	// The live log panel must end at the newest line; starting from the head
+	// would hide recent entries behind the panel's bottom edge.
+	if element.Variable == "log_text" {
+		if visible := int((elemH - 16) / lineH); visible > 0 {
+			lines = tailLines(lines, visible)
+		}
+	}
 	for i, ln := range lines {
 		if y > element.Y+elemH-16 {
 			break

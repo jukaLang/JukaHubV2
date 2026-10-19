@@ -254,6 +254,7 @@ func AtomicWrite(filename string, data []byte, perm os.FileMode) error {
 
 // SaveConfig marshals config to JSON and writes it atomically.
 func SaveConfig(filename string, config *Config) error {
+	config.SchemaVersion = ConfigSchemaVersion
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		configHealth.RecordSave(filename, fmt.Errorf("marshal config: %w", err))

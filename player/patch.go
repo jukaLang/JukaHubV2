@@ -489,8 +489,10 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 		}
 		fillRoundedRect(renderer, confirmX, btnY, confirmW, btnH, RadiusMD, ColorAccent)
 		if progress > 0 && progress < 1 {
-			// Progress fill inside the button.
-			fillRoundedRect(renderer, confirmX, btnY, int32(float64(confirmW)*progress), btnH, RadiusMD, WithAlpha(ColorAccent, 180))
+			// Progress fill inside the button (transparent track: the button
+			// fill underneath is the track).
+			UIProgressBar(renderer, sdl.Rect{X: confirmX, Y: btnY, W: confirmW, H: btnH},
+				progress, sdl.Color{}, WithAlpha(ColorAccent, 180))
 			renderer.SetDrawColor(6, 8, 14, 255)
 		}
 		if patchHoldActive && progress >= 1 {

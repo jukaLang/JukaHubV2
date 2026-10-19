@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -31,6 +32,7 @@ type qsState struct {
 	cursor  int
 	toggles []qsToggle
 	sliders []qsSlider
+	enter   uiEnter // rise + fade entrance
 }
 
 var qs qsState
@@ -94,6 +96,7 @@ func qsToggleOpen() {
 	qs.open = !qs.open
 	if qs.open {
 		qs.cursor = 0
+		qs.enter.begin(uiClockMS(), uiPanelEnterMS)
 		if appConfig != nil {
 			qsSyncFromConfig(appConfig)
 		}
@@ -161,9 +164,20 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
+	// Entrance keyframes: the scrim fades and the panel rises into place as a
+	// single layer, so the whole overlay settles instead of popping.
+	progress := 1.0
+	if uiMotionEnabled(config) {
+		progress = qs.enter.progress(uiClockMS())
+	} else {
+		qs.enter.cancel()
+	}
+	fade := uiFadeIn.at(progress)
+	slide := int32(math.Round(uiPanelRise.at(progress)))
+
 	// Dark backdrop.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 160)
+	renderer.SetDrawColor(0, 0, 0, uint8(160*uiScrimProgress(progress, uiPanelEnterMS)))
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
 
 	// Panel card.
@@ -172,134 +186,138 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20,
-		sdl.Color{R: 14, G: 18, B: 28, A: 248})
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorder)
+	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, func() {
+		UICard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, UICardStyle{
+			Fill:   sdl.Color{R: 14, G: 18, B: 28, A: 248},
+			Border: ColorBorder,
+			Radius: 20,
+		})
 
-	// Title.
-	if medFont != nil {
-		title := "Quick Settings"
-		tw, _, _ := medFont.SizeUTF8(title)
-		renderText(renderer, config, medFont, title,
-			sdl.Color{R: 220, G: 230, B: 245, A: 240},
-			panelX+(panelW-int32(tw))/2, panelY+16)
-	}
+		// Title.
+		if medFont != nil {
+			title := "Quick Settings"
+			tw, _, _ := medFont.SizeUTF8(title)
+			renderText(renderer, config, medFont, title,
+				sdl.Color{R: 220, G: 230, B: 245, A: 240},
+				panelX+(panelW-int32(tw))/2, panelY+16)
+		}
 
-	// Items.
-	itemY := panelY + 56
-	itemH := int32(44)
-	itemX := panelX + 16
-	itemW := panelW - 32
+		// Items.
+		itemY := panelY + 56
+		itemH := int32(44)
+		itemX := panelX + 16
+		itemW := panelW - 32
 
-	// Toggles.
-	for i, t := range qs.toggles {
-		iy := itemY + int32(i)*itemH
-		focused := qs.cursor == i
+		// Toggles.
+		for i, t := range qs.toggles {
+			iy := itemY + int32(i)*itemH
+			focused := qs.cursor == i
 
-		if focused {
-			fillRoundedRect(renderer, itemX, iy, itemW, itemH-4, 10,
+			if focused {
+				fillRoundedRect(renderer, itemX, iy, itemW, itemH-4, 10,
+					sdl.Color{R: 30, G: 36, B: 50, A: 200})
+			}
+
+			// Icon.
+			renderText(renderer, config, font, t.Icon,
+				sdl.Color{R: 200, G: 210, B: 230, A: 220}, itemX+8, iy+10)
+
+			// Label.
+			renderText(renderer, config, font, t.Label,
+				sdl.Color{R: 180, G: 190, B: 210, A: 220}, itemX+36, iy+10)
+
+			// Toggle switch.
+			swW := int32(44)
+			swH := int32(24)
+			swX := itemX + itemW - swW - 8
+			swY := iy + 8
+
+			swFill := t.OffColor
+			if t.Value {
+				swFill = t.OnColor
+			}
+			fillRoundedRect(renderer, swX, swY, swW, swH, swH/2, swFill)
+
+			// Knob.
+			knobR := int32(8)
+			knobX := swX + knobR + 4
+			if t.Value {
+				knobX = swX + swW - knobR - 4
+			}
+			knobY := swY + swH/2
+			fillCircle(renderer, knobX, knobY, knobR, sdl.Color{R: 255, G: 255, B: 255, A: 240})
+		}
+
+		// Sliders.
+		sliderStart := itemY + int32(len(qs.toggles))*itemH + 8
+		for i, s := range qs.sliders {
+			si := len(qs.toggles) + i
+			sy := sliderStart + int32(i)*itemH
+			focused := qs.cursor == si
+
+			if focused {
+				fillRoundedRect(renderer, itemX, sy, itemW, itemH-4, 10,
+					sdl.Color{R: 30, G: 36, B: 50, A: 200})
+			}
+
+			// Icon + Label.
+			renderText(renderer, config, font, s.Icon,
+				sdl.Color{R: 200, G: 210, B: 230, A: 220}, itemX+8, sy+6)
+			renderText(renderer, config, font, s.Label,
+				sdl.Color{R: 180, G: 190, B: 210, A: 220}, itemX+36, sy+6)
+
+			// Value text.
+			valStr := fmt.Sprintf("%d%%", int(s.Value*100))
+			vw, _, _ := font.SizeUTF8(valStr)
+			renderText(renderer, config, font, valStr,
+				sdl.Color{R: 140, G: 155, B: 180, A: 200},
+				itemX+itemW-int32(vw)-8, sy+6)
+
+			// Slider track.
+			trackW := itemW - 120
+			trackX := itemX + 100
+			trackY := sy + 28
+			trackH := int32(6)
+			fillRoundedRect(renderer, trackX, trackY, trackW, trackH, 3,
 				sdl.Color{R: 30, G: 36, B: 50, A: 200})
+
+			// Filled portion.
+			frac := (s.Value - s.Min) / (s.Max - s.Min)
+			fillW := int32(float64(trackW) * frac)
+			if fillW > 0 {
+				fillRoundedRect(renderer, trackX, trackY, fillW, trackH, 3,
+					sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 200})
+			}
+
+			// Knob.
+			knobX := trackX + fillW
+			knobR := int32(6)
+			fillCircle(renderer, knobX, trackY+trackH/2, knobR,
+				sdl.Color{R: 240, G: 245, B: 255, A: 240})
 		}
 
-		// Icon.
-		renderText(renderer, config, font, t.Icon,
-			sdl.Color{R: 200, G: 210, B: 230, A: 220}, itemX+8, iy+10)
+		// System info at bottom.
+		infoY := panelY + panelH - 60
+		if font != nil {
+			// Battery.
+			bat := getBatteryPercent()
+			if bat >= 0 {
+				batStr := fmt.Sprintf("[=] %d%%", bat)
+				renderText(renderer, config, font, batStr,
+					sdl.Color{R: 140, G: 155, B: 180, A: 200}, panelX+20, infoY)
+			}
 
-		// Label.
-		renderText(renderer, config, font, t.Label,
-			sdl.Color{R: 180, G: 190, B: 210, A: 220}, itemX+36, iy+10)
-
-		// Toggle switch.
-		swW := int32(44)
-		swH := int32(24)
-		swX := itemX + itemW - swW - 8
-		swY := iy + 8
-
-		swFill := t.OffColor
-		if t.Value {
-			swFill = t.OnColor
+			// Network.
+			netStr := "OK Online"
+			if !IsOnline() {
+				netStr = "[!] Offline"
+			}
+			nw, _, _ := font.SizeUTF8(netStr)
+			renderText(renderer, config, font, netStr,
+				sdl.Color{R: 140, G: 155, B: 180, A: 200},
+				panelX+panelW-int32(nw)-20, infoY)
 		}
-		fillRoundedRect(renderer, swX, swY, swW, swH, swH/2, swFill)
-
-		// Knob.
-		knobR := int32(8)
-		knobX := swX + knobR + 4
-		if t.Value {
-			knobX = swX + swW - knobR - 4
-		}
-		knobY := swY + swH/2
-		fillCircle(renderer, knobX, knobY, knobR, sdl.Color{R: 255, G: 255, B: 255, A: 240})
-	}
-
-	// Sliders.
-	sliderStart := itemY + int32(len(qs.toggles))*itemH + 8
-	for i, s := range qs.sliders {
-		si := len(qs.toggles) + i
-		sy := sliderStart + int32(i)*itemH
-		focused := qs.cursor == si
-
-		if focused {
-			fillRoundedRect(renderer, itemX, sy, itemW, itemH-4, 10,
-				sdl.Color{R: 30, G: 36, B: 50, A: 200})
-		}
-
-		// Icon + Label.
-		renderText(renderer, config, font, s.Icon,
-			sdl.Color{R: 200, G: 210, B: 230, A: 220}, itemX+8, sy+6)
-		renderText(renderer, config, font, s.Label,
-			sdl.Color{R: 180, G: 190, B: 210, A: 220}, itemX+36, sy+6)
-
-		// Value text.
-		valStr := fmt.Sprintf("%d%%", int(s.Value*100))
-		vw, _, _ := font.SizeUTF8(valStr)
-		renderText(renderer, config, font, valStr,
-			sdl.Color{R: 140, G: 155, B: 180, A: 200},
-			itemX+itemW-int32(vw)-8, sy+6)
-
-		// Slider track.
-		trackW := itemW - 120
-		trackX := itemX + 100
-		trackY := sy + 28
-		trackH := int32(6)
-		fillRoundedRect(renderer, trackX, trackY, trackW, trackH, 3,
-			sdl.Color{R: 30, G: 36, B: 50, A: 200})
-
-		// Filled portion.
-		frac := (s.Value - s.Min) / (s.Max - s.Min)
-		fillW := int32(float64(trackW) * frac)
-		if fillW > 0 {
-			fillRoundedRect(renderer, trackX, trackY, fillW, trackH, 3,
-				sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 200})
-		}
-
-		// Knob.
-		knobX := trackX + fillW
-		knobR := int32(6)
-		fillCircle(renderer, knobX, trackY+trackH/2, knobR,
-			sdl.Color{R: 240, G: 245, B: 255, A: 240})
-	}
-
-	// System info at bottom.
-	infoY := panelY + panelH - 60
-	if font != nil {
-		// Battery.
-		bat := getBatteryPercent()
-		if bat >= 0 {
-			batStr := fmt.Sprintf("[=] %d%%", bat)
-			renderText(renderer, config, font, batStr,
-				sdl.Color{R: 140, G: 155, B: 180, A: 200}, panelX+20, infoY)
-		}
-
-		// Network.
-		netStr := "OK Online"
-		if !IsOnline() {
-			netStr = "[!] Offline"
-		}
-		nw, _, _ := font.SizeUTF8(netStr)
-		renderText(renderer, config, font, netStr,
-			sdl.Color{R: 140, G: 155, B: 180, A: 200},
-			panelX+panelW-int32(nw)-20, infoY)
-	}
+	})
 }
 
 func handleQSInput(e *sdl.KeyboardEvent, config *Config) {

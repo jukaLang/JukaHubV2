@@ -613,6 +613,10 @@ func ApplyThemePreset(config *Config, presetName string) {
 	config.Variables.Custom["theme_info"] = preset.Info
 	config.Variables.Custom["theme_overlay"] = preset.Overlay
 	ApplyThemeColors(preset)
+	// Cached text textures carry the old palette in their pixels; drop them so
+	// the new theme is visible at once instead of after the LRU ages them out.
+	ClearTextCache()
+	clearHomeTextCache()
 	user := &UserConfig{
 		Variables: UserVariables{
 			ButtonColor:        config.Variables.ButtonColor,

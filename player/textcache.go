@@ -13,19 +13,27 @@ type textCacheEntry struct {
 	texture *sdl.Texture
 	width   int32
 	height  int32
+	bytes   int64
 }
 
 // TextCache is an LRU texture cache for rendered text.
 // On TSP (1GB RAM), we cap at 512 entries to avoid memory pressure.
 type TextCache struct {
-	mu      sync.RWMutex
-	entries map[string]*textCacheEntry
-	order   []string // LRU order: least recently used at index 0
-	maxSize int
+	mu         sync.RWMutex
+	entries    map[string]*textCacheEntry
+	order      []string // LRU order: least recently used at index 0
+	maxSize    int
+	totalBytes int64 // approximate texture memory (RGBA), for diagnostics
 }
 
 // NewTextCache creates a cache with the given maximum entries.
+// A non-positive limit is clamped to 1: a zero-sized cache would otherwise
+// never evict (the eviction loop needs an entry to remove) and grow without
+// bound while every Put destroyed nothing.
 func NewTextCache(maxSize int) *TextCache {
+	if maxSize < 1 {
+		maxSize = 1
+	}
 	return &TextCache{
 		entries: make(map[string]*textCacheEntry, maxSize),
 		order:   make([]string, 0, maxSize),
@@ -66,14 +74,18 @@ func (tc *TextCache) Put(font *ttf.Font, text string, color sdl.Color, texture *
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
+	entryBytes := int64(w) * int64(h) * 4
+
 	// If already exists, update it
 	if entry, ok := tc.entries[key]; ok {
 		if entry.texture != nil {
 			entry.texture.Destroy()
 		}
+		tc.totalBytes += entryBytes - entry.bytes
 		entry.texture = texture
 		entry.width = w
 		entry.height = h
+		entry.bytes = entryBytes
 		tc.touchLocked(key)
 		return
 	}
@@ -86,6 +98,7 @@ func (tc *TextCache) Put(font *ttf.Font, text string, color sdl.Color, texture *
 			if entry.texture != nil {
 				entry.texture.Destroy()
 			}
+			tc.totalBytes -= entry.bytes
 			delete(tc.entries, evictKey)
 		}
 	}
@@ -95,7 +108,9 @@ func (tc *TextCache) Put(font *ttf.Font, text string, color sdl.Color, texture *
 		texture: texture,
 		width:   w,
 		height:  h,
+		bytes:   entryBytes,
 	}
+	tc.totalBytes += entryBytes
 	tc.order = append(tc.order, key)
 }
 
@@ -121,6 +136,7 @@ func (tc *TextCache) Clear() {
 		delete(tc.entries, key)
 	}
 	tc.order = tc.order[:0]
+	tc.totalBytes = 0
 }
 
 // Len returns the current number of cached entries.
@@ -128,6 +144,13 @@ func (tc *TextCache) Len() int {
 	tc.mu.RLock()
 	defer tc.mu.RUnlock()
 	return len(tc.entries)
+}
+
+// Bytes returns the approximate texture memory held by the cache (RGBA).
+func (tc *TextCache) Bytes() int64 {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	return tc.totalBytes
 }
 
 // TrimTo evicts LRU entries until the cache is at most keepEntries in size.
@@ -142,6 +165,7 @@ func (tc *TextCache) TrimTo(keepEntries int) {
 			if entry.texture != nil {
 				entry.texture.Destroy()
 			}
+			tc.totalBytes -= entry.bytes
 			delete(tc.entries, evictKey)
 		}
 	}

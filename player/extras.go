@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -99,6 +100,14 @@ var (
 	userConfigSaveTimer *time.Timer
 	userConfigSaveMutex sync.Mutex
 	pendingUserConfig   *UserConfig
+	// pendingUserConfigDir is the working directory captured when the save was
+	// scheduled. A debounced write must land where the change was made even if
+	// the process (or a test) has changed directory by the time the timer fires.
+	pendingUserConfigDir string
+
+	// userConfigSaveDelay is the debounce window; a variable so tests can
+	// exercise the timer without sleeping two seconds.
+	userConfigSaveDelay = 2 * time.Second
 )
 
 // saveUserConfigDebounced batches rapid successive config changes into a single
@@ -107,15 +116,17 @@ var (
 func saveUserConfigDebounced(user *UserConfig) {
 	userConfigSaveMutex.Lock()
 	pendingUserConfig = user
+	pendingUserConfigDir, _ = os.Getwd()
 	if userConfigSaveTimer != nil {
 		userConfigSaveTimer.Stop()
 	}
-	userConfigSaveTimer = time.AfterFunc(2*time.Second, func() {
+	userConfigSaveTimer = time.AfterFunc(userConfigSaveDelay, func() {
 		userConfigSaveMutex.Lock()
 		defer userConfigSaveMutex.Unlock()
 		if pendingUserConfig != nil {
-			saveUserConfig(pendingUserConfig)
+			saveUserConfigToDir(pendingUserConfigDir, pendingUserConfig)
 			pendingUserConfig = nil
+			pendingUserConfigDir = ""
 		}
 	})
 	userConfigSaveMutex.Unlock()
@@ -266,11 +277,20 @@ func fetchWeatherOnce() {
 		log.Printf("[WARN] Geolocation request failed, using default weather location")
 	}
 	url := fmt.Sprintf("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&forecast_days=7&timezone=auto", lat, lon)
-	resp, err := client.Get(url)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return
+	}
+	resp, err := doWithRetry(ctx, client, req, defaultRetryPolicy())
 	if err != nil {
 		return
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
 	var w struct {
 		Daily struct {
 			Time []string  `json:"time"`
@@ -493,6 +513,23 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
 			renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: w + 6, H: ah + 6})
 		}
+		headerTextW += SpaceSM + w
+	}
+
+	// Safe-mode chip: a persistent reminder that background network, plugin
+	// and updater work is suppressed for this launch.
+	if safeModeActive() && font != nil {
+		label := "SAFE"
+		sw, _, _ := font.SizeUTF8(label)
+		pad := int32(10)
+		sh := int32(22)
+		w := int32(sw) + pad*2
+		x := tb.startRect.X + tb.startRect.W + SpaceSM
+		y := (barH - sh) / 2
+		warn := sdl.Color{R: 235, G: 170, B: 60, A: 255}
+		fillRoundedRect(renderer, x, y, w, sh, sh/2, WithAlpha(warn, 40))
+		strokeRoundedRect(renderer, x, y, w, sh, sh/2, 1, WithAlpha(warn, 210))
+		renderText(renderer, config, font, label, warn, x+pad, y+(sh-int32(font.Height()))/2)
 		headerTextW += SpaceSM + w
 	}
 
@@ -861,8 +898,19 @@ func migrateLegacyUserFiles() {
 }
 
 func saveUserConfig(user *UserConfig) {
+	saveUserConfigToDir("", user)
+}
+
+// saveUserConfigToDir persists jukauser.json into dir (empty means the current
+// working directory). The debounced writer uses it so a pending save cannot
+// land in whatever directory happens to be current two seconds later.
+func saveUserConfigToDir(dir string, user *UserConfig) {
 	if user == nil {
 		return
+	}
+	path := "jukauser.json"
+	if dir != "" {
+		path = filepath.Join(dir, "jukauser.json")
 	}
 	userCopy := *user
 	userCopy.Variables.Custom = make(map[string]interface{})
@@ -896,11 +944,11 @@ func saveUserConfig(user *UserConfig) {
 		log.Printf("saveUserConfig: marshal error: %v", err)
 		return
 	}
-	if err := AtomicWrite("jukauser.json", data, 0644); err != nil {
+	if err := AtomicWrite(path, data, 0644); err != nil {
 		log.Printf("saveUserConfig: write error: %v", err)
 		return
 	}
-	LogScene("config").Info("user config saved")
+	LogScene("config").Info("user config saved", "path", path)
 }
 
 func mergeUserConfig(config *Config, user *UserConfig) {
@@ -929,6 +977,7 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 
 func saveConfig(config *Config) {
 	saved := *config
+	saved.SchemaVersion = ConfigSchemaVersion
 	saved.Variables = config.Variables
 	saved.Variables.Custom = make(map[string]interface{})
 	for k, v := range config.Variables.Custom {

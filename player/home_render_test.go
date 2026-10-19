@@ -220,6 +220,34 @@ func TestHomeLayoutGeometry(t *testing.T) {
 	}
 }
 
+// TestNarrowHomeCardsUseStackedLayout pins the fix for the "Files and Settings
+// look squished" complaint: the half-width tiles must stack their icon above
+// the label instead of squeezing the text into a ~60px column, while the wider
+// rows keep the icon-beside-label composition.
+func TestNarrowHomeCardsUseStackedLayout(t *testing.T) {
+	snapshotHomeGlobals(t)
+	homeLayout = NewHomeLayout(probeW, probeH)
+	homeLayout.Resize(probeW, probeH)
+	iconSize := scaleX(56, probeW)
+	pad := scaleX(20, probeW)
+
+	for _, id := range []HomeFocusID{HomeFocusFiles, HomeFocusSettings} {
+		r := homeLayout.Items[id].Rect
+		if !homeCardStacksIcon(r, iconSize, pad, probeW) {
+			t.Errorf("%s card %+v is narrow but still uses the horizontal layout", id, r)
+		}
+	}
+	for _, id := range []HomeFocusID{
+		HomeFocusMedia, HomeFocusPackages, HomeFocusApps,
+		HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
+	} {
+		r := homeLayout.Items[id].Rect
+		if homeCardStacksIcon(r, iconSize, pad, probeW) {
+			t.Errorf("%s card %+v should keep the icon beside its label", id, r)
+		}
+	}
+}
+
 // TestHomeProbeRender dumps the two home states to tmp/ for visual review.
 func TestHomeProbeRender(t *testing.T) {
 	snapshotHomeGlobals(t)

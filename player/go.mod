@@ -13,6 +13,11 @@ require (
 )
 
 require (
+	github.com/kr/fs v0.1.0 // indirect
+	github.com/pkg/sftp v1.13.11 // indirect
+)
+
+require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
 	github.com/gorilla/websocket v1.5.3

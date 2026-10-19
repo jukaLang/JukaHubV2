@@ -127,8 +127,7 @@ var (
 	// Scene history for B/Esc back navigation on non-home scenes.
 	sceneHistory []int
 
-	// Cache for thumbnails
-	textureCache        = make(map[string]*sdl.Texture)
+	// Bounded cache for decoded thumbnail textures (see thumbstore.go).
 	thumbnailCacheMutex sync.Mutex
 
 	// Placeholder texture for missing thumbnails
@@ -442,6 +441,11 @@ func loadConfig(filename string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config file %s is not valid JSON: %w", filename, err)
 	}
+	// Migrate older schemas forward, and refuse a newer one so an older build
+	// never rewrites a file it does not understand.
+	if _, err := MigrateConfig(&config); err != nil {
+		return nil, fmt.Errorf("config file %s: %w", filename, err)
+	}
 	if config.Variables.Fonts == nil {
 		config.Variables.Fonts = make(map[string]string)
 	}
@@ -637,6 +641,9 @@ func flattenCustomBlocks(custom map[string]interface{}) {
 func finalizeConfig(config *Config) {
 	if config == nil {
 		return
+	}
+	if config.SchemaVersion == 0 {
+		config.SchemaVersion = ConfigSchemaVersion
 	}
 	if config.AppName == "" {
 		config.AppName = "JukaHub"
@@ -1421,30 +1428,10 @@ func drawCard(renderer *sdl.Renderer, x, y, w, h, r int32) {
 	renderer.DrawRect(&sdl.Rect{X: x + w - 2, Y: y + 1, W: 1, H: h - 2})
 }
 
-// drawRow renders a single list row with premium polish.
+// drawRow renders a single list row through the shared row component, so
+// every list in the shell shares one selected/hovered treatment.
 func drawRow(renderer *sdl.Renderer, x, y, w, h, r int32, selected, hovered bool) {
-	// shadow layer
-	fillRoundedRect(renderer, x+1, y+2, w, h, r, ShadowFill(24))
-	// base surface
-	fillRoundedRect(renderer, x, y, w, h, r, ColorSurfaceRow)
-	if selected {
-		// selected: accent tint + left accent bar + bottom sheen
-		fillRoundedRect(renderer, x, y, w, h, r, WithAlpha(accentColor, 50))
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
-		renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + 2, W: 3, H: h - 4})
-		// subtle top highlight
-		renderer.SetDrawColor(255, 255, 255, 20)
-		renderer.FillRect(&sdl.Rect{X: x + 4, Y: y + 1, W: w - 8, H: 1})
-		// bottom gradient fade
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 15)
-		renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + h - 2, W: w - 2, H: 1})
-	} else if hovered {
-		// hovered: subtle lift with sheen
-		fillRoundedRect(renderer, x, y, w, h, r, WithAlpha(ColorCardHover, 120))
-		// top sheen
-		renderer.SetDrawColor(255, 255, 255, 12)
-		renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
-	}
+	UIListRow(renderer, sdl.Rect{X: x, Y: y, W: w, H: h}, r, selected, hovered)
 }
 
 // drawScrollbar draws a vertical scrollbar within a track when content
@@ -1500,19 +1487,37 @@ func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, e
 	// Every non-tile button renders through the shared flat dark primitive so
 	// the whole app shares one button look (no silver gradients, gloss, or
 	// layered shadows that produced feet/tabs in the legacy renderer).
-	renderDarkButtonElement(renderer, config, elem, selected, hovered, pressed)
+	renderDarkButtonElement(renderer, config, elem, selected, hovered, hoverProgress, pressed)
 }
 
 // renderDarkButtonElement renders a refined dark button with premium polish.
-func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Element, selected, hovered, pressed bool) {
+// hoverProgress (0..1, eased by the main loop) drives a small scale lift so a
+// pointer hover settles instead of snapping.
+func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Element, selected, hovered bool, hoverProgress float64, pressed bool) {
 	font, _ := getCachedFont(config, elem.Font)
 	width, height := buttonHitSize(elem, font)
 	x, y := elem.X, elem.Y
 	r := RadiusMD
 
+	// Hover scale: grow by up to 2px around the same centre. The element's
+	// rect is untouched, so hit testing and the focus graph keep their
+	// settled geometry.
+	if hovered && !pressed && hoverProgress > 0 {
+		grow := int32(math.Round(uiClamp01(hoverProgress) * 2))
+		if grow > 0 {
+			x -= grow
+			y -= grow
+			width += grow * 2
+			height += grow * 2
+		}
+	}
+
+	// Eased press dip: the button travels down over the press window instead
+	// of jumping by a fixed offset, so a click reads as a physical push.
 	pressOffset := int32(0)
 	if pressed {
-		pressOffset = PressOffset
+		age := float64(sdl.GetTicks64() - pressStartTime)
+		pressOffset = int32(math.Round(float64(PressOffset) * uiPressProgress(config, age, float64(pressDuration))))
 	}
 	ox := x + pressOffset
 	oy := y + pressOffset
@@ -1582,9 +1587,12 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 		x, y, width, height = rect.X, rect.Y, rect.W, rect.H
 	}
 
+	// Eased press dip: the button travels down over the press window instead
+	// of jumping by a fixed offset, so a click reads as a physical push.
 	pressOffset := int32(0)
 	if pressed {
-		pressOffset = PressOffset
+		age := float64(sdl.GetTicks64() - pressStartTime)
+		pressOffset = int32(math.Round(float64(PressOffset) * uiPressProgress(config, age, float64(pressDuration))))
 	}
 	ox := x + pressOffset
 	oy := y + pressOffset
@@ -2084,7 +2092,7 @@ func loadThumbnailFromURLs(renderer *sdl.Renderer, urls []string) *sdl.Texture {
 			continue
 		}
 		url := normalizeThumbnailURL(rawURL)
-		if tex, ok := textureCache[url]; ok {
+		if tex := getThumbnailTextures().Get(url); tex != nil {
 			return tex
 		}
 
@@ -2110,7 +2118,11 @@ func loadThumbnailFromURLs(renderer *sdl.Renderer, urls []string) *sdl.Texture {
 			log.Printf("[DEBUG] loadThumbnail: LoadTextureRW failed for %s: %v", url, err)
 			continue
 		}
-		textureCache[url] = tex
+		var tw, th int32
+		if _, _, qw, qh, err := tex.Query(); err == nil {
+			tw, th = qw, qh
+		}
+		getThumbnailTextures().Put(url, tex, tw, th)
 		log.Printf("[DEBUG] loadThumbnail: loaded %s", url)
 		return tex
 	}
@@ -3934,15 +3946,9 @@ var themeGalleryScroll int
 func themeGalleryMetrics(element Element) (cols int, cardW int32, visibleRows int) {
 	elemW := getElementWidth(element, 1160)
 	elemH := getElementHeight(element, 560)
-	cols = int((elemW + themeGalleryGap) / (themeGalleryMinW + themeGalleryGap))
-	if cols < 1 {
-		cols = 1
-	}
-	cardW = (elemW - themeGalleryGap*int32(cols-1)) / int32(cols)
-	visibleRows = int((elemH + themeGalleryGap) / (themeGalleryH + themeGalleryGap))
-	if visibleRows < 1 {
-		visibleRows = 1
-	}
+	cols = UIGridColumns(elemW, themeGalleryMinW, themeGalleryGap)
+	cardW = UIGridCellWidth(elemW, cols, themeGalleryGap)
+	visibleRows = UIGridVisibleRows(elemH, themeGalleryH, themeGalleryGap)
 	return cols, cardW, visibleRows
 }
 

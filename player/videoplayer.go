@@ -21,19 +21,23 @@ import (
 
 // VideoPlayerState holds the embedded video player runtime state.
 type VideoPlayerState struct {
-	mu                  sync.Mutex
-	phase               string // idle | downloading | playing | paused | error
-	progress            float64
-	progressBase        float64
-	volume              float64
-	speed               float64
-	downloadSpeed       float64 // bytes per second, 0 when unknown
-	current             *sdl.Texture
-	currentRaw          []byte
-	frameSeq            uint64
-	uploadedSeq         uint64
-	width               int32
-	height              int32
+	mu            sync.Mutex
+	phase         string // idle | downloading | playing | paused | error
+	progress      float64
+	progressBase  float64
+	volume        float64
+	speed         float64
+	downloadSpeed float64 // bytes per second, 0 when unknown
+	current       *sdl.Texture
+	currentRaw    []byte
+	frameSeq      uint64
+	uploadedSeq   uint64
+	width         int32
+	height        int32
+	// sourceWidth/sourceHeight are the probed size before the decode cap.
+	// The decoder scales the source down to width×height when they differ.
+	sourceWidth         int32
+	sourceHeight        int32
 	lastErr             string
 	duration            float64
 	frameRate           float64
@@ -133,7 +137,28 @@ var (
 	playbackMu      sync.Mutex
 	playbackCurrent *playbackSession
 	playbackSeq     uint64
+
+	// videoDecoderWG tracks the goroutines that own an ffmpeg process so tests
+	// (and shutdown paths) can wait until they have really exited before a
+	// shared SDL renderer is destroyed.
+	videoDecoderWG sync.WaitGroup
 )
+
+// waitForVideoDecoders waits until every playback goroutine has returned,
+// bounded by timeout. It is used by tests that tear down a renderer.
+func waitForVideoDecoders(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		videoDecoderWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
 
 func beginPlaybackSession(source, pageURL string, tempFile bool) *playbackSession {
 	persistSessionProgress(playbackCurrentSession())
@@ -402,17 +427,35 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 	return w, h, dur, fps
 }
 
-func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, height int32, startSec float64) {
+// ffmpegDecoderArgs builds the rawvideo decoder command. When the source is
+// larger than the decode target it uses a scale filter in ffmpeg (cheaper than
+// decoding 4K frames and letting the GPU shrink them); otherwise it asks for
+// the native size directly.
+func ffmpegDecoderArgs(path string, width, height int32, scaling bool, startSec float64) []string {
 	args := []string{}
 	if startSec > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", startSec))
 	}
-	args = append(args, "-i", path,
+	args = append(args, "-i", path)
+	if scaling {
+		args = append(args, "-vf", fmt.Sprintf("scale=%d:%d:flags=bilinear", width, height))
+	} else {
+		args = append(args, "-s", fmt.Sprintf("%dx%d", width, height))
+	}
+	return append(args,
 		"-f", "rawvideo",
 		"-pix_fmt", "rgba",
-		"-s", fmt.Sprintf("%dx%d", width, height),
 		"-",
 	)
+}
+
+func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, height int32, startSec float64) {
+	embeddedPlayer.mu.Lock()
+	srcW, srcH := embeddedPlayer.sourceWidth, embeddedPlayer.sourceHeight
+	embeddedPlayer.mu.Unlock()
+	scaling := srcW > 0 && srcH > 0 && (srcW != width || srcH != height)
+
+	args := ffmpegDecoderArgs(path, width, height, scaling, startSec)
 	cmd := exec.CommandContext(sess.ctx, ffmpegPath, args...)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {
@@ -477,18 +520,28 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 		}
 		frameCount++
 
+		// Publish the decoded frame by handing the buffer to the renderer and
+		// taking the previous one back, instead of copying every frame. A
+		// 720p RGBA frame is 3.6 MB; at 30fps the copy alone burned ~110 MB/s
+		// of memory bandwidth on a device with a single 1 GB pool.
 		embeddedPlayer.mu.Lock()
-		if cap(embeddedPlayer.currentRaw) < len(buf) {
-			embeddedPlayer.currentRaw = make([]byte, len(buf))
-		}
-		raw := embeddedPlayer.currentRaw[:len(buf)]
-		copy(raw, buf)
-		embeddedPlayer.currentRaw = raw
+		previous := embeddedPlayer.currentRaw
+		embeddedPlayer.currentRaw = buf
 		embeddedPlayer.width = width
 		embeddedPlayer.height = height
 		embeddedPlayer.lastFrameTime = time.Now()
 		embeddedPlayer.frameSeq++
 		embeddedPlayer.mu.Unlock()
+
+		// Reuse the retired buffer. The renderer only touches a published
+		// buffer while holding the mutex, so by the time it is recycled the
+		// upload has finished; if the renderer never got to it, that frame is
+		// simply dropped (the correct behaviour when the UI is behind).
+		if cap(previous) >= frameSize {
+			buf = previous[:frameSize]
+		} else {
+			buf = make([]byte, frameSize)
+		}
 
 		if frameCount > 1 {
 			frameDeadline = frameDeadline.Add(frameDuration)
@@ -584,6 +637,17 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 		return
 	}
 
+	// A new video may have different dimensions (a scaled 1080p source vs a
+	// native 480p one). Reusing a texture of the old size made SDL reject the
+	// upload; recreate it instead so every source plays after the first.
+	if embeddedPlayer.current != nil {
+		_, _, tw, th, qerr := embeddedPlayer.current.Query()
+		if qerr != nil || tw != w || th != h {
+			embeddedPlayer.current.Destroy()
+			embeddedPlayer.current = nil
+			embeddedPlayer.uploadedSeq = 0
+		}
+	}
 	if embeddedPlayer.current == nil {
 		tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA32), sdl.TEXTUREACCESS_STREAMING, w, h)
 		if err != nil {
@@ -640,18 +704,26 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	embeddedPlayer.currentRaw = nil
 	embeddedPlayer.frameSeq = 0
 	embeddedPlayer.uploadedSeq = 0
+	embeddedPlayer.sourceWidth = 0
+	embeddedPlayer.sourceHeight = 0
 	embeddedPlayer.totalPausedDuration = 0
 	embeddedPlayer.pauseStartTime = time.Time{}
 	embeddedPlayer.mu.Unlock()
 
+	videoDecoderWG.Add(1)
 	go func() {
+		defer videoDecoderWG.Done()
 		ffmpegPath := getToolPath("ffmpeg", config)
 		ffprobePath := getToolPath("ffprobe", config)
 
-		w, h, dur, fps := probeVideoInfo(ffprobePath, url)
+		srcW, srcH, dur, fps := probeVideoInfo(ffprobePath, url)
 		if !sess.isCurrent() {
 			return
 		}
+		// Cap the decode size at the panel's resolution (or 1080p on desktop)
+		// before allocating any frame buffers.
+		maxW, maxH := videoDecodeMaxSize(IsTrimuiDevice() || P().IsHandheld())
+		w, h := videoDecodeSize(srcW, srcH, maxW, maxH)
 
 		videoPlaybackMutex.Lock()
 		videoPlaybackPhase = "playing"
@@ -674,6 +746,8 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		embeddedPlayer.phase = "playing"
 		embeddedPlayer.width = w
 		embeddedPlayer.height = h
+		embeddedPlayer.sourceWidth = srcW
+		embeddedPlayer.sourceHeight = srcH
 		embeddedPlayer.duration = dur
 		embeddedPlayer.frameRate = fps
 		embeddedPlayer.decoderStartTime = time.Now()
@@ -803,7 +877,9 @@ func SeekVideo(fraction float64) {
 	embeddedPlayer.progress = fraction
 	embeddedPlayer.mu.Unlock()
 
+	videoDecoderWG.Add(1)
 	go func() {
+		defer videoDecoderWG.Done()
 		go startFFmpegAudio(next, ffmpegPath, prev.source, seekSec)
 		startFFmpegDecoder(next, ffmpegPath, prev.source, width, height, seekSec)
 		next.finish()

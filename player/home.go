@@ -380,6 +380,13 @@ func homeViewData(config *Config) HomeViewData {
 		Pressed:      homePressedID,
 		ShowBackHint: true,
 	}
+	// Ease the click feedback over the (short) press window. uiPressProgress
+	// snaps to full depth when motion is disabled, so reduced motion keeps the
+	// press readable without animating it.
+	if homePressedID != "" {
+		age := float64(sdl.GetTicks64() - homePressedAt)
+		data.PressDepth = uiPressProgress(config, age, float64(homePressDuration))
+	}
 	if name, ok := config.Variables.Custom["TSPUsername"].(string); ok {
 		data.Greeting = homeGreeting(name)
 	}
@@ -493,6 +500,9 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 		renderFireworks(renderer, config, 0.016)
 	}
 
+	// Hover/focus lift honours reduced motion; the layout also owns the win
+	// animations for the apps menu and notification dropdown.
+	homeLayout.Motion = uiMotionEnabled(config)
 	_ = homeLayout.Render(renderer, loadHomeFonts(), homeViewData(config))
 
 	// The header clock toggles the mini calendar (trigger: toggle_calendar).

@@ -78,6 +78,16 @@ func main() {
 	// Expose the active config for sub-packages (Discord chat, canvas, ...).
 	appConfig = config
 
+	// Tune the collector before the first heavy allocation (thumbnail cache,
+	// video frames, render layers). On the TrimUI this installs a soft heap
+	// limit so a 4K video + thumbnail grid cannot balloon the Go heap.
+	applyGCForDevice()
+
+	// Safe mode is decided before any background work starts, so a bad plugin,
+	// update feed or network setup can be bypassed for this launch without
+	// touching the user's config.
+	initSafeMode()
+
 	// The alarm UI renders through the scene pipeline; register its scene at
 	// startup (in-memory, never written back) so the status-bar clock and the
 	// Start menu can open it on every config. The loader stays pure.
@@ -110,13 +120,17 @@ func main() {
 	alarmLoad()
 	notesInit()
 	qsInit()
-	startWeather(config)
+	if safeModeAllows(SafeFeatureNetwork) {
+		startWeather(config)
+	}
 
 	// Tool readiness: check whether the helper tools (yt-dlp, ffmpeg, ffprobe)
 	// are present and auto-install the missing ones, showing the install bar
 	// while they download. This is non-fatal: offline launches stay usable and
 	// retry on the next run.
-	startToolHealthCheck()
+	if safeModeAllows(SafeFeatureToolInstall) {
+		startToolHealthCheck()
+	}
 
 	// Patch module: load persisted state and roll back any interrupted update
 	// transaction so JukaHub always launches in a consistent state.
@@ -125,14 +139,18 @@ func main() {
 	// Automatic updater: check the release feed in the background and offer a
 	// newer build in Patch. It never downloads or installs without the user
 	// confirming there.
-	startAutoUpdateCheck(config)
+	if safeModeAllows(SafeFeatureUpdates) {
+		startAutoUpdateCheck(config)
+	}
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
 
 	// Start network connectivity monitoring (tool health is already started
 	// above; running it twice would double the startup probes).
-	startNetworkMonitor()
+	if safeModeAllows(SafeFeatureNetwork) {
+		startNetworkMonitor()
+	}
 
 	// Tools panel / FTP: publish the initial IP and server state, and make sure
 	// the listener never outlives the app.
@@ -263,7 +281,11 @@ func main() {
 	initKeyboard()
 
 	thumbnailDownloadCh = make(chan string, 256)
-	go thumbnailPrefetchWorker()
+	// More than one worker: prefetching a results grid is latency-bound, and a
+	// single worker downloaded exactly one thumbnail per network round trip.
+	for i := 0; i < thumbnailWorkerCount(); i++ {
+		go thumbnailPrefetchWorker()
+	}
 
 	currentSceneIndex = 0
 	selectedButtonIndex = findFirstSelectableElement(config.Scenes[currentSceneIndex])
@@ -1577,17 +1599,17 @@ func main() {
 			if config.Variables.ReducedMotion || sdl.GetTicks64()-pressStartTime > pressDuration {
 				pressedButtonIndex = -1
 			}
-		}			// Screensaver takes over when idle.
-			if ss.active {
-				renderScreensaver(renderer, config, sdl.GetTicks64())
-			} else {
-				renderScene(renderer, config, config.Scenes[currentSceneIndex])
-			}
+		} // Screensaver takes over when idle.
+		if ss.active {
+			renderScreensaver(renderer, config, sdl.GetTicks64())
+		} else {
+			renderScene(renderer, config, config.Scenes[currentSceneIndex])
+		}
 
-			// Full screen video covers the scene and its chrome entirely.
-			if videoFullscreen && playerPhase() != "idle" {
-				renderVideoFullscreen(renderer, config)
-			}
+		// Full screen video covers the scene and its chrome entirely.
+		if videoFullscreen && playerPhase() != "idle" {
+			renderVideoFullscreen(renderer, config)
+		}
 
 		// Scene transition effects
 		if config.Variables.ReducedMotion && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
@@ -1597,36 +1619,38 @@ func main() {
 				transitionPhase = "none"
 			}
 		}
-		if transitionPhase == "fade-out" {
+		// Scene fade-out -> fade-in, timed by anim.go so the handheld gets a
+		// snappy transition and both phases read the same theme colour.
+		if transitionPhase == "fade-out" || transitionPhase == "fade-in" {
 			elapsed := float64(sdl.GetTicks64() - sceneFadeStart)
-			duration := float64(250)
-			if elapsed >= duration {
-				sceneFadeAlpha = 255
-				completeSceneTransition(config)
+			alive := !uiSceneFadeDone(transitionPhase, elapsed)
+			if transitionPhase == "fade-out" {
+				if !alive {
+					sceneFadeAlpha = 255
+					completeSceneTransition(config)
+				} else {
+					sceneFadeAlpha = uiSceneScrimAlpha(transitionPhase, elapsed)
+				}
 			} else {
-				t := easeOutCubic(elapsed / duration)
-				sceneFadeAlpha = uint8(t * 255)
+				if !alive {
+					sceneFadeAlpha = 0
+					transitionPhase = "none"
+				} else {
+					sceneFadeAlpha = uiSceneScrimAlpha(transitionPhase, elapsed)
+				}
 			}
-			renderer.SetDrawColor(15, 17, 21, sceneFadeAlpha)
-			renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-			// accent sweep along the bottom edge
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, sceneFadeAlpha/2)
-			renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 4, W: screenWidth, H: 4})
-		} else if transitionPhase == "fade-in" {
-			elapsed := float64(sdl.GetTicks64() - sceneFadeStart)
-			duration := float64(300)
-			if elapsed >= duration {
-				sceneFadeAlpha = 255
-				transitionPhase = "none"
-			} else {
-				t := easeOutCubic(elapsed / duration)
-				sceneFadeAlpha = uint8(t * 255)
+
+			// During fade-out the old scene is covered; during fade-in the new
+			// scene is revealed. sceneFadeAlpha now carries the opacity directly
+			// (255 = covered), which is 0..255 in both phases.
+			if sceneFadeAlpha > 0 {
+				scrim := uiSceneScrimColor()
+				renderer.SetDrawColor(scrim.R, scrim.G, scrim.B, sceneFadeAlpha)
+				renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+				// accent sweep along the bottom edge
+				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, sceneFadeAlpha/2)
+				renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 4, W: screenWidth, H: 4})
 			}
-			renderer.SetDrawColor(15, 17, 21, 255-sceneFadeAlpha)
-			renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-			// accent sweep along the bottom edge
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, (255-sceneFadeAlpha)/2)
-			renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 4, W: screenWidth, H: 4})
 		}
 
 		// Image viewer overlay
@@ -1725,15 +1749,20 @@ func main() {
 
 		// Adaptive frame rate: faster while interacting/animating, slower when
 		// idle. LowPower picks the slowest cadence instead of forcing 60fps.
-		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0
+		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating()
 		frameRateCtrl.SetAnimationActive(animating)
 		frameRateCtrl.SetLowPower(config.Variables.LowPower)
 		sdl.Delay(frameRateCtrl.Delay())
 
 		frameCount++
-		// Periodic memory pressure check (every ~10 frames on TSP)
+		// Periodic memory pressure check (every ~10 frames on TSP). The
+		// evictor inside is debounced, so this is a cheap level read most of
+		// the time instead of a cache clear every poll.
 		if IsTrimuiDevice() && memMonitor != nil && frameCount%10 == 0 {
 			EvictCachesForPressure(memMonitor)
+		}
+		if textureStatsLoggingEnabled && frameCount%textureStatsInterval == 0 {
+			logTextureMemoryStats("runtime")
 		}
 
 		// Check alarms every second.
@@ -1747,12 +1776,10 @@ func main() {
 	saveFavorites()
 	ClearTextCache()
 	DestroyVKStaticCache()
-	for _, tex := range textureCache {
-		tex.Destroy()
-	}
-	for _, tex := range homeTextCache {
-		tex.Destroy()
-	}
+	clearThumbnailCache()
+	DestroyVKVideoOverlayCache()
+	DestroyVKChatCache()
+	clearHomeTextCache()
 	for _, font := range fontCache {
 		font.Close()
 	}

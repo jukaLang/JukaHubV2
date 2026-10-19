@@ -21,6 +21,10 @@ type ChannelProfileConfig struct {
 }
 
 type Config struct {
+	// SchemaVersion stamps the config format so migrations are explicit and a
+	// newer file is never silently overwritten by an older build. Configs
+	// written before stamping existed load as version 0 and migrate to 1.
+	SchemaVersion  int                  `json:"schemaVersion,omitempty"`
 	AppName        string               `json:"AppName"`
 	Version        string               `json:"Version"`
 	Width          int                  `json:"Width"`

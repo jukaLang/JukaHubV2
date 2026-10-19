@@ -1,6 +1,7 @@
 package main
 
 import (
+	"container/list"
 	"fmt"
 	"math"
 	"strconv"
@@ -45,12 +46,16 @@ type HomeContinueState struct {
 }
 
 type HomeViewData struct {
-	Greeting     string
-	Subtitle     string
-	Version      string
-	StatusParts  []string // right-side header cluster, shared with scene headers
-	Continue     HomeContinueState
-	Pressed      HomeFocusID
+	Greeting    string
+	Subtitle    string
+	Version     string
+	StatusParts []string // right-side header cluster, shared with scene headers
+	Continue    HomeContinueState
+	Pressed     HomeFocusID
+	// PressDepth is the eased 0..1 weight of the click feedback for Pressed:
+	// it rises and falls over the short press window so the card dips instead
+	// of jumping. Zero means settled.
+	PressDepth   float64
 	ShowBackHint bool
 }
 
@@ -69,6 +74,12 @@ type HomeLayout struct {
 	Focus  *HomeFocusController
 	Items  map[HomeFocusID]HomeItem
 	Order  []HomeFocusID
+
+	// Hover/focus lift: the focused card grows by a couple of pixels, eased so
+	// it settles instead of snapping. Motion is disabled by reduced motion.
+	Motion  bool
+	hover   uiHover
+	hoverID HomeFocusID
 }
 
 func NewHomeLayout(width, height int32) *HomeLayout {
@@ -82,6 +93,7 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 	layout := &HomeLayout{
 		Width:  width,
 		Height: height,
+		Motion: true,
 		Focus:  NewHomeFocusController(),
 		Items:  make(map[HomeFocusID]HomeItem, 11),
 		Order: []HomeFocusID{
@@ -183,6 +195,49 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 	return false
 }
 
+// BoundsViolations reports layout problems that would show up as clipped or
+// overlapping cards: empty rects, rects outside the viewport, and interactive
+// items that overlap each other. The header clock is excluded from the overlap
+// check because its rect is replaced with the measured status text each frame.
+func (h *HomeLayout) BoundsViolations() []string {
+	if h == nil {
+		return []string{"nil layout"}
+	}
+	var out []string
+	checked := make([]HomeItem, 0, len(h.Order))
+	for _, id := range h.Order {
+		item, ok := h.Items[id]
+		if !ok {
+			out = append(out, fmt.Sprintf("%s: missing", id))
+			continue
+		}
+		if item.Rect.W <= 0 || item.Rect.H <= 0 {
+			out = append(out, fmt.Sprintf("%s: empty rect %dx%d", id, item.Rect.W, item.Rect.H))
+		} else if item.Rect.X < 0 || item.Rect.Y < 0 ||
+			item.Rect.X+item.Rect.W > h.Width || item.Rect.Y+item.Rect.H > h.Height {
+			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
+		}
+		if id == HomeFocusClock {
+			continue
+		}
+		checked = append(checked, item)
+	}
+	for i := 0; i < len(checked); i++ {
+		for j := i + 1; j < len(checked); j++ {
+			if homeRectsOverlap(checked[i].Rect, checked[j].Rect) {
+				out = append(out, fmt.Sprintf("%s overlaps %s", checked[i].ID, checked[j].ID))
+			}
+		}
+	}
+	return out
+}
+
+// homeRectsOverlap reports whether two rects share any pixel.
+func homeRectsOverlap(a, b sdl.Rect) bool {
+	return a.X < b.X+b.W && b.X < a.X+a.W &&
+		a.Y < b.Y+b.H && b.Y < a.Y+a.H
+}
+
 func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) error {
 	if h == nil || renderer == nil {
 		return fmt.Errorf("home layout requires a renderer")
@@ -199,17 +254,32 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 	h.drawFooter(renderer, fonts, data.ShowBackHint)
 
 	focused := h.Focus.Current()
+	if h.hoverID != focused {
+		// A new card takes the lift: restart the ease so the growth reads as a
+		// hover response rather than a jump.
+		h.hoverID = focused
+		h.hover.weight = 0
+	}
+	lift := h.hover.update(1, h.Motion)
 	for _, id := range h.Order {
 		item := h.Items[id]
+		cardLift := 0.0
+		if id == focused {
+			cardLift = lift
+		}
+		pressDepth := 0.0
+		if data.Pressed == id {
+			pressDepth = data.PressDepth
+		}
 		switch id {
 		case HomeFocusContinue:
-			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, data.Continue)
+			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, data.Continue, cardLift)
 		case HomeFocusExit:
-			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id)
+			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
 		case HomeFocusClock:
 			// The header clock is the button; drawHeader draws its focus ring.
 		default:
-			h.drawActionCard(renderer, fonts, item, id == focused, data.Pressed == id)
+			h.drawActionCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 		}
 	}
 
@@ -357,32 +427,69 @@ func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data 
 	drawText(renderer, fonts.Subtitle, subtitle, scaleX(32, h.Width), scaleY(119, h.Height), ColorTextMuted(), textAlignLeft)
 }
 
-func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool) {
+func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth, lift float64) {
 	if fonts.Card == nil {
 		return
 	}
-	rect := item.Rect
+	rect := scaleHomeCard(item.Rect, lift)
 	DrawHomeCardSurface(renderer, rect, focused, pressed)
-	offsetY := int32(0)
-	if pressed {
-		offsetY = scaleY(2, h.Height)
-	}
+	offsetY := homePressOffset(pressDepth, h.Height)
 
-	// One consistent horizontal layout for every action card (including the
-	// bottom row): 20px padding, a 56x56 icon tile on the left, 16px gap, then
-	// the title/subtitle stack. The icon is drawn exactly once.
+	// One icon tile per card, drawn exactly once. Narrow cards (Files and
+	// Settings) cannot fit the 56px tile and a readable label side by side, so
+	// they stack a smaller tile above the text. homeActionIconTile decides
+	// which of the two compositions applies before anything is drawn: the
+	// previous code drew the wide tile first and then drew the stacked tile on
+	// top, which is how those two cards ended up with two icons each.
 	pad := scaleX(20, h.Width)
-	iconSize := min32(scaleX(56, h.Width), scaleY(56, h.Height))
-	if maxIcon := rect.H - scaleY(12, h.Height); iconSize > maxIcon {
-		iconSize = maxIcon
+	iconTile, stacked, ok := homeActionIconTile(rect, h.Width, h.Height)
+	if !ok {
+		return
 	}
-	iconTile := sdl.Rect{
-		X: rect.X + pad,
-		Y: rect.Y + (rect.H-iconSize)/2 + offsetY,
-		W: iconSize, H: iconSize,
+	if stacked && fonts.Helper != nil {
+		// The half-width cards are short: a full 40px tile leaves no room for
+		// both the title and the subtitle, and the card used to drop the
+		// subtitle entirely, leaving empty space under the icon. Shrink the
+		// tile just enough to keep both lines (down to a legible minimum).
+		th := int32(fonts.Card.Height())
+		sh := int32(fonts.Helper.Height())
+		avail := rect.H - scaleY(14, h.Height) - scaleY(10, h.Height) - th - scaleY(4, h.Height) - sh - scaleY(8, h.Height)
+		minSize := scaleY(26, h.Height)
+		if avail >= minSize && avail < iconTile.H {
+			iconTile = sdl.Rect{
+				X: rect.X + (rect.W-avail)/2,
+				Y: iconTile.Y,
+				W: avail, H: avail,
+			}
+		}
 	}
+	iconTile.Y += offsetY
 	glyph := DrawIconTile(renderer, iconTile, focused)
 	DrawHomeIcon(renderer, item.Icon, glyph, focused)
+
+	if stacked {
+		stackPad := scaleX(16, h.Width)
+
+		textW := rect.W - stackPad*2
+		if textW < 48 {
+			textW = 48
+		}
+		cx := rect.X + rect.W/2
+		th := int32(fonts.Card.Height())
+		sh := int32(fonts.Helper.Height())
+		title := ellipsize(fonts.Card, item.Title, textW)
+		subtitle := ellipsize(fonts.Helper, item.Subtitle, textW)
+		textTop := iconTile.Y + iconTile.H + scaleY(10, h.Height)
+		if textTop+th+scaleY(4, h.Height)+sh > rect.Y+rect.H-scaleY(8, h.Height) {
+			// Too short for both lines: keep the title only.
+			textTop = rect.Y + rect.H - scaleY(8, h.Height) - th
+			drawText(renderer, fonts.Card, title, cx, textTop, ColorTextPrimary(), textAlignCenter)
+			return
+		}
+		drawText(renderer, fonts.Card, title, cx, textTop, ColorTextPrimary(), textAlignCenter)
+		drawText(renderer, fonts.Helper, subtitle, cx, textTop+th+scaleY(4, h.Height), ColorTextMuted(), textAlignCenter)
+		return
+	}
 
 	textX := iconTile.X + iconTile.W + scaleX(16, h.Width)
 	maxW := rect.X + rect.W - pad - textX
@@ -400,16 +507,78 @@ func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, ite
 	drawText(renderer, fonts.Helper, subtitle, textX, textTop+th+scaleY(6, h.Height), ColorTextMuted(), textAlignLeft)
 }
 
-func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, state HomeContinueState) {
+// homePressOffset converts an eased press weight into a downward offset. Three
+// pixels is enough to read as a push on both the 720p panel and a desktop
+// window, and small enough that the card never leaves its slot.
+func homePressOffset(depth float64, layoutHeight int32) int32 {
+	if depth <= 0.01 {
+		return 0
+	}
+	return int32(math.Round(uiClamp01(depth) * float64(scaleY(3, layoutHeight))))
+}
+
+// scaleHomeCard grows a card by up to three pixels for the hover/focus lift.
+// The rect is only used for drawing; hit areas keep their settled geometry so
+// clicks land where the card actually is.
+func scaleHomeCard(rect sdl.Rect, lift float64) sdl.Rect {
+	if lift <= 0.01 {
+		return rect
+	}
+	grow := int32(math.Round(uiClamp01(lift) * 3))
+	return sdl.Rect{X: rect.X - grow, Y: rect.Y - grow, W: rect.W + grow*2, H: rect.H + grow*2}
+}
+
+// homeCardStacksIcon reports whether an action card is too narrow for the
+// side-by-side icon/label layout. Under roughly 120px of label column the
+// title no longer fits and would render as an ellipsis, so the card switches
+// to a stacked icon-over-text composition instead.
+func homeCardStacksIcon(rect sdl.Rect, iconSize, pad, layoutWidth int32) bool {
+	textX := rect.X + pad + iconSize + scaleX(16, layoutWidth)
+	return rect.X+rect.W-pad-textX < scaleX(120, layoutWidth)
+}
+
+// homeActionIconTile returns the single icon tile an action card draws, plus
+// whether the card uses the stacked (icon above label) composition. ok is
+// false when the card is too small to hold an icon at all, in which case the
+// caller draws no icon rather than a clipped one.
+func homeActionIconTile(rect sdl.Rect, layoutWidth, layoutHeight int32) (tile sdl.Rect, stacked, ok bool) {
+	pad := scaleX(20, layoutWidth)
+	iconSize := min32(scaleX(56, layoutWidth), scaleY(56, layoutHeight))
+	if maxIcon := rect.H - scaleY(12, layoutHeight); iconSize > maxIcon {
+		iconSize = maxIcon
+	}
+	stacked = homeCardStacksIcon(rect, iconSize, pad, layoutWidth)
+	if stacked {
+		iconSize = min32(scaleX(40, layoutWidth), scaleY(40, layoutHeight))
+		// Keep the stacked tile inside the card's horizontal padding even on
+		// the narrowest layout the grid can produce.
+		iconSize = min32(iconSize, rect.W-pad*2)
+		if iconSize <= 0 {
+			return sdl.Rect{}, true, false
+		}
+		return sdl.Rect{
+			X: rect.X + (rect.W-iconSize)/2,
+			Y: rect.Y + scaleY(14, layoutHeight),
+			W: iconSize, H: iconSize,
+		}, true, true
+	}
+	if iconSize <= 0 {
+		return sdl.Rect{}, false, false
+	}
+	return sdl.Rect{
+		X: rect.X + pad,
+		Y: rect.Y + (rect.H-iconSize)/2,
+		W: iconSize, H: iconSize,
+	}, false, true
+}
+
+func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth float64, state HomeContinueState, lift float64) {
 	if fonts.Small == nil {
 		return
 	}
-	rect := item.Rect
+	rect := scaleHomeCard(item.Rect, lift)
 	DrawHomeCardSurface(renderer, rect, focused, pressed)
-	offsetY := int32(0)
-	if pressed {
-		offsetY = scaleY(2, h.Height)
-	}
+	offsetY := homePressOffset(pressDepth, h.Height)
 
 	pad := scaleX(28, h.Width)
 
@@ -506,11 +675,14 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 // drawChipButton renders a compact pill for the corner buttons (Exit, Back):
 // a small glyph followed by a single label, sized so the text stays readable
 // where the full action card would be too cramped.
-func (h *HomeLayout) drawChipButton(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool) {
+func (h *HomeLayout) drawChipButton(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth float64) {
 	if fonts.Small == nil {
 		return
 	}
 	rect := item.Rect
+	if pressDepth > 0 {
+		rect.Y += homePressOffset(pressDepth, h.Height)
+	}
 	bg := ColorIconSurface
 	fg := ColorTextPrimary()
 	if focused {
@@ -635,10 +807,101 @@ type homeTextKey struct {
 	color uint32
 }
 
-// homeTextCache holds the rasterized labels drawn by drawText. Entries are
-// destroyed together with textureCache at shutdown; theme changes naturally
-// create fresh keys because the color is part of the key.
-var homeTextCache = map[homeTextKey]*sdl.Texture{}
+// homeTextCache holds the rasterized labels drawn by drawText. It is bounded:
+// drawText is used for dynamic text too (clock, status parts, video titles,
+// search results, toasts), so an unbounded map slowly kept every string the
+// user ever saw as an SDL texture. The LRU keeps a long session flat at a few
+// megabytes while static labels still rasterize only once.
+type homeTextCacheEntry struct {
+	texture *sdl.Texture
+	key     homeTextKey
+	elem    *list.Element
+	bytes   int64
+}
+
+type homeTextCacheStore struct {
+	entries  map[homeTextKey]*homeTextCacheEntry
+	lru      *list.List // front = most recently used
+	bytes    int64
+	maxBytes int64
+	maxItems int
+}
+
+var homeTextCache = homeTextCacheStore{
+	entries:  map[homeTextKey]*homeTextCacheEntry{},
+	lru:      list.New(),
+	maxBytes: homeTextCacheBudgetBytes(),
+	maxItems: homeTextCacheMaxItems(),
+}
+
+// homeTextCacheBudgetBytes is the memory budget for drawText labels. They are
+// small (a title is ~10-40 KB), so a few MB holds thousands of strings.
+func homeTextCacheBudgetBytes() int64 {
+	if IsTrimuiDevice() || P().IsHandheld() {
+		return 8 << 20
+	}
+	return 48 << 20
+}
+
+// homeTextCacheMaxItems bounds the entry count as well as the bytes: many
+// tiny strings would otherwise never hit the byte budget.
+func homeTextCacheMaxItems() int {
+	if IsTrimuiDevice() || P().IsHandheld() {
+		return 512
+	}
+	return 2048
+}
+
+// homeTextCacheBytes reports the cache's memory for the texture accounting log.
+func homeTextCacheBytes() int64 {
+	return homeTextCache.bytes
+}
+
+// clearHomeTextCache destroys every cached label (shutdown / pressure).
+func clearHomeTextCache() {
+	for key, entry := range homeTextCache.entries {
+		if entry.texture != nil {
+			entry.texture.Destroy()
+		}
+		delete(homeTextCache.entries, key)
+	}
+	homeTextCache.lru.Init()
+	homeTextCache.bytes = 0
+}
+
+// put inserts a texture and evicts the least recently used entries. No lock:
+// drawText runs on the render thread only (the same contract the previous map
+// relied on).
+func (c *homeTextCacheStore) put(key homeTextKey, texture *sdl.Texture, w, h int32) {
+	bytes := int64(w) * int64(h) * 4
+	if old, ok := c.entries[key]; ok {
+		c.bytes -= old.bytes
+		c.lru.Remove(old.elem)
+		if old.texture != nil {
+			old.texture.Destroy()
+		}
+		delete(c.entries, key)
+	}
+	entry := &homeTextCacheEntry{texture: texture, key: key, bytes: bytes}
+	entry.elem = c.lru.PushFront(key)
+	c.entries[key] = entry
+	c.bytes += bytes
+	for (c.bytes > c.maxBytes && c.lru.Len() > 1) || (c.lru.Len() > c.maxItems && c.lru.Len() > 1) {
+		back := c.lru.Back()
+		if back == nil {
+			break
+		}
+		key := back.Value.(homeTextKey)
+		if evicted, ok := c.entries[key]; ok {
+			c.bytes -= evicted.bytes
+			if evicted.texture != nil {
+				evicted.texture.Destroy()
+			}
+			delete(c.entries, key)
+		}
+		c.lru.Remove(back)
+	}
+}
 
 func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, color sdl.Color, alignment textAlignment) {
 	if renderer == nil || font == nil || strings.TrimSpace(text) == "" {
@@ -652,8 +915,9 @@ func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, c
 	}
 	var texture *sdl.Texture
 	var tw, th int32
-	if cached, ok := homeTextCache[key]; ok && cached != nil {
-		texture = cached
+	if cached, ok := homeTextCache.entries[key]; ok && cached.texture != nil {
+		homeTextCache.lru.MoveToFront(cached.elem)
+		texture = cached.texture
 		_, _, tw, th, _ = texture.Query()
 	} else {
 		surface, err := font.RenderUTF8Blended(text, color)
@@ -666,7 +930,7 @@ func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, c
 			return
 		}
 		tw, th = surface.W, surface.H
-		homeTextCache[key] = texture
+		homeTextCache.put(key, texture, tw, th)
 	}
 
 	dstX := x

@@ -34,7 +34,13 @@ var (
 )
 
 // LoadPlugins scans the plugins directory and loads enabled plugins.
+// Safe mode skips the scan entirely so a broken plugin cannot block startup;
+// the caller's list simply renders as empty for this launch.
 func LoadPlugins(config *Config) {
+	if !safeModeAllows(SafeFeaturePlugins) {
+		plugins = make(map[string]*PluginInfo)
+		return
+	}
 	if _, err := os.Stat(pluginDir); os.IsNotExist(err) {
 		os.MkdirAll(pluginDir, 0755)
 		return

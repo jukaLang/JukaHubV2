@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -317,6 +318,12 @@ func readProcMeminfo() memInfo {
 // Adaptive eviction — clear caches under memory pressure
 // ──────────────────────────────────────────────────────────────────────
 
+// cacheEvictor rate-limits pressure cleanup. The main loop polls every ten
+// frames, so without this a device sitting under MemCritical re-cleared every
+// texture cache and ran a full GC several times a second: that was the hitch
+// users saw when a transition happened while RAM was tight.
+var cacheEvictor = &cachePressureEvictor{}
+
 // EvictCachesForPressure clears render caches proportional to the current
 // memory pressure level. Returns true if any cache was evicted.
 func EvictCachesForPressure(mm *MemoryMonitor) bool {
@@ -324,12 +331,19 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		return false
 	}
 	level := mm.Level()
+	if !cacheEvictor.shouldAct(level, sdl.GetTicks64()) {
+		return false
+	}
 	switch level {
 	case MemCritical:
-		log.Printf("[mem] Critical: clearing all text caches")
+		logTextureMemoryStats("critical-evict")
+		log.Printf("[mem] Critical: clearing text and thumbnail texture caches")
 		ClearTextCache()
+		clearHomeTextCache()
 		clearThumbnailCache()
-		runtime.GC()
+		// Reclaim the freed heap off the render thread. runtime.GC() here used
+		// to block the frame that was drawing a transition.
+		go debug.FreeOSMemory()
 		return true
 	case MemWarning:
 		log.Printf("[mem] Warning: trimming text cache (50%%)")
@@ -341,14 +355,7 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 
 // clearThumbnailCache destroys all cached thumbnail textures.
 func clearThumbnailCache() {
-	thumbnailCacheMutex.Lock()
-	defer thumbnailCacheMutex.Unlock()
-	for k, tex := range textureCache {
-		if tex != nil {
-			tex.Destroy()
-		}
-		delete(textureCache, k)
-	}
+	getThumbnailTextures().Clear()
 }
 
 // TrimTextCache reduces the text cache to at most keepEntries entries,
@@ -385,4 +392,11 @@ func LogDeviceDiagnostics() {
 	} else {
 		log.Printf("[device] Non-TrimUI mode: text cache 2048 entries, standard FPS")
 	}
+
+	// Texture accounting starts near zero and grows as the user browses; the
+	// baseline still proves the budgets are what this build expects.
+	s := collectTextureMemoryStats()
+	log.Printf("[tex] startup: total=%d MB (text=%d, labels=%d, thumbs=%d, video-overlay=%d, frame=%d, ui-layer=%d)",
+		s.Total()>>20, s.TextCache>>20, s.HomeText>>20, s.Thumbnails>>20, s.VideoOverlay>>20, s.VideoFrame>>20, s.UILayer>>20)
+	log.Printf("[tex] thumbnail texture budget: %d MB", thumbnailTextureBudgetBytes()>>20)
 }

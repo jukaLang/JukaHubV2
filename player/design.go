@@ -477,6 +477,93 @@ func Spacing(airy bool, size string) int32 {
 	return SpaceMD
 }
 
+// --- Semantic typography -------------------------------------------------
+
+// TypeRole names a text style in the design language. Screens pick a role
+// instead of a raw font name, so the type scale can change in one place.
+type TypeRole int
+
+const (
+	TypeTitle TypeRole = iota
+	TypeHeading
+	TypeBody
+	TypeLabel
+	TypeCaption
+)
+
+// FontName returns the logical font name configured for the role.
+func (r TypeRole) FontName() string {
+	switch r {
+	case TypeTitle:
+		return "large"
+	case TypeHeading:
+		return "medium"
+	case TypeBody:
+		return "medium"
+	case TypeLabel:
+		return "small"
+	case TypeCaption:
+		return "small"
+	}
+	return "medium"
+}
+
+// Size returns the role's design size in px. It mirrors the shipped
+// jukaconfig FontSizes and is the fallback when a config omits the entry.
+func (r TypeRole) Size() int32 {
+	switch r {
+	case TypeTitle:
+		return FontSize2XL
+	case TypeHeading:
+		return FontSizeXL
+	case TypeBody:
+		return FontSizeLG
+	case TypeLabel:
+		return FontSizeLG
+	case TypeCaption:
+		return FontSizeMD
+	}
+	return FontSizeLG
+}
+
+// FontForRole resolves the configured font for a semantic role.
+func FontForRole(config *Config, role TypeRole) *ttf.Font {
+	if config == nil {
+		return nil
+	}
+	font, _ := getCachedFont(config, role.FontName())
+	return font
+}
+
+// --- Density -------------------------------------------------------------
+
+// Density selects the spacing rhythm of a layout.
+type Density int
+
+const (
+	DensityCompact Density = iota
+	DensityComfortable
+)
+
+// DensityFor picks the rhythm for the current viewport. Low Power uses the
+// compact rhythm too, because fitting more content on screen means less
+// scrolling (and fewer redraws) on the handheld.
+func DensityFor(config *Config) Density {
+	if config != nil && config.Variables.LowPower {
+		return DensityCompact
+	}
+	if screenHeight >= 600 {
+		return DensityComfortable
+	}
+	return DensityCompact
+}
+
+// DensitySpace returns a spacing token for the density. Steps use the same
+// names as Spacing.
+func DensitySpace(d Density, step string) int32 {
+	return Spacing(d == DensityComfortable, step)
+}
+
 // focusColorForAccent returns a focus ring color from the accent hue.
 func focusColorForAccent(accent sdl.Color) sdl.Color {
 	if int(accent.R)+int(accent.G) > 420 && int(accent.R) > int(accent.B) {

@@ -1148,7 +1148,7 @@ func fetchBounded(ctx context.Context, client *http.Client, raw string, maxBytes
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "JukaHub-Patch/"+versionString(nil))
-	resp, err := client.Do(req)
+	resp, err := doWithRetry(ctx, client, req, defaultRetryPolicy())
 	if err != nil {
 		return nil, err
 	}

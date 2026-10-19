@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -27,6 +28,7 @@ type startMenuState struct {
 	startOpen bool     // menu visible
 	cursor    int      // focused menu row (D-pad/keyboard)
 	scroll    int      // first visible menu row
+	enter     uiEnter  // drop-down + fade entrance
 }
 
 var tb startMenuState
@@ -164,93 +166,112 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 	menuW, menuH := startMenuSize()
 	menuX, menuY := startMenuOrigin()
 
+	// Entrance keyframes: the scrim fades under the menu while the card itself
+	// drops from under the Apps pill and fades as one layer. Reduced motion (or
+	// a backend without render targets) draws the settled state.
+	progress := 1.0
+	if uiMotionEnabled(config) {
+		progress = tb.enter.progress(uiClockMS())
+	} else {
+		tb.enter.cancel()
+	}
+	fade := uiFadeIn.at(progress)
+	slide := int32(math.Round(uiMenuDrop.at(progress)))
+
 	// Dim everything behind the menu, keeping the top bar readable.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 140)
+	renderer.SetDrawColor(0, 0, 0, uint8(140*uiScrimProgress(progress, uiMenuEnterMS)))
 	renderer.FillRect(&sdl.Rect{X: 0, Y: HomeTopBarH, W: screenWidth, H: screenHeight - HomeTopBarH})
 
-	// Menu card.
-	fillRoundedRect(renderer, menuX, menuY, menuW, menuH, 12, ColorSurfaceAlt)
-	strokeRoundedRect(renderer, menuX, menuY, menuW, menuH, 12, 1, ColorBorder)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 90)
-	renderer.FillRect(&sdl.Rect{X: menuX, Y: menuY, W: 3, H: menuH})
+	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: menuX, Y: menuY, W: menuW, H: menuH}, func() {
 
-	// Title.
-	renderText(renderer, config, font, "Apps", ColorTextPrimary(), menuX+20, menuY+16)
-	if smallFont != nil {
-		hint := "Y / Start opens this menu"
-		hw, _, _ := smallFont.SizeUTF8(hint)
-		renderText(renderer, config, smallFont, hint, ColorTextTertiary(),
-			menuX+menuW-int32(hw)-16, menuY+22)
-	}
+		// Menu card.
+		UICard(renderer, sdl.Rect{X: menuX, Y: menuY, W: menuW, H: menuH}, UICardStyle{
+			Fill:        ColorSurfaceAlt,
+			Border:      ColorBorder,
+			Radius:      12,
+			BorderWidth: 1,
+		})
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 90)
+		renderer.FillRect(&sdl.Rect{X: menuX, Y: menuY, W: 3, H: menuH})
 
-	// Build app list from config.
-	apps := getStartMenuApps(config)
-
-	rows := startMenuRows()
-	first := tb.scroll
-	if first > len(apps)-rows {
-		first = len(apps) - rows
-	}
-	if first < 0 {
-		first = 0
-	}
-	for row := 0; row < rows; row++ {
-		i := first + row
-		if i >= len(apps) {
-			break
-		}
-		app := apps[i]
-		iy := menuY + startMenuListY + int32(row)*startMenuItemH
-		if iy+startMenuItemH > menuY+menuH {
-			break
+		// Title.
+		renderText(renderer, config, font, "Apps", ColorTextPrimary(), menuX+20, menuY+16)
+		if smallFont != nil {
+			hint := "Y / Start opens this menu"
+			hw, _, _ := smallFont.SizeUTF8(hint)
+			renderText(renderer, config, smallFont, hint, ColorTextTertiary(),
+				menuX+menuW-int32(hw)-16, menuY+22)
 		}
 
-		focused := i == tb.cursor
-		hovered := mouseX >= menuX && mouseX <= menuX+menuW &&
-			mouseY >= iy && mouseY < iy+startMenuItemH
-		if focused || hovered {
-			// Themed fills so the menu is readable on light and dark palettes.
-			fill := WithAlpha(ColorSurfaceRaised, 180)
-			if focused {
-				fill = WithAlpha(accentColor, 70)
+		// Build app list from config.
+		apps := getStartMenuApps(config)
+
+		rows := startMenuRows()
+		first := tb.scroll
+		if first > len(apps)-rows {
+			first = len(apps) - rows
+		}
+		if first < 0 {
+			first = 0
+		}
+		for row := 0; row < rows; row++ {
+			i := first + row
+			if i >= len(apps) {
+				break
 			}
-			fillRoundedRect(renderer, menuX+6, iy, menuW-12, startMenuItemH-4, 8, fill)
+			app := apps[i]
+			iy := menuY + startMenuListY + int32(row)*startMenuItemH
+			if iy+startMenuItemH > menuY+menuH {
+				break
+			}
+
+			focused := i == tb.cursor
+			hovered := mouseX >= menuX && mouseX <= menuX+menuW &&
+				mouseY >= iy && mouseY < iy+startMenuItemH
+			if focused || hovered {
+				// Themed fills so the menu is readable on light and dark palettes.
+				fill := WithAlpha(ColorSurfaceRaised, 180)
+				if focused {
+					fill = WithAlpha(accentColor, 70)
+				}
+				fillRoundedRect(renderer, menuX+6, iy, menuW-12, startMenuItemH-4, 8, fill)
+			}
+
+			iconCol := ColorTextSecondary()
+			nameCol := ColorTextPrimary()
+			if focused || hovered {
+				iconCol = ColorTextPrimary()
+				nameCol = ColorTextPrimary()
+			}
+			renderText(renderer, config, font, app.icon, iconCol, menuX+18, iy+6)
+			renderText(renderer, config, font, app.name, nameCol, menuX+52, iy+6)
 		}
 
-		iconCol := ColorTextSecondary()
-		nameCol := ColorTextPrimary()
-		if focused || hovered {
-			iconCol = ColorTextPrimary()
-			nameCol = ColorTextPrimary()
+		// Footer: version + current scene.
+		if smallFont != nil {
+			ver := versionDisplayString(config)
+			renderText(renderer, config, smallFont, ver, ColorTextTertiary(),
+				menuX+20, menuY+menuH-28)
+			if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+				sceneName := sceneDisplayName(config.Scenes[currentSceneIndex].Name)
+				sw, _, _ := smallFont.SizeUTF8(sceneName)
+				renderText(renderer, config, smallFont, sceneName, ColorTextTertiary(),
+					menuX+menuW-int32(sw)-20, menuY+menuH-28)
+			}
 		}
-		renderText(renderer, config, font, app.icon, iconCol, menuX+18, iy+6)
-		renderText(renderer, config, font, app.name, nameCol, menuX+52, iy+6)
-	}
 
-	// Footer: version + current scene.
-	if smallFont != nil {
-		ver := versionDisplayString(config)
-		renderText(renderer, config, smallFont, ver, ColorTextTertiary(),
-			menuX+20, menuY+menuH-28)
-		if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-			sceneName := sceneDisplayName(config.Scenes[currentSceneIndex].Name)
-			sw, _, _ := smallFont.SizeUTF8(sceneName)
-			renderText(renderer, config, smallFont, sceneName, ColorTextTertiary(),
-				menuX+menuW-int32(sw)-20, menuY+menuH-28)
-		}
-	}
-
-	// Scrollbar when the list is longer than the menu.
-	if len(apps) > rows {
-		thumbFrac := float64(rows) / float64(len(apps))
-		scrollFrac := 0.0
+		// Scrollbar when the list is longer than the menu.
 		if len(apps) > rows {
-			scrollFrac = float64(first) / float64(len(apps)-rows)
+			thumbFrac := float64(rows) / float64(len(apps))
+			scrollFrac := 0.0
+			if len(apps) > rows {
+				scrollFrac = float64(first) / float64(len(apps)-rows)
+			}
+			drawScrollbar(renderer, menuX+menuW-6, menuY+startMenuListY, 3,
+				menuH-startMenuListY-startMenuFootH, thumbFrac, scrollFrac)
 		}
-		drawScrollbar(renderer, menuX+menuW-6, menuY+startMenuListY, 3,
-			menuH-startMenuListY-startMenuFootH, thumbFrac, scrollFrac)
-	}
+	})
 }
 
 // startMenuIsPointIn tests if a click is inside the app menu card.
@@ -291,6 +312,7 @@ func startMenuToggle() {
 	tb.startOpen = !tb.startOpen
 	if tb.startOpen {
 		tb.cursor, tb.scroll = 0, 0
+		tb.enter.begin(uiClockMS(), uiMenuEnterMS)
 		// The two top-bar overlays are exclusive: a dropdown behind the menu
 		// would swallow the D-pad as soon as the menu closed.
 		nc.open = false

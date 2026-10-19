@@ -1,13 +1,17 @@
 package main
 
 import (
+	"container/list"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -41,14 +45,13 @@ func fetchThumbnailBytes(url string) ([]byte, error) {
 		return data, nil
 	}
 
-	// 2. Disk cache (survives restarts).
-	if db, err := cacheOpen("jukahub.cache"); err == nil {
+	// 2. Disk cache (survives restarts). The shared handle avoids a per-image
+	// open/mmap, which cost more than the download on a local network.
+	if db, err := openSharedCache("jukahub.cache"); err == nil {
 		if data, cErr := cacheGet(db, thumbnailDiskPrefix+url); cErr == nil && len(data) > 0 {
-			db.Close()
 			thumbnailDataSet(url, data)
 			return data, nil
 		}
-		db.Close()
 	}
 
 	// 3. Network with retry + backoff.
@@ -59,9 +62,8 @@ func fetchThumbnailBytes(url string) ([]byte, error) {
 
 	// Persist to both caches.
 	thumbnailDataSet(url, data)
-	if db, err := cacheOpen("jukahub.cache"); err == nil {
+	if db, err := openSharedCache("jukahub.cache"); err == nil {
 		_ = cacheSet(db, thumbnailDiskPrefix+url, data, thumbnailTTL)
-		db.Close()
 	}
 	return data, nil
 }
@@ -204,9 +206,175 @@ func PrefetchThumbnail(url string) {
 	}
 }
 
-// thumbnailPrefetchWorker is the background goroutine that drains
+// thumbnailInFlight dedupes concurrent prefetches of the same URL, which is
+// common when a grid re-enqueues its visible rows every frame.
+var thumbnailInFlight sync.Map
+
+// thumbnailWorkerCount picks prefetch concurrency. A single worker serialized
+// every thumbnail behind the slowest request, so a grid of YouTube results
+// filled one image per round trip. Two workers overlap the Wi-Fi latency
+// without competing for the handheld's 1GB of RAM; desktop gets three.
+func thumbnailWorkerCount() int {
+	if IsTrimuiDevice() || P().IsHandheld() {
+		return 2
+	}
+	return 3
+}
+
+// thumbnailPrefetchWorker is one of the background goroutines that drains
 // thumbnailDownloadCh, downloading to memory + disk caches without blocking
 // the render loop.
+// ──────────────────────────────────────────────────────────────────────
+// Bounded thumbnail texture cache
+// ──────────────────────────────────────────────────────────────────────
+
+// thumbnailTextureBudgetBytes caps the SDL textures decoded from thumbnails.
+// The old cache was an unbounded map: a long YouTube session kept every image
+// ever scrolled past, and on a 1 GB device that is what pushed the renderer
+// into evicting and re-uploading textures mid-transition. 64 MB holds roughly
+// 250 320×180 thumbnails, far more than a screenful, while leaving RAM for
+// video; desktops get a larger budget.
+func thumbnailTextureBudgetBytes() int64 {
+	if IsTrimuiDevice() || P().IsHandheld() {
+		return 64 << 20
+	}
+	return 192 << 20
+}
+
+// thumbnailTextureEntry is one cached texture with its approximate footprint.
+type thumbnailTextureEntry struct {
+	texture *sdl.Texture
+	bytes   int64
+	elem    *list.Element
+}
+
+// thumbnailTextureCache is an LRU cache of decoded thumbnail textures. Lookups
+// are O(1); eviction happens on insert, never while a texture is being drawn.
+type thumbnailTextureCache struct {
+	mu       sync.Mutex
+	entries  map[string]*thumbnailTextureEntry
+	lru      *list.List // front = most recently used; values are keys
+	bytes    int64
+	maxBytes int64
+	destroy  func(*sdl.Texture) // injectable for tests
+}
+
+func newThumbnailTextureCache(maxBytes int64) *thumbnailTextureCache {
+	if maxBytes <= 0 {
+		maxBytes = 64 << 20
+	}
+	return &thumbnailTextureCache{
+		entries:  make(map[string]*thumbnailTextureEntry),
+		lru:      list.New(),
+		maxBytes: maxBytes,
+		destroy: func(t *sdl.Texture) {
+			if t != nil {
+				t.Destroy()
+			}
+		},
+	}
+}
+
+var (
+	thumbnailTexturesOnce sync.Once
+	thumbnailTextures     *thumbnailTextureCache
+)
+
+// getThumbnailTextures returns the process-wide thumbnail texture cache,
+// created on first use so the device-specific budget is evaluated after the
+// environment (TrimUI detection) is available.
+func getThumbnailTextures() *thumbnailTextureCache {
+	thumbnailTexturesOnce.Do(func() {
+		thumbnailTextures = newThumbnailTextureCache(thumbnailTextureBudgetBytes())
+	})
+	return thumbnailTextures
+}
+
+// Get returns a cached texture and marks it most recently used.
+func (c *thumbnailTextureCache) Get(key string) *sdl.Texture {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return nil
+	}
+	c.lru.MoveToFront(entry.elem)
+	return entry.texture
+}
+
+// Put stores a texture, evicting least-recently-used entries over the budget.
+// w/h are the texture dimensions; they determine the accounted footprint.
+func (c *thumbnailTextureCache) Put(key string, texture *sdl.Texture, w, h int32) {
+	bytes := int64(w) * int64(h) * 4
+	if bytes <= 0 {
+		// Query can fail on an unusual driver format. Account a conservative
+		// floor so such entries still age out of the budget instead of
+		// accumulating for free.
+		bytes = 64 * 64 * 4
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old, ok := c.entries[key]; ok {
+		c.bytes -= old.bytes
+		c.lru.Remove(old.elem)
+		c.destroy(old.texture)
+		delete(c.entries, key)
+	}
+	entry := &thumbnailTextureEntry{texture: texture, bytes: bytes}
+	entry.elem = c.lru.PushFront(key)
+	c.entries[key] = entry
+	c.bytes += bytes
+	// Keep at least the newest entry even if a single texture exceeds the
+	// budget; destroying it would return a dangling pointer to the caller.
+	for c.bytes > c.maxBytes && c.lru.Len() > 1 {
+		back := c.lru.Back()
+		if back == nil {
+			break
+		}
+		key := back.Value.(string)
+		if evicted, ok := c.entries[key]; ok {
+			c.bytes -= evicted.bytes
+			c.destroy(evicted.texture)
+			delete(c.entries, key)
+		}
+		c.lru.Remove(back)
+	}
+}
+
+// Clear destroys every cached texture. Runs on the render thread / shutdown.
+func (c *thumbnailTextureCache) Clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, entry := range c.entries {
+		c.destroy(entry.texture)
+		delete(c.entries, key)
+	}
+	c.lru.Init()
+	c.bytes = 0
+}
+
+// contains reports whether a key is cached, without touching its LRU position.
+func (c *thumbnailTextureCache) contains(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.entries[key]
+	return ok
+}
+
+// Len returns the number of cached textures.
+func (c *thumbnailTextureCache) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.entries)
+}
+
+// Bytes returns the approximated texture memory held by the cache.
+func (c *thumbnailTextureCache) Bytes() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.bytes
+}
+
 func thumbnailPrefetchWorker() {
 	for url := range thumbnailDownloadCh {
 		if url == "" {
@@ -218,10 +386,17 @@ func thumbnailPrefetchWorker() {
 		if memHit {
 			continue
 		}
-		if _, err := fetchThumbnailBytes(url); err != nil {
+		if _, busy := thumbnailInFlight.LoadOrStore(url, struct{}{}); busy {
+			continue
+		}
+		err := func() error {
+			defer thumbnailInFlight.Delete(url)
+			_, err := fetchThumbnailBytes(url)
+			return err
+		}()
+		if err != nil {
 			// Silent failure — the render path retries on demand.
 			log.Printf("[thumb] prefetch failed for %s: %v", url, err)
-			continue
 		}
 	}
 }

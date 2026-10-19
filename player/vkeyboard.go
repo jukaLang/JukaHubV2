@@ -963,6 +963,8 @@ var (
 	vkVideoOverlayValid  bool
 	vkVideoOverlayBroken bool // renderer has no render-target support: draw live
 	vkVideoOverlayBuilds int  // rebuild count, used by tests and diagnostics
+	vkVideoOverlayW      int32
+	vkVideoOverlayH      int32
 )
 
 func DestroyVKVideoOverlayCache() {
@@ -972,6 +974,16 @@ func DestroyVKVideoOverlayCache() {
 	}
 	vkVideoOverlayValid = false
 	vkVideoOverlayBroken = false
+	vkVideoOverlayW, vkVideoOverlayH = 0, 0
+}
+
+// cachedVideoOverlayBytes reports the memory held by the cached static video
+// overlay layer, for the texture-accounting log.
+func cachedVideoOverlayBytes() int64 {
+	if vkVideoOverlayTex == nil {
+		return 0
+	}
+	return int64(vkVideoOverlayW) * int64(vkVideoOverlayH) * 4
 }
 
 // vkEnsureVideoOverlayCache returns the cached static layer of the video
@@ -1027,6 +1039,7 @@ func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int3
 	_ = renderer.SetDrawBlendMode(prevBlend)
 	vkVideoOverlayTex = tex
 	vkVideoOverlayState = state
+	vkVideoOverlayW, vkVideoOverlayH = w, h
 	vkVideoOverlayValid = true
 	vkVideoOverlayBuilds++
 	return tex

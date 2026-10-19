@@ -1,5 +1,7 @@
 # JukaHubV2 Modernization Plan
 
+> **Implementation status (2026-10-18):** verified item-by-item in [MODERNIZATION-CHECKLIST.md](MODERNIZATION-CHECKLIST.md). `go vet ./...`, `go test ./...` and `go build .` pass on this revision. The newest handheld work is in [Phase 8](#phase-8-trimui-handheld-polish).
+
 ## Executive Summary
 
 This document outlines the modernization of JukaHubV2 for production use on **Trimui Smart Pro** (1280×720, ARM64, 1GB RAM) and **Windows** (x64, resizable). The goal is to create a controller-first, responsive, reliable handheld launcher while preserving the existing Go + SDL2 runtime and config-driven architecture.
@@ -37,43 +39,43 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - ✅ Icon rendering: Made backgrounds opaque
 
 #### 2. Architecture Issues (Phase 2)
-- ❌ **Monolithic main.go**: ~5000 lines, no clear separation of concerns
-- ❌ **Global state**: All state in package-level variables
-- ❌ **No async work isolation**: HTTP, image decoding on render thread
-- ❌ **No context cancellation**: Background work not cancellable
-- ❌ **No bounded concurrency**: Unbounded goroutines for thumbnails, weather, etc.
-- ❌ **No platform abstraction**: OS-specific code mixed throughout
-- ❌ **No structured logging**: Uses `log.Printf` everywhere
-- ❌ **No config validation**: Assumes valid JSON, no schema versioning
-- ❌ **No atomic writes**: Config writes not atomic
-- ❌ **No safe mode**: Corrupt config prevents startup
+- 🟡 **Large main.go**: split into core/extras/feature files, but `main.go` (~1.8k lines) still owns the loop
+- 🟡 **Global state**: still package-level, though ownership is now split by file
+- 🟡 **Async isolation**: most network work is off-thread; some render-path decoding remains
+- 🟡 **Context cancellation**: Patch, downloads and text browser use contexts; older fetches do not
+- 🟡 **Bounded concurrency**: thumbnail downloads are serialized; other paths are not pooled
+- ✅ **Platform abstraction**: `platform.go` behind `P()`
+- ✅ **Structured logging**: `log/slog` with scene/operation fields
+- ✅ **Config validation + schema versioning**: `config_schema.go`, `config_health.go`
+- ✅ **Atomic writes**: `AtomicWrite` with `.bak` fallback
+- ✅ **Safe mode**: flag/env/marker disables plugins, updater and network work
 
 #### 3. UI/UX Issues (Phase 1 - Partially Fixed)
 - ✅ Home screen layout: Responsive grid with 4/3/2 columns
 - ✅ Focus state: 3px cyan accent outline
-- ❌ Focus preservation: No remembered focus per scene
-- ❌ Focus graph: No explicit focus order, relies on element index
-- ❌ Empty states: Continue panel has compact empty state
+- ✅ Focus preservation: per-scene persist/restore (`focus.go`)
+- ✅ Focus graph: explicit per-scene graph with deterministic navigation
+- ✅ Empty states: shared `UIEmptyState` / `UIErrorState`
 - ❌ Icon consistency: Monochrome icons but mixed stroke weights
-- ❌ Typography: Limited font weights (regular only)
-- ❌ Spacing: Magic numbers, not consistent 8pt grid
+- 🟡 Typography: semantic size roles and font-size config; one font weight
+- ✅ Spacing: 4pt scale plus density tokens
 
 #### 4. Performance Issues (Phase 3)
-- ❌ Per-frame allocations: Textures created every frame
-- ❌ No texture caching: Thumbnails downloaded fresh each time
-- ❌ No list virtualization: Full lists rendered
-- ❌ No idle mode: Polling continues when scene hidden
-- ❌ No power profiles: No battery/thermal awareness
-- ❌ No render budget: No frame time limits
+- ✅ Text textures are cached (`textcache.go`)
+- ✅ Texture/thumbnail caching with entry and byte limits
+- 🟡 No list virtualization: full lists are still drawn, clipped to the viewport
+- 🟡 Idle frame cadence exists; background polling is not scene-scoped
+- 🟡 Low-power mode and adaptive frame rate; no named profiles
+- ✅ Adaptive frame budget (`adaptive.go`)
 
 #### 5. Reliability Issues (Phase 4)
-- ❌ No config validation: Invalid JSON crashes app
-- ❌ No atomic writes: Config corruption possible
-- ❌ No backup: No last-known-good config
-- ❌ No crash recovery: No unclean shutdown detection
-- ❌ No offline handling: Network failures crash UI
-- ❌ No missing tool detection: `yt-dlp`/`ffplay` errors in terminal
-- ❌ No log viewer: Logs only to stderr
+- ✅ Config validation with defaults on failure
+- ✅ Atomic writes with last-known-good backup
+- ✅ Backup: `config_health.go` restores the `.bak` copy
+- ✅ Crash recovery: update journal rollback at startup
+- ✅ Offline handling: best-effort failures and connectivity monitor
+- ✅ Missing tool detection: health check plus guided install bar
+- ✅ Log viewer: captured ring buffer rendered by `textlog` scenes
 
 ## Implementation Plan
 
@@ -89,181 +91,260 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [x] Format all Go files
 
 ### Phase 2: Architecture Refactoring
-**Status**: 🔄 In Progress
+**Status**: 🟡 Mostly complete — see the checklist
 
 #### 2.1 Design System
 - [x] Semantic color tokens in `design.go`
-- [ ] Add spacing tokens (8, 12, 16, 24, 32)
-- [ ] Add radius tokens (small, medium, large)
-- [ ] Add typography tokens (title, heading, body, label)
-- [ ] Add motion tokens (fast, standard, reduced)
-- [ ] Add density tokens (compact, comfortable)
+- [x] Add spacing tokens (8, 12, 16, 24, 32)
+- [x] Add radius tokens (small, medium, large)
+- [x] Add typography tokens (title, heading, body, label)
+- [x] Add motion tokens (fast, standard, reduced) — `anim.go`: `uiMenuEnterMS`/`uiPanelEnterMS`/`uiFadeMS`, all gated by `ReducedMotion`
+- [x] Add density tokens (compact, comfortable)
 
 #### 2.2 Component System
 - [ ] Create `AppBar` component
-- [ ] Create `StatusBar` component
-- [ ] Create `FooterHints` component
-- [ ] Create `Card` component
+- [x] Create `StatusBar` component
+- [x] Footer hints (`FooterHint` + `renderFooter`)
+- [x] Create `Card` component
 - [ ] Create `CategoryTile` component
 - [ ] Create `Button` component
 - [ ] Create `IconButton` component
-- [ ] Create `ListRow` component
-- [ ] Create `Grid` component
-- [ ] Create `ProgressBar` component
-- [ ] Create `Badge` component
-- [ ] Create `Toast` component
-- [ ] Create `EmptyState` component
-- [ ] Create `ErrorState` component
-- [ ] Create `LoadingSkeleton` component
+- [x] Create `ListRow` component
+- [x] Create `Grid` component
+- [x] Create `ProgressBar` component
+- [x] Create `Badge` component
+- [x] Create `Toast` component
+- [x] Create `EmptyState` component
+- [x] Create `ErrorState` component
+- [x] Create `LoadingSkeleton` component
 
 #### 2.3 Focus System
 - [ ] Create `Focusable` interface
-- [ ] Build explicit focus graph per scene
-- [ ] Implement focus preservation on scene return
-- [ ] Add deterministic directional navigation
-- [ ] Add focus animation (100-140ms)
-- [ ] Add reduced-motion mode
+- [x] Build explicit focus graph per scene
+- [x] Implement focus preservation on scene return
+- [x] Add deterministic directional navigation
+- [x] Add focus animation (100-140ms) — keyframed hover/focus lift on home cards and buttons
+- [x] Add reduced-motion mode
 - [ ] Add input remapping screen
 - [ ] Add controller test screen
 
 #### 2.4 Platform Abstraction
-- [ ] Define `Platform` interface
-- [ ] Create `platform/tsp/` for Trimui/Linux
-- [ ] Create `platform/win/` for Windows
-- [ ] Move OS-specific paths to platform layer
-- [ ] Move process flags to platform layer
-- [ ] Move power behavior to platform layer
-- [ ] Move tool discovery to platform layer
+- [x] Define `Platform` interface
+- [x] Add TrimUI/Linux platform implementation (`platform.go`)
+- [x] Add Windows platform implementation (`platform.go`)
+- [x] Move OS-specific paths to platform layer
+- [x] Move process flags to platform layer
+- [x] Move power behavior to platform layer
+- [x] Move tool discovery to platform layer
 
 ### Phase 3: Async Work & Performance
-**Status**: ⏳ Pending
+**Status**: 🟡 In progress
 
 #### 3.1 Concurrency Model
 - [ ] Add `context.Context` everywhere
 - [ ] Add `errgroup` for coordinated cancellation
 - [ ] Add bounded semaphore for concurrency limits
 - [ ] Create worker pool for image decoding (2 jobs on Trimui)
-- [ ] Create worker pool for network requests (2-3 jobs on Trimui)
+- [x] Create worker pool for network requests (2-3 jobs on Trimui) — thumbnail prefetch: 2 on handhelds, 3 on desktop
 - [ ] Debounce search input (250-350ms)
 - [ ] Cancel scene work on scene exit
 
 #### 3.2 Caching
-- [ ] Add font texture cache (key: font+size+color+string)
+- [x] Add font texture cache (key: font+size+color+string)
 - [ ] Add icon texture atlas
-- [ ] Add thumbnail cache with byte limit
-- [ ] Add network response cache with TTL
-- [ ] Add LRU eviction policy
+- [x] Add thumbnail cache with byte limit
+- [x] Add network response cache with TTL
+- [x] Add LRU eviction policy
 
 #### 3.3 Rendering
-- [ ] Cache text textures
+- [x] Cache text textures
 - [ ] Cache static icons in atlas
 - [ ] Reuse card/label/image objects
-- [ ] Add clipping for lists/grids
-- [ ] Add idle render mode
-- [ ] Add frame time budget
+- [x] Add clipping for lists/grids
+- [x] Add idle render mode
+- [x] Add frame time budget
 
 #### 3.4 Power Management
 - [ ] Add Battery Saver profile
 - [ ] Add Balanced profile
 - [ ] Add Performance profile
 - [ ] Stop polling when scene hidden
-- [ ] Reduce animation in battery saver
+- [x] Reduce animation in battery saver
 
 ### Phase 4: Reliability & Configuration
-**Status**: ⏳ Pending
+**Status**: 🟡 Mostly complete
 
 #### 4.1 Configuration
-- [ ] Add schema versioning
-- [ ] Add config validation
-- [ ] Add migrations for old configs
-- [ ] Add atomic writes (temp file + rename)
-- [ ] Add last-known-good backup
-- [ ] Add config hot-reload (Windows dev only)
-- [ ] Add portable mode for packaging
+- [x] Add schema versioning
+- [x] Add config validation
+- [x] Add migrations for old configs
+- [x] Add atomic writes (temp file + rename)
+- [x] Add last-known-good backup
+- [x] Add config hot-reload (Windows dev only)
+- [x] Add portable mode for packaging
 
 #### 4.2 Logging
-- [ ] Switch to `log/slog`
-- [ ] Add structured fields (subsystem, scene, action, duration)
-- [ ] Add JSON logs for Windows
-- [ ] Add compact logs for Trimui
+- [x] Switch to `log/slog`
+- [x] Add structured fields (subsystem, scene, action, duration)
+- [x] Add JSON logs for Windows
+- [x] Add compact logs for Trimui
 - [ ] Add log rotation
-- [ ] Add in-app log viewer
-- [ ] Add diagnostic bundle export
+- [x] Add in-app log viewer
+- [x] Add diagnostic bundle export
 
 #### 4.3 Error Handling
-- [ ] Add offline detection
+- [x] Add offline detection
 - [ ] Add cached fallback for offline content
-- [ ] Add guided remediation for missing tools
-- [ ] Add safe mode (disable plugins, themes, networking)
-- [ ] Add unclean shutdown detection
-- [ ] Add crash recovery UX
+- [x] Add guided remediation for missing tools
+- [x] Add safe mode (disable plugins, themes, networking)
+- [x] Add unclean shutdown detection
+- [x] Add crash recovery UX
 
 #### 4.4 Network
-- [ ] Create shared HTTP client
-- [ ] Add connection reuse
-- [ ] Add request timeouts
-- [ ] Add max response sizes
-- [ ] Add retry with exponential backoff + jitter
+- [x] Create shared HTTP client
+- [x] Add connection reuse
+- [x] Add request timeouts
+- [x] Add max response sizes
+- [x] Add retry with exponential backoff + jitter
 - [ ] Add conditional caching
-- [ ] Add offline detection
+- [x] Add offline detection
 
 ### Phase 5: Features
-**Status**: ⏳ Pending
+**Status**: 🟡 Partially complete
 
 #### 5.1 Media
 - [ ] Add media-backend interface (ffplay today; keep it swappable)
 - [ ] Add playback queue
-- [ ] Add resume position
-- [ ] Add progress display
+- [x] Add resume position
+- [x] Add progress display
 - [ ] Add cancellation
-- [ ] Add clear failure messages
+- [x] Add clear failure messages
 
 #### 5.2 Files
-- [ ] Add file explorer improvements
+- [x] Add file explorer improvements
 - [ ] Add drag-and-drop (Windows)
-- [ ] Add clipboard integration (Windows)
+- [x] Add clipboard integration (Windows)
 
 #### 5.3 Packages
-- [ ] Add package trust UX
-- [ ] Add source/version/checksum display
-- [ ] Add uninstall rollback
+- [x] Add package trust UX
+- [x] Add source/version/checksum display
+- [x] Add uninstall rollback
 
 #### 5.4 Settings
 - [ ] Add controller remapping
-- [ ] Add accessibility settings
+- [x] Add accessibility settings
 - [ ] Add power profile selection
-- [ ] Add theme preview
+- [x] Add theme preview
 
 ### Phase 6: Testing
-**Status**: ⏳ Pending
+**Status**: 🟡 Partially complete — bounds, cache, retry and persistence gaps closed
 
-- [ ] Add config validation tests
-- [ ] Add focus graph navigation tests
-- [ ] Add input normalization tests
-- [ ] Add layout bounds tests (1280×720)
-- [ ] Add cache eviction tests
+- [x] Add config validation tests
+- [x] Add focus graph navigation tests
+- [x] Add input normalization tests
+- [x] Add layout bounds tests (1280×720)
+- [x] Add cache eviction tests
 - [ ] Add cancellation tests
-- [ ] Add external process cleanup tests
-- [ ] Add URL/path validation tests
-- [ ] Add offline/retry behavior tests
+- [x] Add external process cleanup tests — ffmpeg decoder join + teardown assertion
+- [x] Add URL/path validation tests
+- [x] Add offline/retry behavior tests
 - [ ] Add platform path selection tests
 - [ ] Add benchmarks for render, cache, navigation
 
 ### Phase 7: Web Builder
-**Status**: ⏳ Pending
+**Status**: 🟡 Mostly complete — snapping and guides still missing
 
-- [ ] Add semantic design tokens
+- [x] Add semantic design tokens
 - [ ] Add reusable components
 - [ ] Add snap-to-grid
 - [ ] Add alignment guides
 - [ ] Add safe-area overlay
 - [ ] Add focus-order editor
-- [ ] Add state previews
-- [ ] Add undo/redo
-- [ ] Add autosave
+- [x] Add state previews
+- [x] Add undo/redo
+- [x] Add autosave
 - [ ] Add Trimui performance linting
 - [ ] Add schema validation
-- [ ] Add production export
+- [x] Add production export
+
+### Phase 8: TrimUI handheld polish
+**Status**: 🟡 Started — interaction feedback and card rendering landed; the rest is queued
+
+This phase collects the work that specifically targets the TrimUI Smart Pro
+(1280×720, ARM64, 1 GB RAM, 60 Hz panel) rather than desktop parity.
+
+#### 8.1 Interaction feedback (implemented)
+- [x] One icon per home card: `homeActionIconTile` picks the horizontal or the
+      stacked composition **before** drawing, so Files and Settings no longer
+      render a wide tile plus a small stacked tile on top of it
+- [x] Eased press dip for every click: home cards, config buttons and app tiles
+      travel down over the press window instead of toggling a fixed 2 px offset
+      (`uiPressDepth` / `uiPressProgress` in `anim.go`)
+- [x] Scene fade-out/fade-in retimed for the handheld: 160 ms out, 200 ms in
+      (was 250/300 ms, which read as waiting after every button press)
+- [x] Theme-aware fade scrim: the transition follows the active theme's
+      background instead of hardcoded near-black, so light themes no longer
+      flash dark between screens
+- [x] Press feedback still animates under Low Power (the handheld default) and
+      snaps under Reduced Motion only; entrance animations remain gated by both
+- [ ] Haptic tick on card activation (SDL haptic, best-effort, off by default)
+- [ ] Hold-to-repeat on list edges for D-pad scrolling
+
+#### 8.2 Touch & layout
+- [x] Responsive stacked composition for half-width cards (Files, Settings)
+- [x] Stacked cards keep their subtitle: the tile shrinks just enough for both
+      text lines instead of dropping the subtitle and leaving dead space
+- [ ] Guarantee ≥44×44 px touch targets for every interactive control
+- [ ] Safe-area insets so cards and footer chips clear the panel's rounded corners
+- [ ] Enlarge the Exit chip's hit area without changing its drawn size
+
+#### 8.3 Rendering budget
+- [x] Text texture cache and byte-capped thumbnail cache
+- [x] Bounded thumbnail prefetch (2 workers on handhelds)
+- [x] **Bounded thumbnail texture cache** (`thumbstore.go`): an LRU with a
+      64 MB budget on handhelds / 192 MB on desktop. The old map kept every
+      thumbnail texture for the whole session, which is what forced SDL to
+      re-upload and evict during long browsing sessions.
+- [x] **Texture memory accounting** (`perf.go`, `JUKAHUB_TEXSTATS=1`): text,
+      thumbnail, video overlay, decoded frame and UI-layer bytes are logged at
+      startup, on critical pressure, and periodically when the env var is set.
+- [x] **Bounded `drawText` label cache** (`homelayout.go`): 8 MB / 512 entries
+      on handhelds, 48 MB / 2048 on desktop, LRU-evicted. Dynamic strings
+      (clock, status, titles, toasts) used to accumulate textures forever.
+- [x] Theme changes drop cached text and label textures immediately, so the
+      new palette shows on the next frame instead of waiting for LRU eviction.
+- [ ] Cache the ambient glow instead of re-blending four blobs per frame
+- [ ] Icon atlas for the shared 32 px glyph set
+- [ ] Virtualize lists and grids by row instead of drawing the full list clipped
+- [ ] Keep thumbnail decoding out of the render path (decode budget of 2/frame)
+
+#### 8.4 Memory & GC (implemented)
+- [x] Go collector tuned per device (`applyGCForDevice`): GOGC=60 with a
+      384 MB soft heap limit on 1 GB/handheld targets, GOGC=80 / 768 MB up to
+      2 GB, stock settings on desktops. Explicit `GOGC`/`GOMEMLIMIT` env vars
+      always win so profiling runs are not silently overridden.
+- [x] Debounced cache-pressure eviction: the loop used to clear every texture
+      cache and run a full `runtime.GC()` every ~10 frames while RAM was low
+      (≈3 times a second). It now acts on a new pressure level and at most once
+      per 15 s (critical) / 60 s (warning), and the reclamation runs off the
+      render thread.
+- [x] **Decode-size cap**: sources above the display size are scaled in ffmpeg
+      (1280×720 handheld, 1080p desktop) instead of decoding 33 MB 4K RGBA
+      frames for a 720p panel.
+- [x] **Zero-copy frame handoff**: the decoder swaps its buffer with the
+      renderer's instead of copying every frame (a 720p frame is 3.6 MB).
+- [x] Video texture is recreated when a new source has different dimensions
+      (previously the old texture size was reused and SDL rejected the upload).
+- [ ] Scene-scoped texture release: free caches for scenes that are not open
+- [ ] On-device measurement of cold start, transition frame time and idle RSS
+
+#### 8.5 Power & startup
+- [ ] Named power profiles (Battery Saver / Balanced / Performance) mapping to
+      Low Power, adaptive FPS and motion in one setting
+- [ ] Scene-scoped polling: stop weather/network refreshes for hidden scenes
+- [ ] Warm start: draw the home shell on the first frame, fetch afterwards
+- [ ] Measure cold-start time and idle frame cost on the device (target: home
+      interactive < 1.5 s, idle < 5% CPU at the capped cadence)
 
 ## Acceptance Criteria
 
@@ -279,16 +360,16 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [ ] Home screen interactive quickly after launch
 - [ ] Navigation responsive while thumbnails/network load
 - [ ] No network/image/filesystem work on render loop
-- [ ] Texture/thumbnail caches have entry/byte limits
+- [x] Texture/thumbnail caches have entry/byte limits
 - [ ] Idle scenes reduce polling/rendering
 - [ ] Trimui build stable under repeated scene changes
 
 ### Reliability
-- [ ] Corrupt user config doesn't prevent startup
-- [ ] Missing tools produce guided remediation
-- [ ] Writes are atomic and recoverable
-- [ ] Plugins can be disabled via safe mode
-- [ ] Logs identify scene/action/operation/platform/duration
+- [x] Corrupt user config doesn't prevent startup
+- [x] Missing tools produce guided remediation
+- [x] Writes are atomic and recoverable
+- [x] Plugins can be disabled via safe mode
+- [x] Logs identify scene/action/operation/platform (duration where measured)
 - [ ] Windows/Trimui builds pass CI with smoke tests
 
 ## Timeline Estimate
@@ -317,22 +398,19 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 
 ## Next Steps
 
-1. **Complete Phase 1** (UI/UX fixes) - ✅ Done
-2. **Start Phase 2** (Architecture refactoring)
-   - Create component system
-   - Build focus graph
-   - Add platform abstraction
-3. **Implement Phase 3** (Async work)
-   - Add context cancellation
-   - Create worker pools
-   - Add caching
-4. **Implement Phase 4** (Reliability)
-   - Add config validation
-   - Add structured logging
-   - Add error handling
-5. **Add Features** (Phase 5)
-6. **Write Tests** (Phase 6)
-7. **Update Web Builder** (Phase 7)
+The phases above are now mostly implemented. The authoritative remaining work,
+with file-level evidence, is the **Recommended next work** section of
+[MODERNIZATION-CHECKLIST.md](MODERNIZATION-CHECKLIST.md):
+
+1. Bounded async work and scene-scoped cancellation.
+2. Log rotation and wiring `Ctrl+L` to the existing Logs scene.
+3. Controller remapping screen.
+4. Web builder snapping, alignment guides, safe-area overlay and schema validation.
+5. Render/navigation benchmarks at 720p.
+6. **Phase 8 handheld polish:** touch-target audit, safe-area insets, cached
+   ambient glow, icon atlas, list virtualization, named power profiles, and
+   on-device measurement of cold start, transition frame time, idle RSS and the
+   GC/decode tuning above (all numbers so far are desktop proxies).
 
 ## Notes
 

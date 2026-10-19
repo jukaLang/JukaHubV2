@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -34,6 +35,7 @@ type notifCenter struct {
 	bellRect  sdl.Rect
 	dropRect  sdl.Rect
 	clearRect sdl.Rect // "Clear All" hit area
+	enter     uiEnter  // drop-down + fade entrance
 }
 
 var nc notifCenter
@@ -115,16 +117,10 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 	// Unread count badge.
 	unread := notifUnreadCount()
 	if unread > 0 {
-		badgeR := int32(8)
-		badgeX := bellX + bellW - 4
-		badgeY := bellY - 2
-		fillCircle(renderer, badgeX, badgeY, badgeR,
-			sdl.Color{R: 220, G: 60, B: 60, A: 240})
 		numStr := fmt.Sprintf("%d", unread)
-		nw, _, _ := font.SizeUTF8(numStr)
-		renderText(renderer, config, font, numStr,
-			sdl.Color{R: 255, G: 255, B: 255, A: 255},
-			badgeX-int32(nw)/2, badgeY-6)
+		bw, bh := UIBadgeSize(config, numStr)
+		UIBadge(renderer, config, bellX+bellW-bw+SpaceXS, bellY-bh/2, numStr,
+			sdl.Color{R: 220, G: 60, B: 60, A: 240}, sdl.Color{R: 255, G: 255, B: 255, A: 255})
 	}
 
 	nc.bellRect = rect
@@ -163,94 +159,106 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 		dropH = maxH
 	}
 
+	// Entrance keyframes: the scrim fades while the card drops out from under
+	// the bell, so the panel arrives as one layer instead of popping.
+	progress := 1.0
+	if uiMotionEnabled(config) {
+		progress = nc.enter.progress(uiClockMS())
+	} else {
+		nc.enter.cancel()
+	}
+	fade := uiFadeIn.at(progress)
+	slide := int32(math.Round(uiDropDown.at(progress)))
+
 	// Dark backdrop.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 160)
+	renderer.SetDrawColor(0, 0, 0, uint8(160*uiScrimProgress(progress, uiPanelEnterMS)))
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
 
-	// Dropdown card.
-	nc.dropRect = sdl.Rect{X: bx, Y: by, W: dropW, H: dropH}
-	fillRoundedRect(renderer, bx, by, dropW, dropH, 16,
-		sdl.Color{R: 16, G: 20, B: 30, A: 245})
-	strokeRoundedRect(renderer, bx, by, dropW, dropH, 16, 1, ColorBorder)
+	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: bx, Y: by, W: dropW, H: dropH}, func() {
+		// Dropdown card.
+		nc.dropRect = sdl.Rect{X: bx, Y: by, W: dropW, H: dropH}
+		UICard(renderer, sdl.Rect{X: bx, Y: by, W: dropW, H: dropH}, UICardStyle{
+			Fill:   sdl.Color{R: 16, G: 20, B: 30, A: 245},
+			Border: ColorBorder,
+			Radius: 16,
+		})
 
-	// Header: "Notifications" + Clear All.
-	title := "Notifications"
-	renderText(renderer, config, font, title,
-		sdl.Color{R: 200, G: 210, B: 230, A: 220}, bx+16, by+12)
+		// Header: "Notifications" + Clear All.
+		title := "Notifications"
+		renderText(renderer, config, font, title,
+			sdl.Color{R: 200, G: 210, B: 230, A: 220}, bx+16, by+12)
 
-	nc.clearRect = sdl.Rect{}
-	if len(nc.history) > 0 {
-		clearStr := "Clear All"
-		cw, ch, _ := font.SizeUTF8(clearStr)
-		clearX := bx + dropW - int32(cw) - 16
-		nc.clearRect = sdl.Rect{X: clearX - 8, Y: by + 6, W: int32(cw) + 16, H: int32(ch) + 12}
-		renderText(renderer, config, font, clearStr,
-			sdl.Color{R: 220, G: 100, B: 100, A: 200},
-			clearX, by+12)
-	}
-
-	// Notification rows.
-	listY := by + headerH
-	for i := 0; i < numRows && i < len(nc.history); i++ {
-		n := nc.history[i]
-		ry := listY + int32(i)*rowH
-
-		if ry+rowH > by+dropH {
-			break
+		nc.clearRect = sdl.Rect{}
+		if len(nc.history) > 0 {
+			clearStr := "Clear All"
+			cw, ch, _ := font.SizeUTF8(clearStr)
+			clearX := bx + dropW - int32(cw) - 16
+			nc.clearRect = sdl.Rect{X: clearX - 8, Y: by + 6, W: int32(cw) + 16, H: int32(ch) + 12}
+			renderText(renderer, config, font, clearStr,
+				sdl.Color{R: 220, G: 100, B: 100, A: 200},
+				clearX, by+12)
 		}
 
-		// Row background.
-		if i == nc.cursor {
-			fillRoundedRect(renderer, bx+4, ry, dropW-8, rowH-2, 8,
-				sdl.Color{R: 30, G: 36, B: 50, A: 255})
+		// Notification rows.
+		listY := by + headerH
+		for i := 0; i < numRows && i < len(nc.history); i++ {
+			n := nc.history[i]
+			ry := listY + int32(i)*rowH
+
+			if ry+rowH > by+dropH {
+				break
+			}
+
+			// Row background.
+			if i == nc.cursor {
+				fillRoundedRect(renderer, bx+4, ry, dropW-8, rowH-2, 8,
+					sdl.Color{R: 30, G: 36, B: 50, A: 255})
+			}
+
+			// Priority dot.
+			dotCol := sdl.Color{R: 80, G: 160, B: 255, A: 220}
+			switch n.Priority {
+			case notifSuccess:
+				dotCol = sdl.Color{R: 80, G: 200, B: 120, A: 220}
+			case notifWarning:
+				dotCol = sdl.Color{R: 240, G: 180, B: 60, A: 220}
+			case notifError:
+				dotCol = sdl.Color{R: 220, G: 70, B: 70, A: 220}
+			}
+			fillCircle(renderer, bx+20, ry+rowH/2, 4, dotCol)
+
+			// Message.
+			msg := n.Message
+			if len(msg) > 38 {
+				msg = msg[:38] + "…"
+			}
+			msgCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
+			if n.Read {
+				msgCol = sdl.Color{R: 110, G: 120, B: 140, A: 180}
+			}
+			renderText(renderer, config, font, msg, msgCol, bx+32, ry+8)
+
+			// Timestamp.
+			ago := time.Since(n.Timestamp)
+			timeStr := ""
+			switch {
+			case ago < time.Minute:
+				timeStr = "just now"
+			case ago < time.Hour:
+				timeStr = fmt.Sprintf("%dm ago", int(ago.Minutes()))
+			default:
+				timeStr = fmt.Sprintf("%dh ago", int(ago.Hours()))
+			}
+			renderText(renderer, config, font, timeStr,
+				sdl.Color{R: 80, G: 90, B: 110, A: 150}, bx+32, ry+24)
 		}
 
-		// Priority dot.
-		dotCol := sdl.Color{R: 80, G: 160, B: 255, A: 220}
-		switch n.Priority {
-		case notifSuccess:
-			dotCol = sdl.Color{R: 80, G: 200, B: 120, A: 220}
-		case notifWarning:
-			dotCol = sdl.Color{R: 240, G: 180, B: 60, A: 220}
-		case notifError:
-			dotCol = sdl.Color{R: 220, G: 70, B: 70, A: 220}
+		if len(nc.history) == 0 {
+			UIEmptyState(renderer, config, sdl.Rect{X: bx, Y: listY, W: dropW, H: dropH - headerH},
+				"(*)", "No notifications", "You're all caught up.")
 		}
-		fillCircle(renderer, bx+20, ry+rowH/2, 4, dotCol)
-
-		// Message.
-		msg := n.Message
-		if len(msg) > 38 {
-			msg = msg[:38] + "…"
-		}
-		msgCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
-		if n.Read {
-			msgCol = sdl.Color{R: 110, G: 120, B: 140, A: 180}
-		}
-		renderText(renderer, config, font, msg, msgCol, bx+32, ry+8)
-
-		// Timestamp.
-		ago := time.Since(n.Timestamp)
-		timeStr := ""
-		switch {
-		case ago < time.Minute:
-			timeStr = "just now"
-		case ago < time.Hour:
-			timeStr = fmt.Sprintf("%dm ago", int(ago.Minutes()))
-		default:
-			timeStr = fmt.Sprintf("%dh ago", int(ago.Hours()))
-		}
-		renderText(renderer, config, font, timeStr,
-			sdl.Color{R: 80, G: 90, B: 110, A: 150}, bx+32, ry+24)
-	}
-
-	if len(nc.history) == 0 {
-		empty := "No notifications"
-		ew, _, _ := font.SizeUTF8(empty)
-		renderText(renderer, config, font, empty,
-			sdl.Color{R: 100, G: 110, B: 130, A: 140},
-			bx+(dropW-int32(ew))/2, listY+40)
-	}
+	})
 }
 
 // notifToggle opens/closes the notification dropdown.
@@ -258,6 +266,7 @@ func notifToggle() {
 	nc.open = !nc.open
 	nc.cursor = 0
 	if nc.open {
+		nc.enter.begin(uiClockMS(), uiPanelEnterMS)
 		// The two top-bar overlays are exclusive.
 		tb.startOpen = false
 		// Mark all as read.
