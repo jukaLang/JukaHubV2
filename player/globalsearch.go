@@ -272,10 +272,7 @@ func renderGlobalSearch(renderer *sdl.Renderer, config *Config) {
 
 		// Subtitle
 		if r.Subtitle != "" {
-			sub := r.Subtitle
-			if len(sub) > 48 {
-				sub = sub[:45] + "..."
-			}
+			sub := truncateRunesSuffix(r.Subtitle, 48, "...")
 			drawText(renderer, bodyFont, sub, inputX+44, ry+26, colorNew(120, 135, 160, 180), textAlignLeft)
 		}
 

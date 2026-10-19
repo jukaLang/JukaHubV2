@@ -53,9 +53,7 @@ func renderCanvasSandbox(renderer *sdl.Renderer, config *Config, element Element
 		lineNum := fmt.Sprintf("%d", i+1)
 		renderText(renderer, config, font, lineNum, ColorTextTertiary(), editorX+8, editorY+12+int32(i-start)*lineH)
 		codeLine := lines[i]
-		if len(codeLine) > 55 {
-			codeLine = codeLine[:52] + "..."
-		}
+		codeLine = truncateRunesSuffix(codeLine, 55, "...")
 		renderText(renderer, config, font, codeLine, ColorTextSecondary(), editorX+40, editorY+12+int32(i-start)*lineH)
 	}
 
@@ -94,6 +92,7 @@ func executeCanvasCode(code string) *sdl.Surface {
 	textFont, fontErr := ttf.OpenFont(resolvePath("Inter-Regular.ttf"), 20)
 	if fontErr == nil {
 		defer textFont.Close()
+		registerFontPath(textFont, "Inter-Regular.ttf")
 	}
 
 	parseColor := func(s string) sdl.Color {
@@ -294,7 +293,7 @@ func executeCanvasCode(code string) *sdl.Surface {
 					c = parseColor(strings.TrimSpace(parts[3]))
 				}
 				if textFont != nil && fontErr == nil {
-					if ts, terr := textFont.RenderUTF8Blended(text, c); terr == nil {
+					if ts, terr := textFont.RenderUTF8Blended(sanitizeForFont(textFont, text), c); terr == nil {
 						surface.Blit(&sdl.Rect{X: int32(tx), Y: int32(ty)}, ts, nil)
 						ts.Free()
 					}

@@ -263,10 +263,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 		drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == packagesFocusIndex, false)
 
 		if listFont != nil {
-			name := p.Name
-			if len(name) > 34 {
-				name = name[:31] + "..."
-			}
+			name := truncateRunesSuffix(p.Name, 34, "...")
 			renderText(renderer, config, listFont, name, ColorTextPrimary(), rowX+12, rowY+6)
 
 			meta := ""
@@ -304,10 +301,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 	y := element.Y + 20
 	if titleFont != nil {
-		name := p.Name
-		if len(name) > 30 {
-			name = name[:27] + "..."
-		}
+		name := truncateRunesSuffix(p.Name, 30, "...")
 		renderText(renderer, config, titleFont, name, accentColor, detailX+14, y)
 	}
 	y += 32
@@ -332,10 +326,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 			y += 22
 		}
 		if len(p.Device) > 0 {
-			devs := strings.Join(p.Device, ", ")
-			if len(devs) > 40 {
-				devs = devs[:37] + "..."
-			}
+			devs := truncateRunesSuffix(strings.Join(p.Device, ", "), 40, "...")
 			renderText(renderer, config, smallFont, "Devices: "+devs, ColorTextSecondary(), detailX+14, y)
 			y += 22
 		}
@@ -344,10 +335,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 			y += 22
 		}
 		if len(p.Dependencies) > 0 {
-			deps := strings.Join(p.Dependencies, ", ")
-			if len(deps) > 40 {
-				deps = deps[:37] + "..."
-			}
+			deps := truncateRunesSuffix(strings.Join(p.Dependencies, ", "), 40, "...")
 			renderText(renderer, config, smallFont, "Dependencies: "+deps, ColorTextTertiary(), detailX+14, y)
 			y += 22
 		}
@@ -383,10 +371,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 				renderText(renderer, config, smallFont, "Install", sdl.Color{R: 255, G: 255, B: 255, A: 255}, sx+50, sy+8)
 			}
 
-			url := p.Download
-			if len(url) > 44 {
-				url = url[:41] + "..."
-			}
+			url := truncateRunesSuffix(p.Download, 44, "...")
 			renderText(renderer, config, smallFont, url, sdl.Color{R: 110, G: 200, B: 255, A: 255}, detailX+14, element.Y+elemH-16)
 		}
 	}

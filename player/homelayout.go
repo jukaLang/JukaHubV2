@@ -913,6 +913,9 @@ func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, c
 	if renderer == nil || font == nil || strings.TrimSpace(text) == "" {
 		return
 	}
+	// Substitute characters this font cannot draw so list rows never show
+	// .notdef boxes (see fonts.go). Supported text is returned unchanged.
+	text = sanitizeForFont(font, text)
 
 	key := homeTextKey{
 		font:  font,
@@ -1197,23 +1200,14 @@ func fillQuad(renderer *sdl.Renderer, p1, p2, p3, p4 pt, color sdl.Color) {
 // ellipsize shortens text to fit within a pixel width, appending an ellipsis.
 // This is used for UI rendering where text must fit in a fixed-width area.
 // Returns the original text if it already fits or if font/maxW is invalid.
-// The ellipsis character (U+2026) is used for a single-character ellipsis.
+// Measuring goes through the fallback engine (fonts.go), so a CJK or emoji
+// glyph is measured at its real width rather than at the width of the .notdef
+// box the primary font would otherwise draw for it.
 func ellipsize(font *ttf.Font, text string, maxW int32) string {
 	if font == nil || maxW <= 0 {
 		return text
 	}
-	w, _, _ := font.SizeUTF8(text)
-	if int32(w) <= maxW {
-		return text
-	}
-	runes := []rune(text)
-	for i := range runes {
-		w, _, _ := font.SizeUTF8(string(runes[:i+1]) + "…")
-		if int32(w) > maxW {
-			return string(runes[:i]) + "…"
-		}
-	}
-	return text + "…"
+	return fitTextToWidth(font, text, maxW)
 }
 
 func insetRect(rect sdl.Rect, inset int32) sdl.Rect {

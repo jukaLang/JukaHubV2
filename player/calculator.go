@@ -350,9 +350,7 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 
 	// Result / display value.
 	dispText := calc.display
-	if len(dispText) > 30 {
-		dispText = dispText[:30] + "..."
-	}
+	dispText = truncateRunesSuffix(dispText, 30, "...")
 	dw, _, _ := font.SizeUTF8(dispText)
 	dx := displayX + displayW - int32(dw) - 16
 	dy := displayY + 40
@@ -434,9 +432,7 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 
 		for i, h := range calc.history[start:] {
 			line := h
-			if len(line) > 28 {
-				line = line[:28] + "…"
-			}
+			line = truncateRunes(line, 28)
 			ly := histY + 30 + int32(i)*24
 			if ly+24 > histY+histH {
 				break

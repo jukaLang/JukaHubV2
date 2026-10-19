@@ -781,12 +781,28 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 		log.Printf("Error loading font %s: %v", fontPath, err)
 		return nil, 0
 	}
+	// Remember where this font was opened so renderText can read its cmap and
+	// substitute characters it cannot draw (see fonts.go).
+	registerFontPath(font, fontPath)
 	fontCache[key] = font
 	return font, size
 }
 
+// renderText draws text and returns its rendered size. Characters the font
+// cannot draw (CJK, Thai, Arabic, Devanagari, Hebrew, emoji) are mapped to the
+// closest supported character or collapsed into an ellipsis, so nothing ever
+// renders as a .notdef box. Supported text is passed through unchanged. See
+// fonts.go.
 func renderText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text string, color sdl.Color, x, y int32) (int32, int32) {
 	processed := substituteVars(text, config.Variables.Custom)
+	if processed == "" || font == nil {
+		return 0, 0
+	}
+	return drawTextRun(renderer, config, font, sanitizeForFont(font, processed), color, x, y)
+}
+
+// drawTextRun renders one font/text pair through the shared texture cache.
+func drawTextRun(renderer *sdl.Renderer, config *Config, font *ttf.Font, processed string, color sdl.Color, x, y int32) (int32, int32) {
 	if processed == "" || font == nil {
 		return 0, 0
 	}
@@ -5227,10 +5243,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 				if err != nil {
 					sendChatMessage("System", "Failed to read file: "+err.Error())
 				} else {
-					content := string(data)
-					if len(content) > 500 {
-						content = content[:500] + "..."
-					}
+					content := truncateRunesSuffix(string(data), 500, "...")
 					sendChatMessage(chatDisplayName(), content)
 				}
 			} else {

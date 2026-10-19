@@ -497,9 +497,7 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 		// Label
 		if smallFont != nil && a.Label != "" {
 			label := a.Label
-			if len(label) > 40 {
-				label = label[:40] + "…"
-			}
+			label = truncateRunes(label, 40)
 			renderText(renderer, config, smallFont, label,
 				sdl.Color{R: 140, G: 155, B: 180, A: 180},
 				x+160, ry+20)

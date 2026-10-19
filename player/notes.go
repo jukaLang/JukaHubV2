@@ -287,18 +287,12 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 		}
 
 		// Title.
-		title := n.Title
-		if len(title) > 45 {
-			title = title[:45] + "..."
-		}
+		title := truncateRunesSuffix(n.Title, 45, "...")
 		renderText(renderer, config, medFont, title,
 			sdl.Color{R: 220, G: 230, B: 245, A: 240}, listX+16, ry+8)
 
 		// Preview.
-		preview := strings.ReplaceAll(n.Content, "\n", " ")
-		if len(preview) > 60 {
-			preview = preview[:60] + "..."
-		}
+		preview := truncateRunesSuffix(strings.ReplaceAll(n.Content, "\n", " "), 60, "...")
 		renderText(renderer, config, font, preview,
 			sdl.Color{R: 120, G: 135, B: 160, A: 180}, listX+16, ry+28)
 

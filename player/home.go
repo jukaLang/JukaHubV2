@@ -598,8 +598,10 @@ func loadHomeFonts() HomeFonts {
 func openHomeFont(size int) *ttf.Font {
 	for _, candidate := range []string{"Inter-Regular.ttf", "DejaVuSans.ttf", "DejaVuSans-Bold.ttf"} {
 		if f, err := ttf.OpenFont(resolvePath(candidate), size); err == nil {
-			// Register in fontCache so the shutdown path closes it.
+			// Register in fontCache so the shutdown path closes it, and record
+			// its path so unsupported characters can be substituted (fonts.go).
 			fontCache["home_"+candidate+fmt.Sprint(size)] = f
+			registerFontPath(f, candidate)
 			return f
 		}
 	}

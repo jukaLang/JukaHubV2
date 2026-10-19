@@ -125,10 +125,10 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 
 		// title overlay at bottom of thumbnail (vertical scrim: opaque bottom → transparent top)
-		title := vid.Title
-		if len(title) > 24 {
-			title = title[:21] + "..."
-		}
+		// Clip to the card width in pixels with the fallback-aware measurement,
+		// so a Japanese or emoji title is neither split mid-character nor
+		// drawn past the card edge.
+		title := fitTextToWidth(font, vid.Title, thumbWidth-16)
 		titleY := yPos + thumbHeight - 30
 		for s := int32(0); s < 30; s += 3 {
 			a := uint8(40 + float64(s)/30.0*120)

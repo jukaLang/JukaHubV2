@@ -482,10 +482,7 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			if tc.R == 0 && tc.G == 0 && tc.B == 0 {
 				tc = ColorTextSecondary()
 			}
-			labelText := prefix + item.Label()
-			if len(labelText) > 60 {
-				labelText = labelText[:57] + "..."
-			}
+			labelText := truncateRunesSuffix(prefix+item.Label(), 60, "...")
 			if listFont != nil {
 				renderText(renderer, config, listFont, labelText, tc, rowX+12, rowY+8)
 			}

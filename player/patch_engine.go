@@ -355,12 +355,10 @@ func validatePatchURL(raw string) error {
 // Device detection
 // ---------------------------------------------------------------------------
 
-
 func pathExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }
-
 
 // ---------------------------------------------------------------------------
 // Patch state directory
@@ -737,10 +735,7 @@ func firstLine(s string) string {
 	if i := strings.IndexByte(s, '\n'); i >= 0 {
 		s = s[:i]
 	}
-	if len(s) > 96 {
-		s = s[:93] + "..."
-	}
-	return s
+	return truncateRunesSuffix(s, 96, "...")
 }
 
 func downloadHelperTool(tool, target string, config *Config) error {
@@ -1102,10 +1097,7 @@ func toolVersionFromPath(path string) string {
 	}
 	s := strings.TrimSpace(string(out))
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) > 60 {
-		s = s[:60]
-	}
-	return s
+	return truncateRunes(s, 60)
 }
 
 // ---------------------------------------------------------------------------

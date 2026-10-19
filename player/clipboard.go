@@ -123,9 +123,7 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 
 		// Text preview (truncate to 1-2 lines)
 		text := e.text
-		if len(text) > 80 {
-			text = text[:77] + "..."
-		}
+		text = truncateRunesSuffix(text, 80, "...")
 		lines := strings.SplitN(text, "\n", 2)
 
 		if isFocused {
@@ -136,9 +134,7 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 
 		if len(lines) > 1 {
 			sub := lines[1]
-			if len(sub) > 60 {
-				sub = sub[:57] + "..."
-			}
+			sub = truncateRunesSuffix(sub, 60, "...")
 			drawText(renderer, smallFont, sub, cardX+24, y+24, colorNew(110, 110, 125, 255), textAlignLeft)
 		}
 
