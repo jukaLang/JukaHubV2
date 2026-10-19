@@ -81,36 +81,40 @@ type Variables struct {
 	PlaybackResolution string            `json:"playbackResolution"`
 	ReducedMotion      bool              `json:"reducedMotion"`
 	LowPower           bool              `json:"lowPower"`
-	GridColumns        int               `json:"gridColumns"`
-	SearchWidth        int               `json:"searchWidth"`
-	DynamicBg          bool              `json:"dynamicBg"`
-	ScreensaverTimeout int               `json:"screensaverTimeout"`
-	SocialNotifs       bool              `json:"socialNotifs"`
+	// LEDSync drives the stick/ring LEDs from the audio being played. Off by
+	// default: it writes to sysfs, so it is opt-in like the other hardware
+	// features.
+	LEDSync            bool `json:"ledSync"`
+	GridColumns        int  `json:"gridColumns"`
+	SearchWidth        int  `json:"searchWidth"`
+	DynamicBg          bool `json:"dynamicBg"`
+	ScreensaverTimeout int  `json:"screensaverTimeout"`
+	SocialNotifs       bool `json:"socialNotifs"`
 
 	// Optional feature toggles (future-facing). These are persisted as first-class
 	// config fields so the app can be configured on the device without requiring a
 	// code change, and so jukaconfig.json stays a readable feature catalog.
 	// They are safe to ignore when the runtime feature is not wired yet.
-	NetPlayEnabled       bool `json:"netPlayEnabled"`
-	VideoPlayerEnabled   bool `json:"videoPlayerEnabled"`
-	ScreensaverEnabled   bool `json:"screensaverEnabled"`
-	LauncherEnabled      bool `json:"launcherEnabled"`
-	ExternalAppEnabled   bool `json:"externalAppEnabled"`
-	PackageRepoEnabled   bool `json:"packageRepoEnabled"`
-	ThemeGalleryEnabled  bool `json:"themeGalleryEnabled"`
+	NetPlayEnabled      bool `json:"netPlayEnabled"`
+	VideoPlayerEnabled  bool `json:"videoPlayerEnabled"`
+	ScreensaverEnabled  bool `json:"screensaverEnabled"`
+	LauncherEnabled     bool `json:"launcherEnabled"`
+	ExternalAppEnabled  bool `json:"externalAppEnabled"`
+	PackageRepoEnabled  bool `json:"packageRepoEnabled"`
+	ThemeGalleryEnabled bool `json:"themeGalleryEnabled"`
 
 	// TrimUI/tablet runtime hints (best-effort). These describe the target device
 	// so the app can keep one config layout that still feels native on a handheld
 	// like the TrimUI Smart Pro. Unknown or missing values are treated as "no
 	// preference", never as an error.
-	DeviceModel         string `json:"deviceModel"`
-	TargetPlatform      string `json:"targetPlatform"`
-	DefaultOrientation  string `json:"defaultOrientation"`
-	AccentColor         string `json:"accentColor"`
+	DeviceModel        string `json:"deviceModel"`
+	TargetPlatform     string `json:"targetPlatform"`
+	DefaultOrientation string `json:"defaultOrientation"`
+	AccentColor        string `json:"accentColor"`
 
-	Custom             map[string]interface{}
-	LoadingSpinner     bool   `json:"-"`
-	SpinnerText        string `json:"-"`
+	Custom         map[string]interface{}
+	LoadingSpinner bool   `json:"-"`
+	SpinnerText    string `json:"-"`
 }
 
 type SceneConfig struct {
@@ -214,30 +218,31 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"gridColumns":        true,
 		"searchWidth":        true,
 		"dynamicBg":          true,
-		"screensaverTimeout": true,	"socialNotifs":       true,
-	"reducedMotion":      true,
-	"lowPower":           true,
-	"custom":             true,
+		"screensaverTimeout": true, "socialNotifs": true,
+		"reducedMotion": true,
+		"lowPower":      true,
+		"ledSync":       true,
+		"custom":        true,
 
-	// First-class feature-toggle and device-hint fields. These live in the struct
-	// now so jukaconfig.json stays a readable catalog; keep them known here so the
-	// Variables decoder puts them in the struct instead of burying them in Custom.
-	"netPlayEnabled":       true,
-	"videoPlayerEnabled":   true,
-	"screensaverEnabled":   true,
-	"launcherEnabled":      true,
-	"externalAppEnabled":   true,
-	"packageRepoEnabled":   true,
-	"themeGalleryEnabled":  true,
-	"deviceModel":         true,		"targetPlatform":      true,
-		"defaultOrientation":  true,
-		"accentColor":         true,
+		// First-class feature-toggle and device-hint fields. These live in the struct
+		// now so jukaconfig.json stays a readable catalog; keep them known here so the
+		// Variables decoder puts them in the struct instead of burying them in Custom.
+		"netPlayEnabled":      true,
+		"videoPlayerEnabled":  true,
+		"screensaverEnabled":  true,
+		"launcherEnabled":     true,
+		"externalAppEnabled":  true,
+		"packageRepoEnabled":  true,
+		"themeGalleryEnabled": true,
+		"deviceModel":         true, "targetPlatform": true,
+		"defaultOrientation": true,
+		"accentColor":        true,
 
-	// Retired settings. Older configs still carry these; they no longer control
-	// anything (video always uses the embedded ffmpeg decoder), so drop them
-	// instead of parking them in Custom where they would be re-saved forever.
-	"audioBackend": true,
-	"AudioBackend": true,
+		// Retired settings. Older configs still carry these; they no longer control
+		// anything (video always uses the embedded ffmpeg decoder), so drop them
+		// instead of parking them in Custom where they would be re-saved forever.
+		"audioBackend": true,
+		"AudioBackend": true,
 	}
 	v.Custom = make(map[string]interface{})
 	for k, val := range raw {
@@ -298,18 +303,30 @@ func (v *Variables) Get(name string) string {
 	// Expose them through $ substitution so the rest of the app can continue to
 	// read them via Variables.Get even if the config is the canonical source.
 	switch name {
-	case "netPlayEnabled":        return boolString(v.NetPlayEnabled)
-	case "videoPlayerEnabled":   return boolString(v.VideoPlayerEnabled)
-	case "screensaverEnabled":   return boolString(v.ScreensaverEnabled)
-	case "launcherEnabled":      return boolString(v.LauncherEnabled)
-	case "externalAppEnabled":   return boolString(v.ExternalAppEnabled)
-	case "packageRepoEnabled":   return boolString(v.PackageRepoEnabled)
-	case "themeGalleryEnabled":  return boolString(v.ThemeGalleryEnabled)
-	case "deviceModel":          return v.DeviceModel
-	case "targetPlatform":       return v.TargetPlatform
-	case "defaultOrientation":   return v.DefaultOrientation
-	case "accentColor":          return v.AccentColor
+	case "netPlayEnabled":
+		return boolString(v.NetPlayEnabled)
+	case "videoPlayerEnabled":
+		return boolString(v.VideoPlayerEnabled)
+	case "screensaverEnabled":
+		return boolString(v.ScreensaverEnabled)
+	case "launcherEnabled":
+		return boolString(v.LauncherEnabled)
+	case "externalAppEnabled":
+		return boolString(v.ExternalAppEnabled)
+	case "packageRepoEnabled":
+		return boolString(v.PackageRepoEnabled)
+	case "themeGalleryEnabled":
+		return boolString(v.ThemeGalleryEnabled)
+	case "ledSync":
+		return boolString(v.LEDSync)
+	case "deviceModel":
+		return v.DeviceModel
+	case "targetPlatform":
+		return v.TargetPlatform
+	case "defaultOrientation":
+		return v.DefaultOrientation
+	case "accentColor":
+		return v.AccentColor
 	}
 	return ""
 }
-

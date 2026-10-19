@@ -898,3 +898,25 @@ func craftItem() {
 	}
 	saveJukaLand()
 }
+
+// Scene registration.
+type jukaScene struct{ sceneBase }
+
+func (jukaScene) render(r *sdl.Renderer, c *Config) bool {
+	updateJukaLand()
+	renderJukaLand(r, c)
+	renderStatusBar(r, c)
+	return true
+}
+
+func (jukaScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleJukaLandInput(e)
+	return true
+}
+
+func (jukaScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	handleJukaLandController(e)
+	return true
+}
+
+func init() { registerScene(jukaScene{sceneBase{name: "JukaLand"}}) }

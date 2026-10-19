@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"container/list"
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -14,14 +14,26 @@ type textCacheEntry struct {
 	width   int32
 	height  int32
 	bytes   int64
+	// element is this key's node in the LRU list (front = most recent).
+	element *list.Element
+}
+
+// textCacheKey is the cache identity: font, exact text and colour. It is a
+// comparable struct rather than a concatenated string, so a lookup no longer
+// allocates a key (the old %p+text+colour string cost 2 allocations and
+// ~420ns on every visible string, every frame).
+type textCacheKey struct {
+	font  *ttf.Font
+	text  string
+	color sdl.Color
 }
 
 // TextCache is an LRU texture cache for rendered text.
 // On TSP (1GB RAM), we cap at 512 entries to avoid memory pressure.
 type TextCache struct {
 	mu         sync.RWMutex
-	entries    map[string]*textCacheEntry
-	order      []string // LRU order: least recently used at index 0
+	entries    map[textCacheKey]*textCacheEntry
+	order      *list.List // front = most recently used
 	maxSize    int
 	totalBytes int64 // approximate texture memory (RGBA), for diagnostics
 }
@@ -35,42 +47,32 @@ func NewTextCache(maxSize int) *TextCache {
 		maxSize = 1
 	}
 	return &TextCache{
-		entries: make(map[string]*textCacheEntry, maxSize),
-		order:   make([]string, 0, maxSize),
+		entries: make(map[textCacheKey]*textCacheEntry, maxSize),
+		order:   list.New(),
 		maxSize: maxSize,
 	}
 }
 
-// textCacheKey generates a cache key from font, text, and color.
-func textCacheKey(font *ttf.Font, text string, color sdl.Color) string {
-	// Use the font pointer's address string + text + color bytes. A simple
-	// string(rune(uintptr)) conversion is not portable (Windows disallows
-	// pointer→uintptr without unsafe), and it produced duplicate keys for
-	// different fonts on 32-bit addresses.
-	fontAddr := fmt.Sprintf("%p", font)
-	return fontAddr + "|" + text + "|" +
-		string([]byte{color.R, color.G, color.B, color.A})
+func makeTextCacheKey(font *ttf.Font, text string, color sdl.Color) textCacheKey {
+	return textCacheKey{font: font, text: text, color: color}
 }
 
 // Get retrieves a cached texture. Returns nil if not found.
 func (tc *TextCache) Get(font *ttf.Font, text string, color sdl.Color) *textCacheEntry {
-	key := textCacheKey(font, text, color)
-	tc.mu.RLock()
+	key := makeTextCacheKey(font, text, color)
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
 	entry, ok := tc.entries[key]
-	tc.mu.RUnlock()
 	if !ok {
 		return nil
 	}
-	// Move to end of LRU (most recently used)
-	tc.mu.Lock()
-	tc.touchLocked(key)
-	tc.mu.Unlock()
+	tc.order.MoveToFront(entry.element)
 	return entry
 }
 
 // Put adds a texture to the cache, evicting LRU entries if needed.
 func (tc *TextCache) Put(font *ttf.Font, text string, color sdl.Color, texture *sdl.Texture, w, h int32) {
-	key := textCacheKey(font, text, color)
+	key := makeTextCacheKey(font, text, color)
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
 
@@ -86,14 +88,18 @@ func (tc *TextCache) Put(font *ttf.Font, text string, color sdl.Color, texture *
 		entry.width = w
 		entry.height = h
 		entry.bytes = entryBytes
-		tc.touchLocked(key)
+		tc.order.MoveToFront(entry.element)
 		return
 	}
 
-	// Evict LRU if at capacity
-	for len(tc.order) >= tc.maxSize && len(tc.order) > 0 {
-		evictKey := tc.order[0]
-		tc.order = tc.order[1:]
+	// Evict LRU while at capacity.
+	for len(tc.entries) >= tc.maxSize {
+		oldest := tc.order.Back()
+		if oldest == nil {
+			break
+		}
+		evictKey := oldest.Value.(textCacheKey)
+		tc.order.Remove(oldest)
 		if entry, ok := tc.entries[evictKey]; ok {
 			if entry.texture != nil {
 				entry.texture.Destroy()
@@ -103,26 +109,15 @@ func (tc *TextCache) Put(font *ttf.Font, text string, color sdl.Color, texture *
 		}
 	}
 
-	// Add new entry
-	tc.entries[key] = &textCacheEntry{
+	entry := &textCacheEntry{
 		texture: texture,
 		width:   w,
 		height:  h,
 		bytes:   entryBytes,
 	}
+	entry.element = tc.order.PushFront(key)
+	tc.entries[key] = entry
 	tc.totalBytes += entryBytes
-	tc.order = append(tc.order, key)
-}
-
-// touchLocked moves a key to the end of the LRU order (must hold write lock).
-func (tc *TextCache) touchLocked(key string) {
-	for i, k := range tc.order {
-		if k == key {
-			tc.order = append(tc.order[:i], tc.order[i+1:]...)
-			tc.order = append(tc.order, key)
-			return
-		}
-	}
 }
 
 // Clear destroys all cached textures and resets the cache.
@@ -135,7 +130,7 @@ func (tc *TextCache) Clear() {
 		}
 		delete(tc.entries, key)
 	}
-	tc.order = tc.order[:0]
+	tc.order.Init()
 	tc.totalBytes = 0
 }
 
@@ -158,9 +153,13 @@ func (tc *TextCache) Bytes() int64 {
 func (tc *TextCache) TrimTo(keepEntries int) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
-	for len(tc.order) > keepEntries && len(tc.order) > 0 {
-		evictKey := tc.order[0]
-		tc.order = tc.order[1:]
+	for len(tc.entries) > keepEntries {
+		oldest := tc.order.Back()
+		if oldest == nil {
+			return
+		}
+		evictKey := oldest.Value.(textCacheKey)
+		tc.order.Remove(oldest)
 		if entry, ok := tc.entries[evictKey]; ok {
 			if entry.texture != nil {
 				entry.texture.Destroy()

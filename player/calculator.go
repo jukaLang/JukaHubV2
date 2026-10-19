@@ -489,3 +489,54 @@ func handleCalcInput(e *sdl.KeyboardEvent) {
 		}
 	}
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlCalculator(e *sdl.ControllerButtonEvent) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		calcNavigate(-1, 0)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		calcNavigate(1, 0)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		calcNavigate(0, -1)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		calcNavigate(0, 1)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_A:
+		calcSelect()
+		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		calcHandleFunc("C")
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		calcHandleFunc("<")
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration. The renderer, keyboard handler and controller mapping all
+// live in this file; scene.go routes to them by name.
+type calculatorScene struct{ sceneBase }
+
+func (calculatorScene) render(r *sdl.Renderer, c *Config) bool { renderCalculator(r, c); return true }
+
+func (calculatorScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleCalcInput(e)
+	return true
+}
+
+func (calculatorScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlCalculator(e)
+}
+
+func init() { registerScene(calculatorScene{sceneBase{name: "Calculator"}}) }

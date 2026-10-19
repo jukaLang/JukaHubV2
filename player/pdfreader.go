@@ -491,3 +491,51 @@ func pdfOpenFile(path string) {
 	pdf.page = 1
 	pdf.scrollY = 0
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlPDFReader(e *sdl.ControllerButtonEvent) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		pdf.scrollY -= 60
+		if pdf.scrollY < 0 {
+			pdf.scrollY = 0
+		}
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		pdf.scrollY += 60
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		if pdf.page > 1 {
+			pdf.page--
+			pdf.scrollY = 0
+			PlayNavSound()
+		}
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		if pdf.page < pdf.doc.NumPages {
+			pdf.page++
+			pdf.scrollY = 0
+			PlayNavSound()
+		}
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration.
+type pdfScene struct{ sceneBase }
+
+func (pdfScene) render(r *sdl.Renderer, c *Config) bool { renderPDFReader(r, c); return true }
+
+func (pdfScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handlePDFInput(e, c)
+	return true
+}
+
+func (pdfScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlPDFReader(e)
+}
+
+func init() { registerScene(pdfScene{sceneBase{name: "PDFReader"}}) }

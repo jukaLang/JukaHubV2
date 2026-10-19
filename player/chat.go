@@ -51,6 +51,32 @@ type LinkPreview struct {
 // ChatAttachments stores images for rendering
 var chatImages = make(map[string]*sdl.Texture)
 var chatImageMutex sync.Mutex
+
+// chatImageOrder is the insertion order of chatImages, oldest first. The
+// texture cache is bounded: a long chat with image replies used to pin every
+// decoded image in GPU memory for the life of the process.
+var chatImageOrder []string
+
+const chatImageCacheMax = 16
+
+// evictChatImagesLocked destroys the oldest textures past the limit. The
+// caller holds chatImageMutex.
+func evictChatImagesLocked(keep string) {
+	for len(chatImageOrder) > chatImageCacheMax {
+		oldest := chatImageOrder[0]
+		chatImageOrder = chatImageOrder[1:]
+		if oldest == keep {
+			continue
+		}
+		if tex, ok := chatImages[oldest]; ok {
+			if tex != nil {
+				tex.Destroy()
+			}
+			delete(chatImages, oldest)
+		}
+	}
+}
+
 var chatImageDownloads = make(map[string][]byte)
 var chatImageFetching = make(map[string]bool)
 var chatImageDLMutex sync.Mutex
@@ -135,27 +161,44 @@ func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Textu
 	}
 	tex.Update(nil, unsafe.Pointer(&rgba.Pix[0]), rgba.Stride)
 	chatImageMutex.Lock()
+	if old, ok := chatImages[url]; ok {
+		// Two fetch paths can race for one URL; keep one texture and one
+		// order entry so eviction never frees the live copy.
+		if old != nil {
+			old.Destroy()
+		}
+	} else {
+		chatImageOrder = append(chatImageOrder, url)
+	}
 	chatImages[url] = tex
+	evictChatImagesLocked(url)
 	chatImageMutex.Unlock()
 	return tex
 }
 
 func processChatImageDownloads(renderer *sdl.Renderer) {
 	chatImageDLMutex.Lock()
-	var toProcess []struct {
+	var ready []struct {
 		url  string
 		data []byte
 	}
 	for url, data := range chatImageDownloads {
-		chatImageDLMutex.Unlock()
-		uploadChatImage(renderer, url, data)
-		toProcess = append(toProcess, struct {
+		ready = append(ready, struct {
 			url  string
 			data []byte
 		}{url, data})
-		chatImageDLMutex.Lock()
 	}
 	chatImageDLMutex.Unlock()
+
+	for _, item := range ready {
+		uploadChatImage(renderer, item.url, item.data)
+		// The texture now owns the pixels. Keeping the downloaded buffer as
+		// well doubled the cost of every image in the history, and nothing
+		// ever freed it.
+		chatImageDLMutex.Lock()
+		delete(chatImageDownloads, item.url)
+		chatImageDLMutex.Unlock()
+	}
 }
 
 // ChatSection is the chat history section persisted inside jukauser.json.

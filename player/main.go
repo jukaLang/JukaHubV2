@@ -92,6 +92,13 @@ func main() {
 	// startup (in-memory, never written back) so the status-bar clock and the
 	// Start menu can open it on every config. The loader stays pure.
 	ensureAlarmScene(config)
+	// Contextual widget toggles (start at login, battery saver, time-of-day
+	// theme) live on the Smart Widgets page, reached from Settings → General.
+	// Injected in memory like the alarm scene, so no shipped config is edited.
+	ensureSettingsWidgets(config)
+	// Apply the saved "Start JukaHub at login" setting to the platform's
+	// startup folder (only ever our own launcher file).
+	reconcileAutoStart(config)
 
 	SetAccentColor(resolveColor(config, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
 
@@ -120,6 +127,14 @@ func main() {
 	alarmLoad()
 	notesInit()
 	qsInit()
+	// Push the saved mixer/backlight levels once the panel state exists, so the
+	// device comes up where Quick Settings left it. Only values the user has
+	// actually set are written, and it runs off the startup path because the
+	// mixer probe may need to wait on a daemon.
+	go qsApplyPersistedSystemState()
+	// Restore the audio-reactive LEDs if the user left them on. SetLEDSync is a
+	// no-op on a device with no addressable LED, and logs why.
+	StartLEDSyncIfEnabled(config)
 	if safeModeAllows(SafeFeatureNetwork) {
 		startWeather(config)
 	}
@@ -319,6 +334,10 @@ func main() {
 
 	running := true
 	for running {
+		// Phone Companion actions arrive on an HTTP goroutine. They are queued
+		// and applied here, on the main loop, so a phone keypress takes the same
+		// path as the handheld's own input.
+		drainCompanionQueue(config)
 		// Exit request (home Exit button or config "exit" trigger): play the
 		// farewell sequence, then shut down through the deferred cleanup below
 		// (persist favorites, free textures/fonts, sdl.Quit).
@@ -342,12 +361,22 @@ func main() {
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
 					screensaverNotifyInput()
+					// Watch Party is a global modal; F8 opens and closes it while
+					// no text field is capturing the keyboard.
+					if e.Keysym.Sym == sdl.K_F8 && !virtualKeyboardActive {
+						partyTogglePanel()
+						continue
+					}
 					if shortcutsOpen {
 						handleShortcutsInput(e)
 						continue
 					}
 					if clipSearchOpen {
 						handleClipboardInput(e)
+						continue
+					}
+					// The QR overlay is modal: it owns every key while it is up.
+					if handleCompanionKey(e, config) {
 						continue
 					}
 					if globalSearchOpen {
@@ -364,6 +393,11 @@ func main() {
 					}
 					// Update prompt is the topmost modal.
 					if updatePrompt.open && handleUpdatePromptKey(e, config) {
+						continue
+					}
+					// Watch Party is modal too, but the on-screen keyboard owns the
+					// keys while it is typing an invite or a link.
+					if partyUI.open && !virtualKeyboardActive && partyHandleKey(e, config) {
 						continue
 					}
 					// Tools is modal and consumes all keys while open.
@@ -583,36 +617,13 @@ func main() {
 							handlePackageInput(e, config)
 						} else if curElem.Type == "recent" {
 							handleRecentInput(e, config)
-						} else if curScene.Name == "Pomodoro" {
-							handlePomodoroInput(e, config)
-						} else if curScene.Name == "Calculator" {
-							handleCalcInput(e)
-						} else if curScene.Name == "Alarm" {
-							handleAlarmInput(e, config)
-						} else if curScene.Name == "Dashboard" {
-							handleDashInput(e, config)
-						} else if curScene.Name == "About" {
-							handleAboutInput(e, config)
-						} else if curScene.Name == "Dictionary" {
-							handleDictInput(e, config)
-						} else if curScene.Name == "PDFReader" {
-							handlePDFInput(e, config)
-						} else if curScene.Name == "MusicPlayer" {
-							handleMusicInput(e, config)
-						} else if curScene.Name == "Notes" {
-							handleNotesInput(e, config)
-						} else if curScene.Name == "Games" {
-							if activeGame != gameNone {
-								handleActiveGameInput(e)
-							} else {
-								handleGamesMenuInput(e)
-							}
 						} else if socialNotifOpen {
 							handleSocialNotifInput(e)
 						} else if wpOpen {
 							handleWallpaperInput(e, config)
-						} else if curScene.Name == "JukaLand" {
-							handleJukaLandInput(e)
+						} else if m, ok := lookupScene(curScene.Name); ok && m.handleKey(e, config) {
+							// The scene consumed the key. Overlays are checked first so a
+							// picker floating over a scene always wins the D-pad.
 						} else {
 							// Normal button/input navigation
 							switch e.Keysym.Sym {
@@ -712,33 +723,7 @@ func main() {
 			case *sdl.TextInputEvent:
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
-				if clipSearchOpen {
-					handleClipboardTextInput(string(e.Text[:]))
-				} else if globalSearchOpen {
-					handleGlobalSearchTextInput(string(e.Text[:]))
-				} else if virtualKeyboardActive {
-					// While the keyboard is open its target owns the text, so
-					// scene-specific handlers must not also consume it.
-					vkInsertText(string(e.Text[:]), config)
-				} else {
-					if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
-						// Route text input to scene-specific handlers.
-						switch config.Scenes[currentSceneIndex].Name {
-						case "Alarm":
-							handleAlarmTextInput(e)
-						case "Terminal":
-							handleTermTextInput(e)
-						case "Dictionary":
-							handleDictTextInput(e)
-						case "Notes":
-							handleNotesTextInput(e)
-						}
-					}
-					// Chat composer and unit converter typing without the modal.
-					if unitInputActive || chatInputActive || activeSceneIndex != -1 {
-						vkInsertText(string(e.Text[:]), config)
-					}
-				}
+				handleTextInputEvent(e, config)
 			case *sdl.MouseMotionEvent:
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
@@ -856,6 +841,11 @@ func main() {
 						// Update prompt is modal and above every other overlay.
 						if updatePrompt.open {
 							handleUpdatePromptMouse(mx, my, config)
+							break
+						}
+						// Watch Party panel is modal the same way.
+						if partyUI.open {
+							partyHandleMouse(mx, my, config)
 							break
 						}
 						// Tools panel is modal: a click selects a row, a click outside
@@ -1645,7 +1635,12 @@ func main() {
 			if config.Variables.ReducedMotion || sdl.GetTicks64()-pressStartTime > pressDuration {
 				pressedButtonIndex = -1
 			}
-		} // Screensaver takes over when idle.
+		}
+
+		// Contextual widgets: battery saver and time-of-day theme, checked once a
+		// second before the frame is drawn so a theme switch lands immediately.
+		widgetsTick(config)
+		// Screensaver takes over when idle.
 		if ss.active {
 			renderScreensaver(renderer, config, sdl.GetTicks64())
 		} else {
@@ -1727,6 +1722,9 @@ func main() {
 
 		// Patch scene: drain worker events and apply hold-to-confirm progress.
 		PatchSceneFrame()
+		// Watch Party polling and remote playhead correction. It never blocks:
+		// the HTTP request runs on its own goroutine.
+		partyTick(config)
 		if appRestartRequested.Load() {
 			// A staged update was handed to the swap helper; quit so it can
 			// replace the executable and relaunch JukaHub.
@@ -1740,6 +1738,11 @@ func main() {
 		// Quick Settings overlay.
 		if qs.open {
 			renderQuickSettings(renderer, config)
+		}
+
+		// Watch Party overlay (LAN shared queue + synced playback).
+		if partyUI.open {
+			partyRender(renderer, config)
 		}
 
 		// Tools overlay (IP address + FTP server).
@@ -1772,13 +1775,18 @@ func main() {
 			renderSocialNotifPanel(renderer, config)
 		}
 
+		// Phone Companion pairing card.
+		if companion.open {
+			renderCompanionOverlay(renderer, config)
+		}
+
 		// Update prompt is the topmost modal.
 		if updatePrompt.open {
 			renderUpdatePrompt(renderer, config)
 		}
 
 		// Shortcut hint at bottom (hidden when overlays are open).
-		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open {
+		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open && !companion.open {
 			renderShortcutHint(renderer, config)
 		}
 
@@ -1829,6 +1837,8 @@ func main() {
 
 	// Persist favorites and resume positions on every graceful quit path
 	// (window close, exit button, scene-exit trigger).
+	// Blank the LEDs first so they do not stay lit on the last audio frame.
+	_ = SetLEDSync(false)
 	saveFavorites()
 	ClearTextCache()
 	DestroyVKStaticCache()
@@ -1838,5 +1848,54 @@ func main() {
 	clearHomeTextCache()
 	for _, font := range fontCache {
 		font.Close()
+	}
+}
+
+// handleTextInputEvent routes one SDL text event to whatever currently owns
+// typed text. It is shared by real keyboards, the on-screen keyboard and the
+// Phone Companion, so a phone keystroke lands exactly where a handheld one
+// would.
+func handleTextInputEvent(e *sdl.TextInputEvent, config *Config) {
+	if e == nil {
+		return
+	}
+	// SDL fills Text with a NUL-terminated C string padded with zero bytes.
+	// Converting the whole fixed-size array produced "a\x00\x00...", which the
+	// renderer truncated at the first NUL: typing looked frozen after one key
+	// and backspace deleted invisible padding. GetText stops at the NUL.
+	text := e.GetText()
+	if text == "" {
+		return
+	}
+	if clipSearchOpen {
+		handleClipboardTextInput(text)
+		return
+	}
+	if globalSearchOpen {
+		handleGlobalSearchTextInput(text)
+		return
+	}
+	if virtualKeyboardActive {
+		// While the keyboard is open its target owns the text, so
+		// scene-specific handlers must not also consume it.
+		vkInsertText(text, config)
+		return
+	}
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		// Route text input to scene-specific handlers.
+		switch config.Scenes[currentSceneIndex].Name {
+		case "Alarm":
+			handleAlarmTextInput(e)
+		case "Terminal":
+			handleTermTextInput(e)
+		case "Dictionary":
+			handleDictTextInput(e)
+		case "Notes":
+			handleNotesTextInput(e)
+		}
+	}
+	// Chat composer and unit converter typing without the modal.
+	if unitInputActive || chatInputActive || activeSceneIndex != -1 {
+		vkInsertText(text, config)
 	}
 }

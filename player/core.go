@@ -466,9 +466,17 @@ func loadConfig(filename string) (*Config, error) {
 	return &config, nil
 }
 
+// varPattern is compiled once. It used to be compiled inside substituteVars,
+// which every renderText call reaches, so a frame with 40 labels paid for 40
+// regex compilations (~1.4us and 1.7KB of garbage each on the handheld).
+var varPattern = regexp.MustCompile(`\$(\w+)`)
+
 func substituteVars(text string, vars map[string]interface{}) string {
-	re := regexp.MustCompile(`\$(\w+)`)
-	return re.ReplaceAllStringFunc(text, func(m string) string {
+	// Fast path: almost every string on screen has no substitutions at all.
+	if text == "" || !strings.Contains(text, "$") || len(vars) == 0 {
+		return text
+	}
+	return varPattern.ReplaceAllStringFunc(text, func(m string) string {
 		varName := m[1:]
 		if val, ok := vars[varName]; ok {
 			return fmt.Sprintf("%v", val)
@@ -477,11 +485,17 @@ func substituteVars(text string, vars map[string]interface{}) string {
 	})
 }
 
+var (
+	ytSearchKeyPattern = regexp.MustCompile(`"ytsearch\d+:[^"]+"`)
+	ffmpegFlagPattern  = regexp.MustCompile(`-f "[^"]*"`)
+	spaceRunPattern    = regexp.MustCompile(`\s+`)
+)
+
 func normalizeCacheKey(raw string) string {
 	s := strings.ToLower(raw)
-	s = regexp.MustCompile(`"ytsearch\d+:[^"]+"`).ReplaceAllString(s, `"ytsearch:QUERY"`)
-	s = regexp.MustCompile(`-f "[^"]*"`).ReplaceAllString(s, "")
-	s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
+	s = ytSearchKeyPattern.ReplaceAllString(s, `"ytsearch:QUERY"`)
+	s = ffmpegFlagPattern.ReplaceAllString(s, "")
+	s = spaceRunPattern.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
 }
 
@@ -3229,7 +3243,7 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 				}
 				// Printable characters arrive through the text-input event below.
 			case *sdl.TextInputEvent:
-				vkInsertText(string(e.Text[:]), config)
+				vkInsertText(e.GetText(), config)
 			case *sdl.ControllerButtonEvent:
 				if e.Type != sdl.CONTROLLERBUTTONDOWN {
 					continue
@@ -3546,23 +3560,9 @@ func syncVariableOverrides(config *Config) {
 			}
 		}
 	}
-	saveUserConfigDebounced(&UserConfig{Variables: UserVariables{
-		ButtonColor:        config.Variables.ButtonColor,
-		LabelColor:         config.Variables.LabelColor,
-		InputColor:         config.Variables.InputColor,
-		Fullscreen:         config.Variables.Fullscreen,
-		FileExplorerRoot:   config.Variables.FileExplorerRoot,
-		WeatherEnabled:     config.Variables.WeatherEnabled,
-		WeatherUnit:        config.Variables.WeatherUnit,
-		TSPUsername:        config.Variables.TSPUsername,
-		PlaybackResolution: config.Variables.PlaybackResolution,
-		GridColumns:        config.Variables.GridColumns,
-		SearchWidth:        config.Variables.SearchWidth,
-		DynamicBg:          config.Variables.DynamicBg,
-		ScreensaverTimeout: config.Variables.ScreensaverTimeout,
-		SocialNotifs:       config.Variables.SocialNotifs,
-		Custom:             config.Variables.Custom,
-	}})
+	// One snapshot helper for every save, so a settings change cannot drop the
+	// Quick Settings levels on the way to disk.
+	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
 // inputVariableValue resolves the current value of a settings input from the
@@ -3742,69 +3742,9 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 
 // --- renderScene ---
 func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
-	if scene.Name == "JukaLand" {
-		updateJukaLand()
-		renderJukaLand(renderer, config)
-		renderStatusBar(renderer, config)
-		return
-	}
-	if scene.Name == "Pomodoro" {
-		renderPomodoro(renderer, config)
-		return
-	}
-	if scene.Name == "Calculator" {
-		renderCalculator(renderer, config)
-		return
-	}
-	if scene.Name == "Alarm" {
-		renderAlarmClock(renderer, config)
-		return
-	}
-	if scene.Name == "Terminal" {
-		renderTerminal(renderer, config)
-		return
-	}
-	if scene.Name == "Dashboard" {
-		renderDashboard(renderer, config)
-		return
-	}
-	if scene.Name == "About" {
-		renderAbout(renderer, config)
-		return
-	}
-	if scene.Name == "Dictionary" {
-		renderDictionary(renderer, config)
-		return
-	}
-	if scene.Name == "PDFReader" {
-		renderPDFReader(renderer, config)
-		return
-	}
-	if scene.Name == "MusicPlayer" {
-		renderMusicPlayer(renderer, config)
-		return
-	}
-	if scene.Name == "Notes" {
-		renderNotes(renderer, config)
-		return
-	}
-	if scene.Name == "Games" {
-		if activeGame != gameNone {
-			renderActiveGame(renderer, config)
-		} else {
-			renderGamesMenu(renderer, config)
-		}
-		return
-	}
-	if scene.Name == "Patch" {
-		// The Patch scene owns its body (list, modals) but the shared header
-		// and footer are drawn at the bottom of this function.
-		renderPatchScene(renderer, config)
-		renderStatusBar(renderer, config)
-		renderFooter(renderer, config)
-		renderer.SetDrawColor(0, 0, 0, 255)
-		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		renderer.SetClipRect(nil)
+	// A registered scene owns its whole body. Everything else falls through to
+	// the config-driven element renderer below, which is the common case.
+	if m, ok := lookupScene(scene.Name); ok && m.render(renderer, config) {
 		return
 	}
 
@@ -4261,6 +4201,11 @@ func toggleVariable(config *Config, element Element) {
 			mainWindow.SetFullscreen(0)
 		}
 	}
+	// Widget toggles (start at login, battery saver, ...) act on the system and
+	// show their own, more useful message.
+	if widgetToggleSideEffect(config, element.Variable, on) {
+		return
+	}
 	label := strings.TrimSpace(element.Text)
 	if label == "" {
 		label = element.Variable
@@ -4416,7 +4361,24 @@ func toastKindColor(kind ToastKind) sdl.Color {
 // ShowToast is the single entry point for user-facing notifications. A newer
 // toast replaces the current one and resets its timer; whitespace-only
 // messages clear any pending toast so nothing renders.
+//
+// Every visible toast is also filed in the notification center's history, so a
+// download that finished or an error that flashed by can be re-read later.
+// ToastKindSwitch is the exception: scene-switch labels (L2/R2, Q/E) are
+// navigation feedback, not events, and would bury the log.
 func ShowToast(message string, kind ToastKind) {
+	showToastPrimitive(message, kind)
+	msg := strings.TrimSpace(message)
+	if msg == "" || kind == ToastKindSwitch {
+		return
+	}
+	notifRecord(msg, toastKindPriority(kind))
+}
+
+// showToastPrimitive renders a toast without touching the notification
+// history. ShowToast wraps it for normal callers; notifPush uses it directly
+// because it has already recorded its own message.
+func showToastPrimitive(message string, kind ToastKind) {
 	msg := strings.TrimSpace(message)
 	currentToast = ToastState{
 		Message:   msg,
@@ -5165,26 +5127,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			} else {
 				discordStatus = "Discord: connected"
 			}
-			user := &UserConfig{
-				Variables: UserVariables{
-					ButtonColor:        config.Variables.ButtonColor,
-					LabelColor:         config.Variables.LabelColor,
-					InputColor:         config.Variables.InputColor,
-					Fullscreen:         config.Variables.Fullscreen,
-					FileExplorerRoot:   config.Variables.FileExplorerRoot,
-					WeatherEnabled:     config.Variables.WeatherEnabled,
-					WeatherUnit:        config.Variables.WeatherUnit,
-					TSPUsername:        config.Variables.TSPUsername,
-					PlaybackResolution: config.Variables.PlaybackResolution,
-					GridColumns:        config.Variables.GridColumns,
-					SearchWidth:        config.Variables.SearchWidth,
-					DynamicBg:          config.Variables.DynamicBg,
-					ScreensaverTimeout: config.Variables.ScreensaverTimeout,
-					SocialNotifs:       config.Variables.SocialNotifs,
-					Custom:             config.Variables.Custom,
-				},
-			}
-			saveUserConfig(user)
+			saveUserConfig(userConfigFromVariables(config))
 		}()
 	case "chat_clear":
 		chatMutex.Lock()
@@ -5429,6 +5372,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	case "tools_open":
 		openToolsPanel()
+	case "companion_open":
+		toggleCompanionOverlay()
 	case "processes_open":
 		openProcessPanel()
 	case "ip_open":

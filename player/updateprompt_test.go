@@ -137,12 +137,12 @@ func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
 	}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 7 {
-		t.Fatalf("row rects = %d, want 7", len(rects))
+	if len(rects) != 9 {
+		t.Fatalf("row rects = %d, want 9", len(rects))
 	}
 	layout := toolsPanelMetrics(config, len(rects))
 	if !layout.dense {
-		t.Fatal("expected dense rows for seven items on a 720p screen")
+		t.Fatal("expected dense rows for nine items on a 720p screen")
 	}
 	content := layout.headerH + int32(len(rects))*layout.rowH + layout.infoH + layout.footerH
 	if content > probeH-40 || content > panel.H {

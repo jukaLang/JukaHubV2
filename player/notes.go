@@ -544,7 +544,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 }
 
 func handleNotesTextInput(e *sdl.TextInputEvent) {
-	for _, r := range string(e.Text[:]) {
+	for _, r := range e.GetText() {
 		switch notes.tab {
 		case 1:
 			if len(notes.editTitle) < 80 {
@@ -561,3 +561,115 @@ func handleNotesTextInput(e *sdl.TextInputEvent) {
 		}
 	}
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlNotes(e *sdl.ControllerButtonEvent) bool {
+	if notes.tab != 0 {
+		// In edit mode — let keyboard handler manage text input
+		return false
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		if notes.cursor > 0 {
+			notes.cursor--
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		filtered := notesFiltered()
+		if notes.cursor < len(filtered)-1 {
+			notes.cursor++
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_A:
+		filtered := notesFiltered()
+		if notes.cursor >= 0 && notes.cursor < len(filtered) {
+			note := filtered[notes.cursor]
+			// Find the note in the store and open for editing
+			for _, n := range notes.store.Notes {
+				if n.ID == note.ID {
+					notes.tab = 1
+					notes.editTitle = n.Title
+					notes.editContent = n.Content
+					notes.editID = n.ID
+					PlayActivateSound()
+					return true
+				}
+			}
+		}
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		// The list is the top level of the scene, so B leaves Notes instead of
+		// silently staying on the list (the old handler looked like a no-op).
+		goBackScene(appConfig)
+	case sdl.CONTROLLER_BUTTON_Y:
+		notes.tab = 3
+		notes.editTitle = ""
+		notes.editContent = ""
+		notes.editID = -1
+		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_X:
+		filtered := notesFiltered()
+		if notes.cursor >= 0 && notes.cursor < len(filtered) {
+			notesDeleteNote(filtered[notes.cursor].ID)
+			PlayNavSound()
+		}
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		// Cycle folder filter left
+		folders := notes.store.Folders
+		if len(folders) > 0 {
+			idx := 0
+			for i, f := range folders {
+				if f == notes.filter {
+					idx = i
+					break
+				}
+			}
+			idx--
+			if idx < 0 {
+				idx = len(folders) - 1
+			}
+			notes.filter = folders[idx]
+			notes.cursor = 0
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		// Cycle folder filter right
+		folders := notes.store.Folders
+		if len(folders) > 0 {
+			idx := 0
+			for i, f := range folders {
+				if f == notes.filter {
+					idx = i
+					break
+				}
+			}
+			idx++
+			if idx >= len(folders) {
+				idx = 0
+			}
+			notes.filter = folders[idx]
+			notes.cursor = 0
+		}
+		PlayNavSound()
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration.
+type notesScene struct{ sceneBase }
+
+func (notesScene) render(r *sdl.Renderer, c *Config) bool { renderNotes(r, c); return true }
+
+func (notesScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleNotesInput(e, c)
+	return true
+}
+
+func (notesScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlNotes(e)
+}
+
+func init() { registerScene(notesScene{sceneBase{name: "Notes"}}) }

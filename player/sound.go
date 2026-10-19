@@ -92,6 +92,9 @@ func playTone(freq float64, ms int, volume float64) {
 		data[i*2] = byte(s)
 		data[i*2+1] = byte(s >> 8)
 	}
+	// Feed the LED sync with the same samples the beep is about to play. Mono,
+	// so the analyser sees each sample once.
+	publishAudioLevel(data, int(audioSampleRate), 1)
 	_ = sdl.QueueAudio(audioDev, data)
 }
 
@@ -247,6 +250,9 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 			pcm[i*2+1] = byte(uint16(int16(v)) >> 8)
 		}
 	}
+	// Video and music share this path, so one publish covers both. The buffer is
+	// stereo S16 at the device's rate; the analyser reads at most 2048 frames.
+	publishAudioLevel(pcm, int(videoAudioRate), 2)
 	_ = sdl.QueueAudio(videoAudioDev, pcm)
 }
 

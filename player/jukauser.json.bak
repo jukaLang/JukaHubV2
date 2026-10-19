@@ -1,62 +1,145 @@
 {
   "variables": {
     "buttonColor": {
-      "r": 0,
-      "g": 0,
-      "b": 0
+      "r": 30,
+      "g": 41,
+      "b": 59
     },
     "labelColor": {
-      "r": 0,
-      "g": 0,
-      "b": 0
+      "r": 248,
+      "g": 250,
+      "b": 252
     },
     "inputColor": {
-      "r": 0,
-      "g": 0,
-      "b": 0
+      "r": 15,
+      "g": 20,
+      "b": 32
     },
     "fullscreen": false,
-    "fileExplorerRoot": "",
-    "weatherEnabled": false,
-    "weatherUnit": "",
+    "fileExplorerRoot": "/media",
+    "weatherEnabled": true,
+    "weatherUnit": "C",
     "tspUsername": "",
-    "playbackResolution": "",
+    "playbackResolution": "720",
     "reducedMotion": false,
     "lowPower": false,
-    "gridColumns": 0,
-    "searchWidth": 0,
+    "ledSync": false,
+    "gridColumns": 5,
+    "searchWidth": 940,
     "dynamicBg": false,
-    "screensaverTimeout": 0,
+    "screensaverTimeout": 300,
     "socialNotifs": false,
-    "Custom": {}
+    "volume": 0,
+    "volumeSet": false,
+    "brightness": 0,
+    "brightnessSet": false,
+    "Custom": {
+      "BackgroundImage": "background.jpg",
+      "ButtonColor": "#1E293B",
+      "FileExplorerRoot": "/media",
+      "Fullscreen": false,
+      "GridColumns": 5,
+      "InputColor": "#0F1420",
+      "LabelColor": "#F8FAFC",
+      "PlaybackResolution": "720",
+      "ScreenHeight": 720,
+      "ScreenWidth": 1280,
+      "SearchWidth": 940,
+      "TSPUsername": "",
+      "WeatherEnabled": true,
+      "WeatherUnit": "C",
+      "chat_input": "hi",
+      "diskpie_data": {
+        "Total": 510718431232,
+        "Used": 321701838848,
+        "Pct": 62
+      },
+      "ftp_address": "",
+      "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
+      "ftp_status": "stopped",
+      "local_ip": "192.168.68.59",
+      "network_status": "online",
+      "recently_played": [
+        "https://www.youtube.com/watch?v=yH-_c6vb-9c",
+        "https://www.youtube.com/watch?v=6TmT35PxgZg"
+      ],
+      "ssh_address": "",
+      "ssh_fingerprint": "",
+      "ssh_port": "2222",
+      "ssh_root": "C:\\Users\\Stepan",
+      "ssh_status": "stopped",
+      "ssh_user": "juka",
+      "swapABButtons": false,
+      "tool_ffmpeg": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffmpeg.exe",
+      "tool_ffplay": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffplay.exe",
+      "tool_ffprobe": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffprobe.exe",
+      "tool_yt-dlp": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\yt-dlp.exe",
+      "tools_status": "All tools available"
+    }
   },
   "favorites": {
     "videos": [],
-    "recent": [],
+    "recent": [
+      {
+        "Type": "video",
+        "Data": {
+          "id": "6TmT35PxgZg",
+          "title": "Дима Билан - Как хотел я",
+          "uploader": "bilanofficial",
+          "channel": "bilanofficial",
+          "duration": 265,
+          "thumbnail": "https://i.ytimg.com/vi/6TmT35PxgZg/hqdefault.jpg?sqp=-oaymwE2COADEI4CSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gSAAuADigIMCAAQARhkIGQoZDAP\u0026rs=AOn4CLCR9wnDpeJZKNys7g7eioAM7k3DOA",
+          "description": "... iTunes https://itunes.apple.com/ru/album/dotanis/id648258369 Dima Bilan Kak hotel ya (How I wanted) Director Gosha Toidze, ...",
+          "view_count": 1474902,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=6TmT35PxgZg",
+          "position": 67.656628
+        },
+        "Timestamp": "2026-10-19T14:47:17.6630895-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "yH-_c6vb-9c",
+          "title": "THE “STAY AT HOME WIFE” TREND IS DEEPLY CONCERNING | Influencer Insanity Ep 40",
+          "uploader": "Hannah Alonzo",
+          "channel": "Hannah Alonzo",
+          "duration": 3984,
+          "thumbnail": "https://i.ytimg.com/vi/yH-_c6vb-9c/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLCUGnWmqR35aSsw131nTlFK7lPTjA",
+          "description": "Get 40% off your first Hungryroot box PLUS get a free item of your choice in every box for life with code HANNAH at ...",
+          "view_count": 987931,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=yH-_c6vb-9c",
+          "position": 6.3814237
+        },
+        "Timestamp": "2026-10-19T14:45:29.6700672-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "_Nw4qDYtncU",
+          "title": "Controlling Mom FORCES DAUGHTER To Be Popular Ft. Gia Rose | Dhar Mann Studios",
+          "uploader": "Dhar Mann Studios",
+          "channel": "Dhar Mann Studios",
+          "duration": 1722,
+          "thumbnail": "https://i.ytimg.com/vi/_Nw4qDYtncU/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLA8vuMxCNLJMkyy3ZtZ4cYk0hdUQA",
+          "description": "Join the Dhar Mann Studios Discord! Meet the community, talk episodes, participate in fun polls and more!",
+          "view_count": 2482393,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=_Nw4qDYtncU",
+          "position": 15.0823884
+        },
+        "Timestamp": "2026-10-19T14:38:28.8204577-04:00"
+      }
+    ],
     "files": [],
     "iptv": []
   },
   "chat": {
     "messages": [
-      {
-        "id": "1561181754021249086",
-        "sender": "jukalang",
-        "text": "Yes the latest version now works...albeit there is a bit delay",
-        "timestamp": "2026-10-18T00:58:55.513Z"
-      },
-      {
-        "id": "1561184112016887960",
-        "sender": "jukalang",
-        "text": "If anybody wants to try it: https://github.com/jukaLang/JukaHubV2/releases",
-        "timestamp": "2026-10-18T01:08:17.703Z"
-      },
-      {
-        "id": "1561257675436597310",
-        "sender": "jukalang",
-        "text": "",
-        "timestamp": "2026-10-18T06:00:36.589Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561257675575140413/image.png?ex=6ad65ac4\u0026is=6ad50944\u0026hm=e755c3ec8a82fd098fbba40eca97f33d808f758eb7231f72c2ea93c6d663dbae\u0026"
-      },
       {
         "id": "1561260072422867087",
         "sender": "jukalang",
@@ -68,7 +151,7 @@
         "sender": "jukalang",
         "text": "",
         "timestamp": "2026-10-18T06:11:42.523Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561260468268564510/image.png?ex=6ad65d5e\u0026is=6ad50bde\u0026hm=e7f22576680118c5e89bd5fb02886b678623d9c777a3846b95eb6965c695432c\u0026"
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561260468268564510/image.png?ex=6ad7061e\u0026is=6ad5b49e\u0026hm=66c98b3ea8f29a3ac2d4decae4e87c218f58bf1aefb13770d6e0efff26aab9d8\u0026"
       },
       {
         "id": "1561261560544895129",
@@ -93,14 +176,33 @@
         "sender": "jukalang",
         "text": "Packages are back:",
         "timestamp": "2026-10-18T17:12:00.314Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561426637269114991/image.png?ex=6ad64f60\u0026is=6ad4fde0\u0026hm=0aff06857bd884b3f8c74033fa1401fd4758253df7bc05160024411c5d3eb9e0\u0026"
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561426637269114991/image.png?ex=6ad6f820\u0026is=6ad5a6a0\u0026hm=5d6c058f1dffd0755ee07667b5ece099ff1f1b7ca78bb442218b6742e5cfd278\u0026"
       },
       {
         "id": "1561536957648076851",
         "sender": "jukalang",
         "text": "25 themes will now be available:",
         "timestamp": "2026-10-19T00:30:22.657Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561536957035585596/image.png?ex=6ad6b61e\u0026is=6ad5649e\u0026hm=14556bbff3b0d034f58e787020fc78206e40cee4262428040c6e9e76105f3705\u0026"
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561536957035585596/image.png?ex=6ad75ede\u0026is=6ad60d5e\u0026hm=b028bc36c31529581860327d117a56199b06c4fcf16c4fc4adb42762a2d0aa1c\u0026"
+      },
+      {
+        "id": "1561602357274349589",
+        "sender": "jukalang",
+        "text": "Battery Saving modes added...auto save battery when battery is \u003c 20%.",
+        "timestamp": "2026-10-19T04:50:15.143Z"
+      },
+      {
+        "id": "1561604543949709366",
+        "sender": "jukalang",
+        "text": "JukaHub now includes both FTP and SFTP:",
+        "timestamp": "2026-10-19T04:58:56.487Z",
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561604543568019556/image.png?ex=6ad6f510\u0026is=6ad5a390\u0026hm=8753ba2bc186c2d3328025ae95e460059384c0840899b91c5660800dfe0b4f49\u0026"
+      },
+      {
+        "id": "1561605560518971465",
+        "sender": "jukalang",
+        "text": "Will be implementing \"Steam\" like overlay",
+        "timestamp": "2026-10-19T05:02:58.856Z"
       }
     ]
   }

@@ -428,7 +428,7 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 
 // handleTermTextInput processes text input for the terminal.
 func handleTermTextInput(e *sdl.TextInputEvent) {
-	for _, r := range string(e.Text[:]) {
+	for _, r := range e.GetText() {
 		if r >= 32 && r <= 126 {
 			term.input = term.input[:term.cursor] + string(r) + term.input[term.cursor:]
 			term.cursor++
@@ -646,3 +646,48 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 		sdl.Color{R: 96, G: 116, B: 146, A: 190},
 		(screenWidth-int32(hw))/2, screenHeight-26)
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_A:
+		if term.input != "" {
+			input := term.input
+			term.input = ""
+			term.cursor = 0
+			termExecute(input)
+		}
+	case sdl.CONTROLLER_BUTTON_Y, sdl.CONTROLLER_BUTTON_X:
+		// Open the on-screen keyboard: without it a controller-only device
+		// cannot type a command at all.
+		vkOpenTerminal()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		// goBackScene plays the back sound itself.
+		goBackScene(config)
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		termScroll(3)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		termScroll(-3)
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		termScroll(10)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		termScroll(-10)
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration. Terminal has no key branch of its own: typing is handled
+// by the terminal widget before scene routing, so handleKey stays false.
+type terminalScene struct{ sceneBase }
+
+func (terminalScene) render(r *sdl.Renderer, c *Config) bool { renderTerminal(r, c); return true }
+
+func (terminalScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlTerminal(e, c)
+}
+
+func init() { registerScene(terminalScene{sceneBase{name: "Terminal"}}) }

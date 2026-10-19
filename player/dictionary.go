@@ -480,7 +480,7 @@ func handleDictInput(e *sdl.KeyboardEvent, config *Config) {
 }
 
 func handleDictTextInput(e *sdl.TextInputEvent) {
-	for _, r := range string(e.Text[:]) {
+	for _, r := range e.GetText() {
 		if unicode.IsLetter(r) || r == ' ' || r == '-' {
 			if len(dict.query) < 60 {
 				dict.query += string(r)
@@ -488,3 +488,49 @@ func handleDictTextInput(e *sdl.TextInputEvent) {
 		}
 	}
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlDictionary(e *sdl.ControllerButtonEvent) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		if dict.cursor > 0 {
+			dict.cursor--
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		if dict.cursor < len(dict.results)-1 {
+			dict.cursor++
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_A:
+		if dict.cursor >= 0 && dict.cursor < len(dict.results) {
+			word := dict.results[dict.cursor].Word
+			dict.query = word
+			dict.result = dictLookup(word)
+			PlayActivateSound()
+		}
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration.
+type dictionaryScene struct{ sceneBase }
+
+func (dictionaryScene) render(r *sdl.Renderer, c *Config) bool { renderDictionary(r, c); return true }
+
+func (dictionaryScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleDictInput(e, c)
+	return true
+}
+
+func (dictionaryScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlDictionary(e)
+}
+
+func init() { registerScene(dictionaryScene{sceneBase{name: "Dictionary"}}) }

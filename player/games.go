@@ -1124,3 +1124,211 @@ func renderGameOver(renderer *sdl.Renderer, config *Config, title string, score 
 		drawText(renderer, smallFont, hint, cx+(cardW-int32(hw))/2, cy+130, ColorTextTertiary(), textAlignLeft)
 	}
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlGames(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if activeGame != gameNone {
+		return ctrlActiveGame(e)
+	}
+	return ctrlGamesMenu(e, config)
+}
+
+func ctrlGamesMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		if gameMenuCursor >= 2 {
+			gameMenuCursor -= 2
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		if gameMenuCursor < len(gameList)-2 {
+			gameMenuCursor += 2
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		if gameMenuCursor%2 == 1 {
+			gameMenuCursor--
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		if gameMenuCursor%2 == 0 && gameMenuCursor+1 < len(gameList) {
+			gameMenuCursor++
+		}
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_A:
+		startGame(gameList[gameMenuCursor].id)
+		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(config) // plays the back sound itself
+	default:
+		return false
+	}
+	return true
+}
+
+func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
+	// Universal game controls: B always leaves the game and returns to the
+	// game list. It used to work only on the Game Over screen, so a running
+	// game could not be exited with the back button at all.
+	if e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK {
+		activeGame = gameNone
+		gameOver = false
+		PlayBackSound()
+		return true
+	}
+	if e.Button == sdl.CONTROLLER_BUTTON_START && gameOver {
+		switch activeGame {
+		case gameSnake:
+			initSnake()
+		case gameTetris:
+			initTetris()
+		case game2048:
+			init2048()
+		case gamePong:
+			initPong()
+		}
+		gameOver = false
+		gameScore = 0
+		return true
+	}
+
+	switch activeGame {
+	case gameSnake:
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			if snakeCurDir != snakeDown {
+				snakeNextDir = snakeUp
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			if snakeCurDir != snakeUp {
+				snakeNextDir = snakeDown
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			if snakeCurDir != snakeRight {
+				snakeNextDir = snakeLeft
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			if snakeCurDir != snakeLeft {
+				snakeNextDir = snakeRight
+			}
+		case sdl.CONTROLLER_BUTTON_A:
+			if gameOver {
+				initSnake()
+				gameOver = false
+				gameScore = 0
+			}
+		}
+	case gameTetris:
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			if tetrisCanPlace(tetrisPiece.shape, tetrisPiece.x-1, tetrisPiece.y) {
+				tetrisPiece.x--
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			if tetrisCanPlace(tetrisPiece.shape, tetrisPiece.x+1, tetrisPiece.y) {
+				tetrisPiece.x++
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			if tetrisCanPlace(tetrisPiece.shape, tetrisPiece.x, tetrisPiece.y+1) {
+				tetrisPiece.y++
+				gameScore++
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			rotated := tetrisRotate()
+			if tetrisCanPlace(rotated, tetrisPiece.x, tetrisPiece.y) {
+				tetrisPiece.shape = rotated
+			}
+		case sdl.CONTROLLER_BUTTON_A:
+			if gameOver {
+				initTetris()
+				gameOver = false
+				gameScore = 0
+			} else {
+				for tetrisCanPlace(tetrisPiece.shape, tetrisPiece.x, tetrisPiece.y+1) {
+					tetrisPiece.y++
+					gameScore += 2
+				}
+				tetrisPlace()
+			}
+		case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+			if tetrisCanPlace(tetrisPiece.shape, tetrisPiece.x, tetrisPiece.y+1) {
+				tetrisPiece.y++
+				gameScore++
+			}
+		}
+	case game2048:
+		if gameOver {
+			return true
+		}
+		scoreBefore := gameScore
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			gameScore += g2048MoveLeft()
+		case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			gameScore += g2048MoveRight()
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			gameScore += g2048MoveUp()
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			gameScore += g2048MoveDown()
+		default:
+			return true
+		}
+		if gameScore != scoreBefore {
+			place2048Tile()
+			PlayNavSound()
+			if !g2048HasMoves() {
+				gameOver = true
+			}
+		}
+	case gamePong:
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			pongPaddleY[0] -= 30
+			if pongPaddleY[0] < 0 {
+				pongPaddleY[0] = 0
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			pongPaddleY[0] += 30
+			if pongPaddleY[0] > float64(pongH)-float64(pongPaddleH) {
+				pongPaddleY[0] = float64(pongH) - float64(pongPaddleH)
+			}
+		case sdl.CONTROLLER_BUTTON_A:
+			if gameOver {
+				initPong()
+			}
+		}
+	}
+	return true
+}
+
+// Scene registration. The menu and a running game share one scene name, so both
+// paths are dispatched here.
+type gamesScene struct{ sceneBase }
+
+func (gamesScene) render(r *sdl.Renderer, c *Config) bool {
+	if activeGame != gameNone {
+		renderActiveGame(r, c)
+	} else {
+		renderGamesMenu(r, c)
+	}
+	return true
+}
+
+func (gamesScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	if activeGame != gameNone {
+		handleActiveGameInput(e)
+	} else {
+		handleGamesMenuInput(e)
+	}
+	// Both handlers are void-ish; the old chain ignored their result and never
+	// fell through to element navigation.
+	return true
+}
+
+func (gamesScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlGames(e, c)
+}
+
+func init() { registerScene(gamesScene{sceneBase{name: "Games"}}) }

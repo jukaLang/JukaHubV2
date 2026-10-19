@@ -170,11 +170,12 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
 	rows := toolsRows(config)
-	if len(rows) != 4 {
-		t.Fatalf("rows = %d, want FTP, SSH, IP and Close only", len(rows))
+	if len(rows) != 6 {
+		t.Fatalf("rows = %d, want FTP, SSH, phone companion, Watch Party, IP and Close only", len(rows))
 	}
 	if rows[0].action != toolsActionFTP || rows[1].action != toolsActionSSH ||
-		rows[2].action != toolsActionCopyIP || rows[3].action != toolsActionClose {
+		rows[2].action != toolsActionCompanion || rows[3].action != toolsActionParty ||
+		rows[4].action != toolsActionCopyIP || rows[5].action != toolsActionClose {
 		t.Fatalf("unexpected row order: %+v", rows)
 	}
 	if rows[0].value != "Stopped" {
@@ -183,18 +184,21 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	if rows[1].value != "Stopped" || rows[1].hint != "A: start" {
 		t.Fatalf("SSH row = %+v, want stopped with a start hint", rows[1])
 	}
+	if rows[2].value != "Scan to connect" || rows[2].hint != "A: show QR code" {
+		t.Fatalf("companion row = %+v, want the idle QR hint", rows[2])
+	}
 }
 
 func TestToolsRowsWithMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	rows := toolsRows(config)
-	if len(rows) != 5 {
+	if len(rows) != 7 {
 		t.Fatalf("rows = %d, want a System utilities row too", len(rows))
 	}
 	found := false
 	for i, r := range rows {
 		if r.action == toolsActionUtilities {
-			if i != 3 {
+			if i != 5 {
 				t.Fatalf("utilities row at %d, want before Close", i)
 			}
 			found = true
@@ -247,8 +251,8 @@ func TestToolsRowsRunningSSH(t *testing.T) {
 	}
 }
 
-// FTP and SFTP running together is the worst case for the panel's height: five
-// rows plus two info lines must still leave the footer its space.
+// FTP and SFTP running together is the worst case for the panel's height:
+// seven rows plus two info lines must still leave the footer its space.
 func TestToolsPanelRunningBothServersFits(t *testing.T) {
 	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
 	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
@@ -262,8 +266,8 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 5 {
-		t.Fatalf("row rects = %d, want 5 with the Misc scene", len(rects))
+	if len(rects) != 7 {
+		t.Fatalf("row rects = %d, want 7 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Skip("no usable font")

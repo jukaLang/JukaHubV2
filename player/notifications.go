@@ -26,6 +26,10 @@ type notification struct {
 	Priority  notifPriority
 	Timestamp time.Time
 	Read      bool
+	// Repeat counts how many identical events were folded into this row, so a
+	// chatty producer (a retry loop, a volume slider) shows "×3" instead of
+	// pushing everything else out of the 50-entry history.
+	Repeat int
 }
 
 type notifCenter struct {
@@ -40,27 +44,65 @@ type notifCenter struct {
 
 var nc notifCenter
 
-func notifPush(msg string, p notifPriority) {
-	n := notification{
-		Message:   msg,
-		Priority:  p,
-		Timestamp: time.Now(),
+// toastKindPriority maps a toast severity onto the history's own scale.
+func toastKindPriority(k ToastKind) notifPriority {
+	switch k {
+	case ToastKindSuccess:
+		return notifSuccess
+	case ToastKindWarning:
+		return notifWarning
+	case ToastKindError:
+		return notifError
+	default:
+		return notifInfo
 	}
-	nc.history = append([]notification{n}, nc.history...)
+}
+
+// priorityToastKind is the reverse mapping, used when a caller supplies the
+// priority itself (notifPush) and the toast still has to render.
+func priorityToastKind(p notifPriority) ToastKind {
+	switch p {
+	case notifSuccess:
+		return ToastKindSuccess
+	case notifWarning:
+		return ToastKindWarning
+	case notifError:
+		return ToastKindError
+	default:
+		return ToastKindInfo
+	}
+}
+
+// notifRecord files a message in the history without showing a toast. It is
+// the single writer for nc.history: ShowToast calls it for every user-facing
+// toast, so downloads, update prompts, screenshots and errors all survive the
+// toast timeout instead of vanishing after three seconds.
+//
+// A repeat of the newest unread row is folded into it (Timestamp refreshed,
+// Repeat bumped) rather than appended, so a loop cannot flush the history.
+func notifRecord(msg string, p notifPriority) {
+	if msg == "" {
+		return
+	}
+	if len(nc.history) > 0 {
+		top := &nc.history[0]
+		if top.Message == msg && top.Priority == p && !top.Read {
+			top.Timestamp = time.Now()
+			top.Repeat++
+			return
+		}
+	}
+	nc.history = append([]notification{{Message: msg, Priority: p, Timestamp: time.Now(), Repeat: 1}}, nc.history...)
 	if len(nc.history) > 50 {
 		nc.history = nc.history[:50]
 	}
-	// Also show the toast as before.
-	switch p {
-	case notifSuccess:
-		showToast(msg, ToastSuccess())
-	case notifWarning:
-		showToast(msg, ToastWarn())
-	case notifError:
-		showToast(msg, ToastError())
-	default:
-		showToast(msg, ToastInfo())
-	}
+}
+
+// notifPush files a notification and shows its toast. It records directly
+// (not through ShowToast) so the message is stored exactly once.
+func notifPush(msg string, p notifPriority) {
+	notifRecord(msg, p)
+	showToastPrimitive(msg, priorityToastKind(p))
 }
 
 func notifUnreadCount() int {
@@ -256,8 +298,14 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			}
 			fillCircle(renderer, bx+20, ry+rowH/2, 4, dotCol)
 
-			// Message.
-			msg := ellipsize(font, n.Message, msgMaxW)
+			// Message, with the fold count when identical events were merged.
+			msg := n.Message
+			if n.Repeat > 1 {
+				// ASCII on purpose: the handheld's bundled fonts are not
+				// guaranteed to carry U+00D7.
+				msg = fmt.Sprintf("%s  x%d", msg, n.Repeat)
+			}
+			msg = ellipsize(font, msg, msgMaxW)
 			msgCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
 			if n.Read {
 				msgCol = sdl.Color{R: 110, G: 120, B: 140, A: 180}

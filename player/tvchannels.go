@@ -60,6 +60,14 @@ type tvLibrary struct {
 	query    string
 	favs     map[string]TVFavorite
 	favsRead bool
+
+	// visible is the size of the last filtered list. The filter bar draws
+	// the count on every frame; recomputing it there meant copying and
+	// lowercasing the whole playlist (the public iptv-org index has
+	// thousands of channels) at 30-60fps. It is refreshed whenever the
+	// filter changes, which is the only time the answer can change.
+	visible     int
+	countsValid bool
 }
 
 var tvLib tvLibrary
@@ -321,6 +329,7 @@ func tvSetChannels(list []TVChannel) {
 	tvLib.mu.Lock()
 	defer tvLib.mu.Unlock()
 	tvLib.channels = dedupeTVChannels(list)
+	tvLib.countsValid = false
 	tvLib.index = make(map[string]TVChannel, len(tvLib.channels))
 	for _, ch := range tvLib.channels {
 		tvLib.index[ch.URL] = ch
@@ -386,6 +395,7 @@ func tvSetCategory(name string) bool {
 		return false
 	}
 	tvLib.category = name
+	tvLib.countsValid = false
 	focusedFileIndex = 0
 	return true
 }
@@ -419,6 +429,7 @@ func tvSetQuery(q string) {
 		return
 	}
 	tvLib.query = q
+	tvLib.countsValid = false
 	tvLib.mu.Unlock()
 	focusedFileIndex = 0
 	tvSync()
@@ -436,6 +447,12 @@ func tvFilteredChannels() []TVChannel {
 	tvLib.mu.Lock()
 	defer tvLib.mu.Unlock()
 	return tvFilteredLocked()
+}
+
+// noteFilteredLocked records how many rows the current filter produces.
+func tvNoteFilteredLocked(visible int) {
+	tvLib.visible = visible
+	tvLib.countsValid = true
 }
 
 func tvFilteredLocked() []TVChannel {
@@ -472,6 +489,7 @@ func tvFilteredLocked() []TVChannel {
 		sort.Slice(out, func(i, j int) bool {
 			return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 		})
+		tvNoteFilteredLocked(len(out))
 		return out
 	}
 
@@ -485,14 +503,19 @@ func tvFilteredLocked() []TVChannel {
 		}
 		out = append(out, ch)
 	}
+	tvNoteFilteredLocked(len(out))
 	return out
 }
 
 // tvCounts reports the visible and total channel counts for the filter bar.
+// The visible count is cached: the filter bar is redrawn every frame.
 func tvCounts() (visible, total int) {
 	tvLib.mu.Lock()
 	defer tvLib.mu.Unlock()
-	return len(tvFilteredLocked()), len(tvLib.channels)
+	if !tvLib.countsValid {
+		tvFilteredLocked()
+	}
+	return tvLib.visible, len(tvLib.channels)
 }
 
 // tvCategoryLabel is the human label of the active category.
@@ -609,6 +632,7 @@ func tvToggleFavoriteFocused() (TVChannel, bool, bool) {
 		return TVChannel{}, false, false
 	}
 	ch := list[focusedFileIndex]
+	tvLib.countsValid = false
 	if _, ok := tvLib.favs[ch.URL]; ok {
 		delete(tvLib.favs, ch.URL)
 		return ch, false, true

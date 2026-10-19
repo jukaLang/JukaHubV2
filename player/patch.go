@@ -1063,3 +1063,23 @@ func patchFooterHints() ([]FooterHint, bool) {
 func formatPatchTime(t time.Time) string {
 	return t.Format("2006-01-02 15:04")
 }
+
+// Scene registration. Patch draws its own status bar and footer, and clears the
+// clip rect before returning, so the generic renderer never runs for it.
+type patchScene struct{ sceneBase }
+
+func (patchScene) render(r *sdl.Renderer, c *Config) bool {
+	renderPatchScene(r, c)
+	renderStatusBar(r, c)
+	renderFooter(r, c)
+	r.SetDrawColor(0, 0, 0, 255)
+	r.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	r.SetClipRect(nil)
+	return true
+}
+
+func (patchScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return handlePatchController(e, c)
+}
+
+func init() { registerScene(patchScene{sceneBase{name: "Patch"}}) }

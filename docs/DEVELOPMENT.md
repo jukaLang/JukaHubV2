@@ -1,23 +1,33 @@
 # JukaHub developer guide
 
-Everything below is for building, packaging and extending JukaHub. For
-installation on a handheld, see the [README](../README.md).
-
----
+Orientation for working on the player. Practical tasks live on their own pages;
+this page is the architecture and the design system.
 
 ## How it works
 
 JukaHub has two parts:
 
-1. **Web builder** — drag-and-drop interface at
-   [generate.jukalang.com](https://generate.jukalang.com) that produces
-   `jukaconfig.json`.
-2. **Player** — this repository's Go + SDL2 runtime. It reads
-   `jukaconfig.json` and renders the interface. Changing the file changes the
-   app; no recompilation.
+1. **Web builder** — the drag-and-drop editor at
+   [generate.jukalang.com](https://generate.jukalang.com) (this repository's
+   `index.html`, `style.css`, `script.js`) that produces `jukaconfig.json`.
+2. **Player** — the Go + SDL2 runtime in `player/`. It reads the config and
+   renders it, so changing the file changes the app with no rebuild.
 
 The player is controller-first, drawn entirely with SDL2 primitives, and
 targets a 1280×720 logical canvas.
+
+## Where to read next
+
+| Page | Covers |
+|------|--------|
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | local setup, the checks to run, tests, what to commit |
+| [BUILDING.md](BUILDING.md) | Windows/Linux/ARM64 builds, packaging, releases, CI |
+| [CONFIGURATION.md](CONFIGURATION.md) | config files, variables, elements and every trigger |
+| [CONTROLS.md](CONTROLS.md) | controller and keyboard bindings per screen |
+| [PACKAGES.md](PACKAGES.md) | package format, the signed repository, Patch transactions |
+| [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
+| [SECURITY.md](../player/SECURITY.md) | secret storage, crypto, threat notes |
+| [trimui/README-ID.md](../player/trimui/README-ID.md) | device package and launcher details |
 
 ## Repository layout
 
@@ -25,290 +35,160 @@ targets a 1280×720 logical canvas.
 JukaHubV2/
 ├── index.html, style.css, script.js   # web builder UI
 ├── player/                            # the Go application
-│   ├── main.go                        # entry point, event loop
-│   ├── core.go                        # scene rendering, input, text helpers
-│   ├── vkeyboard.go                   # on-screen keyboard
+│   ├── main.go                        # entry point, event loop, background services
+│   ├── core.go                        # scene rendering, input, trigger dispatch
 │   ├── controller.go                  # gamepad / keyboard / touch routing
-│   ├── home.go, dashboard.go          # Home screen
-│   ├── patch_*.go                     # package manager
-│   ├── tools.go, netmon.go            # tool download and network helpers
+│   ├── focus.go                       # focus graph and spatial navigation
 │   ├── design.go, themes.go           # design tokens and theme presets
-│   ├── jukaconfig.json                # design config (generated)
+│   ├── homelayout.go, home.go         # Home screen
+│   ├── vkeyboard.go                   # on-screen keyboard
+│   ├── videoplayer.go, videosubs.go   # embedded ffmpeg playback
+│   ├── patch_*.go, packages.go        # package manager
+│   ├── plugins.go                     # plugin loader and runner
+│   ├── widgets.go, autostart.go       # contextual widgets, start-at-login
+│   ├── config.go, xmlconfig.go        # config types and both loaders
+│   ├── *_test.go                      # unit, render and focus tests
+│   ├── jukaconfig.json                # committed design config
 │   ├── trimui/                        # device package assets and notes
 │   └── build.bat, release.sh, package-sdcard.sh
-├── .github/workflows/                 # CI: CodeQL, SD-card package, releases
-└── docs/                              # developer documentation
+├── docs/                              # user and developer documentation
+└── .github/workflows/                 # CI: SD-card package, releases, tags
 ```
 
----
+## Architecture
 
-## Building
+### Startup
 
-### Windows
+`main.go` runs one sequence, in order, because each step depends on the last:
 
-Requires Go 1.25+ and a MinGW-w64 GCC (CGO links against SDL2).
+1. SDL/TTF/image init, then load the config (JSON or XML, whichever is newer —
+   see [CONFIGURATION.md](CONFIGURATION.md)) and validate it.
+2. Merge `jukauser.json` over the design defaults.
+3. Tune the garbage collector for the device, then resolve safe mode (plugins,
+   updates and network work off for this launch).
+4. Inject the scenes the config does not ship: the alarm editor and the Smart
+   Widgets page. Both are in-memory only, so a user config is never rewritten.
+5. Start the background services — tool health, Patch, updater, disk chart,
+   network monitor, FTP/SSH servers, screensaver, notifications — each behind a
+   safe-mode check.
 
-```bash
-cd player
-./build.bat
-```
+### Render loop and cadence
 
-`build.bat` checks for GCC, downloads the SDL2 development libraries into
-`.sdl2/`, builds `JukaHub.exe`, copies the SDL2 DLLs next to it and launches
-the app. Set `SDL2_DIR` to use an existing SDL2 installation.
+One loop per frame: poll events → advance animation state → render the scene
+plus overlays → present → sleep. The sleep comes from the frame-rate controller
+in `adaptive.go`, which picks a cadence from activity:
 
-Manual build:
+| Platform | Active | Idle | Deep idle |
+|----------|-------:|-----:|----------:|
+| Handheld (TrimUI) | 33 ms (~30 fps) | 42 ms (~24 fps) | 66 ms (~15 fps) |
+| Desktop | 16 ms (~60 fps) | 33 ms (~30 fps) | 50 ms (~20 fps) |
 
-```bash
-cd player
-set CGO_ENABLED=1
-set GOOS=windows
-set GOARCH=amd64
-set CGO_CFLAGS=-I%CD%\.sdl2\x86_64-w64-mingw32\include
-set CGO_LDFLAGS=-L%CD%\.sdl2\x86_64-w64-mingw32\lib
-go build -o JukaHub.exe .
-```
+The handheld is capped at 30 fps on purpose: it cannot sustain 60 while drawing
+menus, the keyboard or decoded video, and the extra frames only cost battery and
+heat. The `lowPower` setting caps the cadence at the idle profile. Animations
+select the fastest tier through `SetAnimationActive`.
 
-### Linux (development)
+Battery saver (see the Smart Widgets page) turns `lowPower` and `reducedMotion`
+on and switches to the OLED theme below 20%, restoring your own settings when
+charged again.
 
-```bash
-sudo apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
-cd player
-go build -o JukaHub .
-./JukaHub
-```
+### Scenes
 
-### ARM64 handhelds
+A scene either uses the generic element renderer or owns its body. Owning it is
+one small interface ([`player/scene.go`](../player/scene.go)) registered from the
+scene's own file:
 
-```bash
-export GOOS=linux GOARCH=arm64 CGO_ENABLED=1
-export CC=aarch64-linux-gnu-gcc
-go build -o JukaHub .
-```
-
-The TrimUI Smart Pro needs the official SDK sysroot (glibc 2.23, SDL2 2.26.1),
-so use the packaging script instead of a plain cross-build:
-
-```bash
-cd player
-SYSROOT=/usr/local/aarch64-linux-gnu-7.5.0-linaro/sysroot ./package-sdcard.sh
-```
-
-This produces `dist/JukaHub-SDCARD/Apps/JukaHub/` and
-`dist/JukaHub-SDCARD.zip`, including ARM64 `yt-dlp` and ffmpeg builds. The same
-package is built by the **Build SD card package** workflow, which uploads the
-`JukaHub-SDCARD` artifact on every push to `main`.
-
-TrimUI notes, launcher registration and the on-device config are described in
-[../player/trimui/README-ID.md](../player/trimui/README-ID.md).
-
----
-
-## Configuration
-
-Two JSON files:
-
-### `jukaconfig.json` — design config
-
-Static layout: scenes, elements, positions, colours, fonts, variables. Generated
-by the web builder. Do not hand-edit unless you know the schema.
-
-### `jukauser.json` — user data
-
-Created automatically next to the app. Stores mutable settings: theme overrides,
-fullscreen, weather unit, username, playback resolution, file-explorer root and
-custom variables.
-
-### Variables reference
-
-| Variable | Type | Description |
-|----------|------|-------------|
-| `buttonColor` | `#rrggbb` | Button background color |
-| `labelColor` | `#rrggbb` | Label text color |
-| `inputColor` | `#rrggbb` | Input field background |
-| `fullscreen` | `bool` | Launch in fullscreen |
-| `screenWidth` | `int` | Logical screen width |
-| `screenHeight` | `int` | Logical screen height |
-| `weatherEnabled` | `bool` | Enable weather fetch |
-| `weatherUnit` | `"C"` / `"F"` | Temperature unit |
-| `tspUsername` | `string` | Username for greetings |
-| `playbackResolution` | `string` | Max video height (e.g. `"720"`) |
-| `fileExplorerRoot` | `string` | Root directory for the file browser |
-| `tools_path` | `string` | Path to yt-dlp / ffplay binaries |
-
----
-
-## Patch & updates (package manager)
-
-**Patch** lives under **MISC → Patch** ("Update and repair JukaHub"). It is a
-small, safe package manager for the TrimUI Smart Pro — `apt-get` for your own
-files — plus JukaHub's own update flow.
-
-### The package index: `packages.json`
-
-Packages live in one editable JSON index in the Patch state directory, next to
-the installation:
-
-```json
-{
-  "schema": 1,
-  "packages": [
-    {
-      "id": "my-theme",
-      "name": "My theme",
-      "version": "1.0.0",
-      "description": "My custom JukaHub theme",
-      "root": "/mnt/SDCARD/JukaHub/packages/my-theme",
-      "dest_root": "/mnt/SDCARD",
-      "files": [
-        { "src": "theme.json", "dest": "/JukaHub/themes/my-theme.json", "sha256": "sha256:...", "keep_user": true },
-        { "src": "tool.sh", "dest": "/Tools/tool.sh", "executable": true }
-      ]
-    }
-  ]
+```go
+type sceneModule interface {
+	sceneName() string
+	render(renderer *sdl.Renderer, config *Config) bool      // false → generic renderer
+	handleKey(e *sdl.KeyboardEvent, config *Config) bool     // false → generic navigation
+	handleController(e *sdl.ControllerButtonEvent, config *Config) bool
 }
 ```
 
-- **Local packages**: `root` points at a directory on the device; files are
-  copied from there.
-- **Remote packages**: give `archive_url` (HTTPS, GitHub-only) and
-  `archive_sha`; the archive is downloaded, verified and extracted into staging
-  before install.
-- Destinations default to the SD-card root (or the app directory on desktop)
-  and can be overridden per file. Installing into `Roms/`, `BIOS`, `Saves`,
-  `States`, `jukauser.json` etc. is **refused**.
+`sceneBase` supplies the name and the no-op defaults, so a scene declares only
+the methods it needs and an `init` registers it:
 
-### What Patch does
+```go
+type alarmModule struct{ sceneBase }
 
-- **Install / Update / Remove** packages from the index, with a per-file action
-  menu (A on a package row).
-- **Edit packages.json** — opens the Patch state directory in the File
-  Explorer.
-- **JukaHub bundled assets** starter package (fonts, background, default
-  config), to restore JukaHub's own files.
-- **Check for updates** — compares the latest release's publication time with
-  the build's compile stamp (`main.buildTime`, stamped by `build.bat` and
-  `release.sh`). A newer release only adds an **Install update** action; no
-  archive is downloaded until you confirm it, then it downloads, stages,
-  applies and restarts.
-- The same check runs automatically at launch, at most once a day, and only
-  advertises the release: it never downloads or installs on its own
-  (`JUKAHUB_NO_AUTOUPDATE=1` disables the check).
-- **Verify & repair** — validate config, tools and assets; clear stale
-  downloads.
-- **Backups & Restore** — every install/update/remove is journaled, every
-  replaced file is backed up, and an interrupted operation is rolled back
-  automatically at next launch.
-- **Export diagnostics** — redacted report.
-
-### Signed repository (trust model)
-
-Patch packages come from a JukaHub-maintained repository. The repository index
-is **Ed25519-signed** and the verification public key is embedded in the
-application (`patch_signed.go`). Every package archive is SHA-256-verified
-against the signed index before install; HTTPS alone is never treated as
-authenticity. The signing private key exists only in the offline repository
-tooling:
-
-```bash
-PATCH_SIGN_KEY=<hex private key> go run ./tools/build-patch-repo --src ./patch-packages --out ./patch-repo
-```
-
-The tool assembles deterministic package archives (`packages/<name>.zip` with
-`manifest.json` + `payload/`), computes digests and signs
-`repository/index.json`. An example package (`jukahub-cache-clean`) ships in
-`player/patch-packages/`.
-
-### Package format
-
-A package is a zip with a declarative `manifest.json` (schema 1) and a
-`payload/` directory:
-
-```json
-{
-  "schema": 1, "name": "jukahub-cache-clean", "version": "1.0.0",
-  "architecture": "all", "devices": ["TG5040"], "os": ["trimui-stock"],
-  "risk": "low", "restart": "none",
-  "operations": [
-    { "kind": "install", "src": "jukahub-cache-clean.sh", "dest": "/JukaHub/tools/jukahub-cache-clean.sh" },
-    { "kind": "executable", "dest": "/JukaHub/tools/jukahub-cache-clean.sh" }
-  ],
-  "rollback": "automatic"
+func (alarmModule) render(r *sdl.Renderer, c *Config) bool { renderAlarmClock(r, c); return true }
+func (alarmModule) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleAlarmInput(e, c)
+	return true
 }
+func (alarmModule) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlAlarm(e)
+}
+
+func init() { registerScene(alarmModule{sceneBase{name: "Alarm"}}) }
 ```
 
-Supported operations: `install`, `replace` (baseline-hash gated), `remove`
-(package-owned files only), `patch` (structured key/value), `executable`,
-`chmod`. No arbitrary lifecycle scripts are executed; unknown operations and
-unknown schema versions are rejected.
+All three dispatchers (`renderScene` in `core.go`, the key chain in `main.go`,
+`handleSceneController`) ask the registry, so a scene is defined in exactly one
+table: its own `init`. The scene's renderer, key handler and controller mapping
+live in the same file. Scenes that need nothing special — the config-driven
+screens — are simply not registered and keep the generic path.
 
-### Apt-like operations
+Overlays (wallpaper picker, social notifications, Quick Settings, search) are
+checked before scene routing, so a floating panel always wins the D-pad.
 
-- **Refresh** — download and verify the signed repository index (`apt-get
-  update` equivalent; offline keeps the cached verified index).
-- **Browse / Install / Upgrade / Remove** — with dependency resolution
-  (`depends` / `conflicts` / `provides`), cycle detection, reverse-dependency
-  checks, plan preview, digest verification and hold/unhold.
-- **Verify** — hash every installed managed file and report damage.
-- **History & Rollback** — transaction log with rollback to the last committed
-  backup set (user edits made after the transaction are never silently
-  overwritten).
-- **Maintenance** — repair, cache clean, diagnostics.
+Before adding a scene, check the name is not already taken by a different type
+in the file (for example the alarm editor already had an `alarmScene`); the
+registry logs and ignores a duplicate name instead of panicking at startup.
 
-Every install/upgrade/remove is a journaled transaction: backups first,
-journal before mutation, rollback on failure or interruption (auto-recovered at
-next launch). The local package database (`db/db.json`) is written atomically.
+### Focus and navigation
 
-### Safety model
+`focus.go` builds a spatial focus graph per scene from the focusable elements,
+plus the top-bar chrome (back pill, Apps pill, clock, notification bell), which
+is hand-wired left-to-right so a diagonal vector cannot hijack Left/Right along
+a content row. The graph is rebuilt on each key press so dynamic buttons and
+freshly measured chrome rects are included, and re-installing it keeps the
+current node instead of resetting your place.
 
-- Destructive steps are journaled **before** they happen; interruption rolls
-  back automatically.
-- Archives are inspected (no traversal, absolute paths, symlinks or devices).
-- Checksums are enforced when declared; user-owned files (`keep_user`) are
-  backed up before any change.
-- No firmware flashing, no SD-card reformatting, no ROM/BIOS/save access.
-  JukaHub never touches system partitions.
-- Fully usable offline: local repair, backups, restore and diagnostics need no
-  network.
+Back navigation is universal: the header pill, **B**, `Escape` and any
+body-level Back trigger all pop the same scene history, falling back to Home.
 
-### Releases
+### Config, schema and compatibility
 
-Every push to `main` runs `.github/workflows/docker-image.yml`, which creates a
-`JukaHub-<timestamp>` release with two assets:
+The config format is versioned (`schemaVersion`, currently **1**): older files
+are migrated in memory, and a file from a newer build is refused rather than
+downgraded and later overwritten. Unknown element types are logged and skipped;
+unrecognised triggers are inert. Both alone mean a config from a newer builder
+degrades instead of crashing.
 
-- `JukaHub-Windows.zip` — `JukaHub.exe`, the SDL DLLs, fonts/background and the
-  config.
-- `JukaHub-Trimui.zip` — the ARM64 binary, `launch.sh`, fonts/background and the
-  config for every supported TrimUI model.
+### Memory on the device
 
-Both archives include `release-info.json` (`tag` + RFC3339 `date`). The app
-reads it to show the release build date and to decide whether a newer release
-exists; the build also embeds the compile stamp with
-`-ldflags "-X main.buildDate=YYYY-MM-DD -X main.buildTime=<RFC3339 UTC>"`.
-Release tags are timestamps, so the updater compares release times rather than
-semantic versions.
+`applyGCForDevice()` installs a soft heap limit before the first heavy
+allocation, and a memory-pressure monitor evicts caches on the handheld when
+free RAM drops. Caches (textures, text, thumbnails, chat images) are bounded
+and invalidated when their inputs change — follow that pattern rather than
+adding an unbounded map.
 
-### CodeQL
-
-`.github/workflows/codeql.yml` scans `player/` on every pull request that
-touches the Go sources. It analyzes the base commit and the PR head, then the
-`Fail on new high-severity findings` job compares the two SARIF reports and
-fails only when the PR adds a finding rated high or critical
-(`security-severity >= 7.0`). The existing alert backlog does not block PRs.
-
-Advanced setup means default setup must be turned off under
-**Settings → Code security**. The comparison is implemented in
-`.github/codeql/check_new_alerts.py`; findings are matched by rule, file and
-message (not line number), so moved code is not reported as new.
-
----
+Per-frame paths must not allocate. Text goes through `substituteVars` and
+the texture cache for every label on every frame, so both have zero-allocation
+fast paths (`varPattern` is compiled once; the cache key is a struct and its
+LRU is O(1)). The Live TV filter bar reads a cached count instead of filtering
+the whole playlist per frame, and the File Explorer toolbar caches its
+validated path instead of stat-ing the SD card. `go test -bench .` in `player/`
+measures those paths (`BenchmarkFrameTextPass`, `BenchmarkTVFilterBarCounts`).
 
 ## Design system
 
-Controller-first, dark, optimised for a 1280×720 logical canvas read at arm's
-length.
+Controller-first, dark, optimised for a 1280×720 canvas read at arm's length.
 
-### Home screen layout
+### Scene shell
+
+1. **Global header** (56 px) — brand, version and the active scene on the left;
+   network / weather / clock / battery on the right, from one shared helper so
+   it never shifts between screens.
+2. **Scene body** — clipped inside a content panel that ends 16 px above the
+   footer, so no element can reach the footer band.
+3. **Footer** (48 px) — hints that reflect real bindings.
+4. Toasts, the start menu and overlays render last, on top of everything.
+
+### Home screen
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -329,137 +209,69 @@ length.
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
-### Scene shell
-
-1. **Global header** (56 px) — brand, version and active scene on the left;
-   network / weather / time / battery on the right, produced by one shared
-   helper so it never shifts between screens.
-2. **Scene body** — only the active scene, clipped above the footer.
-3. **Contextual footer** (48 px) — hints that reflect real bindings.
-4. Toasts and overlays render last, above the footer.
-
 ### Ambient background
 
 Four soft colour blobs (cyan, purple, blue, soft white), tinted from the active
-theme, orbit and breathe on multi-minute cycles at low alpha. Rendered from one
-cached radial-glow texture with a handful of copies per frame — no per-frame
-allocation, no blur shaders. Cards and text stay opaque on top.
+theme, orbit and breathe on multi-minute cycles at low alpha. They are drawn
+from one cached radial-glow texture with a handful of copies per frame — no
+per-frame allocation and no blur shaders. Cards and text stay opaque on top.
+`variables.dynamicBg` swaps this for the animated, weather-aware background.
 
 ### Colour tokens
+
+Base palette from `design.go` (theme presets override these through
+`ApplyThemeColors`):
 
 | Token | Value |
 |-------|-------|
 | Background | `#090E19` |
-| Surface | `#121A2A` |
-| Card | `#172033` |
-| Card focused | `#22314B` |
+| Top bar | `#111725` |
+| Surface / panel | `#121A2A` |
+| Card | `#182236` |
+| Card focused | `#24344E` |
+| Card hover | `#1C273C` |
 | Border | `#2A3953` |
-| Focus border | `#55D6FF` |
-| Text primary | `#F6F8FC` |
-| Text secondary | `#9CA9BD` |
-| Success / Warning / Error | `#57D68D` / `#FFCB66` / `#FF6B7A` |
+| Border focus | `#6EE7FF` at ~31% alpha |
+| Accent | `#55D8FF` |
+| Accent secondary | `#8B7CFF` |
+| Text primary / secondary / tertiary | `#F6F8FC` / `#9CA9BD` / `#66758B` |
+| Success / warning / danger | `#48D597` / `#FFBF69` / `#E26878` |
+
+Spacing follows a 4 pt grid (`SpaceXS`…`Space3XL`) with an "airy" variant for
+larger screens; corner radii match the same scale (`RadiusSM` … `RadiusXXL`).
 
 ### Typography
 
-Bundled Inter font; `jukauser.json` can override sizes per role.
-
-| Role | Size | Weight |
-|------|-----:|--------|
-| Brand | 25–27 px | Medium |
-| Greeting | 30–34 px | Medium/Bold |
-| Card title | 22–24 px | Medium |
-| Card helper | 16–18 px | Regular |
-| Status / footer | 15–17 px | Medium |
+Bundled Inter (`Inter-Regular.ttf`). Text is drawn through the caching text
+renderer, which reads the font's `cmap` and substitutes characters the font
+cannot draw (full-width forms, `【】`, circled digits, emoji) so a title never
+becomes a row of boxes; characters with no sensible substitute collapse to a
+single `…`. A font role that is not configured falls back to
+`Inter-Regular.ttf` at 24 px.
 
 ### Focus and icons
 
-- Selected cards use a 3 px cyan border on a raised surface, unmistakable in
+- The focused card gets a bright border on a raised surface, readable in
   grayscale and from viewing distance.
 - Focus never changes card geometry; pressed feedback darkens the card and
-  shifts content 1–2 px for ~100 ms.
+  shifts content 1–2 px briefly.
 - Icons are drawn with SDL geometry — never emoji or glyphs the font may lack.
 
 ### Themes
 
-Seven built-in presets (Dark, Light, OLED, Midnight, Hub, Ocean, Sunset) can be
-applied live from Settings → Themes and persist in `jukauser.json`. Each preset
-defines background, surfaces, text, borders and accent colour.
-
----
-
-## Controls reference
-
-### Menus
-
-| Button | Action |
-|--------|--------|
-| D-pad / left stick | Move |
-| A | Open / confirm |
-| B | Back |
-| L1 / R1 | Previous / next section or page |
-| X | Secondary action |
-| Y | Tertiary action (save, ask AI in chat) |
-
-### On-screen keyboard
-
-| Button | Action |
-|--------|--------|
-| D-pad | Move between keys |
-| A | Type the selected key |
-| L1 | Shift |
-| Y | Submit (send / save) |
-| B, Esc | Close |
-
-The keyboard also closes with its close button, by tapping outside the panel,
-and on `Done` / `Send`.
-
-### Video player
-
-| Button | Action |
-|--------|--------|
-| A | Play / pause |
-| B | Stop and go back |
-| Left / Right | Seek |
-| Up / Down | Volume |
-| L1 / R1 | Playback speed ±0.25× |
-
-### Desktop keyboard
-
-| Key | Action |
-|-----|--------|
-| Arrows / Enter | Navigate / confirm |
-| Esc | Back |
-| Q / E | Previous / next scene |
-| Ctrl+K | Jump to YouTube search |
-| Ctrl+Q | Quick settings |
-| F1 | Shortcut overlay |
-| F2 | Global search |
-| F12 | Screenshot |
-
-### JukaLand
-
-| Button | Action |
-|--------|--------|
-| D-pad | Move |
-| A | Jump |
-| B | Break block |
-| X | Place block |
-| Y | Enter / exit car |
-| Start | Craft menu |
-| Back / Select | Exit game |
-
----
+25 presets, applied live from Settings → Themes or the Smart Widgets page and
+persisted in `jukauser.json`: `dark`, `light`, `oled`, `midnight`, `hub`,
+`ocean`, `sunset`, `red`, `green`, `blue`, `highcontrast`, `anime`, `cute`,
+`girly`, `sakura`, `lavender`, `sand`, `nord`, `gruvbox`, `dracula`, `matrix`,
+`fallout`, `cyberpunk`, `mono`, `vaporwave`. Each preset defines background,
+surfaces, text, borders and the accent colour. The gallery order is pinned in
+`themePresetOrder` — never rely on map iteration, which would shuffle the cards
+every frame.
 
 ## Security
 
-JukaHub encrypts sensitive values (API keys, tokens) with AES-256-GCM. Set
-`JUKAHUB_CRYPTO_KEY` (and optionally `JUKAHUB_CRYPTO_SALT`) before launching;
-values look like `ENC:default-v3-enhanced/...` in the config. At startup the
-player logs warnings for plaintext secrets, the built-in default key, Discord
-user tokens and values that fail input validation.
-
-Secrets are managed without a GUI, so a token can be prepared on a PC and
-copied to the handheld:
+Sensitive values (API keys, tokens) are encrypted with AES-256-GCM and can be
+prepared from a PC:
 
 ```bash
 cd player
@@ -467,42 +279,48 @@ cd player
 ./JukaHub -check-secrets                   # which values decrypt, and why not
 ```
 
-The tool uses the same key derivation as the player. Decryption accepts values
-written with the older, untrimmed default salt (same `default-v3-enhanced` key
-ID), so configs from earlier builds keep working.
+Set `JUKAHUB_CRYPTO_KEY` (and optionally `JUKAHUB_CRYPTO_SALT`) before
+launching; encrypted values look like `ENC:default-v3-enhanced/…` in the
+config, and the player warns about plaintext secrets, the built-in default key
+and tokens that fail validation. Never commit a config with real credentials —
+`jukaconfig.json` and `jukauser.json` are git-ignored for that reason.
 
-Never commit real credentials: keep them out of `jukaconfig.json` in version
-control. Details: [../player/SECURITY.md](../player/SECURITY.md).
-
----
+Full details: [player/SECURITY.md](../player/SECURITY.md).
 
 ## Key files
 
 | File | Purpose |
 |------|---------|
-| `player/main.go` | App entry point, SDL2 init, scene loop |
-| `player/core.go` | Scene rendering, input routing, text helpers |
-| `player/vkeyboard.go` | On-screen keyboard (layout, hit testing, rendering) |
+| `player/main.go` | entry point, SDL2 init, event loop, background services |
+| `player/core.go` | scene rendering, input routing, text helpers, triggers |
+| `player/scene.go` | scene interface, registry and per-scene routing |
+| `player/focus.go` | focus graph, spatial navigation, chrome tiers |
+| `player/controller.go` | gamepad, keyboard and touch routing |
+| `player/design.go`, `player/themes.go` | design tokens and theme presets |
+| `player/config.go`, `player/xmlconfig.go` | config types, JSON/XML loading |
+| `player/config_health.go` | config validation, atomic writes, backups |
 | `player/crypto.go` | AES-256-GCM encryption and key management |
-| `player/config_health.go` | Config validation and security checks |
-| `player/controller.go` | Gamepad / keyboard / touch routing |
-| `player/tools.go` | Tool paths, downloads, GitHub API helpers |
-| `player/patch_engine.go` | Install / update / verify / rollback engine |
-| `player/patch_signed.go` | Signed repository verification (Ed25519) |
-| `build.bat` | Windows build wrapper (GCC check, SDL2 staging, launch) |
+| `player/patch_engine.go` | install / update / verify / rollback engine |
+| `player/patch_signed.go` | signed repository verification (Ed25519) |
+| `player/plugins.go` | plugin loader and script runner |
+| `player/companion.go` | phone companion HTTP server, PIN auth, uploads (no SDL) |
+| `player/companionui.go` | companion QR card and phone-to-SDL input bridge |
+| `player/widgets.go` | battery saver, time-of-day theme, Smart Widgets page |
+| `player/build.bat` | Windows build wrapper (toolchain check, SDL2 staging) |
 | `player/package-sdcard.sh` | TrimUI SD-card package |
-| `player/release.sh` | Release artifacts and `manifest.json` |
-
-## Contributing
-
-Fork, branch, keep changes focused, then open a pull request. Run `go vet` and
-`go test ./...` in `player/` before submitting. Rendering changes are expected
-to include pixel or geometry tests; the existing tests in
-`installbar_render_test.go`, `vkeyboard_test.go` and `vkeyboard_ui_test.go`
-show the pattern (SDL dummy driver + software renderer).
+| `player/release.sh` | release artifacts and `manifest.json` |
 
 ## Roadmap
 
 Ported from JukaHub V1: canvas sandbox, favorites tabs, unit converter, disk
 space chart, ffplay/ffmpeg playback, image viewer, chat, YouTube Shorts, random
 I/O benchmark, log viewer, theme presets, plugin system — all done.
+
+Open work, documented here so it is not rediscovered:
+
+- A plugin install/uninstall screen (the API exists, the UI does not).
+- Drawing callbacks for plugins (`PluginContext` is declared but never passed).
+- Fixing the intermittent native crash in the fullscreen video test — see the
+  note in [CONTRIBUTING.md](../CONTRIBUTING.md).
+- The shortcuts overlay lists `F5` (refresh) and `Ctrl+L` (log viewer); only
+  `Ctrl+L` *inside the terminal* (clear output) is implemented.

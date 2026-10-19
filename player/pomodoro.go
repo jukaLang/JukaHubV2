@@ -287,3 +287,41 @@ func handlePomodoroInput(e *sdl.KeyboardEvent, config *Config) {
 		pomodoroReset()
 	}
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlPomodoro(e *sdl.ControllerButtonEvent) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_A:
+		pomodoroTogglePause()
+		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_Y:
+		pomodoroReset()
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_X:
+		pomodoroSkip()
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration.
+type pomodoroScene struct{ sceneBase }
+
+func (pomodoroScene) render(r *sdl.Renderer, c *Config) bool { renderPomodoro(r, c); return true }
+
+func (pomodoroScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handlePomodoroInput(e, c)
+	return true
+}
+
+func (pomodoroScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlPomodoro(e)
+}
+
+func init() { registerScene(pomodoroScene{sceneBase{name: "Pomodoro"}}) }

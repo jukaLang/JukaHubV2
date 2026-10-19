@@ -20,35 +20,27 @@ import (
 // --- System status helpers ---
 
 func getBatteryPercent() int {
-	// Try common Linux sysfs paths for battery capacity
-	base := "/sys/class/power_supply"
-	entries, err := os.ReadDir(base)
+	// The same sysfs battery the charging check reads (see batterySysfsDir); -1
+	// means "unknown", which the battery saver treats as "do nothing".
+	dir := batterySysfsDir()
+	if dir == "" {
+		return -1
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "capacity"))
 	if err != nil {
 		return -1
 	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.Contains(strings.ToLower(name), "bat") {
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(base, name, "capacity"))
-		if err == nil {
-			var pct int
-			if _, err := fmt.Fscan(strings.NewReader(string(data)), &pct); err == nil {
-				if pct > 100 {
-					pct = 100
-				}
-				if pct < 0 {
-					pct = 0
-				}
-				return pct
-			}
-		}
+	var pct int
+	if _, err := fmt.Fscan(strings.NewReader(string(data)), &pct); err != nil {
+		return -1
 	}
-	return -1
+	if pct > 100 {
+		pct = 100
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	return pct
 }
 
 func getWifiStatus() string {
@@ -132,6 +124,45 @@ func saveUserConfigDebounced(user *UserConfig) {
 	userConfigSaveMutex.Unlock()
 }
 
+// userConfigFromVariables snapshots the persisted half of a live config into
+// the shape saveUserConfigDebounced expects. Every caller used to build this
+// struct by hand; sharing it keeps a new setting from being remembered in one
+// copy and forgotten in another.
+func userConfigFromVariables(config *Config) *UserConfig {
+	if config == nil {
+		return nil
+	}
+	user := &UserConfig{Variables: UserVariables{
+		ButtonColor:        config.Variables.ButtonColor,
+		LabelColor:         config.Variables.LabelColor,
+		InputColor:         config.Variables.InputColor,
+		Fullscreen:         config.Variables.Fullscreen,
+		FileExplorerRoot:   config.Variables.FileExplorerRoot,
+		WeatherEnabled:     config.Variables.WeatherEnabled,
+		WeatherUnit:        config.Variables.WeatherUnit,
+		TSPUsername:        config.Variables.TSPUsername,
+		PlaybackResolution: config.Variables.PlaybackResolution,
+		GridColumns:        config.Variables.GridColumns,
+		SearchWidth:        config.Variables.SearchWidth,
+		DynamicBg:          config.Variables.DynamicBg,
+		ScreensaverTimeout: config.Variables.ScreensaverTimeout,
+		SocialNotifs:       config.Variables.SocialNotifs,
+		ReducedMotion:      config.Variables.ReducedMotion,
+		LowPower:           config.Variables.LowPower,
+		LedSync:            config.Variables.LEDSync,
+		Custom:             config.Variables.Custom,
+	}}
+	// Levels are owned by Quick Settings and live only in jukauser.json. Carry
+	// them through so a save triggered by any other screen does not reset them.
+	if userConfigCache != nil {
+		user.Variables.Volume = userConfigCache.Variables.Volume
+		user.Variables.VolumeSet = userConfigCache.Variables.VolumeSet
+		user.Variables.Brightness = userConfigCache.Variables.Brightness
+		user.Variables.BrightnessSet = userConfigCache.Variables.BrightnessSet
+	}
+	return user
+}
+
 func loadRecentlyPlayed() {
 	user := loadUserConfig()
 	if user == nil || user.Variables.Custom == nil {
@@ -174,23 +205,7 @@ func recordPlayed(config *Config, key string) {
 		config.Variables.Custom["recently_played"] = list
 	}
 
-	saveUserConfigDebounced(&UserConfig{Variables: UserVariables{
-		ButtonColor:        config.Variables.ButtonColor,
-		LabelColor:         config.Variables.LabelColor,
-		InputColor:         config.Variables.InputColor,
-		Fullscreen:         config.Variables.Fullscreen,
-		FileExplorerRoot:   config.Variables.FileExplorerRoot,
-		WeatherEnabled:     config.Variables.WeatherEnabled,
-		WeatherUnit:        config.Variables.WeatherUnit,
-		TSPUsername:        config.Variables.TSPUsername,
-		PlaybackResolution: config.Variables.PlaybackResolution,
-		GridColumns:        config.Variables.GridColumns,
-		SearchWidth:        config.Variables.SearchWidth,
-		DynamicBg:          config.Variables.DynamicBg,
-		ScreensaverTimeout: config.Variables.ScreensaverTimeout,
-		SocialNotifs:       config.Variables.SocialNotifs,
-		Custom:             config.Variables.Custom,
-	}})
+	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
 // --- Weather (best-effort IP-geolocated 7-day forecast; non-fatal) ---
@@ -341,6 +356,8 @@ func sceneDisplayName(name string) string {
 		return "General"
 	case "SettingsAppearance":
 		return "Appearance"
+	case "SettingsSmart":
+		return "Smart Widgets"
 	case "ThemePresets":
 		return "Themes"
 	case "UnitConverter":
@@ -513,6 +530,33 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
 			renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: w + 6, H: ah + 6})
 		}
+		headerTextW += SpaceSM + w
+	}
+
+	// Watch Party chip: a live room is a session-level state, so it belongs in
+	// the same place as the safe-mode chip. The count is the number of devices
+	// currently present, which makes "did my friend join?" visible at a glance.
+	if partyActive() && font != nil {
+		snap, _, _, _ := partyState()
+		label := "PARTY"
+		if n := len(snap.Members); n > 1 {
+			label = fmt.Sprintf("PARTY %d", n)
+		}
+		pw, _, _ := font.SizeUTF8(label)
+		pad := int32(10)
+		sh := int32(22)
+		w := int32(pw) + pad*2
+		x := tb.startRect.X + tb.startRect.W + SpaceSM
+		if safeModeActive() {
+			// The safe chip is drawn next; keep this one to its left by
+			// shifting right after it instead of overlapping.
+			sw, _, _ := font.SizeUTF8("SAFE")
+			x += int32(sw) + pad*2 + SpaceSM
+		}
+		y := (barH - sh) / 2
+		fillRoundedRect(renderer, x, y, w, sh, sh/2, WithAlpha(accentColor, 45))
+		strokeRoundedRect(renderer, x, y, w, sh, sh/2, 1, WithAlpha(accentColor, 210))
+		renderText(renderer, config, font, label, accentColor, x+pad, y+(sh-int32(font.Height()))/2)
 		headerTextW += SpaceSM + w
 	}
 
@@ -793,12 +837,22 @@ type UserVariables struct {
 	PlaybackResolution string `json:"playbackResolution"`
 	ReducedMotion      bool   `json:"reducedMotion"`
 	LowPower           bool   `json:"lowPower"`
+	LedSync            bool   `json:"ledSync"`
 	GridColumns        int    `json:"gridColumns"`
 	SearchWidth        int    `json:"searchWidth"`
 	DynamicBg          bool   `json:"dynamicBg"`
 	ScreensaverTimeout int    `json:"screensaverTimeout"`
 	SocialNotifs       bool   `json:"socialNotifs"`
-	Custom             map[string]interface{}
+
+	// Quick Settings levels. The *Set flags separate "never touched" from a
+	// real 0 (muted / dimmed), so a fresh install never overrides the device's
+	// own mixer or backlight on first launch.
+	Volume        int  `json:"volume"`
+	VolumeSet     bool `json:"volumeSet"`
+	Brightness    int  `json:"brightness"`
+	BrightnessSet bool `json:"brightnessSet"`
+
+	Custom map[string]interface{}
 }
 
 func loadUserConfig() *UserConfig {
@@ -971,6 +1025,12 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	config.Variables.PlaybackResolution = user.Variables.PlaybackResolution
 	config.Variables.ReducedMotion = user.Variables.ReducedMotion
 	config.Variables.LowPower = user.Variables.LowPower
+	config.Variables.LEDSync = user.Variables.LedSync
+	// A zero timeout means "not saved" (old user files), not "never sleep":
+	// keep the validator's 5-minute default instead of disabling the screensaver.
+	if user.Variables.ScreensaverTimeout > 0 {
+		config.Variables.ScreensaverTimeout = user.Variables.ScreensaverTimeout
+	}
 	for k, v := range user.Variables.Custom {
 		if !volatileCustomVars[k] {
 			config.Variables.Custom[k] = v

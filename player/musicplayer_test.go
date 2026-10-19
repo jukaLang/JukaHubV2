@@ -297,6 +297,64 @@ func TestMusicPlaylistClickPlaysVisibleRow(t *testing.T) {
 	}
 }
 
+// Tapping the artwork shows the synced lyrics and tapping again hides them.
+// The lyrics view occupies the artwork slot, so the rest of the layout (seek
+// bar, transport, playlist) must not move when it is toggled.
+func TestMusicArtworkTapTogglesLyrics(t *testing.T) {
+	withScreen(t, 1280, 720)
+	resetMusicState(t)
+	musicLoadPlaylist(musicTestFiles(t), "")
+
+	music.mu.Lock()
+	music.current = 0
+	music.lyrics = parseLRC("[00:00.00]one\n[00:02.00]two\n[00:04.00]three")
+	music.showLyrics = false
+	music.position = 3
+	music.mu.Unlock()
+	t.Cleanup(func() {
+		music.mu.Lock()
+		music.lyrics = nil
+		music.showLyrics = false
+		music.position = 0
+		music.mu.Unlock()
+	})
+
+	renderMusicForTest(t)
+	art := musicRects.art
+	if art.W < 100 || art.H < 100 {
+		t.Fatalf("artwork hitbox %v is implausibly small", art)
+	}
+	seekBefore := musicRects.seek
+
+	if !HandleMusicClick(art.X+12, art.Y+12) {
+		t.Fatal("tap on the artwork was not consumed")
+	}
+	music.mu.Lock()
+	shown := music.showLyrics
+	music.mu.Unlock()
+	if !shown {
+		t.Fatal("artwork tap did not enable lyrics")
+	}
+
+	renderMusicForTest(t) // draws the lyric lines instead of the bars
+	if musicRects.seek != seekBefore {
+		t.Errorf("seek bar moved when lyrics were shown: %v -> %v", seekBefore, musicRects.seek)
+	}
+	if musicRects.art != art {
+		t.Errorf("artwork rect changed when lyrics were shown: %v -> %v", art, musicRects.art)
+	}
+
+	if !HandleMusicClick(art.X+12, art.Y+12) {
+		t.Fatal("second tap on the artwork was not consumed")
+	}
+	music.mu.Lock()
+	shown = music.showLyrics
+	music.mu.Unlock()
+	if shown {
+		t.Error("second artwork tap did not hide lyrics")
+	}
+}
+
 // renderMusicForTest draws the player into an offscreen renderer so the
 // hitboxes are published exactly as they are on screen.
 func renderMusicForTest(t *testing.T) {

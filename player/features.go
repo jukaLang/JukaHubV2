@@ -172,6 +172,34 @@ func feListDirectory(config *Config) {
 	}
 }
 
+// feDisplayCache remembers the validated path shown in the File Explorer
+// toolbar. feCurrentPath stats the directory (and resolves it against the
+// root) to validate it; the toolbar is redrawn every frame, and on the SD card
+// that stat was the only disk I/O the render loop performed.
+var feDisplayCache struct {
+	raw     string
+	root    string
+	display string
+}
+
+// feDisplayPath is the cached variant of feCurrentPath for rendering only.
+func feDisplayPath(config *Config) string {
+	raw := ""
+	root := ""
+	if config != nil {
+		raw, _ = config.Variables.Custom["fe_path"].(string)
+		root = config.Variables.FileExplorerRoot
+	}
+	if feDisplayCache.display != "" && feDisplayCache.raw == raw && feDisplayCache.root == root {
+		return feDisplayCache.display
+	}
+	path := feCurrentPath(config)
+	feDisplayCache.raw = raw
+	feDisplayCache.root = root
+	feDisplayCache.display = path
+	return path
+}
+
 // feBack handles B/Escape in the File Explorer: inside a directory it goes up
 // one level; at the root it returns to the previous scene/Home. It never
 // terminates the application.
@@ -380,7 +408,7 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		toolbar := sdl.Rect{X: element.X, Y: element.Y - 52, W: elemW, H: 44}
 		fillRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, ColorCard)
 		strokeRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, 1, ColorBorder)
-		pathText := feCurrentPath(config)
+		pathText := feDisplayPath(config)
 		renderWithClip(renderer, toolbar.X+12, toolbar.Y+4, toolbar.W-24, toolbar.H-8, func(ren *sdl.Renderer) {
 			drawText(ren, font, ellipsize(font, pathText, toolbar.W-30), toolbar.X+12, toolbar.Y+(toolbar.H-int32(font.Height()))/2,
 				ColorTextSecondary(), textAlignLeft)

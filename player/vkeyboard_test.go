@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -277,6 +278,71 @@ func TestKeyboardActivateFocusedTypesAndSubmits(t *testing.T) {
 	vkActivateFocused(cfg)
 	if virtualKeyboardActive {
 		t.Fatal("Done should close the keyboard")
+	}
+}
+
+// paddedTextEvent mimics what SDL hands the app: a NUL-terminated string in a
+// fixed 32-byte array whose tail is zero padding. Converting the whole array
+// to a Go string used to append that padding to the edited field, which made
+// the field look stuck after the first key because the renderer stops at the
+// first NUL.
+func paddedTextEvent(text string) *sdl.TextInputEvent {
+	e := &sdl.TextInputEvent{Type: sdl.TEXTINPUT}
+	copy(e.Text[:], text)
+	return e
+}
+
+func TestPhysicalTypingKeepsTextAfterTheFirstKey(t *testing.T) {
+	resetKeyboardState(t)
+	withScreen(t, 1280, 720)
+	cfg := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	vkTarget = vkTargetScene
+	prevScene, prevElem := activeSceneIndex, activeElementIndex
+	activeSceneIndex, activeElementIndex = -1, -1
+	t.Cleanup(func() { activeSceneIndex, activeElementIndex = prevScene, prevElem })
+	inputTextBuffer = ""
+	vkEnsureLayout()
+
+	press := func(sym sdl.Keycode, text string) {
+		handleVirtualKeyboardInput(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sym}}, cfg)
+		handleTextInputEvent(paddedTextEvent(text), cfg)
+	}
+	press(sdl.K_h, "h")
+	press(sdl.K_i, "i")
+	press(sdl.K_EXCLAIM, "!")
+
+	if inputTextBuffer != "hi!" {
+		t.Fatalf("typed %q, want %q", inputTextBuffer, "hi!")
+	}
+	if strings.IndexByte(inputTextBuffer, 0) >= 0 {
+		t.Fatalf("buffer contains NUL padding: %q", inputTextBuffer)
+	}
+
+	// Backspace has to remove the visible character, not invisible padding.
+	handleVirtualKeyboardInput(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_BACKSPACE}}, cfg)
+	if inputTextBuffer != "hi" {
+		t.Fatalf("after backspace %q, want %q", inputTextBuffer, "hi")
+	}
+
+	// The sanitizer also protects other producers (e.g. the phone companion).
+	vkInsertText("a\x00b", cfg)
+	if inputTextBuffer != "hiab" {
+		t.Fatalf("NUL was not stripped: %q", inputTextBuffer)
+	}
+}
+
+func TestNotesTypingDropsSDLTextPadding(t *testing.T) {
+	prevTab, prevContent := notes.tab, notes.editContent
+	t.Cleanup(func() { notes.tab, notes.editContent = prevTab, prevContent })
+	notes.tab = 2
+	notes.editContent = ""
+
+	handleNotesTextInput(paddedTextEvent("ab"))
+	if notes.editContent != "ab" {
+		t.Fatalf("notes content %q, want %q", notes.editContent, "ab")
+	}
+	if strings.IndexByte(notes.editContent, 0) >= 0 {
+		t.Fatalf("notes content contains NUL padding: %q", notes.editContent)
 	}
 }
 

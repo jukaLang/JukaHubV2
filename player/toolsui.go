@@ -21,6 +21,8 @@ type toolsAction int
 const (
 	toolsActionFTP toolsAction = iota
 	toolsActionSSH
+	toolsActionCompanion
+	toolsActionParty
 	toolsActionPatch
 	toolsActionCalculator
 	toolsActionCopyIP
@@ -73,6 +75,10 @@ func toolsIPAddress() string {
 func openToolsPanel() {
 	// Close Quick Settings so two modals never stack on top of each other.
 	qs.open = false
+	// The companion QR card is also a modal; opening Tools replaces it.
+	if companion.open {
+		closeCompanionOverlay()
+	}
 	toolsPanel.open = true
 	toolsPanel.cursor = 0
 	toolsPanelRect = sdl.Rect{}
@@ -203,6 +209,36 @@ func toolsRows(config *Config) []toolsRow {
 	}
 	rows = append(rows, sshRow)
 
+	// The phone companion is the answer to typing on a D-pad, so it belongs
+	// next to the file servers rather than buried in the classic Tools scene.
+	companionRow := toolsRow{
+		label:   "Phone companion",
+		value:   "Scan to connect",
+		detail:  "Type, use a remote and send files from your phone",
+		hint:    "A: show QR code",
+		action:  toolsActionCompanion,
+		enabled: true,
+	}
+	if companion.open {
+		companionRow.value = companionStatusLine()
+		companionRow.hint = "A: hide"
+	}
+	rows = append(rows, companionRow)
+
+	partyRow := toolsRow{
+		label:   "Watch Party",
+		value:   "LAN",
+		detail:  "Watch the same stream together, with a shared queue",
+		hint:    "A: open",
+		action:  toolsActionParty,
+		enabled: true,
+	}
+	if partyActive() {
+		partyRow.value = "In a room"
+		partyRow.detail = partyInviteText()
+	}
+	rows = append(rows, partyRow)
+
 	if sceneIndexExact(config, "Patch") >= 0 {
 		patchRow := toolsRow{
 			label:   "Patch",
@@ -293,6 +329,20 @@ func toolsPanelActivate(config *Config) {
 		toggleFTPServer()
 	case toolsActionSSH:
 		toggleSSHServer()
+	case toolsActionParty:
+		// The Watch Party panel replaces Tools; two full-screen overlays
+		// stacked would be unreadable.
+		toolsPanel.open = false
+		partyOpenPanel()
+	case toolsActionCompanion:
+		// The QR card replaces the panel: both are full-screen overlays and
+		// two of them stacked would be unreadable.
+		toolsPanel.open = false
+		if !IsOnline() || toolsIPAddress() == "" {
+			ShowToast("Connect WiFi first — the phone needs an address", ToastKindWarning)
+			return
+		}
+		openCompanionOverlay()
 	case toolsActionPatch:
 		idx := sceneIndexExact(config, "Patch")
 		if idx < 0 {

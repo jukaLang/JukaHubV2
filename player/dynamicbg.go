@@ -325,6 +325,14 @@ func loadWallpaper(renderer *sdl.Renderer, path string) bool {
 // Main render function — called every frame after clearing the screen
 // ──────────────────────────────────────────────────────────────────────
 
+// dynamicBgLowPower reports whether the backdrop should draw its reduced
+// variant. Low Power is on by default on the handhelds, and every blob and
+// particle is a blended texture copy, so this is the biggest per-frame cost a
+// user can switch on by hand.
+func dynamicBgLowPower() bool {
+	return appConfig != nil && appConfig.Variables.LowPower
+}
+
 var lastBgTime float64
 
 func renderDynamicBackground(renderer *sdl.Renderer) {
@@ -374,11 +382,18 @@ func renderWallpaperBg(renderer *sdl.Renderer, t float64) {
 	_ = dynbg.wallpaper.SetAlphaMod(180)
 	renderer.Copy(dynbg.wallpaper, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
 
-	// Subtle gradient overlay at bottom for text readability
-	for i := int32(0); i < 80; i++ {
-		a := uint8(200 * (1.0 - float64(i)/80.0))
+	// Subtle gradient overlay at bottom for text readability. 80 one-pixel
+	// bands are 80 draw calls per frame; on Low Power a tenth of them is
+	// visually identical behind the scrim.
+	bands := int32(80)
+	if dynamicBgLowPower() {
+		bands = 10
+	}
+	bandH := int32(80) / bands
+	for i := int32(0); i < bands; i++ {
+		a := uint8(200 * (1.0 - float64(i)*float64(bandH)/80.0))
 		renderer.SetDrawColor(0, 0, 0, a)
-		renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 80 + i, W: screenWidth, H: 1})
+		renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 80 + i*bandH, W: screenWidth, H: bandH})
 	}
 }
 
@@ -441,7 +456,12 @@ func renderAmbientDynamicBg(renderer *sdl.Renderer, t float64) {
 		{0.4, 0.8, 0.09, 0.10, -0.05, 5.0, 420, sdl.Color{R: 34, G: 197, B: 94}, pal.blobAlpha - 12},
 	}
 
-	for i, b := range blobs {
+	// Low Power keeps three blobs: the drift still reads, at half the copies.
+	visibleBlobs := blobs
+	if dynamicBgLowPower() {
+		visibleBlobs = blobs[:3]
+	}
+	for i, b := range visibleBlobs {
 		cx := float64(screenWidth)*b.ox + math.Cos(t*b.speed+b.phase)*float64(screenWidth)*b.rx
 		cy := float64(screenHeight)*b.oy + math.Sin(t*b.speed*0.8+b.phase)*float64(screenHeight)*b.ry
 		sz := b.size * scale * (1 + 0.12*math.Sin(t*0.18+float64(i)*1.7))
@@ -471,7 +491,13 @@ func renderBgParticles(renderer *sdl.Renderer, t float64, pal bgPalette) {
 	if dynbg.particleTex == nil {
 		return
 	}
-	for _, p := range dynbg.particles {
+	// Low Power draws a quarter of the particles; they are decorative and
+	// the motion is still there.
+	particles := dynbg.particles
+	if dynamicBgLowPower() && len(particles) > 20 {
+		particles = particles[:20]
+	}
+	for _, p := range particles {
 		// Twinkle
 		twinkle := 0.5 + 0.5*math.Sin(t*p.twinkle+p.phase)
 		alpha := uint8(float64(p.alpha) * twinkle)

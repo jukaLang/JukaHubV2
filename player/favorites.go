@@ -652,7 +652,11 @@ func openInExplorer(path string) {
 	}
 	if err := cmd.Start(); err != nil {
 		log.Printf("openInExplorer: %v", err)
+		return
 	}
+	// Reap the shell process; without Wait it stays a zombie on the handheld's
+	// Linux until JukaHub exits.
+	go func() { _ = cmd.Wait() }()
 }
 
 func sortFavoritesByTimestamp(items []FavoriteItem) []FavoriteItem {

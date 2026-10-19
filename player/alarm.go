@@ -906,9 +906,57 @@ func handleAlarmTextInput(e *sdl.TextInputEvent) {
 	if alarmUI.tab != 3 {
 		return
 	}
-	for _, r := range string(e.Text[:]) {
+	for _, r := range e.GetText() {
 		if r >= 32 && r <= 126 && len(alarmUI.editLabel) < 40 {
 			alarmUI.editLabel += string(r)
 		}
 	}
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlAlarm(e *sdl.ControllerButtonEvent) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		alarmNavigate(-1)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		alarmNavigate(1)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_A:
+		alarmSelect()
+		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_B:
+		alarmBack()
+		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_Y:
+		alarmInitUI()
+		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_X:
+		alarmToggleFocused()
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		alarmDeleteFocused()
+		PlayNavSound()
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration.
+type alarmModule struct{ sceneBase }
+
+func (alarmModule) render(r *sdl.Renderer, c *Config) bool { renderAlarmClock(r, c); return true }
+
+func (alarmModule) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleAlarmInput(e, c)
+	return true
+}
+
+func (alarmModule) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlAlarm(e)
+}
+
+func init() { registerScene(alarmModule{sceneBase{name: "Alarm"}}) }

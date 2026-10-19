@@ -609,3 +609,30 @@ func TestLoadTVChannelsFromDir(t *testing.T) {
 		t.Fatalf("first channel = %q, want A One (a.m3u8 sorts first)", chans[0].Name)
 	}
 }
+
+// TestTVCountsFollowFilterChanges guards the cached count: the filter bar must
+// still show a new number after a query, a category switch or a reload.
+func TestTVCountsFollowFilterChanges(t *testing.T) {
+	resetTVLibrary(t)
+	tvSetChannels([]TVChannel{
+		{Name: "One", URL: "http://x/1", Group: "News"},
+		{Name: "Two", URL: "http://x/2", Group: "Sports"},
+		{Name: "Three", URL: "http://x/3", Group: "Sports"},
+	})
+	if visible, total := tvCounts(); visible != 3 || total != 3 {
+		t.Fatalf("counts = %d/%d, want 3/3", visible, total)
+	}
+	tvSetCategory("Sports")
+	if visible, total := tvCounts(); visible != 2 || total != 3 {
+		t.Fatalf("after category: counts = %d/%d, want 2/3", visible, total)
+	}
+	tvSetQuery("three")
+	if visible, total := tvCounts(); visible != 1 || total != 3 {
+		t.Fatalf("after query: counts = %d/%d, want 1/3", visible, total)
+	}
+	tvSetQuery("")
+	tvSetCategory(tvAllCategory)
+	if visible, total := tvCounts(); visible != 3 || total != 3 {
+		t.Fatalf("after reset: counts = %d/%d, want 3/3", visible, total)
+	}
+}

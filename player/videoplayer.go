@@ -684,8 +684,15 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	pageURL := currentPlaybackURL
 	if pageURL == "" {
 		pageURL = url
+		// Direct StartEmbeddedPlayback calls (queue/home cards) must still
+		// know their source, or Watch Party would see an empty URL and think
+		// the room had switched streams.
+		currentPlaybackURL = pageURL
 	}
 	sess := beginPlaybackSession(url, pageURL, tempFile)
+	// If a Watch Party is open, opening a video makes it the room's stream.
+	// Remote peers get the original page URL, not the resolved CDN URL.
+	partyPublishStart(pageURL, startSec)
 
 	videoPlaybackMutex.Lock()
 	embeddedPlaybackPath = url
@@ -794,6 +801,9 @@ func StopEmbeddedPlayback() {
 		clearVideoFrameQueue()
 	}
 
+	// Remember a deliberate stop so Watch Party does not reopen the room's
+	// stream the moment the poll sees it again.
+	partyNoteStop(currentPlaybackURL)
 	currentPlaybackURL = ""
 	// Leaving playback also leaves full screen and the settings sheet behind.
 	videoFullscreen = false
@@ -815,7 +825,6 @@ func stopVideoPlayback() {
 
 func ToggleVideoPlayback() {
 	embeddedPlayer.mu.Lock()
-	defer embeddedPlayer.mu.Unlock()
 
 	switch embeddedPlayer.phase {
 	case "playing":
@@ -828,6 +837,10 @@ func ToggleVideoPlayback() {
 		embeddedPlayer.phase = "playing"
 		PauseVideoAudio(false)
 	}
+	embeddedPlayer.mu.Unlock()
+	// Publish after releasing the state lock: partyPublishPlayback snapshots
+	// the player and would deadlock if called underneath it.
+	partyPublishPlayback()
 }
 
 func toggleVideoPlayback() {
@@ -884,6 +897,7 @@ func SeekVideo(fraction float64) {
 		startFFmpegDecoder(next, ffmpegPath, prev.source, width, height, seekSec)
 		next.finish()
 	}()
+	partyPublishPlayback()
 }
 
 func AdjustVolume(delta float64) {

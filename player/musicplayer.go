@@ -56,6 +56,14 @@ type musicState struct {
 	cursor   int     // highlighted playlist row
 	repeat   bool
 
+	// Long-form extras (audiobooks, podcasts).
+	speed      float64   // listening speed, 0.75..2 (see audioSpeedSteps)
+	sleepUntil time.Time // zero when no sleep timer is armed
+	sleepGen   int       // invalidates a timer armed before the last stop
+	lyrics     []lyricLine
+	showLyrics bool
+	lastSave   time.Time // last resume write, to keep SD card writes rare
+
 	visualizer [visualBars]float64
 
 	mu       sync.Mutex
@@ -245,6 +253,9 @@ func musicSceneEnter() {
 	music.mu.Lock()
 	ready := music.ready
 	dir := music.dir
+	if music.speed <= 0 {
+		music.speed = audioSavedSpeed()
+	}
 	music.mu.Unlock()
 	if ready {
 		return
@@ -278,15 +289,27 @@ func musicPlayTrackNow(index int) {
 		return
 	}
 	track := music.tracks[index]
+	previousPath, previousPos, previousDur := "", 0.0, 0.0
+	if music.current >= 0 && music.current < len(music.tracks) {
+		previousPath = music.tracks[music.current].Path
+		previousPos, previousDur = music.position, music.duration
+	}
 	music.current = index
 	music.cursor = index
 	music.playing = true
 	music.paused = false
-	music.position = 0
 	music.duration = track.Duration
+	resume := audioStartPosition(audioResumePosition(track.Path), track.Duration)
+	music.position = resume
+	music.lyrics = loadLyricsFor(track.Path)
+	music.lastSave = time.Now()
 	music.mu.Unlock()
 
-	musicStartDecode(track.Path, 0)
+	if previousPath != "" && !sameAudioPath(previousPath, track.Path) {
+		audioRememberPosition(previousPath, previousPos, previousDur)
+	}
+
+	musicStartDecode(track.Path, resume)
 	PlayActivateSound()
 	go musicProbeDuration(track.Path)
 }
@@ -370,14 +393,13 @@ func musicDecode(path string, startSec float64, gen int) {
 	if rate <= 0 {
 		rate = 44100
 	}
-	args := []string{"-nostdin", "-v", "error"}
-	if startSec > 0.05 {
-		args = append(args, "-ss", strconv.FormatFloat(startSec, 'f', 3, 64))
+	music.mu.Lock()
+	speed := music.speed
+	music.mu.Unlock()
+	if speed <= 0 {
+		speed = 1
 	}
-	args = append(args,
-		"-i", path,
-		"-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2",
-		"-ar", strconv.Itoa(int(rate)), "pipe:1")
+	args := musicFFmpegArgs(path, startSec, speed, rate)
 
 	cmd := execCommand(ffmpegPath, args...)
 	if cmd == nil {
@@ -406,6 +428,12 @@ func musicDecode(path string, startSec float64, gen int) {
 	music.mu.Unlock()
 
 	buf := make([]byte, 32*1024)
+	// One scratch buffer for the volume-adjusted copy. QueueVideoAudio hands
+	// the bytes to SDL, which copies them, so the buffer is free to reuse
+	// immediately; allocating 32KB per read was pure GC pressure while music
+	// plays for hours.
+	pcm := make([]byte, len(buf))
+	var savePos, saveDur float64
 loop:
 	for {
 		n, readErr := stdout.Read(buf)
@@ -425,21 +453,30 @@ loop:
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-			pcm := make([]byte, n)
-			copy(pcm, buf[:n])
-			QueueVideoAudio(pcm, vol)
+			copy(pcm[:n], buf[:n])
+			QueueVideoAudio(pcm[:n], vol)
 
 			music.mu.Lock()
 			if gen == music.gen {
 				music.pcmBytes += int64(n)
-				elapsed := music.pcmStart + float64(music.pcmBytes)/float64(int64(rate)*4)
+				elapsed := musicMediaElapsed(music.pcmStart, music.pcmBytes, rate, speed)
 				if music.duration <= 0 || elapsed < music.duration {
 					music.position = elapsed
 				} else {
 					music.position = music.duration
 				}
+				// Persist a long-form position every ten seconds so a crash, a
+				// battery pull or a launcher restart does not lose the chapter.
+				if time.Since(music.lastSave) > 10*time.Second {
+					music.lastSave = time.Now()
+					savePos, saveDur = elapsed, music.duration
+				}
 			}
 			music.mu.Unlock()
+			if savePos > 0 {
+				audioRememberPosition(path, savePos, saveDur)
+				savePos = 0
+			}
 		}
 		if readErr != nil {
 			break
@@ -450,11 +487,13 @@ loop:
 
 	music.mu.Lock()
 	finished := gen == music.gen && music.playing
+	reachedEnd := false
 	if gen == music.gen {
 		music.proc = nil
 		music.playing = false
 		if music.duration > 0 {
 			music.position = music.duration
+			reachedEnd = true
 		}
 	}
 	next := music.current + 1
@@ -464,6 +503,10 @@ loop:
 
 	if !finished {
 		return
+	}
+	if reachedEnd {
+		// A finished book or episode starts from the top next time.
+		audioForgetPosition(path)
 	}
 	if repeat {
 		musicPlayTrack(music.current)
@@ -480,18 +523,153 @@ loop:
 func musicStop() {
 	music.mu.Lock()
 	music.gen++
+	music.sleepGen++ // a stop cancels any armed sleep timer
+	music.sleepUntil = time.Time{}
 	proc := music.proc
 	music.proc = nil
 	music.playing = false
 	music.paused = false
-	music.position = 0
 	music.pcmBytes = 0
+	path, pos, dur := "", 0.0, 0.0
+	if music.current >= 0 && music.current < len(music.tracks) {
+		path, pos, dur = music.tracks[music.current].Path, music.position, music.duration
+	}
+	music.position = 0
 	music.mu.Unlock()
 
 	if proc != nil && proc.Process != nil {
 		_ = proc.Process.Kill()
 	}
 	ClearVideoAudioQueue()
+	// Keep the place for long-form audio; short music is forgotten by the
+	// resume rule when it is played again.
+	audioRememberPosition(path, pos, dur)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Long-form playback: speed, sleep timer, lyrics
+// ──────────────────────────────────────────────────────────────────────
+
+// musicSetSpeed changes the listening speed and restarts the decoder at the
+// same position (ffmpeg's atempo filter is applied at start).
+func musicSetSpeed(v float64) float64 {
+	v = audioClampSpeed(v)
+	music.mu.Lock()
+	if music.speed == v {
+		music.mu.Unlock()
+		return v
+	}
+	music.speed = v
+	playing := music.playing
+	paused := music.paused
+	path, pos := "", 0.0
+	if music.current >= 0 && music.current < len(music.tracks) {
+		path, pos = music.tracks[music.current].Path, music.position
+	}
+	music.mu.Unlock()
+
+	audioSaveSpeed(v)
+	if playing && path != "" {
+		music.mu.Lock()
+		music.paused = paused
+		music.mu.Unlock()
+		musicStartDecode(path, pos)
+	}
+	return v
+}
+
+// musicCycleSpeed steps through the speed presets. delta is +1 (faster) or -1
+// (slower); it wraps around the list.
+func musicCycleSpeed(delta int) float64 {
+	music.mu.Lock()
+	cur := music.speed
+	music.mu.Unlock()
+	idx := 0
+	best := math.MaxFloat64
+	for i, s := range audioSpeedSteps {
+		if d := math.Abs(s - cur); d < best {
+			best, idx = d, i
+		}
+	}
+	n := len(audioSpeedSteps)
+	idx = ((idx+delta)%n + n) % n
+	return musicSetSpeed(audioSpeedSteps[idx])
+}
+
+// musicSetSleepTimer arms a stop after d (0 cancels). The timer lives on its
+// own goroutine: playback continues when the player scene is left, and the
+// timer has to fire anyway.
+func musicSetSleepTimer(d time.Duration) {
+	music.mu.Lock()
+	music.sleepGen++
+	gen := music.sleepGen
+	if d <= 0 {
+		music.sleepUntil = time.Time{}
+		music.mu.Unlock()
+		return
+	}
+	music.sleepUntil = time.Now().Add(d)
+	music.mu.Unlock()
+
+	go func() {
+		timer := time.NewTimer(d)
+		defer timer.Stop()
+		<-timer.C
+		music.mu.Lock()
+		valid := gen == music.sleepGen
+		playing := music.playing
+		music.mu.Unlock()
+		if valid && playing {
+			musicStop()
+			showToast("Sleep timer stopped playback", ToastInfo())
+		}
+	}()
+}
+
+// musicCycleSleepTimer cycles off -> 15 -> 30 -> 60 minutes and reports the
+// armed number of minutes (0 = off).
+func musicCycleSleepTimer() int {
+	remaining := musicSleepRemaining()
+	switch {
+	case remaining == 0:
+		musicSetSleepTimer(15 * time.Minute)
+		return 15
+	case remaining <= 15*time.Minute:
+		musicSetSleepTimer(30 * time.Minute)
+		return 30
+	case remaining <= 30*time.Minute:
+		musicSetSleepTimer(60 * time.Minute)
+		return 60
+	default:
+		musicSetSleepTimer(0)
+		return 0
+	}
+}
+
+// musicSleepRemaining is how long the armed timer has left (0 when none).
+func musicSleepRemaining() time.Duration {
+	music.mu.Lock()
+	defer music.mu.Unlock()
+	if music.sleepUntil.IsZero() {
+		return 0
+	}
+	left := time.Until(music.sleepUntil)
+	if left < 0 {
+		return 0
+	}
+	return left
+}
+
+// musicToggleLyrics shows or hides the .lrc panel. It returns false when the
+// current track has no lyrics file.
+func musicToggleLyrics() bool {
+	music.mu.Lock()
+	defer music.mu.Unlock()
+	if len(music.lyrics) == 0 {
+		return false
+	}
+	music.showLyrics = !music.showLyrics
+	return true
 }
 
 // musicStopIfPlaying stops background audio before a video takes the device.
@@ -517,7 +695,14 @@ func musicTogglePause() {
 	}
 	music.paused = !music.paused
 	paused := music.paused
+	path, pos, dur := "", 0.0, 0.0
+	if music.current >= 0 && music.current < len(music.tracks) {
+		path, pos, dur = music.tracks[music.current].Path, music.position, music.duration
+	}
 	music.mu.Unlock()
+	if paused {
+		audioRememberPosition(path, pos, dur)
+	}
 
 	// Pausing is done by the decoder (it stops queueing) plus dropping what is
 	// still buffered, so no audio trails after the tap. The shared SDL device is
@@ -655,8 +840,8 @@ func musicUpdateVisualizer() {
 // so a click on a scrolled list plays the track the user sees.
 var musicRects = struct {
 	prev, playPause, next, stop sdl.Rect
-	volDown, volUp              sdl.Rect
-	seek                        sdl.Rect
+	volDown, volUp, seek        sdl.Rect
+	art                         sdl.Rect // artwork tile; tapping toggles the lyrics view
 	rows                        []sdl.Rect
 	rowStart                    int
 	valid                       bool
@@ -702,7 +887,14 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	duration := music.duration
 	volume := music.volume
 	dir := music.dir
+	speed := music.speed
+	lyrics := music.lyrics
+	showLyrics := music.showLyrics
 	music.mu.Unlock()
+	if speed <= 0 {
+		speed = 1
+	}
+	sleepLeft := musicSleepRemaining()
 
 	musicRects.rows = musicRects.rows[:0]
 	musicRects.valid = true
@@ -721,32 +913,40 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	fillRoundedRect(renderer, artX, artY, artSize, artSize, 16, WithAlpha(ColorPanelRaised, 255))
 	strokeRoundedRect(renderer, artX, artY, artSize, artSize, 16, 1, WithAlpha(ColorBorder, 200))
 	musicUpdateVisualizer()
-	barW := int32(6)
-	barGap := int32(7)
-	bars := 12
-	totalW := int32(bars)*(barW+barGap) - barGap
-	barBase := artY + artSize - 34
-	for i := 0; i < bars; i++ {
-		h := int32(music.visualizer[(i*visualBars/bars)%visualBars] * 1.1)
-		if h < 6 {
-			h = 6
+	musicRects.art = sdl.Rect{X: artX, Y: artY, W: artSize, H: artSize}
+	if showLyrics && len(lyrics) > 0 {
+		renderLyricsTile(renderer, config, font, lyrics, position, artX, artY, artSize)
+	} else {
+		barW := int32(6)
+		barGap := int32(7)
+		bars := 12
+		totalW := int32(bars)*(barW+barGap) - barGap
+		barBase := artY + artSize - 34
+		for i := 0; i < bars; i++ {
+			h := int32(music.visualizer[(i*visualBars/bars)%visualBars] * 1.1)
+			if h < 6 {
+				h = 6
+			}
+			// Leave room for the state caption above the bars.
+			if h > artSize-116 {
+				h = artSize - 116
+			}
+			bx := artX + (artSize-totalW)/2 + int32(i)*(barW+barGap)
+			col := WithAlpha(accentColor, 220)
+			if !playing || paused {
+				col = WithAlpha(accentColor, 110)
+			}
+			fillRoundedRect(renderer, bx, barBase-h, barW, h, 3, col)
 		}
-		// Leave room for the state caption above the bars.
-		if h > artSize-116 {
-			h = artSize - 116
-		}
-		bx := artX + (artSize-totalW)/2 + int32(i)*(barW+barGap)
-		col := WithAlpha(accentColor, 220)
-		if !playing || paused {
-			col = WithAlpha(accentColor, 110)
-		}
-		fillRoundedRect(renderer, bx, barBase-h, barW, h, 3, col)
 	}
 	stateLabel := "Paused"
 	if !playing {
 		stateLabel = "Stopped"
 	} else if !paused {
 		stateLabel = "Playing"
+	}
+	if showLyrics && len(lyrics) > 0 {
+		stateLabel = "Lyrics"
 	}
 	sw, _, _ := font.SizeUTF8(stateLabel)
 	renderText(renderer, config, font, stateLabel, ColorTextTertiary(),
@@ -770,6 +970,23 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, bigFont, title, ColorTextPrimary(), textX, cardY+30)
 	meta = ellipsize(font, meta, textW)
 	renderText(renderer, config, font, meta, ColorTextTertiary(), textX, cardY+30+int32(bigFont.Height())+8)
+
+	// Playback status: speed, sleep timer and lyric availability. Keeping this
+	// on its own line means the meta line stays stable while the timer counts
+	// down instead of re-flowing the title.
+	status := formatSpeedLabel(speed)
+	if sleepLeft > 0 {
+		status += "   ·   Sleep " + formatSleepRemaining(sleepLeft)
+	}
+	if len(lyrics) > 0 {
+		if showLyrics {
+			status += "   ·   Lyrics on"
+		} else {
+			status += "   ·   Lyrics ready"
+		}
+	}
+	statusY := cardY + 30 + int32(bigFont.Height()) + 8 + int32(font.Height()) + 6
+	renderText(renderer, config, font, ellipsize(font, status, textW), ColorTextSecondary(), textX, statusY)
 
 	// Progress bar with a thumb and times on either side.
 	seekY := cardY + 138
@@ -893,7 +1110,7 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Footer hints.
-	hint := "ENTER Play   SPACE Pause   LEFT/RIGHT Seek   -/+ Volume   B Back"
+	hint := "ENTER Play   SPACE Pause   LEFT/RIGHT Seek   -/+ Volume   [ ] Speed   T Sleep   L Lyrics   B Back"
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 170},
 		(screenWidth-int32(hw))/2, screenHeight-36)
@@ -923,6 +1140,12 @@ func musicButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w
 func HandleMusicClick(mx, my int32) bool {
 	if !musicRects.valid {
 		return false
+	}
+	if pointInRect(mx, my, musicRects.art) {
+		if !musicToggleLyrics() {
+			showToast("No .lrc file next to this track", ToastInfo())
+		}
+		return true
 	}
 	if pointInRect(mx, my, musicRects.playPause) {
 		musicTogglePause()
@@ -1013,6 +1236,24 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		musicPrev()
 	case sdl.K_s:
 		musicStop()
+	case sdl.K_l:
+		if !musicToggleLyrics() {
+			showToast("No .lrc file next to this track", ToastInfo())
+		}
+	case sdl.K_LEFTBRACKET:
+		musicCycleSpeed(-1)
+		PlayNavSound()
+	case sdl.K_RIGHTBRACKET:
+		musicCycleSpeed(1)
+		PlayNavSound()
+	case sdl.K_t:
+		minutes := musicCycleSleepTimer()
+		if minutes == 0 {
+			showToast("Sleep timer off", ToastInfo())
+		} else {
+			showToast(fmt.Sprintf("Sleep timer: %d min", minutes), ToastSuccess())
+		}
+		PlayNavSound()
 	case sdl.K_LEFT:
 		musicSeekBy(-10)
 	case sdl.K_RIGHT:
@@ -1031,6 +1272,142 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 // Helpers
 // ──────────────────────────────────────────────────────────────────────
 
+// formatSpeedLabel renders a listening speed without trailing zeros:
+// 1 -> "1x", 1.25 -> "1.25x".
+func formatSpeedLabel(speed float64) string {
+	s := strconv.FormatFloat(speed, 'f', 2, 64)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimRight(s, ".")
+	return s + "x"
+}
+
+// formatSleepRemaining renders the time left on the sleep timer, rounding up so
+// it never shows "0m" while audio is still playing.
+func formatSleepRemaining(d time.Duration) string {
+	mins := int(math.Ceil(d.Minutes()))
+	if mins >= 60 {
+		return fmt.Sprintf("%dh %02dm", mins/60, mins%60)
+	}
+	return fmt.Sprintf("%dm", mins)
+}
+
+// renderLyricsTile draws the synced lyric around the current playback position
+// inside the artwork square: the active line in the accent colour, the
+// neighbours dimmed above and below. It stays in the artwork slot so the rest
+// of the player layout never shifts when lyrics are toggled.
+func renderLyricsTile(renderer *sdl.Renderer, config *Config, font *ttf.Font, lines []lyricLine, pos float64, x, y, size int32) {
+	if renderer == nil || font == nil || len(lines) == 0 {
+		return
+	}
+	idx := lyricIndexAt(lines, pos)
+	lineH := int32(font.Height()) + 10
+	midY := y + size/2 - lineH/2
+	inner := size - 28
+
+	for off := -2; off <= 2; off++ {
+		i := idx + off
+		if i < 0 || i >= len(lines) {
+			continue
+		}
+		col := WithAlpha(ColorTextTertiary(), 150)
+		if off == 0 {
+			col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 255}
+		} else if off == -1 || off == 1 {
+			col = WithAlpha(ColorTextSecondary(), 190)
+		}
+		text := ellipsize(font, strings.TrimSpace(lines[i].Text), inner)
+		if text == "" {
+			continue
+		}
+		tw, _, _ := font.SizeUTF8(text)
+		renderText(renderer, config, font, text, col,
+			x+(size-int32(tw))/2, midY+int32(off)*lineH)
+	}
+
+	if idx < 0 {
+		text := "…"
+		tw, _, _ := font.SizeUTF8(text)
+		renderText(renderer, config, font, text, WithAlpha(ColorTextTertiary(), 160),
+			x+(size-int32(tw))/2, y+size-40)
+	}
+}
+
 func execCommand(name string, args ...string) *exec.Cmd {
 	return P().CommandContext(context.Background(), name, args...)
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		music.mu.Lock()
+		if music.cursor > 0 {
+			music.cursor--
+		}
+		music.mu.Unlock()
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		music.mu.Lock()
+		if music.cursor < len(music.tracks)-1 {
+			music.cursor++
+		}
+		music.mu.Unlock()
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_A:
+		// A plays the highlighted playlist row.
+		music.mu.Lock()
+		idx := music.cursor
+		music.mu.Unlock()
+		musicPlayTrack(idx)
+	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
+		musicTogglePause()
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(appConfig)
+		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		musicSeekBy(-10)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		musicSeekBy(10)
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		musicPrev()
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		musicNext()
+		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
+		if !musicToggleLyrics() {
+			showToast("No .lrc file next to this track", ToastInfo())
+		}
+	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		minutes := musicCycleSleepTimer()
+		if minutes == 0 {
+			showToast("Sleep timer off", ToastInfo())
+		} else {
+			showToast(fmt.Sprintf("Sleep timer: %d min", minutes), ToastSuccess())
+		}
+		PlayNavSound()
+	default:
+		return false
+	}
+	return true
+}
+
+// Scene registration.
+type musicScene struct{ sceneBase }
+
+func (musicScene) render(r *sdl.Renderer, c *Config) bool { renderMusicPlayer(r, c); return true }
+
+func (musicScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleMusicInput(e, c)
+	return true
+}
+
+func (musicScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlMusicPlayer(e)
+}
+
+func init() { registerScene(musicScene{sceneBase{name: "MusicPlayer"}}) }

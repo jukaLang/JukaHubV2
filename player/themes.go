@@ -587,8 +587,16 @@ func GetThemePreset(name string) ThemePreset {
 	return themePresets["dark"]
 }
 
-// ApplyThemePreset applies a theme preset to the config variables.
+// ApplyThemePreset applies a theme preset the user picked, including the
+// confirmation toast.
 func ApplyThemePreset(config *Config, presetName string) {
+	applyThemePreset(config, presetName, true)
+}
+
+// applyThemePreset writes the preset into the config variables. notify controls
+// the toast: automatic switches (battery saver, time-of-day theme) must not
+// announce themselves as if the user had chosen them.
+func applyThemePreset(config *Config, presetName string, notify bool) {
 	preset := GetThemePreset(presetName)
 	br, bg, bb := hexToRGB(preset.ButtonColor)
 	config.Variables.ButtonColor = RGB{R: int(br), G: int(bg), B: int(bb)}
@@ -617,22 +625,12 @@ func ApplyThemePreset(config *Config, presetName string) {
 	// the new theme is visible at once instead of after the LRU ages them out.
 	ClearTextCache()
 	clearHomeTextCache()
-	user := &UserConfig{
-		Variables: UserVariables{
-			ButtonColor:        config.Variables.ButtonColor,
-			LabelColor:         config.Variables.LabelColor,
-			InputColor:         config.Variables.InputColor,
-			Fullscreen:         config.Variables.Fullscreen,
-			FileExplorerRoot:   config.Variables.FileExplorerRoot,
-			WeatherEnabled:     config.Variables.WeatherEnabled,
-			WeatherUnit:        config.Variables.WeatherUnit,
-			TSPUsername:        config.Variables.TSPUsername,
-			PlaybackResolution: config.Variables.PlaybackResolution,
-			Custom:             config.Variables.Custom,
-		},
+	// The shared snapshot keeps Quick Settings levels and every other persisted
+	// field intact when the theme changes.
+	saveUserConfig(userConfigFromVariables(config))
+	if notify {
+		showToast(fmt.Sprintf("Theme: %s", preset.Name), ToastInfo())
 	}
-	saveUserConfig(user)
-	showToast(fmt.Sprintf("Theme: %s", preset.Name), ToastInfo())
 }
 
 // themePresetOrder is the canonical, stable display order for the theme

@@ -179,3 +179,30 @@ func handleAboutInput(e *sdl.KeyboardEvent, config *Config) {
 		PlayBackSound()
 	}
 }
+
+// Scene controller mapping, moved here from controller.go so the scene owns
+// its own input.
+
+func ctrlAbout(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK {
+		goBackScene(config) // plays the back sound itself
+		return true
+	}
+	return false
+}
+
+// Scene registration.
+type aboutScene struct{ sceneBase }
+
+func (aboutScene) render(r *sdl.Renderer, c *Config) bool { renderAbout(r, c); return true }
+
+func (aboutScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
+	handleAboutInput(e, c)
+	return true
+}
+
+func (aboutScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
+	return ctrlAbout(e, c)
+}
+
+func init() { registerScene(aboutScene{sceneBase{name: "About"}}) }

@@ -44,9 +44,10 @@ const (
 	vkTargetScene vkTargetKind = iota
 	vkTargetChat
 	vkTargetUnit
-	vkTargetTerm // terminal command line
-	vkTargetName // chat display name
-	vkTargetTV   // Live TV channel search
+	vkTargetTerm  // terminal command line
+	vkTargetName  // chat display name
+	vkTargetTV    // Live TV channel search
+	vkTargetParty // Watch Party invite / shared link
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -245,6 +246,8 @@ func vkEnsureLayout() {
 		target = 2
 	case vkTargetTV:
 		target = 3
+	case vkTargetParty:
+		target = 4
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -470,6 +473,8 @@ func vkCurrentText() string {
 		return term.input
 	case vkTargetTV:
 		return tvQuery()
+	case vkTargetParty:
+		return partyUI.input
 	}
 	return inputTextBuffer
 }
@@ -490,6 +495,8 @@ func vkSetText(text string, config *Config) {
 		// The list re-filters on every keystroke, so the user sees matches
 		// appear while typing instead of after submitting.
 		tvSetQuery(text)
+	case vkTargetParty:
+		partyUI.input = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -498,8 +505,24 @@ func vkSetText(text string, config *Config) {
 
 const vkMaxTextLen = 2000
 
-// vkInsertText appends text to the active target exactly once.
+// vkInsertText appends text to the active target exactly once. Control
+// characters other than newline and tab are dropped: an SDL text event carries
+// a fixed-size C buffer, and letting its NUL padding into the field made the
+// renderer truncate at the first key (and backspace delete invisible bytes).
 func vkInsertText(text string, config *Config) {
+	if text == "" {
+		return
+	}
+	if strings.IndexByte(text, 0) >= 0 || strings.IndexFunc(text, func(r rune) bool {
+		return r < 0x20 && r != '\n' && r != '\t'
+	}) >= 0 {
+		text = strings.Map(func(r rune) rune {
+			if r < 0x20 && r != '\n' && r != '\t' {
+				return -1
+			}
+			return r
+		}, text)
+	}
 	if text == "" {
 		return
 	}
@@ -539,6 +562,11 @@ func vkTitle() string {
 		return "COMMAND"
 	case vkTargetTV:
 		return "CHANNEL SEARCH"
+	case vkTargetParty:
+		if partyUI.inputMode == partyInputQueue {
+			return "SHARE A LINK"
+		}
+		return "PARTY INVITE"
 	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
@@ -565,6 +593,11 @@ func vkPlaceholder() string {
 		return "Type a command"
 	case vkTargetTV:
 		return "Search channels"
+	case vkTargetParty:
+		if partyUI.inputMode == partyInputQueue {
+			return "https://…"
+		}
+		return "192.168.1.5:8318 ABCDE"
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -656,6 +689,22 @@ func vkOpenTVSearch() {
 	chatInputActive = false
 	unitInputActive = false
 	vkTarget = vkTargetTV
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenPartyInput opens the keyboard for the Watch Party invite or link
+// field. The caller seeds partyUI.input first so an invite can be corrected
+// instead of retyped.
+func vkOpenPartyInput() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetParty
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
@@ -806,6 +855,9 @@ func vkSubmit(config *Config, askAI bool) {
 		name := setChatDisplayName(text)
 		vkCloseKeyboard()
 		showToast("Chat name set to "+name, ToastInfo())
+	case vkTargetParty:
+		vkCloseKeyboard()
+		partySubmitInput(text)
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may
@@ -1115,7 +1167,7 @@ func vkEnsureChatCache(renderer *sdl.Renderer, config *Config, listX, listY, lis
 	if groqStatus != "" {
 		gw, _, _ := statusFont.SizeUTF8(groqStatus)
 		groqX := statusRight - int32(gw) - int32(8)
-		if groqX < listX + int32(12) {
+		if groqX < listX+int32(12) {
 			groqX = listX + int32(12)
 		}
 		renderText(renderer, config, statusFont, groqStatus, groqStatusColor(), groqX, statusY)

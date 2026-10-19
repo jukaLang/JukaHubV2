@@ -67,10 +67,20 @@ var shortcutCategories = []struct {
 	{
 		title: "Music Player",
 		items: []shortcutEntry{
-			{"A", "Play / pause"},
-			{"← →", "Prev / next track"},
-			{"Y", "Toggle repeat"},
-			{"X", "Shuffle"},
+			{"A", "Play highlighted track"},
+			{"X / Y", "Play / pause"},
+			{"← →", "Seek −10 s / +10 s"},
+			{"L1 / R1", "Previous / next track"},
+			{"L3 / R3", "Lyrics / sleep timer"},
+		},
+	},
+	{
+		title: "Watch Party",
+		items: []shortcutEntry{
+			{"F8", "Open / close the LAN room"},
+			{"A / Enter", "Host, join or play a queued item"},
+			{"X", "Remove the highlighted queue item"},
+			{"B / Esc", "Close the panel"},
 		},
 	},
 	{
