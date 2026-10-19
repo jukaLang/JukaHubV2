@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -51,6 +52,7 @@ type LinkPreview struct {
 var chatImages = make(map[string]*sdl.Texture)
 var chatImageMutex sync.Mutex
 var chatImageDownloads = make(map[string][]byte)
+var chatImageFetching = make(map[string]bool)
 var chatImageDLMutex sync.Mutex
 var linkPreviews = make(map[string]*LinkPreview)
 var urlRegex = regexp.MustCompile(`https?://[^\s<>"]+`)
@@ -78,23 +80,36 @@ func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 
 func fetchChatImage(url string) {
 	chatImageDLMutex.Lock()
-	if _, downloading := chatImageDownloads[url]; downloading {
+	if _, done := chatImageDownloads[url]; done || chatImageFetching[url] {
 		chatImageDLMutex.Unlock()
 		return
 	}
+	chatImageFetching[url] = true
 	chatImageDLMutex.Unlock()
 
-	resp, err := http.Get(url)
-	if err != nil {
-		return
+	var data []byte
+	if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		client := &http.Client{Timeout: 15 * time.Second}
+		resp, err := client.Get(url)
+		if err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				data, _ = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+			}
+		}
+	} else {
+		// Chat attachments store a local file path; read it directly instead
+		// of sending it through http.Get.
+		if info, err := os.Stat(url); err == nil && info.Size() <= 32<<20 {
+			data, _ = os.ReadFile(url)
+		}
 	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return
-	}
+
 	chatImageDLMutex.Lock()
-	chatImageDownloads[url] = data
+	delete(chatImageFetching, url)
+	if len(data) > 0 {
+		chatImageDownloads[url] = data
+	}
 	chatImageDLMutex.Unlock()
 }
 
@@ -204,6 +219,108 @@ var chatInputRect sdl.Rect
 // chatNameRect is the display-name pill in the chat header (mouse hit target);
 // clicking it opens the keyboard to rename the local chat user.
 var chatNameRect sdl.Rect
+
+// chatLinkHit is a playable URL rendered inside a chat bubble. Clicking the
+// pill plays it in the media player (YouTube links, MP3/MP4 URLs).
+type chatLinkHit struct {
+	rect sdl.Rect
+	url  string
+}
+
+var chatLinkRects []chatLinkHit
+
+// chatImageHit is an inline image preview rendered inside a chat bubble.
+// Clicking it opens the image full screen (and clicking again closes it).
+type chatImageHit struct {
+	rect sdl.Rect
+	url  string
+}
+
+var chatImageRects []chatImageHit
+
+// handleChatImageClick opens the image preview under the cursor in the image
+// viewer. It reports whether the click landed on one.
+func handleChatImageClick(mx, my int32) bool {
+	for _, hit := range chatImageRects {
+		if pointInRect(mx, my, hit.rect) {
+			openImageViewerURL(hit.url)
+			return true
+		}
+	}
+	return false
+}
+
+// trimChatURL drops punctuation that commonly follows a pasted link in prose.
+func trimChatURL(u string) string {
+	return strings.TrimRight(u, ".,;:!?)]}'\"")
+}
+
+// firstChatURL returns the first http(s) URL in a message, or "".
+func firstChatURL(text string) string {
+	m := urlRegex.FindString(text)
+	if m == "" {
+		return ""
+	}
+	return trimChatURL(m)
+}
+
+// firstChatImageURL returns the first URL in a message that points at an image,
+// so pasting an image link shows a thumbnail instead of a bare address.
+func firstChatImageURL(text string) string {
+	for _, m := range urlRegex.FindAllString(text, -1) {
+		u := trimChatURL(m)
+		if imageURLRegex.MatchString(u) {
+			return u
+		}
+	}
+	return ""
+}
+
+// isYouTubeURL reports whether a URL is a YouTube watch/short link. yt-dlp
+// handles both, so they can go straight to the embedded player.
+func isYouTubeURL(u string) bool {
+	lower := strings.ToLower(u)
+	return strings.Contains(lower, "youtube.com/") || strings.Contains(lower, "youtu.be/")
+}
+
+// chatPlayableURL returns the first link in a message that the media player can
+// open: a YouTube link, a direct audio/video file, or a live stream.
+func chatPlayableURL(text string) string {
+	for _, m := range urlRegex.FindAllString(text, -1) {
+		u := trimChatURL(m)
+		if isYouTubeURL(u) || hasMediaExtension(u) {
+			return u
+		}
+	}
+	return ""
+}
+
+// currentSceneHasChat reports whether the visible scene owns a chat panel. Link
+// hitboxes are only meaningful there; they are not cleared when another scene
+// renders, so the click handler must not consult stale ones.
+func currentSceneHasChat(config *Config) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	for _, elem := range config.Scenes[currentSceneIndex].Elements {
+		if elem.Type == "chat" {
+			return true
+		}
+	}
+	return false
+}
+
+// handleChatLinkClick plays a link pill drawn by renderChat. It reports whether
+// the click landed on one, so the generic composer handler does not also run.
+func handleChatLinkClick(mx, my int32, config *Config) bool {
+	for _, hit := range chatLinkRects {
+		if pointInRect(mx, my, hit.rect) {
+			playSmartURL(config, hit.url)
+			return true
+		}
+	}
+	return false
+}
 
 // groqStatus holds a short human-readable Groq AI connection status shown in
 // the chat UI.
@@ -926,6 +1043,17 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		titleFont = font
 	}
 
+	// Reset the hit targets this frame. chatNameRect in particular used to be
+	// cleared after the header was drawn, which left the rename pill visible
+	// but unclickable.
+	chatNameRect = sdl.Rect{}
+	chatAskAIBtnRect = sdl.Rect{}
+	chatSendBtnRect = sdl.Rect{}
+	chatAttachBtnRect = sdl.Rect{}
+	chatInputRect = sdl.Rect{}
+	chatLinkRects = chatLinkRects[:0]
+	chatImageRects = chatImageRects[:0]
+
 	listX := int32(element.X) + SpaceMD
 	listY := int32(element.Y) + SpaceMD
 	listW := getElementWidth(element, 1160) - 2*SpaceMD
@@ -1035,15 +1163,29 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		bh := int32(len(lines))*lineH + bubblePad*2
 
+		// A pasted image URL gets the same inline preview as an attachment;
+		// a YouTube or media URL gets a play pill that opens the media player.
+		thumbURL := msg.ImageURL
+		if thumbURL == "" {
+			thumbURL = firstChatImageURL(text)
+		}
 		var imageH int32
 		var thumbTex *sdl.Texture
-		if msg.ImageURL != "" {
-			thumbTex = getChatImageTexture(renderer, msg.ImageURL)
+		if thumbURL != "" {
+			thumbTex = getChatImageTexture(renderer, thumbURL)
 			if thumbTex != nil {
 				imageH = 80 + SpaceXS
 			}
 		}
-		bh += imageH
+		playURL := ""
+		if msg.ImageURL == "" {
+			playURL = chatPlayableURL(text)
+		}
+		linkH := int32(0)
+		if playURL != "" {
+			linkH = 28 + SpaceXS
+		}
+		bh += imageH + linkH
 
 		by := startY - bh
 		if by < msgAreaTop {
@@ -1099,7 +1241,8 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			renderText(renderer, config, font, line, ColorTextPrimary(), bx+bubblePad, by+bubblePad+int32(li)*lineH)
 		}
 
-		// Inline image thumbnail.
+		// Inline image thumbnail. The rect is recorded so a click can open the
+		// same image full screen.
 		if thumbTex != nil {
 			iw := int32(120)
 			ih := int32(80)
@@ -1109,6 +1252,22 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
 			renderer.DrawRect(&sdl.Rect{X: ix, Y: iy2, W: iw, H: ih})
 			renderer.Copy(thumbTex, nil, &sdl.Rect{X: ix + 1, Y: iy2 + 1, W: iw - 2, H: ih - 2})
+			chatImageRects = append(chatImageRects, chatImageHit{
+				rect: sdl.Rect{X: ix, Y: iy2, W: iw, H: ih},
+				url:  thumbURL,
+			})
+		}
+
+		// Play pill for links the media player understands. The hit target is
+		// recorded for the mouse handler in main.go.
+		if playURL != "" {
+			pillW, pillH := int32(128), int32(26)
+			px := bx + bubblePad
+			py := by + bubblePad + int32(len(lines))*lineH + imageH
+			fillRoundedRect(renderer, px, py, pillW, pillH, pillH/2, WithAlpha(ColorInfo, 55))
+			strokeRoundedRect(renderer, px, py, pillW, pillH, pillH/2, 1, WithAlpha(ColorInfo, 140))
+			renderText(renderer, config, statusFont, "Play link", ColorTextPrimary(), px+12, py+3)
+			chatLinkRects = append(chatLinkRects, chatLinkHit{rect: sdl.Rect{X: px, Y: py, W: pillW, H: pillH}, url: playURL})
 		}
 
 		startY = by - bubbleGap - int32(statusFont.Height()) - 2
@@ -1130,11 +1289,6 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	processChatImageDownloads(renderer)
 
 	// Single composer: click the input area to type, Send to send, Ask AI for Groq.
-	chatAskAIBtnRect = sdl.Rect{}
-	chatSendBtnRect = sdl.Rect{}
-	chatAttachBtnRect = sdl.Rect{}
-	chatInputRect = sdl.Rect{}
-	chatNameRect = sdl.Rect{}
 	inputY := listY + listH - inputH - SpaceSM
 	inputX := listX + SpaceSM
 	inputW := listW - 2*SpaceSM

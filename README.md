@@ -63,8 +63,9 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 * **Settings** — playback resolution, weather and 25 colour themes
   (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
 * **Logs** — view or export the app log if something misbehaves.
-* **Tools** — this device's IP address and a built-in FTP server for copying
-  files over Wi-Fi (also under **MISC → FTP & IP**).
+* **Tools** — this device's IP address, a built-in FTP server for quick file
+  drops over Wi-Fi, and an SSH/SFTP server for browsing the file system from a
+  PC (also under **MISC → FTP & IP**).
 
 Turn Wi-Fi on before using YouTube or weather. Your settings are stored in
 `Apps/JukaHub/jukauser.json` and survive updates.
@@ -82,6 +83,42 @@ Turn Wi-Fi on before using YouTube or weather. Your settings are stored in
 The server stays on until you stop it or close JukaHub. Turn it on only on a
 network you trust: while it runs, anyone on the same Wi-Fi can read and write
 the shared folder. Login accepts any username and password by design.
+
+## Browse files over SFTP
+
+FTP is fine for dropping a file on the SD card, but some tools (editors, `scp`,
+backup scripts) want SFTP. **Tools → SSH / SFTP** starts an SSH server that only
+serves the SFTP subsystem:
+
+1. Connect the handheld and the PC to the same Wi-Fi.
+2. Open **Tools** and start **SSH / SFTP**. The row shows an address such as
+   `sftp://juka@192.168.1.42:2222`, and the panel shows the one-time password
+   for the `juka` account (also `ssh` in the built-in terminal).
+3. On the PC, connect with WinSCP, FileZilla, Cyberduck, Finder or the
+   `sftp`/`scp` command line, using the shown password. (Windows Explorer only
+   speaks FTP, so use it with the server above or install an SFTP client.)
+
+On the handheld the session is rooted at `/`, so you can reach the whole Linux
+file system, not just the SD card. On a Windows build it starts at your home
+folder.
+
+Unlike FTP, this server is not open to the network: the password is random and
+regenerated every time the server starts, password guesses are limited, and
+only SFTP is enabled. Shell commands, port forwarding and tunnels are refused,
+and paths cannot escape the root (including through symlinks). The host key is
+saved in the app data folder, so the SFTP client only asks you to trust it
+once. Press **A** on the row (or run `ssh off`) to stop it.
+
+The random password is shown on the device only and is never written to
+`jukauser.json` or the log. For unattended access, put your public key in
+`Apps/JukaHub/data/ssh_authorized_keys` (OpenSSH format) and keep it across
+updates. Advanced settings:
+
+| Variable | Effect |
+|----------|--------|
+| `JUKAHUB_SSH_PORT` | Port to listen on (default `2222`), or set `ssh_port` in the config |
+| `JUKAHUB_SSH_ROOT` | Folder to expose instead of the whole file system |
+| `JUKAHUB_SSH_READONLY=1` | Refuse every upload, rename and delete; or set `ssh_readonly` in the config |
 
 ## Controls
 

@@ -6,6 +6,7 @@ package main
 // on real pixels instead of by inspection.
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"unsafe"
@@ -169,27 +170,31 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
 	rows := toolsRows(config)
-	if len(rows) != 3 {
-		t.Fatalf("rows = %d, want FTP, IP and Close only", len(rows))
+	if len(rows) != 4 {
+		t.Fatalf("rows = %d, want FTP, SSH, IP and Close only", len(rows))
 	}
-	if rows[0].action != toolsActionFTP || rows[1].action != toolsActionCopyIP || rows[2].action != toolsActionClose {
+	if rows[0].action != toolsActionFTP || rows[1].action != toolsActionSSH ||
+		rows[2].action != toolsActionCopyIP || rows[3].action != toolsActionClose {
 		t.Fatalf("unexpected row order: %+v", rows)
 	}
 	if rows[0].value != "Stopped" {
 		t.Fatalf("FTP row value = %q, want Stopped", rows[0].value)
+	}
+	if rows[1].value != "Stopped" || rows[1].hint != "A: start" {
+		t.Fatalf("SSH row = %+v, want stopped with a start hint", rows[1])
 	}
 }
 
 func TestToolsRowsWithMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	rows := toolsRows(config)
-	if len(rows) != 4 {
+	if len(rows) != 5 {
 		t.Fatalf("rows = %d, want a System utilities row too", len(rows))
 	}
 	found := false
 	for i, r := range rows {
 		if r.action == toolsActionUtilities {
-			if i != 2 {
+			if i != 3 {
 				t.Fatalf("utilities row at %d, want before Close", i)
 			}
 			found = true
@@ -214,6 +219,90 @@ func TestEnsureToolsMenuEntryRespectsTrigger(t *testing.T) {
 	ensureToolsMenuEntry(config)
 	if got := len(config.Scenes[0].Elements); got != 2 {
 		t.Fatalf("elements = %d, want an existing tools_open entry to be left alone", got)
+	}
+}
+
+// While SFTP is running the row and the credentials line must reflect it.
+func TestToolsRowsRunningSSH(t *testing.T) {
+	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
+	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
+		t.Fatalf("start SSH: %v", err)
+	}
+	defer sshSrv.Stop()
+
+	rows := toolsRows(&Config{})
+	if rows[1].value != "Running" || rows[1].hint != "A: stop" {
+		t.Fatalf("SSH row = %+v, want running with a stop hint", rows[1])
+	}
+	if !strings.HasPrefix(rows[1].detail, "sftp://") {
+		t.Fatalf("SSH row detail = %q, want an sftp:// address", rows[1].detail)
+	}
+
+	info := toolsInfoLines()
+	if len(info) == 0 || !strings.Contains(info[0].text, sshSrv.Password()) {
+		t.Fatalf("credentials line missing the generated password: %+v", info)
+	}
+	if len(info) > 2 {
+		t.Fatalf("info lines = %d, want at most 2 to fit the panel", len(info))
+	}
+}
+
+// FTP and SFTP running together is the worst case for the panel's height: five
+// rows plus two info lines must still leave the footer its space.
+func TestToolsPanelRunningBothServersFits(t *testing.T) {
+	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
+	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
+		t.Fatalf("start SSH: %v", err)
+	}
+	defer sshSrv.Stop()
+	if err := ftpSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
+		t.Fatalf("start FTP: %v", err)
+	}
+	defer ftpSrv.Stop()
+
+	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
+	_, panel, rects := renderToolsProbe(t, config, 0)
+	if len(rects) != 5 {
+		t.Fatalf("row rects = %d, want 5 with the Misc scene", len(rects))
+	}
+	if font, _ := getCachedFont(config, "small"); font == nil {
+		t.Skip("no usable font")
+	}
+	layout := toolsPanelMetrics(config, len(rects))
+	content := layout.headerH + int32(len(rects))*layout.rowH + layout.infoH + layout.footerH
+	if content > probeH-40 {
+		t.Fatalf("layout needs %dpx on a %dpx screen", content, probeH)
+	}
+	if content > panel.H {
+		t.Fatalf("layout needs %dpx but the panel is %dpx tall", content, panel.H)
+	}
+	if len(layout.info) == 0 {
+		t.Fatal("compact layout dropped the SFTP credentials line")
+	}
+}
+
+// The password is shown on the device only: publishing it as a custom variable
+// would write it into jukauser.json and any scene text using $ssh_password.
+func TestPublishSSHStateOmitsPassword(t *testing.T) {
+	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
+	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
+		t.Fatalf("start SSH: %v", err)
+	}
+	defer sshSrv.Stop()
+
+	config := &Config{Variables: Variables{Custom: make(map[string]interface{})}}
+	drainCustom(config)
+	publishSSHState()
+	drainCustom(config)
+
+	if got := config.Variables.Custom["ssh_status"]; got != "running" {
+		t.Fatalf("ssh_status = %v, want running", got)
+	}
+	password := sshSrv.Password()
+	for key, value := range config.Variables.Custom {
+		if strings.Contains(key, "password") || strings.Contains(fmt.Sprint(value), password) {
+			t.Fatalf("custom variable %q leaked the SSH password: %v", key, value)
+		}
 	}
 }
 

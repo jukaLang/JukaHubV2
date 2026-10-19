@@ -134,10 +134,10 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 32, Y: 164, W: 480, H: 258})
 	card(HomeFocusMedia, "Media", "Watch and listen", "media", HomeActionMedia,
 		sdl.Rect{X: 536, Y: 164, W: 348, H: 121})
-	// Files shrinks to half its old width so Settings fits beside it in the
-	// same top-right slot.
+	// Files and Settings share the top-right slot but keep a clear gap: flush
+	// edges made them read as one wide tile with a seam.
 	card(HomeFocusFiles, "Files", "Browse storage", "files", HomeActionFiles,
-		sdl.Rect{X: 900, Y: 164, W: 174, H: 121})
+		sdl.Rect{X: 900, Y: 164, W: 162, H: 121})
 	card(HomeFocusPackages, "Packages", "Discover content", "packages", HomeActionPackages,
 		sdl.Rect{X: 536, Y: 301, W: 348, H: 121})
 	card(HomeFocusApps, "Apps", "Launch installed apps", "apps", HomeActionApps,
@@ -151,7 +151,7 @@ func (h *HomeLayout) rebuildItems() {
 	card(HomeFocusEmulator, "Emulator", "Launch games and emulators", "emulator", HomeActionEmulator,
 		sdl.Rect{X: 956, Y: 454, W: 292, H: 158})
 	card(HomeFocusSettings, "Settings", "Personalize JukaHub", "settings", HomeActionSettings,
-		sdl.Rect{X: 1074, Y: 164, W: 174, H: 121})
+		sdl.Rect{X: 1082, Y: 164, W: 166, H: 121})
 	// The Clock is the header time itself - no separate button is drawn.
 	// drawHeader replaces this rect with the measured clock text every frame,
 	// so focus and clicks land on the actual clock in the top right.
@@ -341,8 +341,14 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	bellX := bellRight - bellW
 	bellY := (header.H - bellH) / 2
 	renderHomeBell(renderer, fonts, bellX, bellY, bellW, bellH)
+	// A pending release shows a download badge beside the bell; it shifts the
+	// status cluster left so the clock never overlaps it.
+	var badgeAdvance int32
+	if appConfig != nil {
+		badgeAdvance = drawUpdateBadge(renderer, appConfig, bellX-scaleX(12, h.Width), bellY, bellH)
+	}
 
-	x := bellX - scaleX(12, h.Width) - total
+	x := bellX - scaleX(12, h.Width) - badgeAdvance - total
 	y := scaleY(19, h.Height)
 	for _, part := range data.StatusParts {
 		w, _, _ := fonts.Small.SizeUTF8(part)

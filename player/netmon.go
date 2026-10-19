@@ -109,6 +109,9 @@ func (m *netMonitor) update() {
 	if ftpSrv.Running() {
 		publishCustom("ftp_address", ftpSrv.Address())
 	}
+	if sshSrv.Running() {
+		publishCustom("ssh_address", sshSrv.Address())
+	}
 
 	switch {
 	case changed && online:

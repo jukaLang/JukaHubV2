@@ -264,6 +264,36 @@ When configuring Discord:
 - GitHub API calls set a descriptive `User-Agent`, the `Accept` header for the intended API version, and respect `429`/`Retry-After` rate limiting.
 - Updates and package archives are checksum-verified against signed metadata before use (see Patch, below).
 
+### SSH/SFTP server
+
+The Tools panel can start an SSH server that exposes the file system over
+SFTP. It is opt-in and stops when the app closes. Its security model:
+
+- **Authentication** — one account, `juka`, with a 16-character password
+  generated from `crypto/rand` on every start and shown only on the device. It
+  is never published as a custom variable (which would persist it in
+  `jukauser.json`) and never logged. Optional OpenSSH public keys are read from
+  `ssh_authorized_keys` in the app data folder. `MaxAuthTries` is 3 and at most
+  4 connections are open at once, so online guessing is not practical.
+- **SFTP only** — the server accepts the `sftp` subsystem and refuses shell,
+  exec, pty, environment, agent-forwarding and global requests. Port forwarding
+  and tunnels are therefore unavailable, even for an authenticated client.
+- **Path confinement** — client paths are POSIX paths rooted at `/`; each
+  component is joined to the local root and `..` is removed before the join.
+  Symlinks are resolved and must still point inside the root, so a link planted
+  on the SD card cannot expose `/etc/shadow`. Writes through dangling links are
+  refused, and creating hard or symbolic links over SFTP is rejected.
+- **Host key** — an Ed25519 host key is generated on first start and stored as
+  `ssh_host_ed25519_key` (mode `0600`) in the app data folder. The SHA256
+  fingerprint is shown in the terminal (`ssh status`), so a client warning can
+  be verified and a changed host key noticed.
+- **Least privilege** — the server runs as the JukaHub process user, not root.
+  Set `JUKAHUB_SSH_READONLY=1` (or `ssh_readonly` in the config) to refuse all
+  writes, and `JUKAHUB_SSH_ROOT` to expose only one folder instead of `/`.
+
+As with FTP, the server is meant for a trusted home network. A leaked password
+is valid until the server is restarted; restart it from Tools to rotate.
+
 ## Patch / signed repositories
 
 The Patch tool uses an Ed25519-signed repository index. The verification public key is embedded in the player (`patch_signed.go`), and every package archive is SHA-256-verified against the signed index before install. HTTPS alone is never treated as authenticity.

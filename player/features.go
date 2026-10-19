@@ -262,14 +262,7 @@ func feEnterFocused(config *Config) {
 			showToast("Cannot open image: "+err.Error(), ToastError())
 			return
 		}
-		imageViewerPath = imagePath
-		if imageViewerTexture != nil {
-			imageViewerTexture.Destroy()
-			imageViewerTexture = nil
-		}
-		imageViewerZoom = 1.0
-		imageViewerPanX = 0
-		imageViewerPanY = 0
+		openImageViewer(config, imagePath)
 		return
 	}
 	if ext == ".html" || ext == ".js" {

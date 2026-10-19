@@ -37,6 +37,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if processPanel.open {
 		return ctrlProcessPanel(e, config)
 	}
+	// Update prompt is the topmost modal.
+	if updatePrompt.open {
+		return ctrlUpdatePrompt(e, config)
+	}
 	// Tools is modal: nothing underneath may react while it is open.
 	if toolsPanel.open {
 		return ctrlToolsPanel(e, config)
@@ -272,10 +276,14 @@ func ctrlSocialNotif(e *sdl.ControllerButtonEvent) bool {
 // ── Image viewer ──
 
 func ctrlImageViewer(e *sdl.ControllerButtonEvent) bool {
-	if e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK {
-		imageViewerPath = ""
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_A:
+		closeImageViewer()
 		PlayBackSound()
-		return true
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		imageViewerStep(-1)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		imageViewerStep(1)
 	}
 	return true
 }

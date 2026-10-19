@@ -173,6 +173,81 @@ func homeCalendarRect() sdl.Rect {
 	}
 }
 
+// calendarAlarmButtonRect is the "Set alarm" button below the mini calendar,
+// so the clock popover is the single entry point for both the date and alarms.
+func calendarAlarmButtonRect() sdl.Rect {
+	r := homeCalendarRect()
+	return sdl.Rect{
+		X: r.X,
+		Y: r.Y + r.H + scaleY(8, screenHeight),
+		W: r.W,
+		H: scaleY(38, screenHeight),
+	}
+}
+
+// calendarPopoverRect bounds the whole clock popover (calendar card plus the
+// action row). Clicks inside it belong to the popover; clicks outside dismiss
+// it before they reach the scene underneath.
+func calendarPopoverRect() sdl.Rect {
+	r := homeCalendarRect()
+	b := calendarAlarmButtonRect()
+	return sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: b.Y + b.H - r.Y}
+}
+
+// toggleCalendarPopover opens or closes the clock popover. The clock behaves
+// the same on Home and every other scene, so there is one toggle for both.
+// It is exclusive with the other top-bar overlays: two floating panels at once
+// would overlap and fight over the same clicks.
+func toggleCalendarPopover() {
+	homeCalendarOpen = !homeCalendarOpen
+	if homeCalendarOpen {
+		tb.startOpen = false
+		nc.open = false
+	}
+}
+
+// renderCalendarPopover draws the mini calendar and the Set alarm action below
+// it. It is called by the home renderer and by the shared render loop for all
+// other scenes, so the clock looks and behaves identically everywhere.
+func renderCalendarPopover(renderer *sdl.Renderer, config *Config) {
+	r := homeCalendarRect()
+	renderMiniCalendarAt(renderer, config, r.X, r.Y)
+
+	b := calendarAlarmButtonRect()
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	fillRoundedRect(renderer, b.X, b.Y, b.W, b.H, 10, WithAlpha(ColorInfo, 55))
+	strokeRoundedRect(renderer, b.X, b.Y, b.W, b.H, 10, 1, WithAlpha(ColorInfo, 150))
+	label := "Set alarm"
+	lw, lh, _ := font.SizeUTF8(label)
+	renderText(renderer, config, font, label, ColorTextPrimary(),
+		b.X+(b.W-int32(lw))/2, b.Y+(b.H-int32(lh))/2)
+}
+
+// calendarPopoverClick consumes a mouse click while the clock popover is open.
+// The Set alarm row opens the alarm editor; any other click dismisses the
+// popover. It reports whether the popover was open and handled the click.
+func calendarPopoverClick(mx, my int32, config *Config) bool {
+	if !homeCalendarOpen {
+		return false
+	}
+	// Clicks on the calendar card itself stay inside the popover (viewing the
+	// month must not dismiss it); only the action row changes screens.
+	if pointInRect(mx, my, homeCalendarRect()) {
+		return true
+	}
+	if pointInRect(mx, my, calendarAlarmButtonRect()) {
+		homeCalendarOpen = false
+		PlayActivateSound()
+		openAlarmScene(config)
+		return true
+	}
+	homeCalendarOpen = false
+	return true
+}
+
 // homeActivate triggers the action for the currently focused home item.
 // Continue resumes the most recent item when one exists, otherwise it opens
 // Media. Every other item performs a scene change using its configured target.
@@ -206,7 +281,7 @@ func homeActivate(config *Config) {
 	// The Clock never maps to a scene: its dedicated trigger
 	// (toggle_calendar) runs before the scene lookup.
 	if id == HomeFocusClock {
-		homeCalendarOpen = !homeCalendarOpen
+		toggleCalendarPopover()
 		return
 	}
 	// The Emulator card opens the availability panel on every platform: the
@@ -335,17 +410,7 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	// With the calendar popover open, a click inside it is consumed, a click
 	// on the clock toggles it closed, and any other click dismisses it without
 	// activating whatever lies underneath - standard dropdown behaviour.
-	if homeCalendarOpen {
-		if pointInRect(mx, my, homeCalendarRect()) {
-			return true
-		}
-		if homeLayout.FocusAt(mx, my) && homeLayout.Focus.Current() == HomeFocusClock {
-			// Clicking the clock again runs the same toggle and closes it.
-			homeLayout.Focus.Remember()
-			homeActivate(config)
-			return true
-		}
-		homeCalendarOpen = false
+	if calendarPopoverClick(mx, my, config) {
 		return true
 	}
 	if homeLayout.FocusAt(mx, my) {
@@ -509,8 +574,7 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	// It draws after the layout so the popover floats above the cards instead
 	// of being painted over by the layout backdrop.
 	if homeCalendarOpen {
-		r := homeCalendarRect()
-		renderMiniCalendarAt(renderer, config, r.X, r.Y)
+		renderCalendarPopover(renderer, config)
 	}
 }
 

@@ -147,6 +147,7 @@ func termExecute(input string) {
 		termPushLine("  sysinfo     Show system information", false)
 		termPushLine("  neofetch    System info with ASCII art", false)
 		termPushLine("  calc <expr> Evaluate a math expression", false)
+		termPushLine("  ssh [on|off|status]  SFTP server for PC file access", false)
 		termPushLine("  exit        Return to home", false)
 
 	case "ls", "dir":
@@ -282,6 +283,9 @@ func termExecute(input string) {
 			termPushLine(fmt.Sprintf("= %g", val), false)
 		}
 
+	case "ssh":
+		termSSHCommand(args)
+
 	case "exit", "quit":
 		goBackScene(appConfig)
 
@@ -305,6 +309,67 @@ func termExecute(input string) {
 			termPushLine(fmt.Sprintf("Error: %v", err), true)
 		}
 	}
+}
+
+// termSSHCommand reports or toggles the SSH/SFTP server. It is the console-side
+// equivalent of the Tools row: the random password is printed here because the
+// terminal is the device's own screen and there is no other way to read it
+// without leaving the terminal.
+func termSSHCommand(args []string) {
+	action := "status"
+	if len(args) > 0 {
+		action = strings.ToLower(args[0])
+	}
+	switch action {
+	case "on", "start":
+		if sshSrv.Running() {
+			termPushLine("SSH/SFTP is already running.", false)
+			break
+		}
+		if toolsIPAddress() == "" {
+			termPushLine("No WiFi address — connect to a network before starting SFTP.", true)
+			return
+		}
+		if err := sshSrv.Start(); err != nil {
+			termPushLine("Error: "+err.Error(), true)
+			return
+		}
+	case "off", "stop":
+		if !sshSrv.Running() {
+			termPushLine("SSH/SFTP is not running.", false)
+			break
+		}
+		sshSrv.Stop()
+		termPushLine("SSH/SFTP server stopped.", false)
+		return
+	case "status":
+	case "help", "-h", "--help":
+		termPushLine("Usage: ssh [on|off|status]", false)
+		return
+	default:
+		termPushLine("Usage: ssh [on|off|status]", true)
+		return
+	}
+
+	if !sshSrv.Running() {
+		termPushLine("SSH/SFTP server: stopped", false)
+		termPushLine(fmt.Sprintf("  Root: %s   Port: %d", sshRootDir(), sshPort()), false)
+		return
+	}
+	termPushLine("SSH/SFTP server: running", false)
+	addr := sshSrv.Address()
+	if addr == "" {
+		addr = "no WiFi address"
+	}
+	termPushLine("  Address:  "+addr, false)
+	termPushLine("  User:     "+sshSrv.User(), false)
+	termPushLine("  Password: "+sshSrv.Password(), false)
+	termPushLine("  Root:     "+sshSrv.Root(), false)
+	termPushLine("  Host key: "+sshSrv.Fingerprint(), false)
+	if sshSrv.ReadOnly() {
+		termPushLine("  Mode:     read-only", false)
+	}
+	termPushLine("  Accepts the sftp subsystem only (no shell or tunnels).", false)
 }
 
 // handleTermInput processes physical keyboard input for the terminal.

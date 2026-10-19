@@ -127,6 +127,40 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 	return rect
 }
 
+const (
+	notifDropW   = int32(400)
+	notifHeaderH = int32(40)
+	notifRowH    = int32(52)
+	notifMaxRows = 8
+)
+
+// notifDropdownLayout sizes the dropdown so it always fits on screen: the
+// panel is measured from the bell's anchor, and the visible row count shrinks
+// until the card (header + rows + padding) fits below it.
+func notifDropdownLayout(by int32, count int) (w, h int32, rows int) {
+	w = notifDropW
+	if maxW := screenWidth - 24; w > maxW {
+		w = maxW
+	}
+	rows = count
+	if rows == 0 {
+		// The empty state needs one row's worth of height to breathe.
+		rows = 1
+	}
+	if rows > notifMaxRows {
+		rows = notifMaxRows
+	}
+	maxH := screenHeight - by - 12
+	if maxH < notifHeaderH+notifRowH+12 {
+		maxH = notifHeaderH + notifRowH + 12
+	}
+	for rows > 0 && notifHeaderH+int32(rows)*notifRowH+12 > maxH {
+		rows--
+	}
+	h = notifHeaderH + int32(rows)*notifRowH + 12
+	return w, h, rows
+}
+
 // renderNotifDropdown draws the notification history dropdown.
 func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	if !nc.open {
@@ -138,26 +172,18 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	dropW := int32(400)
-	maxH := int32(400)
-	rowH := int32(44)
-	headerH := int32(40)
-
-	// Position below the bell.
-	bx := nc.bellRect.X
+	// Position below the bell, then size the card to the rows that fit.
 	by := nc.bellRect.Y + nc.bellRect.H + 8
+	dropW, dropH, numRows := notifDropdownLayout(by, len(nc.history))
+	bx := nc.bellRect.X
 	if bx+dropW > screenWidth {
 		bx = screenWidth - dropW - 12
 	}
-
-	numRows := len(nc.history)
-	if numRows > 8 {
-		numRows = 8
+	if bx < 12 {
+		bx = 12
 	}
-	dropH := headerH + int32(numRows)*rowH + 12
-	if dropH > maxH {
-		dropH = maxH
-	}
+	rowH := notifRowH
+	headerH := notifHeaderH
 
 	// Entrance keyframes: the scrim fades while the card drops out from under
 	// the bell, so the panel arrives as one layer instead of popping.
@@ -200,8 +226,10 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 				clearX, by+12)
 		}
 
-		// Notification rows.
+		// Notification rows. The message is clipped to the card's inner width
+		// in pixels (not characters) so no text can spill past the background.
 		listY := by + headerH
+		msgMaxW := dropW - 32 - 16
 		for i := 0; i < numRows && i < len(nc.history); i++ {
 			n := nc.history[i]
 			ry := listY + int32(i)*rowH
@@ -229,17 +257,14 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			fillCircle(renderer, bx+20, ry+rowH/2, 4, dotCol)
 
 			// Message.
-			msg := n.Message
-			if len(msg) > 38 {
-				msg = msg[:38] + "…"
-			}
+			msg := ellipsize(font, n.Message, msgMaxW)
 			msgCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
 			if n.Read {
 				msgCol = sdl.Color{R: 110, G: 120, B: 140, A: 180}
 			}
 			renderText(renderer, config, font, msg, msgCol, bx+32, ry+8)
 
-			// Timestamp.
+			// Timestamp, on its own line inside the taller row.
 			ago := time.Since(n.Timestamp)
 			timeStr := ""
 			switch {
@@ -251,7 +276,7 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 				timeStr = fmt.Sprintf("%dh ago", int(ago.Hours()))
 			}
 			renderText(renderer, config, font, timeStr,
-				sdl.Color{R: 80, G: 90, B: 110, A: 150}, bx+32, ry+24)
+				sdl.Color{R: 80, G: 90, B: 110, A: 150}, bx+32, ry+28)
 		}
 
 		if len(nc.history) == 0 {

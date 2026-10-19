@@ -155,7 +155,9 @@ func main() {
 	// Tools panel / FTP: publish the initial IP and server state, and make sure
 	// the listener never outlives the app.
 	initToolsModule()
+	publishSSHState()
 	defer ftpSrv.Stop()
+	defer sshSrv.Stop()
 
 	// Start screensaver idle monitor.
 	// Set screensaver timeout from config
@@ -360,6 +362,10 @@ func main() {
 					if processPanel.open && handleProcessKey(e, config) {
 						continue
 					}
+					// Update prompt is the topmost modal.
+					if updatePrompt.open && handleUpdatePromptKey(e, config) {
+						continue
+					}
 					// Tools is modal and consumes all keys while open.
 					if toolsPanel.open && handleToolsKey(e, config) {
 						continue
@@ -395,6 +401,12 @@ func main() {
 						// The app menu and notification center are modal:
 						// while one is open it owns the D-pad and Confirm/Back keys.
 						if handleChromeOverlayKey(e, config) {
+							continue
+						}
+						// The clock popover is shared by every scene, so Escape closes
+						// it before the scene's own input runs.
+						if homeCalendarOpen && (e.Keysym.Sym == sdl.K_ESCAPE || e.Keysym.Sym == sdl.K_b) {
+							homeCalendarOpen = false
 							continue
 						}
 						// Home scene uses the dedicated focus graph + activation.
@@ -841,6 +853,11 @@ func main() {
 							handleProcessMouse(mx, my, config)
 							break
 						}
+						// Update prompt is modal and above every other overlay.
+						if updatePrompt.open {
+							handleUpdatePromptMouse(mx, my, config)
+							break
+						}
 						// Tools panel is modal: a click selects a row, a click outside
 						// closes it, and nothing reaches the scene underneath.
 						if toolsPanel.open {
@@ -860,6 +877,20 @@ func main() {
 							break
 						}
 
+						// Clock popover: drawn above the scene on every screen, so it
+						// receives clicks before anything underneath. The Set alarm row
+						// opens the alarm editor; any other click dismisses it.
+						if homeCalendarOpen && calendarPopoverClick(mx, my, config) {
+							break
+						}
+
+						// The alarm screen draws its own Back pill and rows, so it owns
+						// the clicks on its surface.
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == "Alarm" {
+							handleAlarmMouseClick(mx, my, config)
+							break
+						}
 						// The terminal owns every click on its screen: its Back and
 						// Keyboard controls are drawn by the terminal renderer, not by
 						// config elements.
@@ -875,12 +906,10 @@ func main() {
 							fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
 							SeekVideo(fraction)
 						}
-						// Image viewer overlay: only the close button is interactive.
+						// Image viewer overlay: a click anywhere closes it, matching
+						// the tap-to-open / tap-to-close gesture.
 						if imageViewerPath != "" {
-							if mx >= imageViewerCloseBtn.X && mx <= imageViewerCloseBtn.X+imageViewerCloseBtn.W &&
-								my >= imageViewerCloseBtn.Y && my <= imageViewerCloseBtn.Y+imageViewerCloseBtn.H {
-								closeImageViewer()
-							}
+							closeImageViewer()
 							break
 						}
 
@@ -931,6 +960,14 @@ func main() {
 						// Top-bar chrome buttons: the back pill and the status clock
 						// activate on click/touch like any focused button would.
 						if handleChromeBarClick(mx, my, config) {
+							break
+						}
+						// Chat image previews open full screen; clicking again closes.
+						if currentSceneHasChat(config) && handleChatImageClick(mx, my) {
+							break
+						}
+						// Chat link pills open YouTube/media links in the player.
+						if currentSceneHasChat(config) && handleChatLinkClick(mx, my, config) {
 							break
 						}
 						// Chat header: the display-name pill renames the local chat user.
@@ -988,6 +1025,15 @@ func main() {
 						// to the scene elements drawn underneath the player).
 						if HandleVideoControlClick(mx, my) {
 							break
+						}
+						// Patch's list and modals are drawn by the scene renderer, so
+						// they need their own click routing (rows used to be keyboard
+						// only on a touch-capable device).
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == "Patch" {
+							if handlePatchMouse(mx, my, config) {
+								break
+							}
 						}
 						// Check recent panel (Continue cards)
 						handleRecentMouseClick(mx, my, config)
@@ -1604,11 +1650,13 @@ func main() {
 			renderScreensaver(renderer, config, sdl.GetTicks64())
 		} else {
 			renderScene(renderer, config, config.Scenes[currentSceneIndex])
-		}
-
-		// Full screen video covers the scene and its chrome entirely.
+		} // Full screen video covers the scene and its chrome entirely.
 		if videoFullscreen && playerPhase() != "idle" {
 			renderVideoFullscreen(renderer, config)
+		} else if homeCalendarOpen && !homeLayoutActive {
+			// The clock popover is shared chrome: Home draws it in its own
+			// renderer, every other scene draws it here above the status bar.
+			renderCalendarPopover(renderer, config)
 		}
 
 		// Scene transition effects
@@ -1686,6 +1734,9 @@ func main() {
 			continue
 		}
 
+		// Offer a newly discovered release once.
+		maybeOfferUpdate()
+
 		// Quick Settings overlay.
 		if qs.open {
 			renderQuickSettings(renderer, config)
@@ -1721,8 +1772,13 @@ func main() {
 			renderSocialNotifPanel(renderer, config)
 		}
 
+		// Update prompt is the topmost modal.
+		if updatePrompt.open {
+			renderUpdatePrompt(renderer, config)
+		}
+
 		// Shortcut hint at bottom (hidden when overlays are open).
-		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open {
+		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open {
 			renderShortcutHint(renderer, config)
 		}
 

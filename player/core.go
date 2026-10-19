@@ -310,7 +310,14 @@ var customCh = make(chan customUpdate, 64)
 
 // publishCustom queues a Custom value written by a background goroutine.
 func publishCustom(key string, val interface{}) {
-	customCh <- customUpdate{key: key, val: val}
+	select {
+	case customCh <- customUpdate{key: key, val: val}:
+	default:
+		// The render loop drains this queue every frame. If it is ever busy or
+		// stalled, a background publisher (network monitor, server state, tool
+		// progress) must not block on a full channel: the value is transient
+		// and the next publish refreshes it.
+	}
 }
 
 // drainCustom applies any pending background updates to the Custom map. Must
@@ -5196,14 +5203,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 					showToast("Cannot open image: "+err.Error(), ToastError())
 					break
 				}
-				imageViewerPath = imagePath
-				if imageViewerTexture != nil {
-					imageViewerTexture.Destroy()
-					imageViewerTexture = nil
-				}
-				imageViewerZoom = 1.0
-				imageViewerPanX = 0
-				imageViewerPanY = 0
+				openImageViewer(config, imagePath)
 			} else {
 				showToast("Select an image file first", ToastError())
 			}
@@ -5438,6 +5438,17 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if ftpSrv.Running() {
 			ftpSrv.Stop()
 			showToast("FTP server stopped", ToastInfo())
+		}
+	case "ssh_toggle":
+		toggleSSHServer()
+	case "ssh_start":
+		if !sshSrv.Running() {
+			toggleSSHServer()
+		}
+	case "ssh_stop":
+		if sshSrv.Running() {
+			sshSrv.Stop()
+			showToast("SSH/SFTP server stopped", ToastInfo())
 		}
 	default:
 		if strings.HasPrefix(element.Trigger, "http://") || strings.HasPrefix(element.Trigger, "https://") {
@@ -5884,8 +5895,8 @@ func handleSearchResultsAction(action Action, config *Config) {
 }
 
 // activateChromeFocus presses the focused chrome button: the back pill leaves
-// the scene, the status clock opens the Alarm Clock UI, the Apps pill
-// button toggles the app menu and the notification bell toggles the
+// the scene, the status clock toggles the same calendar popover Home shows, the
+// Apps pill button toggles the app menu and the notification bell toggles the
 // notification center. It reports whether a chrome button held the focus.
 func activateChromeFocus(config *Config) bool {
 	switch focusEngine.ElementIndex() {
@@ -5895,7 +5906,7 @@ func activateChromeFocus(config *Config) bool {
 		return true
 	case ChromeClockIndex:
 		PlayActivateSound()
-		openAlarmScene(config)
+		toggleCalendarPopover()
 		return true
 	case ChromeStartIndex:
 		// startMenuToggle plays its own activation sound.
@@ -5914,9 +5925,14 @@ func activateChromeFocus(config *Config) bool {
 }
 
 // handleChromeBarClick activates a top-bar chrome button under the pointer:
-// the back pill leaves the scene, the status clock opens the Alarm Clock UI.
-// It reports whether a chrome button was hit.
+// the back pill leaves the scene, the status clock toggles the calendar
+// popover (exactly like Home). It reports whether a chrome button was hit.
 func handleChromeBarClick(mx, my int32, config *Config) bool {
+	// The update badge sits in the status cluster, left of the bell.
+	if updatePrompt.badge.W > 0 && pointInRect(mx, my, updatePrompt.badge) {
+		openUpdatePrompt()
+		return true
+	}
 	if sceneTitleBackRect.W > 0 && mx >= sceneTitleBackRect.X && mx <= sceneTitleBackRect.X+sceneTitleBackRect.W &&
 		my >= sceneTitleBackRect.Y && my <= sceneTitleBackRect.Y+sceneTitleBackRect.H {
 		goBackScene(config)
@@ -5924,7 +5940,7 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	}
 	if statusClockRect.W > 0 && mx >= statusClockRect.X && mx <= statusClockRect.X+statusClockRect.W &&
 		my >= statusClockRect.Y && my <= statusClockRect.Y+statusClockRect.H {
-		openAlarmScene(config)
+		toggleCalendarPopover()
 		return true
 	}
 	return false
@@ -5937,6 +5953,14 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 func handleChromeKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || homeLayoutActive {
 		return false
+	}
+	// The clock popover floats above every scene, so Escape closes it before
+	// the focused chrome button or the scene sees the key. An open app menu or
+	// notification center is modal and owns Escape.
+	if homeCalendarOpen && !tb.startOpen && !nc.open &&
+		(e.Keysym.Sym == sdl.K_ESCAPE || e.Keysym.Sym == sdl.K_b) {
+		homeCalendarOpen = false
+		return true
 	}
 	switch chromeTier(focusEngine.ElementIndex()) {
 	case 1, 2:

@@ -24,6 +24,14 @@ type FooterHint struct {
 	Label  string
 }
 
+// Mouse hit targets, filled every frame by the Patch renderer.
+var (
+	patchRowRects    []sdl.Rect
+	patchMenuRects   []sdl.Rect
+	patchConfirmRect sdl.Rect
+	patchCancelRect  sdl.Rect
+)
+
 // --- Patch scene state ---
 
 var (
@@ -321,13 +329,16 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 		patchScrollY = 0
 	}
 
-	// Render rows inside the clipped viewport.
+	// Render rows inside the clipped viewport. The rects are kept for mouse
+	// hit-testing, which the scene previously did not support at all.
+	patchRowRects = make([]sdl.Rect, len(rows))
 	renderWithClip(renderer, 24, listTop, screenWidth-48, listH, func(r *sdl.Renderer) {
 		for i, row := range rows {
 			y := listTop - patchScrollY + int32(i)*(rowH+rowGap)
 			if y+rowH < listTop || y > listTop+listH {
 				continue
 			}
+			patchRowRects[i] = sdl.Rect{X: 24, Y: y, W: screenWidth - 48, H: rowH}
 			focused := row.id == focusID
 			bg := ColorCard
 			border := ColorBorder
@@ -443,11 +454,16 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 		}
 	})
 
+	patchMenuRects = nil
+	patchConfirmRect, patchCancelRect = sdl.Rect{}, sdl.Rect{}
+
 	// Package action menu: vertical action rows instead of confirm/cancel.
 	if len(m.Menu) > 0 {
 		menuY := y + h - 64 - int32(len(m.Menu))*44
+		patchMenuRects = make([]sdl.Rect, len(m.Menu))
 		for i, item := range m.Menu {
 			itemY := menuY + int32(i)*44
+			patchMenuRects[i] = sdl.Rect{X: x + 24, Y: itemY, W: w - 48, H: 38}
 			focused := i == m.MenuFocus
 			bg := ColorCardFocus
 			if focused {
@@ -474,6 +490,8 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 	cancelW := int32(140)
 	confirmX := x + w - confirmW - 24
 	cancelX := confirmX - cancelW - 16
+	patchConfirmRect = sdl.Rect{X: confirmX, Y: btnY, W: confirmW, H: btnH}
+	patchCancelRect = sdl.Rect{X: cancelX, Y: btnY, W: cancelW, H: btnH}
 
 	// Confirm button: hold-to-confirm for high-risk actions.
 	confirmLabel := m.Confirm
@@ -515,6 +533,46 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 }
 
 // --- Input ---
+
+// handlePatchMouse handles clicks on the Patch list and modals. It returns true
+// when the click was consumed.
+func handlePatchMouse(mx, my int32, config *Config) bool {
+	if patchModal != nil {
+		if len(patchModal.Menu) > 0 {
+			for i, r := range patchMenuRects {
+				if r.W > 0 && pointInRect(mx, my, r) {
+					patchModal.MenuFocus = i
+					PlayActivateSound()
+					patchConfirmModal()
+					return true
+				}
+			}
+			return true // modal swallows every click behind it
+		}
+		if patchConfirmRect.W > 0 && pointInRect(mx, my, patchConfirmRect) {
+			PlayActivateSound()
+			patchConfirmModal()
+			return true
+		}
+		if patchCancelRect.W > 0 && pointInRect(mx, my, patchCancelRect) {
+			patchModal = nil
+			patchHoldActive = false
+			PlayBackSound()
+			return true
+		}
+		return true
+	}
+	for i, r := range patchRowRects {
+		if r.W <= 0 || !pointInRect(mx, my, r) {
+			continue
+		}
+		patchFocusIndex = i
+		patchClampFocus()
+		patchActivate(config)
+		return true
+	}
+	return false
+}
 
 // handlePatchKey processes keyboard input for the Patch scene. Returns true
 // when consumed.

@@ -142,13 +142,26 @@ func TestChromeBarClick(t *testing.T) {
 	useChromeBar(t)
 	isolateSceneSwitch(t)
 
-	// Clicking the clock opens the Alarm Clock UI.
+	// Clicking the clock toggles the same calendar popover Home shows;
+	// it must not navigate away from the scene to the alarm editor.
+	prevOpen := homeCalendarOpen
+	homeCalendarOpen = false
+	t.Cleanup(func() {
+		homeCalendarOpen = prevOpen
+		tb.startOpen = false
+		nc.open = false
+	})
 	if !handleChromeBarClick(statusClockRect.X+2, statusClockRect.Y+2, config) {
 		t.Fatal("click on the status clock was not consumed")
 	}
-	idx := sceneIndexExact(config, "Alarm")
-	if idx < 0 || (currentSceneIndex != idx && pendingSceneIndex != idx) {
-		t.Fatalf("clock click targeted current=%d pending=%d, want Alarm scene %d", currentSceneIndex, pendingSceneIndex, idx)
+	if !homeCalendarOpen {
+		t.Fatal("clock click did not open the calendar popover")
+	}
+	if handleChromeBarClick(statusClockRect.X+2, statusClockRect.Y+2, config) == false || homeCalendarOpen {
+		t.Fatal("second clock click did not close the calendar popover")
+	}
+	if idx := sceneIndexExact(config, "Alarm"); idx >= 0 && (currentSceneIndex == idx || pendingSceneIndex == idx) {
+		t.Fatal("clock click navigated to the Alarm scene instead of the calendar")
 	}
 
 	// Clicking the pill is consumed as back.

@@ -1,6 +1,7 @@
 package main
 
-// toolsui.go — the Tools panel: LAN IP address and the on-device FTP server.
+// toolsui.go — the Tools panel: LAN IP address, the on-device FTP server and
+// the SSH/SFTP server.
 //
 // It is an overlay (like Quick Settings) so it works on every config: the home
 // "Tools" card opens it when the config has no "Misc" scene, and config authors
@@ -19,6 +20,9 @@ type toolsAction int
 
 const (
 	toolsActionFTP toolsAction = iota
+	toolsActionSSH
+	toolsActionPatch
+	toolsActionCalculator
 	toolsActionCopyIP
 	toolsActionUtilities
 	toolsActionClose
@@ -77,6 +81,7 @@ func openToolsPanel() {
 	toolsIPCache.at = time.Time{}
 	toolsIPCache.mu.Unlock()
 	publishFTPState()
+	publishSSHState()
 	PlayActivateSound()
 }
 
@@ -179,6 +184,50 @@ func toolsRows(config *Config) []toolsRow {
 	}
 	rows = append(rows, ftp)
 
+	sshRow := toolsRow{
+		label:   "SSH / SFTP",
+		value:   "Stopped",
+		detail:  "Browse the file system from a PC with any SFTP client",
+		hint:    "A: start",
+		action:  toolsActionSSH,
+		enabled: true,
+	}
+	if sshSrv.Running() {
+		ip := toolsIPAddress()
+		if ip == "" {
+			ip = "this device"
+		}
+		sshRow.value = "Running"
+		sshRow.detail = fmt.Sprintf("sftp://%s@%s:%d", sshSrv.User(), ip, sshSrv.Port())
+		sshRow.hint = "A: stop"
+	}
+	rows = append(rows, sshRow)
+
+	if sceneIndexExact(config, "Patch") >= 0 {
+		patchRow := toolsRow{
+			label:   "Patch",
+			value:   "Check for updates",
+			detail:  "Updates, packages and rollback",
+			hint:    "A: open",
+			action:  toolsActionPatch,
+			enabled: true,
+		}
+		if availableUpdateTag() != "" {
+			patchRow.value = "Update " + availableUpdateLabel()
+		}
+		rows = append(rows, patchRow)
+	}
+	if sceneIndexExact(config, "Calculator") >= 0 {
+		rows = append(rows, toolsRow{
+			label:   "Calculator",
+			value:   "Open",
+			detail:  "Quick math with history",
+			hint:    "A: open",
+			action:  toolsActionCalculator,
+			enabled: true,
+		})
+	}
+
 	ip := toolsIPAddress()
 	ipRow := toolsRow{
 		label:   "IP address",
@@ -242,6 +291,24 @@ func toolsPanelActivate(config *Config) {
 	switch row.action {
 	case toolsActionFTP:
 		toggleFTPServer()
+	case toolsActionSSH:
+		toggleSSHServer()
+	case toolsActionPatch:
+		idx := sceneIndexExact(config, "Patch")
+		if idx < 0 {
+			ShowToast("This build has no Patch scene", ToastKindInfo)
+			return
+		}
+		toolsPanel.open = false
+		changeSceneTo(config, idx)
+	case toolsActionCalculator:
+		idx := sceneIndexExact(config, "Calculator")
+		if idx < 0 {
+			ShowToast("This build has no Calculator scene", ToastKindInfo)
+			return
+		}
+		toolsPanel.open = false
+		changeSceneTo(config, idx)
 	case toolsActionCopyIP:
 		ip := toolsIPAddress()
 		if ip == "" {
@@ -341,6 +408,94 @@ func handleToolsMouse(mx, my int32, config *Config) bool {
 }
 
 // renderToolsPanel draws the modal over the current scene.
+// toolsInfoLine is one line of live server detail under the rows.
+type toolsInfoLine struct {
+	text string
+	warn bool
+}
+
+// toolsInfoLines returns at most two lines: the SFTP credentials while the
+// server runs, then the warning for the exposed share. Two lines is what fits
+// on a 720p handheld without pushing the footer off the panel.
+func toolsInfoLines() []toolsInfoLine {
+	lines := make([]toolsInfoLine, 0, 2)
+	if sshSrv.Running() {
+		lines = append(lines, toolsInfoLine{text: fmt.Sprintf("%s  ·  password %s", sshSrv.User(), sshSrv.Password())})
+	}
+	switch {
+	case ftpSrv.Running() && sshSrv.Running():
+		lines = append(lines, toolsInfoLine{text: "FTP is open to this WiFi; SFTP allows no shell or tunnels.", warn: true})
+	case ftpSrv.Running():
+		lines = append(lines, toolsInfoLine{text: "Anyone on this WiFi can read and write the shared folder.", warn: true})
+	case sshSrv.Running():
+		lines = append(lines, toolsInfoLine{text: "SFTP only: no shell, port forwarding or tunnels.", warn: true})
+	}
+	return lines
+}
+
+// toolsPanelLayout is the measured geometry for the current font, row count and
+// server state. Handheld fonts can be taller than their point size, so a fixed
+// row height used to push the last row and the footer off a 720p screen once
+// the SSH row was added. When the full three-line row does not fit, the detail
+// line is folded into the value and the row padding shrinks.
+type toolsPanelLayout struct {
+	smallH, medH, headerH, footerH, rowH, rowPad, infoLineH, infoH int32
+	showDetail, dense                                              bool
+	info                                                           []toolsInfoLine
+}
+
+func toolsPanelMetrics(config *Config, rowCount int) toolsPanelLayout {
+	font, _ := getCachedFont(config, "small")
+	medium, _ := getCachedFont(config, "medium")
+	if font == nil {
+		return toolsPanelLayout{}
+	}
+	if medium == nil {
+		medium = font
+	}
+	const gap = int32(2)
+	layout := toolsPanelLayout{
+		smallH:     int32(font.Height()),
+		medH:       int32(medium.Height()),
+		showDetail: true,
+		info:       toolsInfoLines(),
+	}
+	layout.headerH = 18 + layout.medH + 4 + layout.smallH + 14
+	layout.footerH = 20 + layout.smallH
+	layout.infoLineH = layout.smallH + 8
+	if len(layout.info) > 0 {
+		layout.infoH = int32(len(layout.info))*layout.infoLineH + 5
+	}
+	layout.rowPad = 10
+	layout.rowH = 2*layout.rowPad + layout.smallH + gap + layout.medH + gap + layout.smallH
+
+	available := screenHeight - 40 - layout.headerH - layout.footerH
+	total := func() int32 {
+		return int32(rowCount)*layout.rowH + layout.infoH
+	}
+	if total() > available {
+		layout.showDetail = false
+		layout.rowPad = 8
+		layout.rowH = 2*layout.rowPad + layout.smallH + gap + layout.medH
+	}
+	if total() > available {
+		// Dense mode: label and value on one line. Patch and Calculator add
+		// two rows, which does not fit the three-line row on a 720p screen.
+		layout.dense = true
+		layout.rowPad = 9
+		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
+	}
+	if total() > available && len(layout.info) > 1 {
+		layout.info = layout.info[:1]
+		layout.infoH = layout.infoLineH + 5
+	}
+	if total() > available {
+		layout.info = nil
+		layout.infoH = 0
+	}
+	return layout
+}
+
 func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	if !toolsPanel.open || renderer == nil {
 		return
@@ -365,25 +520,25 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	// Sizes come from the fonts, not from constants: a config that does not
 	// override "small"/"medium" gets 24px for both, and fixed offsets used to
 	// stack the label, value and detail on top of each other.
-	smallH := int32(font.Height())
-	medH := int32(medium.Height())
+	layout := toolsPanelMetrics(config, len(rows))
+	smallH := layout.smallH
+	medH := layout.medH
 	const (
 		padX = int32(24)
 		// label + gap + value + gap + detail
 		rowTextH = int32(2)
 	)
-	rowH := int32(10) + smallH + rowTextH + medH + rowTextH + smallH + 10
-	headerH := 18 + medH + 4 + smallH + 14
-	footerH := 20 + smallH
+	rowH := layout.rowH
+	headerH := layout.headerH
+	footerH := layout.footerH
 	panelW := int32(760)
 	if panelW > screenWidth-48 {
 		panelW = screenWidth - 48
 	}
-	warnH := int32(0)
-	if ftpSrv.Running() {
-		warnH = smallH + 10
-	}
-	panelH := headerH + int32(len(rows))*rowH + warnH + footerH
+	info := layout.info
+	infoLineH := layout.infoLineH
+	infoH := layout.infoH
+	panelH := headerH + int32(len(rows))*rowH + infoH + footerH
 	if panelH > screenHeight-40 {
 		panelH = screenHeight - 40
 	}
@@ -430,21 +585,56 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
 		}
 
-		labelY := r.Y + 10
-		valueY := labelY + smallH + rowTextH
-		detailY := valueY + medH + rowTextH
-		renderText(renderer, config, font, row.label, ColorTextSecondary(), r.X+16, labelY)
 		valueColor := ColorTextPrimary()
-		if row.action == toolsActionFTP && ftpSrv.Running() {
+		if (row.action == toolsActionFTP && ftpSrv.Running()) || (row.action == toolsActionSSH && sshSrv.Running()) {
 			valueColor = ColorToastSuccess
+		}
+		if row.action == toolsActionPatch && availableUpdateTag() != "" {
+			valueColor = ColorToastWarn
 		}
 		if row.action == toolsActionCopyIP && row.value == "No WiFi address" {
 			valueColor = ColorToastWarn
 		}
-		renderText(renderer, config, medium, row.value, valueColor, r.X+16, valueY)
+		value := row.value
+		if !layout.showDetail && value == "Running" && row.detail != "" {
+			// Fold the address into the value line when there is no room for a
+			// separate detail line: it is the part the user needs to type.
+			value = row.detail
+		}
+
+		if layout.dense {
+			// One line per row: label on the left, value after it, hint on the
+			// right. Dense mode exists so Patch, Calculator and both servers fit
+			// on a 720p screen without shrinking the text.
+			hintColor := ColorTextSecondary()
+			if focused {
+				hintColor = focusColor
+			}
+			hintW := int32(0)
+			if row.hint != "" {
+				hw, _, _ := font.SizeUTF8(row.hint)
+				hintW = int32(hw)
+				renderText(renderer, config, font, row.hint, hintColor, r.X+r.W-hintW-16, r.Y+(r.H-smallH)/2)
+			}
+			label := ellipsize(font, row.label, r.W/3)
+			lw, _, _ := font.SizeUTF8(label)
+			renderText(renderer, config, font, label, ColorTextSecondary(), r.X+16, r.Y+(r.H-smallH)/2)
+			valueX := r.X + 16 + int32(lw) + 14
+			valueW := r.X + r.W - 16 - hintW - 16 - valueX
+			if valueW > 0 {
+				renderText(renderer, config, medium, ellipsize(medium, value, valueW), valueColor, valueX, r.Y+(r.H-medH)/2)
+			}
+			continue
+		}
+
+		labelY := r.Y + layout.rowPad
+		valueY := labelY + smallH + rowTextH
+		detailY := valueY + medH + rowTextH
+		renderText(renderer, config, font, row.label, ColorTextSecondary(), r.X+16, labelY)
+		renderText(renderer, config, medium, value, valueColor, r.X+16, valueY)
 
 		detail := row.detail
-		if detail != "" {
+		if layout.showDetail && detail != "" {
 			maxW := r.W - 32 - 150
 			renderText(renderer, config, font, ellipsize(font, detail, maxW), ColorTextTertiary(), r.X+16, detailY)
 		}
@@ -458,11 +648,17 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// Warning while the share is open: it is unauthenticated by design.
-	if warnH > 0 {
-		warn := "Anyone on this WiFi can read and write the shared folder."
-		renderText(renderer, config, font, ellipsize(font, warn, rowW), ColorToastWarn,
-			panelX+padX, panelY+headerH+int32(len(rows))*rowH+2)
+	// Live details while a server is open: the SFTP password is shown here (it
+	// is random per run and never written to the config or the log), followed
+	// by the warning for whichever share is exposed.
+	infoY := panelY + headerH + int32(len(rows))*rowH + 2
+	for _, line := range info {
+		color := ColorTextSecondary()
+		if line.warn {
+			color = ColorToastWarn
+		}
+		renderText(renderer, config, font, ellipsize(font, line.text, rowW), color, panelX+padX, infoY)
+		infoY += infoLineH
 	}
 
 	footer := "A select    B close"

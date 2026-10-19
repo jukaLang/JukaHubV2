@@ -547,6 +547,11 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if bellW > 0 {
 		rightX -= bellW + SpaceLG
 	}
+	// Download badge (only while a release is advertised) sits between the
+	// clock and the bell and shifts the status cluster left by its width.
+	if advance := drawUpdateBadge(renderer, config, rightX, (barH-bellH)/2, bellH); advance > 0 {
+		rightX -= advance
+	}
 	gap := StatusPartGap
 
 	// Measure total width and drop least-important items if they don't fit

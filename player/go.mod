@@ -6,16 +6,14 @@ require (
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/grandcat/zeroconf v1.0.0
 	github.com/mattn/go-sqlite3 v1.14.52
+	github.com/pkg/sftp v1.13.11
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/tidwall/gjson v1.17.0
 	github.com/veandco/go-sdl2 v0.4.40
 	go.etcd.io/bbolt v1.3.9
 )
 
-require (
-	github.com/kr/fs v0.1.0 // indirect
-	github.com/pkg/sftp v1.13.11 // indirect
-)
+require github.com/kr/fs v0.1.0 // indirect
 
 require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
@@ -30,7 +28,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.14 // indirect
 	github.com/tklauser/numcpus v0.8.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
+	golang.org/x/crypto v0.55.0
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 )

@@ -200,14 +200,11 @@ func TestHomeLayoutGeometry(t *testing.T) {
 	}
 	files := homeLayout.Items[HomeFocusFiles].Rect
 	settings := homeLayout.Items[HomeFocusSettings].Rect
-	if files.W != 174 {
-		t.Errorf("Files width = %d, want 174 (half of the old 348)", files.W)
+	if files.W < 150 || settings.W < 150 {
+		t.Errorf("Files/Settings widths = %d/%d, want two readable narrow tiles", files.W, settings.W)
 	}
-	if settings.W != files.W {
-		t.Errorf("Settings width = %d, want the same as Files (%d)", settings.W, files.W)
-	}
-	if settings.X != files.X+files.W {
-		t.Errorf("Settings x = %d, want %d (right of Files)", settings.X, files.X+files.W)
+	if gap := settings.X - (files.X + files.W); gap < 16 {
+		t.Errorf("Files and Settings are %dpx apart, want at least 16px of breathing room", gap)
 	}
 	if settings.X+settings.W != 1248 {
 		t.Errorf("Settings right edge = %d, want 1248 (keeps the grid's right margin)", settings.X+settings.W)

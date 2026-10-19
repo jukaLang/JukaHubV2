@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -81,6 +82,21 @@ type alarmScene struct {
 }
 
 var alarmUI alarmScene
+
+// alarmBackRect is the on-screen Back pill, populated each frame so touch users
+// are never trapped in the alarm screen (the keyboard/controller use B).
+var alarmBackRect sdl.Rect
+
+// alarmAddRect is the "+ Add Alarm" row, populated by renderAlarmList.
+var alarmAddRect sdl.Rect
+
+// Alarm list geometry shared by the renderer and the mouse handler.
+const (
+	alarmListX = int32(100)
+	alarmListY = int32(160)
+	alarmListW = int32(740)
+	alarmRowH  = int32(64)
+)
 
 func alarmInitUI() {
 	now := time.Now()
@@ -298,9 +314,26 @@ func alarmRing() {
 func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 	alarmUI.now = time.Now()
 
-	renderer.SetDrawColor(8, 10, 18, 255)
-	renderer.Clear()
+	// Reuse the shared backdrop instead of clearing to near-black: the alarm
+	// screen is a normal scene, and a bare Clear() read as a broken black page.
+	ensureBackgroundTexture(renderer, config)
+	if bgTexture != nil {
+		_ = renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+		setDrawColor(renderer, overlayColor)
+		_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	} else {
+		// No wallpaper configured: use the same theme gradient every other
+		// scene falls back to, so the alarm screen is never a black page.
+		ensureGradientTexture(renderer, config, ColorBackground)
+		if gradientTexture != nil {
+			_ = renderer.Copy(gradientTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+		} else {
+			renderer.SetDrawColor(8, 10, 18, 255)
+			renderer.Clear()
+		}
+	}
 
+	// Touch-visible Back pill (top-left), mirroring the other scenes' chrome.
 	font, _ := getCachedFont(config, "medium")
 	bigFont, _ := getCachedFont(config, "big")
 	if bigFont == nil {
@@ -350,13 +383,24 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 			cx-int32(cw)/2, int32(110))
 	}
 
+	if smallFont != nil {
+		label := "< Back"
+		lw, lh, _ := smallFont.SizeUTF8(label)
+		bw := int32(lw) + 24
+		bh := int32(lh) + 12
+		alarmBackRect = sdl.Rect{X: 24, Y: 24, W: bw, H: bh}
+		fillRoundedRect(renderer, alarmBackRect.X, alarmBackRect.Y, bw, bh, bh/2, WithAlpha(ColorSurfaceRaised, 220))
+		strokeRoundedRect(renderer, alarmBackRect.X, alarmBackRect.Y, bw, bh, bh/2, 1, ColorBorder)
+		renderText(renderer, config, smallFont, label, ColorTextSecondary(), alarmBackRect.X+12, alarmBackRect.Y+6)
+	}
+
 	// --- Mini calendar (top right) ---
 	renderMiniCalendar(renderer, config)
 
 	// --- Alarm list or editor ---
-	listX := int32(100)
-	listY := int32(160)
-	listW := int32(740)
+	listX := alarmListX
+	listY := alarmListY
+	listW := alarmListW
 
 	if alarmUI.tab == 0 {
 		// List mode
@@ -400,12 +444,13 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 
 	if len(alarmStore.Alarms) == 0 {
 		if smallFont != nil {
-			empty := "No alarms set. Press Y to add one."
+			empty := "No alarms set. Tap + Add Alarm or press Y."
 			ew, _, _ := smallFont.SizeUTF8(empty)
 			renderText(renderer, config, smallFont, empty,
 				sdl.Color{R: 100, G: 115, B: 140, A: 150},
 				(screenWidth-int32(ew))/2, y+80)
 		}
+		renderAlarmAddRow(renderer, config, font, x, y+120, w)
 		return
 	}
 
@@ -472,14 +517,55 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 	}
 
 	// "Add new" row at bottom
-	addY := y + int32(len(alarmStore.Alarms))*rowH
-	if addY < screenHeight-100 {
-		addText := "+ Add Alarm"
-		aw, _, _ := font.SizeUTF8(addText)
-		addCol := sdl.Color{R: 120, G: 160, B: 255, A: 180}
-		renderText(renderer, config, font, addText, addCol,
-			x+(w-int32(aw))/2, addY+8)
+	renderAlarmAddRow(renderer, config, font, x, y+int32(len(alarmStore.Alarms))*rowH, w)
+}
+
+// renderAlarmAddRow draws the tappable "+ Add Alarm" row and records its rect
+// so the mouse handler can open the editor.
+func renderAlarmAddRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w int32) {
+	alarmAddRect = sdl.Rect{}
+	if font == nil || y >= screenHeight-100 {
+		return
 	}
+	addText := "+ Add Alarm"
+	aw, ah, _ := font.SizeUTF8(addText)
+	addCol := sdl.Color{R: 120, G: 160, B: 255, A: 180}
+	alarmAddRect = sdl.Rect{X: x + (w-int32(aw))/2 - 16, Y: y, W: int32(aw) + 32, H: int32(ah) + 16}
+	fillRoundedRect(renderer, alarmAddRect.X, alarmAddRect.Y, alarmAddRect.W, alarmAddRect.H, 10, WithAlpha(ColorInfo, 40))
+	renderText(renderer, config, font, addText, addCol,
+		x+(w-int32(aw))/2, y+8)
+}
+
+// handleAlarmMouseClick handles taps on the alarm screen: the Back pill, the
+// alarm rows and the "+ Add Alarm" row. It reports whether the click was used.
+func handleAlarmMouseClick(mx, my int32, config *Config) bool {
+	if alarmBackRect.W > 0 && pointInRect(mx, my, alarmBackRect) {
+		alarmBack()
+		return true
+	}
+	if alarmUI.tab != 0 {
+		return false
+	}
+	if alarmAddRect.W > 0 && pointInRect(mx, my, alarmAddRect) {
+		now := time.Now()
+		alarmUI.tab = 1
+		alarmUI.editHour = now.Hour()
+		alarmUI.editMin = (now.Minute() + 5) % 60
+		alarmUI.editLabel = ""
+		alarmUI.editID = -1
+		PlayActivateSound()
+		return true
+	}
+	if my < alarmListY || my >= alarmListY+int32(len(alarmStore.Alarms))*alarmRowH {
+		return false
+	}
+	idx := int((my - alarmListY) / alarmRowH)
+	if idx < 0 || idx >= len(alarmStore.Alarms) {
+		return false
+	}
+	alarmUI.cursor = idx
+	alarmSelect()
+	return true
 }
 
 func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {

@@ -290,7 +290,7 @@ func TestHomeCardHoverLift(t *testing.T) {
 	if r := h.Items[HomeFocusContinue].Rect; r.X != 32 || r.Y != 164 || r.W != 480 {
 		t.Errorf("Continue hit rect moved: %+v", r)
 	}
-	if r := h.Items[HomeFocusFiles].Rect; r.W != 174 {
+	if r := h.Items[HomeFocusFiles].Rect; r.W != 162 {
 		t.Errorf("Files hit rect moved: %+v", r)
 	}
 }
