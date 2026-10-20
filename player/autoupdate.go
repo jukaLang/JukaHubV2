@@ -101,6 +101,21 @@ func readInstalledReleaseInfo() releaseInfo {
 	return releaseInfoCache
 }
 
+// readReleaseInfoFromDir reads a release stamp from any directory. The staged
+// tree carries the same file as an installation, so the ready marker and the
+// installed stamp are the same format.
+func readReleaseInfoFromDir(dir string) releaseInfo {
+	var info releaseInfo
+	data, err := os.ReadFile(releaseInfoPath(dir))
+	if err != nil {
+		return releaseInfo{}
+	}
+	if json.Unmarshal(data, &info) != nil {
+		return releaseInfo{}
+	}
+	return info
+}
+
 // writeReleaseInfo writes the stamp file into dir atomically.
 func writeReleaseInfo(dir string, info releaseInfo) error {
 	data, err := json.MarshalIndent(info, "", "  ")
@@ -344,6 +359,10 @@ func availableUpdateLabel() string {
 	return "new release"
 }
 
+// errAlreadyUpToDate reports that the advertised release is not newer than the
+// running build (a stale advertisement, or a build that already applied it).
+var errAlreadyUpToDate = errors.New("already up to date")
+
 // InstallAvailableJukaHubUpdate downloads, stages and applies the newest release.
 // It runs only after the user confirms in the Patch scene; nothing in the
 // background path calls it.
@@ -358,12 +377,33 @@ func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
 		if installed == "" {
 			installed = versionString(config)
 		}
-		return fmt.Errorf("already up to date (%s)", installed)
+		return fmt.Errorf("%w (%s)", errAlreadyUpToDate, installed)
 	}
 	if err := StageJukaHubUpdate(ctx, config, rel); err != nil {
 		return err
 	}
 	return OpApplyStagedSwap(ctx, config)
+}
+
+// releaseAssetDigest turns a release asset's API digest ("sha256:<hex>") into
+// the bare hash downloadToFile verifies. Any other algorithm, an empty value or
+// a malformed hash yields "", so the caller falls back to no check rather than
+// rejecting a release it cannot verify.
+func releaseAssetDigest(digest string) string {
+	const prefix = "sha256:"
+	d := strings.TrimSpace(digest)
+	if len(d) != len(prefix)+64 || !strings.EqualFold(d[:len(prefix)], prefix) {
+		return ""
+	}
+	h := d[len(prefix):]
+	for _, c := range []byte(h) {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F':
+		default:
+			return ""
+		}
+	}
+	return strings.ToLower(h)
 }
 
 // announceAvailableUpdate surfaces a pending update: an immediate toast plus a
@@ -372,7 +412,7 @@ func InstallAvailableJukaHubUpdate(ctx context.Context, config *Config) error {
 func announceAvailableUpdate() {
 	label := availableUpdateLabel()
 	logPatch("auto-update: offering %s", label)
-	notifPush("JukaHub "+label+" is available — install it from Patch", notifInfo)
+	notifPush("JukaHub "+label+" is available — press the download icon in the header", notifInfo)
 }
 
 // startAutoUpdateCheck runs the startup update check in the background. It is
@@ -462,10 +502,12 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 
 	assetURL := ""
 	var assetSize int64
+	expectSHA := ""
 	for _, a := range rel.Assets {
 		if strings.EqualFold(a.Name, target.Asset) {
 			assetURL = a.BrowserDownloadURL
 			assetSize = a.Size
+			expectSHA = releaseAssetDigest(a.Digest)
 			break
 		}
 	}
@@ -473,6 +515,11 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 		// The release workflow always publishes these two archive names; fall
 		// back to the stable "latest" URL when the API omits the asset list.
 		assetURL = jukaHubReleaseDownloadBase + target.Asset
+	}
+	if expectSHA == "" {
+		// Older releases and the URL fallback carry no digest. Say so in the log
+		// instead of pretending the archive was verified.
+		logPatch("update: no sha256 digest published for %s; archive is not checksum-verified", target.Asset)
 	}
 	if assetSize > 0 && assetSize > patchMaxDownload {
 		return fmt.Errorf("release asset %s is larger than the %d byte limit", target.Asset, patchMaxDownload)
@@ -482,14 +529,48 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	}
 
 	patchRowStatus(ComponentApp, StatusDownloading)
+	// The install bar is only shown when a caller opened it (the header chip
+	// and the prompt do); these calls are no-ops elsewhere.
+	installBarPhase(installPhaseDownload)
 	archivePath := filepath.Join(dir, "downloads", sanitizeFileName(target.Asset))
-	if err := downloadToFile(ctx, client, assetURL, archivePath, "", patchMaxDownload); err != nil {
+	// A truncated or swapped archive is caught here, before it is unpacked: the
+	// handheld's Wi-Fi drops mid-download often enough that a corrupt file used
+	// to surface as "archive contains no JukaHub executable".
+	if err := downloadToFile(ctx, client, assetURL, archivePath, expectSHA, patchMaxDownload); err != nil {
 		patchRowStatus(ComponentApp, StatusFailed)
 		return fmt.Errorf("download failed: %w", err)
 	}
 	patchRowStatus(ComponentApp, StatusVerified)
 
 	staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(rel.TagName))
+	if err := stageDownloadedRelease(ctx, rel, archivePath, staging); err != nil {
+		patchRowStatus(ComponentApp, StatusFailed)
+		return err
+	}
+	stamp := releaseInfo{Tag: rel.TagName, Date: releaseStampISO(rel), Version: versionString(nil)}
+
+	patchStateMu.Lock()
+	patchState.LastUpdateVer = rel.TagName
+	patchState.LastUpdateAt = time.Now().UTC().Format(time.RFC3339)
+	patchState.LastUpdatePublishedAt = stamp.Date
+	patchState.LastUpdateAsset = target.Asset
+	patchStateMu.Unlock()
+	_ = savePatchState()
+
+	// Refresh the staged marker on disk so a cancelled staging is not mistaken
+	// for a complete one: release-info.json is the "ready" marker.
+	patchRowStatus(ComponentApp, StatusStaged)
+	return nil
+}
+
+// stageDownloadedRelease unpacks a downloaded release archive into the staging
+// folder and marks it ready. It is separate from the download so the
+// unzip-verify-stamp half can be tested against a local archive, exactly as
+// StageJukaHubUpdate uses it.
+func stageDownloadedRelease(ctx context.Context, rel *githubRelease, archivePath, staging string) error {
+	if rel == nil {
+		return errors.New("missing release metadata")
+	}
 	// Reuse a complete staging tree: startup checks must not redownload the
 	// same release after a failed or postponed apply.
 	reused := false
@@ -503,8 +584,8 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 		if err := os.MkdirAll(staging, 0o700); err != nil {
 			return err
 		}
+		installBarPhase(installPhaseExtract)
 		if err := extractSafe(ctx, archivePath, staging, patchMaxEntries, patchMaxExpandBytes); err != nil {
-			patchRowStatus(ComponentApp, StatusFailed)
 			return fmt.Errorf("extracting update: %w", err)
 		}
 	} else {
@@ -512,17 +593,14 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	}
 	newBin := findStagedBinary(staging)
 	if newBin == "" {
-		patchRowStatus(ComponentApp, StatusFailed)
 		return errors.New("archive contains no JukaHub executable")
 	}
 	info, err := os.Stat(newBin)
 	if err != nil || info.IsDir() {
-		patchRowStatus(ComponentApp, StatusFailed)
 		return errors.New("staged executable is not a regular file")
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 {
 		if err := os.Chmod(newBin, 0o755); err != nil {
-			patchRowStatus(ComponentApp, StatusFailed)
 			return fmt.Errorf("staged executable is not executable: %w", err)
 		}
 	}
@@ -535,18 +613,6 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	}
 	// AtomicWrite keeps a .bak of the previous stamp; never ship that copy.
 	_ = os.Remove(releaseInfoPath(filepath.Dir(newBin)) + ".bak")
-
-	patchStateMu.Lock()
-	patchState.LastUpdateVer = rel.TagName
-	patchState.LastUpdateAt = time.Now().UTC().Format(time.RFC3339)
-	patchState.LastUpdatePublishedAt = stamp.Date
-	patchState.LastUpdateAsset = target.Asset
-	patchStateMu.Unlock()
-	_ = savePatchState()
-
-	// Refresh the staged marker on disk so a cancelled staging is not mistaken
-	// for a complete one: release-info.json is the "ready" marker.
-	patchRowStatus(ComponentApp, StatusStaged)
 	return nil
 }
 

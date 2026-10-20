@@ -27,6 +27,7 @@ const (
 	HomeActionExit           HomeAction = "exit"
 	HomeActionToggleCalendar HomeAction = "toggle_calendar"
 	HomeActionToggleWeather  HomeAction = "toggle_weather"
+	HomeActionUpdate         HomeAction = "install_update"
 )
 
 type HomeFonts struct {
@@ -105,7 +106,7 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusExit,
+			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusUpdate, HomeFocusExit,
 		},
 	}
 	layout.rebuildItems()
@@ -164,6 +165,11 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 1020, Y: 10, W: 92, H: 36})
 	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
 		sdl.Rect{X: 1120, Y: 10, W: 76, H: 36})
+	// The update download chip sits at the left end of the status cluster.
+	// Like the clock and weather, its rect is replaced with the drawn chip
+	// every frame, and it is only focusable while a release is offered.
+	card(HomeFocusUpdate, "Update", "Install the new release", "update", HomeActionUpdate,
+		sdl.Rect{X: 930, Y: 12, W: 30, H: 24})
 	// Exit sits on the footer's left end (drawn above the footer band so it
 	// stays visible) and is the primary way to quit from the home screen.
 	// Back stays available through B/Esc and the footer hint.
@@ -224,7 +230,7 @@ func (h *HomeLayout) BoundsViolations() []string {
 			item.Rect.X+item.Rect.W > h.Width || item.Rect.Y+item.Rect.H > h.Height {
 			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
 		}
-		if id == HomeFocusClock || id == HomeFocusWeather {
+		if id == HomeFocusClock || id == HomeFocusWeather || id == HomeFocusUpdate {
 			continue
 		}
 		checked = append(checked, item)
@@ -283,8 +289,10 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, data.Continue, cardLift)
 		case HomeFocusExit:
 			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
-		case HomeFocusClock, HomeFocusWeather:
-			// Header chips are the buttons; drawHeader draws their focus rings.
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5:
+			// Header chips are the buttons; drawHeader draws them and their focus
+			// rings. Rendering them as action cards would paint a clipped card
+			// (title and icon) over the header.
 		default:
 			h.drawActionCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 		}
@@ -306,6 +314,8 @@ func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
 	weatherStatusRect = sdl.Rect{}
+	ps5TileRect = sdl.Rect{}
+	homeUpdateRect = sdl.Rect{}
 	header := ScaleHomeRect(sdl.Rect{X: 0, Y: 0, W: 1280, H: 56}, h.Width, h.Height)
 	setDrawColor(renderer, ColorSurface)
 	_ = renderer.FillRect(&header)
@@ -342,6 +352,13 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			total += sepW
 		}
 	}
+	weatherIdx := -1
+	for i, part := range data.StatusParts {
+		if isWeatherStatusPart(part) {
+			weatherIdx = i
+			break
+		}
+	}
 	bellFont := data.BellFont
 	if bellFont == nil {
 		bellFont = fonts.Small
@@ -358,14 +375,24 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	bellX := bellRight - bellW
 	bellY := (header.H - bellH) / 2
 	renderHomeBell(renderer, bellFont, bellX, bellY, bellW, bellH)
-	// A pending release shows a download badge beside the bell; it shifts the
-	// status cluster left so the clock never overlaps it.
-	var badgeAdvance int32
-	if appConfig != nil {
-		badgeAdvance = drawUpdateBadge(renderer, appConfig, bellX-scaleX(12, h.Width), bellY, bellH)
-	}
 
-	x := bellX - scaleX(12, h.Width) - badgeAdvance - total
+	// The chip's width is part of the cluster so it shifts the text left instead
+	// of landing on top of it. It is dropped when it would push the cluster into
+	// the greeting column: on such a screen the scene headers and the prompt
+	// still reach the release.
+	updateChipW, updateChipH := int32(0), int32(0)
+	if updateAvailable() {
+		chipW, chipH := homeUpdateChipSize(fonts.Small)
+		chipW += scaleX(8, h.Width)
+		if bellX-scaleX(12, h.Width)-total-chipW >= scaleX(480, h.Width) {
+			updateChipW, updateChipH = chipW, chipH
+			total += chipW
+		}
+	}
+	// The home header offers a pending release itself, as the download chip in
+	// the status cluster below; the scene-header "Update" pill is not drawn here
+	// so the header never shows two offers for the same release.
+	x := bellX - scaleX(12, h.Width) - total
 
 	// Phone Companion QR: a scan-and-connect tile sits left of the network,
 	// weather and clock cluster, in the empty band above the action cards. It
@@ -383,9 +410,47 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		renderCompanionHeaderQR(renderer, fonts, sdl.Rect{X: qrX, Y: qrY, W: qrCard, H: qrCard})
 	}
 
+	// PS5 Remote Play launcher: the slot immediately left of the QR tile, never
+	// on top of it. When the QR is not drawn the launcher keeps that slot, and
+	// on narrow screens it is dropped instead of crowding the header. The left
+	// bound matches the QR's own gate, which is the point past the greeting
+	// column where a header tile can sit without covering text.
+	ps5TileRect = sdl.Rect{}
+	if ps5Slot, ok := ps5TileRectFor(sdl.Rect{X: qrX, Y: qrY, W: qrCard, H: qrCard}, scaleX(12, h.Width), scaleX(480, h.Width)); ok {
+		renderPS5HeaderTile(renderer, fonts, ps5Slot, ps5TileVisual{
+			Focused: h.Focus.Current() == HomeFocusPS5,
+			Pressed: data.Pressed == HomeFocusPS5,
+			Depth:   data.PressDepth,
+		})
+	}
+	// The controller can only focus the tile while it is on screen. Disabling
+	// it moves focus off automatically if the window is resized underneath it.
+	h.Focus.SetEnabled(HomeFocusPS5, ps5TileRect.W > 0)
+	// Link the launcher with whichever card sits under it, so Up reaches it and
+	// Down comes back: the D-pad follows the layout instead of a guess about how
+	// wide the status cluster turned out to be.
+	h.Focus.SetTileLink(h.CardUnderTile(ps5TileRect))
+
 	y := scaleY(19, h.Height)
-	for _, part := range data.StatusParts {
+	updateChipDrawn := false
+	drawUpdateChip := func(atX int32) {
+		chip := sdl.Rect{X: atX, Y: y - scaleY(3, h.Height), W: updateChipW, H: updateChipH}
+		renderHomeUpdateChip(renderer, fonts, chip, h.Focus.Current() == HomeFocusUpdate)
+		if homeUpdateRect.W > 0 {
+			item := h.Items[HomeFocusUpdate]
+			item.Rect = homeUpdateRect
+			h.Items[HomeFocusUpdate] = item
+		}
+		updateChipDrawn = true
+	}
+	for i, part := range data.StatusParts {
 		w, _, _ := fonts.Small.SizeUTF8(part)
+		// The chip belongs immediately left of the weather text; with no
+		// weather part it leads the cluster instead of disappearing.
+		if updateChipW > 0 && !updateChipDrawn && ((weatherIdx < 0 && i == 0) || i == weatherIdx) {
+			drawUpdateChip(x)
+			x += updateChipW + scaleX(8, h.Width)
+		}
 		r := sdl.Rect{
 			X: x - scaleX(8, h.Width),
 			Y: y - scaleY(6, h.Height),
@@ -406,14 +471,57 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		drawText(renderer, fonts.Small, part, x, y, ColorTextMuted(), textAlignLeft)
 		x += int32(w) + sepW
 	}
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather} {
+	if updateChipW > 0 && !updateChipDrawn {
+		drawUpdateChip(x)
+	}
+	// The D-pad may only focus the chip while it is on screen; with no update
+	// (or no room) it stays disabled and the arrows skip it.
+	h.Focus.SetEnabled(HomeFocusUpdate, homeUpdateRect.W > 0)
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusPS5} {
 		if h.Focus.Current() != id {
 			continue
 		}
 		r := h.Items[id].Rect
+		if id == HomeFocusPS5 {
+			r = ps5TileRect
+		}
+		if r.W <= 0 {
+			continue
+		}
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 2, ColorAccent)
 	}
+}
+
+// CardUnderTile returns the card sitting directly below a header tile: same
+// column, nearest top edge. The PS5 launcher uses it to claim the Up edge of
+// the card beneath it. Header chips and the tile itself are skipped, and an
+// empty tile or a tile with nothing under it returns "".
+func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
+	if h == nil || tile.W <= 0 {
+		return ""
+	}
+	center := tile.X + tile.W/2
+	best := HomeFocusID("")
+	bestY := int32(0)
+	for _, id := range h.Order {
+		switch id {
+		case HomeFocusPS5, HomeFocusClock, HomeFocusWeather, HomeFocusExit:
+			continue
+		}
+		item, ok := h.Items[id]
+		if !ok {
+			continue
+		}
+		r := item.Rect
+		if center < r.X || center >= r.X+r.W || r.Y < tile.Y+tile.H {
+			continue
+		}
+		if best == "" || r.Y < bestY {
+			best, bestY = id, r.Y
+		}
+	}
+	return best
 }
 
 // isClockStatusPart reports whether a header status part is the clock text

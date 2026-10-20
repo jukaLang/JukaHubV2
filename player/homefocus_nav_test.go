@@ -30,7 +30,7 @@ func TestHomeClockSelectableWithArrows(t *testing.T) {
 	useHomeAsCurrent(t)
 	config := &Config{}
 
-	for _, start := range []HomeFocusID{HomeFocusMedia, HomeFocusFiles, HomeFocusSettings} {
+	for _, start := range []HomeFocusID{HomeFocusMedia, HomeFocusSettings} {
 		if !homeLayout.Focus.Set(start) {
 			t.Fatalf("cannot focus %q", start)
 		}
@@ -38,6 +38,120 @@ func TestHomeClockSelectableWithArrows(t *testing.T) {
 		if got := homeLayout.Focus.Current(); got != HomeFocusClock {
 			t.Errorf("Up from %q focused %q, want clock", start, got)
 		}
+	}
+
+	// Files sits under the launcher, so Up reaches the launcher first and a
+	// second Up continues to the clock.
+	if !homeLayout.Focus.Set(HomeFocusFiles) {
+		t.Fatal("cannot focus files")
+	}
+	homeKey(t, config, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
+		t.Fatalf("Up from files focused %q, want the PS5 launcher", got)
+	}
+	homeKey(t, config, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
+		t.Fatalf("Up from the PS5 launcher focused %q, want clock", got)
+	}
+}
+
+// TestHomePS5LauncherFocusFallsThroughWhenHidden keeps the D-pad sane on
+// screens too narrow for the launcher: the disabled entry must not trap focus.
+func TestHomePS5LauncherFocusFallsThroughWhenHidden(t *testing.T) {
+	useHomeAsCurrent(t)
+	homeLayout.Focus.SetEnabled(HomeFocusPS5, false)
+	homeLayout.Focus.SetTileLink(HomeFocusFiles)
+	if !homeLayout.Focus.Set(HomeFocusFiles) {
+		t.Fatal("cannot focus files")
+	}
+	homeKey(t, &Config{}, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
+		t.Fatalf("Up from files with the launcher hidden focused %q, want clock", got)
+	}
+}
+
+// TestHomePS5LauncherTileLinkFollowsTheTile covers the layout-derived edge: Up
+// reaches the launcher from the card it sits over and Down comes back there,
+// whichever card that turned out to be.
+func TestHomePS5LauncherTileLinkFollowsTheTile(t *testing.T) {
+	useHomeAsCurrent(t)
+
+	if !homeLayout.Focus.Set(HomeFocusFiles) {
+		t.Fatal("cannot focus files")
+	}
+	homeKey(t, &Config{}, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
+		t.Fatalf("Up from files focused %q, want the PS5 launcher", got)
+	}
+
+	// A wide status cluster pushes the launcher over Media instead.
+	homeLayout.Focus.SetTileLink(HomeFocusMedia)
+	if !homeLayout.Focus.Set(HomeFocusMedia) {
+		t.Fatal("cannot focus media")
+	}
+	homeKey(t, &Config{}, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
+		t.Fatalf("Up from media with the launcher link focused %q, want the PS5 launcher", got)
+	}
+	homeKey(t, &Config{}, sdl.K_DOWN)
+	if got := homeLayout.Focus.Current(); got != HomeFocusMedia {
+		t.Fatalf("Down from the launcher focused %q, want media", got)
+	}
+
+	// Clearing the link (the tile is hidden) restores the static graph.
+	homeLayout.Focus.SetTileLink("")
+	if !homeLayout.Focus.Set(HomeFocusPS5) {
+		t.Fatal("cannot focus the launcher")
+	}
+	homeKey(t, &Config{}, sdl.K_DOWN)
+	if got := homeLayout.Focus.Current(); got != HomeFocusFiles {
+		t.Fatalf("Down from the launcher without a link focused %q, want files", got)
+	}
+	homeLayout.Focus.SetEnabled(HomeFocusPS5, false)
+	if !homeLayout.Focus.Set(HomeFocusMedia) {
+		t.Fatal("cannot focus media")
+	}
+	homeKey(t, &Config{}, sdl.K_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
+		t.Fatalf("Up from media without the launcher focused %q, want clock", got)
+	}
+}
+
+// TestHomePS5LauncherIsReachableWithDpad walks the controller path onto the
+// launcher: D-pad moves focus there and A presses it. This is the bug the
+// touch-only tile had on the Smart Pro.
+func TestHomePS5LauncherIsReachableWithDpad(t *testing.T) {
+	clearToastAfterTest(t)
+	useHomeAsCurrent(t)
+	t.Cleanup(func() {
+		chiakiPS5LaunchAfterInstall.Store(false)
+		ps5LaunchPending.Store(false)
+	})
+	withChiakiSDRoot(t)
+
+	if !homeLayout.Focus.Set(HomeFocusFiles) {
+		t.Fatal("cannot focus files")
+	}
+	up := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_UP}
+	if !handleHomeController(up, &Config{}) {
+		t.Fatal("D-pad Up was not handled on home")
+	}
+	if got := homeLayout.Focus.Current(); got != HomeFocusPS5 {
+		t.Fatalf("D-pad Up from files focused %q, want the PS5 launcher", got)
+	}
+
+	// A must press it. This platform cannot install the TrimUI package, so the
+	// observable outcome is a refused install, not a queued launch - which is
+	// exactly what proves the button is wired to the launcher.
+	a := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_A}
+	if !handleHomeController(a, &Config{}) {
+		t.Fatal("A was not handled on home")
+	}
+	if homePressedID != HomeFocusPS5 {
+		t.Fatalf("A on the launcher gave press feedback for %q", homePressedID)
+	}
+	if ps5LaunchPending.Load() || chiakiPS5LaunchAfterInstall.Load() {
+		t.Fatal("pressing A left a launch queued")
 	}
 }
 

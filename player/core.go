@@ -5127,8 +5127,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		entries, ok := getSceneFileEntries(config, config.Scenes[currentSceneIndex])
 		if ok && focusedFileIndex >= 0 && focusedFileIndex < len(entries) {
 			entry := entries[focusedFileIndex]
-			ext := strings.ToLower(filepath.Ext(entry.Path))
-			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
+			if isImageExtension(filepath.Ext(entry.Path)) {
 				imagePath, err := resolveExplorerEntry(config, entry.Path)
 				if err != nil {
 					showToast("Cannot open image: "+err.Error(), ToastError())
@@ -5144,7 +5143,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if ok && focusedFileIndex >= 0 && focusedFileIndex < len(entries) {
 			entry := entries[focusedFileIndex]
 			ext := strings.ToLower(filepath.Ext(entry.Path))
-			if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
+			if isImageExtension(ext) {
 				sendChatMessage(chatDisplayName(), "[Image: "+entry.Name+"]")
 			} else if ext == ".txt" || ext == ".md" || ext == ".json" || ext == ".js" || ext == ".html" {
 				// The row comes from a dynamic list, not from the filesystem:

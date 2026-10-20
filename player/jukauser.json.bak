@@ -16,18 +16,18 @@
       "b": 32
     },
     "fullscreen": false,
-    "fileExplorerRoot": "",
-    "weatherEnabled": false,
+    "fileExplorerRoot": "/media",
+    "weatherEnabled": true,
     "weatherUnit": "",
     "tspUsername": "",
-    "playbackResolution": "",
+    "playbackResolution": "720",
     "reducedMotion": false,
     "lowPower": false,
     "ledSync": false,
     "gridColumns": 5,
     "searchWidth": 940,
     "dynamicBg": false,
-    "screensaverTimeout": 300,
+    "screensaverTimeout": 0,
     "socialNotifs": false,
     "volume": 0,
     "volumeSet": false,
@@ -48,57 +48,22 @@
       "TSPUsername": "",
       "WeatherEnabled": true,
       "WeatherUnit": "",
-      "a11y_colorblind": "protanopia",
-      "a11y_font_scale": 1.15,
-      "a11y_high_contrast": true,
-      "a11y_swap_ab": true,
-      "a11y_swap_xy": false,
       "buttonColor": "#1e293b",
       "chat_input": "hi",
       "diskpie_data": {
-        "Total": 510718431232,
-        "Used": 331369934848,
-        "Pct": 64
+        "Pct": 0,
+        "Total": 0,
+        "Used": 0
       },
-      "ftp_address": "",
-      "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
-      "ftp_status": "stopped",
       "inputColor": "#0f1420",
       "labelColor": "#f8fafc",
-      "local_ip": "192.168.68.59",
-      "network_status": "online",
-      "onboarding_done": true,
-      "onboarding_skipped": true,
-      "playtime_v1": {
-        "total": 10,
-        "scenes": {
-          "Main": 8,
-          "Settings": 2
-        },
-        "days": {
-          "2026-10-20": 10
-        },
-        "unlocked": {}
-      },
-      "ssh_address": "",
-      "ssh_fingerprint": "",
-      "ssh_port": "2222",
-      "ssh_root": "C:\\Users\\Stepan",
-      "ssh_status": "stopped",
-      "ssh_user": "juka",
-      "swapABButtons": false,
-      "tool_ffmpeg": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffmpeg.exe",
-      "tool_ffplay": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffplay.exe",
-      "tool_ffprobe": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffprobe.exe",
-      "tool_yt-dlp": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\yt-dlp.exe",
-      "tools_status": "All tools available",
-      "weatherUnitAuto": true
+      "swapABButtons": false
     }
   },
   "favorites": {
-    "videos": [],
-    "recent": [],
-    "files": [],
-    "iptv": []
+    "videos": null,
+    "recent": null,
+    "files": null,
+    "iptv": null
   }
 }

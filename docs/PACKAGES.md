@@ -29,8 +29,10 @@ interrupted operation is rolled back at the next launch.
 - **Check for updates** — compares the latest release's publication time with
   the compile stamp inside the running binary (`main.buildTime`, set by
   `build.bat` / `release.sh`). A newer release adds an **Install update**
-  action; nothing is downloaded until you confirm it. The same check runs at
-  most once a day at launch and only ever advertises.
+  action here, and the home header gets a download chip next to the weather
+  that installs the release in one press. Nothing is downloaded until one of
+  those is pressed. The same check runs at most once a day at launch and only
+  ever advertises.
 - **Export diagnostics** — a redacted report.
 - **JukaHub bundled assets** starter package — restores the app's own fonts,
   background and default config.

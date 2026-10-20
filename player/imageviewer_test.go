@@ -35,6 +35,33 @@ func TestImageViewerStepWraps(t *testing.T) {
 	}
 }
 
+// TestWebPBoxArtFollowsTheCodecProbe pins the format gate to what the loaded
+// SDL_image can actually decode: WebP box art must be offered exactly when a
+// real WebP decodes, so a runtime without libwebp skips the file instead of
+// opening a broken image. AVIF stays out on both, because the handheld build has
+// no libavif.
+func TestWebPBoxArtFollowsTheCodecProbe(t *testing.T) {
+	newProbeFrame(t)
+	canWebP := webpDecodable()
+	t.Logf("WebP codec available in this build: %v", canWebP)
+
+	if got := isViewableImagePath("cover.webp"); got != canWebP {
+		t.Errorf("isViewableImagePath(cover.webp) = %v, want %v", got, canWebP)
+	}
+	if got := isImageExtension(".WEBP"); got != canWebP {
+		t.Errorf("isImageExtension(.WEBP) = %v, want %v", got, canWebP)
+	}
+	for _, p := range []string{"cover.avif", "notes.txt", "clip.mp4", "cover"} {
+		if isViewableImagePath(p) {
+			t.Errorf("%q must not be treated as a viewable image", p)
+		}
+	}
+	// The probe is cached, so a second answer cannot disagree with the first.
+	if again := webpDecodable(); again != canWebP {
+		t.Errorf("webpDecodable changed between calls: %v then %v", canWebP, again)
+	}
+}
+
 // A chat image preview must be clickable and open the viewer in remote mode,
 // where the picture comes from the chat download cache instead of disk.
 func TestChatImagePreviewOpensRemoteViewer(t *testing.T) {

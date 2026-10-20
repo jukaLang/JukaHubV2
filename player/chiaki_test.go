@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,22 +164,251 @@ func TestAppsListHasPSRemotePlayAction(t *testing.T) {
 	}
 }
 
-func TestChiakiPanelRowsExplainPS5Limitation(t *testing.T) {
-	rows := chiakiRows()
-	var sawInstall, sawPS5 bool
+// withChiakiSDRoot points the installer at a temp SD card. chiakiSDRootDir
+// honours JUKAHUB_SD_ROOT first, so this works on any test platform.
+func withChiakiSDRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("JUKAHUB_SD_ROOT", root)
+	return root
+}
+
+func chiakiRowByLabel(rows []chiakiRow, label string) (chiakiRow, bool) {
 	for _, row := range rows {
-		switch row.label {
-		case "Install Chiaki-ng", "Update Chiaki-ng":
-			sawInstall = true
-		case "PS5 status":
-			sawPS5 = true
-			if !strings.Contains(strings.ToLower(row.detail), "ps5") || !strings.Contains(strings.ToLower(row.detail), "not supported") {
-				t.Fatalf("PS5 row should explain the limitation: %+v", row)
-			}
+		if row.label == label {
+			return row, true
 		}
 	}
-	if !sawInstall || !sawPS5 {
-		t.Fatalf("rows = %+v", rows)
+	return chiakiRow{}, false
+}
+
+func TestChiakiPanelOffersPS5BetaInstall(t *testing.T) {
+	withChiakiSDRoot(t)
+	rows := chiakiRows()
+
+	row, ok := chiakiRowByLabel(rows, "Install PS5 beta")
+	if !ok {
+		t.Fatalf("no PS5 install row: %+v", rows)
+	}
+	if row.action != chiakiActionInstallPS5 {
+		t.Fatalf("PS5 row action = %v, want install", row.action)
+	}
+	if !strings.Contains(row.detail, chiakiPS5Tag) {
+		t.Fatalf("PS5 row should name the beta tag: %+v", row)
+	}
+	if _, ok := chiakiRowByLabel(rows, "PS5 setup"); !ok {
+		t.Fatalf("no PS5 setup guide row: %+v", rows)
+	}
+}
+
+func TestChiakiPanelOffersLaunchOncePS5IsInstalled(t *testing.T) {
+	root := withChiakiSDRoot(t)
+	app := filepath.Join(root, "Apps", "Chiaki-PS5")
+	writeChiakiTestFile(t, filepath.Join(app, "launch.sh"), "#!/bin/sh\n")
+	writeChiakiTestFile(t, filepath.Join(app, "app.py"), "print('ps5')\n")
+
+	rows := chiakiRows()
+	launch, ok := chiakiRowByLabel(rows, "Launch PS5 beta")
+	if !ok || launch.action != chiakiActionLaunchPS5 {
+		t.Fatalf("launch row = %+v (ok=%v)", launch, ok)
+	}
+	if _, ok := chiakiRowByLabel(rows, "Reinstall PS5 beta"); !ok {
+		t.Fatalf("no reinstall row: %+v", rows)
+	}
+	if _, ok := chiakiRowByLabel(rows, "Install PS5 beta"); ok {
+		t.Fatal("install row should disappear once the beta is installed")
+	}
+}
+
+// Informational rows used to share the zero value of chiakiActionInstall, so
+// pressing A on "PS5 status" silently started a download.
+func TestChiakiInfoRowsDoNotTriggerInstall(t *testing.T) {
+	withChiakiSDRoot(t)
+	for _, row := range chiakiRows() {
+		if row.info && row.action != chiakiActionNone {
+			t.Fatalf("info row %q has action %v, want none", row.label, row.action)
+		}
+	}
+}
+
+func TestParseChiakiManifest(t *testing.T) {
+	good := func() map[string]interface{} {
+		files := []map[string]interface{}{}
+		for i := 0; i < chiakiPS5MinFiles; i++ {
+			files = append(files, map[string]interface{}{
+				"path":   "f" + string(rune('a'+i)) + ".py",
+				"sha256": strings.Repeat("b", 64),
+				"size":   10,
+			})
+		}
+		return map[string]interface{}{
+			"version": "0.4.0-beta2",
+			"note":    map[string]string{"en": "ps5 account id"},
+			"files":   files,
+		}
+	}
+
+	data, _ := json.Marshal(good())
+	m, err := parseChiakiManifest(data)
+	if err != nil {
+		t.Fatalf("valid manifest rejected: %v", err)
+	}
+	if m.Version != "0.4.0-beta2" || len(m.Files) != chiakiPS5MinFiles {
+		t.Fatalf("parsed = %+v", m)
+	}
+
+	bad := func(mutate func(map[string]interface{})) []byte {
+		doc := good()
+		mutate(doc)
+		b, _ := json.Marshal(doc)
+		return b
+	}
+	files := func(doc map[string]interface{}) []map[string]interface{} {
+		return doc["files"].([]map[string]interface{})
+	}
+
+	cases := map[string][]byte{
+		"no version":     bad(func(d map[string]interface{}) { d["version"] = "" }),
+		"too few files":  bad(func(d map[string]interface{}) { d["files"] = files(d)[:2] }),
+		"absolute path":  bad(func(d map[string]interface{}) { files(d)[0]["path"] = "/etc/passwd" }),
+		"parent escape":  bad(func(d map[string]interface{}) { files(d)[0]["path"] = "../escape.py" }),
+		"bad digest":     bad(func(d map[string]interface{}) { files(d)[0]["sha256"] = "zz" }),
+		"missing digest": bad(func(d map[string]interface{}) { files(d)[0]["sha256"] = "" }),
+		"zero size":      bad(func(d map[string]interface{}) { files(d)[0]["size"] = 0 }),
+		"huge size":      bad(func(d map[string]interface{}) { files(d)[0]["size"] = chiakiPS5MaxExpand + 1 }),
+	}
+	for name, data := range cases {
+		if _, err := parseChiakiManifest(data); err == nil {
+			t.Errorf("%s: manifest was accepted", name)
+		}
+	}
+
+	if _, err := parseChiakiManifest([]byte("not json")); err == nil {
+		t.Fatal("invalid JSON was accepted")
+	}
+}
+
+func TestChiakiManifestDetectsPS5Module(t *testing.T) {
+	m := &chiakiManifest{Version: "0.4.0-beta2"}
+	m.Files = append(m.Files, struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	}{Path: "app.py", SHA256: strings.Repeat("a", 64), Size: 1})
+	if m.supportsPS5() {
+		t.Fatal("a manifest without the PS5 module must not claim PS5 support")
+	}
+	m.Files = append(m.Files, struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	}{Path: chiakiPS5MarkModule, SHA256: strings.Repeat("a", 64), Size: 1})
+	if !m.supportsPS5() {
+		t.Fatal("manifest with rh/ps5_regist.py must report PS5 support")
+	}
+	var nilManifest *chiakiManifest
+	if nilManifest.supportsPS5() {
+		t.Fatal("nil manifest must not report PS5 support")
+	}
+}
+
+// buildChiakiTagTree writes a fake extracted tag: <top>/manifest.json + files/.
+func buildChiakiTagTree(t *testing.T, top, tag string, includePS5 bool) {
+	t.Helper()
+	files := map[string]string{
+		"app.py":            "print('app')\n",
+		"launch.sh":         "#!/bin/sh\n",
+		"config.json":       "{}\n",
+		"icon.png":          "png",
+		"bin/chiaki-stream": "bin",
+		"bin/chiaki-regist": "bin",
+		"rh/engine.py":      "engine\n",
+		"rh/i18n.py":        "i18n\n",
+	}
+	if includePS5 {
+		files[chiakiPS5MarkModule] = "ps5 regist\n"
+	}
+	type entry struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	}
+	var list []entry
+	for rel, body := range files {
+		path := filepath.Join(top, "files", filepath.FromSlash(rel))
+		writeChiakiTestFile(t, path, body)
+		sum := sha256.Sum256([]byte(body))
+		list = append(list, entry{Path: rel, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(body))})
+	}
+	doc := map[string]interface{}{
+		"version": strings.TrimPrefix(tag, "v"),
+		"files":   list,
+	}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeChiakiTestFile(t, filepath.Join(top, "manifest.json"), string(data))
+}
+
+func TestInstallChiakiFromTreeVerifiesAndInstalls(t *testing.T) {
+	unpacked := t.TempDir()
+	top := filepath.Join(unpacked, "trimui-chiaki-ng-v0.4.0-beta2")
+	buildChiakiTagTree(t, top, chiakiPS5Tag, true)
+	target := filepath.Join(t.TempDir(), "Apps", "Chiaki-PS5")
+
+	if err := installChiakiFromTree(unpacked, target, chiakiPS5Tag); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	for _, rel := range []string{"launch.sh", "app.py", chiakiPS5MarkModule} {
+		if !regularFile(filepath.Join(target, filepath.FromSlash(rel))) {
+			t.Errorf("installed tree missing %s", rel)
+		}
+	}
+	if got := chiakiInstalledVersionAt(target); got != chiakiPS5Tag {
+		t.Errorf("version file = %q, want %q", got, chiakiPS5Tag)
+	}
+}
+
+func TestInstallChiakiFromTreeRejectsTamperedFile(t *testing.T) {
+	unpacked := t.TempDir()
+	top := filepath.Join(unpacked, "trimui-chiaki-ng-v0.4.0-beta2")
+	buildChiakiTagTree(t, top, chiakiPS5Tag, true)
+	// Corrupt one file after the manifest was written, keeping its length so the
+	// digest check (not the size check) is what catches it.
+	writeChiakiTestFile(t, filepath.Join(top, "files", "rh", "engine.py"), "enginX\n")
+
+	target := filepath.Join(t.TempDir(), "Apps", "Chiaki-PS5")
+	err := installChiakiFromTree(unpacked, target, chiakiPS5Tag)
+	if err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("tampered tree was not rejected: %v", err)
+	}
+	if info, statErr := os.Stat(filepath.Join(top, "files", "rh", "engine.py")); statErr != nil || info.Size() != 7 {
+		t.Fatalf("test fixture should keep the file length: %v %v", info, statErr)
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Fatalf("a failed verification must not create the target: %v", statErr)
+	}
+}
+
+func TestInstallChiakiFromTreeRequiresPS5Build(t *testing.T) {
+	unpacked := t.TempDir()
+	top := filepath.Join(unpacked, "trimui-chiaki-ng-v0.3.40")
+	buildChiakiTagTree(t, top, "v0.3.40", false)
+	target := filepath.Join(t.TempDir(), "Apps", "Chiaki-PS5")
+	err := installChiakiFromTree(unpacked, target, "v0.3.40")
+	if err == nil || !strings.Contains(err.Error(), "PS5") {
+		t.Fatalf("a PS4-only tree must be rejected for the PS5 slot: %v", err)
+	}
+}
+
+func TestInstallChiakiFromTreeRequiresMatchingVersion(t *testing.T) {
+	unpacked := t.TempDir()
+	top := filepath.Join(unpacked, "trimui-chiaki-ng-v0.4.0-beta2")
+	buildChiakiTagTree(t, top, chiakiPS5Tag, true)
+	target := filepath.Join(t.TempDir(), "Apps", "Chiaki-PS5")
+	if err := installChiakiFromTree(unpacked, target, "v0.4.0-beta1"); err == nil {
+		t.Fatal("a mismatched tag was installed")
 	}
 }
 
@@ -206,6 +438,34 @@ func TestChiakiPanelRendersInsideCanvas(t *testing.T) {
 			r.Y+r.H > chiakiPanelRect.Y+chiakiPanelRect.H {
 			t.Errorf("row rect %+v escapes the panel %+v", r, chiakiPanelRect)
 		}
+	}
+}
+
+// TestChiakiPS5TagInstallIntegration installs the real PS5 beta from its tag.
+// Opt-in: it downloads the ~12 MB source tarball. It proves the whole path,
+// including that the manifest's digests match the files GitHub actually serves.
+func TestChiakiPS5TagInstallIntegration(t *testing.T) {
+	if os.Getenv("JUKAHUB_TEST_CHIAKI") != "1" {
+		t.Skip("set JUKAHUB_TEST_CHIAKI=1 to download and install the real PS5 beta")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	root := t.TempDir()
+	target := filepath.Join(root, "Apps", "Chiaki-PS5")
+	if err := installChiakiFromTag(ctx, root, target, chiakiPS5Tag); err != nil {
+		t.Fatalf("install %s: %v", chiakiPS5Tag, err)
+	}
+	for _, rel := range []string{
+		"launch.sh", "app.py", chiakiPS5MarkModule,
+		"bin/chiaki-regist", "bin/chiaki-stream",
+		"libs/brick-stock/libSDL2-2.0.so.0",
+	} {
+		if !regularFile(filepath.Join(target, filepath.FromSlash(rel))) {
+			t.Errorf("installed PS5 beta missing %s", rel)
+		}
+	}
+	if got := chiakiInstalledVersionAt(target); got != chiakiPS5Tag {
+		t.Errorf("version = %q, want %q", got, chiakiPS5Tag)
 	}
 }
 

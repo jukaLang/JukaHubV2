@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -20,21 +21,32 @@ func withAvailableUpdate(t *testing.T, tag string) {
 	})
 }
 
-// Update now must take the user to Patch's install confirmation, not download
-// anything by itself.
-func TestUpdatePromptUpdateNowOpensPatchInstall(t *testing.T) {
+// Update now installs directly: one press, no Patch scene and no second
+// confirmation. The header download chip runs the same action.
+func TestUpdatePromptUpdateNowInstallsDirectly(t *testing.T) {
 	withAvailableUpdate(t, "v9.9.9")
+	clearToastAfterTest(t)
 
 	prevModal, prevPrompt := patchModal, updatePrompt
+	prevRunner := updateInstallRunner
 	prevScene, prevPending, prevPhase := currentSceneIndex, pendingSceneIndex, transitionPhase
 	t.Cleanup(func() {
 		patchModal, updatePrompt = prevModal, prevPrompt
+		updateInstallRunner = prevRunner
 		currentSceneIndex, pendingSceneIndex, transitionPhase = prevScene, prevPending, prevPhase
+		endPatchOp()
+		clearPatchBusy()
 	})
 	patchModal = nil
 	currentSceneIndex, pendingSceneIndex, transitionPhase = 0, -1, "none"
 	updatePrompt.open, updatePrompt.focus, updatePrompt.seen = false, 0, false
 	updatePrompt.nowBtn, updatePrompt.laterBtn, updatePrompt.badge = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+
+	started := make(chan struct{}, 1)
+	updateInstallRunner = func(ctx context.Context, cfg *Config) error {
+		started <- struct{}{}
+		return nil
+	}
 
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Patch"}}}
 	openUpdatePrompt()
@@ -43,11 +55,16 @@ func TestUpdatePromptUpdateNowOpensPatchInstall(t *testing.T) {
 	}
 	activateUpdatePrompt(config)
 
-	if currentSceneIndex != 1 && pendingSceneIndex != 1 {
-		t.Fatalf("Update now targeted current=%d pending=%d, want the Patch scene", currentSceneIndex, pendingSceneIndex)
+	waitForInstall(t, started)
+	waitPatchIdle(t)
+	if updatePrompt.open {
+		t.Fatal("the prompt stayed open after Update now")
 	}
-	if patchModal == nil || patchModal.ID != "confirm-install-app" {
-		t.Fatalf("patch modal = %+v, want the install confirmation", patchModal)
+	if patchModal != nil {
+		t.Fatalf("Update now opened another confirmation: %+v", patchModal)
+	}
+	if currentSceneIndex != 0 || pendingSceneIndex == 1 {
+		t.Fatalf("Update now changed scene: current=%d pending=%d", currentSceneIndex, pendingSceneIndex)
 	}
 }
 

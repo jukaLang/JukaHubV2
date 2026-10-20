@@ -134,9 +134,12 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e.Button == sdl.CONTROLLER_BUTTON_A {
 		if tool, ok := installBarRetryPending(); ok {
 			PlayActivateSound()
-			if tool == chiakiAppName {
+			switch tool {
+			case chiakiAppName:
 				retryChiakiInstall()
-			} else {
+			case chiakiPS5AppName:
+				retryChiakiPS5Install()
+			default:
 				retryHelperToolInstall(tool)
 			}
 			return true

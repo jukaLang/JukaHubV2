@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -48,13 +50,65 @@ func openImageViewerURL(url string) {
 	}
 }
 
-// isViewableImagePath reports whether the image decoder handles the file.
-func isViewableImagePath(p string) bool {
-	switch strings.ToLower(filepath.Ext(p)) {
+// webpProbe is a 36-byte 1x1 lossless WebP. SDL_image reaches WebP through
+// libwebp loaded at runtime, so a build can carry the WebP code path and still
+// fail to decode (the Windows SDL2_image.dll needs libwebp-2.dll beside it,
+// which the release archive does not ship). Decoding this tiny image once is
+// the only honest capability check; the handheld build links libwebp into
+// SDL2_image, so the same probe succeeds there.
+var webpProbe = []byte{
+	0x52, 0x49, 0x46, 0x46, 0x1c, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50,
+	0x56, 0x50, 0x38, 0x4c, 0x0f, 0x00, 0x00, 0x00, 0x2f, 0x00, 0x00, 0x00,
+	0x00, 0x07, 0x10, 0xfd, 0x8f, 0xfe, 0x07, 0x22, 0xa2, 0xff, 0x01, 0x00,
+}
+
+var webpSupport struct {
+	once sync.Once
+	ok   bool
+}
+
+// webpDecodable reports whether this installation can really decode WebP. It is
+// answered once and cached, because the answer depends on the runtime files
+// next to the executable, not on anything that changes while the app runs.
+func webpDecodable() bool {
+	// Before SDL is up there is no meaningful answer and caching "no" would
+	// stick for the whole process; callers only ask once the UI is running.
+	if sdl.WasInit(sdl.INIT_VIDEO) == 0 {
+		return false
+	}
+	webpSupport.once.Do(func() {
+		rw, err := sdl.RWFromMem(webpProbe)
+		if err != nil {
+			return
+		}
+		defer rw.Close()
+		surface, err := img.LoadTypedRW(rw, false, "WEBP")
+		if err != nil {
+			log.Printf("WebP images unavailable in this build: %v", err)
+			return
+		}
+		surface.Free()
+		webpSupport.ok = true
+	})
+	return webpSupport.ok
+}
+
+// isImageExtension reports whether a lower-case extension (with the dot) is an
+// image this build can decode. WebP is offered only when the loaded SDL_image
+// can actually decode it, so box art never shows up as a broken picture.
+func isImageExtension(ext string) bool {
+	switch strings.ToLower(ext) {
 	case ".png", ".jpg", ".jpeg", ".bmp":
 		return true
+	case ".webp":
+		return webpDecodable()
 	}
 	return false
+}
+
+// isViewableImagePath reports whether the image decoder handles the file.
+func isViewableImagePath(p string) bool {
+	return isImageExtension(filepath.Ext(p))
 }
 
 // openImageViewer shows path and collects the other images in the current File

@@ -62,6 +62,11 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 **Favorites**, **Apps**, **Settings**, **Logs** and **Exit**.
 
 * **Media / Tube** — YouTube search and trending.
+* **Photos** — open PNG, JPG, BMP and WebP images from the file browser, then
+  browse the folder with Left/Right and zoom with Up/Down. WebP box art decodes
+  natively on the handheld, whose SDL_image links libwebp; a desktop runtime that
+  ships an SDL2_image without libwebp detects that at startup and skips WebP
+  files instead of showing a broken picture.
 * **Favorites** — save links and reopen them later.
 * **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather,
   and **Browser**, a text web browser with GitHub issue quick links; see
@@ -92,9 +97,14 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   remap, all from one panel in the Start menu; see
   [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md).
 * **PS Remote Play** — install and launch the TrimUI Chiaki-ng port from the
-  Start menu, with its SDL2/FFmpeg runtime bundled in the package. The current
-  port supports PS4 Remote Play; PS5 is not supported by the port's maintainer
-  yet. See [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
+  Start menu, with its SDL2/FFmpeg runtime bundled in the package. Releases are
+  PS4-only; the author's withdrawn PS5 beta can be installed beside it from its
+  tag and launched separately, with every file checked against the tag's
+  manifest. A **PS5** tile in the home header, left of the phone-pairing QR,
+  plays it in one press and downloads it first when it is missing; on a handheld
+  it is selected with the D-pad (`Up` from the card beneath it) and pressed with
+  **A**, so no touchscreen is needed. See
+  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
@@ -191,11 +201,18 @@ use **Export → JSON** and send the file.
 ## Updating
 
 JukaHub updates itself. On launch it checks the latest release on GitHub and,
-when a newer build exists, downloads the archive for the platform
-(`JukaHub-Windows.zip` on Windows, `JukaHub-Trimui.zip` on TrimUI), replaces the
-app files and restarts. Your `jukauser.json` settings, favorites and media are
-untouched, and an interrupted update is rolled back automatically at next
-launch.
+when a newer build exists, offers it as a **download icon in the home header**,
+immediately left of the weather text. Select it with the D-pad (the arrows step
+onto it from the weather chip) and press **A**, or click it: one press downloads
+the archive for the platform (`JukaHub-Windows.zip` on Windows,
+`JukaHub-Trimui.zip` on TrimUI), checks its SHA-256 against the digest GitHub
+publishes for that asset (a truncated or swapped archive is rejected before it
+is unpacked), unpacks it, replaces the app files
+and restarts. Progress shows in the install bar over whatever screen is open, so
+there is no menu to walk through. Your `jukauser.json` settings, favorites and
+media are untouched, and an interrupted update is rolled back automatically at
+next launch. The once-per-launch "update available" prompt installs the same
+way.
 
 After the restart, **What's new** opens once with that release's notes (the
 notes are cached before the swap, so it also works offline). You can reopen it
@@ -253,7 +270,7 @@ JukaHub on a PC.
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
 | [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
-| [PS Remote Play](docs/REMOTE_PLAY.md) | Chiaki-ng install, PS4 pairing, controls and the PS5 limitation |
+| [PS Remote Play](docs/REMOTE_PLAY.md) | Chiaki-ng install, PS4 pairing, the opt-in PS5 beta and its setup |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |

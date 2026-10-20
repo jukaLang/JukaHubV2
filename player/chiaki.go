@@ -8,10 +8,18 @@ package main
 // native aarch64 helpers and the SDL2/FFmpeg/OpenSSL libraries the Brick Pro
 // needs, so it can run from an SD card on TrimUI firmware without a desktop.
 //
-// The port currently supports PS4 Remote Play only. PS5 pairing is explicitly
-// disabled by its README and PS5_STATUS.md, so the panel says so rather than
-// pretending the button enables PS5 streaming. The installer keeps the
-// package's own settings and pairing data when it updates.
+// The port's published releases are PS4-only: the author shipped one PS5 build
+// (v0.4.0-beta2, an in-app PSN Account-ID pairing flow) and then withdrew it,
+// deleting the release ZIP and closing PS5 development in docs/PS5_STATUS.md.
+// The tag itself still carries the complete, runnable tree, so JukaHub can offer
+// that build as an opt-in "PS5 beta" installed beside the PS4 app. It is
+// deliberately separate: the stable build and its PS4 pairing are never
+// replaced by an unsupported beta.
+//
+// Both installers keep the package's own settings and pairing data when they
+// update, and both verify what they write: the release ZIP against the digest
+// GitHub publishes, the beta tree against the per-file SHA-256 values in the
+// manifest.json that ships inside its tag.
 //
 // JukaHub only downloads the official release ZIP from the project's GitHub
 // releases, verifies the SHA-256 digest published by GitHub, extracts it in a
@@ -19,12 +27,15 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,7 +48,10 @@ import (
 )
 
 const (
-	chiakiAppName       = "Chiaki-ng"
+	chiakiAppName = "Chiaki-ng"
+	// chiakiPS5AppName names the opt-in beta in the install card, so a failed
+	// PS5 download retries the PS5 install and not the stable one.
+	chiakiPS5AppName    = "Chiaki-ng PS5"
 	chiakiPanelTitle    = "PS Remote Play"
 	chiakiRepo          = "nlkcodenew/trimui-chiaki-ng"
 	chiakiInstallSubdir = "Apps/Chiaki"
@@ -45,6 +59,17 @@ const (
 	chiakiZipMaxBytes   = 64 << 20
 	chiakiZipMaxEntries = 8192
 	chiakiZipMaxExpand  = 256 << 20
+
+	// The last build with PS5 pairing. The release was withdrawn (its ZIP and
+	// its GitHub release are gone), but the tag still holds the whole app tree
+	// plus the manifest that lists every file's SHA-256.
+	chiakiPS5Tag        = "v0.4.0-beta2"
+	chiakiPS5Subdir     = "Apps/Chiaki-PS5"
+	chiakiPS5MarkModule = "rh/ps5_regist.py"
+	chiakiPS5MaxArchive = 96 << 20
+	chiakiPS5MaxExpand  = 320 << 20
+	chiakiPS5MaxEntries = 4096
+	chiakiPS5MinFiles   = 8
 )
 
 // chiakiSDRoot is overridable in tests. On a device the SD card is mounted at
@@ -573,6 +598,273 @@ func retryChiakiInstall() {
 	}
 }
 
+// retryChiakiPS5Install is the same retry for the beta card.
+func retryChiakiPS5Install() {
+	if chiakiInstalling() {
+		return
+	}
+	if err := startChiakiPS5Install(); err != nil {
+		ShowToast(err.Error(), ToastKindWarning)
+	}
+}
+
+// ── PS5 beta build ────────────────────────────────────────────────────────
+//
+// The author's only PS5 build was published as v0.4.0-beta2 and then pulled:
+// the release and its ZIP now return 404 and docs/PS5_STATUS.md says PS5 work
+// stopped. The git tag is intact and carries the complete application plus a
+// manifest listing a SHA-256 for every file, which is what this installer
+// uses. It is installed into its own folder and never replaces the stable PS4
+// app: the beta is unsupported, and a user who tries it must be able to go
+// back to a working PS4 setup by simply launching the other app.
+
+func chiakiPS5AppDir() string {
+	root := chiakiSDRootDir()
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, filepath.FromSlash(chiakiPS5Subdir))
+}
+
+func chiakiPS5Installed() bool {
+	app := chiakiPS5AppDir()
+	if app == "" {
+		return false
+	}
+	return regularFile(filepath.Join(app, "launch.sh")) && regularFile(filepath.Join(app, "app.py"))
+}
+
+func chiakiPS5InstalledVersion() string {
+	return chiakiInstalledVersionAt(chiakiPS5AppDir())
+}
+
+// chiakiTagArchiveURL is GitHub's source tarball for a tag. codeload is on the
+// download allowlist, so this goes through the same URL validation as every
+// other download in the app.
+func chiakiTagArchiveURL(tag string) string {
+	return fmt.Sprintf("https://codeload.github.com/%s/tar.gz/refs/tags/%s", chiakiRepo, url.PathEscape(tag))
+}
+
+// chiakiManifest is the file list the port publishes beside every release. The
+// PS5 tag's manifest is the only integrity data left for that build, so it is
+// what the installer verifies against.
+type chiakiManifest struct {
+	Version string `json:"version"`
+	Note    struct {
+		EN string `json:"en"`
+		VI string `json:"vi"`
+	} `json:"note"`
+	Files []struct {
+		Path   string `json:"path"`
+		SHA256 string `json:"sha256"`
+		Size   int64  `json:"size"`
+	} `json:"files"`
+}
+
+func (m *chiakiManifest) supportsPS5() bool {
+	if m == nil {
+		return false
+	}
+	for _, f := range m.Files {
+		if filepath.ToSlash(f.Path) == chiakiPS5MarkModule {
+			return true
+		}
+	}
+	return false
+}
+
+// parseChiakiManifest validates the file list before anything is written. Every
+// path has to be relative, every digest has to be a real SHA-256 and the total
+// has to fit, so a damaged or hostile manifest fails before it can steer the
+// install.
+func parseChiakiManifest(data []byte) (*chiakiManifest, error) {
+	var m chiakiManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("manifest is not valid JSON: %w", err)
+	}
+	if strings.TrimSpace(m.Version) == "" {
+		return nil, errors.New("manifest has no version")
+	}
+	if len(m.Files) < chiakiPS5MinFiles || len(m.Files) > chiakiPS5MaxEntries {
+		return nil, fmt.Errorf("manifest lists %d files, outside the supported range", len(m.Files))
+	}
+	var total int64
+	for _, f := range m.Files {
+		if err := sanitizeArchiveEntry(filepath.FromSlash(f.Path), 0o644, false); err != nil {
+			return nil, fmt.Errorf("manifest path %q: %w", f.Path, err)
+		}
+		sha := strings.ToLower(strings.TrimSpace(f.SHA256))
+		if len(sha) != 64 || !isHexString(sha) {
+			return nil, fmt.Errorf("manifest entry %q has no valid SHA-256", f.Path)
+		}
+		if f.Size <= 0 {
+			return nil, fmt.Errorf("manifest entry %q has no size", f.Path)
+		}
+		total += f.Size
+		if total > chiakiPS5MaxExpand {
+			return nil, errors.New("manifest tree is larger than the install limit")
+		}
+	}
+	return &m, nil
+}
+
+// findChiakiTagFilesRoot locates the app tree inside an extracted GitHub tag
+// tarball: <repo>-<tag>/manifest.json beside <repo>-<tag>/files/.
+func findChiakiTagFilesRoot(unpacked string) (filesRoot string, manifest chiakiManifest, err error) {
+	entries, err := os.ReadDir(unpacked)
+	if err != nil {
+		return "", manifest, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		top := filepath.Join(unpacked, entry.Name())
+		data, readErr := os.ReadFile(filepath.Join(top, "manifest.json"))
+		if readErr != nil {
+			continue
+		}
+		parsed, parseErr := parseChiakiManifest(data)
+		if parseErr != nil {
+			return "", manifest, parseErr
+		}
+		files := filepath.Join(top, "files")
+		if !regularFile(filepath.Join(files, "app.py")) || !regularFile(filepath.Join(files, "launch.sh")) {
+			continue
+		}
+		return files, *parsed, nil
+	}
+	return "", manifest, errors.New("archive does not contain a manifest.json beside files/app.py")
+}
+
+// verifyChiakiTree hashes every file the manifest lists. It catches a truncated
+// download and a half-written SD card, which are the realistic failure modes on
+// a handheld; it is not a defence against a compromised upstream, because the
+// manifest travels in the same archive.
+func verifyChiakiTree(root string, m *chiakiManifest) error {
+	if m == nil {
+		return errors.New("missing manifest")
+	}
+	for _, f := range m.Files {
+		path := filepath.Join(root, filepath.FromSlash(f.Path))
+		info, err := os.Lstat(path)
+		if err != nil {
+			return fmt.Errorf("missing file %s", f.Path)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing non-regular file %s", f.Path)
+		}
+		if info.Size() != f.Size {
+			return fmt.Errorf("%s is %d bytes, manifest says %d", f.Path, info.Size(), f.Size)
+		}
+		sum, err := sha256File(path)
+		if err != nil {
+			return fmt.Errorf("hash %s: %w", f.Path, err)
+		}
+		if !strings.EqualFold(sum, f.SHA256) {
+			return fmt.Errorf("%s failed its SHA-256 check", f.Path)
+		}
+	}
+	return nil
+}
+
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// installChiakiFromTag downloads a tag's source tree, verifies it against the
+// manifest it carries and installs the app folder into target.
+func installChiakiFromTag(ctx context.Context, sdRoot, target, tag string) error {
+	if strings.TrimSpace(sdRoot) == "" {
+		return errors.New("SD card path is unknown")
+	}
+	stage, err := os.MkdirTemp(sdRoot, ".chiaki-tag-*")
+	if err != nil {
+		return fmt.Errorf("cannot create staging folder: %w", err)
+	}
+	defer os.RemoveAll(stage)
+
+	installBarPhase(installPhaseDownload)
+	archive := filepath.Join(stage, "source.tar.gz")
+	if err := downloadToFile(ctx, newPatchClient(), chiakiTagArchiveURL(tag), archive, "", chiakiPS5MaxArchive); err != nil {
+		return err
+	}
+
+	installBarPhase(installPhaseExtract)
+	unpacked := filepath.Join(stage, "unpack")
+	if err := extractTarGzSafe(ctx, archive, unpacked, chiakiPS5MaxEntries, chiakiPS5MaxExpand); err != nil {
+		return fmt.Errorf("unpack %s: %w", tag, err)
+	}
+	return installChiakiFromTree(unpacked, target, tag)
+}
+
+// installChiakiFromTree is the local half of the tag install: find the app
+// tree, check it is the build the caller asked for, verify every file, install.
+// It is separate from the download so the verification path can be tested
+// without a network.
+func installChiakiFromTree(unpacked, target, tag string) error {
+	filesRoot, manifest, err := findChiakiTagFilesRoot(unpacked)
+	if err != nil {
+		return err
+	}
+	if !manifest.supportsPS5() {
+		return fmt.Errorf("%s does not contain the PS5 pairing module", tag)
+	}
+	if !strings.EqualFold(strings.TrimSpace(manifest.Version), strings.TrimPrefix(tag, "v")) {
+		return fmt.Errorf("manifest version %q does not match %s", manifest.Version, tag)
+	}
+	if err := verifyChiakiTree(filesRoot, &manifest); err != nil {
+		return err
+	}
+	return installChiakiTree(filesRoot, target, &chiakiRelease{Tag: tag})
+}
+
+// startChiakiPS5Install installs the opt-in PS5 beta beside the PS4 app.
+func startChiakiPS5Install() error {
+	if !chiakiPackageSupported() {
+		return errors.New("the Chiaki-ng PS5 beta is a TrimUI ARM64 package")
+	}
+	if chiakiInstalling() {
+		return errors.New("the Chiaki-ng installer is already running")
+	}
+	if !IsOnline() {
+		return errors.New("no internet — connect WiFi, then try again")
+	}
+	root := chiakiSDRootDir()
+	if root == "" {
+		return errors.New("SD card path is unknown")
+	}
+	setChiakiInstalling(true)
+	installBarBegin(chiakiPS5AppName)
+	go func() {
+		defer setChiakiInstalling(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancel()
+		target := filepath.Join(root, filepath.FromSlash(chiakiPS5Subdir))
+		if err := installChiakiFromTag(ctx, root, target, chiakiPS5Tag); err != nil {
+			log.Printf("[chiaki] PS5 beta install failed: %v", err)
+			installBarFailRetry(chiakiPS5AppName, firstLine(err.Error()))
+			ShowToast("PS5 beta install failed — "+firstLine(err.Error()), ToastKindError)
+			return
+		}
+		installBarDone()
+		log.Printf("[chiaki] installed PS5 beta %s into %s", chiakiPS5Tag, target)
+		ShowToast("PS5 beta installed — pair from Chiaki-ng", ToastKindSuccess)
+		// A press on the home launcher asked for "download, then play".
+		chiakiPS5InstallSucceeded()
+	}()
+	return nil
+}
+
 // ── Launch ───────────────────────────────────────────────────────────────
 
 // chiakiLaunchEnv builds the environment for the port's launcher. The port's
@@ -632,8 +924,21 @@ func launchChiaki() {
 		ShowToast("Install Chiaki-ng first", ToastKindWarning)
 		return
 	}
-	appDir := chiakiAppDir()
-	launcher := chiakiLauncherPath()
+	launchChiakiAt(chiakiAppDir(), chiakiAppName)
+}
+
+// launchChiakiPS5 runs the opt-in PS5 beta build from its own folder, so a
+// failed PS5 experiment cannot disturb the stable PS4 install beside it.
+func launchChiakiPS5() {
+	if !chiakiPS5Installed() {
+		ShowToast("Install the PS5 beta build first", ToastKindWarning)
+		return
+	}
+	launchChiakiAt(chiakiPS5AppDir(), "Chiaki-ng PS5 beta")
+}
+
+func launchChiakiAt(appDir, label string) {
+	launcher := filepath.Join(appDir, "launch.sh")
 	if !chiakiPackageSupported() {
 		ShowToast("Chiaki-ng runs on the TrimUI Linux build", ToastKindWarning)
 		return
@@ -671,10 +976,10 @@ func launchChiaki() {
 	}
 	if runErr != nil {
 		log.Printf("[chiaki] launcher exited: %v", runErr)
-		ShowToast("Chiaki-ng exited — check Chiaki-jukahub.log", ToastKindError)
+		ShowToast(label+" exited — check Chiaki-jukahub.log", ToastKindError)
 		return
 	}
-	ShowToast("Chiaki-ng closed", ToastKindInfo)
+	ShowToast(label+" closed", ToastKindInfo)
 }
 
 // ── Panel ────────────────────────────────────────────────────────────────
@@ -682,10 +987,16 @@ func launchChiaki() {
 type chiakiAction int
 
 const (
-	chiakiActionInstall chiakiAction = iota
+	// chiakiActionNone is first on purpose: it used to be the zero value of
+	// chiakiActionInstall, so pressing A on an informational row started an
+	// install.
+	chiakiActionNone chiakiAction = iota
+	chiakiActionInstall
 	chiakiActionLaunch
 	chiakiActionFolder
 	chiakiActionClose
+	chiakiActionInstallPS5
+	chiakiActionLaunchPS5
 )
 
 type chiakiRow struct {
@@ -711,6 +1022,7 @@ var chiakiRowHits []struct {
 
 func openChiakiPanel() {
 	qs.open = false
+	a11y.open = false
 	toolsPanel.open = false
 	emuPanel.open = false
 	gpPanel.open = false
@@ -767,17 +1079,57 @@ func chiakiRows() []chiakiRow {
 			action: chiakiActionInstall,
 		})
 	}
+	// PS5. The published builds are PS4-only; the one PS5 build was withdrawn,
+	// so the panel offers the author's beta tag as a separate, opt-in app instead
+	// of claiming PS5 works out of the box.
+	switch {
+	case chiakiSDRootDir() == "":
+		// No SD-card root means there is nowhere to install to, which is the
+		// same reason the PS4 row cannot proceed on a desktop build.
+		rows = append(rows, chiakiRow{
+			label:  "PS5 beta build",
+			detail: "Needs a TrimUI SD card; this platform has no Apps folder to install into.",
+			status: "Unavailable",
+			action: chiakiActionNone,
+			info:   true,
+		})
+	case chiakiPS5Installed():
+		version := chiakiPS5InstalledVersion()
+		if version == "" {
+			version = "installed"
+		}
+		rows = append(rows, chiakiRow{
+			label:  "Launch PS5 beta",
+			detail: "Pair from Link Device using your PSN Account-ID; PS4 stays on the stable app.",
+			status: "Beta",
+			action: chiakiActionLaunchPS5,
+		})
+		rows = append(rows, chiakiRow{
+			label:  "Reinstall PS5 beta",
+			detail: "Re-download " + chiakiPS5Tag + "; its settings and pairing are kept.",
+			status: version,
+			action: chiakiActionInstallPS5,
+		})
+	default:
+		rows = append(rows, chiakiRow{
+			label:  "Install PS5 beta",
+			detail: "Author-withdrawn " + chiakiPS5Tag + " build, installed beside PS4. Unsupported.",
+			status: "Beta",
+			action: chiakiActionInstallPS5,
+		})
+	}
+	rows = append(rows, chiakiRow{
+		label:  "PS5 setup",
+		detail: "Link Device on the PS5; the app asks for a 12-char Base64 PSN Account-ID, then the 8-digit PIN.",
+		status: "Guide",
+		action: chiakiActionNone,
+		info:   true,
+	})
 	rows = append(rows, chiakiRow{
 		label:  "Open install folder",
 		detail: chiakiAppDir(),
 		status: "Files",
 		action: chiakiActionFolder,
-	})
-	rows = append(rows, chiakiRow{
-		label:  "PS5 status",
-		detail: "This TrimUI build supports PS4 Remote Play. PS5 pairing is not supported yet.",
-		status: "PS4 only",
-		info:   true,
 	})
 	rows = append(rows, chiakiRow{
 		label:  "Close",
@@ -822,6 +1174,19 @@ func chiakiPanelActivate() {
 	case chiakiActionLaunch:
 		closeChiakiPanel()
 		launchChiaki()
+	case chiakiActionInstallPS5:
+		if chiakiInstalling() {
+			ShowToast("The Chiaki-ng installer is already running", ToastKindInfo)
+			return
+		}
+		if err := startChiakiPS5Install(); err != nil {
+			ShowToast(err.Error(), ToastKindWarning)
+			return
+		}
+		installBarPhase(installPhaseResolving)
+	case chiakiActionLaunchPS5:
+		closeChiakiPanel()
+		launchChiakiPS5()
 	case chiakiActionFolder:
 		dir := chiakiAppDir()
 		if dir == "" {
@@ -954,7 +1319,7 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
 	renderText(renderer, config, medium, chiakiPanelTitle, ColorTextPrimary(), panelX+padX, panelY+18)
-	subtitle := "TrimUI Chiaki-ng port · PS4 Remote Play"
+	subtitle := "TrimUI Chiaki-ng port · PS4 + PS5 beta"
 	if chiakiInstalled() {
 		if v := chiakiInstalledVersion(); v != "" {
 			subtitle += " · " + v
@@ -1009,6 +1374,9 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 	hint := "A: select   B: close"
 	if !chiakiInstalled() {
 		hint = "A: install Chiaki-ng   B: close"
+	}
+	if chiakiInstalling() {
+		hint = "Installing — this can take a few minutes"
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

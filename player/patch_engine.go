@@ -1253,6 +1253,10 @@ type githubAsset struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 	Size               int64  `json:"size"`
+	// Digest is published by the releases API as "sha256:<hex>" for uploaded
+	// assets. It is the only integrity statement the updater can check without
+	// a second signed document, so an absent digest simply means no check.
+	Digest string `json:"digest"`
 }
 
 // githubRelease is a minimal GitHub release record.

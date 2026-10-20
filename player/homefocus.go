@@ -17,6 +17,14 @@ const (
 	HomeFocusWeather   HomeFocusID = "weather"
 	HomeFocusClock     HomeFocusID = "clock"
 	HomeFocusExit      HomeFocusID = "exit"
+	// HomeFocusPS5 is the PS5 Remote Play tile in the header, left of the phone
+	// pairing QR. It is disabled whenever that tile is not drawn, so the D-pad
+	// can never land on something invisible.
+	HomeFocusPS5 HomeFocusID = "ps5"
+	// HomeFocusUpdate is the "new release available" download chip in the status
+	// cluster, left of the weather text. It is disabled unless a release is
+	// actually offered and drawn.
+	HomeFocusUpdate HomeFocusID = "update"
 )
 
 // FocusDirection indicates the direction to move focus.
@@ -48,8 +56,21 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Left: HomeFocusContinue, Right: HomeFocusFiles,
 	},
 	HomeFocusFiles: {
-		Up: HomeFocusClock, Down: HomeFocusApps,
+		// Up lands on the PS5 launcher, which sits above the top-right cards in
+		// the header band. The layout re-points this edge at whichever card the
+		// tile actually sits over (see SetTileLink), so the D-pad and the tile
+		// can never disagree. When the tile is hidden the PS5 entry is disabled
+		// and Move falls through to the PS5 entry's own Up neighbour, the clock,
+		// which is what Files did before the launcher existed.
+		Up: HomeFocusPS5, Down: HomeFocusApps,
 		Left: HomeFocusMedia, Right: HomeFocusSettings,
+	},
+	// The PS5 launcher is a header tile: Up and Right reach the header clock,
+	// Down returns to the card below it, and Left stays put so the D-pad cannot
+	// wander into a card that is not beside it.
+	HomeFocusPS5: {
+		Up: HomeFocusClock, Down: HomeFocusFiles,
+		Left: HomeFocusPS5, Right: HomeFocusClock,
 	},
 	HomeFocusPackages: {
 		Up: HomeFocusMedia, Down: HomeFocusTools,
@@ -81,9 +102,19 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	},
 	// The Clock is the header time in the top-right corner: the top-right
 	// cards reach it Up and it drops back Down to Settings.
+	// The weather chip sits directly right of the update download chip, so Left
+	// steps onto the offer. With no update the chip is disabled and Move falls
+	// through to the update entry's own Left neighbour, Media, which is what
+	// the weather chip did before the offer existed.
 	HomeFocusWeather: {
 		Up: HomeFocusWeather, Down: HomeFocusSettings,
-		Left: HomeFocusMedia, Right: HomeFocusClock,
+		Left: HomeFocusUpdate, Right: HomeFocusClock,
+	},
+	// The update download chip is a header button: Right returns to the weather
+	// text, Down drops to the first card in the settings column.
+	HomeFocusUpdate: {
+		Up: HomeFocusUpdate, Down: HomeFocusSettings,
+		Left: HomeFocusMedia, Right: HomeFocusWeather,
 	},
 	HomeFocusClock: {
 		Up: HomeFocusClock, Down: HomeFocusSettings,
@@ -101,6 +132,11 @@ type HomeFocusController struct {
 	current  HomeFocusID
 	lastHome HomeFocusID
 	enabled  map[HomeFocusID]bool
+	// tileUnder is the card the header launcher sits over. The home layout sets
+	// it from the measured geometry, so Up from that card reaches the launcher
+	// and Down from the launcher returns there. The static graph cannot know
+	// this: the header cluster's width moves the tile.
+	tileUnder HomeFocusID
 }
 
 // NewHomeFocusController creates a new HomeFocusController with all focus IDs enabled.
@@ -114,6 +150,23 @@ func NewHomeFocusController() *HomeFocusController {
 		f.enabled[id] = true
 	}
 	return f
+}
+
+// SetTileLink records which card the header launcher sits over, or clears the
+// link when the tile is not drawn.
+func (f *HomeFocusController) SetTileLink(under HomeFocusID) {
+	if f == nil {
+		return
+	}
+	f.tileUnder = under
+}
+
+// TileLink returns the card the header launcher currently sits over.
+func (f *HomeFocusController) TileLink() HomeFocusID {
+	if f == nil {
+		return ""
+	}
+	return f.tileUnder
 }
 
 // Current returns the currently focused HomeFocusID.
@@ -203,6 +256,16 @@ func (f *HomeFocusController) Restore() HomeFocusID {
 
 // neighbor returns the neighbor HomeFocusID in the given direction.
 func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection) HomeFocusID {
+	if f.tileUnder != "" {
+		// The header launcher trades Up/Down with the card under it, so the
+		// D-pad never has to guess which column the tile ended up in.
+		if direction == FocusUp && id == f.tileUnder {
+			return HomeFocusPS5
+		}
+		if direction == FocusDown && id == HomeFocusPS5 {
+			return f.tileUnder
+		}
+	}
 	n, ok := homeFocusGraph[id]
 	if !ok {
 		return ""
@@ -227,7 +290,7 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
-		HomeFocusWeather, HomeFocusClock, HomeFocusExit,
+		HomeFocusWeather, HomeFocusClock, HomeFocusUpdate, HomeFocusPS5, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

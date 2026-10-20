@@ -426,6 +426,30 @@ func TestAutoUpdateCheckDue(t *testing.T) {
 	}
 }
 
+// TestReleaseAssetDigest pins the release archive checksum: only a well-formed
+// sha256 digest is used, and anything else leaves the download unverified
+// instead of rejecting a release the API described differently.
+func TestReleaseAssetDigest(t *testing.T) {
+	sum := "48ed6fb51883a9aa82c3875a0e87744354bdfd4d8cc6de80004d28d3ded0fa24"
+	cases := []struct {
+		name, digest, want string
+	}{
+		{"sha256 is used", "sha256:" + sum, sum},
+		{"upper-case hex is normalised", "SHA256:" + strings.ToUpper(sum), sum},
+		{"surrounding space is ignored", "  sha256:" + sum + "\n", sum},
+		{"missing digest", "", ""},
+		{"another algorithm", "sha512:" + sum, ""},
+		{"truncated hash", "sha256:abc123", ""},
+		{"non-hex hash", "sha256:" + sum[:63] + "z", ""},
+		{"bare hash without algorithm", sum, ""},
+	}
+	for _, tc := range cases {
+		if got := releaseAssetDigest(tc.digest); got != tc.want {
+			t.Errorf("%s: releaseAssetDigest(%q) = %q, want %q", tc.name, tc.digest, got, tc.want)
+		}
+	}
+}
+
 // TestAnnounceAvailableUpdateRepeatsEveryBoot covers the reported symptom: a
 // pending release must be offered again on later boots, through both the toast
 // and the notification center that keeps it visible after the toast fades.
@@ -453,12 +477,17 @@ func TestAnnounceAvailableUpdateRepeatsEveryBoot(t *testing.T) {
 	if !strings.Contains(msg, "2026-10-18") {
 		t.Errorf("offer %q lacks the release date", msg)
 	}
-	if !strings.Contains(msg, "Patch") {
+	if !strings.Contains(msg, "download icon") {
 		t.Errorf("offer %q does not tell the user where to install it", msg)
 	}
 
 	announceAvailableUpdate()
-	if len(nc.history) != 2 {
-		t.Fatalf("second boot pushed %d notifications total, want 2", len(nc.history))
+	// An unread offer for the same release is bumped instead of duplicated, so
+	// the bell keeps one entry that still points at the same install.
+	if len(nc.history) != 1 {
+		t.Fatalf("second boot left %d notifications, want 1 deduped offer", len(nc.history))
+	}
+	if nc.history[0].Repeat != 2 {
+		t.Fatalf("second boot left Repeat=%d, want 2", nc.history[0].Repeat)
 	}
 }

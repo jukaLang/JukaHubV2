@@ -268,7 +268,7 @@ func feEnterFocused(config *Config) {
 		return
 	}
 	ext := strings.ToLower(filepath.Ext(entry.Path))
-	if ext == ".png" || ext == ".jpg" || ext == ".jpeg" || ext == ".bmp" {
+	if isImageExtension(ext) {
 		if config.Variables.Custom["chat_attach_image"] == "1" {
 			// Send image as chat message attachment
 			config.Variables.Custom["chat_attach_image"] = ""

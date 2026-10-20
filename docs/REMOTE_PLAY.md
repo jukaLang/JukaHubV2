@@ -6,13 +6,51 @@ the SDL2, FFmpeg and OpenSSL libraries used by the Brick Pro Stock OS.
 
 ## Supported consoles
 
-The current TrimUI port targets **PS4 Remote Play**. Its README says
-`PS5 không được hỗ trợ` ("PS5 is not supported"), and the project's
-`docs/PS5_STATUS.md` says PS5 pairing, PSN login and H.265 streaming are not
-being developed further.
+| Build | PS4 | PS5 |
+|-------|-----|-----|
+| Stable release (`v0.3.x`) | Yes, LAN PIN pairing | No |
+| `v0.4.0-beta2` (**PS5 beta**, opt-in) | Yes | Beta pairing + streaming, never confirmed on real hardware |
 
-JukaHub therefore labels the feature **PS4 only** in the installer. Do not
-expect the PS5 to appear as a pair-able console in this build.
+The port's *published* releases are PS4-only: the author shipped one PS5 build
+(`v0.4.0-beta2`, "in-app PS5 Account-ID pairing flow"), then withdrew it — the
+release and its ZIP now return 404 — and `docs/PS5_STATUS.md` says PS5
+development stopped. Its README states plainly: `PS5 không được hỗ trợ` ("PS5 is
+not supported") and "the old beta tags are kept for technical reference only".
+
+JukaHub can still install that build, because the **git tag is intact** and
+carries the complete application plus a `manifest.json` with a SHA-256 for every
+file. It is installed as a *separate* app, so the stable PS4 install and its
+pairing are never touched:
+
+```text
+SDCARD/Apps/Chiaki/       stable, PS4
+SDCARD/Apps/Chiaki-PS5/   opt-in PS5 beta
+```
+
+Treat it as an experiment owned by the port's author, not a supported path. If
+it does not pair, the stable build is exactly where you left it.
+
+## Launch from the home screen
+
+The home header has a **PS5** tile immediately left of the Phone Companion QR
+tile (it never covers the code). One press does everything:
+
+| Tile state | Press |
+|---|---|
+| `PS5 PLAY` (beta installed) | Launches the PS5 build |
+| `PS5 GET` (not installed) | Downloads the PS5 beta, then launches it automatically |
+| `PS5 WAIT` (an install is running) | Only reports that the installer is busy |
+
+The tile is part of the D-pad focus order: from the card directly beneath it
+(**Media** when the header shows network, weather, clock and battery, as on the
+Smart Pro; **Files** when the status cluster is short) press **Up** to select
+`PS5`, then **A** to press it. The tile lifts, gains a bright ring and adds
+"A" to its caption while selected, and dips while pressed, so the handheld can
+reach it without a touchscreen. `Up` again from the tile reaches the clock, and
+`Down` returns to the card it sits over. The tile is hidden on viewports too
+narrow to hold it beside the QR without covering the greeting, and then its
+focus entry is disabled rather than left pointing at something invisible;
+**Start → PS Remote Play** reaches the same actions.
 
 ## Install
 
@@ -45,6 +83,45 @@ Apps/Chiaki/libs/brick-stock/
 The Smart Pro S launcher uses the firmware's SDL2/FFmpeg instead. Python 3.8+
 is required; TrimUI firmware 1.0.4 or newer includes it. The panel reports a
 missing Python or SDL2 instead of starting a client that cannot render.
+
+## Install the PS5 beta
+
+1. Open **Start → PS Remote Play**.
+2. Select **Install PS5 beta** (about 12 MB).
+3. JukaHub downloads the `v0.4.0-beta2` source tree from GitHub, unpacks it in a
+   staging folder, checks every file against the SHA-256 values in the tag's
+   `manifest.json`, and only then swaps the app into `Apps/Chiaki-PS5/`.
+4. Launch it with **Launch PS5 beta**. Its settings and pairing live in its own
+   folder and are preserved when you reinstall.
+
+## Pair a PS5 (beta)
+
+The PS5 path needs two different numbers; neither is the other.
+
+| Value | What it is | Where it comes from |
+|-------|------------|---------------------|
+| PSN Account-ID | 12-character Base64 of your PSN `user_id` (8 bytes) | The **PSN Login** button in the official desktop chiaki-ng |
+| Remote Play PIN | 8 digits | The PS5's own **Link Device** screen |
+
+Steps:
+
+1. Keep the PS5 and the handheld on the same LAN. Enable **Settings → System →
+   Remote Play → Enable Remote Play** and leave the console awake for the first
+   attempt.
+2. On the PS5 open **Settings → System → Remote Play → Link Device**. It shows
+   an 8-digit PIN.
+3. Run **Launch PS5 beta**, scan, and pick the host the app detects as a PS5.
+   It asks for **Step 1/2**, the 12-character Base64 PSN Account-ID. It is *not*
+   your PSN Online ID, and it is not the 8-digit PIN. Get it from the desktop
+   chiaki-ng's PSN Login and type the resulting string on the handheld.
+4. **Step 2/2** is the 8-digit PIN from the console. The helper registers
+   directly against the console's IP.
+5. For a first attempt, turn off the console's 4-digit login code (that is a
+   different code again) and use 720p/30, SDR, no HDR.
+
+The PS5 build answers failures with `PS5-*` codes and writes the detail to
+`Apps/Chiaki-PS5/Chiaki-loi.txt`. JukaHub cannot fix PS5 pairing: the port's
+author stopped that work, so a failure is reported, not repaired.
 
 ## Pair a PS4
 
@@ -81,6 +158,7 @@ in the port's settings if the stream stutters.
 | File | Contents |
 |------|----------|
 | `Apps/Chiaki/Chiaki-loi.txt` | Port and native-helper output |
+| `Apps/Chiaki-PS5/Chiaki-loi.txt` | PS5 beta port and helper output (`PS5-*` codes) |
 | `Apps/Chiaki/Chiaki-jukahub.log` | JukaHub's launch wrapper output |
 | `Apps/JukaHub/logs.txt` | JukaHub's own log |
 

@@ -3,18 +3,25 @@ package main
 // updateprompt.go — the "a new JukaHub release is available" prompt.
 //
 // The startup check only advertises a release (see autoupdate.go); this file
-// turns that advertisement into a visible, dismissible prompt:
-//   - a download badge in the status cluster next to the clock/bell, and
-//   - one modal per launch with "Update now" / "Not now".
+// turns that advertisement into a visible, one-press offer:
+//   - a download icon in the home header's status cluster, immediately left of
+//     the weather chip, reachable with the D-pad and clickable, and
+//   - the scene-header badge and the once-per-launch modal, which now install
+//     directly instead of walking the user through the Patch scene.
 //
-// Choosing Update now opens the Patch scene and its install confirmation, which
-// still requires the user to confirm the high-risk install. Nothing downloads
-// until that confirmation, and Not now leaves the release advertised in Patch.
+// startHeaderUpdate is the single action behind all three: it downloads the
+// release, verifies and extracts the archive, then hands the file swap to the
+// detached helper and restarts. Progress shows in the install bar over whatever
+// screen is open, so the offer never pulls the user out of what they were doing.
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 var updatePrompt struct {
@@ -63,16 +70,64 @@ func maybeOfferUpdate() {
 func activateUpdatePrompt(config *Config) {
 	if updatePrompt.focus == 0 {
 		closeUpdatePrompt()
-		if idx := sceneIndexExact(config, "Patch"); idx >= 0 {
-			changeSceneTo(config, idx)
-			openInstallUpdateModal()
-			ShowToast("Confirm the update in Patch to download it", ToastKindInfo)
-		} else {
-			ShowToast("This build has no Patch scene — update from Releases", ToastKindWarning)
-		}
+		// One press installs: no Patch detour and no second confirmation. The
+		// header download chip runs this same action.
+		startHeaderUpdate()
 		return
 	}
 	closeUpdatePrompt()
+}
+
+// updateInstallRunner performs the download, extraction and staged swap. It is
+// a variable so tests can press the header chip without touching the network or
+// replacing the running executable.
+var updateInstallRunner = func(ctx context.Context, config *Config) error {
+	return InstallAvailableJukaHubUpdate(ctx, config)
+}
+
+// startHeaderUpdate installs the advertised release in one press. The work runs
+// off the event thread; the install bar reports download/install progress over
+// whatever screen is open, and on success the swap helper restarts JukaHub.
+// It reports whether an update was started.
+func startHeaderUpdate() bool {
+	if !updateAvailable() {
+		ShowToast("JukaHub is up to date", ToastKindInfo)
+		return false
+	}
+	if !tryBeginPatchOp() {
+		ShowToast("An update is already running", ToastKindInfo)
+		return false
+	}
+	label := availableUpdateLabel()
+	setPatchBusy("Updating JukaHub to " + label)
+	installBarBegin("JukaHub update")
+	installBarPhase(installPhaseResolving)
+	ShowToast("Downloading JukaHub "+label+" — JukaHub restarts when it is ready", ToastKindInfo)
+
+	go func() {
+		defer endPatchOp()
+		defer clearPatchBusy()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		defer cancel()
+		if err := updateInstallRunner(ctx, appConfig); err != nil {
+			// A stale offer (the build already carries the release, or it was
+			// pulled) is not a failure: forget it and say so.
+			if errors.Is(err, errAlreadyUpToDate) {
+				clearAvailableUpdate()
+				installBarDone()
+				ShowToast("JukaHub is already up to date", ToastKindSuccess)
+				return
+			}
+			installBarFail(firstLine(err.Error()))
+			ShowToast("Update failed — "+firstLine(err.Error()), ToastKindError)
+			return
+		}
+		installBarDone()
+		if appConfig != nil {
+			patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(appConfig)})
+		}
+	}()
+	return true
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -114,6 +169,68 @@ func drawUpdateBadge(renderer *sdl.Renderer, config *Config, rightX, y, h int32)
 	renderText(renderer, config, font, text, ColorTextPrimary(), x+30, y+(pillH-int32(font.Height()))/2)
 	updatePrompt.badge = rect
 	return pillW + SpaceSM
+}
+
+// homeUpdateRect is the header download chip's rect for this frame, or an empty
+// rect when no release is offered (or the screen is too small for the chip).
+// Hit-testing and the focus entry are driven from it.
+var homeUpdateRect sdl.Rect
+
+// homeUpdateChipSize is the chip's footprint for a given text font: a small
+// pill that sits inside the header band without competing with the status text
+// it is next to.
+func homeUpdateChipSize(font *ttf.Font) (int32, int32) {
+	h := int32(24)
+	if font != nil {
+		if fh := int32(font.Height()) + 8; fh > h {
+			h = fh
+		}
+	}
+	// Wider than tall: room for a readable download glyph and a comfortable
+	// focus ring on a small screen.
+	return h + 20, h
+}
+
+// renderHomeUpdateChip draws the "a new JukaHub release is available" download
+// icon in the home header. Focused, it takes the theme highlight and a ring, so
+// the D-pad position is obvious on a handheld screen without a pointer.
+func renderHomeUpdateChip(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect, focused bool) sdl.Rect {
+	homeUpdateRect = sdl.Rect{}
+	if renderer == nil || fonts.Small == nil || rect.W < 18 || rect.H < 18 || !updateAvailable() {
+		return sdl.Rect{}
+	}
+
+	fill := WithAlpha(ColorWarning, 36)
+	border := WithAlpha(ColorWarning, 200)
+	// The glyph is always the primary text colour: a warning-tinted arrow on a
+	// warning-tinted pill disappeared at handheld size.
+	glyph := ColorTextPrimary()
+	if focused {
+		fill = sdl.Color{R: 22, G: 60, B: 96, A: 255}
+		border = uiHighlightColor()
+	}
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, fill)
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, 1, border)
+
+	// Download glyph: a bar, an arrow head and a tray. SDL's line drawing is one
+	// pixel wide, so each stroke is drawn twice to survive a 1280x720 panel.
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	setDrawColor(renderer, glyph)
+	cx := rect.X + rect.W/2
+	top := rect.Y + rect.H/2 - 6
+	for _, dx := range []int32{0, 1} {
+		renderer.DrawLine(cx+dx, top, cx+dx, top+8)
+	}
+	for _, d := range []int32{0, 1} {
+		renderer.DrawLine(cx-5, top+3, cx, top+8+d)
+		renderer.DrawLine(cx+5, top+3, cx, top+8+d)
+	}
+	for _, dy := range []int32{0, 1} {
+		renderer.DrawLine(cx-6, top+12+dy, cx+6, top+12+dy)
+	}
+
+	homeUpdateRect = rect
+	return rect
 }
 
 func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {

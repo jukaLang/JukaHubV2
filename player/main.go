@@ -51,6 +51,12 @@ func main() {
 	if err := img.Init(img.INIT_PNG | img.INIT_JPG); err != nil {
 		log.Fatal("IMG init error:", err)
 	}
+	// WebP box art: best-effort, because a build without libwebp must still
+	// start. Every shipped SDL_image is built with it, so the error is only a
+	// log line if a custom runtime drops the codec.
+	if err := img.Init(img.INIT_WEBP); err != nil {
+		log.Printf("WEBP init unavailable: %v", err)
+	}
 	// Enable text input so physical keyboard typing works in input fields
 	// (both the on-screen keyboard modal and the main loop).
 	sdl.StartTextInput()
@@ -1923,6 +1929,10 @@ func main() {
 			running = false
 			continue
 		}
+
+		// A home-launcher press that downloaded the PS5 beta launches it as soon
+		// as the install reports success. Polled here, on the event thread.
+		ps5PollPendingLaunch()
 
 		// Offer a newly discovered release once.
 		maybeOfferUpdate()

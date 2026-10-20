@@ -266,6 +266,19 @@ func homeActivate(config *Config) {
 	homePressedID = id
 	homePressedAt = sdl.GetTicks64()
 
+	// The PS5 launcher is the one header tile that is also a launcher: A plays
+	// the PS5 build, or downloads it first. It gets its own sound, so return
+	// before the generic card handling below.
+	if id == HomeFocusPS5 {
+		ps5TileActivate()
+		return
+	}
+	// The update chip is the other one: A downloads and installs the release
+	// directly, without opening Patch or any other menu.
+	if id == HomeFocusUpdate {
+		startHeaderUpdate()
+		return
+	}
 	if id == HomeFocusContinue {
 		if items := getRecentItems(); len(items) > 0 {
 			items[0].Play(config)
@@ -428,6 +441,16 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	// pairing card without leaving Home.
 	if companionHeaderRect.W > 0 && pointInRect(mx, my, companionHeaderRect) {
 		openCompanionOverlay()
+		return true
+	}
+	// The PS5 launcher beside it starts streaming in one press, installing the
+	// beta first when it is missing.
+	if ps5TileRect.W > 0 && pointInRect(mx, my, ps5TileRect) {
+		// A click is a deliberate choice: focus follows it so the D-pad
+		// continues from the tile the user just touched.
+		homeLayout.Focus.Set(HomeFocusPS5)
+		homeLayout.Focus.Remember()
+		ps5TileActivate()
 		return true
 	}
 	if homeLayout.FocusAt(mx, my) {
