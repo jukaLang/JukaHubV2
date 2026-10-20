@@ -141,8 +141,7 @@ func chiakiLauncherPath() string {
 }
 
 func chiakiInstalled() bool {
-	launcher := chiakiLauncherPath()
-	return launcher != "" && regularFile(launcher) && regularFile(filepath.Join(filepath.Dir(launcher), "app.py"))
+	return chiakiInstalledAt(chiakiAppDir())
 }
 
 func chiakiInstalledVersion() string {
@@ -158,6 +157,154 @@ func chiakiInstalledVersionAt(app string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// ── Interface language ──────────────────────────────────────────────────────
+//
+// The port ships its own English catalogue (rh/i18n.py: VI and EN) and stores
+// the choice as "language": "VI"|"EN" in settings.json. JukaHub does not patch
+// the app: it flips that one key, preserving every other value, so the user's
+// menus become English without losing settings or console pairing.
+
+// chiakiSettingsPath is where the port keeps its settings.
+func chiakiSettingsPath(appDir string) string {
+	if appDir == "" {
+		return ""
+	}
+	return filepath.Join(appDir, "settings.json")
+}
+
+// chiakiSettingsLanguage returns "EN", "VI", or "" when the file or key is
+// missing or the file cannot be parsed.
+func chiakiSettingsLanguage(appDir string) string {
+	path := chiakiSettingsPath(appDir)
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var cfg struct {
+		Language string `json:"language"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	lang := strings.ToUpper(strings.TrimSpace(cfg.Language))
+	if lang != "EN" && lang != "VI" {
+		return ""
+	}
+	return lang
+}
+
+// setChiakiSettingsLanguage rewrites only the language key. Unknown keys are
+// carried over as raw JSON, so a newer release's settings survive untouched.
+// A corrupt file is never overwritten: the caller gets an error instead of the
+// app silently losing its pairing data.
+func setChiakiSettingsLanguage(appDir, lang string) error {
+	lang = strings.ToUpper(strings.TrimSpace(lang))
+	if lang != "EN" && lang != "VI" {
+		return fmt.Errorf("unsupported language %q", lang)
+	}
+	path := chiakiSettingsPath(appDir)
+	if path == "" {
+		return errors.New("the Chiaki-ng install folder is unknown")
+	}
+	values := map[string]json.RawMessage{}
+	data, err := os.ReadFile(path)
+	switch {
+	case err == nil:
+		if len(strings.TrimSpace(string(data))) > 0 {
+			if err := json.Unmarshal(data, &values); err != nil {
+				return errors.New("settings.json is not valid JSON; fix or delete it first")
+			}
+		}
+	case os.IsNotExist(err):
+		// The port creates its defaults on first run; a file with only the
+		// language key is enough to make that first run English.
+	default:
+		return err
+	}
+	if values == nil {
+		values = map[string]json.RawMessage{}
+	}
+	quoted, err := json.Marshal(lang)
+	if err != nil {
+		return err
+	}
+	values["language"] = quoted
+	out, err := json.MarshalIndent(values, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+	tmp := path + ".jukahub-tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(out); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+// chiakiCurrentLanguage is the language the next launch will use. The port
+// defaults to VI when settings.json has no language yet.
+func chiakiCurrentLanguage(appDir string) string {
+	if lang := chiakiSettingsLanguage(appDir); lang != "" {
+		return lang
+	}
+	return "VI"
+}
+
+// chiakiToggleLanguage switches between the port's two catalogues and returns
+// the new code.
+func chiakiToggleLanguage(appDir string) (string, error) {
+	next := "EN"
+	if chiakiCurrentLanguage(appDir) == "EN" {
+		next = "VI"
+	}
+	if err := setChiakiSettingsLanguage(appDir, next); err != nil {
+		return "", err
+	}
+	return next, nil
+}
+
+// chiakiLanguageName is the label shown in the panel and toast.
+func chiakiLanguageName(lang string) string {
+	if lang == "EN" {
+		return "English"
+	}
+	return "Vietnamese"
+}
+
+// chiakiEnsureEnglishDefault gives a fresh install an English UI before its
+// first run. An existing settings.json is never touched: a user who picked
+// Vietnamese in the app keeps it, and the panel row switches it either way.
+func chiakiEnsureEnglishDefault(appDir string) {
+	if appDir == "" || regularFile(chiakiSettingsPath(appDir)) {
+		return
+	}
+	if err := setChiakiSettingsLanguage(appDir, "EN"); err != nil {
+		log.Printf("[chiaki] could not default the UI to English: %v", err)
+	}
 }
 
 func chiakiPackageSupported() bool {
@@ -178,7 +325,7 @@ type chiakiRequirements struct {
 
 func chiakiCheckRequirements(appDir string) chiakiRequirements {
 	var req chiakiRequirements
-	req.Python = findPython3()
+	req.Python = findPython3(appDir)
 	for _, cand := range []string{
 		"/usr/trimui/lib/libSDL2-2.0.so.0",
 		"/usr/lib64/libSDL2-2.0.so.0",
@@ -202,41 +349,67 @@ func chiakiCheckRequirements(appDir string) chiakiRequirements {
 			}
 		}
 	}
+	// Newer releases also ship their Python SDL2 binding in vendor/sdl2 and may
+	// take the native library from the firmware. Treat all three layouts as a
+	// valid runtime instead of rejecting a package the stock menu starts fine.
+	vendor := regularFile(filepath.Join(appDir, "vendor", "sdl2", "__init__.py"))
 	if req.Python == "" {
 		req.Detail = "Python 3.8+ not found — update the firmware (1.0.4+)"
 		return req
 	}
-	if req.SDL2 == "" {
-		req.Detail = "SDL2 not found in the firmware or package"
-		return req
-	}
-	if req.Libs == 0 {
-		req.Detail = "Package runtime libraries are missing"
-		return req
-	}
+	var missing []string
 	for _, rel := range []string{"bin/chiaki-stream", "bin/chiaki-regist"} {
 		if !regularFile(filepath.Join(appDir, filepath.FromSlash(rel))) {
-			req.Detail = "Package helper " + rel + " is missing"
-			return req
+			missing = append(missing, filepath.Base(rel))
 		}
 	}
+	if req.SDL2 == "" && req.Libs == 0 && !vendor {
+		missing = append(missing, "SDL2")
+	}
+	if len(missing) > 0 {
+		// These are needed to stream, not to open the app. Report them without
+		// pretending the install is unusable: the stock menu runs it anyway.
+		req.Detail = "Missing " + strings.Join(missing, ", ") + " — the menu may still start"
+		return req
+	}
 	req.OK = true
-	req.Detail = fmt.Sprintf("Python %s · SDL2 %s · %d bundled libs", filepath.Base(req.Python), filepath.Base(req.SDL2), req.Libs)
+	SDL := "firmware"
+	if req.SDL2 != "" {
+		SDL = filepath.Base(req.SDL2)
+	} else if vendor {
+		SDL = "vendored"
+	}
+	req.Detail = fmt.Sprintf("Python %s · SDL2 %s · %d bundled libs", filepath.Base(req.Python), SDL, req.Libs)
 	return req
 }
 
-func findPython3() string {
-	for _, name := range []string{"python3", "python3.12", "python3.11", "python3.10"} {
+// findPython3 follows the same discovery as the port's own launch.sh: PATH,
+// the app's own python folder, the SD card System/bin folder and PortMaster's
+// bundled interpreter. A missing interpreter is the one startup failure that
+// cannot be worked around, so the search is deliberately broad.
+func findPython3(appDir string) string {
+	for _, name := range []string{"python3", "python3.13", "python3.12", "python3.11", "python3.10", "python3.9", "python3.8"} {
 		if p, err := exec.LookPath(name); err == nil && p != "" {
 			return p
 		}
 	}
-	for _, cand := range []string{
+	candidates := []string{
 		"/usr/bin/python3",
+		"/usr/local/bin/python3",
 		"/usr/trimui/bin/python3",
-		"/mnt/SDCARD/Apps/Python/bin/python3",
-		"/mnt/SDCARD/Apps/python/bin/python3",
-	} {
+	}
+	if appDir != "" {
+		candidates = append(candidates, filepath.Join(appDir, "python", "bin", "python3"))
+	}
+	if root := chiakiSDRootDir(); root != "" {
+		candidates = append(candidates,
+			filepath.Join(root, "System", "bin", "python3"),
+			filepath.Join(root, "Apps", "Python", "bin", "python3"),
+			filepath.Join(root, "Apps", "python", "bin", "python3"),
+			filepath.Join(root, "Apps", "PortMaster", "PortMaster", "exlibs", "python3"),
+		)
+	}
+	for _, cand := range candidates {
 		if regularFile(cand) {
 			return cand
 		}
@@ -580,6 +753,7 @@ func startChiakiInstall() error {
 			ShowToast("Could not install Chiaki-ng — "+firstLine(err.Error()), ToastKindError)
 			return
 		}
+		chiakiEnsureEnglishDefault(filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir)))
 		installBarDone()
 		log.Printf("[chiaki] installed %s into %s", release.Tag, filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir)))
 		ShowToast(chiakiAppName+" "+release.Tag+" installed", ToastKindSuccess)
@@ -856,6 +1030,7 @@ func startChiakiPS5Install() error {
 			ShowToast("PS5 beta install failed — "+firstLine(err.Error()), ToastKindError)
 			return
 		}
+		chiakiEnsureEnglishDefault(target)
 		installBarDone()
 		log.Printf("[chiaki] installed PS5 beta %s into %s", chiakiPS5Tag, target)
 		ShowToast("PS5 beta installed — pair from Chiaki-ng", ToastKindSuccess)
@@ -937,49 +1112,188 @@ func launchChiakiPS5() {
 	launchChiakiAt(chiakiPS5AppDir(), "Chiaki-ng PS5 beta")
 }
 
+// launchChiakiAt hands the screen to the port instead of running it inside
+// JukaHub. This firmware gives one app the display at a time: JukaHub's own
+// launcher kills the stock UI before JukaHub starts, and a second SDL window
+// cannot come up behind a running JukaHub. The old version hid JukaHub's window
+// and blocked on the port's launcher, which is why "Launch Remote Play" looked
+// like it did nothing.
+//
+// JukaHub now arms a detached handoff script and exits: the script waits for
+// this process to release the display, runs the port, then gives the screen
+// back to the stock launcher. The failure mode is safe - when the port cannot
+// start, the log says why and the stock menu still comes back.
 func launchChiakiAt(appDir, label string) {
 	launcher := filepath.Join(appDir, "launch.sh")
 	if !chiakiPackageSupported() {
 		ShowToast("Chiaki-ng runs on the TrimUI Linux build", ToastKindWarning)
 		return
 	}
-	if req := chiakiCheckRequirements(appDir); !req.OK {
-		ShowToast(req.Detail, ToastKindWarning)
+	if !regularFile(launcher) {
+		ShowToast("Chiaki-ng is not installed", ToastKindWarning)
 		return
 	}
 
-	logFile, err := os.OpenFile(filepath.Join(appDir, "Chiaki-jukahub.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		logFile = nil
+	if err := startChiakiHandoff(appDir, label); err != nil {
+		log.Printf("[chiaki] handoff failed: %v", err)
+		ShowToast("Could not start "+label+" — "+firstLine(err.Error()), ToastKindError)
+		return
 	}
-	if logFile != nil {
-		fmt.Fprintf(logFile, "\n=== JukaHub launch %s ===\n", time.Now().Format(time.RFC3339))
-		defer logFile.Close()
-	}
+	log.Printf("[chiaki] handing the display to %s (%s)", label, launcher)
+	ShowToast(label+" is starting — JukaHub closes while it runs", ToastKindInfo)
+	// Quit so SDL and the framebuffer are released before the port starts.
+	requestAppExit()
+}
 
-	cmd := exec.Command("sh", launcher)
+// chiakiHandoffPath is where the generated handoff script lives. It is on
+// tmpfs, so it never survives a reboot and cannot accumulate on the SD card.
+func chiakiHandoffPath() string {
+	return filepath.Join(os.TempDir(), "jukahub-chiaki-handoff.sh")
+}
+
+// chiakiHandoffEnv picks only the variables the port's launcher needs. The
+// whole process environment is never written to disk: it can hold tokens.
+func chiakiHandoffEnv(appDir string) []string {
+	allowed := map[string]bool{
+		"HOME": true, "SDCARD_PATH": true, "LD_LIBRARY_PATH": true,
+		"PATH": true, "CLR_OPENSSL_VERSION_OVERRIDE": true, "PYTHONUNBUFFERED": true,
+	}
+	var out []string
+	for _, kv := range chiakiLaunchEnv(appDir, nil) {
+		name := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			name = kv[:i]
+		}
+		if allowed[name] {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// chiakiShellQuote wraps a value so the generated script treats it literally.
+func chiakiShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// chiakiHandoffScript builds the launcher that outlives JukaHub. The firmware
+// gives one app the screen, so the script waits for JukaHub to exit, lets its
+// launcher restore the stock UI, then takes the display from it the same way
+// that launcher takes it from MainUI: pause the supervisors, stop the UI, and
+// run the port. When the stream ends it hands the screen back.
+func chiakiHandoffScript(pid int, appDir, label string) string {
+	logPath := filepath.Join(appDir, "Chiaki-jukahub.log")
+	var b strings.Builder
+	b.WriteString("#!/bin/sh\n")
+	b.WriteString("# Generated by JukaHub — display handoff to Chiaki-ng. Do not edit.\n")
+	fmt.Fprintf(&b, "JUKAHUB_PID=%d\n", pid)
+	fmt.Fprintf(&b, "APP=%s\n", chiakiShellQuote(appDir))
+	fmt.Fprintf(&b, "LOG=%s\n", chiakiShellQuote(logPath))
+	fmt.Fprintf(&b, "LABEL=%s\n", chiakiShellQuote(label))
+	for _, kv := range chiakiHandoffEnv(appDir) {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "export %s=%s\n", kv[:i], chiakiShellQuote(kv[i+1:]))
+	}
+	b.WriteString(`
+# Wait for JukaHub to release SDL and the framebuffer (60 s cap).
+i=0
+while kill -0 "$JUKAHUB_PID" 2>/dev/null; do
+    i=$((i+1))
+    [ "$i" -ge 600 ] && break
+    sleep 0.1
+done
+
+# JukaHub's own launcher restores the stock UI when JukaHub exits. Let it
+# finish, then take the screen from it exactly like that launcher took it from
+# MainUI: pause the firmware supervisors and stop the UI.
+sleep 3
+if command -v pkill >/dev/null 2>&1; then
+    pkill -STOP runtrimui.sh 2>/dev/null
+    pkill -STOP trimui_launcher 2>/dev/null
+fi
+UI_PID="$(pidof MainUI 2>/dev/null)"
+if [ -n "$UI_PID" ]; then
+    kill "$UI_PID" 2>/dev/null
+    sleep 1
+    UI_PID="$(pidof MainUI 2>/dev/null)"
+    [ -n "$UI_PID" ] && kill -9 "$UI_PID" 2>/dev/null
+fi
+# Give the display a moment to settle before SDL takes it, as JukaHub's own
+# launcher does.
+sleep 1
+
+{
+    echo ""
+    echo "=== JukaHub handoff $(date 2>/dev/null) ==="
+} >> "$LOG" 2>/dev/null
+cd "$APP" || exit 1
+sh "$APP/launch.sh" >> "$LOG" 2>&1
+RC=$?
+echo "=== $LABEL exited with code $RC ===" >> "$LOG" 2>/dev/null
+
+# Hand the screen back to the stock UI.
+if command -v pkill >/dev/null 2>&1; then
+    pkill -CONT runtrimui.sh 2>/dev/null
+    pkill -CONT trimui_launcher 2>/dev/null
+fi
+sleep 2
+
+# If nothing brought the stock menu back, start it here so the user is never
+# left on a black screen.
+if [ -z "$(pidof MainUI 2>/dev/null)" ]; then
+    for UI in /usr/trimui/bin/MainUI /usr/bin/MainUI /usr/local/bin/MainUI \
+        /mnt/SDCARD/System/usr/trimui/bin/MainUI
+    do
+        if [ -x "$UI" ]; then
+            (nohup "$UI" >/dev/null 2>&1 &)
+            break
+        fi
+    done
+fi
+
+rm -f "$0" 2>/dev/null
+exit 0
+`)
+	return b.String()
+}
+
+// startChiakiHandoff writes and starts the detached handoff script.
+func startChiakiHandoff(appDir, label string) error {
+	if strings.TrimSpace(appDir) == "" {
+		return errors.New("the Chiaki-ng install folder is unknown")
+	}
+	if !chiakiInstalledAt(appDir) {
+		return errors.New("Chiaki-ng is not installed")
+	}
+	chiakiEnsureEnglishDefault(appDir)
+	path := chiakiHandoffPath()
+	script := chiakiHandoffScript(os.Getpid(), appDir, label)
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		return fmt.Errorf("write handoff script: %w", err)
+	}
+	cmd := exec.Command("sh", path)
 	cmd.Dir = appDir
-	cmd.Env = chiakiLaunchEnv(appDir, os.Environ())
-	if logFile != nil {
-		cmd.Stdout = logFile
-		cmd.Stderr = logFile
+	configureChiakiDetached(cmd)
+	if err := cmd.Start(); err != nil {
+		_ = os.Remove(path)
+		return fmt.Errorf("start handoff: %w", err)
 	}
+	// The script is detached: it keeps running after JukaHub exits. Nothing
+	// waits on it, but reaping the direct child keeps the process table clean
+	// if it finishes before JukaHub does.
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
 
-	log.Printf("[chiaki] launching %s", launcher)
-	if mainWindow != nil {
-		mainWindow.Hide()
+// chiakiInstalledAt reports whether appDir holds a runnable port install.
+func chiakiInstalledAt(appDir string) bool {
+	if appDir == "" {
+		return false
 	}
-	runErr := cmd.Run()
-	if mainWindow != nil {
-		mainWindow.Show()
-		mainWindow.Raise()
-	}
-	if runErr != nil {
-		log.Printf("[chiaki] launcher exited: %v", runErr)
-		ShowToast(label+" exited — check Chiaki-jukahub.log", ToastKindError)
-		return
-	}
-	ShowToast(label+" closed", ToastKindInfo)
+	return regularFile(filepath.Join(appDir, "launch.sh")) && regularFile(filepath.Join(appDir, "app.py"))
 }
 
 // ── Panel ────────────────────────────────────────────────────────────────
@@ -997,6 +1311,7 @@ const (
 	chiakiActionClose
 	chiakiActionInstallPS5
 	chiakiActionLaunchPS5
+	chiakiActionLanguage
 )
 
 type chiakiRow struct {
@@ -1060,16 +1375,27 @@ func chiakiRows() []chiakiRow {
 		})
 		req := chiakiCheckRequirements(chiakiAppDir())
 		status := "Ready"
-		detail := "Pair a PS4 inside Chiaki-ng, then select it to stream."
+		detail := "JukaHub closes while Chiaki-ng runs; START+SELECT returns to the stock menu."
 		if !req.OK {
 			status = "Needs setup"
+			detail = req.Detail
 		}
-		detail = req.Detail
 		rows = append(rows, chiakiRow{
 			label:  "Launch Remote Play",
 			detail: detail,
 			status: status,
 			action: chiakiActionLaunch,
+		})
+		lang := chiakiCurrentLanguage(chiakiAppDir())
+		other := "English"
+		if lang == "EN" {
+			other = "Vietnamese"
+		}
+		rows = append(rows, chiakiRow{
+			label:  "Interface language",
+			detail: "Chiaki-ng's own menus are " + chiakiLanguageName(lang) + "; select for " + other + ".",
+			status: lang,
+			action: chiakiActionLanguage,
 		})
 	} else {
 		rows = append(rows, chiakiRow{
@@ -1187,6 +1513,18 @@ func chiakiPanelActivate() {
 	case chiakiActionLaunchPS5:
 		closeChiakiPanel()
 		launchChiakiPS5()
+	case chiakiActionLanguage:
+		appDir := chiakiAppDir()
+		if !chiakiInstalledAt(appDir) {
+			ShowToast("Install Chiaki-ng first", ToastKindWarning)
+			return
+		}
+		next, err := chiakiToggleLanguage(appDir)
+		if err != nil {
+			ShowToast("Could not change the language — "+firstLine(err.Error()), ToastKindError)
+			return
+		}
+		ShowToast("Chiaki-ng menus will open in "+chiakiLanguageName(next), ToastKindSuccess)
 	case chiakiActionFolder:
 		dir := chiakiAppDir()
 		if dir == "" {

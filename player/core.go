@@ -5876,6 +5876,12 @@ func activateChromeFocus(config *Config) bool {
 		// notifToggle plays its own activation sound.
 		notifToggle()
 		return true
+	case ChromeUpdateIndex:
+		// Same one-press install as the home header chip, so the offer behaves
+		// identically wherever it is drawn.
+		PlayActivateSound()
+		startHeaderUpdate()
+		return true
 	}
 	return false
 }
@@ -5884,9 +5890,11 @@ func activateChromeFocus(config *Config) bool {
 // the back pill leaves the scene, the status clock toggles the calendar
 // popover (exactly like Home). It reports whether a chrome button was hit.
 func handleChromeBarClick(mx, my int32, config *Config) bool {
-	// The update badge sits in the status cluster, left of the bell.
+	// The update badge sits in the status cluster, left of the bell, and starts
+	// the install directly — the same action as the D-pad and the home chip.
 	if updatePrompt.badge.W > 0 && pointInRect(mx, my, updatePrompt.badge) {
-		openUpdatePrompt()
+		PlayActivateSound()
+		startHeaderUpdate()
 		return true
 	}
 	if sceneTitleBackRect.W > 0 && mx >= sceneTitleBackRect.X && mx <= sceneTitleBackRect.X+sceneTitleBackRect.W &&

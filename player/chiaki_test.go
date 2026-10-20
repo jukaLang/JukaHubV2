@@ -126,6 +126,190 @@ func TestChiakiLaunchEnvUsesBundledRuntime(t *testing.T) {
 	}
 }
 
+// The port ships an English catalogue and stores the choice in settings.json.
+// JukaHub switches that one key instead of patching the app, and must never
+// lose the pairing keys or any other setting while doing it.
+func TestChiakiSettingsLanguageTogglePreservesOtherKeys(t *testing.T) {
+	app := t.TempDir()
+	writeChiakiTestFile(t, filepath.Join(app, "settings.json"),
+		`{"language":"VI","regist_key":"secret","video_resolution":"540p","intro":true}`+"\n")
+
+	if got := chiakiCurrentLanguage(app); got != "VI" {
+		t.Fatalf("current language = %q, want VI", got)
+	}
+	next, err := chiakiToggleLanguage(app)
+	if err != nil {
+		t.Fatalf("toggle to EN: %v", err)
+	}
+	if next != "EN" {
+		t.Fatalf("next = %q, want EN", next)
+	}
+
+	data, err := os.ReadFile(filepath.Join(app, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]interface{}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("rewritten settings are not JSON: %v\n%s", err, data)
+	}
+	if cfg["language"] != "EN" {
+		t.Errorf("language = %v, want EN", cfg["language"])
+	}
+	if cfg["regist_key"] != "secret" {
+		t.Errorf("regist_key was lost: %v", cfg["regist_key"])
+	}
+	if cfg["video_resolution"] != "540p" {
+		t.Errorf("video_resolution was lost: %v", cfg["video_resolution"])
+	}
+	if cfg["intro"] != true {
+		t.Errorf("intro was lost: %v", cfg["intro"])
+	}
+
+	back, err := chiakiToggleLanguage(app)
+	if err != nil || back != "VI" {
+		t.Fatalf("toggle back = %q, %v; want VI", back, err)
+	}
+	if got := chiakiSettingsLanguage(app); got != "VI" {
+		t.Fatalf("language after second toggle = %q, want VI", got)
+	}
+}
+
+func TestChiakiSettingsLanguageCreatesFileForFirstRun(t *testing.T) {
+	app := t.TempDir()
+	if got := chiakiCurrentLanguage(app); got != "VI" {
+		t.Fatalf("empty install should report the port default VI, got %q", got)
+	}
+	if err := setChiakiSettingsLanguage(app, "EN"); err != nil {
+		t.Fatalf("create settings: %v", err)
+	}
+	if got := chiakiSettingsLanguage(app); got != "EN" {
+		t.Fatalf("language = %q, want EN", got)
+	}
+}
+
+// A corrupt settings file must be reported, not overwritten: it is the only
+// place the console pairing keys live.
+func TestChiakiSettingsLanguageLeavesCorruptFileAlone(t *testing.T) {
+	app := t.TempDir()
+	path := filepath.Join(app, "settings.json")
+	writeChiakiTestFile(t, path, "{not json")
+
+	if err := setChiakiSettingsLanguage(app, "EN"); err == nil {
+		t.Fatal("corrupt settings were overwritten")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "{not json" {
+		t.Fatalf("settings changed: %q (%v)", got, err)
+	}
+}
+
+func TestChiakiLanguageName(t *testing.T) {
+	if chiakiLanguageName("EN") != "English" || chiakiLanguageName("VI") != "Vietnamese" {
+		t.Fatal("language labels are wrong")
+	}
+}
+
+// The handoff script is what actually starts the port after JukaHub exits, so
+// its order matters: wait for JukaHub to release the screen, wait for its
+// launcher to restore the stock UI, take the screen from that UI, run the port,
+// then give the screen back.
+func TestChiakiHandoffScriptTakesTheScreenAfterJukaHubExits(t *testing.T) {
+	app := filepath.Join(t.TempDir(), "Apps", "Chiaki")
+	script := chiakiHandoffScript(4242, app, "Chiaki-ng")
+
+	for _, want := range []string{
+		"JUKAHUB_PID=4242",
+		"APP=" + chiakiShellQuote(app),
+		"LOG=" + chiakiShellQuote(filepath.Join(app, "Chiaki-jukahub.log")),
+		"export HOME=" + chiakiShellQuote(app),
+		`kill -0 "$JUKAHUB_PID"`,
+		"pkill -STOP runtrimui.sh",
+		`pidof MainUI`,
+		`sh "$APP/launch.sh"`,
+		"pkill -CONT runtrimui.sh",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("handoff script is missing %q:\n%s", want, script)
+		}
+	}
+
+	wait := strings.Index(script, `kill -0 "$JUKAHUB_PID"`)
+	settle := strings.Index(script, "sleep 3")
+	takeover := strings.Index(script, "pkill -STOP")
+	run := strings.Index(script, `sh "$APP/launch.sh"`)
+	giveBack := strings.Index(script, "pkill -CONT")
+	if !(wait >= 0 && wait < settle && settle < takeover && takeover < run && run < giveBack) {
+		t.Fatalf("handoff order is wrong (wait=%d settle=%d takeover=%d run=%d giveBack=%d)",
+			wait, settle, takeover, run, giveBack)
+	}
+}
+
+// The handoff script sits in /tmp for the whole stream. Only the variables the
+// port needs may be written there; the rest of JukaHub's environment can hold
+// tokens and must never reach disk.
+func TestChiakiHandoffEnvOmitsUnrelatedVariables(t *testing.T) {
+	t.Setenv("JUKAHUB_TEST_SECRET", "do-not-write-me")
+	allowed := map[string]bool{
+		"HOME": true, "SDCARD_PATH": true, "LD_LIBRARY_PATH": true,
+		"PATH": true, "CLR_OPENSSL_VERSION_OVERRIDE": true, "PYTHONUNBUFFERED": true,
+	}
+	for _, kv := range chiakiHandoffEnv(t.TempDir()) {
+		i := strings.IndexByte(kv, '=')
+		if i <= 0 {
+			t.Fatalf("malformed environment entry %q", kv)
+		}
+		if !allowed[kv[:i]] {
+			t.Errorf("unexpected variable in the handoff script: %s", kv[:i])
+		}
+		if strings.Contains(kv, "do-not-write-me") {
+			t.Errorf("secret leaked into the handoff environment: %s", kv)
+		}
+	}
+}
+
+func TestChiakiShellQuoteEscapesSingleQuotes(t *testing.T) {
+	if got, want := chiakiShellQuote("a'b"), `'a'\''b'`; got != want {
+		t.Fatalf("quote = %q, want %q", got, want)
+	}
+}
+
+func TestChiakiPanelShowsInterfaceLanguageRow(t *testing.T) {
+	root := withChiakiSDRoot(t)
+	app := filepath.Join(root, "Apps", "Chiaki")
+	writeChiakiTestFile(t, filepath.Join(app, "launch.sh"), "#!/bin/sh\n")
+	writeChiakiTestFile(t, filepath.Join(app, "app.py"), "print('ok')\n")
+	writeChiakiTestFile(t, filepath.Join(app, "settings.json"), `{"language":"VI"}`)
+
+	row, ok := chiakiRowByLabel(chiakiRows(), "Interface language")
+	if !ok {
+		t.Fatalf("no language row: %+v", chiakiRows())
+	}
+	if row.action != chiakiActionLanguage {
+		t.Fatalf("language row action = %v", row.action)
+	}
+	if row.status != "VI" {
+		t.Fatalf("language row status = %q, want VI", row.status)
+	}
+	if !strings.Contains(row.detail, "Vietnamese") || !strings.Contains(row.detail, "English") {
+		t.Fatalf("language row should name both languages: %q", row.detail)
+	}
+}
+
+func TestChiakiEnsureEnglishDefaultOnlyOnFreshInstall(t *testing.T) {
+	fresh := t.TempDir()
+	chiakiEnsureEnglishDefault(fresh)
+	if got := chiakiSettingsLanguage(fresh); got != "EN" {
+		t.Fatalf("fresh install language = %q, want EN", got)
+	}
+
+	existing := t.TempDir()
+	writeChiakiTestFile(t, filepath.Join(existing, "settings.json"), `{"language":"VI"}`)
+	chiakiEnsureEnglishDefault(existing)
+	if got := chiakiSettingsLanguage(existing); got != "VI" {
+		t.Fatalf("existing language was overwritten: %q", got)
+	}
+}
+
 func TestChiakiPreservedFilesAreTheUserStateOnes(t *testing.T) {
 	for _, name := range []string{"settings.json", "paired_hosts.json", "chiaki.conf"} {
 		if !chiakiPreservedNames[name] {

@@ -103,8 +103,8 @@ func TestSmartWidgetsPageRenders(t *testing.T) {
 			t.Errorf("%s: row at y=%d runs into the footer", el.Variable, el.Y)
 		}
 	}
-	if toggles != 3 {
-		t.Fatalf("%d toggles on the page, want 3", toggles)
+	if toggles != 4 {
+		t.Fatalf("%d toggles on the page, want 4", toggles)
 	}
 
 	// Labels must draw visible text and stay inside the content panel

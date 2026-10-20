@@ -2040,6 +2040,33 @@ func DiagnosticsText(config *Config) string {
 		}
 	}
 	sb.WriteString("Storage free : " + storage + "\n")
+	if sd := sdHealthCached(); sd.Total > 0 || sd.Free >= 0 || sd.FSType != "" {
+		sb.WriteString("SD card      : " + sdHealthLine(sd) + "\n")
+		if sd.Probed {
+			verdict := "read back verified"
+			if !sd.Verified {
+				verdict = "read back FAILED"
+			}
+			sb.WriteString(fmt.Sprintf("SD write     : %.1f MB/s (%s)\n", sd.WriteMBps, verdict))
+		}
+		for _, finding := range sd.Findings {
+			sb.WriteString("SD warning   : " + finding + "\n")
+		}
+	}
+	if battery := batteryHealthReport(); batteryHealthRelevant(battery) {
+		sb.WriteString("Battery      : " + batteryHealthLine(battery) + "\n")
+		for _, finding := range battery.Findings {
+			sb.WriteString("Battery note : " + finding + "\n")
+		}
+	}
+	// Which release archive this build would install. A device whose model
+	// could not be read still has a target; saying so here saves a support
+	// round trip when an update is refused for another reason.
+	if target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH); err == nil {
+		sb.WriteString("Update asset : " + target.Asset + "\n")
+	} else {
+		sb.WriteString("Update asset : none (" + err.Error() + ")\n")
+	}
 	sb.WriteString("Network      : " + NetworkStatus() + "\n")
 	if tag := availableUpdateTag(); tag != "" {
 		sb.WriteString("Update ready : " + availableUpdateLabel() + "\n")
@@ -2066,6 +2093,9 @@ func DiagnosticsText(config *Config) string {
 	}
 	if safeModeActive() {
 		sb.WriteString("Safe mode    : on\n")
+	}
+	if line := safebootDiagnostic(); line != "" {
+		sb.WriteString(line + "\n")
 	}
 	backups, _ := ListBackupSets()
 	sb.WriteString(fmt.Sprintf("Backups      : %d set(s)\n", len(backups)))

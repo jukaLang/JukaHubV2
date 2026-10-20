@@ -354,6 +354,7 @@ func (s *companionServer) handler() http.Handler {
 	mux.HandleFunc("/api/key", s.guard(s.handleKey))
 	mux.HandleFunc("/api/open", s.guard(s.handleOpenURL))
 	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
+	mux.HandleFunc("/api/screen", s.guard(s.handleScreen))
 	return mux
 }
 
@@ -588,6 +589,13 @@ small{color:var(--dim);display:block;margin-top:8px;font-size:12px}
   <small id=fileName>Files land in the PhoneDrop folder on the SD card.</small>
 </div>
 
+<div class=card>
+  <h2>Screen</h2>
+  <img id=screen alt="Handheld screen" style="width:100%;border-radius:10px;background:#0f131b;display:block">
+  <div class=row><button id=shotScreen>Refresh</button><button class=ghost id=autoScreen>Auto: off</button></div>
+  <small>The image is captured on the handheld, not mirrored from a stream.</small>
+</div>
+
 <div id=toast></div>
 <script>
 const pin = new URL(location.href).searchParams.get('p') || '';
@@ -669,6 +677,30 @@ document.getElementById('sendFile').onclick = async () => {
     btn.disabled = false; btn.textContent = 'Upload';
   }
 };
+const screenEl = document.getElementById('screen');
+let shotURL = '';
+let autoTimer = 0;
+async function loadScreen() {
+  const res = await fetch('/api/screen', {headers: hdr()});
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  const blob = await res.blob();
+  const next = URL.createObjectURL(blob);
+  screenEl.src = next;
+  if (shotURL) URL.revokeObjectURL(shotURL);
+  shotURL = next;
+}
+document.getElementById('shotScreen').onclick = () => loadScreen().catch(e => toast(e.message, true));
+document.getElementById('autoScreen').onclick = e => {
+  clearInterval(autoTimer);
+  if (autoTimer) {
+    autoTimer = 0;
+    e.target.textContent = 'Auto: off';
+    return;
+  }
+  e.target.textContent = 'Auto: on';
+  autoTimer = setInterval(() => { loadScreen().catch(() => {}); }, 1200);
+};
+loadScreen().catch(() => {});
 stateEl.textContent = pin ? 'paired' : 'no PIN';
 </script>
 </html>`

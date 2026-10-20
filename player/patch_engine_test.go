@@ -137,30 +137,37 @@ func TestJukaHubUpdateTargetSelection(t *testing.T) {
 	if err != nil || windows.Asset != "JukaHub-Windows.zip" {
 		t.Fatalf("windows target = %+v, %v", windows, err)
 	}
+	// Any arm64 Linux target gets the one published arm64 archive. Detection
+	// only names the device; it must never decide whether updating is possible.
+	// This is the "no JukaHub update target for device \"unknown\" on
+	// linux/arm64" report on a Smart Pro whose model file was not readable.
+	for _, device := range []DeviceModel{DeviceUnknown, DeviceDevBuild, DeviceTrimuiSmartPro} {
+		target, err := jukaHubUpdateTargetFor(device, "linux", "arm64")
+		if err != nil || target.Asset != "JukaHub-Trimui.zip" {
+			t.Errorf("arm64 fallback for %q = %+v, %v", device, target, err)
+		}
+	}
+
 	for _, tc := range []struct {
 		device DeviceModel
 		goos   string
 		arch   string
 	}{
-		{DeviceUnknown, "linux", "arm64"},
-		{DeviceDevBuild, "linux", "arm64"},
 		{DeviceTrimuiSmartPro, "windows", "amd64"},
 		{DeviceTrimuiBrick, "linux", "arm"},
+		{DeviceUnknown, "linux", "amd64"},
 	} {
 		if target, err := jukaHubUpdateTargetFor(tc.device, tc.goos, tc.arch); err == nil {
 			t.Errorf("unexpected target for %q %s/%s: %+v", tc.device, tc.goos, tc.arch, target)
 		}
 	}
 
-	for _, device := range devices {
+	for _, device := range append(devices, DeviceUnknown) {
 		asset, err := jukaHubAssetName(device, "linux", "arm64")
 		wantAsset := "JukaHub-Trimui.zip"
 		if err != nil || asset != wantAsset {
 			t.Errorf("jukaHubAssetName(%q) = %q, %v; want %q", device, asset, err, wantAsset)
 		}
-	}
-	if _, err := jukaHubAssetName(DeviceUnknown, "linux", "arm64"); err == nil {
-		t.Error("unknown device must not select a release asset")
 	}
 }
 

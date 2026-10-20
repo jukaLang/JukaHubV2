@@ -250,6 +250,9 @@ func widgetsTick(config *Config) {
 		applyBatterySaver(config, false, percent)
 	}
 
+	// Low-battery guard: save state and suspend before the card loses power.
+	lowBatteryTick(config)
+
 	// Time-of-day theme, unless the saver owns the theme right now.
 	if !batterySaverActive {
 		applyTimeOfDayTheme(config, now)
@@ -292,6 +295,8 @@ func ensureSmartSettingsScene(config *Config) {
 			"At 20% or less: slower cadence, no motion, OLED theme."},
 		{"Theme follows time of day", "timeOfDayTheme",
 			"Dawn sunset · day light · evening midnight · night OLED."},
+		{"Save & suspend at 3%", "lowBatteryGuard",
+			"While a game runs: save state, sync, then suspend."},
 	}
 	elems := []Element{{
 		Type: "label",
@@ -368,7 +373,7 @@ func ensureSmartSettingsEntry(config *Config) {
 // toggle element already uses ("true"/"false").
 func defaultWidgetValue(variable string) string {
 	switch variable {
-	case "batterySaver":
+	case "batterySaver", "lowBatteryGuard":
 		return "true" // on by default
 	default:
 		return "false" // autoStart and timeOfDayTheme are opt-in

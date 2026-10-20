@@ -107,7 +107,7 @@ func TestEnsureSettingsWidgets(t *testing.T) {
 		t.Fatalf("%s scene was not created", smartSettingsScene)
 	}
 
-	wantDefaults := map[string]string{"autoStart": "false", "batterySaver": "true", "timeOfDayTheme": "false"}
+	wantDefaults := map[string]string{"autoStart": "false", "batterySaver": "true", "timeOfDayTheme": "false", "lowBatteryGuard": "true"}
 	for variable, wantDefault := range wantDefaults {
 		count := 0
 		var found Element
@@ -206,8 +206,8 @@ func TestSmartWidgetsPageIsNavigable(t *testing.T) {
 			toggleIdx = append(toggleIdx, node.Index)
 		}
 	}
-	if len(toggleIdx) != 3 {
-		t.Fatalf("%d toggles are focusable on the page, want 3", len(toggleIdx))
+	if len(toggleIdx) != 4 {
+		t.Fatalf("%d toggles are focusable on the page, want 4", len(toggleIdx))
 	}
 
 	// Down the list, and the focused element must follow.

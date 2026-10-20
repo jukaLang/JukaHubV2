@@ -52,6 +52,28 @@ narrow to hold it beside the QR without covering the greeting, and then its
 focus entry is disabled rather than left pointing at something invisible;
 **Start → PS Remote Play** reaches the same actions.
 
+### The screen is handed over, not shared
+
+TrimUI firmware gives one app the display: JukaHub's own launcher stops the
+stock `MainUI` before JukaHub starts. A second SDL app therefore cannot come up
+behind a running JukaHub, which is why the old in-process launch (hide the
+window, then run the port) produced no picture.
+
+Launching now writes a small handoff script to `/tmp` and quits JukaHub, so SDL
+and the framebuffer are released. The script waits for JukaHub to exit, lets its
+launcher bring the stock menu back, then takes the screen from it the same way
+that launcher takes it from `MainUI`: pause `runtrimui.sh`, stop `MainUI`, and
+run the port's own `launch.sh`. When the stream ends it resumes the firmware
+supervisors and restores the stock menu. Expect:
+
+* JukaHub to close and the screen to go black for a moment,
+* Chiaki-ng to start by itself,
+* the stock menu to return when you exit the stream (**START + SELECT**),
+* **Start → JukaHub** to reopen JukaHub.
+
+If the port cannot start, the reason is written to `Apps/Chiaki/Chiaki-loi.txt`
+and `Apps/Chiaki/Chiaki-jukahub.log`; the stock menu still comes back.
+
 ## Install
 
 1. Connect the handheld to the same Wi-Fi as the console.
@@ -81,8 +103,34 @@ Apps/Chiaki/libs/brick-stock/
 ```
 
 The Smart Pro S launcher uses the firmware's SDL2/FFmpeg instead. Python 3.8+
-is required; TrimUI firmware 1.0.4 or newer includes it. The panel reports a
-missing Python or SDL2 instead of starting a client that cannot render.
+is required; TrimUI firmware 1.0.4 or newer includes it. JukaHub looks for the
+interpreter in the same places as the port's own launcher (PATH, the app's
+`python/bin`, `SDCARD/System/bin` and PortMaster's `exlibs`), and the panel
+reports a missing Python or SDL2 while still letting you try the launch.
+
+## Interface language
+
+Chiaki-ng ships its own Vietnamese and English catalogues and stores the choice
+as `"language": "VI"` or `"EN"` in `Apps/Chiaki/settings.json`. No translation
+patch is needed — JukaHub flips that single key:
+
+* **Start → PS Remote Play → Interface language** toggles EN/VI and keeps every
+  other setting and pairing key untouched.
+* A fresh install from JukaHub starts in English. An existing `settings.json`
+  is never overwritten; use the row (or the port's own Settings screen, where
+  the switch is labelled `VI`/`EN`) to change it.
+* Some diagnostics printed by the port's launcher stay Vietnamese; only the
+  app's menus come from the translation catalogue.
+
+## Why JukaHub does not embed its own client
+
+Chiaki-ng is a complete Remote Play implementation: console discovery,
+registration crypto, H.264/HEVC decode, audio, input and latency control, with
+a desktop graphics stack. Reimplementing it inside JukaHub would mean replacing
+all of that protocol work rather than just a UI, and this handheld has neither
+Vulkan nor the memory for the upstream Qt client. The TrimUI port exists
+because it already did that work for this hardware; JukaHub's job is to
+install, verify, launch and configure it.
 
 ## Install the PS5 beta
 
@@ -159,7 +207,7 @@ in the port's settings if the stream stutters.
 |------|----------|
 | `Apps/Chiaki/Chiaki-loi.txt` | Port and native-helper output |
 | `Apps/Chiaki-PS5/Chiaki-loi.txt` | PS5 beta port and helper output (`PS5-*` codes) |
-| `Apps/Chiaki/Chiaki-jukahub.log` | JukaHub's launch wrapper output |
+| `Apps/Chiaki/Chiaki-jukahub.log` | Handoff script and port launcher output from JukaHub launches |
 | `Apps/JukaHub/logs.txt` | JukaHub's own log |
 
 ## Removing

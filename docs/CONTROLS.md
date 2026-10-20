@@ -391,8 +391,8 @@ The built-in shell, useful for diagnostics over the on-screen keyboard.
 
 | Input | Action |
 |-------|--------|
-| Typed command | Runs it |
-| Tab | Open the on-screen keyboard (needed on a controller-only device) |
+| Typed command | Runs it (saved to the history file, so it survives a restart) |
+| Tab | Complete the command or path; on an empty line, open the on-screen keyboard |
 | Up / Down | Command history |
 | PgUp / PgDn | Scroll the output |
 | Ctrl+L | Clear the output |

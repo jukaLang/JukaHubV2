@@ -96,6 +96,10 @@ func main() {
 	// update feed or network setup can be bypassed for this launch without
 	// touching the user's config.
 	initSafeMode()
+	// The recovery chord (L+R+Start held at boot) turns safe mode on and puts the
+	// previous JukaHub binary back, so a bad update is reversible without a
+	// terminal or a card reader.
+	initSafeboot()
 
 	// The alarm UI renders through the scene pipeline; register its scene at
 	// startup (in-memory, never written back) so the status-bar clock and the
@@ -2058,6 +2062,10 @@ func main() {
 
 		renderToast(renderer, config)
 		renderInstallBar(renderer, config)
+
+		// Companion screen view: capture on the render thread only when the
+		// phone asked for a frame (see companion_screen.go).
+		captureCompanionScreen(renderer)
 
 		renderer.Present()
 		animTime = float64(sdl.GetTicks64()) / 1000.0

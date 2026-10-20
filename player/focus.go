@@ -46,11 +46,13 @@ const (
 	ChromeStartIndex   = -4
 	ChromeBellIndex    = -5
 	ChromeWeatherIndex = -6
+	ChromeUpdateIndex  = -7
 	ChromeBackType     = "back"
 	ChromeClockType    = "clock"
 	ChromeStartType    = "start"
 	ChromeBellType     = "bell"
 	ChromeWeatherType  = "weather"
+	ChromeUpdateType   = "update"
 )
 
 // chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
@@ -59,7 +61,7 @@ const (
 // The bottom of the screen is now the hint bar only, so there is no tier 2.
 func chromeTier(idx int) int {
 	switch idx {
-	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex:
+	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex:
 		return 1
 	}
 	return 0
@@ -149,6 +151,12 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		}
 		if nc.bellRect.W > 0 {
 			addNode(ChromeBellIndex, nc.bellRect, ChromeBellType, "Notifications")
+		}
+		// The "Update" pill only exists while a release is advertised, so it
+		// joins the bar for that launch. Home has its own chip entry; this is
+		// the same offer on every other screen, reachable the same way.
+		if updatePrompt.badge.W > 0 {
+			addNode(ChromeUpdateIndex, updatePrompt.badge, ChromeUpdateType, "Update")
 		}
 		// Cut the spatial edges chrome picked up while the graph was built, so
 		// a diagonal vector can never pull Left/Right off a content row.

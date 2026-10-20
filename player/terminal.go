@@ -55,6 +55,11 @@ func termInit() {
 	term.histIdx = -1
 	// Keep the session across visits: leaving the terminal and coming back
 	// should not wipe what the user was reading.
+	// Commands survive a restart: the history file is small, read once, and
+	// shared with Tab completion.
+	if len(term.history) == 0 {
+		term.history = termLoadHistory()
+	}
 	if len(term.lines) == 0 {
 		term.started = time.Now()
 		term.lines = []termLine{
@@ -113,11 +118,7 @@ func termHistoryStep(delta int) {
 }
 
 func termExecute(input string) {
-	if cmd := strings.TrimSpace(input); cmd != "" {
-		if len(term.history) == 0 || term.history[len(term.history)-1] != cmd {
-			term.history = append(term.history, cmd)
-		}
-	}
+	termRecordHistory(input)
 	term.histIdx = -1
 	termPushLine(termPrompt+input, false)
 	cmd := strings.TrimSpace(input)
@@ -142,7 +143,7 @@ func termExecute(input string) {
 		termPushLine("  uptime      Show system uptime", false)
 		termPushLine("  whoami      Show current user", false)
 		termPushLine("  hostname    Show hostname", false)
-		termPushLine("  history     Show recent commands", false)
+		termPushLine("  history     Show recent commands (saved across restarts)", false)
 		termPushLine("  clear       Clear the terminal (Ctrl+L)", false)
 		termPushLine("  sysinfo     Show system information", false)
 		termPushLine("  neofetch    System info with ASCII art", false)
@@ -413,9 +414,10 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 	case sdl.K_PAGEDOWN:
 		termScroll(-10)
 	case sdl.K_TAB:
-		// Tab opens the on-screen keyboard: the terminal is reachable from a
-		// controller or touch screen where there is no hardware keyboard.
-		vkOpenTerminal()
+		// Tab completes what is typed. On an empty line it still opens the
+		// on-screen keyboard: the handheld has no hardware keyboard, so that
+		// remains the only way to start typing.
+		termComplete()
 	case sdl.K_l:
 		if e.Keysym.Mod&sdl.KMOD_CTRL != 0 {
 			term.lines = term.lines[:0]
@@ -640,7 +642,7 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// ── Footer hints ────────────────────────────────────────────────────
-	hintStr := "Enter run   ·   Tab / Y keyboard   ·   PgUp PgDn scroll   ·   Esc back"
+	hintStr := "Enter run   ·   Tab complete (empty: keyboard)   ·   PgUp PgDn scroll   ·   Esc back"
 	hw, _, _ := font.SizeUTF8(hintStr)
 	renderText(renderer, config, font, hintStr,
 		sdl.Color{R: 96, G: 116, B: 146, A: 190},

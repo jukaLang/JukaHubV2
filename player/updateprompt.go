@@ -157,6 +157,13 @@ func drawUpdateBadge(renderer *sdl.Renderer, config *Config, rightX, y, h int32)
 	rect := sdl.Rect{X: x, Y: y, W: pillW, H: pillH}
 	fillRoundedRect(renderer, x, y, pillW, pillH, pillH/2, WithAlpha(ColorWarning, 40))
 	strokeRoundedRect(renderer, x, y, pillW, pillH, pillH/2, 1, WithAlpha(ColorWarning, 200))
+	// Focus ring while the D-pad/arrows sit on the pill. Every other top-bar
+	// control draws one; without it a controller user cannot tell the offer is
+	// selected rather than merely present.
+	if focusEngine.ElementIndex() == ChromeUpdateIndex {
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+		renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: pillW + 6, H: pillH + 6})
+	}
 
 	// Down-arrow drawn with lines: Inter may not contain U+2193 on the device.
 	cx := x + 16

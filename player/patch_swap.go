@@ -43,15 +43,21 @@ type jukaHubUpdateTarget struct {
 	Asset  string
 }
 
-// jukaHubUpdateTargetFor selects only explicitly supported runtime targets.
-// Unknown platforms/devices never fall through to the original Smart Pro build.
+// jukaHubUpdateTargetFor selects the release archive for a running platform.
+//
+// There are exactly two published builds: JukaHub-Windows.zip for Windows x64
+// and JukaHub-Trimui.zip for arm64 Linux. The arm64 build does not depend on the
+// detected model, so an unrecognised handheld (a new TrimUI revision, a custom
+// firmware that hides the model file, or a Linux arm64 port of JukaHub) gets the
+// same archive instead of a failed update. That was the bug behind "no JukaHub
+// update target for device \"unknown\" on linux/arm64": detection is a
+// convenience, not a prerequisite for updating.
 func jukaHubUpdateTargetFor(device DeviceModel, goos, arch string) (jukaHubUpdateTarget, error) {
 	if device == DeviceDevBuild && goos == "windows" && arch == "amd64" {
 		// The Windows build is shared by every desktop install.
 		return jukaHubUpdateTarget{Device: device, OS: goos, Arch: arch, Asset: "JukaHub-Windows.zip"}, nil
 	}
-	if goos == "linux" && arch == "arm64" && device.IsTrimui() {
-		// Every supported TrimUI model uses the same arm64 archive.
+	if goos == "linux" && arch == "arm64" {
 		return jukaHubUpdateTarget{Device: device, OS: goos, Arch: arch, Asset: "JukaHub-Trimui.zip"}, nil
 	}
 	return jukaHubUpdateTarget{}, fmt.Errorf("no JukaHub update target for device %q on %s/%s", device, goos, arch)

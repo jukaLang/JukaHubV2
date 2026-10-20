@@ -109,7 +109,10 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   manifest. A **PS5** tile in the home header, left of the phone-pairing QR,
   plays it in one press and downloads it first when it is missing; on a handheld
   it is selected with the D-pad (`Up` from the card beneath it) and pressed with
-  **A**, so no touchscreen is needed. See
+  **A**, so no touchscreen is needed. JukaHub hands the screen to the port and
+  closes while it runs (the stock menu returns when the stream ends), and an
+  **Interface language** row switches Chiaki-ng's own menus between its English
+  and Vietnamese catalogues without patching the app. See
   [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
@@ -280,6 +283,7 @@ JukaHub on a PC.
 | [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
 | [PS Remote Play](docs/REMOTE_PLAY.md) | Chiaki-ng install, PS4 pairing, the opt-in PS5 beta and its setup |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
+| [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
