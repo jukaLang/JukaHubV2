@@ -230,9 +230,12 @@ still attach a log or ask on [Discord](https://discord.gg/R9qgJjh5jG).
 
 ## Other devices
 
-The same package is built for **TrimUI Smart Pro S**, **TrimUI Brick** and
-**Brick Pro** (pick the matching file on the Releases page). Windows builds are
-for trying JukaHub on a PC.
+The same package is built for **TrimUI Smart Pro S**, **TrimUI Brick**,
+**Brick Pro** and **TrimUI Hammer** (pick the matching file on the Releases
+page). JukaHub detects the panel and picks its canvas automatically: 1280×720
+on the Smart Pro and Smart Pro S, and a compact 960×720 canvas scaled to the
+1024×768 4:3 Brick, Brick Pro and Hammer screens. Windows builds are for trying
+JukaHub on a PC.
 
 ## Documentation
 

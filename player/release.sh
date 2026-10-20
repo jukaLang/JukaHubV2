@@ -7,7 +7,7 @@
 #
 # Produces, in dist/:
 #   JukaHub-win-x64.zip
-#   JukaHub-{trimui-smart-pro,trimui-smart-pro-s,trimui-brick,trimui-brick-pro}-linux-arm64.tar.gz
+#   JukaHub-{trimui-smart-pro,trimui-smart-pro-s,trimui-brick,trimui-brick-pro,trimui-hammer}-linux-arm64.tar.gz
 #   manifest.json
 #   SHA256SUMS
 #
@@ -49,7 +49,7 @@ WINDOWS_SIZE="$(stat -c %s "$OUT/JukaHub-win-x64.zip")"
 
 # --- TrimUI Linux arm64 targets ---
 # These identifiers match DeviceModel values and the updater's strict target map.
-TRIMUI_DEVICES=(trimui-smart-pro trimui-smart-pro-s trimui-brick trimui-brick-pro)
+TRIMUI_DEVICES=(trimui-smart-pro trimui-smart-pro-s trimui-brick trimui-brick-pro trimui-hammer)
 TARGETS_JSON=""
 for device in "${TRIMUI_DEVICES[@]}"; do
     echo "Building TrimUI target ${device} (Linux arm64, CGO + SDL2)..."

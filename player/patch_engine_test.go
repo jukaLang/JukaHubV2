@@ -70,7 +70,13 @@ func TestDetectDeviceForSystem(t *testing.T) {
 		{"smart pro s TG5050", "linux", "TrimUI Smart Pro S TG5050", DeviceTrimuiSmartProS},
 		{"brick TG3040", "linux", "TrimUI Brick TG3040", DeviceTrimuiBrick},
 		{"brick pro TG4040", "linux", "TrimUI Brick Pro TG4040", DeviceTrimuiBrickPro},
-		{"marketing name without model id", "linux", "TrimUI Smart Pro S", DeviceUnknown},
+		{"hammer TG3040", "linux", "TrimUI Hammer TG3040", DeviceTrimuiHammer},
+		{"hammer marketing name only", "linux", "TrimUI Hammer", DeviceTrimuiHammer},
+		{"hammer with a conflicting model id", "linux", "TrimUI Hammer TG4040", DeviceUnknown},
+		{"smart pro s marketing name only", "linux", "TrimUI Smart Pro S", DeviceTrimuiSmartProS},
+		{"smart pro marketing name only", "linux", "TrimUI Smart Pro", DeviceTrimuiSmartPro},
+		{"brick marketing name only", "linux", "TRIMUI Brick", DeviceTrimuiBrick},
+		{"brick pro marketing name only", "linux", "TRIMUI Brick Pro", DeviceTrimuiBrickPro},
 		{"unknown model", "linux", "TrimUI TG9999", DeviceUnknown},
 		{"model ID must be a whole token", "linux", "TrimUI TG50401", DeviceUnknown},
 		{"model code without TrimUI model string", "linux", "TG5040", DeviceUnknown},
@@ -112,6 +118,7 @@ func TestJukaHubUpdateTargetSelection(t *testing.T) {
 		DeviceTrimuiSmartProS,
 		DeviceTrimuiBrick,
 		DeviceTrimuiBrickPro,
+		DeviceTrimuiHammer,
 	}
 	for _, device := range devices {
 		t.Run(string(device), func(t *testing.T) {
@@ -175,7 +182,10 @@ func TestParsePatchManifest(t *testing.T) {
 			 "sha256": "` + strings.Repeat("cd", 32) + `", "size": 1234},
 			{"device": "trimui-brick-pro", "os": "linux", "arch": "arm64",
 			 "asset": "JukaHub-trimui-brick-pro-linux-arm64.tar.gz",
-			 "sha256": "` + strings.Repeat("de", 32) + `", "size": 1234}
+			 "sha256": "` + strings.Repeat("de", 32) + `", "size": 1234},
+			{"device": "trimui-hammer", "os": "linux", "arch": "arm64",
+			 "asset": "JukaHub-trimui-hammer-linux-arm64.tar.gz",
+			 "sha256": "` + strings.Repeat("ef", 32) + `", "size": 1234}
 		]
 	}`
 
@@ -190,7 +200,7 @@ func TestParsePatchManifest(t *testing.T) {
 	if m.ManifestTargetFor("brick", "linux", "arm64") != nil {
 		t.Fatal("wrong device must not match")
 	}
-	for _, device := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro} {
+	for _, device := range []DeviceModel{DeviceTrimuiSmartProS, DeviceTrimuiBrick, DeviceTrimuiBrickPro, DeviceTrimuiHammer} {
 		if manifestTarget := m.ManifestTargetFor(string(device), "linux", "arm64"); manifestTarget == nil || manifestTarget.Asset == "" {
 			t.Errorf("manifest has no target for %q", device)
 		}

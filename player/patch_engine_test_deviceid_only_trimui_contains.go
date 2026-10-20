@@ -23,6 +23,7 @@ func TestRepoPkgCompatibleByExactDeviceMirrorsTheRepoGateOnly(t *testing.T) {
 		{DeviceTrimuiSmartProS, false},
 		{DeviceTrimuiBrick, false},
 		{DeviceTrimuiBrickPro, false},
+		{DeviceTrimuiHammer, false},
 		{DeviceUnknown, false},
 	} {
 		if got := repoPkgCompatibleWithDeviceExactSameDevice(pkg, tc.device, "arm64", false); got != tc.want {

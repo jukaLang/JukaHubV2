@@ -62,7 +62,7 @@ settings such as `search_query` or `stream_url`.
 | `backgroundImage` | string | background image path |
 | `fonts`, `fontSizes` | object | per-role font file and size (e.g. `small`, `medium`, `big`) |
 | `fullscreen` | bool | start in fullscreen |
-| `screenWidth`, `screenHeight` | int | window size on desktop |
+| `screenWidth`, `screenHeight` | int | window size on desktop. On supported TrimUI models the runtime uses the device's canvas: 1280×720 on the Smart Pro / Smart Pro S and a compact 960×720 canvas scaled to the 1024×768 Brick, Brick Pro and Hammer panels. |
 | `tools_path` | string | where yt-dlp / ffmpeg live |
 | `fileExplorerRoot` | string | starting directory of the file explorer |
 | `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country |

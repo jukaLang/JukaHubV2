@@ -235,6 +235,11 @@ func main() {
 	// reference the first scene.
 	currentSceneIndex = 0
 
+	// Pick the logical canvas for this panel (the Brick/Hammer family needs the
+	// compact 4:3 canvas). Scene geometry is scaled once here, after every
+	// injected scene has been added, so the whole UI uses one coordinate space.
+	applyDeviceUIProfile(config)
+
 	// Optional resolution / fullscreen configuration (great for TrimuiSmartPro)
 	screenW, screenH := 1280, 720
 	if config.Variables.ScreenWidth > 0 {
@@ -282,9 +287,19 @@ func main() {
 	}
 	defer renderer.Destroy()
 
-	// Render into a fixed logical 1280x720 coordinate system and let SDL
-	// letterbox to the physical window size. This preserves the Trimui layout
-	// on Windows when the window is resized.
+	// Mouse and touch arrive in physical window pixels. The handheld canvases
+	// are scaled to their panel (notably 960x720 onto the Brick's 1024x768), so
+	// seed the inverse transform now instead of waiting for a resize event that
+	// never comes in fullscreen.
+	if ow, oh, err := renderer.GetOutputSize(); err == nil && ow > 0 && oh > 0 {
+		updateWindowScale(ow, oh)
+	} else if ww, wh := window.GetSize(); ww > 0 && wh > 0 {
+		updateWindowScale(ww, wh)
+	}
+
+	// Render into a fixed logical canvas and let SDL scale it to the physical
+	// window size. This preserves the layout on Windows when the window is
+	// resized and maps the compact 4:3 canvas onto the Brick panels.
 	renderer.SetLogicalSize(screenWidth, screenHeight)
 
 	// Enable alpha blending for draw operations (FillRect, etc.) so
@@ -350,6 +365,7 @@ func main() {
 		// and update the scene list. The render loop will pick up the new
 		// config on the next frame.
 		mergeUserConfig(newCfg, loadUserConfig())
+		applyDeviceUIProfile(newCfg)
 		if presetName, ok := newCfg.Variables.Custom["theme_preset"].(string); ok && presetName != "" {
 			ApplyThemeColors(GetThemePreset(presetName))
 		}

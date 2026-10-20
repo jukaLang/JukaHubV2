@@ -112,7 +112,9 @@ and writes to `dist/`:
 
 - `JukaHub-win-x64.zip` — the Windows executable
 - `JukaHub-<device>-linux-arm64.tar.gz` for each of `trimui-smart-pro`,
-  `trimui-smart-pro-s`, `trimui-brick`, `trimui-brick-pro`
+  `trimui-smart-pro-s`, `trimui-brick`, `trimui-brick-pro`, `trimui-hammer`.
+  The Brick family runs the compact 4:3 UI canvas; the Smart Pro family keeps
+  the 1280×720 canvas.
 - `manifest.json` — `schema`, `product`, `version`, `channel`, `published_at`
   and one `targets[]` entry per asset (`device`, `os`, `arch`, `asset`,
   `sha256`, `size`, `min_firmware`, `files`)

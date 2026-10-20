@@ -84,6 +84,7 @@ func TestRepoPkgCompatibleByExactDevice(t *testing.T) {
 		{DeviceTrimuiSmartProS, false},
 		{DeviceTrimuiBrick, false},
 		{DeviceTrimuiBrickPro, false},
+		{DeviceTrimuiHammer, false},
 		{DeviceUnknown, false},
 	} {
 		if got := signedRepoPackageCompatible(pkg, tc.device, "arm64", false); got != tc.want {
