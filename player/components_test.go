@@ -70,6 +70,65 @@ func TestUICardDrawsSurface(t *testing.T) {
 	}
 }
 
+func TestUIButtonDrawsSharedStates(t *testing.T) {
+	config := &Config{}
+	font := FontForRole(config, TypeBody)
+	if font == nil {
+		t.Skip("body font unavailable")
+	}
+	rect := sdl.Rect{X: 100, Y: 100, W: 200, H: 60}
+	fill := sdl.Color{R: 20, G: 120, B: 220, A: 255}
+	rest := componentFrame(t, func(r *sdl.Renderer) {
+		UIButton(r, config, rect, "Save", UIButtonStyle{Variant: UIButtonCustom, Fill: fill, Font: font, Radius: RadiusMD}, UIButtonState{})
+	})
+	if got := rest.at(110, 130); got.B < 180 || got.R > 60 {
+		t.Errorf("resting button pixel = %+v, want the custom fill", got)
+	}
+	// The label must sit on top of the fill. contrastText picks dark ink on
+	// this bright blue, so count pixels darker than both the fill and shadow.
+	ink := 0
+	for y := int32(110); y < 150; y++ {
+		for x := int32(120); x < 280; x++ {
+			if got := rest.at(x, y); got.R < 90 && got.G < 90 && got.B < 90 {
+				ink++
+			}
+		}
+	}
+	if ink < 20 {
+		t.Errorf("button label drew only %d ink pixels", ink)
+	}
+
+	focused := componentFrame(t, func(r *sdl.Renderer) {
+		UIButton(r, config, rect, "Save", UIButtonStyle{
+			Variant:   UIButtonCustom,
+			Fill:      fill,
+			FocusFill: sdl.Color{R: 220, G: 60, B: 60, A: 255},
+			Font:      font,
+			Radius:    RadiusMD,
+		}, UIButtonState{Focused: true})
+	})
+	if got := focused.at(110, 130); got.R < 180 || got.B > 120 {
+		t.Errorf("focused button pixel = %+v, want the focus fill", got)
+	}
+	if focused.at(rect.X-FocusRing, 130) == focused.bg {
+		t.Error("focused button did not draw its outer focus ring")
+	}
+
+	disabled := componentFrame(t, func(r *sdl.Renderer) {
+		UIButton(r, config, rect, "Save", UIButtonStyle{Variant: UIButtonCustom, Fill: fill, Font: font, Radius: RadiusMD}, UIButtonState{Disabled: true})
+	})
+	if disabled.at(110, 130) == rest.at(110, 130) {
+		t.Error("disabled button looks identical to its resting state")
+	}
+
+	pressed := componentFrame(t, func(r *sdl.Renderer) {
+		UIButton(r, config, rect, "Save", UIButtonStyle{Variant: UIButtonCustom, Fill: fill, Font: font, Radius: RadiusMD}, UIButtonState{Pressed: true})
+	})
+	if pressed.at(110, 130).B >= rest.at(110, 130).B {
+		t.Error("pressed button was not darkened")
+	}
+}
+
 func TestUIBadgeMeasuresAndDraws(t *testing.T) {
 	config := &Config{}
 	w, h := UIBadgeSize(config, "3")

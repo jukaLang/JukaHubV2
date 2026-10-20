@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"time"
 
@@ -22,6 +23,8 @@ const (
 	gameTetris
 	game2048
 	gamePong
+	gameMinesweeper
+	gameFlappy
 )
 
 var (
@@ -47,6 +50,8 @@ var gameList = []gameEntry{
 	{"Tetris", "[T]", "Stack blocks, clear lines", gameTetris},
 	{"2048", "[2]", "Merge tiles, reach 2048", game2048},
 	{"Pong", "[P]", "Classic paddle ball", gamePong},
+	{"Minesweeper", "[M]", "Flag mines, clear the board", gameMinesweeper},
+	{"Flappy", "[F]", "Tap to fly through pipes", gameFlappy},
 }
 
 var gameMenuCursor int
@@ -66,16 +71,17 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 	tw, _, _ := titleFont.SizeUTF8(title)
 	drawText(renderer, titleFont, title, (screenWidth-int32(tw))/2, 40, getAccentColor(config), textAlignLeft)
 
-	// Game cards — 2x2 grid
-	cardW := int32(500)
-	cardH := int32(200)
+	// Game cards — 3x2 grid so all six games fit on the 720p screen.
+	const gameCols = 3
+	cardW := int32(390)
+	cardH := int32(190)
 	gap := int32(30)
-	startX := (screenWidth - (cardW*2 + gap)) / 2
-	startY := int32(120)
+	startX := (screenWidth - (cardW*gameCols + gap*(gameCols-1))) / 2
+	startY := int32(112)
 
 	for i, g := range gameList {
-		col := i % 2
-		row := i / 2
+		col := i % gameCols
+		row := i / gameCols
 		cx := startX + int32(col)*(cardW+gap)
 		cy := startY + int32(row)*(cardH+gap)
 		focused := i == gameMenuCursor
@@ -108,7 +114,8 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 
 		// Description
 		if smallFont != nil {
-			drawText(renderer, smallFont, g.desc, cx+80, cy+56, ColorTextSecondary(), textAlignLeft)
+			desc := ellipsize(smallFont, g.desc, cardW-100)
+			drawText(renderer, smallFont, desc, cx+80, cy+56, ColorTextSecondary(), textAlignLeft)
 		}
 
 		// "Press A to play" hint
@@ -133,22 +140,22 @@ func handleGamesMenuInput(event *sdl.KeyboardEvent) bool {
 	}
 	switch event.Keysym.Sym {
 	case sdl.K_UP:
-		if gameMenuCursor >= 2 {
-			gameMenuCursor -= 2
+		if gameMenuCursor >= 3 {
+			gameMenuCursor -= 3
 		}
 		PlayNavSound()
 	case sdl.K_DOWN:
-		if gameMenuCursor < len(gameList)-2 {
-			gameMenuCursor += 2
+		if gameMenuCursor+3 < len(gameList) {
+			gameMenuCursor += 3
 		}
 		PlayNavSound()
 	case sdl.K_LEFT:
-		if gameMenuCursor%2 == 1 {
+		if gameMenuCursor%3 > 0 {
 			gameMenuCursor--
 		}
 		PlayNavSound()
 	case sdl.K_RIGHT:
-		if gameMenuCursor%2 == 0 && gameMenuCursor+1 < len(gameList) {
+		if gameMenuCursor%3 < 2 && gameMenuCursor+1 < len(gameList) {
 			gameMenuCursor++
 		}
 		PlayNavSound()
@@ -181,6 +188,10 @@ func startGame(id gameID) {
 		init2048()
 	case gamePong:
 		initPong()
+	case gameMinesweeper:
+		initMinesweeper()
+	case gameFlappy:
+		initFlappy()
 	}
 }
 
@@ -202,6 +213,10 @@ func renderActiveGame(renderer *sdl.Renderer, config *Config) {
 		render2048(renderer, config)
 	case gamePong:
 		renderPong(renderer, config)
+	case gameMinesweeper:
+		renderMinesweeper(renderer, config)
+	case gameFlappy:
+		renderFlappy(renderer, config)
 	}
 }
 
@@ -224,6 +239,10 @@ func handleActiveGameInput(event *sdl.KeyboardEvent) bool {
 		return handle2048Input(event)
 	case gamePong:
 		return handlePongInput(event)
+	case gameMinesweeper:
+		return handleMinesweeperInput(event)
+	case gameFlappy:
+		return handleFlappyInput(event)
 	}
 	return true
 }
@@ -239,6 +258,10 @@ func tickActiveGame() {
 		tickTetris()
 	case gamePong:
 		tickPong()
+	case gameMinesweeper:
+		tickMinesweeper()
+	case gameFlappy:
+		tickFlappy()
 	}
 }
 
@@ -1138,22 +1161,22 @@ func ctrlGames(e *sdl.ControllerButtonEvent, config *Config) bool {
 func ctrlGamesMenu(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if gameMenuCursor >= 2 {
-			gameMenuCursor -= 2
+		if gameMenuCursor >= 3 {
+			gameMenuCursor -= 3
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if gameMenuCursor < len(gameList)-2 {
-			gameMenuCursor += 2
+		if gameMenuCursor+3 < len(gameList) {
+			gameMenuCursor += 3
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-		if gameMenuCursor%2 == 1 {
+		if gameMenuCursor%3 > 0 {
 			gameMenuCursor--
 		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		if gameMenuCursor%2 == 0 && gameMenuCursor+1 < len(gameList) {
+		if gameMenuCursor%3 < 2 && gameMenuCursor+1 < len(gameList) {
 			gameMenuCursor++
 		}
 		PlayNavSound()
@@ -1188,6 +1211,10 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 			init2048()
 		case gamePong:
 			initPong()
+		case gameMinesweeper:
+			initMinesweeper()
+		case gameFlappy:
+			initFlappy()
 		}
 		gameOver = false
 		gameScore = 0
@@ -1299,8 +1326,482 @@ func ctrlActiveGame(e *sdl.ControllerButtonEvent) bool {
 				initPong()
 			}
 		}
+	case gameMinesweeper:
+		if gameOver {
+			if e.Button == sdl.CONTROLLER_BUTTON_A || e.Button == sdl.CONTROLLER_BUTTON_START {
+				initMinesweeper()
+				gameOver = false
+				gameScore = 0
+			}
+			return true
+		}
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			msCursorY--
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			msCursorY++
+		case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			msCursorX--
+		case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			msCursorX++
+		case sdl.CONTROLLER_BUTTON_A:
+			msRevealAtCursor()
+		case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
+			msToggleFlagAtCursor()
+		default:
+			return true
+		}
+		msClampCursor()
+		PlayNavSound()
+	case gameFlappy:
+		if e.Button == sdl.CONTROLLER_BUTTON_A || e.Button == sdl.CONTROLLER_BUTTON_START {
+			flappyFlap()
+		}
 	}
 	return true
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// MINESWEEPER
+// ──────────────────────────────────────────────────────────────────────
+
+const (
+	msW      = 12
+	msH      = 9
+	msMines  = 16
+	msCellSz = 32
+)
+
+var (
+	msMine     [msH][msW]bool
+	msRevealed [msH][msW]bool
+	msFlagged  [msH][msW]bool
+	msCursorX  int
+	msCursorY  int
+	msWon      bool
+)
+
+func initMinesweeper() {
+	msMine = [msH][msW]bool{}
+	msRevealed = [msH][msW]bool{}
+	msFlagged = [msH][msW]bool{}
+	msCursorX, msCursorY = msW/2, msH/2
+	msWon = false
+	gameScore = 0
+	// Keep the first move safe: no mine under the centre 3x3 area.
+	for placed := 0; placed < msMines; {
+		x, y := rand.Intn(msW), rand.Intn(msH)
+		if msMine[y][x] || (msAbs(x-msCursorX) <= 1 && msAbs(y-msCursorY) <= 1) {
+			continue
+		}
+		msMine[y][x] = true
+		placed++
+	}
+}
+
+func msAbs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
+func msClampCursor() {
+	if msCursorX < 0 {
+		msCursorX = 0
+	}
+	if msCursorX >= msW {
+		msCursorX = msW - 1
+	}
+	if msCursorY < 0 {
+		msCursorY = 0
+	}
+	if msCursorY >= msH {
+		msCursorY = msH - 1
+	}
+}
+
+func msNeighborMines(x, y int) int {
+	n := 0
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			nx, ny := x+dx, y+dy
+			if nx >= 0 && nx < msW && ny >= 0 && ny < msH && msMine[ny][nx] {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+func msToggleFlagAtCursor() {
+	if gameOver || msRevealed[msCursorY][msCursorX] {
+		return
+	}
+	msFlagged[msCursorY][msCursorX] = !msFlagged[msCursorY][msCursorX]
+}
+
+func msRevealAtCursor() {
+	if gameOver {
+		return
+	}
+	msRevealCell(msCursorX, msCursorY)
+	if gameOver {
+		return
+	}
+	revealed := 0
+	for y := 0; y < msH; y++ {
+		for x := 0; x < msW; x++ {
+			if msRevealed[y][x] {
+				revealed++
+			}
+		}
+	}
+	gameScore = revealed
+	if revealed == msW*msH-msMines {
+		gameOver = true
+		msWon = true
+	}
+}
+
+func msRevealCell(x, y int) {
+	if x < 0 || x >= msW || y < 0 || y >= msH || msRevealed[y][x] || msFlagged[y][x] {
+		return
+	}
+	msRevealed[y][x] = true
+	if msMine[y][x] {
+		gameOver = true
+		msWon = false
+		return
+	}
+	if msNeighborMines(x, y) != 0 {
+		return
+	}
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx != 0 || dy != 0 {
+				msRevealCell(x+dx, y+dy)
+			}
+		}
+	}
+}
+
+func handleMinesweeperInput(event *sdl.KeyboardEvent) bool {
+	if gameOver {
+		switch event.Keysym.Sym {
+		case sdl.K_r, sdl.K_RETURN, sdl.K_SPACE:
+			initMinesweeper()
+			gameOver = false
+		}
+		return true
+	}
+	switch event.Keysym.Sym {
+	case sdl.K_UP, sdl.K_w:
+		msCursorY--
+	case sdl.K_DOWN, sdl.K_s:
+		msCursorY++
+	case sdl.K_LEFT, sdl.K_a:
+		msCursorX--
+	case sdl.K_RIGHT, sdl.K_d:
+		msCursorX++
+	case sdl.K_RETURN, sdl.K_SPACE:
+		msRevealAtCursor()
+	case sdl.K_f:
+		msToggleFlagAtCursor()
+	case sdl.K_r:
+		initMinesweeper()
+	default:
+		return false
+	}
+	msClampCursor()
+	PlayNavSound()
+	return true
+}
+
+func tickMinesweeper() {}
+
+var msNumberColors = map[int]sdl.Color{
+	1: {R: 90, G: 160, B: 255, A: 255},
+	2: {R: 90, G: 200, B: 120, A: 255},
+	3: {R: 240, G: 110, B: 110, A: 255},
+	4: {R: 180, G: 120, B: 255, A: 255},
+	5: {R: 240, G: 160, B: 70, A: 255},
+	6: {R: 80, G: 210, B: 210, A: 255},
+	7: {R: 230, G: 230, B: 230, A: 255},
+	8: {R: 150, G: 160, B: 180, A: 255},
+}
+
+func renderMinesweeper(renderer *sdl.Renderer, config *Config) {
+	boardW := int32(msW * msCellSz)
+	boardH := int32(msH * msCellSz)
+	offsetX := (screenWidth - boardW) / 2
+	offsetY := (screenHeight-boardH)/2 + 18
+	font, _ := getCachedFont(config, "medium")
+	small, _ := getCachedFont(config, "small")
+
+	fillRoundedRect(renderer, offsetX-10, offsetY-10, boardW+20, boardH+20, 12, ColorPanel)
+
+	flags := 0
+	revealed := 0
+	for y := 0; y < msH; y++ {
+		for x := 0; x < msW; x++ {
+			if msFlagged[y][x] {
+				flags++
+			}
+			if msRevealed[y][x] {
+				revealed++
+			}
+			px := offsetX + int32(x*msCellSz)
+			py := offsetY + int32(y*msCellSz)
+			cell := sdl.Rect{X: px + 1, Y: py + 1, W: msCellSz - 2, H: msCellSz - 2}
+			bg := sdl.Color{R: 38, G: 48, B: 68, A: 255}
+			if msRevealed[y][x] {
+				bg = sdl.Color{R: 22, G: 28, B: 42, A: 255}
+			}
+			if (gameOver && msMine[y][x] && !msWon) || (msWon && msMine[y][x]) {
+				bg = sdl.Color{R: 120, G: 36, B: 46, A: 255}
+			}
+			fillRoundedRect(renderer, cell.X, cell.Y, cell.W, cell.H, 5, bg)
+			if msRevealed[y][x] && msMine[y][x] {
+				fillCircle(renderer, px+msCellSz/2, py+msCellSz/2, 7, sdl.Color{R: 240, G: 90, B: 90, A: 255})
+			} else if msRevealed[y][x] {
+				n := msNeighborMines(x, y)
+				if n > 0 && font != nil {
+					label := fmt.Sprintf("%d", n)
+					lw, lh, _ := font.SizeUTF8(label)
+					col := msNumberColors[n]
+					if col == (sdl.Color{}) {
+						col = ColorTextPrimary()
+					}
+					drawText(renderer, font, label, px+(msCellSz-int32(lw))/2, py+(msCellSz-int32(lh))/2, col, textAlignLeft)
+				}
+			} else if msFlagged[y][x] && small != nil {
+				fw, fh, _ := small.SizeUTF8("F")
+				drawText(renderer, small, "F", px+(msCellSz-int32(fw))/2, py+(msCellSz-int32(fh))/2,
+					sdl.Color{R: 240, G: 190, B: 80, A: 255}, textAlignLeft)
+			}
+		}
+	}
+
+	// Cursor ring.
+	cx := offsetX + int32(msCursorX*msCellSz)
+	cy := offsetY + int32(msCursorY*msCellSz)
+	strokeRoundedRect(renderer, cx-2, cy-2, msCellSz+4, msCellSz+4, 7, 2, getAccentColor(config))
+
+	if font != nil {
+		header := fmt.Sprintf("Minesweeper   %d/%d cleared   %d flags   %d mines", revealed, msW*msH-msMines, flags, msMines)
+		hw, _, _ := font.SizeUTF8(header)
+		drawText(renderer, font, header, (screenWidth-int32(hw))/2, offsetY-58, getAccentColor(config), textAlignLeft)
+	}
+	if small != nil {
+		hint := "Arrows move  •  Enter reveal  •  F flag  •  R restart  •  Q quit"
+		hw, _, _ := small.SizeUTF8(hint)
+		drawText(renderer, small, hint, (screenWidth-int32(hw))/2, offsetY+boardH+18, ColorTextTertiary(), textAlignLeft)
+	}
+	if gameOver {
+		title := "Boom!"
+		if msWon {
+			title = "Board cleared!"
+		}
+		renderGameOver(renderer, config, title, gameScore)
+	}
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// FLAPPY
+// ──────────────────────────────────────────────────────────────────────
+
+const (
+	flappyW        = 760
+	flappyH        = 500
+	flappyGround   = 64
+	flappyBirdX    = 190
+	flappyBirdR    = 16
+	flappyGap      = 150
+	flappyPipeW    = 64
+	flappyGravity  = 1500.0
+	flappyFlapVel  = -500.0
+	flappyPipeVel  = 190.0
+	flappySpawnGap = 1.45
+)
+
+type flappyPipe struct {
+	X      float64
+	GapY   float64
+	Passed bool
+}
+
+var (
+	flappyY         float64
+	flappyVy        float64
+	flappyPipes     []flappyPipe
+	flappyLastMs    uint64
+	flappySpawnWait float64
+)
+
+func initFlappy() {
+	flappyY = float64(flappyH-flappyGround) / 2
+	flappyVy = 0
+	flappyPipes = nil
+	flappySpawnWait = 0.9
+	flappyLastMs = sdl.GetTicks64()
+	gameScore = 0
+	gameOver = false
+}
+
+func flappyFlap() {
+	if gameOver {
+		initFlappy()
+		return
+	}
+	flappyVy = flappyFlapVel
+}
+
+func handleFlappyInput(event *sdl.KeyboardEvent) bool {
+	switch event.Keysym.Sym {
+	case sdl.K_SPACE, sdl.K_RETURN, sdl.K_UP, sdl.K_w:
+		flappyFlap()
+	case sdl.K_r:
+		initFlappy()
+	default:
+		return false
+	}
+	return true
+}
+
+func tickFlappy() {
+	if gameOver {
+		return
+	}
+	now := sdl.GetTicks64()
+	if flappyLastMs == 0 {
+		flappyLastMs = now
+		return
+	}
+	dt := float64(now-flappyLastMs) / 1000
+	flappyLastMs = now
+	if dt <= 0 {
+		return
+	}
+	if dt > 0.1 {
+		dt = 0.1
+	}
+
+	flappyVy += flappyGravity * dt
+	flappyY += flappyVy * dt
+	floor := float64(flappyH - flappyGround)
+	if flappyY < float64(flappyBirdR) {
+		flappyY = float64(flappyBirdR)
+		flappyVy = 0
+	}
+	if flappyY+float64(flappyBirdR) >= floor {
+		gameOver = true
+		return
+	}
+
+	for i := range flappyPipes {
+		flappyPipes[i].X -= flappyPipeVel * dt
+		p := &flappyPipes[i]
+		if !p.Passed && p.X+flappyPipeW < float64(flappyBirdX) {
+			p.Passed = true
+			gameScore++
+			PlayNavSound()
+		}
+	}
+	if len(flappyPipes) > 0 && flappyPipes[0].X+flappyPipeW < -40 {
+		flappyPipes = flappyPipes[1:]
+	}
+
+	flappySpawnWait -= dt
+	if flappySpawnWait <= 0 {
+		gapMin := float64(80)
+		gapMax := floor - flappyGap - 80
+		gapY := gapMin + rand.Float64()*(gapMax-gapMin)
+		flappyPipes = append(flappyPipes, flappyPipe{X: float64(flappyW) + 60, GapY: gapY})
+		flappySpawnWait = flappySpawnGap
+	}
+
+	// Circle-vs-rectangle check, slightly forgiving on the pipe caps.
+	bx, by := float64(flappyBirdX), flappyY
+	for _, p := range flappyPipes {
+		if bx+float64(flappyBirdR) < p.X || bx-float64(flappyBirdR) > p.X+flappyPipeW {
+			continue
+		}
+		if by-float64(flappyBirdR) < p.GapY || by+float64(flappyBirdR) > p.GapY+flappyGap {
+			gameOver = true
+			return
+		}
+	}
+}
+
+func renderFlappy(renderer *sdl.Renderer, config *Config) {
+	offsetX := (screenWidth - flappyW) / 2
+	offsetY := (screenHeight - flappyH) / 2
+
+	// Sky and horizon.
+	fillRoundedRect(renderer, offsetX-4, offsetY-4, flappyW+8, flappyH+8, 14, sdl.Color{R: 60, G: 150, B: 215, A: 255})
+	fillRoundedRect(renderer, offsetX, offsetY+flappyH-flappyGround, flappyW, flappyGround, 0, sdl.Color{R: 90, G: 180, B: 95, A: 255})
+	renderer.SetDrawColor(255, 255, 255, 45)
+	for i := int32(0); i < 5; i++ {
+		x := offsetX + 60 + i*170
+		fillCircle(renderer, x, offsetY+90+(i%2)*34, 34, sdl.Color{R: 255, G: 255, B: 255, A: 40})
+	}
+
+	// Pipes.
+	for _, p := range flappyPipes {
+		x := offsetX + int32(math.Round(p.X))
+		gapTop := offsetY + int32(math.Round(p.GapY))
+		gapBottom := gapTop + flappyGap
+		pipeCol := sdl.Color{R: 70, G: 190, B: 90, A: 255}
+		pipeDark := sdl.Color{R: 45, G: 145, B: 70, A: 255}
+		fillRoundedRect(renderer, x, offsetY, flappyPipeW, gapTop-offsetY, 7, pipeCol)
+		fillRoundedRect(renderer, x-4, gapTop-24, flappyPipeW+8, 24, 5, pipeDark)
+		fillRoundedRect(renderer, x, gapBottom, flappyPipeW, offsetY+flappyH-flappyGround-gapBottom, 7, pipeCol)
+		fillRoundedRect(renderer, x-4, gapBottom, flappyPipeW+8, 24, 5, pipeDark)
+	}
+
+	// Bird with wing and eye.
+	bx := offsetX + flappyBirdX
+	by := offsetY + int32(math.Round(flappyY))
+	body := sdl.Color{R: 255, G: 215, B: 70, A: 255}
+	fillCircle(renderer, bx, by, flappyBirdR, body)
+	fillCircle(renderer, bx+6, by-5, 5, sdl.Color{R: 255, G: 255, B: 255, A: 255})
+	fillCircle(renderer, bx+8, by-5, 2, sdl.Color{R: 25, G: 30, B: 40, A: 255})
+	fillRoundedRect(renderer, bx-18, by+2, 14, 8, 4, sdl.Color{R: 245, G: 170, B: 45, A: 255})
+	fillRoundedRect(renderer, bx+flappyBirdR-2, by+2, 12, 8, 4, sdl.Color{R: 250, G: 150, B: 40, A: 255})
+
+	font, _ := getCachedFont(config, "large")
+	small, _ := getCachedFont(config, "small")
+	if font != nil {
+		score := fmt.Sprintf("%d", gameScore)
+		sw, _, _ := font.SizeUTF8(score)
+		drawText(renderer, font, score, (screenWidth-int32(sw))/2, offsetY+18, sdl.Color{R: 255, G: 255, B: 255, A: 240}, textAlignLeft)
+	}
+	if small != nil {
+		hint := "Space / A flap  •  R restart  •  Q quit"
+		hw, _, _ := small.SizeUTF8(hint)
+		drawText(renderer, small, hint, (screenWidth-int32(hw))/2, offsetY+flappyH+12, ColorTextTertiary(), textAlignLeft)
+	}
+	if gameOver {
+		renderGameOver(renderer, config, "Game Over", gameScore)
+	}
+}
+
+// ensureGamesScene adds the collection to configs that predate it, so the Start
+// menu always has a Games row even after a config reset or an old update.
+func ensureGamesScene(config *Config) {
+	if config == nil || sceneByName(config, "Games") != nil {
+		return
+	}
+	config.Scenes = append(config.Scenes, SceneConfig{
+		Name:        "Games",
+		Icon:        "G",
+		Description: "Snake, Tetris, 2048, Pong, Minesweeper and Flappy",
+		Background:  "#0B0F17",
+	})
 }
 
 // Scene registration. The menu and a running game share one scene name, so both

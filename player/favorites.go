@@ -506,15 +506,11 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 	if by < element.Y+getElementHeight(element, 500) {
 		by = element.Y + getElementHeight(element, 500) + 10
 	}
-	fillRoundedRect(renderer, bx+3, by+3, bw, bh, 10, ShadowFill(40))
-	fillRoundedRect(renderer, bx, by, bw, bh, 10, ColorButtonRaised)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
-	renderer.FillRect(&sdl.Rect{X: bx + 8, Y: by + bh - 2, W: bw - 16, H: 2})
-	if font != nil {
-		blw, _, _ := font.SizeUTF8(backText)
-		renderText(renderer, config, font, backText, sdl.Color{R: 235, G: 238, B: 245, A: 255}, bx+(bw-int32(blw))/2, by+10)
-	}
-	favBackRect = sdl.Rect{X: bx, Y: by, W: bw, H: bh}
+	favBackRect = UIButton(renderer, config, sdl.Rect{X: bx, Y: by, W: bw, H: bh}, backText, UIButtonStyle{
+		Variant: UIButtonSecondary,
+		Font:    font,
+		Radius:  RadiusMD,
+	}, UIButtonState{})
 }
 
 func handleFavoritesInput(e *sdl.KeyboardEvent, config *Config) {

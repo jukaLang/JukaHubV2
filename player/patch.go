@@ -505,14 +505,6 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 				progress = float64(elapsed) / float64(patchHoldDuration)
 			}
 		}
-		fillRoundedRect(renderer, confirmX, btnY, confirmW, btnH, RadiusMD, ColorAccent)
-		if progress > 0 && progress < 1 {
-			// Progress fill inside the button (transparent track: the button
-			// fill underneath is the track).
-			UIProgressBar(renderer, sdl.Rect{X: confirmX, Y: btnY, W: confirmW, H: btnH},
-				progress, sdl.Color{}, WithAlpha(ColorAccent, 180))
-			renderer.SetDrawColor(6, 8, 14, 255)
-		}
 		if patchHoldActive && progress >= 1 {
 			confirmLabel = "Release A to confirm"
 		} else if patchHoldActive {
@@ -520,16 +512,35 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 		} else {
 			confirmLabel = "Hold A to confirm"
 		}
-		renderText(renderer, config, font, confirmLabel, ColorTextInverse(), confirmX+18, btnY+10)
+		UIButton(renderer, config, patchConfirmRect, confirmLabel, UIButtonStyle{
+			Variant:      UIButtonCustom,
+			Fill:         ColorAccent,
+			HoverFill:    ColorAccent,
+			FocusFill:    ColorAccent,
+			Border:       WithAlpha(ColorAccent, 220),
+			LabelColor:   ColorTextInverse(),
+			Font:         font,
+			Radius:       RadiusMD,
+			Progress:     progress,
+			ProgressFill: lighten(ColorAccent, 30),
+		}, UIButtonState{})
 	} else {
-		fillRoundedRect(renderer, confirmX, btnY, confirmW, btnH, RadiusMD, ColorCardFocus)
-		strokeRoundedRect(renderer, confirmX, btnY, confirmW, btnH, RadiusMD, 1, ColorAccent)
-		cw, _, _ := font.SizeUTF8(confirmLabel)
-		renderText(renderer, config, font, confirmLabel, ColorTextPrimary(), confirmX+(confirmW-int32(cw))/2, btnY+10)
+		UIButton(renderer, config, patchConfirmRect, confirmLabel, UIButtonStyle{
+			Variant:    UIButtonCustom,
+			Fill:       ColorCardFocus,
+			Border:     ColorAccent,
+			LabelColor: ColorTextPrimary(),
+			Font:       font,
+			Radius:     RadiusMD,
+		}, UIButtonState{})
 	}
-	fillRoundedRect(renderer, cancelX, btnY, cancelW, btnH, RadiusMD, ColorIconSurface)
-	cw2, _, _ := font.SizeUTF8("Cancel")
-	renderText(renderer, config, font, "Cancel", ColorTextSecondary(), cancelX+(cancelW-int32(cw2))/2, btnY+10)
+	UIButton(renderer, config, patchCancelRect, "Cancel", UIButtonStyle{
+		Variant:    UIButtonCustom,
+		Fill:       ColorIconSurface,
+		LabelColor: ColorTextSecondary(),
+		Font:       font,
+		Radius:     RadiusMD,
+	}, UIButtonState{})
 }
 
 // --- Input ---

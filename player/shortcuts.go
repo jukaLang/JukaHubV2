@@ -84,6 +84,15 @@ var shortcutCategories = []struct {
 		},
 	},
 	{
+		title: "Community & support",
+		items: []shortcutEntry{
+			{"Tools → Community", "Changelog, bug report, diagnostics switch"},
+			{"A / Enter", "Select a row or go back from the changelog"},
+			{"↑ / ↓", "Move or scroll"},
+			{"B / Esc", "Close"},
+		},
+	},
+	{
 		title: "Pomodoro",
 		items: []shortcutEntry{
 			{"A", "Start / pause"},

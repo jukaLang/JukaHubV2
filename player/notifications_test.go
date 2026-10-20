@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"testing"
+	"unsafe"
+
+	"github.com/veandco/go-sdl2/sdl"
+)
 
 // resetNotifCenter clears the global bell state between cases.
 func resetNotifCenter(t *testing.T) {
@@ -121,6 +126,34 @@ func TestNotifHistoryIsCapped(t *testing.T) {
 	}
 	if len(nc.history) != 50 {
 		t.Fatalf("history has %d entries, want the 50 cap", len(nc.history))
+	}
+}
+
+// The notification control uses a drawn bell, not the old "(*)" glyph. Check
+// that the silhouette actually paints and stays inside its box.
+func TestBellIconDrawsSilhouette(t *testing.T) {
+	f := newProbeFrame(t)
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Skipf("software renderer unavailable: %v", err)
+	}
+	defer renderer.Destroy()
+
+	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
+	renderer.Clear()
+	cx, cy, size := probeW/2, probeH/2, int32(40)
+	icon := sdl.Color{R: 245, G: 248, B: 255, A: 255}
+	drawBellIcon(renderer, cx, cy, size, icon)
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+	}
+
+	painted := f.countColor(icon, cx-size/2-4, cy-size/2-4, cx+size/2+4, cy+size/2+4)
+	if painted < 200 {
+		t.Fatalf("bell silhouette painted only %d pixels", painted)
+	}
+	if got := f.countColor(icon, 0, 0, cx-size/2-6, probeH-1); got > 0 {
+		t.Fatalf("bell icon bled %d pixels outside its box", got)
 	}
 }
 

@@ -365,29 +365,15 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 			by := int32(calcY0 + row*(calcBtnH+calcGap))
 			focused := calc.cursor[0] == row && calc.cursor[1] == col
 
-			// Button fill.
+			// Button fill. The calculator keeps its own semantic colours
+			// (equals is blue, clear/back are red) while sharing the shape,
+			// sheen, border and focus ring with every other button.
 			fill := ColorCard
-			if focused {
-				fill = ColorCardFocus
-			}
 			if btn.action == "eq" {
 				fill = sdl.Color{R: 80, G: 160, B: 255, A: 255}
-				if focused {
-					fill = sdl.Color{R: 100, G: 180, B: 255, A: 255}
-				}
 			}
 			if btn.action == "clear" || btn.action == "back" {
 				fill = sdl.Color{R: 60, G: 30, B: 30, A: 255}
-				if focused {
-					fill = sdl.Color{R: 80, G: 40, B: 40, A: 255}
-				}
-			}
-
-			fillRoundedRect(renderer, bx, by, int32(calcBtnW), int32(calcBtnH), 10, fill)
-			if focused {
-				strokeRoundedRect(renderer, bx, by, int32(calcBtnW), int32(calcBtnH), 10, 3, ColorAccent)
-			} else {
-				strokeRoundedRect(renderer, bx, by, int32(calcBtnW), int32(calcBtnH), 10, 1, ColorBorder)
 			}
 
 			// Label.
@@ -398,9 +384,6 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 					btnFont = font
 				}
 			}
-			bw, bh, _ := btnFont.SizeUTF8(btn.label)
-			tx := bx + (int32(calcBtnW)-int32(bw))/2
-			ty := by + (int32(calcBtnH)-int32(bh))/2
 			textCol := ColorTextPrimary()
 			if btn.action == "op" {
 				textCol = sdl.Color{R: 140, G: 200, B: 255, A: 255}
@@ -408,7 +391,17 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 			if btn.action == "eq" {
 				textCol = sdl.Color{R: 255, G: 255, B: 255, A: 255}
 			}
-			renderText(renderer, config, btnFont, btn.label, textCol, tx, ty)
+			UIButton(renderer, config, sdl.Rect{X: bx, Y: by, W: int32(calcBtnW), H: int32(calcBtnH)}, btn.label, UIButtonStyle{
+				Variant:    UIButtonCustom,
+				Fill:       fill,
+				HoverFill:  fill,
+				FocusFill:  fill,
+				Border:     ColorBorder,
+				LabelColor: textCol,
+				Font:       btnFont,
+				Radius:     10,
+				NoShadow:   true,
+			}, UIButtonState{Focused: focused})
 		}
 	}
 

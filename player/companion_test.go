@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 )
 
@@ -406,6 +407,49 @@ func TestCompanionURLRoundTrips(t *testing.T) {
 	}
 }
 
+// TestCompanionEnsureStartedBuildsHomeQR covers the background path: the
+// listener and QR must exist before anyone opens the pairing card, because the
+// home header is the primary pairing affordance.
+func TestCompanionEnsureStartedBuildsHomeQR(t *testing.T) {
+	if localIPv4() == "" {
+		t.Skip("no LAN address on this machine")
+	}
+	prev := companion
+	prevRetry, prevRefresh := companionNextRetry, companionNextRefresh
+	prevRect := companionHeaderRect
+	t.Cleanup(func() {
+		shutdownCompanion()
+		companion = prev
+		companionNextRetry, companionNextRefresh = prevRetry, prevRefresh
+		companionHeaderRect = prevRect
+	})
+	companion = companionOverlay{}
+	companionNextRetry, companionNextRefresh = time.Time{}, time.Time{}
+
+	companionEnsureStarted()
+	if companion.err != "" {
+		t.Fatalf("background companion failed to start: %s", companion.err)
+	}
+	if companion.srv == nil || !companion.srv.Running() {
+		t.Fatal("background companion did not bind a listener")
+	}
+	if len(companion.pin) != 6 {
+		t.Fatalf("PIN = %q, want six digits", companion.pin)
+	}
+	if len(companion.qr) == 0 {
+		t.Fatal("background companion did not build the home QR")
+	}
+	if !strings.Contains(companion.url, companion.pin) {
+		t.Fatalf("QR URL %q does not carry the PIN", companion.url)
+	}
+
+	// Closing the large card must not take the home QR offline.
+	closeCompanionOverlay()
+	if companion.srv == nil || !companion.srv.Running() {
+		t.Fatal("closing the pairing card stopped the background listener")
+	}
+}
+
 // TestCompanionOverlayStartsAndServes walks the real open path the Tools row
 // uses: generate a PIN, bind the listener, build the QR, answer the page, and
 // release the port when the card closes.
@@ -415,7 +459,7 @@ func TestCompanionOverlayStartsAndServes(t *testing.T) {
 	}
 	prev := companion
 	t.Cleanup(func() {
-		closeCompanionOverlay()
+		shutdownCompanion()
 		companion = prev
 	})
 	companion = companionOverlay{}
@@ -459,7 +503,15 @@ func TestCompanionOverlayStartsAndServes(t *testing.T) {
 	}
 
 	toggleCompanionOverlay() // open -> close
-	if companion.open || companion.srv != nil {
-		t.Fatal("card stayed open or kept the listener after toggling")
+	if companion.open {
+		t.Fatal("card stayed open after toggling")
+	}
+	// The listener now stays up so the home-header QR keeps working; it is
+	// released by shutdownCompanion or a new PIN, not by closing the card.
+	if companion.srv == nil || !companion.srv.Running() {
+		t.Fatal("closing the card released the listener needed by the home QR")
+	}
+	if len(companion.qr) == 0 {
+		t.Fatal("closing the card discarded the home QR bitmap")
 	}
 }

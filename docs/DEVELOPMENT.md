@@ -25,6 +25,7 @@ targets a 1280×720 logical canvas.
 | [CONFIGURATION.md](CONFIGURATION.md) | config files, variables, elements and every trigger |
 | [CONTROLS.md](CONTROLS.md) | controller and keyboard bindings per screen |
 | [PACKAGES.md](PACKAGES.md) | package format, the signed repository, Patch transactions |
+| [GAME_PROFILES.md](GAME_PROFILES.md) | game-profile schema, Box64/Wine launching, import/export |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
 | [SECURITY.md](../player/SECURITY.md) | secret storage, crypto, threat notes |
 | [trimui/README-ID.md](../player/trimui/README-ID.md) | device package and launcher details |
@@ -42,9 +43,11 @@ JukaHubV2/
 │   ├── design.go, themes.go           # design tokens and theme presets
 │   ├── homelayout.go, home.go         # Home screen
 │   ├── vkeyboard.go                   # on-screen keyboard
-│   ├── videoplayer.go, videosubs.go   # embedded ffmpeg playback
-│   ├── patch_*.go, packages.go        # package manager
-│   ├── plugins.go                     # plugin loader and runner
+│   ├── videoplayer.go, videosubs.go   # embedded ffmpeg playback	│   ├── patch_*.go, packages.go        # package manager
+	│   ├── community.go, changelog.go     # community hub, bug report, release notes
+	│   ├── powertools.go, powertools_backend.go  # developer tools overlay and probes
+	│   ├── telemetry.go                   # opt-in device/crash telemetry
+	│   ├── plugins.go                     # plugin loader and runner
 │   ├── widgets.go, autostart.go       # contextual widgets, start-at-login
 │   ├── config.go, xmlconfig.go        # config types and both loaders
 │   ├── *_test.go                      # unit, render and focus tests

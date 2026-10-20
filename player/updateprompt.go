@@ -52,7 +52,7 @@ func maybeOfferUpdate() {
 	}
 	if virtualKeyboardActive || toolsPanel.open || imageViewerPath != "" || qs.open ||
 		patchModal != nil || transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
-		nc.open || tb.startOpen || processPanel.open || ipPanelOpen || emuPanel.open ||
+		nc.open || tb.startOpen || processPanel.open || ipPanelOpen || emuPanel.open || gpPanel.open || raPanel.open ||
 		wpOpen || socialNotifOpen || shortcutsOpen || globalSearchOpen || clipSearchOpen {
 		return
 	}
@@ -165,18 +165,31 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 	updatePrompt.laterBtn = sdl.Rect{X: laterX, Y: btnY, W: laterW, H: btnH}
 	updatePrompt.nowBtn = sdl.Rect{X: updateX, Y: btnY, W: updateW, H: btnH}
 
+	updateFill := WithAlpha(ColorInfo, 90)
 	if updatePrompt.focus == 0 {
-		fillRoundedRect(renderer, updateX, btnY, updateW, btnH, btnH/2, WithAlpha(uiHighlightColor(), 220))
-	} else {
-		fillRoundedRect(renderer, updateX, btnY, updateW, btnH, btnH/2, WithAlpha(ColorInfo, 90))
+		updateFill = WithAlpha(uiHighlightColor(), 220)
 	}
-	strokeRoundedRect(renderer, updateX, btnY, updateW, btnH, btnH/2, 1, uiHighlightColor())
-	renderText(renderer, config, font, "Update now", ColorTextPrimary(), updateX+20, btnY+(btnH-smallH)/2)
-	fillRoundedRect(renderer, laterX, btnY, laterW, btnH, btnH/2, ColorIconSurface)
-	if updatePrompt.focus == 1 {
-		strokeRoundedRect(renderer, laterX, btnY, laterW, btnH, btnH/2, 2, accentColor)
-	}
-	renderText(renderer, config, font, "Not now", ColorTextSecondary(), laterX+20, btnY+(btnH-smallH)/2)
+	updatePrompt.nowBtn = UIButton(renderer, config, updatePrompt.nowBtn, "Update now", UIButtonStyle{
+		Variant:    UIButtonCustom,
+		Fill:       updateFill,
+		HoverFill:  updateFill,
+		FocusFill:  updateFill,
+		Border:     uiHighlightColor(),
+		LabelColor: ColorTextPrimary(),
+		Font:       font,
+		Pill:       true,
+		NoShadow:   true,
+	}, UIButtonState{Focused: updatePrompt.focus == 0})
+	updatePrompt.laterBtn = UIButton(renderer, config, updatePrompt.laterBtn, "Not now", UIButtonStyle{
+		Variant:    UIButtonCustom,
+		Fill:       ColorIconSurface,
+		HoverFill:  ColorIconSurface,
+		FocusFill:  ColorIconSurface,
+		LabelColor: ColorTextSecondary(),
+		Font:       font,
+		Pill:       true,
+		NoShadow:   true,
+	}, UIButtonState{Focused: updatePrompt.focus == 1})
 }
 
 // ──────────────────────────────────────────────────────────────────────

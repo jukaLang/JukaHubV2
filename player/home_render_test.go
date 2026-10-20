@@ -25,12 +25,14 @@ func snapshotHomeGlobals(t *testing.T) {
 	prevIndex, prevLayout := currentSceneIndex, homeLayout
 	prevCal, prevPressed := homeCalendarOpen, homePressedID
 	prevW, prevH := screenWidth, screenHeight
+	prevCompanion, prevQR := companion, companionHeaderRect
 	t.Cleanup(func() {
 		currentSceneIndex = prevIndex
 		homeLayout = prevLayout
 		homeCalendarOpen = prevCal
 		homePressedID = prevPressed
 		screenWidth, screenHeight = prevW, prevH
+		companion, companionHeaderRect = prevCompanion, prevQR
 	})
 }
 

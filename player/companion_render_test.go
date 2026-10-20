@@ -106,6 +106,87 @@ func TestCompanionCardDrawsScannableQR(t *testing.T) {
 	}
 }
 
+// The home header tile is the always-visible pairing affordance. It must draw
+// a real code on a white tile and record the exact rect the click handler uses.
+func TestCompanionHeaderQRDrawsScannableTile(t *testing.T) {
+	code, err := qrcode.New("http://192.168.1.42:8317/?p=123456", qrcode.Low)
+	if err != nil {
+		t.Fatalf("building the QR code failed: %v", err)
+	}
+	prev := companion
+	prevRect := companionHeaderRect
+	t.Cleanup(func() {
+		companion = prev
+		companionHeaderRect = prevRect
+	})
+	companion = companionOverlay{pin: "123456", qr: code.Bitmap()}
+
+	rect := sdl.Rect{X: 100, Y: 100, W: 76, H: 76}
+	f := componentFrame(t, func(r *sdl.Renderer) {
+		renderCompanionHeaderQR(r, HomeFonts{}, rect)
+	})
+	if companionHeaderRect != rect {
+		t.Fatalf("header QR rect = %+v, want %+v", companionHeaderRect, rect)
+	}
+	if got := f.at(rect.X+rect.W/2, rect.Y+3); got.R < 230 || got.G < 230 || got.B < 230 {
+		t.Errorf("header QR tile top edge = %+v, want the white tile", got)
+	}
+	black := 0
+	for y := rect.Y + 4; y < rect.Y+rect.H-4; y++ {
+		for x := rect.X + 4; x < rect.X+rect.W-4; x++ {
+			if c := f.at(x, y); c.R < 40 && c.G < 40 && c.B < 40 {
+				black++
+			}
+		}
+	}
+	if black < 120 {
+		t.Fatalf("header QR has only %d black pixels; the code was not drawn", black)
+	}
+}
+
+// The home screen must show the same scannable code without opening the full
+// card, in the empty band above the action cards and left of the status text.
+func TestHomeHeaderQRTileRenders(t *testing.T) {
+	code, err := qrcode.New("http://192.168.1.42:8317/?p=123456", qrcode.Low)
+	if err != nil {
+		t.Fatalf("building the QR code failed: %v", err)
+	}
+	snapshotHomeGlobals(t)
+	prev := companion
+	prevRect := companionHeaderRect
+	t.Cleanup(func() {
+		companion = prev
+		companionHeaderRect = prevRect
+	})
+	companion = companionOverlay{pin: "123456", qr: code.Bitmap()}
+
+	f := renderHomeFrame(t, false)
+	rect := companionHeaderRect
+	if rect.W < 72 || rect.H < 72 {
+		t.Fatalf("home header QR rect = %+v, want a visible tile", rect)
+	}
+	if rect.Y < scaleY(56, probeH) {
+		t.Errorf("header QR top = %d, want it below the header band", rect.Y)
+	}
+	if rect.Y+rect.H > scaleY(164, probeH) {
+		t.Errorf("header QR bottom = %d, want it above the action cards", rect.Y+rect.H)
+	}
+	if got := f.at(rect.X+rect.W/2, rect.Y+3); got.R < 230 || got.G < 230 || got.B < 230 {
+		t.Errorf("header QR tile top edge = %+v, want the white tile", got)
+	}
+	black := 0
+	for y := rect.Y + 4; y < rect.Y+rect.H-20; y++ {
+		for x := rect.X + 4; x < rect.X+rect.W-4; x++ {
+			if c := f.at(x, y); c.R < 40 && c.G < 40 && c.B < 40 {
+				black++
+			}
+		}
+	}
+	if black < 200 {
+		t.Fatalf("home header QR has only %d black pixels; the code was not drawn", black)
+	}
+}
+
 func TestCompanionCardErrorStateRenders(t *testing.T) {
 	// No QR and no server: this is what a failed bind looks like. It must
 	// draw the message instead of panicking on a nil bitmap.

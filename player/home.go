@@ -218,12 +218,15 @@ func renderCalendarPopover(renderer *sdl.Renderer, config *Config) {
 	if font == nil {
 		return
 	}
-	fillRoundedRect(renderer, b.X, b.Y, b.W, b.H, 10, WithAlpha(ColorInfo, 55))
-	strokeRoundedRect(renderer, b.X, b.Y, b.W, b.H, 10, 1, WithAlpha(ColorInfo, 150))
-	label := "Set alarm"
-	lw, lh, _ := font.SizeUTF8(label)
-	renderText(renderer, config, font, label, ColorTextPrimary(),
-		b.X+(b.W-int32(lw))/2, b.Y+(b.H-int32(lh))/2)
+	UIButton(renderer, config, b, "Set alarm", UIButtonStyle{
+		Variant:    UIButtonCustom,
+		Fill:       WithAlpha(ColorInfo, 55),
+		Border:     WithAlpha(ColorInfo, 150),
+		LabelColor: ColorTextPrimary(),
+		Font:       font,
+		Radius:     10,
+		NoShadow:   true,
+	}, UIButtonState{})
 }
 
 // calendarPopoverClick consumes a mouse click while the clock popover is open.
@@ -411,6 +414,12 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	// on the clock toggles it closed, and any other click dismisses it without
 	// activating whatever lies underneath - standard dropdown behaviour.
 	if calendarPopoverClick(mx, my, config) {
+		return true
+	}
+	// The header QR is a direct pairing affordance: tapping it opens the large
+	// pairing card without leaving Home.
+	if companionHeaderRect.W > 0 && pointInRect(mx, my, companionHeaderRect) {
+		openCompanionOverlay()
 		return true
 	}
 	if homeLayout.FocusAt(mx, my) {

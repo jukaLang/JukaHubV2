@@ -2,6 +2,18 @@
 :root {
   color-scheme: dark;
 
+  /* Z-index layers. These must live on :root; an earlier block lost its
+     selector, which left every modal at z-index auto and behind the canvas. */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-dropdown: 20;
+  --z-sidebar: 30;
+  --z-modal-backdrop: 45;
+  --z-modal: 50;
+  --z-toast: 60;
+  --z-mobile-fab: 35;
+  --z-ai-bottom-sheet: 55;
+
   /* Dark-first palette */
   --app-bg: #090b10;
   --surface-raised: #11151d;
@@ -2363,6 +2375,108 @@ body.ai-open .ai-panel {
 .close-button:hover {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+/* === Design sharing / Remix === */
+.remix-button {
+  border-color: var(--secondary);
+  color: var(--secondary);
+}
+
+.remix-button[hidden] {
+  display: none;
+}
+
+.share-content {
+  max-width: 680px;
+}
+
+.share-body,
+.remix-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.share-note {
+  margin: 0;
+  color: var(--text-secondary, var(--text-muted));
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.share-note-muted {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.share-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.share-url-row {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-sm);
+}
+
+.share-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 42px;
+  padding: 0 var(--space-md);
+  background: var(--surface-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-main);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.share-url:focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.share-size-note {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.share-size-note.warn {
+  color: var(--warning);
+}
+
+.remix-content {
+  max-width: 580px;
+}
+
+.remix-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  padding-top: var(--space-xs);
+}
+
+.remix-actions .action-button {
+  min-height: 42px;
+}
+
+@media (max-width: 768px) {
+  .app-bar-actions .share-button span,
+  .app-bar-actions .remix-button span {
+    display: none;
+  }
+
+  .share-url-row {
+    flex-direction: column;
+  }
 }
 
 /* === Footer === */

@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // ThemePreset represents a complete visual theme.
@@ -587,6 +589,155 @@ func GetThemePreset(name string) ThemePreset {
 	return themePresets["dark"]
 }
 
+// themeColorVariables are the three editable theme colours. A zero RGB value
+// means "never chosen" (the shipped config and fresh user files leave them
+// empty), not "black": resolving zero literally painted every button, label
+// and input field black in Settings → Appearance.
+var themeColorVariables = []string{"buttonColor", "labelColor", "inputColor"}
+
+func isThemeColorVariable(name string) bool {
+	for _, n := range themeColorVariables {
+		if strings.EqualFold(n, name) {
+			return true
+		}
+	}
+	return false
+}
+
+func isZeroRGB(c RGB) bool {
+	return c.R == 0 && c.G == 0 && c.B == 0
+}
+
+func rgbHex(c RGB) string {
+	return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B)
+}
+
+// parseColorValue accepts the two colour forms the app writes: "#rrggbb" /
+// "rrggbb" and "r,g,b". Channels must fit in 0..255, because an out-of-range
+// value cannot be rendered and would otherwise fall back to black later.
+func parseColorValue(value string) (RGB, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return RGB{}, false
+	}
+	if strings.HasPrefix(value, "#") || (!strings.Contains(value, ",") && len(value) == 6) {
+		c, ok := parseHexColor(value)
+		if !ok {
+			return RGB{}, false
+		}
+		return RGB{R: int(c.R), G: int(c.G), B: int(c.B)}, true
+	}
+	parts := strings.Split(value, ",")
+	if len(parts) != 3 {
+		return RGB{}, false
+	}
+	var out RGB
+	dst := []*int{&out.R, &out.G, &out.B}
+	for i, part := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || n < 0 || n > 255 {
+			return RGB{}, false
+		}
+		*dst[i] = n
+	}
+	return out, true
+}
+
+func themeColorValue(config *Config, name string) RGB {
+	if config == nil {
+		return RGB{}
+	}
+	switch strings.ToLower(name) {
+	case "buttoncolor":
+		return config.Variables.ButtonColor
+	case "labelcolor":
+		return config.Variables.LabelColor
+	case "inputcolor":
+		return config.Variables.InputColor
+	}
+	return RGB{}
+}
+
+func setThemeColorValue(config *Config, name string, c RGB) bool {
+	if config == nil {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "buttoncolor":
+		config.Variables.ButtonColor = c
+	case "labelcolor":
+		config.Variables.LabelColor = c
+	case "inputcolor":
+		config.Variables.InputColor = c
+	default:
+		return false
+	}
+	return true
+}
+
+// themePresetColor returns the colour a named slot has in the active preset
+// (or in Dark when no preset was ever chosen).
+func themePresetColor(config *Config, name string) RGB {
+	presetName := ""
+	if config != nil {
+		if s, ok := config.Variables.Custom["theme_preset"].(string); ok {
+			presetName = s
+		}
+	}
+	preset := GetThemePreset(presetName)
+	hex := preset.ButtonColor
+	switch strings.ToLower(name) {
+	case "labelcolor":
+		hex = preset.LabelColor
+	case "inputcolor":
+		hex = preset.InputColor
+	}
+	r, g, b := hexToRGB(hex)
+	return RGB{R: int(r), G: int(g), B: int(b)}
+}
+
+// effectiveThemeColor resolves a theme colour in priority order: an explicit
+// value saved by the user, then the config field, then the active preset. This
+// is the single source of truth for rendering and for the Appearance form, so
+// an empty field and an explicitly chosen black cannot be confused.
+func effectiveThemeColor(config *Config, name string) RGB {
+	if config != nil {
+		if s, ok := customString(config.Variables.Custom, name); ok {
+			if c, ok := parseColorValue(s); ok {
+				return c
+			}
+		}
+	}
+	if c := themeColorValue(config, name); !isZeroRGB(c) {
+		return c
+	}
+	return themePresetColor(config, name)
+}
+
+// ensureThemeColors heals the "zero means unset" state on load and after a hot
+// reload. Explicit black is preserved when it was saved as a colour string;
+// only genuinely empty slots inherit the active theme.
+func ensureThemeColors(config *Config) {
+	if config == nil {
+		return
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	for _, name := range themeColorVariables {
+		if s, ok := customString(config.Variables.Custom, name); ok {
+			if c, ok := parseColorValue(s); ok {
+				_ = setThemeColorValue(config, name, c)
+				continue
+			}
+		}
+		if !isZeroRGB(themeColorValue(config, name)) {
+			continue
+		}
+		_ = setThemeColorValue(config, name, themePresetColor(config, name))
+	}
+}
+
 // ApplyThemePreset applies a theme preset the user picked, including the
 // confirmation toast.
 func ApplyThemePreset(config *Config, presetName string) {
@@ -598,12 +749,11 @@ func ApplyThemePreset(config *Config, presetName string) {
 // announce themselves as if the user had chosen them.
 func applyThemePreset(config *Config, presetName string, notify bool) {
 	preset := GetThemePreset(presetName)
-	br, bg, bb := hexToRGB(preset.ButtonColor)
-	config.Variables.ButtonColor = RGB{R: int(br), G: int(bg), B: int(bb)}
-	lr, lg, lb := hexToRGB(preset.LabelColor)
-	config.Variables.LabelColor = RGB{R: int(lr), G: int(lg), B: int(lb)}
-	ir, ig, ib := hexToRGB(preset.InputColor)
-	config.Variables.InputColor = RGB{R: int(ir), G: int(ig), B: int(ib)}
+	// Route through applyColorVar so stale custom colour strings from an older
+	// theme cannot override the preset chosen now.
+	applyColorVar(config, "buttonColor", preset.ButtonColor)
+	applyColorVar(config, "labelColor", preset.LabelColor)
+	applyColorVar(config, "inputColor", preset.InputColor)
 	config.Variables.Custom["theme_preset"] = presetName
 	config.Variables.Custom["theme_background"] = preset.Background
 	config.Variables.Custom["theme_surface"] = preset.Surface

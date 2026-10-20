@@ -45,13 +45,13 @@ func renderAppearancePreview(renderer *sdl.Renderer, config *Config) {
 	// A sample primary button in the chosen button colour.
 	btnW, btnH := int32(200), int32(54)
 	btnY := y + 52
-	fillRoundedRect(renderer, x+24, btnY, btnW, btnH, RadiusMD, buttonCol)
-	strokeRoundedRect(renderer, x+24, btnY, btnW, btnH, RadiusMD, 1, sdl.Color{R: 255, G: 255, B: 255, A: 26})
-	btnLabel := "Continue"
-	if bw, bh, err := medium.SizeUTF8(btnLabel); err == nil {
-		renderText(renderer, config, medium, btnLabel, labelCol,
-			x+24+(btnW-int32(bw))/2, btnY+(btnH-int32(bh))/2)
-	}
+	UIButton(renderer, config, sdl.Rect{X: x + 24, Y: btnY, W: btnW, H: btnH}, "Continue", UIButtonStyle{
+		Variant:    UIButtonCustom,
+		Fill:       buttonCol,
+		LabelColor: labelCol,
+		Font:       medium,
+		Radius:     RadiusMD,
+	}, UIButtonState{})
 
 	// A sample label and input using the other two colours.
 	renderText(renderer, config, small, "Label colour", labelCol, x+24, btnY+btnH+22)

@@ -229,8 +229,8 @@ var companionKeyNames = map[string]bool{
 
 // ── Server ──
 
-// companionServer is the HTTP listener. One instance is live at a time; it is
-// created when the overlay opens and shut down when it closes.
+// companionServer is the HTTP listener. One instance is live for the session:
+// the home-header QR needs it running even while the pairing card is closed.
 type companionServer struct {
 	pin  string
 	root string

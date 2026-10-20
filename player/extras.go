@@ -386,6 +386,16 @@ func sceneDisplayName(name string) string {
 		return "Apps"
 	case "Patch":
 		return "Patch"
+	case "MusicPlayer":
+		return "Music"
+	case "Games":
+		return "Games"
+	case "Notes":
+		return "Notes"
+	case "Calculator":
+		return "Calculator"
+	case "Playtime":
+		return "Playtime"
 	default:
 		return name
 	}
@@ -1003,6 +1013,13 @@ func saveUserConfigToDir(dir string, user *UserConfig) {
 		log.Printf("saveUserConfig: marshal error: %v", err)
 		return
 	}
+	// Keep a short rollback history next to the config. The helper skips an
+	// identical newest snapshot, so debounced saves do not grow the folder.
+	if powerConfigHistoryEnabled {
+		if err := snapshotPowerConfig(path); err != nil {
+			log.Printf("saveUserConfig: history snapshot: %v", err)
+		}
+	}
 	if err := AtomicWrite(path, data, 0644); err != nil {
 		log.Printf("saveUserConfig: write error: %v", err)
 		return
@@ -1011,7 +1028,13 @@ func saveUserConfigToDir(dir string, user *UserConfig) {
 }
 
 func mergeUserConfig(config *Config, user *UserConfig) {
+	if config == nil {
+		return
+	}
 	if user == nil {
+		// Even with no user file, empty colour slots must inherit the theme
+		// instead of rendering as black.
+		ensureThemeColors(config)
 		return
 	}
 	config.Variables.ButtonColor = user.Variables.ButtonColor
@@ -1036,6 +1059,7 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 			config.Variables.Custom[k] = v
 		}
 	}
+	ensureThemeColors(config)
 }
 
 // --- Persist design-only config to jukaconfig.json ---

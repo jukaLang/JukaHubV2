@@ -334,9 +334,11 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			total += sepW
 		}
 	}
-	bellGlyphW, bellGlyphH, _ := fonts.Small.SizeUTF8("(*)")
-	bellW := int32(bellGlyphW) + 16
-	bellH := int32(bellGlyphH) + 8
+	bellH := int32(fonts.Small.Height()) + 10
+	if bellH < 24 {
+		bellH = 24
+	}
+	bellW := bellH + 14
 	bellRight := h.Width - scaleX(32, h.Width)
 	bellX := bellRight - bellW
 	bellY := (header.H - bellH) / 2
@@ -349,6 +351,23 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 
 	x := bellX - scaleX(12, h.Width) - badgeAdvance - total
+
+	// Phone Companion QR: a scan-and-connect tile sits left of the network,
+	// weather and clock cluster, in the empty band above the action cards. It
+	// is not a focusable card; the Tools row and its trigger remain the
+	// controller path to the full pairing card.
+	companionHeaderRect = sdl.Rect{}
+	qrCard := scaleX(104, h.Width)
+	if sy := scaleY(104, h.Height); sy < qrCard {
+		qrCard = sy
+	}
+	qrRight := x - scaleX(16, h.Width)
+	qrX := qrRight - qrCard
+	qrY := header.H + scaleY(2, h.Height)
+	if qrCard >= 72 && qrX > scaleX(480, h.Width) {
+		renderCompanionHeaderQR(renderer, fonts, sdl.Rect{X: qrX, Y: qrY, W: qrCard, H: qrCard})
+	}
+
 	y := scaleY(19, h.Height)
 	for _, part := range data.StatusParts {
 		w, _, _ := fonts.Small.SizeUTF8(part)
@@ -401,11 +420,18 @@ func renderHomeBell(renderer *sdl.Renderer, fonts HomeFonts, x, y, w, h int32) {
 	if fonts.Small == nil {
 		return
 	}
-	fillRoundedRect(renderer, x, y, w, h, h/2, ColorIconSurface)
+	border := ColorBorderDefault
 	if nc.open {
-		strokeRoundedRect(renderer, x, y, w, h, h/2, 1, ColorAccent)
+		border = ColorAccent
 	}
-	drawText(renderer, fonts.Small, "(*)", x+8, y+4, ColorTextSecondary(), textAlignLeft)
+	UIButton(renderer, nil, sdl.Rect{X: x, Y: y, W: w, H: h}, "", UIButtonStyle{
+		Variant:  UIButtonCustom,
+		Fill:     ColorIconSurface,
+		Border:   border,
+		Pill:     true,
+		NoShadow: true,
+	}, UIButtonState{})
+	drawBellIcon(renderer, x+w/2, y+h/2, h-8, ColorTextPrimary())
 	unread := notifUnreadCount()
 	if unread > 0 {
 		badgeR := int32(8)
@@ -691,21 +717,20 @@ func (h *HomeLayout) drawChipButton(renderer *sdl.Renderer, fonts HomeFonts, ite
 	}
 	bg := ColorIconSurface
 	fg := ColorTextPrimary()
+	border := ColorBorder
 	if focused {
 		bg = ColorAccent
 		fg = ColorIconDark
-	}
-	if pressed {
-		bg = darken(bg, 18)
+		border = ColorAccent
 	}
 
-	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, bg)
-	if focused {
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 2, ColorAccent)
-	} else {
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, ColorBorder)
-	}
+	UIButton(renderer, nil, rect, "", UIButtonStyle{
+		Variant:  UIButtonCustom,
+		Fill:     bg,
+		Border:   border,
+		Pill:     true,
+		NoShadow: true,
+	}, UIButtonState{Pressed: pressed})
 
 	// Small glyph on the left, then the label.
 	glyph := rect.H - 16

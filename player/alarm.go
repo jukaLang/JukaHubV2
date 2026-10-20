@@ -388,10 +388,15 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 		lw, lh, _ := smallFont.SizeUTF8(label)
 		bw := int32(lw) + 24
 		bh := int32(lh) + 12
-		alarmBackRect = sdl.Rect{X: 24, Y: 24, W: bw, H: bh}
-		fillRoundedRect(renderer, alarmBackRect.X, alarmBackRect.Y, bw, bh, bh/2, WithAlpha(ColorSurfaceRaised, 220))
-		strokeRoundedRect(renderer, alarmBackRect.X, alarmBackRect.Y, bw, bh, bh/2, 1, ColorBorder)
-		renderText(renderer, config, smallFont, label, ColorTextSecondary(), alarmBackRect.X+12, alarmBackRect.Y+6)
+		alarmBackRect = UIButton(renderer, config, sdl.Rect{X: 24, Y: 24, W: bw, H: bh}, label, UIButtonStyle{
+			Variant:    UIButtonCustom,
+			Fill:       WithAlpha(ColorSurfaceRaised, 220),
+			Border:     ColorBorder,
+			LabelColor: ColorTextSecondary(),
+			Font:       smallFont,
+			Pill:       true,
+			NoShadow:   true,
+		}, UIButtonState{})
 	}
 
 	// --- Mini calendar (top right) ---

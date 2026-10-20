@@ -57,6 +57,23 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if partyUI.open {
 		return partyHandleController(e, config)
 	}
+	// Community hub is the topmost modal when open.
+	if communityPanel.open {
+		return ctrlCommunity(e, config)
+	}
+	// Developer / power-user tools sit above the regular overlays.
+	if powerTools.open {
+		return ctrlPowerTools(e, config)
+	}
+	// RetroAchievements is modal; the on-screen keyboard gets the controller
+	// while a credential field is being typed.
+	if raPanel.open && !virtualKeyboardActive {
+		return ctrlRetroAchievements(e, config)
+	}
+	// Game Profiles is modal and sits above the panel that launched it.
+	if gpPanel.open {
+		return ctrlGameProfiles(e, config)
+	}
 	// Tools is modal: nothing underneath may react while it is open.
 	if toolsPanel.open {
 		return ctrlToolsPanel(e, config)

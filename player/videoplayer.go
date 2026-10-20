@@ -1319,8 +1319,13 @@ func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoSta
 		overlayBtn := videoControlRects.overlayPlay
 		cx := overlayBtn.X + overlayBtn.W/2
 		cy := overlayBtn.Y + overlayBtn.H/2
-		fillCircle(renderer, cx, cy, overlayBtn.W/2, WithAlpha(ColorSurfacePanel, 200))
-		strokeCircle(renderer, cx, cy, overlayBtn.W/2, WithAlpha(accent, 180))
+		UIButton(renderer, config, overlayBtn, "", UIButtonStyle{
+			Variant:  UIButtonCustom,
+			Fill:     WithAlpha(ColorSurfacePanel, 200),
+			Border:   WithAlpha(accent, 180),
+			Pill:     true,
+			NoShadow: true,
+		}, UIButtonState{})
 		s := overlayBtn.W / 5
 		renderer.SetDrawColor(accent.R, accent.G, accent.B, accent.A)
 		renderer.DrawLine(cx-s, cy-s, cx-s, cy+s)
@@ -1358,9 +1363,13 @@ func iconCol() sdl.Color {
 }
 
 func drawIconBtn(renderer *sdl.Renderer, icon playerIcon, x, y, size int32) sdl.Rect {
-	fillRoundedRect(renderer, x, y, size, size, size/5, WithAlpha(ColorSurfaceRaised, 180))
-	renderer.SetDrawColor(255, 255, 255, 25)
-	renderer.FillRect(&sdl.Rect{X: x + 3, Y: y + 1, W: size - 6, H: 1})
+	UIButton(renderer, nil, sdl.Rect{X: x, Y: y, W: size, H: size}, "", UIButtonStyle{
+		Variant:  UIButtonCustom,
+		Fill:     WithAlpha(ColorSurfaceRaised, 180),
+		Border:   WithAlpha(ColorBorderSubtle, 120),
+		Radius:   size / 5,
+		NoShadow: true,
+	}, UIButtonState{})
 	cx := x + size/2
 	cy := y + size/2
 	col := iconCol()
@@ -1435,13 +1444,17 @@ func drawCCBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, siz
 		bg = WithAlpha(ColorInfo, 220)
 		fg = sdl.Color{R: 12, G: 14, B: 20, A: 255}
 	}
-	fillRoundedRect(renderer, x, y, size, size, size/5, bg)
-	renderer.SetDrawColor(255, 255, 255, 25)
-	renderer.FillRect(&sdl.Rect{X: x + 3, Y: y + 1, W: size - 6, H: 1})
-	if font != nil {
-		lw, lh, _ := font.SizeUTF8("CC")
-		renderText(renderer, config, font, "CC", fg, x+(size-int32(lw))/2, y+(size-int32(lh))/2)
-	}
+	UIButton(renderer, config, sdl.Rect{X: x, Y: y, W: size, H: size}, "CC", UIButtonStyle{
+		Variant:    UIButtonCustom,
+		Fill:       bg,
+		HoverFill:  bg,
+		FocusFill:  bg,
+		Border:     WithAlpha(ColorBorderSubtle, 120),
+		LabelColor: fg,
+		Font:       font,
+		Radius:     size / 5,
+		NoShadow:   true,
+	}, UIButtonState{})
 }
 
 // Layout of the settings sheet. The row metrics are shared by the renderer and

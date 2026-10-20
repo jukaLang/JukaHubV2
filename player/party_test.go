@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -419,7 +421,84 @@ func TestPartyLeaderboardKeepsDepartedScores(t *testing.T) {
 	}
 }
 
+func withPartyFriendsTempFile(t *testing.T) string {
+	t.Helper()
+	prevPath := partyFriendsPath
+	prevLoaded := partyFriendsStore.loaded
+	prevItems := partyFriendsStore.items
+
+	path := filepath.Join(t.TempDir(), partyFriendsFileName)
+	partyFriendsPath = func() string { return path }
+	partyFriendsStore.mu.Lock()
+	partyFriendsStore.loaded = false
+	partyFriendsStore.items = nil
+	partyFriendsStore.mu.Unlock()
+
+	t.Cleanup(func() {
+		partyFriendsPath = prevPath
+		partyFriendsStore.mu.Lock()
+		partyFriendsStore.loaded = prevLoaded
+		partyFriendsStore.items = prevItems
+		partyFriendsStore.mu.Unlock()
+	})
+	return path
+}
+
+func TestPartyFriendsRoundTrip(t *testing.T) {
+	path := withPartyFriendsTempFile(t)
+
+	if err := partyFriendAdd("Alice", "192.168.1.5:8318 ABCD2"); err != nil {
+		t.Fatal(err)
+	}
+	// The same invite updates the existing friend instead of duplicating it.
+	if err := partyFriendAdd("Alice's TV", "http://192.168.1.5:8318 ABCD2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := partyFriendAdd("Nobody", "not an invite"); err == nil {
+		t.Error("invalid invite was saved")
+	}
+
+	friends := partyFriends()
+	if len(friends) != 1 {
+		t.Fatalf("friends = %+v, want one entry", friends)
+	}
+	if friends[0].Name != "Alice's TV" {
+		t.Errorf("name = %q, want the updated one", friends[0].Name)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("friends file not written: %v", err)
+	}
+
+	// Reload as a fresh launch would.
+	partyFriendsStore.mu.Lock()
+	partyFriendsStore.loaded = false
+	partyFriendsStore.items = nil
+	partyFriendsStore.mu.Unlock()
+	if got := partyFriends(); len(got) != 1 || got[0].Name != "Alice's TV" {
+		t.Fatalf("friends after reload = %+v", got)
+	}
+
+	partyFriendRemove(friends[0].Invite)
+	if got := partyFriends(); len(got) != 0 {
+		t.Fatalf("friends after remove = %+v", got)
+	}
+}
+
+func TestPartyFriendsAreCapped(t *testing.T) {
+	withPartyFriendsTempFile(t)
+	for i := 0; i < partyFriendsLimit+4; i++ {
+		invite := fmt.Sprintf("192.168.1.%d:%d ABCD2", i%250+1, 8300+i)
+		if err := partyFriendAdd("Friend", invite); err != nil {
+			t.Fatalf("add %d: %v", i, err)
+		}
+	}
+	if got := partyFriends(); len(got) > partyFriendsLimit {
+		t.Fatalf("friends = %d, want at most %d", len(got), partyFriendsLimit)
+	}
+}
+
 func TestPartyOverlayRenders(t *testing.T) {
+	withPartyFriendsTempFile(t)
 	cfg := &Config{}
 	// The probe initialises SDL/TTF; fonts cannot load before it.
 	f := newProbeFrame(t)

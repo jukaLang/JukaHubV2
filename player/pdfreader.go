@@ -368,13 +368,17 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 		if pdf.page <= 1 {
 			prevFill = sdl.Color{R: 20, G: 24, B: 30, A: 150}
 		}
-		fillRoundedRect(renderer, prevX, ctrlY, prevW, prevH, 8, prevFill)
-		strokeRoundedRect(renderer, prevX, ctrlY, prevW, prevH, 8, 1, ColorBorder)
-		prevStr := "< Prev"
-		pnw, _, _ := font.SizeUTF8(prevStr)
-		renderText(renderer, config, font, prevStr,
-			sdl.Color{R: 180, G: 190, B: 210, A: 200},
-			prevX+(prevW-int32(pnw))/2, ctrlY+6)
+		UIButton(renderer, config, sdl.Rect{X: prevX, Y: ctrlY, W: prevW, H: prevH}, "< Prev", UIButtonStyle{
+			Variant:    UIButtonCustom,
+			Fill:       prevFill,
+			HoverFill:  prevFill,
+			FocusFill:  prevFill,
+			Border:     ColorBorder,
+			LabelColor: sdl.Color{R: 180, G: 190, B: 210, A: 200},
+			Font:       font,
+			Radius:     RadiusSM,
+			NoShadow:   true,
+		}, UIButtonState{Disabled: pdf.page <= 1})
 
 		// Page number.
 		numStr := fmt.Sprintf("%d / %d", pdf.page, doc.NumPages)
@@ -390,13 +394,17 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 		if pdf.page >= doc.NumPages {
 			nextFill = sdl.Color{R: 20, G: 24, B: 30, A: 150}
 		}
-		fillRoundedRect(renderer, nextX, ctrlY, nextW, prevH, 8, nextFill)
-		strokeRoundedRect(renderer, nextX, ctrlY, nextW, prevH, 8, 1, ColorBorder)
-		nextStr := "Next >"
-		nnw, _, _ := font.SizeUTF8(nextStr)
-		renderText(renderer, config, font, nextStr,
-			sdl.Color{R: 180, G: 190, B: 210, A: 200},
-			nextX+(nextW-int32(nnw))/2, ctrlY+6)
+		UIButton(renderer, config, sdl.Rect{X: nextX, Y: ctrlY, W: nextW, H: prevH}, "Next >", UIButtonStyle{
+			Variant:    UIButtonCustom,
+			Fill:       nextFill,
+			HoverFill:  nextFill,
+			FocusFill:  nextFill,
+			Border:     ColorBorder,
+			LabelColor: sdl.Color{R: 180, G: 190, B: 210, A: 200},
+			Font:       font,
+			Radius:     RadiusSM,
+			NoShadow:   true,
+		}, UIButtonState{Disabled: pdf.page >= doc.NumPages})
 
 		tb.startRect = sdl.Rect{} // Avoid conflict
 	}

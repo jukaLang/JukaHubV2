@@ -57,12 +57,13 @@ type musicState struct {
 	repeat   bool
 
 	// Long-form extras (audiobooks, podcasts).
-	speed      float64   // listening speed, 0.75..2 (see audioSpeedSteps)
-	sleepUntil time.Time // zero when no sleep timer is armed
-	sleepGen   int       // invalidates a timer armed before the last stop
-	lyrics     []lyricLine
-	showLyrics bool
-	lastSave   time.Time // last resume write, to keep SD card writes rare
+	speed          float64   // listening speed, 0.75..2 (see audioSpeedSteps)
+	sleepUntil     time.Time // zero when no sleep timer is armed
+	sleepGen       int       // invalidates a timer armed before the last stop
+	lyrics         []lyricLine
+	showLyrics     bool
+	visualizerFull bool
+	lastSave       time.Time // last resume write, to keep SD card writes rare
 
 	visualizer [visualBars]float64
 
@@ -831,6 +832,123 @@ func musicUpdateVisualizer() {
 	}
 }
 
+// renderMusicFullVisualizer is the immersive mode toggled with V. It trades the
+// playlist for a mirrored spectrum, large track title, and a progress rail. The
+// bars come from the same smoothed visualizer the artwork tile uses, so the two
+// views never disagree about whether audio is playing.
+func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
+	musicUpdateVisualizer()
+
+	music.mu.Lock()
+	tracks := append([]musicTrack(nil), music.tracks...)
+	cur := music.current
+	playing := music.playing
+	paused := music.paused
+	position := music.position
+	duration := music.duration
+	volume := music.volume
+	barsData := music.visualizer
+	music.mu.Unlock()
+
+	// Deep vertical gradient backdrop.
+	for y := int32(0); y < screenHeight; y += 4 {
+		t := float64(y) / float64(screenHeight)
+		r := uint8(float64(7) + t*10)
+		g := uint8(float64(10) + t*14)
+		b := uint8(float64(18) + t*28)
+		renderer.SetDrawColor(r, g, b, 255)
+		renderer.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 4})
+	}
+
+	font, _ := getCachedFont(config, "small")
+	med, _ := getCachedFont(config, "medium")
+	big, _ := getCachedFont(config, "big")
+	if font == nil {
+		return
+	}
+	if med == nil {
+		med = font
+	}
+	if big == nil {
+		big = med
+	}
+
+	title := "Nothing playing"
+	meta := "Pick a song from the playlist"
+	if cur >= 0 && cur < len(tracks) {
+		title = strings.TrimSuffix(tracks[cur].Name, filepath.Ext(tracks[cur].Name))
+		meta = fmt.Sprintf("Track %d of %d", cur+1, len(tracks))
+	}
+	tw, _, _ := big.SizeUTF8(title)
+	renderText(renderer, config, big, ellipsize(big, title, screenWidth-160),
+		ColorTextPrimary(), (screenWidth-int32(tw))/2, 54)
+	mw, _, _ := font.SizeUTF8(meta)
+	renderText(renderer, config, font, meta, ColorTextTertiary(), (screenWidth-int32(mw))/2, 54+int32(big.Height())+10)
+
+	// Spectrum. 48 bars, mirrored around a centre line with a faint reflection.
+	bars := 48
+	gap := int32(5)
+	usable := screenWidth - 120
+	barW := (usable - gap*int32(bars-1)) / int32(bars)
+	if barW < 4 {
+		barW = 4
+	}
+	baseY := screenHeight/2 + 70
+	maxH := int32(float64(screenHeight) * 0.42)
+	for i := 0; i < bars; i++ {
+		v := barsData[(i*visualBars/bars)%visualBars]
+		h := int32(v / float64(visualMaxH) * float64(maxH))
+		if h < 8 {
+			h = 8
+		}
+		x := 60 + int32(i)*(barW+gap)
+		col := WithAlpha(accentColor, 230)
+		if !playing || paused {
+			col = WithAlpha(accentColor, 90)
+		}
+		fillRoundedRect(renderer, x, baseY-h, barW, h, barW/2, col)
+		// Mirrored lower half fades into the background.
+		fillRoundedRect(renderer, x, baseY+4, barW, h/2, barW/2,
+			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 52})
+	}
+
+	// Centre line and progress rail.
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 90)
+	renderer.FillRect(&sdl.Rect{X: 60, Y: baseY, W: screenWidth - 120, H: 2})
+	frac := 0.0
+	if duration > 0 {
+		frac = position / duration
+	}
+	if frac < 0 {
+		frac = 0
+	}
+	if frac > 1 {
+		frac = 1
+	}
+	railY := screenHeight - 66
+	fillRoundedRect(renderer, 60, railY, screenWidth-120, 6, 3, WithAlpha(ColorBorder, 120))
+	if frac > 0 {
+		fillRoundedRect(renderer, 60, railY, int32(float64(screenWidth-120)*frac), 6, 3, accentColor)
+	}
+	timeText := formatTime(position) + "  /  " + formatTime(duration)
+	tw, _, _ = font.SizeUTF8(timeText)
+	renderText(renderer, config, font, timeText, ColorTextSecondary(), (screenWidth-int32(tw))/2, railY+16)
+
+	state := "Playing"
+	if !playing {
+		state = "Stopped"
+	} else if paused {
+		state = "Paused"
+	}
+	state = fmt.Sprintf("%s   ·   Vol %d%%", state, int(math.Round(volume*100)))
+	sw, _, _ := font.SizeUTF8(state)
+	renderText(renderer, config, font, state, ColorTextTertiary(), (screenWidth-int32(sw))/2, screenHeight-38)
+
+	hint := "V  Close visualizer     SPACE  Pause     B  Back"
+	hw, _, _ := font.SizeUTF8(hint)
+	renderText(renderer, config, font, hint, WithAlpha(ColorTextTertiary(), 170), (screenWidth-int32(hw))/2, screenHeight-20)
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Rendering
 // ──────────────────────────────────────────────────────────────────────
@@ -852,6 +970,14 @@ const musicRowHeight = 46
 func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(11, 15, 23, 255)
 	renderer.Clear()
+
+	music.mu.Lock()
+	fullVisualizer := music.visualizerFull
+	music.mu.Unlock()
+	if fullVisualizer {
+		renderMusicFullVisualizer(renderer, config)
+		return
+	}
 
 	font, _ := getCachedFont(config, "small")
 	medFont, _ := getCachedFont(config, "medium")
@@ -1110,7 +1236,7 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Footer hints.
-	hint := "ENTER Play   SPACE Pause   LEFT/RIGHT Seek   -/+ Volume   [ ] Speed   T Sleep   L Lyrics   B Back"
+	hint := "ENTER Play   SPACE Pause   LEFT/RIGHT Seek   -/+ Volume   [ ] Speed   T Sleep   L Lyrics   V Visualizer   B Back"
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 170},
 		(screenWidth-int32(hw))/2, screenHeight-36)
@@ -1126,13 +1252,15 @@ func musicButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w
 		fg = sdl.Color{R: 10, G: 14, B: 22, A: 255}
 		border = accentColor
 	}
-	fillRoundedRect(renderer, x, y, w, h, 12, fill)
-	strokeRoundedRect(renderer, x, y, w, h, 12, 1, border)
-	if font != nil {
-		lw, lh, _ := font.SizeUTF8(label)
-		renderText(renderer, config, font, label, fg, x+(w-int32(lw))/2, y+(h-int32(lh))/2)
-	}
-	return sdl.Rect{X: x, Y: y, W: w, H: h}
+	return UIButton(renderer, config, sdl.Rect{X: x, Y: y, W: w, H: h}, label, UIButtonStyle{
+		Variant:    UIButtonCustom,
+		Fill:       fill,
+		Border:     border,
+		LabelColor: fg,
+		Font:       font,
+		Radius:     RadiusMD,
+		NoShadow:   true,
+	}, UIButtonState{})
 }
 
 // HandleMusicClick processes mouse/touch clicks on the audio player. It reports
@@ -1240,6 +1368,11 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		if !musicToggleLyrics() {
 			showToast("No .lrc file next to this track", ToastInfo())
 		}
+	case sdl.K_v:
+		music.mu.Lock()
+		music.visualizerFull = !music.visualizerFull
+		music.mu.Unlock()
+		PlayNavSound()
 	case sdl.K_LEFTBRACKET:
 		musicCycleSpeed(-1)
 		PlayNavSound()
@@ -1263,7 +1396,15 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 	case sdl.K_EQUALS, sdl.K_PLUS, sdl.K_KP_PLUS:
 		musicAdjustVolume(0.1)
 	case sdl.K_ESCAPE:
-		goBackScene(config)
+		music.mu.Lock()
+		full := music.visualizerFull
+		if full {
+			music.visualizerFull = false
+		}
+		music.mu.Unlock()
+		if !full {
+			goBackScene(config)
+		}
 		PlayBackSound()
 	}
 }
@@ -1363,8 +1504,21 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		musicPlayTrack(idx)
 	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
 		musicTogglePause()
+	case sdl.CONTROLLER_BUTTON_START:
+		music.mu.Lock()
+		music.visualizerFull = !music.visualizerFull
+		music.mu.Unlock()
+		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		goBackScene(appConfig)
+		music.mu.Lock()
+		full := music.visualizerFull
+		if full {
+			music.visualizerFull = false
+		}
+		music.mu.Unlock()
+		if !full {
+			goBackScene(appConfig)
+		}
 		PlayBackSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		musicSeekBy(-10)

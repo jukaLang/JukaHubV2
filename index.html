@@ -40,6 +40,12 @@
                 <button id="reloadConfigBtn" class="app-bar-button reload-button" type="button" title="Restore the last loaded JSON or XML config" aria-label="Reload imported config" disabled>
                     <i class="fas fa-sync-alt" aria-hidden="true"></i> <span>Reload config</span>
                 </button>
+                <button id="remixSharedBtn" class="app-bar-button remix-button" type="button" title="Load a copy of the shared design" hidden>
+                    <i class="fas fa-code-branch" aria-hidden="true"></i> <span>Remix</span>
+                </button>
+                <button id="shareDesignBtn" class="app-bar-button share-button" type="button" title="Share this theme and layout as a link" aria-label="Share this design">
+                    <i class="fas fa-share-nodes" aria-hidden="true"></i> <span>Share</span>
+                </button>
                 <div class="export-dropdown-wrapper">
                     <button class="app-bar-button export-button" type="button" id="headerExportBtn">
                         <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
@@ -52,6 +58,58 @@
                 </div>
             </div>
         </header>
+
+        <!-- Share / Remix Modals -->
+        <div id="sharePanel" class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="shareTitle" hidden>
+            <div class="guide-backdrop" data-close-share></div>
+            <div class="guide-content share-content">
+                <div class="guide-header">
+                    <div>
+                        <h2 id="shareTitle"><i class="fas fa-share-nodes" aria-hidden="true"></i> Share this design</h2>
+                        <p class="guide-subtitle">Theme, fonts and layout travel in one link.</p>
+                    </div>
+                    <button class="close-button" type="button" data-close-share aria-label="Close share dialog">
+                        <i class="fas fa-times" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="guide-body share-body">
+                    <p class="share-note">Anyone with the link can open a copy in the builder and remix it. Your workspace is not uploaded anywhere: the whole design lives in the link itself. Account keys, tokens and recent activity are removed automatically.</p>
+                    <label class="share-label" for="shareUrl">Design link</label>
+                    <div class="share-url-row">
+                        <input id="shareUrl" class="share-url" type="text" readonly spellcheck="false" aria-label="Shared design link">
+                        <button id="copyShareLink" class="action-button primary" type="button">
+                            <i class="fas fa-copy" aria-hidden="true"></i> Copy link
+                        </button>
+                    </div>
+                    <p id="shareSizeNote" class="share-size-note"></p>
+                    <p class="share-note share-note-muted">Very large projects can exceed what a chat app accepts in a URL. In that case use <strong>Export → JSON</strong> and send the file.</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="remixPanel" class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="remixTitle" hidden>
+            <div class="guide-backdrop" data-close-remix></div>
+            <div class="guide-content remix-content">
+                <div class="guide-header">
+                    <div>
+                        <h2 id="remixTitle"><i class="fas fa-code-branch" aria-hidden="true"></i> A shared design is ready</h2>
+                        <p class="guide-subtitle" id="remixMeta">Open it as your own copy.</p>
+                    </div>
+                    <button class="close-button" type="button" data-close-remix aria-label="Dismiss shared design">
+                        <i class="fas fa-times" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="guide-body remix-body">
+                    <p class="share-note">This link carries someone else's theme and layout. Remixing makes a fresh copy in your workspace; the original stays untouched. Your current design is only replaced when you choose Remix.</p>
+                    <div class="remix-actions">
+                        <button id="remixDesignBtn" class="action-button primary" type="button">
+                            <i class="fas fa-code-branch" aria-hidden="true"></i> Remix this design
+                        </button>
+                        <button id="keepDesignBtn" class="action-button" type="button" data-close-remix>Keep my design</button>
+                    </div>
+                </div>
+            </div>
+        </div>
 
         <!-- Guide Modal -->
         <div id="guidePanel" class="guide-modal steps-box" role="dialog" aria-modal="true" aria-labelledby="guideTitle" hidden>

@@ -232,6 +232,50 @@ config from a newer builder degrades to an inert button instead of a crash.
 
 ---
 
+## Power tools data
+
+**Tools → Power tools** keeps its own small files next to `jukauser.json`.
+They are plain JSON/text so they can be backed up or edited over FTP/SFTP.
+
+| File / setting | Meaning |
+|----------------|---------|
+| `power-scripts.json` | Saved snippets, an array of `{"name": "…", "command": "…"}`. Built-ins are compiled in and cannot be deleted |
+| `power-bench.json` | Benchmark entries (`device`, `kind`, `write`, `read`, `at`, `version`), newest 50 kept, sorted by the slower of read/write |
+| `power-config-history/` | The 20 newest `jukauser.json` snapshots. A save only creates one when the content changed |
+| `variables.Custom.powerSyncSource` | rsync source folder; defaults to the JukaHub folder when unset |
+| `variables.Custom.powerSyncTarget` | rsync target: a folder or `user@host:/path` |
+| `variables.Custom.powerBenchURL` | Optional HTTP(S) URL returning a JSON array of benchmark entries for the online board; `JUKAHUB_BENCH_URL` wins when both are set |
+
+Snippets run through `sh -c` (or `cmd /c` on Windows) with a 30-second
+timeout and the app's permissions. rsync is invoked directly with `-az
+--itemize-changes`, never through a shell, and never with `--delete`.
+
+## Privacy and diagnostics
+
+Anonymous diagnostics are controlled by `variables.Custom.telemetryOptIn` in
+`jukauser.json` and are **off** unless explicitly enabled in **Tools → Community
+& support**. When enabled, the payload contains only:
+
+| Field | Example |
+|-------|---------|
+| `kind` | `device` on launch, `crash` on a panic |
+| `version`, `release` | `v0.4.0`, `JukaHub-20261017…` |
+| `device`, `platform` | `TrimUI Smart Pro`, `Trimui` |
+| `os`, `arch` | `linux`, `arm64` |
+| `crash` | `panic` (crash events only) |
+
+No install ID, account, config value, filename, URL or usage history is sent.
+A collector must be configured by the build (`-X main.telemetryEndpoint=…`) or
+at runtime with `JUKAHUB_TELEMETRY_URL`; when neither is set the switch stores
+the preference but sends nothing.
+
+**Report a bug** (same panel) builds a GitHub issue from `DiagnosticsText`: app
+and release version, build date, device, OS/architecture, config scene/element
+counts, safe-mode state and backup count. It never includes config values,
+tokens, usernames or private paths.
+
+---
+
 ## Related
 
 - [Plugin API](PLUGINS.md) — plugin manifest, entry points and execution contract

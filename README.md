@@ -6,7 +6,8 @@
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
 A media hub for the **TrimUI Smart Pro**: YouTube search and trending, Shorts,
-saved favourites and a few handy tools, in one controller-friendly app.
+saved favourites, RetroAchievements progress, and a few handy tools, in one
+controller-friendly app.
 
 [Download](https://github.com/jukaLang/JukaHubV2/releases/latest) ·
 [Web builder](https://generate.jukalang.com) ·
@@ -68,11 +69,20 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   motion and switches to the OLED theme below 20% until it is charged again;
   the optional time-of-day theme (dawn, day, evening, night); and start at
   login, which is off by default.
+* **Game Profiles** — launch Windows games through Box64/Wine, native
+  binaries and scripts. Profiles live in `Apps/JukaHub/data/game-profiles`;
+  see [docs/GAME_PROFILES.md](docs/GAME_PROFILES.md) for the format and the
+  import/export workflow.
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
-  (also under **MISC → FTP & IP**), and the phone companion that turns a phone
-  into a keyboard, remote and file drop.
+  (also under **MISC → FTP & IP**), the phone companion that turns a phone
+  into a keyboard, remote and file drop, and **Community & support** for the
+  changelog, bug reports and the anonymous-diagnostics switch. **Power tools**
+  adds a gateway or clipboard-host port scan, ping/traceroute, DNS and Wi-Fi
+  checks, a hex/JSON/log viewer, clipboard-saved script buttons, rsync and Syncthing checks,
+  jukauser.json snapshots with diff/rollback, and a read/write benchmark
+  board.
 
 Turn Wi-Fi on before using YouTube or weather. Your settings are stored in
 `Apps/JukaHub/jukauser.json` and survive updates.
@@ -146,6 +156,16 @@ The QR code carries a fresh six-digit PIN, so nothing has to be typed on the
 device. The server stops when the card closes, and **Y** issues a new PIN on the
 spot. `JUKAHUB_COMPANION_PORT` overrides the port (default `8317`).
 
+## Share and remix a design
+
+In the [web builder](https://generate.jukalang.com), **Share** turns the current
+theme, fonts and layout into one link. Nothing is uploaded: the design is
+compressed into the link itself, and account keys, tokens and recent activity
+are stripped first. Opening the link shows **Remix**, which loads a fresh copy
+into that person's workspace; their existing design is only replaced when they
+choose it. Very large projects may exceed chat-app URL limits — in that case
+use **Export → JSON** and send the file.
+
 ## Updating
 
 JukaHub updates itself. On launch it checks the latest release on GitHub and,
@@ -155,10 +175,23 @@ app files and restarts. Your `jukauser.json` settings, favorites and media are
 untouched, and an interrupted update is rolled back automatically at next
 launch.
 
-The version line shows the release build date, e.g. `v0.4.0 · 2026-10-17`, so
-you can tell which build is installed. **MISC → Patch → Check for updates**
-runs the same check manually. Set `JUKAHUB_NO_AUTOUPDATE=1` to disable
-automatic updates, or extract a release archive over `Apps/JukaHub` by hand.
+After the restart, **What's new** opens once with that release's notes (the
+notes are cached before the swap, so it also works offline). You can reopen it
+any time from **Tools → Community & support**. The version line shows the
+release build date, e.g. `v0.4.0 · 2026-10-17`, so you can tell which build is
+installed. **MISC → Patch → Check for updates** runs the same check manually.
+Set `JUKAHUB_NO_AUTOUPDATE=1` to disable automatic updates, or extract a release
+archive over `Apps/JukaHub` by hand.
+
+## Privacy
+
+Anonymous diagnostics are **off by default**. The switch is under **Tools →
+Community & support**, and the app never sends anything unless you turn it on.
+When enabled, the only data is the build/version, device model, platform and
+OS/architecture — plus a crash count when the app panics. There is no install
+ID, account, filename, config value or usage history. **Report a bug** opens a
+prefilled GitHub issue with a redacted diagnostics block for you to review
+before submitting.
 
 To uninstall, delete the `Apps/JukaHub` folder.
 
@@ -177,8 +210,9 @@ Logs are on the SD card, so you can read them on a PC without SSH.
 
 `Apps/JukaHub/errors.txt` is the launcher log. For the app's own log, open
 **Logs → Export** on the device; it writes `Apps/JukaHub/logs.txt`. If you need
-help, attach one of them to your report on
-[Discord](https://discord.gg/R9qgJjh5jG) or in an issue.
+help, **Tools → Community & support → Report a bug** opens a GitHub issue with
+redacted diagnostics already filled in and copied to the clipboard; you can
+still attach a log or ask on [Discord](https://discord.gg/R9qgJjh5jG).
 
 ## Other devices
 

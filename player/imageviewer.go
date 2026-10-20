@@ -220,14 +220,13 @@ func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 		// On-screen Close button (top-right)
 		btnW, btnH := int32(120), int32(44)
 		bx, by := screenWidth-btnW-20, int32(20)
-		imageViewerCloseBtn = sdl.Rect{X: bx, Y: by, W: btnW, H: btnH}
-		fillRoundedRect(renderer, bx+2, by+3, btnW, btnH, RadiusMD, ShadowFill(60))
-		gradientRoundedRect(renderer, bx, by, btnW, btnH, RadiusMD, lighten(ColorButtonRaised, 18), darken(ColorButtonRaised, 12))
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
-		renderer.DrawRect(&sdl.Rect{X: bx, Y: by, W: btnW, H: btnH})
 		// Use × (U+00D7), which Inter contains — ✕ (U+2715) is not in Inter and
 		// would render as a missing-glyph box.
-		renderText(renderer, config, font, "Close  X", ColorTextPrimary(), bx+16, by+12)
+		imageViewerCloseBtn = UIButton(renderer, config, sdl.Rect{X: bx, Y: by, W: btnW, H: btnH}, "Close  X", UIButtonStyle{
+			Variant: UIButtonSecondary,
+			Font:    font,
+			Radius:  RadiusMD,
+		}, UIButtonState{})
 	}
 }
 
@@ -247,10 +246,11 @@ func renderImageViewerBackdrop(renderer *sdl.Renderer, config *Config, msg strin
 
 	btnW, btnH := int32(120), int32(44)
 	bx, by := screenWidth-btnW-20, int32(20)
-	imageViewerCloseBtn = sdl.Rect{X: bx, Y: by, W: btnW, H: btnH}
-	fillRoundedRect(renderer, bx+2, by+3, btnW, btnH, RadiusMD, ShadowFill(60))
-	gradientRoundedRect(renderer, bx, by, btnW, btnH, RadiusMD, lighten(ColorButtonRaised, 18), darken(ColorButtonRaised, 12))
-	renderText(renderer, config, font, "Close  X", ColorTextPrimary(), bx+16, by+12)
+	imageViewerCloseBtn = UIButton(renderer, config, sdl.Rect{X: bx, Y: by, W: btnW, H: btnH}, "Close  X", UIButtonStyle{
+		Variant: UIButtonSecondary,
+		Font:    font,
+		Radius:  RadiusMD,
+	}, UIButtonState{})
 }
 
 func handleImageViewerInput(e *sdl.KeyboardEvent) {

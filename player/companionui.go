@@ -1,15 +1,18 @@
 package main
 
-// companionui.go — the on-device half of the Phone Companion: the QR overlay
-// and the bridge that turns queued phone actions into real input events.
+// companionui.go — the on-device half of the Phone Companion: the compact QR
+// in the home header, the full pairing card, and the bridge that turns queued
+// phone actions into real input events.
 //
-// The overlay is modal. Its QR code contains the LAN address plus a fresh
-// six-digit PIN, so nothing has to be typed on the handheld to pair a phone.
+// The listener lives for the whole session so the header QR is always
+// scannable. The full card is modal. Both codes contain the LAN address plus a
+// fresh six-digit PIN, so nothing has to be typed on the handheld to pair.
 
 import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/skip2/go-qrcode"
 	"github.com/veandco/go-sdl2/sdl"
@@ -27,8 +30,23 @@ type companionOverlay struct {
 
 var companion companionOverlay
 
+// companionHeaderRect is the QR tile in the home header. It is set by the
+// renderer and read by the home click handler, so the visible code and its hit
+// target can never drift apart.
+var companionHeaderRect sdl.Rect
+
+// companionNextRefresh throttles the LAN-address poll. The companion server
+// stays up for the whole session; this only notices a DHCP change and rebuilds
+// the QR for the new address.
+var companionNextRefresh time.Time
+
+// companionNextRetry throttles automatic startup while the handheld is waiting
+// for Wi-Fi, so returning to Home retries without enumerating interfaces every
+// frame.
+var companionNextRetry time.Time
+
 func init() {
-	Cleanup = append(Cleanup, closeCompanionOverlay)
+	Cleanup = append(Cleanup, shutdownCompanion)
 }
 
 func openCompanionOverlay() {
@@ -42,16 +60,11 @@ func openCompanionOverlay() {
 	PlayActivateSound()
 }
 
+// closeCompanionOverlay only dismisses the pairing card. The listener and its
+// PIN stay alive so the QR code on the home screen keeps working; shutting the
+// server down is reserved for app exit and "new PIN".
 func closeCompanionOverlay() {
-	if companion.srv != nil {
-		companion.srv.Stop()
-		companion.srv = nil
-	}
 	companion.open = false
-	companion.pin = ""
-	companion.url = ""
-	companion.err = ""
-	companion.qr = nil
 	resetCompanionQueue()
 }
 
@@ -68,15 +81,43 @@ func toggleCompanionOverlay() {
 // screen is the only copy of the old PIN, so rotating it locks out any phone
 // that was left connected.
 func companionRestart() {
-	if companion.srv != nil {
-		companion.srv.Stop()
-		companion.srv = nil
-	}
+	stopCompanionServer()
+	companion.pin = ""
 	companionStart()
 	PlayNavSound()
 }
 
+// stopCompanionServer releases the listener and clears the pairing material.
+// The overlay may stay open so the error state is visible.
+func stopCompanionServer() {
+	if companion.srv != nil {
+		companion.srv.Stop()
+		companion.srv = nil
+	}
+	companion.pin = ""
+	companion.url = ""
+	companion.err = ""
+	companion.qr = nil
+	companionHeaderRect = sdl.Rect{}
+}
+
+// shutdownCompanion is the app-exit path: close the card and release the port.
+func shutdownCompanion() {
+	closeCompanionOverlay()
+	stopCompanionServer()
+}
+
+// companionStart binds the server once. Calling it again is a cheap no-op that
+// only refreshes the QR if the handheld's LAN address changed.
 func companionStart() {
+	if companion.srv != nil && companion.srv.Running() {
+		companionRefreshURL()
+		return
+	}
+	if !safeModeAllows(SafeFeatureNetwork) {
+		companion.err = "Network is disabled in safe mode"
+		return
+	}
 	companion.err = ""
 	companion.url = ""
 	companion.qr = nil
@@ -84,26 +125,145 @@ func companionStart() {
 		companion.err = "No Wi-Fi address - connect the handheld to a network"
 		return
 	}
-	pin, err := companionNewPIN()
-	if err != nil {
-		companion.err = "cannot generate a PIN: " + err.Error()
-		return
+	pin := companion.pin
+	if len(pin) != 6 {
+		var err error
+		pin, err = companionNewPIN()
+		if err != nil {
+			companion.err = "cannot generate a PIN: " + err.Error()
+			return
+		}
 	}
 	companion.pin = pin
-	companion.err = ""
 	srv := newCompanionServer(pin, ftpRootDir(), enqueueCompanion)
 	if err := srv.Start(); err != nil {
 		companion.err = err.Error()
 		return
 	}
 	companion.srv = srv
-	companion.url = srv.URL()
-	companion.qr = nil
-	if code, err := qrcode.New(companion.url, qrcode.Low); err == nil {
-		companion.qr = code.Bitmap()
-	} else {
-		companion.err = "cannot draw the QR code: " + err.Error()
+	companionRefreshURL()
+}
+
+// companionEnsureStarted brings the companion up in the background so the home
+// QR can be scanned without opening the pairing card first. It is safe to call
+// from the render loop: while the server is healthy it only checks the LAN
+// address every few seconds, and when Wi-Fi is absent it retries slowly.
+func companionEnsureStarted() {
+	if !safeModeAllows(SafeFeatureNetwork) {
+		return
 	}
+	now := time.Now()
+	if companion.srv != nil && companion.srv.Running() {
+		if now.Before(companionNextRefresh) {
+			return
+		}
+		companionNextRefresh = now.Add(3 * time.Second)
+		companionRefreshURL()
+		return
+	}
+	if now.Before(companionNextRetry) {
+		return
+	}
+	companionNextRetry = now.Add(5 * time.Second)
+	companionStart()
+}
+
+// companionRefreshURL keeps the QR in sync with the current LAN address. The
+// listener stays bound across DHCP changes; only the displayed URL changes.
+func companionRefreshURL() {
+	if companion.srv == nil {
+		return
+	}
+	if localIPv4() == "" {
+		companion.err = "No Wi-Fi address - connect the handheld to a network"
+		companion.url = ""
+		companion.qr = nil
+		return
+	}
+	url := companion.srv.URL()
+	if url == companion.url && len(companion.qr) > 0 {
+		companion.err = ""
+		return
+	}
+	companion.url = url
+	companion.err = ""
+	code, err := qrcode.New(url, qrcode.Low)
+	if err != nil {
+		companion.qr = nil
+		companion.err = "cannot draw the QR code: " + err.Error()
+		return
+	}
+	companion.qr = code.Bitmap()
+}
+
+// drawCompanionQR paints the module bitmap inside rect, centring the code and
+// leaving the leftover space as a quiet zone. The caller owns the white tile.
+func drawCompanionQR(renderer *sdl.Renderer, rect sdl.Rect, modules [][]bool) {
+	if renderer == nil || rect.W <= 0 || rect.H <= 0 || len(modules) == 0 {
+		return
+	}
+	module := rect.W / int32(len(modules))
+	if module < 1 {
+		module = 1
+	}
+	coded := module * int32(len(modules))
+	ox := rect.X + (rect.W-coded)/2
+	oy := rect.Y + (rect.H-coded)/2
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(0, 0, 0, 255)
+	for y, row := range modules {
+		for x, on := range row {
+			if !on {
+				continue
+			}
+			renderer.FillRect(&sdl.Rect{
+				X: ox + int32(x)*module,
+				Y: oy + int32(y)*module,
+				W: module,
+				H: module,
+			})
+		}
+	}
+}
+
+// renderCompanionHeaderQR draws the compact, always-available pairing code in
+// the home header. It returns an empty rect when there is no code to show.
+func renderCompanionHeaderQR(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect) sdl.Rect {
+	companionHeaderRect = sdl.Rect{}
+	if renderer == nil || len(companion.qr) == 0 || rect.W < 72 || rect.H < 72 {
+		return sdl.Rect{}
+	}
+	UIButton(renderer, nil, rect, "", UIButtonStyle{
+		Variant:  UIButtonCustom,
+		Fill:     sdl.Color{R: 255, G: 255, B: 255, A: 255},
+		Border:   WithAlpha(accentColor, 200),
+		Radius:   RadiusSM,
+		NoShadow: true,
+	}, UIButtonState{})
+
+	pad := int32(6)
+	captionH := int32(0)
+	if rect.H >= 80 && fonts.Small != nil {
+		captionH = companionFontLine(fonts.Small) + 2
+	}
+	qrSize := rect.W - 2*pad
+	if maxH := rect.H - 2*pad - captionH; qrSize > maxH {
+		qrSize = maxH
+	}
+	if qrSize > 0 {
+		drawCompanionQR(renderer, sdl.Rect{
+			X: rect.X + (rect.W-qrSize)/2,
+			Y: rect.Y + pad,
+			W: qrSize,
+			H: qrSize,
+		}, companion.qr)
+	}
+	if captionH > 0 {
+		drawText(renderer, fonts.Small, "SCAN", rect.X+rect.W/2, rect.Y+rect.H-captionH,
+			colorNew(7, 17, 31, 255), textAlignCenter)
+	}
+	companionHeaderRect = rect
+	return rect
 }
 
 // companionFontLine is the height of one line of a cached font, falling back
@@ -176,31 +336,7 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 	qrX := cardX + pad
 	qrY := contentY
 	drawRoundedRect(renderer, &sdl.Rect{X: qrX, Y: qrY, W: qrSize, H: qrSize}, 8, 255, 255, 255, 255)
-	if modules := len(companion.qr); modules > 0 {
-		module := qrSize / int32(modules)
-		if module < 1 {
-			module = 1
-		}
-		coded := module * int32(modules)
-		ox := qrX + (qrSize-coded)/2
-		oy := qrY + (qrSize-coded)/2
-		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		renderer.SetDrawColor(0, 0, 0, 255)
-		for y := 0; y < modules; y++ {
-			row := companion.qr[y]
-			for x := 0; x < modules; x++ {
-				if !row[x] {
-					continue
-				}
-				renderer.FillRect(&sdl.Rect{
-					X: ox + int32(x)*module,
-					Y: oy + int32(y)*module,
-					W: module,
-					H: module,
-				})
-			}
-		}
-	}
+	drawCompanionQR(renderer, sdl.Rect{X: qrX, Y: qrY, W: qrSize, H: qrSize}, companion.qr)
 
 	caption := "Scan with your phone camera"
 	if companion.err != "" {
@@ -376,11 +512,11 @@ func drainCompanionQueue(config *Config) {
 // companionStatusLine is used by tests and the Tools panel: a one-line summary
 // of where the phone should connect.
 func companionStatusLine() string {
-	if !companion.open {
-		return "Stopped"
-	}
 	if companion.err != "" {
 		return "Error: " + companion.err
+	}
+	if companion.pin == "" && companion.srv == nil {
+		return "Stopped"
 	}
 	return fmt.Sprintf("Pairing PIN %s", companion.pin)
 }

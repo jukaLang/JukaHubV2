@@ -17,6 +17,9 @@ func main() {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Printf("Panic: %v\n%s", r, debug.Stack())
+			// Only the fact that a panic happened leaves the device, and only
+			// when the user opted in. The stack above stays local.
+			TelemetryCrash(appConfig)
 		}
 	}()
 
@@ -96,6 +99,18 @@ func main() {
 	// theme) live on the Smart Widgets page, reached from Settings → General.
 	// Injected in memory like the alarm scene, so no shipped config is edited.
 	ensureSettingsWidgets(config)
+	// Replay entry point + first-run welcome tour. The tour is a global modal,
+	// so it is started once here and rendered above every other screen.
+	ensureOnboardingEntry(config)
+	onboardingStartIfNeeded(config)
+	// Make the music player and game collection reachable from the Start menu
+	// even on configs created before those scenes existed.
+	ensureMusicScene(config)
+	ensureGamesScene(config)
+	// Playtime stats and badges have their own screen under Tools.
+	ensurePlaytimeScene(config)
+	ensurePlaytimeEntry(config)
+	playtimeInit(config)
 	// Apply the saved "Start JukaHub at login" setting to the platform's
 	// startup folder (only ever our own launcher file).
 	reconcileAutoStart(config)
@@ -150,6 +165,20 @@ func main() {
 	// Patch module: load persisted state and roll back any interrupted update
 	// transaction so JukaHub always launches in a consistent state.
 	InitPatchModule()
+	// Game profiles: create the catalog folders once. The catalog itself is
+	// loaded lazily when the launcher opens, so a broken profile cannot slow
+	// startup or prevent booting.
+	InitGameProfiles()
+
+	// Show the release notes once on the first launch of a newly installed
+	// build. The notes were cached before the restart, so this works offline.
+	if safeModeAllows(SafeFeatureUpdates) {
+		maybeShowChangelogAfterUpdate(config)
+	}
+	// Opt-in device census (off by default, no identifier).
+	if safeModeAllows(SafeFeatureNetwork) {
+		TelemetryBoot(config)
+	}
 
 	// Automatic updater: check the release feed in the background and offer a
 	// newer build in Patch. It never downloads or installs without the user
@@ -173,6 +202,10 @@ func main() {
 	publishSSHState()
 	defer ftpSrv.Stop()
 	defer sshSrv.Stop()
+	// The Phone Companion starts with the app so the QR in the home header is
+	// live immediately. It retries from Home if Wi-Fi comes up later.
+	companionEnsureStarted()
+	defer stopCompanionServer()
 
 	// Start screensaver idle monitor.
 	// Set screensaver timeout from config
@@ -334,6 +367,9 @@ func main() {
 
 	running := true
 	for running {
+		// Keep the home-header pairing QR live: start the companion when Wi-Fi
+		// appears and rebuild the code if DHCP moved the address.
+		companionEnsureStarted()
 		// Phone Companion actions arrive on an HTTP goroutine. They are queued
 		// and applied here, on the main loop, so a phone keypress takes the same
 		// path as the handheld's own input.
@@ -361,6 +397,12 @@ func main() {
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
 					screensaverNotifyInput()
+					// The first-run tour is the topmost modal: while it is open it
+					// owns every key, including escape and the usual global chords.
+					if onboarding.active {
+						handleOnboardingKey(e)
+						continue
+					}
 					// Watch Party is a global modal; F8 opens and closes it while
 					// no text field is capturing the keyboard.
 					if e.Keysym.Sym == sdl.K_F8 && !virtualKeyboardActive {
@@ -395,9 +437,26 @@ func main() {
 					if updatePrompt.open && handleUpdatePromptKey(e, config) {
 						continue
 					}
+					// Community hub is above the other overlays.
+					if communityPanel.open && handleCommunityKey(e, config) {
+						continue
+					}
+					// Power tools are above the app chrome while open.
+					if powerTools.open && handlePowerToolsKey(e, config) {
+						continue
+					}
+					// RetroAchievements is modal. While the keyboard is editing a
+					// username or API key the keyboard owns the keys instead.
+					if raPanel.open && !virtualKeyboardActive && handleRetroAchievementsKey(e, config) {
+						continue
+					}
 					// Watch Party is modal too, but the on-screen keyboard owns the
 					// keys while it is typing an invite or a link.
 					if partyUI.open && !virtualKeyboardActive && partyHandleKey(e, config) {
+						continue
+					}
+					// Game Profiles is modal and consumes all keys while open.
+					if gpPanel.open && handleGameProfileKey(e, config) {
 						continue
 					}
 					// Tools is modal and consumes all keys while open.
@@ -474,6 +533,15 @@ func main() {
 							selectedButtonIndex = findFirstSelectableElement(curScene)
 						}
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
+							// Registered scenes without config elements (Games, Music,
+							// Playtime) still need their own keys: otherwise the empty
+							// element list swallowed Enter and B before the registry ran.
+							if m, ok := lookupScene(curScene.Name); ok && m.handleKey(e, config) {
+								continue
+							}
+							if !homeLayoutActive && (e.Keysym.Sym == sdl.K_ESCAPE || e.Keysym.Sym == sdl.K_b) {
+								goBackScene(config)
+							}
 							continue
 						}
 						curElem := curScene.Elements[selectedButtonIndex]
@@ -748,6 +816,12 @@ func main() {
 					SeekVideo(fraction)
 				}
 			case *sdl.MouseWheelEvent:
+				if powerTools.open && handlePowerToolsWheel(e.Y) {
+					continue
+				}
+				if communityPanel.open && handleCommunityWheel(e.Y) {
+					continue
+				}
 				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
 					config.Scenes[currentSceneIndex].Name == "Terminal" {
 					handleTermWheel(e.Y)
@@ -799,6 +873,9 @@ func main() {
 				if e.Button == sdl.BUTTON_LEFT {
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
 					if e.Type == sdl.MOUSEBUTTONDOWN {
+						if handleOnboardingMouse(mx, my, config) {
+							break
+						}
 						if virtualKeyboardActive {
 							kmx, kmy := physicalToLogical(int32(e.X), int32(e.Y))
 							if vkCloseHit(kmx, kmy) {
@@ -843,9 +920,30 @@ func main() {
 							handleUpdatePromptMouse(mx, my, config)
 							break
 						}
+						// Community hub is modal and above every other overlay.
+						if communityPanel.open {
+							handleCommunityMouse(mx, my, config)
+							break
+						}
+						// Power tools replace the app while open.
+						if powerTools.open {
+							handlePowerToolsMouse(mx, my, config)
+							break
+						}
+						// RetroAchievements overlay is modal and above the panels
+						// that launch it.
+						if raPanel.open {
+							handleRetroAchievementsMouse(mx, my, config)
+							break
+						}
 						// Watch Party panel is modal the same way.
 						if partyUI.open {
 							partyHandleMouse(mx, my, config)
+							break
+						}
+						// Game Profiles is modal the same way.
+						if gpPanel.open {
+							handleGameProfileMouse(mx, my, config)
 							break
 						}
 						// Tools panel is modal: a click selects a row, a click outside
@@ -950,6 +1048,13 @@ func main() {
 						// Top-bar chrome buttons: the back pill and the status clock
 						// activate on click/touch like any focused button would.
 						if handleChromeBarClick(mx, my, config) {
+							break
+						}
+						// Playtime has no config elements; its RA touch target lives
+						// in the header.
+						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == playtimeSceneName &&
+							handlePlaytimeMouse(mx, my) {
 							break
 						}
 						// Chat image previews open full screen; clicking again closes.
@@ -1193,6 +1298,10 @@ func main() {
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
 				if e.Type == sdl.CONTROLLERBUTTONDOWN {
+					// The first-run tour is modal and above every other overlay.
+					if handleOnboardingController(e, config) {
+						continue
+					}
 					// Route overlays first (highest priority).
 					if handleControllerEvent(e, config) {
 						continue
@@ -1640,6 +1749,7 @@ func main() {
 		// Contextual widgets: battery saver and time-of-day theme, checked once a
 		// second before the frame is drawn so a theme switch lands immediately.
 		widgetsTick(config)
+		playtimeTick(config)
 		// Screensaver takes over when idle.
 		if ss.active {
 			renderScreensaver(renderer, config, sdl.GetTicks64())
@@ -1750,6 +1860,16 @@ func main() {
 			renderToolsPanel(renderer, config)
 		}
 
+		// Community hub (changelog, bug report, telemetry consent).
+		if communityPanel.open {
+			renderCommunityPanel(renderer, config)
+		}
+
+		// Developer / power-user tools overlay.
+		if powerTools.open {
+			renderPowerToolsPanel(renderer, config)
+		}
+
 		// Process list overlay (inspect and kill processes).
 		if processPanel.open {
 			renderProcessPanel(renderer, config)
@@ -1763,6 +1883,16 @@ func main() {
 		// Emulators overlay (availability list).
 		if emuPanel.open {
 			renderEmuPanel(renderer, config)
+		}
+
+		// Game Profiles overlay (Wine/Box64/native launcher).
+		if gpPanel.open {
+			renderGameProfilesPanel(renderer, config)
+		}
+
+		// RetroAchievements overlay (recent unlocks + game progress).
+		if raPanel.open {
+			renderRetroAchievementsPanel(renderer, config)
 		}
 
 		// Wallpaper picker overlay.
@@ -1804,6 +1934,10 @@ func main() {
 		if virtualKeyboardActive {
 			renderKeyboard(renderer, config)
 		}
+		// First-run tour sits above every scene and overlay.
+		if onboarding.active {
+			renderOnboarding(renderer, config)
+		}
 
 		renderToast(renderer, config)
 		renderInstallBar(renderer, config)
@@ -1839,6 +1973,8 @@ func main() {
 	// (window close, exit button, scene-exit trigger).
 	// Blank the LEDs first so they do not stay lit on the last audio frame.
 	_ = SetLEDSync(false)
+	playtimeFlush(config)
+	partyHistoryFlush()
 	saveFavorites()
 	ClearTextCache()
 	DestroyVKStaticCache()

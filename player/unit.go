@@ -220,14 +220,12 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	arrowY := rowY + rowH/2
 	circleR := int32(16)
 	circleX := fromX + rowW + gap/2 - circleR
-	fillRoundedRect(renderer, circleX+2, arrowY-circleR+2, circleR*2, circleR*2, circleR, ShadowFill(40))
-	fillRoundedRect(renderer, circleX, arrowY-circleR, circleR*2, circleR*2, circleR, ColorButtonRaised)
-	renderer.SetDrawColor(255, 255, 255, 30)
-	renderer.FillRect(&sdl.Rect{X: circleX + 4, Y: arrowY - circleR + 3, W: circleR*2 - 8, H: 1})
-	if font != nil {
-		gw, gh, _ := font.SizeUTF8("<->")
-		renderText(renderer, config, font, "<->", accentColor, circleX+(circleR*2-int32(gw))/2, arrowY-int32(gh)/2+1)
-	}
+	UIButton(renderer, config, sdl.Rect{X: circleX, Y: arrowY - circleR, W: circleR * 2, H: circleR * 2}, "<->", UIButtonStyle{
+		Variant:    UIButtonSecondary,
+		LabelColor: accentColor,
+		Font:       font,
+		Pill:       true,
+	}, UIButtonState{})
 
 	resultY := rowY + rowH + 40
 	resultH := int32(60)
@@ -248,13 +246,11 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	swapW := int32(120)
 	swapH := int32(40)
 	swapX := inputX + inputW - swapW
-	fillRoundedRect(renderer, swapX, swapY, swapW, swapH, 10, ColorButtonRaised)
-	renderer.SetDrawColor(255, 255, 255, 30)
-	renderer.FillRect(&sdl.Rect{X: swapX + 1, Y: swapY + 1, W: swapW - 2, H: 1})
-	if font != nil {
-		sw, _, _ := font.SizeUTF8("Swap")
-		renderText(renderer, config, font, "Swap", ColorTextPrimary(), swapX+(swapW-int32(sw))/2, swapY+10)
-	}
+	UIButton(renderer, config, sdl.Rect{X: swapX, Y: swapY, W: swapW, H: swapH}, "Swap", UIButtonStyle{
+		Variant: UIButtonSecondary,
+		Font:    font,
+		Radius:  RadiusMD,
+	}, UIButtonState{})
 }
 
 func handleUnitInput(e *sdl.KeyboardEvent, config *Config) {

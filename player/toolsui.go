@@ -25,6 +25,8 @@ const (
 	toolsActionParty
 	toolsActionPatch
 	toolsActionCalculator
+	toolsActionCommunity
+	toolsActionPowerTools
 	toolsActionCopyIP
 	toolsActionUtilities
 	toolsActionClose
@@ -219,7 +221,10 @@ func toolsRows(config *Config) []toolsRow {
 		action:  toolsActionCompanion,
 		enabled: true,
 	}
-	if companion.open {
+	if companion.err != "" {
+		companionRow.value = "Offline"
+		companionRow.hint = "A: details"
+	} else if companion.open {
 		companionRow.value = companionStatusLine()
 		companionRow.hint = "A: hide"
 	}
@@ -263,6 +268,24 @@ func toolsRows(config *Config) []toolsRow {
 			enabled: true,
 		})
 	}
+
+	rows = append(rows, toolsRow{
+		label:   "Community & support",
+		value:   "Changelog · Bugs",
+		detail:  "What's new, report a bug, anonymous diagnostics",
+		hint:    "A: open",
+		action:  toolsActionCommunity,
+		enabled: true,
+	})
+
+	rows = append(rows, toolsRow{
+		label:   "Power tools",
+		value:   "Network · Files · Scripts",
+		detail:  "Port scan, hex viewer, snippets, config history",
+		hint:    "A: open",
+		action:  toolsActionPowerTools,
+		enabled: true,
+	})
 
 	ip := toolsIPAddress()
 	ipRow := toolsRow{
@@ -359,6 +382,12 @@ func toolsPanelActivate(config *Config) {
 		}
 		toolsPanel.open = false
 		changeSceneTo(config, idx)
+	case toolsActionCommunity:
+		toolsPanel.open = false
+		openCommunityPanel(config, communityPageHome)
+		PlayActivateSound()
+	case toolsActionPowerTools:
+		openPowerTools(config)
 	case toolsActionCopyIP:
 		ip := toolsIPAddress()
 		if ip == "" {
@@ -532,7 +561,7 @@ func toolsPanelMetrics(config *Config, rowCount int) toolsPanelLayout {
 		// Dense mode: label and value on one line. Patch and Calculator add
 		// two rows, which does not fit the three-line row on a 720p screen.
 		layout.dense = true
-		layout.rowPad = 9
+		layout.rowPad = 7
 		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
 	}
 	if total() > available && len(layout.info) > 1 {

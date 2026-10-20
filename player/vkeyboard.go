@@ -48,6 +48,7 @@ const (
 	vkTargetName  // chat display name
 	vkTargetTV    // Live TV channel search
 	vkTargetParty // Watch Party invite / shared link
+	vkTargetRA    // RetroAchievements username / Web API key
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -248,6 +249,8 @@ func vkEnsureLayout() {
 		target = 3
 	case vkTargetParty:
 		target = 4
+	case vkTargetRA:
+		target = 5
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -475,6 +478,8 @@ func vkCurrentText() string {
 		return tvQuery()
 	case vkTargetParty:
 		return partyUI.input
+	case vkTargetRA:
+		return raPanel.input
 	}
 	return inputTextBuffer
 }
@@ -497,6 +502,8 @@ func vkSetText(text string, config *Config) {
 		tvSetQuery(text)
 	case vkTargetParty:
 		partyUI.input = text
+	case vkTargetRA:
+		raPanel.input = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -567,6 +574,11 @@ func vkTitle() string {
 			return "SHARE A LINK"
 		}
 		return "PARTY INVITE"
+	case vkTargetRA:
+		if raPanel.edit == raEditAPIKey {
+			return "WEB API KEY"
+		}
+		return "RETROACHIEVEMENTS USERNAME"
 	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
@@ -598,6 +610,11 @@ func vkPlaceholder() string {
 			return "https://…"
 		}
 		return "192.168.1.5:8318 ABCDE"
+	case vkTargetRA:
+		if raPanel.edit == raEditAPIKey {
+			return "32 letters or digits"
+		}
+		return "Your RetroAchievements username"
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -617,6 +634,8 @@ func vkHints() string {
 		return "A type    Done run    B / Esc close"
 	case vkTargetTV:
 		return "A type    live filter    B / Esc close"
+	case vkTargetRA:
+		return "A type    Y save    B / Esc close"
 	}
 	return "A type    Y save    B / Esc close"
 }
@@ -714,6 +733,24 @@ func vkOpenPartyInput() {
 	vkEnsureLayout()
 }
 
+// vkOpenRetroAchievementsInput opens the keyboard for the RA username or Web
+// API key field. raPanel.input seeds it so a typo can be corrected.
+func vkOpenRetroAchievementsInput() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetRA
+	vkLayer = vkLayerLetters
+	// Web API keys are case-sensitive and conventionally uppercase; start
+	// there so a handheld user does not have to toggle Shift for every letter.
+	keyboardUpper = raPanel.edit == raEditAPIKey
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
 // vkOpenSceneInput opens the keyboard for a scene input element.
 func vkOpenSceneInput(config *Config, sceneIdx, elemIdx int) {
 	if sceneIdx < 0 || sceneIdx >= len(config.Scenes) {
@@ -754,6 +791,11 @@ func vkCloseKeyboard() {
 	if vkTarget == vkTargetScene {
 		activeSceneIndex = -1
 		activeElementIndex = -1
+	}
+	if vkTarget == vkTargetRA {
+		// The API-key field starts in uppercase; do not leak that into the
+		// next keyboard target.
+		keyboardUpper = false
 	}
 	chatInputActive = false
 	unitInputActive = false
@@ -858,6 +900,9 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetParty:
 		vkCloseKeyboard()
 		partySubmitInput(text)
+	case vkTargetRA:
+		vkCloseKeyboard()
+		raSubmitCredential(text)
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may
@@ -1333,9 +1378,14 @@ func vkDrawHeader(renderer *sdl.Renderer, config *Config, font *ttf.Font, panel,
 
 	// Close button: a full-size tap target with a drawn X. The old 26px dotted
 	// cross was both hard to hit and easy to mistake for decoration.
-	fillRoundedRect(renderer, closeBtn.X, closeBtn.Y, closeBtn.W, closeBtn.H, RadiusSM, ColorSurfaceRaised)
-	strokeRoundedRect(renderer, closeBtn.X, closeBtn.Y, closeBtn.W, closeBtn.H, RadiusSM, 1,
-		WithAlpha(ColorBorderSubtle, 140))
+	UIButton(renderer, config, closeBtn, "", UIButtonStyle{
+		Variant:  UIButtonCustom,
+		Fill:     ColorSurfaceRaised,
+		Border:   WithAlpha(ColorBorderSubtle, 140),
+		Font:     font,
+		Radius:   RadiusSM,
+		NoShadow: true,
+	}, UIButtonState{})
 	cx := closeBtn.X + closeBtn.W/2
 	cy := closeBtn.Y + closeBtn.H/2
 	// Two passes give the X a 2px stroke so it reads at handheld distance.
@@ -1365,7 +1415,13 @@ func vkDrawField(renderer *sdl.Renderer, config *Config, font *ttf.Font, field s
 	if text == "" {
 		renderText(renderer, config, font, vkPlaceholder(), ColorTextTertiary(), field.X+padX, textY)
 	} else {
-		visible, w := vkFitTail(font, text, maxW)
+		display := text
+		if vkTarget == vkTargetRA && raPanel.edit == raEditAPIKey {
+			// Do not leave the Web API key readable on the handheld screen
+			// while it is being typed or corrected.
+			display = strings.Repeat("•", utf8.RuneCountInString(text))
+		}
+		visible, w := vkFitTail(font, display, maxW)
 		renderText(renderer, config, font, visible, ColorTextPrimary(), field.X+padX, textY)
 		if uint32(sdl.GetTicks64()/530)%2 == 0 {
 			cx := field.X + padX + w + 2

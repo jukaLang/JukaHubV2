@@ -93,6 +93,10 @@ document.addEventListener('DOMContentLoaded', () => {
   if (reloadBtn) reloadBtn.addEventListener('click', reloadImportedConfig);
   refreshReloadButtonState();
 
+  // Theme/layout sharing: a design can be handed to someone else as a single
+  // link, then opened here as a fresh copy with the Remix button.
+  setupDesignSharing();
+  restoreSharedDesignFromURL();
 
   setupMobileElementAdding();
   setupMobileCanvasClick();
@@ -2642,6 +2646,295 @@ function createJukaApp() {
 // Legacy alias for inline Export buttons
 function exportConfig() {
   createJukaApp();
+}
+
+// ---
+// Design sharing (theme + layout in a URL)
+// ---
+// The shared payload is the same config buildEditorConfig() exports, gzipped
+// and base64url-encoded into the fragment. Nothing is uploaded: the link is
+// the transport. Opening one never overwrites the local workspace - the
+// recipient explicitly presses Remix, which loads a copy through the normal
+// import path.
+
+const SHARE_HASH_PREFIX = '#remix=';
+const SHARE_MAX_TOKEN = 200000;
+const SHARE_MAX_SCENES = 64;
+const SHARE_MAX_ELEMENTS = 4000;
+
+let sharedDesign = null;      // { config, token, compressed, bytes, title, author }
+let shareLinkValue = '';
+
+function bytesToBase64Url(bytes) {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlToBytes(text) {
+  const normalized = String(text || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+async function gzipBytes(bytes) {
+  if (typeof CompressionStream !== 'function') return null;
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function gunzipBytes(bytes) {
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error('This browser cannot open compressed share links');
+  }
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+// A share link is for the theme and layout, not the whole local profile.
+// Remove account material and runtime history before anything is encoded: an
+// imported config can carry a Discord token, a Groq key or a user's last
+// searches, and none of that belongs in a URL pasted into a chat app.
+const SHARE_SECRET_KEY = /(token|secret|password|api[-_]?key|credential|cookie|authorization)/i;
+const SHARE_PRIVATE_VARIABLE = /^(recently_played|search_query|search_error|stream_url|custom_link_url|podcast_url|terminal_cmd|fe_path|fe_entries|canvas_code|custom_ticker|custom_tickers|packages_list|plugin_list|ssh_status|chat_attach_image|youtube_cookies_file|tspusername|fileexplorerroot|tools_path|discord_.*)$/i;
+
+function sanitizeSharedConfig(config) {
+  let copy;
+  try { copy = JSON.parse(JSON.stringify(config || {})); } catch (e) { return {}; }
+  delete copy.channel_profile;
+
+  const scrub = obj => {
+    if (!obj || typeof obj !== 'object') return;
+    for (const key of Object.keys(obj)) {
+      if (SHARE_SECRET_KEY.test(key) || SHARE_PRIVATE_VARIABLE.test(key)) {
+        delete obj[key];
+        continue;
+      }
+      const value = obj[key];
+      if (value && typeof value === 'object' && !Array.isArray(value)) scrub(value);
+    }
+  };
+  if (copy.variables && typeof copy.variables === 'object') scrub(copy.variables);
+  return copy;
+}
+
+async function encodeSharedDesign(config) {
+  const json = new TextEncoder().encode(JSON.stringify(config));
+  const compressed = await gzipBytes(json);
+  if (compressed) {
+    return { token: 'v1g.' + bytesToBase64Url(compressed), compressed: true, bytes: compressed.length };
+  }
+  return { token: 'v1r.' + bytesToBase64Url(json), compressed: false, bytes: json.length };
+}
+
+function validateSharedConfig(config) {
+  if (!config || typeof config !== 'object' || Array.isArray(config)) return false;
+  if (!Array.isArray(config.scenes)) return false;
+  if (config.scenes.length === 0 || config.scenes.length > SHARE_MAX_SCENES) return false;
+  let elements = 0;
+  for (const scene of config.scenes) {
+    if (!scene || typeof scene !== 'object') return false;
+    if (typeof scene.name !== 'string' || !scene.name.trim()) return false;
+    if (!Array.isArray(scene.elements)) return false;
+    elements += scene.elements.length;
+    if (elements > SHARE_MAX_ELEMENTS) return false;
+  }
+  return true;
+}
+
+async function decodeSharedDesign(token) {
+  if (!token || token.length > SHARE_MAX_TOKEN) throw new Error('This share link is too large');
+  const dot = token.indexOf('.');
+  if (dot < 1) throw new Error('This share link is not in a known format');
+  const version = token.slice(0, dot);
+  const payload = base64UrlToBytes(token.slice(dot + 1));
+  let jsonBytes;
+  if (version === 'v1g') jsonBytes = await gunzipBytes(payload);
+  else if (version === 'v1r') jsonBytes = payload;
+  else throw new Error('This share link was made by a newer builder');
+  let config;
+  try {
+    config = JSON.parse(new TextDecoder().decode(jsonBytes));
+  } catch (e) {
+    throw new Error('This share link is damaged');
+  }
+  if (!validateSharedConfig(config)) throw new Error('This share link has no usable design');
+  return config;
+}
+
+function showShareModal() {
+  const panel = document.getElementById('sharePanel');
+  if (!panel) return;
+  panel.removeAttribute('hidden');
+  const urlInput = document.getElementById('shareUrl');
+  if (urlInput) {
+    urlInput.value = shareLinkValue;
+    setTimeout(() => { urlInput.focus(); urlInput.select(); }, 0);
+  }
+}
+
+function closeShareModal() {
+  const panel = document.getElementById('sharePanel');
+  if (panel) panel.setAttribute('hidden', '');
+}
+
+function showRemixModal() {
+  if (!sharedDesign) return;
+  closeShareModal();
+  const panel = document.getElementById('remixPanel');
+  if (!panel) return;
+  const meta = document.getElementById('remixMeta');
+  if (meta) {
+    const title = sharedDesign.title || 'Untitled design';
+    const author = sharedDesign.author ? ' by ' + sharedDesign.author : '';
+    meta.textContent = '“' + title + '”' + author;
+  }
+  panel.removeAttribute('hidden');
+  const remixBtn = document.getElementById('remixDesignBtn');
+  if (remixBtn) setTimeout(() => remixBtn.focus(), 0);
+}
+
+function closeRemixModal() {
+  const panel = document.getElementById('remixPanel');
+  if (panel) panel.setAttribute('hidden', '');
+}
+
+function stripShareHash() {
+  try {
+    history.replaceState(null, '', location.pathname + location.search);
+  } catch (e) { /* file:// or restricted history */ }
+}
+
+function adoptSharedDesign() {
+  if (!sharedDesign) return;
+  const config = JSON.parse(JSON.stringify(sharedDesign.config));
+  if (autoSaveTimer) {
+    clearTimeout(autoSaveTimer);
+    autoSaveTimer = null;
+  }
+  // A remix is an import: it replaces the workspace and becomes the source
+  // the Reload config button restores.
+  importedConfigSnapshot = JSON.parse(JSON.stringify(config));
+  loadJukaApp(config);
+  scheduleAutoSave();
+  refreshReloadButtonState();
+  closeRemixModal();
+  closeShareModal();
+  stripShareHash();
+  const remixButton = document.getElementById('remixSharedBtn');
+  if (remixButton) remixButton.hidden = true;
+  showToast('Remixed — you are editing a copy', 'success');
+}
+
+async function shareCurrentDesign() {
+  const btn = document.getElementById('shareDesignBtn');
+  if (btn) setLoading(btn, true);
+  try {
+    const encoded = await encodeSharedDesign(sanitizeSharedConfig(buildEditorConfig()));
+    shareLinkValue = location.href.split('#')[0] + SHARE_HASH_PREFIX + encoded.token;
+    const urlInput = document.getElementById('shareUrl');
+    if (urlInput) urlInput.value = shareLinkValue;
+    const sizeNote = document.getElementById('shareSizeNote');
+    if (sizeNote) {
+      const kb = Math.round(shareLinkValue.length / 1024);
+      sizeNote.textContent = 'Link size: about ' + kb + ' KB.';
+      sizeNote.classList.toggle('warn', shareLinkValue.length > 12000);
+      if (shareLinkValue.length > 12000) {
+        sizeNote.textContent += ' Some chat apps truncate links this long — export JSON instead.';
+      }
+    }
+    showShareModal();
+  } catch (e) {
+    showToast('Could not build the share link: ' + e.message, 'error');
+  } finally {
+    if (btn) setLoading(btn, false);
+  }
+}
+
+async function copyShareLink() {
+  const urlInput = document.getElementById('shareUrl');
+  if (!urlInput || !urlInput.value) return;
+  try {
+    await navigator.clipboard.writeText(urlInput.value);
+  } catch (e) {
+    // Clipboard API needs a secure context; a selected readonly input still
+    // works on file:// previews and older Safari.
+    urlInput.focus();
+    urlInput.select();
+    try {
+      if (!document.execCommand('copy')) throw new Error('copy rejected');
+    } catch (err) {
+      showToast('Press Ctrl/Cmd+C to copy the link', 'warning');
+      return;
+    }
+  }
+  showToast('Share link copied', 'success');
+}
+
+async function restoreSharedDesignFromURL() {
+  if (!location.hash.startsWith(SHARE_HASH_PREFIX)) return;
+  const token = location.hash.slice(SHARE_HASH_PREFIX.length);
+  if (!token) return;
+  try {
+    const config = await decodeSharedDesign(token);
+    sharedDesign = {
+      config,
+      token,
+      title: config.title || '',
+      author: config.author || ''
+    };
+    const remixButton = document.getElementById('remixSharedBtn');
+    if (remixButton) remixButton.hidden = false;
+    showRemixModal();
+  } catch (e) {
+    showToast('Could not open shared design: ' + e.message, 'error');
+    stripShareHash();
+  }
+}
+
+function setupDesignSharing() {
+  const shareBtn = document.getElementById('shareDesignBtn');
+  const remixBtn = document.getElementById('remixSharedBtn');
+  const copyBtn = document.getElementById('copyShareLink');
+  const adoptBtn = document.getElementById('remixDesignBtn');
+
+  if (shareBtn) shareBtn.addEventListener('click', shareCurrentDesign);
+  if (remixBtn) remixBtn.addEventListener('click', showRemixModal);
+  if (copyBtn) copyBtn.addEventListener('click', copyShareLink);
+  if (adoptBtn) adoptBtn.addEventListener('click', adoptSharedDesign);
+
+  document.querySelectorAll('[data-close-share]').forEach(el => {
+    el.addEventListener('click', closeShareModal);
+  });
+  document.querySelectorAll('[data-close-remix]').forEach(el => {
+    el.addEventListener('click', () => {
+      closeRemixModal();
+      if (sharedDesign) showToast('Your design was left unchanged — press Remix to copy theirs', 'info');
+    });
+  });
+
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    const sharePanel = document.getElementById('sharePanel');
+    const remixPanel = document.getElementById('remixPanel');
+    if (sharePanel && !sharePanel.hasAttribute('hidden')) {
+      closeShareModal();
+      e.preventDefault();
+      return;
+    }
+    if (remixPanel && !remixPanel.hasAttribute('hidden')) {
+      closeRemixModal();
+      e.preventDefault();
+    }
+  });
+
+  window.addEventListener('hashchange', restoreSharedDesignFromURL);
 }
 
 // ---

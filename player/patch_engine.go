@@ -491,6 +491,12 @@ type PatchState struct {
 	AvailableUpdateTag   string `json:"available_update_tag,omitempty"`
 	AvailableUpdateAt    string `json:"available_update_published_at,omitempty"`
 	AvailableUpdateAsset string `json:"available_update_asset,omitempty"`
+	// Release notes are cached so the in-app changelog can open immediately
+	// after a restart, before (or without) a network round trip. The body is
+	// GitHub's release markdown, never user data.
+	ReleaseNotesTag  string `json:"release_notes_tag,omitempty"`
+	ReleaseNotesText string `json:"release_notes_text,omitempty"`
+	ChangelogSeenTag string `json:"changelog_seen_tag,omitempty"`
 }
 
 var (
@@ -1254,6 +1260,7 @@ type githubRelease struct {
 	TagName     string        `json:"tag_name"`
 	Name        string        `json:"name"`
 	PublishedAt string        `json:"published_at"`
+	Body        string        `json:"body"`
 	Assets      []githubAsset `json:"assets"`
 }
 
@@ -1994,6 +2001,43 @@ func RepairJukaHub(config *Config) PatchRepairReport {
 	return r
 }
 
+// DiagnosticsText builds the redacted report shared by the Patch export and
+// the in-app bug report. It deliberately contains no config values, URLs,
+// usernames, tokens or private paths: only build, device and health facts.
+func DiagnosticsText(config *Config) string {
+	var sb strings.Builder
+	sb.WriteString("JukaHub diagnostics\n")
+	sb.WriteString("===================\n\n")
+	sb.WriteString("Version      : " + versionString(config) + "\n")
+	if build := installedBuildTimeLabel(); build != "" {
+		sb.WriteString("Build        : " + build + "\n")
+	}
+	if tag := readInstalledReleaseInfo().Tag; tag != "" {
+		sb.WriteString("Release      : " + tag + "\n")
+	}
+	sb.WriteString("Platform     : " + P().Name() + " " + runtime.GOOS + "/" + runtime.GOARCH + "\n")
+	sb.WriteString("Device       : " + deviceDisplayName(DetectDevice()) + "\n")
+	sb.WriteString(fmt.Sprintf("CPUs         : %d\n", runtime.NumCPU()))
+	if config != nil {
+		elements := 0
+		for _, sc := range config.Scenes {
+			elements += len(sc.Elements)
+		}
+		sb.WriteString(fmt.Sprintf("Config       : %d scene(s), %d element(s), schema %d\n",
+			len(config.Scenes), elements, config.SchemaVersion))
+	}
+	if safeModeActive() {
+		sb.WriteString("Safe mode    : on\n")
+	}
+	backups, _ := ListBackupSets()
+	sb.WriteString(fmt.Sprintf("Backups      : %d set(s)\n", len(backups)))
+	for _, b := range backups {
+		sb.WriteString("  - " + b + "\n")
+	}
+	sb.WriteString("\nNo credentials, tokens, config values or private paths are included.\n")
+	return sb.String()
+}
+
 // ExportDiagnostics writes a redacted diagnostics report into the patch
 // reports directory and returns its path.
 func ExportDiagnostics(config *Config) (string, error) {
@@ -2001,21 +2045,9 @@ func ExportDiagnostics(config *Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var sb strings.Builder
-	sb.WriteString("JukaHub Patch diagnostics\n")
-	sb.WriteString("=========================\n\n")
-	sb.WriteString("Version      : " + versionString(config) + "\n")
-	sb.WriteString("Platform     : " + P().Name() + " " + runtime.GOOS + "/" + runtime.GOARCH + "\n")
-	sb.WriteString("Device       : " + deviceDisplayName(DetectDevice()) + "\n")
-	backups, _ := ListBackupSets()
-	sb.WriteString(fmt.Sprintf("Backups      : %d set(s)\n", len(backups)))
-	for _, b := range backups {
-		sb.WriteString("  - " + b + "\n")
-	}
-	sb.WriteString("\nNo credentials, tokens, or private paths are included.\n")
 	name := "diagnostics-" + time.Now().UTC().Format("20060102T150405Z") + ".txt"
 	path := filepath.Join(dir, "reports", name)
-	if err := os.WriteFile(path, []byte(sb.String()), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(DiagnosticsText(config)), 0o600); err != nil {
 		return "", err
 	}
 	return path, nil

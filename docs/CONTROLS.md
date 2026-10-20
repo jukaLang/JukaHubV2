@@ -82,6 +82,77 @@ Opens for search fields, the chat composer, the terminal and the unit converter.
 It also closes with its own close button, by tapping outside the panel, or when
 you press **Done** / **Send**.
 
+## First-run tour
+
+The first launch opens a short, skippable tour of the D-pad controls, top-bar
+clock and notification bell, Appearance settings, and the Start menu. **A** or
+**Enter** advances, **Left** goes back, and **B** or **Esc** skips.
+
+Replay it any time from **Settings → General → Replay tour**.
+
+## Game profiles
+
+Open **Start → Game Profiles**, or the pinned **Game Profiles** row in
+**Emulators**. The panel launches Windows games through Box64/Wine, native
+binaries and scripts. Profiles are JSON files in
+`data/game-profiles/`; see [GAME_PROFILES.md](GAME_PROFILES.md) for the format
+and the import/export workflow.
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Move through profiles |
+| A | Launch the selected profile |
+| X | Export it to `export/<id>.json` |
+| Y | Rescan `profiles.json`, `import/` and `local/` |
+| B | Back (to Emulators when opened there) |
+
+On a keyboard, **Enter**/**Space** launches, **X** exports, **Y** or **R**
+rescans, and **Esc**/**B** goes back. Tapping a row launches it; tapping outside
+closes the panel.
+
+## Games
+
+Open **Start → Games**. Snake, Tetris, 2048, Pong, Minesweeper and Flappy all
+use the D-pad; **A** selects or performs the primary action and **B** leaves a
+running game. **R** restarts a lost round.
+
+| Game | Special controls |
+|------|------------------|
+| Minesweeper | **A** reveal · **X** / **Y** flag · arrows move |
+| Flappy | **A** / **Space** flap · **R** restart |
+
+## Playtime & achievements
+
+Open **Tools → Playtime & Achievements** for total time, the last seven days,
+the most-used screens, and the badge list. Stats are stored in the same user
+config as other settings and survive restarts. Badges unlock automatically for
+milestones such as one hour total, 30 minutes of games, 30 minutes of music, and
+eight different screens.
+
+### RetroAchievements
+
+On a TrimUI Smart Pro, open **Start → RetroAchievements**,
+**Emulators → RetroAchievements**, or open **Playtime & Achievements** and press
+**Y**. The screen shows recent unlocks and completion progress for the account
+already configured on the card.
+
+JukaHub reads the username from Spruce or RetroArch and the Web API key from
+`Saves/cheevos/apikey.txt` (or Spruce's saved `webApiKey`). It never edits those
+files. If nothing is configured, use **X** → **A** to enter a username and a
+32-character key from `retroachievements.org/settings → Keys`.
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Move through recent unlocks |
+| A | Edit the selected account field (setup screen) |
+| X or Start | Account settings |
+| Y | Refresh from RetroAchievements |
+| B | Back / close |
+
+The last successful sync is cached on the SD card, so the screen still shows
+your history when Wi-Fi is unavailable. A key entered in JukaHub is stored only
+in its data folder and is never displayed in full.
+
 ## Music player
 
 | Button | Action |
@@ -93,16 +164,87 @@ you press **Done** / **Send**.
 | L1 / R1 | Previous / next track |
 | L3 (left stick click) | Show / hide synced `.lrc` lyrics |
 | R3 (right stick click) | Cycle the sleep timer (off, 15, 30, 60 min) |
-| B | Back |
+| Start | Toggle the full-screen visualizer |
+| B | Close the visualizer, then go back |
 
 On a keyboard, **Space** pauses, **L** toggles lyrics, **[** / **]** change the
-listening speed, **T** cycles the sleep timer and **-** / **+** set the volume.
+listening speed, **T** cycles the sleep timer, **V** opens the full-screen
+visualizer, and **-** / **+** set the volume.
 
 A `.lrc` file next to the track (same file name) is loaded automatically; its
 timed lines appear inside the artwork square and the current line is
 highlighted. Long files — audiobooks and podcasts of eight minutes or more —
 resume where you stopped, and the listening speed is remembered between
 launches.
+
+## Power tools
+
+Open **Tools → Power tools** for the developer and power-user panel. The
+landing page holds six tools; **A** opens one, **B** goes back, and the list
+scrolls when the font is large.
+
+| Input | Action |
+|-------|--------|
+| Up / Down | Move through rows (the output pane scrolls line by line) |
+| A | Open a tool, run the highlighted probe or snippet, or go back from output |
+| X | Delete a saved snippet or restore a config snapshot (press again to confirm); in output, toggle the hex view |
+| Y | Save the clipboard as a snippet; in output, pretty-print JSON |
+| L1 / R1 | Page through a list, or scroll output by ten lines |
+| B / Esc | Back one level; closes the panel from the landing page |
+
+**Network probes** scan 13 common TCP ports on the guessed gateway, or on a
+host copied to the clipboard (**Scan clipboard host**), ping
+`1.1.1.1` (the platform's ICMP ping, falling back to a TCP connect when no
+ping binary exists), run the installed `traceroute`/`tracert`, resolve two host
+names and read the Wi-Fi link quality from `/proc/net/wireless` (or `netsh` on
+Windows).
+
+**File inspector** only opens a fixed list: `jukauser.json`, `jukaconfig.json`,
+`power-scripts.json`, `power-bench.json`, `logs.txt`, `errors.txt` and
+`crash.log`. JSON opens pretty-printed, logs open at the newest lines, and
+binary content opens as a hex dump. Nothing in the config can add a path.
+
+**Script snippets** ships five read-only commands and runs them through the
+platform shell with a 30-second timeout. Copy a command to the clipboard and
+press **Y** to save it as a button. Snippets run with JukaHub's permissions:
+only save commands you trust. Saved snippets live in `power-scripts.json`.
+
+**Folder sync** runs `rsync -az --itemize-changes` directly, never through a
+shell, and never adds `--delete`. Set the source and target by copying a path
+and pressing **A** on the row. The Syncthing row only checks the local web UI
+at `127.0.0.1:8384`; it does not need an API key.
+
+**Config history** keeps the 20 newest `jukauser.json` snapshots in
+`power-config-history/` next to the config. A snapshot is taken before each
+save when the content changed; **A** shows a compact line diff against the
+current file and **X** restores it (twice, to confirm). Restart JukaHub after a
+restore so the in-memory design is rebuilt.
+
+**Benchmark board** runs a 32 MiB write/read test, records the device model and
+MB/s in `power-bench.json`, and sorts by the slower of read and write. The
+**Same model** row counts entries for this device model and shows its best
+score. Set `powerBenchURL` in the config (or the `JUKAHUB_BENCH_URL`
+environment variable) to a JSON array of the same entries to fetch an online
+board; **A** on **Copy board** puts the local and fetched entries on the
+clipboard.
+
+## Community & support
+
+Open **Tools → Community & support** for the changelog, a prefilled GitHub bug
+report and the anonymous-diagnostics switch. The **What's new** page also opens
+by itself once on the first launch after an update.
+
+| Input | Action |
+|-------|--------|
+| Up / Down | Move through the rows, or scroll the changelog |
+| Enter / A | Open the changelog, report a bug, toggle diagnostics, or go back from the notes |
+| B / Esc | Close the panel |
+
+**Report a bug** writes a diagnostics file, copies the redacted report and
+opens a GitHub issue with a summary, reproduction steps and diagnostics already
+filled in. **Anonymous diagnostics** is off by default; when on, it sends only
+the build, device model, platform, OS/architecture and panic counts — never
+designs, filenames, links or account details.
 
 ## Watch Party
 
@@ -122,9 +264,22 @@ queue and a watch-time leaderboard.
 
 **Join** opens the on-screen keyboard for an invite such as
 `192.168.1.5:8318 ABCD2`. **Add a link** queues any `http(s)` video URL,
-including YouTube links. Playback drift beyond a few seconds is corrected
-automatically; smaller differences are left alone so the picture does not
-stutter. Only streams are shared — local files stay on the device.
+including YouTube links. **Save room to friends** keeps that invite, and saved
+friends appear as one-tap **Join** rows the next time the panel opens; **X**
+removes one. The list is stored in `partyfriends.json` next to the other app
+data (at most 12 entries).
+
+**All-time & friend history** opens the durable view. It ranks everyone this
+device has watched with across every room, then lists each host with their
+recent rooms, room codes, last title and accumulated time. Scores survive
+leaving, closing the panel and restarting JukaHub; repeated state polls only
+count new watch time. The archive is local and stored in
+`partyhistory.json` next to the other app data. Selecting **Back to watch
+party** returns; **B** / **Esc** does the same while the history is open.
+
+Playback drift beyond a few seconds is corrected automatically; smaller
+differences are left alone so the picture does not stutter. Only streams are
+shared — local files stay on the device.
 
 ## Pomodoro
 

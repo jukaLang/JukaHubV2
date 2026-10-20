@@ -5,7 +5,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -554,41 +553,22 @@ func settingsFieldColor(config *Config, element Element, editing bool) (sdl.Colo
 }
 
 // applyColorVar parses an "r,g,b" or "#rrggbb" string and updates a named
-// theme variable.
+// theme variable. The canonical colour string is stored in Custom too, which
+// records an explicit choice (including black) and lets a later theme preset
+// replace it instead of being overridden by a stale value.
 func applyColorVar(config *Config, name, value string) {
-	value = strings.TrimSpace(value)
-	// Accept "#rrggbb" and the bare "rrggbb" form the swatch preview already
-	// understands, so a typo-free value never previews but fails to save.
-	if strings.HasPrefix(value, "#") || (!strings.Contains(value, ",") && len(value) == 6) {
-		if c, ok := parseHexColor(value); ok {
-			value = fmt.Sprintf("%d,%d,%d", c.R, c.G, c.B)
-		}
-	}
-	parts := strings.Split(value, ",")
-	if len(parts) != 3 {
-		log.Printf("applyColorVar: expected r,g,b got %q", value)
+	c, ok := parseColorValue(value)
+	if !ok {
+		log.Printf("applyColorVar: invalid colour %q", value)
 		return
 	}
-	r, e1 := strconv.Atoi(strings.TrimSpace(parts[0]))
-	g, e2 := strconv.Atoi(strings.TrimSpace(parts[1]))
-	b, e3 := strconv.Atoi(strings.TrimSpace(parts[2]))
-	if e1 != nil || e2 != nil || e3 != nil {
-		log.Printf("applyColorVar: invalid number in %q", value)
+	if !setThemeColorValue(config, name, c) {
+		log.Printf("applyColorVar: unknown colour variable %q", name)
 		return
 	}
-	switch name {
-	case "buttonColor":
-		config.Variables.ButtonColor.R = r
-		config.Variables.ButtonColor.G = g
-		config.Variables.ButtonColor.B = b
-	case "labelColor":
-		config.Variables.LabelColor.R = r
-		config.Variables.LabelColor.G = g
-		config.Variables.LabelColor.B = b
-	case "inputColor":
-		config.Variables.InputColor.R = r
-		config.Variables.InputColor.G = g
-		config.Variables.InputColor.B = b
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
 	}
-	log.Printf("[DEBUG] Set %s = %d,%d,%d", name, r, g, b)
+	config.Variables.Custom[name] = rgbHex(c)
+	log.Printf("[DEBUG] Set %s = %d,%d,%d", name, c.R, c.G, c.B)
 }

@@ -116,14 +116,73 @@ func notifUnreadCount() int {
 }
 
 // notifBellSize returns the bell pill's width and height for the active font,
-// so the top bar can reserve its corner before drawing.
+// so the top bar can reserve its corner before drawing. The icon is drawn from
+// primitives, so the pill is sized from the font height rather than a glyph.
 func notifBellSize(config *Config) (int32, int32) {
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
 		return 0, 0
 	}
-	bw, bh, _ := font.SizeUTF8("(*)")
-	return int32(bw) + 16, int32(bh) + 8
+	h := int32(font.Height()) + 10
+	if h < 24 {
+		h = 24
+	}
+	return h + 14, h
+}
+
+// drawBellIcon paints a notification bell centred in a size×size box using only
+// SDL primitives. A text glyph such as "(*)" was hard to read on the handheld's
+// small screen and looked like an error marker, not a notification control.
+func drawBellIcon(renderer *sdl.Renderer, cx, cy, size int32, col sdl.Color) {
+	if renderer == nil || size < 10 {
+		return
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	setDrawColor(renderer, col)
+
+	f := float64(size)
+	bodyTop := float64(cy) - f*0.36
+	bodyH := f * 0.58
+	bodyBottom := bodyTop + bodyH
+	halfMax := f * 0.34
+
+	// Dome and flared skirt. The width grows smoothly from the rounded top to
+	// the rim, which reads as a bell even at 14–16 px.
+	for y := int32(math.Round(bodyTop)); y <= int32(math.Round(bodyBottom)); y++ {
+		t := (float64(y) - bodyTop) / bodyH
+		if t < 0 || t > 1 {
+			continue
+		}
+		half := halfMax * (0.40 + 0.60*t)
+		if t < 0.28 {
+			half = halfMax * math.Sqrt(0.16+(t/0.28)*0.84)
+		}
+		renderer.DrawLine(cx-int32(math.Round(half)), y, cx+int32(math.Round(half)), y)
+	}
+
+	// Hanger knob.
+	knobR := int32(math.Max(1, f*0.09))
+	fillCircle(renderer, cx, int32(math.Round(bodyTop))-knobR+1, knobR, col)
+
+	// Rim and clapper.
+	rimW := int32(math.Round(f * 0.88))
+	rimH := int32(math.Max(2, f*0.13))
+	rimY := int32(math.Round(bodyBottom)) - rimH/2
+	fillRoundedRect(renderer, cx-rimW/2, rimY, rimW, rimH, rimH/2, col)
+	clapR := int32(math.Max(1, f*0.11))
+	fillCircle(renderer, cx, int32(math.Round(bodyBottom+f*0.20)), clapR, col)
+
+	// Soft highlight on the left shoulder gives the silhouette a little depth.
+	if size >= 18 {
+		sheen := sdl.Color{R: 255, G: 255, B: 255, A: 55}
+		for y := int32(math.Round(bodyTop + f*0.20)); y < int32(math.Round(bodyTop+f*0.45)); y++ {
+			t := (float64(y) - bodyTop) / bodyH
+			half := halfMax * (0.40 + 0.60*t)
+			x := cx - int32(math.Round(half)) + 2
+			renderer.SetDrawColor(sheen.R, sheen.G, sheen.B, sheen.A)
+			renderer.DrawLine(x, y, x+1, y)
+		}
+	}
 }
 
 // renderNotifBell draws the bell icon at the top-right of the status bar.
@@ -137,7 +196,6 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 	if bellW <= 0 {
 		return sdl.Rect{}
 	}
-	bellStr := "(*)"
 	bellX := x - bellW
 	bellY := y
 	rect := sdl.Rect{X: bellX, Y: bellY, W: bellW, H: bellH}
@@ -153,8 +211,10 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 		strokeRoundedRect(renderer, bellX-2, bellY-2, bellW+4, bellH+4, (bellH+4)/2, 2, accentColor)
 	}
 
-	// Bell icon.
-	renderText(renderer, config, font, bellStr, ColorTextSecondary(), bellX+8, bellY+4)
+	// Bell icon: primary text colour so it reads as a control, with the accent
+	// ring already marking focus/open state.
+	iconSize := bellH - 8
+	drawBellIcon(renderer, bellX+bellW/2, bellY+bellH/2, iconSize, ColorTextPrimary())
 
 	// Unread count badge.
 	unread := notifUnreadCount()
@@ -329,7 +389,7 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 
 		if len(nc.history) == 0 {
 			UIEmptyState(renderer, config, sdl.Rect{X: bx, Y: listY, W: dropW, H: dropH - headerH},
-				"(*)", "No notifications", "You're all caught up.")
+				"@bell", "No notifications", "You're all caught up.")
 		}
 	})
 }

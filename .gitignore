@@ -34,3 +34,4 @@ player/jukahub.cache
 player/jukauser.json
 .freebuff/project-id
 tmp
+/player/power-config-history

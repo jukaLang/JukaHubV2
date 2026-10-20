@@ -187,6 +187,123 @@ func TestResolveColorAcceptsFullRangeRGB(t *testing.T) {
 	}
 }
 
+// Empty colour fields are "unset", not black: they must inherit the active
+// theme so Settings → Appearance and the Save button show the real palette.
+func TestThemeColorsFallBackWhenUnset(t *testing.T) {
+	cfg := &Config{}
+	cfg.Variables.Custom = map[string]interface{}{}
+
+	ensureThemeColors(cfg)
+	assertThemeColor(t, cfg, "buttonColor", GetThemePreset("dark").ButtonColor)
+	assertThemeColor(t, cfg, "labelColor", GetThemePreset("dark").LabelColor)
+	assertThemeColor(t, cfg, "inputColor", GetThemePreset("dark").InputColor)
+
+	// The Appearance form and every $color reference must agree with the healed
+	// config, not print/render #000000 for an empty slot.
+	if got := inputVariableValue(cfg, "buttonColor"); got != GetThemePreset("dark").ButtonColor {
+		t.Fatalf("Appearance button field = %q, want the theme colour %q", got, GetThemePreset("dark").ButtonColor)
+	}
+	wantR, wantG, wantB := hexToRGB(GetThemePreset("dark").ButtonColor)
+	if got := resolveColor(cfg, "$buttonColor", sdl.Color{R: 1, G: 2, B: 3, A: 255}); got != (sdl.Color{R: wantR, G: wantG, B: wantB, A: 255}) {
+		t.Fatalf("resolveColor($buttonColor) = %v, want the theme colour", got)
+	}
+}
+
+// The shipped config stores colours under capitalised keys (ButtonColor).
+// Those must survive the user merge, whose zero struct fields used to hide them
+// from the Appearance form and paint every swatch black.
+func TestShippedCapitalisedColorsResolve(t *testing.T) {
+	cfg := &Config{}
+	cfg.Variables.Custom = map[string]interface{}{
+		"ButtonColor": "#1E293B",
+		"LabelColor":  "#F8FAFC",
+		"InputColor":  "#0F1420",
+	}
+
+	mergeUserConfig(cfg, nil)
+
+	for name, want := range map[string]string{
+		"buttonColor": "#1e293b",
+		"labelColor":  "#f8fafc",
+		"inputColor":  "#0f1420",
+	} {
+		if got := inputVariableValue(cfg, name); got != want {
+			t.Fatalf("Appearance %s field = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// The rendered preview must use the recovered palette, not just the form text.
+func TestAppearancePreviewShowsCapitalisedSavedColors(t *testing.T) {
+	pauseRenderGlobals(t)
+	cfg := &Config{}
+	cfg.Variables.Custom = map[string]interface{}{
+		"ButtonColor": "#1E293B",
+		"LabelColor":  "#F8FAFC",
+		"InputColor":  "#0F1420",
+	}
+	mergeUserConfig(cfg, nil)
+
+	prevW, prevH := screenWidth, screenHeight
+	screenWidth, screenHeight = probeW, probeH
+	t.Cleanup(func() { screenWidth, screenHeight = prevW, prevH })
+
+	f := newProbeFrame(t)
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Skipf("software renderer unavailable: %v", err)
+	}
+	defer renderer.Destroy()
+	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
+	renderer.Clear()
+	renderAppearancePreview(renderer, cfg)
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+	}
+
+	btn := sdl.Color{R: 30, G: 41, B: 59, A: 255}
+	if got := f.countColor(btn, 640, 184, 850, 238); got < 500 {
+		t.Fatalf("preview button still black: %d pixels of the saved colour", got)
+	}
+	inp := sdl.Color{R: 15, G: 20, B: 32, A: 255}
+	if got := f.countColor(inp, 640, 290, 1230, 340); got < 500 {
+		t.Fatalf("preview input still black: %d pixels of the saved colour", got)
+	}
+}
+
+func TestThemeColorsUseSelectedPreset(t *testing.T) {
+	cfg := &Config{}
+	cfg.Variables.Custom = map[string]interface{}{"theme_preset": "light"}
+
+	ensureThemeColors(cfg)
+	assertThemeColor(t, cfg, "buttonColor", GetThemePreset("light").ButtonColor)
+	assertThemeColor(t, cfg, "labelColor", GetThemePreset("light").LabelColor)
+	assertThemeColor(t, cfg, "inputColor", GetThemePreset("light").InputColor)
+}
+
+// An explicitly saved black is a real choice and must survive the fallback.
+func TestThemeColorsPreserveExplicitBlack(t *testing.T) {
+	cfg := &Config{}
+	cfg.Variables.Custom = map[string]interface{}{"buttonColor": "#000000"}
+
+	ensureThemeColors(cfg)
+	if got := effectiveThemeColor(cfg, "buttonColor"); !isZeroRGB(got) {
+		t.Fatalf("explicit black became %+v; the fallback must not overwrite it", got)
+	}
+	if got := inputVariableValue(cfg, "buttonColor"); got != "#000000" {
+		t.Fatalf("explicit black field = %q, want #000000", got)
+	}
+}
+
+func assertThemeColor(t *testing.T, cfg *Config, name, wantHex string) {
+	t.Helper()
+	r, g, b := hexToRGB(wantHex)
+	want := RGB{R: int(r), G: int(g), B: int(b)}
+	if got := themeColorValue(cfg, name); got != want {
+		t.Fatalf("%s = %+v, want %+v (%s)", name, got, want, wantHex)
+	}
+}
+
 // Color values must parse strictly: the swatch helpers are what decide whether
 // a value is a colour at all.
 func TestParseHexColorStrict(t *testing.T) {

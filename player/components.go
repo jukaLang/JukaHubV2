@@ -12,6 +12,7 @@ import (
 	"math"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // UICardStyle is the surface recipe for a panel or card.
@@ -51,6 +52,180 @@ func UICard(renderer *sdl.Renderer, rect sdl.Rect, style UICardStyle) {
 	if style.Border.A > 0 {
 		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, style.Radius, style.BorderWidth, style.Border)
 	}
+}
+
+// UIButtonVariant selects one of the app's semantic button roles. A custom
+// variant uses the fill and label colours supplied in the style instead.
+type UIButtonVariant int
+
+const (
+	UIButtonSecondary UIButtonVariant = iota
+	UIButtonPrimary
+	UIButtonGhost
+	UIButtonDanger
+	UIButtonCustom
+)
+
+// UIButtonStyle is the visual recipe for a button. Zero values fall back to the
+// variant defaults, so callers only set the parts they need to override.
+type UIButtonStyle struct {
+	Variant       UIButtonVariant
+	Fill          sdl.Color
+	HoverFill     sdl.Color
+	FocusFill     sdl.Color
+	Border        sdl.Color
+	LabelColor    sdl.Color
+	Font          *ttf.Font
+	Radius        int32
+	Pill          bool
+	NoShadow      bool
+	HideFocusRing bool
+	Progress      float64 // 0..1 hold-to-confirm fill over the surface
+	ProgressFill  sdl.Color
+}
+
+// UIButtonState carries the interaction flags for one button draw. Layout and
+// hit-testing stay with the caller; this only controls the pixels.
+type UIButtonState struct {
+	Focused  bool
+	Hovered  bool
+	Pressed  bool
+	Disabled bool
+}
+
+func uiButtonFill(variant UIButtonVariant) sdl.Color {
+	switch variant {
+	case UIButtonPrimary:
+		return accentColor
+	case UIButtonDanger:
+		return ColorDanger
+	case UIButtonGhost:
+		return WithAlpha(ColorSurfaceAlt, 120)
+	case UIButtonCustom:
+		return sdl.Color{}
+	default:
+		return ColorSurfaceAlt
+	}
+}
+
+func uiButtonHoverFill(variant UIButtonVariant, fill sdl.Color) sdl.Color {
+	switch variant {
+	case UIButtonPrimary, UIButtonDanger, UIButtonCustom:
+		return lighten(fill, 6)
+	case UIButtonGhost:
+		return WithAlpha(ColorSurfaceRaised, 170)
+	default:
+		return ColorCardHover
+	}
+}
+
+func uiButtonFocusFill(variant UIButtonVariant, fill sdl.Color) sdl.Color {
+	switch variant {
+	case UIButtonPrimary, UIButtonDanger, UIButtonCustom:
+		return lighten(fill, 10)
+	case UIButtonGhost:
+		return WithAlpha(ColorSurfaceRaised, 200)
+	default:
+		return ColorCardFocus
+	}
+}
+
+// UIButton draws the app-wide button recipe: one rounded surface, a top sheen,
+// a hairline border, a focus ring and a centred label. It returns rect so scene
+// code can record the hit target in the same expression.
+func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label string, style UIButtonStyle, state UIButtonState) sdl.Rect {
+	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
+		return rect
+	}
+
+	radius := style.Radius
+	if radius <= 0 {
+		radius = RadiusMD
+	}
+	if style.Pill {
+		radius = rect.H / 2
+	}
+
+	fill := style.Fill
+	if fill.A == 0 {
+		fill = uiButtonFill(style.Variant)
+	}
+	hoverFill := style.HoverFill
+	if hoverFill.A == 0 {
+		hoverFill = uiButtonHoverFill(style.Variant, fill)
+	}
+	focusFill := style.FocusFill
+	if focusFill.A == 0 {
+		focusFill = uiButtonFocusFill(style.Variant, fill)
+	}
+	border := style.Border
+	if border.A == 0 {
+		border = ColorBorderDefault
+	}
+	labelColor := style.LabelColor
+	if labelColor.A == 0 {
+		labelColor = contrastText(fill)
+	}
+
+	if state.Disabled {
+		fill = WithAlpha(fill, 90)
+		border = WithAlpha(border, 90)
+		labelColor = WithAlpha(ColorTextTertiary(), 160)
+	} else if state.Pressed {
+		fill = darken(fill, 16)
+	} else if state.Focused {
+		fill = focusFill
+	} else if state.Hovered {
+		fill = hoverFill
+	}
+
+	if state.Focused && !state.Disabled && !style.HideFocusRing {
+		border = focusColorForAccent(accentColor)
+	} else if state.Hovered && !state.Disabled {
+		border = ColorBorderHover
+	}
+
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	if !style.NoShadow {
+		fillRoundedRect(renderer, rect.X+2, rect.Y+4, rect.W, rect.H, radius, ShadowFill(22))
+	}
+	if state.Focused && !state.Disabled && !style.HideFocusRing {
+		fillRoundedRect(renderer, rect.X-FocusGlow, rect.Y-FocusGlow, rect.W+2*FocusGlow, rect.H+2*FocusGlow, radius+FocusGlow, WithAlpha(accentColor, 24))
+	}
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, fill)
+	if style.Progress > 0 {
+		progressFill := style.ProgressFill
+		if progressFill.A == 0 {
+			progressFill = lighten(fill, 24)
+		}
+		UIProgressBar(renderer, rect, style.Progress, sdl.Color{}, progressFill)
+	}
+	// A full-width highlight line only fits a rounded rectangle; on a pill or
+	// circle it would stick out past the curved top edge.
+	if !style.Pill && radius < rect.H/2 {
+		renderer.SetDrawColor(255, 255, 255, 14)
+		renderer.FillRect(&sdl.Rect{X: rect.X + 2, Y: rect.Y + 1, W: rect.W - 4, H: 1})
+	}
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, border)
+	if state.Focused && !state.Disabled && !style.HideFocusRing {
+		strokeRoundedRect(renderer, rect.X-FocusRing, rect.Y-FocusRing, rect.W+2*FocusRing, rect.H+2*FocusRing, radius+FocusRing, FocusRing, focusColorForAccent(accentColor))
+		fillRoundedRect(renderer, rect.X+1, rect.Y+1, rect.W-2, rect.H/2, radius-1, SurfaceHighlight(8))
+	}
+
+	if style.Font != nil && label != "" {
+		text := label
+		// Compact pills and icon buttons are sized from their label; only
+		// trim labels on full-size buttons where a caller may pass a long
+		// string.
+		if maxW := rect.W - 2*SpaceXS; maxW > 0 && rect.W >= 60 {
+			text = ellipsize(style.Font, text, maxW)
+		}
+		if tw, th, err := style.Font.SizeUTF8(text); err == nil {
+			renderText(renderer, config, style.Font, text, labelColor,
+				rect.X+(rect.W-int32(tw))/2, rect.Y+(rect.H-int32(th))/2)
+		}
+	}
+	return rect
 }
 
 // UIBadgeSize measures a count badge before drawing it, so callers can align
@@ -153,7 +328,12 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 	if bodyFont != nil && body != "" {
 		bodyH = int32(bodyFont.Height())
 	}
-	if glyphFont != nil && glyph != "" {
+	bellGlyph := glyph == "@bell"
+	if bellGlyph {
+		// Drawn icons need a little more room than a text glyph; the bell reads
+		// as an empty-state illustration instead of an error marker.
+		glyphH = 36 + SpaceMD
+	} else if glyphFont != nil && glyph != "" {
 		glyphH = int32(glyphFont.Height()) + SpaceMD
 	}
 	gap := int32(0)
@@ -168,8 +348,12 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 	cx := rect.X + rect.W/2
 
 	if glyphH > 0 {
-		gw, _, _ := glyphFont.SizeUTF8(glyph)
-		renderText(renderer, config, glyphFont, glyph, tone, cx-int32(gw)/2, y)
+		if bellGlyph {
+			drawBellIcon(renderer, cx, y+glyphH/2, 36, tone)
+		} else {
+			gw, _, _ := glyphFont.SizeUTF8(glyph)
+			renderText(renderer, config, glyphFont, glyph, tone, cx-int32(gw)/2, y)
+		}
 		y += glyphH
 	}
 	tw, _, _ := titleFont.SizeUTF8(title)

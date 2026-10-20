@@ -1307,9 +1307,15 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			pillW, pillH := int32(128), int32(26)
 			px := bx + bubblePad
 			py := by + bubblePad + int32(len(lines))*lineH + imageH
-			fillRoundedRect(renderer, px, py, pillW, pillH, pillH/2, WithAlpha(ColorInfo, 55))
-			strokeRoundedRect(renderer, px, py, pillW, pillH, pillH/2, 1, WithAlpha(ColorInfo, 140))
-			renderText(renderer, config, statusFont, "Play link", ColorTextPrimary(), px+12, py+3)
+			UIButton(renderer, config, sdl.Rect{X: px, Y: py, W: pillW, H: pillH}, "Play link", UIButtonStyle{
+				Variant:    UIButtonCustom,
+				Fill:       WithAlpha(ColorInfo, 55),
+				Border:     WithAlpha(ColorInfo, 140),
+				LabelColor: ColorTextPrimary(),
+				Font:       statusFont,
+				Pill:       true,
+				NoShadow:   true,
+			}, UIButtonState{})
 			chatLinkRects = append(chatLinkRects, chatLinkHit{rect: sdl.Rect{X: px, Y: py, W: pillW, H: pillH}, url: playURL})
 		}
 
@@ -1359,24 +1365,36 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		saw := int32(sw) + pad*2
 		sax := listX + listW - SpaceSM - saw
 		say := inputY + (inputH-ah)/2
-		chatSendBtnRect = sdl.Rect{X: sax, Y: say, W: saw, H: ah}
+		sendFill, sendLabelCol := ColorIconSurface, ColorTextTertiary()
 		if chatInputText != "" {
-			fillRoundedRect(renderer, sax, say, saw, ah, ah/2, WithAlpha(ColorInfo, 200))
-			renderText(renderer, config, statusFont, sendLabel, sdl.Color{R: 255, G: 255, B: 255, A: 255}, sax+pad, say+(ah-int32(statusFont.Height()))/2)
-		} else {
-			fillRoundedRect(renderer, sax, say, saw, ah, ah/2, ColorIconSurface)
-			renderText(renderer, config, statusFont, sendLabel, ColorTextTertiary(), sax+pad, say+(ah-int32(statusFont.Height()))/2)
+			sendFill, sendLabelCol = WithAlpha(ColorInfo, 200), sdl.Color{R: 255, G: 255, B: 255, A: 255}
 		}
+		chatSendBtnRect = UIButton(renderer, config, sdl.Rect{X: sax, Y: say, W: saw, H: ah}, sendLabel, UIButtonStyle{
+			Variant:    UIButtonCustom,
+			Fill:       sendFill,
+			HoverFill:  sendFill,
+			FocusFill:  sendFill,
+			Border:     WithAlpha(sendFill, 160),
+			LabelColor: sendLabelCol,
+			Font:       statusFont,
+			Pill:       true,
+			NoShadow:   true,
+		}, UIButtonState{})
 		// Ask Juka AI pill.
 		aiLabel := "Ask AI"
 		aw, _, _ := statusFont.SizeUTF8(aiLabel)
 		aaw := int32(aw) + pad*2
 		aax := chatSendBtnRect.X - aaw - SpaceSM
 		aay := inputY + (inputH-ah)/2
-		chatAskAIBtnRect = sdl.Rect{X: aax, Y: aay, W: aaw, H: ah}
-		fillRoundedRect(renderer, aax, aay, aaw, ah, ah/2, ColorIconSurface)
-		strokeRoundedRect(renderer, aax, aay, aaw, ah, ah/2, 1, WithAlpha(ColorInfo, 120))
-		renderText(renderer, config, statusFont, aiLabel, ColorTextPrimary(), aax+pad, aay+(ah-int32(statusFont.Height()))/2)
+		chatAskAIBtnRect = UIButton(renderer, config, sdl.Rect{X: aax, Y: aay, W: aaw, H: ah}, aiLabel, UIButtonStyle{
+			Variant:    UIButtonCustom,
+			Fill:       ColorIconSurface,
+			Border:     WithAlpha(ColorInfo, 120),
+			LabelColor: ColorTextPrimary(),
+			Font:       statusFont,
+			Pill:       true,
+			NoShadow:   true,
+		}, UIButtonState{})
 		// Attach image pill (left of Ask AI); the composer hit-test in main.go
 		// reads chatAttachBtnRect to trigger the image picker.
 		attachLabel := "Attach"
@@ -1384,10 +1402,15 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		attaw := int32(attw) + pad*2
 		attax := aax - attaw - SpaceSM
 		attay := inputY + (inputH-ah)/2
-		chatAttachBtnRect = sdl.Rect{X: attax, Y: attay, W: attaw, H: ah}
-		fillRoundedRect(renderer, attax, attay, attaw, ah, ah/2, ColorIconSurface)
-		strokeRoundedRect(renderer, attax, attay, attaw, ah, ah/2, 1, WithAlpha(ColorInfo, 120))
-		renderText(renderer, config, statusFont, attachLabel, ColorTextPrimary(), attax+pad, attay+(ah-int32(statusFont.Height()))/2)
+		chatAttachBtnRect = UIButton(renderer, config, sdl.Rect{X: attax, Y: attay, W: attaw, H: ah}, attachLabel, UIButtonStyle{
+			Variant:    UIButtonCustom,
+			Fill:       ColorIconSurface,
+			Border:     WithAlpha(ColorInfo, 120),
+			LabelColor: ColorTextPrimary(),
+			Font:       statusFont,
+			Pill:       true,
+			NoShadow:   true,
+		}, UIButtonState{})
 	}
 
 	// The composer's controls are communicated once, by the shared footer

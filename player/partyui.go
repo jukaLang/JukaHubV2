@@ -30,9 +30,15 @@ const (
 	partyRowJoin
 	partyRowAdd
 	partyRowQueue
+	partyRowSaveFriend
+	partyRowFriend
 	partyRowCopy
 	partyRowLeave
 	partyRowClose
+	partyRowHistory
+	partyRowHistoryBack
+	partyRowInfo
+	partyRowSection
 )
 
 type partyRow struct {
@@ -41,6 +47,7 @@ type partyRow struct {
 	kind   partyRowKind
 	index  int
 	id     int
+	invite string
 }
 
 type partyUIState struct {
@@ -50,6 +57,7 @@ type partyUIState struct {
 	input     string
 	busy      bool
 	flash     string
+	history   bool // showing the durable all-time/friend report
 }
 
 var partyUI partyUIState
@@ -58,6 +66,10 @@ var partyUI partyUIState
 // hit testing. Only touched on the render/event thread.
 var partyPanelRect sdl.Rect
 var partyRowRects []sdl.Rect
+
+// partyRowStart is the absolute index of partyRowRects[0]; the list scrolls, so
+// a click has to add it back to find the row the user actually sees.
+var partyRowStart int
 
 // partyAsyncResults carries the outcome of a LAN request back to the render
 // thread. UI state is never written from a network goroutine.
@@ -117,14 +129,17 @@ func partyOpenPanel() {
 	partyUI.cursor = 0
 	partyUI.flash = ""
 	partyUI.busy = false
+	partyUI.history = false
 	partyPanelRect = sdl.Rect{}
 	partyRowRects = nil
+	partyRowStart = 0
 	PlayActivateSound()
 }
 
 func partyClosePanel() {
 	partyUI.open = false
 	partyUI.inputMode = partyInputNone
+	partyUI.history = false
 	PlayBackSound()
 }
 
@@ -150,13 +165,28 @@ func partyMoveCursor(delta int) {
 // partyRows builds the actionable rows for the current state. Queue rows carry
 // their shared index so selecting one starts it for the whole room.
 func partyRows() []partyRow {
+	if partyUI.history {
+		return partyHistoryRows()
+	}
 	snapshot, _, active, _ := partyState()
 	if !active {
-		return []partyRow{
+		rows := []partyRow{
 			{label: "Host a watch party", detail: "This device serves the room on the LAN", kind: partyRowHost},
 			{label: "Join a watch party", detail: "Paste the host address and 5-character code", kind: partyRowJoin},
-			{label: "Close", detail: "Back to the app", kind: partyRowClose},
 		}
+		for _, friend := range partyFriends() {
+			rows = append(rows, partyRow{
+				label:  "Join " + friend.Name,
+				detail: friend.Invite,
+				kind:   partyRowFriend,
+				invite: friend.Invite,
+			})
+		}
+		rows = append(rows,
+			partyRow{label: "All-time & friend history", detail: "Leaderboard and rooms across many parties", kind: partyRowHistory},
+			partyRow{label: "Close", detail: "Back to the app", kind: partyRowClose},
+		)
+		return rows
 	}
 	rows := []partyRow{{label: "Add a link to the queue", detail: "Everyone can watch it", kind: partyRowAdd}}
 	for i, item := range snapshot.Queue {
@@ -171,11 +201,89 @@ func partyRows() []partyRow {
 		rows = append(rows, partyRow{label: label, detail: detail, kind: partyRowQueue, index: i, id: item.ID})
 	}
 	rows = append(rows,
+		partyRow{label: "Save room to friends", detail: "Rejoin it without retyping the code", kind: partyRowSaveFriend},
 		partyRow{label: "Copy invite", detail: "Address and room code as one line", kind: partyRowCopy},
+		partyRow{label: "All-time & friend history", detail: "This party plus every earlier room", kind: partyRowHistory},
 		partyRow{label: "Leave the party", detail: "The room stays open for the others", kind: partyRowLeave},
 		partyRow{label: "Close", detail: "Keep watching together", kind: partyRowClose},
 	)
 	return rows
+}
+
+// partyHistoryRows turns the durable report into the same scrollable row list
+// the rest of the panel uses, so D-pad, touch and mouse need no extra input
+// paths. Section rows are labels; only Back is actionable.
+func partyHistoryRows() []partyRow {
+	report := partyHistoryReport()
+	rows := []partyRow{{label: "ALL-TIME WATCH LEADERBOARD", kind: partyRowSection}}
+	if len(report.People) == 0 {
+		rows = append(rows, partyRow{label: "No watch time recorded yet", detail: "Join or host a party to start", kind: partyRowInfo})
+	} else {
+		shown := len(report.People)
+		if shown > partyLeaderboardLimit {
+			shown = partyLeaderboardLimit
+		}
+		for i := 0; i < shown; i++ {
+			person := report.People[i]
+			rooms := "rooms"
+			if person.Rooms == 1 {
+				rooms = "room"
+			}
+			rows = append(rows, partyRow{
+				label:  fmt.Sprintf("%d. %s", i+1, person.Name),
+				detail: partyFormatWatch(person.WatchSecs) + fmt.Sprintf(" · %d %s", person.Rooms, rooms),
+				kind:   partyRowInfo,
+			})
+		}
+	}
+
+	rows = append(rows, partyRow{label: "FRIEND HISTORY", kind: partyRowSection})
+	if len(report.Friends) == 0 {
+		rows = append(rows, partyRow{label: "No parties yet", detail: "Hosted and joined rooms appear here", kind: partyRowInfo})
+	} else {
+		for _, friend := range report.Friends {
+			roomCount := 0
+			for _, room := range report.Rooms {
+				if room.Host == friend.Host {
+					roomCount++
+				}
+			}
+			roomsWord := "rooms"
+			if roomCount == 1 {
+				roomsWord = "room"
+			}
+			label := friend.Name
+			if label == "" {
+				label = friend.Host
+			}
+			rows = append(rows, partyRow{
+				label:  label,
+				detail: fmt.Sprintf("%d %s · %s · %s", roomCount, roomsWord, partyFormatWatch(friend.WatchSecs), partyHistoryWhen(friend.LastSeen)),
+				kind:   partyRowInfo,
+			})
+			shown := 0
+			for _, room := range report.Rooms {
+				if room.Host != friend.Host || shown >= partyHistoryFriendRooms {
+					continue
+				}
+				name := room.Name
+				if name == "" {
+					name = room.Code
+				}
+				detail := room.Code + " · " + partyFormatWatch(room.WatchSecs)
+				if room.Title != "" {
+					detail += " · " + room.Title
+				}
+				rows = append(rows, partyRow{
+					label:  "   " + name,
+					detail: detail,
+					kind:   partyRowInfo,
+				})
+				shown++
+			}
+		}
+	}
+	return append(rows, partyRow{label: "Back to watch party", detail: "Return to rooms and friends", kind: partyRowHistoryBack})
 }
 
 func partyActivateRow(config *Config) {
@@ -196,6 +304,22 @@ func partyActivateRow(config *Config) {
 		}
 		partyUI.cursor = 0
 		partyUI.flash = "Party open — share the invite"
+		PlaySuccessSound()
+	case partyRowFriend:
+		invite := row.invite
+		partyRunAsync(func() (string, error) {
+			if err := partyJoin(invite, partyDeviceName()); err != nil {
+				return "", err
+			}
+			return "Joined " + invite, nil
+		})
+	case partyRowSaveFriend:
+		snapshot, _, _, _ := partyState()
+		if err := partyFriendAdd(partyHostName(snapshot), partyInviteText()); err != nil {
+			partyUI.flash = "Could not save this room"
+			return
+		}
+		partyUI.flash = "Saved " + partyHostName(snapshot) + " to friends"
 		PlaySuccessSound()
 	case partyRowJoin:
 		partyUI.inputMode = partyInputJoin
@@ -233,6 +357,15 @@ func partyActivateRow(config *Config) {
 		partyLeaveSession()
 		partyUI.cursor = 0
 		partyUI.flash = "Left the party"
+		PlayBackSound()
+	case partyRowHistory:
+		partyUI.history = true
+		partyUI.cursor = 0
+		partyUI.flash = ""
+		PlayActivateSound()
+	case partyRowHistoryBack:
+		partyUI.history = false
+		partyUI.cursor = 0
 		PlayBackSound()
 	case partyRowClose:
 		partyClosePanel()
@@ -276,6 +409,17 @@ func partyDeleteSelected() {
 		return
 	}
 	row := rows[partyUI.cursor]
+	if row.kind == partyRowFriend {
+		partyFriendRemove(row.invite)
+		partyUI.flash = "Removed " + row.label
+		if partyUI.cursor >= partyRowCount() {
+			partyUI.cursor = partyRowCount() - 1
+		}
+		if partyUI.cursor < 0 {
+			partyUI.cursor = 0
+		}
+		return
+	}
 	if row.kind != partyRowQueue {
 		return
 	}
@@ -306,7 +450,13 @@ func partyHandleKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_DELETE, sdl.K_x:
 		partyDeleteSelected()
 	case sdl.K_ESCAPE, sdl.K_b:
-		partyClosePanel()
+		if partyUI.history {
+			partyUI.history = false
+			partyUI.cursor = 0
+			PlayBackSound()
+		} else {
+			partyClosePanel()
+		}
 	}
 	return true
 }
@@ -325,7 +475,13 @@ func partyHandleController(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_X:
 		partyDeleteSelected()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		partyClosePanel()
+		if partyUI.history {
+			partyUI.history = false
+			partyUI.cursor = 0
+			PlayBackSound()
+		} else {
+			partyClosePanel()
+		}
 	}
 	return true
 }
@@ -336,13 +492,18 @@ func partyHandleMouse(mx, my int32, config *Config) bool {
 	}
 	for i, r := range partyRowRects {
 		if r.W > 0 && pointInRect(mx, my, r) {
-			partyUI.cursor = i
+			partyUI.cursor = partyRowStart + i
 			partyActivateRow(config)
 			return true
 		}
 	}
 	if partyPanelRect.W > 0 && !pointInRect(mx, my, partyPanelRect) {
-		partyClosePanel()
+		if partyUI.history {
+			partyUI.history = false
+			partyUI.cursor = 0
+		} else {
+			partyClosePanel()
+		}
 	}
 	return true
 }
@@ -398,7 +559,10 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 	pad := int32(28)
 	renderText(renderer, config, titleFont, "WATCH PARTY", ColorTextPrimary(), x+pad, y+22)
 	stateLine := "LAN · same stream, same moment"
-	if partyActive() {
+	history := partyUI.history
+	if history {
+		stateLine = "All-time · kept on this handheld"
+	} else if partyActive() {
 		stateLine = "Live · " + partyDeviceName()
 	}
 	sw, _, _ := small.SizeUTF8(stateLine)
@@ -407,7 +571,11 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 	snapshot, _, active, errText := partyState()
 	listTop := y + 64
 
-	if active {
+	if history {
+		intro := "Cumulative watch time and the rooms behind it, across every party on this device."
+		renderText(renderer, config, small, ellipsize(small, intro, w-2*pad), ColorTextSecondary(), x+pad, listTop)
+		listTop += int32(small.Height()) + 14
+	} else if active {
 		code := snapshot.Code
 		if code == "" {
 			code = "—"
@@ -450,7 +618,7 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 	rowH := int32(48)
 	rowsBottom := y + h - 52
 	leftW := w - 2*pad
-	if active {
+	if active && !history {
 		leftW = int32(float64(w-2*pad) * 0.62)
 	}
 	visible := int((rowsBottom - listTop) / rowH)
@@ -473,6 +641,7 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 	}
 
 	partyRowRects = partyRowRects[:0]
+	partyRowStart = start
 	for i := start; i < end; i++ {
 		row := rows[i]
 		rowY := listTop + int32(i-start)*rowH
@@ -481,10 +650,21 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, WithAlpha(ColorCardFocus, 255))
 		}
 		labelColor := ColorTextPrimary()
-		if row.kind == partyRowClose && i != partyUI.cursor {
+		textFont := font
+		labelY := rect.Y + 6
+		if row.kind == partyRowSection {
+			labelColor = ColorTextTertiary()
+			textFont = small
+			labelY = rect.Y + 12
+		} else if row.kind == partyRowInfo {
+			labelColor = ColorTextSecondary()
+			if i == partyUI.cursor {
+				labelColor = ColorTextPrimary()
+			}
+		} else if row.kind == partyRowClose && i != partyUI.cursor {
 			labelColor = ColorTextSecondary()
 		}
-		renderText(renderer, config, font, ellipsize(font, row.label, leftW-24), labelColor, rect.X+14, rect.Y+6)
+		renderText(renderer, config, textFont, ellipsize(textFont, row.label, leftW-24), labelColor, rect.X+14, labelY)
 		if row.detail != "" {
 			renderText(renderer, config, small, ellipsize(small, row.detail, leftW-24), ColorTextTertiary(), rect.X+14, rect.Y+8+int32(font.Height()))
 		}
@@ -492,7 +672,7 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Leaderboard column, only meaningful once the room has members.
-	if active {
+	if active && !history {
 		lx := x + pad + leftW + 22
 		lw := x + w - pad - lx
 		renderText(renderer, config, small, "WATCH LEADERBOARD", ColorTextTertiary(), lx, listTop)
@@ -521,7 +701,9 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 
 	// Status and footer.
 	footer := "ENTER select   A add   X remove   B close"
-	if !active {
+	if history {
+		footer = "UP/DOWN scroll   B back"
+	} else if !active {
 		footer = "ENTER select   B close"
 	}
 	fw, _, _ := small.SizeUTF8(footer)

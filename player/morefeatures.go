@@ -324,9 +324,13 @@ func runBenchmark(config *Config) {
 		d2 := time.Since(start)
 		f.Close()
 		os.Remove(path)
+		writeMB := float64(sz) / d1.Seconds() / 1e6
+		readMB := float64(sz) / d2.Seconds() / 1e6
+		if err := recordPowerBenchmark("sequential", writeMB, readMB, config.Version); err != nil {
+			log.Printf("[BENCH] could not record result: %v", err)
+		}
 		publishCustom("benchmark_text", fmt.Sprintf(
-			"Write: %.1f MB/s\nRead:  %.1f MB/s",
-			float64(sz)/d1.Seconds()/1e6, float64(sz)/d2.Seconds()/1e6))
+			"Write: %.1f MB/s\nRead:  %.1f MB/s", writeMB, readMB))
 	}()
 }
 

@@ -86,6 +86,10 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 		})
 	}
 	// Special entries that open overlays, not scenes.
+	apps = append(apps, startMenuEntry{name: "Game Profiles", icon: "G", scene: "", action: func(c *Config) { openGameProfilePanel(false) }})
+	if retroAchievementsSupported() {
+		apps = append(apps, startMenuEntry{name: "RetroAchievements", icon: "R", scene: "", action: func(c *Config) { openRetroAchievementsPanel() }})
+	}
 	apps = append(apps, startMenuEntry{name: "Wallpapers", icon: "P", scene: "", action: func(c *Config) { wpOpen = true; initWallpaperPicker() }})
 	apps = append(apps, startMenuEntry{name: "Quick Settings", icon: "Q", scene: "", action: func(c *Config) { qs.open = !qs.open }})
 	apps = append(apps, startMenuEntry{name: "About", icon: "i", scene: "About"})

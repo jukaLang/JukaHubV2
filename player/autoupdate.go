@@ -263,6 +263,32 @@ func releaseIsNewerThanInstalled(rel *githubRelease) bool {
 // markUpdateAvailable records that a newer release exists. It deliberately does
 // not download or stage anything: the Patch scene turns this into an "Install
 // update" action that only runs after the user confirms.
+// storeReleaseNotes caches the release markdown for the in-app changelog. It
+// never blocks the caller on disk: state is written only when the notes for
+// this tag actually changed, so routine update checks do not rewrite state.json
+// every launch.
+func storeReleaseNotes(rel *githubRelease) {
+	if rel == nil || strings.TrimSpace(rel.TagName) == "" {
+		return
+	}
+	body := strings.TrimSpace(rel.Body)
+	if body == "" {
+		return
+	}
+	if len(body) > 200_000 {
+		body = body[:200_000]
+	}
+	patchStateMu.Lock()
+	if patchState.ReleaseNotesTag == rel.TagName && patchState.ReleaseNotesText == body {
+		patchStateMu.Unlock()
+		return
+	}
+	patchState.ReleaseNotesTag = rel.TagName
+	patchState.ReleaseNotesText = body
+	patchStateMu.Unlock()
+	_ = savePatchState()
+}
+
 func markUpdateAvailable(rel *githubRelease) {
 	if rel == nil {
 		return
@@ -392,6 +418,9 @@ func startAutoUpdateCheck(config *Config) {
 			logPatch("auto-update check failed: %v", err)
 			return
 		}
+		// Keep the release notes even when the user does not install this
+		// build: the changelog screen can then show what is waiting.
+		storeReleaseNotes(rel)
 		patchStateMu.Lock()
 		patchState.AutoUpdateCheckedAt = time.Now().UTC().Format(time.RFC3339)
 		patchStateMu.Unlock()
@@ -418,6 +447,9 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 	if rel == nil {
 		return errors.New("missing release metadata")
 	}
+	// Persist the notes before the swap: after the restart they are the only
+	// copy on the device, and they power the "What's new" screen.
+	storeReleaseNotes(rel)
 	target, err := jukaHubUpdateTargetFor(DetectDevice(), runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err

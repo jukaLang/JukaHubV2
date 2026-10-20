@@ -560,6 +560,7 @@ var partySession struct {
 	applying    bool
 	lastPoll    time.Time
 	lastWatch   time.Time // previous poll used for the watch-time delta
+	lastHistory time.Time // snapshot already folded into the durable archive
 	lastSeek    time.Time
 	lastCommand int64 // last playback instruction applied remotely
 	invite      string
@@ -571,6 +572,14 @@ var partySession struct {
 func partyHost(name string) error {
 	partyLeaveSession()
 	room, hostID := newPartyRoom(name, name)
+	// Sharing starts from what is already on screen: hosting while a stream
+	// plays should put that stream and its position in the room instead of
+	// showing friends an empty party.
+	if looksLikeStreamURL(currentPlaybackURL) {
+		if phase := snapshotVideoState().phase; phase == "playing" || phase == "paused" {
+			_ = room.SetPlayback(hostID, currentPlaybackURL, "", partyLocalPosition(), phase == "playing")
+		}
+	}
 	srv := newPartyServer(room)
 	if err := srv.Start(); err != nil {
 		return err
@@ -657,6 +666,7 @@ func partyLeaveSession() {
 	partySession.invite = ""
 	partySession.lastErr = ""
 	partySession.hosting = false
+	partySession.lastHistory = time.Time{}
 	partySession.dismissed = ""
 	partySession.mu.Unlock()
 
@@ -666,6 +676,8 @@ func partyLeaveSession() {
 	if srv != nil {
 		srv.Stop()
 	}
+	// Watch time accrued since the last debounced write must survive leaving.
+	partyHistoryFlush()
 }
 
 func partyActive() bool {
@@ -713,6 +725,8 @@ func partyTick(config *Config) {
 	// the UI state is only ever written from the main loop.
 	partyDrainAsync()
 
+	defer partyHistorySync()
+
 	partySession.mu.Lock()
 	client := partySession.client
 	if client == nil {
@@ -738,6 +752,24 @@ func partyTick(config *Config) {
 		// The result lands on the next tick; nothing here waits for the LAN.
 	}
 	partyApplyRemote(config)
+}
+
+// partyHistorySync folds each newly received room snapshot into the durable
+// all-time archive. It runs at most once per poll, not once per frame.
+func partyHistorySync() {
+	snap, received, ok, _ := partyState()
+	if !ok || snap.Code == "" || received.IsZero() {
+		return
+	}
+	partySession.mu.Lock()
+	if !received.After(partySession.lastHistory) {
+		partySession.mu.Unlock()
+		return
+	}
+	partySession.lastHistory = received
+	invite := partySession.invite
+	partySession.mu.Unlock()
+	partyHistoryObserve(snap, invite)
 }
 
 // partyApplyRemote converges the local player on the room playhead.

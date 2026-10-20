@@ -501,7 +501,15 @@ func normalizeCacheKey(raw string) string {
 
 func resolveColor(config *Config, colorName string, defaultColor sdl.Color) sdl.Color {
 	if strings.HasPrefix(colorName, "$") {
-		colorValue := config.Variables.Get(colorName[1:])
+		name := colorName[1:]
+		// Theme colours resolve through the effective value, not Variables.Get:
+		// an unset field is stored as zero RGB, which must inherit the active
+		// theme rather than paint buttons black.
+		if config != nil && isThemeColorVariable(name) {
+			c := effectiveThemeColor(config, name)
+			return sdl.Color{R: uint8(c.R), G: uint8(c.G), B: uint8(c.B), A: 255}
+		}
+		colorValue := config.Variables.Get(name)
 		parts := strings.Split(colorValue, ",")
 		if len(parts) == 3 {
 
@@ -1559,51 +1567,14 @@ func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Elemen
 	ox := x + pressOffset
 	oy := y + pressOffset
 
-	fill := resolveColor(config, elem.BgColor, ColorCard)
-	border := ColorBorderDefault
-	if selected {
-		fill = ColorCardFocus
-		border = ColorAccent
-	} else if hovered {
-		fill = ColorCardHover
-		border = ColorBorderHover
-	}
-	if pressed {
-		fill = darken(fill, 18)
-	}
-
-	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	// shadow - tighter, more refined spread
-	fillRoundedRect(renderer, ox+1, oy+2, width, height, r, ShadowFill(14))
-	fillRoundedRect(renderer, ox+2, oy+4, width, height, r, ShadowFill(22))
-	// surface
-	fillRoundedRect(renderer, ox, oy, width, height, r, fill)
-	// top sheen - refined two-tone highlight
-	renderer.SetDrawColor(SurfaceHighlight(255).R, SurfaceHighlight(255).G, SurfaceHighlight(255).B, 14)
-	renderer.FillRect(&sdl.Rect{X: ox + 2, Y: oy + 1, W: width - 4, H: 1})
-	renderer.SetDrawColor(255, 255, 255, 5)
-	renderer.FillRect(&sdl.Rect{X: ox + 2, Y: oy + 2, W: width - 4, H: 1})
-	// border - crisp hairline with subtle alpha
-	strokeRoundedRect(renderer, ox, oy, width, height, r, 1, border)
-	// focus ring
-	if selected {
-		strokeColor := ColorAccent
-		strokeRoundedRect(renderer, ox-FocusRing, oy-FocusRing, width+2*FocusRing, height+2*FocusRing, r+FocusRing, FocusRing, strokeColor)
-		// inner glow - top half only for premium feel
-		fillRoundedRect(renderer, ox+1, oy+1, width-2, height/2, r-1, SurfaceHighlight(8))
-	}
-
-	if font != nil {
-		txt := ColorTextPrimary()
-		lum := int(fill.R)*299 + int(fill.G)*587 + int(fill.B)*114
-		if lum > 60000 {
-			txt = sdl.Color{R: 18, G: 22, B: 30, A: 255}
-		}
-		w, h, _ := font.SizeUTF8(elem.Text)
-		tx := ox + (width-int32(w))/2
-		ty := oy + (height-int32(h))/2
-		renderText(renderer, config, font, elem.Text, txt, tx, ty)
-	}
+	UIButton(renderer, config, sdl.Rect{X: ox, Y: oy, W: width, H: height}, elem.Text, UIButtonStyle{
+		Variant:   UIButtonCustom,
+		Fill:      resolveColor(config, elem.BgColor, ColorCard),
+		HoverFill: ColorCardHover,
+		FocusFill: ColorCardFocus,
+		Font:      font,
+		Radius:    r,
+	}, UIButtonState{Focused: selected, Hovered: hovered, Pressed: pressed})
 }
 
 // renderAppTile draws an OS-style launcher icon: a clean opaque card with a
@@ -3616,12 +3587,8 @@ func inputVariableValue(config *Config, variable string) string {
 			return "true"
 		}
 		return "false"
-	case "buttonColor":
-		return fmt.Sprintf("#%02x%02x%02x", config.Variables.ButtonColor.R, config.Variables.ButtonColor.G, config.Variables.ButtonColor.B)
-	case "labelColor":
-		return fmt.Sprintf("#%02x%02x%02x", config.Variables.LabelColor.R, config.Variables.LabelColor.G, config.Variables.LabelColor.B)
-	case "inputColor":
-		return fmt.Sprintf("#%02x%02x%02x", config.Variables.InputColor.R, config.Variables.InputColor.G, config.Variables.InputColor.B)
+	case "buttonColor", "labelColor", "inputColor":
+		return rgbHex(effectiveThemeColor(config, v))
 	}
 	if val, ok := config.Variables.Custom[v]; ok {
 		return fmt.Sprintf("%v", val)
@@ -5199,6 +5166,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			entry := entries[focusedFileIndex]
 			openFileInCanvasSandbox(entry.Path)
 		}
+	case "onboarding_replay":
+		onboardingStart()
 	case "save_config":
 		// Apply any color variable inputs from the current scene before saving.
 		if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {

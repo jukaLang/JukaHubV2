@@ -40,6 +40,7 @@ type emuEntry struct {
 	Detail string
 	Status emuStatus
 	Launch string
+	Pinned bool // RetroAchievements sits at the top of the list
 }
 
 // ── Windows catalog ──────────────────────────────────────────────────────
@@ -246,6 +247,14 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 func sortEmulatorEntries(entries []emuEntry) {
 	rank := map[emuStatus]int{emuAvailable: 0, emuBroken: 1, emuMissing: 2}
 	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].Pinned != entries[j].Pinned {
+			return entries[i].Pinned
+		}
+		if entries[i].Pinned {
+			// Pinned order is intentional (RetroAchievements, then Game
+			// Profiles); stable sort keeps it instead of alphabetising it.
+			return false
+		}
 		if rank[entries[i].Status] != rank[entries[j].Status] {
 			return rank[entries[i].Status] < rank[entries[j].Status]
 		}
@@ -276,6 +285,16 @@ func emulatorEntries() []emuEntry {
 	} else {
 		entries = deviceEmulatorEntries(deviceEmuRoots, deviceRomsRoot, deviceRACores)
 	}
+	// Pinned rows keep their append order: RetroAchievements stays first (it
+	// was the original top row), then the Game Profiles launcher. The profile
+	// row is always present so the folder is discoverable before the first
+	// import.
+	if retroAchievementsSupported() {
+		re := retroAchievementsEmuEntry()
+		re.Pinned = true
+		entries = append(entries, re)
+	}
+	entries = append(entries, gameProfilesEmuEntry())
 	sortEmulatorEntries(entries)
 	emuCache.entries = entries
 	emuCache.built = true
@@ -287,6 +306,25 @@ func invalidateEmulatorCache() {
 	emuCache.built = false
 	emuCache.entries = nil
 	emuCache.mu.Unlock()
+}
+
+// gameProfilesEmuEntry is the pinned launcher row. It reports the catalog
+// totals so an empty or partially broken library is obvious before opening it.
+func gameProfilesEmuEntry() emuEntry {
+	total, ready, issues := gameProfileStats()
+	detail := "Open the launcher · drop JSON into " + gameProfilesImportDir()
+	if total > 0 {
+		detail = fmt.Sprintf("%d profile(s) · %d ready", total, ready)
+		if issues > 0 {
+			detail += fmt.Sprintf(" · %d file issue(s)", issues)
+		}
+	}
+	return emuEntry{
+		Name:   gameProfilesEntryName,
+		Detail: detail,
+		Status: emuAvailable,
+		Pinned: true,
+	}
 }
 
 // ── Panel ────────────────────────────────────────────────────────────────
@@ -316,6 +354,8 @@ func openEmulatorPanel() {
 	qs.open = false
 	toolsPanel.open = false
 	invalidateEmulatorCache()
+	// The pinned Game Profiles row reports catalog totals, so rebuild those too.
+	invalidateGameProfileCache()
 	emuPanel.open = true
 	emuPanel.cursor = 0
 	emuPanel.scroll = 0
@@ -394,6 +434,15 @@ func emuPanelActivate(config *Config) {
 		return
 	}
 	e := entries[emuPanel.cursor]
+	if e.Name == gameProfilesEntryName {
+		emuPanel.open = false
+		openGameProfilePanel(true)
+		return
+	}
+	if e.Name == retroAchievementsEntryName {
+		openRetroAchievementsPanelFromEmu()
+		return
+	}
 	switch e.Status {
 	case emuAvailable:
 		if e.Launch == "" {
@@ -419,6 +468,10 @@ func ctrlEmuPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 		emuPanelMove(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		emuPanelActivate(config)
+	case sdl.CONTROLLER_BUTTON_Y:
+		if retroAchievementsSupported() {
+			openRetroAchievementsPanelFromEmu()
+		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeEmulatorPanel()
 	}
@@ -438,6 +491,10 @@ func handleEmuKey(e *sdl.KeyboardEvent, config *Config) bool {
 		emuPanelMove(1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		emuPanelActivate(config)
+	case sdl.K_y:
+		if retroAchievementsSupported() {
+			openRetroAchievementsPanelFromEmu()
+		}
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		closeEmulatorPanel()
 	}
@@ -613,9 +670,17 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	}
 
 	hint := "A: launch   B: close"
+	if retroAchievementsSupported() {
+		hint = "A: launch   Y: achievements   B: close"
+	}
 	if emuPanel.scroll > 0 || emuPanel.scroll+int(visible) < len(entries) {
-		hint = fmt.Sprintf("D-Pad: scroll %d-%d of %d   A: launch   B: close",
-			emuPanel.scroll+1, emuPanel.scroll+int(visible), len(entries))
+		if retroAchievementsSupported() {
+			hint = fmt.Sprintf("D-Pad: scroll %d-%d of %d   A: launch   Y: achievements   B: close",
+				emuPanel.scroll+1, emuPanel.scroll+int(visible), len(entries))
+		} else {
+			hint = fmt.Sprintf("D-Pad: scroll %d-%d of %d   A: launch   B: close",
+				emuPanel.scroll+1, emuPanel.scroll+int(visible), len(entries))
+		}
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

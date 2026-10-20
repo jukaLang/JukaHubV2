@@ -363,13 +363,20 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 			sx := detailX + detailW - btnW - 14
 			sy := element.Y + elemH - 50
 
+			label, labelCol := "Install", sdl.Color{R: 255, G: 255, B: 255, A: 255}
+			fill := WithAlpha(ColorInfo, 200)
 			if installed {
-				fillRoundedRect(renderer, sx, sy, btnW, btnH, 8, ColorIconSurface)
-				renderText(renderer, config, smallFont, "Installed", ColorTextTertiary(), sx+40, sy+8)
-			} else {
-				fillRoundedRect(renderer, sx, sy, btnW, btnH, 8, WithAlpha(ColorInfo, 200))
-				renderText(renderer, config, smallFont, "Install", sdl.Color{R: 255, G: 255, B: 255, A: 255}, sx+50, sy+8)
+				label, labelCol, fill = "Installed", ColorTextTertiary(), ColorIconSurface
 			}
+			UIButton(renderer, config, sdl.Rect{X: sx, Y: sy, W: btnW, H: btnH}, label, UIButtonStyle{
+				Variant:       UIButtonCustom,
+				Fill:          fill,
+				LabelColor:    labelCol,
+				Font:          smallFont,
+				Radius:        RadiusSM,
+				NoShadow:      true,
+				HideFocusRing: true,
+			}, UIButtonState{})
 
 			url := truncateRunesSuffix(p.Download, 44, "...")
 			renderText(renderer, config, smallFont, url, sdl.Color{R: 110, G: 200, B: 255, A: 255}, detailX+14, element.Y+elemH-16)

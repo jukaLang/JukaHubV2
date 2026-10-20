@@ -2,6 +2,9 @@
 jukaconfig.json
 jukauser.json
 
+# Local Watch Party history
+partyhistory.json
+
 # Build output
 *.exe
 *.dll

@@ -16,8 +16,8 @@
       "b": 32
     },
     "fullscreen": false,
-    "fileExplorerRoot": "/media",
-    "weatherEnabled": true,
+    "fileExplorerRoot": "",
+    "weatherEnabled": false,
     "weatherUnit": "C",
     "tspUsername": "",
     "playbackResolution": "720",
@@ -48,21 +48,32 @@
       "TSPUsername": "",
       "WeatherEnabled": true,
       "WeatherUnit": "C",
+      "buttonColor": "#1e293b",
       "chat_input": "hi",
       "diskpie_data": {
         "Total": 510718431232,
-        "Used": 321701838848,
-        "Pct": 62
+        "Used": 325866971136,
+        "Pct": 63
       },
       "ftp_address": "",
       "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
       "ftp_status": "stopped",
+      "inputColor": "#0f1420",
+      "labelColor": "#f8fafc",
       "local_ip": "192.168.68.59",
       "network_status": "online",
-      "recently_played": [
-        "https://www.youtube.com/watch?v=yH-_c6vb-9c",
-        "https://www.youtube.com/watch?v=6TmT35PxgZg"
-      ],
+      "onboarding_done": true,
+      "onboarding_skipped": true,
+      "playtime_v1": {
+        "total": 9,
+        "scenes": {
+          "Main": 9
+        },
+        "days": {
+          "2026-10-19": 9
+        },
+        "unlocked": {}
+      },
       "ssh_address": "",
       "ssh_fingerprint": "",
       "ssh_port": "2222",
@@ -79,86 +90,12 @@
   },
   "favorites": {
     "videos": [],
-    "recent": [
-      {
-        "Type": "video",
-        "Data": {
-          "id": "6TmT35PxgZg",
-          "title": "Дима Билан - Как хотел я",
-          "uploader": "bilanofficial",
-          "channel": "bilanofficial",
-          "duration": 265,
-          "thumbnail": "https://i.ytimg.com/vi/6TmT35PxgZg/hqdefault.jpg?sqp=-oaymwE2COADEI4CSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gSAAuADigIMCAAQARhkIGQoZDAP\u0026rs=AOn4CLCR9wnDpeJZKNys7g7eioAM7k3DOA",
-          "description": "... iTunes https://itunes.apple.com/ru/album/dotanis/id648258369 Dima Bilan Kak hotel ya (How I wanted) Director Gosha Toidze, ...",
-          "view_count": 1474902,
-          "upload_date": "",
-          "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=6TmT35PxgZg",
-          "position": 67.656628
-        },
-        "Timestamp": "2026-10-19T14:47:17.6630895-04:00"
-      },
-      {
-        "Type": "video",
-        "Data": {
-          "id": "yH-_c6vb-9c",
-          "title": "THE “STAY AT HOME WIFE” TREND IS DEEPLY CONCERNING | Influencer Insanity Ep 40",
-          "uploader": "Hannah Alonzo",
-          "channel": "Hannah Alonzo",
-          "duration": 3984,
-          "thumbnail": "https://i.ytimg.com/vi/yH-_c6vb-9c/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLCUGnWmqR35aSsw131nTlFK7lPTjA",
-          "description": "Get 40% off your first Hungryroot box PLUS get a free item of your choice in every box for life with code HANNAH at ...",
-          "view_count": 987931,
-          "upload_date": "",
-          "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=yH-_c6vb-9c",
-          "position": 6.3814237
-        },
-        "Timestamp": "2026-10-19T14:45:29.6700672-04:00"
-      },
-      {
-        "Type": "video",
-        "Data": {
-          "id": "_Nw4qDYtncU",
-          "title": "Controlling Mom FORCES DAUGHTER To Be Popular Ft. Gia Rose | Dhar Mann Studios",
-          "uploader": "Dhar Mann Studios",
-          "channel": "Dhar Mann Studios",
-          "duration": 1722,
-          "thumbnail": "https://i.ytimg.com/vi/_Nw4qDYtncU/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLA8vuMxCNLJMkyy3ZtZ4cYk0hdUQA",
-          "description": "Join the Dhar Mann Studios Discord! Meet the community, talk episodes, participate in fun polls and more!",
-          "view_count": 2482393,
-          "upload_date": "",
-          "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=_Nw4qDYtncU",
-          "position": 15.0823884
-        },
-        "Timestamp": "2026-10-19T14:38:28.8204577-04:00"
-      }
-    ],
+    "recent": [],
     "files": [],
     "iptv": []
   },
   "chat": {
     "messages": [
-      {
-        "id": "1561260072422867087",
-        "sender": "jukalang",
-        "text": "New JukaHub v0.4 is built from scratch and is 10x smaller than v0.3, is 3 seconds faster in startup, features more modular design, removes dependency on old players and instead uses a custom built from scratch player. There are still many features missing, but feel free to send me a message...Chat is back online, and videos play, tools someone work. FTP server has been added, file manager seems to be working...PDF reader and image viewer are built-in",
-        "timestamp": "2026-10-18T06:10:08.075Z"
-      },
-      {
-        "id": "1561260468566233128",
-        "sender": "jukalang",
-        "text": "",
-        "timestamp": "2026-10-18T06:11:42.523Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561260468268564510/image.png?ex=6ad7061e\u0026is=6ad5b49e\u0026hm=66c98b3ea8f29a3ac2d4decae4e87c218f58bf1aefb13770d6e0efff26aab9d8\u0026"
-      },
-      {
-        "id": "1561261560544895129",
-        "sender": "jukalang",
-        "text": "Packages are included and will be used to install latest emulators...",
-        "timestamp": "2026-10-18T06:16:02.871Z"
-      },
       {
         "id": "1561263890019655751",
         "sender": "jukalang",
@@ -176,7 +113,7 @@
         "sender": "jukalang",
         "text": "Packages are back:",
         "timestamp": "2026-10-18T17:12:00.314Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561426637269114991/image.png?ex=6ad6f820\u0026is=6ad5a6a0\u0026hm=5d6c058f1dffd0755ee07667b5ece099ff1f1b7ca78bb442218b6742e5cfd278\u0026"
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561426637269114991/image.png?ex=6ad7a0e0\u0026is=6ad64f60\u0026hm=a92c3814c0bb192cf0a64f578043f235bf2c72852041a6151209c780d8535bab\u0026"
       },
       {
         "id": "1561536957648076851",
@@ -196,14 +133,34 @@
         "sender": "jukalang",
         "text": "JukaHub now includes both FTP and SFTP:",
         "timestamp": "2026-10-19T04:58:56.487Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561604543568019556/image.png?ex=6ad6f510\u0026is=6ad5a390\u0026hm=8753ba2bc186c2d3328025ae95e460059384c0840899b91c5660800dfe0b4f49\u0026"
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561604543568019556/image.png?ex=6ad79dd0\u0026is=6ad64c50\u0026hm=ce69c781d802c8a335eb4437cfa8327b1a77b066056fd89f7bca77dabb2a1206\u0026"
       },
       {
         "id": "1561605560518971465",
         "sender": "jukalang",
         "text": "Will be implementing \"Steam\" like overlay",
         "timestamp": "2026-10-19T05:02:58.856Z"
+      },
+      {
+        "id": "1561787089576661083",
+        "sender": "jukalang",
+        "text": "JukaHub companion app coming soon",
+        "timestamp": "2026-10-19T17:04:18.756Z",
+        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561787089165492235/image.png?ex=6ad79f12\u0026is=6ad64d92\u0026hm=5f782ca70b017049ec0fef040ba3d21de7c879caf642842de9ab80d4966f4ef6\u0026"
+      },
+      {
+        "id": "1561813703626588234",
+        "sender": "JukaTest",
+        "text": "Hello",
+        "timestamp": "2026-10-19T18:50:04.04Z"
+      },
+      {
+        "id": "1561813749222867066",
+        "sender": "JukaTest",
+        "text": "How is everyone?",
+        "timestamp": "2026-10-19T18:50:14.911Z"
       }
-    ]
+    ],
+    "name": "JukaTest"
   }
 }
