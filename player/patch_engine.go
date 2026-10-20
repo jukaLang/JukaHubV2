@@ -2030,6 +2030,40 @@ func DiagnosticsText(config *Config) string {
 		sb.WriteString(fmt.Sprintf("Config       : %d scene(s), %d element(s), schema %d\n",
 			len(config.Scenes), elements, config.SchemaVersion))
 	}
+	// Support triage facts. Still no paths, addresses, names or config values:
+	// free space, connectivity state, how many emulators were detected and how
+	// much of the detected list is actually usable.
+	storage := "unknown"
+	if dir, err := PatchStateDir(); err == nil {
+		if free, err := freeBytes(dir); err == nil {
+			storage = fmt.Sprintf("%d MiB", free>>20)
+		}
+	}
+	sb.WriteString("Storage free : " + storage + "\n")
+	sb.WriteString("Network      : " + NetworkStatus() + "\n")
+	if tag := availableUpdateTag(); tag != "" {
+		sb.WriteString("Update ready : " + availableUpdateLabel() + "\n")
+	}
+	usable, unusable, listed := 0, 0, 0
+	for _, e := range emulatorEntries() {
+		listed++
+		switch e.Status {
+		case emuAvailable:
+			usable++
+		case emuBroken:
+			unusable++
+		}
+	}
+	if listed > 0 {
+		sb.WriteString(fmt.Sprintf("Emulators    : %d usable, %d unusable, %d listed\n", usable, unusable, listed))
+	}
+	if snap := configHealth.Snapshot(); snap != nil {
+		loadErrs, _ := snap["load_errors"].(int)
+		saveErrs, _ := snap["save_errors"].(int)
+		if loadErrs > 0 || saveErrs > 0 {
+			sb.WriteString(fmt.Sprintf("Config health: %d load error(s), %d save error(s)\n", loadErrs, saveErrs))
+		}
+	}
 	if safeModeActive() {
 		sb.WriteString("Safe mode    : on\n")
 	}

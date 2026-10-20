@@ -54,7 +54,15 @@ type musicState struct {
 	duration float64 // seconds, 0 while unknown
 	dir      string  // folder the playlist was built from
 	cursor   int     // highlighted playlist row
-	repeat   bool
+
+	// Playback modes and the play-next queue (see musiclibrary.go). The
+	// repeat preference survives a restart; the queue does not.
+	repeatMode musicRepeatMode
+	shuffle    bool
+	order      []int // shuffle permutation, rebuilt whenever the list changes
+	orderPos   int
+	queue      []string // absolute paths waiting to play next
+	queueLen   int      // queue length cached for the status line
 
 	// Long-form extras (audiobooks, podcasts).
 	speed          float64   // listening speed, 0.75..2 (see audioSpeedSteps)
@@ -150,6 +158,12 @@ func musicLoadPlaylist(dir, startPath string) int {
 	music.position = 0
 	music.duration = 0
 	music.ready = true
+	// A new folder invalidates the shuffled walk and anything queued from the
+	// previous list; the shuffle preference itself stays on.
+	music.order = nil
+	music.orderPos = 0
+	music.queue = nil
+	music.queueLen = 0
 	music.mu.Unlock()
 	return start
 }
@@ -300,6 +314,22 @@ func musicPlayTrackNow(index int) {
 	music.playing = true
 	music.paused = false
 	music.duration = track.Duration
+	// Keep the shuffled walk aligned with the track that is actually playing:
+	// picking a row by hand should continue from that row, not from wherever
+	// the old order happened to be.
+	if music.shuffle {
+		if len(music.order) != len(music.tracks) {
+			music.order = buildShuffleOrder(len(music.tracks), index, nil)
+			music.orderPos = 0
+		} else {
+			for i, v := range music.order {
+				if v == index {
+					music.orderPos = i
+					break
+				}
+			}
+		}
+	}
 	resume := audioStartPosition(audioResumePosition(track.Path), track.Duration)
 	music.position = resume
 	music.lyrics = loadLyricsFor(track.Path)
@@ -497,9 +527,20 @@ loop:
 			reachedEnd = true
 		}
 	}
-	next := music.current + 1
-	total := len(music.tracks)
-	repeat := music.repeat
+	// Where playback goes next: repeat-one restarts the same track, a queued
+	// track wins over the folder order, then the shuffled or sequential walk.
+	repeatOne := music.repeatMode == musicRepeatOne
+	nextIdx, advance := 0, false
+	switch {
+	case repeatOne:
+		nextIdx, advance = music.current, true
+	default:
+		if idx, ok := music.musicPopQueueLocked(); ok {
+			nextIdx, advance = idx, true
+		} else if idx, ok := music.musicStepLocked(1, true); ok {
+			nextIdx, advance = idx, true
+		}
+	}
 	music.mu.Unlock()
 
 	if !finished {
@@ -509,12 +550,8 @@ loop:
 		// A finished book or episode starts from the top next time.
 		audioForgetPosition(path)
 	}
-	if repeat {
-		musicPlayTrack(music.current)
-		return
-	}
-	if next < total {
-		musicPlayTrack(next)
+	if advance {
+		musicPlayTrack(nextIdx)
 		return
 	}
 	ClearVideoAudioQueue()
@@ -770,34 +807,101 @@ func musicAdjustVolume(delta float64) {
 	musicSetVolume(v)
 }
 
+// musicNext advances the transport: the play-next queue first, then the
+// shuffled or folder order. A manual Next always wraps, even with repeat off.
 func musicNext() {
 	music.mu.Lock()
-	total := len(music.tracks)
-	current := music.current
-	music.mu.Unlock()
-	if total == 0 {
+	if len(music.tracks) == 0 {
+		music.mu.Unlock()
 		return
 	}
-	next := current + 1
-	if next >= total {
-		next = 0
+	if idx, ok := music.musicPopQueueLocked(); ok {
+		music.mu.Unlock()
+		musicPlayTrack(idx)
+		return
 	}
-	musicPlayTrack(next)
+	idx, ok := music.musicStepLocked(1, false)
+	music.mu.Unlock()
+	if ok {
+		musicPlayTrack(idx)
+	}
 }
 
 func musicPrev() {
 	music.mu.Lock()
-	total := len(music.tracks)
-	current := music.current
-	music.mu.Unlock()
-	if total == 0 {
+	if len(music.tracks) == 0 {
+		music.mu.Unlock()
 		return
 	}
-	prev := current - 1
-	if prev < 0 {
-		prev = total - 1
+	idx, ok := music.musicStepLocked(-1, false)
+	music.mu.Unlock()
+	if ok {
+		musicPlayTrack(idx)
 	}
-	musicPlayTrack(prev)
+}
+
+// musicToggleShuffle turns the shuffled walk on or off. Turning it on builds an
+// order that starts with the current track, so nothing restarts mid-song.
+func musicToggleShuffle() bool {
+	music.mu.Lock()
+	defer music.mu.Unlock()
+	music.shuffle = !music.shuffle
+	if !music.shuffle {
+		music.order = nil
+		music.orderPos = 0
+		return false
+	}
+	start := music.current
+	if start < 0 {
+		start = music.cursor
+	}
+	music.order = buildShuffleOrder(len(music.tracks), start, nil)
+	music.orderPos = 0
+	return true
+}
+
+// musicCycleRepeatMode advances off → all → one and returns the new mode.
+func musicCycleRepeatMode() musicRepeatMode {
+	music.mu.Lock()
+	defer music.mu.Unlock()
+	music.repeatMode = nextMusicRepeat(music.repeatMode)
+	return music.repeatMode
+}
+
+// musicQueueFocused puts the highlighted row at the head of the play-next
+// queue and returns its display name.
+func musicQueueFocused() (string, bool) {
+	music.mu.Lock()
+	defer music.mu.Unlock()
+	if music.cursor < 0 || music.cursor >= len(music.tracks) {
+		return "", false
+	}
+	track := music.tracks[music.cursor]
+	if !music.musicQueuePathLocked(track.Path, true) {
+		return track.Name, false
+	}
+	return track.Name, true
+}
+
+// musicFavoriteCurrent flips the favorite flag of the playing track (falling
+// back to the highlighted row) and reports the new state and track name.
+func musicFavoriteCurrent() (bool, string, bool) {
+	music.mu.Lock()
+	path := ""
+	if music.current >= 0 && music.current < len(music.tracks) {
+		path = music.tracks[music.current].Path
+	} else if music.cursor >= 0 && music.cursor < len(music.tracks) {
+		path = music.tracks[music.cursor].Path
+	}
+	name := ""
+	if path != "" {
+		name = filepath.Base(path)
+	}
+	music.mu.Unlock()
+	if path == "" {
+		return false, "", false
+	}
+	return musicToggleFavorite(path), name, true
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -958,6 +1062,7 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 // so a click on a scrolled list plays the track the user sees.
 var musicRects = struct {
 	prev, playPause, next, stop sdl.Rect
+	shuffle, repeat, favorite   sdl.Rect
 	volDown, volUp, seek        sdl.Rect
 	art                         sdl.Rect // artwork tile; tapping toggles the lyrics view
 	rows                        []sdl.Rect
@@ -1016,6 +1121,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	speed := music.speed
 	lyrics := music.lyrics
 	showLyrics := music.showLyrics
+	repeatMode := music.repeatMode
+	shuffleOn := music.shuffle
+	queued := music.queueLen
 	music.mu.Unlock()
 	if speed <= 0 {
 		speed = 1
@@ -1101,6 +1209,13 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	// on its own line means the meta line stays stable while the timer counts
 	// down instead of re-flowing the title.
 	status := formatSpeedLabel(speed)
+	if shuffleOn {
+		status += "   ·   Shuffle"
+	}
+	status += "   ·   " + repeatMode.label()
+	if queued > 0 {
+		status += fmt.Sprintf("   ·   %d queued", queued)
+	}
 	if sleepLeft > 0 {
 		status += "   ·   Sleep " + formatSleepRemaining(sleepLeft)
 	}
@@ -1158,6 +1273,18 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	musicRects.next = musicButton(renderer, config, iconFont, textX+154, btnY, 54, btnH, ">|", false)
 	musicRects.stop = musicButton(renderer, config, iconFont, textX+220, btnY, 54, btnH, "[]", false)
 
+	// Play modes. They sit after the transport where there is room, and show
+	// their state in the fill (accent = on) instead of a second label: on a
+	// handheld, a button that changes size or wording is harder to aim at.
+	modeFont := font
+	favPath := ""
+	if cur >= 0 && cur < len(tracks) {
+		favPath = tracks[cur].Path
+	}
+	musicRects.shuffle = musicButton(renderer, config, modeFont, textX+290, btnY, 104, btnH, "Shuffle", shuffleOn)
+	musicRects.repeat = musicButton(renderer, config, modeFont, textX+402, btnY, 124, btnH, "Repeat "+repeatMode.short(), repeatMode != musicRepeatOff)
+	musicRects.favorite = musicButton(renderer, config, modeFont, textX+534, btnY, 64, btnH, "Fav", musicIsFavorite(favPath))
+
 	// Volume controls, right aligned in the card. The label sits left of the
 	// buttons so a long value ("Vol 100%") never slides underneath them.
 	volUpX := cardX + cardW - 24 - 44
@@ -1170,7 +1297,8 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 
 	// ── Playlist card ──
 	listY := cardY + cardH + 20
-	listH := screenHeight - listY - 56
+	// Two footer hint lines need more room than the single line the player had.
+	listH := screenHeight - listY - 74
 	if listH < 120 {
 		listH = 120
 	}
@@ -1215,6 +1343,11 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
 				renderer.FillRect(&sdl.Rect{X: row.X + 3, Y: row.Y + 8, W: 4, H: row.H - 16})
 			}
+			if musicIsFavorite(tracks[i].Path) {
+				// A favourite keeps its row marker between the number and the
+				// title, so the name and duration never shift when it is set.
+				fillCircle(renderer, row.X+46, row.Y+row.H/2, 4, accentColor)
+			}
 			num := strconv.Itoa(i+1) + "."
 			renderText(renderer, config, font, num, ColorTextTertiary(), row.X+18, row.Y+(row.H-int32(font.Height()))/2)
 			name := tracks[i].Name
@@ -1235,11 +1368,17 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// Footer hints.
-	hint := "ENTER Play   SPACE Pause   LEFT/RIGHT Seek   -/+ Volume   [ ] Speed   T Sleep   L Lyrics   V Visualizer   B Back"
-	hw, _, _ := font.SizeUTF8(hint)
-	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 170},
-		(screenWidth-int32(hw))/2, screenHeight-36)
+	// Footer hints, on two lines: the player gained keys, and one line no
+	// longer fits the panel at the smallest text size.
+	hints := []string{
+		"ENTER Play   SPACE Pause   LEFT/RIGHT Seek   -/+ Volume   [ ] Speed   T Sleep",
+		"M Shuffle   R Repeat   F Favorite   Q Play next   L Lyrics   V Visualizer   B Back",
+	}
+	for i, line := range hints {
+		hw, _, _ := font.SizeUTF8(line)
+		renderText(renderer, config, font, line, sdl.Color{R: 110, G: 125, B: 150, A: 170},
+			(screenWidth-int32(hw))/2, screenHeight-52+int32(i)*18)
+	}
 }
 
 // musicButton draws one rounded transport button and returns its rect.
@@ -1292,6 +1431,35 @@ func HandleMusicClick(mx, my int32) bool {
 	if pointInRect(mx, my, musicRects.stop) {
 		musicStop()
 		PlayBackSound()
+		return true
+	}
+	if pointInRect(mx, my, musicRects.shuffle) {
+		on := musicToggleShuffle()
+		if on {
+			showToast("Shuffle on", ToastSuccess())
+		} else {
+			showToast("Shuffle off", ToastInfo())
+		}
+		PlayNavSound()
+		return true
+	}
+	if pointInRect(mx, my, musicRects.repeat) {
+		mode := musicCycleRepeatMode()
+		showToast(mode.label(), ToastInfo())
+		PlayNavSound()
+		return true
+	}
+	if pointInRect(mx, my, musicRects.favorite) {
+		if fav, name, ok := musicFavoriteCurrent(); ok {
+			if fav {
+				showToast("Favorite: "+name, ToastSuccess())
+			} else {
+				showToast("Removed favorite: "+name, ToastInfo())
+			}
+		} else {
+			showToast("Nothing to favorite yet", ToastInfo())
+		}
+		PlayNavSound()
 		return true
 	}
 	if pointInRect(mx, my, musicRects.volUp) {
@@ -1378,6 +1546,34 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		PlayNavSound()
 	case sdl.K_RIGHTBRACKET:
 		musicCycleSpeed(1)
+		PlayNavSound()
+	case sdl.K_m:
+		if musicToggleShuffle() {
+			showToast("Shuffle on", ToastSuccess())
+		} else {
+			showToast("Shuffle off", ToastInfo())
+		}
+		PlayNavSound()
+	case sdl.K_r:
+		showToast(musicCycleRepeatMode().label(), ToastInfo())
+		PlayNavSound()
+	case sdl.K_f:
+		if fav, name, ok := musicFavoriteCurrent(); ok {
+			if fav {
+				showToast("Favorite: "+name, ToastSuccess())
+			} else {
+				showToast("Removed favorite: "+name, ToastInfo())
+			}
+		} else {
+			showToast("Nothing to favorite yet", ToastInfo())
+		}
+		PlayNavSound()
+	case sdl.K_q:
+		if name, ok := musicQueueFocused(); ok {
+			showToast("Queued: "+name, ToastSuccess())
+		} else {
+			showToast("Nothing to queue", ToastInfo())
+		}
 		PlayNavSound()
 	case sdl.K_t:
 		minutes := musicCycleSleepTimer()
@@ -1502,8 +1698,20 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		idx := music.cursor
 		music.mu.Unlock()
 		musicPlayTrack(idx)
-	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
+	case sdl.CONTROLLER_BUTTON_X:
 		musicTogglePause()
+	case sdl.CONTROLLER_BUTTON_Y:
+		// Y favorites the playing track. Pause already has X, so the second
+		// button is better spent on the library than duplicating it.
+		if fav, name, ok := musicFavoriteCurrent(); ok {
+			if fav {
+				showToast("Favorite: "+name, ToastSuccess())
+			} else {
+				showToast("Removed favorite: "+name, ToastInfo())
+			}
+		} else {
+			showToast("Nothing to favorite yet", ToastInfo())
+		}
 	case sdl.CONTROLLER_BUTTON_START:
 		music.mu.Lock()
 		music.visualizerFull = !music.visualizerFull
@@ -1536,6 +1744,15 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		if !musicToggleLyrics() {
 			showToast("No .lrc file next to this track", ToastInfo())
 		}
+	case sdl.CONTROLLER_BUTTON_GUIDE:
+		// Pads that report the logo/guide button get a shuffle toggle; the
+		// on-screen Shuffle button and M on a keyboard reach the same state.
+		if musicToggleShuffle() {
+			showToast("Shuffle on", ToastSuccess())
+		} else {
+			showToast("Shuffle off", ToastInfo())
+		}
+		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
 		minutes := musicCycleSleepTimer()
 		if minutes == 0 {

@@ -155,6 +155,72 @@ func TestHomePS5LauncherIsReachableWithDpad(t *testing.T) {
 	}
 }
 
+// TestHomeBellSelectableWithDpad pins the "notification bell is unreachable on
+// Home" report: the bell is a chrome control on every other scene, but Home
+// drives its own focus graph, so it needs a node of its own. The rendered bell
+// rect must also be the one focus and clicks use.
+func TestHomeBellSelectableWithDpad(t *testing.T) {
+	clearToastAfterTest(t)
+	snapshotHomeGlobals(t)
+	prevNC := nc
+	nc = notifCenter{}
+	t.Cleanup(func() {
+		nc = prevNC
+		homeCalendarOpen = false
+	})
+
+	// Render once so the bell is measured and enabled exactly as on screen.
+	_ = renderHomeFrame(t, false)
+	bell := nc.bellRect
+	if bell.W <= 0 || bell.H <= 0 {
+		t.Fatalf("bell was not drawn: %+v", bell)
+	}
+	if got := homeLayout.Items[HomeFocusBell].Rect; got != bell {
+		t.Fatalf("bell focus rect %+v differs from the drawn bell %+v", got, bell)
+	}
+	if !homeLayout.Focus.IsEnabled(HomeFocusBell) {
+		t.Fatal("bell is not focusable on Home")
+	}
+
+	// Right from the clock reaches it; Left and Down leave it again.
+	if !homeLayout.Focus.Set(HomeFocusClock) {
+		t.Fatal("cannot focus the clock")
+	}
+	homeKey(t, &Config{}, sdl.K_RIGHT)
+	if got := homeLayout.Focus.Current(); got != HomeFocusBell {
+		t.Fatalf("Right from the clock focused %q, want the bell", got)
+	}
+	homeKey(t, &Config{}, sdl.K_LEFT)
+	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
+		t.Fatalf("Left from the bell focused %q, want the clock", got)
+	}
+	if !homeLayout.Focus.Set(HomeFocusBell) {
+		t.Fatal("cannot focus the bell")
+	}
+	homeKey(t, &Config{}, sdl.K_DOWN)
+	if got := homeLayout.Focus.Current(); got != HomeFocusSettings {
+		t.Fatalf("Down from the bell focused %q, want settings", got)
+	}
+
+	// A opens the notification center, the same as clicking the bell.
+	if !homeLayout.Focus.Set(HomeFocusBell) {
+		t.Fatal("cannot focus the bell")
+	}
+	a := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_A}
+	if !handleHomeController(a, &Config{}) {
+		t.Fatal("A was not handled on home")
+	}
+	if !nc.open {
+		t.Fatal("A on the bell did not open the notification center")
+	}
+	if homePressedID != HomeFocusBell {
+		t.Fatalf("A on the bell gave press feedback for %q", homePressedID)
+	}
+	if notifUnreadCount() != 0 {
+		t.Fatalf("opening the bell left %d unread, want 0", notifUnreadCount())
+	}
+}
+
 // TestHomeFocusGraphFullyReachable walks the home focus graph the way the
 // D-pad does and asserts every card can be focused from every other card.
 func TestHomeFocusGraphFullyReachable(t *testing.T) {

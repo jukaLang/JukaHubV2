@@ -157,6 +157,50 @@ func TestBellIconDrawsSilhouette(t *testing.T) {
 	}
 }
 
+// TestNotificationCenterControllerNavigation pins the handheld path: once the
+// bell is opened with A, the D-pad must walk the rows and B must close the
+// panel instead of falling through to the scene underneath.
+func TestNotificationCenterControllerNavigation(t *testing.T) {
+	prevNC := nc
+	prevActive := homeLayoutActive
+	t.Cleanup(func() {
+		nc = prevNC
+		homeLayoutActive = prevActive
+	})
+	resetNotifCenter(t)
+	homeLayoutActive = false // the controller router owns the overlay, not Home
+
+	notifPush("one", notifInfo)
+	notifPush("two", notifInfo)
+	notifToggle()
+	if !nc.open {
+		t.Fatal("notification center did not open")
+	}
+
+	press := func(button uint8) bool {
+		e := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: button}
+		return handleControllerEvent(e, &Config{})
+	}
+	if !press(sdl.CONTROLLER_BUTTON_DPAD_DOWN) {
+		t.Fatal("D-pad Down was not consumed by the open notification center")
+	}
+	if nc.cursor != 1 {
+		t.Fatalf("cursor after Down = %d, want 1", nc.cursor)
+	}
+	if !press(sdl.CONTROLLER_BUTTON_DPAD_UP) {
+		t.Fatal("D-pad Up was not consumed by the open notification center")
+	}
+	if nc.cursor != 0 {
+		t.Fatalf("cursor after Up = %d, want 0", nc.cursor)
+	}
+	if !press(sdl.CONTROLLER_BUTTON_B) {
+		t.Fatal("B was not consumed by the open notification center")
+	}
+	if nc.open {
+		t.Fatal("B did not close the notification center")
+	}
+}
+
 func TestToastKindPriorityRoundTrip(t *testing.T) {
 	cases := []ToastKind{ToastKindInfo, ToastKindSuccess, ToastKindWarning, ToastKindError}
 	for _, k := range cases {

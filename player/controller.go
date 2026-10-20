@@ -101,6 +101,24 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if emuPanel.open {
 		return ctrlEmuPanel(e, config)
 	}
+	// The notification centre is a top-bar overlay: while it is open the D-pad
+	// walks its rows and A/B close it, matching handleChromeOverlayKey so the
+	// controller and the keyboard behave the same on every scene, Home included.
+	if nc.open {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			notifNavigate(-1)
+			PlayNavSound()
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			notifNavigate(1)
+			PlayNavSound()
+		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B,
+			sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+			notifDismiss()
+			PlayBackSound()
+		}
+		return true
+	}
 	// The Local weather card floats above every scene, so it consumes the
 	// controller until it is dismissed.
 	if weatherPopoverOpen {

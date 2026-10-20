@@ -225,6 +225,49 @@ than the embedded one.
 > (`jukahub-patch-dev-2026`). A production deployment replaces it with the
 > official key and publishes the matching repository.
 
+### Signed app releases
+
+App updates use the same key and the same canonical-JSON scheme. A release may
+publish `release.json` beside its archives:
+
+```json
+{
+  "format": 1,
+  "key_id": "jukahub-patch-dev-2026",
+  "tag": "JukaHub-20261020154603",
+  "issued_at": "2026-10-20T15:46:03Z",
+  "expires_at": "2027-10-20T15:46:03Z",
+  "targets": [
+    { "asset": "JukaHub-Windows.zip", "sha256": "…", "size": 29289140 },
+    { "asset": "JukaHub-Trimui.zip", "sha256": "…", "size": 10142417 }
+  ],
+  "signature": "<hex Ed25519 signature over the canonical JSON>"
+}
+```
+
+The updater's order of trust is: **signature, then digest, then HTTPS**. When
+`release.json` is published it must verify, must name the release tag being
+installed, must list this platform's archive, and its digest must agree with the
+GitHub asset digest — otherwise the install stops. A release without the
+manifest is still installable (older releases and the URL fallback), but the
+updater logs that it fell back to the digest, because the GitHub digest and the
+archive come from the same account and a compromise there defeats the check.
+
+Sign a release after both archives are built and before uploading them:
+
+```bash
+cd player
+PATCH_SIGN_KEY=<hex private key> go run ./tools/sign-release \
+  -tag JukaHub-20261020154603 \
+  -asset JukaHub-Windows.zip=dist/JukaHub-Windows.zip \
+  -asset JukaHub-Trimui.zip=dist/JukaHub-Trimui.zip \
+  -out dist/release.json
+```
+
+Upload `release.json` as a release asset. Until the release pipeline runs that
+step with the signing key in CI, releases stay unsigned and the updater keeps
+using the GitHub digest (with the log warning above).
+
 ---
 
 ## Related

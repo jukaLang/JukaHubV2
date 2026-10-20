@@ -427,7 +427,14 @@ func TestMusicPlayerPreview(t *testing.T) {
 		t.Skip("set JUKA_PREVIEW=1 to write tmp/audioplayer-preview.png")
 	}
 	resetMusicState(t)
-	musicLoadPlaylist(musicTestFiles(t), "")
+	// Show the new playback modes in their on state so the preview covers the
+	// buttons, the status line and the favorite row marker.
+	withTempFavorites(t)
+	dir := musicTestFiles(t)
+	musicLoadPlaylist(dir, "")
+	musicToggleShuffle()
+	musicCycleRepeatMode()
+	musicToggleFavorite(filepath.Join(dir, "a-song.flac"))
 	f := renderMusicFrame(t)
 
 	img := image.NewRGBA(image.Rect(0, 0, int(probeW), int(probeH)))

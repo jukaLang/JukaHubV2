@@ -62,6 +62,12 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 **Favorites**, **Apps**, **Settings**, **Logs** and **Exit**.
 
 * **Media / Tube** — YouTube search and trending.
+* **Music** — open any audio file from the browser and the player takes its
+  folder: shuffle that visits each track once, repeat off/all/one, a play-next
+  queue, favorites that survive a restart, 0.75×–2× speed, a sleep timer,
+  synced `.lrc` lyrics and a full-screen spectrum. Playback continues while you
+  browse; see [docs/MUSIC_PLAYER.md](docs/MUSIC_PLAYER.md) for the feature map
+  and roadmap.
 * **Photos** — open PNG, JPG, BMP and WebP images from the file browser, then
   browse the folder with Left/Right and zoom with Up/Down. WebP box art decodes
   natively on the handheld, whose SDL_image links libwebp; a desktop runtime that
@@ -207,7 +213,9 @@ onto it from the weather chip) and press **A**, or click it: one press downloads
 the archive for the platform (`JukaHub-Windows.zip` on Windows,
 `JukaHub-Trimui.zip` on TrimUI), checks its SHA-256 against the digest GitHub
 publishes for that asset (a truncated or swapped archive is rejected before it
-is unpacked), unpacks it, replaces the app files
+is unpacked) and, when the release ships a signed `release.json`, verifies that
+signature with the same Ed25519 key as the Patch repository — so a compromised
+release account is not enough to install a build. It then unpacks the archive, replaces the app files
 and restarts. Progress shows in the install bar over whatever screen is open, so
 there is no menu to walk through. Your `jukauser.json` settings, favorites and
 media are untouched, and an interrupted update is rolled back automatically at

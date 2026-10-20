@@ -428,6 +428,14 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 func notifToggle() {
 	nc.open = !nc.open
 	nc.cursor = 0
+	// Home has its own focus graph. A tap or a chrome activation on Home is a
+	// deliberate choice, so focus follows it and the D-pad continues from the
+	// bell instead of jumping back to a card.
+	if homeLayoutActive && homeLayout != nil {
+		if homeLayout.Focus.Set(HomeFocusBell) {
+			homeLayout.Focus.Remember()
+		}
+	}
 	if nc.open {
 		nc.enter.begin(uiClockMS(), uiPanelEnterMS)
 		// The top-bar overlays are exclusive.

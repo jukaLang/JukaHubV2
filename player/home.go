@@ -260,8 +260,18 @@ func homeActivate(config *Config) {
 	if homeLayout == nil {
 		return
 	}
-	PlayActivateSound()
 	id := homeLayout.Focus.Current()
+	// The notification bell opens the same dropdown as the touch target and
+	// the chrome control on other scenes. notifToggle plays its own
+	// activation sound, so return before the generic one.
+	if id == HomeFocusBell {
+		log.Printf("[home] activate card %s", id)
+		homePressedID = id
+		homePressedAt = sdl.GetTicks64()
+		notifToggle()
+		return
+	}
+	PlayActivateSound()
 	log.Printf("[home] activate card %s", id)
 	homePressedID = id
 	homePressedAt = sdl.GetTicks64()

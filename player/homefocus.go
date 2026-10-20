@@ -17,6 +17,11 @@ const (
 	HomeFocusWeather   HomeFocusID = "weather"
 	HomeFocusClock     HomeFocusID = "clock"
 	HomeFocusExit      HomeFocusID = "exit"
+	// HomeFocusBell is the notification bell in the far-right corner of the
+	// header. It is a chrome control on every other scene, but Home drives its
+	// own focus graph, so without an entry here the D-pad could never reach it.
+	// It is enabled only while the bell is actually drawn.
+	HomeFocusBell HomeFocusID = "bell"
 	// HomeFocusPS5 is the PS5 Remote Play tile in the header, left of the phone
 	// pairing QR. It is disabled whenever that tile is not drawn, so the D-pad
 	// can never land on something invisible.
@@ -118,7 +123,14 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	},
 	HomeFocusClock: {
 		Up: HomeFocusClock, Down: HomeFocusSettings,
-		Left: HomeFocusWeather, Right: HomeFocusClock,
+		Left: HomeFocusWeather, Right: HomeFocusBell,
+	},
+	// The bell is the last control in the header, right of the clock. Right
+	// stays put at the screen edge and Down drops into the Settings column
+	// under it.
+	HomeFocusBell: {
+		Up: HomeFocusBell, Down: HomeFocusSettings,
+		Left: HomeFocusClock, Right: HomeFocusBell,
 	},
 	// Exit sits on the footer's left end; Favorites drops down to it.
 	HomeFocusExit: {
@@ -290,7 +302,7 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
-		HomeFocusWeather, HomeFocusClock, HomeFocusUpdate, HomeFocusPS5, HomeFocusExit,
+		HomeFocusWeather, HomeFocusClock, HomeFocusBell, HomeFocusUpdate, HomeFocusPS5, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

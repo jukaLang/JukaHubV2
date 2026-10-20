@@ -28,6 +28,7 @@ const (
 	HomeActionToggleCalendar HomeAction = "toggle_calendar"
 	HomeActionToggleWeather  HomeAction = "toggle_weather"
 	HomeActionUpdate         HomeAction = "install_update"
+	HomeActionNotifications  HomeAction = "toggle_notifications"
 )
 
 type HomeFonts struct {
@@ -106,7 +107,7 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusUpdate, HomeFocusExit,
+			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusBell, HomeFocusUpdate, HomeFocusExit,
 		},
 	}
 	layout.rebuildItems()
@@ -165,6 +166,11 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 1020, Y: 10, W: 92, H: 36})
 	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
 		sdl.Rect{X: 1120, Y: 10, W: 76, H: 36})
+	// The notification bell closes the header on the right. drawHeader replaces
+	// this rect with the one actually drawn, and only enables the entry while
+	// the bell is on screen.
+	card(HomeFocusBell, "Notifications", "Recent alerts", "bell", HomeActionNotifications,
+		sdl.Rect{X: 1204, Y: 10, W: 46, H: 36})
 	// The update download chip sits at the left end of the status cluster.
 	// Like the clock and weather, its rect is replaced with the drawn chip
 	// every frame, and it is only focusable while a release is offered.
@@ -230,7 +236,7 @@ func (h *HomeLayout) BoundsViolations() []string {
 			item.Rect.X+item.Rect.W > h.Width || item.Rect.Y+item.Rect.H > h.Height {
 			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
 		}
-		if id == HomeFocusClock || id == HomeFocusWeather || id == HomeFocusUpdate {
+		if id == HomeFocusClock || id == HomeFocusWeather || id == HomeFocusUpdate || id == HomeFocusBell {
 			continue
 		}
 		checked = append(checked, item)
@@ -289,7 +295,7 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, data.Continue, cardLift)
 		case HomeFocusExit:
 			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusBell:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
 			// (title and icon) over the header.
@@ -339,6 +345,9 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// The notification bell owns the far-right corner on every screen, so the
 	// cluster is laid out to its left.
 	if fonts.Small == nil {
+		// No status bar, so no bell either. Keep it out of the D-pad path so
+		// focus can never land on a control that is not drawn.
+		h.Focus.SetEnabled(HomeFocusBell, false)
 		return
 	}
 	sep := "   "
@@ -375,6 +384,14 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	bellX := bellRight - bellW
 	bellY := (header.H - bellH) / 2
 	renderHomeBell(renderer, bellFont, bellX, bellY, bellW, bellH)
+	// The bell is a full member of the home focus graph: record the rect it was
+	// actually drawn at, and only let the D-pad land on it while it is visible.
+	if nc.bellRect.W > 0 {
+		item := h.Items[HomeFocusBell]
+		item.Rect = nc.bellRect
+		h.Items[HomeFocusBell] = item
+	}
+	h.Focus.SetEnabled(HomeFocusBell, nc.bellRect.W > 0)
 
 	// The chip's width is part of the cluster so it shifts the text left instead
 	// of landing on top of it. It is dropped when it would push the cluster into
@@ -477,7 +494,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// The D-pad may only focus the chip while it is on screen; with no update
 	// (or no room) it stays disabled and the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusUpdate, homeUpdateRect.W > 0)
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusPS5} {
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusPS5} {
 		if h.Focus.Current() != id {
 			continue
 		}
@@ -506,7 +523,7 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	bestY := int32(0)
 	for _, id := range h.Order {
 		switch id {
-		case HomeFocusPS5, HomeFocusClock, HomeFocusWeather, HomeFocusExit:
+		case HomeFocusPS5, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusExit:
 			continue
 		}
 		item, ok := h.Items[id]

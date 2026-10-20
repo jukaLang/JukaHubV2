@@ -151,6 +151,12 @@ a content row. The graph is rebuilt on each key press so dynamic buttons and
 freshly measured chrome rects are included, and re-installing it keeps the
 current node instead of resetting your place.
 
+Home is the exception: it draws its own layout, so `homefocus.go` owns a
+separate graph. The header chips are nodes there too (weather, clock, the
+notification bell and the update offer), each enabled only while the layout
+actually drew it — that is how **Right** from the clock reaches the bell on
+Home, where the chrome graph is not in charge.
+
 Back navigation is universal: the header pill, **B**, `Escape` and any
 body-level Back trigger all pop the same scene history, falling back to Home.
 

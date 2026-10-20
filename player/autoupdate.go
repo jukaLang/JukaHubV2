@@ -521,6 +521,27 @@ func StageJukaHubUpdate(ctx context.Context, config *Config, rel *githubRelease)
 		// instead of pretending the archive was verified.
 		logPatch("update: no sha256 digest published for %s; archive is not checksum-verified", target.Asset)
 	}
+	// The API digest proves the download was not corrupted; the signature proves
+	// who published it. Both are checked when the release carries a signed
+	// manifest, and a manifest that does not verify stops the install instead of
+	// quietly falling back to the digest.
+	signedSHA, signedSize, signErr := signedReleaseTarget(ctx, client, rel, target.Asset)
+	switch {
+	case signErr == nil:
+		if expectSHA != "" && !strings.EqualFold(expectSHA, signedSHA) {
+			return fmt.Errorf("release digest for %s disagrees with its signed manifest", target.Asset)
+		}
+		expectSHA = signedSHA
+		if signedSize > 0 {
+			assetSize = signedSize
+		}
+		logPatch("update: %s matches the signed release manifest", target.Asset)
+	case errors.Is(signErr, errNoReleaseManifest):
+		logPatch("update: release has no signed manifest; relying on the GitHub digest for %s", target.Asset)
+	default:
+		patchRowStatus(ComponentApp, StatusFailed)
+		return fmt.Errorf("release verification failed: %w", signErr)
+	}
 	if assetSize > 0 && assetSize > patchMaxDownload {
 		return fmt.Errorf("release asset %s is larger than the %d byte limit", target.Asset, patchMaxDownload)
 	}

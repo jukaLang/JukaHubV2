@@ -167,7 +167,22 @@ func TestDecryptWithAuthRoundTrip(t *testing.T) {
 	if got != "authenticated-secret" {
 		t.Fatalf("got %q", got)
 	}
-	if _, err := DecryptWithAuth(enc[:len(enc)-2] + "00"); err == nil {
+	// Flip the first MAC digit. The old test replaced the last two characters
+	// with "00", which is a no-op whenever the MAC already ended in "00" — a
+	// one-in-256 flake that reported a tampered value as authentic.
+	macAt := strings.LastIndex(enc, ":") + 1
+	if macAt <= 0 || macAt >= len(enc) {
+		t.Fatalf("unexpected EncryptWithAuth format: %q", enc)
+	}
+	repl := byte('0')
+	if enc[macAt] == '0' {
+		repl = '1'
+	}
+	tampered := enc[:macAt] + string(repl) + enc[macAt+1:]
+	if tampered == enc {
+		t.Fatal("the tampered value is identical to the original")
+	}
+	if _, err := DecryptWithAuth(tampered); err == nil {
 		t.Fatal("tampered authenticated value decrypted")
 	}
 }

@@ -14,7 +14,9 @@ forecast for the detected location; the time opens the calendar. The chip uses
 Fahrenheit automatically in the US and its territories, and Celsius elsewhere,
 until a unit is set explicitly in Settings. Both chips can be tapped or reached
 with the D-pad — Up from the top-right cards lands on the weather chip, then
-the clock.
+the clock, and **Right** from the clock lands on the notification bell. **A** on
+the bell opens the notification centre, exactly like tapping it; **B**/Esc
+closes it.
 **Local weather** is modal: **A**/**B**/Esc closes it, a tap outside dismisses
 it, and the D-pad does not move the screen underneath while it is open.
 
@@ -44,7 +46,8 @@ shortcuts overlay, **B** or **F1** to close it.
 | B | Settings |
 | Y | Toggle theme (cycles the presets) |
 | X | Favourites |
-| D-pad | Move between tiles and the footer row |
+| D-pad | Move between tiles, the header chips and the footer row |
+| Right (from the clock) | Move onto the notification bell; **A** opens the notification centre |
 
 ## Live TV
 
@@ -215,17 +218,33 @@ in its data folder and is never displayed in full.
 |--------|--------|
 | Up / Down | Move through the playlist |
 | A | Play the highlighted track |
-| X or Y | Play / pause |
+| X | Play / pause |
+| Y | Favorite the playing track |
 | Left / Right | Seek −10 s / +10 s |
 | L1 / R1 | Previous / next track |
 | L3 (left stick click) | Show / hide synced `.lrc` lyrics |
 | R3 (right stick click) | Cycle the sleep timer (off, 15, 30, 60 min) |
 | Start | Toggle the full-screen visualizer |
+| Guide (logo button, where the pad reports it) | Toggle shuffle |
 | B | Close the visualizer, then go back |
+
+**Shuffle**, **Repeat** and **Fav** also sit in the transport row and are tapped
+directly on the touchscreen, which is the reliable path on a handheld whose pad
+does not report a guide button.
 
 On a keyboard, **Space** pauses, **L** toggles lyrics, **[** / **]** change the
 listening speed, **T** cycles the sleep timer, **V** opens the full-screen
-visualizer, and **-** / **+** set the volume.
+visualizer, **M** toggles shuffle, **R** cycles repeat off/all/one, **F**
+favorites the playing track, **Q** queues the highlighted row to play next, and
+**-** / **+** set the volume.
+
+Shuffle builds an order that starts with the current track and visits every
+track once before wrapping, so it never repeats a song early. Repeat one
+restarts the track and repeat all wraps at the end of the list or shuffle walk.
+The play-next queue wins over the folder order and is shown as `N queued` in
+the status line. Favorites are stored in `musicfavorites.json` in the app data
+folder, survive updates, and are marked with an accent dot between the row
+number and the title.
 
 A `.lrc` file next to the track (same file name) is loaded automatically; its
 timed lines appear inside the artwork square and the current line is
