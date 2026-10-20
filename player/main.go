@@ -141,6 +141,9 @@ func main() {
 	alarmLoad()
 	notesInit()
 	qsInit()
+	// Accessibility settings load before the first frame so a saved text size is
+	// already in effect on the splash screen, not applied later.
+	a11yInit(config)
 	// Push the saved mixer/backlight levels once the panel state exists, so the
 	// device comes up where Quick Settings left it. Only values the user has
 	// actually set are written, and it runs off the startup path because the
@@ -479,6 +482,13 @@ func main() {
 					}
 					// Windows Apps is modal and consumes all keys while open.
 					if winAppsPanel.open && handleWindowsAppsKey(e, config) {
+						continue
+					}
+					if a11y.open && handleAccessibilityKey(e, config) {
+						continue
+					}
+					// PS Remote Play installer/launcher is modal too.
+					if chiakiPanel.open && handleChiakiKey(e) {
 						continue
 					}
 					// PortMaster Ports is modal too.
@@ -985,6 +995,16 @@ func main() {
 							handleWindowsAppsMouse(mx, my, config)
 							break
 						}
+						// PS Remote Play is modal the same way.
+						if chiakiPanel.open {
+							handleChiakiMouse(mx, my)
+							break
+						}
+						// Accessibility is modal the same way.
+						if a11y.open {
+							handleAccessibilityMouse(mx, my, config)
+							break
+						}
 						// PortMaster Ports is modal the same way.
 						if portsPanel.open {
 							handlePortsMouse(mx, my)
@@ -1352,6 +1372,9 @@ func main() {
 				// press felt late (the frame rate never woke up).
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
+				// Accessibility remapping rewrites the physical button once, here,
+				// before the overlay router or the scene sees the event.
+				a11yRemapEvent(e)
 				if e.Type == sdl.CONTROLLERBUTTONDOWN {
 					// The first-run tour is modal and above every other overlay.
 					if handleOnboardingController(e, config) {
@@ -1952,6 +1975,16 @@ func main() {
 		// Windows Apps overlay (Wine + WestonPack launcher).
 		if winAppsPanel.open {
 			renderWindowsAppsPanel(renderer, config)
+		}
+
+		// PS Remote Play overlay (install and launch the TrimUI Chiaki-ng port).
+		if chiakiPanel.open {
+			renderChiakiPanel(renderer, config)
+		}
+
+		// Accessibility overlay: text size, palettes and controller mapping.
+		if a11y.open {
+			renderAccessibilityPanel(renderer, config)
 		}
 
 		// PortMaster Ports overlay (install PortMaster, launch installed ports).

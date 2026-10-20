@@ -20,7 +20,7 @@
     "weatherEnabled": false,
     "weatherUnit": "",
     "tspUsername": "",
-    "playbackResolution": "720",
+    "playbackResolution": "",
     "reducedMotion": false,
     "lowPower": false,
     "ledSync": false,
@@ -48,11 +48,16 @@
       "TSPUsername": "",
       "WeatherEnabled": true,
       "WeatherUnit": "",
+      "a11y_colorblind": "protanopia",
+      "a11y_font_scale": 1.15,
+      "a11y_high_contrast": true,
+      "a11y_swap_ab": true,
+      "a11y_swap_xy": false,
       "buttonColor": "#1e293b",
       "chat_input": "hi",
       "diskpie_data": {
         "Total": 510718431232,
-        "Used": 329521135616,
+        "Used": 331369934848,
         "Pct": 64
       },
       "ftp_address": "",
@@ -65,12 +70,13 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "total": 2,
+        "total": 10,
         "scenes": {
-          "Main": 2
+          "Main": 8,
+          "Settings": 2
         },
         "days": {
-          "2026-10-20": 2
+          "2026-10-20": 10
         },
         "unlocked": {}
       },
@@ -94,72 +100,5 @@
     "recent": [],
     "files": [],
     "iptv": []
-  },
-  "chat": {
-    "messages": [
-      {
-        "id": "1561787089576661083",
-        "sender": "jukalang",
-        "text": "JukaHub companion app coming soon",
-        "timestamp": "2026-10-19T17:04:18.756Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561787089165492235/image.png?ex=6ad79f12\u0026is=6ad64d92\u0026hm=5f782ca70b017049ec0fef040ba3d21de7c879caf642842de9ab80d4966f4ef6\u0026"
-      },
-      {
-        "id": "1561813703626588234",
-        "sender": "JukaTest",
-        "text": "Hello",
-        "timestamp": "2026-10-19T18:50:04.04Z"
-      },
-      {
-        "id": "1561813749222867066",
-        "sender": "JukaTest",
-        "text": "How is everyone?",
-        "timestamp": "2026-10-19T18:50:14.911Z"
-      },
-      {
-        "id": "1561897514050003065",
-        "sender": "jukalang",
-        "text": "Basic Windows Applications now run on TSP",
-        "timestamp": "2026-10-20T00:23:06.002Z"
-      },
-      {
-        "id": "1561897564012417105",
-        "sender": "jukalang",
-        "text": "Native STEAM?",
-        "timestamp": "2026-10-20T00:23:17.914Z"
-      },
-      {
-        "id": "1561901483979448332",
-        "sender": "jukalang",
-        "text": "Comapnion App now works...access Juka from your phone or computer (Local Network)",
-        "timestamp": "2026-10-20T00:38:52.507Z"
-      },
-      {
-        "id": "1561907594434449439",
-        "sender": "jukalang",
-        "text": "Send files and links directly from your phone (or computer):",
-        "timestamp": "2026-10-20T01:03:09.353Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561907593994182778/image.png?ex=6ad80f4d\u0026is=6ad6bdcd\u0026hm=7e2a257ac17efe6ba2054cef9695f1896260c8cca2eb03f49010d1dac7f987fc\u0026"
-      },
-      {
-        "id": "1561935541656625243",
-        "sender": "jukalang",
-        "text": "ok we are able to run small Windows apps!",
-        "timestamp": "2026-10-20T02:54:12.49Z"
-      },
-      {
-        "id": "1561935690625720421",
-        "sender": "jukalang",
-        "text": "adding HTML5 engine back",
-        "timestamp": "2026-10-20T02:54:48.007Z"
-      },
-      {
-        "id": "1561955759552471041",
-        "sender": "jukalang",
-        "text": "Windows XP games now running well on the conversion layer...",
-        "timestamp": "2026-10-20T04:14:32.812Z"
-      }
-    ],
-    "name": "JukaTest"
   }
 }

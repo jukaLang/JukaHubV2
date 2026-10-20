@@ -87,6 +87,7 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 	}
 	// Special entries that open overlays, not scenes.
 	apps = append(apps, startMenuEntry{name: "Game Profiles", icon: "G", scene: "", action: func(c *Config) { openGameProfilePanel(false) }})
+	apps = append(apps, startMenuEntry{name: "PS Remote Play", icon: "C", scene: "", action: func(c *Config) { openChiakiPanel() }})
 	if !IsWindows() {
 		apps = append(apps, startMenuEntry{name: windowsAppsEntryName, icon: "W", scene: "", action: func(c *Config) { openWindowsAppsPanel(false) }})
 		apps = append(apps, startMenuEntry{name: portMasterEntryName, icon: "P", scene: "", action: func(c *Config) { openPortsPanel(false) }})
@@ -94,6 +95,7 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 	if retroAchievementsSupported() {
 		apps = append(apps, startMenuEntry{name: "RetroAchievements", icon: "R", scene: "", action: func(c *Config) { openRetroAchievementsPanel() }})
 	}
+	apps = append(apps, startMenuEntry{name: "Accessibility", icon: "A", scene: "", action: func(c *Config) { openAccessibilityPanel(c) }})
 	apps = append(apps, startMenuEntry{name: "Wallpapers", icon: "P", scene: "", action: func(c *Config) { wpOpen = true; initWallpaperPicker() }})
 	apps = append(apps, startMenuEntry{name: "Quick Settings", icon: "Q", scene: "", action: func(c *Config) { qs.open = !qs.open }})
 	apps = append(apps, startMenuEntry{name: "About", icon: "i", scene: "About"})

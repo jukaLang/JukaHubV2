@@ -34,23 +34,30 @@ const (
 // launching an external process. It never reaches the filesystem.
 const builtinScenePrefix = "scene:"
 
+// builtinActionPrefix marks a built-in applet that opens a panel directly
+// rather than navigating to a config scene. It is resolved by
+// launchBuiltinAppAction and never reaches the filesystem either.
+const builtinActionPrefix = "action:"
+
 // builtinApplets are JukaHub's own apps. They live at the bottom of the Apps
 // list so the launcher is complete even on a machine with no external apps.
 var builtinApplets = []struct {
-	Name  string
-	Scene string
+	Name   string
+	Scene  string
+	Action string
 }{
-	{"JukaLand", "JukaLand"},
-	{"YouTube Shorts", "Shorts"},
-	{"Live TV", "LiveTV"},
-	{"Podcasts", "Podcasts"},
-	{"Tickers", "Tickers"},
-	{"Weather", "Weather"},
-	{"Unit Converter", "UnitConverter"},
-	{"Canvas Sandbox", "CanvasSandbox"},
-	{"Browser", "Browser"},
-	{"IP Stream", "IPStream"},
-	{"Audio Player", "MusicPlayer"},
+	{"JukaLand", "JukaLand", ""},
+	{"YouTube Shorts", "Shorts", ""},
+	{"Live TV", "LiveTV", ""},
+	{"Podcasts", "Podcasts", ""},
+	{"Tickers", "Tickers", ""},
+	{"Weather", "Weather", ""},
+	{"Unit Converter", "UnitConverter", ""},
+	{"Canvas Sandbox", "CanvasSandbox", ""},
+	{"Browser", "Browser", ""},
+	{"IP Stream", "IPStream", ""},
+	{"Audio Player", "MusicPlayer", ""},
+	{"PS Remote Play", "", "chiaki"},
 }
 
 // maxAppEntries caps a single source so a huge Start Menu cannot flood the
@@ -61,9 +68,13 @@ const maxAppEntries = 300
 func builtinAppEntries() []FileEntry {
 	entries := make([]FileEntry, 0, len(builtinApplets))
 	for _, a := range builtinApplets {
+		path := builtinScenePrefix + a.Scene
+		if a.Action != "" {
+			path = builtinActionPrefix + a.Action
+		}
 		entries = append(entries, FileEntry{
 			Name:  a.Name + " (built-in)",
-			Path:  builtinScenePrefix + a.Scene,
+			Path:  path,
 			IsDir: false,
 		})
 	}
@@ -289,6 +300,10 @@ func appEntryTarget(entry FileEntry) (scene string, external string) {
 // launchAppEntry activates a row from the Apps list: built-in entries open the
 // matching JukaHub scene, everything else launches the external program.
 func launchAppEntry(config *Config, entry FileEntry) {
+	if action := strings.TrimPrefix(entry.Path, builtinActionPrefix); action != entry.Path {
+		launchBuiltinAppAction(action)
+		return
+	}
 	scene, external := appEntryTarget(entry)
 	if scene != "" {
 		// The audio player is created on demand: older jukaconfig.json files do
@@ -305,6 +320,18 @@ func launchAppEntry(config *Config, entry FileEntry) {
 		return
 	}
 	launchInstalledApp(external)
+}
+
+// launchBuiltinAppAction opens a panel-backed built-in applet. Keeping the
+// action names in one switch means a malformed app_entries row cannot run an
+// arbitrary function.
+func launchBuiltinAppAction(action string) {
+	switch action {
+	case "chiaki":
+		openChiakiPanel()
+	default:
+		log.Printf("[apps] unknown built-in app action %q", action)
+	}
 }
 
 // isLaunchableAppPath reports whether path lives below one of the folders the

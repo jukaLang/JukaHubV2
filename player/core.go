@@ -778,6 +778,9 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 			break
 		}
 	}
+	// Accessibility text scaling applies here, at the one place every logical
+	// font is resolved, so no screen can be left behind at the default size.
+	size = a11yScaleFontSize(size)
 
 	// Cache key includes both resolved path and size so we never serve
 	// the wrong size for a given font name.

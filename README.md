@@ -87,6 +87,14 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   the ports it manages without leaving JukaHub. Installed launchers are read
   from `Ports/` and the older `Roms/Ports` locations; see
   [docs/PORTMASTER.md](docs/PORTMASTER.md).
+* **Accessibility** — global text scaling (85–145%), a high-contrast palette,
+  three colour-blind-safe palettes and a system-wide A/B / X/Y controller
+  remap, all from one panel in the Start menu; see
+  [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md).
+* **PS Remote Play** — install and launch the TrimUI Chiaki-ng port from the
+  Start menu, with its SDL2/FFmpeg runtime bundled in the package. The current
+  port supports PS4 Remote Play; PS5 is not supported by the port's maintainer
+  yet. See [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
@@ -245,6 +253,8 @@ JukaHub on a PC.
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
 | [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
+| [PS Remote Play](docs/REMOTE_PLAY.md) | Chiaki-ng install, PS4 pairing, controls and the PS5 limitation |
+| [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |

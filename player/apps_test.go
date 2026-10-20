@@ -150,6 +150,9 @@ func TestBuiltinAppletScenesExist(t *testing.T) {
 		scenes[s.Name] = true
 	}
 	for _, a := range builtinApplets {
+		if a.Action != "" {
+			continue // panel-backed applets have no config scene
+		}
 		if !scenes[a.Scene] {
 			t.Errorf("built-in app %q points at missing scene %q", a.Name, a.Scene)
 		}
