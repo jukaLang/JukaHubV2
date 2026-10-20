@@ -4,7 +4,6 @@ import (
 	"container/list"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 	"time"
 
@@ -50,8 +49,13 @@ type HomeViewData struct {
 	Subtitle    string
 	Version     string
 	StatusParts []string // right-side header cluster, shared with scene headers
-	Continue    HomeContinueState
-	Pressed     HomeFocusID
+	// The notification bell is sized and drawn from the same font/metrics on
+	// every screen, so the home header cannot drift from the scene status bar.
+	BellFont *ttf.Font
+	BellW    int32
+	BellH    int32
+	Continue HomeContinueState
+	Pressed  HomeFocusID
 	// PressDepth is the eased 0..1 weight of the click feedback for Pressed:
 	// it rises and falls over the short press window so the card dips instead
 	// of jumping. Zero means settled.
@@ -334,15 +338,22 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			total += sepW
 		}
 	}
-	bellH := int32(fonts.Small.Height()) + 10
-	if bellH < 24 {
-		bellH = 24
+	bellFont := data.BellFont
+	if bellFont == nil {
+		bellFont = fonts.Small
 	}
-	bellW := bellH + 14
+	bellW, bellH := data.BellW, data.BellH
+	if bellW <= 0 && bellFont != nil {
+		bellH = int32(bellFont.Height()) + 10
+		if bellH < 24 {
+			bellH = 24
+		}
+		bellW = bellH + 14
+	}
 	bellRight := h.Width - scaleX(32, h.Width)
 	bellX := bellRight - bellW
 	bellY := (header.H - bellH) / 2
-	renderHomeBell(renderer, fonts, bellX, bellY, bellW, bellH)
+	renderHomeBell(renderer, bellFont, bellX, bellY, bellW, bellH)
 	// A pending release shows a download badge beside the bell; it shifts the
 	// status cluster left so the clock never overlaps it.
 	var badgeAdvance int32
@@ -416,34 +427,13 @@ func isClockStatusPart(s string) bool {
 // renderHomeBell draws the notification bell in the home header's top-right
 // corner. It mirrors the status-bar bell so the system corner is identical on
 // every screen, and it records the rect the click handler uses.
-func renderHomeBell(renderer *sdl.Renderer, fonts HomeFonts, x, y, w, h int32) {
-	if fonts.Small == nil {
+func renderHomeBell(renderer *sdl.Renderer, font *ttf.Font, x, y, w, h int32) {
+	if font == nil {
 		return
 	}
-	border := ColorBorderDefault
-	if nc.open {
-		border = ColorAccent
-	}
-	UIButton(renderer, nil, sdl.Rect{X: x, Y: y, W: w, H: h}, "", UIButtonStyle{
-		Variant:  UIButtonCustom,
-		Fill:     ColorIconSurface,
-		Border:   border,
-		Pill:     true,
-		NoShadow: true,
-	}, UIButtonState{})
-	drawBellIcon(renderer, x+w/2, y+h/2, h-8, ColorTextPrimary())
-	unread := notifUnreadCount()
-	if unread > 0 {
-		badgeR := int32(8)
-		badgeX := x + w - 4
-		badgeY := y - 2
-		fillCircle(renderer, badgeX, badgeY, badgeR, sdl.Color{R: 220, G: 60, B: 60, A: 240})
-		num := strconv.Itoa(unread)
-		nw, _, _ := fonts.Small.SizeUTF8(num)
-		drawText(renderer, fonts.Small, num, badgeX-int32(nw)/2, badgeY-6,
-			sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
-	}
-	nc.bellRect = sdl.Rect{X: x, Y: y, W: w, H: h}
+	// The pill, icon and unread badge come from the shared notification-center
+	// renderer; only the home header's position differs from the scene bar.
+	drawNotifBell(renderer, font, sdl.Rect{X: x, Y: y, W: w, H: h})
 }
 
 func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {

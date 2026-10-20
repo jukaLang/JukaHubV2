@@ -95,6 +95,9 @@ func main() {
 	// startup (in-memory, never written back) so the status-bar clock and the
 	// Start menu can open it on every config. The loader stays pure.
 	ensureAlarmScene(config)
+	// The Browser has no shipped handheld scene either. It is injected here so
+	// the Apps entry, Start menu and GitHub quick links work on every config.
+	ensureBrowserScene(config)
 	// Contextual widget toggles (start at login, battery saver, time-of-day
 	// theme) live on the Smart Widgets page, reached from Settings → General.
 	// Injected in memory like the alarm scene, so no shipped config is edited.
@@ -169,6 +172,9 @@ func main() {
 	// loaded lazily when the launcher opens, so a broken profile cannot slow
 	// startup or prevent booting.
 	InitGameProfiles()
+	// Windows Apps: create the drop folders. Runtimes themselves are not
+	// installed here; the panel detects Wine and WestonPack instead.
+	InitWindowsApps()
 
 	// Show the release notes once on the first launch of a newly installed
 	// build. The notes were cached before the restart, so this works offline.
@@ -459,6 +465,14 @@ func main() {
 					if gpPanel.open && handleGameProfileKey(e, config) {
 						continue
 					}
+					// Windows Apps is modal and consumes all keys while open.
+					if winAppsPanel.open && handleWindowsAppsKey(e, config) {
+						continue
+					}
+					// The browser's link picker is modal too.
+					if browserLinkPanel.open && handleBrowserLinksKey(e, config) {
+						continue
+					}
 					// Tools is modal and consumes all keys while open.
 					if toolsPanel.open && handleToolsKey(e, config) {
 						continue
@@ -679,6 +693,10 @@ func main() {
 									textBrowserScrollY = 1 << 30
 									textBrowserScrollVelocity = 0
 									textBrowserScrollCooldown = 0
+								case sdl.K_l, sdl.K_x:
+									if textBrowserElementSource(curElem) == textBrowserSourceWeb {
+										openBrowserLinkPanel(config, curElem)
+									}
 								}
 							}
 						} else if curElem.Type == "packagelist" {
@@ -944,6 +962,16 @@ func main() {
 						// Game Profiles is modal the same way.
 						if gpPanel.open {
 							handleGameProfileMouse(mx, my, config)
+							break
+						}
+						// Windows Apps is modal the same way.
+						if winAppsPanel.open {
+							handleWindowsAppsMouse(mx, my, config)
+							break
+						}
+						// Browser link picker floats above the browser scene.
+						if browserLinkPanel.open {
+							handleBrowserLinksMouse(mx, my, config)
 							break
 						}
 						// Tools panel is modal: a click selects a row, a click outside
@@ -1511,6 +1539,10 @@ func main() {
 							}
 						} else if curElem.Type == "textbrowser" {
 							switch e.Button {
+							case sdl.CONTROLLER_BUTTON_X:
+								if textBrowserElementSource(curElem) == textBrowserSourceWeb {
+									openBrowserLinkPanel(config, curElem)
+								}
 							case sdl.CONTROLLER_BUTTON_DPAD_UP:
 								textBrowserScrollVelocity -= textBrowserScrollAccel
 								if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
@@ -1888,6 +1920,16 @@ func main() {
 		// Game Profiles overlay (Wine/Box64/native launcher).
 		if gpPanel.open {
 			renderGameProfilesPanel(renderer, config)
+		}
+
+		// Windows Apps overlay (Wine + WestonPack launcher).
+		if winAppsPanel.open {
+			renderWindowsAppsPanel(renderer, config)
+		}
+
+		// Browser link picker (anchors extracted from the current page).
+		if browserLinkPanel.open {
+			renderBrowserLinkPanel(renderer, config)
 		}
 
 		// RetroAchievements overlay (recent unlocks + game progress).

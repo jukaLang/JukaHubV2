@@ -169,8 +169,9 @@ func TestNotifMessageClippedToCardWidth(t *testing.T) {
 // The dropdown must never be taller than the space below the bell, so its
 // background always covers every row it draws.
 func TestNotifDropdownFitsBelowBell(t *testing.T) {
+	config := &Config{}
 	by := int32(100)
-	w, h, rows := notifDropdownLayout(by, 50)
+	w, h, rows := notifDropdownLayout(config, by, 50)
 	if w <= 0 || w > screenWidth {
 		t.Fatalf("dropdown width %d does not fit screen %d", w, screenWidth)
 	}
@@ -184,9 +185,18 @@ func TestNotifDropdownFitsBelowBell(t *testing.T) {
 		t.Fatalf("dropdown height %d, want header + rows + padding = %d", h, want)
 	}
 
-	// An empty history still reserves enough height for the empty state.
-	_, emptyH, _ := notifDropdownLayout(by, 0)
-	if emptyH <= notifHeaderH {
-		t.Fatalf("empty dropdown height %d leaves no room for the empty state", emptyH)
+	// An empty history reserves the empty state's measured height, not one
+	// notification row: the bell glyph and two text lines used to overflow the
+	// card, which made the background look truncated behind the message.
+	_, emptyH, emptyRows := notifDropdownLayout(config, by, 0)
+	if emptyRows != 0 {
+		t.Fatalf("empty dropdown reports %d rows, want its empty state", emptyRows)
+	}
+	content := uiStateBlockHeight(config, "@bell", "No notifications", "You're all caught up.")
+	if got := emptyH - notifHeaderH; got < content {
+		t.Fatalf("empty dropdown body is %dpx tall but its content needs %dpx", got, content)
+	}
+	if by+emptyH > screenHeight {
+		t.Fatalf("empty dropdown bottom %d exceeds screen height %d", by+emptyH, screenHeight)
 	}
 }

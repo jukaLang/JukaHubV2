@@ -61,6 +61,7 @@ type GameProfile struct {
 	Executable     string            `json:"executable"`
 	Args           []string          `json:"args,omitempty"`
 	Env            map[string]string `json:"env,omitempty"`
+	Display        string            `json:"display,omitempty"`
 	Controller     string            `json:"controller,omitempty"`
 	TestedFirmware string            `json:"testedFirmware,omitempty"`
 	Notes          string            `json:"notes,omitempty"`
@@ -504,6 +505,12 @@ func validateGameProfile(p *GameProfile) error {
 			return fmt.Errorf("argument %d is longer than 4096 bytes", i+1)
 		}
 	}
+	p.Display = strings.ToLower(strings.TrimSpace(p.Display))
+	switch p.Display {
+	case "", windowsDisplayAuto, windowsDisplayX11, windowsDisplayWayland, windowsDisplayWeston, windowsDisplayHeadless:
+	default:
+		return fmt.Errorf("invalid display %q (use auto, x11, wayland, weston or headless)", p.Display)
+	}
 	if len(p.Env) > gameProfileMaxEnv {
 		return fmt.Errorf("more than %d environment variables", gameProfileMaxEnv)
 	}
@@ -543,6 +550,15 @@ func resolveGameProfileEntry(p GameProfile, source string, roots []string) gameP
 	entry.Executable = exe
 	if _, _, err := planGameRuntime(p, exe, exec.LookPath); err != nil {
 		entry.Issue = err.Error()
+		return entry
+	}
+	// A Wine profile is only launchable when the device also has a display
+	// backend. This keeps the panel from offering a profile that will fail
+	// immediately on a stock TrimUI with no X11 or Wayland.
+	if p.Runtime == gameRuntimeWine && !IsWindows() {
+		if _, err := resolveWineDisplay(p.Display, currentWineHost()); err != nil {
+			entry.Issue = err.Error()
+		}
 	}
 	return entry
 }
@@ -725,6 +741,8 @@ func resolveWine(lookPath func(string) (string, error)) (string, error) {
 		return absoluteRegularFile(override)
 	}
 	candidates := []string{
+		filepath.Join(windowsRuntimeDir(), "bin", "wine"),
+		filepath.Join(windowsRuntimeDir(), "wine"),
 		"/usr/trimui/bin/wine",
 		"/usr/trimui/bin/wine64",
 		"/mnt/SDCARD/Apps/Wine/bin/wine",
@@ -732,6 +750,7 @@ func resolveWine(lookPath func(string) (string, error)) (string, error) {
 		"/mnt/SDCARD/PortMaster/wine/bin/wine",
 		"/mnt/SDCARD/Apps/PortMaster/wine/bin/wine",
 		"/mnt/SDCARD/Emus/PortMaster/wine/bin/wine",
+		"/mnt/SDCARD/PortMaster/runtimes/wine/bin/wine",
 	}
 	for _, candidate := range candidates {
 		if regularFile(candidate) {
@@ -809,6 +828,14 @@ func launchGameProfile(entry gameProfileEntry) error {
 				return fmt.Errorf("create wine prefix: %w", err)
 			}
 			env["WINEPREFIX"] = prefix
+		}
+		applyWineCompatibilityEnv(env)
+		// Route through WestonPack when the handheld has no X11/Wayland.
+		// The wrapper owns the compositor and receives the profile's
+		// environment explicitly, so WINEPREFIX and DLL overrides survive.
+		command, args, err = wrapWineCommand(entry.Profile.Display, command, args, env, currentWineHost())
+		if err != nil {
+			return err
 		}
 	}
 

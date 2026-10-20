@@ -5217,6 +5217,18 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		config.Variables.Custom["plugin_list"] = strings.Join(list, "\n")
 	case "packages_refresh":
 		go fetchPackages(config)
+	case "browser_back":
+		browserBack(config)
+	case "browser_forward":
+		browserForward(config)
+	case "browser_reload":
+		browserReload(config)
+	case "browser_repo":
+		browserOpenURL(config, browserReposURL)
+	case "browser_issues":
+		browserOpenURL(config, browserIssuesURL)
+	case "browser_new_issue":
+		browserOpenURL(config, browserNewIssueURL)
 	case "textbrowser_refresh":
 		textBrowserRefresh(config, element)
 		if element.AutoRefresh && textBrowserElementSource(element) != textBrowserSourceWeb {
@@ -5531,6 +5543,11 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	// float the Start menu or the notification center over the next one.
 	startMenuDismiss()
 	notifDismiss()
+	// The browser link picker belongs to the page that opened it; it must not
+	// float over the next scene.
+	browserLinkPanel = browserLinkPanelState{}
+	browserLinkRowHits = nil
+	browserLinkPanelRect = sdl.Rect{}
 }
 
 func changeSceneTo(config *Config, targetIdx int) {
@@ -5566,6 +5583,9 @@ func completeSceneTransition(config *Config) {
 
 	stopAllTextBrowserAutoRefresh()
 	refreshSceneTextBrowsers(config)
+	if scene.Name == browserSceneName {
+		browserEnsureHome(config)
+	}
 
 	// The Hardware screen shows a live snapshot: refresh it on entry so the
 	// process list is not stale from the last visit (or empty on first open).

@@ -454,6 +454,10 @@ func homeViewData(config *Config) HomeViewData {
 		Pressed:      homePressedID,
 		ShowBackHint: true,
 	}
+	// Use the status bar's own bell metrics here, not a second home-only size,
+	// so the control is pixel-identical on Home and every other scene.
+	data.BellFont, _ = getCachedFont(config, "small")
+	data.BellW, data.BellH = notifBellSize(config)
 	// Ease the click feedback over the (short) press window. uiPressProgress
 	// snaps to full depth when motion is disabled, so reduced motion keeps the
 	// press readable without animating it.

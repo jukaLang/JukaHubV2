@@ -61,7 +61,9 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 
 * **Media / Tube** — YouTube search and trending.
 * **Favorites** — save links and reopen them later.
-* **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather).
+* **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather,
+  and **Browser**, a text web browser with GitHub issue quick links; see
+  [docs/BROWSER.md](docs/BROWSER.md)).
 * **Settings** — playback resolution, weather and 25 colour themes
   (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
   **Smart Widgets** (from General) holds the settings that react to the device
@@ -73,6 +75,12 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   binaries and scripts. Profiles live in `Apps/JukaHub/data/game-profiles`;
   see [docs/GAME_PROFILES.md](docs/GAME_PROFILES.md) for the format and the
   import/export workflow.
+* **Windows Apps** — scan for `.exe` files and launch basic Windows programs
+  through Wine. On TrimUI's no-X11 firmware it can route through WestonPack's
+  DRM/KMS compositor instead of failing on a missing display. If DXVK is
+  installed beside Wine and a Vulkan loader is present, Direct3D DLL overrides
+  are enabled automatically; see [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md)
+  for the runtime setup.
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
@@ -227,6 +235,7 @@ for trying JukaHub on a PC.
 | [Controls](docs/CONTROLS.md) | every button and key, screen by screen |
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
+| [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |

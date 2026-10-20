@@ -315,7 +315,9 @@ func textBrowserRefresh(config *Config, element Element) {
 	case textBrowserSourceJSON:
 		publishCustom(element.Variable, browseJSONContent(element))
 	case textBrowserSourceWeb:
-		loadTextBrowserURL(config, element, textBrowserAddress(config))
+		// Auto-refresh and the scene trigger are not navigations: keep the
+		// back/forward stack stable while the page reloads.
+		loadTextBrowserURLAt(config, element, textBrowserAddress(config), false)
 	default:
 		publishCustom(element.Variable, browseSystemInfo(element))
 	}
@@ -363,7 +365,17 @@ func textBrowserToolbarRects(element Element) (sdl.Rect, sdl.Rect) {
 	return address, goButton
 }
 
+// loadTextBrowserURL is the address-bar entry point: it records the page in
+// the browser's back/forward history. Internal reloads and history traversal
+// call loadTextBrowserURLAt directly so they do not grow the stack.
 func loadTextBrowserURL(config *Config, element Element, rawURL string) {
+	loadTextBrowserURLAt(config, element, rawURL, true)
+}
+
+func loadTextBrowserURLAt(config *Config, element Element, rawURL string, recordHistory bool) {
+	if config == nil {
+		return
+	}
 	outputVariable := element.Variable
 	if outputVariable == "" {
 		outputVariable = findTextBrowserVariable(config)
@@ -376,6 +388,10 @@ func loadTextBrowserURL(config *Config, element Element, rawURL string) {
 	}
 	config.Variables.Custom[textBrowserURLVariable] = address
 	config.Variables.Custom[outputVariable] = "Loading " + address + " ..."
+	setBrowserLinks(outputVariable, nil)
+	if recordHistory {
+		browserRecordURL(address)
+	}
 	textBrowserScrollY = 0
 	textBrowserScrollVelocity = 0
 
@@ -385,12 +401,13 @@ func loadTextBrowserURL(config *Config, element Element, rawURL string) {
 	textBrowserRequestMutex.Unlock()
 
 	go func(variable, pageURL string, id uint64) {
-		content := browseWebPage(pageURL)
+		page := browseWebPageResult(pageURL)
 		textBrowserRequestMutex.Lock()
 		isCurrent := textBrowserRequestSequence[variable] == id
 		textBrowserRequestMutex.Unlock()
 		if isCurrent {
-			publishCustom(variable, content)
+			setBrowserLinks(variable, page.Links)
+			publishCustom(variable, page.Text)
 		}
 	}(outputVariable, address, requestID)
 }
@@ -418,17 +435,21 @@ func normalizeTextBrowserURL(rawURL string) (string, error) {
 }
 
 func browseWebPage(rawURL string) string {
+	return browseWebPageResult(rawURL).Text
+}
+
+func browseWebPageResult(rawURL string) browserPage {
 	address, err := normalizeTextBrowserURL(rawURL)
 	if err != nil {
-		return "Browser error: " + err.Error()
+		return browserPage{Text: "Browser error: " + err.Error()}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
-		return "Browser error: " + err.Error()
+		return browserPage{Text: "Browser error: " + err.Error()}
 	}
-	req.Header.Set("User-Agent", "JukaHub Text Browser/1.0")
+	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
 	client := &http.Client{
 		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -443,31 +464,38 @@ func browseWebPage(rawURL string) string {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Sprintf("Could not load %s\n%s", address, err.Error())
+		return browserPage{Text: fmt.Sprintf("Could not load %s\n%s", address, err.Error())}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Sprintf("Could not load %s\nHTTP %s", address, resp.Status)
+		return browserPage{Text: fmt.Sprintf("Could not load %s\nHTTP %s", address, resp.Status)}
 	}
 	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
 	if contentType != "" && !strings.Contains(contentType, "html") {
-		return fmt.Sprintf("This page is not HTML (%s).\nTry a website that serves readable HTML.", contentType)
+		return browserPage{Text: fmt.Sprintf("This page is not HTML (%s).\nTry a website that serves readable HTML.", contentType)}
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, textBrowserMaxPageBytes+1))
 	if err != nil {
-		return fmt.Sprintf("Could not read %s\n%s", address, err.Error())
+		return browserPage{Text: fmt.Sprintf("Could not read %s\n%s", address, err.Error())}
 	}
 	if len(body) > textBrowserMaxPageBytes {
-		return "Page is larger than the 2 MiB text-browser limit."
+		return browserPage{Text: "Page is larger than the 2 MiB browser limit."}
 	}
-	title, pageText := extractTextBrowserHTML(string(body))
+	source := string(body)
+	title, pageText := extractTextBrowserHTML(source)
 	if title == "" {
 		title = resp.Request.URL.Hostname()
 	}
 	if pageText == "" {
 		pageText = "This page has no readable text content."
 	}
-	return fmt.Sprintf("Title: %s\nURL: %s\n\n%s", title, resp.Request.URL.String(), pageText)
+	links := extractBrowserLinks(source, resp.Request.URL)
+	text := fmt.Sprintf("Title: %s\nURL: %s\n", title, resp.Request.URL.String())
+	if len(links) > 0 {
+		text += fmt.Sprintf("Links: %d (press X or L to choose one)\n", len(links))
+	}
+	text += "\n" + pageText
+	return browserPage{Text: text, Links: links, FinalURL: resp.Request.URL.String()}
 }
 
 func extractTextBrowserHTML(source string) (string, string) {

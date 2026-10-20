@@ -295,6 +295,9 @@ func emulatorEntries() []emuEntry {
 		entries = append(entries, re)
 	}
 	entries = append(entries, gameProfilesEmuEntry())
+	if !IsWindows() {
+		entries = append(entries, windowsAppsEmuEntry())
+	}
 	sortEmulatorEntries(entries)
 	emuCache.entries = entries
 	emuCache.built = true
@@ -325,6 +328,23 @@ func gameProfilesEmuEntry() emuEntry {
 		Status: emuAvailable,
 		Pinned: true,
 	}
+}
+
+// windowsAppsEmuEntry is the pinned launcher for plain .exe files. It is
+// always available to open so the setup page can explain a missing Wine or
+// WestonPack install; "Unavailable" means no runtime yet, not a hidden row.
+func windowsAppsEmuEntry() emuEntry {
+	entries := windowsAppEntries()
+	runtime := currentWindowsRuntimeStatus()
+	e := emuEntry{Name: windowsAppsEntryName, Pinned: true}
+	if !runtime.ready() {
+		e.Status = emuBroken
+		e.Detail = "Open for setup · " + runtime.Problem
+		return e
+	}
+	e.Status = emuAvailable
+	e.Detail = fmt.Sprintf("%d app(s) · Wine ready · %s", len(entries), runtime.displayLabel())
+	return e
 }
 
 // ── Panel ────────────────────────────────────────────────────────────────
@@ -437,6 +457,11 @@ func emuPanelActivate(config *Config) {
 	if e.Name == gameProfilesEntryName {
 		emuPanel.open = false
 		openGameProfilePanel(true)
+		return
+	}
+	if e.Name == windowsAppsEntryName {
+		emuPanel.open = false
+		openWindowsAppsPanel(true)
 		return
 	}
 	if e.Name == retroAchievementsEntryName {

@@ -462,11 +462,33 @@ var companionKeyboardKeys = map[string]sdl.Keycode{
 	"backspace": sdl.K_BACKSPACE,
 }
 
+// companionButtonFor resolves the SDL button a phone label should press.
+//
+// The phone labels describe what the user means ("A" = confirm), while the
+// event queue is later normalized by applyButtonSwap for firmware that reports
+// the physical face buttons inverted. Pre-flipping here cancels that second
+// swap, so a phone A stays A on every device instead of becoming Back.
+func companionButtonFor(name string, swapped bool) (uint8, bool) {
+	btn, ok := companionControllerButtons[name]
+	if !ok {
+		return 0, false
+	}
+	if swapped {
+		switch btn {
+		case sdl.CONTROLLER_BUTTON_A:
+			btn = sdl.CONTROLLER_BUTTON_B
+		case sdl.CONTROLLER_BUTTON_B:
+			btn = sdl.CONTROLLER_BUTTON_A
+		}
+	}
+	return btn, true
+}
+
 // pushCompanionKey replays a phone button as a real SDL event. Going through
 // the event queue means the phone gets exactly the same handling as the
 // handheld's own pad, overlays and scene handlers included.
-func pushCompanionKey(name string) {
-	if btn, ok := companionControllerButtons[name]; ok {
+func pushCompanionKey(name string, config *Config) {
+	if btn, ok := companionButtonFor(name, abButtonsSwapped(config)); ok {
 		sdl.PushEvent(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: btn})
 		sdl.PushEvent(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONUP, Button: btn})
 		return
@@ -499,7 +521,7 @@ func drainCompanionQueue(config *Config) {
 				handleTextInputEvent(companionTextEvent(chunk), config)
 			}
 		case companionEventKey:
-			pushCompanionKey(ev.Text)
+			pushCompanionKey(ev.Text, config)
 		case companionEventURL:
 			playVideoURL(config, ev.Text)
 			showToast("Phone sent a link", ColorToastSuccess)

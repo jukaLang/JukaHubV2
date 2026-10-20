@@ -48,7 +48,7 @@ var builtinApplets = []struct {
 	{"Weather", "Weather"},
 	{"Unit Converter", "UnitConverter"},
 	{"Canvas Sandbox", "CanvasSandbox"},
-	{"Text Browser", "TextBrowser"},
+	{"Browser", "Browser"},
 	{"IP Stream", "IPStream"},
 	{"Audio Player", "MusicPlayer"},
 }

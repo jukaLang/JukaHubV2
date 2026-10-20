@@ -372,6 +372,8 @@ func sceneDisplayName(name string) string {
 		return "Storage"
 	case "Hardware":
 		return "Hardware"
+	case "Browser":
+		return "Browser"
 	case "TextBrowser":
 		return "Text"
 	case "IPStream":

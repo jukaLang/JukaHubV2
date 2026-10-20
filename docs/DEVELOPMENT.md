@@ -26,6 +26,7 @@ targets a 1280×720 logical canvas.
 | [CONTROLS.md](CONTROLS.md) | controller and keyboard bindings per screen |
 | [PACKAGES.md](PACKAGES.md) | package format, the signed repository, Patch transactions |
 | [GAME_PROFILES.md](GAME_PROFILES.md) | game-profile schema, Box64/Wine launching, import/export |
+| [WINDOWS_APPS.md](WINDOWS_APPS.md) | .exe discovery, Wine display bridge, WestonPack setup |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
 | [SECURITY.md](../player/SECURITY.md) | secret storage, crypto, threat notes |
 | [trimui/README-ID.md](../player/trimui/README-ID.md) | device package and launcher details |

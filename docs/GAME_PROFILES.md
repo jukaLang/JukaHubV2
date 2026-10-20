@@ -98,6 +98,7 @@ load. A malformed single-profile file is skipped as a whole.
 | `executable` | yes | File inside `dir`; must stay inside it after symlinks are resolved. |
 | `args` | no | Up to 128 arguments passed directly to the program (no shell parsing). |
 | `env` | no | Up to 64 environment variables for the game process. |
+| `display` | no | Wine display backend: `auto` (default), `x11`, `wayland`, `weston` or `headless`. |
 | `controller` | no | Informational label such as `xinput` or `keyboard`. |
 | `testedFirmware` | no | Firmware/device combination you tested, shown in the panel. |
 | `notes` | no | Free text shown in the panel; max 2000 characters. |
@@ -114,6 +115,18 @@ load. A malformed single-profile file is skipped as a whole.
 If Wine is configured with `WINEPREFIX` in the profile's `env`, that prefix is
 used. Otherwise JukaHub creates and uses
 `data/game-profiles/wineprefix` and replaces any inherited prefix.
+
+Wine still needs a display server. Profiles default to `display: "auto"`:
+JukaHub uses an existing Wayland or X11 session, then falls back to
+WestonPack's `westonwrap.sh` on DRM/KMS. On a stock TrimUI with no X11, install
+WestonPack and set `JUKAHUB_WESTON`, or use `display: "headless"` for a console
+program. See [WINDOWS_APPS.md](WINDOWS_APPS.md) for the full setup.
+
+When DXVK is installed in `data/windows-runtime/dxvk` (or `JUKAHUB_DXVK`) and a
+Vulkan loader is present, JukaHub adds the DXVK DLL overrides automatically. A
+profile that already sets `WINEDLLOVERRIDES` keeps its own value. Direct3D games
+also need a Vulkan 1.3-capable driver; the setup page in Windows Apps reports
+what was detected.
 
 ### Game roots
 
@@ -141,9 +154,10 @@ JukaHub looks for Box64 in this order:
 7. `/mnt/SDCARD/Emus/PortMaster/box64`
 8. `box64` on `PATH`
 
-Wine uses the same pattern with `JUKAHUB_WINE`, `/usr/trimui/bin/wine`,
-`/usr/trimui/bin/wine64`, the two `Apps/Wine` paths, the PortMaster paths, then
-`wine`/`wine64` on `PATH`.
+Wine uses the same pattern with `JUKAHUB_WINE`,
+`data/windows-runtime/bin/wine`, `data/windows-runtime/wine`,
+`/usr/trimui/bin/wine`, `/usr/trimui/bin/wine64`, the two `Apps/Wine` paths,
+the PortMaster paths, then `wine`/`wine64` on `PATH`.
 
 If the Wine binary is an x86 or x86-64 ELF, JukaHub automatically prefixes it
 with Box64. Wrapper scripts and native ARM Wine binaries run directly.
@@ -201,6 +215,7 @@ the normal user and never elevates privileges for a game.
 | `executable: ... no such file` | Check the file name and case inside the game folder. |
 | `wine not found` | Install Wine, or set `JUKAHUB_WINE` to its binary. |
 | `box64 not found` | Install Box64, or set `JUKAHUB_BOX64` to its binary. |
+| `no display server` | Install WestonPack and set `JUKAHUB_WESTON`, or use `display: "headless"` for a console program. |
 | `outside the allowed game folders` | Move the game under the SD card (or the data-folder `games/`) and use a relative `dir`. |
 | `already running (pid …)` | Wait for the current instance to exit; the panel shows **Running** until it is reaped. |
 | Game exits immediately | Read `data/game-profiles/logs/<id>.log`; Wine DLL overrides and missing prefixes are the usual causes. |

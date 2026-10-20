@@ -257,6 +257,7 @@ func TestGameProfileExportRoundTrips(t *testing.T) {
 		Executable:     "game.exe",
 		Args:           []string{"-fullscreen"},
 		Env:            map[string]string{"BOX64_LOG": "1"},
+		Display:        windowsDisplayWeston,
 		TestedFirmware: "TrimUI Smart Pro 1.1",
 		Notes:          "test",
 	}, Source: "local"}
@@ -292,6 +293,9 @@ func TestGameProfileExportRoundTrips(t *testing.T) {
 	}
 	if len(profiles[0].Args) != 1 || profiles[0].Args[0] != "-fullscreen" {
 		t.Errorf("args = %v", profiles[0].Args)
+	}
+	if profiles[0].Display != windowsDisplayWeston {
+		t.Errorf("display = %q, want weston", profiles[0].Display)
 	}
 }
 

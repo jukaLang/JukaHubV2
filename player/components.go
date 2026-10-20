@@ -313,6 +313,41 @@ func UIErrorState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 	uiStateBlock(renderer, config, rect, glyph, title, body, ColorDanger)
 }
 
+// uiStateBlockMetrics measures the vertical pieces of an empty/error state.
+// Layout code uses the same metrics (via uiStateBlockHeight) to size the
+// surface, so a centred block can never be taller than its background.
+func uiStateBlockMetrics(config *Config, glyph, title, body string) (glyphH, titleH, bodyH, gap int32) {
+	titleFont := FontForRole(config, TypeHeading)
+	if titleFont == nil {
+		return 0, 0, 0, 0
+	}
+	bodyFont := FontForRole(config, TypeCaption)
+	glyphFont := FontForRole(config, TypeTitle)
+	titleH = int32(titleFont.Height())
+	if bodyFont != nil && body != "" {
+		bodyH = int32(bodyFont.Height())
+	}
+	if glyph == "@bell" {
+		// Drawn icons need a little more room than a text glyph; the bell reads
+		// as an empty-state illustration instead of an error marker.
+		glyphH = 36 + SpaceMD
+	} else if glyphFont != nil && glyph != "" {
+		glyphH = int32(glyphFont.Height()) + SpaceMD
+	}
+	if bodyH > 0 {
+		gap = SpaceXS
+	}
+	return glyphH, titleH, bodyH, gap
+}
+
+// uiStateBlockHeight returns the exact height the glyph/title/body stack
+// needs. Callers that draw the surface themselves (the notification dropdown)
+// reserve this instead of guessing a row height.
+func uiStateBlockHeight(config *Config, glyph, title, body string) int32 {
+	glyphH, titleH, bodyH, gap := uiStateBlockMetrics(config, glyph, title, body)
+	return glyphH + titleH + gap + bodyH
+}
+
 func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, title, body string, tone sdl.Color) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
@@ -324,22 +359,8 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 		return
 	}
 
-	glyphH, titleH, bodyH := int32(0), int32(titleFont.Height()), int32(0)
-	if bodyFont != nil && body != "" {
-		bodyH = int32(bodyFont.Height())
-	}
+	glyphH, titleH, bodyH, gap := uiStateBlockMetrics(config, glyph, title, body)
 	bellGlyph := glyph == "@bell"
-	if bellGlyph {
-		// Drawn icons need a little more room than a text glyph; the bell reads
-		// as an empty-state illustration instead of an error marker.
-		glyphH = 36 + SpaceMD
-	} else if glyphFont != nil && glyph != "" {
-		glyphH = int32(glyphFont.Height()) + SpaceMD
-	}
-	gap := int32(0)
-	if bodyH > 0 {
-		gap = SpaceXS
-	}
 	stackH := glyphH + titleH + gap + bodyH
 	y := rect.Y + (rect.H-stackH)/2
 	if y < rect.Y {

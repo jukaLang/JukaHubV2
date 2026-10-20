@@ -143,6 +143,8 @@ func TestBuiltinAppletScenesExist(t *testing.T) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("parse jukaconfig.json: %v", err)
 	}
+	// The Browser scene is injected at startup, not stored in shipped configs.
+	ensureBrowserScene(&cfg)
 	scenes := map[string]bool{}
 	for _, s := range cfg.Scenes {
 		scenes[s.Name] = true

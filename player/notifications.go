@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -185,6 +186,47 @@ func drawBellIcon(renderer *sdl.Renderer, cx, cy, size int32, col sdl.Color) {
 	}
 }
 
+// drawNotifBell paints the bell pill, focus/open ring, icon and unread badge.
+// Every screen (home header and the scene status bar) funnels through here, so
+// the control cannot drift between the home screen and the rest of the app.
+func drawNotifBell(renderer *sdl.Renderer, font *ttf.Font, rect sdl.Rect) {
+	if renderer == nil || font == nil || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+
+	// Background pill in the active theme's input surface.
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, ColorIconSurface)
+	if nc.open {
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, accentColor)
+	}
+
+	// Focus ring when the D-pad/arrows sit on the bell.
+	if focusEngine.ElementIndex() == ChromeBellIndex {
+		strokeRoundedRect(renderer, rect.X-2, rect.Y-2, rect.W+4, rect.H+4, (rect.H+4)/2, 2, accentColor)
+	}
+
+	// Bell icon: primary text colour so it reads as a control, with the accent
+	// ring already marking focus/open state.
+	drawBellIcon(renderer, rect.X+rect.W/2, rect.Y+rect.H/2, rect.H-8, ColorTextPrimary())
+
+	// Unread count badge, measured from the same font the bell is sized for so
+	// its pill and digits match on every screen.
+	if unread := notifUnreadCount(); unread > 0 {
+		numStr := fmt.Sprintf("%d", unread)
+		tw, th, _ := font.SizeUTF8(numStr)
+		bw := int32(tw) + SpaceSM*2
+		bh := int32(th) + 8
+		badgeX := rect.X + rect.W - bw + SpaceXS
+		badgeY := rect.Y - bh/2
+		fillRoundedRect(renderer, badgeX, badgeY, bw, bh, bh/2,
+			sdl.Color{R: 220, G: 60, B: 60, A: 240})
+		drawText(renderer, font, numStr, badgeX+SpaceSM, badgeY+(bh-int32(th))/2,
+			sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
+	}
+
+	nc.bellRect = rect
+}
+
 // renderNotifBell draws the bell icon at the top-right of the status bar.
 // Returns its rect for hit testing.
 func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rect {
@@ -196,36 +238,8 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 	if bellW <= 0 {
 		return sdl.Rect{}
 	}
-	bellX := x - bellW
-	bellY := y
-	rect := sdl.Rect{X: bellX, Y: bellY, W: bellW, H: bellH}
-
-	// Background pill in the active theme's input surface.
-	fillRoundedRect(renderer, bellX, bellY, bellW, bellH, bellH/2, ColorIconSurface)
-	if nc.open {
-		strokeRoundedRect(renderer, bellX, bellY, bellW, bellH, bellH/2, 1, accentColor)
-	}
-
-	// Focus ring when the D-pad/arrows sit on the bell.
-	if focusEngine.ElementIndex() == ChromeBellIndex {
-		strokeRoundedRect(renderer, bellX-2, bellY-2, bellW+4, bellH+4, (bellH+4)/2, 2, accentColor)
-	}
-
-	// Bell icon: primary text colour so it reads as a control, with the accent
-	// ring already marking focus/open state.
-	iconSize := bellH - 8
-	drawBellIcon(renderer, bellX+bellW/2, bellY+bellH/2, iconSize, ColorTextPrimary())
-
-	// Unread count badge.
-	unread := notifUnreadCount()
-	if unread > 0 {
-		numStr := fmt.Sprintf("%d", unread)
-		bw, bh := UIBadgeSize(config, numStr)
-		UIBadge(renderer, config, bellX+bellW-bw+SpaceXS, bellY-bh/2, numStr,
-			sdl.Color{R: 220, G: 60, B: 60, A: 240}, sdl.Color{R: 255, G: 255, B: 255, A: 255})
-	}
-
-	nc.bellRect = rect
+	rect := sdl.Rect{X: x - bellW, Y: y, W: bellW, H: bellH}
+	drawNotifBell(renderer, font, rect)
 	return rect
 }
 
@@ -236,25 +250,41 @@ const (
 	notifMaxRows = 8
 )
 
+// notifEmptyContentH is the vertical space the empty state needs below the
+// dropdown header: the drawn bell glyph, both text lines and breathing room.
+// A single row (52px) was smaller than that stack, so the card used to end
+// above the second line and the empty-state text spilled out of its surface.
+func notifEmptyContentH(config *Config) int32 {
+	content := uiStateBlockHeight(config, "@bell", "No notifications", "You're all caught up.")
+	if content <= 0 {
+		content = 72
+	}
+	return content + SpaceLG*2
+}
+
 // notifDropdownLayout sizes the dropdown so it always fits on screen: the
 // panel is measured from the bell's anchor, and the visible row count shrinks
-// until the card (header + rows + padding) fits below it.
-func notifDropdownLayout(by int32, count int) (w, h int32, rows int) {
+// until the card (header + rows + padding) fits below it. An empty history
+// gets the empty state's measured height instead of a guessed row count.
+func notifDropdownLayout(config *Config, by int32, count int) (w, h int32, rows int) {
 	w = notifDropW
 	if maxW := screenWidth - 24; w > maxW {
 		w = maxW
 	}
-	rows = count
-	if rows == 0 {
-		// The empty state needs one row's worth of height to breathe.
-		rows = 1
-	}
-	if rows > notifMaxRows {
-		rows = notifMaxRows
-	}
 	maxH := screenHeight - by - 12
 	if maxH < notifHeaderH+notifRowH+12 {
 		maxH = notifHeaderH + notifRowH + 12
+	}
+	if count <= 0 {
+		h = notifHeaderH + notifEmptyContentH(config)
+		if h > maxH {
+			h = maxH
+		}
+		return w, h, 0
+	}
+	rows = count
+	if rows > notifMaxRows {
+		rows = notifMaxRows
 	}
 	for rows > 0 && notifHeaderH+int32(rows)*notifRowH+12 > maxH {
 		rows--
@@ -276,7 +306,7 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 
 	// Position below the bell, then size the card to the rows that fit.
 	by := nc.bellRect.Y + nc.bellRect.H + 8
-	dropW, dropH, numRows := notifDropdownLayout(by, len(nc.history))
+	dropW, dropH, numRows := notifDropdownLayout(config, by, len(nc.history))
 	bx := nc.bellRect.X
 	if bx+dropW > screenWidth {
 		bx = screenWidth - dropW - 12

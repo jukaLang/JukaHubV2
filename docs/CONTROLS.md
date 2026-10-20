@@ -54,6 +54,19 @@ scrolled channel by channel.
 Favourites are stored in `data/tvfavorites.json` next to the app, so they
 survive playlist reloads and updates.
 
+## Browser
+
+A text web browser for GitHub issues, release notes and documentation. See
+[docs/BROWSER.md](BROWSER.md) for setup and limitations.
+
+| Button | Action |
+|--------|--------|
+| Up / Down | Scroll the page |
+| L1 / R1 | Scroll by a page |
+| A | Edit the address bar |
+| X | Open the link picker |
+| B | Leave the browser |
+
 ## Video player
 
 | Button | Action |
@@ -109,6 +122,23 @@ and the import/export workflow.
 On a keyboard, **Enter**/**Space** launches, **X** exports, **Y** or **R**
 rescans, and **Esc**/**B** goes back. Tapping a row launches it; tapping outside
 closes the panel.
+
+## Windows apps
+
+Open **Start → Windows Apps**, or the pinned **Windows Apps** row in
+**Emulators**. The panel lists discovered `.exe` files and launches basic
+Windows programs through Wine. On TrimUI's no-X11 firmware it can use
+WestonPack's DRM/KMS compositor; see [WINDOWS_APPS.md](WINDOWS_APPS.md).
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Move through apps |
+| A | Launch the selected app |
+| X / H | Show the runtime setup page |
+| Y / R | Rescan the app folders |
+| B | Close setup, then the launcher |
+
+Tapping a row launches it; tapping outside closes the panel.
 
 ## Games
 

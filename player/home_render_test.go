@@ -247,6 +247,68 @@ func TestNarrowHomeCardsUseStackedLayout(t *testing.T) {
 	}
 }
 
+// TestHomeBellMatchesSceneStatusBar pins the reported inconsistency: the
+// notification bell must be the same control, at the same size and position,
+// whether the home screen or a normal scene owns the top bar.
+func TestHomeBellMatchesSceneStatusBar(t *testing.T) {
+	snapshotHomeGlobals(t)
+	prevNC, prevTB := nc, tb
+	prevBack, prevClock := sceneTitleBackRect, statusClockRect
+	prevScene := currentSceneIndex
+	nc = notifCenter{}
+	t.Cleanup(func() {
+		nc, tb = prevNC, prevTB
+		sceneTitleBackRect, statusClockRect = prevBack, prevClock
+		currentSceneIndex = prevScene
+	})
+
+	config := &Config{Scenes: []SceneConfig{{Name: "Main", Layout: "home"}}}
+	home := renderHomeFrame(t, false)
+	homeBell := nc.bellRect
+	if homeBell.W <= 0 || homeBell.H <= 0 {
+		t.Fatalf("home did not measure the notification bell: %+v", homeBell)
+	}
+
+	newProbeFrame(t)
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Skipf("software renderer unavailable: %v", err)
+	}
+	defer renderer.Destroy()
+	screenWidth, screenHeight = probeW, probeH
+	currentSceneIndex = 0
+	tb.startRect = sdl.Rect{}
+	if err := renderer.SetDrawColor(0, 0, 0, 255); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderer.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	renderStatusBar(renderer, config)
+	sceneBell := nc.bellRect
+	if sceneBell != homeBell {
+		t.Fatalf("home bell %+v differs from the scene status bar bell %+v", homeBell, sceneBell)
+	}
+
+	scene := &probeFrame{buf: make([]byte, probeW*probeH*4), bg: sdl.Color{A: 255}}
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&scene.buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+	}
+	// Compare the pill's interior: the rounded corners sit on different
+	// backgrounds on the two screens, but the control itself must match.
+	for y := homeBell.Y + 4; y < homeBell.Y+homeBell.H-4; y++ {
+		for x := homeBell.X + 10; x < homeBell.X+homeBell.W-10; x++ {
+			i := (int(y)*int(probeW) + int(x)) * 4
+			for c := 0; c < 4; c++ {
+				if home.buf[i+c] != scene.buf[i+c] {
+					t.Fatalf("bell pixel (%d,%d) differs between home %v and scene %v",
+						x, y, home.buf[i:i+4], scene.buf[i:i+4])
+				}
+			}
+		}
+	}
+}
+
 // TestHomeProbeRender dumps the two home states to tmp/ for visual review.
 func TestHomeProbeRender(t *testing.T) {
 	snapshotHomeGlobals(t)

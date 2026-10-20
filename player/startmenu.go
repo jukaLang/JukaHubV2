@@ -52,7 +52,7 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 		"Pomodoro", "Alarm", "Dashboard", "Cron", "Settings",
 		"JukaLand", "CanvasSandbox", "Favorites", "Terminal",
 		"Dictionary", "PDFReader", "MusicPlayer", "Notes",
-		"Games", "TextBrowser",
+		"Games", "Browser", "TextBrowser",
 	}
 	seen := make(map[string]bool)
 	for _, name := range preferOrder {
@@ -87,6 +87,9 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 	}
 	// Special entries that open overlays, not scenes.
 	apps = append(apps, startMenuEntry{name: "Game Profiles", icon: "G", scene: "", action: func(c *Config) { openGameProfilePanel(false) }})
+	if !IsWindows() {
+		apps = append(apps, startMenuEntry{name: windowsAppsEntryName, icon: "W", scene: "", action: func(c *Config) { openWindowsAppsPanel(false) }})
+	}
 	if retroAchievementsSupported() {
 		apps = append(apps, startMenuEntry{name: "RetroAchievements", icon: "R", scene: "", action: func(c *Config) { openRetroAchievementsPanel() }})
 	}

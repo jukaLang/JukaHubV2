@@ -41,6 +41,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if updatePrompt.open {
 		return ctrlUpdatePrompt(e, config)
 	}
+	// The browser's link picker is modal while it is open.
+	if browserLinkPanel.open {
+		return ctrlBrowserLinks(e, config)
+	}
 	// The Phone Companion QR card is modal, and B is how a phone closes it
 	// after pairing: the phone's remote pushes a real B event.
 	if companion.open {
@@ -73,6 +77,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// Game Profiles is modal and sits above the panel that launched it.
 	if gpPanel.open {
 		return ctrlGameProfiles(e, config)
+	}
+	// Windows Apps is modal in the same way.
+	if winAppsPanel.open {
+		return ctrlWindowsApps(e, config)
 	}
 	// Tools is modal: nothing underneath may react while it is open.
 	if toolsPanel.open {
