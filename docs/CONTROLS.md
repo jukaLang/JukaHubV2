@@ -8,6 +8,16 @@ and the notification bell on the right, the **Apps** pill and a **back** pill on
 the left. The bottom of every screen is the hint bar for real controller
 bindings; there is no second clock or battery indicator down there.
 
+The header chips are buttons on every screen: the weather chip
+(`21C / 12C`, or `69F / 53F` in the US) opens **Local weather**, a seven-day
+forecast for the detected location; the time opens the calendar. The chip uses
+Fahrenheit automatically in the US and its territories, and Celsius elsewhere,
+until a unit is set explicitly in Settings. Both chips can be tapped or reached
+with the D-pad — Up from the top-right cards lands on the weather chip, then
+the clock.
+**Local weather** is modal: **A**/**B**/Esc closes it, a tap outside dismisses
+it, and the D-pad does not move the screen underneath while it is open.
+
 All bindings below are also listed in-app: press **F1** anywhere for the
 shortcuts overlay, **B** or **F1** to close it.
 
@@ -139,6 +149,22 @@ WestonPack's DRM/KMS compositor; see [WINDOWS_APPS.md](WINDOWS_APPS.md).
 | B | Close setup, then the launcher |
 
 Tapping a row launches it; tapping outside closes the panel.
+
+## PortMaster ports
+
+Open **Start → PortMaster Ports**, or the pinned **PortMaster Ports** row in
+**Emulators**. On a fresh card, **A** installs PortMaster's official TrimUI
+package into `Apps/PortMaster`. Afterwards the panel lists PortMaster first,
+then every port launcher in `Ports/`, `Roms/Ports`, `Roms/PORTS` and
+`Data/ports`. See [PORTMASTER.md](PORTMASTER.md) for paths and limitations.
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Move through PortMaster and installed ports |
+| A | Install PortMaster, open it, or launch the selected port |
+| B | Back (to Emulators when opened there) |
+
+Tapping a row activates it; tapping outside closes the panel.
 
 ## Games
 

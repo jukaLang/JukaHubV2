@@ -65,7 +65,7 @@ settings such as `search_query` or `stream_url`.
 | `screenWidth`, `screenHeight` | int | window size on desktop |
 | `tools_path` | string | where yt-dlp / ffmpeg live |
 | `fileExplorerRoot` | string | starting directory of the file explorer |
-| `weatherEnabled`, `weatherUnit` | bool, `"C"`/`"F"` | status-bar weather |
+| `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country |
 | `tspUsername` | string | name used in the greeting |
 | `playbackResolution` | string | maximum video height, e.g. `"720"` |
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |

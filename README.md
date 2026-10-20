@@ -5,6 +5,8 @@
 [![SDL2](https://img.shields.io/badge/SDL2-2.0+-3A75C0?logo=sdl)](https://www.libsdl.org/)
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 
+<img width="1284" height="722" alt="Image" src="https://github.com/user-attachments/assets/c7c17162-7b10-4b12-8f9e-cc90fdc9edc1" />
+
 A media hub for the **TrimUI Smart Pro**: YouTube search and trending, Shorts,
 saved favourites, RetroAchievements progress, and a few handy tools, in one
 controller-friendly app.
@@ -81,6 +83,10 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   installed beside Wine and a Vulkan loader is present, Direct3D DLL overrides
   are enabled automatically; see [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md)
   for the runtime setup.
+* **PortMaster Ports** — install PortMaster from the Emulators screen and launch
+  the ports it manages without leaving JukaHub. Installed launchers are read
+  from `Ports/` and the older `Roms/Ports` locations; see
+  [docs/PORTMASTER.md](docs/PORTMASTER.md).
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC

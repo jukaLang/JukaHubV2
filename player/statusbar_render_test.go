@@ -28,7 +28,7 @@ func TestStatusBarOwnsSystemCorner(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
 	ClearTextCache()
 
@@ -124,7 +124,7 @@ func TestBottomBarIsFooterButtons(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 
 	prevScene := currentSceneIndex
 	currentSceneIndex = idx
@@ -172,7 +172,7 @@ func TestThemeGalleryRendersWithoutOverflow(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
 	ClearTextCache()
 

@@ -89,6 +89,7 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 	apps = append(apps, startMenuEntry{name: "Game Profiles", icon: "G", scene: "", action: func(c *Config) { openGameProfilePanel(false) }})
 	if !IsWindows() {
 		apps = append(apps, startMenuEntry{name: windowsAppsEntryName, icon: "W", scene: "", action: func(c *Config) { openWindowsAppsPanel(false) }})
+		apps = append(apps, startMenuEntry{name: portMasterEntryName, icon: "P", scene: "", action: func(c *Config) { openPortsPanel(false) }})
 	}
 	if retroAchievementsSupported() {
 		apps = append(apps, startMenuEntry{name: "RetroAchievements", icon: "R", scene: "", action: func(c *Config) { openRetroAchievementsPanel() }})
@@ -320,9 +321,11 @@ func startMenuToggle() {
 	if tb.startOpen {
 		tb.cursor, tb.scroll = 0, 0
 		tb.enter.begin(uiClockMS(), uiMenuEnterMS)
-		// The two top-bar overlays are exclusive: a dropdown behind the menu
+		// The top-bar overlays are exclusive: a dropdown behind the menu
 		// would swallow the D-pad as soon as the menu closed.
 		nc.open = false
+		homeCalendarOpen = false
+		dismissWeatherPopover()
 	}
 	PlayActivateSound()
 }

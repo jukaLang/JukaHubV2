@@ -14,6 +14,7 @@ const (
 	HomeFocusTools     HomeFocusID = "tools"
 	HomeFocusEmulator  HomeFocusID = "emulator"
 	HomeFocusSettings  HomeFocusID = "settings"
+	HomeFocusWeather   HomeFocusID = "weather"
 	HomeFocusClock     HomeFocusID = "clock"
 	HomeFocusExit      HomeFocusID = "exit"
 )
@@ -39,55 +40,59 @@ type homeNeighbors struct {
 // homeFocusGraph maps each HomeFocusID to its focus neighbors for D-pad/controller navigation.
 var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	HomeFocusContinue: {
-		Up:    HomeFocusContinue, Down: HomeFocusFavorites,
-		Left:  HomeFocusContinue, Right: HomeFocusMedia,
+		Up: HomeFocusContinue, Down: HomeFocusFavorites,
+		Left: HomeFocusContinue, Right: HomeFocusMedia,
 	},
 	HomeFocusMedia: {
-		Up:    HomeFocusClock, Down: HomeFocusPackages,
-		Left:  HomeFocusContinue, Right: HomeFocusFiles,
+		Up: HomeFocusClock, Down: HomeFocusPackages,
+		Left: HomeFocusContinue, Right: HomeFocusFiles,
 	},
 	HomeFocusFiles: {
-		Up:    HomeFocusClock, Down: HomeFocusApps,
-		Left:  HomeFocusMedia, Right: HomeFocusSettings,
+		Up: HomeFocusClock, Down: HomeFocusApps,
+		Left: HomeFocusMedia, Right: HomeFocusSettings,
 	},
 	HomeFocusPackages: {
-		Up:    HomeFocusMedia, Down: HomeFocusTools,
-		Left:  HomeFocusContinue, Right: HomeFocusApps,
+		Up: HomeFocusMedia, Down: HomeFocusTools,
+		Left: HomeFocusContinue, Right: HomeFocusApps,
 	},
 	HomeFocusApps: {
-		Up:    HomeFocusFiles, Down: HomeFocusEmulator,
-		Left:  HomeFocusPackages, Right: HomeFocusApps,
+		Up: HomeFocusFiles, Down: HomeFocusEmulator,
+		Left: HomeFocusPackages, Right: HomeFocusApps,
 	},
 	HomeFocusFavorites: {
-		Up:    HomeFocusContinue, Down: HomeFocusExit,
-		Left:  HomeFocusFavorites, Right: HomeFocusChat,
+		Up: HomeFocusContinue, Down: HomeFocusExit,
+		Left: HomeFocusFavorites, Right: HomeFocusChat,
 	},
 	HomeFocusChat: {
-		Up:    HomeFocusContinue, Down: HomeFocusChat,
-		Left:  HomeFocusFavorites, Right: HomeFocusTools,
+		Up: HomeFocusContinue, Down: HomeFocusChat,
+		Left: HomeFocusFavorites, Right: HomeFocusTools,
 	},
 	HomeFocusTools: {
-		Up:    HomeFocusPackages, Down: HomeFocusTools,
-		Left:  HomeFocusChat, Right: HomeFocusEmulator,
+		Up: HomeFocusPackages, Down: HomeFocusTools,
+		Left: HomeFocusChat, Right: HomeFocusEmulator,
 	},
 	HomeFocusEmulator: {
-		Up:    HomeFocusApps, Down: HomeFocusEmulator,
-		Left:  HomeFocusTools, Right: HomeFocusEmulator,
+		Up: HomeFocusApps, Down: HomeFocusEmulator,
+		Left: HomeFocusTools, Right: HomeFocusEmulator,
 	},
 	HomeFocusSettings: {
-		Up:    HomeFocusClock, Down: HomeFocusApps,
-		Left:  HomeFocusFiles, Right: HomeFocusSettings,
+		Up: HomeFocusClock, Down: HomeFocusApps,
+		Left: HomeFocusFiles, Right: HomeFocusSettings,
 	},
 	// The Clock is the header time in the top-right corner: the top-right
 	// cards reach it Up and it drops back Down to Settings.
+	HomeFocusWeather: {
+		Up: HomeFocusWeather, Down: HomeFocusSettings,
+		Left: HomeFocusMedia, Right: HomeFocusClock,
+	},
 	HomeFocusClock: {
-		Up:    HomeFocusClock, Down: HomeFocusSettings,
-		Left:  HomeFocusMedia, Right: HomeFocusClock,
+		Up: HomeFocusClock, Down: HomeFocusSettings,
+		Left: HomeFocusWeather, Right: HomeFocusClock,
 	},
 	// Exit sits on the footer's left end; Favorites drops down to it.
 	HomeFocusExit: {
-		Up:    HomeFocusFavorites, Down: HomeFocusExit,
-		Left:  HomeFocusExit, Right: HomeFocusExit,
+		Up: HomeFocusFavorites, Down: HomeFocusExit,
+		Left: HomeFocusExit, Right: HomeFocusExit,
 	},
 }
 
@@ -222,7 +227,7 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
-		HomeFocusClock, HomeFocusExit,
+		HomeFocusWeather, HomeFocusClock, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

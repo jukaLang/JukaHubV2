@@ -64,7 +64,7 @@
                                      "SearchWidth":  940,
                                      "TSPUsername":  "",
                                      "WeatherEnabled":  false,
-                                     "WeatherUnit":  "C",
+                                     "WeatherUnit":  "",
                                      "chat_input":  "hi",
                                      "diskpie_data":  {
                                                           "Total":  0,
@@ -1803,7 +1803,7 @@
                                             "listVariable":  "",
                                             "columns":  0,
                                             "rows":  0,
-                                            "placeholder":  "Weather unit (C/F)",
+                                            "placeholder":  "Weather unit (C/F, blank = auto)",
                                             "style":  "",
                                             "icon":  "",
                                             "jsonPath":  "",

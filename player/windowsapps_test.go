@@ -314,7 +314,7 @@ func TestWindowsAppsPanelRendersRows(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderWindowsAppsPanel(renderer, &Config{})
 
 	if windowsAppPanelRect.W <= 0 || windowsAppPanelRect.H <= 0 {
@@ -330,6 +330,20 @@ func TestWindowsAppsPanelRendersRows(t *testing.T) {
 			r.Y+r.H > windowsAppPanelRect.Y+windowsAppPanelRect.H {
 			t.Errorf("row %+v escapes panel %+v", r, windowsAppPanelRect)
 		}
+	}
+
+	// Touch users need the header pill: there is no keyboard X on a handheld.
+	if windowsSetupButtonRect.W <= 0 {
+		t.Fatal("setup pill was not measured")
+	}
+	if windowsSetupButtonRect.X+windowsSetupButtonRect.W > windowsAppPanelRect.X+windowsAppPanelRect.W {
+		t.Errorf("setup pill %+v escapes the panel", windowsSetupButtonRect)
+	}
+	if !handleWindowsAppsMouse(windowsSetupButtonRect.X+2, windowsSetupButtonRect.Y+2, &Config{}) {
+		t.Fatal("tap on the setup pill was not handled")
+	}
+	if !winAppsPanel.help {
+		t.Fatal("tapping Setup did not open the runtime page")
 	}
 }
 
@@ -351,7 +365,7 @@ func TestWindowsAppsPanelRendersSetupPage(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderWindowsAppsPanel(renderer, &Config{})
 	if windowsAppPanelRect.W <= 0 || len(windowsAppRowHits) != 0 {
 		t.Fatalf("setup panel = %+v, rows = %v", windowsAppPanelRect, windowsAppRowHits)

@@ -14,9 +14,9 @@ utilities, older 2D apps. A Windows program does not become ARM-native: Wine
 provides the Windows APIs, and Box64 or Hangover's emulator DLLs provide the
 x86/x86-64 instruction translation.
 
+JukaHub can install the runtime for you (see [Install from the setup page](#install-from-the-setup-page)).
 What it does **not** provide:
 
-* a bundled Wine, Box64, Proton or Weston installation;
 * Direct3D/Proton compatibility, DXVK/VKD3D, or a Vulkan 1.3 driver;
 * a guarantee that a particular app works. Test app by app and use the log.
 
@@ -39,13 +39,61 @@ If none of the first three is available, the app stays listed but the row says
 **Unavailable** and explains what is missing. A missing display is reported
 before Wine is started, rather than treated as a successful silent launch.
 
-## Install the pieces
+## Install from the setup page
+
+Open **Start → Windows Apps**, then press **X** (or tap **Setup**). The setup
+page starts with two install actions:
+
+| Row | What it does |
+|-----|--------------|
+| **Install Wine (Hangover ARM64)** | Downloads the current ARM64 Hangover release, unpacks its Debian packages into `data/windows-runtime/hangover`, writes `data/windows-runtime/bin/wine`, runs `wine --version`, and reports the result. |
+| **Install display runtime (WestonPack)** | Downloads `weston_pkg_0.2.aarch64.squashfs` from PortMaster and extracts it with `unsquashfs` when that tool exists. |
+
+Select a row with Up/Down and press **A**, or tap it. The card keeps showing
+the current step (`Installer: downloading …`) while the download runs in the
+background, so the UI stays responsive. Wine is Linux-only: on the Windows
+desktop build pressing the install row explains that Windows runs the `.exe`
+directly.
+
+The Wine install resolves the latest release through the GitHub API and picks
+the Debian 12 ARM64 archive (falling back to another ARM64 `.tar`). The
+separate `dlls.tar` asset is deliberately skipped. To install a specific build
+instead, set `JUKAHUB_WINE_RUNTIME_URL` to a `.tar`, `.tar.gz` or `.zip` of an
+ARM64 Wine tree before launching.
+
+Hangover publishes that archive as a set of Debian `.deb` packages, not as an
+installed tree. JukaHub unpacks their `data.tar.xz` payloads itself, so neither
+`dpkg` nor root access is needed. The download is roughly 300 MB, the unpacked
+runtime is about 2.5 GB, and the download and package copies coexist briefly,
+so leave at least 4 GB free in the data folder.
+
+Unpacking is CPU-bound and can take several minutes on the handheld; the setup
+page keeps showing `Installer: unpacking …` while it runs.
+
+Nothing outside `data/windows-runtime` is modified. The extracted `wine`
+launcher is ARM64; x86/x86-64 apps still go through Hangover's Box64/FEX
+dependencies, which the same packages provide.
+
+The installer cannot make a newer glibc appear. Hangover's published ARM64
+builds target Debian/Ubuntu releases, and a stock TrimUI firmware may refuse
+the binary at load time. When that happens the setup page reports the exact
+`wine --version` error; use `JUKAHUB_WINE_RUNTIME_URL` with a build matching
+your firmware, or the PortMaster build described below.
+
+### Display runtime caveats
+
+WestonPack ships as SquashFS. JukaHub extracts it userland when `unsquashfs`
+is present; otherwise it keeps the image at
+`data/windows-runtime/weston_pkg_0.2.aarch64.squashfs` and tells you to let
+PortMaster install the runtime. The setup page shows **WestonPack** as
+missing until a `westonwrap.sh` is found.
+
+## Install the pieces manually
 
 Hangover and WestonPack are separate projects with their own licenses and
-release packages. JukaHub does not download them, because their binaries are
-large and depend on the firmware's glibc and graphics stack. Neither project
-publishes a package specifically tested on the original Smart Pro, so this is
-the experimental part of the feature.
+release packages. Their binaries depend on the firmware's glibc and graphics
+stack, and neither project publishes a package specifically tested on the
+original Smart Pro, so this remains the experimental part of the feature.
 
 ### Wine on ARM64
 
@@ -139,6 +187,8 @@ Wine's own `windows/`, `system32/` and `syswow64/` folders are skipped.
 | D-pad Up / Down | Move through apps |
 | A / Enter / Space | Launch the selected app |
 | X / `x` / `h` | Show the setup page |
+| Setup: Up / Down | Choose Wine or the display runtime |
+| Setup: A / Enter | Install the selected runtime |
 | Y / `y` / `r` | Rescan the app folders |
 | B / Esc / Backspace | Close setup, then the launcher |
 | Mouse / touch | Tap a row to launch; tap outside to close |

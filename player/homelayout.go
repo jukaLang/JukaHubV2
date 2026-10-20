@@ -26,6 +26,7 @@ const (
 	HomeActionSettings       HomeAction = "settings"
 	HomeActionExit           HomeAction = "exit"
 	HomeActionToggleCalendar HomeAction = "toggle_calendar"
+	HomeActionToggleWeather  HomeAction = "toggle_weather"
 )
 
 type HomeFonts struct {
@@ -104,7 +105,7 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusClock, HomeFocusExit,
+			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusExit,
 		},
 	}
 	layout.rebuildItems()
@@ -156,9 +157,11 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 956, Y: 454, W: 292, H: 158})
 	card(HomeFocusSettings, "Settings", "Personalize JukaHub", "settings", HomeActionSettings,
 		sdl.Rect{X: 1082, Y: 164, W: 166, H: 121})
-	// The Clock is the header time itself - no separate button is drawn.
-	// drawHeader replaces this rect with the measured clock text every frame,
-	// so focus and clicks land on the actual clock in the top right.
+	// The weather chip and clock are the header text itself - no separate
+	// buttons are drawn. drawHeader replaces these rects with the measured
+	// status text every frame, so focus and clicks land on the header.
+	card(HomeFocusWeather, "Weather", "Local forecast", "weather", HomeActionToggleWeather,
+		sdl.Rect{X: 1020, Y: 10, W: 92, H: 36})
 	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
 		sdl.Rect{X: 1120, Y: 10, W: 76, H: 36})
 	// Exit sits on the footer's left end (drawn above the footer band so it
@@ -221,7 +224,7 @@ func (h *HomeLayout) BoundsViolations() []string {
 			item.Rect.X+item.Rect.W > h.Width || item.Rect.Y+item.Rect.H > h.Height {
 			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
 		}
-		if id == HomeFocusClock {
+		if id == HomeFocusClock || id == HomeFocusWeather {
 			continue
 		}
 		checked = append(checked, item)
@@ -280,8 +283,8 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, data.Continue, cardLift)
 		case HomeFocusExit:
 			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
-		case HomeFocusClock:
-			// The header clock is the button; drawHeader draws its focus ring.
+		case HomeFocusClock, HomeFocusWeather:
+			// Header chips are the buttons; drawHeader draws their focus rings.
 		default:
 			h.drawActionCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 		}
@@ -302,6 +305,7 @@ func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 }
 
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
+	weatherStatusRect = sdl.Rect{}
 	header := ScaleHomeRect(sdl.Rect{X: 0, Y: 0, W: 1280, H: 56}, h.Width, h.Height)
 	setDrawColor(renderer, ColorSurface)
 	_ = renderer.FillRect(&header)
@@ -382,21 +386,31 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	y := scaleY(19, h.Height)
 	for _, part := range data.StatusParts {
 		w, _, _ := fonts.Small.SizeUTF8(part)
+		r := sdl.Rect{
+			X: x - scaleX(8, h.Width),
+			Y: y - scaleY(6, h.Height),
+			W: int32(w) + scaleX(16, h.Width),
+			H: int32(fonts.Small.Height()) + scaleY(12, h.Height),
+		}
 		if isClockStatusPart(part) {
 			item := h.Items[HomeFocusClock]
-			item.Rect = sdl.Rect{
-				X: x - scaleX(8, h.Width),
-				Y: y - scaleY(6, h.Height),
-				W: int32(w) + scaleX(16, h.Width),
-				H: int32(fonts.Small.Height()) + scaleY(12, h.Height),
-			}
+			item.Rect = r
 			h.Items[HomeFocusClock] = item
+		}
+		if isWeatherStatusPart(part) {
+			item := h.Items[HomeFocusWeather]
+			item.Rect = r
+			h.Items[HomeFocusWeather] = item
+			weatherStatusRect = r
 		}
 		drawText(renderer, fonts.Small, part, x, y, ColorTextMuted(), textAlignLeft)
 		x += int32(w) + sepW
 	}
-	if h.Focus.Current() == HomeFocusClock {
-		r := h.Items[HomeFocusClock].Rect
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather} {
+		if h.Focus.Current() != id {
+			continue
+		}
+		r := h.Items[id].Rect
 		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 2, ColorAccent)
 	}

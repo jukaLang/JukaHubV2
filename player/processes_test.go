@@ -212,7 +212,7 @@ func TestProcessPanelRenders(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer r.Destroy()
+	defer destroyTestRenderer(r)
 	withScreen(t, probeW, probeH)
 
 	prev := processPanel

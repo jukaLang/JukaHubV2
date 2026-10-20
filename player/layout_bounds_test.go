@@ -23,7 +23,7 @@ func TestHomeLayoutFitsViewport(t *testing.T) {
 	for _, size := range sizes {
 		t.Run(size.name, func(t *testing.T) {
 			h := NewHomeLayout(size.w, size.h)
-			if got, want := len(h.Order), 12; got != want {
+			if got, want := len(h.Order), 13; got != want {
 				t.Fatalf("items = %d, want %d", got, want)
 			}
 			for _, problem := range h.BoundsViolations() {

@@ -50,7 +50,7 @@ func renderNamedScene(t *testing.T, config *Config, name string) (*probeFrame, *
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()

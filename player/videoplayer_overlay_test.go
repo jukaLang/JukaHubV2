@@ -52,7 +52,7 @@ func videoOverlayProbe(t *testing.T, forceNoCache, frame bool) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	// Text textures are bound to the renderer that created them; each probe
 	// owns a fresh renderer, so start from an empty text cache.
 	ClearTextCache()

@@ -20,7 +20,7 @@ func renderGoodbyeFrame(t *testing.T, elapsed float64) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
@@ -78,8 +78,8 @@ func TestGoodbyeWordmarkAndCompletion(t *testing.T) {
 	f := renderGoodbyeFrame(t, 1700)
 	// Sample the wordmark band around 43% screen height.
 	lit := 0
-	for y := probeH*40/100; y < probeH*47/100; y += 2 {
-		for x := probeW*35/100; x < probeW*65/100; x += 2 {
+	for y := probeH * 40 / 100; y < probeH*47/100; y += 2 {
+		for x := probeW * 35 / 100; x < probeW*65/100; x += 2 {
 			if !f.isBG(x, y) {
 				lit++
 			}
@@ -97,7 +97,7 @@ func TestGoodbyeWordmarkAndCompletion(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	if renderGoodbye(renderer, &Config{}, tick) {
 		t.Error("renderGoodbye still active past goodbyeDuration")
 	}

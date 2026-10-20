@@ -88,7 +88,7 @@ func TestTempVideoPathUsesVideoTempDir(t *testing.T) {
 	}
 	removeTempVideo(path)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("removeTempVideo did not remove %q: %v", path, err)
+		t.Fatalf("removeTempVideo did not remove %q: %v", path, err)
 	}
 }
 

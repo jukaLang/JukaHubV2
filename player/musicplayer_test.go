@@ -230,7 +230,7 @@ func TestMusicTransportHitboxesAreSeparate(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderMusicPlayer(renderer, &Config{})
 
 	if !musicRects.valid {
@@ -276,7 +276,7 @@ func TestMusicPlaylistClickPlaysVisibleRow(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderMusicPlayer(renderer, &Config{})
 
 	if len(musicRects.rows) == 0 {
@@ -365,7 +365,7 @@ func renderMusicForTest(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderMusicPlayer(renderer, &Config{})
 }
 
@@ -377,7 +377,7 @@ func renderMusicFrame(t *testing.T) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	ClearTextCache()
 	prevAccent := accentColor
 	SetAccentColor(sdl.Color{R: 85, G: 216, B: 255, A: 255})

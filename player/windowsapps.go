@@ -12,9 +12,10 @@ package main
 //   * WestonPack's westonwrap.sh, which starts a minimal Weston/Xwayland
 //     session on DRM/KMS so basic Win32 windows can be shown on the handheld.
 //
-// Nothing large is downloaded here. Wine, Box64 and WestonPack are
-// glibc-sensitive binaries and must match the firmware, so the panel explains
-// what is missing and launches only when the user has installed them.
+// The setup page can install the runtime itself (windows_runtime_install.go):
+// it fetches the current ARM64 Hangover release into data/windows-runtime and
+// writes the bin/wine wrapper this file resolves. Box64 is still detected but
+// not downloaded, because it has to match the firmware's glibc.
 //
 // "Basic" is deliberate: console programs and simple Win32 windows are the
 // target. Direct3D games still need DXVK/VKD3D and a capable Vulkan driver.

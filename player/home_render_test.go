@@ -46,7 +46,7 @@ func renderHomeFrame(t *testing.T, calendarOpen bool) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 
 	screenWidth, screenHeight = probeW, probeH
 	homeLayout = nil
@@ -274,7 +274,7 @@ func TestHomeBellMatchesSceneStatusBar(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	screenWidth, screenHeight = probeW, probeH
 	currentSceneIndex = 0
 	tb.startRect = sdl.Rect{}

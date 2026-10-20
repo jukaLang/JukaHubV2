@@ -259,6 +259,20 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 	// (variables.Custom.Custom["ButtonColor"] etc.); flatten those blocks so
 	// Get/$-substitution resolve them like the legacy flat format.
 	flattenCustomBlocks(v.Custom)
+	// Older configs stored their implicit Celsius default in Custom while the
+	// typed weatherUnit stayed empty. That is now "auto" (location-based), so
+	// drop the stale key instead of letting syncVariableOverrides pin Celsius.
+	for _, key := range []string{"weatherUnit", "WeatherUnit"} {
+		val, ok := v.Custom[key].(string)
+		if !ok {
+			continue
+		}
+		// The typed field is authoritative when present; an empty typed field
+		// only drops the legacy Celsius default, not a deliberate F override.
+		if strings.TrimSpace(v.WeatherUnit) != "" || strings.EqualFold(strings.TrimSpace(val), "C") {
+			delete(v.Custom, key)
+		}
+	}
 	tmp := &Config{Variables: *v}
 	syncVariableOverrides(tmp)
 	*v = tmp.Variables

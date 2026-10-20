@@ -21,9 +21,8 @@ func newKeyboardTestRenderer(t *testing.T) *sdl.Renderer {
 	// Text and keyboard textures belong to this renderer: drop them while the
 	// renderer is still alive so later tests do not draw with stale pointers.
 	t.Cleanup(func() {
-		ClearTextCache()
 		DestroyVKStaticCache()
-		r.Destroy()
+		destroyTestRenderer(r)
 	})
 	return r
 }

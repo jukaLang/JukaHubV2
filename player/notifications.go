@@ -430,8 +430,10 @@ func notifToggle() {
 	nc.cursor = 0
 	if nc.open {
 		nc.enter.begin(uiClockMS(), uiPanelEnterMS)
-		// The two top-bar overlays are exclusive.
+		// The top-bar overlays are exclusive.
 		tb.startOpen = false
+		homeCalendarOpen = false
+		dismissWeatherPopover()
 		// Mark all as read.
 		for i := range nc.history {
 			nc.history[i].Read = true

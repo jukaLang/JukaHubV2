@@ -82,12 +82,21 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if winAppsPanel.open {
 		return ctrlWindowsApps(e, config)
 	}
+	// PortMaster Ports is modal too.
+	if portsPanel.open {
+		return ctrlPortsPanel(e)
+	}
 	// Tools is modal: nothing underneath may react while it is open.
 	if toolsPanel.open {
 		return ctrlToolsPanel(e, config)
 	}
 	if emuPanel.open {
 		return ctrlEmuPanel(e, config)
+	}
+	// The Local weather card floats above every scene, so it consumes the
+	// controller until it is dismissed.
+	if weatherPopoverOpen {
+		return ctrlWeatherPopover(e)
 	}
 	if shortcutsOpen {
 		return ctrlShortcuts(e)

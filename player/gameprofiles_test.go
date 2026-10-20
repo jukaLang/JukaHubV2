@@ -376,7 +376,7 @@ func TestGameProfilesPanelRendersRows(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderGameProfilesPanel(renderer, &Config{})
 
 	if gameProfilePanelRect.W <= 0 || gameProfilePanelRect.H <= 0 {
@@ -427,7 +427,7 @@ func TestGameProfilesPanelScrollsOnSmallScreen(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderGameProfilesPanel(renderer, &Config{})
 
 	if gameProfilePanelRect.Y < 0 || gameProfilePanelRect.Y+gameProfilePanelRect.H > screenHeight {
@@ -458,7 +458,7 @@ func TestGameProfilesPanelEmptyStateRenders(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderGameProfilesPanel(renderer, &Config{})
 	if gameProfilePanelRect.W <= 0 {
 		t.Fatalf("empty panel rect not set: %+v", gameProfilePanelRect)

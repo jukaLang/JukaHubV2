@@ -203,6 +203,7 @@ func toggleCalendarPopover() {
 	if homeCalendarOpen {
 		tb.startOpen = false
 		nc.open = false
+		dismissWeatherPopover()
 	}
 }
 
@@ -281,8 +282,12 @@ func homeActivate(config *Config) {
 		requestAppExit()
 		return
 	}
-	// The Clock never maps to a scene: its dedicated trigger
-	// (toggle_calendar) runs before the scene lookup.
+	// Header chips never map to a scene: their dedicated triggers run before
+	// the scene lookup.
+	if id == HomeFocusWeather {
+		toggleWeatherPopover()
+		return
+	}
 	if id == HomeFocusClock {
 		toggleCalendarPopover()
 		return
@@ -414,6 +419,9 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	// on the clock toggles it closed, and any other click dismisses it without
 	// activating whatever lies underneath - standard dropdown behaviour.
 	if calendarPopoverClick(mx, my, config) {
+		return true
+	}
+	if weatherPopoverClick(mx, my, config) {
 		return true
 	}
 	// The header QR is a direct pairing affordance: tapping it opens the large

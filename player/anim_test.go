@@ -116,7 +116,7 @@ func TestCompositeUILayerFadesAndSlides(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
 	if uiLayerTexture(renderer) == nil {
 		t.Skip("backend has no render targets; the panel draws unanimated")
@@ -174,7 +174,7 @@ func TestStartMenuEntranceFadesIn(t *testing.T) {
 		if err != nil {
 			t.Skipf("software renderer unavailable: %v", err)
 		}
-		defer renderer.Destroy()
+		defer destroyTestRenderer(renderer)
 		withScreen(t, probeW, probeH)
 		ClearTextCache()
 		if uiLayerTexture(renderer) == nil {
@@ -247,7 +247,7 @@ func TestStartMenuEntranceHonoursReducedMotion(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
 	ClearTextCache()
 

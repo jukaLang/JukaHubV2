@@ -98,7 +98,7 @@ $cfg.variables.Custom.WeatherEnabled = $false
 $cfg.variables.Custom.PlaybackResolution = "720"
 $cfg.variables.Custom.ScreenWidth = 1280
 $cfg.variables.Custom.ScreenHeight = 720
-$cfg.variables.Custom.WeatherUnit = "C"
+$cfg.variables.Custom.WeatherUnit = ""
 
 $out = [ordered]@{}
 foreach ($p in $cfg.PSObject.Properties) {

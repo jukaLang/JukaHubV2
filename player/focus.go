@@ -41,14 +41,16 @@ type FocusNode struct {
 // screen. ElementIndex reports -1 for "no focus", so chrome uses deeper
 // sentinels.
 const (
-	ChromeBackIndex  = -2
-	ChromeClockIndex = -3
-	ChromeStartIndex = -4
-	ChromeBellIndex  = -5
-	ChromeBackType   = "back"
-	ChromeClockType  = "clock"
-	ChromeStartType  = "start"
-	ChromeBellType   = "bell"
+	ChromeBackIndex    = -2
+	ChromeClockIndex   = -3
+	ChromeStartIndex   = -4
+	ChromeBellIndex    = -5
+	ChromeWeatherIndex = -6
+	ChromeBackType     = "back"
+	ChromeClockType    = "clock"
+	ChromeStartType    = "start"
+	ChromeBellType     = "bell"
+	ChromeWeatherType  = "weather"
 )
 
 // chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
@@ -57,7 +59,7 @@ const (
 // The bottom of the screen is now the hint bar only, so there is no tier 2.
 func chromeTier(idx int) int {
 	switch idx {
-	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex:
+	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex:
 		return 1
 	}
 	return 0
@@ -141,6 +143,9 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		}
 		if statusClockRect.W > 0 {
 			addNode(ChromeClockIndex, statusClockRect, ChromeClockType, "Clock")
+		}
+		if weatherStatusRect.W > 0 {
+			addNode(ChromeWeatherIndex, weatherStatusRect, ChromeWeatherType, "Local weather")
 		}
 		if nc.bellRect.W > 0 {
 			addNode(ChromeBellIndex, nc.bellRect, ChromeBellType, "Notifications")

@@ -2,15 +2,16 @@ package main
 
 // windowsapps_ui.go — the "Windows Apps" overlay.
 //
-// It is intentionally a launcher, not an installer: runtimes are large and
-// firmware-specific. The panel shows every discovered .exe, says why one
-// cannot launch, and explains the Wine/WestonPack setup on X.
+// The panel shows every discovered .exe, says why one cannot launch, and on X
+// offers the runtime install (Wine, WestonPack) plus the detected Wine/Box64/
+// display status.
 
 import (
 	"fmt"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 type windowsAppsPanelState struct {
@@ -31,15 +32,23 @@ type windowsAppRowHit struct {
 var windowsAppRowHits []windowsAppRowHit
 var windowsAppPanelRect sdl.Rect
 
+// windowsSetupButtonRect is the tappable "Setup" pill in the panel header, so
+// touch-only handheld users can reach the runtime page without a keyboard.
+var windowsSetupButtonRect sdl.Rect
+
 func openWindowsAppsPanel(returnEmu bool) {
 	qs.open = false
 	toolsPanel.open = false
 	emuPanel.open = false
 	gpPanel.open = false
 	raPanel.open = false
+	portsPanel = portsPanelState{}
 	winAppsPanel = windowsAppsPanelState{open: true, returnEmu: returnEmu}
 	windowsAppPanelRect = sdl.Rect{}
 	windowsAppRowHits = nil
+	windowsSetupButtonRect = sdl.Rect{}
+	windowsSetupRowHit = [windowsSetupRowCount]sdl.Rect{}
+	setupCursor = windowsSetupRowWine
 	invalidateWindowsAppsCache()
 	PlayActivateSound()
 }
@@ -52,6 +61,7 @@ func closeWindowsAppsPanel() {
 	winAppsPanel = windowsAppsPanelState{}
 	windowsAppPanelRect = sdl.Rect{}
 	windowsAppRowHits = nil
+	windowsSetupButtonRect = sdl.Rect{}
 	if returnEmu {
 		emuPanel.open = true
 		emuPanelRect = sdl.Rect{}
@@ -73,6 +83,70 @@ func windowsAppsPanelMove(delta int) {
 		winAppsPanel.cursor = 0
 	}
 	PlayNavSound()
+}
+
+func setWindowsSetupCursor(row int) {
+	if row < 0 {
+		row = windowsSetupRowCount - 1
+	}
+	if row >= windowsSetupRowCount {
+		row = 0
+	}
+	if row != setupCursor {
+		PlayNavSound()
+	}
+	setupCursor = row
+}
+
+func setupMove(delta int) {
+	setWindowsSetupCursor(setupCursor + delta)
+}
+
+// setupActivate runs the install action for the focused setup row.
+func setupActivate() {
+	switch setupCursor {
+	case windowsSetupRowDisplay:
+		windowsAppsPanelInstallDisplay()
+	default:
+		windowsAppsPanelInstall()
+	}
+}
+
+// windowsAppsPanelInstall starts the on-device runtime install. The setup
+// page keeps rendering while it runs, with the current step on its top line.
+func windowsAppsPanelInstall() {
+	if windowsRuntimeInstalling() {
+		ShowToast("The runtime installer is already running", ToastKindInfo)
+		return
+	}
+	if err := startWindowsRuntimeInstall(); err != nil {
+		ShowToast("Could not start the installer: "+err.Error(), ToastKindError)
+		return
+	}
+	PlaySuccessSound()
+	setWindowsSetupCursor(windowsSetupRowWine)
+}
+
+// windowsAppsPanelInstallDisplay downloads WestonPack, the display bridge Wine
+// needs on a handheld with no X11 or Wayland session.
+func windowsAppsPanelInstallDisplay() {
+	if !beginWindowsRuntimeInstall("weston", "contacting PortMaster for WestonPack") {
+		ShowToast("The runtime installer is already running", ToastKindInfo)
+		return
+	}
+	go func() {
+		err := installWestonRuntime()
+		endWindowsRuntimeInstall()
+		invalidateWindowsAppsCache()
+		if err != nil {
+			setWindowsRuntimeStatus("WestonPack not installed", err.Error(), false)
+			ShowToast(err.Error(), ToastKindWarning)
+			return
+		}
+		setWindowsRuntimeStatus("WestonPack installed", "", false)
+		ShowToast("WestonPack installed", ToastKindSuccess)
+	}()
+	PlayActivateSound()
 }
 
 func windowsAppsPanelRescan() {
@@ -126,15 +200,21 @@ func windowsAppsPanelToggleHelp() {
 func ctrlWindowsApps(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if !winAppsPanel.help {
+		if winAppsPanel.help {
+			setupMove(-1)
+		} else {
 			windowsAppsPanelMove(-1)
 		}
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if !winAppsPanel.help {
+		if winAppsPanel.help {
+			setupMove(1)
+		} else {
 			windowsAppsPanelMove(1)
 		}
 	case sdl.CONTROLLER_BUTTON_A:
-		if !winAppsPanel.help {
+		if winAppsPanel.help {
+			setupActivate()
+		} else {
 			windowsAppsPanelActivate()
 		}
 	case sdl.CONTROLLER_BUTTON_X:
@@ -159,15 +239,21 @@ func handleWindowsAppsKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
-		if !winAppsPanel.help {
+		if winAppsPanel.help {
+			setupMove(-1)
+		} else {
 			windowsAppsPanelMove(-1)
 		}
 	case sdl.K_DOWN:
-		if !winAppsPanel.help {
+		if winAppsPanel.help {
+			setupMove(1)
+		} else {
 			windowsAppsPanelMove(1)
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
-		if !winAppsPanel.help {
+		if winAppsPanel.help {
+			setupActivate()
+		} else {
 			windowsAppsPanelActivate()
 		}
 	case sdl.K_x, sdl.K_h:
@@ -190,7 +276,18 @@ func handleWindowsAppsMouse(mx, my int32, config *Config) bool {
 	if !winAppsPanel.open {
 		return false
 	}
+	if !winAppsPanel.help && windowsSetupButtonRect.W > 0 && pointInRect(mx, my, windowsSetupButtonRect) {
+		windowsAppsPanelToggleHelp()
+		return true
+	}
 	if winAppsPanel.help {
+		for i, r := range windowsSetupRowHit {
+			if r.W > 0 && pointInRect(mx, my, r) {
+				setupCursor = i
+				setupActivate()
+				return true
+			}
+		}
 		if windowsAppPanelRect.W > 0 && pointInRect(mx, my, windowsAppPanelRect) {
 			return true
 		}
@@ -209,6 +306,28 @@ func handleWindowsAppsMouse(mx, my int32, config *Config) bool {
 	}
 	closeWindowsAppsPanel()
 	return true
+}
+
+// drawWindowsSetupButton paints the header "Setup" pill and records its hit
+// rect. It is omitted once the setup page itself is showing.
+func drawWindowsSetupButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, panelX, panelY, panelW int32) {
+	if renderer == nil || font == nil {
+		windowsSetupButtonRect = sdl.Rect{}
+		return
+	}
+	label := "Setup"
+	w, _, _ := font.SizeUTF8(label)
+	pad := int32(12)
+	r := sdl.Rect{
+		X: panelX + panelW - 24 - int32(w) - pad*2,
+		Y: panelY + 14,
+		W: int32(w) + pad*2,
+		H: int32(font.Height()) + 10,
+	}
+	windowsSetupButtonRect = r
+	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, WithAlpha(ColorSurfaceRow, 200))
+	strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 1, ColorBorderDefault)
+	renderText(renderer, config, font, label, ColorTextSecondary(), r.X+pad, r.Y+5)
 }
 
 func windowsAppsSummary(entries []windowsAppEntry, runtime windowsRuntimeStatus) string {
@@ -232,6 +351,70 @@ func windowsAppsSummary(entries []windowsAppEntry, runtime windowsRuntimeStatus)
 		parts = append(parts, "runtime setup needed")
 	}
 	return strings.Join(parts, " · ")
+}
+
+// Windows Apps setup actions. They are the only focusable rows on the setup
+// page; everything below them is status text.
+const (
+	windowsSetupRowWine    = 0
+	windowsSetupRowDisplay = 1
+	windowsSetupRowCount   = 2
+)
+
+var (
+	setupCursor        int
+	windowsSetupRowHit [windowsSetupRowCount]sdl.Rect
+)
+
+type windowsSetupRow struct {
+	Title  string
+	Detail string
+	Status string
+	Bad    bool
+}
+
+// windowsAppsSetupRows builds the two install actions plus the detected
+// runtime status. The actions come first so the panel answers "what do I press"
+// before it explains the environment.
+func windowsAppsSetupRows(runtime windowsRuntimeStatus) []windowsSetupRow {
+	wineStatus, wineBad := "missing", true
+	if runtime.Wine != "" {
+		wineStatus, wineBad = "installed", false
+	}
+	displayStatus, displayBad := "missing", true
+	if runtime.Weston != "" {
+		displayStatus, displayBad = "installed", false
+	}
+	if target := windowsRuntimeInstallTarget(); target != "" {
+		if target == "wine" {
+			wineStatus, wineBad = "installing", false
+		} else {
+			displayStatus, displayBad = "installing", false
+		}
+	} else if windowsWineInstallFailed() {
+		wineStatus = "failed"
+	} else if strings.HasPrefix(windowsRuntimeInstallLine(), "Installer: Wine installed") {
+		// Extracted but not yet reported by the resolver (for example no
+		// display server); keep the action available for a re-install.
+		wineStatus = "reinstall"
+	}
+	if displayStatus == "missing" && windowsWestonInstallFailed() {
+		displayStatus = "failed"
+	}
+
+	rows := []windowsSetupRow{
+		{
+			Title:  "Install Wine (Hangover ARM64)",
+			Detail: "Download and unpack Hangover into data/windows-runtime (~2.5 GB).",
+			Status: wineStatus, Bad: wineBad,
+		},
+		{
+			Title:  "Install display runtime (WestonPack)",
+			Detail: "A stock TrimUI has no X11 or Wayland; Wine needs this bridge.",
+			Status: displayStatus, Bad: displayBad,
+		},
+	}
+	return rows
 }
 
 func windowsAppsSetupLines(runtime windowsRuntimeStatus) []string {
@@ -267,15 +450,13 @@ func windowsAppsSetupLines(runtime windowsRuntimeStatus) []string {
 		"DXVK: " + dxvk,
 		"Vulkan: " + vulkan,
 		"",
-		"1. Install Hangover (ARM64 Wine), or Box64 plus an x86-64 Wine build.",
-		"2. Put the wine binary in data/windows-runtime/bin/wine,",
-		"   or set JUKAHUB_WINE to its path.",
-		"3. A stock TrimUI has no X11. Install WestonPack and put",
-		"   westonwrap.sh in data/windows-runtime/, or set JUKAHUB_WESTON.",
-		"4. Copy .exe files to data/windows-apps or /mnt/SDCARD/Roms/PC.",
-		"5. For Direct3D, put DXVK in data/windows-runtime/dxvk (or set",
-		"   JUKAHUB_DXVK). It is enabled only when a Vulkan loader is present.",
-		"6. Basic Win32 windows work without DXVK; games still need Vulkan 1.3.",
+		"Copy .exe files to data/windows-apps or /mnt/SDCARD/Roms/PC.",
+		"For Direct3D, put DXVK in data/windows-runtime/dxvk (or set",
+		"JUKAHUB_DXVK). It is enabled only when a Vulkan loader is present.",
+		"Basic Win32 windows work without DXVK; games still need Vulkan 1.3.",
+	}
+	if line := windowsRuntimeInstallLine(); line != "" {
+		lines = append(lines, "", line)
 	}
 	if runtime.Problem != "" {
 		lines = append([]string{"Missing: " + runtime.Problem, ""}, lines...)
@@ -323,7 +504,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	var visible int32
 	setupLines := windowsAppsSetupLines(runtime)
 	if winAppsPanel.help {
-		bodyH = int32(len(setupLines))*(smallH+4) + 16
+		bodyH = rowH*2 + 12 + int32(len(setupLines))*(smallH+4) + 12
 	} else if len(entries) == 0 {
 		bodyH = 18 + medH + 4 + smallH + 4 + smallH + 4 + smallH + 18
 	} else {
@@ -381,12 +562,50 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	if !runtime.ready() {
 		summaryColor = ColorWarning
 	}
-	renderText(renderer, config, font, ellipsize(font, summary, panelW-2*padX),
+	summaryMax := panelW - 2*padX
+	if !winAppsPanel.help {
+		// Leave room for the header Setup pill.
+		summaryMax -= 90
+	}
+	renderText(renderer, config, font, ellipsize(font, summary, summaryMax),
 		summaryColor, panelX+padX, panelY+18+medH+4)
 
 	if winAppsPanel.help {
 		windowsAppRowHits = nil
+		windowsSetupButtonRect = sdl.Rect{}
+		focusColor := installHighlight()
+		rowW := panelW - 2*padX
+		if setupCursor < 0 || setupCursor >= windowsSetupRowCount {
+			setupCursor = windowsSetupRowWine
+		}
+		rows := windowsAppsSetupRows(runtime)
 		y := panelY + headerH
+		for i, row := range rows {
+			r := sdl.Rect{X: panelX + padX, Y: y, W: rowW, H: rowH - 8}
+			windowsSetupRowHit[i] = r
+			focused := i == setupCursor
+			rowBg := WithAlpha(ColorSurfaceRow, 190)
+			if focused {
+				rowBg = WithAlpha(focusColor, 46)
+			}
+			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, rowBg)
+			if focused {
+				strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
+			}
+			renderText(renderer, config, medium, row.Title, ColorTextPrimary(), r.X+16, r.Y+8)
+			statusColor := ColorToastSuccess
+			if row.Bad {
+				statusColor = ColorToastError
+			} else if row.Status == "installing" {
+				statusColor = ColorWarning
+			}
+			sw, _, _ := font.SizeUTF8(row.Status)
+			renderText(renderer, config, font, row.Status, statusColor, r.X+r.W-16-int32(sw), r.Y+8+(medH-smallH)/2)
+			renderText(renderer, config, font, ellipsize(font, row.Detail, r.W-32),
+				ColorTextTertiary(), r.X+16, r.Y+8+medH+4)
+			y += rowH
+		}
+		y += 12
 		for _, line := range setupLines {
 			if y+smallH > panelY+panelH-footerH {
 				break
@@ -395,6 +614,10 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			switch {
 			case strings.HasPrefix(line, "Missing:"):
 				color = ColorToastError
+			case strings.HasPrefix(line, "Installer:") && strings.Contains(line, "failed"):
+				color = ColorToastError
+			case strings.HasPrefix(line, "Installer:"):
+				color = ColorWarning
 			case strings.HasPrefix(line, "Wine:") || strings.HasPrefix(line, "Box64:") ||
 				strings.HasPrefix(line, "Display:") || strings.HasPrefix(line, "WestonPack:") ||
 				strings.HasPrefix(line, "DXVK:") || strings.HasPrefix(line, "Vulkan:"):
@@ -408,6 +631,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	} else if len(entries) == 0 {
 		windowsAppRowHits = nil
+		drawWindowsSetupButton(renderer, config, font, panelX, panelY, panelW)
 		y := panelY + headerH
 		renderText(renderer, config, medium, "No .exe files found", ColorTextPrimary(), panelX+padX, y)
 		y += medH + 4
@@ -424,6 +648,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, font, "then press Y to rescan, or X for runtime setup.",
 			ColorTextTertiary(), panelX+padX, y)
 	} else {
+		drawWindowsSetupButton(renderer, config, font, panelX, panelY, panelW)
 		focusColor := installHighlight()
 		rowW := panelW - 2*padX
 		windowsAppRowHits = make([]windowsAppRowHit, 0, visible)
@@ -467,7 +692,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 
 	hint := "A: launch   X: setup   Y: rescan   B: back"
 	if winAppsPanel.help {
-		hint = "B: back to the app list"
+		hint = "A: install the selected runtime   B: back to the app list"
 	} else if len(entries) == 0 {
 		hint = "X: setup   Y: rescan   B: back"
 	}

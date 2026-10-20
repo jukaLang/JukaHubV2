@@ -37,7 +37,7 @@ func probeRenderer(t *testing.T) *sdl.Renderer {
 	prevW, prevH := screenWidth, screenHeight
 	screenWidth, screenHeight = probeW, probeH
 	t.Cleanup(func() {
-		renderer.Destroy()
+		destroyTestRenderer(renderer)
 		screenWidth, screenHeight = prevW, prevH
 	})
 	return renderer

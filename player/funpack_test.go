@@ -202,7 +202,7 @@ func renderFunProbe(t *testing.T, screen func(*sdl.Renderer)) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
 	screen(renderer)

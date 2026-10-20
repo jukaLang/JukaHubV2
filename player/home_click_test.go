@@ -19,7 +19,7 @@ func homeActionCards(h *HomeLayout) []HomeFocusID {
 	var ids []HomeFocusID
 	for _, id := range h.Order {
 		switch id {
-		case HomeFocusContinue, HomeFocusClock, HomeFocusExit:
+		case HomeFocusContinue, HomeFocusClock, HomeFocusWeather, HomeFocusExit:
 			continue
 		}
 		ids = append(ids, id)

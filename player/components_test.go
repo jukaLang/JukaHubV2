@@ -20,7 +20,7 @@ func componentFrame(t *testing.T, draw func(*sdl.Renderer)) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
 	ClearTextCache()
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)

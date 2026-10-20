@@ -297,6 +297,9 @@ func emulatorEntries() []emuEntry {
 	entries = append(entries, gameProfilesEmuEntry())
 	if !IsWindows() {
 		entries = append(entries, windowsAppsEmuEntry())
+		// PortMaster is a handheld app; listing it on Windows would only offer
+		// an installer that cannot produce a working runtime there.
+		entries = append(entries, portMasterEmuEntry())
 	}
 	sortEmulatorEntries(entries)
 	emuCache.entries = entries
@@ -462,6 +465,11 @@ func emuPanelActivate(config *Config) {
 	if e.Name == windowsAppsEntryName {
 		emuPanel.open = false
 		openWindowsAppsPanel(true)
+		return
+	}
+	if e.Name == portMasterEntryName {
+		emuPanel.open = false
+		openPortsPanel(true)
 		return
 	}
 	if e.Name == retroAchievementsEntryName {

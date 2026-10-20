@@ -526,15 +526,10 @@ func weatherScreenText(config *Config) string {
 	if !ready || len(days) == 0 {
 		return "Weather unavailable (offline?)"
 	}
-	unit := config.Variables.WeatherUnit
-	conv := func(c float64) float64 {
-		if unit == "F" {
-			return c*9/5 + 32
-		}
-		return c
-	}
+	unit := weatherUnit(config)
+	conv := func(c float64) float64 { return weatherTemp(c, unit) }
 	var sb strings.Builder
-	sb.WriteString("7-Day Forecast\n\n")
+	sb.WriteString(fmt.Sprintf("7-Day Forecast (%s)\n\n", unit))
 	for _, d := range days {
 		day := d.Date
 		if t, err := time.Parse("2006-01-02", d.Date); err == nil {

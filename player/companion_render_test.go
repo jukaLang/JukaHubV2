@@ -33,7 +33,7 @@ func probeCompanionCard(t *testing.T, state companionOverlay) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	ClearTextCache()
 
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)

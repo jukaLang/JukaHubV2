@@ -20,7 +20,7 @@ func renderColorField(t *testing.T, cfg *Config, elem Element, sceneIdx, elemIdx
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
@@ -143,7 +143,7 @@ func TestAppearancePreviewShowsPalette(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
 	renderAppearancePreview(renderer, cfg)
@@ -253,7 +253,7 @@ func TestAppearancePreviewShowsCapitalisedSavedColors(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
 	renderAppearancePreview(renderer, cfg)

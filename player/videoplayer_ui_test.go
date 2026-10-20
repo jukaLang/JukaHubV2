@@ -209,7 +209,7 @@ func renderingFullscreenProbe(t *testing.T, chrome bool) *probeFrame {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	ClearTextCache()
 
 	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_RGB24, sdl.TEXTUREACCESS_STATIC, 4, 4)

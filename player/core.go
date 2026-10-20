@@ -3744,6 +3744,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		statusClockRect = sdl.Rect{}
 		tb.startRect = sdl.Rect{}
 		renderHomeModern(renderer, config)
+		renderWeatherPopover(renderer, config)
 		renderNotifDropdown(renderer, config)
 		renderer.SetDrawColor(0, 0, 0, 255)
 		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
@@ -3836,6 +3837,7 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	// The bottom of every menu is reserved for buttons now: the controller
 	// hint bar, plus the app menu overlay when it is open.
 	renderFooter(renderer, config)
+	renderWeatherPopover(renderer, config)
 	renderStartMenu(renderer, config)
 	renderNotifDropdown(renderer, config)
 
@@ -5543,6 +5545,7 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	// float the Start menu or the notification center over the next one.
 	startMenuDismiss()
 	notifDismiss()
+	dismissWeatherPopover()
 	// The browser link picker belongs to the page that opened it; it must not
 	// float over the next scene.
 	browserLinkPanel = browserLinkPanelState{}
@@ -5863,6 +5866,10 @@ func activateChromeFocus(config *Config) bool {
 			startMenuToggle()
 		}
 		return true
+	case ChromeWeatherIndex:
+		PlayActivateSound()
+		toggleWeatherPopover()
+		return true
 	case ChromeBellIndex:
 		// notifToggle plays its own activation sound.
 		notifToggle()
@@ -5888,6 +5895,10 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	if statusClockRect.W > 0 && mx >= statusClockRect.X && mx <= statusClockRect.X+statusClockRect.W &&
 		my >= statusClockRect.Y && my <= statusClockRect.Y+statusClockRect.H {
 		toggleCalendarPopover()
+		return true
+	}
+	if weatherStatusRect.W > 0 && pointInRect(mx, my, weatherStatusRect) {
+		toggleWeatherPopover()
 		return true
 	}
 	return false
@@ -5945,6 +5956,13 @@ func handleChromeKey(e *sdl.KeyboardEvent, config *Config) bool {
 func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false
+	}
+	if weatherPopoverOpen {
+		switch e.Keysym.Sym {
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+			dismissWeatherPopover()
+		}
+		return true
 	}
 	if tb.startOpen {
 		switch e.Keysym.Sym {

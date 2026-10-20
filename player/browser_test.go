@@ -183,7 +183,7 @@ func TestBrowserLinkPanelRendersSelectableRows(t *testing.T) {
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	renderBrowserLinkPanel(renderer, &Config{})
 
 	if browserLinkPanelRect.W <= 0 || browserLinkPanelRect.H <= 0 {

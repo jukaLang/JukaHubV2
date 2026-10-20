@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -274,22 +276,99 @@ func weatherCodeDesc(code int) string {
 	}
 }
 
+type geoLocation struct {
+	Latitude    float64
+	Longitude   float64
+	CountryCode string
+}
+
+// lookupLocation resolves the device's approximate position and country from a
+// keyless IP service. ipapi.co rate-limits anonymous callers aggressively, so
+// ipwho.is goes first and ipinfo.io is the last fallback; a failure here only
+// costs the forecast its exact location and unit preference.
+func lookupLocation(client *http.Client) (geoLocation, bool) {
+	for _, provider := range []func(*http.Client) (geoLocation, bool){
+		lookupIPWhoIs, lookupIPAPICo, lookupIPInfo,
+	} {
+		if g, ok := provider(client); ok {
+			return g, true
+		}
+	}
+	return geoLocation{}, false
+}
+
+func getGeoJSON(client *http.Client, url string, dst any) bool {
+	resp, err := client.Get(url)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(dst) == nil
+}
+
+func lookupIPWhoIs(client *http.Client) (geoLocation, bool) {
+	var v struct {
+		Success     bool    `json:"success"`
+		Latitude    float64 `json:"latitude"`
+		Longitude   float64 `json:"longitude"`
+		CountryCode string  `json:"country_code"`
+	}
+	if !getGeoJSON(client, "https://ipwho.is/", &v) || !v.Success {
+		return geoLocation{}, false
+	}
+	if v.Latitude == 0 && v.Longitude == 0 {
+		return geoLocation{}, false
+	}
+	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode}, true
+}
+
+func lookupIPAPICo(client *http.Client) (geoLocation, bool) {
+	var v struct {
+		Error       bool    `json:"error"`
+		Latitude    float64 `json:"latitude"`
+		Longitude   float64 `json:"longitude"`
+		CountryCode string  `json:"country_code"`
+	}
+	if !getGeoJSON(client, "https://ipapi.co/json/", &v) || v.Error {
+		return geoLocation{}, false
+	}
+	if v.Latitude == 0 && v.Longitude == 0 {
+		return geoLocation{}, false
+	}
+	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode}, true
+}
+
+func lookupIPInfo(client *http.Client) (geoLocation, bool) {
+	var v struct {
+		Loc     string `json:"loc"`
+		Country string `json:"country"`
+	}
+	if !getGeoJSON(client, "https://ipinfo.io/json", &v) {
+		return geoLocation{}, false
+	}
+	parts := strings.Split(v.Loc, ",")
+	if len(parts) != 2 {
+		return geoLocation{}, false
+	}
+	lat, errLat := strconv.ParseFloat(strings.TrimSpace(parts[0]), 64)
+	lon, errLon := strconv.ParseFloat(strings.TrimSpace(parts[1]), 64)
+	if errLat != nil || errLon != nil || (lat == 0 && lon == 0) {
+		return geoLocation{}, false
+	}
+	return geoLocation{Latitude: lat, Longitude: lon, CountryCode: v.Country}, true
+}
+
 func fetchWeatherOnce() {
 	client := &http.Client{Timeout: 6 * time.Second}
 	lat, lon := 40.71, -74.0 // default fallback (New York) if geolocation fails
-	if geo, err := client.Get("https://ipapi.co/json/"); err == nil {
-		defer geo.Body.Close()
-		var g struct {
-			Latitude  float64 `json:"latitude"`
-			Longitude float64 `json:"longitude"`
-		}
-		if err := json.NewDecoder(geo.Body).Decode(&g); err == nil && (g.Latitude != 0 || g.Longitude != 0) {
-			lat, lon = g.Latitude, g.Longitude
-		} else {
-			log.Printf("[WARN] Geolocation unavailable, using default weather location")
-		}
+	if g, ok := lookupLocation(client); ok {
+		lat, lon = g.Latitude, g.Longitude
+		setWeatherCountry(g.CountryCode)
 	} else {
-		log.Printf("[WARN] Geolocation request failed, using default weather location")
+		log.Printf("[WARN] Geolocation unavailable, using default weather location")
 	}
 	url := fmt.Sprintf("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&forecast_days=7&timezone=auto", lat, lon)
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -446,6 +525,7 @@ func headerTitle(config *Config, scene SceneConfig) string {
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	sceneTitleBackRect = sdl.Rect{}
 	statusClockRect = sdl.Rect{}
+	weatherStatusRect = sdl.Rect{}
 	barH := HomeTopBarH
 	if screenHeight < 600 {
 		barH = HomeTopBarHSmall
@@ -652,11 +732,22 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 				W: int32(pw) + 12, H: int32(statusFont.Height()) + 12,
 			}
 		}
+		if isWeatherStatusPart(p) {
+			// The hi/lo chip is the Local weather button.
+			weatherStatusRect = sdl.Rect{
+				X: startX - 6, Y: statusY - 6,
+				W: int32(pw) + 12, H: int32(statusFont.Height()) + 12,
+			}
+		}
 		startX += int32(pw) + gap
 	}
 	if focusEngine.ElementIndex() == ChromeClockIndex && statusClockRect.W > 0 {
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
 		renderer.DrawRect(&statusClockRect)
+	}
+	if focusEngine.ElementIndex() == ChromeWeatherIndex && weatherStatusRect.W > 0 {
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+		renderer.DrawRect(&weatherStatusRect)
 	}
 
 	// Notification bell: top-right corner, always reachable with the D-pad.
@@ -687,13 +778,9 @@ func headerStatusParts(config *Config) []string {
 	}
 	wxMutex.Unlock()
 	if ready && len(weatherDaily) > 0 {
-		unit := config.Variables.WeatherUnit
-		hi, lo := today.TMax, today.TMin
-		if unit == "F" {
-			hi = hi*9/5 + 32
-			lo = lo*9/5 + 32
-		}
-		parts = append(parts, safeStatusText(fmt.Sprintf("%dC / %dC", int(hi), int(lo))))
+		unit := weatherUnit(config)
+		hi, lo := weatherTemp(today.TMax, unit), weatherTemp(today.TMin, unit)
+		parts = append(parts, safeStatusText(fmt.Sprintf("%d%s / %d%s", int(hi), unit, int(lo), unit)))
 	}
 	parts = append(parts, safeStatusText(time.Now().Format("15:04")))
 	if bat := getBatteryPercent(); bat >= 0 {
@@ -898,6 +985,12 @@ func loadUserConfig() *UserConfig {
 	// jukauser.json sections, then delete them so only the two canonical JSON
 	// files remain on disk.
 	migrateLegacyUserFiles()
+	// Older builds wrote their implicit Celsius default into jukauser.json.
+	// Clear that legacy "C" once so the country-based default can take over;
+	// the marker keeps a later explicit choice intact.
+	if migrateWeatherUnitAuto(userConfigCache) {
+		saveUserConfig(userConfigCache)
+	}
 	// The handheld face-button fix is persisted once so the setting the user
 	// sees matches how the buttons actually behave.
 	if migrateHandheldButtonMapping(userConfigCache, P().IsHandheld()) {
@@ -966,6 +1059,37 @@ func migrateLegacyUserFiles() {
 			}
 		}
 	}
+}
+
+// migrateWeatherUnitAuto clears the old implicit Celsius default once so the
+// country-based default can take over, and records that it ran so a later
+// explicit choice is never rewritten. It reports whether anything changed.
+func migrateWeatherUnitAuto(user *UserConfig) bool {
+	if user == nil {
+		return false
+	}
+	if user.Variables.Custom == nil {
+		user.Variables.Custom = make(map[string]interface{})
+	}
+	if _, migrated := user.Variables.Custom["weatherUnitAuto"]; migrated {
+		return false
+	}
+	user.Variables.Custom["weatherUnitAuto"] = true
+	changed := false
+	if strings.EqualFold(strings.TrimSpace(user.Variables.WeatherUnit), "C") {
+		user.Variables.WeatherUnit = ""
+		changed = true
+	}
+	for key, value := range user.Variables.Custom {
+		if !strings.EqualFold(key, "weatherUnit") {
+			continue
+		}
+		if s, ok := value.(string); ok && strings.EqualFold(strings.TrimSpace(s), "C") {
+			delete(user.Variables.Custom, key)
+			changed = true
+		}
+	}
+	return changed
 }
 
 func saveUserConfig(user *UserConfig) {

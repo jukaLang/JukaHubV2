@@ -36,7 +36,7 @@ func renderToolsProbe(t *testing.T, config *Config, cursor int) (*probeFrame, *s
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
 	}
-	defer renderer.Destroy()
+	defer destroyTestRenderer(renderer)
 	// Cached text textures belong to the renderer that created them; each probe
 	// makes a fresh renderer, so drop the previous probe's textures.
 	ClearTextCache()

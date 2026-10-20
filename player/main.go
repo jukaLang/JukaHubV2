@@ -126,10 +126,6 @@ func main() {
 		ApplyThemeColors(GetThemePreset(presetName))
 	}
 
-	// Defaults for optional settings
-	if config.Variables.WeatherUnit == "" {
-		config.Variables.WeatherUnit = "C"
-	}
 	// Default reduced-motion and low-power on handheld targets
 	// (e.g. Trimui Smart Pro) for a safer out-of-box experience. Windows
 	// development builds keep full animation.
@@ -467,6 +463,10 @@ func main() {
 					}
 					// Windows Apps is modal and consumes all keys while open.
 					if winAppsPanel.open && handleWindowsAppsKey(e, config) {
+						continue
+					}
+					// PortMaster Ports is modal too.
+					if portsPanel.open && handlePortsKey(e) {
 						continue
 					}
 					// The browser's link picker is modal too.
@@ -969,6 +969,11 @@ func main() {
 							handleWindowsAppsMouse(mx, my, config)
 							break
 						}
+						// PortMaster Ports is modal the same way.
+						if portsPanel.open {
+							handlePortsMouse(mx, my)
+							break
+						}
 						// Browser link picker floats above the browser scene.
 						if browserLinkPanel.open {
 							handleBrowserLinksMouse(mx, my, config)
@@ -997,6 +1002,12 @@ func main() {
 						// receives clicks before anything underneath. The Set alarm row
 						// opens the alarm editor; any other click dismisses it.
 						if homeCalendarOpen && calendarPopoverClick(mx, my, config) {
+							break
+						}
+
+						// Local weather card: it floats above the scene and dismisses
+						// on an outside click before the scene sees the tap.
+						if weatherPopoverClick(mx, my, config) {
 							break
 						}
 
@@ -1925,6 +1936,11 @@ func main() {
 		// Windows Apps overlay (Wine + WestonPack launcher).
 		if winAppsPanel.open {
 			renderWindowsAppsPanel(renderer, config)
+		}
+
+		// PortMaster Ports overlay (install PortMaster, launch installed ports).
+		if portsPanel.open {
+			renderPortsPanel(renderer, config)
 		}
 
 		// Browser link picker (anchors extracted from the current page).
