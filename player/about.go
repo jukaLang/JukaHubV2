@@ -9,11 +9,23 @@ import (
 
 // ──────────────────────────────────────────────────────────────────────
 // About / Credits screen
+//
+// Like Patch, About is a registered scene, so it draws its own body and then
+// the shared status bar and footer. Earlier it drew a bare screen with no
+// header, no footer badges, a black plate behind the wordmark and a credits
+// card that spilled its licence list over the bottom hint; the layout below is
+// measured from the content panel so every card fits.
 // ──────────────────────────────────────────────────────────────────────
 
 func renderAbout(renderer *sdl.Renderer, config *Config) {
-	renderer.SetDrawColor(8, 10, 18, 255)
-	renderer.Clear()
+	ensureBackgroundTexture(renderer, config)
+	if bgTexture != nil {
+		renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	} else {
+		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
+		renderer.Clear()
+	}
+	renderAmbientBackground(renderer)
 
 	font, _ := getCachedFont(config, "small")
 	medFont, _ := getCachedFont(config, "medium")
@@ -24,149 +36,118 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	if bigFont == nil {
 		bigFont = medFont
 	}
+	if font == nil {
+		return
+	}
 
-	cx := int32(screenWidth / 2)
+	const margin = int32(24)
+	top := HomeTopBarH + 8
+	bottom := screenHeight - bottomBarHeight("About") - 16
+	cx := screenWidth / 2
 
-	// Logo.
+	// Brand block: the wordmark is drawn like the header brand, with no plate
+	// behind it, so the screen matches every other one.
 	if bigFont != nil {
 		logo := "JukaHub"
-		lw, lh, _ := bigFont.SizeUTF8(logo)
-		lx := cx - int32(lw)/2
-		ly := int32(40)
-
-		// Glow.
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 25)
-		renderer.FillRect(&sdl.Rect{X: lx - 16, Y: ly - 8, W: int32(lw) + 32, H: int32(lh) + 16})
-
-		renderText(renderer, config, bigFont, logo,
-			sdl.Color{R: 240, G: 245, B: 255, A: 255}, lx, ly)
+		lw, _, _ := bigFont.SizeUTF8(logo)
+		renderText(renderer, config, bigFont, logo, ColorTextPrimary(), cx-int32(lw)/2, top+2)
 	}
-
-	// Version.
 	ver := versionDisplayString(config)
-	if medFont != nil {
-		vw, _, _ := medFont.SizeUTF8(ver)
-		renderText(renderer, config, medFont, ver,
-			sdl.Color{R: 140, G: 160, B: 200, A: 200},
-			cx-int32(vw)/2, int32(100))
+	vw, _, _ := medFont.SizeUTF8(ver)
+	renderText(renderer, config, medFont, ver, ColorTextSecondary(), cx-int32(vw)/2, top+52)
+	tag := "Your device. Your way."
+	tw, _, _ := font.SizeUTF8(tag)
+	renderText(renderer, config, font, tag, ColorTextTertiary(), cx-int32(tw)/2, top+84)
+
+	// Two columns of cards, then a full-width card for the licences. Heights
+	// come from the panel, so adding a credit line cannot push text into the
+	// footer band again.
+	gap := int32(24)
+	cardY := top + 112
+	cardW := (screenWidth - margin*2 - gap) / 2
+	rowH := int32(224)
+	buildRect := sdl.Rect{X: margin, Y: cardY, W: cardW, H: rowH}
+	creditsRect := sdl.Rect{X: margin + cardW + gap, Y: cardY, W: cardW, H: rowH}
+	srcRect := sdl.Rect{X: margin, Y: cardY + rowH + 16, W: screenWidth - margin*2, H: bottom - (cardY + rowH + 16)}
+
+	cardTitle := func(rect sdl.Rect, title string) int32 {
+		drawCard(renderer, rect.X, rect.Y, rect.W, rect.H, 16)
+		renderText(renderer, config, medFont, title, ColorTextPrimary(), rect.X+24, rect.Y+18)
+		return rect.Y + 54
 	}
 
-	// Tagline.
-	if font != nil {
-		tag := "Your device. Your way."
-		tw, _, _ := font.SizeUTF8(tag)
-		renderText(renderer, config, font, tag,
-			sdl.Color{R: 110, G: 125, B: 150, A: 160},
-			cx-int32(tw)/2, int32(130))
+	// Build info.
+	y := cardTitle(buildRect, "Build")
+	build := installedBuildTimeLabel()
+	if build == "" {
+		build = "unknown (source build)"
 	}
-
-	// Build info card.
-	cardX := int32(200)
-	cardY := int32(170)
-	cardW := int32(screenWidth - 400)
-	cardH := int32(200)
-	drawCard(renderer, cardX, cardY, cardW, cardH, 16)
-
-	if font != nil {
-		infoX := cardX + 24
-		y := cardY + 20
-		lineH := int32(24)
-
-		build := installedBuildTimeLabel()
-		if build == "" {
-			build = "unknown (source build)"
-		}
-		release := readInstalledReleaseInfo().Tag
-		if release == "" {
-			release = "—"
-		}
-		lines := []string{
-			fmt.Sprintf("Version:    %s", versionString(config)),
-			fmt.Sprintf("Compiled:   %s", build),
-			fmt.Sprintf("Release:    %s", release),
-			fmt.Sprintf("Platform:   %s", P().Name()),
-			fmt.Sprintf("OS:         %s/%s", runtime.GOOS, runtime.GOARCH),
-			fmt.Sprintf("CPUs:       %d", runtime.NumCPU()),
-			fmt.Sprintf("Renderer:   SDL2"),
-		}
-		for _, line := range lines {
-			renderText(renderer, config, font, line,
-				sdl.Color{R: 160, G: 175, B: 200, A: 200}, infoX, y)
-			y += lineH
+	release := readInstalledReleaseInfo().Tag
+	if release == "" {
+		release = "—"
+	}
+	info := []struct{ label, value string }{
+		{"Version", versionString(config)},
+		{"Compiled", build},
+		{"Release", release},
+		{"Platform", P().Name()},
+		{"OS", fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)},
+		{"CPUs", fmt.Sprintf("%d", runtime.NumCPU())},
+		{"Renderer", "SDL2"},
+	}
+	// The value column is measured from the widest label so no label runs into
+	// its value ("Compiledunknown" was the old bug).
+	labelW := int32(0)
+	for _, line := range info {
+		if lw, _, _ := font.SizeUTF8(line.label); int32(lw) > labelW {
+			labelW = int32(lw)
 		}
 	}
-
-	// Credits card.
-	credY := cardY + cardH + 20
-	credH := int32(260)
-	drawCard(renderer, cardX, credY, cardW, credH, 16)
-
-	if font != nil {
-		infoX := cardX + 24
-		y := credY + 20
-		lineH := int32(22)
-
-		// Title.
-		if medFont != nil {
-			renderText(renderer, config, medFont, "Credits",
-				sdl.Color{R: 200, G: 210, B: 230, A: 220}, infoX, y)
-			y += 30
-		}
-
-		credits := []struct {
-			name string
-			role string
-		}{
-			{"JukaHub Team", "Core Development"},
-			{"Go + SDL2", "Runtime & Rendering"},
-			{"Inter Font", "Typography"},
-			{"Trimui Smart Pro", "Primary Target Device"},
-		}
-		for _, c := range credits {
-			// Name in accent color.
-			renderText(renderer, config, font, c.name,
-				sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 220},
-				infoX, y)
-			// Role in secondary.
-			nameW, _, _ := font.SizeUTF8(c.name)
-			renderText(renderer, config, font, " - "+c.role,
-				sdl.Color{R: 110, G: 125, B: 150, A: 160},
-				infoX+int32(nameW), y)
-			y += lineH
-		}
-
-		y += 10
-		if medFont != nil {
-			renderText(renderer, config, medFont, "Open Source",
-				sdl.Color{R: 200, G: 210, B: 230, A: 220}, infoX, y)
-			y += 28
-		}
-
-		licenses := []string{
-			"Go - BSD License",
-			"SDL2 - zlib License",
-			"SDL2_ttf - zlib License",
-			"SDL2_image - zlib License",
-			"bbolt - MIT License",
-			"zeroconf - Apache 2.0",
-			"gopsutil - BSD License",
-			"gjson - MIT License",
-		}
-		for _, lic := range licenses {
-			renderText(renderer, config, font, lic,
-				sdl.Color{R: 100, G: 115, B: 140, A: 160}, infoX+16, y)
-			y += lineH - 4
-		}
+	for _, line := range info {
+		renderText(renderer, config, font, line.label, ColorTextTertiary(), buildRect.X+24, y)
+		renderText(renderer, config, font, line.value, ColorTextSecondary(), buildRect.X+24+labelW+18, y)
+		y += 21
 	}
 
-	// Controls hint.
-	if font != nil {
-		hint := "B/Esc: Back"
-		hw, _, _ := font.SizeUTF8(hint)
-		renderText(renderer, config, font, hint,
-			sdl.Color{R: 80, G: 90, B: 110, A: 120},
-			cx-int32(hw)/2, screenHeight-30)
+	// Credits.
+	y = cardTitle(creditsRect, "Credits")
+	credits := []struct{ name, role string }{
+		{"JukaHub Team", "Core Development"},
+		{"Go + SDL2", "Runtime & Rendering"},
+		{"Inter Font", "Typography"},
+		{"Trimui Smart Pro", "Primary Target Device"},
 	}
+	for _, c := range credits {
+		renderText(renderer, config, font, c.name, WithAlpha(ColorAccent, 230), creditsRect.X+24, y)
+		nameW, _, _ := font.SizeUTF8(c.name)
+		renderText(renderer, config, font, " - "+c.role, ColorTextSecondary(), creditsRect.X+24+int32(nameW), y)
+		y += 22
+	}
+
+	// Open source licences.
+	y = cardTitle(srcRect, "Open Source")
+	licenses := []string{
+		"Go - BSD License",
+		"SDL2 - zlib License",
+		"SDL2_ttf - zlib License",
+		"SDL2_image - zlib License",
+		"bbolt - MIT License",
+		"zeroconf - Apache 2.0",
+		"gopsutil - BSD License",
+		"gjson - MIT License",
+	}
+	for _, lic := range licenses {
+		renderText(renderer, config, font, lic, ColorTextTertiary(), srcRect.X+24, y)
+		y += 20
+	}
+
+	// The shared bars: About had none, which made it the only screen without
+	// the header status cluster or the footer button badges.
+	renderStatusBar(renderer, config)
+	renderFooter(renderer, config)
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetClipRect(nil)
 }
 
 // handleAboutInput processes keyboard input for the about scene.

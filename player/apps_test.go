@@ -98,7 +98,7 @@ func TestCollectAppEntriesOrderAndDedupe(t *testing.T) {
 	mustWriteAppFile(t, filepath.Join(sys, "shared.lnk")) // same display name as portable
 	mustWriteAppFile(t, filepath.Join(sys, "Beta.lnk"))
 
-	entries := collectAppEntries(appsDir, []string{sys})
+	entries := collectAppEntries(nil, appsDir, []string{sys})
 	var names []string
 	for _, e := range entries {
 		names = append(names, e.Name)

@@ -113,6 +113,13 @@ func (f *FavoriteItem) Label() string {
 		if fe, ok := f.Data.(FileEntry); ok {
 			return fe.Name
 		}
+	case "game":
+		if g, ok := f.Data.(recentGame); ok {
+			if g.Title != "" {
+				return g.Title
+			}
+			return filepath.Base(g.Path)
+		}
 	}
 	return fmt.Sprintf("%v", f.Data)
 }
@@ -137,6 +144,10 @@ func (f *FavoriteItem) Play(config *Config) {
 	case "file":
 		if fe, ok := f.Data.(FileEntry); ok {
 			openInExplorer(fe.Path)
+		}
+	case "game":
+		if g, ok := f.Data.(recentGame); ok {
+			playRecentGame(g)
 		}
 	}
 }

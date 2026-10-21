@@ -93,6 +93,32 @@ Catatan: ini hook yang dipakai komunitas dan CrossMix, bukan antarmuka resmi
 trimui. Kalau firmware kamu memakai mekanisme lain, jalankan `launch.sh` dari
 hook firmware tersebut — hasilnya sama.
 
+### Update mandiri dan restart
+
+Saat update, JukaHub tidak bisa mengganti binernya sendiri, jadi helper kecil
+mengganti file setelah aplikasi keluar. Di handheld, `launch.sh` yang menjalankan
+ulang build baru **di tempat**: helper hanya menulis `.update-swapped`, dan
+script yang sama (proses yang sama) menjalankan `JukaHub` lagi. Supervisor
+firmware tetap di-pause dan MainUI tidak pernah dijalankan ulang di tengah
+update.
+
+Ini penting karena launcher lama mengembalikan MainUI begitu JukaHub keluar,
+sementara helper menjalankan launcher kedua. Dua UI lalu menggambar ke
+`/dev/fb0` yang sama dan layar tampak berkedip antara MainUI dan JukaHub.
+Sekarang ada dua pengaman:
+
+- `launch.sh` memeriksa ulang bahwa MainUI benar-benar sudah mati; kalau masih
+  hidup setelah beberapa percobaan `kill -9`, JukaHub **tidak** dijalankan dan
+  alasannya ditulis ke `errors.txt`.
+- Kalau launcher di kartu belum mengenal protokol ini (versi lama), helper
+  menunggu launcher lama selesai lebih dulu, baru menjalankan launcher baru.
+
+Penanda yang dipakai (di folder app, hanya sementara): `.restart-pending`
+ditulis JukaHub sebelum swap, `.update-swapped` / `.update-failed` ditulis
+helper sebagai hasilnya, dan `launch.sh` menghapus semuanya saat mulai.
+`launch.sh` di paket rilis dan di `Apps/JukaHub` harus identik — ada test yang
+menolak kalau keduanya berbeda.
+
 ---
 
 ## 3. Kalau ada masalah
@@ -102,6 +128,7 @@ hook firmware tersebut — hasilnya sama.
 | Layar hitam / tidak keluar dari app | Buka kartu SD di PC, kirim isi `Apps/JukaHub/errors.txt` ke saya. |
 | App muncul tapi langsung keluar | Cek `errors.txt` — biasanya `JukaHub` belum executable (`chmod +x`) atau library kurang. |
 | Huruf tidak tampil / kotak-kotak | `Inter-Regular.ttf` hilang dari folder app. |
+| Layar berkedip antara MainUI dan JukaHub setelah update | `launch.sh` di kartu lebih lama dari aplikasinya. Update sekali lagi (arsip rilis mengganti `launch.sh`), atau salin `launch.sh` dari arsip ke `Apps/JukaHub/`, lalu reboot. |
 | Pencarian YouTube gagal | Cek `required/yt-dlp` ada; butuh Wi-Fi. Lihat juga `logs.txt` (scene **Logs** di Beranda). |
 | Baru buka app, Wi-Fi belum tersambung | Akan muncul pesan **Offline — connect WiFi**. Sambungkan Wi-Fi; tool yang belum ada diunduh otomatis setelah koneksi kembali. |
 | `yt-dlp` / `ffmpeg` gagal diunduh | Kartu unduhan menampilkan `Could not install …` dengan tombol **A: retry**. Tekan **A** untuk mengulang; kalau sudah berhasil, restart JukaHub supaya tool baru dipakai. |

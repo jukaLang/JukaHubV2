@@ -71,9 +71,10 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 			}
 		}
 	}
-	// Append remaining scenes that weren't in preferOrder.
+	// Append remaining scenes that weren't in preferOrder. About is listed by
+	// the explicit entry at the end of the menu, so its scene is skipped here.
 	for _, sc := range config.Scenes {
-		if seen[sc.Name] || sc.Icon == "" || sc.Name == "Exit" || sc.Name == "Patch" {
+		if seen[sc.Name] || sc.Icon == "" || sc.Name == "Exit" || sc.Name == "Patch" || sc.Name == "About" {
 			continue
 		}
 		if strings.HasPrefix(sc.Name, "Settings") || strings.HasPrefix(sc.Name, "Theme") {
@@ -88,6 +89,9 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 	// Special entries that open overlays, not scenes.
 	apps = append(apps, startMenuEntry{name: "Save Manager", icon: "S", scene: "", action: func(c *Config) { openSaveManagerPanel() }})
 	apps = append(apps, startMenuEntry{name: "Curation Hub", icon: "H", scene: "", action: func(c *Config) { openCurationPanel(c) }})
+	// The Emulator card opens this panel from Home; the Apps row has to reach
+	// the same place instead of a per-platform launcher scene.
+	apps = append(apps, startMenuEntry{name: "Emulator", icon: "E", scene: "", action: func(c *Config) { openEmulatorPanel() }})
 	apps = append(apps, startMenuEntry{name: "Game Profiles", icon: "G", scene: "", action: func(c *Config) { openGameProfilePanel(false) }})
 	apps = append(apps, startMenuEntry{name: "PS Remote Play", icon: "C", scene: "", action: func(c *Config) { openChiakiPanel() }})
 	if !IsWindows() {

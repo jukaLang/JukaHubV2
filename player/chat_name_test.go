@@ -16,11 +16,16 @@ func withChatNameEnv(t *testing.T) {
 	t.Chdir(t.TempDir())
 	prevCache := userConfigCache
 	prevMessages := chatMessages
+	prevWrites := userConfigWritesEnabled
+	// The test binary disables user-config writes; these tests check that the
+	// name is persisted, into the temporary directory they chdir'd into.
+	userConfigWritesEnabled = true
 	userConfigCache = &UserConfig{Variables: UserVariables{Custom: make(map[string]interface{})}}
 	chatMessages = nil
 	t.Cleanup(func() {
 		userConfigCache = prevCache
 		chatMessages = prevMessages
+		userConfigWritesEnabled = prevWrites
 	})
 }
 

@@ -331,8 +331,8 @@ func handleGSInput(e *sdl.KeyboardEvent, config *Config) {
 		globalSearchOpen = false
 		PlayBackSound()
 	case sdl.K_BACKSPACE:
-		if len(gsQuery) > 0 {
-			gsQuery = gsQuery[:len(gsQuery)-1]
+		if gsQuery != "" {
+			gsQuery = trimLastRune(gsQuery)
 			gsResults = gsSearch(gsQuery)
 			gsCursor = 0
 		}

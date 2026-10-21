@@ -196,7 +196,7 @@ func termCompletions(input string, dirEntries, history []string) (string, []stri
 	prefix := matches[0]
 	for _, m := range matches[1:] {
 		for !strings.HasPrefix(m, prefix) && prefix != "" {
-			prefix = prefix[:len(prefix)-1]
+			prefix = trimLastRune(prefix)
 		}
 	}
 	if len(prefix) > len(word) {

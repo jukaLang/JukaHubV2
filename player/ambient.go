@@ -172,7 +172,7 @@ func ambientEntryBlocked(config *Config) bool {
 		shortcutsOpen || clipSearchOpen || globalSearchOpen || virtualKeyboardActive ||
 		toolsPanel.open || imageViewerPath != "" || patchModal != nil ||
 		transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
-		nc.open || tb.startOpen || processPanel.open || ipPanelOpen || emuPanel.open ||
+		nc.open || tb.startOpen || processPanel.open || ipPanelOpen || emuPanel.open || gameLib.open ||
 		gpPanel.open || winAppsPanel.open || portsPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open ||
 		raPanel.open || a11y.open || wpOpen || socialNotifOpen || smartHomePanel.open {
 		return true

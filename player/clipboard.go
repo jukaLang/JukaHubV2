@@ -210,9 +210,7 @@ func handleClipboardInput(event *sdl.KeyboardEvent) bool {
 			}
 			return true
 		case sdl.K_BACKSPACE:
-			if len(clipSearchBuf) > 0 {
-				clipSearchBuf = clipSearchBuf[:len(clipSearchBuf)-1]
-			}
+			clipSearchBuf = trimLastRune(clipSearchBuf)
 			return true
 		case sdl.K_u:
 			if event.Keysym.Mod&sdl.KMOD_CTRL != 0 {

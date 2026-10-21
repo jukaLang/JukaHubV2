@@ -300,6 +300,7 @@ func emulatorEntries() []emuEntry {
 		Status: emuAvailable,
 		Pinned: true,
 	})
+	entries = append(entries, gamesLibraryEmuEntry())
 	entries = append(entries, gameProfilesEmuEntry())
 	entries = append(entries, compatibilityEmuEntry())
 	if !IsWindows() {
@@ -319,6 +320,19 @@ func invalidateEmulatorCache() {
 	emuCache.built = false
 	emuCache.entries = nil
 	emuCache.mu.Unlock()
+}
+
+// gamesLibraryEmuEntry is the pinned door to the game browser. It deliberately
+// reports no counts: counting a card full of ROMs on every open would make the
+// Emulators panel wait on the SD card, and the library screen scans when it
+// opens anyway.
+func gamesLibraryEmuEntry() emuEntry {
+	return emuEntry{
+		Name:   gamesLibraryEntryName,
+		Detail: "Browse Roms/ by console, with box art and one-press resume",
+		Status: emuAvailable,
+		Pinned: true,
+	}
 }
 
 // gameProfilesEmuEntry is the pinned launcher row. It reports the catalog
@@ -495,6 +509,10 @@ func emuPanelActivate(config *Config) {
 	if e.Name == biosDoctorEntryName {
 		openCommunityPanel(config, communityPageBIOSDoctor)
 		emuPanel.open = false
+		return
+	}
+	if e.Name == gamesLibraryEntryName {
+		openGameLibraryPanel()
 		return
 	}
 	if e.Name == gameProfilesEntryName {

@@ -413,16 +413,65 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 	renderPatchModal(renderer, config, font, medium)
 }
 
+// patchModalLayout is the measured confirmation card. The height follows the
+// wrapped body, so a long explanation is readable instead of being cut after
+// two rune-split lines — the dialog asks before replacing files, and its reason
+// is the part that must not be lost.
+type patchModalLayout struct {
+	card  sdl.Rect
+	lines []string
+	lineH int32
+	textY int32
+}
+
+func layoutPatchModal(font *ttf.Font, body string) patchModalLayout {
+	const (
+		minH    = int32(300)
+		bodyTop = int32(66)
+		btnZone = int32(88) // button row plus its bottom padding
+	)
+	w := int32(720)
+	if w > screenWidth-48 {
+		w = screenWidth - 48
+	}
+	lineH := int32(font.Height()) + 4
+	// Cap the measure so a pathological body cannot produce thousands of lines
+	// just to be clamped to the screen below.
+	lines := wrapTextLines(font, body, w-48, 14)
+	h := minH
+	if need := bodyTop + int32(len(lines))*lineH + btnZone; need > h {
+		h = need
+	}
+	if maxH := screenHeight - 64; h > maxH {
+		h = maxH
+	}
+	// If the screen clipped the card, re-wrap to what actually fits so the
+	// overflow shows as an ellipsis instead of vanishing under the buttons.
+	if fit := int((h - bodyTop - btnZone) / lineH); fit < len(lines) {
+		if fit < 1 {
+			fit = 1
+		}
+		lines = wrapTextLines(font, body, w-48, fit)
+	}
+	if len(lines) == 0 {
+		lines = []string{""}
+	}
+	return patchModalLayout{
+		card:  sdl.Rect{X: (screenWidth - w) / 2, Y: (screenHeight - h) / 2, W: w, H: h},
+		lines: lines,
+		lineH: lineH,
+		textY: (screenHeight-h)/2 + bodyTop,
+	}
+}
+
 // renderPatchModal draws the active confirmation modal.
 func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.Font) {
 	m := patchModal
 	if m == nil || font == nil {
 		return
 	}
-	w := int32(720)
-	h := int32(300)
-	x := (screenWidth - w) / 2
-	y := (screenHeight - h) / 2
+	layout := layoutPatchModal(font, m.Body)
+	x, y, w, h := layout.card.X, layout.card.Y, layout.card.W, layout.card.H
 
 	// Scrim.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
@@ -436,21 +485,11 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 
 	renderText(renderer, config, medium, m.Title, ColorTextPrimary(), x+24, y+20)
 
-	// Body: wrap to the modal width.
-	bodyMax := w - 48
-	lines := wrapMeasured([]rune(m.Body), bodyMax, func(s string) int32 {
-		sw, _, _ := font.SizeUTF8(s)
-		return int32(sw)
-	})
-	if len(lines) == 0 {
-		lines = []string{""}
-	}
-	lineH := int32(font.Height()) + 4
-	textY := y + 66
-	renderWithClip(renderer, x+24, textY, bodyMax, h-160, func(r *sdl.Renderer) {
-		for _, l := range lines {
+	textY := layout.textY
+	renderWithClip(renderer, x+24, textY, w-48, h-160, func(r *sdl.Renderer) {
+		for _, l := range layout.lines {
 			renderText(r, config, font, l, ColorTextSecondary(), x+24, textY)
-			textY += lineH
+			textY += layout.lineH
 		}
 	})
 

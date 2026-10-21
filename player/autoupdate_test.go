@@ -5,6 +5,7 @@ package main
 // directories; no network and no real installation is touched.
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -258,7 +259,7 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		script += ".bat"
 	}
-	if err := writeSwapScript(script, filepath.Join(install, exe), files, journal); err != nil {
+	if err := writeSwapScript(script, filepath.Join(install, exe), files, journal, 0); err != nil {
 		t.Fatalf("writeSwapScript: %v", err)
 	}
 	data, err := os.ReadFile(script)
@@ -269,13 +270,17 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		sep = "\r\n"
 	}
+	// Neutralise the relaunch instead of deleting its lines: the POSIX helper
+	// wraps it in an if/fi, so dropping lines would leave a broken script.
+	// `true` swallows the arguments, and `rem` comments out the .bat command.
 	var kept []string
 	for _, line := range strings.Split(string(data), sep) {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "start ") || strings.Contains(trimmed, "nohup") ||
+		if strings.HasPrefix(trimmed, "start ") ||
 			trimmed == "sleep 2" || strings.HasPrefix(trimmed, "timeout /t 2") {
 			continue
 		}
+		line = strings.ReplaceAll(line, "nohup ", "true ")
 		kept = append(kept, line)
 	}
 	if err := os.WriteFile(script, []byte(strings.Join(kept, sep)), 0o700); err != nil {
@@ -285,6 +290,8 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		cmd = exec.Command("cmd", "/c", script)
+	} else if sh, lookErr := exec.LookPath("sh"); lookErr == nil {
+		cmd = exec.Command(sh, script)
 	} else {
 		cmd = exec.Command(script)
 	}
@@ -341,7 +348,7 @@ func TestSwapScriptReplacesFiles(t *testing.T) {
 		t.Fatalf("stagedInstallFiles: %v", err)
 	}
 	script := filepath.Join(dir, "apply-update.bat")
-	if err := writeSwapScript(script, filepath.Join(install, "JukaHub.exe"), files, journal); err != nil {
+	if err := writeSwapScript(script, filepath.Join(install, "JukaHub.exe"), files, journal, 0); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(script)
@@ -385,7 +392,7 @@ func TestWriteSwapScriptIncludesEveryFile(t *testing.T) {
 		{Src: filepath.Join(dir, "JukaHub"), Name: "JukaHub", Dest: filepath.Join(dir, "out", "JukaHub")},
 	}
 	script := filepath.Join(dir, "apply-update")
-	if err := writeSwapScript(script, filepath.Join(dir, "out", "JukaHub"), files, filepath.Join(dir, "journal.json")); err != nil {
+	if err := writeSwapScript(script, filepath.Join(dir, "out", "JukaHub"), files, filepath.Join(dir, "journal.json"), 0); err != nil {
 		t.Fatalf("writeSwapScript: %v", err)
 	}
 	data, err := os.ReadFile(script)
@@ -424,6 +431,61 @@ func TestAutoUpdateCheckDue(t *testing.T) {
 			t.Errorf("%s: autoUpdateCheckDue(%q) = %v, want %v", tc.name, tc.last, got, tc.want)
 		}
 	}
+}
+
+// TestRunAutoUpdateAttempts pins the retry: a failed lookup is tried again
+// after the delay, a success stops the loop, and the Patch lock is never
+// retried because waiting cannot release it.
+func TestRunAutoUpdateAttempts(t *testing.T) {
+	t.Run("retries then succeeds", func(t *testing.T) {
+		calls := 0
+		var slept []time.Duration
+		used, err := runAutoUpdateAttempts(func() error {
+			calls++
+			if calls == 1 {
+				return errors.New("no route to host")
+			}
+			return nil
+		}, 2, func(d time.Duration) { slept = append(slept, d) }, nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if used != 2 || calls != 2 {
+			t.Fatalf("used %d attempts, check ran %d times; want 2 and 2", used, calls)
+		}
+		if len(slept) != 1 || slept[0] != autoUpdateRetryDelay {
+			t.Fatalf("slept %v, want one pause of %v", slept, autoUpdateRetryDelay)
+		}
+	})
+
+	t.Run("gives up after the budget", func(t *testing.T) {
+		calls := 0
+		used, err := runAutoUpdateAttempts(func() error {
+			calls++
+			return errors.New("offline")
+		}, 3, func(time.Duration) {}, nil)
+		if err == nil {
+			t.Fatal("expected the last error to be returned")
+		}
+		if used != 3 || calls != 3 {
+			t.Fatalf("used %d attempts, check ran %d times; want 3 and 3", used, calls)
+		}
+	})
+
+	t.Run("busy lock is not retried", func(t *testing.T) {
+		calls := 0
+		sleeps := 0
+		used, err := runAutoUpdateAttempts(func() error {
+			calls++
+			return errAutoUpdateInProgress
+		}, 3, func(time.Duration) { sleeps++ }, nil)
+		if !errors.Is(err, errAutoUpdateInProgress) {
+			t.Fatalf("error = %v, want errAutoUpdateInProgress", err)
+		}
+		if used != 1 || calls != 1 || sleeps != 0 {
+			t.Fatalf("used %d, calls %d, sleeps %d; want 1, 1, 0", used, calls, sleeps)
+		}
+	})
 }
 
 // TestReleaseAssetDigest pins the release archive checksum: only a well-formed

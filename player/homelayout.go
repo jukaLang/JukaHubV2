@@ -151,13 +151,16 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 900, Y: 301, W: 348, H: 121})
 	card(HomeFocusFavorites, "Favorites", "Saved content", "favorites", HomeActionFavorites,
 		sdl.Rect{X: 32, Y: 454, W: 292, H: 158})
-	card(HomeFocusChat, "Chat", "Messages and sharing", "chat", HomeActionChat,
+	// Card subtitles are single lines that must fit beside the icon; the long
+	// ones ("Messages and sharing", "Personalize JukaHub") were ellipsised on
+	// the shipped layout, which read as a rendering bug. Keep them short.
+	card(HomeFocusChat, "Chat", "Chat with AI", "chat", HomeActionChat,
 		sdl.Rect{X: 340, Y: 454, W: 292, H: 158})
 	card(HomeFocusTools, "Tools", "Network and utilities", "tools", HomeActionTools,
 		sdl.Rect{X: 648, Y: 454, W: 292, H: 158})
-	card(HomeFocusEmulator, "Emulator", "Launch games and emulators", "emulator", HomeActionEmulator,
+	card(HomeFocusEmulator, "Emulator", "Play games", "emulator", HomeActionEmulator,
 		sdl.Rect{X: 956, Y: 454, W: 292, H: 158})
-	card(HomeFocusSettings, "Settings", "Personalize JukaHub", "settings", HomeActionSettings,
+	card(HomeFocusSettings, "Settings", "Preferences", "settings", HomeActionSettings,
 		sdl.Rect{X: 1082, Y: 164, W: 166, H: 121})
 	// The weather chip and clock are the header text itself - no separate
 	// buttons are drawn. drawHeader replaces these rects with the measured

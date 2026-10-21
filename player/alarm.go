@@ -894,9 +894,7 @@ func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 		case sdl.K_ESCAPE, sdl.K_b:
 			alarmBack()
 		case sdl.K_BACKSPACE:
-			if len(alarmUI.editLabel) > 0 {
-				alarmUI.editLabel = alarmUI.editLabel[:len(alarmUI.editLabel)-1]
-			}
+			alarmUI.editLabel = trimLastRune(alarmUI.editLabel)
 		}
 	case 4: // Confirm delete
 		switch e.Keysym.Sym {

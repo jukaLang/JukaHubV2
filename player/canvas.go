@@ -348,9 +348,7 @@ func handleCanvasInput(e *sdl.KeyboardEvent, config *Config) {
 			}
 			canvasSurface = executeCanvasCode(canvasCode)
 		case sdl.K_BACKSPACE:
-			if len(inputTextBuffer) > 0 {
-				inputTextBuffer = inputTextBuffer[:len(inputTextBuffer)-1]
-			}
+			inputTextBuffer = trimLastRune(inputTextBuffer)
 		default:
 			if e.Keysym.Sym != 0 {
 				inputTextBuffer += string(rune(e.Keysym.Sym))

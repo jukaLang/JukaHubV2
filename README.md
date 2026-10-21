@@ -104,6 +104,13 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   installed beside Wine and a Vulkan loader is present, Direct3D DLL overrides
   are enabled automatically; see [docs/WINDOWS_APPS.md](docs/WINDOWS_APPS.md)
   for the runtime setup.
+* **Games Library** — **Emulators → Games Library** browses `Roms/<system>/`
+  console by console, shows the box art downloaded for each title, and launches
+  the game with the emulator that owns its system. Every launch is recorded, so
+  the **Continue** row at the top resumes the last game in one press. **X** on a
+  game opens **LAN Play**: host it, or join another device over Wi-Fi, so link
+  cable titles like Mario Kart and Four Swords play without a cable. See
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md).
 * **PortMaster Ports** — install PortMaster from the Emulators screen and launch
   the ports it manages without leaving JukaHub. Installed launchers are read
   from `Ports/` and the older `Roms/Ports` locations; see
@@ -269,6 +276,12 @@ media are untouched, and an interrupted update is rolled back automatically at
 next launch. The once-per-launch "update available" prompt installs the same
 way.
 
+On the handheld the restart happens in place: `launch.sh` runs the new build
+itself and keeps the firmware supervisors paused, so the stock launcher never
+comes back underneath JukaHub. A build installed before this handover still
+relaunches the old way once — that update replaces `launch.sh` with the new one,
+and every update after it restarts cleanly.
+
 After the restart, **What's new** opens once with that release's notes (the
 notes are cached before the swap, so it also works offline). You can reopen it
 any time from **Tools → Community & support**. The version line shows the
@@ -298,6 +311,7 @@ Logs are on the SD card, so you can read them on a PC without SSH.
 | Not in the Apps menu | Reboot. Check the folder is `Apps/JukaHub` and contains `launch.sh`. |
 | Black screen or closes at once | Send `Apps/JukaHub/errors.txt` — the launcher's log. |
 | A plugin or a bad update broke startup | Create an empty `safe-mode.flag` next to the app (or launch with `--safe-mode`). |
+| Screen blinks between the stock menu and JukaHub after an update | Both UIs are drawing at once: the launcher on the card is older than the app. Update once more, or copy `launch.sh` from the release archive over `Apps/JukaHub/launch.sh`, then reboot. |
 | YouTube search fails | Check Wi-Fi; open **Logs** on Home for the app's own log. |
 | Video stutters | Settings → playback resolution → try `480` or `360`. |
 | Text shows as boxes | `Inter-Regular.ttf` is missing from `Apps/JukaHub`. |
@@ -330,6 +344,7 @@ JukaHub on a PC.
 | [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
 | [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
+| [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
 | [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |
 | [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |

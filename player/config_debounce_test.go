@@ -20,8 +20,13 @@ func TestDebouncedUserConfigSaveStaysInScheduledDir(t *testing.T) {
 	defer func() { _ = os.Chdir(prevWD) }()
 	prevDelay := userConfigSaveDelay
 	prevCache := userConfigCache
+	prevWrites := userConfigWritesEnabled
 	userConfigSaveDelay = 20 * time.Millisecond
 	userConfigCache = nil
+	// This test is about the writer actually landing a file; the rest of the
+	// binary runs with the debounced writer disabled so tests never touch the
+	// checkout.
+	userConfigWritesEnabled = true
 	t.Cleanup(func() {
 		userConfigSaveMutex.Lock()
 		if userConfigSaveTimer != nil {
@@ -33,6 +38,7 @@ func TestDebouncedUserConfigSaveStaysInScheduledDir(t *testing.T) {
 		userConfigSaveMutex.Unlock()
 		userConfigSaveDelay = prevDelay
 		userConfigCache = prevCache
+		userConfigWritesEnabled = prevWrites
 		_ = os.Chdir(prevWD)
 	})
 

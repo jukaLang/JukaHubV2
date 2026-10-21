@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -257,27 +258,29 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(0, 0, 0, 190)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
 
-	smallH, medH := int32(font.Height()), int32(medium.Height())
-	cardW := int32(620)
-	if cardW > screenWidth-64 {
-		cardW = screenWidth - 64
-	}
-	cardH := int32(250)
-	if cardH > screenHeight-64 {
-		cardH = screenHeight - 64
-	}
-	x := (screenWidth - cardW) / 2
-	y := (screenHeight - cardH) / 2
+	smallH := int32(font.Height())
+	layout := layoutUpdatePrompt(font, medium)
+	x, y, cardW, cardH := layout.card.X, layout.card.Y, layout.card.W, layout.card.H
 	fillRoundedRect(renderer, x, y, cardW, cardH, 20, ColorPanelRaised)
 	strokeRoundedRect(renderer, x, y, cardW, cardH, 20, 1, ColorBorderDefault)
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 140)
 	renderer.FillRect(&sdl.Rect{X: x + 18, Y: y + 1, W: cardW - 36, H: 2})
 
-	renderText(renderer, config, medium, "JukaHub update available", ColorTextPrimary(), x+28, y+24)
-	version := availableUpdateLabel()
-	body := fmt.Sprintf("Release %s is ready to install.\nDownload and restart when you are ready — nothing is installed without your confirmation.", version)
-	renderText(renderer, config, font, body, ColorTextTertiary(), x+28, y+24+medH+12)
-	renderText(renderer, config, font, "You can always install it later from Tools → Patch.", ColorTextTertiary(), x+28, y+24+medH+12+smallH*2+8)
+	renderText(renderer, config, medium, "JukaHub update available", ColorTextPrimary(), x+28, layout.titleY)
+	for i, line := range layout.bodyLines {
+		renderText(renderer, config, font, line, ColorTextTertiary(), x+28, layout.bodyY+int32(i)*smallH)
+	}
+	for i, line := range layout.hintLines {
+		renderText(renderer, config, font, line, ColorTextTertiary(), x+28, layout.hintY+int32(i)*smallH)
+	}
+	if len(layout.notes) > 0 {
+		renderText(renderer, config, font, "WHAT'S NEW", accentColor, x+28, layout.noteLabelY)
+		for i, note := range layout.notes {
+			// ASCII dash: the bundled handheld fonts are not guaranteed to
+			// carry a bullet glyph.
+			renderText(renderer, config, font, "- "+note, ColorTextSecondary(), x+28, layout.noteLabelY+smallH+6+int32(i)*smallH)
+		}
+	}
 
 	// Buttons side by side, right-aligned.
 	btnH := int32(42)
@@ -285,7 +288,7 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 	laterW := int32(120)
 	laterX := x + cardW - 28 - laterW
 	updateX := laterX - 12 - updateW
-	btnY := y + cardH - 28 - btnH
+	btnY := layout.buttonsY
 	updatePrompt.laterBtn = sdl.Rect{X: laterX, Y: btnY, W: laterW, H: btnH}
 	updatePrompt.nowBtn = sdl.Rect{X: updateX, Y: btnY, W: updateW, H: btnH}
 
@@ -314,6 +317,124 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 		Pill:       true,
 		NoShadow:   true,
 	}, UIButtonState{Focused: updatePrompt.focus == 1})
+}
+
+// updatePromptLayout is the measured geometry of the modal. The renderer draws
+// from it and the render test checks it, so wrapped copy and the release-note
+// preview cannot slip under the button row again.
+type updatePromptLayout struct {
+	card       sdl.Rect
+	titleY     int32
+	bodyY      int32
+	bodyLines  []string
+	hintY      int32
+	hintLines  []string
+	noteLabelY int32
+	notes      []string
+	noteBottom int32
+	buttonsY   int32
+}
+
+const (
+	updatePromptPad      = int32(24)
+	updatePromptBtnH     = int32(42)
+	updatePromptBtnGap   = int32(28)
+	updatePromptMaxNotes = 3
+)
+
+// layoutUpdatePrompt measures the card from its text, top down. The height is
+// derived from the wrapped lines rather than a constant, because a fixed height
+// is what let the third release-note line draw behind the buttons.
+func layoutUpdatePrompt(font, medium *ttf.Font) updatePromptLayout {
+	smallH, medH := int32(font.Height()), int32(medium.Height())
+	cardW := int32(620)
+	if cardW > screenWidth-64 {
+		cardW = screenWidth - 64
+	}
+	innerW := cardW - 56
+
+	body := fmt.Sprintf("Release %s is ready to install. Download and restart when you are ready — nothing is installed without your confirmation.", availableUpdateLabel())
+	bodyLines := wrapTextLines(font, body, innerW, 3)
+	hintLines := wrapTextLines(font, "You can always install it later from Tools → Patch.", innerW, 1)
+	notes := updatePromptHighlights(updatePromptMaxNotes)
+
+	measure := func(withNotes bool) updatePromptLayout {
+		m := updatePromptLayout{bodyLines: bodyLines, hintLines: hintLines}
+		m.titleY = updatePromptPad
+		m.bodyY = m.titleY + medH + 12
+		m.hintY = m.bodyY + int32(len(bodyLines))*smallH + 8
+		h := m.hintY + int32(len(hintLines))*smallH
+		m.noteBottom = h
+		if withNotes {
+			m.notes = notes
+			m.noteLabelY = h + 14
+			m.noteBottom = m.noteLabelY + smallH + 6 + int32(len(notes))*smallH
+			h = m.noteBottom
+		}
+		m.buttonsY = h + updatePromptPad - 4
+		h = m.buttonsY + updatePromptBtnH + updatePromptBtnGap
+		m.card = sdl.Rect{W: cardW, H: h}
+		return m
+	}
+
+	m := measure(len(notes) > 0)
+	// A short window (a desktop resize, a scaled preview) gets the compact
+	// card rather than notes overlapping the buttons.
+	if maxH := screenHeight - 64; m.card.H > maxH {
+		m = measure(false)
+		if m.card.H > maxH {
+			m.card.H = maxH
+		}
+	}
+	// Vertical geometry above is card-relative; offset it into screen space.
+	m.card.X = (screenWidth - m.card.W) / 2
+	m.card.Y = (screenHeight - m.card.H) / 2
+	m.titleY += m.card.Y
+	m.bodyY += m.card.Y
+	m.hintY += m.card.Y
+	m.noteLabelY += m.card.Y
+	m.noteBottom += m.card.Y
+	m.buttonsY += m.card.Y
+	return m
+}
+
+// updatePromptHighlights returns up to max lines of the cached release notes
+// for the modal, so the offer says what is in the release and not just which
+// version it is. Bullet items win over section headings ("Fixes" on its own
+// tells the user nothing); an offline device with no cached notes gets nil and
+// the compact layout.
+func updatePromptHighlights(max int) []string {
+	if max <= 0 {
+		return nil
+	}
+	_, text := cachedReleaseNotes()
+	var bullets, all []string
+	for _, line := range plainReleaseNotes(text) {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		all = append(all, line)
+		item, ok := strings.CutPrefix(line, "• ")
+		if !ok {
+			continue
+		}
+		item = strings.TrimSpace(item)
+		// Release bodies end with a "thanks" list of handles and links; those
+		// are not changes, and three of them would fill the whole preview.
+		if item == "" || strings.HasPrefix(item, "@") || strings.HasPrefix(item, "http") {
+			continue
+		}
+		bullets = append(bullets, item)
+	}
+	pick := bullets
+	if len(pick) == 0 {
+		pick = all
+	}
+	if len(pick) > max {
+		pick = pick[:max]
+	}
+	return pick
 }
 
 // ──────────────────────────────────────────────────────────────────────

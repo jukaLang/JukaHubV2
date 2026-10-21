@@ -29,6 +29,8 @@ targets a 1280×720 logical canvas.
 | [WINDOWS_APPS.md](WINDOWS_APPS.md) | .exe discovery, Wine display bridge, WestonPack setup |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
 | [SECURITY.md](../player/SECURITY.md) | secret storage, crypto, threat notes |
+| [IMPROVEMENTS.md](IMPROVEMENTS.md) | what we learned from BrickOS, the backlog it implies, and where we are ahead |
+| [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | netplay, OSD/recording, simple mode, box art, game switcher: what exists and what cannot work |
 | [trimui/README-ID.md](../player/trimui/README-ID.md) | device package and launcher details |
 
 ## Repository layout
@@ -196,6 +198,45 @@ downgraded and later overwritten. Unknown element types are logged and skipped;
 unrecognised triggers are inert. Both alone mean a config from a newer builder
 degrades instead of crashing.
 
+### Menu audit
+
+`player/menu_audit_test.go` walks both shipped configs (`jukaconfig.json` and
+`trimui/jukaconfig.device.json`) and fails when the UI and the code disagree:
+
+- every scene has a renderer (a registered scene module or renderable elements),
+  so no menu row leads to a blank screen;
+- every button trigger is a `case` in `handleTrigger` — the test parses that
+  switch, so a trigger that only survives in a comment does not count;
+- every `change_scene:` target, Apps row and home card resolves to a scene the
+  config really has;
+- interactive elements stay inside the content panel and never overlap;
+- every scene paints text when rendered offscreen;
+- a scene that ships in both configs has identical geometry on the desktop and
+  the handheld — both panels are 1280×720, so a screen has no reason to look
+  different.
+
+`TestFooterHintsMatchTheHandlers` keeps the footer badges honest (Chat says
+"A Type", because A opens the keyboard), and
+`TestAboutSceneDrawsTheSharedChrome` pins the About screen to the shared header
+and footer. Set `JUKAHUB_SCENE_DUMP_DIR=/tmp/scenes` to have the audit write one
+PNG per scene for a visual review.
+
+The test binary turns off `jukauser.json` writes (`TestMain` in
+`testmain_test.go`), so a run cannot rewrite the checkout's user config; the few
+tests that assert a real save re-enable `userConfigWritesEnabled` themselves.
+
+### Text input and wrapping
+
+Every buffer that accepts typed text must delete with `trimLastRune`, never by
+slicing a byte: the on-screen keyboard inserts arbitrary runes, so a byte-sliced
+backspace leaves half a character behind and the next press looks dead.
+`TestNoByteSlicedTextEdits` fails on any `x = x[:len(x)-1]` in the package (the
+a few slice-of-lines cases are listed in the test).
+
+Use `wrapTextLines` for dialog and card copy. `renderText` draws a single line:
+passing it a string with `\n` used to run the text off the panel instead of
+breaking it.
+
 ### Memory on the device
 
 `applyGCForDevice()` installs a soft heap limit before the first heavy
@@ -362,3 +403,7 @@ Open work, documented here so it is not rediscovered:
   note in [CONTRIBUTING.md](../CONTRIBUTING.md).
 - The shortcuts overlay lists `F5` (refresh) and `Ctrl+L` (log viewer); only
   `Ctrl+L` *inside the terminal* (clear output) is implemented.
+
+[IMPROVEMENTS.md](IMPROVEMENTS.md) holds the comparison-driven backlog: update
+UX, button remapping, component versions, and the BrickOS failure modes worth
+copying. Add to that list instead of starting a second one.

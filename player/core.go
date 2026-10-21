@@ -26,6 +26,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -4234,13 +4235,21 @@ func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element
 	if label == "" {
 		label = element.Variable
 	}
-	labelCol := ColorTextPrimary()
-	drawText(renderer, font, label, element.X+18, element.Y+(height-int32(font.Height()))/2, labelCol, textAlignLeft)
 
 	// ON/OFF pill at the right.
 	pillW := int32(76)
 	pillH := int32(32)
 	pillX := element.X + width - pillW - 14
+
+	// The label may never run under the pill: a long label used to be drawn
+	// straight across it ("Weather Enable[d]  ON").
+	labelCol := ColorTextPrimary()
+	labelMaxW := pillX - (element.X + 18) - 12
+	if labelMaxW < 24 {
+		labelMaxW = 24
+	}
+	label = ellipsize(font, label, labelMaxW)
+	drawText(renderer, font, label, element.X+18, element.Y+(height-int32(font.Height()))/2, labelCol, textAlignLeft)
 	pillY := element.Y + (height-pillH)/2
 	pillCol := ColorIconSurface
 	textCol := ColorTextPrimary()
@@ -4404,6 +4413,22 @@ func showToast(message string, color sdl.Color) {
 	ShowToast(message, kind)
 }
 
+// trimLastRune removes the last user-visible character, not the last byte.
+// Text fields must use it: slicing a multi-byte rune in half leaves invalid
+// UTF-8 that renders as a replacement glyph and makes the next backspace look
+// like a no-op. The on-screen keyboard has always deleted by rune; the
+// physical-keyboard handlers sliced by byte and disagreed with it.
+func trimLastRune(s string) string {
+	if s == "" {
+		return s
+	}
+	_, size := utf8.DecodeLastRuneInString(s)
+	if size <= 0 {
+		return ""
+	}
+	return s[:len(s)-size]
+}
+
 // wrapMeasured breaks runes into at most two lines that fit maxW, using the
 // measure callback for pixel widths. A truncated second line ends with an
 // ellipsis; the only allowed overflow is a single rune wider than maxW.
@@ -4446,6 +4471,53 @@ func wrapMeasured(runes []rune, maxW int32, measure func(string) int32) []string
 		secondLine = string(rest[:second])
 	}
 	return []string{string(runes[:first]), secondLine}
+}
+
+// wrapTextLines word-wraps text into at most maxLines lines of at most maxW
+// pixels, honouring explicit newlines as paragraph breaks and marking a cut
+// with an ellipsis. The update modal and the Patch confirmation used to hand
+// strings with \n straight to renderText, which drew them as one long line that
+// ran off the card, or cut a long body after two rune-split lines.
+func wrapTextLines(font *ttf.Font, text string, maxW int32, maxLines int) []string {
+	if font == nil || maxLines <= 0 {
+		return nil
+	}
+	measure := func(s string) int32 {
+		w, _, _ := font.SizeUTF8(s)
+		return int32(w)
+	}
+	var out []string
+	for _, para := range strings.Split(text, "\n") {
+		cur := ""
+		for _, word := range strings.Fields(para) {
+			cand := word
+			if cur != "" {
+				cand = cur + " " + word
+			}
+			// A lone word wider than the box stays on its own line and is
+			// ellipsized below, so wrapping always terminates.
+			if cur == "" || measure(cand) <= maxW {
+				cur = cand
+				continue
+			}
+			out = append(out, cur)
+			cur = word
+		}
+		if cur != "" {
+			out = append(out, cur)
+		}
+	}
+	truncated := len(out) > maxLines
+	if truncated {
+		out = out[:maxLines]
+	}
+	for i := range out {
+		out[i] = ellipsize(font, out[i], maxW)
+	}
+	if truncated && len(out) > 0 {
+		out[len(out)-1] = fitTextToWidth(font, out[len(out)-1]+"…", maxW)
+	}
+	return out
 }
 
 // wrapToastLines wraps the toast message to at most two lines within maxW.

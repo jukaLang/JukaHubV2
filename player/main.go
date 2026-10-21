@@ -597,6 +597,18 @@ func main() {
 					if toolsPanel.open && handleToolsKey(e, config) {
 						continue
 					}
+					// LAN play is modal over the library. The address field is typed
+					// on the on-screen keyboard, which is handled earlier, so only
+					// route here while no text field is capturing keys.
+					if netplayPanel.open && !virtualKeyboardActive && handleNetplayKey(e, config) {
+						continue
+					}
+					// The game library is modal too. It yields to the on-screen
+					// keyboard so an address typed from LAN play is not swallowed by
+					// arrow-key navigation behind it.
+					if gameLib.open && !virtualKeyboardActive && handleGameLibraryKey(e, config) {
+						continue
+					}
 					// The Emulators panel is modal too.
 					if emuPanel.open && handleEmuKey(e, config) {
 						continue
@@ -616,9 +628,7 @@ func main() {
 					} else if activeSceneIndex != -1 {
 						switch e.Keysym.Sym {
 						case sdl.K_BACKSPACE:
-							if len(inputTextBuffer) > 0 {
-								inputTextBuffer = inputTextBuffer[:len(inputTextBuffer)-1]
-							}
+							inputTextBuffer = trimLastRune(inputTextBuffer)
 							updateInputVariable(config)
 						case sdl.K_RETURN:
 							activeSceneIndex = -1
@@ -859,6 +869,12 @@ func main() {
 										pressStartTime = sdl.GetTicks64()
 										handleTrigger(renderer, config, elem)
 									}
+								}
+							case sdl.K_x:
+								// The footer advertises "X Search" on Tube: open the
+								// keyboard for the search field, matching the controller.
+								if curScene.Name == "Tube" {
+									openSearchShortcut(config)
 								}
 							case sdl.K_ESCAPE, sdl.K_b:
 								// Generic back on non-home scenes (Escape or B, matching every
@@ -1161,6 +1177,16 @@ func main() {
 						// closes it, and nothing reaches the scene underneath.
 						if toolsPanel.open {
 							handleToolsMouse(mx, my, config)
+							break
+						}
+						// LAN play is modal over the game library.
+						if netplayPanel.open {
+							handleNetplayMouse(mx, my)
+							break
+						}
+						// Game library is modal the same way.
+						if gameLib.open {
+							handleGameLibraryMouse(mx, my, config)
 							break
 						}
 						// Emulators panel is modal the same way.
@@ -1863,10 +1889,9 @@ func main() {
 									goBackScene(config)
 								}
 							case sdl.CONTROLLER_BUTTON_X:
-								// Search shortcut: jump to the Tube/search scene.
-								if idx := findSceneIndex(config, "Tube"); idx >= 0 {
-									changeSceneTo(config, idx)
-								}
+								// Search shortcut: open the Tube search field on Tube,
+								// jump there from anywhere else.
+								openSearchShortcut(config)
 							case sdl.CONTROLLER_BUTTON_BACK:
 								// BACK is the handheld's back button too: leaving the
 								// scene is what users expect, not a jump to Settings.
@@ -2141,6 +2166,16 @@ func main() {
 		// IPStream library overlay.
 		if ipPanelOpen {
 			renderIPPanel(renderer, config)
+		}
+
+		// Game library overlay (consoles, games and box art).
+		if gameLib.open {
+			renderGameLibraryPanel(renderer, config)
+		}
+
+		// LAN play overlay: sits on top of the library it was opened from.
+		if netplayPanel.open {
+			renderNetplayPanel(renderer, config)
 		}
 
 		// Emulators overlay (availability list).

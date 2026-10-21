@@ -185,3 +185,45 @@ func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 		t.Fatal("dense layout dropped the SFTP credentials")
 	}
 }
+
+// TestUpdatePromptHighlights covers the "what's new" preview: the modal shows
+// cleaned release-note lines, caps how many, and stays compact when nothing is
+// cached (first run offline, or an older release with no stored notes).
+func TestUpdatePromptHighlights(t *testing.T) {
+	patchStateMu.Lock()
+	prevTag, prevText := patchState.ReleaseNotesTag, patchState.ReleaseNotesText
+	patchStateMu.Unlock()
+	t.Cleanup(func() {
+		patchStateMu.Lock()
+		patchState.ReleaseNotesTag, patchState.ReleaseNotesText = prevTag, prevText
+		patchStateMu.Unlock()
+	})
+	setNotes := func(text string) {
+		patchStateMu.Lock()
+		patchState.ReleaseNotesTag, patchState.ReleaseNotesText = "v9.9.9", text
+		patchStateMu.Unlock()
+	}
+
+	setNotes("")
+	if got := updatePromptHighlights(3); got != nil {
+		t.Fatalf("empty notes = %#v, want nil", got)
+	}
+
+	setNotes("## Fixes\n- **Patch** no longer drops the swap script\n- `Chat` keyboard wraps\n![shot](x.png)\n### Thanks\n- @someone\n- @another\n")
+	got := updatePromptHighlights(3)
+	// Bullets beat the "Fixes" heading, the "Thanks" handles are skipped, and
+	// the image line never reaches the preview.
+	want := []string{"Patch no longer drops the swap script", "Chat keyboard wraps"}
+	if len(got) != len(want) {
+		t.Fatalf("highlights = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("highlight %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	if zero := updatePromptHighlights(0); zero != nil {
+		t.Errorf("max 0 = %#v, want nil", zero)
+	}
+}

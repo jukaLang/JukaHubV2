@@ -505,9 +505,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 			notes.tab = 0
 			PlayBackSound()
 		case sdl.K_BACKSPACE:
-			if len(notes.editTitle) > 0 {
-				notes.editTitle = notes.editTitle[:len(notes.editTitle)-1]
-			}
+			notes.editTitle = trimLastRune(notes.editTitle)
 		}
 	case 2: // Edit content
 		switch e.Keysym.Sym {
@@ -516,9 +514,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 			notes.tab = 0
 			PlayBackSound()
 		case sdl.K_BACKSPACE:
-			if len(notes.editContent) > 0 {
-				notes.editContent = notes.editContent[:len(notes.editContent)-1]
-			}
+			notes.editContent = trimLastRune(notes.editContent)
 		case sdl.K_RETURN:
 			notes.editContent += "\n"
 		case sdl.K_PAGEUP:
@@ -536,9 +532,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 			notes.cursor = 0
 			PlayBackSound()
 		case sdl.K_BACKSPACE:
-			if len(notes.search) > 0 {
-				notes.search = notes.search[:len(notes.search)-1]
-			}
+			notes.search = trimLastRune(notes.search)
 		}
 	}
 }

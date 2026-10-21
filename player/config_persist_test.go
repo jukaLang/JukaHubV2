@@ -78,8 +78,12 @@ func TestSaveUserConfigPreservesSections(t *testing.T) {
 	t.Chdir(t.TempDir())
 
 	prevCache, prevTimer, prevPending := userConfigCache, userConfigSaveTimer, pendingUserConfig
+	prevWrites := userConfigWritesEnabled
+	// The test binary disables user-config writes; this test asserts one.
+	userConfigWritesEnabled = true
 	t.Cleanup(func() {
 		userConfigCache, userConfigSaveTimer, pendingUserConfig = prevCache, prevTimer, prevPending
+		userConfigWritesEnabled = prevWrites
 	})
 	userConfigSaveTimer = nil
 	pendingUserConfig = nil

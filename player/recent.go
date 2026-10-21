@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -15,17 +16,54 @@ var (
 	emptyActionRect  sdl.Rect // "Open Media" action button in empty Continue panel
 )
 
+// gameRecentItem adapts a recorded game launch for the Continue list. The data
+// stays a recentGame rather than a resolved launcher: a system's emulator can be
+// reinstalled or re-pointed between sessions, so the launcher is resolved again
+// at play time (see playRecentGame).
+func gameRecentItem(g recentGame) FavoriteItem {
+	return FavoriteItem{Type: "game", Data: g, Timestamp: g.PlayedAt}
+}
+
+// getRecentItems is the Continue list: game recents and media recents in one
+// timeline, newest first. It used to read only the media favourites store, so a
+// device that had played ten games still showed "Nothing played recently".
 func getRecentItems() []FavoriteItem {
 	favoritesMutex.Lock()
-	defer favoritesMutex.Unlock()
-	if favoritesStore.Recent == nil {
-		return nil
-	}
 	out := make([]FavoriteItem, 0, len(favoritesStore.Recent))
 	for _, it := range favoritesStore.Recent {
 		out = append(out, it)
 	}
+	favoritesMutex.Unlock()
+
+	for _, g := range recentGames() {
+		out = append(out, gameRecentItem(g))
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Timestamp.After(out[j].Timestamp)
+	})
 	return out
+}
+
+// playRecentGame relaunches a game from Continue. Failures are toasts instead
+// of silent no-ops: the ROM may have been deleted or the emulator moved since
+// the card was last scanned.
+func playRecentGame(g recentGame) {
+	if g.Path == "" || !regularFile(g.Path) {
+		ShowToast("ROM is missing: "+filepath.Base(g.Path), ToastKindError)
+		return
+	}
+	launcher := resolveGameLauncher(g.System)
+	if launcher == "" {
+		ShowToast("No emulator found for "+g.System+" — add one on the Emulators screen", ToastKindWarning)
+		return
+	}
+	game := libraryGame{Path: g.Path, System: g.System, Title: g.Title}
+	if err := launchLibraryGame(game, launcher); err != nil {
+		ShowToast("Cannot launch "+g.Title+": "+err.Error(), ToastKindError)
+		return
+	}
+	PlaySuccessSound()
+	ShowToast("Playing "+g.Title, ToastKindSuccess)
 }
 
 func recentItemLabel(it FavoriteItem) string {
@@ -40,6 +78,8 @@ func recentItemIcon(it FavoriteItem) string {
 		return "tv"
 	case "file":
 		return "files"
+	case "game":
+		return "game"
 	default:
 		return "play"
 	}
@@ -96,7 +136,7 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		iconCY := listY + listH/2 + SpaceXS
 		drawTileIcon(renderer, iconCX, iconCY, iconSize, "media", ColorTextSecondary(), HomeCardColor())
 		msg1 := "Nothing played recently"
-		msg2 := "Open Media to start watching or listening"
+		msg2 := "Play a game or open Media to start"
 		f, _ := getCachedFont(config, "small")
 		if f == nil {
 			f = font
@@ -198,7 +238,8 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		tw, th, _ := f.SizeUTF8(label)
 		renderText(renderer, config, f, label, ColorTextPrimary(), sx+SpaceSM+(lw-int32(tw))/2, sy+sh-int32(th)-LabelBottomPad)
 
-		// Type tag under label
+		// Type tag under label: for games this names the console, which is the
+		// piece of context the title alone does not carry.
 		typeName := map[string]string{
 			"video": "Video",
 			"iptv":  "Channel",
@@ -206,6 +247,9 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		}[items[i].Type]
 		if typeName == "" {
 			typeName = "Item"
+		}
+		if g, ok := items[i].Data.(recentGame); ok && g.System != "" {
+			typeName = g.System
 		}
 		tw2, _, _ := f.SizeUTF8(typeName)
 		renderText(renderer, config, f, typeName, ColorTextSecondary(), sx+SpaceSM+(lw-int32(tw2))/2, sy+sh-LabelBottomPad)

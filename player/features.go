@@ -78,6 +78,32 @@ var mediaExtensions = []string{
 	".mpg", ".mpeg", ".ts", ".m2ts", ".mp3", ".wav", ".ogg", ".m4a",
 }
 
+// openSearchShortcut is the "X Search" affordance the footer advertises on
+// Tube: from another scene it jumps to the search screen, and on Tube itself it
+// opens the on-screen keyboard for the search field, so a controller-only
+// handheld can type a query. The footer hint, the controller button and the
+// keyboard key all go through here so they cannot drift apart.
+func openSearchShortcut(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	idx := sceneIndexExact(config, "Tube")
+	if idx < 0 {
+		return false
+	}
+	if idx != currentSceneIndex {
+		changeSceneTo(config, idx)
+		return true
+	}
+	for i, el := range config.Scenes[idx].Elements {
+		if el.Type == "input" {
+			vkOpenSceneInput(config, idx, i)
+			return true
+		}
+	}
+	return false
+}
+
 func isMediaFile(name string) bool {
 	ext := strings.ToLower(filepath.Ext(name))
 	for _, e := range mediaExtensions {

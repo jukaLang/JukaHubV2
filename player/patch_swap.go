@@ -32,6 +32,94 @@ const (
 	patchMaxExpandBytes = 2 << 30 // 2 GiB staged expansion cap
 )
 
+// Restart handshake between JukaHub and the device launcher.
+//
+// On the handheld the launcher script owns the screen: it pauses the firmware
+// supervisors and stops MainUI before starting JukaHub, then restores them when
+// JukaHub exits. An update exits the app on purpose, so the old launcher's
+// restore step is exactly wrong: it brings MainUI back while the swap helper
+// starts the new build, and two UIs then alternate frames on /dev/fb0 (the
+// "blinking between MainUI and JukaHub" after an update).
+//
+// The launcher that knows this protocol runs JukaHub in a loop instead: when it
+// exits with restartPendingName present it waits for the helper's verdict and
+// starts the new build in the same process, so the supervisors stay paused and
+// MainUI never comes back.
+const (
+	// launcherRestartProtocolToken is a comment line in launch.sh. The app reads
+	// the launcher on disk before writing a marker, because during the update
+	// that first ships this protocol the running launcher is still the old one
+	// and would never read it.
+	launcherRestartProtocolToken = "jukahub-restart-protocol: 1"
+	restartPendingName           = ".restart-pending"
+	restartSwappedName           = ".update-swapped"
+	restartFailedName            = ".update-failed"
+)
+
+// deviceLauncherSupportsInPlaceRestart reports whether the launcher script on
+// disk advertises the restart protocol.
+func deviceLauncherSupportsInPlaceRestart(launcherPath string) bool {
+	data, err := os.ReadFile(launcherPath)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), launcherRestartProtocolToken)
+}
+
+// launchedByDeviceLauncher reports whether this process was started by
+// launch.sh. The environment variable is the direct signal; the parent process
+// is the fallback, because a launcher installed before this protocol existed
+// does not export it yet.
+func launchedByDeviceLauncher() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("JUKAHUB_LAUNCHED_BY")), "launch.sh") {
+		return true
+	}
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", os.Getppid()))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ReplaceAll(string(raw), "\x00", " "), "launch.sh")
+}
+
+// clearStaleRestartMarkers removes handshake files a killed run left behind.
+// Without this, a leftover .restart-pending would make the next update's helper
+// skip its relaunch and wait for a launcher loop that is not running. The
+// launcher clears the same files when it starts; this covers a build started
+// straight from the stock menu, which never goes through that script.
+func clearStaleRestartMarkers() {
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	clearStaleRestartMarkersIn(filepath.Dir(exe))
+}
+
+func clearStaleRestartMarkersIn(dir string) {
+	for _, name := range []string{restartPendingName, restartSwappedName, restartFailedName} {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
+}
+
+// prepareLauncherRestart writes the "my launcher will restart me" marker and
+// returns its path, or "" when this install has no launcher that can honour it
+// (a desktop build, or a launcher older than the protocol). The swap helper
+// reads the same marker to decide between an in-place restart and a relaunch.
+func prepareLauncherRestart(exeDir string) string {
+	launcher := filepath.Join(exeDir, "launch.sh")
+	if !deviceLauncherSupportsInPlaceRestart(launcher) || !launchedByDeviceLauncher() {
+		return ""
+	}
+	marker := filepath.Join(exeDir, restartPendingName)
+	if err := os.WriteFile(marker, []byte("JukaHub is restarting into an updated build.\n"), 0o644); err != nil {
+		logPatch("update: could not write the restart marker (%v); the helper will relaunch the app", err)
+		return ""
+	}
+	return marker
+}
+
 // appRestartRequested tells the render loop to exit after the swap helper was
 // started, freeing the executable for replacement.
 var appRestartRequested atomic.Bool
@@ -191,7 +279,13 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 
 	patchRowStatus(ComponentApp, StatusApplying)
 	script := swapScriptPath(staging)
-	if err := writeSwapScript(script, exePath, files, journal.path); err != nil {
+	// Written before the helper starts, so it exists when the app exits and the
+	// launcher looks at what to do next.
+	restartMarker := prepareLauncherRestart(exeDir)
+	if err := writeSwapScript(script, exePath, files, journal.path, os.Getppid()); err != nil {
+		if restartMarker != "" {
+			_ = os.Remove(restartMarker)
+		}
 		_ = journal.rollback()
 		return err
 	}
@@ -199,6 +293,9 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 	// Run the helper detached: the running process exits as part of the swap.
 	cmd := P().CommandContext(ctx, script)
 	if err := cmd.Start(); err != nil {
+		if restartMarker != "" {
+			_ = os.Remove(restartMarker)
+		}
 		_ = journal.rollback()
 		return fmt.Errorf("starting swap helper: %w", err)
 	}

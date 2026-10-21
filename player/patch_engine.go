@@ -549,6 +549,7 @@ func InitPatchModule() {
 	loadPatchState()
 	checkInterruptedJournal()
 	confirmAppliedUpdate()
+	clearStaleRestartMarkers()
 	ensureDefaultRepo()
 }
 

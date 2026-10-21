@@ -198,7 +198,17 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 	})
 
 	unit := weatherUnit(config)
-	renderText(renderer, config, medium, "Local weather · °"+unit, ColorTextPrimary(), r.X+18, r.Y+14)
+	heading := "Local weather · °" + unit
+	renderText(renderer, config, medium, heading, ColorTextPrimary(), r.X+18, r.Y+14)
+	// When the forecast came from the cache, say so instead of pretending it is
+	// live: a saved card is useful, a stale one presented as current is not.
+	if note := weatherFreshnessNote(time.Now()); note != "" {
+		hw, _, _ := medium.SizeUTF8(heading)
+		nw, _, _ := font.SizeUTF8(note)
+		if int32(hw)+int32(nw)+60 <= r.W {
+			renderText(renderer, config, font, note, ColorTextTertiary(), r.X+r.W-int32(nw)-18, r.Y+18)
+		}
+	}
 
 	wxMutex.Lock()
 	ready := weatherReady

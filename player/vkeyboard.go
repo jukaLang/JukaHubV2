@@ -44,12 +44,13 @@ const (
 	vkTargetScene vkTargetKind = iota
 	vkTargetChat
 	vkTargetUnit
-	vkTargetTerm  // terminal command line
-	vkTargetName  // chat display name
-	vkTargetTV    // Live TV channel search
-	vkTargetParty // Watch Party invite / shared link
-	vkTargetRA    // RetroAchievements username / Web API key
-	vkTargetMusic // audio player initialism search
+	vkTargetTerm    // terminal command line
+	vkTargetName    // chat display name
+	vkTargetTV      // Live TV channel search
+	vkTargetParty   // Watch Party invite / shared link
+	vkTargetRA      // RetroAchievements username / Web API key
+	vkTargetMusic   // audio player initialism search
+	vkTargetNetplay // LAN play host address
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -485,6 +486,8 @@ func vkCurrentText() string {
 		return raPanel.input
 	case vkTargetMusic:
 		return musicSearchQueryValue()
+	case vkTargetNetplay:
+		return netplayPanel.address
 	}
 	return inputTextBuffer
 }
@@ -513,6 +516,8 @@ func vkSetText(text string, config *Config) {
 		// The result list filters on every keystroke, so the panel behind the
 		// keyboard updates while the user types the initials.
 		musicSetSearchQuery(text)
+	case vkTargetNetplay:
+		netplayPanel.address = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -555,11 +560,7 @@ func vkBackspace(config *Config) {
 	if current == "" {
 		return
 	}
-	_, size := utf8.DecodeLastRuneInString(current)
-	if size <= 0 {
-		return
-	}
-	vkSetText(current[:len(current)-size], config)
+	vkSetText(trimLastRune(current), config)
 }
 
 // vkTitle / vkPlaceholder describe the field for the active target.
@@ -590,6 +591,8 @@ func vkTitle() string {
 		return "RETROACHIEVEMENTS USERNAME"
 	case vkTargetMusic:
 		return "SEARCH SONGS"
+	case vkTargetNetplay:
+		return "HOST ADDRESS"
 	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
@@ -628,6 +631,8 @@ func vkPlaceholder() string {
 		return "Your RetroAchievements username"
 	case vkTargetMusic:
 		return "Type initials: iwyn = I Want You Now"
+	case vkTargetNetplay:
+		return "192.168.1.5"
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -651,6 +656,8 @@ func vkHints() string {
 		return "A type    Y save    B / Esc close"
 	case vkTargetMusic:
 		return "Type initials    A / Y search    B / Esc close"
+	case vkTargetNetplay:
+		return "A type    Start join    B / Esc close"
 	}
 	return "A type    Y save    B / Esc close"
 }
@@ -708,6 +715,22 @@ func vkOpenTerminal() {
 	chatInputActive = false
 	unitInputActive = false
 	vkTarget = vkTargetTerm
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenNetplay opens the keyboard for the host address of a LAN game. Any
+// remembered address seeds the field so a second session is one correction
+// away instead of a full retype.
+func vkOpenNetplay() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetNetplay
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
@@ -935,6 +958,9 @@ func vkSubmit(config *Config, askAI bool) {
 		if !musicSearchPlay() {
 			showToast("No song matches those initials", ToastInfo())
 		}
+	case vkTargetNetplay:
+		vkCloseKeyboard()
+		netplayJoinSubmit(text)
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may

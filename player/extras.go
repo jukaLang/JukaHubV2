@@ -107,7 +107,16 @@ var (
 // saveUserConfigDebounced batches rapid successive config changes into a single
 // disk write after a short quiet period. This avoids excessive I/O on handheld
 // devices when, for example, a user is typing in an input field.
+// userConfigWritesEnabled gates every jukauser.json write. The test binary
+// turns it off: tests load the shipped config and exercise settings paths, and
+// a run used to rewrite jukauser.json and its .bak in the checkout. The tests
+// that assert a real save turn it back on for their own scope.
+var userConfigWritesEnabled = true
+
 func saveUserConfigDebounced(user *UserConfig) {
+	if !userConfigWritesEnabled {
+		return
+	}
 	userConfigSaveMutex.Lock()
 	pendingUserConfig = user
 	pendingUserConfigDir, _ = os.Getwd()
@@ -228,6 +237,9 @@ var (
 )
 
 func startWeather(config *Config) {
+	// Put the last saved forecast on screen before the first network attempt:
+	// an offline boot then shows weather instead of "unavailable".
+	restoreWeatherCache(time.Now())
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
 		fetchWeatherOnce()
@@ -419,6 +431,11 @@ func fetchWeatherOnce() {
 	weatherDaily = days
 	weatherReady = len(days) > 0
 	wxMutex.Unlock()
+	// Persist the forecast so the next boot has weather before the network is
+	// up; a failed write is logged, never fatal.
+	if len(days) > 0 {
+		noteWeatherFetched(days, time.Now())
+	}
 	// Update dynamic background with weather data.
 	if len(days) > 0 {
 		DynBGUpdateWeather(days[0].Code)
@@ -801,6 +818,42 @@ func headerStatusFont() *ttf.Font {
 
 // --- Footer rendering (controller hints) --
 
+// footerHints returns the controller hints for a scene. Every scene gets
+// navigate + open + back; scenes with extra bindings add them. It is separate
+// from the drawing code so the audit tests can check each label against what
+// the input handlers really do.
+func footerHints(config *Config, scene SceneConfig) []FooterHint {
+	// The File Explorer's B binding climbs the directory tree, so it is
+	// advertised as "Parent" inside a folder and "Back" at the root.
+	backLabel := "Back"
+	if scene.Name == "FileExplorer" && feCurrentPath(config) != feRoot(config) {
+		backLabel = "Parent"
+	}
+	hints := []FooterHint{
+		{Button: "D-Pad", Label: "Navigate"},
+		{Button: "A", Label: "Open"},
+		{Button: "B", Label: backLabel},
+	}
+	switch scene.Name {
+	case "Chat":
+		// A opens the on-screen keyboard (Return inside it sends); Y sends the
+		// draft straight to the assistant and X renames the local user.
+		hints[1] = FooterHint{Button: "A", Label: "Type"}
+		hints = append(hints,
+			FooterHint{Button: "Y", Label: "Ask AI"},
+			FooterHint{Button: "X", Label: "Rename"},
+		)
+	case "Tube":
+		hints = append(hints, FooterHint{Button: "X", Label: "Search"})
+	case "Patch":
+		// Patch is modal-aware and lists the keys the open dialog takes.
+		if patchHints, ok := patchFooterHints(); ok {
+			hints = patchHints
+		}
+	}
+	return hints
+}
+
 // renderFooter displays controller navigation hints pinned to the bottom of the viewport.
 // It shows only the bindings actually supported by the current input code.
 func renderFooter(renderer *sdl.Renderer, config *Config) {
@@ -831,37 +884,7 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Contextual hints: every scene gets navigate + open + back. The File
-	// Explorer's B binding climbs the directory tree, so it is advertised as
-	// "Parent" inside a folder and "Back" at the root. Tube adds the X search
-	// shortcut that actually exists for it.
-	backLabel := "Back"
-	if scene.Name == "FileExplorer" && feCurrentPath(config) != feRoot(config) {
-		backLabel = "Parent"
-	}
-	hints := []FooterHint{
-		{Button: "D-Pad", Label: "Navigate"},
-		{Button: "A", Label: "Open"},
-		{Button: "B", Label: backLabel},
-	}
-	if scene.Name == "Chat" {
-		// In Chat, A sends the typed message rather than opening anything.
-		hints[1] = FooterHint{Button: "A", Label: "Send"}
-	}
-	if scene.Name == "Tube" {
-		hints = append(hints, FooterHint{Button: "X", Label: "Search"})
-	}
-	if scene.Name == "Chat" {
-		hints = append(hints, FooterHint{Button: "Y", Label: "Ask AI"})
-		hints = append(hints, FooterHint{Button: "X", Label: "Rename"})
-	}
-	// Patch shows its own contextual hints (modal-aware) instead of the
-	// generic defaults.
-	if scene.Name == "Patch" {
-		if patchHints, ok := patchFooterHints(); ok {
-			hints = patchHints
-		}
-	}
+	hints := footerHints(config, scene)
 
 	// Distinct hint groups: a small button badge pill plus a separate label,
 	// 32px group gaps, centered as one row inside the footer.
@@ -1104,7 +1127,7 @@ func saveUserConfig(user *UserConfig) {
 // working directory). The debounced writer uses it so a pending save cannot
 // land in whatever directory happens to be current two seconds later.
 func saveUserConfigToDir(dir string, user *UserConfig) {
-	if user == nil {
+	if user == nil || !userConfigWritesEnabled {
 		return
 	}
 	path := "jukauser.json"

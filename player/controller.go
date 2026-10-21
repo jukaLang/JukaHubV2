@@ -127,6 +127,14 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if toolsPanel.open {
 		return ctrlToolsPanel(e, config)
 	}
+	// LAN play is modal over the game library.
+	if netplayPanel.open {
+		return ctrlNetplay(e, config)
+	}
+	// The game library is modal: nothing underneath may react while it is open.
+	if gameLib.open {
+		return ctrlGameLibrary(e, config)
+	}
 	if emuPanel.open {
 		return ctrlEmuPanel(e, config)
 	}

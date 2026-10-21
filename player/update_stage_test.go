@@ -169,7 +169,7 @@ func TestStagedUpdateUnzipsAndReplacesTheInstallation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		script += ".bat"
 	}
-	if err := writeSwapScript(script, filepath.Join(install, exe), files, journalPath); err != nil {
+	if err := writeSwapScript(script, filepath.Join(install, exe), files, journalPath, 0); err != nil {
 		t.Fatalf("writeSwapScript: %v", err)
 	}
 

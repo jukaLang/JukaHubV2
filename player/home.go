@@ -556,6 +556,13 @@ func recentSourceLabel(it FavoriteItem) string {
 		label = "Channel"
 	case "file":
 		label = "File"
+	case "game":
+		// The console is the useful context for a game, not the word "Game".
+		if g, ok := it.Data.(recentGame); ok && g.System != "" {
+			label = g.System
+		} else {
+			label = "Game"
+		}
 	default:
 		label = "Item"
 	}

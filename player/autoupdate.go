@@ -28,9 +28,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -59,7 +61,16 @@ const (
 	autoUpdateCheckInterval = 30 * time.Minute
 	autoUpdateMaxFiles      = 128
 	autoUpdateStartupDelay  = 4 * time.Second
+	// autoUpdateCheckAttempts includes the first try. A handheld can reach the
+	// UI before Wi-Fi has finished associating, and one failed lookup used to
+	// leave the whole session with no update offer.
+	autoUpdateCheckAttempts = 2
+	autoUpdateRetryDelay    = 60 * time.Second
 )
+
+// errAutoUpdateInProgress means another Patch operation owns the device. It is
+// not a network blip: retrying would just bounce off the same lock.
+var errAutoUpdateInProgress = errors.New("another patch operation is running")
 
 // releaseInfo records the release an installation was built from or updated to.
 type releaseInfo struct {
@@ -442,42 +453,80 @@ func startAutoUpdateCheck(config *Config) {
 		if !autoUpdateCheckDue(last, time.Now()) {
 			return
 		}
-		if !tryBeginPatchOp() {
+		_, err := runAutoUpdateAttempts(func() error { return checkForUpdateOnce(config) }, autoUpdateCheckAttempts, time.Sleep, func(attempt int, err error) {
+			logPatch("auto-update check failed (%d/%d): %v", attempt, autoUpdateCheckAttempts, err)
+		})
+		if errors.Is(err, errAutoUpdateInProgress) {
 			// Worth a log line: a skipped check means this boot never reaches
 			// the release feed, which otherwise looks like a silent updater.
 			logPatch("auto-update: check skipped, another Patch operation is running")
-			return
 		}
-		defer endPatchOp()
-
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
-
-		rel, err := FetchLatestJukaHubRelease(ctx)
-		if err != nil {
-			logPatch("auto-update check failed: %v", err)
-			return
-		}
-		// Keep the release notes even when the user does not install this
-		// build: the changelog screen can then show what is waiting.
-		storeReleaseNotes(rel)
-		patchStateMu.Lock()
-		patchState.AutoUpdateCheckedAt = time.Now().UTC().Format(time.RFC3339)
-		patchStateMu.Unlock()
-
-		if !releaseIsNewerThanInstalled(rel) {
-			clearAvailableUpdate()
-			_ = savePatchState()
-			logPatch("auto-update: %s is current", versionString(nil))
-			return
-		}
-		markUpdateAvailable(rel)
-		logPatch("auto-update: %s is available; waiting for the user to confirm", rel.TagName)
-		if !pending {
-			announceAvailableUpdate()
-		}
-		patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	}()
+}
+
+// checkForUpdateOnce performs one release lookup and records its result. It
+// returns errAutoUpdateInProgress when another Patch operation owns the device
+// (which no retry can fix) and a plain error for anything the retry may survive.
+func checkForUpdateOnce(config *Config) error {
+	if !tryBeginPatchOp() {
+		return errAutoUpdateInProgress
+	}
+	defer endPatchOp()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	rel, err := FetchLatestJukaHubRelease(ctx)
+	if err != nil {
+		return err
+	}
+	// Keep the release notes even when the user does not install this
+	// build: the changelog screen can then show what is waiting.
+	storeReleaseNotes(rel)
+	patchStateMu.Lock()
+	patchState.AutoUpdateCheckedAt = time.Now().UTC().Format(time.RFC3339)
+	patchStateMu.Unlock()
+
+	if !releaseIsNewerThanInstalled(rel) {
+		clearAvailableUpdate()
+		_ = savePatchState()
+		logPatch("auto-update: %s is current", versionString(nil))
+		return nil
+	}
+	patchStateMu.Lock()
+	alreadyOffered := patchState.AvailableUpdateTag != ""
+	patchStateMu.Unlock()
+	markUpdateAvailable(rel)
+	logPatch("auto-update: %s is available; waiting for the user to confirm", rel.TagName)
+	if !alreadyOffered {
+		announceAvailableUpdate()
+	}
+	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
+	return nil
+}
+
+// runAutoUpdateAttempts retries a failed check so a device that launches before
+// its Wi-Fi has associated still learns about an update in the same session,
+// instead of waiting for the next boot to try again. sleep is a parameter so a
+// test can run the loop without waiting a minute.
+func runAutoUpdateAttempts(check func() error, attempts int, sleep func(time.Duration), onFail func(attempt int, err error)) (int, error) {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if attempt > 1 && sleep != nil {
+			sleep(autoUpdateRetryDelay)
+		}
+		err = check()
+		if err == nil {
+			return attempt, nil
+		}
+		if errors.Is(err, errAutoUpdateInProgress) {
+			return attempt, err
+		}
+		if onFail != nil {
+			onFail(attempt, err)
+		}
+	}
+	return attempts, err
 }
 
 // StageJukaHubUpdate downloads and extracts a release for this device into the
@@ -736,9 +785,22 @@ func quotePOSIXArg(p string) string {
 // the staged files, commits (deletes) the journal, and relaunches JukaHub.
 // The helper waits for this process to exit and retries while the old
 // executable is still locked.
-func writeSwapScript(scriptPath, exePath string, files []stagedInstallFile, journalPath string) error {
+//
+// launcherPID is the launcher that started this build (0 when unknown). On
+// POSIX the helper uses it two ways: it asks a protocol-aware launcher to
+// restart the app in place, and with an older launcher it waits for that
+// launcher to finish restoring the stock UI before starting a new one — starting
+// two UIs on one framebuffer is the post-update blinking.
+func writeSwapScript(scriptPath, exePath string, files []stagedInstallFile, journalPath string, launcherPID int) error {
+	return writeSwapScriptFor(runtime.GOOS, scriptPath, exePath, files, journalPath, launcherPID)
+}
+
+// writeSwapScriptFor is the testable form: the handshake tests generate the
+// POSIX helper on any host, so the device script is covered by CI runs on
+// Windows too.
+func writeSwapScriptFor(goos, scriptPath, exePath string, files []stagedInstallFile, journalPath string, launcherPID int) error {
 	var b strings.Builder
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		b.WriteString("@echo off\r\n")
 		b.WriteString("rem JukaHub apply-update helper (generated by Patch; do not edit)\r\n")
 		b.WriteString("setlocal\r\n")
@@ -764,21 +826,47 @@ func writeSwapScript(scriptPath, exePath string, files []stagedInstallFile, jour
 	} else {
 		b.WriteString("#!/bin/sh\n")
 		b.WriteString("# JukaHub apply-update helper (generated by Patch; do not edit)\n")
-		launcher := filepath.Join(filepath.Dir(exePath), "launch.sh")
-		b.WriteString("EXE=" + quotePOSIXArg(exePath) + "\n")
+		// The script runs on the device, so its paths are POSIX: build them with
+		// `path` rather than the host's filepath (a release cross-built on a
+		// Windows host would otherwise write backslashes /mnt can not open).
+		posixDir := path.Dir(filepath.ToSlash(exePath))
+		posixExe := filepath.ToSlash(exePath)
+		launcher := path.Join(posixDir, "launch.sh")
+		b.WriteString("EXE=" + quotePOSIXArg(posixExe) + "\n")
 		b.WriteString("LAUNCHER=" + quotePOSIXArg(launcher) + "\n")
-		b.WriteString("JOURNAL=" + quotePOSIXArg(journalPath) + "\n")
+		b.WriteString("JOURNAL=" + quotePOSIXArg(filepath.ToSlash(journalPath)) + "\n")
+		b.WriteString("DIR=" + quotePOSIXArg(posixDir) + "\n")
+		b.WriteString("PENDING=\"$DIR/" + restartPendingName + "\"\n")
+		b.WriteString("SWAPPED=\"$DIR/" + restartSwappedName + "\"\n")
+		b.WriteString("FAILED=\"$DIR/" + restartFailedName + "\"\n")
+		b.WriteString("LAUNCHER_PID=" + strconv.Itoa(launcherPID) + "\n")
 		b.WriteString("sleep 2\n")
 		for _, f := range files {
 			// Write next to the target and rename: works even if the old binary
 			// is still mapped by the exiting process.
-			b.WriteString("cp -f " + quotePOSIXArg(f.Src) + " " + quotePOSIXArg(f.Dest+".new") + " || exit 5\n")
-			b.WriteString("mv -f " + quotePOSIXArg(f.Dest+".new") + " " + quotePOSIXArg(f.Dest) + " || exit 6\n")
+			src, dest := filepath.ToSlash(f.Src), filepath.ToSlash(f.Dest)
+			b.WriteString("cp -f " + quotePOSIXArg(src) + " " + quotePOSIXArg(dest+".new") + " || { : > \"$FAILED\"; exit 5; }\n")
+			b.WriteString("mv -f " + quotePOSIXArg(dest+".new") + " " + quotePOSIXArg(dest) + " || { : > \"$FAILED\"; exit 6; }\n")
 		}
 		// FAT-formatted SD cards may not support chmod; the extracted mode is
 		// already executable there, so never fail the swap on it.
 		b.WriteString("chmod 755 \"$EXE\" 2>/dev/null || true\n")
 		b.WriteString("rm -f \"$JOURNAL\" || true\n")
+		// A protocol-aware launcher is waiting for this verdict and restarts the
+		// new build itself; spawning a second launcher here is what put two UIs
+		// on the screen.
+		b.WriteString("if [ -f \"$PENDING\" ] && [ \"$LAUNCHER_PID\" -gt 0 ] 2>/dev/null && kill -0 \"$LAUNCHER_PID\" 2>/dev/null; then\n")
+		b.WriteString("    : > \"$SWAPPED\"\n")
+		b.WriteString("    exit 0\n")
+		b.WriteString("fi\n")
+		b.WriteString("rm -f \"$PENDING\" \"$FAILED\"\n")
+		// Older launcher: it restores MainUI as this process exits. Give it the
+		// time to finish before starting a new launcher, or both UIs run at once.
+		b.WriteString("n=0\n")
+		b.WriteString("while [ \"$LAUNCHER_PID\" -gt 0 ] 2>/dev/null && kill -0 \"$LAUNCHER_PID\" 2>/dev/null && [ \"$n\" -lt 20 ]; do\n")
+		b.WriteString("    n=$((n + 1))\n")
+		b.WriteString("    sleep 1\n")
+		b.WriteString("done\n")
 		// The device launcher exports LD_LIBRARY_PATH before starting JukaHub;
 		// restart through it when present.
 		b.WriteString("if [ -f \"$LAUNCHER\" ]; then nohup sh \"$LAUNCHER\" >/dev/null 2>&1 &\n")

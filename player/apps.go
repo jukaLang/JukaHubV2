@@ -64,13 +64,23 @@ var builtinApplets = []struct {
 // list with thousands of rows.
 const maxAppEntries = 300
 
-// builtinAppEntries renders the applet table as launcher rows.
-func builtinAppEntries() []FileEntry {
+// builtinAppEntries renders the applet table as launcher rows. A nil config
+// keeps every applet (the merge-order tests use it); scanInstalledApps always
+// passes the live config, so a pruned config never lists an applet whose scene
+// it does not have.
+func builtinAppEntries(config *Config) []FileEntry {
 	entries := make([]FileEntry, 0, len(builtinApplets))
 	for _, a := range builtinApplets {
 		path := builtinScenePrefix + a.Scene
 		if a.Action != "" {
 			path = builtinActionPrefix + a.Action
+			if !builtinAppActionSupported(a.Action) {
+				continue
+			}
+		} else if config != nil && sceneIndexExact(config, a.Scene) < 0 {
+			// The row would open nothing on this config: leave it out of the
+			// launcher instead of logging a dead launch after a press.
+			continue
 		}
 		entries = append(entries, FileEntry{
 			Name:  a.Name + " (built-in)",
@@ -116,7 +126,7 @@ func systemAppDirs() []string {
 // scanInstalledApps rebuilds the Apps list and publishes it for the renderer.
 // It runs on the main thread from scene entry and from the app_refresh trigger.
 func scanInstalledApps(config *Config) {
-	entries := collectAppEntries(appsFolder(), systemAppDirs())
+	entries := collectAppEntries(config, appsFolder(), systemAppDirs())
 	config.Variables.Custom[appsEntriesVar] = entries
 	log.Printf("[apps] scanned %d app entries", len(entries))
 }
@@ -125,7 +135,7 @@ func scanInstalledApps(config *Config) {
 // folder first, then system app folders, then built-in applets. Display names
 // are de-duplicated case-insensitively so a shortcut and a portable copy of
 // the same program do not appear twice.
-func collectAppEntries(appsFolder string, systemDirs []string) []FileEntry {
+func collectAppEntries(config *Config, appsFolder string, systemDirs []string) []FileEntry {
 	entries := scanAppsFolder(appsFolder)
 	seen := make(map[string]bool, len(entries)+len(builtinApplets))
 	for _, e := range entries {
@@ -144,7 +154,7 @@ func collectAppEntries(appsFolder string, systemDirs []string) []FileEntry {
 			entries = append(entries, e)
 		}
 	}
-	for _, e := range builtinAppEntries() {
+	for _, e := range builtinAppEntries(config) {
 		key := strings.ToLower(e.Name)
 		if seen[key] {
 			continue
@@ -320,6 +330,11 @@ func launchAppEntry(config *Config, entry FileEntry) {
 		return
 	}
 	launchInstalledApp(external)
+}
+
+// builtinAppActionSupported reports whether an applet action has a handler.
+func builtinAppActionSupported(action string) bool {
+	return action == "chiaki"
 }
 
 // launchBuiltinAppAction opens a panel-backed built-in applet. Keeping the

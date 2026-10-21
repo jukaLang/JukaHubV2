@@ -301,9 +301,7 @@ func handleUnitInput(e *sdl.KeyboardEvent, config *Config) {
 			}
 		}
 	case sdl.K_BACKSPACE:
-		if len(unitInputValue) > 0 {
-			unitInputValue = unitInputValue[:len(unitInputValue)-1]
-		}
+		unitInputValue = trimLastRune(unitInputValue)
 	default:
 		if e.Type == sdl.KEYDOWN {
 			ks := e.Keysym.Sym

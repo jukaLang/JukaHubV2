@@ -343,7 +343,7 @@ func TestStartMenuHasPSRemotePlay(t *testing.T) {
 
 func TestAppsListHasPSRemotePlayAction(t *testing.T) {
 	found := false
-	for _, entry := range builtinAppEntries() {
+	for _, entry := range builtinAppEntries(nil) {
 		if entry.Name == "PS Remote Play (built-in)" {
 			found = true
 			if entry.Path != builtinActionPrefix+"chiaki" {

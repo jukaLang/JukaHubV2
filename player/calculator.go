@@ -93,9 +93,7 @@ func calcSelect() {
 		calc.result = ""
 		calc.hasResult = true
 	case "back":
-		if len(calc.expression) > 0 {
-			calc.expression = calc.expression[:len(calc.expression)-1]
-		}
+		calc.expression = trimLastRune(calc.expression)
 		if calc.expression == "" {
 			calc.display = "0"
 			calc.hasResult = true
@@ -473,9 +471,7 @@ func handleCalcInput(e *sdl.KeyboardEvent) {
 		calc.result = ""
 		calc.hasResult = true
 	case sdl.K_BACKSPACE, sdl.K_x:
-		if len(calc.expression) > 0 {
-			calc.expression = calc.expression[:len(calc.expression)-1]
-		}
+		calc.expression = trimLastRune(calc.expression)
 		if calc.expression == "" {
 			calc.display = "0"
 			calc.hasResult = true

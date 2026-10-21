@@ -465,9 +465,7 @@ func handleDictInput(e *sdl.KeyboardEvent, config *Config) {
 			}()
 		}
 	case sdl.K_BACKSPACE:
-		if len(dict.query) > 0 {
-			dict.query = dict.query[:len(dict.query)-1]
-		}
+		dict.query = trimLastRune(dict.query)
 	case sdl.K_ESCAPE, sdl.K_b:
 		if dict.query != "" {
 			dict.query = ""

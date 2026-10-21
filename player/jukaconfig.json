@@ -622,7 +622,7 @@
           "triggerValue": "",
           "image": "",
           "width": "1232",
-          "height": "480",
+          "height": "472",
           "video": "",
           "variable": "",
           "command": "",
@@ -3595,7 +3595,7 @@
         },
         {
           "type": "toggle",
-          "text": "Weather Enabled",
+          "text": "Weather",
           "color": "",
           "x": 660,
           "y": 96,
@@ -3715,7 +3715,7 @@
         },
         {
           "type": "toggle",
-          "text": "Swap A/B Buttons",
+          "text": "Swap A/B",
           "color": "",
           "x": 660,
           "y": 412,
@@ -4079,41 +4079,20 @@
       "background": "#0B0F17",
       "layout": "",
       "elements": [
-        {
-          "type": "button",
-          "text": "Refresh",
-          "color": "$labelColor",
-          "x": 24,
-          "y": 72,
-          "font": "",
-          "bgColor": "$buttonColor",
-          "trigger": "",
-          "triggerTarget": "",
-          "triggerValue": "",
-          "image": "",
-          "width": "140",
-          "height": "45",
-          "video": "",
-          "variable": "",
-          "command": "",
-          "listVariable": "",
-          "columns": 0,
-          "rows": 0,
-          "placeholder": "",
-          "style": "",
-          "icon": "",
-          "jsonPath": "",
-          "autoRefresh": false,
-          "externalAppPath": "",
-          "externalAppReturn": "",
-          "variableChange": "",
-          "variableChangeValue": ""
-        }
+        
       ],
       "icon": "[P]",
       "description": "Update and repair JukaHub"
     },
-    {
+{
+    "name": "About",
+    "background": "#0B0F17",
+    "layout": "",
+    "elements": [],
+    "icon": "i",
+    "description": "Version, credits and license"
+},
+        {
       "name": "Exit",
       "background": "#0B0F17",
       "layout": "",
