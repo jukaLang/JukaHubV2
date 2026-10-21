@@ -32,7 +32,7 @@ jobs:
         run: bash ./release.sh
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             player/dist/JukaHub-trimui-smart-pro-linux-arm64.tar.gz
