@@ -4636,7 +4636,7 @@ function setupMobileElementAdding() {
       button.style.padding = '0.5rem';
       button.style.width = '100%';
       button.style.marginBottom = '0.5rem';
-      button.innerHTML = `<i class="${element.icon}"></i> ${element.name}`;
+      button.innerHTML = `<i class="${escapeHtml(element.icon)}" aria-hidden="true"></i> ${escapeHtml(element.name)}`;
 
       button.addEventListener('click', () => {
         elementType = element.type;
@@ -5283,10 +5283,13 @@ const AI = (() => {
       headers: {
         'x-api-key': key,
         'anthropic-version': '2023-06-01',
+        // Required by Anthropic for calls made straight from a browser; without
+        // it the request is blocked by CORS before it reaches the API.
+        'anthropic-dangerous-direct-browser-access': 'true',
         'Content-Type': 'application/json',
       },
       body: {
-        model: 'claude-3-5-haiku-20241022',
+        model: 'claude-haiku-5-5',
         max_tokens: 2000,
         temperature: 0.2,
         system: AI_SYSTEM,

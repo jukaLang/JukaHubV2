@@ -242,9 +242,9 @@ jobs:
           sudo cp -r SDL2_ttf-2.22.0/x86_64-w64-mingw32/* $MINGW_DIR/x86_64-w64-mingw32/
 
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: player/go.mod
 
       - name: Install Dependencies
         run: |

@@ -1,0 +1,58 @@
+name: CI
+
+# Runs on every push and pull request. The player has ~150 test files but no
+# workflow ran them; the existing workflows only build packages.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Web builder checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Syntax check builder scripts
+        run: |
+          for f in script.js builder-device.js builder-gallery.js gallery/layouts.js; do
+            node --check "$f"
+          done
+      - name: Config files are valid JSON
+        run: |
+          for f in player/jukaconfig.json; do
+            [ -f "$f" ] && node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))"
+          done
+          true
+
+  player:
+    name: Player vet and tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        # SDL_VIDEODRIVER=dummy lets the offscreen render tests run headless.
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: go test ./... -count=1 -timeout 10m
