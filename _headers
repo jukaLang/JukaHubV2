@@ -1,0 +1,7 @@
+# Netlify response headers for generate.jukalang.com.
+# The builder uses the microphone for AI voice input, so it stays allowed for
+# this origin; camera and geolocation are never needed.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), geolocation=(), microphone=(self)

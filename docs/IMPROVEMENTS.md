@@ -89,3 +89,20 @@ writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
   inherit them, so their suspend and power fixes do not translate.
 - **The 12-hour clock fix.** We render 24-hour time everywhere, so there is no
   AM/PM bug to fix. Adding a 12-hour option is a feature, not a correction.
+
+## Web builder pass (October 2026)
+
+| Problem | Fix |
+|---|---|
+| Variable names and values from imported JSON/XML and share links were spliced into `innerHTML` and into an inline `onclick="editVariable('…')"` — a design link could run script in the viewer's browser (5 call sites) | `createVariableItem` in [script.js](../script.js) builds each row with DOM APIs and `addEventListener`; `tests/web/builder.test.mjs` fails if a hostile name becomes markup |
+| Validation panel and Dynamic List inspector inserted config-derived text unescaped | `escapeHtml` on the location label and on the `value=` attributes |
+| AI panel's Anthropic call was missing the browser-access header (blocked by CORS) and named a retired model | header added, model updated |
+| Viewport locked pinch-zoom (`user-scalable=no`) | removed |
+| Theme preference read `localStorage` unguarded and threw when storage was blocked | wrapped in try/catch |
+| Eight inline `onclick`/`onchange` attributes blocked any future strict CSP | moved to `data-click` / `data-change` bindings |
+| Nothing ran the player's ~150 test files in CI | `.github/workflows/ci.yml` (player job is non-blocking until it has been green once) |
+| `docker-image.yml` built with Go 1.23 while `go.mod` needs 1.25 | `go-version-file: player/go.mod` |
+
+Also added: `robots.txt`, `sitemap.xml`, Netlify `_headers` (nosniff, referrer and permissions policy), Dependabot for Actions, Go modules and the test package.
+
+Not done, and why: a Content-Security-Policy (inline `style=` attributes and LAN device pushes over `http:` need a careful allow-list first), a service worker (a stale-cache bug would be hard to recover from; the favicon is 48 px, below the 192 px installable-PWA minimum), and any change under `player/` (the SDL2/CGO build could not be run in the environment used for this pass).

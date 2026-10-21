@@ -25,6 +25,11 @@ jobs:
           for f in script.js builder-device.js builder-gallery.js gallery/layouts.js; do
             node --check "$f"
           done
+      - name: Browser-free smoke and security tests (jsdom)
+        working-directory: tests/web
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
       - name: Config files are valid JSON
         run: |
           for f in player/jukaconfig.json; do
@@ -35,6 +40,9 @@ jobs:
   player:
     name: Player vet and tests
     runs-on: ubuntu-latest
+    # Not blocking yet: this job has not run on a GitHub runner. Once it is
+    # green on main, delete the next line so failures block merges.
+    continue-on-error: true
     defaults:
       run:
         working-directory: player

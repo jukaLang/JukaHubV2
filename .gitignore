@@ -35,3 +35,6 @@ player/jukauser.json
 .freebuff/project-id
 tmp
 /player/power-config-history
+
+# web test dependencies
+tests/web/node_modules/

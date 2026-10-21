@@ -250,18 +250,7 @@ function restoreSnapshot(snapshot) {
   // Rebuild variables UI
   variablesList.innerHTML = '';
   for (const [key, val] of Object.entries(variables)) {
-    const variableItem = document.createElement('div');
-    variableItem.className = 'variable-item';
-    variableItem.innerHTML = `
-      <div>
-        <span class="variable-name">${key}</span>
-        <span class="variable-value">${val}</span>
-      </div>
-      <div class="variable-actions">
-        <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
-        <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
-      </div>
-    `;
+    const variableItem = createVariableItem(key, val);
     variablesList.appendChild(variableItem);
   }
 
@@ -516,18 +505,7 @@ function loadAutoSave() {
     // Rebuild variables UI
     variablesList.innerHTML = '';
     for (const [key, val] of Object.entries(variables)) {
-      const variableItem = document.createElement('div');
-      variableItem.className = 'variable-item';
-      variableItem.innerHTML = `
-        <div>
-          <span class="variable-name">${key}</span>
-          <span class="variable-value">${val}</span>
-        </div>
-        <div class="variable-actions">
-          <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
-          <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
-        </div>
-      `;
+      const variableItem = createVariableItem(key, val);
       variablesList.appendChild(variableItem);
     }
 
@@ -929,18 +907,7 @@ function restoreWorkspaceFromSnapshot(data) {
   loadScene(currentScene);
 
   for (const [key, val] of Object.entries(variables)) {
-    const variableItem = document.createElement('div');
-    variableItem.className = 'variable-item';
-    variableItem.innerHTML = `
-      <div>
-        <span class="variable-name">${key}</span>
-        <span class="variable-value">${val}</span>
-      </div>
-      <div class="variable-actions">
-        <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
-        <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
-      </div>
-    `;
+    const variableItem = createVariableItem(key, val);
     variablesList.appendChild(variableItem);
   }
 
@@ -1164,7 +1131,7 @@ function setupEventListeners() {
       darkModeToggle.innerHTML = isLight ?
         '<i class="fas fa-sun" aria-hidden="true"></i> <span>Light Mode</span>' :
         '<i class="fas fa-moon" aria-hidden="true"></i> <span>Dark Mode</span>';
-      localStorage.setItem('jukahub-theme', isLight ? 'light' : 'dark');
+      try { localStorage.setItem('jukahub-theme', isLight ? 'light' : 'dark'); } catch (e) { /* storage blocked */ }
     });
   }
 
@@ -1376,7 +1343,8 @@ function setupEventListeners() {
 
 // Theme helpers
 function loadTheme() {
-  const saved = localStorage.getItem('jukahub-theme');
+  let saved = null;
+  try { saved = localStorage.getItem('jukahub-theme'); } catch (e) { /* storage blocked: use the default theme */ }
   const prefersLight = saved === 'light';
   document.body.classList.toggle('theme-light', prefersLight);
   document.body.classList.toggle('theme-dark', !prefersLight);
@@ -2541,18 +2509,7 @@ function addVariable() {
     variables[variableName] = '';
 
     // Create variable item
-    const variableItem = document.createElement('div');
-    variableItem.className = 'variable-item';
-    variableItem.innerHTML = `
-                    <div>
-                        <span class="variable-name">${variableName}</span>
-                        <span class="variable-value">${variables[variableName]}</span>
-                    </div>
-                    <div class="variable-actions">
-                    <button type="button" aria-label="Edit ${variableName}" title="Edit ${variableName}" onclick="editVariable('${variableName}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
-                    <button type="button" aria-label="Delete ${variableName}" title="Delete ${variableName}" onclick="deleteVariable('${variableName}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
-                    </div>
-                `;
+    const variableItem = createVariableItem(variableName, variables[variableName]);
 
     variablesList.appendChild(variableItem);
 
@@ -3537,7 +3494,7 @@ function renderValidationPanel(result, report) {
     button.innerHTML = `
       <i class="fas ${issue.severity === 'error' ? 'fa-circle-exclamation' : 'fa-triangle-exclamation'} validate-icon" aria-hidden="true"></i>
       <span class="validate-issue-body">
-        <span class="validate-issue-where">${issue.where || 'Design'}</span>
+        <span class="validate-issue-where">${escapeHtml(issue.where || 'Design')}</span>
         <span>${escapeHtml(issue.message)}</span>
         ${issue.fix ? `<span class="validate-issue-fix">${escapeHtml(issue.fix)}</span>` : ''}
       </span>`;
@@ -3545,6 +3502,45 @@ function renderValidationPanel(result, report) {
     li.appendChild(button);
     list.appendChild(li);
   });
+}
+
+// Builds one row of the Variables list with DOM APIs only. Variable names and
+// values come from imported configs, XML files and share links, so they must
+// never be parsed as HTML or spliced into an inline handler.
+function createVariableItem(key, val) {
+  const item = document.createElement('div');
+  item.className = 'variable-item';
+
+  const info = document.createElement('div');
+  const nameEl = document.createElement('span');
+  nameEl.className = 'variable-name';
+  nameEl.textContent = String(key);
+  const valueEl = document.createElement('span');
+  valueEl.className = 'variable-value';
+  valueEl.textContent = val === undefined || val === null ? '' : String(val);
+  info.append(nameEl, ' ', valueEl);
+
+  const actions = document.createElement('div');
+  actions.className = 'variable-actions';
+  const makeButton = (verb, iconClass, handler) => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.setAttribute('aria-label', `${verb} ${key}`);
+    btn.title = `${verb} ${key}`;
+    const icon = document.createElement('i');
+    icon.className = iconClass;
+    icon.setAttribute('aria-hidden', 'true');
+    btn.appendChild(icon);
+    btn.addEventListener('click', () => handler(String(key)));
+    return btn;
+  };
+  actions.append(
+    makeButton('Edit', 'fas fa-edit', name => editVariable(name)),
+    makeButton('Delete', 'fas fa-trash', name => deleteVariable(name))
+  );
+
+  item.append(info, actions);
+  return item;
 }
 
 function escapeHtml(text) {
@@ -4356,18 +4352,7 @@ function loadJukaApp(input) {
         variables[key] = data.variables[key];
 
         // Add variable to UI
-        const variableItem = document.createElement('div');
-        variableItem.className = 'variable-item';
-        variableItem.innerHTML = `
-                    <div>
-                        <span class="variable-name">${key}</span>
-                        <span class="variable-value">${data.variables[key]}</span>
-                    </div>
-                    <div class="variable-actions">
-                        <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
-                        <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
-                    </div>
-                `;
+        const variableItem = createVariableItem(key, data.variables[key]);
         variablesList.appendChild(variableItem);
       }
     }
@@ -4728,7 +4713,7 @@ function setupDynamicListProperties(el) {
   commandGroup.innerHTML = `
     <label for="dynamicCommand"><i class="fas fa-terminal"></i> Command Path:</label>
     <input type="text" id="dynamicCommand" class="dynamic-command-input" 
-           placeholder="Path to executable" value="${el.getAttribute('data-command') || ''}">
+           placeholder="Path to executable" value="${escapeHtml(el.getAttribute('data-command') || '')}">
   `;
   container.appendChild(commandGroup);
 
@@ -4738,7 +4723,7 @@ function setupDynamicListProperties(el) {
   variableGroup.innerHTML = `
     <label for="dynamicVariable"><i class="fas fa-code"></i> Variable:</label>
     <input type="text" id="dynamicVariable" class="dynamic-variable-input" 
-           placeholder="Variable to store selection" value="${el.getAttribute('data-variable') || ''}">
+           placeholder="Variable to store selection" value="${escapeHtml(el.getAttribute('data-variable') || '')}">
   `;
   container.appendChild(variableGroup);
 
@@ -6584,3 +6569,30 @@ function setupEditorQuality() {
     document.getElementById(id)?.addEventListener('change', scheduleValidationRefresh);
   });
 }
+
+// Static toolbar buttons used to carry inline onclick/onchange attributes. They
+// are wired here instead so the page can adopt a strict Content-Security-Policy
+// later. Only these named builder actions can be triggered from the markup.
+(function bindDeclarativeActions() {
+  const actions = {
+    exportConfig: () => exportConfig(),
+    exportConfigXml: () => exportConfigXml(),
+    addScene: () => addScene(),
+    renameScene: () => renameScene(),
+    deleteScene: () => deleteScene(),
+    duplicateScene: () => duplicateScene(),
+    changeScene: () => changeScene(),
+  };
+  const bind = () => {
+    document.querySelectorAll('[data-click]').forEach(el => {
+      const fn = actions[el.dataset.click];
+      if (fn) el.addEventListener('click', fn);
+    });
+    document.querySelectorAll('[data-change]').forEach(el => {
+      const fn = actions[el.dataset.change];
+      if (fn) el.addEventListener('change', fn);
+    });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+  else bind();
+})();

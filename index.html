@@ -81,8 +81,8 @@
                         <i class="fas fa-caret-down" style="margin-left:2px"></i>
                     </button>
                     <div class="export-dropdown" id="headerExportDropdown">
-                        <button type="button" onclick="exportConfig()"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
-                        <button type="button" onclick="exportConfigXml()"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
+                        <button type="button" data-click="exportConfig"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
+                        <button type="button" data-click="exportConfigXml"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
                     </div>
                 </div>
             </div>
@@ -284,17 +284,17 @@
                 <div class="canvas-header">
                     <div class="canvas-controls">
                         <div class="scene-controls">
-                            <button class="action-button" type="button" onclick="addScene()">
+                            <button class="action-button" type="button" data-click="addScene">
                                 <i class="fas fa-plus" aria-hidden="true"></i> <span>Add Scene</span>
                             </button>
-                            <select id="sceneSelector" aria-label="Current scene" onchange="changeScene()"></select>
-                            <button class="action-button" type="button" onclick="renameScene()" aria-label="Rename scene">
+                            <select id="sceneSelector" aria-label="Current scene" data-change="changeScene"></select>
+                            <button class="action-button" type="button" data-click="renameScene" aria-label="Rename scene">
                                 <i class="fas fa-edit" aria-hidden="true"></i>
                             </button>
-                            <button class="action-button danger" type="button" onclick="deleteScene()" aria-label="Delete scene">
+                            <button class="action-button danger" type="button" data-click="deleteScene" aria-label="Delete scene">
                                 <i class="fas fa-trash" aria-hidden="true"></i>
                             </button>
-                            <button class="action-button" type="button" onclick="duplicateScene()" aria-label="Duplicate scene">
+                            <button class="action-button" type="button" data-click="duplicateScene" aria-label="Duplicate scene">
                                 <i class="fas fa-copy" aria-hidden="true"></i>
                             </button>
                         </div>
@@ -308,8 +308,8 @@
                                     <i class="fas fa-caret-down" style="margin-left:2px"></i>
                                 </button>
                                 <div class="export-dropdown" id="canvasExportDropdown">
-                                    <button type="button" onclick="exportConfig()"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
-                                    <button type="button" onclick="exportConfigXml()"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
+                                    <button type="button" data-click="exportConfig"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
+                                    <button type="button" data-click="exportConfigXml"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
                                 </div>
                             </div>
                         </div>
