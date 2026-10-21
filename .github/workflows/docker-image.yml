@@ -20,7 +20,7 @@ jobs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Generate Tag Name
         id: generate_tag
@@ -74,7 +74,7 @@ jobs:
           fi
     
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download and Install ARM Libraries
         run: |
@@ -201,7 +201,7 @@ jobs:
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Homebrew
         run: |
