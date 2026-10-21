@@ -3047,3 +3047,329 @@ body.element-selected #elementPropertiesPanel {
     right: calc(var(--sidebar-collapsed) + var(--space-md));
   }
 }
+
+/* === Editor quality-of-life additions ====================================
+   History controls, design validation, the player-matching preview chrome and
+   keyboard affordances. Kept together at the end so the base layout above is
+   unchanged when these features are off. */
+
+/* Skip link: first tab stop, visible only when focused. */
+.skip-link {
+  position: fixed;
+  top: var(--space-sm);
+  left: var(--space-sm);
+  z-index: calc(var(--z-toast) + 5);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--text-on-primary);
+  font-weight: 600;
+  transform: translateY(-200%);
+  transition: transform 0.15s ease;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+  text-decoration: none;
+}
+
+/* History controls */
+.history-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-secondary);
+}
+
+.history-button {
+  min-width: 34px;
+  padding: 0 var(--space-sm);
+  border: 0;
+  background: transparent;
+}
+
+.history-button:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.history-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+/* Design check */
+.validate-button {
+  position: relative;
+}
+
+.validate-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.validate-count[hidden] {
+  display: none;
+}
+
+.validate-content {
+  width: min(640px, 94vw);
+  max-height: min(78vh, 780px);
+  display: flex;
+  flex-direction: column;
+}
+
+.validate-body {
+  overflow: auto;
+  flex: 1 1 auto;
+  padding-bottom: var(--space-sm);
+}
+
+.validate-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.validate-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+}
+
+.validate-issue {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--warning);
+  border-radius: var(--radius-sm);
+  background: var(--surface-secondary);
+  color: var(--text-main);
+  text-align: left;
+  font: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.validate-issue:hover {
+  background: var(--surface-tertiary);
+}
+
+.validate-issue.is-error {
+  border-left-color: var(--danger);
+}
+
+.validate-issue.is-warning {
+  border-left-color: var(--warning);
+}
+
+.validate-issue .validate-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.validate-issue.is-error .validate-icon {
+  color: var(--danger);
+}
+
+.validate-issue-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.validate-issue-where {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.validate-issue-fix {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.validate-empty {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-lg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-secondary);
+  color: var(--text-main);
+}
+
+.validate-empty[hidden] {
+  display: none;
+}
+
+.validate-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--border);
+}
+
+/* Preview chrome: the editor shell disappears, this bar and the canvas stay. */
+.preview-bar {
+  position: fixed;
+  top: calc(var(--header-height) + var(--space-sm));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-lg);
+  width: min(760px, calc(100vw - 2 * var(--space-lg)));
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-raised) 92%, transparent);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(12px);
+}
+
+.preview-bar[hidden] {
+  display: none;
+}
+
+.preview-bar-info,
+.preview-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+}
+
+.preview-chip {
+  padding: 2px var(--space-sm);
+  border-radius: 999px;
+  background: var(--surface-tertiary);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.preview-scene-label {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-scale {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The logical canvas is 1280x720. Preview scales it down to the viewport with a
+   transform so percentages, gradients and text all scale exactly like the
+   player's renderer scales the same coordinates. */
+body.preview-mode .canvas-container {
+  padding: calc(var(--header-height) + 64px) var(--space-xl) var(--space-xl);
+  overflow: hidden;
+}
+
+body.preview-mode .canvas {
+  transform-origin: center center;
+  transition: transform 0.2s ease;
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 10px #05070b,
+    0 0 0 11px #2c3444,
+    0 28px 70px -20px rgba(0, 0, 0, 0.85);
+}
+
+body.preview-mode .preview-toggle {
+  display: none !important;
+}
+
+/* Elements act as buttons in preview, but only those the runtime would react
+   to get a pointer cursor and a hover lift. */
+body.preview-mode .element[data-trigger]:not([data-trigger=""]),
+body.preview-mode .element[data-scene-change]:not([data-scene-change=""]),
+body.preview-mode .menu-scene-button {
+  cursor: pointer;
+}
+
+body.preview-mode .element[data-trigger]:not([data-trigger=""]):hover,
+body.preview-mode .element[data-scene-change]:not([data-scene-change=""]):hover {
+  filter: brightness(1.12);
+}
+
+/* Keyboard affordances: canvas elements and library tiles are focusable. */
+.element:focus-visible,
+.left-sidebar .element:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+body.preview-mode .element:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 2px;
+}
+
+.menu-scene-button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+
+/* A focusable element that is not selected should not read as selected. */
+body:not(.element-selected) .element:focus {
+  box-shadow: none;
+}
+
+@media (max-width: 720px) {
+  .preview-bar {
+    width: calc(100vw - 2 * var(--space-sm));
+    gap: var(--space-sm);
+  }
+
+  .preview-chip,
+  .preview-scale {
+    display: none;
+  }
+
+  .history-label {
+    display: none;
+  }
+}
+
+/* Dropping a jukaconfig.json on the canvas imports it. */
+.canvas-container.config-drop-active {
+  outline: 3px dashed var(--secondary);
+  outline-offset: -10px;
+  background-color: rgba(37, 194, 160, 0.06);
+}
+
+.validate-count.has-errors {
+  background: var(--danger);
+}

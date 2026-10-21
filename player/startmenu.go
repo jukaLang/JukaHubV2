@@ -98,6 +98,9 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 	apps = append(apps, startMenuEntry{name: "Audio", icon: "S", scene: "", action: func(c *Config) { openMusicSettingsPanel(c) }})
 	apps = append(apps, startMenuEntry{name: "Remote Cast", icon: "V", scene: "", action: func(c *Config) { openCastPanel(c) }})
 	apps = append(apps, startMenuEntry{name: "Smart Home", icon: "H", scene: "", action: func(c *Config) { openSmartHomePanel(c) }})
+	if IsTrimuiDevice() || hasPPSSPPInstall(ppssppSearchRoots()) {
+		apps = append(apps, startMenuEntry{name: "Stick Calibration", icon: "K", scene: "", action: func(c *Config) { openStickCalibrationPanel(c) }})
+	}
 	apps = append(apps, startMenuEntry{name: "Accessibility", icon: "A", scene: "", action: func(c *Config) { openAccessibilityPanel(c) }})
 	apps = append(apps, startMenuEntry{name: "Ambient", icon: "D", scene: "", action: func(c *Config) { ambientEnter(c) }})
 	apps = append(apps, startMenuEntry{name: "Wallpapers", icon: "P", scene: "", action: func(c *Config) { wpOpen = true; initWallpaperPicker() }})

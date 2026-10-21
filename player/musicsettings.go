@@ -197,6 +197,7 @@ func openMusicSettingsPanel(config *Config) {
 	qs.open = false
 	toolsPanel.open = false
 	a11y.open = false
+	smartHomePanel.open = false
 	musicSettings.open = true
 	musicSettings.cursor = 0
 	musicSettings.scroll = 0

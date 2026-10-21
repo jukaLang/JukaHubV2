@@ -26,6 +26,9 @@ const (
 	// pairing QR. It is disabled whenever that tile is not drawn, so the D-pad
 	// can never land on something invisible.
 	HomeFocusPS5 HomeFocusID = "ps5"
+	// HomeFocusPS4 is the stable PS4 Remote Play tile, one slot left of the PS5
+	// tile. Disabled (and skipped by the D-pad) while it is not drawn.
+	HomeFocusPS4 HomeFocusID = "ps4"
 	// HomeFocusUpdate is the "new release available" download chip in the status
 	// cluster, left of the weather text. It is disabled unless a release is
 	// actually offered and drawn.
@@ -70,12 +73,16 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusPS5, Down: HomeFocusApps,
 		Left: HomeFocusMedia, Right: HomeFocusSettings,
 	},
-	// The PS5 launcher is a header tile: Up and Right reach the header clock,
-	// Down returns to the card below it, and Left stays put so the D-pad cannot
-	// wander into a card that is not beside it.
+	// The Remote Play launchers are header tiles: Up reaches the header clock,
+	// Down returns to the card below them, and Left/Right step between the two
+	// tiles instead of wandering into a card that is not beside them.
+	HomeFocusPS4: {
+		Up: HomeFocusClock, Down: HomeFocusFiles,
+		Left: HomeFocusPS4, Right: HomeFocusPS5,
+	},
 	HomeFocusPS5: {
 		Up: HomeFocusClock, Down: HomeFocusFiles,
-		Left: HomeFocusPS5, Right: HomeFocusClock,
+		Left: HomeFocusPS4, Right: HomeFocusClock,
 	},
 	HomeFocusPackages: {
 		Up: HomeFocusMedia, Down: HomeFocusTools,
@@ -274,7 +281,7 @@ func (f *HomeFocusController) neighbor(id HomeFocusID, direction FocusDirection)
 		if direction == FocusUp && id == f.tileUnder {
 			return HomeFocusPS5
 		}
-		if direction == FocusDown && id == HomeFocusPS5 {
+		if direction == FocusDown && (id == HomeFocusPS5 || id == HomeFocusPS4) {
 			return f.tileUnder
 		}
 	}
@@ -302,7 +309,7 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
-		HomeFocusWeather, HomeFocusClock, HomeFocusBell, HomeFocusUpdate, HomeFocusPS5, HomeFocusExit,
+		HomeFocusWeather, HomeFocusClock, HomeFocusBell, HomeFocusUpdate, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

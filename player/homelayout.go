@@ -295,7 +295,7 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, data.Continue, cardLift)
 		case HomeFocusExit:
 			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusBell:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusBell:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
 			// (title and icon) over the header.
@@ -321,6 +321,7 @@ func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
 	weatherStatusRect = sdl.Rect{}
 	ps5TileRect = sdl.Rect{}
+	ps4TileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
 	header := ScaleHomeRect(sdl.Rect{X: 0, Y: 0, W: 1280, H: 56}, h.Width, h.Height)
 	setDrawColor(renderer, ColorSurface)
@@ -433,13 +434,27 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// bound matches the QR's own gate, which is the point past the greeting
 	// column where a header tile can sit without covering text.
 	ps5TileRect = sdl.Rect{}
-	if ps5Slot, ok := ps5TileRectFor(sdl.Rect{X: qrX, Y: qrY, W: qrCard, H: qrCard}, scaleX(12, h.Width), scaleX(480, h.Width)); ok {
+	ps5Slot, ps5Shown := ps5TileRectFor(sdl.Rect{X: qrX, Y: qrY, W: qrCard, H: qrCard}, scaleX(12, h.Width), scaleX(480, h.Width))
+	if ps5Shown {
 		renderPS5HeaderTile(renderer, fonts, ps5Slot, ps5TileVisual{
 			Focused: h.Focus.Current() == HomeFocusPS5,
 			Pressed: data.Pressed == HomeFocusPS5,
 			Depth:   data.PressDepth,
 		})
 	}
+	// PS4 Remote Play launcher: the slot immediately left of the PS5 tile, so
+	// the stable build is reachable in one press from Home as well. It is only
+	// drawn when the PS5 tile is drawn and the extra slot still clears the
+	// greeting column; otherwise its focus entry stays disabled.
+	ps4TileRect = sdl.Rect{}
+	if ps4Slot, ok := ps4TileRectFor(ps5Slot, scaleX(12, h.Width), scaleX(480, h.Width)); ok {
+		renderPS4HeaderTile(renderer, fonts, ps4Slot, ps4TileVisual{
+			Focused: h.Focus.Current() == HomeFocusPS4,
+			Pressed: data.Pressed == HomeFocusPS4,
+			Depth:   data.PressDepth,
+		})
+	}
+	h.Focus.SetEnabled(HomeFocusPS4, ps4TileRect.W > 0)
 	// The controller can only focus the tile while it is on screen. Disabling
 	// it moves focus off automatically if the window is resized underneath it.
 	h.Focus.SetEnabled(HomeFocusPS5, ps5TileRect.W > 0)
@@ -494,13 +509,16 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// The D-pad may only focus the chip while it is on screen; with no update
 	// (or no room) it stays disabled and the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusUpdate, homeUpdateRect.W > 0)
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusPS5} {
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
 		if h.Focus.Current() != id {
 			continue
 		}
 		r := h.Items[id].Rect
-		if id == HomeFocusPS5 {
+		switch id {
+		case HomeFocusPS5:
 			r = ps5TileRect
+		case HomeFocusPS4:
+			r = ps4TileRect
 		}
 		if r.W <= 0 {
 			continue
@@ -523,7 +541,7 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	bestY := int32(0)
 	for _, id := range h.Order {
 		switch id {
-		case HomeFocusPS5, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusExit:
+		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusExit:
 			continue
 		}
 		item, ok := h.Items[id]

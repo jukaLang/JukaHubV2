@@ -447,12 +447,20 @@ func launchEmulatorEntry(e emuEntry) {
 		cmd = exec.Command(path)
 	}
 	cmd.Dir = filepath.Dir(path)
+	// Raise the CPU profile for the emulator and drop it back when the child
+	// exits. beginGamePowerProfile never fails a launch: an unsupported
+	// firmware only logs.
+	restoreProfile := beginGamePowerProfile(appConfig)
 	if err := cmd.Start(); err != nil {
+		restoreProfile()
 		log.Printf("[emulators] launch failed for %s: %v", path, err)
 		showLaunchFailureDialog(e.Name, err, "")
 		return
 	}
-	go func() { _ = cmd.Wait() }() // reap the child, keep JukaHub responsive
+	go func() {
+		_ = cmd.Wait() // reap the child, keep JukaHub responsive
+		restoreProfile()
+	}()
 	PlaySuccessSound()
 	ShowToast("Launching "+e.Name, ToastKindSuccess)
 }

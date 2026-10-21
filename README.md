@@ -315,6 +315,7 @@ JukaHub on a PC.
 | [PS Remote Play](docs/REMOTE_PLAY.md) | Chiaki-ng install, PS4 pairing, the opt-in PS5 beta and its setup |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
 | [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
+| [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
 | [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |

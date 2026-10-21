@@ -402,6 +402,7 @@ func a11ySyncFromTheme(config *Config) {
 func openAccessibilityPanel(config *Config) {
 	qs.open = false
 	toolsPanel.open = false
+	smartHomePanel.open = false
 	emuPanel.open = false
 	gpPanel.open = false
 	winAppsPanel = windowsAppsPanelState{}

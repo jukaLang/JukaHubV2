@@ -11,7 +11,9 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="theme-dark">
-    <div id="toastContainer" class="toast-container" aria-live="polite"></div>
+    <a class="skip-link" href="#workspace">Skip to canvas</a>
+    <div id="toastContainer" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="a11yStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
 
     <div class="app-shell">
         <!-- Top Application Bar -->
@@ -24,6 +26,18 @@
                 </div>
             </div>
             <div class="app-bar-actions">
+                <div class="history-group" role="group" aria-label="Edit history">
+                    <button id="undoBtn" class="app-bar-button history-button" type="button" aria-label="Undo" title="Undo (Ctrl+Z)" disabled>
+                        <i class="fas fa-undo" aria-hidden="true"></i><span class="history-label">Undo</span>
+                    </button>
+                    <button id="redoBtn" class="app-bar-button history-button" type="button" aria-label="Redo" title="Redo (Ctrl+Shift+Z)" disabled>
+                        <i class="fas fa-redo" aria-hidden="true"></i><span class="history-label">Redo</span>
+                    </button>
+                </div>
+                <button id="validateBtn" class="app-bar-button validate-button" type="button" aria-label="Check design for problems" title="Check design (Ctrl+Shift+K)">
+                    <i class="fas fa-circle-check" aria-hidden="true"></i> <span>Check</span>
+                    <span id="validateCount" class="validate-count" aria-hidden="true" hidden>0</span>
+                </button>
                 <button id="aiToggleBtn" class="app-bar-button ai-toggle-button" type="button" aria-label="Toggle AI assistant" aria-expanded="false" aria-controls="aiPanel">
                     <span class="ai-toggle-icon"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i></span> <span>AI</span>
                 </button>
@@ -161,7 +175,9 @@
                         <li><kbd>Delete</kbd> — Remove selected element</li>
                         <li><kbd>Ctrl+D</kbd> — Duplicate selected element</li>
                         <li><kbd>Ctrl+S</kbd> — Export JSON</li>
-                        <li><kbd>Ctrl+Shift+P</kbd> — Toggle Preview Mode ; <kbd>Esc</kbd> — Exit Preview</li>
+                        <li><kbd>Ctrl+P</kbd> or <kbd>Ctrl+Shift+P</kbd> — Toggle Preview Mode ; <kbd>Esc</kbd> — Exit Preview</li>
+                        <li><kbd>Ctrl+Shift+K</kbd> — Check the design for problems</li>
+                        <li><kbd>Arrow keys</kbd> — Nudge the selected element (<kbd>Shift</kbd> moves 10 px)</li>
                         <li>Right-click elements for a context menu</li>
                     </ul>
                     <p>Visit <a href="https://github.com/jukaLang/JukaHubV2/wiki" target="_blank">https://github.com/jukaLang/JukaHubV2/wiki</a> for more info</p>
@@ -193,19 +209,19 @@
                     <div class="component-section">
                         <h4 class="component-section-title">Basic</h4>
                         <div class="elements-container">
-                            <div class="element" draggable="true" data-type="button" title="Button">
+                            <div class="element" draggable="true" data-type="button" title="Button" role="button" tabindex="0" aria-label="Add Button to canvas">
                                 <i class="fas fa-square" aria-hidden="true"></i> <span>Button</span>
                             </div>
-                            <div class="element" draggable="true" data-type="label" title="Label">
+                            <div class="element" draggable="true" data-type="label" title="Label" role="button" tabindex="0" aria-label="Add Label to canvas">
                                 <i class="fas fa-font" aria-hidden="true"></i> <span>Label</span>
                             </div>
-                            <div class="element" draggable="true" data-type="image" title="Image">
+                            <div class="element" draggable="true" data-type="image" title="Image" role="button" tabindex="0" aria-label="Add Image to canvas">
                                 <i class="fas fa-image" aria-hidden="true"></i> <span>Image</span>
                             </div>
-                            <div class="element" draggable="true" data-type="input" title="Input">
+                            <div class="element" draggable="true" data-type="input" title="Input" role="button" tabindex="0" aria-label="Add Input to canvas">
                                 <i class="fas fa-edit" aria-hidden="true"></i> <span>Input</span>
                             </div>
-                            <div class="element" draggable="true" data-type="menu-element" title="Menu">
+                            <div class="element" draggable="true" data-type="menu-element" title="Menu" role="button" tabindex="0" aria-label="Add Menu to canvas">
                                 <i class="fa-solid fa-bars-progress" aria-hidden="true"></i> <span>Menu</span>
                             </div>
                         </div>
@@ -213,13 +229,13 @@
                     <div class="component-section">
                         <h4 class="component-section-title">Data</h4>
                         <div class="elements-container">
-                            <div class="element" draggable="true" data-type="dynamiclist" title="Dynamic List">
+                            <div class="element" draggable="true" data-type="dynamiclist" title="Dynamic List" role="button" tabindex="0" aria-label="Add Dynamic List to canvas">
                                 <i class="fas fa-list" aria-hidden="true"></i> <span>Dynamic List</span>
                             </div>
-                            <div class="element" draggable="true" data-type="textlog" title="Text Log">
+                            <div class="element" draggable="true" data-type="textlog" title="Text Log" role="button" tabindex="0" aria-label="Add Text Log to canvas">
                                 <i class="fas fa-align-left" aria-hidden="true"></i> <span>Text Log</span>
                             </div>
-                            <div class="element" draggable="true" data-type="textbrowser" title="Text Browser">
+                            <div class="element" draggable="true" data-type="textbrowser" title="Text Browser" role="button" tabindex="0" aria-label="Add Text Browser to canvas">
                                 <i class="fas fa-globe" aria-hidden="true"></i> <span>Text Browser</span>
                             </div>
                         </div>
@@ -227,7 +243,7 @@
                     <div class="component-section">
                         <h4 class="component-section-title">Advanced</h4>
                         <div class="elements-container">
-                            <div class="element" draggable="true" data-type="searchresults" title="YouTube / Search Results">
+                            <div class="element" draggable="true" data-type="searchresults" title="YouTube / Search Results" role="button" tabindex="0" aria-label="Add Search Results to canvas">
                                 <i class="fas fa-th-large" aria-hidden="true"></i> <span>Search Results</span>
                             </div>
                         </div>
@@ -306,12 +322,12 @@
                 </div>
                 <div id="rightSidebarContent" class="sidebar-content">
                     <div class="properties-tabs" role="tablist" aria-label="Inspector tabs">
-                        <button class="properties-tab active" data-tab="element-properties" type="button" role="tab" aria-selected="true">Element</button>
-                        <button class="properties-tab" data-tab="app-properties" type="button" role="tab" aria-selected="false">App Info</button>
+                        <button class="properties-tab active" data-tab="element-properties" type="button" role="tab" aria-selected="true" aria-controls="elementPropertiesPanel">Element</button>
+                        <button class="properties-tab" data-tab="app-properties" type="button" role="tab" aria-selected="false" aria-controls="appInfoPanel">App Info</button>
                     </div>
 
                     <!-- Element Properties -->
-                    <div id="elementPropertiesPanel" class="properties-panel">
+                    <div id="elementPropertiesPanel" class="properties-panel" role="tabpanel" aria-label="Element properties">
                         <div id="elementProperties" class="element-properties">
                             <div class="no-selection" id="noSelection">
                                 <i class="fas fa-mouse-pointer" aria-hidden="true"></i>
@@ -417,7 +433,7 @@
                                 </div>
 
                                 <div id="triggerOptions">
-                                    <select id="sceneChangeSelector" class="scene-change-selector"></select>
+                                    <select id="sceneChangeSelector" class="scene-change-selector" aria-label="Target scene"></select>
                                     <input type="text" id="externalAppPath" class="external-app-path" placeholder="App path">
                                     <input type="text" id="externalAppReturnVar" class="external-app-return-var" placeholder="Return variable">
                                     <select id="variableChangeSelector" class="variable-change-selector"></select>
@@ -507,7 +523,7 @@
                     </div>
 
                     <!-- App Properties -->
-                    <div id="appInfoPanel" class="properties-panel active">
+                    <div id="appInfoPanel" class="properties-panel active" role="tabpanel" aria-label="App info">
                         <div class="input-container">
                             <fieldset class="app-fieldset">                                <legend class="app-fieldset-legend">General</legend>
                                 <div class="input-group">
@@ -735,6 +751,51 @@
         <button type="button" data-action="send-back"><i class="fas fa-arrow-down"></i> Send to Back</button>
         <div class="context-menu-sep"></div>
         <button type="button" data-action="edit-text"><i class="fas fa-pen"></i> Edit Text</button>
+    </div>
+
+    <!-- Design check: config problems the player would hit on the handheld -->
+    <div id="validatePanel" class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="validateTitle" hidden>
+        <div class="guide-backdrop" data-close-validate></div>
+        <div class="guide-content validate-content">
+            <div class="guide-header">
+                <div>
+                    <h2 id="validateTitle"><i class="fas fa-circle-check" aria-hidden="true"></i> Check design</h2>
+                    <p class="guide-subtitle" id="validateSummary">Checks the same fields the player reads on the handheld.</p>
+                </div>
+                <button class="close-button" type="button" data-close-validate aria-label="Close design check">
+                    <i class="fas fa-times" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="guide-body validate-body">
+                <ul id="validateList" class="validate-list"></ul>
+                <p id="validateEmpty" class="validate-empty" hidden><i class="fas fa-circle-check" aria-hidden="true"></i> No problems found — this design will load on the device.</p>
+            </div>
+            <div class="validate-actions">
+                <button id="validateRecheck" class="action-button" type="button"><i class="fas fa-rotate" aria-hidden="true"></i> Re-check</button>
+                <button id="validateExportAnyway" class="action-button danger" type="button" hidden>Export anyway</button>
+                <button class="action-button primary" type="button" data-close-validate>Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preview chrome: stays visible while the editor chrome is hidden -->
+    <div id="previewBar" class="preview-bar" role="toolbar" aria-label="Preview controls" hidden>
+        <div class="preview-bar-info">
+            <span class="preview-chip" id="previewDevice">1280 × 720</span>
+            <span id="previewSceneLabel" class="preview-scene-label" aria-live="polite">Scene 1</span>
+            <span id="previewScale" class="preview-scale">100%</span>
+        </div>
+        <div class="preview-bar-actions">
+            <button id="previewPrev" class="action-button small" type="button" aria-label="Previous scene">
+                <i class="fas fa-chevron-left" aria-hidden="true"></i>
+            </button>
+            <button id="previewNext" class="action-button small" type="button" aria-label="Next scene">
+                <i class="fas fa-chevron-right" aria-hidden="true"></i>
+            </button>
+            <button id="previewExit" class="action-button small primary" type="button">
+                <i class="fas fa-pen" aria-hidden="true"></i> Back to editor
+            </button>
+        </div>
     </div>
 
     <!-- Preview Mode Toggle -->

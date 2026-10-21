@@ -790,6 +790,8 @@ func startChiakiInstall() error {
 		}
 		chiakiInstallLanguageDefault(filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir)), hadSettings)
 		installBarDone()
+		// A press on the home PS4 tile asked for "download, then play".
+		chiakiPS4InstallSucceeded()
 		log.Printf("[chiaki] installed %s into %s", release.Tag, filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir)))
 		ShowToast(chiakiAppName+" "+release.Tag+" installed", ToastKindSuccess)
 	}()
@@ -1375,6 +1377,7 @@ var chiakiRowHits []struct {
 func openChiakiPanel() {
 	qs.open = false
 	a11y.open = false
+	smartHomePanel.open = false
 	toolsPanel.open = false
 	emuPanel.open = false
 	gpPanel.open = false

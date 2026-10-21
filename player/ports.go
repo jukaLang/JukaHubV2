@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -95,9 +96,10 @@ type portEntry struct {
 	Detail  string
 	Status  emuStatus
 	Launch  string
-	Install bool // the PortMaster install action
-	Master  bool // the PortMaster app itself
-	Info    bool // a hint row with no status label
+	Compat  portCompat // whether the port's own manifest can run on this chip
+	Install bool       // the PortMaster install action
+	Master  bool       // the PortMaster app itself
+	Info    bool       // a hint row with no status label
 }
 
 // scanPortLaunchers lists top-level .sh scripts in roots, excluding
@@ -128,11 +130,19 @@ func scanPortLaunchers(roots []string) []portEntry {
 				continue
 			}
 			seen[key] = true
+			compat := portCompatForLauncher(path)
+			detail := path
+			if compat.State == portCompat32BitOnly {
+				// The manifest itself says this build cannot run here; the panel
+				// refuses it rather than letting it fail inside PortMaster.
+				detail = path + " · " + compat.Note
+			}
 			entries = append(entries, portEntry{
 				Name:   label,
-				Detail: path,
+				Detail: detail,
 				Status: emuAvailable,
 				Launch: path,
+				Compat: compat,
 			})
 		}
 	}
@@ -415,6 +425,18 @@ func portsPanelActivate() {
 	if e.Launch == "" {
 		return
 	}
+	// Flag, don't guess: a 32-bit-only build is refused with the manifest's own
+	// reason, which is more useful than a black screen or a missing library.
+	// portIgnoreCompat is the escape hatch for a manifest that is wrong (some
+	// ports ship a 64-bit wrapper the metadata does not mention).
+	if e.Compat.State == portCompat32BitOnly && !portCompatIgnored(appConfig) {
+		note := e.Compat.Note
+		if note == "" {
+			note = "32-bit build only"
+		}
+		ShowToast(e.Name+" cannot run here: "+note, ToastKindWarning)
+		return
+	}
 	portsPanel.open = false
 	launchPortScript(e.Name, e.Launch)
 }
@@ -435,14 +457,85 @@ func launchPortScript(name, path string) {
 	log.Printf("[portmaster] launching %s (%s via %s)", name, path, shell)
 	cmd := exec.Command(shell, path)
 	cmd.Dir = filepath.Dir(path)
+	// The ALSA workaround and the CPU profile are scoped to this child: the
+	// environment is replaced for the port only, so JukaHub's own audio and the
+	// next launch are untouched even if the port crashes.
+	if env := portLaunchEnv(appConfig); len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
+	}
+	restoreProfile := beginGamePowerProfile(appConfig)
 	if err := cmd.Start(); err != nil {
+		restoreProfile()
 		log.Printf("[portmaster] launch failed for %s: %v", path, err)
 		ShowToast("Could not launch "+name, ToastKindError)
 		return
 	}
-	go func() { _ = cmd.Wait() }()
+	go func() {
+		_ = cmd.Wait()
+		restoreProfile()
+	}()
 	PlaySuccessSound()
 	ShowToast("Launching "+name, ToastKindSuccess)
+}
+
+// portCompatIgnored is the escape hatch for a port whose manifest is wrong:
+// `portIgnoreCompat: true` in the user config launches it anyway, and the row's
+// badge is still shown so the choice is deliberate.
+func portCompatIgnored(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	if v, ok := customValue(config.Variables.Custom, "portIgnoreCompat"); ok {
+		return coerceBool(v)
+	}
+	return false
+}
+
+// portLaunchEnv is the environment a PortMaster launch gets.
+//
+// The handheld firmware has no PulseAudio, and a port that autodetects its SDL
+// audio driver can come up silent or crackly. Pinning the driver for the child
+// is the fix that needs no root, no system file and no cleanup: the parent
+// environment is never modified, so nothing has to be restored if the port
+// hangs or is killed. Keys:
+//
+//	portAudioWorkaround  bool, default on
+//	portAudioDriver      default "alsa"
+//	portAudioDevice      optional, passed as SDL_AUDIODEV
+func portLaunchEnv(config *Config) []string {
+	if config == nil {
+		return portAudioEnvFor(runtime.GOOS, nil)
+	}
+	return portAudioEnvFor(runtime.GOOS, config.Variables.Custom)
+}
+
+// portAudioEnvFor is the pure form, so the policy is testable on any host.
+func portAudioEnvFor(goos string, custom map[string]interface{}) []string {
+	if goos != "linux" {
+		return nil
+	}
+	enabled := true
+	driver := "alsa"
+	device := ""
+	if custom != nil {
+		if v, ok := customValue(custom, "portAudioWorkaround"); ok {
+			enabled = coerceBool(v)
+		}
+		if v, ok := customString(custom, "portAudioDriver"); ok && strings.TrimSpace(v) != "" {
+			driver = strings.TrimSpace(v)
+		}
+		if v, ok := customString(custom, "portAudioDevice"); ok {
+			device = strings.TrimSpace(v)
+		}
+	}
+	if !enabled {
+		return nil
+	}
+	env := []string{"SDL_AUDIODRIVER=" + driver}
+	if device != "" {
+		env = append(env, "SDL_AUDIODEV="+device, "AUDIODEV="+device)
+	}
+	return env
 }
 
 func ctrlPortsPanel(e *sdl.ControllerButtonEvent) bool {
@@ -497,12 +590,16 @@ func handlePortsMouse(mx, my int32) bool {
 func portsSummary(entries []portEntry) string {
 	installed := false
 	ports := 0
+	unsupported := 0
 	for _, e := range entries {
 		if e.Master && e.Status == emuAvailable {
 			installed = true
 		}
 		if !e.Master && !e.Install && e.Status == emuAvailable {
 			ports++
+			if e.Compat.State == portCompat32BitOnly {
+				unsupported++
+			}
 		}
 	}
 	if !installed {
@@ -511,7 +608,12 @@ func portsSummary(entries []portEntry) string {
 	if ports == 0 {
 		return "PortMaster installed · no ports yet"
 	}
-	return fmt.Sprintf("PortMaster installed · %d port(s)", ports)
+	summary := fmt.Sprintf("PortMaster installed · %d port(s)", ports)
+	if unsupported > 0 {
+		// Say it up front, so nobody opens a port that cannot start.
+		summary += fmt.Sprintf(" · %d cannot run here (32-bit only)", unsupported)
+	}
+	return summary
 }
 
 // renderPortsPanel draws the modal Ports list, scrolling with the cursor.
@@ -609,10 +711,23 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 
 		renderText(renderer, config, medium, e.Name, ColorTextPrimary(), r.X+16, r.Y+8)
+		if badge := portCompatBadge(e.Compat.State); badge != "" {
+			// The chip verdict sits next to the name, before the title can push
+			// it off the row: it is the first thing to know about a port.
+			nw, _, _ := medium.SizeUTF8(e.Name)
+			badgeColor := ColorTextTertiary()
+			if e.Compat.State == portCompat32BitOnly {
+				badgeColor = ColorToastWarn
+			}
+			renderText(renderer, config, font, badge, badgeColor, r.X+24+int32(nw), r.Y+10+(medH-smallH)/2)
+		}
 		if !e.Info {
 			label, labelColor := emuStatusLabel(e.Status)
 			if e.Install {
 				label, labelColor = "Install", installHighlight()
+			}
+			if e.Compat.State == portCompat32BitOnly {
+				label, labelColor = "32-bit only", ColorToastWarn
 			}
 			lw, _, _ := font.SizeUTF8(label)
 			renderText(renderer, config, font, label, labelColor, r.X+r.W-16-int32(lw), r.Y+8+(medH-smallH)/2)

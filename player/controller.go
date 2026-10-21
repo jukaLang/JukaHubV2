@@ -98,6 +98,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if smartHomePanel.open {
 		return ctrlSmartHomePanel(e, config)
 	}
+	// The calibration wizard owns the pad while it measures it.
+	if calibrationPanel.open {
+		return ctrlStickCalibration(e, config)
+	}
 	// PS Remote Play installer/launcher is modal too.
 	if chiakiPanel.open {
 		return ctrlChiakiPanel(e)

@@ -283,6 +283,10 @@ func homeActivate(config *Config) {
 		ps5TileActivate()
 		return
 	}
+	if id == HomeFocusPS4 {
+		ps4TileActivate()
+		return
+	}
 	// The update chip is the other one: A downloads and installs the release
 	// directly, without opening Patch or any other menu.
 	if id == HomeFocusUpdate {
@@ -455,6 +459,14 @@ func handleHomeMouseClick(mx, my int32, config *Config) bool {
 	}
 	// The PS5 launcher beside it starts streaming in one press, installing the
 	// beta first when it is missing.
+	if ps4TileRect.W > 0 && pointInRect(mx, my, ps4TileRect) {
+		// A click is a deliberate choice: focus follows it so the D-pad
+		// continues from the tile the user just touched.
+		homeLayout.Focus.Set(HomeFocusPS4)
+		homeLayout.Focus.Remember()
+		ps4TileActivate()
+		return true
+	}
 	if ps5TileRect.W > 0 && pointInRect(mx, my, ps5TileRect) {
 		// A click is a deliberate choice: focus follows it so the D-pad
 		// continues from the tile the user just touched.

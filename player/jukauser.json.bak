@@ -1,19 +1,19 @@
 {
   "variables": {
     "buttonColor": {
-      "r": 30,
-      "g": 41,
-      "b": 59
+      "r": 0,
+      "g": 0,
+      "b": 0
     },
     "labelColor": {
-      "r": 248,
-      "g": 250,
-      "b": 252
+      "r": 0,
+      "g": 0,
+      "b": 0
     },
     "inputColor": {
-      "r": 15,
-      "g": 20,
-      "b": 32
+      "r": 0,
+      "g": 0,
+      "b": 0
     },
     "fullscreen": false,
     "fileExplorerRoot": "",
@@ -24,149 +24,21 @@
     "reducedMotion": false,
     "lowPower": false,
     "ledSync": false,
-    "gridColumns": 5,
-    "searchWidth": 940,
+    "gridColumns": 0,
+    "searchWidth": 0,
     "dynamicBg": false,
-    "screensaverTimeout": 300,
+    "screensaverTimeout": 0,
     "socialNotifs": false,
     "volume": 0,
     "volumeSet": false,
     "brightness": 0,
     "brightnessSet": false,
     "Custom": {
-      "BackgroundImage": "background.jpg",
-      "ButtonColor": "#1E293B",
-      "FileExplorerRoot": "/media",
-      "Fullscreen": false,
-      "GridColumns": 5,
-      "InputColor": "#0F1420",
-      "LabelColor": "#F8FAFC",
-      "PlaybackResolution": "720",
-      "ScreenHeight": 720,
-      "ScreenWidth": 1280,
-      "SearchWidth": 940,
-      "TSPUsername": "",
-      "WeatherEnabled": true,
-      "WeatherUnit": "",
-      "a11y_colorblind": "protanopia",
-      "a11y_font_scale": 1.15,
-      "a11y_high_contrast": true,
-      "a11y_swap_ab": true,
-      "a11y_swap_xy": false,
-      "buttonColor": "#1e293b",
-      "chat_input": "hi",
-      "diskpie_data": {
-        "Total": 510718431232,
-        "Used": 326571393024,
-        "Pct": 63
-      },
-      "ftp_address": "",
-      "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
-      "ftp_status": "stopped",
-      "inputColor": "#0f1420",
-      "labelColor": "#f8fafc",
-      "local_ip": "192.168.68.59",
-      "network_status": "online",
-      "onboarding_done": true,
-      "onboarding_skipped": true,
-      "playtime_v1": {
-        "total": 17,
-        "scenes": {
-          "FileExplorer": 1,
-          "Main": 10,
-          "Settings": 1,
-          "Tube": 5
-        },
-        "days": {
-          "2026-10-20": 17
-        },
-        "unlocked": {}
-      },
-      "ssh_address": "",
-      "ssh_fingerprint": "",
-      "ssh_port": "2222",
-      "ssh_root": "C:\\Users\\Stepan",
-      "ssh_status": "stopped",
-      "ssh_user": "juka",
-      "swapABButtons": false,
-      "tool_ffmpeg": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffmpeg.exe",
-      "tool_ffplay": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffplay.exe",
-      "tool_ffprobe": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffprobe.exe",
-      "tool_yt-dlp": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\yt-dlp.exe",
-      "tools_status": "All tools available",
-      "weatherUnitAuto": true
+      "a11y_colorblind": "",
+      "a11y_font_scale": 1,
+      "a11y_high_contrast": false,
+      "a11y_swap_ab": false,
+      "a11y_swap_xy": false
     }
-  },
-  "favorites": {
-    "videos": [],
-    "recent": [],
-    "files": [],
-    "iptv": []
-  },
-  "chat": {
-    "messages": [
-      {
-        "id": "1561897564012417105",
-        "sender": "jukalang",
-        "text": "Native STEAM?",
-        "timestamp": "2026-10-20T00:23:17.914Z"
-      },
-      {
-        "id": "1561901483979448332",
-        "sender": "jukalang",
-        "text": "Comapnion App now works...access Juka from your phone or computer (Local Network)",
-        "timestamp": "2026-10-20T00:38:52.507Z"
-      },
-      {
-        "id": "1561907594434449439",
-        "sender": "jukalang",
-        "text": "Send files and links directly from your phone (or computer):",
-        "timestamp": "2026-10-20T01:03:09.353Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1561907593994182778/image.png?ex=6ad8b80d\u0026is=6ad7668d\u0026hm=006064d744e4c3189d95eb7d322b1aa2df0517cf2fad10a3d10f89816a5944ff\u0026"
-      },
-      {
-        "id": "1561935541656625243",
-        "sender": "jukalang",
-        "text": "ok we are able to run small Windows apps!",
-        "timestamp": "2026-10-20T02:54:12.49Z"
-      },
-      {
-        "id": "1561935690625720421",
-        "sender": "jukalang",
-        "text": "adding HTML5 engine back",
-        "timestamp": "2026-10-20T02:54:48.007Z"
-      },
-      {
-        "id": "1561955759552471041",
-        "sender": "jukalang",
-        "text": "Windows XP games now running well on the conversion layer...",
-        "timestamp": "2026-10-20T04:14:32.812Z"
-      },
-      {
-        "id": "1561964779151822859",
-        "sender": "jukalang",
-        "text": "Should JukaHub be able to \"swap\" OSes? By that, I mean you can store multiple OSes on a single SD card and the launcher is able to \"switch\" between OSes you want",
-        "timestamp": "2026-10-20T04:50:23.252Z"
-      },
-      {
-        "id": "1562214390470803546",
-        "sender": "jukalang",
-        "text": "",
-        "timestamp": "2026-10-20T21:22:15.228Z",
-        "image_url": "https://cdn.discordapp.com/attachments/975787212954275916/1562214390063693944/image.png?ex=6ad92d07\u0026is=6ad7db87\u0026hm=9116a36af81487ddd8094dc1cb6fcc48c0e99235a1390b595cf9100ecd88a45c\u0026"
-      },
-      {
-        "id": "1562214435068715059",
-        "sender": "jukalang",
-        "text": "Running PS5 remote play via JukaHub...",
-        "timestamp": "2026-10-20T21:22:25.861Z"
-      },
-      {
-        "id": "1562225186294468672",
-        "sender": "jukalang",
-        "text": "@everyone Looking for beta testers to test the new JukaHub features.",
-        "timestamp": "2026-10-20T22:05:09.153Z"
-      }
-    ]
   }
 }

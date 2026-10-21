@@ -29,8 +29,19 @@ the config.
 | `tailscale_toggle` | `true` shows the Tailscale row even before the CLI is found |
 
 Tokens and passwords live in `jukauser.json`, which is never committed and is
-not part of the shipped config — but it is plain JSON on the SD card, so treat
-the card like any other device holding credentials. A Home Assistant token
+not part of the shipped config. They can be stored encrypted instead of in
+plaintext, using the same secret store as the other API keys:
+
+```bash
+cd player
+./JukaHub -set-secret ha_token        # value read from stdin
+./JukaHub -set-secret pihole_token
+./JukaHub -set-secret mqtt_pass
+```
+
+A value written that way is `ENC:…` in the file and is decrypted only when the
+panel loads its settings; if the key is missing the integration reports the
+credential as unset rather than sending ciphertext. A Home Assistant token
 created for this panel can be limited to the entities it should control.
 
 ## What each row does

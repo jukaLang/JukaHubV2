@@ -33,6 +33,9 @@ let canvasWidth = 1280;
 let canvasHeight = 720;
 let videoList = [];
 let globalTooltip = null;
+// Import/init also adds elements; those are not user edits and must not land on
+// the undo stack. Set once the editor is fully constructed.
+let editorReady = false;
 
 // Initialize the editor
 document.addEventListener('DOMContentLoaded', () => {
@@ -98,6 +101,14 @@ document.addEventListener('DOMContentLoaded', () => {
   setupDesignSharing();
   restoreSharedDesignFromURL();
 
+  // History controls, design check, preview chrome, keyboard editing.
+  setupEditorQuality();
+  setupPreviewInteractions();
+  setupConfigDrop();
+  editorReady = true;
+  refreshHistoryControls();
+  scheduleValidationRefresh();
+
   setupMobileElementAdding();
   setupMobileCanvasClick();
   setupMobileElementSelection();
@@ -117,22 +128,76 @@ const undoStack = [];
 const redoStack = [];
 const MAX_UNDO = 60;
 
-function pushUndo(label) {
+// The complete editor state an undo step must restore. Scenes alone were not
+// enough: canvas size, background, font sizes and the imported metadata were
+// left behind, so undoing an edit could bring back elements on the wrong
+// canvas. Kept as one function so every history path captures the same shape.
+function captureWorkspace(label) {
+  // The live canvas is the source of truth while editing; scenes[] only catches
+  // up when something saves them. Capture without this saved a stale snapshot of
+  // the element positions a drag had just changed.
   saveCurrentScene();
-  const snapshot = {
-    label,
+  return {
+    label: label || 'edit',
     scenes: JSON.parse(JSON.stringify(
       Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)]))
     )),
     currentScene,
     variables: JSON.parse(JSON.stringify(variables)),
-    title: document.getElementById('title').value,
-    author: document.getElementById('author').value,
-    description: document.getElementById('description').value
+    title: document.getElementById('title')?.value || '',
+    author: document.getElementById('author')?.value || '',
+    description: document.getElementById('description')?.value || '',
+    canvasWidth,
+    canvasHeight,
+    backgroundPath,
+    fontSizes: {
+      title: document.getElementById('titleSize')?.value ?? '',
+      big: document.getElementById('bigSize')?.value ?? '',
+      medium: document.getElementById('mediumSize')?.value ?? '',
+      small: document.getElementById('smallSize')?.value ?? ''
+    },
+    importedConfig: JSON.parse(JSON.stringify(importedConfig))
   };
-  undoStack.push(snapshot);
+}
+
+function pushUndo(label) {
+  saveCurrentScene();
+  undoStack.push(captureWorkspace(label));
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack.length = 0;
+  refreshHistoryControls();
+}
+
+// Commit a snapshot taken before a continuous gesture (drag, resize, typing in
+// an inspector field). Only records a step when the state actually changed, so
+// a click that never moved an element does not fill the history with no-ops.
+function commitUndoSnapshot(before) {
+  if (!before) return;
+  const now = captureWorkspace(before.label);
+  const comparable = state => JSON.stringify(Object.assign({}, state, { label: '' }));
+  if (comparable(now) === comparable(before)) return;
+  undoStack.push(before);
+  if (undoStack.length > MAX_UNDO) undoStack.shift();
+  redoStack.length = 0;
+  refreshHistoryControls();
+  scheduleValidationRefresh();
+}
+
+function refreshHistoryControls() {
+  const undoBtn = document.getElementById('undoBtn');
+  const redoBtn = document.getElementById('redoBtn');
+  if (undoBtn) {
+    undoBtn.disabled = undoStack.length === 0;
+    const label = undoStack.length ? undoStack[undoStack.length - 1].label : '';
+    undoBtn.title = label ? `Undo ${label} (Ctrl+Z)` : 'Nothing to undo (Ctrl+Z)';
+    undoBtn.setAttribute('aria-label', label ? `Undo ${label}` : 'Undo');
+  }
+  if (redoBtn) {
+    redoBtn.disabled = redoStack.length === 0;
+    const label = redoStack.length ? redoStack[redoStack.length - 1].label : '';
+    redoBtn.title = label ? `Redo ${label} (Ctrl+Shift+Z)` : 'Nothing to redo (Ctrl+Shift+Z)';
+    redoBtn.setAttribute('aria-label', label ? `Redo ${label}` : 'Redo');
+  }
 }
 
 function restoreSnapshot(snapshot) {
@@ -153,12 +218,34 @@ function restoreSnapshot(snapshot) {
     sceneSelectorEl.appendChild(option);
   }
 
-  currentScene = snapshot.currentScene;
+  currentScene = snapshot.currentScene || Object.keys(scenes)[0] || 'Scene 1';
   sceneSelectorEl.value = currentScene;
-  variables = JSON.parse(JSON.stringify(snapshot.variables));
-  document.getElementById('title').value = snapshot.title;
-  document.getElementById('author').value = snapshot.author;
-  document.getElementById('description').value = snapshot.description;
+  variables = JSON.parse(JSON.stringify(snapshot.variables || {}));
+  document.getElementById('title').value = snapshot.title || '';
+  document.getElementById('author').value = snapshot.author || '';
+  document.getElementById('description').value = snapshot.description || '';
+
+  // Canvas geometry, background and font sizes are part of the design too.
+  canvasWidth = Number(snapshot.canvasWidth) || 1280;
+  canvasHeight = Number(snapshot.canvasHeight) || 720;
+  canvas.style.width = `${canvasWidth}px`;
+  canvas.style.height = `${canvasHeight}px`;
+  backgroundPath = snapshot.backgroundPath || '';
+  canvas.style.backgroundImage = backgroundPath ? `url(${backgroundPath})` : '';
+  canvas.style.backgroundSize = backgroundPath ? 'cover' : '';
+  syncCanvasSizeControls();
+  const sizes = snapshot.fontSizes || {};
+  ['title', 'big', 'medium', 'small'].forEach(role => {
+    const input = document.getElementById(role + 'Size');
+    if (input && sizes[role] !== undefined && sizes[role] !== '') input.value = sizes[role];
+  });
+  updateAllFontSizes();
+  importedConfig = snapshot.importedConfig || { top: {}, variables: {}, scenes: {} };
+  currentElement = null;
+  document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
+  document.body.classList.remove('element-selected');
+  const noSelection = document.getElementById('noSelection');
+  if (noSelection) noSelection.style.display = '';
 
   // Rebuild variables UI
   variablesList.innerHTML = '';
@@ -171,8 +258,8 @@ function restoreSnapshot(snapshot) {
         <span class="variable-value">${val}</span>
       </div>
       <div class="variable-actions">
-        <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
-        <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+        <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
+        <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
       </div>
     `;
     variablesList.appendChild(variableItem);
@@ -184,23 +271,15 @@ function restoreSnapshot(snapshot) {
   updateVariableChangeSelector();
   updateAllMenuSceneButtons();
   updateAllStoredMenus();
+  updateCanvasReadout();
+  refreshHistoryControls();
+  scheduleValidationRefresh();
 }
 
 function undo() {
   if (undoStack.length === 0) return;
   saveCurrentScene();
-  const current = {
-    label: 'redo',
-    scenes: JSON.parse(JSON.stringify(
-      Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)]))
-    )),
-    currentScene,
-    variables: JSON.parse(JSON.stringify(variables)),
-    title: document.getElementById('title').value,
-    author: document.getElementById('author').value,
-    description: document.getElementById('description').value
-  };
-  redoStack.push(current);
+  redoStack.push(captureWorkspace(undoStack[undoStack.length - 1].label || 'edit'));
   const snapshot = undoStack.pop();
   restoreSnapshot(snapshot);
   showToast('Undone: ' + (snapshot.label || 'action'), 'info');
@@ -209,19 +288,8 @@ function undo() {
 function redo() {
   if (redoStack.length === 0) return;
   saveCurrentScene();
-  const current = {
-    label: 'undo',
-    scenes: JSON.parse(JSON.stringify(
-      Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)]))
-    )),
-    currentScene,
-    variables: JSON.parse(JSON.stringify(variables)),
-    title: document.getElementById('title').value,
-    author: document.getElementById('author').value,
-    description: document.getElementById('description').value
-  };
-  undoStack.push(current);
   const snapshot = redoStack.pop();
+  undoStack.push(captureWorkspace(snapshot.label || 'edit'));
   restoreSnapshot(snapshot);
   showToast('Redone: ' + (snapshot.label || 'action'), 'info');
 }
@@ -351,7 +419,11 @@ function persistAutoSave() {
     titleSize: titleSizeInput?.value || 48,
     bigSize: bigSizeInput?.value || 36,
     mediumSize: mediumSizeInput?.value || 24,
-    smallSize: smallSizeInput?.value || 18
+    smallSize: smallSizeInput?.value || 18,
+    // Imported metadata (theme colours, font paths, player settings) has to
+    // survive a reload too, otherwise $labelColor loses its source and the
+    // preview cannot match the device after the first autosave.
+    importedConfig: JSON.parse(JSON.stringify(importedConfig))
   };
   try {
     localStorage.setItem('jukahub-autosave', JSON.stringify(data));
@@ -414,6 +486,7 @@ function loadAutoSave() {
     currentScene = data.currentScene || Object.keys(scenes)[0];
     sceneSelectorEl.value = currentScene;
     variables = data.variables || {};
+    importedConfig = data.importedConfig || { top: {}, variables: {}, scenes: {} };
     canvasWidth = data.canvasWidth || 1280;
     canvasHeight = data.canvasHeight || 720;
     backgroundPath = data.backgroundPath || '';
@@ -431,6 +504,7 @@ function loadAutoSave() {
       canvas.style.backgroundSize = 'cover';
     }
 
+    syncCanvasSizeControls();
     updateCanvasSize();
     loadScene(currentScene);
 
@@ -445,8 +519,8 @@ function loadAutoSave() {
           <span class="variable-value">${val}</span>
         </div>
         <div class="variable-actions">
-          <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
-          <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+          <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
+          <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
         </div>
       `;
       variablesList.appendChild(variableItem);
@@ -495,9 +569,157 @@ function togglePreviewMode() {
   enterPreviewMode();
 }
 
+// Preview state: a resolved copy of the variables, plus the scene the user was
+// editing so exiting returns them where they started. The runtime substitutes
+// $variables at draw time; the preview does the same instead of showing the
+// literal "$title" the editor uses for reference.
+let previewVariables = {};
+let previewOriginScene = null;
+let previewScale = 1;
+
+// Mirrors Variables.Get in player/config.go: custom variables first, then the
+// known colour names, whose RGB objects the runtime formats as "r,g,b".
+function previewVariableValue(name) {
+  const custom = previewVariables[name] !== undefined
+    ? previewVariables[name]
+    : ((importedConfig.variables || {})[name]);
+  if (custom === undefined || custom === null) return '';
+  if (typeof custom === 'object') {
+    if ('r' in custom && 'g' in custom && 'b' in custom) return `${custom.r},${custom.g},${custom.b}`;
+    return '';
+  }
+  return String(custom);
+}
+
+// The three theme slots resolve through the active theme preset in the player
+// (player/themes.go: effectiveThemeColor), where zero RGB means "never chosen",
+// not black. The builder's dark chrome is a close stand-in for the default
+// preset; explicit config colours still win.
+const PREVIEW_THEME_PRESETS = {
+  dark: { buttonColor: '#1c2230', labelColor: '#e8eefc', inputColor: '#141a26', background: '#0f1115' },
+  light: { buttonColor: '#ffffff', labelColor: '#1a1d26', inputColor: '#e8eaef', background: '#f0f2f5' }
+};
+
+function previewThemeColour(name) {
+  const key = String(name || '').toLowerCase();
+  const camel = key === 'buttoncolor' ? 'buttonColor'
+    : key === 'labelcolor' ? 'labelColor'
+    : key === 'inputcolor' ? 'inputColor' : key;
+  const importedVars = importedConfig.variables || {};
+  const custom = (variables && variables.Custom) || {};
+  const explicit = custom[name] ?? custom[camel] ?? importedVars.Custom?.[camel];
+  if (typeof explicit === 'string' && colourIsCss(explicit)) return explicit;
+  const rgb = importedVars[camel] || importedVars[name];
+  if (rgb && typeof rgb === 'object' && (rgb.r || rgb.g || rgb.b)) {
+    return `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+  }
+  const presetName = String(importedVars.theme_preset || variables.theme_preset || 'dark').toLowerCase();
+  const preset = PREVIEW_THEME_PRESETS[presetName] || PREVIEW_THEME_PRESETS.dark;
+  return preset[key] || '';
+}
+
+function previewColourValue(name) {
+  const key = String(name || '').toLowerCase();
+  if (key === 'buttoncolor' || key === 'labelcolor' || key === 'inputcolor') {
+    return previewThemeColour(key);
+  }
+  const value = previewVariableValue(name).trim();
+  if (!value) return '';
+  if (/^\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}$/.test(value)) return `rgb(${value})`;
+  return value;
+}
+
+function resolvePreviewText(text) {
+  return String(text || '').replace(/\$([a-zA-Z_][a-zA-Z0-9_]*)/g, (whole, name) => previewVariableValue(name));
+}
+
+function applyPreviewVariables() {
+  canvas.querySelectorAll('.element').forEach(el => {
+    const span = el.querySelector('.text-content');
+    if (span) {
+      if (el.dataset.previewSourceText === undefined) {
+        el.dataset.previewSourceText = span.textContent;
+      }
+      span.textContent = resolvePreviewText(el.dataset.previewSourceText);
+      el.setAttribute('aria-label', `${el.getAttribute('data-type') || 'element'}: ${span.textContent || 'no text'}`);
+    }
+
+    // Colours are variable references too. The player resolves them at draw
+    // time, so the preview has to, or every tile renders as unstyled text.
+    const colourAttrs = [['data-color', 'color'], ['data-bg-color', 'background']];
+    colourAttrs.forEach(([attr, styleProp]) => {
+      const raw = el.getAttribute(attr);
+      if (!raw || !raw.trim().startsWith('$')) return;
+      const resolved = previewColourValue(raw.trim().slice(1));
+      if (resolved) el.style[styleProp] = resolved;
+    });
+  });
+}
+
+function previewSceneNames() {
+  return Object.keys(scenes);
+}
+
+function previewSceneIndex() {
+  const names = previewSceneNames();
+  const index = names.indexOf(currentScene);
+  return index < 0 ? 0 : index;
+}
+
+function fitPreviewCanvas() {
+  if (!previewMode) return;
+  const host = document.getElementById('canvasWrapper');
+  if (!host) return;
+  const hostStyle = window.getComputedStyle(host);
+  const padX = parseFloat(hostStyle.paddingLeft) + parseFloat(hostStyle.paddingRight);
+  const padY = parseFloat(hostStyle.paddingTop) + parseFloat(hostStyle.paddingBottom);
+  const availableW = Math.max(240, host.clientWidth - padX);
+  const availableH = Math.max(160, host.clientHeight - padY);
+  previewScale = Math.min(1, availableW / canvasWidth, availableH / canvasHeight);
+  canvas.style.transform = `scale(${previewScale})`;
+  const readout = document.getElementById('previewScale');
+  if (readout) readout.textContent = `${Math.round(previewScale * 100)}%`;
+}
+
+function updatePreviewBar() {
+  const names = previewSceneNames();
+  const index = previewSceneIndex();
+  const label = document.getElementById('previewSceneLabel');
+  if (label) label.textContent = `${currentScene} · ${index + 1} / ${names.length}`;
+  const device = document.getElementById('previewDevice');
+  if (device) device.textContent = `${canvasWidth} × ${canvasHeight}`;
+  const prev = document.getElementById('previewPrev');
+  const next = document.getElementById('previewNext');
+  if (prev) prev.disabled = index <= 0;
+  if (next) next.disabled = index >= names.length - 1;
+  const readout = document.getElementById('previewScale');
+  if (readout) readout.textContent = `${Math.round(previewScale * 100)}%`;
+}
+
+function previewGoTo(sceneName) {
+  if (!previewMode || !scenes[sceneName]) return;
+  sceneSelector.value = sceneName;
+  changeScene();
+  applyPreviewVariables();
+  updatePreviewBar();
+  announce(`Preview: ${sceneName}.`);
+}
+
+function previewStep(delta) {
+  const names = previewSceneNames();
+  const next = previewSceneIndex() + delta;
+  if (next < 0 || next >= names.length) return;
+  previewGoTo(names[next]);
+}
+
 function enterPreviewMode() {
   if (previewMode) return;
+  // Snapshot the live DOM first: preview rewrites $variables in place and must
+  // never write those resolved strings back into the design.
+  saveCurrentScene();
   previewMode = true;
+  previewOriginScene = currentScene;
+  previewVariables = JSON.parse(JSON.stringify(variables));
   document.body.classList.add('preview-mode');
   setPreviewButtonLabel(true);
 
@@ -505,6 +727,15 @@ function enterPreviewMode() {
   currentElement = null;
   document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
   document.body.classList.remove('element-selected');
+
+  applyPreviewVariables();
+  const bar = document.getElementById('previewBar');
+  if (bar) bar.removeAttribute('hidden');
+  const toggle = document.getElementById('previewToggle');
+  if (toggle) toggle.setAttribute('tabindex', '-1');
+  fitPreviewCanvas();
+  updatePreviewBar();
+  requestAnimationFrame(fitPreviewCanvas);
 
   // Preserve a lightweight before-preview snapshot for diagnostics and cleanup.
   // Save immediately on entering preview so the latest workspace survives a
@@ -517,7 +748,8 @@ function enterPreviewMode() {
     localStorage.setItem('jukahub-autosave', JSON.stringify(snapshotWorkspace()));
   } catch (e) { /* private mode or storage quota can deny localStorage */ }
 
-  showToast('Preview mode on — click Exit preview, Esc, or Ctrl+P to exit', 'info');
+  showToast('Preview mode — click the scene menu, arrow keys, or Esc to exit', 'info');
+  announce('Preview mode. Variables are resolved like the player. Press Escape to return to the editor.');
 }
 
 // The preview button remains available as the visible exit control while preview is active.
@@ -534,15 +766,92 @@ function leavePreviewMode() {
   previewMode = false;
   document.body.classList.remove('preview-mode');
   setPreviewButtonLabel(false);
+  const bar = document.getElementById('previewBar');
+  if (bar) bar.setAttribute('hidden', '');
+  const toggle = document.getElementById('previewToggle');
+  if (toggle) toggle.removeAttribute('tabindex');
+  canvas.style.transform = '';
+  previewScale = 1;
+
+  // Return to the scene the user was editing, rebuilt from the clean snapshot
+  // (which never contains resolved variable text).
+  if (previewOriginScene && scenes[previewOriginScene]) {
+    sceneSelector.value = previewOriginScene;
+    changeScene();
+  }
+  previewOriginScene = null;
+  previewVariables = {};
 
   // Persist the workspace as it stands after preview, without reverting edits.
   scheduleAutoSave();
   showToast('Edit mode', 'info');
+  announce('Edit mode.');
 }
 
 function exitPreviewMode() {
   leavePreviewMode();
 }
+
+// Preview interactions mirror the runtime: scene links navigate, set_variable
+// updates the preview's own variable copy, everything else is a device action.
+function setupPreviewInteractions() {
+  if (!canvas) return;
+  canvas.addEventListener('click', event => {
+    if (!previewMode) return;
+    const menuButton = event.target.closest('.menu-scene-button');
+    if (menuButton) {
+      updatePreviewBar();
+      announce(`Preview: ${currentScene}.`);
+      return;
+    }
+    const el = event.target.closest('.element');
+    if (!el) return;
+    const trigger = (el.getAttribute('data-trigger') || '').trim();
+    const sceneTarget = (el.getAttribute('data-scene-change') ||
+      (trigger.startsWith('change_scene:') ? trigger.slice('change_scene:'.length) : '')).trim();
+    if (sceneTarget && scenes[sceneTarget]) {
+      previewGoTo(sceneTarget);
+      return;
+    }
+    if (trigger === 'change_scene') {
+      showToast('This element has no target scene', 'warning');
+      return;
+    }
+    if (trigger === 'set_variable') {
+      const name = el.getAttribute('data-variable-change');
+      if (name) {
+        previewVariables[name] = el.getAttribute('data-variable-change-value') || '';
+        applyPreviewVariables();
+        const span = el.querySelector('.text-content');
+        announce(`Set ${name} to ${previewVariables[name]}. ${span ? span.textContent : ''}`.trim());
+      }
+      return;
+    }
+    if (trigger) {
+      showToast(`“${trigger.replace(/_/g, ' ')}” runs on the device`, 'info');
+    }
+  });
+
+  const prev = document.getElementById('previewPrev');
+  const next = document.getElementById('previewNext');
+  if (prev) prev.addEventListener('click', () => previewStep(-1));
+  if (next) next.addEventListener('click', () => previewStep(1));
+  const exit = document.getElementById('previewExit');
+  if (exit) exit.addEventListener('click', exitPreviewMode);
+  window.addEventListener('resize', () => { if (previewMode) fitPreviewCanvas(); });
+}
+
+// Preview needs to re-resolve after any scene load, including menu navigation
+// that calls changeScene() from inside the canvas.
+const baseLoadSceneForPreview = loadScene;
+loadScene = function (sceneName) {
+  baseLoadSceneForPreview(sceneName);
+  if (previewMode) {
+    applyPreviewVariables();
+    updatePreviewBar();
+    fitPreviewCanvas();
+  }
+};
 
 
 function snapshotWorkspace() {
@@ -623,8 +932,8 @@ function restoreWorkspaceFromSnapshot(data) {
         <span class="variable-value">${val}</span>
       </div>
       <div class="variable-actions">
-        <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
-        <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+        <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
+        <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
       </div>
     `;
     variablesList.appendChild(variableItem);
@@ -711,8 +1020,9 @@ function setupKeyboardShortcuts() {
     const tag = e.target.tagName;
     const isInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target.isContentEditable;
 
-    // Ctrl/Cmd + Z = Undo
+    // Ctrl/Cmd + Z = Undo (inside a text field the browser's own text undo wins)
     if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+      if (isInput) return;
       e.preventDefault();
       undo();
       return;
@@ -720,6 +1030,7 @@ function setupKeyboardShortcuts() {
 
     // Ctrl/Cmd + Shift + Z = Redo
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') {
+      if (isInput) return;
       e.preventDefault();
       redo();
       return;
@@ -727,8 +1038,16 @@ function setupKeyboardShortcuts() {
 
     // Ctrl/Cmd + Y = Redo
     if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+      if (isInput) return;
       e.preventDefault();
       redo();
+      return;
+    }
+
+    // Ctrl/Cmd + Shift + K = Design check
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      openValidationPanel(lastImportReport);
       return;
     }
 
@@ -749,11 +1068,46 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Ctrl/Cmd + P = Toggle preview
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'p') {
+    // Ctrl/Cmd + P (or Ctrl+Shift+P, as the guide says) = Toggle preview
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
       e.preventDefault();
       togglePreviewMode();
       return;
+    }
+
+    // Preview: left/right walk the scenes, like the device menu.
+    if (previewMode && !isInput && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault();
+      previewStep(e.key === 'ArrowRight' ? 1 : -1);
+      return;
+    }
+
+    // Enter/Space activate a focused canvas element, matching a touch tap.
+    if (!isInput && (e.key === 'Enter' || e.key === ' ') &&
+        document.activeElement && document.activeElement.classList.contains('element')) {
+      e.preventDefault();
+      document.activeElement.click();
+      return;
+    }
+
+    // Arrow keys nudge the selected element: 1 px, or 10 px with Shift.
+    if (!isInput && !previewMode && currentElement && e.key.startsWith('Arrow')) {
+      const step = e.shiftKey ? 10 : 1;
+      const dx = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
+      const dy = e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0;
+      e.preventDefault();
+      nudgeElement(currentElement, dx, dy);
+      return;
+    }
+
+    // Escape closes the design check first when it is open.
+    if (e.key === 'Escape') {
+      const validate = document.getElementById('validatePanel');
+      if (validate && !validate.hasAttribute('hidden')) {
+        e.preventDefault();
+        closeValidationPanel();
+        return;
+      }
     }
 
     // Delete / Backspace = Delete selected element (when not in input)
@@ -983,31 +1337,9 @@ function setupEventListeners() {
   loadFileInput.addEventListener('change', function (e) {
     const file = e.target.files[0];
     if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = e => {
-      try {
-        const text = e.target.result;
-        let config;
-        if (file.name.endsWith('.xml') || text.trim().startsWith('<?xml') || text.trim().startsWith('<')) {
-          config = xmlToJson(text);
-        } else {
-          config = JSON.parse(text);
-        }
-        if (autoSaveTimer) {
-          clearTimeout(autoSaveTimer);
-          autoSaveTimer = null;
-        }
-        importedConfigSnapshot = JSON.parse(JSON.stringify(config));
-        loadJukaApp(config);
-        scheduleAutoSave();
-        refreshReloadButtonState();
-        showToast('Configuration loaded', 'success');
-      } catch (error) {
-        showToast('Error loading config: ' + error.message, 'error');
-      }
-    };
-    reader.readAsText(file);
+    importConfigFile(file);
+    // Allow selecting the same file again after a failed import.
+    e.target.value = '';
   });
 
   // Clear button
@@ -1183,6 +1515,21 @@ function switchTab(tabId) {
   }
 }
 
+// Reflect the live canvas geometry in the size picker and its custom fields so
+// an import or an undo cannot leave the controls describing a different canvas.
+function syncCanvasSizeControls() {
+  if (!canvasSizeSelect) return;
+  const preset = `${canvasWidth}x${canvasHeight}`;
+  const hasPreset = Array.from(canvasSizeSelect.options).some(option => option.value === preset);
+  canvasSizeSelect.value = hasPreset ? preset : 'custom';
+  const customFields = document.getElementById('customSizeFields');
+  if (customFields) customFields.style.display = hasPreset ? 'none' : 'grid';
+  if (customWidthInput) customWidthInput.value = canvasWidth;
+  if (customHeightInput) customHeightInput.value = canvasHeight;
+  canvas.style.width = `${canvasWidth}px`;
+  canvas.style.height = `${canvasHeight}px`;
+}
+
 // Update canvas size based on selection
 function updateCanvasSize() {
   if (canvasSizeSelect.value === 'custom') {
@@ -1226,6 +1573,7 @@ function updateCanvasSize() {
 
 // Update the addScene function to call the new function
 function addScene() {
+  pushUndo('add scene');
   saveCurrentScene();
   const newSceneName = `Scene ${Object.keys(scenes).length + 1}`;
   scenes[newSceneName] = [];
@@ -1240,8 +1588,8 @@ function addScene() {
   loadScene(currentScene);
   updateSceneBadge();
 
-  // Add menu to new scene
-  addElement('menu', 0, canvasHeight - 50);
+  // Add menu to new scene (the scene itself is already one history step)
+  addElement('menu', 0, canvasHeight - 50, false);
 
   // Update scene change selector
   updateSceneChangeSelector();
@@ -1273,6 +1621,7 @@ function duplicateScene() {
   saveCurrentScene();
   const newSceneName = prompt('Name for duplicated scene:', `${currentScene} Copy`);
   if (!newSceneName || scenes[newSceneName]) return;
+  pushUndo('duplicate scene');
 
   scenes[newSceneName] = scenes[currentScene].map(el => el.cloneNode(true));
 
@@ -1322,10 +1671,11 @@ function loadScene(sceneName) {
 // Small helper so both preview-exit and reload can keep font-size controls in
 // sync without duplicating the same four assignments.
 // Element Management
-function addElement(type, x, y) {
+function addElement(type, x, y, recordHistory = true) {
   if (type === 'menu-element') {
     type = 'menu'; // Convert to the actual type used on canvas
   }
+  if (recordHistory && editorReady && typeof pushUndo === 'function') pushUndo('add ' + type);
   const el = document.createElement('div');
   el.className = 'element';
   el.style.position = 'absolute';
@@ -1491,6 +1841,7 @@ function addElement(type, x, y) {
   scenes[currentScene].push(el.cloneNode(true));
 
   scheduleAutoSave();
+  scheduleValidationRefresh();
   return el;
 }
 
@@ -1498,15 +1849,27 @@ function setupElementEvents(el) {
   let isDragging = false;
   let startX, startY;
   let startTouchX, startTouchY;
+  let dragUndoBase = null;
+
+  // Canvas elements are part of the keyboard editing surface: Tab reaches them,
+  // Enter selects, and arrow keys nudge (handled globally in the shortcuts).
+  if (el.getAttribute('data-type') !== 'menu') {
+    el.tabIndex = 0;
+    el.setAttribute('role', 'group');
+    const label = el.querySelector('.text-content')?.textContent || el.getAttribute('data-type') || 'element';
+    el.setAttribute('aria-label', `${el.getAttribute('data-type') || 'element'}: ${label}`);
+  }
 
   // Touch events for mobile
   el.addEventListener('touchstart', (event) => {
+    if (previewMode) return;
     if (event.touches.length === 1) {
       event.preventDefault();
       const touch = event.touches[0];
       startTouchX = touch.clientX - el.offsetLeft;
       startTouchY = touch.clientY - el.offsetTop;
       isDragging = true;
+      dragUndoBase = captureWorkspace('move');
       el.style.cursor = 'grabbing';
 
     }
@@ -1537,12 +1900,16 @@ function setupElementEvents(el) {
     if (isDragging) {
       isDragging = false;
       el.style.cursor = 'grab';
+      commitUndoSnapshot(dragUndoBase);
+      dragUndoBase = null;
+      scheduleAutoSave();
     }
   }, { passive: false });
 
 
   // Mouse events for dragging and resizing
   el.addEventListener('mousedown', (event) => {
+    if (previewMode) return;
     if (event.button === 2) { // Right click for resize
       handleResize(el, event);
     } else { // Left click for drag
@@ -1554,6 +1921,7 @@ function setupElementEvents(el) {
       isDragging = true;
       startX = event.clientX - el.offsetLeft;
       startY = event.clientY - el.offsetTop;
+      dragUndoBase = captureWorkspace('move');
       el.style.cursor = 'grabbing';
 
       // Prevent text selection during drag
@@ -1587,6 +1955,8 @@ function setupElementEvents(el) {
     if (isDragging) {
       isDragging = false;
       el.style.cursor = 'grab';
+      commitUndoSnapshot(dragUndoBase);
+      dragUndoBase = null;
       scheduleAutoSave();
     }
   });
@@ -1596,14 +1966,17 @@ function setupElementEvents(el) {
 
   // Double click for editing
   el.addEventListener('dblclick', (event) => {
+    if (previewMode) return;
     event.stopPropagation();
     const type = el.getAttribute('data-type');
     if (['button', 'label', 'video'].includes(type)) {
       const textSpan = el.querySelector('.text-content');
       const newText = prompt("Edit text:", textSpan.textContent);
-      if (newText !== null) {
+      if (newText !== null && newText !== textSpan.textContent) {
+        pushUndo('edit text');
         textSpan.textContent = newText;
         processTextForVariables(textSpan);
+        scheduleValidationRefresh();
       }
     } else if (type === 'image') {
       const fileInput = document.createElement('input');
@@ -1648,6 +2021,7 @@ function setupElementEvents(el) {
   // Update the element click event listener to properly switch panels
   // Update the element click event listener to work better on mobile
   el.addEventListener('click', (e) => {
+    if (previewMode) return;
     if (e.target.classList.contains('remove-button') ||
       e.target.classList.contains('menu-scene-button') ||
       e.target.classList.contains('menu-language') ||
@@ -1704,6 +2078,7 @@ function handleResize(el, event) {
   const startY = event.clientY;
   const startWidth = el.offsetWidth;
   const startHeight = el.offsetHeight;
+  const undoBase = captureWorkspace('resize');
 
   const onMouseMove = (e) => {
     const newWidth = Math.max(50, startWidth + (e.clientX - startX));
@@ -1718,6 +2093,8 @@ function handleResize(el, event) {
     el.style.cursor = 'grab';
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
+    commitUndoSnapshot(undoBase);
+    scheduleAutoSave();
   };
 
   document.addEventListener('mousemove', onMouseMove);
@@ -2167,8 +2544,8 @@ function addVariable() {
                         <span class="variable-value">${variables[variableName]}</span>
                     </div>
                     <div class="variable-actions">
-                        <button onclick="editVariable('${variableName}')"><i class="fas fa-edit"></i></button>
-                        <button onclick="deleteVariable('${variableName}')"><i class="fas fa-trash"></i></button>
+                    <button type="button" aria-label="Edit ${variableName}" title="Edit ${variableName}" onclick="editVariable('${variableName}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
+                    <button type="button" aria-label="Delete ${variableName}" title="Delete ${variableName}" onclick="deleteVariable('${variableName}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
                     </div>
                 `;
 
@@ -2618,6 +2995,11 @@ function buildEditorConfig() {
   if (Object.keys(fontSizes).length > 0) exportedVariables.fontSizes = fontSizes;
 
   return Object.assign({}, importedConfig.top, {
+    // The player reads Width/Height for its logical canvas. The builder's size
+    // controls therefore have to be written here, not only applied to the CSS
+    // canvas, or a design authored at 1024x768 still loaded as 1280x720.
+    Width: canvasWidth,
+    Height: canvasHeight,
     title: document.getElementById('title').value,
     author: document.getElementById('author').value,
     description: document.getElementById('description').value,
@@ -2627,6 +3009,592 @@ function buildEditorConfig() {
       elements: scenes[sceneName].map(el => elementToConfig(el))
     }))
   });
+}
+
+// ============================================================================
+// Import normalisation and design validation
+// ============================================================================
+// A jukaconfig.json in the wild is not always the exact shape the builder writes:
+// the Go player accepts numeric strings, the XML path emits strings, older files
+// omit Width/Height, and hand-edited files can repeat a scene name. Import used
+// to trust the file completely, so a single bad element aborted the whole load
+// with "Cannot read properties of undefined". This normalises first and reports
+// what it changed.
+
+// Every type the Go renderer draws (player/core.go), plus "menu", which is the
+// builder's own scene bar. Keeping this list in sync matters: a config that uses
+// a feature tile the builder does not expose is still valid on the device.
+const PLAYER_ELEMENT_TYPES = [
+  'button', 'label', 'image', 'input', 'menu', 'video', 'dynamiclist',
+  'textlog', 'textbrowser', 'searchresults', 'piechart', 'favorites',
+  'unitconverter', 'chat', 'shortslist', 'canvas', 'packagelist', 'recent',
+  'themegallery', 'toggle'
+];
+const FONT_ROLES = ['title', 'big', 'medium', 'small'];
+const DEFAULT_SCENE_WIDTH = 1280;
+const DEFAULT_SCENE_HEIGHT = 720;
+
+function toIntOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.round(value) : null;
+  const text = String(value).trim().replace(/px$/i, '');
+  if (text === '') return null;
+  const n = Number(text);
+  return Number.isFinite(n) ? Math.round(n) : null;
+}
+
+function toNumberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function uniqueSceneName(name, taken) {
+  const base = String(name || '').trim() || 'Scene';
+  if (!taken.has(base)) return base;
+  let index = 2;
+  while (taken.has(`${base} (${index})`)) index += 1;
+  return `${base} (${index})`;
+}
+
+function normalizeElement(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const type = String(raw.type || '').trim().toLowerCase();
+  if (!type) return null;
+  const element = Object.assign({}, raw);
+  element.type = type === 'menu-element' ? 'menu' : type;
+  element.x = toIntOrNull(raw.x) ?? 0;
+  element.y = toIntOrNull(raw.y) ?? 0;
+  // null means "the player decides the size", which is different from 0.
+  element.width = toIntOrNull(raw.width);
+  element.height = toIntOrNull(raw.height);
+  if (typeof raw.text === 'number' || typeof raw.text === 'boolean') element.text = String(raw.text);
+  const opacity = toNumberOrNull(raw.opacity);
+  if (opacity === null) delete element.opacity;
+  else element.opacity = Math.min(1, Math.max(0, opacity));
+  if (raw.columns !== undefined) element.columns = toIntOrNull(raw.columns) ?? undefined;
+  if (raw.rows !== undefined) element.rows = toIntOrNull(raw.rows) ?? undefined;
+  if (element.columns === undefined) delete element.columns;
+  if (element.rows === undefined) delete element.rows;
+  if (raw.autoRefresh !== undefined) element.autoRefresh = raw.autoRefresh === true || raw.autoRefresh === 'true';
+  return element;
+}
+
+// Accepts a JSON object (or XML already converted to one) and returns a safe
+// config plus a report of everything that had to be repaired.
+function normalizeImportedConfig(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('The file does not contain a JukaHub config object.');
+  }
+  // Some files wrap the config in <jukaconfig> when they were converted badly.
+  const source = (raw.jukaconfig && typeof raw.jukaconfig === 'object' && !Array.isArray(raw.jukaconfig))
+    ? raw.jukaconfig : raw;
+
+  let scenesInput = source.scenes;
+  if (!scenesInput) throw new Error('This config has no "scenes". Is it a JukaHub config?');
+  if (!Array.isArray(scenesInput)) {
+    // A map of {sceneName: {elements: [...]}} is what older exports produced.
+    if (typeof scenesInput === 'object') {
+      scenesInput = Object.entries(scenesInput).map(([name, scene]) =>
+        Object.assign({}, scene && typeof scene === 'object' ? scene : {}, { name }));
+    } else {
+      throw new Error('This config\'s "scenes" is not a list or an object.');
+    }
+  }
+
+  const report = {
+    scenes: 0,
+    elements: 0,
+    skippedElements: 0,
+    renamedScenes: [],
+    fixedFields: 0,
+    warnings: []
+  };
+  const takenNames = new Set();
+  const scenes = [];
+
+  scenesInput.forEach((rawScene, index) => {
+    if (!rawScene || typeof rawScene !== 'object') {
+      report.warnings.push(`Scene ${index + 1} is not an object and was skipped.`);
+      return;
+    }
+    const requested = typeof rawScene.name === 'string' ? rawScene.name.trim() : '';
+    const name = uniqueSceneName(requested || `Scene ${index + 1}`, takenNames);
+    if (requested && name !== requested) report.renamedScenes.push(`${requested} → ${name}`);
+    takenNames.add(name);
+
+    const elementsInput = Array.isArray(rawScene.elements) ? rawScene.elements : [];
+    const elements = [];
+    elementsInput.forEach(rawElement => {
+      const element = normalizeElement(rawElement);
+      if (!element) {
+        report.skippedElements += 1;
+        return;
+      }
+      // Numeric strings are valid to the Go loader ("x": "30"), so converting
+      // them is not a repair and should not inflate the import report. Only a
+      // value that could not be a number is counted.
+      ['x', 'y', 'width', 'height', 'columns', 'rows'].forEach(key => {
+        const value = rawElement[key];
+        if (value === undefined || value === null || value === '') return;
+        if (toIntOrNull(value) === null) report.fixedFields += 1;
+      });
+      elements.push(element);
+    });
+
+    scenes.push(Object.assign({}, rawScene, { name, elements }));
+    report.scenes += 1;
+    report.elements += elements.length;
+  });
+
+  if (scenes.length === 0) throw new Error('This config has no usable scenes.');
+
+  const variables = (source.variables && typeof source.variables === 'object' && !Array.isArray(source.variables))
+    ? JSON.parse(JSON.stringify(source.variables))
+    : {};
+
+  const width = toIntOrNull(source.Width ?? source.width ?? source.canvasWidth);
+  const height = toIntOrNull(source.Height ?? source.height ?? source.canvasHeight);
+
+  return {
+    config: Object.assign({}, source, {
+      scenes,
+      variables,
+      Width: width && width > 0 ? width : DEFAULT_SCENE_WIDTH,
+      Height: height && height > 0 ? height : DEFAULT_SCENE_HEIGHT
+    }),
+    report
+  };
+}
+
+function importReportMessage(report) {
+  const parts = [`${report.scenes} scene${report.scenes === 1 ? '' : 's'}`, `${report.elements} element${report.elements === 1 ? '' : 's'} imported`];
+  if (report.skippedElements) parts.push(`${report.skippedElements} invalid element${report.skippedElements === 1 ? '' : 's'} skipped`);
+  if (report.fixedFields) parts.push(`${report.fixedFields} field${report.fixedFields === 1 ? '' : 's'} repaired`);
+  if (report.renamedScenes.length) parts.push(`renamed: ${report.renamedScenes.join(', ')}`);
+  return parts.join(' · ');
+}
+
+let lastImportReport = null;
+
+function parseConfigText(text, fileName) {
+  const trimmed = String(text || '').trim();
+  if (!trimmed) throw new Error('The file is empty.');
+  const looksXml = /\.xml$/i.test(fileName || '') || trimmed.startsWith('<?xml') || trimmed.startsWith('<');
+  if (looksXml) return xmlToJson(text);
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    throw new Error('JSON could not be parsed — ' + e.message);
+  }
+}
+
+// One import path for the Load button and for dropping a file on the canvas, so
+// a dropped file and a picked file behave identically.
+function importConfigFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onerror = () => showToast('Could not read that file', 'error');
+  reader.onload = event => {
+    try {
+      const parsed = parseConfigText(String(event.target.result || ''), file.name || '');
+      const { config, report } = normalizeImportedConfig(parsed);
+      if (autoSaveTimer) {
+        clearTimeout(autoSaveTimer);
+        autoSaveTimer = null;
+      }
+      importedConfigSnapshot = JSON.parse(JSON.stringify(config));
+      loadJukaApp(config);
+      scheduleAutoSave();
+      refreshReloadButtonState();
+      scheduleValidationRefresh();
+
+      const repaired = report.skippedElements > 0 || report.renamedScenes.length > 0 || report.warnings.length > 0;
+      showToast(importReportMessage(report), repaired ? 'info' : 'success');
+      if (report.warnings.length) showToast(report.warnings[0], 'warning');
+      announce(`Imported ${file.name || 'config'}: ${importReportMessage(report)}.`);
+    } catch (error) {
+      showToast('Error loading config: ' + error.message, 'error');
+      announce('Import failed: ' + error.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function setupConfigDrop() {
+  const dropZone = document.getElementById('canvasWrapper') || canvas;
+  if (!dropZone) return;
+  const acceptsFiles = event => Array.from(event.dataTransfer?.types || []).includes('Files');
+  dropZone.addEventListener('dragover', event => {
+    if (!acceptsFiles(event)) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'copy';
+    dropZone.classList.add('config-drop-active');
+  });
+  dropZone.addEventListener('dragleave', event => {
+    if (event.target === dropZone) dropZone.classList.remove('config-drop-active');
+  });
+  dropZone.addEventListener('drop', event => {
+    if (!acceptsFiles(event)) return;
+    event.preventDefault();
+    dropZone.classList.remove('config-drop-active');
+    const file = event.dataTransfer.files && event.dataTransfer.files[0];
+    if (file) importConfigFile(file);
+  });
+}
+
+// --- Colour helpers (the player accepts #rrggbb and "r,g,b") -----------------
+function parseConfigColour(value) {
+  if (typeof value !== 'string') return null;
+  const v = value.trim().toLowerCase();
+  if (!v) return null;
+  let m = v.match(/^#([0-9a-f]{3,8})$/);
+  if (m) {
+    let hex = m[1];
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    if (hex.length !== 6 && hex.length !== 8) return null;
+    return { r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4, 6), 16) };
+  }
+  m = v.match(/^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/);
+  if (!m) m = v.match(/^(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})$/);
+  if (m) {
+    const rgb = [Number(m[1]), Number(m[2]), Number(m[3])];
+    if (rgb.some(n => n > 255)) return null;
+    return { r: rgb[0], g: rgb[1], b: rgb[2] };
+  }
+  // Named CSS colours are valid for the browser preview; the player only
+  // understands hex/rgb, so flag them without trying to compute contrast.
+  if (/^[a-z]+$/.test(v)) return { named: v };
+  return null;
+}
+
+function colourIsCss(value) {
+  if (typeof value !== 'string') return false;
+  const v = value.trim().toLowerCase();
+  if (!v) return false;
+  // Colours are commonly "$buttonColor": the player substitutes variables when
+  // it draws, so a reference is valid and cannot be checked statically.
+  if (/^\$[a-z_][a-z0-9_]*$/i.test(v)) return true;
+  if (parseConfigColour(v)) return true;
+  return /^hsla?\(/.test(v) || /^var\(--/.test(v) || /^(transparent|currentcolor)$/.test(v);
+}
+
+function luminance(rgb) {
+  const channel = c => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+function contrastRatio(a, b) {
+  if (!a || !b || a.named || b.named) return null;
+  const la = luminance(a);
+  const lb = luminance(b);
+  const light = Math.max(la, lb);
+  const dark = Math.min(la, lb);
+  return (light + 0.05) / (dark + 0.05);
+}
+
+// Rough text width for clipping warnings; the builder canvas uses Inter 900, but
+// an estimate keeps validation pure and fast across every element.
+function estimateTextWidth(text, fontSize) {
+  return String(text || '').length * fontSize * 0.56;
+}
+
+// The single validation pass used by the Check panel and the export gate. It
+// checks what actually breaks on the handheld, not style preferences: values the
+// Go loader rejects, scene links that go nowhere, text that will not fit, and
+// controls too small to hit with a thumb.
+function validateProject(config) {
+  const issues = [];
+  const add = (severity, code, message, fix, where, target) => {
+    issues.push(Object.assign({ severity, code, message, fix: fix || '', where: where || '' }, target || {}));
+  };
+
+  if (!config || typeof config !== 'object') {
+    add('error', 'config', 'There is no design to check.', 'Add a scene and try again.');
+    return { issues, errors: 1, warnings: 0 };
+  }
+  const sceneList = Array.isArray(config.scenes) ? config.scenes : [];
+  if (sceneList.length === 0) {
+    add('error', 'no-scenes', 'This design has no scenes.', 'Add a scene from the canvas toolbar.');
+    return { issues, errors: 1, warnings: 0 };
+  }
+
+  const canvasW = toIntOrNull(config.Width) || canvasWidth || DEFAULT_SCENE_WIDTH;
+  const canvasH = toIntOrNull(config.Height) || canvasHeight || DEFAULT_SCENE_HEIGHT;
+  const sceneNames = new Set();
+  const duplicateNames = new Set();
+  sceneList.forEach(scene => {
+    const name = String(scene && scene.name || '').trim();
+    if (!name) return;
+    if (sceneNames.has(name)) duplicateNames.add(name);
+    sceneNames.add(name);
+  });
+  const fontSizes = (config.variables && config.variables.fontSizes) || {};
+  FONT_ROLES.forEach(role => {
+    if (fontSizes[role] === undefined) return;
+    const size = toIntOrNull(fontSizes[role]);
+    if (size === null || size < 8 || size > 96) {
+      add('warning', 'font-size', `The "${role}" font size (${fontSizes[role]}) is outside 8–96 px.`, 'Pick a size between 8 and 96 px in App Info.', 'Font sizes');
+    }
+  });
+
+  const allVariables = Object.assign({}, (config.variables && config.variables.Custom) || {}, config.variables || {});
+
+  sceneList.forEach((scene, sceneIndex) => {
+    const sceneName = String(scene && scene.name || '').trim();
+    const whereScene = sceneName ? `Scene “${sceneName}”` : `Scene ${sceneIndex + 1}`;
+    if (!sceneName) {
+      add('error', 'scene-name', 'A scene has no name.', 'Rename the scene so the menu and scene links can target it.', whereScene, { sceneIndex });
+    } else if (duplicateNames.has(sceneName)) {
+      add('error', 'scene-duplicate', `Two scenes are both named “${sceneName}”.`, 'Rename one scene; the player can only open one of them.', whereScene, { sceneIndex });
+    }
+    if (scene.background && !colourIsCss(scene.background)) {
+      add('warning', 'scene-background', `Scene background “${scene.background}” is not a colour the player understands.`, 'Use #rrggbb or an image path for the background.', whereScene, { sceneIndex });
+    }
+
+    const elements = Array.isArray(scene.elements) ? scene.elements : [];
+    if (elements.length === 0) {
+      add('warning', 'scene-empty', 'This scene has no elements.', 'Add a label or a button, or remove the scene.', whereScene, { sceneIndex });
+    }
+    let menuRect = null;
+    elements.forEach(el => {
+      if (String(el.type || '').toLowerCase() === 'menu') {
+        menuRect = { x: 0, y: toIntOrNull(el.y) || 0, w: canvasW, h: toIntOrNull(el.height) || 50 };
+      }
+    });
+
+    elements.forEach((el, elementIndex) => {
+      const type = String(el.type || '').toLowerCase();
+      const text = el.text === undefined || el.text === null ? '' : String(el.text);
+      const label = text.trim() || type || 'element';
+      const where = `${whereScene} · ${label.length > 32 ? label.slice(0, 32) + '…' : label}`;
+      const target = { sceneIndex, elementIndex };
+
+      if (!type) {
+        add('error', 'element-type', 'An element has no type.', 'Choose a type in the Inspector.', whereScene, target);
+        return;
+      }
+      if (!PLAYER_ELEMENT_TYPES.includes(type)) {
+        add('error', 'element-type-unknown', `“${type}” is not an element type the player draws.`, `Use one of: ${PLAYER_ELEMENT_TYPES.join(', ')}.`, where, target);
+      }
+
+      const x = toIntOrNull(el.x);
+      const y = toIntOrNull(el.y);
+      if (x === null || y === null) {
+        add('error', 'element-position', 'This element has a missing or non-numeric position.', 'Set X and Y to whole pixels.', where, target);
+      } else {
+        if (x < 0 || y < 0) add('error', 'element-negative', `Position ${x}, ${y} is off the top-left of the canvas.`, 'Move it inside the canvas.', where, target);
+        if (x >= canvasW || y >= canvasH) add('error', 'element-offcanvas', `Position ${x}, ${y} is outside the ${canvasW}×${canvasH} canvas.`, 'Move it inside the canvas.', where, target);
+      }
+
+      const w = toIntOrNull(el.width);
+      const h = toIntOrNull(el.height);
+      if (el.width !== undefined && el.width !== null && el.width !== '' && (w === null || w <= 0)) {
+        add('error', 'element-width', 'Width is not a positive number.', 'Set a width in pixels, or clear it to let the player size it.', where, target);
+      }
+      if (el.height !== undefined && el.height !== null && el.height !== '' && (h === null || h <= 0)) {
+        add('error', 'element-height', 'Height is not a positive number.', 'Set a height in pixels, or clear it to let the player size it.', where, target);
+      }
+      if (x !== null && y !== null && w && h && (x + w > canvasW || y + h > canvasH)) {
+        add('warning', 'element-overflow', `This element extends past the ${canvasW}×${canvasH} canvas and will be clipped.`, 'Move it left/up or reduce its size.', where, target);
+      }
+
+      if (['button', 'input', 'menu'].includes(type) && w && h && (w < 36 || h < 36)) {
+        add('warning', 'tap-target', `This ${type} is only ${w}×${h} px — hard to hit on a handheld.`, 'Make touch controls at least 36×36 px.', where, target);
+      }
+      if (['button', 'label'].includes(type) && !text.trim() && !el.variable && type !== 'label') {
+        add('warning', 'empty-text', 'This button has no text.', 'Double-click it on the canvas to add a label.', where, target);
+      }
+
+      if (el.font && !FONT_ROLES.includes(String(el.font).toLowerCase())) {
+        add('warning', 'font-role', `Font role “${el.font}” is not one the player knows.`, `Use ${FONT_ROLES.join(', ')}.`, where, target);
+      }
+      if (el.color && !colourIsCss(el.color)) {
+        add('warning', 'text-colour', `Text colour “${el.color}” is not valid.`, 'Use #rrggbb in the Inspector.', where, target);
+      }
+      if (el.bgColor && !colourIsCss(el.bgColor)) {
+        add('warning', 'bg-colour', `Background colour “${el.bgColor}” is not valid.`, 'Use #rrggbb in the Inspector.', where, target);
+      }
+
+      const resolveColour = value => {
+        if (typeof value !== 'string') return value;
+        const ref = value.trim().replace(/^\$/, '');
+        if (ref === value.trim()) return value;
+        const resolved = allVariables[ref];
+        return typeof resolved === 'string' ? resolved : '';
+      };
+      const fg = parseConfigColour(resolveColour(el.color) || '#F8FAFC');
+      const bg = parseConfigColour(resolveColour(el.bgColor) || resolveColour(scene.background) || '');
+      const ratio = bg ? contrastRatio(fg, bg) : null;
+      if (ratio !== null && ratio < 4.5 && (text.trim() || type === 'button')) {
+        add('warning', 'contrast', `Text contrast is ${ratio.toFixed(1)}:1, below the 4.5:1 readable minimum.`, 'Lighten the text or darken the background.', where, target);
+      }
+
+      const trigger = String(el.trigger || '').trim();
+      let sceneTarget = String(el.sceneChange || '').trim();
+      if (!sceneTarget && trigger.startsWith('change_scene:')) sceneTarget = trigger.slice('change_scene:'.length).trim();
+      if ((trigger === 'change_scene' || trigger.startsWith('change_scene:')) && !sceneTarget) {
+        add('error', 'scene-target-missing', 'This element changes scene but has no target scene.', 'Pick a target scene in the Inspector.', where, target);
+      } else if (sceneTarget && !sceneNames.has(sceneTarget)) {
+        add('error', 'scene-target-unknown', `Scene “${sceneTarget}” does not exist.`, 'Pick an existing scene, or create it first.', where, target);
+      }
+
+      // $variable references: the player substitutes an empty string for an
+      // unknown name, which looks like a blank tile with no explanation.
+      const refs = new Set();
+      const regex = /\$([a-zA-Z_][a-zA-Z0-9_]*)/g;
+      let match;
+      while ((match = regex.exec(text)) !== null) refs.add(match[1]);
+      refs.forEach(name => {
+        if (allVariables[name] === undefined && !(config.variables && config.variables[name] !== undefined)) {
+          add('warning', 'unknown-variable', `“$${name}” is not defined, so the player will draw nothing there.`, `Add a “${name}” variable in the Variables panel.`, where, target);
+        }
+      });
+
+      if (text.trim() && w) {
+        const size = toIntOrNull(fontSizes[String(el.font || 'medium').toLowerCase()]) || toIntOrNull(fontSizes.medium) || 24;
+        const estimated = estimateTextWidth(text, size);
+        if (estimated > w * 1.15) {
+          add('warning', 'text-overflow', `“${text.trim().slice(0, 24)}…” may not fit in ${w} px at ${size} px.`, 'Widen the element, shorten the text, or use a smaller font role.', where, target);
+        }
+      }
+
+      if (menuRect && type !== 'menu' && y !== null && h) {
+        const bottom = y + h;
+        if (bottom > menuRect.y && y < menuRect.y + menuRect.h) {
+          add('warning', 'menu-overlap', 'This element is underneath the menu bar and will be covered.', 'Move it above the menu or shorten the menu.', where, target);
+        }
+      }
+    });
+  });
+
+  const errors = issues.filter(issue => issue.severity === 'error').length;
+  return { issues, errors, warnings: issues.length - errors };
+}
+
+// --- Design check panel ------------------------------------------------------
+let validationResult = null;
+let validationTimer = null;
+let pendingExportKind = null;
+
+function scheduleValidationRefresh() {
+  const badge = document.getElementById('validateCount');
+  if (!badge) return;
+  if (validationTimer) clearTimeout(validationTimer);
+  validationTimer = setTimeout(() => {
+    validationTimer = null;
+    const result = validateProject(buildEditorConfig());
+    const total = result.errors + result.warnings;
+    badge.hidden = total === 0;
+    badge.textContent = String(total);
+    badge.classList.toggle('has-errors', result.errors > 0);
+    const btn = document.getElementById('validateBtn');
+    if (btn) {
+      btn.title = total === 0
+        ? 'No problems found (Ctrl+Shift+K)'
+        : `${result.errors} error${result.errors === 1 ? '' : 's'}, ${result.warnings} warning${result.warnings === 1 ? '' : 's'} (Ctrl+Shift+K)`;
+    }
+  }, 700);
+}
+
+function renderValidationPanel(result, report) {
+  validationResult = result;
+  const list = document.getElementById('validateList');
+  const empty = document.getElementById('validateEmpty');
+  const summary = document.getElementById('validateSummary');
+  const exportAnyway = document.getElementById('validateExportAnyway');
+  if (!list || !summary) return;
+
+  list.innerHTML = '';
+  const total = result.errors + result.warnings;
+  summary.textContent = total === 0
+    ? 'No problems found — this design will load on the device.'
+    : `${result.errors} error${result.errors === 1 ? '' : 's'} and ${result.warnings} warning${result.warnings === 1 ? '' : 's'}. Errors block export; warnings do not.`;
+  if (report) {
+    summary.textContent += ` Imported: ${importReportMessage(report)}.`;
+  }
+  empty.hidden = total !== 0;
+  if (exportAnyway) exportAnyway.hidden = result.errors === 0;
+
+  result.issues.forEach(issue => {
+    const li = document.createElement('li');
+    li.className = 'validate-item';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `validate-issue is-${issue.severity}`;
+    button.setAttribute('aria-label', `${issue.severity}: ${issue.message}. ${issue.fix}`);
+    button.innerHTML = `
+      <i class="fas ${issue.severity === 'error' ? 'fa-circle-exclamation' : 'fa-triangle-exclamation'} validate-icon" aria-hidden="true"></i>
+      <span class="validate-issue-body">
+        <span class="validate-issue-where">${issue.where || 'Design'}</span>
+        <span>${escapeHtml(issue.message)}</span>
+        ${issue.fix ? `<span class="validate-issue-fix">${escapeHtml(issue.fix)}</span>` : ''}
+      </span>`;
+    button.addEventListener('click', () => focusValidationIssue(issue));
+    li.appendChild(button);
+    list.appendChild(li);
+  });
+}
+
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function focusValidationIssue(issue) {
+  if (issue.sceneIndex === undefined) return;
+  const names = Object.keys(scenes);
+  const sceneName = names[issue.sceneIndex];
+  if (!sceneName) return;
+  const changed = currentScene !== sceneName;
+  if (changed) {
+    sceneSelector.value = sceneName;
+    changeScene();
+  }
+  closeValidationPanel();
+  if (issue.elementIndex === undefined) return;
+  const elements = canvas.querySelectorAll('.element');
+  const el = elements[issue.elementIndex];
+  if (!el) return;
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  el.click();
+  el.focus({ preventScroll: true });
+  announce(`Selected ${el.getAttribute('data-type') || 'element'} in ${sceneName}.`);
+}
+
+function openValidationPanel(report) {
+  const panel = document.getElementById('validatePanel');
+  if (!panel) return;
+  const result = validateProject(buildEditorConfig());
+  renderValidationPanel(result, report || null);
+  panel.removeAttribute('hidden');
+  panel.setAttribute('aria-hidden', 'false');
+  const firstIssue = panel.querySelector('.validate-issue');
+  (firstIssue || panel.querySelector('[data-close-validate]'))?.focus();
+  announce(result.errors || result.warnings
+    ? `Design check: ${result.errors} errors, ${result.warnings} warnings.`
+    : 'Design check found no problems.');
+}
+
+function closeValidationPanel() {
+  const panel = document.getElementById('validatePanel');
+  if (!panel || panel.hasAttribute('hidden')) return;
+  panel.setAttribute('hidden', '');
+  panel.setAttribute('aria-hidden', 'true');
+  document.getElementById('validateBtn')?.focus();
+}
+
+function exportWithValidation(kind) {
+  const result = validateProject(buildEditorConfig());
+  if (result.errors > 0) {
+    pendingExportKind = kind;
+    openValidationPanel(lastImportReport);
+    showToast(`Fix ${result.errors} error${result.errors === 1 ? '' : 's'} before exporting`, 'error');
+    return false;
+  }
+  return true;
 }
 
 // Export functionality
@@ -2643,8 +3611,10 @@ function createJukaApp() {
   showToast('Exported jukaconfig.json', 'success');
 }
 
-// Legacy alias for inline Export buttons
-function exportConfig() {
+// Legacy alias for inline Export buttons. The design check gates export on
+// errors, because a config the player cannot load is worse than no download.
+function exportConfig(force) {
+  if (!force && !exportWithValidation('json')) return;
   createJukaApp();
 }
 
@@ -2939,7 +3909,8 @@ function setupDesignSharing() {
 
 // ---
 
-function exportConfigXml() {
+function exportConfigXml(force) {
+  if (!force && !exportWithValidation('xml')) return;
   const config = buildEditorConfig();
 
   const xmlStr = configToXml(config);
@@ -3191,6 +4162,7 @@ function xmlToJson(xmlStr) {
 }
 function clearAll() {
   if (confirm('Are you sure you want to clear everything and start new?')) {
+    pushUndo('clear project');
     scenes = { 'Scene 1': [] };
     currentScene = 'Scene 1';
     variables = {};
@@ -3239,7 +4211,8 @@ function saveCurrentScene() {
 // Scene management functions
 function renameScene() {
   const newName = prompt('Enter new name for scene:', currentScene);
-  if (!newName || scenes[newName]) return;
+  if (!newName || newName === currentScene || scenes[newName]) return;
+  pushUndo('rename scene');
 
   // Update scenes object
   scenes[newName] = scenes[currentScene];
@@ -3271,6 +4244,8 @@ function deleteScene() {
   }
 
   if (confirm(`Are you sure you want to delete "${currentScene}"?`)) {
+    pushUndo('delete scene');
+    const removedScene = currentScene;
     // Find next scene to show
     const sceneNames = Object.keys(scenes);
     const currentIndex = sceneNames.indexOf(currentScene);
@@ -3296,7 +4271,7 @@ function deleteScene() {
     // Update scene change selector
     updateSceneChangeSelector();
     scheduleAutoSave();
-    showToast(`Scene "${currentScene}" deleted`, 'success');
+    showToast(`Scene "${removedScene}" deleted`, 'success');
   }
 }
 
@@ -3325,9 +4300,21 @@ function loadDefaultConfig() {
 }
 
 
-function loadJukaApp(data) {
+function loadJukaApp(input) {
+  // Normalise before touching any builder state: one malformed element must not
+  // leave the workspace half-loaded. The report is shown by the Check panel.
+  const normalized = normalizeImportedConfig(input);
+  const data = normalized.config;
+  lastImportReport = normalized.report;
+
   // Remember everything the builder does not model, so the export keeps it.
   resetImportedConfig(data);
+
+  // The config's logical canvas is the design's canvas, not whatever size the
+  // previous project used.
+  canvasWidth = data.Width || DEFAULT_SCENE_WIDTH;
+  canvasHeight = data.Height || DEFAULT_SCENE_HEIGHT;
+  syncCanvasSizeControls();
 
   // Clear existing elements
   variableChangeSelector.innerHTML = '';
@@ -3369,8 +4356,8 @@ function loadJukaApp(data) {
                         <span class="variable-value">${data.variables[key]}</span>
                     </div>
                     <div class="variable-actions">
-                        <button onclick="editVariable('${key}')"><i class="fas fa-edit"></i></button>
-                        <button onclick="deleteVariable('${key}')"><i class="fas fa-trash"></i></button>
+                        <button type="button" aria-label="Edit ${key}" title="Edit ${key}" onclick="editVariable('${key}')"><i class="fas fa-edit" aria-hidden="true"></i></button>
+                        <button type="button" aria-label="Delete ${key}" title="Delete ${key}" onclick="deleteVariable('${key}')"><i class="fas fa-trash" aria-hidden="true"></i></button>
                     </div>
                 `;
         variablesList.appendChild(variableItem);
@@ -3381,6 +4368,7 @@ function loadJukaApp(data) {
   // Load scenes
   const sceneSelector = document.getElementById('sceneSelector');
   sceneSelector.innerHTML = '';
+  scenes = {};
 
   data.scenes.forEach(scene => {
     scenes[scene.name] = [];
@@ -5418,3 +6406,170 @@ if (typeof AI !== 'undefined' && typeof AI.init === 'function') {
     });
   });
 })();
+
+// ============================================================================
+// Editor quality-of-life wiring
+// ============================================================================
+// Screen-reader announcements. Toasts are visible and already live, but mode
+// changes and keyboard nudges need a short spoken confirmation that does not
+// repeat the toast's whole sentence.
+function announce(message) {
+  const live = document.getElementById('a11yStatus');
+  if (!live || !message) return;
+  live.textContent = '';
+  setTimeout(() => { live.textContent = message; }, 40);
+}
+
+// Arrow-key nudging is one undo step per burst of key presses, not one per
+// pixel: holding an arrow key should not evict the rest of the history.
+let nudgeBase = null;
+let nudgeTimer = null;
+function nudgeElement(el, dx, dy) {
+  if (!el || (!dx && !dy)) return;
+  if (!nudgeBase) nudgeBase = captureWorkspace('move');
+  const x = Number(el.getAttribute('data-x')) || 0;
+  const y = Number(el.getAttribute('data-y')) || 0;
+  const width = Number(el.getAttribute('data-width')) || el.offsetWidth || 0;
+  const height = Number(el.getAttribute('data-height')) || el.offsetHeight || 0;
+  const nextX = Math.max(0, Math.min(x + dx, Math.max(0, canvasWidth - width)));
+  const nextY = Math.max(0, Math.min(y + dy, Math.max(0, canvasHeight - height)));
+  if (nextX === x && nextY === y) return;
+  el.style.left = `${nextX}px`;
+  el.style.top = `${nextY}px`;
+  el.setAttribute('data-x', nextX);
+  el.setAttribute('data-y', nextY);
+  const xInput = document.getElementById('datax');
+  const yInput = document.getElementById('datay');
+  if (xInput && currentElement === el) xInput.value = nextX;
+  if (yInput && currentElement === el) yInput.value = nextY;
+  announce(`Moved to ${nextX}, ${nextY}.`);
+  scheduleAutoSave();
+  scheduleValidationRefresh();
+  if (nudgeTimer) clearTimeout(nudgeTimer);
+  nudgeTimer = setTimeout(() => {
+    commitUndoSnapshot(nudgeBase);
+    nudgeBase = null;
+    nudgeTimer = null;
+  }, 450);
+}
+
+function trapDialogFocus(panel) {
+  if (!panel) return;
+  panel.addEventListener('keydown', event => {
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(panel.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    )).filter(el => el.offsetParent !== null);
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
+  // Restore focus to whatever opened the dialog once it closes.
+  let opener = null;
+  if (typeof MutationObserver === 'function') {
+    new MutationObserver(() => {
+      if (panel.hasAttribute('hidden')) {
+        if (opener && document.contains(opener) && typeof opener.focus === 'function') opener.focus();
+        opener = null;
+      } else if (!opener) {
+        opener = document.activeElement;
+      }
+    }).observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+  }
+}
+
+function controlLabelFor(input) {
+  if (!input) return 'edit';
+  const group = input.closest('.control-group, .size-group, .field, .form-group');
+  const label = group && group.querySelector('label');
+  const text = (label && label.textContent) || input.getAttribute('aria-label') || input.id || 'edit';
+  return text.trim().replace(/\s+/g, ' ').slice(0, 32) || 'edit';
+}
+
+function setupEditorQuality() {
+  document.getElementById('undoBtn')?.addEventListener('click', undo);
+  document.getElementById('redoBtn')?.addEventListener('click', redo);
+  document.getElementById('validateBtn')?.addEventListener('click', () => openValidationPanel(lastImportReport));
+
+  document.querySelectorAll('[data-close-validate]').forEach(el => {
+    el.addEventListener('click', closeValidationPanel);
+  });
+  document.getElementById('validateRecheck')?.addEventListener('click', () => {
+    renderValidationPanel(validateProject(buildEditorConfig()), lastImportReport);
+    announce('Design re-checked.');
+  });
+  document.getElementById('validateExportAnyway')?.addEventListener('click', () => {
+    const kind = pendingExportKind || 'json';
+    pendingExportKind = null;
+    closeValidationPanel();
+    if (kind === 'xml') exportConfigXml(true);
+    else exportConfig(true);
+  });
+
+  // Inspector edits are undoable even though the inputs mutate the DOM directly:
+  // capture on focus, commit on change only if something actually changed.
+  let inspectorBase = null;
+  const inspectorPanels = [
+    document.getElementById('elementProperties'),
+    document.getElementById('appInfoPanel')
+  ].filter(Boolean);
+  inspectorPanels.forEach(panel => {
+    panel.addEventListener('focusin', event => {
+      const input = event.target.closest('input, select, textarea');
+      if (!input) return;
+      inspectorBase = captureWorkspace('edit ' + controlLabelFor(input));
+    });
+    panel.addEventListener('change', () => {
+      if (!inspectorBase) return;
+      commitUndoSnapshot(inspectorBase);
+      inspectorBase = captureWorkspace('edit');
+      scheduleValidationRefresh();
+    });
+  });
+
+  // Library tiles are keyboard buttons: Enter/Space drops the component in the
+  // middle of the canvas, so the builder is usable without a drag gesture.
+  document.querySelectorAll('.left-sidebar .element[data-type]').forEach(tile => {
+    tile.addEventListener('keydown', event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      const type = tile.getAttribute('data-type');
+      const el = addElement(type, Math.round(canvasWidth / 2 - 60), Math.round(canvasHeight / 2 - 20));
+      el.click();
+      announce(`Added ${type} to ${currentScene}.`);
+    });
+  });
+
+  document.querySelectorAll('.guide-modal').forEach(trapDialogFocus);
+
+  // Mobile tab strip: aria-selected was never updated, so assistive tech always
+  // announced the first tab as current.
+  const mobileTabs = Array.from(document.querySelectorAll('.mobile-tab'));
+  mobileTabs.forEach((tab, index) => {
+    tab.setAttribute('aria-selected', String(index === 0));
+    tab.addEventListener('click', () => {
+      mobileTabs.forEach(other => other.setAttribute('aria-selected', String(other === tab)));
+    });
+    tab.addEventListener('keydown', event => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      const next = mobileTabs[(index + (event.key === 'ArrowRight' ? 1 : mobileTabs.length - 1)) % mobileTabs.length];
+      next.focus();
+      next.click();
+    });
+  });
+
+  // Keep the validation badge honest after scene/variable changes that do not
+  // go through an inspector field.
+  ['sceneSelector', 'canvasSize', 'customWidth', 'customHeight'].forEach(id => {
+    document.getElementById(id)?.addEventListener('change', scheduleValidationRefresh);
+  });
+}

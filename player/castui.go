@@ -40,6 +40,7 @@ func openCastPanel(config *Config) {
 	qs.open = false
 	toolsPanel.open = false
 	a11y.open = false
+	smartHomePanel.open = false
 	musicSettings.open = false
 	// The server normally comes up with the home screen; this makes the panel
 	// usable even when the user opened it before Wi-Fi appeared.

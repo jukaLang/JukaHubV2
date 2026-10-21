@@ -596,3 +596,81 @@ func TestProbeRouterAgainstListener(t *testing.T) {
 		t.Errorf("closed port probed as reachable: %+v", dead)
 	}
 }
+
+// The whole flow a user performs: open the panel (one refresh), then press A on
+// a light. This runs the real goroutine + mutex path with a fake Home Assistant
+// and a fake broker, so a deadlock or a lost mirror shows up here.
+func TestRefreshAndToggleEndToEnd(t *testing.T) {
+	t.Setenv("JUKAHUB_GATEWAY", "127.0.0.1:1") // keep the router probe off the LAN
+
+	var toggled []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/states":
+			io.WriteString(w, `[{"entity_id":"light.kitchen","state":"off","attributes":{"friendly_name":"Kitchen"}}]`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/services/light/toggle":
+			var body map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			toggled = append(toggled, body["entity_id"])
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	broker := startFakeBroker(t)
+	host, portStr, err := net.SplitHostPort(broker.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &Config{Variables: Variables{Custom: map[string]interface{}{
+		"ha_url":    srv.URL,
+		"ha_token":  "token",
+		"mqtt_host": host,
+		"mqtt_port": portStr,
+	}}}
+
+	prev := smartHomeSnapshot()
+	t.Cleanup(func() {
+		smartHome.mu.Lock()
+		smartHome.smartHomeSnapshotData = prev
+		smartHome.mu.Unlock()
+		invalidateSmartHomeSettings()
+	})
+	invalidateSmartHomeSettings()
+
+	refreshSmartHome(cfg)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		snap := smartHomeSnapshot()
+		if snap.loaded && len(snap.entities) == 1 {
+			if snap.entities[0].State != "off" {
+				t.Fatalf("entity state = %q", snap.entities[0].State)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("refresh did not populate the state: %+v", snap)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := toggleSmartHomeEntity(cfg, "light.kitchen"); err != nil {
+		t.Fatalf("toggle: %v", err)
+	}
+	if len(toggled) != 1 || toggled[0] != "light.kitchen" {
+		t.Fatalf("Home Assistant saw %v", toggled)
+	}
+	select {
+	case got := <-broker.publish:
+		if got != "jukahub/light.kitchen=ON" {
+			t.Errorf("mirror topic/payload = %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("the toggle was not mirrored to MQTT")
+	}
+	if state := smartHomeSnapshot().entities[0].State; state != "on" {
+		t.Errorf("optimistic state = %q, want on", state)
+	}
+}

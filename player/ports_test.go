@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -282,5 +283,87 @@ func TestPortMasterEmuEntryReflectsInstall(t *testing.T) {
 	setPortMasterTestRoot(t, root)
 	if e := portMasterEmuEntry(); e.Status != emuAvailable || e.Name != portMasterEntryName {
 		t.Fatalf("entry = %+v, want an available Ports row", e)
+	}
+}
+
+// A port whose own manifest says armhf-only is flagged and refused, not hidden:
+// the row explains itself and the summary counts it.
+func TestPortLaunchEnv(t *testing.T) {
+	env := portAudioEnvFor("linux", nil)
+	if len(env) != 1 || env[0] != "SDL_AUDIODRIVER=alsa" {
+		t.Errorf("default env = %v", env)
+	}
+	custom := map[string]interface{}{"portAudioWorkaround": "false"}
+	if env := portAudioEnvFor("linux", custom); env != nil {
+		t.Errorf("disabled workaround still set %v", env)
+	}
+	custom = map[string]interface{}{"portAudioDriver": "pulseaudio", "portAudioDevice": "hw:1,0"}
+	env = portAudioEnvFor("linux", custom)
+	if len(env) != 3 || env[0] != "SDL_AUDIODRIVER=pulseaudio" || env[2] != "AUDIODEV=hw:1,0" {
+		t.Errorf("custom env = %v", env)
+	}
+	if env := portAudioEnvFor("windows", nil); env != nil {
+		t.Errorf("non-Linux got %v", env)
+	}
+}
+
+func TestScanPortsFlagsThirtyTwoBitPorts(t *testing.T) {
+	root := t.TempDir()
+	// PortMaster layout: <Name>.sh at the root, manifest in the <Name>/ folder.
+	root32 := filepath.Join(root, "BrokenPort")
+	if err := os.MkdirAll(root32, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "BrokenPort.sh"), []byte("#!/bin/sh\n"), 0o755)
+	os.WriteFile(filepath.Join(root32, "port.json"), []byte(`{"arch":["armhf"]}`), 0o644)
+
+	ok := filepath.Join(root, "GoodPort")
+	if err := os.MkdirAll(ok, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(root, "GoodPort.sh"), []byte("#!/bin/sh\n"), 0o755)
+	os.WriteFile(filepath.Join(ok, "port.json"), []byte(`{"arch":["aarch64"]}`), 0o644)
+
+	entries := scanPortLaunchers([]string{root})
+	if len(entries) != 2 {
+		t.Fatalf("entries = %+v", entries)
+	}
+	byName := map[string]portEntry{}
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+	if got := byName["BrokenPort"].Compat.State; got != portCompat32BitOnly {
+		t.Errorf("BrokenPort compat = %v", got)
+	}
+	if got := byName["GoodPort"].Compat.State; got != portCompatSupported {
+		t.Errorf("GoodPort compat = %v", got)
+	}
+	if !strings.Contains(byName["BrokenPort"].Detail, "armhf") {
+		t.Errorf("detail does not carry the manifest's reason: %q", byName["BrokenPort"].Detail)
+	}
+	if got := portCompatBadge(byName["BrokenPort"].Compat.State); got != "32-bit only" {
+		t.Errorf("badge = %q", got)
+	}
+
+	summary := portsSummary([]portEntry{
+		{Name: "PortMaster", Master: true, Status: emuAvailable},
+		byName["BrokenPort"], byName["GoodPort"],
+	})
+	if !strings.Contains(summary, "2 port(s)") || !strings.Contains(summary, "1 cannot run here") {
+		t.Errorf("summary = %q", summary)
+	}
+}
+
+func TestPortCompatIgnored(t *testing.T) {
+	if portCompatIgnored(nil) {
+		t.Error("a nil config ignored compat")
+	}
+	cfg := &Config{Variables: Variables{Custom: map[string]interface{}{"portIgnoreCompat": true}}}
+	if !portCompatIgnored(cfg) {
+		t.Error("portIgnoreCompat was not read")
+	}
+	cfg.Variables.Custom["portIgnoreCompat"] = "false"
+	if portCompatIgnored(cfg) {
+		t.Error("an explicit false still ignored compat")
 	}
 }

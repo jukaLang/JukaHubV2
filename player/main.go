@@ -556,6 +556,10 @@ func main() {
 					if browserLinkPanel.open && handleBrowserLinksKey(e, config) {
 						continue
 					}
+					// The stick calibration wizard is modal while it runs.
+					if calibrationPanel.open && handleStickCalibrationKey(e, config) {
+						continue
+					}
 					// Smart Home is modal too.
 					if smartHomePanel.open && handleSmartHomeKey(e, config) {
 						continue
@@ -1097,6 +1101,11 @@ func main() {
 						// Browser link picker floats above the browser scene.
 						if browserLinkPanel.open {
 							handleBrowserLinksMouse(mx, my, config)
+							break
+						}
+						// The calibration wizard is modal the same way.
+						if calibrationPanel.open {
+							handleStickCalibrationMouse(mx, my, config)
 							break
 						}
 						// Smart Home is modal the same way.
@@ -2040,6 +2049,7 @@ func main() {
 		// A home-launcher press that downloaded the PS5 beta launches it as soon
 		// as the install reports success. Polled here, on the event thread.
 		ps5PollPendingLaunch()
+		ps4PollPendingLaunch()
 
 		// Offer a newly discovered release once.
 		maybeOfferUpdate()
@@ -2062,6 +2072,11 @@ func main() {
 		// Smart Home overlay (Home Assistant, Pi-hole, Tailscale, WireGuard).
 		if smartHomePanel.open {
 			renderSmartHomePanel(renderer, config)
+		}
+
+		// PPSSPP stick calibration wizard.
+		if calibrationPanel.open {
+			renderStickCalibrationPanel(renderer, config)
 		}
 
 		// Community hub (changelog, bug report, telemetry consent).
@@ -2155,7 +2170,7 @@ func main() {
 		}
 
 		// Shortcut hint at bottom (hidden when overlays are open).
-		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open && !companion.open && !smartHomePanel.open && !ambientIsActive() {
+		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open && !companion.open && !smartHomePanel.open && !calibrationPanel.open && !ambientIsActive() {
 			renderShortcutHint(renderer, config)
 		}
 
