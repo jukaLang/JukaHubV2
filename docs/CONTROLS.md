@@ -169,6 +169,41 @@ then every port launcher in `Ports/`, `Roms/Ports`, `Roms/PORTS` and
 
 Tapping a row activates it; tapping outside closes the panel.
 
+## Save manager
+
+Open **Start → Save Manager**. The panel snapshots emulator save folders,
+restores a snapshot, prepares the folders for Syncthing and zips the newest
+snapshot for a phone. See [SAVE_MANAGER.md](SAVE_MANAGER.md) for the folders and
+the snapshot layout.
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Move through the rows |
+| L1 / R1 | Page by five rows |
+| A | Snapshot, open, or restore — press again to confirm a restore |
+| X | Delete the selected snapshot (press again to confirm) |
+| B / Esc | Back from the snapshot list, then close |
+
+A restore always takes a safety snapshot first. Tapping a row activates it;
+tapping outside closes the panel.
+
+## Curation Hub
+
+Open **Start → Curation Hub**. The hub has an essentials checklist, a theme and
+text-size profile exchange, and a compatibility vote list. See
+[CURATION.md](CURATION.md) for the bundle contents and the feed format.
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Move through rows |
+| L1 / R1 | Page by five rows |
+| A | Open, apply, capture or toggle a vote |
+| X | Delete a saved profile (Profiles page) |
+| Y | Export the focused profile, or submit votes |
+| B / Esc | Back one page, then close |
+
+Tapping a row activates it; tapping outside closes the panel.
+
 ## Games
 
 Open **Start → Games**. Snake, Tetris, 2048, Pong, Minesweeper and Flappy all

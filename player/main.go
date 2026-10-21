@@ -188,6 +188,12 @@ func main() {
 	// The catalog stays lazy; a large community pack only loads when the
 	// intelligence panel opens.
 	InitCompatibility()
+	// Save Manager: create the snapshot/sync/resume folders. Discovery and the
+	// snapshot list stay lazy so a slow card does not delay boot.
+	InitSaveManager()
+	// Curation Hub: create the profile/vote folders. The feed and the ROM
+	// scan stay lazy so boot does not wait on the network or the card.
+	InitCuration()
 	// Windows Apps: create the drop folders. Runtimes themselves are not
 	// installed here; the panel detects Wine and WestonPack instead.
 	InitWindowsApps()
@@ -544,6 +550,14 @@ func main() {
 					// Smart Pro Compatibility keeps the ROM walk off the render
 					// thread and owns every key while open.
 					if cpPanel.open && handleCompatKey(e) {
+						continue
+					}
+					// Save Manager is modal and owns every key while open.
+					if savePanel.open && handleSaveManagerKey(e) {
+						continue
+					}
+					// Curation Hub is modal and owns every key while open.
+					if curationPanel.open && handleCurationKey(e, config) {
 						continue
 					}
 					// Windows Apps is modal and consumes all keys while open.
@@ -1111,6 +1125,16 @@ func main() {
 						// Accessibility is modal the same way.
 						if a11y.open {
 							handleAccessibilityMouse(mx, my, config)
+							break
+						}
+						// Save Manager is modal the same way.
+						if savePanel.open {
+							handleSaveManagerMouse(mx, my)
+							break
+						}
+						// Curation Hub is modal the same way.
+						if curationPanel.open {
+							handleCurationMouse(mx, my, config)
 							break
 						}
 						// PortMaster Ports is modal the same way.
@@ -2157,6 +2181,16 @@ func main() {
 		// Accessibility overlay: text size, palettes and controller mapping.
 		if a11y.open {
 			renderAccessibilityPanel(renderer, config)
+		}
+
+		// Save Manager overlay (snapshots, restore, sync preparation).
+		if savePanel.open {
+			renderSaveManagerPanel(renderer, config)
+		}
+
+		// Curation Hub overlay (essentials, UI profiles, compatibility votes).
+		if curationPanel.open {
+			renderCurationPanel(renderer, config)
 		}
 
 		// PortMaster Ports overlay (install PortMaster, launch installed ports).

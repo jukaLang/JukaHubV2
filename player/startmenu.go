@@ -86,6 +86,8 @@ func getStartMenuApps(config *Config) []startMenuEntry {
 		})
 	}
 	// Special entries that open overlays, not scenes.
+	apps = append(apps, startMenuEntry{name: "Save Manager", icon: "S", scene: "", action: func(c *Config) { openSaveManagerPanel() }})
+	apps = append(apps, startMenuEntry{name: "Curation Hub", icon: "H", scene: "", action: func(c *Config) { openCurationPanel(c) }})
 	apps = append(apps, startMenuEntry{name: "Game Profiles", icon: "G", scene: "", action: func(c *Config) { openGameProfilePanel(false) }})
 	apps = append(apps, startMenuEntry{name: "PS Remote Play", icon: "C", scene: "", action: func(c *Config) { openChiakiPanel() }})
 	if !IsWindows() {
@@ -383,6 +385,13 @@ func startMenuActivate(config *Config) {
 	}
 	app := apps[tb.cursor]
 	tb.startOpen = false
+	// A menu choice replaces whatever overlay was open. Without this, opening
+	// the menu from Save Manager and picking another app would stack two
+	// modals and leave the old one swallowing input behind the new one.
+	savePanel = saveManagerPanelState{}
+	saveRowHits = nil
+	curationPanel = curationPanelState{}
+	curationRowHits = nil
 	if app.action != nil {
 		app.action(config)
 	} else if app.scene != "" {

@@ -57,8 +57,8 @@
       "chat_input": "hi",
       "diskpie_data": {
         "Total": 510718431232,
-        "Used": 330289770496,
-        "Pct": 64
+        "Used": 332647739392,
+        "Pct": 65
       },
       "ftp_address": "",
       "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
@@ -70,12 +70,12 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "total": 4,
+        "total": 9,
         "scenes": {
-          "Main": 4
+          "Main": 9
         },
         "days": {
-          "2026-10-20": 4
+          "2026-10-21": 9
         },
         "unlocked": {}
       },

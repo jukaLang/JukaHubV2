@@ -110,6 +110,15 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if chiakiPanel.open {
 		return ctrlChiakiPanel(e)
 	}
+	// Save Manager is modal too and takes priority over the panels that
+	// launch it, so its A/B/X bindings cannot leak into the list underneath.
+	if savePanel.open {
+		return ctrlSaveManager(e)
+	}
+	// Curation Hub is modal in the same way.
+	if curationPanel.open {
+		return ctrlCuration(e, config)
+	}
 	// PortMaster Ports is modal too.
 	if portsPanel.open {
 		return ctrlPortsPanel(e)

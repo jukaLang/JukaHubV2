@@ -108,6 +108,14 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   the ports it manages without leaving JukaHub. Installed launchers are read
   from `Ports/` and the older `Roms/Ports` locations; see
   [docs/PORTMASTER.md](docs/PORTMASTER.md).
+* **Save Manager** — snapshot every emulator save folder into a versioned copy,
+  restore one with a safety snapshot first, prepare the folders for Syncthing
+  and export a phone resume bundle. Snapshots are plain files on the card, so
+  they work without JukaHub; see [docs/SAVE_MANAGER.md](docs/SAVE_MANAGER.md).
+* **Curation Hub** — a device-specific layer over the Store: an essentials
+  checklist for a new card, shareable theme + text-size profiles tuned per
+  panel, and compatibility votes for games and PortMaster titles. It works
+  offline; see [docs/CURATION.md](docs/CURATION.md).
 * **Accessibility** — global text scaling (85–145%), a high-contrast palette,
   three colour-blind-safe palettes and a system-wide A/B / X/Y controller
   remap, all from one panel in the Start menu; see
@@ -322,6 +330,8 @@ JukaHub on a PC.
 | [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
 | [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
+| [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
+| [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |
 | [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
