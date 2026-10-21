@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-)	// ValidateKnownAtRuntime is a compile-time marker that the config validation
+) // ValidateKnownAtRuntime is a compile-time marker that the config validation
 // helpers in config_health.go are wired into the real config load paths.
 const ValidateKnownAtRuntime = true
 
@@ -63,6 +63,33 @@ func (cw *ConfigWatcher) SetOnSource(fn func(string)) {
 	cw.mu.Lock()
 	defer cw.mu.Unlock()
 	cw.onSource = fn
+}
+
+// NotifyWritten records freshly written files and requests an immediate reload.
+// The live builder saves through AtomicWrite and then calls this, so a push is
+// visible on the handheld in well under a second instead of waiting for the
+// two-second poll. Recording the mtime first keeps the poller from reloading the
+// same bytes again and showing a second "Config reloaded" toast.
+func (cw *ConfigWatcher) NotifyWritten(paths ...string) {
+	cw.mu.Lock()
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil {
+			cw.lastMod[p] = info.ModTime()
+		}
+	}
+	if cw.debounce != nil {
+		cw.debounce.Stop()
+		cw.debounce = nil
+	}
+	running := cw.running
+	cw.mu.Unlock()
+	if !running {
+		return
+	}
+	select {
+	case cw.reloadCh <- struct{}{}:
+	default:
+	}
 }
 
 // Start begins the background file watcher. It polls the modification times

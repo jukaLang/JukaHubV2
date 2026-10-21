@@ -497,6 +497,19 @@ The built-in shell, useful for diagnostics over the on-screen keyboard.
 | Start | Craft menu |
 | Back / Select | Exit the game |
 
+## Smart Pro Compatibility
+
+Opened from **Emulators → Smart Pro Compatibility**.
+
+| Button | Games tab | Core-builds tab |
+|--------|-----------|-----------------|
+| Up / Down | Move the selected game | Move the selected build |
+| Left / Right | Switch tab | Switch tab |
+| A | Apply the boost plan | Activate a pool build |
+| X | Revert the selected plan | — |
+| Y / R | Rescan ROMs, catalog and cores | Rescan |
+| B | Back to Emulators | Back to Emulators |
+
 ## Desktop keyboard
 
 | Key | Action |
@@ -524,4 +537,5 @@ highlights the card under the pointer.
 
 - [Configuration reference](CONFIGURATION.md) — how a button in the config runs a trigger
 - [Dock & ambient](AMBIENT.md) — the idle clock, slideshow, sleep timer and screen-off audio
+- [Performance & compatibility](COMPATIBILITY.md) — per-game reports, boost plans and core builds
 - [Building](BUILDING.md) — running a desktop build to use the keyboard bindings

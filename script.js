@@ -433,6 +433,11 @@ function persistAutoSave() {
 function scheduleAutoSave() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);
   autoSaveTimer = setTimeout(persistAutoSave, 500);
+  // The live builder listens for edits so it can push them to a paired device.
+  // It debounces separately and is a no-op unless auto-push is enabled.
+  if (window.JukaLiveBuilder && typeof window.JukaLiveBuilder.noteEdit === 'function') {
+    window.JukaLiveBuilder.noteEdit();
+  }
 }
 
 function flushAutoSave() {
@@ -2878,9 +2883,12 @@ function elementToConfig(el) {
   }
 
   assign('trigger', attr('data-trigger'));
-  if (element.trigger === 'change_scene') {
-    assign('sceneChange', attr('data-scene-change'));
-  } else if (element.trigger === 'external_app') {
+  // A scene link can be stored either as trigger "change_scene" plus a
+  // sceneChange target, or as the "change_scene:Target" shorthand the shipped
+  // config uses. Keep the target whether or not the trigger dropdown happens to
+  // be set, otherwise an imported sceneChange was silently dropped on export.
+  assign('sceneChange', attr('data-scene-change'));
+  if (element.trigger === 'external_app') {
     assign('externalAppPath', attr('data-external-app-path'));
     assign('externalAppReturn', attr('data-external-app-return'));
   } else if (element.trigger === 'set_variable') {
@@ -4197,10 +4205,10 @@ function clearAll() {
 
     updateSceneChangeSelector();
     updateVariableChangeSelector();
-    undoStack.length = 0;
-    redoStack.length = 0;
+    // The snapshot pushed above is what makes Clear All recoverable, so the
+    // history is deliberately kept: the button's own tooltip promises Undo.
     try { localStorage.removeItem('jukahub-autosave'); } catch (e) {}
-    showToast('Project cleared', 'success');
+    showToast('Project cleared — Undo restores it', 'success');
   }
 }
 

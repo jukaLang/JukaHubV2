@@ -55,7 +55,10 @@ func TestScanBIOSRootsNamesMissingFirmware(t *testing.T) {
 	if got, want := biosDoctorSummary(report), "PS1 ready, Dreamcast missing dc_boot.bin, dc_flash.bin, Saturn missing sega_101.bin or mpr-17933.bin or saturn_bios.bin"; got != want {
 		t.Fatalf("summary = %q, want %q", got, want)
 	}
-	if strings.Contains(report.Systems[0].Missing[0], "scph5502") {
+	if len(report.Systems) == 0 {
+		t.Fatal("BIOS report has no systems")
+	}
+	if len(report.Systems[0].Missing) > 0 && strings.Contains(report.Systems[0].Missing[0], "scph5502") {
 		t.Fatalf("recognized regional BIOS was reported missing: %+v", report.Systems[0])
 	}
 }

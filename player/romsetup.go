@@ -52,6 +52,10 @@ var romSystemAliases = map[string]romSystem{
 	"ps1":                         {"PlayStation", "Sony - PlayStation"},
 	"psx":                         {"PlayStation", "Sony - PlayStation"},
 	"sony - playstation":          {"PlayStation", "Sony - PlayStation"},
+	"psp":                         {"PlayStation Portable", "Sony - PlayStation Portable"},
+	"playstation portable":        {"PlayStation Portable", "Sony - PlayStation Portable"},
+	"nds":                         {"Nintendo DS", "Nintendo - Nintendo DS"},
+	"nintendo ds":                 {"Nintendo DS", "Nintendo - Nintendo DS"},
 	"sat":                         {"Saturn", "Sega - Saturn"},
 	"saturn":                      {"Saturn", "Sega - Saturn"},
 	"sega - saturn":               {"Saturn", "Sega - Saturn"},
@@ -65,7 +69,8 @@ var romFileExtensions = map[string]bool{
 	".gb": true, ".gba": true, ".gbc": true, ".gcm": true, ".gcz": true,
 	".7z": true, ".gen": true, ".iso": true, ".md": true, ".nds": true, ".nes": true,
 	".n64": true, ".pbp": true, ".pce": true, ".rom": true, ".sfc": true,
-	".smc": true, ".z64": true, ".zip": true,
+	".smc": true, ".z64": true, ".zip": true, ".v64": true, ".ndd": true,
+	".cdi": true, ".gdi": true,
 }
 
 func romLibraryRoots() []string {

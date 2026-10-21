@@ -24,13 +24,19 @@ func launchFailureSuggestion(err error) string {
 	if strings.Contains(message, "game folder") && strings.Contains(message, "not found") {
 		return "Put the game folder under one of the configured game roots, or correct the profile’s folder path."
 	}
+	// exec.ErrNotFound's message says "executable file not found", so it must
+	// be recognized before the generic profile-executable branch: this error
+	// means the launcher itself is absent, not that a profile path is wrong.
+	if errors.Is(err, exec.ErrNotFound) {
+		return "The launcher or a required runtime is missing. Reinstall the emulator, then check its BIOS/runtime setup."
+	}
 	if strings.Contains(message, "executable") && (strings.Contains(message, "not found") || strings.Contains(message, "no such file")) {
 		return "Check the profile’s executable path and make sure the game files are installed."
 	}
 	if strings.Contains(message, "unsupported launcher file type") {
 		return "Use a supported launcher file (.exe, .bat, .cmd, .lnk, .url or .sh), then rescan."
 	}
-	if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) {
 		return "The launcher or a required runtime is missing. Reinstall the emulator, then check its BIOS/runtime setup."
 	}
 	if errors.Is(err, os.ErrPermission) {

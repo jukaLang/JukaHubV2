@@ -184,6 +184,10 @@ func main() {
 	// loaded lazily when the launcher opens, so a broken profile cannot slow
 	// startup or prevent booting.
 	InitGameProfiles()
+	// Compatibility catalog: create the folder skeleton and starter reports.
+	// The catalog stays lazy; a large community pack only loads when the
+	// intelligence panel opens.
+	InitCompatibility()
 	// Windows Apps: create the drop folders. Runtimes themselves are not
 	// installed here; the panel detects Wine and WestonPack instead.
 	InitWindowsApps()
@@ -403,6 +407,12 @@ func main() {
 	})
 	defer StopConfigWatcher()
 
+	// Wi-Fi designer: the static web builder pushes jukaconfig.json here and the
+	// watcher above reloads it in place. Local-only, guarded by a pairing code.
+	if liveBuilder := startLiveBuilderIfEnabled(); liveBuilder != nil {
+		defer liveBuilder.Stop()
+	}
+
 	// Hardware volume buttons: a long hold skips a track even while the screen
 	// is off or the player is in the background. The OS still owns the short
 	// press, so nothing about the volume itself changes.
@@ -529,6 +539,11 @@ func main() {
 					}
 					// Game Profiles is modal and consumes all keys while open.
 					if gpPanel.open && handleGameProfileKey(e, config) {
+						continue
+					}
+					// Smart Pro Compatibility keeps the ROM walk off the render
+					// thread and owns every key while open.
+					if cpPanel.open && handleCompatKey(e) {
 						continue
 					}
 					// Windows Apps is modal and consumes all keys while open.
@@ -1066,6 +1081,11 @@ func main() {
 						// Game Profiles is modal the same way.
 						if gpPanel.open {
 							handleGameProfileMouse(mx, my, config)
+							break
+						}
+						// Smart Pro Compatibility is modal the same way.
+						if cpPanel.open {
+							handleCompatMouse(mx, my)
 							break
 						}
 						// Windows Apps is modal the same way.
@@ -2107,6 +2127,11 @@ func main() {
 		// Game Profiles overlay (Wine/Box64/native launcher).
 		if gpPanel.open {
 			renderGameProfilesPanel(renderer, config)
+		}
+
+		// Smart Pro Compatibility overlay (reports, boost plans, core builds).
+		if cpPanel.open {
+			renderCompatibilityPanel(renderer, config)
 		}
 
 		// Windows Apps overlay (Wine + WestonPack launcher).

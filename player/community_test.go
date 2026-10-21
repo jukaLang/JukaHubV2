@@ -219,12 +219,12 @@ func TestPostTelemetry(t *testing.T) {
 
 func TestCommunityRowsExposeAllActions(t *testing.T) {
 	rows := communityRows(&Config{Version: "1.0.0"})
-	if len(rows) != 4 {
-		t.Fatalf("rows = %d, want changelog, bug report, telemetry and close", len(rows))
+	if len(rows) != 6 {
+		t.Fatalf("rows = %d, want changelog, BIOS Doctor, diagnostics QR, bug report, telemetry and close", len(rows))
 	}
 	want := []communityAction{
-		communityActionWhatsNew, communityActionReportBug,
-		communityActionTelemetry, communityActionClose,
+		communityActionWhatsNew, communityActionBIOSDoctor, communityActionDiagnosticsQR,
+		communityActionReportBug, communityActionTelemetry, communityActionClose,
 	}
 	for i, action := range want {
 		if rows[i].action != action {

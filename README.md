@@ -93,6 +93,11 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   binaries and scripts. Profiles live in `Apps/JukaHub/data/game-profiles`;
   see [docs/GAME_PROFILES.md](docs/GAME_PROFILES.md) for the format and the
   import/export workflow.
+* **Smart Pro Compatibility** — per-game community reports, an honest
+  hardware tier when nobody has reported a title yet, one-press boost plans for
+  N64/Dreamcast/PSP, and a manager for multiple libretro core builds. Reports
+  and core pools live in `Apps/JukaHub/data/performance`; see
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 * **Windows Apps** — scan for `.exe` files and launch basic Windows programs
   through Wine. On TrimUI's no-X11 firmware it can route through WestonPack's
   DRM/KMS compositor instead of failing on a missing display. If DXVK is

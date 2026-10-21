@@ -1,0 +1,173 @@
+{
+  "schemaVersion": 1,
+  "updated": "2026-10-20",
+  "entries": [
+    {
+      "id": "ps1-final-fantasy-vii",
+      "title": "Final Fantasy VII",
+      "system": "PlayStation",
+      "aliases": ["FF7", "Final Fantasy 7"],
+      "status": "playable",
+      "core": "pcsx_rearmed",
+      "notes": "Disc 1-3 report. Default 1x resolution and the ReARMed core hold full speed; keep texture filtering off for the battle swirl.",
+      "settings": {
+        "resolutionScale": 100,
+        "audioQuality": "high"
+      }
+    },
+    {
+      "id": "ps1-gran-turismo-2",
+      "title": "Gran Turismo 2",
+      "system": "PlayStation",
+      "aliases": ["GT2"],
+      "status": "playable",
+      "core": "pcsx_rearmed",
+      "notes": "Stable at 1x. Use the NTSC disc for 60 fps; the PAL release runs at 50 fps and feels slower.",
+      "settings": {
+        "resolutionScale": 100
+      }
+    },
+    {
+      "id": "ps1-metal-gear-solid",
+      "title": "Metal Gear Solid",
+      "system": "PlayStation",
+      "aliases": ["MGS1"],
+      "status": "playable",
+      "core": "pcsx_rearmed",
+      "notes": "Full speed with the ReARMed core. The VR missions disc uses the same settings."
+    },
+    {
+      "id": "n64-super-mario-64",
+      "title": "Super Mario 64",
+      "system": "Nintendo 64",
+      "aliases": ["SM64"],
+      "status": "playable",
+      "core": "mupen64plus_next",
+      "notes": "Most areas run at full speed with GLideN64 at 1x. The Bowser stages and the castle courtyard can dip briefly.",
+      "settings": {
+        "resolutionScale": 100
+      }
+    },
+    {
+      "id": "n64-goldeneye-007",
+      "title": "GoldenEye 007",
+      "system": "Nintendo 64",
+      "aliases": ["Golden Eye", "007 GoldenEye"],
+      "status": "performance-issues",
+      "core": "mupen64plus_next",
+      "notes": "Single-player is close to full speed; four-player split-screen drops frames. Lower the render size before changing anything else.",
+      "settings": {
+        "resolutionScale": 75,
+        "audioQuality": "low",
+        "retroArch": {
+          "mupen64plus-169screensize": "640x360",
+          "mupen64plus-43screensize": "320x240"
+        }
+      }
+    },
+    {
+      "id": "n64-perfect-dark",
+      "title": "Perfect Dark",
+      "system": "Nintendo 64",
+      "aliases": ["PerfectDark"],
+      "status": "performance-issues",
+      "core": "mupen64plus_next",
+      "notes": "Requires the Expansion Pak setting; combat scenes with many NPCs are the worst case. The boost plan lowers the render size.",
+      "settings": {
+        "resolutionScale": 75,
+        "audioQuality": "low",
+        "retroArch": {
+          "mupen64plus-169screensize": "640x360",
+          "mupen64plus-43screensize": "320x240"
+        }
+      }
+    },
+    {
+      "id": "dc-sonic-adventure",
+      "title": "Sonic Adventure",
+      "system": "Dreamcast",
+      "aliases": ["Sonic Adventure 1"],
+      "status": "playable",
+      "core": "flycast",
+      "notes": "Set Cable Type to VGA; with the default TV mode the FMV can stall the emulator. Threaded rendering should stay on.",
+      "settings": {
+        "retroArch": {
+          "flycast_cable_type": "VGA (RGB)"
+        }
+      }
+    },
+    {
+      "id": "dc-shenmue",
+      "title": "Shenmue",
+      "system": "Dreamcast",
+      "notes": "Crowded harbor and Dobuita scenes dip below full speed. Threaded rendering and frame skipping help; the story scenes stay smooth.",
+      "status": "performance-issues",
+      "core": "flycast",
+      "settings": {
+        "frameSkip": 1,
+        "resolutionScale": 100,
+        "audioQuality": "low",
+        "retroArch": {
+          "flycast_frame_skipping": "1",
+          "flycast_skip_frame": "enabled",
+          "flycast_threaded_rendering": "enabled"
+        }
+      }
+    },
+    {
+      "id": "psp-crisis-core-final-fantasy-vii",
+      "title": "Crisis Core: Final Fantasy VII",
+      "system": "PlayStation Portable",
+      "aliases": ["Crisis Core", "CC FF7"],
+      "status": "playable",
+      "core": "ppsspp",
+      "notes": "Runs at the native 480x272 with JIT. Keep frameskip off for the DMV cutscenes; battles are the only place it dips.",
+      "settings": {
+        "resolutionScale": 100,
+        "audioQuality": "high"
+      }
+    },
+    {
+      "id": "psp-god-of-war-chains-of-olympus",
+      "title": "God of War: Chains of Olympus",
+      "system": "PlayStation Portable",
+      "aliases": ["GoW Chains of Olympus", "Chains of Olympus"],
+      "status": "performance-issues",
+      "core": "ppsspp",
+      "notes": "One of the hardest PSP titles for the A133P. Native resolution with frameskip 1 is the usual compromise; audio can crackle during big fights.",
+      "settings": {
+        "frameSkip": 1,
+        "resolutionScale": 100,
+        "audioQuality": "low",
+        "retroArch": {
+          "ppsspp_frameskip": "1",
+          "ppsspp_auto_frameskip": "enabled",
+          "ppsspp_internal_resolution": "480x272"
+        }
+      }
+    },
+    {
+      "id": "psp-midnight-club-3-dub-edition",
+      "title": "Midnight Club 3: DUB Edition",
+      "system": "PlayStation Portable",
+      "aliases": ["Midnight Club 3", "MC3"],
+      "status": "performance-issues",
+      "core": "ppsspp",
+      "notes": "Traffic-heavy races are the stress case. Use the native resolution and enable auto frameskip; the menu and garage are fine.",
+      "settings": {
+        "frameSkip": 1,
+        "resolutionScale": 100,
+        "audioQuality": "low"
+      }
+    },
+    {
+      "id": "nds-mario-kart-ds",
+      "title": "Mario Kart DS",
+      "system": "Nintendo DS",
+      "aliases": ["MKDS"],
+      "status": "playable",
+      "core": "melonds",
+      "notes": "Full speed in single-player and local multiplayer. Keep the screen layout at one screen if the frame rate matters more than the map."
+    }
+  ]
+}

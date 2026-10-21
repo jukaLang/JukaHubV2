@@ -78,6 +78,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if gpPanel.open {
 		return ctrlGameProfiles(e, config)
 	}
+	// Smart Pro Compatibility is modal in the same way.
+	if cpPanel.open {
+		return ctrlCompatPanel(e)
+	}
 	// Windows Apps is modal in the same way.
 	if winAppsPanel.open {
 		return ctrlWindowsApps(e, config)

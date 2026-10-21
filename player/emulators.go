@@ -285,22 +285,23 @@ func emulatorEntries() []emuEntry {
 	} else {
 		entries = deviceEmulatorEntries(deviceEmuRoots, deviceRomsRoot, deviceRACores)
 	}
+	// Pinned rows keep their append order: RetroAchievements stays first (it
+	// was the original top row), followed by BIOS Doctor and the launchers.
+	// The profile row is always present so the folder is discoverable before
+	// the first import.
+	if retroAchievementsSupported() {
+		re := retroAchievementsEmuEntry()
+		re.Pinned = true
+		entries = append(entries, re)
+	}
 	entries = append(entries, emuEntry{
 		Name:   biosDoctorEntryName,
 		Detail: "Check PS1, Dreamcast and Saturn firmware",
 		Status: emuAvailable,
 		Pinned: true,
 	})
-	// Pinned rows keep their append order: RetroAchievements stays first (it
-	// was the original top row), then the Game Profiles launcher. The profile
-	// row is always present so the folder is discoverable before the first
-	// import.
-	if retroAchievementsSupported() {
-		re := retroAchievementsEmuEntry()
-		re.Pinned = true
-		entries = append(entries, re)
-	}
 	entries = append(entries, gameProfilesEmuEntry())
+	entries = append(entries, compatibilityEmuEntry())
 	if !IsWindows() {
 		entries = append(entries, windowsAppsEmuEntry())
 		// PortMaster is a handheld app; listing it on Windows would only offer
@@ -333,6 +334,26 @@ func gameProfilesEmuEntry() emuEntry {
 	}
 	return emuEntry{
 		Name:   gameProfilesEntryName,
+		Detail: detail,
+		Status: emuAvailable,
+		Pinned: true,
+	}
+}
+
+// compatibilityEmuEntry is the pinned door to the per-game intelligence
+// panel. It reports catalog coverage without walking the ROM tree, so opening
+// Emulators stays fast on a large SD card.
+func compatibilityEmuEntry() emuEntry {
+	reports, verified, systems := compatStats()
+	detail := fmt.Sprintf("%d report(s) · %d system(s)", reports, systems)
+	if verified > 0 {
+		detail += fmt.Sprintf(" · %d verified", verified)
+	}
+	if reports == 0 {
+		detail = "Per-game reports and boost plans · import a community pack"
+	}
+	return emuEntry{
+		Name:   compatEntryName,
 		Detail: detail,
 		Status: emuAvailable,
 		Pinned: true,
@@ -479,6 +500,11 @@ func emuPanelActivate(config *Config) {
 	if e.Name == gameProfilesEntryName {
 		emuPanel.open = false
 		openGameProfilePanel(true)
+		return
+	}
+	if e.Name == compatEntryName {
+		emuPanel.open = false
+		openCompatPanel(true)
 		return
 	}
 	if e.Name == windowsAppsEntryName {

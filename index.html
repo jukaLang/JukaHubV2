@@ -38,6 +38,13 @@
                     <i class="fas fa-circle-check" aria-hidden="true"></i> <span>Check</span>
                     <span id="validateCount" class="validate-count" aria-hidden="true" hidden>0</span>
                 </button>
+                <button id="deviceBtn" class="app-bar-button device-button compact" type="button" aria-label="Live builder device" aria-haspopup="dialog" title="Push this design to the handheld over Wi-Fi">
+                    <span id="deviceDot" class="device-dot" aria-hidden="true"></span>
+                    <i class="fas fa-wifi" aria-hidden="true"></i> <span class="bar-label">Device</span>
+                </button>
+                <button id="galleryBtn" class="app-bar-button gallery-button compact" type="button" aria-label="Community layout gallery" aria-haspopup="dialog" title="Fork a community layout">
+                    <i class="fas fa-table-cells-large" aria-hidden="true"></i> <span class="bar-label">Gallery</span>
+                </button>
                 <button id="aiToggleBtn" class="app-bar-button ai-toggle-button" type="button" aria-label="Toggle AI assistant" aria-expanded="false" aria-controls="aiPanel">
                     <span class="ai-toggle-icon"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i></span> <span>AI</span>
                 </button>
@@ -753,6 +760,89 @@
         <button type="button" data-action="edit-text"><i class="fas fa-pen"></i> Edit Text</button>
     </div>
 
+    <!-- Live builder: push this design to a running JukaHub over Wi-Fi. -->
+    <div id="devicePanel" class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="deviceTitle" hidden>
+        <div class="guide-backdrop" data-close-device></div>
+        <div class="guide-content device-content">
+            <div class="guide-header">
+                <div>
+                    <h2 id="deviceTitle"><i class="fas fa-wifi" aria-hidden="true"></i> Live builder</h2>
+                    <p class="guide-subtitle">Push this design straight to the handheld. No SD card, no copying files.</p>
+                </div>
+                <button class="close-button" type="button" data-close-device aria-label="Close live builder">
+                    <i class="fas fa-times" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="guide-body device-body">
+                <div class="device-state" id="deviceState" data-state="offline" role="status" aria-live="polite">
+                    <span class="device-dot" aria-hidden="true"></span>
+                    <span id="deviceStateText">Not connected</span>
+                </div>
+
+                <div class="device-field">
+                    <label for="deviceUrl">Device address</label>
+                    <input id="deviceUrl" class="share-url" type="text" inputmode="url" spellcheck="false" autocomplete="off" placeholder="192.168.1.50:8422" aria-describedby="deviceUrlHelp">
+                    <p class="field-help" id="deviceUrlHelp">Shown on the handheld when JukaHub starts, or on <span id="deviceUrlHint">its Live Builder page</span>. Default port 8422.</p>
+                </div>
+
+                <div class="device-field">
+                    <label for="deviceCode">Pairing code</label>
+                    <input id="deviceCode" class="share-url device-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" spellcheck="false" placeholder="6-digit code" aria-describedby="deviceCodeHelp">
+                    <p class="field-help" id="deviceCodeHelp">Six digits shown once on the device. Stored only in this browser.</p>
+                </div>
+
+                <label class="device-auto">
+                    <input type="checkbox" id="deviceAutoPush">
+                    <span>Push automatically after each edit</span>
+                </label>
+
+                <div class="device-actions">
+                    <button id="deviceConnectBtn" class="action-button" type="button"><i class="fas fa-plug" aria-hidden="true"></i> Connect</button>
+                    <button id="devicePullBtn" class="action-button" type="button" disabled><i class="fas fa-cloud-arrow-down" aria-hidden="true"></i> Pull from device</button>
+                    <button id="devicePushBtn" class="action-button primary" type="button" disabled><i class="fas fa-cloud-arrow-up" aria-hidden="true"></i> Push to device</button>
+                </div>
+
+                <p class="device-meta" id="deviceMeta">Tip: keep this page open while you design. Pushes are validated on the device and reload in place.</p>
+                <p class="device-warning" id="deviceWarning" hidden></p>
+            </div>
+            <div class="device-footer">
+                <button id="devicePageBtn" class="action-button small" type="button" disabled><i class="fas fa-arrow-up-right-from-square" aria-hidden="true"></i> Open device page</button>
+                <button class="action-button primary" type="button" data-close-device>Done</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Community layout gallery: fork a design or apply it to the connected device. -->
+    <div id="galleryPanel" class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="galleryTitle" hidden>
+        <div class="guide-backdrop" data-close-gallery></div>
+        <div class="guide-content gallery-content">
+            <div class="guide-header">
+                <div>
+                    <h2 id="galleryTitle"><i class="fas fa-table-cells-large" aria-hidden="true"></i> Community layouts</h2>
+                    <p class="guide-subtitle">Fork one into the editor, or apply it to the handheld in one click.</p>
+                </div>
+                <button class="close-button" type="button" data-close-gallery aria-label="Close layout gallery">
+                    <i class="fas fa-times" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="gallery-toolbar">
+                <div class="search-box gallery-search">
+                    <i class="fas fa-search" aria-hidden="true"></i>
+                    <input type="search" id="gallerySearch" placeholder="Search layouts" aria-label="Search community layouts">
+                </div>
+                <div class="gallery-tags" id="galleryTags" role="group" aria-label="Filter by category"></div>
+            </div>
+            <div class="guide-body gallery-body">
+                <p id="galleryStatus" class="gallery-status" role="status" aria-live="polite">Loading layouts…</p>
+                <div id="galleryGrid" class="gallery-grid"></div>
+            </div>
+            <div class="gallery-footer">
+                <p class="gallery-note">Every layout is a normal jukaconfig.json — fork it, edit it, push it. Export yours and <a href="https://github.com/jukaLang/JukaHubV2" target="_blank" rel="noopener">open a pull request</a> to be featured.</p>
+                <button class="action-button primary" type="button" data-close-gallery>Done</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Design check: config problems the player would hit on the handheld -->
     <div id="validatePanel" class="guide-modal" role="dialog" aria-modal="true" aria-labelledby="validateTitle" hidden>
         <div class="guide-backdrop" data-close-validate></div>
@@ -803,6 +893,9 @@
         <i class="fas fa-eye" aria-hidden="true"></i><span>Preview</span>
     </button>
 
+    <script src="gallery/layouts.js"></script>
     <script src="script.js"></script>
+    <script src="builder-device.js"></script>
+    <script src="builder-gallery.js"></script>
 </body>
 </html>
