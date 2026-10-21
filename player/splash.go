@@ -631,14 +631,19 @@ func drawParticle(renderer *sdl.Renderer, cx, cy, r int32, red, green, blue, alp
 	}
 }
 
-// ShowSplash blocks the caller for splashDuration ms while the boot sequence
-// plays. Any key press or click skips the rest of it.
-func ShowSplash(renderer *sdl.Renderer, config *Config) {
+// ShowSplash plays the boot sequence for the time the boot budget left over.
+// The animation's own timeline is compressed into that window, so a short run
+// still shows the whole arc instead of a frozen frame, and a zero allotment
+// opens the UI immediately. Any key press or click skips the rest of it.
+func ShowSplash(renderer *sdl.Renderer, config *Config, allotted time.Duration) {
+	if allotted <= 0 {
+		return
+	}
 	initSplash()
 	start := time.Now()
 	for {
 		elapsed := time.Since(start).Milliseconds()
-		if elapsed >= int64(splashDuration) {
+		if elapsed >= allotted.Milliseconds() {
 			break
 		}
 
@@ -655,7 +660,10 @@ func ShowSplash(renderer *sdl.Renderer, config *Config) {
 			}
 		}
 
-		tick := uint64(elapsed) + splash.startTick
+		// Map the wall time onto the designed timeline so a 400 ms run is the
+		// same animation played fast rather than a truncated one.
+		scaled := elapsed * int64(splashDuration) / allotted.Milliseconds()
+		tick := uint64(scaled) + splash.startTick
 		renderSplash(renderer, config, tick)
 		renderer.Present()
 		sdl.Delay(16) // ~60fps

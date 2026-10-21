@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -236,12 +237,15 @@ type companionServer struct {
 	root string
 	sink func(companionEvent)
 
-	mu        sync.Mutex
-	ln        net.Listener
-	srv       *http.Server
-	port      int
-	fails     int
-	failSince time.Time
+	mu              sync.Mutex
+	ln              net.Listener
+	srv             *http.Server
+	port            int
+	fails           int
+	failSince       time.Time
+	diagnosticToken string
+	diagnosticUntil time.Time
+	diagnosticText  string
 }
 
 func newCompanionServer(pin, root string, sink func(companionEvent)) *companionServer {
@@ -284,6 +288,9 @@ func (s *companionServer) Stop() {
 	srv := s.srv
 	s.srv = nil
 	s.ln = nil
+	s.diagnosticToken = ""
+	s.diagnosticText = ""
+	s.diagnosticUntil = time.Time{}
 	s.mu.Unlock()
 	if srv == nil {
 		return
@@ -350,12 +357,60 @@ func (s *companionServer) noteFailure() {
 func (s *companionServer) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.handlePage)
+	mux.HandleFunc("/diagnostics", s.handleDiagnostics)
 	mux.HandleFunc("/api/text", s.guard(s.handleText))
 	mux.HandleFunc("/api/key", s.guard(s.handleKey))
 	mux.HandleFunc("/api/open", s.guard(s.handleOpenURL))
 	mux.HandleFunc("/api/upload", s.guard(s.handleUpload))
 	mux.HandleFunc("/api/screen", s.guard(s.handleScreen))
+	// Remote cast: a view-only page and its MJPEG feed. Both are PIN-guarded
+	// like the rest of the API, and both refuse when the cast is off.
+	mux.HandleFunc("/watch", s.guard(s.handleWatch))
+	mux.HandleFunc("/stream", s.guard(s.handleStream))
 	return mux
+}
+
+func (s *companionServer) issueDiagnosticsLink(text string) (string, error) {
+	host := localIPv4()
+	if host == "" {
+		return "", fmt.Errorf("connect to Wi-Fi to create a diagnostics link")
+	}
+	if !s.Running() {
+		return "", fmt.Errorf("the phone companion server is not running")
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	token := hex.EncodeToString(raw)
+	s.mu.Lock()
+	s.diagnosticToken = token
+	s.diagnosticText = text
+	s.diagnosticUntil = time.Now().Add(10 * time.Minute)
+	port := s.port
+	s.mu.Unlock()
+	return fmt.Sprintf("http://%s/diagnostics?token=%s", net.JoinHostPort(host, strconv.Itoa(port)), token), nil
+}
+
+func (s *companionServer) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	got := r.URL.Query().Get("token")
+	s.mu.Lock()
+	want, body, until := s.diagnosticToken, s.diagnosticText, s.diagnosticUntil
+	s.mu.Unlock()
+	if len(got) != len(want) || want == "" || time.Now().After(until) || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+		http.Error(w, "diagnostics link expired or invalid", http.StatusUnauthorized)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="jukahub-diagnostics.txt"`)
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = io.WriteString(w, body)
 }
 
 func (s *companionServer) guard(next http.HandlerFunc) http.HandlerFunc {

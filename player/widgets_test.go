@@ -324,9 +324,13 @@ func TestAutoStartLauncherLifecycle(t *testing.T) {
 	dir := t.TempDir()
 	exe := "/opt/jukahub/JukaHub"
 	prevDir, prevExe := autostartDirFn, autostartExeFn
+	prevTrimui := autostartIsTrimui
+	// Pin the desktop hook: on a handheld this test would otherwise write a
+	// real boot script to the SD card.
+	autostartIsTrimui = func() bool { return false }
 	autostartDirFn = func() (string, error) { return dir, nil }
 	autostartExeFn = func() (string, error) { return exe, nil }
-	t.Cleanup(func() { autostartDirFn, autostartExeFn = prevDir, prevExe })
+	t.Cleanup(func() { autostartDirFn, autostartExeFn, autostartIsTrimui = prevDir, prevExe, prevTrimui })
 
 	if autoStartInstalled() {
 		t.Fatal("a fresh startup directory already reports a launcher")

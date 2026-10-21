@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"math/rand"
+	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -150,7 +151,8 @@ func initScreensaver() {
 
 // screensaverNotifyInput wakes the screensaver on any input.
 func screensaverNotifyInput() {
-	lastScreensaverInput = time.Now()
+	noteUserInputTime(time.Now())
+	ambientNotifyInput()
 	if ss.active {
 		select {
 		case ss.wakeCh <- struct{}{}:
@@ -302,8 +304,28 @@ func deactivateScreensaver() {
 	ss.fadingIn = false
 }
 
-// lastScreensaverInput tracks when the user last interacted.
-var lastScreensaverInput = time.Now()
+// lastInputUnixNano tracks when the user last interacted. It is an atomic
+// because the idle-monitor goroutines read it while the event loop writes it:
+// a plain time.Time there would be a data race, and a torn read on 32-bit ARM.
+var lastInputUnixNano atomic.Int64
+
+func init() { lastInputUnixNano.Store(time.Now().UnixNano()) }
+
+// noteUserInputTime records one interaction for the monitors.
+func noteUserInputTime(t time.Time) {
+	lastInputUnixNano.Store(t.UnixNano())
+}
+
+// userInputAge is how long ago the last interaction happened. A missing
+// timestamp counts as "just now" so a monitor never enters the idle screen
+// before the app has started.
+func userInputAge(now time.Time) time.Duration {
+	ns := lastInputUnixNano.Load()
+	if ns == 0 {
+		return 0
+	}
+	return now.Sub(time.Unix(0, ns))
+}
 
 // startScreensaverMonitor runs a goroutine that watches for idle timeout.
 func startScreensaverMonitor() {
@@ -317,12 +339,18 @@ func startScreensaverMonitor() {
 				select {
 				case <-ss.wakeCh:
 					deactivateScreensaver()
-					lastScreensaverInput = time.Now()
+					noteUserInputTime(time.Now())
 				default:
 				}
 				continue
 			}
-			if time.Since(lastScreensaverInput) > screensaverIdleTimeout {
+			// The dock/ambient screen is the idle screen when it is enabled;
+			// two idle overlays competing for the panel is worse than either
+			// alone. Setting ambientMode=false brings the starfield back.
+			if ambientModeEnabled(appConfig) {
+				continue
+			}
+			if userInputAge(time.Now()) > screensaverIdleTimeout {
 				if !ss.inited {
 					initScreensaver()
 				}

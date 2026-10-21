@@ -73,6 +73,11 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   natively on the handheld, whose SDL_image links libwebp; a desktop runtime that
   ships an SDL2_image without libwebp detects that at startup and skips WebP
   files instead of showing a broken picture.
+* **Dock & ambient** — while charging (after 45 quiet seconds) or idle, the
+  screen becomes a dock display: a large clock, today's weather, the track that
+  is playing and a slideshow from your Photos folder. Y arms a sleep timer, X
+  blanks the panel while audio keeps playing, and an alarm wakes it. Open it by
+  hand from **Start → Ambient**; see [docs/AMBIENT.md](docs/AMBIENT.md).
 * **Favorites** — save links and reopen them later.
 * **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather,
   and **Browser**, a text web browser with GitHub issue quick links; see
@@ -110,15 +115,20 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   plays it in one press and downloads it first when it is missing; on a handheld
   it is selected with the D-pad (`Up` from the card beneath it) and pressed with
   **A**, so no touchscreen is needed. JukaHub hands the screen to the port and
-  closes while it runs (the stock menu returns when the stream ends), and an
-  **Interface language** row switches Chiaki-ng's own menus between its English
-  and Vietnamese catalogues without patching the app. See
+  closes while it runs (the stock menu returns when the stream ends), and
+  **Interface language** rows switch Chiaki-ng's menus between English and
+  Vietnamese, translating the few strings that bypass its catalogue. See
   [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
+* **Smart home** — **Start → Smart Home** drives Home Assistant entities,
+  mirrors every toggle to MQTT, shows the Pi-hole, router and Tailscale state,
+  and connects or disconnects the tunnel. WireGuard is status-only because
+  `wg-quick` needs root. See [docs/SMART_HOME.md](docs/SMART_HOME.md).
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
   (also under **MISC → FTP & IP**), the phone companion that turns a phone
-  into a keyboard, remote and file drop, and **Community & support** for the
+  into a keyboard, remote and file drop, **Remote Cast** to watch the screen
+  live in a browser, and **Community & support** for the
   changelog, bug reports and the anonymous-diagnostics switch. **Power tools**
   adds a gateway or clipboard-host port scan, ping/traceroute, DNS and Wi-Fi
   checks, a hex/JSON/log viewer, clipboard-saved script buttons, rsync and Syncthing checks,
@@ -194,8 +204,29 @@ the phone opens a small page with:
   (the same one FTP publishes), ready for the file browser or player.
 
 The QR code carries a fresh six-digit PIN, so nothing has to be typed on the
-device. The server stops when the card closes, and **Y** issues a new PIN on the
-spot. `JUKAHUB_COMPANION_PORT` overrides the port (default `8317`).
+device. The server runs in the background for the whole session, and **Y**
+issues a new PIN on the spot (which also invalidates every link already shared).
+`JUKAHUB_COMPANION_PORT` overrides the port (default `8317`).
+
+## Cast the screen to a browser
+
+**Menu → Remote Cast** shows a link and a QR code for the device's own screen.
+Open the link on a phone, tablet or laptop on the same Wi-Fi and the page shows
+the handheld live, at up to ten frames a second, with no app to install — the
+stream is plain MJPEG inside an HTML page.
+
+* **A / Enter** starts or stops the cast. It is off by default: the server is
+  always listening, but `/watch` and `/stream` answer `403` until you turn it on.
+* **Y** issues a new PIN and stops the cast, which disconnects whoever was
+  watching; the old link stops authorising immediately.
+* Up to six viewers can watch at once.
+* The viewers get a picture only — no keyboard, remote, upload or settings. The
+  phone-companion page above is the interactive one, and it uses a different
+  surface.
+
+The stream is PIN-guarded like the rest of the companion API, so the link itself
+is the secret: share it only with people on the network you trust. Turn the cast
+off when you are done, or switch off Wi-Fi.
 
 ## Share and remix a design
 
@@ -283,7 +314,9 @@ JukaHub on a PC.
 | [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
 | [PS Remote Play](docs/REMOTE_PLAY.md) | Chiaki-ng install, PS4 pairing, the opt-in PS5 beta and its setup |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
+| [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
+| [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |

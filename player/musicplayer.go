@@ -35,8 +35,15 @@ const (
 	visualMaxH   = 120
 )
 
-// audioFileExtensions are the extensions the playlist accepts.
-var audioFileExtensions = []string{".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus", ".wma"}
+// audioFileExtensions are the extensions the playlist accepts. Everything is
+// decoded by the bundled ffmpeg, so the list is the set of containers that
+// ffmpeg can demux on the handheld: lossless FLAC/WAV/AIFF, DSD (DSF/DFF,
+// decoded to PCM) and the usual lossy formats.
+var audioFileExtensions = []string{
+	".mp3", ".wav", ".ogg", ".m4a", ".flac", ".aac", ".opus", ".wma",
+	".aiff", ".aif", ".aifc", // AIFF / AIFF-C, including 24-bit files
+	".dsf", ".dff", // DSD streams inside a DSF/DFF container
+}
 
 type musicTrack struct {
 	Path     string
@@ -72,6 +79,19 @@ type musicState struct {
 	showLyrics     bool
 	visualizerFull bool
 	lastSave       time.Time // last resume write, to keep SD card writes rare
+
+	// Search panel, screen-off mode and auto-exit timer (musicfeatures.go).
+	searchOpen  bool
+	searchQuery string
+	searchHits  []int
+	searchSel   int
+	screenOff   bool
+	exitUntil   time.Time
+	exitGen     int
+
+	// volHold turns a held volume key into a track skip. It is only touched
+	// on the event thread, so it needs no lock.
+	volHold musicVolumeHold
 
 	visualizer [visualBars]float64
 
@@ -591,6 +611,15 @@ func musicStop() {
 // musicSetSpeed changes the listening speed and restarts the decoder at the
 // same position (ffmpeg's atempo filter is applied at start).
 func musicSetSpeed(v float64) float64 {
+	// The bit-perfect path is unprocessed by definition, and atempo is a
+	// processing step. Rather than silently ignoring the request, say so.
+	if musicEQ.bitPerfect {
+		showToast("Bit-perfect is on — tempo stays at 1x", ToastInfo())
+		music.mu.Lock()
+		music.speed = 1
+		music.mu.Unlock()
+		return 1
+	}
 	v = audioClampSpeed(v)
 	music.mu.Lock()
 	if music.speed == v {
@@ -1063,6 +1092,7 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 var musicRects = struct {
 	prev, playPause, next, stop sdl.Rect
 	shuffle, repeat, favorite   sdl.Rect
+	search, exitTimer           sdl.Rect
 	volDown, volUp, seek        sdl.Rect
 	art                         sdl.Rect // artwork tile; tapping toggles the lyrics view
 	rows                        []sdl.Rect
@@ -1073,6 +1103,13 @@ var musicRects = struct {
 const musicRowHeight = 46
 
 func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
+	musicPEQEnsureLoaded()
+	// Screen-off draws nothing at all: the point of the mode is a dark panel
+	// while the decoder keeps running.
+	if musicScreenOffActive() {
+		renderMusicScreenOff(renderer)
+		return
+	}
 	renderer.SetDrawColor(11, 15, 23, 255)
 	renderer.Clear()
 
@@ -1081,6 +1118,12 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	music.mu.Unlock()
 	if fullVisualizer {
 		renderMusicFullVisualizer(renderer, config)
+		return
+	}
+	// The list-first layout replaces the whole scene body, so it returns before
+	// the Auralis card below is built.
+	if musicLayoutFromConfig(config) == musicLayoutStockOS {
+		renderMusicStockOS(renderer, config)
 		return
 	}
 
@@ -1144,34 +1187,15 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	artSize := int32(236)
 	artX := cardX + 24
 	artY := cardY + (cardH-artSize)/2
-	fillRoundedRect(renderer, artX, artY, artSize, artSize, 16, WithAlpha(ColorPanelRaised, 255))
-	strokeRoundedRect(renderer, artX, artY, artSize, artSize, 16, 1, WithAlpha(ColorBorder, 200))
+	artAlpha := musicArtAlphaNow(config)
+	fillRoundedRect(renderer, artX, artY, artSize, artSize, 16, WithAlpha(ColorPanelRaised, artAlpha))
+	strokeRoundedRect(renderer, artX, artY, artSize, artSize, 16, 1, WithAlpha(ColorBorder, artAlpha))
 	musicUpdateVisualizer()
 	musicRects.art = sdl.Rect{X: artX, Y: artY, W: artSize, H: artSize}
 	if showLyrics && len(lyrics) > 0 {
 		renderLyricsTile(renderer, config, font, lyrics, position, artX, artY, artSize)
 	} else {
-		barW := int32(6)
-		barGap := int32(7)
-		bars := 12
-		totalW := int32(bars)*(barW+barGap) - barGap
-		barBase := artY + artSize - 34
-		for i := 0; i < bars; i++ {
-			h := int32(music.visualizer[(i*visualBars/bars)%visualBars] * 1.1)
-			if h < 6 {
-				h = 6
-			}
-			// Leave room for the state caption above the bars.
-			if h > artSize-116 {
-				h = artSize - 116
-			}
-			bx := artX + (artSize-totalW)/2 + int32(i)*(barW+barGap)
-			col := WithAlpha(accentColor, 220)
-			if !playing || paused {
-				col = WithAlpha(accentColor, 110)
-			}
-			fillRoundedRect(renderer, bx, barBase-h, barW, h, 3, col)
-		}
+		renderMusicVisualizerBars(renderer, playing, paused, artX, artY, artSize, artAlpha)
 	}
 	stateLabel := "Paused"
 	if !playing {
@@ -1218,6 +1242,9 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	}
 	if sleepLeft > 0 {
 		status += "   ·   Sleep " + formatSleepRemaining(sleepLeft)
+	}
+	if exitLeft := musicExitStatusLine(); exitLeft != "" {
+		status += "   ·   " + exitLeft
 	}
 	if len(lyrics) > 0 {
 		if showLyrics {
@@ -1311,7 +1338,23 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 			header += "s"
 		}
 	}
-	renderText(renderer, config, font, ellipsize(font, header, cardW-48), ColorTextSecondary(), cardX+24, listY+16)
+	renderText(renderer, config, font, ellipsize(font, header, cardW-240), ColorTextSecondary(), cardX+24, listY+16)
+
+	// Search and the auto-exit timer live in the list header: the transport row
+	// is already full, and this keeps both reachable by touch and mouse.
+	exitLabel := "Exit"
+	exitW := int32(70)
+	if line := musicExitStatusLine(); line != "" {
+		exitLabel = line
+		if tw, _, _ := font.SizeUTF8(exitLabel); int32(tw)+24 > exitW {
+			exitW = int32(tw) + 24
+		}
+	}
+	exitX := cardX + cardW - 24 - exitW
+	searchW := int32(96)
+	searchX := exitX - 12 - searchW
+	musicRects.exitTimer = musicHeaderButton(renderer, config, font, exitX, listY+11, exitW, 32, exitLabel, musicExitRemaining() > 0)
+	musicRects.search = musicHeaderButton(renderer, config, font, searchX, listY+11, searchW, 32, "Search", musicSearchActive())
 
 	rowsTop := listY + 54
 	visible := int((listH - 66) / musicRowHeight)
@@ -1371,14 +1414,17 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	// Footer hints, on two lines: the player gained keys, and one line no
 	// longer fits the panel at the smallest text size.
 	hints := []string{
-		"ENTER Play   SPACE Pause   LEFT/RIGHT Seek   -/+ Volume   [ ] Speed   T Sleep",
-		"M Shuffle   R Repeat   F Favorite   Q Play next   L Lyrics   V Visualizer   B Back",
+		"ENTER Play   SPACE Pause   LEFT/RIGHT Seek   hold -/+ Skip   [ ] Speed   T Sleep   E Exit",
+		"M Shuffle   R Repeat   F Favorite   Q Play next   L Lyrics   G PEQ   / Search   O Screen off   B Back",
 	}
 	for i, line := range hints {
 		hw, _, _ := font.SizeUTF8(line)
 		renderText(renderer, config, font, line, sdl.Color{R: 110, G: 125, B: 150, A: 170},
 			(screenWidth-int32(hw))/2, screenHeight-52+int32(i)*18)
 	}
+
+	renderMusicSearchOverlay(renderer, config)
+	renderMusicPEQPanel(renderer, config)
 }
 
 // musicButton draws one rounded transport button and returns its rect.
@@ -1405,6 +1451,27 @@ func musicButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w
 // HandleMusicClick processes mouse/touch clicks on the audio player. It reports
 // whether the click was consumed.
 func HandleMusicClick(mx, my int32) bool {
+	// A dark panel wakes on a tap instead of pressing whatever sits underneath.
+	if musicScreenOffActive() {
+		musicSetScreenOff(false)
+		return true
+	}
+	// The PEQ panel is modal too, and a tap on a band selects it.
+	if HandleMusicPEQClick(mx, my) {
+		return true
+	}
+	// The search panel is modal for clicks: a tap on a row plays it, and a tap
+	// elsewhere is swallowed so it cannot trigger the hidden transport.
+	if musicSearchActive() {
+		for _, hit := range musicSearchRowHits {
+			if pointInRect(mx, my, hit.rect) {
+				musicSelectSearchHit(hit.track)
+				return true
+			}
+		}
+		return true
+	}
+
 	if !musicRects.valid {
 		return false
 	}
@@ -1462,6 +1529,16 @@ func HandleMusicClick(mx, my int32) bool {
 		PlayNavSound()
 		return true
 	}
+	if musicRects.search.W > 0 && pointInRect(mx, my, musicRects.search) {
+		musicOpenSearch()
+		return true
+	}
+	if musicRects.exitTimer.W > 0 && pointInRect(mx, my, musicRects.exitTimer) {
+		minutes := musicCycleExitTimer()
+		showToast(musicTimerToast("Auto-exit", minutes), ToastInfo())
+		PlayNavSound()
+		return true
+	}
 	if pointInRect(mx, my, musicRects.volUp) {
 		musicAdjustVolume(0.1)
 		PlayNavSound()
@@ -1497,6 +1574,22 @@ func HandleMusicClick(mx, my int32) bool {
 
 func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 	if e == nil || e.Type != sdl.KEYDOWN {
+		return
+	}
+
+	// A dark panel owns the first key: either it wakes the screen or it is
+	// ignored, depending on the configured mode.
+	if musicScreenOffActive() {
+		if musicHandleScreenOffKey(e, musicScreenModeFromConfig(config)) {
+			return
+		}
+	}
+	// The equaliser panel owns the D-pad while it is up.
+	if handleMusicPEQKey(e) {
+		return
+	}
+	// The search panel keeps Up/Down/Enter/Esc after the keyboard is dismissed.
+	if musicHandleSearchKey(e) {
 		return
 	}
 
@@ -1587,10 +1680,20 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		musicSeekBy(-10)
 	case sdl.K_RIGHT:
 		musicSeekBy(10)
-	case sdl.K_MINUS, sdl.K_KP_MINUS:
-		musicAdjustVolume(-0.1)
-	case sdl.K_EQUALS, sdl.K_PLUS, sdl.K_KP_PLUS:
-		musicAdjustVolume(0.1)
+	case sdl.K_MINUS, sdl.K_KP_MINUS, sdl.K_EQUALS, sdl.K_PLUS, sdl.K_KP_PLUS, sdl.K_VOLUMEUP, sdl.K_VOLUMEDOWN:
+		// A tap changes the volume; holding the same key skips a track.
+		musicHandleVolumeKey(e)
+	case sdl.K_SLASH, sdl.K_F2:
+		musicOpenSearch()
+	case sdl.K_g:
+		musicPEQTogglePanel(config)
+		PlayNavSound()
+	case sdl.K_e:
+		minutes := musicCycleExitTimer()
+		showToast(musicTimerToast("Auto-exit", minutes), ToastInfo())
+		PlayNavSound()
+	case sdl.K_o:
+		musicToggleScreenOff()
 	case sdl.K_ESCAPE:
 		music.mu.Lock()
 		full := music.visualizerFull
@@ -1599,9 +1702,12 @@ func handleMusicInput(e *sdl.KeyboardEvent, config *Config) {
 		}
 		music.mu.Unlock()
 		if !full {
+			musicLeavePlayer(config)
 			goBackScene(config)
 		}
 		PlayBackSound()
+	case sdl.K_k:
+		openMusicSettingsPanel(config)
 	}
 }
 
@@ -1677,7 +1783,44 @@ func execCommand(name string, args ...string) *exec.Cmd {
 // its own input.
 
 func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
+	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
+		return false
+	}
+	// The audio settings panel is modal: while it is up it owns the pad.
+	if musicSettings.open {
+		return ctrlMusicSettings(e, appConfig)
+	}
+	// Dark panel first: Select wakes it, and the mode decides whether the
+	// transport buttons still act.
+	if musicScreenOffActive() {
+		if musicHandleScreenOffButton(e.Button, musicScreenModeFromConfig(appConfig)) {
+			return true
+		}
+	}
+	// While the search panel is up it takes the D-pad and the face buttons.
+	if musicSearchActive() {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			musicSearchMoveSelection(-1)
+			return true
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			musicSearchMoveSelection(1)
+			return true
+		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+			if !musicSearchPlay() {
+				showToast("No song matches those initials", ToastInfo())
+			}
+			return true
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			musicCloseSearch()
+			return true
+		}
+	}
+
 	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_X:
+		musicArmSearchChord()
+		musicTogglePause()
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		music.mu.Lock()
 		if music.cursor > 0 {
@@ -1698,11 +1841,10 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		idx := music.cursor
 		music.mu.Unlock()
 		musicPlayTrack(idx)
-	case sdl.CONTROLLER_BUTTON_X:
-		musicTogglePause()
 	case sdl.CONTROLLER_BUTTON_Y:
-		// Y favorites the playing track. Pause already has X, so the second
-		// button is better spent on the library than duplicating it.
+		// Y arms the Y+Left chord (background playback) as well as favoriting:
+		// a Left pressed within the window consumes the chord instead.
+		musicArmBackgroundChord()
 		if fav, name, ok := musicFavoriteCurrent(); ok {
 			if fav {
 				showToast("Favorite: "+name, ToastSuccess())
@@ -1717,7 +1859,10 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		music.visualizerFull = !music.visualizerFull
 		music.mu.Unlock()
 		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+	case sdl.CONTROLLER_BUTTON_BACK:
+		// Select darkens the panel; the panel keeps playing. B still goes back.
+		musicToggleScreenOff()
+	case sdl.CONTROLLER_BUTTON_B:
 		music.mu.Lock()
 		full := music.visualizerFull
 		if full {
@@ -1725,13 +1870,25 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		}
 		music.mu.Unlock()
 		if !full {
+			musicLeavePlayer(appConfig)
 			goBackScene(appConfig)
 		}
 		PlayBackSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		if musicTakeBackgroundChord() {
+			musicToggleBackground(appConfig)
+			return true
+		}
 		musicSeekBy(-10)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		// X then Right is the search chord; undo the pause X applied so opening
+		// search does not stop the music, then show the panel.
+		if musicTakeSearchChord() {
+			musicTogglePause()
+			musicOpenSearch()
+			return true
+		}
 		musicSeekBy(10)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:

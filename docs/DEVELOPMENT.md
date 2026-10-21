@@ -76,6 +76,34 @@ JukaHubV2/
    network monitor, FTP/SSH servers, screensaver, notifications — each behind a
    safe-mode check.
 
+The boot budget is two seconds from process start to a usable first frame,
+managed in `startup.go`. `startupMarkNow` records a cheap timestamp per phase
+(pre-SDL, SDL, config, modules, window, splash, first frame) and
+`startupLog` prints one line with the deltas and the total:
+
+```
+startup: pre-sdl=0ms sdl=+21ms config=+5ms modules=+101ms window=+180ms splash=+780ms first-frame=+124ms total=1210ms target=2000ms
+```
+
+The splash is not a fixed animation: it receives what is left of the budget
+after the phases above, minus a reserve for the first frame (300 ms, or half the
+boot cost when the boot is slower than that). It is capped at 750 ms and
+skipped entirely when less than 250 ms remain, so a slow card opens the UI
+directly instead of adding an animation on top. The whole 3.6 s splash timeline
+is compressed into whatever window it gets, so a short run still shows the
+complete sequence.
+
+Two environment variables exist for measuring and tuning:
+
+| Variable | Effect |
+|----------|--------|
+| `JUKAHUB_STARTUP_TARGET_MS` | boot budget in ms (500–30000), default 2000 |
+| `JUKAHUB_STARTUP_BENCH=1` | exit after the first frame, so a headless run can be timed |
+
+`JUKAHUB_STARTUP_BENCH=1` with `SDL_VIDEODRIVER=dummy` is how boot time is
+checked without a display; on a development machine the reported total is
+~1.2 s and the wall time including process start ~1.3 s.
+
 ### Render loop and cadence
 
 One loop per frame: poll events → advance animation state → render the scene

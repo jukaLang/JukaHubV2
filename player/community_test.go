@@ -258,8 +258,8 @@ func TestCommunityPanelRender(t *testing.T) {
 	if communityPanelRect.W <= 0 || communityPanelRect.H <= 0 {
 		t.Fatalf("panel was not measured: %+v", communityPanelRect)
 	}
-	if len(communityRowRects) != 4 {
-		t.Fatalf("row rects = %d, want 4", len(communityRowRects))
+	if len(communityRowRects) != 6 {
+		t.Fatalf("row rects = %d, want 6", len(communityRowRects))
 	}
 
 	communityPanel.page = communityPageChangelog

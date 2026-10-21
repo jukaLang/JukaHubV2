@@ -48,8 +48,14 @@ if [ -n "$UI_PID" ]; then
     [ -n "$UI_PID" ] && kill -9 $UI_PID 2>/dev/null
 fi
 
-# A short settle so the display is free before SDL grabs it.
-sleep 1
+# A short settle so the display is free before SDL grabs it. This used to be an
+# unconditional second on every launch; when MainUI is already gone the
+# framebuffer is free, so the wait is only paid if the launcher is still there.
+if command -v pidof >/dev/null 2>&1; then
+    [ -n "$(pidof MainUI 2>/dev/null)" ] && sleep 1
+else
+    sleep 1
+fi
 
 # ------------------------------------------------------------- environment
 # SDL2 2.26.1 + SDL2_image + SDL2_ttf already live in the device rootfs

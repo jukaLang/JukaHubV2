@@ -5,7 +5,11 @@ package main
 // away from by the normal element dispatcher.
 
 import (
+	"fmt"
+	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -14,33 +18,49 @@ type onboardingStep struct {
 	title string
 	body  string
 	hint  string
+	kind  string
 }
 
 var onboardingSteps = []onboardingStep{
 	{
 		title: "Welcome to JukaHub",
-		body:  "Home is your launchpad. Movies, music, files, games and settings all start from here.",
-		hint:  "You can leave this tour at any time.",
+		body:  "Let’s get your handheld ready. This short setup checks the basics, then shows you where everything lives.",
+		hint:  "You can skip the setup or replay it later from Settings.",
 	},
 	{
-		title: "Move with the D-pad",
-		body:  "Use the D-pad or arrow keys to move, A or Enter to select, and B or Escape to go back. The on-screen footer always shows the current controls.",
-		hint:  "Every screen keeps the same A / B language.",
+		title: "Connect to Wi-Fi",
+		body:  "Wi-Fi enables updates, weather, companion controls and artwork downloads. JukaHub will open your system network settings.",
+		hint:  "Network status is shown below. Press F or select the button to open Wi-Fi settings.",
+		kind:  "wifi",
 	},
 	{
-		title: "The top bar is alive",
-		body:  "The clock opens the calendar. The bell opens notifications, downloads and update messages. Both work from any screen.",
-		hint:  "Unread notifications show a red badge.",
+		title: "Set your time zone",
+		body:  "Correct local time keeps the clock, alarms and release dates consistent. This opens your device’s date and time settings.",
+		hint:  "JukaHub reads the time zone from the operating system. Restart JukaHub if the clock does not update.",
+		kind:  "timezone",
 	},
 	{
-		title: "Make it yours",
-		body:  "Settings > Appearance changes button, label and input colours. Theme Presets has complete palettes, and Smart Widgets adds battery saver and time-of-day themes.",
-		hint:  "Changes preview live before you save.",
+		title: "Choose a theme",
+		body:  "Preview a complete palette now. You can change it again any time in Settings > Appearance.",
+		hint:  "Press F or select the button to cycle through the built-in themes.",
+		kind:  "theme",
 	},
 	{
-		title: "There is more inside",
-		body:  "Open the Start menu for Games, Music, Notes and Calculator. Tools adds terminal, file servers, power tools and device monitors.",
-		hint:  "Have fun — and press F1 for shortcuts.",
+		title: "Scan your ROMs",
+		body:  "JukaHub checks the usual Roms folders for supported files. It only reads filenames and does not move or edit your games.",
+		hint:  "Press F or select the button to scan again after adding games.",
+		kind:  "roms",
+	},
+	{
+		title: "Fetch game artwork",
+		body:  "When online, JukaHub can look up box art from the public Libretro thumbnails collection and save matches to its data folder.",
+		hint:  "This is optional. Unmatched titles are left unchanged.",
+		kind:  "artwork",
+	},
+	{
+		title: "Move around JukaHub",
+		body:  "Use the D-pad or arrow keys to move, A or Enter to select, and B or Escape to go back. Home, Start and Tools make the main features easy to find.",
+		hint:  "The on-screen footer shows the controls for each screen.",
 	},
 }
 
@@ -50,6 +70,9 @@ var onboarding = struct {
 	enter  uiEnter
 	next   sdl.Rect
 	skip   sdl.Rect
+	action sdl.Rect
+	info   string
+	roms   *romScanReport
 }{
 	next: sdl.Rect{},
 	skip: sdl.Rect{},
@@ -78,6 +101,9 @@ func onboardingStart() {
 	onboarding.enter.begin(uiClockMS(), uiPanelEnterMS)
 	onboarding.next = sdl.Rect{}
 	onboarding.skip = sdl.Rect{}
+	onboarding.action = sdl.Rect{}
+	onboarding.info = ""
+	onboarding.roms = nil
 }
 
 func onboardingFinish(config *Config, skipped bool) {
@@ -98,13 +124,145 @@ func onboardingAdvance(config *Config) {
 		return
 	}
 	onboarding.step++
+	onboarding.action = sdl.Rect{}
 	onboarding.enter.begin(uiClockMS(), 180)
 	PlayNavSound()
+}
+
+func onboardingActionLabel(kind string) string {
+	switch kind {
+	case "wifi":
+		return "Open Wi-Fi settings"
+	case "timezone":
+		return "Open date & time settings"
+	case "theme":
+		return "Preview next theme"
+	case "roms":
+		return "Scan ROM folders"
+	case "artwork":
+		return "Fetch game artwork"
+	default:
+		return ""
+	}
+}
+
+func onboardingStatus(config *Config, kind string) string {
+	switch kind {
+	case "wifi":
+		return "Network: " + NetworkStatus()
+	case "timezone":
+		return "Current time zone: " + time.Now().Location().String()
+	case "theme":
+		if name, ok := customString(config.Variables.Custom, "theme_preset"); ok && name != "" {
+			return "Current theme: " + name
+		}
+		return "Current theme: dark"
+	case "roms":
+		if onboarding.roms == nil {
+			return "ROM scan has not run yet."
+		}
+		return fmt.Sprintf("Found %d ROM(s) across %d system(s).", len(onboarding.roms.Games), len(onboarding.roms.Counts))
+	case "artwork":
+		return artworkFetchSummary()
+	default:
+		return ""
+	}
+}
+
+func openFirstRunSettings(kind string) error {
+	var command string
+	var args []string
+	switch runtime.GOOS {
+	case "windows":
+		command = "rundll32"
+		target := "ms-settings:network-wifi"
+		if kind == "timezone" {
+			target = "ms-settings:dateandtime"
+		}
+		args = []string{"url.dll,FileProtocolHandler", target}
+	case "darwin":
+		command = "open"
+		target := "x-apple.systempreferences:com.apple.preference.network"
+		if kind == "timezone" {
+			target = "x-apple.systempreferences:com.apple.Date-Time-Settings.extension"
+		}
+		args = []string{target}
+	default:
+		command = "gnome-control-center"
+		page := "wifi"
+		if kind == "timezone" {
+			page = "datetime"
+		}
+		if _, err := exec.LookPath(command); err == nil {
+			args = []string{page}
+		} else if kind == "wifi" {
+			command = "nm-connection-editor"
+		} else {
+			return fmt.Errorf("open Date & Time from your device settings")
+		}
+	}
+	cmd := exec.Command(command, args...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+func onboardingPerformAction(config *Config) {
+	if config == nil || onboarding.step < 0 || onboarding.step >= len(onboardingSteps) {
+		return
+	}
+	kind := onboardingSteps[onboarding.step].kind
+	switch kind {
+	case "wifi", "timezone":
+		if err := openFirstRunSettings(kind); err != nil {
+			onboarding.info = err.Error()
+			ShowToast(err.Error(), ToastKindInfo)
+			return
+		}
+		onboarding.info = "System settings opened. Return here when you are ready."
+	case "theme":
+		names := ListThemePresets()
+		if len(names) == 0 {
+			return
+		}
+		current, _ := customString(config.Variables.Custom, "theme_preset")
+		index := 0
+		for i, name := range names {
+			if name == current {
+				index = (i + 1) % len(names)
+				break
+			}
+		}
+		applyThemePreset(config, names[index], false)
+		onboarding.info = "Previewing " + names[index] + "."
+	case "roms":
+		report := scanROMLibrary(romLibraryRoots())
+		onboarding.roms = &report
+		onboarding.info = fmt.Sprintf("Scan complete: %d ROM(s) across %d system(s).", len(report.Games), len(report.Counts))
+	case "artwork":
+		if onboarding.roms == nil {
+			report := scanROMLibrary(romLibraryRoots())
+			onboarding.roms = &report
+		}
+		if len(onboarding.roms.Games) == 0 {
+			onboarding.info = "No supported ROMs found. Scan folders after adding games."
+			return
+		}
+		if startROMArtworkFetch(onboarding.roms.Games) {
+			onboarding.info = "Artwork fetch started in the background."
+		} else {
+			onboarding.info = "An artwork fetch is already running."
+		}
+	}
+	PlayActivateSound()
 }
 
 func onboardingBack() {
 	if onboarding.step > 0 {
 		onboarding.step--
+		onboarding.action = sdl.Rect{}
 		onboarding.enter.begin(uiClockMS(), 180)
 		PlayNavSound()
 	}
@@ -116,6 +274,10 @@ func handleOnboardingKey(e *sdl.KeyboardEvent) bool {
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+		onboardingAdvance(appConfig)
+	case sdl.K_f:
+		onboardingPerformAction(appConfig)
+	case sdl.K_RIGHT:
 		onboardingAdvance(appConfig)
 	case sdl.K_LEFT:
 		onboardingBack()
@@ -135,6 +297,8 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_START:
 		onboardingAdvance(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		onboardingPerformAction(config)
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		onboardingBack()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
@@ -151,6 +315,10 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 func handleOnboardingMouse(mx, my int32, config *Config) bool {
 	if !onboarding.active {
 		return false
+	}
+	if pointInRect(mx, my, onboarding.action) {
+		onboardingPerformAction(config)
+		return true
 	}
 	if pointInRect(mx, my, onboarding.next) {
 		onboardingAdvance(config)
@@ -262,6 +430,19 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	if hintY < cy+cardH-140 {
 		renderText(renderer, config, smallFont, step.hint, ColorTextTertiary(), textX, hintY)
 	}
+	status := onboardingStatus(config, step.kind)
+	if status != "" {
+		statusY := hintY + int32(smallFont.Height()) + 8
+		if statusY < cy+cardH-162 {
+			renderText(renderer, config, smallFont, ellipsize(smallFont, status, textW), ColorTextSecondary(), textX, statusY)
+		}
+	}
+	if onboarding.info != "" {
+		infoY := hintY + 2*int32(smallFont.Height()) + 14
+		if infoY < cy+cardH-162 {
+			renderText(renderer, config, smallFont, ellipsize(smallFont, onboarding.info, textW), accent, textX, infoY)
+		}
+	}
 
 	// Progress dots.
 	dotY := cy + cardH - 92
@@ -272,6 +453,21 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		} else {
 			fillCircle(renderer, dx+4, dotY+3, 3, WithAlpha(ColorTextTertiary(), 140))
 		}
+	}
+	onboarding.action = sdl.Rect{}
+	if label := onboardingActionLabel(step.kind); label != "" {
+		actionW := int32(300)
+		if actionW > cardW-104 {
+			actionW = cardW - 104
+		}
+		actionH := int32(42)
+		actionY := cy + cardH - 150
+		onboarding.action = UIButton(renderer, config, sdl.Rect{X: textX, Y: actionY, W: actionW, H: actionH}, label, UIButtonStyle{
+			Variant:    UIButtonGhost,
+			LabelColor: accent,
+			Font:       smallFont,
+			Radius:     RadiusMD,
+		}, UIButtonState{})
 	}
 
 	// Skip and Next buttons.
@@ -304,7 +500,7 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 
 	// Footer hint. Use words, not key glyphs, so it survives any controller
 	// mapping.
-	footer := "Left / Right to move • A or Enter to continue • B to skip"
+	footer := "Left / Right move · A / Enter next · F / X action · B skip"
 	fw, _, _ := smallFont.SizeUTF8(footer)
 	renderText(renderer, config, smallFont, footer, WithAlpha(ColorTextTertiary(), 170),
 		cx+(cardW-int32(fw))/2, cy+cardH-18)

@@ -16,7 +16,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"image"
 	"image/png"
 	"net/http"
 	"sync"
@@ -56,6 +55,22 @@ type companionShotState struct {
 	waiters []chan struct{} // one per waiting request, all closed by the capture
 	png     []byte
 	at      time.Time
+
+	// Streaming (companion_cast.go). jpeg is the newest encoded frame for the
+	// MJPEG feed; seq lets a viewer skip frames it already sent without
+	// re-sending the same picture.
+	jpeg    []byte
+	jpegSeq uint64
+	jpegAt  time.Time
+	// raw is the newest captured framebuffer, kept so a viewer that connects
+	// between captures gets a frame immediately instead of a timeout.
+	raw      []byte
+	rawW     int32
+	rawH     int32
+	rawPitch int
+	rawAt    time.Time
+
+	streamWaiters []chan struct{} // one per waiting viewer
 }
 
 var companionShot companionShotState
@@ -109,6 +124,100 @@ func companionScreenPending() bool {
 	return len(companionShot.waiters) > 0
 }
 
+// companionStreamDue reports whether the capture hook should run for the cast:
+// there are viewers and the last encoded frame is older than the frame
+// interval, so a 60 fps loop still encodes ten frames a second.
+func companionStreamDue() bool {
+	if castViewerCount() == 0 || !castIsEnabled() {
+		return false
+	}
+	companionShot.mu.Lock()
+	defer companionShot.mu.Unlock()
+	return time.Since(companionShot.jpegAt) >= castFrameInterval
+}
+
+// publishCompanionPixels stores the captured framebuffer and, while viewers are
+// watching, the JPEG the stream sends. waiters receive the PNG exactly as
+// before, so /api/screen keeps its behaviour.
+func publishCompanionPixels(pixels []byte, w, h int32, pitch int, png, jpeg []byte) {
+	companionShot.mu.Lock()
+	companionShot.raw = pixels
+	companionShot.rawW, companionShot.rawH, companionShot.rawPitch = w, h, pitch
+	companionShot.rawAt = time.Now()
+	if len(png) > 0 {
+		companionShot.png = png
+		companionShot.at = companionShot.rawAt
+	}
+	if len(jpeg) > 0 {
+		companionShot.jpeg = jpeg
+		companionShot.jpegSeq++
+		companionShot.jpegAt = companionShot.rawAt
+	}
+	// Only wake the consumers this capture actually served. A screenshot
+	// request that arrived while a JPEG was being encoded keeps waiting for a
+	// frame with its PNG instead of getting an empty answer.
+	var waiters, streamWaiters []chan struct{}
+	if len(png) > 0 {
+		waiters = companionShot.waiters
+		companionShot.waiters = nil
+	}
+	if len(jpeg) > 0 {
+		streamWaiters = companionShot.streamWaiters
+		companionShot.streamWaiters = nil
+	}
+	companionShot.mu.Unlock()
+	for _, w := range waiters {
+		close(w)
+	}
+	for _, w := range streamWaiters {
+		close(w)
+	}
+}
+
+// requestCompanionStreamFrame returns the newest JPEG newer than after. When
+// nothing newer is ready it waits for the render loop, but never longer than
+// timeout, so a viewer with a stalled device reconnects instead of hanging.
+func requestCompanionStreamFrame(after uint64, timeout time.Duration) ([]byte, uint64, bool) {
+	companionShot.mu.Lock()
+	if len(companionShot.jpeg) > 0 && companionShot.jpegSeq > after &&
+		time.Since(companionShot.jpegAt) < 2*time.Second {
+		frame, seq := companionShot.jpeg, companionShot.jpegSeq
+		companionShot.mu.Unlock()
+		return frame, seq, true
+	}
+	wait := make(chan struct{})
+	companionShot.streamWaiters = append(companionShot.streamWaiters, wait)
+	companionShot.mu.Unlock()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-wait:
+	case <-timer.C:
+		removeCompanionStreamWaiter(wait)
+	}
+
+	companionShot.mu.Lock()
+	defer companionShot.mu.Unlock()
+	if len(companionShot.jpeg) == 0 || companionShot.jpegSeq <= after {
+		return nil, after, false
+	}
+	return companionShot.jpeg, companionShot.jpegSeq, true
+}
+
+// removeCompanionStreamWaiter drops a timed-out viewer so a later capture does
+// not close a channel nobody reads.
+func removeCompanionStreamWaiter(wait chan struct{}) {
+	companionShot.mu.Lock()
+	defer companionShot.mu.Unlock()
+	for i, w := range companionShot.streamWaiters {
+		if w == wait {
+			companionShot.streamWaiters = append(companionShot.streamWaiters[:i], companionShot.streamWaiters[i+1:]...)
+			return
+		}
+	}
+}
+
 // removeCompanionWaiter drops a timed-out request so a later capture does not
 // close a channel nobody is reading.
 func removeCompanionWaiter(wait chan struct{}) {
@@ -138,7 +247,14 @@ func publishCompanionFrame(frame []byte) {
 // captureCompanionScreen grabs the framebuffer for a waiting request. It must
 // be called from the render thread, after the frame is drawn.
 func captureCompanionScreen(renderer *sdl.Renderer) {
-	if renderer == nil || !companionScreenPending() {
+	if renderer == nil {
+		return
+	}
+	// A screenshot request wants a PNG; a cast viewer wants a JPEG at the frame
+	// interval. Either one is enough reason to read the framebuffer.
+	wantPNG := companionScreenPending()
+	wantJPEG := companionStreamDue()
+	if !wantPNG && !wantJPEG {
 		return
 	}
 	w, h, err := renderer.GetOutputSize()
@@ -165,12 +281,21 @@ func captureCompanionScreen(renderer *sdl.Renderer) {
 	pitch := int(surface.Pitch)
 	surface.Unlock()
 
-	frame, err := encodeScreenshotPNG(pixels, w, h, pitch)
-	if err != nil {
+	var pngFrame, jpegFrame []byte
+	if wantPNG {
+		if encoded, err := encodeScreenshotPNG(pixels, w, h, pitch); err == nil {
+			pngFrame = encoded
+		}
+	}
+	if wantJPEG {
+		if encoded, err := encodeCompanionJPEG(pixels, w, h, pitch); err == nil {
+			jpegFrame = encoded
+		}
+	}
+	if len(pngFrame) == 0 && len(jpegFrame) == 0 {
 		return
 	}
-
-	publishCompanionFrame(frame)
+	publishCompanionPixels(pixels, w, h, pitch, pngFrame, jpegFrame)
 }
 
 // encodeScreenshotPNG turns SDL's ARGB8888 rows into a PNG. The in-memory byte
@@ -186,17 +311,9 @@ func encodeScreenshotPNG(pixels []byte, w, h int32, pitch int) ([]byte, error) {
 	if len(pixels) < pitch*int(h) {
 		return nil, errors.New("screenshot buffer is truncated")
 	}
-	img := image.NewNRGBA(image.Rect(0, 0, int(w), int(h)))
-	for y := 0; y < int(h); y++ {
-		row := pixels[y*pitch : y*pitch+int(w)*4]
-		dst := img.Pix[y*img.Stride : y*img.Stride+int(w)*4]
-		for x := 0; x < int(w); x++ {
-			b, g, r, a := row[x*4], row[x*4+1], row[x*4+2], row[x*4+3]
-			if a == 0 {
-				a = 255 // an opaque frame, even if the surface left alpha clear
-			}
-			dst[x*4], dst[x*4+1], dst[x*4+2], dst[x*4+3] = r, g, b, a
-		}
+	img, err := companionFrameImage(pixels, w, h, pitch)
+	if err != nil {
+		return nil, err
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {

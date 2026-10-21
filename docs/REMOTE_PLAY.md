@@ -111,16 +111,40 @@ reports a missing Python or SDL2 while still letting you try the launch.
 ## Interface language
 
 Chiaki-ng ships its own Vietnamese and English catalogues and stores the choice
-as `"language": "VI"` or `"EN"` in `Apps/Chiaki/settings.json`. No translation
-patch is needed — JukaHub flips that single key:
+as `"language": "VI"` or `"EN"` in `Apps/Chiaki/settings.json`. The PS5 beta
+keeps a separate file in `Apps/Chiaki-PS5/settings.json`.
 
-* **Start → PS Remote Play → Interface language** toggles EN/VI and keeps every
-  other setting and pairing key untouched.
-* A fresh install from JukaHub starts in English. An existing `settings.json`
-  is never overwritten; use the row (or the port's own Settings screen, where
-  the switch is labelled `VI`/`EN`) to change it.
-* Some diagnostics printed by the port's launcher stay Vietnamese; only the
-  app's menus come from the translation catalogue.
+**Start → PS Remote Play → Interface language** (and **PS5 interface
+language** when the beta is installed) toggles EN/VI and keeps every other
+setting and pairing key untouched. A fresh install from JukaHub starts in
+English even though every release ZIP ships `settings.json` with
+`"language": "VI"`: the installer rewrites that one key on a first install and
+never touches a language the user already chose.
+
+The catalogue is not the whole UI. Five files carry text written before it
+existed, so JukaHub also rewrites those literals in place, in whichever language
+the settings select, before the port starts:
+
+| File | Text |
+|------|------|
+| `rh/i18n.py` | adds the missing `pair_required` key to both catalogues |
+| `rh/screens/home.py` | the "not paired" toast, which used to print the raw key |
+| `rh/chiaki.py` | stream start and failure messages shown on the home screen |
+| `rh/screens/pair.py` | the reason appended to `Pair failed: %s` |
+| `rh/ps5_regist.py` | the PS5 Account-ID and helper errors shown while pairing |
+
+Each rewrite is an exact full-string match in a known file: protocol code,
+settings and pairing keys are never touched, a release that words a line
+differently is left alone, and the file is replaced through a temporary file so
+a card pulled mid-write cannot truncate a Python module. Switching back to
+Vietnamese restores the original wording of those messages; the two catalogue
+fixes stay in both languages, because a missing key and a broken toast are bugs
+rather than translation. The patch runs again before every launch, so a port
+update that replaces these files is translated automatically.
+
+Some diagnostics printed by the port's launcher stay Vietnamese, and so do the
+GitHub issue bodies the port's reporter builds; only the menus and the messages
+listed above are translated.
 
 ## Why JukaHub does not embed its own client
 
@@ -131,6 +155,13 @@ all of that protocol work rather than just a UI, and this handheld has neither
 Vulkan nor the memory for the upstream Qt client. The TrimUI port exists
 because it already did that work for this hardware; JukaHub's job is to
 install, verify, launch and configure it.
+
+The same reasoning rules out replacing the port's menu with a JukaHub-drawn
+SDL2 screen: the menu is only the shell around host discovery, the pairing
+protocol and the native stream helper, so a replacement would still have to
+drive all three. Rewriting the handful of untranslated strings is the smaller,
+reversible change, and it keeps the port's own screens — which the author
+updates — intact.
 
 ## Install the PS5 beta
 

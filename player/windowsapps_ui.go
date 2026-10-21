@@ -178,7 +178,7 @@ func windowsAppsPanelActivate() {
 	}
 	entry := entries[winAppsPanel.cursor]
 	if err := launchWindowsApp(entry); err != nil {
-		ShowToast("Could not launch "+entry.Title+": "+err.Error(), ToastKindError)
+		showLaunchFailureDialog(entry.Title, err, "")
 		return
 	}
 	winAppsPanel.open = false

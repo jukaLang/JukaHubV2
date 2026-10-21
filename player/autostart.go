@@ -4,9 +4,16 @@ package main
 //
 // The setting is off by default and never changes anything on disk until the
 // user turns it on: enabling it writes a launcher into the platform's standard
-// startup location, disabling it removes that launcher again. On the handheld
-// (TrimUI) the OS launcher owns autostart, so the setting reports that instead
-// of pretending to work.
+// startup location, disabling it removes that launcher again. Only JukaHub's own
+// file is ever written or removed.
+//
+// Two kinds of hook are supported:
+//   - Desktop: a freedesktop .desktop file (or a .cmd on Windows) in the
+//     per-user autostart folder.
+//   - TrimUI: an SD-card boot script in System/starts, which the firmware's
+//     runtrimui.sh runs at boot. That directory is the community-documented
+//     hook for stock and CrossMix firmware; the app creates it when missing and
+//     never touches any other script in it.
 
 import (
 	"fmt"
@@ -21,13 +28,82 @@ import (
 const (
 	autostartWindowsFile = "JukaHub.cmd"
 	autostartLinuxFile   = "jukahub.desktop"
+	// trimuiAutostartFile lives in <SD>/System/starts. The name marks it as
+	// ours so the setting can remove exactly this file later.
+	trimuiAutostartFile = "jukahub-autostart.sh"
 )
 
-// Overridable for tests: where the launcher lives and which executable it runs.
+// Overridable for tests: where the launcher lives, which executable it runs,
+// whether this is a handheld, and where its SD card is mounted.
 var (
-	autostartDirFn = defaultAutostartDir
-	autostartExeFn = func() (string, error) { return os.Executable() }
+	autostartDirFn    = defaultAutostartDir
+	autostartExeFn    = func() (string, error) { return os.Executable() }
+	autostartIsTrimui = func() bool { return IsTrimuiDevice() }
+	trimuiSDRootFn    = defaultTrimuiSDRoot
 )
+
+// defaultTrimuiSDRoot finds the SD card the app is installed on. JukaHub lives
+// in <SD>/Apps/JukaHub, so the executable path already names the root; the
+// environment override exists for a symlinked binary or a test.
+func defaultTrimuiSDRoot() string {
+	if root := strings.TrimSpace(os.Getenv("JUKAHUB_SD_ROOT")); root != "" {
+		return root
+	}
+	exe, err := autostartExeFn()
+	if err != nil {
+		return ""
+	}
+	appDir := filepath.Dir(exe)
+	appsDir := filepath.Dir(appDir)
+	if !strings.EqualFold(filepath.Base(appsDir), "Apps") {
+		return ""
+	}
+	return filepath.Dir(appsDir)
+}
+
+// trimuiAutostartPath is the boot hook's location on the SD card.
+func trimuiAutostartPath() (string, error) {
+	root := trimuiSDRootFn()
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("cannot find the SD card")
+	}
+	return filepath.Join(root, "System", "starts", trimuiAutostartFile), nil
+}
+
+// trimuiAutostartScript is the hook itself. Everything happens in a background
+// subshell and the script returns immediately, so the firmware's boot sequence
+// is never blocked on the app: a hung launch must not keep MainUI from coming
+// up. The subshell first waits (at most 30 s) for the stock launcher, because
+// the boot hook may run before MainUI is on screen; starting earlier either
+// races the launcher or grabs a display that is not ready yet. launch.sh then
+// stops MainUI and hands the display back when the app exits, so no fixed delay
+// is needed here — that is what the old hand-written hooks used sleep 10 for.
+func trimuiAutostartScript(appDir string) string {
+	return "#!/bin/sh\n" +
+		"# Written by JukaHub's \"Start JukaHub at login\" setting.\n" +
+		"# Delete this file (or turn the setting off) to stop it launching at boot.\n" +
+		"APP_DIR=" + shellQuote(appDir) + "\n" +
+		"[ -d \"$APP_DIR\" ] || exit 0\n" +
+		"(\n" +
+		"  # Wait for the stock launcher, so the display is ready and launch.sh can\n" +
+		"  # take it over cleanly. Bounded: with no launcher we start anyway.\n" +
+		"  if command -v pidof >/dev/null 2>&1; then\n" +
+		"    n=0\n" +
+		"    while [ \"$n\" -lt 30 ] && ! pidof MainUI >/dev/null 2>&1; do\n" +
+		"      n=$((n + 1))\n" +
+		"      sleep 1\n" +
+		"    done\n" +
+		"  fi\n" +
+		"  /bin/sh \"$APP_DIR/launch.sh\" >>\"$APP_DIR/autostart.log\" 2>&1\n" +
+		") >/dev/null 2>&1 &\n" +
+		"exit 0\n"
+}
+
+// shellQuote wraps a path for a POSIX shell. Single quotes are the only form
+// every sh understands, and a literal quote is closed and escaped around.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 // defaultAutostartDir returns the platform's per-user startup directory.
 func defaultAutostartDir() (string, error) {
@@ -49,11 +125,12 @@ func defaultAutostartDir() (string, error) {
 }
 
 // autostartSupported reports whether this platform has a startup location the
-// app can write to. The handheld is excluded: its launcher is part of the
-// firmware's app list, not something JukaHub may edit.
+// app can write to. On the handheld that is the SD card's boot script folder;
+// if the card cannot be located the setting honestly reports itself unusable
+// rather than writing somewhere arbitrary.
 func autostartSupported() bool {
-	if IsTrimuiDevice() {
-		return false
+	if autostartIsTrimui() {
+		return strings.TrimSpace(trimuiSDRootFn()) != ""
 	}
 	switch runtime.GOOS {
 	case "windows", "linux", "darwin":
@@ -75,6 +152,9 @@ func autoStartEnabled(config *Config) bool {
 
 // autoStartLauncherPath returns the launcher file for this platform.
 func autoStartLauncherPath() (string, error) {
+	if autostartIsTrimui() {
+		return trimuiAutostartPath()
+	}
 	return autoStartLauncherPathFor(runtime.GOOS)
 }
 
@@ -162,6 +242,14 @@ func setAutoStart(on bool) error {
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
+	}
+	if autostartIsTrimui() {
+		// The boot script has to be executable: runtrimui.sh runs the files in
+		// that folder, and some card filesystems mount without the bit.
+		if err := os.WriteFile(path, []byte(trimuiAutostartScript(filepath.Dir(exe))), 0o755); err != nil {
+			return err
+		}
+		return os.Chmod(path, 0o755)
 	}
 	return os.WriteFile(path, []byte(autoStartLauncher(exe)), 0o644)
 }

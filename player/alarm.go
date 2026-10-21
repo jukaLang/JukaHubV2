@@ -287,6 +287,9 @@ func alarmCheck(now time.Time) {
 		if now.Hour() == a.Hour && now.Minute() == a.Minute {
 			a.Fired = true
 			alarmSave()
+			// A darked ambient panel is the common way to sleep with an alarm
+			// armed, so the alarm has to bring the screen back with it.
+			ambientNotifyInput()
 			// Play alarm sound: ascending arpeggio
 			go alarmRing()
 			label := a.Label

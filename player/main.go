@@ -37,11 +37,13 @@ func main() {
 	}()
 
 	initLogging()
+	startupMarkNow("pre-sdl")
 
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
 		log.Fatal("SDL init error:", err)
 	}
 	defer sdl.Quit()
+	startupMarkNow("sdl")
 
 	if err := ttf.Init(); err != nil {
 		log.Fatal("TTF init error:", err)
@@ -68,6 +70,7 @@ func main() {
 		log.Fatal("Failed to load config:", err)
 	}
 	LogScene("init").Info("config loaded", "path", configPath, "loadErrors", configHealth.LoadErrors)
+	startupMarkNow("config")
 
 	// Validate and apply defaults.
 	if err := NewConfigValidator().Validate(config); err != nil {
@@ -274,6 +277,7 @@ func main() {
 	if P().ResizableDefault() {
 		windowFlags |= sdl.WINDOW_RESIZABLE
 	}
+	startupMarkNow("modules")
 	LogSceneOp(config.Scenes[currentSceneIndex].Name, "init").Info("creating window",
 		"platform", P().Name(),
 		"width", screenW,
@@ -320,9 +324,18 @@ func main() {
 	// background image instead of painting opaque.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
-	// Animated particle splash: particles converge from screen edges,
-	// glow pulse reveals the JukaHub logo, then dissolves into the UI.
-	ShowSplash(renderer, config)
+	// Boot splash: the starfield warp in splash.go, played for whatever is left
+	// of the two-second boot budget. A warm launch sees a short, complete
+	// animation instead of a fixed one; a cold card with nothing left opens the
+	// UI directly (see startup.go).
+	startupMarkNow("window")
+	bootElapsed := startupElapsed()
+	allotment := splashAllotment(bootElapsed, startupTarget(), splashReserve(bootElapsed))
+	if note := startupBudgetNote(bootElapsed); note != "" {
+		log.Printf("startup: %s", note)
+	}
+	ShowSplash(renderer, config, allotment)
+	startupMarkNow("splash")
 	config.Variables.LoadingSpinner = false
 
 	// Create placeholder texture for missing thumbnails
@@ -390,6 +403,11 @@ func main() {
 	})
 	defer StopConfigWatcher()
 
+	// Hardware volume buttons: a long hold skips a track even while the screen
+	// is off or the player is in the background. The OS still owns the short
+	// press, so nothing about the volume itself changes.
+	startVolumeButtonWatcher()
+
 	// Adaptive frame rate and memory monitoring for TSP ARM64 devices
 	frameRateCtrl := NewFrameRateController()
 	memMonitor := NewMemoryMonitor()
@@ -397,6 +415,11 @@ func main() {
 	LogDeviceDiagnostics()
 
 	running := true
+	startupReported := false
+	// Alarms are checked on the clock, not on frameCount: the adaptive frame
+	// rate and the darked ambient panel both run far below 60 fps, which would
+	// make a frame-counted check ring late.
+	lastAlarmCheck := time.Now()
 	for running {
 		// Keep the home-header pairing QR live: start the companion when Wi-Fi
 		// appears and rebuild the code if DHCP moved the address.
@@ -425,9 +448,27 @@ func main() {
 					updateWindowScale(w, h)
 				}
 			case *sdl.KeyboardEvent:
+				if e.Type == sdl.KEYUP {
+					// Only the audio player cares: letting go of a volume key ends a
+					// hold, so the next tap changes the volume instead of looking
+					// like one long press that already skipped a track.
+					if musicSceneActive() {
+						musicHandleVolumeKey(e)
+					}
+					continue
+				}
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
 					screensaverNotifyInput()
+					// The dock screen owns every key while it is up, including the
+					// first press that wakes a darked panel.
+					if ambientHandleKey(e, config) {
+						continue
+					}
+					if launchFailure.open {
+						handleLaunchFailureKey(e)
+						continue
+					}
 					// The first-run tour is the topmost modal: while it is open it
 					// owns every key, including escape and the usual global chords.
 					if onboarding.active {
@@ -494,6 +535,12 @@ func main() {
 					if winAppsPanel.open && handleWindowsAppsKey(e, config) {
 						continue
 					}
+					if castPanel.open && handleCastKey(e, config) {
+						continue
+					}
+					if musicSettings.open && handleMusicSettingsKey(e, config) {
+						continue
+					}
 					if a11y.open && handleAccessibilityKey(e, config) {
 						continue
 					}
@@ -507,6 +554,10 @@ func main() {
 					}
 					// The browser's link picker is modal too.
 					if browserLinkPanel.open && handleBrowserLinksKey(e, config) {
+						continue
+					}
+					// Smart Home is modal too.
+					if smartHomePanel.open && handleSmartHomeKey(e, config) {
 						continue
 					}
 					// Tools is modal and consumes all keys while open.
@@ -924,9 +975,22 @@ func main() {
 			case *sdl.MouseButtonEvent:
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
+				if ambientIsActive() {
+					// Taps on the dock screen act on its chips; everything else
+					// only wakes it, so a stray tap cannot press the UI behind.
+					if e.Button == sdl.BUTTON_LEFT && e.Type == sdl.MOUSEBUTTONDOWN {
+						mx, my := physicalToLogical(int32(e.X), int32(e.Y))
+						ambientHandleClick(mx, my)
+					}
+					continue
+				}
 				if e.Button == sdl.BUTTON_LEFT {
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
 					if e.Type == sdl.MOUSEBUTTONDOWN {
+						if launchFailure.open {
+							handleLaunchFailureMouse()
+							break
+						}
 						if handleOnboardingMouse(mx, my, config) {
 							break
 						}
@@ -1010,6 +1074,16 @@ func main() {
 							handleChiakiMouse(mx, my)
 							break
 						}
+						// The Remote Cast panel is modal the same way.
+						if castPanel.open {
+							handleCastMouse(mx, my, config)
+							break
+						}
+						// The Audio settings panel is modal the same way.
+						if musicSettings.open {
+							handleMusicSettingsMouse(mx, my)
+							break
+						}
 						// Accessibility is modal the same way.
 						if a11y.open {
 							handleAccessibilityMouse(mx, my, config)
@@ -1023,6 +1097,11 @@ func main() {
 						// Browser link picker floats above the browser scene.
 						if browserLinkPanel.open {
 							handleBrowserLinksMouse(mx, my, config)
+							break
+						}
+						// Smart Home is modal the same way.
+						if smartHomePanel.open {
+							handleSmartHomeMouse(mx, my, config)
 							break
 						}
 						// Tools panel is modal: a click selects a row, a click outside
@@ -1333,20 +1412,12 @@ func main() {
 									vids := shortsList
 									shortsMutex.Unlock()
 									if len(vids) > 0 {
-										thumbW := int32(160)
-										cellW := thumbW + 20
 										elemW := getElementWidth(elem, 1080)
-										nCols := int32(elemW / cellW)
-										if nCols < 1 {
-											nCols = 1
-										}
-										cellH := int32(330)
+										elemH := getElementHeight(elem, 500)
+										layout := newShortsGridLayout(elem, elemW)
 										for idx, vid := range vids {
-											col := int32(idx) % nCols
-											row := int32(idx) / nCols
-											xPos := elem.X + 20 + col*cellW
-											yPos := elem.Y + 10 + row*(cellH+10) - shortsScrollY
-											if mx >= xPos && mx <= xPos+thumbW && my >= yPos && my <= yPos+cellH {
+											cell := shortsGridCellRect(elem, layout, idx, shortsScrollY)
+											if mx >= cell.X && mx <= cell.X+cell.W && my >= elem.Y && my <= elem.Y+elemH && my >= cell.Y && my <= cell.Y+cell.H {
 												currentShortIdx = idx
 												selectedButtonIndex = i
 												focusEngine.SetByElementIndex(i)
@@ -1385,7 +1456,13 @@ func main() {
 				// Accessibility remapping rewrites the physical button once, here,
 				// before the overlay router or the scene sees the event.
 				a11yRemapEvent(e)
+				if e.Type == sdl.CONTROLLERBUTTONDOWN && ambientHandleController(e) {
+					continue
+				}
 				if e.Type == sdl.CONTROLLERBUTTONDOWN {
+					if handleLaunchFailureController(e) {
+						continue
+					}
 					// The first-run tour is modal and above every other overlay.
 					if handleOnboardingController(e, config) {
 						continue
@@ -1838,12 +1915,38 @@ func main() {
 			}
 		}
 
+		// Ambient screen-off: the panel is black and audio keeps decoding, so
+		// there is nothing to draw. Paint the black frame once, then idle
+		// cheaply instead of presenting identical frames all night.
+		if ambientIsScreenOff() {
+			if ambientNeedsBlackFrame() {
+				renderer.SetDrawColor(0, 0, 0, 255)
+				renderer.Clear()
+				renderer.Present()
+				ambientMarkBlackFrameDrawn()
+			}
+			sdl.Delay(200)
+			frameCount++
+			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
+				lastAlarmCheck = now
+				alarmCheck(now)
+			}
+			continue
+		}
+
 		// Contextual widgets: battery saver and time-of-day theme, checked once a
 		// second before the frame is drawn so a theme switch lands immediately.
 		widgetsTick(config)
 		playtimeTick(config)
-		// Screensaver takes over when idle.
-		if ss.active {
+		// Dock and ambient screen: clock, weather, now-playing and photos when the
+		// device is charging or idle (see ambient.go). Runs here, on the event
+		// thread, because its entry check reads modal flags.
+		ambientAutoTick(config, time.Now())
+		// The dock/ambient screen takes the whole panel when it is up, then the
+		// screensaver, then the scene.
+		if ambientIsActive() {
+			renderAmbient(renderer, config)
+		} else if ss.active {
 			renderScreensaver(renderer, config, sdl.GetTicks64())
 		} else {
 			renderScene(renderer, config, config.Scenes[currentSceneIndex])
@@ -1956,6 +2059,11 @@ func main() {
 			renderToolsPanel(renderer, config)
 		}
 
+		// Smart Home overlay (Home Assistant, Pi-hole, Tailscale, WireGuard).
+		if smartHomePanel.open {
+			renderSmartHomePanel(renderer, config)
+		}
+
 		// Community hub (changelog, bug report, telemetry consent).
 		if communityPanel.open {
 			renderCommunityPanel(renderer, config)
@@ -1994,6 +2102,16 @@ func main() {
 		// PS Remote Play overlay (install and launch the TrimUI Chiaki-ng port).
 		if chiakiPanel.open {
 			renderChiakiPanel(renderer, config)
+		}
+
+		// Remote cast: share link, QR and the on/off switch.
+		if castPanel.open {
+			renderCastPanel(renderer, config)
+		}
+
+		// Audio settings overlay: layout, art opacity, screen-off controls.
+		if musicSettings.open {
+			renderMusicSettingsPanel(renderer, config)
 		}
 
 		// Accessibility overlay: text size, palettes and controller mapping.
@@ -2037,7 +2155,7 @@ func main() {
 		}
 
 		// Shortcut hint at bottom (hidden when overlays are open).
-		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open && !companion.open {
+		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open && !companion.open && !smartHomePanel.open && !ambientIsActive() {
 			renderShortcutHint(renderer, config)
 		}
 
@@ -2059,6 +2177,9 @@ func main() {
 		if onboarding.active {
 			renderOnboarding(renderer, config)
 		}
+		if launchFailure.open {
+			renderLaunchFailure(renderer, config)
+		}
 
 		renderToast(renderer, config)
 		renderInstallBar(renderer, config)
@@ -2068,6 +2189,17 @@ func main() {
 		captureCompanionScreen(renderer)
 
 		renderer.Present()
+		if !startupReported {
+			startupReported = true
+			startupMarkNow("first-frame")
+			startupLog()
+			// Bench mode measures boot and stops before the event loop settles
+			// into idle work, so CI can assert on the number.
+			if startupBenchEnabled() {
+				running = false
+				continue
+			}
+		}
 		animTime = float64(sdl.GetTicks64()) / 1000.0
 
 		// Adaptive frame rate: faster while interacting/animating, slower when
@@ -2088,9 +2220,10 @@ func main() {
 			logTextureMemoryStats("runtime")
 		}
 
-		// Check alarms every second.
-		if frameCount%60 == 0 {
-			alarmCheck(time.Now())
+		// Check alarms every second, independent of the frame cadence.
+		if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
+			lastAlarmCheck = now
+			alarmCheck(now)
 		}
 	}
 

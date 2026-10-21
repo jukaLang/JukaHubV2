@@ -226,17 +226,64 @@ in its data folder and is never displayed in full.
 | R3 (right stick click) | Cycle the sleep timer (off, 15, 30, 60 min) |
 | Start | Toggle the full-screen visualizer |
 | Guide (logo button, where the pad reports it) | Toggle shuffle |
+| Select | Turn the screen off (playback continues) |
+| X, then D-pad Right (within 0.45 s) | Open song search |
+| Y, then D-pad Left (within 0.45 s) | Toggle background playback |
 | B | Close the visualizer, then go back |
+
+### Search
+
+Press **X**, then **D-pad Right**, and type the initials of the title: `iwyn`
+finds *I Want You Now*. **R1** (or **A**) plays the highlighted hit, the D-pad
+moves the selection, and **B** closes the panel. The search box opens the
+on-screen keyboard, so it works without a physical keyboard.
+
+### Screen off (the lock screen)
+
+**Select** darkens the panel while the decoder keeps running — the player's
+lock screen. What the controls do while it is dark is chosen in
+**Menu → Audio → Screen-off controls**: *Any key* wakes on the first press,
+*Controls* keeps transport and volume working, and *Select only* ignores
+everything except the wake button.
+
+Volume keys are the exception in every mode: they never wake the panel, because
+they belong to the mixer. A **short press** changes the volume, and a **long
+press skips track** — next on hold Vol+, previous on hold Vol− — even with the
+screen dark and the player left behind. The hardware buttons are read from the
+kernel input devices (`/dev/input/event*`), so this works on the handheld where
+the OS owns the volume keys and SDL never sees them; `-`/`+` and
+VOLUMEUP/VOLUMEDOWN keysyms go through the same hold logic on a keyboard.
+
+### Equaliser
+
+**G** (or **Start → Audio** for the settings) opens the 31-band PEQ: the ISO
+one-third-octave centres from 20 Hz to 20 kHz, ±12 dB per band.
+
+| Input | Action |
+|-------|--------|
+| Left / Right | Pick a band |
+| Up / Down | ±1 dB on the selected band |
+| Y | Cycle presets (Flat, Bass, Vocal, Rock, Night) |
+| X | Flatten the selected band |
+| G / B | Close the panel |
+
+Gains are saved to the config as `musicPEQGains`, and the curve restarts the
+decoder immediately so the change is audible. **Bit-perfect DAC output** (in
+**Menu → Audio**) turns the equaliser and the tempo filter off and hands the
+decoded samples straight to the device; the two cannot be on at the same time.
 
 **Shuffle**, **Repeat** and **Fav** also sit in the transport row and are tapped
 directly on the touchscreen, which is the reliable path on a handheld whose pad
 does not report a guide button.
 
 On a keyboard, **Space** pauses, **L** toggles lyrics, **[** / **]** change the
-listening speed, **T** cycles the sleep timer, **V** opens the full-screen
-visualizer, **M** toggles shuffle, **R** cycles repeat off/all/one, **F**
-favorites the playing track, **Q** queues the highlighted row to play next, and
-**-** / **+** set the volume.
+listening speed, **T** cycles the sleep timer, **E** cycles the auto-exit timer,
+**V** opens the full-screen visualizer, **M** toggles shuffle, **R** cycles
+repeat off/all/one, **F** favorites the playing track, **Q** queues the
+highlighted row to play next, **/** opens search, **G** opens the equaliser,
+**O** turns the screen off, **K** opens **Menu → Audio**, and **-** / **+** set
+the volume. Holding either volume key still skips a track instead of repeating
+the volume step.
 
 Shuffle builds an order that starts with the current track and visits every
 track once before wrapping, so it never repeats a song early. Repeat one
@@ -245,6 +292,24 @@ The play-next queue wins over the folder order and is shown as `N queued` in
 the status line. Favorites are stored in `musicfavorites.json` in the app data
 folder, survive updates, and are marked with an accent dot between the row
 number and the title.
+
+### Layouts and the audio settings
+
+**Menu → Audio** (or **K** in the player) opens the audio settings:
+
+| Row | Values |
+|-----|--------|
+| Now Playing layout | Auralis Pro (artwork card) or StockOS (compact list-first) |
+| Cover art opacity | 10% – 100%, applied to the artwork tile and its spectrum |
+| Screen-off controls | Any key / Controls / Select only |
+| Background playback | On keeps the music running when you leave the player |
+| Bit-perfect DAC output | Bypasses the PEQ and the tempo filter |
+| 31-band PEQ | On / off; the curve is edited with **G** in the player |
+| Keyboard shortcuts | Opens the shortcuts reference |
+
+Both layouts share the same hitboxes, so touch, keyboard and pad work the same
+in either one. The choice and the opacity live in the config (`musicNowPlayingLayout`,
+`musicArtOpacity`) and survive updates.
 
 A `.lrc` file next to the track (same file name) is loaded automatically; its
 timed lines appear inside the artwork square and the current line is
@@ -356,6 +421,27 @@ Playback drift beyond a few seconds is corrected automatically; smaller
 differences are left alone so the picture does not stutter. Only streams are
 shared — local files stay on the device.
 
+## Dock & ambient
+
+Open from **Start → Ambient**; it also appears by itself after 45 seconds of
+quiet while charging, or at the idle timeout on battery. The clock, weather,
+now-playing card and photo slideshow are read-only — the chips along the bottom
+control playback and the timers.
+
+| Button | Action |
+|--------|--------|
+| A | Play / pause (starts the music folder when nothing is loaded) |
+| Left / Right | Previous / next track |
+| Up / Down | Volume |
+| Y | Sleep timer: off → 15 → 30 → 60 → 90 min |
+| X | Screen off, audio continues |
+| N | Next photo |
+| Any key / tap | Wake a darked panel |
+| B / Start / Esc | Leave ambient mode |
+
+The sleep timer stops playback before it blanks the panel; **X** only blanks the
+panel. See [Dock & ambient](AMBIENT.md).
+
 ## Pomodoro
 
 | Button | Action |
@@ -437,4 +523,5 @@ highlights the card under the pointer.
 ## Related
 
 - [Configuration reference](CONFIGURATION.md) — how a button in the config runs a trigger
+- [Dock & ambient](AMBIENT.md) — the idle clock, slideshow, sleep timer and screen-off audio
 - [Building](BUILDING.md) — running a desktop build to use the keyboard bindings

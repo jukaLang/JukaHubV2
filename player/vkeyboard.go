@@ -49,6 +49,7 @@ const (
 	vkTargetTV    // Live TV channel search
 	vkTargetParty // Watch Party invite / shared link
 	vkTargetRA    // RetroAchievements username / Web API key
+	vkTargetMusic // audio player initialism search
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -251,6 +252,8 @@ func vkEnsureLayout() {
 		target = 4
 	case vkTargetRA:
 		target = 5
+	case vkTargetMusic:
+		target = 6
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -480,6 +483,8 @@ func vkCurrentText() string {
 		return partyUI.input
 	case vkTargetRA:
 		return raPanel.input
+	case vkTargetMusic:
+		return musicSearchQueryValue()
 	}
 	return inputTextBuffer
 }
@@ -504,6 +509,10 @@ func vkSetText(text string, config *Config) {
 		partyUI.input = text
 	case vkTargetRA:
 		raPanel.input = text
+	case vkTargetMusic:
+		// The result list filters on every keystroke, so the panel behind the
+		// keyboard updates while the user types the initials.
+		musicSetSearchQuery(text)
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -579,6 +588,8 @@ func vkTitle() string {
 			return "WEB API KEY"
 		}
 		return "RETROACHIEVEMENTS USERNAME"
+	case vkTargetMusic:
+		return "SEARCH SONGS"
 	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
@@ -615,6 +626,8 @@ func vkPlaceholder() string {
 			return "32 letters or digits"
 		}
 		return "Your RetroAchievements username"
+	case vkTargetMusic:
+		return "Type initials: iwyn = I Want You Now"
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -636,6 +649,8 @@ func vkHints() string {
 		return "A type    live filter    B / Esc close"
 	case vkTargetRA:
 		return "A type    Y save    B / Esc close"
+	case vkTargetMusic:
+		return "Type initials    A / Y search    B / Esc close"
 	}
 	return "A type    Y save    B / Esc close"
 }
@@ -743,6 +758,21 @@ func vkOpenRetroAchievementsInput() {
 	// Web API keys are case-sensitive and conventionally uppercase; start
 	// there so a handheld user does not have to toggle Shift for every letter.
 	keyboardUpper = raPanel.edit == raEditAPIKey
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenMusicSearch opens the keyboard for the audio player's initialism
+// search. The panel is already open behind it, so the hits update live.
+func vkOpenMusicSearch() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetMusic
+	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
 	virtualKeyboardActive = true
@@ -900,9 +930,11 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetParty:
 		vkCloseKeyboard()
 		partySubmitInput(text)
-	case vkTargetRA:
+	case vkTargetMusic:
 		vkCloseKeyboard()
-		raSubmitCredential(text)
+		if !musicSearchPlay() {
+			showToast("No song matches those initials", ToastInfo())
+		}
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may

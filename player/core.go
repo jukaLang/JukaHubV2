@@ -781,12 +781,30 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 	// Accessibility text scaling applies here, at the one place every logical
 	// font is resolved, so no screen can be left behind at the default size.
 	size = a11yScaleFontSize(size)
+	return loadCachedFont(fontPath, size), size
+}
 
-	// Cache key includes both resolved path and size so we never serve
-	// the wrong size for a given font name.
+// getFontSized opens a logical font at a pixel size the caller chooses, for
+// displays that need a size no config role defines (the ambient clock). It
+// shares the cache, fallback chain and accessibility scaling with
+// getCachedFont.
+func getFontSized(config *Config, fontName string, size int) *ttf.Font {
+	fontPath := "Inter-Regular.ttf"
+	for k, p := range config.Variables.Fonts {
+		if strings.EqualFold(k, fontName) {
+			fontPath = p
+			break
+		}
+	}
+	return loadCachedFont(fontPath, a11yScaleFontSize(size))
+}
+
+// loadCachedFont opens path at size (already accessibility-scaled) and caches it
+// by the pair, so the same face at different sizes is cached separately.
+func loadCachedFont(fontPath string, size int) *ttf.Font {
 	key := fontPath + "\n" + strconv.Itoa(size)
 	if font, ok := fontCache[key]; ok {
-		return font, size
+		return font
 	}
 
 	font, err := ttf.OpenFont(resolvePath(fontPath), size)
@@ -804,13 +822,13 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 	}
 	if err != nil {
 		log.Printf("Error loading font %s: %v", fontPath, err)
-		return nil, 0
+		return nil
 	}
 	// Remember where this font was opened so renderText can read its cmap and
 	// substitute characters it cannot draw (see fonts.go).
 	registerFontPath(font, fontPath)
 	fontCache[key] = font
-	return font, size
+	return font
 }
 
 // renderText draws text and returns its rendered size. Characters the font

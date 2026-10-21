@@ -162,9 +162,10 @@ func chiakiInstalledVersionAt(app string) string {
 // ── Interface language ──────────────────────────────────────────────────────
 //
 // The port ships its own English catalogue (rh/i18n.py: VI and EN) and stores
-// the choice as "language": "VI"|"EN" in settings.json. JukaHub does not patch
-// the app: it flips that one key, preserving every other value, so the user's
-// menus become English without losing settings or console pairing.
+// the choice as "language": "VI"|"EN" in settings.json. JukaHub flips that one
+// key, preserving every other value, so the user's menus change language
+// without losing settings or console pairing. The strings that never go
+// through the catalogue are rewritten separately (see chiaki_translate.go).
 
 // chiakiSettingsPath is where the port keeps its settings.
 func chiakiSettingsPath(appDir string) string {
@@ -275,7 +276,8 @@ func chiakiCurrentLanguage(appDir string) string {
 }
 
 // chiakiToggleLanguage switches between the port's two catalogues and returns
-// the new code.
+// the new code. The hardcoded literals are switched in the same step, so the
+// menus do not come back half-translated after the row is pressed.
 func chiakiToggleLanguage(appDir string) (string, error) {
 	next := "EN"
 	if chiakiCurrentLanguage(appDir) == "EN" {
@@ -283,6 +285,12 @@ func chiakiToggleLanguage(appDir string) (string, error) {
 	}
 	if err := setChiakiSettingsLanguage(appDir, next); err != nil {
 		return "", err
+	}
+	if _, err := chiakiRepairCatalogue(appDir); err != nil {
+		return next, fmt.Errorf("repair the menu catalogue: %w", err)
+	}
+	if _, err := chiakiSetLiteralLanguage(appDir, next); err != nil {
+		return next, fmt.Errorf("switch the menu text: %w", err)
 	}
 	return next, nil
 }
@@ -295,16 +303,39 @@ func chiakiLanguageName(lang string) string {
 	return "Vietnamese"
 }
 
-// chiakiEnsureEnglishDefault gives a fresh install an English UI before its
-// first run. An existing settings.json is never touched: a user who picked
-// Vietnamese in the app keeps it, and the panel row switches it either way.
-func chiakiEnsureEnglishDefault(appDir string) {
-	if appDir == "" || regularFile(chiakiSettingsPath(appDir)) {
+// chiakiEnsureEnglish runs before a launch: it creates settings.json with
+// English when the app has none, then points the port's hardcoded literals at
+// the language settings.json selects. An existing file is never touched: a user
+// who picked Vietnamese in the app keeps it, and the panel row switches it
+// either way.
+func chiakiEnsureEnglish(appDir string) {
+	if appDir == "" {
 		return
 	}
-	if err := setChiakiSettingsLanguage(appDir, "EN"); err != nil {
-		log.Printf("[chiaki] could not default the UI to English: %v", err)
+	if !regularFile(chiakiSettingsPath(appDir)) {
+		if err := setChiakiSettingsLanguage(appDir, "EN"); err != nil {
+			log.Printf("[chiaki] could not default the UI to English: %v", err)
+		}
 	}
+	chiakiPrepareUILanguage(appDir)
+}
+
+// chiakiInstallLanguageDefault points a fresh install at English. Every release
+// ZIP ships its own settings.json with "language": "VI", so the file exists on
+// the very first run and chiakiEnsureEnglish must leave it alone at launch —
+// the installer is the only place that can tell a package default from a
+// language the user picked. hadSettings records whether the app was already
+// installed before this download (its settings are preserved across updates).
+func chiakiInstallLanguageDefault(appDir string, hadSettings bool) {
+	if appDir == "" {
+		return
+	}
+	if !hadSettings {
+		if err := setChiakiSettingsLanguage(appDir, "EN"); err != nil {
+			log.Printf("[chiaki] could not default the UI to English: %v", err)
+		}
+	}
+	chiakiEnsureEnglish(appDir)
 }
 
 func chiakiPackageSupported() bool {
@@ -721,6 +752,10 @@ func startChiakiInstall() error {
 	}
 	setChiakiInstalling(true)
 	installBarBegin(chiakiAppName)
+	// Read before the download: the shipped ZIP carries a Vietnamese
+	// settings.json, so presence afterwards cannot distinguish a fresh install
+	// from one whose language the user already chose.
+	hadSettings := regularFile(chiakiSettingsPath(filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir))))
 	go func() {
 		defer setChiakiInstalling(false)
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
@@ -753,7 +788,7 @@ func startChiakiInstall() error {
 			ShowToast("Could not install Chiaki-ng — "+firstLine(err.Error()), ToastKindError)
 			return
 		}
-		chiakiEnsureEnglishDefault(filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir)))
+		chiakiInstallLanguageDefault(filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir)), hadSettings)
 		installBarDone()
 		log.Printf("[chiaki] installed %s into %s", release.Tag, filepath.Join(root, filepath.FromSlash(chiakiInstallSubdir)))
 		ShowToast(chiakiAppName+" "+release.Tag+" installed", ToastKindSuccess)
@@ -1024,13 +1059,14 @@ func startChiakiPS5Install() error {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
 		target := filepath.Join(root, filepath.FromSlash(chiakiPS5Subdir))
+		hadSettings := regularFile(chiakiSettingsPath(target))
 		if err := installChiakiFromTag(ctx, root, target, chiakiPS5Tag); err != nil {
 			log.Printf("[chiaki] PS5 beta install failed: %v", err)
 			installBarFailRetry(chiakiPS5AppName, firstLine(err.Error()))
 			ShowToast("PS5 beta install failed — "+firstLine(err.Error()), ToastKindError)
 			return
 		}
-		chiakiEnsureEnglishDefault(target)
+		chiakiInstallLanguageDefault(target, hadSettings)
 		installBarDone()
 		log.Printf("[chiaki] installed PS5 beta %s into %s", chiakiPS5Tag, target)
 		ShowToast("PS5 beta installed — pair from Chiaki-ng", ToastKindSuccess)
@@ -1268,7 +1304,7 @@ func startChiakiHandoff(appDir, label string) error {
 	if !chiakiInstalledAt(appDir) {
 		return errors.New("Chiaki-ng is not installed")
 	}
-	chiakiEnsureEnglishDefault(appDir)
+	chiakiEnsureEnglish(appDir)
 	path := chiakiHandoffPath()
 	script := chiakiHandoffScript(os.Getpid(), appDir, label)
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
@@ -1312,6 +1348,7 @@ const (
 	chiakiActionInstallPS5
 	chiakiActionLaunchPS5
 	chiakiActionLanguage
+	chiakiActionLanguagePS5
 )
 
 type chiakiRow struct {
@@ -1361,7 +1398,7 @@ func closeChiakiPanel() {
 }
 
 func chiakiRows() []chiakiRow {
-	rows := make([]chiakiRow, 0, 5)
+	rows := make([]chiakiRow, 0, 9)
 	if chiakiInstalled() {
 		version := chiakiInstalledVersion()
 		if version == "" {
@@ -1436,6 +1473,17 @@ func chiakiRows() []chiakiRow {
 			status: version,
 			action: chiakiActionInstallPS5,
 		})
+		ps5Lang := chiakiCurrentLanguage(chiakiPS5AppDir())
+		ps5Other := "English"
+		if ps5Lang == "EN" {
+			ps5Other = "Vietnamese"
+		}
+		rows = append(rows, chiakiRow{
+			label:  "PS5 interface language",
+			detail: "The PS5 beta's menus are " + chiakiLanguageName(ps5Lang) + "; select for " + ps5Other + ".",
+			status: ps5Lang,
+			action: chiakiActionLanguagePS5,
+		})
 	default:
 		rows = append(rows, chiakiRow{
 			label:  "Install PS5 beta",
@@ -1486,7 +1534,8 @@ func chiakiPanelActivate() {
 	if chiakiPanel.cursor < 0 || chiakiPanel.cursor >= len(rows) {
 		return
 	}
-	switch rows[chiakiPanel.cursor].action {
+	chosen := rows[chiakiPanel.cursor]
+	switch chosen.action {
 	case chiakiActionInstall:
 		if chiakiInstalling() {
 			ShowToast("The Chiaki-ng installer is already running", ToastKindInfo)
@@ -1513,10 +1562,13 @@ func chiakiPanelActivate() {
 	case chiakiActionLaunchPS5:
 		closeChiakiPanel()
 		launchChiakiPS5()
-	case chiakiActionLanguage:
-		appDir := chiakiAppDir()
+	case chiakiActionLanguage, chiakiActionLanguagePS5:
+		appDir, label := chiakiAppDir(), chiakiAppName
+		if chosen.action == chiakiActionLanguagePS5 {
+			appDir, label = chiakiPS5AppDir(), chiakiPS5AppName+" beta"
+		}
 		if !chiakiInstalledAt(appDir) {
-			ShowToast("Install Chiaki-ng first", ToastKindWarning)
+			ShowToast("Install "+label+" first", ToastKindWarning)
 			return
 		}
 		next, err := chiakiToggleLanguage(appDir)
@@ -1524,7 +1576,7 @@ func chiakiPanelActivate() {
 			ShowToast("Could not change the language — "+firstLine(err.Error()), ToastKindError)
 			return
 		}
-		ShowToast("Chiaki-ng menus will open in "+chiakiLanguageName(next), ToastKindSuccess)
+		ShowToast(label+" menus will open in "+chiakiLanguageName(next), ToastKindSuccess)
 	case chiakiActionFolder:
 		dir := chiakiAppDir()
 		if dir == "" {

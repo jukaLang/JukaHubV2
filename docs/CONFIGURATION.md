@@ -71,7 +71,7 @@ settings such as `search_query` or `stream_url`.
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
-| `screensaverTimeout` | int | seconds of idleness before the screensaver |
+| `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default) |
 | `socialNotifs` | bool | periodic social notifications |
 | `netPlayEnabled`, `videoPlayerEnabled`, `screensaverEnabled`, `launcherEnabled`, `externalAppEnabled`, `packageRepoEnabled`, `themeGalleryEnabled` | bool | feature toggles |
 | `deviceModel`, `targetPlatform`, `defaultOrientation`, `accentColor` | string | device hints; unknown values mean "no preference", never an error |
@@ -89,6 +89,24 @@ The player writes your live settings (theme, volume, resolution, and anything
 else a toggle changes) into `jukauser.json`, which is merged over the design
 defaults at startup. Settings → **Smart Widgets** adds `batterySaver`,
 `timeOfDayTheme` and `autoStart` there, for example.
+
+`autoStart` (Settings → Smart Widgets → **Start JukaHub at login**, off by
+default) writes exactly one launcher and removes exactly that file again:
+
+| Platform | Hook file |
+|----------|-----------|
+| TrimUI / CrossMix | `<SD>/System/starts/jukahub-autostart.sh` |
+| Linux, macOS | `~/.config/autostart/jukahub.desktop` |
+| Windows | `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\JukaHub.cmd` |
+
+The handheld hook is a `#!/bin/sh` script that returns immediately and does its
+work in a background subshell, so a slow or hung launch can never block the
+firmware's boot. The subshell waits up to 30 s for the stock launcher to appear
+(the hook may run before MainUI is on screen), then runs `launch.sh`, which
+takes the display and hands it back on exit. Output goes to
+`Apps/JukaHub/autostart.log`. Other files in `System/starts` are never touched,
+and if the SD card cannot be located the toggle stays off and says why rather
+than writing somewhere arbitrary.
 
 Quick Settings (`Ctrl+Q`) writes these keys:
 
@@ -114,6 +132,12 @@ mode, `pactl` then `amixer` for volume, and `/sys/class/backlight` for
 brightness (only direct children of that directory are ever written, and only
 the `brightness` file inside them). A row with no backend renders dimmed with
 the reason, and pressing it says so instead of pretending to work.
+
+Dock and ambient settings are plain custom keys, documented in
+[Dock & ambient](AMBIENT.md): `ambientMode` (bool, default true) chooses
+between the ambient idle screen and the starfield screensaver, `ambientWeather`
+(default true) shows the dock forecast, and `ambientPhotos` points the slideshow
+at a folder.
 
 `ledSync` is opt-in and writes only inside `/sys/class/leds`: LEDs exposing
 `multi_intensity` or `color`, plus brightness-only LEDs whose names look like

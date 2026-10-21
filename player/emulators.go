@@ -251,8 +251,8 @@ func sortEmulatorEntries(entries []emuEntry) {
 			return entries[i].Pinned
 		}
 		if entries[i].Pinned {
-			// Pinned order is intentional (RetroAchievements, then Game
-			// Profiles); stable sort keeps it instead of alphabetising it.
+			// Pinned order is intentional; stable sort keeps it instead of
+			// alphabetising the utility rows.
 			return false
 		}
 		if rank[entries[i].Status] != rank[entries[j].Status] {
@@ -285,6 +285,12 @@ func emulatorEntries() []emuEntry {
 	} else {
 		entries = deviceEmulatorEntries(deviceEmuRoots, deviceRomsRoot, deviceRACores)
 	}
+	entries = append(entries, emuEntry{
+		Name:   biosDoctorEntryName,
+		Detail: "Check PS1, Dreamcast and Saturn firmware",
+		Status: emuAvailable,
+		Pinned: true,
+	})
 	// Pinned rows keep their append order: RetroAchievements stays first (it
 	// was the original top row), then the Game Profiles launcher. The profile
 	// row is always present so the folder is discoverable before the first
@@ -418,12 +424,12 @@ func launchEmulatorEntry(e emuEntry) {
 	case ".exe", ".bat", ".cmd", ".lnk", ".url", ".sh", "":
 	default:
 		log.Printf("[emulators] refusing to launch %q", path)
-		ShowToast("Cannot launch "+e.Name, ToastKindError)
+		showLaunchFailureDialog(e.Name, fmt.Errorf("unsupported launcher file type %q", ext), "")
 		return
 	}
 	if !regularFile(path) {
 		log.Printf("[emulators] %s vanished: %s", e.Name, path)
-		ShowToast(e.Name+" is no longer installed", ToastKindError)
+		showLaunchFailureDialog(e.Name, fmt.Errorf("launcher file is missing: %w", os.ErrNotExist), "")
 		invalidateEmulatorCache()
 		return
 	}
@@ -443,7 +449,7 @@ func launchEmulatorEntry(e emuEntry) {
 	cmd.Dir = filepath.Dir(path)
 	if err := cmd.Start(); err != nil {
 		log.Printf("[emulators] launch failed for %s: %v", path, err)
-		ShowToast("Could not launch "+e.Name, ToastKindError)
+		showLaunchFailureDialog(e.Name, err, "")
 		return
 	}
 	go func() { _ = cmd.Wait() }() // reap the child, keep JukaHub responsive
@@ -457,6 +463,11 @@ func emuPanelActivate(config *Config) {
 		return
 	}
 	e := entries[emuPanel.cursor]
+	if e.Name == biosDoctorEntryName {
+		openCommunityPanel(config, communityPageBIOSDoctor)
+		emuPanel.open = false
+		return
+	}
 	if e.Name == gameProfilesEntryName {
 		emuPanel.open = false
 		openGameProfilePanel(true)

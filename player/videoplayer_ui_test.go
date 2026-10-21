@@ -205,6 +205,13 @@ func TestVideoFullscreenButtonHidesChrome(t *testing.T) {
 func renderingFullscreenProbe(t *testing.T, chrome bool) *probeFrame {
 	t.Helper()
 	f := newProbeFrame(t)
+	// A decoder from the playback integration test can still be exiting. Its
+	// finish path calls StopEmbeddedPlayback, which resets the player to idle
+	// mid-render and turned the probe frame black depending on scheduling.
+	// Drain the decoder goroutines before setting up this frame's state.
+	if !waitForVideoDecoders(5 * time.Second) {
+		t.Skip("a video decoder did not exit before the probe")
+	}
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
 		t.Skipf("software renderer unavailable: %v", err)
@@ -228,24 +235,41 @@ func renderingFullscreenProbe(t *testing.T, chrome bool) *probeFrame {
 	embeddedPlayer.mu.Lock()
 	prevPhase, prevProg, prevBase := embeddedPlayer.phase, embeddedPlayer.progress, embeddedPlayer.progressBase
 	prevDur, prevStart := embeddedPlayer.duration, embeddedPlayer.decoderStartTime
-	prevTex := embeddedPlayer.current
+	// No decoder is running now, but park any raw frame a finished one left
+	// behind: UpdateCurrentTexture would replace the probe texture with it.
+	prevRaw, prevW, prevH := embeddedPlayer.currentRaw, embeddedPlayer.width, embeddedPlayer.height
+	prevSeq, prevUploaded := embeddedPlayer.frameSeq, embeddedPlayer.uploadedSeq
 	embeddedPlayer.phase = "playing"
 	embeddedPlayer.progress = 0.5
 	embeddedPlayer.progressBase = 0.5
 	embeddedPlayer.duration = 100
 	embeddedPlayer.decoderStartTime = time.Now()
 	embeddedPlayer.current = tex
+	embeddedPlayer.currentRaw = nil
+	embeddedPlayer.width, embeddedPlayer.height = 0, 0
+	embeddedPlayer.frameSeq, embeddedPlayer.uploadedSeq = 0, 0
 	embeddedPlayer.mu.Unlock()
-	t.Cleanup(func() {
+	// Restore as this probe returns, not in t.Cleanup. Two probes in one test
+	// must each start from the same state, and the texture this probe created is
+	// destroyed with its renderer right after: leaving it (or a previous
+	// texture, whose renderer is already gone) in the global player state gave a
+	// later test a dangling SDL_Texture and crashed SDL_RenderReadPixels.
+	defer func() {
 		embeddedPlayer.mu.Lock()
 		embeddedPlayer.phase, embeddedPlayer.progress, embeddedPlayer.progressBase = prevPhase, prevProg, prevBase
 		embeddedPlayer.duration, embeddedPlayer.decoderStartTime = prevDur, prevStart
-		embeddedPlayer.current = prevTex
+		embeddedPlayer.current = nil
+		embeddedPlayer.currentRaw, embeddedPlayer.width, embeddedPlayer.height = prevRaw, prevW, prevH
+		embeddedPlayer.frameSeq, embeddedPlayer.uploadedSeq = prevSeq, prevUploaded
 		embeddedPlayer.mu.Unlock()
-	})
+	}()
 
 	DestroyVKVideoOverlayCache()
-	t.Cleanup(DestroyVKVideoOverlayCache)
+	// The cached static control layer is a texture owned by this probe's
+	// renderer, so it must go before that renderer does. Releasing it in
+	// t.Cleanup kept it alive past the renderer and the next probe destroyed a
+	// dangling texture, which surfaced as a crash inside SDL_RenderReadPixels.
+	defer DestroyVKVideoOverlayCache()
 
 	videoFullscreen = true
 	if chrome {

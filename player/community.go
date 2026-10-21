@@ -14,7 +14,9 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/skip2/go-qrcode"
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 type communityPage int
@@ -22,12 +24,16 @@ type communityPage int
 const (
 	communityPageHome communityPage = iota
 	communityPageChangelog
+	communityPageBIOSDoctor
+	communityPageDiagnosticsQR
 )
 
 type communityAction int
 
 const (
 	communityActionWhatsNew communityAction = iota
+	communityActionBIOSDoctor
+	communityActionDiagnosticsQR
 	communityActionReportBug
 	communityActionTelemetry
 	communityActionClose
@@ -56,6 +62,14 @@ var communityRowRects []sdl.Rect
 
 var communityPanelRect sdl.Rect
 
+var communityBIOSReport *biosDoctorReport
+var communityDiagnosticQR struct {
+	url  string
+	path string
+	qr   [][]bool
+	err  string
+}
+
 // communityRows builds the hub's landing list. The telemetry row is the only
 // place consent can be changed, so it states the default explicitly.
 func communityRows(config *Config) []communityRow {
@@ -75,6 +89,20 @@ func communityRows(config *Config) []communityRow {
 			detail: detail,
 			hint:   "A: read",
 			action: communityActionWhatsNew,
+		},
+		{
+			label:  "BIOS Doctor",
+			value:  "PS1 · Dreamcast · Saturn",
+			detail: "Check required filenames and SHA-256 fingerprints",
+			hint:   "A: inspect",
+			action: communityActionBIOSDoctor,
+		},
+		{
+			label:  "Diagnostics QR",
+			value:  "Redacted support report",
+			detail: "Save a report and show a time-limited phone link",
+			hint:   "A: export",
+			action: communityActionDiagnosticsQR,
 		},
 		{
 			label:  "Report a bug",
@@ -149,6 +177,15 @@ func communityPanelActivate(config *Config) {
 		communityPanel.page = communityPageChangelog
 		communityPanel.scroll = 0
 		startChangelog(config)
+	case communityActionBIOSDoctor:
+		report := scanBIOSRoots(biosDoctorRoots())
+		communityBIOSReport = &report
+		communityPanel.page = communityPageBIOSDoctor
+		communityPanel.scroll = 0
+	case communityActionDiagnosticsQR:
+		prepareCommunityDiagnosticsQR(config)
+		communityPanel.page = communityPageDiagnosticsQR
+		communityPanel.scroll = 0
 		PlayActivateSound()
 	case communityActionReportBug:
 		communityPanel.open = false
@@ -186,6 +223,39 @@ func reportBugFromUI(config *Config) {
 		return
 	}
 	ShowToast("GitHub issue opened — diagnostics copied", ToastKindSuccess)
+}
+
+func prepareCommunityDiagnosticsQR(config *Config) {
+	communityDiagnosticQR.url = ""
+	communityDiagnosticQR.path = ""
+	communityDiagnosticQR.qr = nil
+	communityDiagnosticQR.err = ""
+	path, err := ExportDiagnostics(config)
+	if err != nil {
+		communityDiagnosticQR.err = "Could not save diagnostics: " + err.Error()
+		return
+	}
+	communityDiagnosticQR.path = path
+	companionStart()
+	if companion.srv == nil {
+		communityDiagnosticQR.err = companion.err
+		if communityDiagnosticQR.err == "" {
+			communityDiagnosticQR.err = "Connect to Wi-Fi to create a phone link."
+		}
+		return
+	}
+	link, err := companion.srv.issueDiagnosticsLink(DiagnosticsText(config))
+	if err != nil {
+		communityDiagnosticQR.err = err.Error()
+		return
+	}
+	code, err := qrcode.New(link, qrcode.Medium)
+	if err != nil {
+		communityDiagnosticQR.err = "Could not create QR code: " + err.Error()
+		return
+	}
+	communityDiagnosticQR.url = link
+	communityDiagnosticQR.qr = code.Bitmap()
 }
 
 // ── Bug report ──────────────────────────────────────────────────────────────
@@ -246,6 +316,41 @@ func handleCommunityKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !communityPanel.open {
 		return false
 	}
+	if communityPanel.page == communityPageBIOSDoctor {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			communityPanel.scroll -= 2
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.K_DOWN:
+			communityPanel.scroll += 2
+		case sdl.K_PAGEUP:
+			communityPanel.scroll -= 10
+			if communityPanel.scroll < 0 {
+				communityPanel.scroll = 0
+			}
+		case sdl.K_PAGEDOWN:
+			communityPanel.scroll += 10
+		case sdl.K_y:
+			report := scanBIOSRoots(biosDoctorRoots())
+			communityBIOSReport = &report
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_SPACE:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
+	if communityPanel.page == communityPageDiagnosticsQR {
+		switch e.Keysym.Sym {
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_SPACE:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
 	if communityPanel.page == communityPageChangelog {
 		switch e.Keysym.Sym {
 		case sdl.K_UP:
@@ -291,6 +396,31 @@ func ctrlCommunity(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || !communityPanel.open {
 		return false
 	}
+	if communityPanel.page == communityPageBIOSDoctor || communityPanel.page == communityPageDiagnosticsQR {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			if communityPanel.page == communityPageBIOSDoctor {
+				communityPanel.scroll -= 2
+				if communityPanel.scroll < 0 {
+					communityPanel.scroll = 0
+				}
+			}
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			if communityPanel.page == communityPageBIOSDoctor {
+				communityPanel.scroll += 2
+			}
+		case sdl.CONTROLLER_BUTTON_Y:
+			if communityPanel.page == communityPageBIOSDoctor {
+				report := scanBIOSRoots(biosDoctorRoots())
+				communityBIOSReport = &report
+			}
+		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			communityPanel.page = communityPageHome
+			communityPanel.cursor = 0
+			PlayBackSound()
+		}
+		return true
+	}
 	if communityPanel.page == communityPageChangelog {
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -325,7 +455,7 @@ func handleCommunityMouse(mx, my int32, config *Config) bool {
 	if !communityPanel.open {
 		return false
 	}
-	if communityPanel.page == communityPageChangelog {
+	if communityPanel.page != communityPageHome {
 		if communityPanelRect.W > 0 && !pointInRect(mx, my, communityPanelRect) {
 			closeCommunityPanel()
 			return true
@@ -354,7 +484,7 @@ func handleCommunityWheel(y int32) bool {
 	if !communityPanel.open {
 		return false
 	}
-	if communityPanel.page == communityPageChangelog {
+	if communityPanel.page == communityPageChangelog || communityPanel.page == communityPageBIOSDoctor {
 		communityPanel.scroll -= int(y) * 3
 		if communityPanel.scroll < 0 {
 			communityPanel.scroll = 0
@@ -372,7 +502,7 @@ func communityPanelSize(page communityPage, rowH int32) (int32, int32) {
 		panelW = screenWidth - 40
 	}
 	var panelH int32
-	if page == communityPageChangelog {
+	if page == communityPageChangelog || page == communityPageBIOSDoctor || page == communityPageDiagnosticsQR {
 		panelH = 620
 		if panelH > screenHeight-40 {
 			panelH = screenHeight - 40
@@ -424,12 +554,30 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	if communityPanel.page == communityPageChangelog {
 		title = "What's new"
 		sub = changelogSubtitle(config)
+	} else if communityPanel.page == communityPageBIOSDoctor {
+		title = "BIOS Doctor"
+		sub = "Firmware presence and SHA-256 fingerprints"
+	} else if communityPanel.page == communityPageDiagnosticsQR {
+		title = "Diagnostics export"
+		sub = "A time-limited QR link to the redacted support report"
 	}
 	renderText(renderer, config, medium, title, ColorTextPrimary(), panelX+padX, panelY+18)
 	renderText(renderer, config, font, ellipsize(font, sub, panelW-2*padX), ColorTextTertiary(), panelX+padX, panelY+20+medH+4)
 
 	if communityPanel.page == communityPageChangelog {
 		renderCommunityChangelog(renderer, config, font, panelX, panelY, panelW, panelH, padX, smallH)
+		return
+	}
+	if communityPanel.page == communityPageBIOSDoctor {
+		if communityBIOSReport == nil {
+			report := scanBIOSRoots(biosDoctorRoots())
+			communityBIOSReport = &report
+		}
+		renderCommunityBIOSDoctor(renderer, config, font, panelX, panelY, panelW, panelH, padX, *communityBIOSReport)
+		return
+	}
+	if communityPanel.page == communityPageDiagnosticsQR {
+		renderCommunityDiagnosticsQR(renderer, config, font, medium, panelX, panelY, panelW, panelH, padX)
 		return
 	}
 
@@ -490,5 +638,50 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	footer := "A select    B close"
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
+		panelX+(panelW-int32(fw))/2, panelY+panelH-30)
+}
+
+func renderCommunityDiagnosticsQR(renderer *sdl.Renderer, config *Config, font, medium *ttf.Font,
+	panelX, panelY, panelW, panelH, padX int32) {
+	qrSize := int32(248)
+	if qrSize > panelW-64 {
+		qrSize = panelW - 64
+	}
+	qrRect := sdl.Rect{X: panelX + (panelW-qrSize)/2, Y: panelY + 104, W: qrSize, H: qrSize}
+	fillRoundedRect(renderer, qrRect.X, qrRect.Y, qrRect.W, qrRect.H, 10, sdl.Color{R: 255, G: 255, B: 255, A: 255})
+	labelY := qrRect.Y + qrRect.H + 18
+	if len(communityDiagnosticQR.qr) > 0 {
+		drawCompanionQR(renderer, sdl.Rect{X: qrRect.X + 8, Y: qrRect.Y + 8, W: qrRect.W - 16, H: qrRect.H - 16}, communityDiagnosticQR.qr)
+		label := "Scan to download · link expires in 10 minutes"
+		w, _, _ := font.SizeUTF8(label)
+		renderText(renderer, config, font, label, ColorTextSecondary(), panelX+(panelW-int32(w))/2, labelY)
+		labelY += int32(font.Height()) + 8
+	} else {
+		message := communityDiagnosticQR.err
+		if message == "" {
+			message = "No QR link is available. Connect to Wi-Fi and try again."
+		}
+		lines := wrapMeasured([]rune(message), panelW-2*padX, func(s string) int32 {
+			w, _, _ := font.SizeUTF8(s)
+			return int32(w)
+		})
+		for _, line := range lines {
+			renderText(renderer, config, font, line, ColorTextSecondary(), panelX+padX, labelY)
+			labelY += int32(font.Height()) + 4
+		}
+	}
+	if communityDiagnosticQR.path != "" {
+		name := communityDiagnosticQR.path
+		if i := strings.LastIndexAny(name, `/\\`); i >= 0 {
+			name = name[i+1:]
+		}
+		label := "Saved locally: " + name
+		w, _, _ := font.SizeUTF8(label)
+		renderText(renderer, config, font, ellipsize(font, label, panelW-2*padX), ColorTextTertiary(),
+			panelX+(panelW-int32(w))/2, labelY)
+	}
+	footer := "B back"
+	fw, _, _ := medium.SizeUTF8(footer)
+	renderText(renderer, config, medium, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)
 }

@@ -127,8 +127,9 @@ func TestChiakiLaunchEnvUsesBundledRuntime(t *testing.T) {
 }
 
 // The port ships an English catalogue and stores the choice in settings.json.
-// JukaHub switches that one key instead of patching the app, and must never
-// lose the pairing keys or any other setting while doing it.
+// JukaHub switches that one key (plus the literals outside the catalogue, see
+// chiaki_translate_test.go), and must never lose the pairing keys or any other
+// setting while doing it.
 func TestChiakiSettingsLanguageTogglePreservesOtherKeys(t *testing.T) {
 	app := t.TempDir()
 	writeChiakiTestFile(t, filepath.Join(app, "settings.json"),
@@ -295,16 +296,23 @@ func TestChiakiPanelShowsInterfaceLanguageRow(t *testing.T) {
 	}
 }
 
-func TestChiakiEnsureEnglishDefaultOnlyOnFreshInstall(t *testing.T) {
+func TestChiakiPanelHidesPS5LanguageRowWithoutBeta(t *testing.T) {
+	withChiakiSDRoot(t)
+	if row, ok := chiakiRowByLabel(chiakiRows(), "PS5 interface language"); ok {
+		t.Fatalf("PS5 language row shown without an install: %+v", row)
+	}
+}
+
+func TestChiakiEnsureEnglishOnlyOnFreshInstall(t *testing.T) {
 	fresh := t.TempDir()
-	chiakiEnsureEnglishDefault(fresh)
+	chiakiEnsureEnglish(fresh)
 	if got := chiakiSettingsLanguage(fresh); got != "EN" {
 		t.Fatalf("fresh install language = %q, want EN", got)
 	}
 
 	existing := t.TempDir()
 	writeChiakiTestFile(t, filepath.Join(existing, "settings.json"), `{"language":"VI"}`)
-	chiakiEnsureEnglishDefault(existing)
+	chiakiEnsureEnglish(existing)
 	if got := chiakiSettingsLanguage(existing); got != "VI" {
 		t.Fatalf("existing language was overwritten: %q", got)
 	}
@@ -401,6 +409,23 @@ func TestChiakiPanelOffersLaunchOncePS5IsInstalled(t *testing.T) {
 	}
 	if _, ok := chiakiRowByLabel(rows, "Install PS5 beta"); ok {
 		t.Fatal("install row should disappear once the beta is installed")
+	}
+
+	// The beta has its own settings.json, so it needs its own language row:
+	// the stable row must not claim to control the PS5 build's menus.
+	writeChiakiTestFile(t, filepath.Join(app, "settings.json"), `{"language":"EN"}`)
+	lang, ok := chiakiRowByLabel(chiakiRows(), "PS5 interface language")
+	if !ok {
+		t.Fatalf("no PS5 language row: %+v", chiakiRows())
+	}
+	if lang.action != chiakiActionLanguagePS5 {
+		t.Fatalf("PS5 language action = %v", lang.action)
+	}
+	if lang.status != "EN" {
+		t.Fatalf("PS5 language status = %q, want EN", lang.status)
+	}
+	if !strings.Contains(lang.detail, "Vietnamese") {
+		t.Fatalf("PS5 row should offer the other language: %q", lang.detail)
 	}
 }
 

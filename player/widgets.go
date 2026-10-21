@@ -327,7 +327,7 @@ func ensureSmartSettingsScene(config *Config) {
 	}
 	elems = append(elems, Element{
 		Type:  "label",
-		Text:  "On the handheld the OS owns startup apps, so login start stays off there.",
+		Text:  "On the handheld the hook is System/starts on the SD card; here it is your login folder.",
 		Font:  "small",
 		X:     40,
 		Y:     y + 10,

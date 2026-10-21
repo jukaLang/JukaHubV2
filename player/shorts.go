@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -14,7 +13,50 @@ var (
 	shortsMutex     sync.Mutex
 	currentShortIdx int = -1
 	shortsScrollY   int32
+	shortsCols      = 1
 )
+
+type shortsGridLayout struct {
+	thumbWidth  int32
+	thumbHeight int32
+	cellWidth   int32
+	cellHeight  int32
+	gap         int32
+	cols        int
+	originX     int32
+}
+
+func newShortsGridLayout(element Element, elemW int32) shortsGridLayout {
+	layout := shortsGridLayout{
+		thumbWidth:  160,
+		thumbHeight: 250,
+		cellWidth:   180,
+		cellHeight:  298,
+		gap:         16,
+		cols:        1,
+	}
+	if elemW <= 0 {
+		return layout
+	}
+	layout.cols = int((elemW + layout.gap) / (layout.cellWidth + layout.gap))
+	if layout.cols < 1 {
+		layout.cols = 1
+	}
+	gridWidth := int32(layout.cols)*layout.cellWidth + int32(layout.cols-1)*layout.gap
+	layout.originX = element.X + (elemW-gridWidth)/2 + (layout.cellWidth-layout.thumbWidth)/2
+	return layout
+}
+
+func shortsGridCellRect(element Element, layout shortsGridLayout, index int, scrollY int32) sdl.Rect {
+	col := int32(index % layout.cols)
+	row := int32(index / layout.cols)
+	return sdl.Rect{
+		X: element.X + (layout.originX - element.X - (layout.cellWidth-layout.thumbWidth)/2) + col*(layout.cellWidth+layout.gap),
+		Y: element.Y + 10 + row*(layout.cellHeight+layout.gap) - scrollY,
+		W: layout.cellWidth,
+		H: layout.cellHeight,
+	}
+}
 
 func fetchYouTubeShorts(config *Config, resultVar string, vars map[string]interface{}) {
 	cmd := `yt-dlp --flat-playlist --dump-single-json --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors "ytsearch10:shorts"` + " " + ytDlpExtraArgs(config)
@@ -35,20 +77,19 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 		return
 	}
 
-	thumbWidth := int32(160)
-	thumbHeight := int32(280)
-	cellWidth := thumbWidth + 20
-	cellHeight := thumbHeight + 50
-	cols := 3
-
 	elemW := getElementWidth(element, 1080)
 	elemH := getElementHeight(element, 500)
+	layout := newShortsGridLayout(element, elemW)
+	shortsCols = layout.cols
+	thumbWidth, thumbHeight := layout.thumbWidth, layout.thumbHeight
+	cellWidth, cellHeight, cols := layout.cellWidth, layout.cellHeight, layout.cols
+	rowGap := layout.gap
 
 	totalRows := (len(videos) + cols - 1) / cols
 	if totalRows < 1 {
 		totalRows = 1
 	}
-	maxVisibleRows := int((elemH - 20) / cellHeight)
+	maxVisibleRows := int((elemH - 20 + rowGap) / (cellHeight + rowGap))
 	if maxVisibleRows < 1 {
 		maxVisibleRows = 1
 	}
@@ -57,7 +98,7 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	if currentShortIdx >= 0 {
 		focusedRow := int32(currentShortIdx) / int32(cols)
 		if int(focusedRow) >= maxVisibleRows {
-			targetScrollY = (focusedRow - int32(maxVisibleRows) + 1) * (cellHeight + 10)
+			targetScrollY = (focusedRow - int32(maxVisibleRows) + 1) * (cellHeight + rowGap)
 		}
 	}
 	if targetScrollY < 0 {
@@ -65,7 +106,7 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 	maxScroll := int32(0)
 	if totalRows > maxVisibleRows {
-		maxScroll = int32(totalRows-maxVisibleRows) * (cellHeight + 10)
+		maxScroll = int32(totalRows-maxVisibleRows) * (cellHeight + rowGap)
 		if maxScroll < 0 {
 			maxScroll = 0
 		}
@@ -79,89 +120,87 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
-
-	for i, vid := range videos {
-		col := int32(i) % int32(cols)
-		row := int32(i) / int32(cols)
-		xPos := element.X + 20 + col*cellWidth
-		yPos := element.Y + 10 + row*(cellHeight+10) - shortsScrollY
-
-		if yPos+cellHeight < element.Y || yPos > element.Y+elemH {
-			continue
-		}
-
-		if i == currentShortIdx {
-			// soft layered focus glow
-			fillRoundedRect(renderer, xPos-5, yPos-5, cellWidth+10, cellHeight+10, 13, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 45})
-			fillRoundedRect(renderer, xPos-4, yPos-4, cellWidth+8, cellHeight+8, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 95})
-			fillRoundedRect(renderer, xPos-2, yPos-2, cellWidth+4, cellHeight+4, 11, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 140})
-		}
-
-		// card shadow
-		fillRoundedRect(renderer, xPos+3, yPos+4, thumbWidth, thumbHeight, 10, ShadowFill(60))
-		// card background
-		fillRoundedRect(renderer, xPos, yPos, thumbWidth, thumbHeight, 10, ColorSurfaceAlt)
-		// 1px top highlight line
-		renderer.SetDrawColor(255, 255, 255, 14)
-		renderer.FillRect(&sdl.Rect{X: xPos + 2, Y: yPos + 1, W: thumbWidth - 4, H: 1})
-
-		thumbLoaded := false
-		if vid.Thumbnail != "" {
-			tex := loadThumbnail(renderer, vid.Thumbnail)
-			if tex != nil {
-				renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-				thumbLoaded = true
-			}
-		}
-		if !thumbLoaded && len(vid.Thumbnails) > 0 {
-			tex := loadThumbnailFromURLs(renderer, vid.Thumbnails)
-			if tex != nil {
-				renderer.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-				thumbLoaded = true
-			}
-		}
-		if !thumbLoaded && placeholderTexture != nil {
-			renderer.Copy(placeholderTexture, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-		}
-
-		// title overlay at bottom of thumbnail (vertical scrim: opaque bottom → transparent top)
-		// Clip to the card width in pixels with the fallback-aware measurement,
-		// so a Japanese or emoji title is neither split mid-character nor
-		// drawn past the card edge.
-		title := fitTextToWidth(font, vid.Title, thumbWidth-16)
-		titleY := yPos + thumbHeight - 30
-		for s := int32(0); s < 30; s += 3 {
-			a := uint8(40 + float64(s)/30.0*120)
-			renderer.SetDrawColor(0, 0, 0, a)
-			renderer.FillRect(&sdl.Rect{X: xPos, Y: titleY + s, W: thumbWidth, H: 3})
-		}
-		renderText(renderer, config, font, title, ColorTextPrimary(), xPos+8, titleY+6)
-
-		dur := fmt.Sprintf("%d:%02d", int(vid.Duration)/60, int(vid.Duration)%60)
-		bw, bh := int32(50), int32(20)
-		bx := xPos + thumbWidth - bw - 6
-		by := yPos + thumbHeight - 26
-		fillRoundedRect(renderer, bx, by, bw, bh, 6, ShadowFill(160))
-		renderer.SetDrawColor(255, 255, 255, 45)
-		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + 1, W: bw - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + 1, W: 1, H: bh - 2})
-		renderer.DrawRect(&sdl.Rect{X: bx + 1, Y: by + bh - 2, W: bw - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: bx + bw - 2, Y: by + 1, W: 1, H: bh - 2})
-		renderText(renderer, config, font, dur, ColorTextPrimary(), bx+6, by+3)
+	fontSmall, _ := getCachedFont(config, "small")
+	if fontSmall == nil {
+		fontSmall = font
 	}
+
+	renderWithClip(renderer, element.X, element.Y, elemW, elemH, func(r *sdl.Renderer) {
+		for i, vid := range videos {
+			cell := shortsGridCellRect(element, layout, i, shortsScrollY)
+			cellX, yPos := cell.X, cell.Y
+			xPos := cellX + (cellWidth-thumbWidth)/2
+
+			if yPos+cellHeight < element.Y || yPos > element.Y+elemH {
+				continue
+			}
+
+			if i == currentShortIdx {
+				fillRoundedRect(r, cellX-3, yPos-3, cellWidth+6, cellHeight+6, 13, WithAlpha(accentColor, 90))
+			}
+
+			fillRoundedRect(r, cellX, yPos, cellWidth, cellHeight, 12, ColorSurfaceAlt)
+			strokeRoundedRect(r, cellX, yPos, cellWidth, cellHeight, 12, 1, ColorBorder)
+
+			thumbLoaded := false
+			if vid.Thumbnail != "" {
+				tex := loadThumbnail(r, vid.Thumbnail)
+				if tex != nil {
+					r.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+					thumbLoaded = true
+				}
+			}
+			if !thumbLoaded && len(vid.Thumbnails) > 0 {
+				tex := loadThumbnailFromURLs(r, vid.Thumbnails)
+				if tex != nil {
+					r.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+					thumbLoaded = true
+				}
+			}
+			if !thumbLoaded && placeholderTexture != nil {
+				r.Copy(placeholderTexture, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
+			}
+
+			drawDurationBadge(r, config, fontSmall, vid.Duration, xPos+thumbWidth-58, yPos+thumbHeight-23, 52, 18)
+			title := ellipsize(font, vid.Title, cellWidth-16)
+			renderText(r, config, font, title, ColorTextPrimary(), cellX+8, yPos+thumbHeight+12)
+		}
+	})
 }
 
 func handleShortsInput(e *sdl.KeyboardEvent, config *Config) {
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		for _, element := range config.Scenes[currentSceneIndex].Elements {
+			if element.Type == "shortslist" {
+				shortsCols = newShortsGridLayout(element, getElementWidth(element, 1080)).cols
+				break
+			}
+		}
+	}
 	shortsMutex.Lock()
 	videos := shortsList
 	shortsMutex.Unlock()
 
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
+		if currentShortIdx >= 0 {
+			if next := currentShortIdx - shortsCols; next >= 0 {
+				currentShortIdx = next
+			}
+		}
+	case sdl.K_DOWN:
+		if currentShortIdx < 0 && len(videos) > 0 {
+			currentShortIdx = 0
+		} else if currentShortIdx >= 0 {
+			if next := currentShortIdx + shortsCols; next < len(videos) {
+				currentShortIdx = next
+			}
+		}
+	case sdl.K_LEFT:
 		if currentShortIdx > 0 {
 			currentShortIdx--
 		}
-	case sdl.K_DOWN:
+	case sdl.K_RIGHT:
 		if currentShortIdx < len(videos)-1 {
 			currentShortIdx++
 		}

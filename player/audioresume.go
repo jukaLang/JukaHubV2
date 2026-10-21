@@ -9,7 +9,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -237,8 +236,9 @@ func audioClampSpeed(speed float64) float64 {
 	return speed
 }
 
-// musicFFmpegArgs builds the decoder command line. The atempo filter keeps the
-// pitch when the speed changes, and is only added when it would do something.
+// musicFFmpegArgs builds the decoder command line. The filter graph carries the
+// 31-band PEQ and the atempo filter that keeps the pitch when the speed changes;
+// both are dropped on the bit-perfect path, which leaves the samples alone.
 func musicFFmpegArgs(path string, startSec, speed float64, rate int32) []string {
 	if rate <= 0 {
 		rate = 44100
@@ -252,8 +252,8 @@ func musicFFmpegArgs(path string, startSec, speed float64, rate int32) []string 
 		"-i", path,
 		"-vn", "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "2",
 		"-ar", strconv.Itoa(int(rate)))
-	if speed != 1 {
-		args = append(args, "-af", fmt.Sprintf("atempo=%.2f", speed))
+	if chain := musicPEQCurrentChain(speed); chain != "" {
+		args = append(args, "-af", chain)
 	}
 	return append(args, "pipe:1")
 }

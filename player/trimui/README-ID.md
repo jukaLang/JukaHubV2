@@ -68,6 +68,31 @@ SYSROOT=/usr/local/aarch64-linux-gnu-7.5.0-linaro/sysroot ./package-sdcard.sh
 Kalau `Apps/JukaHub` tidak muncul di menu, matikan perangkat dulu lalu nyalakan
 lagi (launcher stock membaca folder `Apps` saat boot).
 
+### Jalankan otomatis saat boot
+
+Buka **Settings → Smart Widgets** dan nyalakan **Start JukaHub at login**.
+JukaHub lalu menulis satu file hook:
+
+```
+SDCARD/System/starts/jukahub-autostart.sh
+```
+
+`runtrimui.sh` menjalankan script di folder `System/starts` saat boot, jadi
+JukaHub langsung terbuka setelah perangkat menyala. Script itu langsung selesai
+(lanjut di background), menunggu MainUI muncul paling lama 30 detik, lalu
+menjalankan `launch.sh` — boot tidak pernah tertahan kalau aplikasi gagal start.
+Output-nya masuk ke `Apps/JukaHub/autostart.log`.
+
+Mematikannya: matikan toggle yang sama, atau hapus file
+`System/starts/jukahub-autostart.sh` secara manual. File lain di folder itu tidak
+disentuh. Kalau SD card tidak terdeteksi (misalnya biner dijalankan dari
+symlink), toggle menolak dan menjelaskan alasannya; set `JUKAHUB_SD_ROOT` ke
+root kartu untuk menunjuk lokasi yang benar.
+
+Catatan: ini hook yang dipakai komunitas dan CrossMix, bukan antarmuka resmi
+trimui. Kalau firmware kamu memakai mekanisme lain, jalankan `launch.sh` dari
+hook firmware tersebut — hasilnya sama.
+
 ---
 
 ## 3. Kalau ada masalah

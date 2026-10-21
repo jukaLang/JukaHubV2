@@ -10,6 +10,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -98,7 +99,11 @@ func gameProfilePanelActivate() {
 	entry := entries[gpPanel.cursor]
 	if err := launchGameProfile(entry); err != nil {
 		log.Printf("[gameprofiles] launch %s failed: %v", entry.Profile.ID, err)
-		ShowToast("Could not launch "+entry.Profile.Title+": "+err.Error(), ToastKindError)
+		logPath := filepath.Join(gameProfilesLogsDir(), entry.Profile.ID+".log")
+		if _, statErr := os.Stat(logPath); statErr != nil {
+			logPath = ""
+		}
+		showLaunchFailureDialog(entry.Profile.Title, err, logPath)
 		return
 	}
 	gpPanel.open = false

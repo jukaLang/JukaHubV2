@@ -82,9 +82,21 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if winAppsPanel.open {
 		return ctrlWindowsApps(e, config)
 	}
+	// Remote Cast panel is modal while open.
+	if castPanel.open {
+		return ctrlCastPanel(e, config)
+	}
+	// Audio settings are modal: the panel owns the d-pad while open.
+	if musicSettings.open {
+		return ctrlMusicSettings(e, config)
+	}
 	// Accessibility settings are modal: the panel owns the d-pad while open.
 	if a11y.open {
 		return ctrlAccessibilityPanel(e, config)
+	}
+	// Smart Home is modal too: the d-pad walks its rows.
+	if smartHomePanel.open {
+		return ctrlSmartHomePanel(e, config)
 	}
 	// PS Remote Play installer/launcher is modal too.
 	if chiakiPanel.open {
