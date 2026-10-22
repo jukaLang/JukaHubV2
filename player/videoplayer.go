@@ -217,6 +217,71 @@ func seekVideoBySeconds(state videoStateSnapshot, seconds float64) {
 	SeekVideo(clampSeekFraction(state.progress, state.duration, seconds))
 }
 
+// playbackQueue remembers the list the current video came from, so L2/R2 can
+// step through it without leaving the player.
+type playbackQueueState struct {
+	videos []VideoInfo
+	index  int
+	shorts bool
+}
+
+var playbackQueue playbackQueueState
+
+// setPlaybackQueue records the list behind v: the Shorts feed first (a short
+// always belongs to it), then the search results of the scene that launched
+// the video. Anything else leaves the queue empty.
+func setPlaybackQueue(config *Config, v VideoInfo) {
+	playbackQueue = playbackQueueState{index: -1}
+	url := v.GetURL()
+	if config == nil || url == "" {
+		return
+	}
+	if vids := shortsVideos(config); len(vids) > 0 {
+		for i := range vids {
+			if vids[i].GetURL() == url {
+				playbackQueue = playbackQueueState{videos: vids, index: i, shorts: true}
+				return
+			}
+		}
+	}
+	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
+		if vids, ok := getSceneVideos(config, config.Scenes[currentSceneIndex]); ok {
+			for i := range vids {
+				if vids[i].GetURL() == url {
+					playbackQueue = playbackQueueState{videos: vids, index: i}
+					return
+				}
+			}
+		}
+	}
+}
+
+// skipPlayback moves to the previous/next video of the list that launched the
+// current one. The ends of the list answer with a message, not a dead press.
+func skipPlayback(config *Config, delta int) bool {
+	if config == nil || playbackQueue.index < 0 || len(playbackQueue.videos) == 0 {
+		ShowToast("No list to skip through", ToastKindInfo)
+		return true
+	}
+	next := playbackQueue.index + delta
+	if next < 0 || next >= len(playbackQueue.videos) {
+		if delta > 0 {
+			ShowToast("No more videos in this list", ToastKindInfo)
+		} else {
+			ShowToast("This is the first video", ToastKindInfo)
+		}
+		return true
+	}
+	if playbackQueue.shorts {
+		// A short belongs to the feed: startShortAt keeps auto-advance armed.
+		startShortAt(config, next)
+	} else {
+		playVideoInfo(config, playbackQueue.videos[next])
+	}
+	PlayActivateSound()
+	return true
+}
+
 // cyclePlaybackSpeed steps to the next preset speed.
 func cyclePlaybackSpeed() {
 	speeds := []float64{0.5, 0.75, 1.0, 1.25, 1.5, 2.0}
@@ -1392,6 +1457,11 @@ func videoSyncPlaybackEnd() {
 		return
 	}
 	log.Printf("[VIDEO] Playback finished; returning to the scene")
+	if shortsAutoplay {
+		// A short reached its natural end: the main loop starts the next one
+		// instead of dropping the user back on the grid.
+		shortsAutoAdvance = true
+	}
 	StopEmbeddedPlayback()
 }
 
@@ -2121,6 +2191,25 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		}
 	}
 
+	// Shift + arrows mirror the shoulders: seek through the clip, or step to
+	// the next/previous video of the list that launched it.
+	if e.Keysym.Mod&sdl.KMOD_SHIFT != 0 {
+		switch e.Keysym.Sym {
+		case sdl.K_LEFT:
+			seekVideoBySeconds(state, -10)
+		case sdl.K_RIGHT:
+			seekVideoBySeconds(state, 10)
+		case sdl.K_DOWN, sdl.K_n:
+			skipPlayback(appConfig, 1)
+		case sdl.K_UP, sdl.K_p:
+			skipPlayback(appConfig, -1)
+		default:
+			return false
+		}
+		revealVideoChrome()
+		return true
+	}
+
 	switch e.Keysym.Sym {
 	case sdl.K_SPACE, sdl.K_RETURN:
 		activateVideoControl()
@@ -2215,9 +2304,11 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		AdjustVolume(-0.1)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		SetPlaybackSpeed(state.speed - 0.25)
+		// Shoulders skip through the clip; speed lives on the overlay button
+		// and the 1-4 keys, where an accidental brush cannot change it.
+		seekVideoBySeconds(state, -10)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		SetPlaybackSpeed(state.speed + 0.25)
+		seekVideoBySeconds(state, 10)
 	case sdl.CONTROLLER_BUTTON_X:
 		toggleSubtitlesWithFeedback()
 	case sdl.CONTROLLER_BUTTON_Y:

@@ -33,6 +33,26 @@ var shortcutCategories = []struct {
 		},
 	},
 	{
+		title: "Media & video",
+		items: []shortcutEntry{
+			{"L1 / R1", "Page lists; skip -10/+10 s in the player"},
+			{"L2 / R2", "Results page; previous / next video"},
+			{"PgUp/PgDn", "Previous / next results page"},
+			{"Shift+Left/Right", "Skip -10 / +10 s"},
+		},
+	},
+	{
+		title: "Browser",
+		items: []shortcutEntry{
+			{"← →", "Walk links on the page"},
+			{"A", "Open the link / edit the address"},
+			{"Y", "Search the web"},
+			{"X", "Full link list"},
+			{"L1 / R1", "Scroll a page"},
+			{"Up / Down at the ends", "Reach the header and the button row"},
+		},
+	},
+	{
 		title: "Global",
 		items: []shortcutEntry{
 			{"F1", "Keyboard shortcuts"},
@@ -40,6 +60,7 @@ var shortcutCategories = []struct {
 			{"F5", "Refresh"},
 			{"F11", "Toggle fullscreen"},
 			{"Ctrl+Q", "Quick settings"},
+			{"Ctrl+Shift+S", "Shorts feed (Media)"},
 			{"Ctrl+L", "Log viewer"},
 			{"PgUp/PgDn", "Page up / down"},
 		},

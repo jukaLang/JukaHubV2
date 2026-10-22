@@ -21,27 +21,30 @@ import (
 
 // --- System status helpers ---
 
+// batteryPercentCache keeps the sysfs read off the render path: the header
+// asks for the level every frame, and on the handheld each read is a syscall
+// plus a directory walk.
+var batteryPercentCache struct {
+	mu  sync.Mutex
+	at  time.Time
+	pct int
+}
+
+// batteryPercentRefresh is how long a reading is reused. Long enough to skip
+// per-frame reads, short enough that the number visibly tracks the charge.
+const batteryPercentRefresh = time.Second
+
 func getBatteryPercent() int {
+	batteryPercentCache.mu.Lock()
+	defer batteryPercentCache.mu.Unlock()
+	if !batteryPercentCache.at.IsZero() && time.Since(batteryPercentCache.at) < batteryPercentRefresh {
+		return batteryPercentCache.pct
+	}
 	// The same sysfs battery the charging check reads (see batterySysfsDir); -1
 	// means "unknown", which the battery saver treats as "do nothing".
-	dir := batterySysfsDir()
-	if dir == "" {
-		return -1
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "capacity"))
-	if err != nil {
-		return -1
-	}
-	var pct int
-	if _, err := fmt.Fscan(strings.NewReader(string(data)), &pct); err != nil {
-		return -1
-	}
-	if pct > 100 {
-		pct = 100
-	}
-	if pct < 0 {
-		pct = 0
-	}
+	pct := batteryPercentIn(batterySysfsDir())
+	batteryPercentCache.at = time.Now()
+	batteryPercentCache.pct = pct
 	return pct
 }
 
@@ -712,25 +715,16 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	gap := StatusPartGap
 
 	// Measure total width and drop least-important items if they don't fit
-	// next to the brand/version/scene/back cluster.
-	totalW := int32(0)
-	for _, p := range parts {
-		pw, _, _ := statusFont.SizeUTF8(p)
-		totalW += int32(pw)
-	}
-	if len(parts) > 1 {
-		totalW += gap * int32(len(parts)-1)
-	}
+	// next to the brand/version/scene/back cluster. Battery and clock are what
+	// the user needs at a glance, so the network name goes first.
 	maxW := screenWidth - StatusBarMargin - titleX - headerTextW - Space2XL
 	if maxW < 120 {
 		maxW = 120
 	}
-	for totalW > maxW && len(parts) > 1 {
-		pw, _, _ := statusFont.SizeUTF8(parts[len(parts)-1])
-		totalW -= int32(pw)
-		totalW -= gap
-		parts = parts[:len(parts)-1]
-	}
+	parts = fitStatusParts(parts, func(p string) int32 {
+		pw, _, _ := statusFont.SizeUTF8(p)
+		return int32(pw)
+	}, gap, maxW)
 
 	// Vertically center the cluster in the bar (same 16px font and position
 	// as the home header).
@@ -738,7 +732,15 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if statusY < 0 {
 		statusY = 0
 	}
-	startX := rightX - totalW
+	clusterW := int32(0)
+	for _, p := range parts {
+		pw, _, _ := statusFont.SizeUTF8(p)
+		clusterW += int32(pw)
+	}
+	if len(parts) > 1 {
+		clusterW += gap * int32(len(parts)-1)
+	}
+	startX := rightX - clusterW
 	for _, p := range parts {
 		pw, _, _ := statusFont.SizeUTF8(p)
 		col := secondary
@@ -776,6 +778,44 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		by := (barH - bellH) / 2
 		renderNotifBell(renderer, config, screenWidth-StatusBarMargin, by)
 	}
+}
+
+// fitStatusParts trims the status cluster until it fits maxW. The network name
+// is the only part that may go first: an offline warning explains failures and
+// stays, and so do the weather, clock and battery readings.
+func fitStatusParts(parts []string, width func(string) int32, gap, maxW int32) []string {
+	total := int32(0)
+	for _, p := range parts {
+		total += width(p)
+	}
+	if len(parts) > 1 {
+		total += gap * int32(len(parts)-1)
+	}
+	for total > maxW && len(parts) > 1 {
+		drop := statusDropIndex(parts)
+		total -= width(parts[drop]) + gap
+		parts = append(parts[:drop], parts[drop+1:]...)
+	}
+	return parts
+}
+
+// statusDropIndex picks the least important part to remove when the bar is
+// crowded: the network name first, then the forecast, then the offline badge.
+// The clock and the battery level are what the user glanced at, so they leave
+// last.
+func statusDropIndex(parts []string) int {
+	if len(parts) > 2 && !strings.HasPrefix(parts[0], "! Offline") {
+		return 0
+	}
+	for i, p := range parts {
+		if isWeatherStatusPart(p) {
+			return i
+		}
+	}
+	if len(parts) > 2 && strings.HasPrefix(parts[0], "! Offline") {
+		return 0
+	}
+	return len(parts) - 1
 }
 
 // headerStatusParts returns the right-side status cluster in one canonical
@@ -835,6 +875,15 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		{Button: "B", Label: backLabel},
 	}
 	switch scene.Name {
+	case "Browser":
+		// The browser has its own D-pad model: links on the page, the address
+		// bar on A, the search keyboard on Y and the full link list on X.
+		hints[1] = FooterHint{Button: "A", Label: "Link / URL"}
+		hints = append(hints,
+			FooterHint{Button: "L1/R1", Label: "Scroll"},
+			FooterHint{Button: "Y", Label: "Search"},
+			FooterHint{Button: "X", Label: "Links"},
+		)
 	case "Chat":
 		// A opens the on-screen keyboard (Return inside it sends); Y sends the
 		// draft straight to the assistant and X renames the local user.
@@ -844,7 +893,17 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			FooterHint{Button: "X", Label: "Rename"},
 		)
 	case "Tube":
-		hints = append(hints, FooterHint{Button: "X", Label: "Search"})
+		// Shoulders page the results, triggers fetch the next page: the chip in
+		// the corner advertises the same action.
+		hints = append(hints,
+			FooterHint{Button: "X", Label: "Search"},
+			FooterHint{Button: "Y", Label: "Shorts"},
+			FooterHint{Button: "L1/R1", Label: "Page"},
+			FooterHint{Button: "R2", Label: "More"},
+		)
+	case "Apps":
+		// The launcher is a tile grid: A starts the focused app.
+		hints[1] = FooterHint{Button: "A", Label: "Launch"}
 	case "Patch":
 		// Patch is modal-aware and lists the keys the open dialog takes.
 		if patchHints, ok := patchFooterHints(); ok {
@@ -1226,10 +1285,21 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	config.Variables.ReducedMotion = user.Variables.ReducedMotion
 	config.Variables.LowPower = user.Variables.LowPower
 	config.Variables.LEDSync = user.Variables.LedSync
-	// A zero timeout means "not saved" (old user files), not "never sleep":
-	// keep the validator's 5-minute default instead of disabling the screensaver.
+	// A zero timeout means "not saved" (old user files), not "never sleep".
 	if user.Variables.ScreensaverTimeout > 0 {
 		config.Variables.ScreensaverTimeout = user.Variables.ScreensaverTimeout
+	}
+	// 300 was the old shipped default, so an untouched user file still says
+	// "5 minutes". Move it to the new 25 s default once and remember that the
+	// value is the user's own choice from then on.
+	if config.Variables.ScreensaverTimeout == 300 {
+		if _, migrated := customValue(config.Variables.Custom, "screensaverTimeoutMigrated"); !migrated {
+			config.Variables.ScreensaverTimeout = 25
+			if config.Variables.Custom == nil {
+				config.Variables.Custom = map[string]interface{}{}
+			}
+			config.Variables.Custom["screensaverTimeoutMigrated"] = true
+		}
 	}
 	for k, v := range user.Variables.Custom {
 		if !volatileCustomVars[k] {

@@ -801,6 +801,9 @@ func renderAmbient(renderer *sdl.Renderer, config *Config) bool {
 
 	ambientDrawNowPlaying(renderer, config, smallFont, mediumFont)
 	ambientDrawStatus(renderer, config, smallFont, now)
+	// Messages that arrive while the dock is up are readable here too, the same
+	// card the starfield saver shows.
+	ambientDrawChat(renderer, config, now)
 	ambientDrawButtons(renderer, config, smallFont)
 
 	return true
@@ -1013,6 +1016,23 @@ func ambientDrawStatus(renderer *sdl.Renderer, config *Config, smallFont *ttf.Fo
 	}
 }
 
+// ambientDrawChat keeps the newest incoming messages visible on the dock. It
+// sits above the now-playing card so the two never overlap, and fades with the
+// dock's own text rather than the saver's fade-in.
+func ambientDrawChat(renderer *sdl.Renderer, config *Config, now time.Time) {
+	notes := screensaverChatNotes(now, ssChatShown)
+	if len(notes) == 0 {
+		return
+	}
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	lineH := int32(font.Height()) + 6
+	cardH := int32(38) + lineH*int32(len(notes))
+	drawChatCard(renderer, config, notes, 255, 56, screenHeight-192-cardH)
+}
+
 // ambientDrawButtons lays out the bottom chip row and records the hit rects.
 func ambientDrawButtons(renderer *sdl.Renderer, config *Config, font *ttf.Font) {
 	if font == nil {
@@ -1071,9 +1091,10 @@ func ambientDurationText(d time.Duration) string {
 }
 
 // ambientAutoCheckInterval bounds how often the main loop checks the auto-entry
-// rule. It reads UI modal flags and the battery sysfs, so it runs on the event
-// thread rather than in a goroutine.
-const ambientAutoCheckInterval = 5 * time.Second
+// rule. One second, like the screensaver, so the dock appears within a tick of
+// the configured idle timeout instead of up to five seconds late. The battery
+// read behind it is cached (ambientStatusRefresh).
+const ambientAutoCheckInterval = time.Second
 
 var ambientLastAutoCheck time.Time
 
@@ -1090,7 +1111,12 @@ func ambientAutoTick(config *Config, now time.Time) {
 	if ambientEntryBlocked(config) {
 		return
 	}
-	if ambientShouldEnter(getBatteryCharging(), userInputAge(now), ambientDockIdleTimeout, screensaverIdleTimeout) {
+	// A download or a patch install is visible progress: the dock must not
+	// cover it. Music is allowed, since the dock shows what is playing.
+	if installInProgress() || patchInstallBusy() {
+		return
+	}
+	if ambientShouldEnter(ambientReadStatus(now).charging, userInputAge(now), ambientDockIdleTimeout, screensaverIdleTimeout) {
 		ambientEnter(config)
 	}
 }

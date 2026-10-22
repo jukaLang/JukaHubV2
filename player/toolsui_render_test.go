@@ -79,8 +79,8 @@ func TestToolsPanelRenderLayout(t *testing.T) {
 	config := &Config{}
 	f, panel, rects := renderToolsProbe(t, config, 0)
 
-	if panel.W != 760 {
-		t.Fatalf("panel width = %d, want 760 on a 1280px screen", panel.W)
+	if panel.W != 880 {
+		t.Fatalf("panel width = %d, want 880 on a 1280px screen", panel.W)
 	}
 	if panel.X != (probeW-panel.W)/2 {
 		t.Fatalf("panel is not horizontally centred: x=%d w=%d screen=%d", panel.X, panel.W, probeW)
@@ -99,12 +99,10 @@ func TestToolsPanelRenderLayout(t *testing.T) {
 			t.Fatalf("row %d %+v escapes panel %+v", i, r, *panel)
 		}
 		if i > 0 {
-			step := rects[1].Y - rects[0].Y
-			if step < r.H {
-				t.Fatalf("rows overlap: step %d < row height %d", step, r.H)
-			}
-			if r.Y != rects[i-1].Y+step {
-				t.Fatalf("row %d starts at y=%d, want %d", i, r.Y, rects[i-1].Y+step)
+			// Section headings sit between groups, so the gap is not constant;
+			// what must hold is that rows stay in order and never overlap.
+			if r.Y < rects[i-1].Y+rects[i-1].H {
+				t.Fatalf("row %d at y=%d overlaps the previous row ending at %d", i, r.Y, rects[i-1].Y+rects[i-1].H)
 			}
 		}
 	}
@@ -145,14 +143,18 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 	defer ftpSrv.Stop()
 
 	rows := toolsRows(&Config{})
-	if rows[0].value != "Running" {
-		t.Fatalf("FTP row value = %q, want Running", rows[0].value)
+	ftp := toolsRowByAction(rows, toolsActionFTP)
+	if ftp == nil {
+		t.Fatal("no FTP row")
 	}
-	if rows[0].hint != "A Stop" {
-		t.Fatalf("FTP row hint = %q, want A Stop", rows[0].hint)
+	if ftp.value != "Running" {
+		t.Fatalf("FTP row value = %q, want Running", ftp.value)
 	}
-	if !strings.HasPrefix(rows[0].detail, "ftp://") {
-		t.Fatalf("FTP row detail = %q, want the ftp:// address", rows[0].detail)
+	if ftp.hint != "A Stop" {
+		t.Fatalf("FTP row hint = %q, want A Stop", ftp.hint)
+	}
+	if !strings.HasPrefix(ftp.detail, "ftp://") {
+		t.Fatalf("FTP row detail = %q, want the ftp:// address", ftp.detail)
 	}
 
 	f, panel, rects := renderToolsProbe(t, &Config{}, 0)
@@ -170,43 +172,44 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
 	rows := toolsRows(config)
-	if len(rows) != 8 {
-		t.Fatalf("rows = %d, want FTP, SSH, phone companion, Watch Party, Community, Power tools, IP and Close only", len(rows))
+	if len(rows) != 7 {
+		t.Fatalf("rows = %d, want IP, FTP, companion, SSH, party, power tools and community only", len(rows))
 	}
-	if rows[0].action != toolsActionFTP || rows[1].action != toolsActionSSH ||
-		rows[2].action != toolsActionCompanion || rows[3].action != toolsActionParty ||
-		rows[4].action != toolsActionCommunity || rows[5].action != toolsActionPowerTools ||
-		rows[6].action != toolsActionCopyIP || rows[7].action != toolsActionClose {
-		t.Fatalf("unexpected row order: %+v", rows)
+	want := []toolsAction{
+		toolsActionCopyIP, toolsActionFTP, toolsActionCompanion, toolsActionSSH,
+		toolsActionParty, toolsActionPowerTools, toolsActionCommunity,
 	}
-	if rows[0].value != "Stopped" {
-		t.Fatalf("FTP row value = %q, want Stopped", rows[0].value)
+	for i, action := range want {
+		if rows[i].action != action {
+			t.Fatalf("row %d = %v, want %v (order: %+v)", i, rows[i].action, action, rows)
+		}
 	}
-	if rows[1].value != "Stopped" || rows[1].hint != "A Start" {
-		t.Fatalf("SSH row = %+v, want stopped with a start hint", rows[1])
+	// Most-used first: the copyable address, then the transfer tools.
+	if rows[0].section != "SHARE & TRANSFER" || rows[4].section != "WATCH TOGETHER" || rows[5].section != "SYSTEM & UPDATES" {
+		t.Fatalf("section headings are wrong: %q %q %q", rows[0].section, rows[4].section, rows[5].section)
 	}
-	if rows[2].value != "Scan to connect" || rows[2].hint != "A Show QR Code" {
-		t.Fatalf("companion row = %+v, want the idle QR hint", rows[2])
+	ftp := toolsRowByAction(rows, toolsActionFTP)
+	if ftp == nil || ftp.value != "Stopped" {
+		t.Fatalf("FTP row = %+v, want Stopped", ftp)
+	}
+	ssh := toolsRowByAction(rows, toolsActionSSH)
+	if ssh == nil || ssh.value != "Stopped" || ssh.hint != "A Start" {
+		t.Fatalf("SSH row = %+v, want stopped with a start hint", ssh)
+	}
+	companion := toolsRowByAction(rows, toolsActionCompanion)
+	if companion == nil || companion.value != "Scan to connect" || companion.hint != "A Show QR Code" {
+		t.Fatalf("companion row = %+v, want the idle QR hint", companion)
 	}
 }
 
 func TestToolsRowsWithMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	rows := toolsRows(config)
-	if len(rows) != 9 {
-		t.Fatalf("rows = %d, want a System utilities row too", len(rows))
+	if len(rows) != 8 {
+		t.Fatalf("rows = %d, want a Classic Tools row too", len(rows))
 	}
-	found := false
-	for i, r := range rows {
-		if r.action == toolsActionUtilities {
-			if i != 7 {
-				t.Fatalf("utilities row at %d, want before Close", i)
-			}
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("no System utilities row for a config with a Misc scene")
+	if rows[len(rows)-1].action != toolsActionUtilities {
+		t.Fatalf("last row = %v, want the Classic Tools row", rows[len(rows)-1].action)
 	}
 }
 
@@ -236,19 +239,20 @@ func TestToolsRowsRunningSSH(t *testing.T) {
 	defer sshSrv.Stop()
 
 	rows := toolsRows(&Config{})
-	if rows[1].value != "Running" || rows[1].hint != "A Stop" {
-		t.Fatalf("SSH row = %+v, want running with a stop hint", rows[1])
+	ssh := toolsRowByAction(rows, toolsActionSSH)
+	if ssh == nil || ssh.value != "Running" || ssh.hint != "A Stop" {
+		t.Fatalf("SSH row = %+v, want running with a stop hint", ssh)
 	}
-	if !strings.HasPrefix(rows[1].detail, "sftp://") {
-		t.Fatalf("SSH row detail = %q, want an sftp:// address", rows[1].detail)
+	if !strings.HasPrefix(ssh.detail, "sftp://") {
+		t.Fatalf("SSH row detail = %q, want an sftp:// address", ssh.detail)
 	}
 
 	info := toolsInfoLines()
 	if len(info) == 0 || !strings.Contains(info[0].text, sshSrv.Password()) {
 		t.Fatalf("credentials line missing the generated password: %+v", info)
 	}
-	if len(info) > 2 {
-		t.Fatalf("info lines = %d, want at most 2 to fit the panel", len(info))
+	if len(info) > 1 {
+		t.Fatalf("info lines = %d, want the single compact line", len(info))
 	}
 }
 
@@ -267,14 +271,14 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 9 {
-		t.Fatalf("row rects = %d, want 9 with the Misc scene", len(rects))
+	if len(rects) != 8 {
+		t.Fatalf("row rects = %d, want 8 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Skip("no usable font")
 	}
-	layout := toolsPanelMetrics(config, len(rects))
-	content := layout.headerH + int32(len(rects))*layout.rowH + layout.infoH + layout.footerH
+	layout := toolsPanelMetrics(config, toolsRows(config))
+	content := layout.contentH(len(rects))
 	if content > probeH-40 {
 		t.Fatalf("layout needs %dpx on a %dpx screen", content, probeH)
 	}
@@ -316,7 +320,22 @@ func TestToolsRowsOfflineHint(t *testing.T) {
 		t.Skip("environment reports network access")
 	}
 	rows := toolsRows(&Config{})
-	if rows[1].detail != "Offline — connect WiFi first" {
-		t.Fatalf("offline IP detail = %q", rows[1].detail)
+	ip := toolsRowByAction(rows, toolsActionCopyIP)
+	if ip == nil || ip.detail != "Offline — connect WiFi first" {
+		t.Fatalf("offline IP row = %+v", ip)
 	}
+	if ip.status != toolsStatusWarn {
+		t.Fatalf("offline IP status = %v, want warn", ip.status)
+	}
+}
+
+// toolsRowByAction finds one row by what it does, so tests do not depend on the
+// order of unrelated rows.
+func toolsRowByAction(rows []toolsRow, action toolsAction) *toolsRow {
+	for i := range rows {
+		if rows[i].action == action {
+			return &rows[i]
+		}
+	}
+	return nil
 }

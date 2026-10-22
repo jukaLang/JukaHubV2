@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -13,7 +17,66 @@ import (
 // Screensaver: constellation particles + rotating quotes
 // ──────────────────────────────────────────────────────────────────────
 
-var screensaverIdleTimeout = 5 * time.Minute
+// ssChatNote is one message that arrived while the device was idle. The
+// screensaver shows the newest few, so a chat answer is visible without the
+// user having to wake the panel first.
+type ssChatNote struct {
+	sender string
+	text   string
+	at     time.Time
+}
+
+var ssChatFeed = struct {
+	mu    sync.Mutex
+	notes []ssChatNote
+}{}
+
+const (
+	ssChatFeedLimit = 8
+	ssChatNoteTTL   = 10 * time.Minute
+	ssChatShown     = 3
+)
+
+// noteScreensaverChat records an incoming message for the idle screen. It is
+// deliberately cheap and callable from the Discord goroutine.
+func noteScreensaverChat(sender, text string) {
+	sender = strings.TrimSpace(sender)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	ssChatFeed.mu.Lock()
+	defer ssChatFeed.mu.Unlock()
+	ssChatFeed.notes = append(ssChatFeed.notes, ssChatNote{sender: sender, text: text, at: time.Now()})
+	if len(ssChatFeed.notes) > ssChatFeedLimit {
+		ssChatFeed.notes = ssChatFeed.notes[len(ssChatFeed.notes)-ssChatFeedLimit:]
+	}
+}
+
+// screensaverChatNotes returns the newest notes, oldest first, dropping ones
+// that have aged out so yesterday's conversation does not reappear.
+func screensaverChatNotes(now time.Time, limit int) []ssChatNote {
+	if limit <= 0 {
+		return nil
+	}
+	ssChatFeed.mu.Lock()
+	defer ssChatFeed.mu.Unlock()
+	var recent []ssChatNote
+	for _, note := range ssChatFeed.notes {
+		if now.Sub(note.at) <= ssChatNoteTTL {
+			recent = append(recent, note)
+		}
+	}
+	if len(recent) > limit {
+		recent = recent[len(recent)-limit:]
+	}
+	return recent
+}
+
+// screensaverIdleTimeout is how long the device waits without input before the
+// starfield appears. 25 seconds is the shipped default; the settings row and
+// Quick Settings both cycle this value at runtime.
+var screensaverIdleTimeout = 25 * time.Second
 
 const (
 	ssStarCount          = 120
@@ -67,7 +130,6 @@ type screensaverState struct {
 	nodes           []ssNode
 	connections     [][2]int
 	inited          bool
-	wakeCh          chan struct{}
 }
 
 var ss screensaverState
@@ -146,18 +208,16 @@ func initScreensaver() {
 	ss.quoteIndex = rand.Intn(len(screensaverQuotes))
 	ss.lastQuoteChange = time.Now()
 	ss.inited = true
-	ss.wakeCh = make(chan struct{}, 1)
 }
 
-// screensaverNotifyInput wakes the screensaver on any input.
+// screensaverNotifyInput wakes the screensaver on any input. It runs on the
+// event thread, which also draws the screensaver, so the wake is immediate
+// instead of waiting for a poll.
 func screensaverNotifyInput() {
 	noteUserInputTime(time.Now())
 	ambientNotifyInput()
 	if ss.active {
-		select {
-		case ss.wakeCh <- struct{}{}:
-		default:
-		}
+		deactivateScreensaver()
 	}
 }
 
@@ -265,7 +325,8 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 			sdl.Color{R: 140, G: 160, B: 200, A: alpha}, qx, qy)
 	}
 
-	// Clock in top-right.
+	// Clock in top-right, with the battery right under it so the saver is also
+	// a glanceable status screen.
 	timeFont, _ := getCachedFont(config, "medium")
 	if timeFont != nil && ss.fadeAlpha > 80 {
 		timeStr := time.Now().Format("15:04")
@@ -278,7 +339,27 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 		}
 		renderText(renderer, config, timeFont, timeStr,
 			sdl.Color{R: 200, G: 210, B: 230, A: alpha}, tx, ty)
+
+		if small, _ := getCachedFont(config, "small"); small != nil {
+			line := "Battery unknown"
+			if pct := getBatteryPercent(); pct >= 0 {
+				line = fmt.Sprintf("%d%%", pct)
+				if getBatteryCharging() {
+					line += " charging"
+				}
+			}
+			lw, _, _ := small.SizeUTF8(line)
+			lineAlpha := uint8(float64(ss.fadeAlpha) * 0.65)
+			if lineAlpha > 170 {
+				lineAlpha = 170
+			}
+			renderText(renderer, config, small, line,
+				sdl.Color{R: 160, G: 175, B: 198, A: lineAlpha},
+				screenWidth-int32(lw)-40, ty+int32(timeFont.Height())+6)
+		}
 	}
+
+	drawScreensaverChat(renderer, config, time.Now())
 
 	// Hint at bottom.
 	if ss.fadeAlpha > 120 {
@@ -296,6 +377,63 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 	}
 
 	return true
+}
+
+// drawScreensaverChat paints the newest incoming messages as a quiet card in
+// the lower-left corner, above the wake hint.
+func drawScreensaverChat(renderer *sdl.Renderer, config *Config, now time.Time) {
+	notes := screensaverChatNotes(now, ssChatShown)
+	if len(notes) == 0 || ss.fadeAlpha < 60 {
+		return
+	}
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	lineH := int32(font.Height()) + 6
+	cardH := int32(38) + lineH*int32(len(notes))
+	drawChatCard(renderer, config, notes, ss.fadeAlpha, 40, screenHeight-92-cardH)
+}
+
+// drawChatCard paints the newest incoming messages in the lower-left area of an
+// idle screen. The caller places it (above the wake hint on the saver, above the
+// now-playing card on the dock) and passes the fade its screen uses.
+func drawChatCard(renderer *sdl.Renderer, config *Config, notes []ssChatNote, alpha uint8, x, y int32) {
+	font, _ := getCachedFont(config, "small")
+	if font == nil || len(notes) == 0 || alpha < 60 {
+		return
+	}
+	lineH := int32(font.Height()) + 6
+	cardW := int32(620)
+	if cardW > screenWidth-96 {
+		cardW = screenWidth - 96
+	}
+	cardH := int32(38) + lineH*int32(len(notes))
+
+	a := float64(alpha) / 255.0
+	fillRoundedRect(renderer, x, y, cardW, cardH, 12, sdl.Color{R: 12, G: 16, B: 26, A: uint8(170 * a)})
+	strokeRoundedRect(renderer, x, y, cardW, cardH, 12, 1, sdl.Color{R: 255, G: 255, B: 255, A: uint8(30 * a)})
+	fillRoundedRect(renderer, x, y, 4, cardH, 2, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: uint8(220 * a)})
+
+	renderText(renderer, config, font, "NEW CHAT",
+		sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: uint8(230 * a)}, x+18, y+10)
+	lineY := y + 34
+	for _, note := range notes {
+		sender := note.sender
+		if sender == "" {
+			sender = "Chat"
+		}
+		label := sender + ": "
+		sw, _, _ := font.SizeUTF8(label)
+		renderText(renderer, config, font, label,
+			sdl.Color{R: 206, G: 220, B: 240, A: uint8(215 * a)}, x+18, lineY)
+		textW := cardW - 36 - int32(sw)
+		if textW > 0 {
+			renderText(renderer, config, font, ellipsize(font, note.text, textW),
+				sdl.Color{R: 160, G: 175, B: 198, A: uint8(200 * a)}, x+18+int32(sw), lineY)
+		}
+		lineY += lineH
+	}
 }
 
 // deactivateScreensaver starts the fade-out and returns to normal UI.
@@ -327,38 +465,114 @@ func userInputAge(now time.Time) time.Duration {
 	return now.Sub(time.Unix(0, ns))
 }
 
-// startScreensaverMonitor runs a goroutine that watches for idle timeout.
+// startScreensaverMonitor prepares the screensaver state. Activation itself
+// runs on the event thread in screensaverAutoTick: the entry check reads modal
+// flags and the player/download state, which only that thread may touch, and a
+// one-second check starts the saver promptly instead of up to five seconds
+// late the way the old polling goroutine did.
 func startScreensaverMonitor() {
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
+	if !ss.inited {
+		initScreensaver()
+	}
+}
 
-		for range ticker.C {
-			if ss.active {
-				// Check for wake signal.
-				select {
-				case <-ss.wakeCh:
-					deactivateScreensaver()
-					noteUserInputTime(time.Now())
-				default:
-				}
-				continue
-			}
-			// The dock/ambient screen is the idle screen when it is enabled;
-			// two idle overlays competing for the panel is worse than either
-			// alone. Setting ambientMode=false brings the starfield back.
-			if ambientModeEnabled(appConfig) {
-				continue
-			}
-			if userInputAge(time.Now()) > screensaverIdleTimeout {
-				if !ss.inited {
-					initScreensaver()
-				}
-				ss.active = true
-				ss.fadingIn = true
-				ss.fadeAlpha = 0
-				ss.startTick = sdl.GetTicks64()
-			}
-		}
-	}()
+// screensaverAutoCheckInterval throttles the idle check. One second keeps the
+// start close to the configured timeout without doing work every frame.
+const screensaverAutoCheckInterval = time.Second
+
+var screensaverLastCheck time.Time
+
+// screensaverAutoTick starts the screensaver once the device has been quiet for
+// the configured timeout and nothing is using the panel.
+func screensaverAutoTick(config *Config, now time.Time) {
+	if config == nil || ss.active {
+		return
+	}
+	// The dock/ambient screen is the idle screen when it is enabled; two idle
+	// overlays competing for the panel is worse than either alone.
+	if ambientModeEnabled(config) || ambientIsActive() {
+		return
+	}
+	if !screensaverLastCheck.IsZero() && now.Sub(screensaverLastCheck) < screensaverAutoCheckInterval {
+		return
+	}
+	screensaverLastCheck = now
+	if idleScreenHoldOff(config) {
+		// Playback, a download or an install is use without input. Keep the
+		// idle clock moving so the countdown restarts when it finishes rather
+		// than dropping straight onto the saver the second it ends.
+		noteUserInputTime(now)
+		return
+	}
+	if screensaverIdleTimeout <= 0 || userInputAge(now) < screensaverIdleTimeout {
+		return
+	}
+	activateScreensaver()
+}
+
+// idleScreenHoldOffFrom is the pure decision at the heart of the gate: the
+// screen stays awake while a modal owns the UI, while audio or video plays, and
+// while a download or install is running.
+func idleScreenHoldOffFrom(uiBlocked, musicPlaying, musicPaused, downloadActive, patchBusy bool) bool {
+	return uiBlocked || musicPlaying || musicPaused || downloadActive || patchBusy
+}
+
+// idleScreenHoldOff reports whether something is using the device right now, so
+// running it in the background is not the same as being idle.
+func idleScreenHoldOff(config *Config) bool {
+	_, _, _, playing, paused := ambientNowPlaying()
+	return idleScreenHoldOffFrom(
+		ambientEntryBlocked(config),
+		playing,
+		paused,
+		installInProgress(),
+		patchInstallBusy(),
+	)
+}
+
+// installInProgress reports whether a package is being fetched or unpacked, so
+// the progress bar does not disappear behind an idle screen mid-download.
+func installInProgress() bool {
+	visible, _, phase, _, _, _, _, _, ending := installBarSnapshot()
+	if !visible || ending {
+		return false
+	}
+	switch phase {
+	case installPhaseResolving, installPhaseDownload, installPhaseExtract, installPhaseVerify:
+		return true
+	}
+	return false
+}
+
+// patchInstallBusy reports whether a saved patch is being applied.
+func patchInstallBusy() bool {
+	return strings.TrimSpace(CurrentPatchBusyLabel()) != ""
+}
+
+// activateScreensaver starts the fade-in. Runs on the event thread.
+func activateScreensaver() {
+	if !ss.inited {
+		initScreensaver()
+	}
+	ss.active = true
+	ss.fadingIn = true
+	ss.fadeAlpha = 0
+	ss.startTick = sdl.GetTicks64()
+}
+
+// applyScreensaverTimeout sets the idle timeout everywhere it is needed: the
+// package timer the monitor reads, the config field, the Quick Settings row and
+// the saved user config.
+func applyScreensaverTimeout(config *Config, seconds int) int {
+	if seconds <= 0 {
+		seconds = 25
+	}
+	screensaverIdleTimeout = time.Duration(seconds) * time.Second
+	qs.cycle.Value = seconds
+	if config != nil {
+		config.Variables.ScreensaverTimeout = seconds
+		config.Variables.Custom["screensaverTimeout"] = strconv.Itoa(seconds)
+		saveUserConfigDebounced(userConfigFromVariables(config))
+	}
+	return seconds
 }

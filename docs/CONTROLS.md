@@ -34,9 +34,26 @@ shortcuts overlay, **B** or **F1** to close it.
 | B | Back (header pill, `Escape` and the scene's Back action all do the same) |
 | X | Secondary action — delete, toggle, search, depending on the screen |
 | Y | Tertiary action — new/create, save, submit in the chat keyboard |
-| L1 / R1 | Previous / next section, page or track |
+| L1 / R1 | Previous / next page of the focused list, or a −10/+10 s skip in the player |
+| L2 / R2 | Bigger jump: previous / next page (fetching the next page of Media results), previous / next video in the player, first / last row in a list, previous / next section on Home |
 | Start | Open the start menu (pause) |
 | Back | Settings / menu |
+
+Shoulders are contextual, not scene-specific: whatever list holds the focus
+owns them. **L1/R1** step one window and **L2/R2** jump further, so the pad
+behaves the same in a menu as it does in a media grid.
+
+| Screen | L1 / R1 | L2 / R2 |
+|--------|---------|---------|
+| Media results, Shorts grid, Apps grid | One screenful | Previous / next results page (R2 fetches it) |
+| Favourites, packages, channel / file lists | One window of rows | First / last row |
+| Text browser | Scroll a page | Top / bottom |
+| Wallpaper picker | Five wallpapers | First / last wallpaper |
+| Image viewer | Previous / next image | Jump ten images back / forward |
+| Notification centre, clipboard history, global search, social notifications | One window of rows | First / last row |
+| Quick Settings | Five rows, or ±5 on a slider | First / last row |
+| Start menu (Apps) | One window of apps | First / last app |
+| Home | — | Previous / next section |
 
 ## Home
 
@@ -48,6 +65,21 @@ shortcuts overlay, **B** or **F1** to close it.
 | X | Favourites |
 | D-pad | Move between tiles, the header chips and the footer row |
 | Right (from the clock) | Move onto the notification bell; **A** opens the notification centre |
+
+## Media
+
+| Button | Action |
+|--------|--------|
+| X | Search YouTube |
+| Y | Shorts feed: opens Shorts, pre-loads it and plays the first clip, then keeps going after each one ends |
+| L1 / R1 | Previous / next screenful of the loaded results |
+| L2 / R2 | Previous / next results page; **R2** fetches the next page when it has not been loaded |
+| B | Back |
+
+The **Next page** chip appears in the bottom-right corner of the grid once the
+focused card is on the last loaded row. Clicking it, pressing **R2**, or pressing
+Down on the last card all load the next page of the same query and focus its
+first result, so a search keeps going instead of stopping after the first batch.
 
 ## Live TV
 
@@ -74,11 +106,21 @@ A text web browser for GitHub issues, release notes and documentation. See
 
 | Button | Action |
 |--------|--------|
-| Up / Down | Scroll the page |
+| Up / Down | Scroll the page; Up at the top and Down at the bottom hand the focus to the header and the button row |
 | L1 / R1 | Scroll by a page |
-| A | Edit the address bar |
-| X | Open the link picker |
+| Left / Right | Walk the links on the page, scrolling them into view |
+| A | Open the highlighted link, or edit the address bar when no link is picked |
+| Y | Search the web (opens the keyboard); the **SEARCH** chip does the same |
+| X | Open the full link list for the page |
 | B | Leave the browser |
+
+Links are walked in reading order and outlined as they come into focus, so a
+link deep in an article can be followed without opening the picker. **Y** (or
+the **SEARCH** chip beside the address bar) opens the keyboard on an empty
+field: type a phrase to search, or a host to open it. The **Back**, **Forward**,
+**Reload**, **Links**, **Search**, **Home** and **Issues** chips at the bottom
+are ordinary scene buttons, reachable by pressing Down past the end of the page
+and Up to come back.
 
 ## Video player
 
@@ -93,7 +135,8 @@ rewind, play/pause, fast-forward, speed, subtitles, settings and full screen, an
 | Up / Down | Volume |
 | X | Subtitles on / off |
 | Y | Video settings sheet |
-| L1 / R1 | Playback speed ±0.25× |
+| L1 / R1 | Skip −10 / +10 seconds |
+| L2 / R2 | Previous / next video in the list that launched this one (search results or the Shorts feed) |
 | B | Close the settings sheet, then stop and go back |
 
 The rewind and fast-forward buttons skip 10 seconds per press. With the settings
@@ -586,12 +629,15 @@ Opened from **Emulators → Smart Pro Compatibility**.
 | Ctrl+K | Jump to the YouTube search screen |
 | Ctrl+Q | Quick settings |
 | Ctrl+Shift+V | Clipboard manager |
+| Ctrl+Shift+S | Shorts feed (the Media **Y** action) |
 | F1 | Shortcuts overlay |
 | F2 | Global search |
 | F8 | Watch Party panel |
 | F11 / Alt+Enter | Toggle fullscreen |
 | F12 | Screenshot |
-| PgUp / PgDn | Page up / down |
+| PgUp / PgDn | Page up / down (previous / next results page in Media) |
+| Shift+Left / Shift+Right | Skip −10 / +10 s in the video player |
+| Shift+Down (or N) / Shift+Up (or P) | Next / previous video in the player's list |
 
 Mouse and touch work as well: clicking activates a card or tile, and hovering
 highlights the card under the pointer.

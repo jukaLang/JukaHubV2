@@ -71,7 +71,7 @@ settings such as `search_query` or `stream_url`.
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |
-| `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default) |
+| `screensaverTimeout` | int | seconds of idleness before the screensaver (or the [ambient screen](AMBIENT.md), which replaces it by default); 25 by default |
 | `socialNotifs` | bool | periodic social notifications |
 | `netPlayEnabled`, `videoPlayerEnabled`, `screensaverEnabled`, `launcherEnabled`, `externalAppEnabled`, `packageRepoEnabled`, `themeGalleryEnabled` | bool | feature toggles |
 | `deviceModel`, `targetPlatform`, `defaultOrientation`, `accentColor` | string | device hints; unknown values mean "no preference", never an error |
@@ -114,7 +114,7 @@ Quick Settings (`Ctrl+Q`) writes these keys:
 |-----|---------|
 | `volume` (0–100) + `volumeSet` | mixer level; written only after you move the slider |
 | `brightness` (0–100) + `brightnessSet` | backlight level, same rule |
-| `screensaverTimeout` | idle seconds before the screensaver overlay, cycled by the panel |
+| `screensaverTimeout` | idle seconds before the screensaver overlay, cycled by the panel and by Settings → General → Screensaver after |
 | `lowPower`, `reducedMotion`, `fullscreen` | the remaining switches |
 | `ledSync` | audio-reactive stick/ring LEDs |
 

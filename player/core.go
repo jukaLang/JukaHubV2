@@ -2359,22 +2359,72 @@ func runMediaSearchTrigger(config *Config, trigger, target, value string) bool {
 }
 
 func executeYouTubeSearch(config *Config, command string, resultVar string, vars map[string]interface{}) {
+	executeYouTubeSearchMode(config, command, resultVar, vars, false)
+}
+
+// executeYouTubeSearchPage runs a follow-up page fetch. In append mode the
+// result is merged into the list already on screen instead of replacing it, so
+// scrolling past the last card grows the grid rather than restarting it.
+func executeYouTubeSearchPage(config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool) {
+	executeYouTubeSearchMode(config, command, resultVar, vars, appendMode)
+}
+
+func executeYouTubeSearchMode(config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool) {
 	gen := beginMediaSearch(config, resultVar)
 	defer finishMediaSearch(config)
 	defer clearMediaSearchCancel(resultVar, gen)
 	// stale is true once a newer search owns the results variable; an old run
 	// must then neither publish results nor clear the error line.
 	stale := func() bool { return mediaSearchSuperseded(resultVar, gen) }
+
+	// deliver publishes a successful fetch. A first page replaces the list and
+	// resets the focus to the top; an appended page adds to the end and focuses
+	// the first new card so the scroll continues where the user left off.
+	deliver := func(videos []VideoInfo) {
+		if stale() {
+			return
+		}
+		if appendMode {
+			current, _ := config.Variables.Custom[resultVar].([]VideoInfo)
+			merged, added := mergeMediaResults(current, videos)
+			if added == 0 {
+				markMediaPageSettled(resultVar, true)
+				publishCustom("search_error", nil)
+				ShowToast("No more results", ToastKindInfo)
+				return
+			}
+			markMediaPageSettled(resultVar, false)
+			publishCustom(resultVar, merged)
+			publishCustom("search_error", nil)
+			focusedResultIndex = len(current)
+			prefetchVideos(config, merged, focusedResultIndex)
+			return
+		}
+		markMediaPageSettled(resultVar, false)
+		publishCustom(resultVar, videos)
+		publishCustom("search_error", nil)
+		focusedResultIndex = -1
+		prefetchFirstResult(config, videos)
+	}
 	publishVideos := func(videos []VideoInfo) {
 		if stale() {
 			log.Printf("[STREAM] dropping superseded search results for %s", resultVar)
 			return
 		}
-		publishCustom(resultVar, videos)
+		if appendMode && len(videos) == 0 {
+			// A failed page must leave the loaded results alone.
+			markMediaPageSettled(resultVar, false)
+			return
+		}
+		deliver(videos)
 	}
 	publishSearchError := func(msg string) {
 		if stale() {
 			return
+		}
+		if appendMode {
+			// A failed page must not leave the grid stuck on "Loading…".
+			markMediaPageSettled(resultVar, false)
 		}
 		publishCustom("search_error", msg)
 	}
@@ -2397,6 +2447,12 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	extraArgs := ytDlpExtraArgs(config)
 	if extraArgs != "" {
 		cmdWithVars += " " + extraArgs
+	}
+
+	// Remember how this list was built so the triggers can request the next
+	// page of the same query. A follow-up page must not overwrite it.
+	if !appendMode {
+		rememberMediaPaging(resultVar, cmdWithVars)
 	}
 
 	// Tokenize the command into arguments, honouring double quotes so that
@@ -2456,10 +2512,7 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 				if stale() {
 					return
 				}
-				publishCustom(resultVar, videos)
-				publishCustom("search_error", nil)
-				focusedResultIndex = -1
-				prefetchFirstResult(config, videos)
+				deliver(videos)
 				return
 			}
 		}
@@ -2587,10 +2640,7 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 		}
 	}
 
-	publishCustom(resultVar, videos)
-	publishCustom("search_error", nil)
-	focusedResultIndex = -1
-	prefetchFirstResult(config, videos)
+	deliver(videos)
 }
 
 // --- Fetch trending videos (2 columns x 6 rows = 12 videos) ---
@@ -2695,9 +2745,11 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 
 	if cols <= 1 {
 		renderSearchResultsList(renderer, config, element, videos, elemWidth, elemHeight)
+		renderMediaNextPageButton(renderer, config, element, videos, elemWidth, elemHeight)
 		return
 	}
 	renderSearchResultsGrid(renderer, config, element, videos, cols, elemWidth, elemHeight)
+	renderMediaNextPageButton(renderer, config, element, videos, elemWidth, elemHeight)
 }
 
 // renderSearchResultsList renders results as one readable vertical list:
@@ -3155,6 +3207,12 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		log.Printf("playVideoInfo: empty URL, nothing to play")
 		return
 	}
+	// Starting any video leaves the Shorts feed unless the caller re-arms it
+	// (startShortAt does), so a normal video does not auto-advance a feed.
+	shortsAutoplay = false
+	// Remember the list behind this video (results or the Shorts feed) so the
+	// shoulder triggers can skip forward and back while it plays.
+	setPlaybackQueue(config, v)
 	// Video and music share one audio device: silence the playlist first.
 	musicStopIfPlaying()
 	ensureVideoScene(config)
@@ -3603,7 +3661,9 @@ func updateInputVariable(config *Config) {
 		}
 		elem := config.Scenes[activeSceneIndex].Elements[activeElementIndex]
 		variable := elem.Variable
-		if textBrowserAddressEditing {
+		if textBrowserSearchEditing {
+			variable = browserSearchVariable
+		} else if textBrowserAddressEditing {
 			variable = textBrowserURLVariable
 		}
 		if variable != "" {
@@ -5544,6 +5604,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		SetAccentColor(resolveColor(config, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
 		saveConfig(config)
 		showToast("Settings saved", ToastInfo())
+	case "cycle_screensaver_timeout":
+		// Settings → General and Quick Settings share this step list.
+		next := applyScreensaverTimeout(config, nextScreenTimeout(config.Variables.ScreensaverTimeout))
+		showToast("Screensaver after "+screenTimeoutLabel(next), ToastInfo())
 	case "theme_preset":
 		if element.TriggerTarget != "" {
 			ApplyThemePreset(config, element.TriggerTarget)
@@ -5580,6 +5644,11 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	case "browser_links":
 		if elem, ok := findBrowserElement(config); ok {
 			openBrowserLinkPanel(config, elem)
+		}
+	case "browser_search":
+		// The Search chip and the Y button both open the query keyboard.
+		if elem, ok := findBrowserElement(config); ok {
+			openBrowserSearch(renderer, config, elem)
 		}
 	case "browser_repo":
 		browserOpenURL(config, browserReposURL)
@@ -6118,25 +6187,27 @@ func moveGridSelection(config *Config, dx, dy int) {
 	if !ok {
 		return
 	}
-	cols, rows := gridColsRows(srElem)
+	cols, _ := gridColsRows(srElem)
 	colsI := int(cols)
-	rowsI := int(rows)
-	maxItems := colsI * rowsI
-	if len(videos) < maxItems {
-		maxItems = len(videos)
+	if colsI < 1 {
+		colsI = 1
 	}
-	if maxItems == 0 {
-		return
+	// Navigate the whole loaded list, not just the configured page: paging
+	// appends results, and a grid capped at 2x6 could never reach them.
+	rowsI := (len(videos) + colsI - 1) / colsI
+	if rowsI < 1 {
+		rowsI = 1
 	}
 	row := focusedResultIndex / colsI
 	col := focusedResultIndex % colsI
 	row += dy
 	col += dx
-	// Wrap around
+	// Rows clamp (Down on the last card asks for the next page), columns wrap
+	// so Left/Right still cycle within a row.
 	if row < 0 {
-		row = rowsI - 1
-	} else if row >= rowsI {
 		row = 0
+	} else if row >= rowsI {
+		row = rowsI - 1
 	}
 	if col < 0 {
 		col = colsI - 1
@@ -6144,9 +6215,9 @@ func moveGridSelection(config *Config, dx, dy int) {
 		col = 0
 	}
 	newIdx := row*colsI + col
-	if newIdx >= maxItems {
+	if newIdx >= len(videos) {
 		// Clamp to last valid index
-		newIdx = maxItems - 1
+		newIdx = len(videos) - 1
 	}
 	focusedResultIndex = newIdx
 	// Resolve the highlighted card's stream in the background while the user
@@ -6184,6 +6255,12 @@ func handleSearchResultsAction(action Action, config *Config) {
 		moveGridSelection(config, 0, -1)
 	case ActionNavigateDown:
 		moveGridSelection(config, 0, 1)
+		// Pressing Down on the last loaded card asks for the next page: that is
+		// the "scroll past the end" gesture the Next chip advertises.
+		if videos, ok := getSceneVideos(config, scene); ok && len(videos) > 0 &&
+			focusedResultIndex >= len(videos)-1 {
+			loadMoreMediaResults(config)
+		}
 	case ActionNavigateLeft:
 		moveGridSelection(config, -1, 0)
 	case ActionNavigateRight:

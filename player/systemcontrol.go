@@ -495,10 +495,12 @@ func runRfkill(kind string, on bool) error {
 
 // ── Screen timeout ─────────────────────────────────────────────────────────
 
-// screenTimeoutSteps are the values the Quick Settings row cycles through, in
-// seconds. 0 would disable the screensaver, but the config validator treats a
-// zero timeout as "unset" and restores 5 minutes, so the cycle never offers it.
-var screenTimeoutSteps = []int{15, 30, 60, 300, 600, 1800}
+// screenTimeoutSteps are the values the screensaver row cycles through, in
+// seconds. 25 is the shipped default, so it is the second stop for anyone who
+// wants the device asleep almost as soon as they put it down. 0 would disable
+// the screensaver, but the config validator treats a zero timeout as "unset"
+// and restores the default, so the cycle never offers it.
+var screenTimeoutSteps = []int{15, 25, 30, 60, 300, 600, 1800}
 
 // screenTimeoutLabel renders a timeout for the panel.
 func screenTimeoutLabel(sec int) string {

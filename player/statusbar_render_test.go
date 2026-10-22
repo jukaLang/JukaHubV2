@@ -211,3 +211,33 @@ func TestThemeGalleryRendersWithoutOverflow(t *testing.T) {
 		t.Fatalf("columns overflow the element: last card ends at %d", lastColX+cardW)
 	}
 }
+
+// A crowded top bar must drop the network name before the battery: the level is
+// the whole point of the status cluster.
+func TestFitStatusPartsKeepsClockAndBattery(t *testing.T) {
+	width := func(s string) int32 { return int32(len(s)) * 8 }
+	gap := int32(8)
+	parts := []string{"MyHomeNetwork", "21C / 12C", "12:40", "87%"}
+
+	all := fitStatusParts(append([]string(nil), parts...), width, gap, 1000)
+	if len(all) != 4 {
+		t.Fatalf("a roomy bar trimmed the cluster to %v", all)
+	}
+
+	// Just wide enough for forecast + clock + battery.
+	fitted := fitStatusParts(append([]string(nil), parts...), width, gap, 160)
+	if len(fitted) != 3 || fitted[0] != "21C / 12C" || fitted[2] != "87%" {
+		t.Fatalf("crowded bar kept %v, want the network name dropped and 87%% kept", fitted)
+	}
+
+	// The offline badge is not preferred over the clock and the level.
+	offline := fitStatusParts([]string{"! Offline", "21C / 12C", "12:40", "87%"}, width, gap, 72)
+	if len(offline) != 2 || offline[0] != "12:40" || offline[1] != "87%" {
+		t.Fatalf("offline cluster kept %v, want clock and battery", offline)
+	}
+
+	// Even a bar too narrow for anything keeps one part rather than none.
+	if got := fitStatusParts([]string{"87%"}, width, gap, 1); len(got) != 1 {
+		t.Fatalf("the only part was dropped: %v", got)
+	}
+}

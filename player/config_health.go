@@ -63,7 +63,9 @@ func (cv *ConfigValidator) Validate(config *Config) error {
 		config.Variables.SearchWidth = 940
 	}
 	if config.Variables.ScreensaverTimeout == 0 {
-		config.Variables.ScreensaverTimeout = 300 // 5 minutes
+		// 25 seconds: long enough to read a screen without the saver butting
+		// in, short enough that a handheld put down is asleep quickly.
+		config.Variables.ScreensaverTimeout = 25
 	}
 
 	// Validate scenes.

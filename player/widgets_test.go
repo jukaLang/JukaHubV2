@@ -174,8 +174,17 @@ func TestEnsureSettingsWidgets(t *testing.T) {
 	if n := len(cfg2.Scenes); n != 2 {
 		t.Fatalf("re-injected a shipped page: %d scenes, want 2", n)
 	}
-	if n := len(cfg2.Scenes[0].Elements); n != 1 {
-		t.Fatalf("duplicated the entry button: %d elements, want 1", n)
+	entries, timeouts := 0, 0
+	for _, el := range cfg2.Scenes[0].Elements {
+		switch {
+		case el.TriggerTarget == smartSettingsScene:
+			entries++
+		case el.Trigger == "cycle_screensaver_timeout":
+			timeouts++
+		}
+	}
+	if entries != 1 || timeouts != 1 {
+		t.Fatalf("re-injection duplicated rows: %d entry, %d timeout, want 1 each", entries, timeouts)
 	}
 }
 

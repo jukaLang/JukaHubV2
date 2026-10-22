@@ -109,14 +109,16 @@ func TestCollectAppEntriesOrderAndDedupe(t *testing.T) {
 			t.Fatalf("order = %v, want prefix %v", names, wantOrder)
 		}
 	}
-	// Built-in applets always trail the external entries.
+	// Built-in applets always trail the external entries. The list is the one
+	// the launcher would show, so applets this build cannot open are absent.
 	last := names[len(wantOrder):]
-	if len(last) != len(builtinApplets) {
-		t.Fatalf("built-ins = %v, want %d entries", last, len(builtinApplets))
+	want := builtinAppEntries(nil)
+	if len(last) != len(want) {
+		t.Fatalf("built-ins = %v, want %d entries", last, len(want))
 	}
-	for i, a := range builtinApplets {
-		if last[i] != a.Name+" (built-in)" {
-			t.Errorf("built-in %d = %q, want %q", i, last[i], a.Name+" (built-in)")
+	for i, a := range want {
+		if last[i] != a.Name {
+			t.Errorf("built-in %d = %q, want %q", i, last[i], a.Name)
 		}
 	}
 }

@@ -406,6 +406,12 @@ func dynamicListRowAt(element Element, start, end int, my int32) int {
 
 // renderDynamicList draws a vertical, scrollable list of file entries.
 func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) {
+	// The Apps scene is a program launcher, not a file browser: it draws as a
+	// tile grid (see appgrid.go). Every other list keeps the row layout.
+	if element.Variable == appsEntriesVar {
+		renderAppGrid(renderer, config, element)
+		return
+	}
 	entries, ok := config.Variables.Custom[element.Variable].([]FileEntry)
 	if !ok {
 		font, _ := getCachedFont(config, "small")

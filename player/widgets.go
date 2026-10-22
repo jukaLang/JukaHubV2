@@ -101,22 +101,111 @@ func getBatteryCharging() bool {
 	return false
 }
 
-// batterySysfsDir returns the first battery directory under /sys/class/power_supply.
+// batterySysfsDir returns the battery directory under /sys/class/power_supply.
 func batterySysfsDir() string {
-	const base = "/sys/class/power_supply"
+	return batterySysfsDirIn("/sys/class/power_supply")
+}
+
+// batterySysfsDirIn picks the battery from one power_supply directory. The
+// entries there are symlinks into the device tree, and DirEntry.IsDir reports
+// false for a link, so the old IsDir check skipped every battery and the Smart
+// Pro read "unknown". The lookup therefore follows the link with os.Stat and
+// prefers an entry that actually exposes a charge level.
+func batterySysfsDirIn(base string) string {
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		return ""
 	}
+	var named, withCapacity string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		path := filepath.Join(base, entry.Name())
+		info, err := os.Stat(path) // follows the symlink
+		if err != nil || !info.IsDir() {
 			continue
 		}
-		if strings.Contains(strings.ToLower(entry.Name()), "bat") {
-			return filepath.Join(base, entry.Name())
+		name := strings.ToLower(entry.Name())
+		looksLikeBattery := strings.Contains(name, "bat")
+		switch {
+		case looksLikeBattery && batteryLevelFile(path) != "":
+			return path
+		case looksLikeBattery && named == "":
+			named = path
+		case batteryLevelFile(path) != "" && withCapacity == "":
+			withCapacity = path
+		}
+	}
+	if named != "" {
+		return named
+	}
+	return withCapacity
+}
+
+// batteryLevelFile names the first readable charge source in a battery
+// directory. Kernels expose either a ready-made percentage or raw counters.
+func batteryLevelFile(dir string) string {
+	if _, err := os.Stat(filepath.Join(dir, "capacity")); err == nil {
+		return "capacity"
+	}
+	for _, counter := range [][2]string{{"charge_now", "charge_full"}, {"energy_now", "energy_full"}} {
+		if _, err := os.Stat(filepath.Join(dir, counter[0])); err != nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, counter[1])); err == nil {
+			return counter[0]
 		}
 	}
 	return ""
+}
+
+// batteryPercentIn reads the charge percentage from one battery directory,
+// returning -1 when the kernel exposes no usable number.
+func batteryPercentIn(dir string) int {
+	if dir == "" {
+		return -1
+	}
+	if pct, ok := readBatteryCounter(filepath.Join(dir, "capacity")); ok {
+		if pct > 100 {
+			pct = 100
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		return int(pct)
+	}
+	for _, pair := range [][2]string{{"charge_now", "charge_full"}, {"energy_now", "energy_full"}} {
+		now, okNow := readBatteryCounter(filepath.Join(dir, pair[0]))
+		full, okFull := readBatteryCounter(filepath.Join(dir, pair[1]))
+		if !okNow || !okFull || full <= 0 {
+			continue
+		}
+		pct := now * 100 / full
+		if pct > 100 {
+			pct = 100
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		return int(pct)
+	}
+	return -1
+}
+
+// readBatteryCounter parses one sysfs counter. Some kernels add a newline and
+// a few append units, so only the leading integer is significant.
+func readBatteryCounter(path string) (int64, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, false
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // batterySaverShouldEngage is the pure decision: engage at or below the enter
@@ -276,6 +365,44 @@ func ensureSettingsWidgets(config *Config) {
 	}
 	ensureSmartSettingsScene(config)
 	ensureSmartSettingsEntry(config)
+	ensureScreensaverTimeoutSetting(config)
+}
+
+// ensureScreensaverTimeoutSetting puts the screensaver timeout in Settings →
+// General next to the Smart Widgets button. One tap cycles the same steps Quick
+// Settings uses, so the device can be set to sleep after 15–25 seconds without
+// opening the overlay.
+func ensureScreensaverTimeoutSetting(config *Config) {
+	scene := settingsGeneralScene(config)
+	if scene == nil {
+		return
+	}
+	for _, el := range scene.Elements {
+		if strings.EqualFold(strings.TrimSpace(el.Trigger), "cycle_screensaver_timeout") {
+			return
+		}
+	}
+	scene.Elements = append(scene.Elements,
+		Element{
+			Type:    "button",
+			Text:    "Screensaver · $screensaverTimeoutLabel",
+			X:       340,
+			Y:       520,
+			Width:   "300",
+			Height:  "48",
+			Trigger: "cycle_screensaver_timeout",
+			Color:   "$labelColor",
+			BgColor: "$buttonColor",
+		},
+		Element{
+			Type:  "label",
+			Text:  "Idle time before the screensaver starts. Tap to change.",
+			Font:  "small",
+			X:     340,
+			Y:     576,
+			Color: "$theme_text_secondary",
+		},
+	)
 }
 
 // ensureSmartSettingsScene creates the page unless the config already has it

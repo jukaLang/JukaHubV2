@@ -63,6 +63,11 @@ var textBrowserRequestMutex sync.Mutex
 var textBrowserAddressEditing bool
 var textBrowserAddressSubmitted bool
 
+// The Search shortcut types into its own buffer: the address bar keeps the
+// page's URL, so cancelling the keyboard leaves the browser where it was.
+var textBrowserSearchEditing bool
+var textBrowserSearchSubmitted bool
+
 // renderTextBrowser renders a scrollable text panel, including readable web pages.
 func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) {
 	defer func() {
@@ -114,22 +119,46 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		headerColor = sdl.Color{R: 67, G: 97, B: 238, A: 255}
 	}
 
-	// A web page is wrapped once per page and then reused every frame. Wrapping
-	// a long page with per-word width measurement was the most expensive thing
-	// the handheld did while a page was open: at 20 fps it re-wrapped hundreds
-	// of kilobytes each frame and handed the GC a mountain of throwaway
-	// strings, which is what made the browser feel like it would fall over on a
-	// 1 GB device.
+	// A web page is laid out (or wrapped) once per page and then reused every
+	// frame. Doing it per frame handed the GC a mountain of throwaway strings,
+	// which is what made the browser feel like it would fall over on a 1 GB
+	// device. Styled pages come from webpage.go; everything else keeps using
+	// the plain-text reader.
 	lineH := int32(22)
 	contentH := elemH - headerH - 8
+	if source == textBrowserSourceWeb {
+		contentH = elemH - headerH - textBrowserURLBarHeight - 12
+	}
 	maxLines := int((contentH) / lineH)
 	var lines []string
+	var styledDoc *webDocument
+	var styledLayout *webLayout
+	totalLines := 0
+	// A page that is still on the wire has no document yet; the renderer
+	// shows a loading card instead of a one-line text stub.
+	loading := source == textBrowserSourceWeb && strings.HasPrefix(text, "Loading ")
 	if source == textBrowserSourceWeb {
-		lines = textBrowserWrappedLines(text, font, elemW-28)
+		webWidth := elemW - 14
+		styledDoc = browserDocumentFor(element.Variable)
+		if layout, rows := webDocumentRows(styledDoc, config, element, webWidth); layout != nil {
+			styledLayout = layout
+			lineH = layout.RowH
+			maxLines = int(contentH / lineH)
+			if maxLines < 1 {
+				maxLines = 1
+			}
+			// The page is clipped to whole rows so the last line is never
+			// cut through the middle of its glyphs.
+			contentH = int32(maxLines) * lineH
+			totalLines = rows
+		} else {
+			lines = textBrowserWrappedLines(text, font, elemW-28)
+			totalLines = len(lines)
+		}
 	} else {
 		lines = strings.Split(text, "\n")
+		totalLines = len(lines)
 	}
-	totalLines := len(lines)
 
 	fillRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 4, headerColor)
 	labelFont, _ := getCachedFont(config, "small")
@@ -144,9 +173,23 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			sourceLabel = "WEB"
 		}
 		lw, lh, _ := labelFont.SizeUTF8(sourceLabel)
-		renderText(renderer, config, labelFont, sourceLabel, sdl.Color{R: 255, G: 255, B: 255, A: 255}, element.X+12, headerY+(headerH-int32(lh))/2)
+		textY := headerY + (headerH-int32(lh))/2
+		renderText(renderer, config, labelFont, sourceLabel, sdl.Color{R: 255, G: 255, B: 255, A: 255}, element.X+12, textY)
 
-		if text != "" && totalLines > 0 {
+		// The header is a browser tab strip in miniature: source badge,
+		// page title, then the position and refresh time pushed right.
+		rightEdge := element.X + elemW - 12
+		if element.AutoRefresh {
+			rightEdge -= 20
+		}
+		if textBrowserLastUpdate > 0 {
+			ts := time.Unix(textBrowserLastUpdate, 0).Format("15:04:05")
+			tw, _, _ := labelFont.SizeUTF8(ts)
+			tsX := rightEdge - int32(tw)
+			renderText(renderer, config, labelFont, ts, sdl.Color{R: 255, G: 255, B: 255, A: 180}, tsX, textY)
+			rightEdge = tsX - 12
+		}
+		if text != "" && totalLines > 0 && !loading {
 			lineInfo := ""
 			if totalLines > maxLines {
 				startLine := int(textBrowserScrollY) + 1
@@ -158,18 +201,19 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			} else {
 				lineInfo = fmt.Sprintf("%d lines", totalLines)
 			}
-			_, _, _ = labelFont.SizeUTF8(lineInfo)
-			renderText(renderer, config, labelFont, lineInfo, sdl.Color{R: 255, G: 255, B: 255, A: 180}, element.X+12+int32(lw)+8, headerY+(headerH-int32(lh))/2)
+			infoW, _, _ := labelFont.SizeUTF8(lineInfo)
+			rightEdge -= int32(infoW)
+			renderText(renderer, config, labelFont, lineInfo, sdl.Color{R: 255, G: 255, B: 255, A: 180}, rightEdge, textY)
+			rightEdge -= 12
 		}
-
-		if textBrowserLastUpdate > 0 {
-			ts := time.Unix(textBrowserLastUpdate, 0).Format("15:04:05")
-			tw, _, _ := labelFont.SizeUTF8(ts)
-			tsX := element.X + elemW - int32(tw) - 12
-			if element.AutoRefresh {
-				tsX -= 20
+		if styledDoc != nil {
+			title := strings.TrimSpace(styledDoc.Title)
+			if title != "" {
+				left := element.X + 12 + int32(lw) + 10
+				if avail := rightEdge - left; avail > 40 {
+					renderText(renderer, config, labelFont, ellipsize(labelFont, title, avail), sdl.Color{R: 255, G: 255, B: 255, A: 230}, left, textY)
+				}
 			}
-			renderText(renderer, config, labelFont, ts, sdl.Color{R: 255, G: 255, B: 255, A: 180}, tsX, headerY+(headerH-int32(lh))/2)
 		}
 
 		if element.AutoRefresh {
@@ -192,24 +236,31 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 
 	contentTop := element.Y + 8 + headerH
 	if source == textBrowserSourceWeb {
-		addressRect, goRect := textBrowserToolbarRects(element)
+		addressRect, searchRect, goRect := textBrowserToolbarLayout(element)
 		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
 		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, 1, sdl.Color{R: 93, G: 110, B: 138, A: 210})
 		address := textBrowserAddress(config)
 		if labelFont != nil {
-			renderText(renderer, config, labelFont, truncate(address, 90), ColorTextPrimary(), addressRect.X+10, addressRect.Y+9)
 			hint := "EDIT URL"
 			hw, _, _ := labelFont.SizeUTF8(hint)
+			// Fit the address to the bar in pixels. A long URL used to run
+			// under the hint and into the Go button.
+			if avail := addressRect.W - int32(hw) - 30; avail > 40 {
+				address = ellipsize(labelFont, address, avail)
+			}
+			renderText(renderer, config, labelFont, address, ColorTextPrimary(), addressRect.X+10, addressRect.Y+9)
 			renderText(renderer, config, labelFont, hint, sdl.Color{R: 155, G: 170, B: 195, A: 255}, addressRect.X+addressRect.W-int32(hw)-10, addressRect.Y+9)
+			if searchRect.W > 0 {
+				fillRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 6, sdl.Color{R: 36, G: 45, B: 63, A: 255})
+				strokeRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 6, 1, WithAlpha(accentColor, 170))
+				sw, sh, _ := labelFont.SizeUTF8("SEARCH")
+				renderText(renderer, config, labelFont, "SEARCH", WithAlpha(accentColor, 235), searchRect.X+(searchRect.W-int32(sw))/2, searchRect.Y+(searchRect.H-int32(sh))/2)
+			}
 			tw, th, _ := labelFont.SizeUTF8("GO")
 			fillRoundedRect(renderer, goRect.X, goRect.Y, goRect.W, goRect.H, 6, accentColor)
 			renderText(renderer, config, labelFont, "GO", sdl.Color{R: 255, G: 255, B: 255, A: 255}, goRect.X+(goRect.W-int32(tw))/2, goRect.Y+(goRect.H-int32(th))/2)
 		}
 		contentTop += textBrowserURLBarHeight + 4
-	}
-	if source == textBrowserSourceWeb {
-		contentH = elemH - headerH - textBrowserURLBarHeight - 12
-		maxLines = int(contentH / lineH)
 	}
 	y := contentTop
 
@@ -233,22 +284,36 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		startIdx = 0
 	}
 
-	for i := startIdx; i < endIdx; i++ {
-		ln := lines[i]
-		if strings.HasPrefix(ln, "===") || strings.HasPrefix(ln, "---") {
-			renderText(renderer, config, font, ln, accentColor, element.X+10, y)
-		} else if source != textBrowserSourceWeb && strings.Contains(ln, ":") && !strings.HasPrefix(ln, " ") {
-			parts := strings.SplitN(ln, ":", 2)
-			if len(parts) == 2 {
-				renderText(renderer, config, font, parts[0]+":", ColorTextSecondary(), element.X+10, y)
-				renderText(renderer, config, font, parts[1], ColorTextPrimary(), element.X+10+int32(len(parts[0])*12)+20, y)
+	loading = styledLayout == nil && loading
+	if styledLayout != nil {
+		drawWebDocument(renderer, config, styledDoc, styledLayout, sdl.Rect{
+			X: element.X + 7,
+			Y: contentTop + 4,
+			W: elemW - 14,
+			H: contentH,
+		}, int(textBrowserScrollY))
+		// Above the page, below the toolbar: the D-pad's current link.
+		browserDrawPageLinkFocus(renderer, element, styledLayout, int(textBrowserScrollY), contentTop+4, contentH)
+	} else if loading {
+		drawTextBrowserLoading(renderer, config, element, contentTop, contentH, accentColor)
+	} else {
+		for i := startIdx; i < endIdx; i++ {
+			ln := lines[i]
+			if strings.HasPrefix(ln, "===") || strings.HasPrefix(ln, "---") {
+				renderText(renderer, config, font, ln, accentColor, element.X+10, y)
+			} else if source != textBrowserSourceWeb && strings.Contains(ln, ":") && !strings.HasPrefix(ln, " ") {
+				parts := strings.SplitN(ln, ":", 2)
+				if len(parts) == 2 {
+					renderText(renderer, config, font, parts[0]+":", ColorTextSecondary(), element.X+10, y)
+					renderText(renderer, config, font, parts[1], ColorTextPrimary(), element.X+10+int32(len(parts[0])*12)+20, y)
+				} else {
+					renderText(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
+				}
 			} else {
 				renderText(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
 			}
-		} else {
-			renderText(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
+			y += lineH
 		}
-		y += lineH
 	}
 
 	if scrollMax > 0 {
@@ -275,6 +340,52 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			renderer.FillRect(&sdl.Rect{X: barX + 1, Y: thumbY + 2, W: 2, H: thumbH - 4})
 		}
 	}
+}
+
+// drawTextBrowserLoading paints the placeholder shown while a page is still on
+// the wire: a small card with pulsing dots, so a slow page reads as work in
+// progress instead of an empty panel with one line of text in the corner.
+func drawTextBrowserLoading(renderer *sdl.Renderer, config *Config, element Element, top, height int32, accent sdl.Color) {
+	if renderer == nil || height < 90 {
+		return
+	}
+	panelW := getElementWidth(element, 1100) - 80
+	if panelW > 560 {
+		panelW = 560
+	}
+	if panelW < 240 {
+		panelW = 240
+	}
+	fullW := getElementWidth(element, 1100)
+	x := element.X + (fullW-panelW)/2
+	cardH := int32(104)
+	y := top + (height-cardH)/2
+
+	fillRoundedRect(renderer, x, y, panelW, cardH, 10, ColorPanelRaised)
+	strokeRoundedRect(renderer, x, y, panelW, cardH, 10, 1, ColorDivider)
+	// Accent rail: the card reads as the browser's own surface rather than a
+	// floating dialog.
+	fillRoundedRect(renderer, x, y, 4, cardH, 2, accent)
+
+	// Three accent dots breathe in sequence; the phase comes from the frame
+	// clock, so there is nothing to update from the network goroutine.
+	phase := float64(sdl.GetTicks64()%1200) / 1200.0 * 2 * math.Pi
+	dotX := x + panelW - 74
+	dotY := y + 26
+	for i := 0; i < 3; i++ {
+		pulse := 0.5 + 0.5*math.Sin(phase-float64(i)*0.7)
+		alpha := uint8(90 + 150*pulse)
+		fillRoundedRect(renderer, dotX+int32(i*16), dotY, 10, 10, 5, sdl.Color{R: accent.R, G: accent.G, B: accent.B, A: alpha})
+	}
+
+	labelFont, _ := getCachedFont(config, "small")
+	if labelFont == nil {
+		return
+	}
+	renderText(renderer, config, labelFont, "LOADING PAGE", accent, x+20, y+16)
+	address := ellipsize(labelFont, textBrowserAddress(config), panelW-40)
+	renderText(renderer, config, labelFont, address, ColorTextPrimary(), x+20, y+46)
+	renderText(renderer, config, labelFont, "Rendering text as soon as the page arrives", ColorTextSecondary(), x+20, y+72)
 }
 
 // findTextBrowserVariable returns the variable name of the first textbrowser
@@ -361,14 +472,64 @@ func textBrowserAddress(config *Config) string {
 	return textBrowserDefaultURL
 }
 
-func textBrowserToolbarRects(element Element) (sdl.Rect, sdl.Rect) {
+const (
+	textBrowserGoWidth     = int32(64)
+	textBrowserSearchWidth = int32(84)
+	textBrowserBarGap      = int32(8)
+)
+
+// textBrowserToolbarRects lays out the web toolbar: the address field, the
+// Search chip and Go. The chip exists so the controller has a visible target
+// for Y instead of a hidden shortcut.
+func textBrowserToolbarRects(element Element) (address, goButton sdl.Rect) {
+	address, _, goButton = textBrowserToolbarLayout(element)
+	return
+}
+
+// textBrowserScrollLimit is the last scroll row for an element, measured the
+// same way the renderer draws it. A styled web page scrolls by layout rows; a
+// plain-text panel scrolls by its 22px lines. -1 means "not measured yet": the
+// caller must not clamp, because the page is still on the wire.
+func textBrowserScrollLimit(config *Config, element Element) int32 {
+	if textBrowserElementSource(element) == textBrowserSourceWeb {
+		if layout := browserPageLayout(config, element); layout != nil {
+			return browserScrollMax(element, layout)
+		}
+		return -1
+	}
+	contentH := getElementHeight(element, 480) - 28 - 8
+	maxLines := int(contentH / 22)
+	totalLines := 0
+	if v, ok := config.Variables.Custom[element.Variable].(string); ok {
+		totalLines = len(strings.Split(v, "\n"))
+	}
+	if totalLines > maxLines {
+		return int32(totalLines - maxLines)
+	}
+	return 0
+}
+
+func textBrowserToolbarLayout(element Element) (address, search, goButton sdl.Rect) {
 	width := getElementWidth(element, 1100)
 	y := element.Y + 36
-	goWidth := int32(64)
-	gap := int32(8)
-	address := sdl.Rect{X: element.X + 8, Y: y, W: width - goWidth - gap - 16, H: textBrowserURLBarHeight - 4}
-	goButton := sdl.Rect{X: address.X + address.W + gap, Y: y, W: goWidth, H: textBrowserURLBarHeight - 4}
-	return address, goButton
+	addressW := width - textBrowserGoWidth - textBrowserSearchWidth - textBrowserBarGap*2 - 16
+	if addressW < 160 {
+		// Very narrow panel: give the address the room and drop the chip.
+		addressW = width - textBrowserGoWidth - textBrowserBarGap - 16
+		address = sdl.Rect{X: element.X + 8, Y: y, W: addressW, H: textBrowserURLBarHeight - 4}
+		goButton = sdl.Rect{X: address.X + address.W + textBrowserBarGap, Y: y, W: textBrowserGoWidth, H: textBrowserURLBarHeight - 4}
+		return
+	}
+	address = sdl.Rect{X: element.X + 8, Y: y, W: addressW, H: textBrowserURLBarHeight - 4}
+	search = sdl.Rect{X: address.X + address.W + textBrowserBarGap, Y: y, W: textBrowserSearchWidth, H: textBrowserURLBarHeight - 4}
+	goButton = sdl.Rect{X: search.X + search.W + textBrowserBarGap, Y: y, W: textBrowserGoWidth, H: textBrowserURLBarHeight - 4}
+	return
+}
+
+// textBrowserSearchRect is the Search chip's hit area.
+func textBrowserSearchRect(element Element) sdl.Rect {
+	_, search, _ := textBrowserToolbarLayout(element)
+	return search
 }
 
 // loadTextBrowserURL is the address-bar entry point: it records the page in
@@ -413,6 +574,7 @@ func loadTextBrowserURLAt(config *Config, element Element, rawURL string, record
 		textBrowserRequestMutex.Unlock()
 		if isCurrent {
 			setBrowserLinks(variable, page.Links)
+			setBrowserDocument(variable, page.Doc)
 			publishCustom(variable, page.Text)
 		}
 	}(outputVariable, address, requestID)
@@ -422,7 +584,7 @@ func loadTextBrowserURLAt(config *Config, element Element, rawURL string, record
 // into a web search, so the browser doubles as a search box the way a handheld
 // user expects from a single field.
 func textBrowserSearchURL(query string) string {
-	return "https://duckduckgo.com/html/?q=" + url.QueryEscape(query)
+	return browserSearchURL + url.QueryEscape(query)
 }
 
 // textBrowserLooksLikeAddress reports whether the entry names a host rather
@@ -539,7 +701,18 @@ func browseWebPageResult(rawURL string) browserPage {
 		text += fmt.Sprintf("Links: %d (press X or L to choose one)\n", len(links))
 	}
 	text += "\n" + pageText
-	return browserPage{Text: text, Links: links, FinalURL: resp.Request.URL.String()}
+	// Linked stylesheets carry most of a real page's look. Fetching a few small
+	// ones is cheap; the parser then applies the presentation subset it can
+	// draw, and the plain text above remains the fallback for everything else.
+	pageCSS := fetchWebStylesheets(source, resp.Request.URL)
+	doc := parseWebPage(source, pageCSS, resp.Request.URL.String())
+	if doc.Title == "" {
+		doc.Title = title
+	}
+	if len(doc.Blocks) == 0 {
+		doc = nil
+	}
+	return browserPage{Text: text, Links: links, FinalURL: resp.Request.URL.String(), Doc: doc}
 }
 
 // capTextBrowserText bounds how much readable text a page may contribute. The

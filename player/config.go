@@ -323,6 +323,10 @@ func (v *Variables) Get(name string) string {
 		return boolString(v.VideoPlayerEnabled)
 	case "screensaverEnabled":
 		return boolString(v.ScreensaverEnabled)
+	case "screensaverTimeout":
+		return strconv.Itoa(v.ScreensaverTimeout)
+	case "screensaverTimeoutLabel":
+		return screenTimeoutLabel(v.ScreensaverTimeout)
 	case "launcherEnabled":
 		return boolString(v.LauncherEnabled)
 	case "externalAppEnabled":

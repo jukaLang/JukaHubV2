@@ -300,6 +300,23 @@ type chatLinkHit struct {
 
 var chatLinkRects []chatLinkHit
 
+// chatLineLinkTargets keeps the spans that survived the wrap intact. A link the
+// renderer clipped to fit the last line would otherwise play a malformed URL.
+func chatLineLinkTargets(line string, whole map[string]bool) []chatLineLinkSpan {
+	var targets []chatLineLinkSpan
+	for _, span := range chatLineLinkSpans(line) {
+		if whole[span.url] {
+			targets = append(targets, span)
+		}
+	}
+	return targets
+}
+
+// chatTextLinkRects are the URL spans drawn as message text. They are kept apart
+// from the card rects so a card and the text it previews never shadow each
+// other in a click.
+var chatTextLinkRects []chatLinkHit
+
 // chatImageHit is an inline image preview rendered inside a chat bubble.
 // Clicking it opens the image full screen (and clicking again closes it).
 type chatImageHit struct {
@@ -371,8 +388,10 @@ func chatPlayableURL(text string) string {
 // pasted URLs into a stall.
 const chatLinkCardLimit = 3
 
-// chatMessageLinks returns the distinct http(s) links in a message, in order.
-func chatMessageLinks(text string) []string {
+// allChatLinks returns every distinct http(s) link in a message, in order. The
+// cards stop at chatLinkCardLimit; the link text in the bubble stays clickable
+// for the rest, so this one is not capped.
+func allChatLinks(text string) []string {
 	links := make([]string, 0, chatLinkCardLimit)
 	seen := make(map[string]bool, chatLinkCardLimit)
 	for _, m := range urlRegex.FindAllString(text, -1) {
@@ -382,11 +401,43 @@ func chatMessageLinks(text string) []string {
 		}
 		seen[u] = true
 		links = append(links, u)
-		if len(links) >= chatLinkCardLimit {
-			break
-		}
 	}
 	return links
+}
+
+// chatMessageLinks returns the distinct http(s) links in a message, in order,
+// limited to the preview cards one bubble may draw.
+func chatMessageLinks(text string) []string {
+	links := allChatLinks(text)
+	if len(links) > chatLinkCardLimit {
+		links = links[:chatLinkCardLimit]
+	}
+	return links
+}
+
+// chatLineLinkSpan is one URL inside a wrapped bubble line, as byte offsets into
+// that line.
+type chatLineLinkSpan struct {
+	start, end int
+	url        string
+}
+
+// chatLineLinkSpans finds the URLs drawn on one wrapped line, so a tap on the
+// link text itself can play or open it. The rects are measured from the same
+// line and font the renderer uses, which keeps the target exactly on the text.
+func chatLineLinkSpans(line string) []chatLineLinkSpan {
+	var spans []chatLineLinkSpan
+	for _, m := range urlRegex.FindAllStringIndex(line, -1) {
+		if m[0] >= m[1] {
+			continue
+		}
+		u := trimChatURL(line[m[0]:m[1]])
+		if u == "" {
+			continue
+		}
+		spans = append(spans, chatLineLinkSpan{start: m[0], end: m[0] + len(u), url: u})
+	}
+	return spans
 }
 
 // chatLinkOpensInPlayer reports whether a link is media the player handles
@@ -474,13 +525,24 @@ func currentSceneHasChat(config *Config) bool {
 // web pages open in the browser. It reports whether the click landed on one,
 // so the generic composer handler does not also run.
 func handleChatLinkClick(mx, my int32, config *Config) bool {
+	activate := func(hit chatLinkHit) bool {
+		if !pointInRect(mx, my, hit.rect) {
+			return false
+		}
+		if hit.play {
+			playSmartURL(config, hit.url)
+		} else {
+			openBrowserAtURL(config, hit.url)
+		}
+		return true
+	}
+	for _, hit := range chatTextLinkRects {
+		if activate(hit) {
+			return true
+		}
+	}
 	for _, hit := range chatLinkRects {
-		if pointInRect(mx, my, hit.rect) {
-			if hit.play {
-				playSmartURL(config, hit.url)
-			} else {
-				openBrowserAtURL(config, hit.url)
-			}
+		if activate(hit) {
 			return true
 		}
 	}
@@ -733,6 +795,9 @@ func discordConnect() error {
 		}
 		chatMutex.Unlock()
 		saveChatMessages()
+		// A message that arrives while the panel is idle should be readable on
+		// the screensaver without waking the device.
+		noteScreensaverChat(sender, text)
 	})
 	if err := dg.Open(); err != nil {
 		discordStatus = "Discord: " + err.Error()
@@ -1144,6 +1209,10 @@ func sendChatMessage(sender, text string) {
 	}
 	chatMutex.Unlock()
 	saveChatMessages()
+	if !msg.Own {
+		// Incoming replies (Juka AI, a relayed message) go to the idle feed too.
+		noteScreensaverChat(msg.Sender, msg.Text)
+	}
 
 	// Mirror the message to Discord when configured.
 	if appConfig != nil {
@@ -1275,6 +1344,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	chatAttachBtnRect = sdl.Rect{}
 	chatInputRect = sdl.Rect{}
 	chatLinkRects = chatLinkRects[:0]
+	chatTextLinkRects = chatTextLinkRects[:0]
 	chatImageRects = chatImageRects[:0]
 	// One stat per session: the explorer root only changes with the config, and
 	// the attach path updates this as soon as the user picks a new folder.
@@ -1376,6 +1446,11 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 
 		text := msg.Text
 		lines := wrapChatLines(font, text, maxBubbleW-bubblePad*2, 8)
+		// The links as written, for validating the wrapped ones below.
+		wholeLinks := make(map[string]bool, chatLinkCardLimit)
+		for _, l := range allChatLinks(text) {
+			wholeLinks[l] = true
+		}
 		bw := int32(0)
 		for _, line := range lines {
 			if w, _, _ := font.SizeUTF8(line); int32(w) > bw {
@@ -1485,7 +1560,21 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 
 		// Message text (wrapped so long AI answers stay readable).
 		for li, line := range lines {
-			renderText(renderer, config, font, line, ColorTextPrimary(), bx+bubblePad, by+bubblePad+int32(li)*lineH)
+			lineY := by + bubblePad + int32(li)*lineH
+			renderText(renderer, config, font, line, ColorTextPrimary(), bx+bubblePad, lineY)
+			// A tap on the link text itself plays or opens it, not only the
+			// preview card below. Only a link that survived the wrap intact is
+			// a target: a clipped tail (the ellipsised last line) would play a
+			// malformed URL.
+			for _, span := range chatLineLinkTargets(line, wholeLinks) {
+				prefixW, _, _ := font.SizeUTF8(line[:span.start])
+				urlW, _, _ := font.SizeUTF8(line[span.start:span.end])
+				chatTextLinkRects = append(chatTextLinkRects, chatLinkHit{
+					rect: sdl.Rect{X: bx + bubblePad + int32(prefixW), Y: lineY, W: int32(urlW), H: lineH},
+					url:  span.url,
+					play: chatLinkOpensInPlayer(span.url),
+				})
+			}
 		}
 
 		// Inline image thumbnail. The rect is recorded so a click can open the

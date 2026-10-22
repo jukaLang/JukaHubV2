@@ -621,6 +621,9 @@ func vkTitle() string {
 	case vkTargetWiFi:
 		return "WI-FI PASSWORD"
 	}
+	if textBrowserSearchEditing {
+		return "SEARCH WEB"
+	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
 	}
@@ -670,6 +673,9 @@ func vkPlaceholder() string {
 		return "192.168.1.51"
 	case vkTargetWiFi:
 		return "At least 8 characters"
+	}
+	if textBrowserSearchEditing {
+		return browserSearchPrompt
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -880,7 +886,9 @@ func vkOpenSceneInput(config *Config, sceneIdx, elemIdx int) {
 	activeElementIndex = elemIdx
 	inputTextBuffer = ""
 	variable := config.Scenes[sceneIdx].Elements[elemIdx].Variable
-	if textBrowserAddressEditing {
+	if textBrowserSearchEditing {
+		variable = browserSearchVariable
+	} else if textBrowserAddressEditing {
 		variable = textBrowserURLVariable
 	}
 	if variable != "" {
@@ -1048,6 +1056,9 @@ func vkSubmit(config *Config, askAI bool) {
 	default:
 		if textBrowserAddressEditing {
 			textBrowserAddressSubmitted = true
+		}
+		if textBrowserSearchEditing {
+			textBrowserSearchSubmitted = true
 		}
 		vkSetText(text, config)
 		vkCloseKeyboard()

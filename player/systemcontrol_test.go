@@ -186,8 +186,8 @@ func TestNextScreenTimeoutCyclesAndWraps(t *testing.T) {
 	if got := nextScreenTimeout(0); got != screenTimeoutSteps[0] {
 		t.Fatalf("from 0: %d, want %d", got, screenTimeoutSteps[0])
 	}
-	if got := nextScreenTimeout(15); got != 30 {
-		t.Fatalf("from 15s: %d, want 30", got)
+	if got := nextScreenTimeout(15); got != 25 {
+		t.Fatalf("from 15s: %d, want the 25s default step", got)
 	}
 	// Unknown values (an old config) move to the first step above them.
 	if got := nextScreenTimeout(120); got != 300 {

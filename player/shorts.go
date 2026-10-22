@@ -14,6 +14,15 @@ var (
 	currentShortIdx int = -1
 	shortsScrollY   int32
 	shortsCols      = 1
+
+	// shortsAutoplay keeps the feed running: when a short ends the next one
+	// starts, until the list runs out or the user opens something else.
+	shortsAutoplay bool
+	// shortsAutoAdvance is raised by the player on a natural end of stream.
+	shortsAutoAdvance bool
+	// shortsPendingStart waits for the feed to download before playing the
+	// first short, so the combo does not open an empty grid.
+	shortsPendingStart bool
 )
 
 type shortsGridLayout struct {
@@ -67,6 +76,104 @@ func fetchYouTubeShorts(config *Config, resultVar string, vars map[string]interf
 // Play does not wait for yt-dlp, matching the results grid.
 func prefetchShortsFocused(config *Config, videos []VideoInfo) {
 	prefetchVideos(config, videos, currentShortIdx)
+}
+
+// shortsVideos returns the feed published by the search worker.
+func shortsVideos(config *Config) []VideoInfo {
+	if config == nil {
+		return nil
+	}
+	videos, _ := config.Variables.Custom["shorts_list"].([]VideoInfo)
+	return videos
+}
+
+// nextShortIndex is the feed step after a finished short. It reports false when
+// the list is exhausted, which ends autoplay.
+func nextShortIndex(current, total int) (int, bool) {
+	next := current + 1
+	if next < 0 || next >= total {
+		return 0, false
+	}
+	return next, true
+}
+
+// openShortsFeed is the Media shortcut: jump to the Shorts feed, pre-load it
+// and start playing the first short. Playback then continues on its own.
+func openShortsFeed(config *Config) bool {
+	idx := sceneIndexExact(config, "Shorts")
+	if idx < 0 {
+		ShowToast("This build has no Shorts feed", ToastKindWarning)
+		return false
+	}
+	shortsAutoplay = true
+	if currentSceneIndex != idx {
+		changeSceneTo(config, idx)
+	}
+	videos := shortsVideos(config)
+	if len(videos) == 0 {
+		// Entering the scene already starts the download; play as soon as the
+		// list lands instead of leaving a blank grid behind the combo.
+		shortsPendingStart = true
+		ShowToast("Loading Shorts…", ToastKindInfo)
+		return true
+	}
+	start := currentShortIdx
+	if start < 0 || start >= len(videos) {
+		start = 0
+	}
+	startShortAt(config, start)
+	return true
+}
+
+// startShortAt plays one short and pre-loads the ones after it, so the
+// auto-advance does not wait for yt-dlp between videos.
+func startShortAt(config *Config, index int) {
+	videos := shortsVideos(config)
+	if index < 0 || index >= len(videos) {
+		return
+	}
+	currentShortIdx = index
+	prefetchShortsFocused(config, videos)
+	playVideoInfo(config, videos[index])
+	shortsAutoplay = true
+}
+
+// drainShortsAutoplay runs on the main loop: it starts a feed that was waiting
+// for its list and advances after a short ends. Everything here touches the
+// player on the event thread, like the rest of the scene code.
+func drainShortsAutoplay(config *Config) {
+	if shortsPendingStart {
+		// Waiting for the feed only makes sense while the Shorts screen is up:
+		// leaving it must not start a video behind whatever the user opened.
+		if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) ||
+			config.Scenes[currentSceneIndex].Name != "Shorts" {
+			shortsPendingStart = false
+			shortsAutoplay = false
+			return
+		}
+		videos := shortsVideos(config)
+		if len(videos) == 0 {
+			return
+		}
+		shortsPendingStart = false
+		startShortAt(config, 0)
+		return
+	}
+	if !shortsAutoAdvance {
+		return
+	}
+	shortsAutoAdvance = false
+	if !shortsAutoplay {
+		return
+	}
+	videos := shortsVideos(config)
+	next, ok := nextShortIndex(currentShortIdx, len(videos))
+	if !ok {
+		shortsAutoplay = false
+		ShowToast("That was the last Short", ToastKindInfo)
+		return
+	}
+	startShortAt(config, next)
 }
 
 func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
@@ -227,7 +334,8 @@ func handleShortsInput(e *sdl.KeyboardEvent, config *Config) {
 		prefetchShortsFocused(config, videos)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		if currentShortIdx >= 0 && currentShortIdx < len(videos) {
-			playVideoInfo(config, videos[currentShortIdx])
+			// Playing from the grid starts the feed, so the next short follows.
+			startShortAt(config, currentShortIdx)
 		}
 	case sdl.K_ESCAPE:
 		for _, scene := range config.Scenes {

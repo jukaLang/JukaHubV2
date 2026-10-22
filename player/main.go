@@ -749,10 +749,20 @@ func main() {
 								handleSearchResultsAction(ActionNavigateRight, config)
 							case sdl.K_RETURN, sdl.K_SPACE:
 								handleSearchResultsAction(ActionConfirm, config)
+							case sdl.K_PAGEDOWN:
+								// Keyboard twin of R2: next page, fetching it if needed.
+								mediaResultsPageJump(config, 1)
+							case sdl.K_PAGEUP:
+								mediaResultsPageJump(config, -1)
 							case sdl.K_ESCAPE:
 								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
+							// The Apps launcher is a tile grid: the D-pad walks it in two
+							// dimensions instead of stepping a single column of rows.
+							if curElem.Variable == appsEntriesVar && appGridKey(e.Keysym.Sym, config) {
+								continue
+							}
 							// Live TV: Left/Right switch category, X searches, Y stars
 							// the highlighted channel. Other lists keep their keys.
 							if curElem.Variable == tvEntriesVar && tvListKeyAction(e.Keysym.Sym, config) {
@@ -774,6 +784,18 @@ func main() {
 								}
 							case sdl.K_RETURN, sdl.K_SPACE:
 								feEnterFocused(config)
+							case sdl.K_PAGEDOWN:
+								if focusedFileIndex+dynamicListMaxVisible(curElem) < n {
+									focusedFileIndex += dynamicListMaxVisible(curElem)
+								} else {
+									focusedFileIndex = n - 1
+								}
+							case sdl.K_PAGEUP:
+								if focusedFileIndex-dynamicListMaxVisible(curElem) > 0 {
+									focusedFileIndex -= dynamicListMaxVisible(curElem)
+								} else {
+									focusedFileIndex = 0
+								}
 							case sdl.K_ESCAPE:
 								// File Explorer: B/Escape climbs the directory tree and
 								// only leaves the scene at the root.
@@ -945,6 +967,13 @@ func main() {
 						} // Quick Settings (Ctrl+Q).
 						if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
 							qsToggleOpen()
+						}
+						// Shorts feed (Ctrl+Shift+S): opens Media's Shorts feed, pre-loads
+						// it and plays the first short. The chord is used instead of a
+						// plain S so typing a capital S in a field cannot trigger it.
+						if e.Keysym.Sym == sdl.K_s && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) != 0 {
+							openShortsFeed(config)
+							continue
 						}
 						// Global shortcuts (F1 = help, F2 = global search, F12 = screenshot).
 						if e.Keysym.Sym == sdl.K_F1 {
@@ -1489,6 +1518,12 @@ func main() {
 									if !ok {
 										continue
 									}
+									// The Next chip floats over the results: a click there loads
+									// the next page instead of playing the card behind it.
+									if mediaNextPageHit(config, elem, videos, mx, my) {
+										loadMoreMediaResults(config)
+										continue
+									}
 									// Grid hit detection (account for smooth scroll offset)
 									cols, rows := gridColsRows(elem)
 									elemWidth := getElementWidth(elem, 1080)
@@ -1511,6 +1546,16 @@ func main() {
 												playVideoInfo(config, videos[idx])
 											}
 											break
+										}
+									}
+								} else if elem.Type == "dynamiclist" && elem.Variable == appsEntriesVar {
+									// Apps launcher: hit-test the tile grid, not list rows.
+									if entries := appGridEntries(config, elem); len(entries) > 0 {
+										if idx := appGridIndexAt(elem, entries, mx, my); idx >= 0 {
+											selectedButtonIndex = i
+											focusEngine.SetByElementIndex(i)
+											focusedFileIndex = idx
+											launchAppEntry(config, entries[idx])
 										}
 									}
 								} else if elem.Type == "dynamiclist" {
@@ -1547,13 +1592,13 @@ func main() {
 										elemW := getElementWidth(elem, 1080)
 										elemH := getElementHeight(elem, 500)
 										layout := newShortsGridLayout(elem, elemW)
-										for idx, vid := range vids {
+										for idx := range vids {
 											cell := shortsGridCellRect(elem, layout, idx, shortsScrollY)
 											if mx >= cell.X && mx <= cell.X+cell.W && my >= elem.Y && my <= elem.Y+elemH && my >= cell.Y && my <= cell.Y+cell.H {
 												currentShortIdx = idx
 												selectedButtonIndex = i
 												focusEngine.SetByElementIndex(i)
-												playVideoInfo(config, vid)
+												startShortAt(config, idx)
 												break
 											}
 										}
@@ -1565,8 +1610,11 @@ func main() {
 									focusEngine.SetByElementIndex(i)
 									if textBrowserElementSource(elem) == textBrowserSourceWeb {
 										addressRect, goRect := textBrowserToolbarRects(elem)
+										searchRect := textBrowserSearchRect(elem)
 										if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
 											handleTextBrowserAddressInput(renderer, config, elem)
+										} else if searchRect.W > 0 && mx >= searchRect.X && mx <= searchRect.X+searchRect.W && my >= searchRect.Y && my <= searchRect.Y+searchRect.H {
+											openBrowserSearch(renderer, config, elem)
 										} else if mx >= goRect.X && mx <= goRect.X+goRect.W && my >= goRect.Y && my <= goRect.Y+goRect.H {
 											loadTextBrowserURL(config, elem, textBrowserAddress(config))
 										}
@@ -1685,6 +1733,14 @@ func main() {
 								continue
 							}
 						}
+						// Y in Media opens the Shorts feed (the controller twin of
+						// Ctrl+Shift+S) and keeps playing after each short ends.
+						if e.Button == sdl.CONTROLLER_BUTTON_Y && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == "Tube" {
+							if openShortsFeed(config) {
+								continue
+							}
+						}
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
@@ -1734,6 +1790,10 @@ func main() {
 								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
+							// Apps launcher: two-dimensional D-pad navigation over tiles.
+							if curElem.Variable == appsEntriesVar && appGridController(e.Button, config) {
+								continue
+							}
 							// Live TV: D-pad Left/Right switch category, X searches,
 							// Y stars the highlighted channel.
 							if curElem.Variable == tvEntriesVar && tvListControllerAction(e.Button, config) {
@@ -1824,6 +1884,10 @@ func main() {
 							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 								goBackScene(config)
 							}
+						} else if curElem.Type == "textbrowser" && textBrowserElementSource(curElem) == textBrowserSourceWeb {
+							// The web browser owns its pad: links, the address bar and the
+							// way out to the button row all live in browser.go.
+							handleBrowserController(renderer, e, config, curElem)
 						} else if curElem.Type == "textbrowser" {
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_X:
@@ -1968,12 +2032,16 @@ func main() {
 								// scene is what users expect, not a jump to Settings.
 								goBackScene(config)
 							}
-							// Scene switching (L1/R1 or L2/R2)
-							switch e.Button {
-							case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-								changeScene(config, -1)
-							case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-								changeScene(config, 1)
+							// Shoulders are contextual now (see shoulders.go): they page
+							// lists, seek and change video, instead of switching scene.
+							if e.Button == sdl.CONTROLLER_BUTTON_LEFTSHOULDER || e.Button == sdl.CONTROLLER_BUTTON_RIGHTSHOULDER {
+								side := padL1
+								if e.Button == sdl.CONTROLLER_BUTTON_RIGHTSHOULDER {
+									side = padR1
+								}
+								if handleShoulderPress(side, config) {
+									continue
+								}
 							}
 						}
 						focusEngine.SyncSelected()
@@ -1982,7 +2050,7 @@ func main() {
 			case *sdl.ControllerAxisEvent:
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
-				handleControllerAxis(e)
+				handleControllerAxis(e, config)
 			}
 		}
 
@@ -1999,31 +2067,24 @@ func main() {
 		}
 		if textBrowserScrollVelocity != 0 {
 			textBrowserScrollY += int32(textBrowserScrollVelocity)
-			// Clamp scroll position based on current scene textbrowser elements
+			// Clamp scroll position based on current scene textbrowser elements.
+			// The limit comes from the renderer's own measure: a styled web page
+			// scrolls by layout rows, which the old 22px-line count here could
+			// not see, so every kinetic scroll on a page snapped back to the top.
 			if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 				for _, elem := range config.Scenes[currentSceneIndex].Elements {
-					if elem.Type == "textbrowser" {
-						elemH := getElementHeight(elem, 480)
-						headerH := int32(28)
-						contentH := elemH - headerH - 8
-						lineH := int32(22)
-						maxLines := int((contentH) / lineH)
-						totalLines := 0
-						if v, ok := config.Variables.Custom[elem.Variable].(string); ok {
-							totalLines = len(strings.Split(v, "\n"))
-						}
-						scrollMax := int32(0)
-						if totalLines > maxLines {
-							scrollMax = int32(totalLines) - int32(maxLines)
-						}
+					if elem.Type != "textbrowser" {
+						continue
+					}
+					if scrollMax := textBrowserScrollLimit(config, elem); scrollMax >= 0 {
 						if textBrowserScrollY < 0 {
 							textBrowserScrollY = 0
 						}
 						if textBrowserScrollY > scrollMax {
 							textBrowserScrollY = scrollMax
 						}
-						break
 					}
+					break
 				}
 			}
 		}
@@ -2090,11 +2151,17 @@ func main() {
 		// when its scene is not the one on screen (the flag used to wait for a
 		// repaint of a scene the user had already left).
 		videoSyncPlaybackEnd()
+		// Shorts feed: start the download- pending first short, then keep the
+		// feed rolling after each one finishes.
+		drainShortsAutoplay(config)
 		playtimeTick(config)
 		// Dock and ambient screen: clock, weather, now-playing and photos when the
 		// device is charging or idle (see ambient.go). Runs here, on the event
 		// thread, because its entry check reads modal flags.
 		ambientAutoTick(config, time.Now())
+		// Screensaver: the same idle timeout, checked here on the event thread
+		// so playback, downloads and open panels can hold it off.
+		screensaverAutoTick(config, time.Now())
 		// The dock/ambient screen takes the whole panel when it is up, then the
 		// screensaver, then the scene.
 		if ambientIsActive() {

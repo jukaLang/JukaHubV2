@@ -135,7 +135,7 @@ func qsInit() {
 		},
 		// The app's idle timer drives the screensaver overlay, not a display
 		// blank, so the row says what it actually controls.
-		cycle: qsCycle{Label: "Screensaver", Icon: "[T]", Value: 300},
+		cycle: qsCycle{Label: "Screensaver", Icon: "[T]", Value: 25},
 		// -1 means "nothing written yet", so the first move always applies.
 		lastVolume:     -1,
 		lastBrightness: -1,

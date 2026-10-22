@@ -1,0 +1,2341 @@
+package main
+
+// webpage.go — styled HTML rendering for the built-in browser.
+//
+// A stock TrimUI Smart Pro has no WebKit/Chromium, no window manager and 1 GB
+// of shared RAM, so embedding a browser engine is not an option. Instead this
+// reader parses the page's HTML5 markup itself, resolves the part of CSS that
+// decides how text looks (colour, size, weight, alignment, spacing,
+// backgrounds, lists, quotes and code blocks) and draws the result with the
+// app's own SDL/TTF pipeline.
+//
+// The parser is streaming: it never keeps a DOM, only the styled text blocks it
+// is about to draw, and it stops at fixed byte/block limits. A styled page
+// therefore costs a few hundred kilobytes on a 1 GB handheld instead of the
+// tens of megabytes a real engine would need.
+
+import (
+	"context"
+	"fmt"
+	htmlstd "html"
+	"io"
+	"math"
+	"net/http"
+	"net/url"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
+)
+
+const (
+	// webMaxTextBytes bounds how much readable text one page may contribute.
+	webMaxTextBytes = 384 << 10
+	// webMaxBlocks bounds the block list so a pathological page cannot make
+	// the layout take seconds on the handheld.
+	webMaxBlocks = 1800
+	// webMaxStylesheets and webSheetByteCap bound external CSS fetching: a
+	// handful of small sheets is what makes real sites look like themselves.
+	webMaxStylesheets = 3
+	webSheetByteCap   = 256 << 10
+	webMaxCSSBytes    = 512 << 10
+	// webMaxRows bounds the laid-out row count (each row is one text line).
+	webMaxRows = 12000
+)
+
+// webElement is the little of an open element the CSS matcher needs.
+type webElement struct {
+	tag     string
+	id      string
+	classes []string
+}
+
+// webStyle is a resolved style for one element. Zero values are meaningful:
+// HasColor/HasBg distinguish "author asked for this" from "inherit".
+type webStyle struct {
+	Color      sdl.Color
+	HasColor   bool
+	Background sdl.Color
+	HasBg      bool
+	FontPx     float64
+	Bold       bool
+	Italic     bool
+	Underline  bool
+	Strike     bool
+	Link       bool
+	Align      int
+	Pre        bool
+	Hidden     bool
+	Indent     float64
+	TextIndent float64
+	MarginTop  float64
+	MarginBot  float64
+	// Transform is the author's text-transform (0 none, 1 uppercase,
+	// 2 lowercase, 3 capitalise). It is applied when a word is measured so
+	// the wrapped width matches the glyphs that get drawn.
+	Transform int
+	// Borders are reported separately: a rule under a heading and a card's
+	// full outline are drawn differently from a quote's left bar.
+	BorderLeft     bool
+	BoxBorder      bool
+	BorderTop      bool
+	BorderBottom   bool
+	BorderColor    sdl.Color
+	HasBorderColor bool
+	ListNone       bool
+	// Href is the target of the anchor this text belongs to, empty for every
+	// other text. Elements inside an <a> inherit it, so a bold or spanned
+	// label still knows where it points and the browser can walk links with
+	// the D-pad.
+	Href string
+}
+
+// webRun is a styled span inside a block.
+type webRun struct {
+	Text  string
+	Style webStyle
+}
+
+// webBlock is one laid-out unit: a paragraph, heading, list item, quote, code
+// block or horizontal rule.
+type webBlock struct {
+	Runs           []webRun
+	Style          webStyle
+	Align          int
+	Indent         float64
+	TextIndent     float64
+	MarginTop      float64
+	MarginBot      float64
+	Bullet         string
+	Pre            bool
+	HasBg          bool
+	Background     sdl.Color
+	BorderLeft     bool
+	BoxBorder      bool
+	BorderTop      bool
+	BorderBottom   bool
+	BorderColor    sdl.Color
+	HasBorderColor bool
+	Rule           bool
+	// InMain marks text inside <main>/<article>. When a page has any, the
+	// reader shows that content instead of the site's navigation furniture.
+	InMain bool
+}
+
+// webDocument is one parsed page. It holds no raw HTML.
+type webDocument struct {
+	URL    string
+	Title  string
+	Blocks []webBlock
+	Paper  sdl.Color
+	Text   sdl.Color
+
+	mu     sync.Mutex
+	stamp  string
+	layout *webLayout
+}
+
+// webRunPos is a measured run, ready to draw.
+type webRunPos struct {
+	Text      string
+	X         int32
+	Font      *ttf.Font
+	Color     sdl.Color
+	Bold      bool
+	Underline bool
+	Strike    bool
+	// Href is set when this run is part of a link, so the browser can outline
+	// and follow it without re-parsing the page.
+	Href string
+	// Inline backgrounds (a <code> chip inside a paragraph) are per run; a
+	// block-level background is painted once for the whole block instead.
+	HasBg bool
+	Bg    sdl.Color
+}
+
+// webRow is one line slot in the uniform layout grid. Tall lines (headings)
+// claim extra empty slots so nothing ever overlaps the next line.
+type webRow struct {
+	Y    int32
+	Runs []webRunPos
+}
+
+// webRect is a background, rule or border drawn with (or behind) the text of
+// a layout. Stroke selects an outline instead of a fill.
+type webRect struct {
+	Rect      sdl.Rect
+	Color     sdl.Color
+	Stroke    bool
+	Thickness int32
+}
+
+// webLayout is the measured page for one width and font configuration.
+type webLayout struct {
+	Rows   []webRow
+	Rects  []webRect
+	RowH   int32
+	Height int32
+	// Links are the page's clickable runs in reading order, one entry per
+	// destination. The browser walks this list with the D-pad.
+	Links []webLinkHit
+}
+
+// webLinkHit is one link on a laid-out page: the row it starts on and its
+// pixel extent inside that row. Href is the raw attribute; the browser
+// resolves it against the document URL when the link is opened.
+type webLinkHit struct {
+	Row  int
+	X    int32
+	W    int32
+	Href string
+	Text string
+}
+
+// webRule is one parsed CSS rule (one selector; groups are split apart).
+type webRule struct {
+	selector    string
+	specificity int
+	order       int
+	decls       map[string]string
+}
+
+// webFrame is an open element during the streaming parse.
+type webFrame struct {
+	el    webElement
+	style webStyle
+	kind  string // "block", "inline", "list", "skip"
+}
+
+// webListState tracks <ul>/<ol> numbering.
+type webListState struct {
+	ordered bool
+	n       int
+}
+
+// --- Document store -------------------------------------------------------
+
+var browserDocuments = struct {
+	mu   sync.Mutex
+	docs map[string]*webDocument
+}{docs: make(map[string]*webDocument)}
+
+// setBrowserDocument stores the parsed page for a browser variable, replacing
+// the previous one so only the pages actually open stay in memory.
+func setBrowserDocument(variable string, doc *webDocument) {
+	if variable == "" {
+		return
+	}
+	browserDocuments.mu.Lock()
+	defer browserDocuments.mu.Unlock()
+	if doc == nil {
+		delete(browserDocuments.docs, variable)
+		return
+	}
+	if len(browserDocuments.docs) >= 2 {
+		if _, exists := browserDocuments.docs[variable]; !exists {
+			for key := range browserDocuments.docs {
+				delete(browserDocuments.docs, key)
+				break
+			}
+		}
+	}
+	browserDocuments.docs[variable] = doc
+}
+
+// browserDocumentFor returns the parsed page for a variable, or nil when the
+// current content is plain text.
+func browserDocumentFor(variable string) *webDocument {
+	if variable == "" {
+		return nil
+	}
+	browserDocuments.mu.Lock()
+	defer browserDocuments.mu.Unlock()
+	return browserDocuments.docs[variable]
+}
+
+func resetBrowserDocumentsForTest() {
+	browserDocuments.mu.Lock()
+	browserDocuments.docs = make(map[string]*webDocument)
+	browserDocuments.mu.Unlock()
+}
+
+// --- CSS parsing ----------------------------------------------------------
+
+// parseWebCSS turns a stylesheet into rules. At-rules with a block are skipped
+// (with the rules inside @media kept, since the handheld screen is the one
+// media that matters).
+func parseWebCSS(src string) []webRule {
+	src = stripWebCSSComments(src)
+	rules := make([]webRule, 0, 32)
+	order := 0
+	for i := 0; i < len(src); {
+		open := strings.IndexByte(src[i:], '{')
+		if open < 0 {
+			break
+		}
+		open += i
+		selectorText := strings.TrimSpace(src[i:open])
+		close := webCSSBlockEnd(src, open)
+		if close < 0 {
+			break
+		}
+		body := src[open+1 : close]
+		i = close + 1
+		if selectorText == "" {
+			continue
+		}
+		if strings.HasPrefix(selectorText, "@") {
+			if strings.HasPrefix(strings.ToLower(selectorText), "@media") {
+				for _, inner := range parseWebCSS(body) {
+					inner.order = order
+					order++
+					rules = append(rules, inner)
+				}
+			}
+			continue
+		}
+		decls := parseWebDecls(body)
+		if len(decls) == 0 {
+			continue
+		}
+		for _, selector := range strings.Split(selectorText, ",") {
+			selector = strings.TrimSpace(selector)
+			if selector == "" {
+				continue
+			}
+			rules = append(rules, webRule{
+				selector:    selector,
+				specificity: webSelectorSpecificity(selector),
+				order:       order,
+				decls:       decls,
+			})
+			order++
+		}
+	}
+	return rules
+}
+
+func stripWebCSSComments(src string) string {
+	var out strings.Builder
+	out.Grow(len(src))
+	for i := 0; i < len(src); {
+		if src[i] == '/' && i+1 < len(src) && src[i+1] == '*' {
+			if end := strings.Index(src[i+2:], "*/"); end >= 0 {
+				i += 2 + end + 2
+			} else {
+				break
+			}
+			continue
+		}
+		out.WriteByte(src[i])
+		i++
+	}
+	return out.String()
+}
+
+// webCSSBlockEnd finds the closing brace of a block, skipping braces inside
+// strings and comments.
+func webCSSBlockEnd(src string, open int) int {
+	depth := 0
+	var quote byte
+	for i := open; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == '\\' {
+				i++
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func parseWebDecls(src string) map[string]string {
+	decls := make(map[string]string, 8)
+	var quote byte
+	start := 0
+	src += ";"
+	for i := 0; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case ';':
+			piece := src[start:i]
+			start = i + 1
+			colon := strings.IndexByte(piece, ':')
+			if colon <= 0 {
+				continue
+			}
+			name := strings.ToLower(strings.TrimSpace(piece[:colon]))
+			value := strings.TrimSpace(piece[colon+1:])
+			if name == "" || value == "" {
+				continue
+			}
+			value = strings.TrimSpace(strings.Replace(value, "!important", "", 1))
+			if value == "" {
+				continue
+			}
+			decls[name] = value
+		}
+	}
+	return decls
+}
+
+// webSelectorParts splits a selector into compounds on descendant combinators.
+// Child/sibling combinators are treated as descendant, which is close enough
+// for a reader and never matches less than the real thing would.
+func webSelectorParts(sel string) []string {
+	var parts []string
+	start := -1
+	for i := 0; i < len(sel); i++ {
+		switch sel[i] {
+		case ' ', '\t', '\n', '>', '+', '~':
+			if start >= 0 {
+				parts = append(parts, sel[start:i])
+				start = -1
+			}
+		default:
+			if start < 0 {
+				start = i
+			}
+		}
+	}
+	if start >= 0 {
+		parts = append(parts, sel[start:])
+	}
+	return parts
+}
+
+// webCompoundTokens splits `div.note#main:hover` into its simple selectors.
+func webCompoundTokens(compound string) []string {
+	var tokens []string
+	for i := 0; i < len(compound); {
+		switch compound[i] {
+		case '.', '#':
+			start := i
+			i++
+			for i < len(compound) && webSelectorNameByte(compound[i]) {
+				i++
+			}
+			tokens = append(tokens, compound[start:i])
+		case '[':
+			start := i
+			if end := strings.IndexByte(compound[i:], ']'); end >= 0 {
+				i += end + 1
+			} else {
+				i = len(compound)
+			}
+			tokens = append(tokens, compound[start:i])
+		case ':':
+			start := i
+			i++
+			for i < len(compound) && compound[i] == ':' {
+				i++
+			}
+			for i < len(compound) && webSelectorNameByte(compound[i]) {
+				i++
+			}
+			if i < len(compound) && compound[i] == '(' {
+				if end := strings.IndexByte(compound[i:], ')'); end >= 0 {
+					i += end + 1
+				}
+			}
+			tokens = append(tokens, compound[start:i])
+		default:
+			start := i
+			for i < len(compound) && compound[i] != '.' && compound[i] != '#' &&
+				compound[i] != ':' && compound[i] != '[' {
+				i++
+			}
+			if token := strings.TrimSpace(compound[start:i]); token != "" {
+				tokens = append(tokens, token)
+			}
+		}
+	}
+	return tokens
+}
+
+func webSelectorNameByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		c == '-' || c == '_'
+}
+
+func webSelectorSpecificity(selector string) int {
+	ids, classes, tags := 0, 0, 0
+	for _, part := range webSelectorParts(selector) {
+		for _, token := range webCompoundTokens(part) {
+			switch {
+			case strings.HasPrefix(token, "#"):
+				ids++
+			case strings.HasPrefix(token, "."):
+				classes++
+			case strings.HasPrefix(token, "[") || strings.HasPrefix(token, ":"), token == "*":
+				// Attribute and pseudo selectors cannot be evaluated against
+				// this document model; they contribute only specificity.
+			default:
+				tags++
+			}
+		}
+	}
+	return ids*100 + classes*10 + tags
+}
+
+// webSelectorMatches matches a selector against the chain of open elements,
+// right to left, which is how descendant selectors are supposed to behave.
+func webSelectorMatches(selector string, chain []webElement) bool {
+	parts := webSelectorParts(selector)
+	if len(parts) == 0 || len(chain) == 0 {
+		return false
+	}
+	if !webCompoundMatches(parts[len(parts)-1], chain[len(chain)-1]) {
+		return false
+	}
+	idx := len(chain) - 2
+	for pi := len(parts) - 2; pi >= 0; pi-- {
+		matched := false
+		for ; idx >= 0; idx-- {
+			if webCompoundMatches(parts[pi], chain[idx]) {
+				matched = true
+				idx--
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func webCompoundMatches(compound string, el webElement) bool {
+	for _, token := range webCompoundTokens(compound) {
+		switch {
+		case token == "" || token == "*":
+		case strings.HasPrefix(token, "#"):
+			if !strings.EqualFold(el.id, token[1:]) {
+				return false
+			}
+		case strings.HasPrefix(token, "."):
+			cls := token[1:]
+			found := false
+			for _, have := range el.classes {
+				if strings.EqualFold(have, cls) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		case strings.HasPrefix(token, "[") || strings.HasPrefix(token, ":"):
+			// Cannot evaluate attrs/pseudos; assume they hold rather than
+			// dropping an otherwise valid rule.
+		default:
+			if !strings.EqualFold(token, el.tag) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// --- CSS values -----------------------------------------------------------
+
+var webNamedColors = map[string]sdl.Color{
+	"black":       {R: 0, G: 0, B: 0, A: 255},
+	"white":       {R: 255, G: 255, B: 255, A: 255},
+	"red":         {R: 220, G: 50, B: 47, A: 255},
+	"green":       {R: 40, G: 140, B: 70, A: 255},
+	"blue":        {R: 30, G: 90, B: 200, A: 255},
+	"yellow":      {R: 240, G: 200, B: 0, A: 255},
+	"orange":      {R: 235, G: 130, B: 30, A: 255},
+	"purple":      {R: 120, G: 60, B: 160, A: 255},
+	"gray":        {R: 128, G: 128, B: 128, A: 255},
+	"grey":        {R: 128, G: 128, B: 128, A: 255},
+	"silver":      {R: 192, G: 192, B: 192, A: 255},
+	"maroon":      {R: 128, G: 0, B: 0, A: 255},
+	"olive":       {R: 128, G: 128, B: 0, A: 255},
+	"lime":        {R: 0, G: 200, B: 0, A: 255},
+	"aqua":        {R: 0, G: 180, B: 180, A: 255},
+	"cyan":        {R: 0, G: 180, B: 180, A: 255},
+	"teal":        {R: 0, G: 128, B: 128, A: 255},
+	"navy":        {R: 0, G: 0, B: 128, A: 255},
+	"fuchsia":     {R: 200, G: 40, B: 190, A: 255},
+	"magenta":     {R: 200, G: 40, B: 190, A: 255},
+	"brown":       {R: 140, G: 80, B: 45, A: 255},
+	"pink":        {R: 235, G: 140, B: 175, A: 255},
+	"gold":        {R: 215, G: 175, B: 45, A: 255},
+	"beige":       {R: 245, G: 245, B: 220, A: 255},
+	"ivory":       {R: 255, G: 255, B: 240, A: 255},
+	"khaki":       {R: 240, G: 230, B: 140, A: 255},
+	"coral":       {R: 255, G: 127, B: 80, A: 255},
+	"crimson":     {R: 220, G: 20, B: 60, A: 255},
+	"indigo":      {R: 75, G: 0, B: 130, A: 255},
+	"violet":      {R: 200, G: 130, B: 220, A: 255},
+	"turquoise":   {R: 64, G: 200, B: 190, A: 255},
+	"salmon":      {R: 250, G: 128, B: 114, A: 255},
+	"tomato":      {R: 255, G: 99, B: 71, A: 255},
+	"steelblue":   {R: 70, G: 130, B: 180, A: 255},
+	"darkgray":    {R: 90, G: 90, B: 90, A: 255},
+	"darkgrey":    {R: 90, G: 90, B: 90, A: 255},
+	"lightgray":   {R: 211, G: 211, B: 211, A: 255},
+	"lightgrey":   {R: 211, G: 211, B: 211, A: 255},
+	"whitesmoke":  {R: 245, G: 245, B: 245, A: 255},
+	"gainsboro":   {R: 220, G: 220, B: 220, A: 255},
+	"dimgray":     {R: 105, G: 105, B: 105, A: 255},
+	"transparent": {R: 0, G: 0, B: 0, A: 0},
+}
+
+// parseWebColor handles hex, rgb()/rgba() and the common named colours. Alpha
+// is ignored: the page background decides what is readable here.
+func parseWebColor(value string) (sdl.Color, bool) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" {
+		return sdl.Color{}, false
+	}
+	if strings.HasPrefix(v, "#") {
+		hex := v[1:]
+		switch len(hex) {
+		case 3, 4:
+			r, ok1 := webHexByte(string([]byte{hex[0], hex[0]}))
+			g, ok2 := webHexByte(string([]byte{hex[1], hex[1]}))
+			b, ok3 := webHexByte(string([]byte{hex[2], hex[2]}))
+			if ok1 && ok2 && ok3 {
+				return sdl.Color{R: r, G: g, B: b, A: 255}, true
+			}
+		case 6, 8:
+			r, ok1 := webHexByte(hex[0:2])
+			g, ok2 := webHexByte(hex[2:4])
+			b, ok3 := webHexByte(hex[4:6])
+			if ok1 && ok2 && ok3 {
+				return sdl.Color{R: r, G: g, B: b, A: 255}, true
+			}
+		}
+		return sdl.Color{}, false
+	}
+	if strings.HasPrefix(v, "rgb") {
+		open := strings.IndexByte(v, '(')
+		close := strings.LastIndexByte(v, ')')
+		if open < 0 || close <= open {
+			return sdl.Color{}, false
+		}
+		parts := strings.FieldsFunc(v[open+1:close], func(r rune) bool { return r == ',' || r == ' ' || r == '/' })
+		if len(parts) < 3 {
+			return sdl.Color{}, false
+		}
+		vals := make([]uint8, 3)
+		for i := 0; i < 3; i++ {
+			part := strings.TrimSpace(parts[i])
+			percent := strings.HasSuffix(part, "%")
+			part = strings.TrimSuffix(part, "%")
+			n, err := strconv.ParseFloat(strings.TrimSpace(part), 64)
+			if err != nil {
+				return sdl.Color{}, false
+			}
+			if percent {
+				n = n * 255 / 100
+			}
+			n = math.Round(n)
+			if n < 0 {
+				n = 0
+			}
+			if n > 255 {
+				n = 255
+			}
+			vals[i] = uint8(n)
+		}
+		return sdl.Color{R: vals[0], G: vals[1], B: vals[2], A: 255}, true
+	}
+	if c, ok := webNamedColors[v]; ok {
+		if c.A == 0 {
+			return sdl.Color{}, false
+		}
+		return c, true
+	}
+	return sdl.Color{}, false
+}
+
+func webHexByte(text string) (uint8, bool) {
+	n, err := strconv.ParseUint(text, 16, 8)
+	if err != nil {
+		return 0, false
+	}
+	return uint8(n), true
+}
+
+// webLength converts a CSS length to px. Percentages resolve against rel.
+func webLength(value string, rel float64) float64 {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" || v == "auto" || v == "none" {
+		return 0
+	}
+	mult := 1.0
+	switch {
+	case strings.HasSuffix(v, "rem"):
+		v = strings.TrimSuffix(v, "rem")
+		mult = 16
+	case strings.HasSuffix(v, "em"):
+		v = strings.TrimSuffix(v, "em")
+		mult = rel
+		if mult <= 0 {
+			mult = 16
+		}
+	case strings.HasSuffix(v, "px"):
+		v = strings.TrimSuffix(v, "px")
+	case strings.HasSuffix(v, "pt"):
+		v = strings.TrimSuffix(v, "pt")
+		mult = 1.333
+	case strings.HasSuffix(v, "%"):
+		v = strings.TrimSuffix(v, "%")
+		mult = rel / 100
+	case strings.HasSuffix(v, "ex"), strings.HasSuffix(v, "ch"):
+		v = strings.TrimRightFunc(v, func(r rune) bool { return r >= 'a' && r <= 'z' })
+		mult = rel / 2
+	case strings.HasSuffix(v, "vw"), strings.HasSuffix(v, "vh"),
+		strings.HasSuffix(v, "vmin"), strings.HasSuffix(v, "vmax"):
+		// Viewport units describe the page's own window; the reader has no
+		// such window, so they must not turn into indentation.
+		return 0
+	}
+	n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+	if err != nil {
+		return 0
+	}
+	return n * mult
+}
+
+// webFontSizePx resolves font-size against the inherited size.
+func webFontSizePx(value string, parent float64) (float64, bool) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	switch v {
+	case "xx-small":
+		return 9, true
+	case "x-small":
+		return 11, true
+	case "small":
+		return 13, true
+	case "medium":
+		return 16, true
+	case "large":
+		return 18, true
+	case "x-large":
+		return 24, true
+	case "xx-large":
+		return 32, true
+	case "smaller":
+		return parent * 0.85, true
+	case "larger":
+		return parent * 1.2, true
+	}
+	px := webLength(v, parent)
+	if px <= 0 {
+		return 0, false
+	}
+	return px, true
+}
+
+// webMarginPair reads the vertical values of a margin shorthand.
+func webMarginPair(value string, fontPx float64) (top, bottom float64) {
+	top, _, bottom, _, valid := webBoxShorthand(value, fontPx)
+	if !valid {
+		return 0, 0
+	}
+	return top, bottom
+}
+
+// webBoxShorthand expands a one-to-four value CSS box shorthand into its top,
+// right, bottom and left lengths.
+func webBoxShorthand(value string, fontPx float64) (top, right, bottom, left float64, ok bool) {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return 0, 0, 0, 0, false
+	}
+	top = webLength(fields[0], fontPx)
+	switch len(fields) {
+	case 1:
+		right, bottom, left = top, top, top
+	case 2:
+		right = webLength(fields[1], fontPx)
+		bottom, left = top, right
+	case 3:
+		right = webLength(fields[1], fontPx)
+		bottom, left = webLength(fields[2], fontPx), right
+	default:
+		right = webLength(fields[1], fontPx)
+		bottom = webLength(fields[2], fontPx)
+		left = webLength(fields[3], fontPx)
+	}
+	return top, right, bottom, left, true
+}
+
+func webTextAlign(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "center":
+		return 1
+	case "right", "end":
+		return 2
+	}
+	return 0
+}
+
+// webTextTransform decodes text-transform into the layout's small enum.
+func webTextTransform(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "uppercase":
+		return 1
+	case "lowercase":
+		return 2
+	case "capitalize":
+		return 3
+	}
+	return 0
+}
+
+// webTransformWord applies text-transform. It runs before measurement so the
+// wrapped line matches the glyphs that are drawn (uppercase is wider).
+func webTransformWord(word string, mode int) string {
+	switch mode {
+	case 1:
+		return strings.ToUpper(word)
+	case 2:
+		return strings.ToLower(word)
+	case 3:
+		runes := []rune(word)
+		if len(runes) == 0 {
+			return word
+		}
+		return strings.ToUpper(string(runes[0])) + string(runes[1:])
+	}
+	return word
+}
+
+// webBorderVisible reports whether a border shorthand actually paints. Many
+// sheets reset borders with `border: none` or `border-top: 0`, which must not
+// grow a rule of its own.
+func webBorderVisible(value string) bool {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" || v == "0" || v == "none" || v == "hidden" {
+		return false
+	}
+	if strings.Contains(v, "none") || strings.Contains(v, "hidden") {
+		return false
+	}
+	return true
+}
+
+// webColorInValue finds the colour in a shorthand such as
+// `background: #123 url(x.png) no-repeat` or `1px solid rgba(0,0,0,.2)`.
+func webColorInValue(value string) (sdl.Color, bool) {
+	if c, ok := parseWebColor(value); ok {
+		return c, true
+	}
+	lower := strings.ToLower(value)
+	if idx := strings.Index(lower, "rgb"); idx >= 0 {
+		if open := strings.IndexByte(lower[idx:], '('); open >= 0 {
+			if end := strings.IndexByte(lower[idx+open:], ')'); end >= 0 {
+				if c, ok := parseWebColor(lower[idx : idx+open+end+1]); ok {
+					return c, true
+				}
+			}
+		}
+	}
+	for _, field := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == ' ' || r == '\t' || r == ',' || r == '/'
+	}) {
+		if c, ok := parseWebColor(field); ok {
+			return c, true
+		}
+	}
+	return sdl.Color{}, false
+}
+
+// --- Style resolution -----------------------------------------------------
+
+func webBaseStyle() webStyle {
+	return webStyle{FontPx: 16}
+}
+
+// applyWebTagDefaults gives the reader its browser-ish baseline: headings are
+// large and bold, paragraphs are spaced, lists are indented, quotes carry a
+// rule and code is monospaced-ish on a tinted panel.
+func applyWebTagDefaults(st *webStyle, tag string) {
+	switch tag {
+	case "h1":
+		st.FontPx, st.Bold = 30, true
+		st.MarginTop, st.MarginBot = 20, 10
+	case "h2":
+		st.FontPx, st.Bold = 25, true
+		st.MarginTop, st.MarginBot = 18, 8
+	case "h3":
+		st.FontPx, st.Bold = 21, true
+		st.MarginTop, st.MarginBot = 16, 6
+	case "h4", "h5", "h6":
+		st.FontPx, st.Bold = 18, true
+		st.MarginTop, st.MarginBot = 12, 4
+	case "p":
+		// Browsers give a paragraph one em above and below; without it the
+		// rows of two paragraphs merge into one undifferentiated wall.
+		st.MarginTop, st.MarginBot = 16, 16
+	case "blockquote":
+		st.Indent += 16
+		st.MarginTop, st.MarginBot = 16, 16
+		st.BorderLeft = true
+	case "pre":
+		st.Pre = true
+		st.FontPx = 13
+		st.MarginTop, st.MarginBot = 16, 16
+		st.HasBg = true
+		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
+	case "code", "kbd", "samp":
+		st.FontPx = 13
+		st.HasBg = true
+		st.Background = sdl.Color{R: 238, G: 241, B: 246, A: 255}
+	case "li":
+		st.Indent += 18
+		st.MarginTop, st.MarginBot = 2, 2
+	case "a":
+		st.Underline = true
+		st.Link = true
+	case "strong", "b":
+		st.Bold = true
+	case "em", "i":
+		st.Italic = true
+	case "s", "del", "strike":
+		st.Strike = true
+	case "u", "ins":
+		st.Underline = true
+	case "center":
+		st.Align = 1
+	case "dt":
+		// Definition terms are bold in every browser.
+		st.Bold = true
+	case "mark":
+		st.HasBg = true
+		st.Background = sdl.Color{R: 255, G: 233, B: 120, A: 255}
+	case "small":
+		if st.FontPx > 12 {
+			st.FontPx -= 2
+		}
+	case "td", "th":
+		st.Indent += 4
+		if tag == "th" {
+			st.Bold = true
+		}
+	}
+}
+
+func applyWebDecls(st *webStyle, decls map[string]string) {
+	if len(decls) == 0 {
+		return
+	}
+	// font-size first: em-based lengths below resolve against it.
+	if v, ok := decls["font-size"]; ok {
+		if px, valid := webFontSizePx(v, st.FontPx); valid {
+			if px < 8 {
+				px = 8
+			}
+			if px > 64 {
+				px = 64
+			}
+			st.FontPx = px
+		}
+	}
+	if v, ok := decls["color"]; ok {
+		if c, valid := parseWebColor(v); valid {
+			st.Color, st.HasColor = c, true
+		}
+	}
+	for _, key := range []string{"background-color", "background"} {
+		if v, ok := decls[key]; ok {
+			if c, valid := webColorInValue(v); valid {
+				st.Background, st.HasBg = c, true
+				break
+			}
+		}
+	}
+	if v, ok := decls["font-weight"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "bold", "bolder", "600", "700", "800", "900":
+			st.Bold = true
+		case "normal", "lighter", "100", "200", "300", "400", "500":
+			st.Bold = false
+		}
+	}
+	if v, ok := decls["font-style"]; ok {
+		lower := strings.ToLower(strings.TrimSpace(v))
+		st.Italic = strings.HasPrefix(lower, "italic") || strings.HasPrefix(lower, "oblique")
+	}
+	for _, key := range []string{"text-decoration", "text-decoration-line"} {
+		if v, ok := decls[key]; ok {
+			lower := strings.ToLower(v)
+			st.Underline = strings.Contains(lower, "underline")
+			st.Strike = strings.Contains(lower, "line-through")
+			break
+		}
+	}
+	if v, ok := decls["text-transform"]; ok {
+		st.Transform = webTextTransform(v)
+	}
+	if v, ok := decls["text-align"]; ok {
+		st.Align = webTextAlign(v)
+	}
+	if v, ok := decls["text-indent"]; ok {
+		st.TextIndent = webLength(v, st.FontPx)
+	}
+	if v, ok := decls["white-space"]; ok {
+		st.Pre = strings.HasPrefix(strings.ToLower(strings.TrimSpace(v)), "pre")
+	}
+	for _, key := range []string{"display", "visibility"} {
+		if v, ok := decls[key]; ok {
+			lower := strings.ToLower(strings.TrimSpace(v))
+			if lower == "none" || lower == "hidden" {
+				st.Hidden = true
+			}
+		}
+	}
+	if v, ok := decls["margin"]; ok {
+		top, bottom := webMarginPair(v, st.FontPx)
+		st.MarginTop, st.MarginBot = top, bottom
+	}
+	if v, ok := decls["margin-top"]; ok {
+		st.MarginTop = webLength(v, st.FontPx)
+	}
+	if v, ok := decls["margin-bottom"]; ok {
+		st.MarginBot = webLength(v, st.FontPx)
+	}
+	if v, ok := decls["padding-left"]; ok {
+		st.Indent += webLength(v, st.FontPx)
+	}
+	if v, ok := decls["padding"]; ok {
+		if top, _, bottom, left, valid := webBoxShorthand(v, st.FontPx); valid {
+			st.Indent += left
+			st.MarginTop += top
+			st.MarginBot += bottom
+		}
+	}
+	if v, ok := decls["border-color"]; ok {
+		if c, valid := webColorInValue(v); valid {
+			st.BorderColor, st.HasBorderColor = c, true
+		}
+	}
+	if !st.HasBorderColor && st.HasColor {
+		// Browsers draw an uncoloured border in currentColor, which is what
+		// `border-top: 1px solid` on a nav or card expects.
+		st.BorderColor, st.HasBorderColor = st.Color, true
+	}
+	// A border shorthand carries its own colour (`border: 1px solid #f00`),
+	// which is the only place most sheets set one.
+	for _, key := range []string{"border", "border-left", "border-right", "border-top", "border-bottom"} {
+		if v, ok := decls[key]; ok {
+			if c, valid := webColorInValue(v); valid {
+				st.BorderColor, st.HasBorderColor = c, true
+			}
+		}
+	}
+	if v, ok := decls["border-left"]; ok && webBorderVisible(v) {
+		st.BorderLeft = true
+	}
+	if v, ok := decls["border-right"]; ok && webBorderVisible(v) {
+		st.BorderLeft = true
+	}
+	if v, ok := decls["border-left-width"]; ok {
+		if webLength(v, st.FontPx) > 0 {
+			st.BorderLeft = true
+		}
+	}
+	if v, ok := decls["border-top"]; ok && webBorderVisible(v) {
+		st.BorderTop = true
+	}
+	if v, ok := decls["border-bottom"]; ok && webBorderVisible(v) {
+		st.BorderBottom = true
+	}
+	for key, target := range map[string]*bool{
+		"border-top-width":    &st.BorderTop,
+		"border-bottom-width": &st.BorderBottom,
+	} {
+		if v, ok := decls[key]; ok && webLength(v, st.FontPx) > 0 {
+			*target = true
+		}
+	}
+	if v, ok := decls["border"]; ok && webBorderVisible(v) {
+		st.BoxBorder = true
+	}
+	if v, ok := decls["border-width"]; ok && webLength(v, st.FontPx) > 0 {
+		st.BoxBorder = true
+	}
+	for _, key := range []string{"list-style-type", "list-style"} {
+		if v, ok := decls[key]; ok && strings.Contains(strings.ToLower(v), "none") {
+			st.ListNone = true
+			break
+		}
+	}
+}
+
+// --- HTML parsing ---------------------------------------------------------
+
+type webParser struct {
+	doc       *webDocument
+	rules     []webRule
+	css       strings.Builder
+	stack     []webFrame
+	blocks    []webBlock
+	current   *webBlock
+	lists     []webListState
+	inHead    bool
+	textLen   int
+	trunc     bool
+	space     bool
+	pendingB  string
+	mainDepth int
+}
+
+// parseWebPage parses HTML plus any already-fetched CSS into a document.
+func parseWebPage(source, extraCSS, baseURL string) *webDocument {
+	doc := &webDocument{
+		URL:   baseURL,
+		Paper: sdl.Color{R: 250, G: 251, B: 253, A: 255},
+		Text:  sdl.Color{R: 28, G: 32, B: 38, A: 255},
+	}
+	p := &webParser{doc: doc}
+	if extraCSS != "" {
+		p.css.WriteString(extraCSS)
+		p.rules = parseWebCSS(extraCSS)
+	}
+	p.walk(source)
+	p.flush()
+	if p.trunc {
+		p.blocks = append(p.blocks, webBlock{
+			Style:  webStyle{FontPx: 13, Italic: true},
+			InMain: true,
+			Runs:   []webRun{{Text: "[Page content truncated so the handheld keeps its memory.]", Style: webStyle{FontPx: 13, Italic: true}}},
+		})
+	}
+	doc.Blocks = filterWebMainContent(p.blocks)
+	return doc
+}
+
+// filterWebMainContent drops navigation, headers and footers when the page
+// marks its real content with <main> or <article>. Reading a docs page should
+// start at the docs, not at the site's menu.
+func filterWebMainContent(blocks []webBlock) []webBlock {
+	hasMain := false
+	for _, block := range blocks {
+		if block.InMain {
+			hasMain = true
+			break
+		}
+	}
+	if !hasMain {
+		return blocks
+	}
+	kept := blocks[:0]
+	for _, block := range blocks {
+		if block.InMain {
+			kept = append(kept, block)
+		}
+	}
+	return kept
+}
+
+// fetchWebStylesheets pulls the page's linked stylesheets. External CSS is what
+// makes most real pages look like themselves, so a few small sheets are worth
+// the request; large frameworks are capped and simply contribute nothing.
+func fetchWebStylesheets(source string, base *url.URL) string {
+	if base == nil {
+		return ""
+	}
+	var addresses []string
+	seen := make(map[string]bool)
+	pos := 0
+	for pos < len(source) && len(addresses) < webMaxStylesheets {
+		rel := webIndexFold(source[pos:], "<link")
+		if rel < 0 {
+			break
+		}
+		start := pos + rel
+		end := findTextBrowserTagEnd(source, start+1)
+		if end < 0 {
+			break
+		}
+		tag := source[start+1 : end]
+		pos = end + 1
+		relAttr := strings.ToLower(htmlTagAttribute(tag, "rel"))
+		if !strings.Contains(relAttr, "stylesheet") {
+			continue
+		}
+		href := strings.TrimSpace(htmlTagAttribute(tag, "href"))
+		if href == "" {
+			continue
+		}
+		ref, err := url.Parse(href)
+		if err != nil {
+			continue
+		}
+		abs := base.ResolveReference(ref)
+		if abs.Scheme != "http" && abs.Scheme != "https" || seen[abs.String()] {
+			continue
+		}
+		seen[abs.String()] = true
+		addresses = append(addresses, abs.String())
+	}
+	if len(addresses) == 0 {
+		return ""
+	}
+	// Fetch the sheets side by side. One slow sheet used to hold up the whole
+	// page load, and on handheld wifi three sequential timeouts could keep the
+	// reader on "Loading ..." for the better part of a minute.
+	bodies := make([]string, len(addresses))
+	var wg sync.WaitGroup
+	for i, address := range addresses {
+		wg.Add(1)
+		go func(i int, address string) {
+			defer wg.Done()
+			bodies[i] = fetchWebStylesheet(address)
+		}(i, address)
+	}
+	wg.Wait()
+	var out strings.Builder
+	for _, css := range bodies {
+		if css == "" || out.Len() >= webMaxCSSBytes {
+			continue
+		}
+		out.WriteString(css)
+		out.WriteString("\n")
+	}
+	return out.String()
+}
+
+func fetchWebStylesheet(address string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
+	client := &http.Client{Timeout: 6 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return ""
+	}
+	if ct := strings.ToLower(resp.Header.Get("Content-Type")); ct != "" && !strings.Contains(ct, "css") {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, webSheetByteCap+1))
+	if err != nil || len(body) > webSheetByteCap {
+		return ""
+	}
+	return string(body)
+}
+
+func webIndexFold(source, sub string) int {
+	for i := 0; i+len(sub) <= len(source); i++ {
+		if strings.EqualFold(source[i:i+len(sub)], sub) {
+			return i
+		}
+	}
+	return -1
+}
+
+// webRawElement returns the raw text of a style/title/script-like element and
+// the offset just past its closing tag.
+func webRawElement(source string, start int, tag string) (string, int, bool) {
+	closing := "</" + tag
+	idx := webIndexFold(source[start:], closing)
+	if idx < 0 {
+		return source[start:], len(source), true
+	}
+	body := source[start : start+idx]
+	end := start + idx + len(closing)
+	if gt := strings.IndexByte(source[end:], '>'); gt >= 0 {
+		end += gt + 1
+	} else {
+		end = len(source)
+	}
+	return body, end, true
+}
+
+func parseWebTag(raw string) (name string, closing, selfClose bool, attrs string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", false, false, ""
+	}
+	if raw[0] == '/' {
+		closing = true
+		raw = strings.TrimSpace(raw[1:])
+	}
+	if strings.HasSuffix(raw, "/") {
+		selfClose = true
+		raw = strings.TrimSpace(raw[:len(raw)-1])
+	}
+	end := 0
+	for end < len(raw) && webSelectorNameByte(raw[end]) {
+		end++
+	}
+	name = strings.ToLower(raw[:end])
+	attrs = raw[end:]
+	return name, closing, selfClose, attrs
+}
+
+func webVoidElement(tag string) bool {
+	switch tag {
+	case "br", "hr", "img", "meta", "link", "input", "area", "base", "col",
+		"embed", "param", "source", "track", "wbr":
+		return true
+	}
+	return false
+}
+
+func webRawTextElement(tag string) bool {
+	switch tag {
+	case "script", "noscript", "svg", "iframe", "template", "canvas", "video", "audio", "object":
+		return true
+	}
+	return false
+}
+
+func webBlockElement(tag string) bool {
+	switch tag {
+	case "body", "p", "div", "section", "article", "main", "header", "footer",
+		"aside", "nav", "form", "fieldset", "figure", "figcaption", "address",
+		"dl", "dt", "dd", "li", "tr", "details", "summary", "blockquote", "pre",
+		"h1", "h2", "h3", "h4", "h5", "h6":
+		return true
+	}
+	return false
+}
+
+func (p *webParser) walk(source string) {
+	for i := 0; i < len(source); {
+		if source[i] != '<' {
+			end := strings.IndexByte(source[i:], '<')
+			if end < 0 {
+				end = len(source)
+			} else {
+				end += i
+			}
+			p.addText(source[i:end])
+			i = end
+			continue
+		}
+		if strings.HasPrefix(source[i:], "<!--") {
+			if end := strings.Index(source[i+4:], "-->"); end >= 0 {
+				i += 4 + end + 3
+			} else {
+				i = len(source)
+			}
+			continue
+		}
+		if strings.HasPrefix(source[i:], "<!") || strings.HasPrefix(source[i:], "<?") {
+			if end := strings.IndexByte(source[i:], '>'); end >= 0 {
+				i += end + 1
+			} else {
+				i = len(source)
+			}
+			continue
+		}
+		end := findTextBrowserTagEnd(source, i+1)
+		if end < 0 {
+			break
+		}
+		raw := source[i+1 : end]
+		i = end + 1
+		name, closing, selfClose, attrs := parseWebTag(raw)
+		if name == "" {
+			continue
+		}
+		if closing {
+			p.endTag(name)
+			continue
+		}
+		if name == "title" || name == "style" || webRawTextElement(name) {
+			inner, next, _ := webRawElement(source, i, name)
+			i = next
+			switch name {
+			case "title":
+				if p.doc.Title == "" {
+					p.doc.Title = cleanTextBrowserHTML(inner)
+				}
+			case "style":
+				if p.css.Len()+len(inner) < webMaxCSSBytes {
+					p.css.WriteString("\n")
+					p.css.WriteString(inner)
+					p.rules = parseWebCSS(p.css.String())
+				}
+			}
+			continue
+		}
+		p.startTag(name, attrs, selfClose)
+	}
+}
+
+func (p *webParser) startTag(name, attrs string, selfClose bool) {
+	if name == "head" {
+		p.inHead = true
+		p.push(webElement{tag: name}, webBaseStyle(), "skip")
+		return
+	}
+	if name == "body" || name == "html" {
+		p.inHead = false
+	}
+	el := webElement{tag: name}
+	el.id = strings.TrimSpace(htmlTagAttribute(attrs, "id"))
+	el.classes = strings.Fields(htmlTagAttribute(attrs, "class"))
+	style := p.computeStyle(el, attrs)
+	if name == "body" || name == "html" {
+		if style.HasBg {
+			p.doc.Paper = style.Background
+		}
+		if style.HasColor {
+			p.doc.Text = style.Color
+		}
+	}
+
+	if name == "main" || name == "article" {
+		p.mainDepth++
+	}
+
+	switch name {
+	case "br":
+		p.addBreak()
+		return
+	case "hr":
+		p.flush()
+		p.blocks = append(p.blocks, webBlock{
+			Rule:      true,
+			MarginTop: style.MarginTop,
+			MarginBot: style.MarginBot,
+		})
+		return
+	case "img":
+		if alt := strings.TrimSpace(htmlTagAttribute(attrs, "alt")); alt != "" {
+			p.addText(" " + alt + " ")
+		}
+		return
+	case "td", "th":
+		if p.current != nil && len(p.current.Runs) > 0 {
+			p.addText("   ")
+		}
+	}
+	if webVoidElement(name) {
+		return
+	}
+	if name == "ul" || name == "ol" {
+		p.flush()
+		p.lists = append(p.lists, webListState{ordered: name == "ol"})
+		p.push(el, style, "list")
+		return
+	}
+	if name == "li" {
+		p.flush()
+		p.pendingB = p.nextBullet(style)
+		p.push(el, style, "block")
+		return
+	}
+	if webBlockElement(name) {
+		p.flush()
+		p.push(el, style, "block")
+		if selfClose {
+			p.endTag(name)
+		}
+		return
+	}
+	p.push(el, style, "inline")
+	if selfClose {
+		p.endTag(name)
+	}
+}
+
+func (p *webParser) endTag(name string) {
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		if p.stack[i].el.tag != name {
+			continue
+		}
+		if p.stack[i].kind == "block" || p.stack[i].kind == "list" {
+			p.flush()
+		}
+		if name == "head" {
+			p.inHead = false
+		}
+		if (name == "main" || name == "article") && p.mainDepth > 0 {
+			p.mainDepth--
+		}
+		if name == "ul" || name == "ol" {
+			if depth := len(p.lists); depth > 0 {
+				p.lists = p.lists[:depth-1]
+			}
+		}
+		if name == "li" {
+			p.pendingB = ""
+		}
+		p.stack = p.stack[:i]
+		return
+	}
+}
+
+func (p *webParser) push(el webElement, style webStyle, kind string) {
+	p.stack = append(p.stack, webFrame{el: el, style: style, kind: kind})
+}
+
+func (p *webParser) topStyle() webStyle {
+	if len(p.stack) == 0 {
+		return webBaseStyle()
+	}
+	return p.stack[len(p.stack)-1].style
+}
+
+// nearestBlockStyle is the style of the block element the text belongs to.
+func (p *webParser) nearestBlockStyle() webStyle {
+	for i := len(p.stack) - 1; i >= 0; i-- {
+		if p.stack[i].kind == "block" {
+			return p.stack[i].style
+		}
+	}
+	return p.topStyle()
+}
+
+func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
+	st := p.topStyle()
+	// Non-inherited properties start clean for every element.
+	st.HasBg, st.Background = false, sdl.Color{}
+	st.Indent, st.TextIndent, st.MarginTop, st.MarginBot = 0, 0, 0, 0
+	st.BorderLeft, st.ListNone = false, false
+	st.BoxBorder, st.BorderTop, st.BorderBottom = false, false, false
+	st.BorderColor, st.HasBorderColor = sdl.Color{}, false
+	// Link colour, underline and strikethrough are not reset: a decoration
+	// on <a> or <s> has to keep showing on the <strong>/<span> inside it,
+	// which is how every browser renders `<a><b>text</b></a>`.
+
+	applyWebTagDefaults(&st, el.tag)
+
+	chain := make([]webElement, 0, len(p.stack)+1)
+	for _, frame := range p.stack {
+		chain = append(chain, frame.el)
+	}
+	chain = append(chain, el)
+
+	var matched []webRule
+	for _, rule := range p.rules {
+		if webSelectorMatches(rule.selector, chain) {
+			matched = append(matched, rule)
+		}
+	}
+	sort.SliceStable(matched, func(i, j int) bool {
+		if matched[i].specificity != matched[j].specificity {
+			return matched[i].specificity < matched[j].specificity
+		}
+		return matched[i].order < matched[j].order
+	})
+	for _, rule := range matched {
+		applyWebDecls(&st, rule.decls)
+	}
+	if inline := htmlTagAttribute(attrs, "style"); inline != "" {
+		applyWebDecls(&st, parseWebDecls(inline))
+	}
+	// The anchor target is not a CSS property and is never inherited from a
+	// sibling: every <a> names its own, and its children inherit that.
+	if el.tag == "a" {
+		st.Href = htmlstd.UnescapeString(strings.TrimSpace(htmlTagAttribute(attrs, "href")))
+	}
+	// Decorative icon fonts and aria-hidden helpers render as short words like
+	// "navigate_next" or "menu" in a text engine; hide them.
+	if strings.EqualFold(strings.TrimSpace(htmlTagAttribute(attrs, "aria-hidden")), "true") {
+		st.Hidden = true
+	}
+	for _, class := range el.classes {
+		switch strings.ToLower(class) {
+		case "material-icons", "material-icons-outlined", "material-symbols",
+			"material-symbols-outlined", "material-symbols-rounded", "material-symbols-sharp":
+			st.Hidden = true
+		}
+	}
+	return st
+}
+
+func (p *webParser) nextBullet(style webStyle) string {
+	if len(p.lists) == 0 || style.ListNone {
+		return ""
+	}
+	list := &p.lists[len(p.lists)-1]
+	if list.ordered {
+		list.n++
+		return fmt.Sprintf("%d.", list.n)
+	}
+	return "•"
+}
+
+func (p *webParser) ensureBlock() *webBlock {
+	if p.current != nil {
+		return p.current
+	}
+	st := p.nearestBlockStyle()
+	block := &webBlock{
+		Style:          st,
+		Align:          st.Align,
+		Indent:         st.Indent,
+		TextIndent:     st.TextIndent,
+		MarginTop:      st.MarginTop,
+		MarginBot:      st.MarginBot,
+		Pre:            st.Pre,
+		HasBg:          st.HasBg,
+		Background:     st.Background,
+		BorderLeft:     st.BorderLeft,
+		BoxBorder:      st.BoxBorder,
+		BorderTop:      st.BorderTop,
+		BorderBottom:   st.BorderBottom,
+		BorderColor:    st.BorderColor,
+		HasBorderColor: st.HasBorderColor,
+		Bullet:         p.pendingB,
+		InMain:         p.mainDepth > 0,
+	}
+	p.pendingB = ""
+	p.current = block
+	return block
+}
+
+func (p *webParser) addBreak() {
+	block := p.ensureBlock()
+	style := p.topStyle()
+	block.Runs = append(block.Runs, webRun{Text: "\n", Style: style})
+	p.space = false
+}
+
+func (p *webParser) addText(raw string) {
+	if p.inHead || raw == "" {
+		return
+	}
+	style := p.topStyle()
+	if style.Hidden {
+		return
+	}
+	if p.textLen >= webMaxTextBytes || len(p.blocks) >= webMaxBlocks {
+		p.trunc = true
+		return
+	}
+	text := strings.ToValidUTF8(htmlstd.UnescapeString(raw), "")
+	if style.Pre {
+		text = strings.ReplaceAll(text, "\r\n", "\n")
+		text = strings.ReplaceAll(text, "\r", "\n")
+		if text == "" {
+			return
+		}
+		p.appendRun(text, style)
+		return
+	}
+	collapsed := strings.Join(strings.Fields(text), " ")
+	if collapsed == "" {
+		p.space = true
+		return
+	}
+	// Whitespace can sit on either side of a tag boundary: `<b>x</b> next`
+	// starts the following text node with a space, and that space has to
+	// survive so the layout does not glue "xnext" together.
+	leadsWithSpace := false
+	if r, _ := utf8.DecodeRuneInString(text); unicode.IsSpace(r) {
+		leadsWithSpace = true
+	}
+	block := p.ensureBlock()
+	if (p.space || leadsWithSpace) && len(block.Runs) > 0 {
+		last := block.Runs[len(block.Runs)-1].Text
+		if last != "" && !strings.HasSuffix(last, " ") && !strings.HasSuffix(last, "\n") {
+			collapsed = " " + collapsed
+		}
+	}
+	p.space = false
+	trimmed := strings.TrimRight(text, " \t\r\n")
+	if len(trimmed) < len(text) {
+		p.space = true
+	}
+	p.appendRun(collapsed, style)
+}
+
+func (p *webParser) appendRun(text string, style webStyle) {
+	if text == "" {
+		return
+	}
+	if p.textLen >= webMaxTextBytes {
+		p.trunc = true
+		return
+	}
+	if remaining := webMaxTextBytes - p.textLen; len(text) > remaining {
+		// Keep the part that fits and flag the page as truncated; dropping the
+		// whole run would lose the text that came before the cap.
+		cut := remaining
+		for cut > 0 && !utf8.RuneStart(text[cut]) {
+			cut--
+		}
+		text = text[:cut]
+		p.trunc = true
+		if text == "" {
+			return
+		}
+	}
+	block := p.ensureBlock()
+	if n := len(block.Runs); n > 0 && block.Runs[n-1].Style == style {
+		block.Runs[n-1].Text += text
+	} else {
+		block.Runs = append(block.Runs, webRun{Text: text, Style: style})
+	}
+	p.textLen += len(text)
+}
+
+func (p *webParser) flush() {
+	if p.current == nil {
+		return
+	}
+	block := p.current
+	p.current = nil
+	// Drop a block that only carried whitespace.
+	hasText := false
+	for _, run := range block.Runs {
+		if strings.TrimSpace(strings.ReplaceAll(run.Text, "\n", "")) != "" {
+			hasText = true
+			break
+		}
+	}
+	if !hasText && block.Bullet == "" && !block.Rule {
+		return
+	}
+	for i := range block.Runs {
+		if i == len(block.Runs)-1 {
+			block.Runs[i].Text = strings.TrimRight(block.Runs[i].Text, " ")
+		}
+	}
+	p.blocks = append(p.blocks, *block)
+}
+
+// --- Layout ---------------------------------------------------------------
+
+// webBaseFontSize mirrors getCachedFont's default so CSS px map onto the same
+// body text size the rest of the UI uses.
+func webBaseFontSize(config *Config, fontName string) float64 {
+	if config != nil {
+		if size, ok := config.Variables.FontSizes[fontName]; ok && size > 0 {
+			return float64(size)
+		}
+	}
+	return 24
+}
+
+// layoutFor returns the measured page, reusing the previous layout while the
+// width, font and page colours are unchanged.
+func (d *webDocument) layoutFor(config *Config, elem Element, width int32) *webLayout {
+	stamp := fmt.Sprintf("%d|%s|%d|%d,%d,%d|%d,%d,%d",
+		width, elem.Font, a11yScaleFontSize(16),
+		d.Paper.R, d.Paper.G, d.Paper.B,
+		d.Text.R, d.Text.G, d.Text.B)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.layout != nil && d.stamp == stamp {
+		return d.layout
+	}
+	d.layout = d.computeLayout(config, elem, width)
+	d.stamp = stamp
+	return d.layout
+}
+
+func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *webLayout {
+	if width < 80 {
+		return nil
+	}
+	baseSize := webBaseFontSize(config, elem.Font)
+	baseFont := getFontSized(config, elem.Font, int(baseSize))
+	if baseFont == nil {
+		return nil
+	}
+	rowH := int32(baseFont.Height()) + 6
+	if rowH < 18 {
+		rowH = 18
+	}
+	layout := &webLayout{RowH: rowH}
+
+	fonts := make(map[int]*ttf.Font, 8)
+	fontAt := func(cssPx float64) *ttf.Font {
+		size := int(math.Round(cssPx * baseSize / 16))
+		minSize := int(math.Round(baseSize * 0.72))
+		maxSize := int(math.Round(baseSize * 1.5))
+		if size < minSize {
+			size = minSize
+		}
+		if size > maxSize {
+			size = maxSize
+		}
+		if size < 8 {
+			size = 8
+		}
+		if font, ok := fonts[size]; ok {
+			return font
+		}
+		font := getFontSized(config, elem.Font, size)
+		fonts[size] = font
+		return font
+	}
+
+	// Cap the measure the way a real content column does. Full-bleed lines on
+	// a 1280px panel run to ~140 characters, which is tiring on a small
+	// screen; 38 em keeps a comfortable line and centres the column.
+	contentW := width - 12
+	if limit := int32(baseSize * 38); limit > 0 && contentW > limit {
+		contentW = limit
+	}
+	if contentW < 60 {
+		return nil
+	}
+	padX := (width - contentW) / 2
+	nextY := func() int32 { return int32(len(layout.Rows)) * rowH }
+	skipRows := func(n int32) {
+		for i := int32(0); i < n && len(layout.Rows) < webMaxRows; i++ {
+			layout.Rows = append(layout.Rows, webRow{Y: nextY()})
+		}
+	}
+	emit := func(runs []webRunPos, fontH int32) {
+		if len(layout.Rows) >= webMaxRows {
+			return
+		}
+		slots := int32(1)
+		if need := int32(math.Ceil(float64(fontH+4) / float64(rowH))); need > slots {
+			slots = need
+		}
+		idx := int32(len(layout.Rows))
+		y := idx * rowH
+		if slots > 1 {
+			y += (slots*rowH - fontH) / 2
+		}
+		layout.Rows = append(layout.Rows, webRow{Y: y, Runs: runs})
+		for i := int32(1); i < slots && len(layout.Rows) < webMaxRows; i++ {
+			layout.Rows = append(layout.Rows, webRow{Y: (idx + i) * rowH})
+		}
+	}
+	marginRows := func(cssPx float64) int32 {
+		if cssPx <= 0 {
+			return 0
+		}
+		design := cssPx * baseSize / 16
+		rows := int32(math.Round(design / float64(rowH)))
+		if rows < 1 && design >= float64(rowH)*0.45 {
+			rows = 1
+		}
+		if rows > 3 {
+			rows = 3
+		}
+		return rows
+	}
+
+	// Adjacent vertical margins collapse to the larger of the two, the way CSS
+	// does it. Summing them stacked a heading's own spacing on top of the
+	// previous block's and filled real pages with holes on a small screen.
+	previousMarginBot := 0.0
+	for _, block := range d.Blocks {
+		if len(layout.Rows) >= webMaxRows {
+			break
+		}
+		gap := block.MarginTop
+		if previousMarginBot > gap {
+			gap = previousMarginBot
+		}
+		// No leading blank rows at the top of the page.
+		if len(layout.Rows) > 0 {
+			skipRows(marginRows(gap))
+		}
+		previousMarginBot = block.MarginBot
+		if block.Rule {
+			y := nextY() + rowH/2
+			layout.Rects = append(layout.Rects, webRect{
+				Rect:  sdl.Rect{X: padX, Y: y, W: contentW, H: 2},
+				Color: sdl.Color{R: 200, G: 206, B: 216, A: 255},
+			})
+			skipRows(1)
+			continue
+		}
+		startGrid := int32(len(layout.Rows))
+
+		indent := int32(block.Indent * baseSize / 16)
+		if indent < 0 {
+			indent = 0
+		}
+		if indent > contentW/2 {
+			indent = contentW / 2
+		}
+		// text-indent pushes only the first line, like a print paragraph.
+		firstLineIndent := int32(block.TextIndent * baseSize / 16)
+		if firstLineIndent < 0 {
+			firstLineIndent = 0
+		}
+		if firstLineIndent > contentW/2 {
+			firstLineIndent = contentW / 2
+		}
+		bullet := ""
+		bulletW := int32(0)
+		if block.Bullet != "" {
+			bullet = block.Bullet
+			if font := fontAt(16); font != nil {
+				if w, _, err := font.SizeUTF8(bullet + " "); err == nil {
+					bulletW = int32(w)
+				}
+			}
+		}
+		textIndent := indent + bulletW
+		avail := contentW - textIndent
+		if avail < 48 {
+			textIndent = indent
+			avail = contentW - textIndent
+		}
+
+		var line []webRunPos
+		var lineMax, lineFontH int32
+		firstLine := true
+		lineStart := padX + textIndent
+		x := lineStart + firstLineIndent
+
+		flushLine := func() {
+			if len(line) == 0 {
+				return
+			}
+			lineWidth := lineMax - (padX + textIndent + firstLineIndent)
+			if lineWidth < 0 {
+				lineWidth = 0
+			}
+			if firstLine && bullet != "" {
+				if font := fontAt(16); font != nil {
+					line = append([]webRunPos{{
+						Text:  bullet,
+						X:     padX + indent,
+						Font:  font,
+						Color: webResolveColor(block.Style, d),
+					}}, line...)
+				}
+			}
+			lineAvail := avail
+			if firstLine {
+				lineAvail = avail - firstLineIndent
+				if lineAvail < 0 {
+					lineAvail = 0
+				}
+			}
+			offset := int32(0)
+			switch block.Align {
+			case 1:
+				offset = (lineAvail - lineWidth) / 2
+			case 2:
+				offset = lineAvail - lineWidth
+			}
+			if offset < 0 {
+				offset = 0
+			}
+			if offset > 0 {
+				for i := range line {
+					line[i].X += offset
+				}
+			}
+			emit(line, lineFontH)
+			firstLine = false
+			line = nil
+			lineMax, lineFontH = 0, 0
+			x = lineStart
+		}
+
+		for _, run := range block.Runs {
+			segments := strings.Split(run.Text, "\n")
+			for si, segment := range segments {
+				if si > 0 {
+					if len(line) == 0 {
+						// An explicit <br> on an empty line is a blank row.
+						skipRows(1)
+					} else {
+						flushLine()
+					}
+				}
+				if segment == "" {
+					continue
+				}
+				words := strings.Fields(segment)
+				if block.Pre && len(words) > 0 {
+					// Keep code lines as one measured run; a long one is
+					// clipped to the page width instead of re-flowed.
+					words = []string{strings.TrimRight(segment, " ")}
+				}
+				// A run only gets a space before it when the source had one.
+				// Inserting one at every style boundary pushed punctuation
+				// away from the word it belongs to ("price , bold ,").
+				leadingSpace := strings.HasPrefix(segment, " ") || strings.HasPrefix(segment, "\t")
+				for wi, word := range words {
+					if word == "" {
+						continue
+					}
+					font := fontAt(run.Style.FontPx)
+					if font == nil {
+						continue
+					}
+					word = webTransformWord(word, run.Style.Transform)
+					text := sanitizeForFont(font, word)
+					if text == "" {
+						continue
+					}
+					width, height, err := font.SizeUTF8(text)
+					if err != nil {
+						continue
+					}
+					wordW := int32(width)
+					if len(line) > 0 && (wi > 0 || leadingSpace) {
+						spaceW := int32(6)
+						if sw, _, e := font.SizeUTF8(" "); e == nil {
+							spaceW = int32(sw)
+						}
+						if x+spaceW+wordW > padX+contentW {
+							flushLine()
+						} else {
+							x += spaceW
+						}
+					}
+					if wordW > avail {
+						text = ellipsize(font, text, avail)
+						if w2, _, e := font.SizeUTF8(text); e == nil {
+							wordW = int32(w2)
+						}
+					}
+					line = append(line, webRunPos{
+						Text:      text,
+						X:         x,
+						Font:      font,
+						Color:     webResolveColor(run.Style, d),
+						Bold:      run.Style.Bold,
+						Underline: run.Style.Underline,
+						Strike:    run.Style.Strike,
+						Href:      run.Style.Href,
+						HasBg:     run.Style.HasBg && !block.HasBg,
+						Bg:        run.Style.Background,
+					})
+					x += wordW
+					if x > lineMax {
+						lineMax = x
+					}
+					if int32(height) > lineFontH {
+						lineFontH = int32(height)
+					}
+				}
+			}
+		}
+		flushLine()
+
+		endGrid := int32(len(layout.Rows))
+		height := (endGrid - startGrid) * rowH
+		if block.HasBg && height > 0 {
+			layout.Rects = append(layout.Rects, webRect{
+				Rect:  sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: contentW + 8, H: height},
+				Color: block.Background,
+			})
+		}
+		if block.BorderLeft && height > 0 {
+			layout.Rects = append(layout.Rects, webRect{
+				Rect:  sdl.Rect{X: padX + indent - 8, Y: startGrid * rowH, W: 3, H: height},
+				Color: sdl.Color{R: 170, G: 178, B: 192, A: 255},
+			})
+		}
+		if height > 0 && (block.BoxBorder || block.BorderTop || block.BorderBottom) {
+			color := sdl.Color{R: 200, G: 206, B: 216, A: 255}
+			if block.HasBorderColor {
+				color = block.BorderColor
+			}
+			top := startGrid * rowH
+			if block.BoxBorder {
+				x := padX + indent - 6
+				w := contentW - indent + 12
+				if x < padX {
+					x = padX
+					w = contentW
+				}
+				layout.Rects = append(layout.Rects, webRect{
+					Rect:      sdl.Rect{X: x, Y: top, W: w, H: height},
+					Color:     color,
+					Stroke:    true,
+					Thickness: 2,
+				})
+			} else {
+				if block.BorderTop {
+					layout.Rects = append(layout.Rects, webRect{
+						Rect:  sdl.Rect{X: padX, Y: top, W: contentW, H: 2},
+						Color: color,
+					})
+				}
+				if block.BorderBottom {
+					layout.Rects = append(layout.Rects, webRect{
+						Rect:  sdl.Rect{X: padX, Y: top + height - 2, W: contentW, H: 2},
+						Color: color,
+					})
+				}
+			}
+		}
+	}
+
+	layout.Height = int32(len(layout.Rows)) * rowH
+	layout.Links = collectWebLinks(layout)
+	return layout
+}
+
+// webHrefFollowable reports whether an anchor target is worth a cursor stop:
+// http, https or a relative path. In-page anchors and non-web schemes
+// (javascript:, mailto:, data:, file:) are not pages the browser can open.
+func webHrefFollowable(href string) bool {
+	trimmed := strings.TrimSpace(href)
+	if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+	if i := strings.IndexByte(trimmed, ':'); i > 0 {
+		// A colon after a slash is part of a path, not a scheme.
+		if !strings.ContainsAny(trimmed[:i], "/?#") {
+			scheme := strings.ToLower(trimmed[:i])
+			return scheme == "http" || scheme == "https"
+		}
+	}
+	return true
+}
+
+// collectWebLinks turns the laid-out link runs into one hit per destination.
+// A link that wraps across rows, or a nav entry repeated in the header and the
+// footer, appears once; walking it with the D-pad would otherwise stop twice
+// on the same place. In-page anchors have nothing to fetch and are skipped.
+func collectWebLinks(layout *webLayout) []webLinkHit {
+	if layout == nil {
+		return nil
+	}
+	var links []webLinkHit
+	seen := map[string]bool{}
+	for rowIdx := 0; rowIdx < len(layout.Rows); rowIdx++ {
+		row := layout.Rows[rowIdx]
+		for i := 0; i < len(row.Runs); {
+			run := row.Runs[i]
+			if run.Font == nil || !webHrefFollowable(run.Href) {
+				i++
+				continue
+			}
+			href := run.Href
+			startX := run.X
+			endX := run.X
+			label := ""
+			j := i
+			for ; j < len(row.Runs); j++ {
+				cur := row.Runs[j]
+				if cur.Href != href || cur.Font == nil {
+					break
+				}
+				w, _, err := cur.Font.SizeUTF8(cur.Text)
+				if err != nil {
+					break
+				}
+				label += " " + cur.Text
+				if end := cur.X + int32(w); end > endX {
+					endX = end
+				}
+			}
+			i = j
+			if endX <= startX || seen[href] {
+				continue
+			}
+			seen[href] = true
+			links = append(links, webLinkHit{
+				Row:  rowIdx,
+				X:    startX,
+				W:    endX - startX,
+				Href: href,
+				Text: strings.Join(strings.Fields(label), " "),
+			})
+		}
+	}
+	return links
+}
+
+func webLuminance(c sdl.Color) float64 {
+	channel := func(v uint8) float64 {
+		x := float64(v) / 255
+		if x <= 0.03928 {
+			return x / 12.92
+		}
+		return math.Pow((x+0.055)/1.055, 2.4)
+	}
+	return 0.2126*channel(c.R) + 0.7152*channel(c.G) + 0.0722*channel(c.B)
+}
+
+func webContrast(a, b sdl.Color) float64 {
+	la, lb := webLuminance(a), webLuminance(b)
+	if la < lb {
+		la, lb = lb, la
+	}
+	return (la + 0.05) / (lb + 0.05)
+}
+
+// webReadableColor keeps author colours when they read on the page background
+// and flips them when a page assumed its own background (a common reason a
+// light page renders as invisible text).
+func webReadableColor(fg, bg sdl.Color) sdl.Color {
+	if webContrast(fg, bg) >= 2.4 {
+		return fg
+	}
+	if webLuminance(bg) > 0.4 {
+		return sdl.Color{R: 28, G: 32, B: 38, A: 255}
+	}
+	return sdl.Color{R: 242, G: 245, B: 250, A: 255}
+}
+
+func webResolveColor(style webStyle, doc *webDocument) sdl.Color {
+	// An element with its own background (an inline <code> chip, a tinted
+	// box) must be judged against that background, not the page: a light chip
+	// on a dark page would otherwise draw light text on light fill.
+	bg := doc.Paper
+	if style.HasBg {
+		bg = style.Background
+	}
+	color := doc.Text
+	if style.HasColor {
+		color = style.Color
+	} else if style.Link {
+		if webLuminance(bg) > 0.4 {
+			color = sdl.Color{R: 20, G: 88, B: 200, A: 255}
+		} else {
+			color = sdl.Color{R: 130, G: 170, B: 255, A: 255}
+		}
+	}
+	return webReadableColor(color, bg)
+}
+
+// drawWebDocument paints the styled page inside rect starting at startRow.
+func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, startRow int) {
+	if doc == nil || layout == nil || layout.RowH <= 0 || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	if startRow < 0 {
+		startRow = 0
+	}
+	if startRow >= len(layout.Rows) {
+		startRow = 0
+	}
+	renderWithClip(renderer, rect.X, rect.Y, rect.W, rect.H, func(r *sdl.Renderer) {
+		r.SetDrawColor(doc.Paper.R, doc.Paper.G, doc.Paper.B, 255)
+		r.FillRect(&sdl.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: rect.H})
+
+		offset := int32(startRow) * layout.RowH
+		for _, bg := range layout.Rects {
+			y := rect.Y + bg.Rect.Y - offset
+			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
+				continue
+			}
+			if bg.Stroke {
+				thickness := bg.Thickness
+				if thickness < 1 {
+					thickness = 1
+				}
+				strokeRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, 3, thickness, bg.Color)
+				continue
+			}
+			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, 2, bg.Color)
+		}
+		for i := startRow; i < len(layout.Rows); i++ {
+			row := layout.Rows[i]
+			y := rect.Y + row.Y - offset
+			if y >= rect.Y+rect.H {
+				break
+			}
+			// Inline backgrounds first, merged across adjacent words of the
+			// same style so a code phrase is one chip instead of one box per
+			// word.
+			for i := 0; i < len(row.Runs); i++ {
+				run := row.Runs[i]
+				if !run.HasBg || run.Font == nil {
+					continue
+				}
+				w, h, err := run.Font.SizeUTF8(run.Text)
+				if err != nil {
+					continue
+				}
+				startX := rect.X + run.X - 2
+				endX := rect.X + run.X + int32(w)
+				for j := i + 1; j < len(row.Runs); j++ {
+					next := row.Runs[j]
+					if !next.HasBg || next.Bg != run.Bg || next.Font == nil {
+						break
+					}
+					nw, _, e := next.Font.SizeUTF8(next.Text)
+					if e != nil {
+						break
+					}
+					endX = rect.X + next.X + int32(nw)
+					i = j
+				}
+				fillRoundedRect(r, startX, y, endX-startX+4, int32(h), 3, run.Bg)
+			}
+			for _, run := range row.Runs {
+				drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+run.X, y)
+				if run.Bold {
+					// One pixel of fake weight: the app ships one font face, and
+					// a second offset copy reads as bold at this size.
+					drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+run.X+1, y)
+				}
+				if (run.Underline || run.Strike) && run.Font != nil {
+					if w, _, err := run.Font.SizeUTF8(run.Text); err == nil {
+						r.SetDrawColor(run.Color.R, run.Color.G, run.Color.B, 220)
+						if run.Underline {
+							r.FillRect(&sdl.Rect{
+								X: rect.X + run.X,
+								Y: y + int32(run.Font.Height()) - 5,
+								W: int32(w),
+								H: 1,
+							})
+						}
+						if run.Strike {
+							r.FillRect(&sdl.Rect{
+								X: rect.X + run.X,
+								Y: y + int32(run.Font.Height())/2,
+								W: int32(w),
+								H: 1,
+							})
+						}
+					}
+				}
+			}
+		}
+	})
+}
+
+// webDocumentRows returns the row count for a styled page, or 0 when the page
+// has no styled document (so callers can fall back to plain text).
+func webDocumentRows(doc *webDocument, config *Config, elem Element, width int32) (*webLayout, int) {
+	if doc == nil {
+		return nil, 0
+	}
+	layout := doc.layoutFor(config, elem, width)
+	if layout == nil || len(layout.Rows) == 0 {
+		return nil, 0
+	}
+	return layout, len(layout.Rows)
+}

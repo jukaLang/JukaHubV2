@@ -9,7 +9,7 @@ Open it from **Start → Ambient**, or let it appear by itself:
 | Situation | When the screen appears |
 |-----------|-------------------------|
 | Charging | after 45 seconds without input |
-| On battery | after the normal idle timeout (`screensaverTimeout`, 5 minutes by default) |
+| On battery | after the normal idle timeout (`screensaverTimeout`, 25 seconds by default) |
 
 Any input wakes a darkened panel. **B** (or Escape) leaves the screen; the ambient
 screen never opens over a modal, a game or a full-screen video.
@@ -26,6 +26,8 @@ screen never opens over a modal, a game or a full-screen video.
   the music folder.
 - **Battery**, charging state, the sleep-timer countdown and the photo counter in
   the bottom-right.
+- **New chat messages** in a card above the now-playing panel, the same card the
+  starfield screensaver shows.
 - **Photos** behind it all, fading from one to the next every 20 seconds.
 
 ## Photos
@@ -102,8 +104,10 @@ config):
 }
 ```
 
-With `ambientMode: false` the screensaver's own `screensaverTimeout` applies as
-before. Start → Ambient still opens the dock screen manually in that case.
+With `ambientMode: false` the starfield screensaver is the idle screen and its
+`screensaverTimeout` applies; the dock still opens by hand from Start → Ambient.
+The timeout can be changed in Settings → General → **Screensaver after** or from
+Quick Settings, in steps from 15 seconds up (25 by default). Start → Ambient still opens the dock screen manually in that case.
 
 ## Related
 

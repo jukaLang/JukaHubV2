@@ -233,6 +233,7 @@ func TestChatLinksRenderAsClickableCards(t *testing.T) {
 		chatMutex.Unlock()
 		chatScrollOffset = prevOffset
 		chatLinkRects = nil
+		chatTextLinkRects = nil
 	})
 
 	renderChat(renderer, config, Element{Type: "chat", X: 0, Y: 0, Width: "1240", Height: "640", Font: "small"})
@@ -272,6 +273,25 @@ func TestChatLinksRenderAsClickableCards(t *testing.T) {
 	if plays != 1 || browsable != 2 {
 		t.Errorf("play cards = %d, browsable cards = %d; want 1 and 2", plays, browsable)
 	}
+
+	// The link text itself is a target too, so tapping the words plays the
+	// video instead of requiring a hit on the card below.
+	if len(chatTextLinkRects) == 0 {
+		t.Fatal("no clickable link text was recorded")
+	}
+	sawPlayText := false
+	for _, hit := range chatTextLinkRects {
+		r := hit.rect
+		if r.W <= 0 || r.H <= 0 || r.Y < 0 || r.Y+r.H > 640 {
+			t.Errorf("text link %+v has an unusable rect", r)
+		}
+		if hit.play {
+			sawPlayText = true
+		}
+	}
+	if !sawPlayText {
+		t.Error("the YouTube link text was not marked as playable")
+	}
 }
 
 func TestChatPlayableURLDetection(t *testing.T) {
@@ -289,5 +309,47 @@ func TestChatPlayableURLDetection(t *testing.T) {
 		if got := chatPlayableURL(tc.text); got != tc.want {
 			t.Errorf("chatPlayableURL(%q) = %q, want %q", tc.text, got, tc.want)
 		}
+	}
+}
+
+// The link text inside a bubble is a click target of its own: the spans must
+// point at exactly the URL characters, so the rect drawn over them lands on the
+// words the reader taps.
+func TestChatLineLinkSpans(t *testing.T) {
+	line := "watch https://youtu.be/dQw4w9WgXcQ now"
+	spans := chatLineLinkSpans(line)
+	if len(spans) != 1 {
+		t.Fatalf("spans = %+v, want one YouTube link", spans)
+	}
+	if got := line[spans[0].start:spans[0].end]; got != "https://youtu.be/dQw4w9WgXcQ" {
+		t.Fatalf("span covers %q", got)
+	}
+	if spans[0].url != "https://youtu.be/dQw4w9WgXcQ" {
+		t.Errorf("url = %q", spans[0].url)
+	}
+
+	// Trailing punctuation belongs to the sentence, not the link.
+	spans = chatLineLinkSpans("see https://example.com/story, then https://youtu.be/abc123.")
+	if len(spans) != 2 {
+		t.Fatalf("spans = %+v, want two links", spans)
+	}
+	if spans[0].url != "https://example.com/story" || spans[1].url != "https://youtu.be/abc123" {
+		t.Errorf("urls = %q, %q", spans[0].url, spans[1].url)
+	}
+
+	if spans := chatLineLinkSpans("no links on this line"); len(spans) != 0 {
+		t.Errorf("plain text produced spans: %+v", spans)
+	}
+}
+
+// A link whose text is clipped by the wrap must not become a target: clicking
+// it would play a truncated URL.
+func TestChatLineLinkTargetsSkipClippedLinks(t *testing.T) {
+	whole := map[string]bool{"https://youtu.be/dQw4w9WgXcQ": true}
+	if got := chatLineLinkTargets("watch https://youtu.be/dQw4w9WgXcQ now", whole); len(got) != 1 {
+		t.Fatalf("whole link targets = %+v, want 1", got)
+	}
+	if got := chatLineLinkTargets("watch https://youtu.be/dQw4w9WgX…", whole); len(got) != 0 {
+		t.Fatalf("clipped link targets = %+v, want none", got)
 	}
 }

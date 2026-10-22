@@ -157,6 +157,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 			notifNavigate(1)
 			PlayNavSound()
+		case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+			notifShoulder(padL1)
+		case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+			notifShoulder(padR1)
 		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B,
 			sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 			notifDismiss()
@@ -238,6 +242,10 @@ func ctrlClipboard(e *sdl.ControllerButtonEvent) bool {
 			clipSearchBuf = ""
 			PlayActivateSound()
 		}
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		clipShoulder(padL1)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		clipShoulder(padR1)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		clipSearchOpen = false
 		clipSearchBuf = ""
@@ -280,6 +288,10 @@ func ctrlGlobalSearch(e *sdl.ControllerButtonEvent, config *Config) bool {
 			globalSearchOpen = false
 			PlayActivateSound()
 		}
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		globalSearchShoulder(padL1)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		globalSearchShoulder(padR1)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		gsQuery = ""
 		gsResults = nil
@@ -306,12 +318,16 @@ func ctrlQuickSettings(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		qsNavigate(1)
 		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		qsNavigateSlider(-5)
 		PlayNavSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		qsNavigateSlider(5)
 		PlayNavSound()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		qsShoulder(padL1)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		qsShoulder(padR1)
 	case sdl.CONTROLLER_BUTTON_A:
 		qsSelect()
 		PlayActivateSound()
@@ -383,6 +399,10 @@ func ctrlSocialNotif(e *sdl.ControllerButtonEvent) bool {
 		if socialNotifCursor < len(socialNotifHistory)-1 {
 			socialNotifCursor++
 		}
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		socialNotifShoulder(padL1)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		socialNotifShoulder(padR1)
 	case sdl.CONTROLLER_BUTTON_X:
 		socialNotifHistory = nil
 		socialNotifCursor = 0
@@ -401,9 +421,13 @@ func ctrlImageViewer(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_A:
 		closeImageViewer()
 		PlayBackSound()
-	case sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		imageViewerStep(-1)
-	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		imageViewerStep(1)
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		imageViewerStep(-1)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		imageViewerStep(1)
 	}
 	return true
@@ -415,7 +439,21 @@ func ctrlImageViewer(e *sdl.ControllerButtonEvent) bool {
 
 const stickDeadzone = 12000
 
-func handleControllerAxis(e *sdl.ControllerAxisEvent) bool {
+func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
+	// Analog triggers are buttons in disguise: they arrive as a stream of axis
+	// values, so they are latched into single presses (see shoulders.go).
+	switch e.Axis {
+	case sdl.CONTROLLER_AXIS_TRIGGERLEFT:
+		if triggerPressedEdge(0, e.Value) {
+			return handleShoulderPress(padL2, config)
+		}
+		return false
+	case sdl.CONTROLLER_AXIS_TRIGGERRIGHT:
+		if triggerPressedEdge(1, e.Value) {
+			return handleShoulderPress(padR2, config)
+		}
+		return false
+	}
 	// Left stick X axis → left/right
 	if e.Axis == sdl.CONTROLLER_AXIS_LEFTX {
 		if e.Value > stickDeadzone {

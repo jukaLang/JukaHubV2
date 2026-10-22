@@ -10,10 +10,12 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 type toolsAction int
@@ -29,7 +31,16 @@ const (
 	toolsActionPowerTools
 	toolsActionCopyIP
 	toolsActionUtilities
-	toolsActionClose
+)
+
+// toolsStatus colours the small dot on a row: a server that is running is
+// green, something the user has to fix (offline, no address) is amber.
+type toolsStatus int
+
+const (
+	toolsStatusNeutral toolsStatus = iota
+	toolsStatusGood
+	toolsStatusWarn
 )
 
 type toolsRow struct {
@@ -39,6 +50,10 @@ type toolsRow struct {
 	hint    string
 	action  toolsAction
 	enabled bool
+	// section is drawn as a small heading above this row; only the first row
+	// of a group carries one.
+	section string
+	status  toolsStatus
 }
 
 type toolsPanelState struct {
@@ -168,10 +183,33 @@ func cachedFTPRoot() string {
 	return ftpRootCache.root
 }
 
-// toolsRows builds the current rows. The utilities row only exists when the
-// config actually has the classic Misc scene.
+// toolsRows builds the current rows, most-used first: the LAN address people
+// copy to type into a PC, then the file servers and the phone companion, then
+// the shared-session and maintenance tools. The rows are grouped into sections
+// so a long list stays scannable.
 func toolsRows(config *Config) []toolsRow {
-	rows := make([]toolsRow, 0, 4)
+	ip := toolsIPAddress()
+
+	share := make([]toolsRow, 0, 4)
+	ipRow := toolsRow{
+		label:   "IP address",
+		value:   "No WiFi address",
+		detail:  "Connect to WiFi to transfer files",
+		hint:    hintLine(FooterHint{"A", "Copy"}),
+		action:  toolsActionCopyIP,
+		enabled: true,
+		status:  toolsStatusWarn,
+	}
+	if ip != "" {
+		ipRow.value = ip
+		ipRow.detail = "Other devices use this address"
+		ipRow.status = toolsStatusGood
+	}
+	if !IsOnline() {
+		ipRow.detail = "Offline — connect WiFi first"
+		ipRow.status = toolsStatusWarn
+	}
+	share = append(share, ipRow)
 
 	ftp := toolsRow{
 		label:   "FTP server",
@@ -182,34 +220,16 @@ func toolsRows(config *Config) []toolsRow {
 		enabled: true,
 	}
 	if ftpSrv.Running() {
-		ip := toolsIPAddress()
-		if ip == "" {
-			ip = "this device"
+		addr := ip
+		if addr == "" {
+			addr = "this device"
 		}
 		ftp.value = "Running"
-		ftp.detail = fmt.Sprintf("ftp://%s:%d", ip, ftpSrv.Port())
+		ftp.detail = fmt.Sprintf("ftp://%s:%d", addr, ftpSrv.Port())
 		ftp.hint = hintLine(FooterHint{"A", "Stop"})
+		ftp.status = toolsStatusGood
 	}
-	rows = append(rows, ftp)
-
-	sshRow := toolsRow{
-		label:   "SSH / SFTP",
-		value:   "Stopped",
-		detail:  "Browse the file system from a PC with any SFTP client",
-		hint:    hintLine(FooterHint{"A", "Start"}),
-		action:  toolsActionSSH,
-		enabled: true,
-	}
-	if sshSrv.Running() {
-		ip := toolsIPAddress()
-		if ip == "" {
-			ip = "this device"
-		}
-		sshRow.value = "Running"
-		sshRow.detail = fmt.Sprintf("sftp://%s@%s:%d", sshSrv.User(), ip, sshSrv.Port())
-		sshRow.hint = hintLine(FooterHint{"A", "Stop"})
-	}
-	rows = append(rows, sshRow)
+	share = append(share, ftp)
 
 	// The phone companion is the answer to typing on a D-pad, so it belongs
 	// next to the file servers rather than buried in the classic Tools scene.
@@ -224,12 +244,35 @@ func toolsRows(config *Config) []toolsRow {
 	if companion.err != "" {
 		companionRow.value = "Offline"
 		companionRow.hint = hintLine(FooterHint{"A", "Details"})
+		companionRow.status = toolsStatusWarn
 	} else if companion.open {
 		companionRow.value = companionStatusLine()
 		companionRow.hint = hintLine(FooterHint{"A", "Hide"})
+		companionRow.status = toolsStatusGood
 	}
-	rows = append(rows, companionRow)
+	share = append(share, companionRow)
 
+	sshRow := toolsRow{
+		label:   "SSH / SFTP",
+		value:   "Stopped",
+		detail:  "Browse the file system from a PC with any SFTP client",
+		hint:    hintLine(FooterHint{"A", "Start"}),
+		action:  toolsActionSSH,
+		enabled: true,
+	}
+	if sshSrv.Running() {
+		addr := ip
+		if addr == "" {
+			addr = "this device"
+		}
+		sshRow.value = "Running"
+		sshRow.detail = fmt.Sprintf("sftp://%s@%s:%d", sshSrv.User(), addr, sshSrv.Port())
+		sshRow.hint = hintLine(FooterHint{"A", "Stop"})
+		sshRow.status = toolsStatusGood
+	}
+	share = append(share, sshRow)
+
+	together := make([]toolsRow, 0, 1)
 	partyRow := toolsRow{
 		label:   "Watch Party",
 		value:   "LAN",
@@ -241,12 +284,14 @@ func toolsRows(config *Config) []toolsRow {
 	if partyActive() {
 		partyRow.value = "In a room"
 		partyRow.detail = partyInviteText()
+		partyRow.status = toolsStatusGood
 	}
-	rows = append(rows, partyRow)
+	together = append(together, partyRow)
 
+	system := make([]toolsRow, 0, 5)
 	if sceneIndexExact(config, "Patch") >= 0 {
 		patchRow := toolsRow{
-			label:   "Patch",
+			label:   "Updates",
 			value:   "Check for updates",
 			detail:  "Updates, packages and rollback",
 			hint:    hintLine(FooterHint{"A", "Open"}),
@@ -255,11 +300,22 @@ func toolsRows(config *Config) []toolsRow {
 		}
 		if availableUpdateTag() != "" {
 			patchRow.value = "Update " + availableUpdateLabel()
+			patchRow.status = toolsStatusWarn
 		}
-		rows = append(rows, patchRow)
+		system = append(system, patchRow)
 	}
+
+	system = append(system, toolsRow{
+		label:   "Power tools",
+		value:   "Network · Files · Scripts",
+		detail:  "Port scan, hex viewer, snippets, config history",
+		hint:    hintLine(FooterHint{"A", "Open"}),
+		action:  toolsActionPowerTools,
+		enabled: true,
+	})
+
 	if sceneIndexExact(config, "Calculator") >= 0 {
-		rows = append(rows, toolsRow{
+		system = append(system, toolsRow{
 			label:   "Calculator",
 			value:   "Open",
 			detail:  "Quick math with history",
@@ -269,7 +325,7 @@ func toolsRows(config *Config) []toolsRow {
 		})
 	}
 
-	rows = append(rows, toolsRow{
+	system = append(system, toolsRow{
 		label:   "Community & support",
 		value:   "Changelog · Bugs",
 		detail:  "What's new, report a bug, anonymous diagnostics",
@@ -278,37 +334,10 @@ func toolsRows(config *Config) []toolsRow {
 		enabled: true,
 	})
 
-	rows = append(rows, toolsRow{
-		label:   "Power tools",
-		value:   "Network · Files · Scripts",
-		detail:  "Port scan, hex viewer, snippets, config history",
-		hint:    hintLine(FooterHint{"A", "Open"}),
-		action:  toolsActionPowerTools,
-		enabled: true,
-	})
-
-	ip := toolsIPAddress()
-	ipRow := toolsRow{
-		label:   "IP address",
-		value:   "No WiFi address",
-		detail:  "Connect to WiFi to transfer files",
-		hint:    hintLine(FooterHint{"A", "Copy"}),
-		action:  toolsActionCopyIP,
-		enabled: true,
-	}
-	if ip != "" {
-		ipRow.value = ip
-		ipRow.detail = "Other devices use this address"
-	}
-	if !IsOnline() {
-		ipRow.detail = "Offline — connect WiFi first"
-	}
-	rows = append(rows, ipRow)
-
 	if sceneIndexExact(config, "Misc") >= 0 {
-		rows = append(rows, toolsRow{
-			label:   "System utilities",
-			value:   "Classic Tools",
+		system = append(system, toolsRow{
+			label:   "Classic Tools",
+			value:   "Terminal · Logs",
 			detail:  "Terminal, cron, logs, patch and more",
 			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  toolsActionUtilities,
@@ -316,14 +345,25 @@ func toolsRows(config *Config) []toolsRow {
 		})
 	}
 
-	rows = append(rows, toolsRow{
-		label:   "Close",
-		value:   "Back to the app",
-		hint:    "B",
-		action:  toolsActionClose,
-		enabled: true,
-	})
+	// One heading per group; rows are added conditionally, so the label goes on
+	// whichever row ended up first.
+	markToolsSection(share, "SHARE & TRANSFER")
+	markToolsSection(together, "WATCH TOGETHER")
+	markToolsSection(system, "SYSTEM & UPDATES")
+
+	rows := make([]toolsRow, 0, len(share)+len(together)+len(system))
+	rows = append(rows, share...)
+	rows = append(rows, together...)
+	rows = append(rows, system...)
 	return rows
+}
+
+// markToolsSection labels the first row of a group so the renderer can draw one
+// heading per group.
+func markToolsSection(rows []toolsRow, title string) {
+	if len(rows) > 0 {
+		rows[0].section = title
+	}
 }
 
 func toolsPanelMove(delta int) {
@@ -408,8 +448,6 @@ func toolsPanelActivate(config *Config) {
 		}
 		toolsPanel.open = false
 		changeSceneTo(config, idx)
-	case toolsActionClose:
-		closeToolsPanel()
 	}
 }
 
@@ -493,37 +531,45 @@ type toolsInfoLine struct {
 	warn bool
 }
 
-// toolsInfoLines returns at most two lines: the SFTP credentials while the
-// server runs, then the warning for the exposed share. Two lines is what fits
-// on a 720p handheld without pushing the footer off the panel.
+// toolsInfoLines returns at most one line of live server detail: the SFTP
+// credentials when it runs, plus the exposure warning in the same line. One
+// line is what fits under the rows on a 720p handheld once the list is grouped
+// into sections, and the password must not be the thing that gets dropped.
 func toolsInfoLines() []toolsInfoLine {
-	lines := make([]toolsInfoLine, 0, 2)
 	if sshSrv.Running() {
-		lines = append(lines, toolsInfoLine{text: fmt.Sprintf("%s  ·  password %s", sshSrv.User(), sshSrv.Password())})
+		line := fmt.Sprintf("%s · password %s", sshSrv.User(), sshSrv.Password())
+		if ftpSrv.Running() {
+			line += " — FTP is open to this WiFi"
+		} else {
+			line += " — SFTP only, no shell"
+		}
+		return []toolsInfoLine{{text: line, warn: true}}
 	}
-	switch {
-	case ftpSrv.Running() && sshSrv.Running():
-		lines = append(lines, toolsInfoLine{text: "FTP is open to this WiFi; SFTP allows no shell or tunnels.", warn: true})
-	case ftpSrv.Running():
-		lines = append(lines, toolsInfoLine{text: "Anyone on this WiFi can read and write the shared folder.", warn: true})
-	case sshSrv.Running():
-		lines = append(lines, toolsInfoLine{text: "SFTP only: no shell, port forwarding or tunnels.", warn: true})
+	if ftpSrv.Running() {
+		return []toolsInfoLine{{text: "Anyone on this WiFi can read and write the shared folder.", warn: true}}
 	}
-	return lines
+	return nil
 }
 
-// toolsPanelLayout is the measured geometry for the current font, row count and
+// toolsPanelLayout is the measured geometry for the current font, rows and
 // server state. Handheld fonts can be taller than their point size, so a fixed
-// row height used to push the last row and the footer off a 720p screen once
-// the SSH row was added. When the full three-line row does not fit, the detail
-// line is folded into the value and the row padding shrinks.
+// row height used to push the last row and the footer off a 720p screen. When
+// the full three-line row does not fit, the detail line is folded into the value
+// and the row padding shrinks; section headings are paid for from the same
+// budget.
 type toolsPanelLayout struct {
-	smallH, medH, headerH, footerH, rowH, rowPad, infoLineH, infoH int32
-	showDetail, dense                                              bool
-	info                                                           []toolsInfoLine
+	smallH, medH, sectionH, headerH, footerH, rowH, rowPad, infoLineH, infoH int32
+	showDetail, dense                                                        bool
+	info                                                                     []toolsInfoLine
+	sections                                                                 int
 }
 
-func toolsPanelMetrics(config *Config, rowCount int) toolsPanelLayout {
+// contentH is the height the panel needs for rows, headings and the footer.
+func (l toolsPanelLayout) contentH(rows int) int32 {
+	return l.headerH + int32(rows)*l.rowH + int32(l.sections)*l.sectionH + l.infoH + l.footerH
+}
+
+func toolsPanelMetrics(config *Config, rows []toolsRow) toolsPanelLayout {
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
 	if font == nil {
@@ -539,8 +585,22 @@ func toolsPanelMetrics(config *Config, rowCount int) toolsPanelLayout {
 		showDetail: true,
 		info:       toolsInfoLines(),
 	}
-	layout.headerH = 18 + layout.medH + 4 + layout.smallH + 14
-	layout.footerH = 20 + layout.smallH
+	for _, row := range rows {
+		if row.section != "" {
+			layout.sections++
+		}
+	}
+	// Section headings are a fixed, small size so they read as labels instead
+	// of another row, whatever the theme's body fonts are set to.
+	layout.sectionH = 24
+	if label := getFontSized(config, "small", 15); label != nil {
+		layout.sectionH = int32(label.Height()) + 10
+		if layout.sectionH < 22 {
+			layout.sectionH = 22
+		}
+	}
+	layout.headerH = 18 + layout.medH + 4 + layout.smallH + 12
+	layout.footerH = 18 + layout.smallH
 	layout.infoLineH = layout.smallH + 8
 	if len(layout.info) > 0 {
 		layout.infoH = int32(len(layout.info))*layout.infoLineH + 5
@@ -548,27 +608,25 @@ func toolsPanelMetrics(config *Config, rowCount int) toolsPanelLayout {
 	layout.rowPad = 10
 	layout.rowH = 2*layout.rowPad + layout.smallH + gap + layout.medH + gap + layout.smallH
 
-	available := screenHeight - 40 - layout.headerH - layout.footerH
-	total := func() int32 {
-		return int32(rowCount)*layout.rowH + layout.infoH
-	}
-	if total() > available {
+	available := screenHeight - 40
+	fits := func() bool { return layout.contentH(len(rows)) <= available }
+	if !fits() {
 		layout.showDetail = false
 		layout.rowPad = 8
 		layout.rowH = 2*layout.rowPad + layout.smallH + gap + layout.medH
 	}
-	if total() > available {
+	if !fits() {
 		// Dense mode: label and value on one line. Patch and Calculator add
 		// two rows, which does not fit the three-line row on a 720p screen.
 		layout.dense = true
-		layout.rowPad = 7
+		layout.rowPad = 5
 		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
 	}
-	if total() > available && len(layout.info) > 1 {
+	if !fits() && len(layout.info) > 1 {
 		layout.info = layout.info[:1]
 		layout.infoH = layout.infoLineH + 5
 	}
-	if total() > available {
+	if !fits() {
 		layout.info = nil
 		layout.infoH = 0
 	}
@@ -599,7 +657,7 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	// Sizes come from the fonts, not from constants: a config that does not
 	// override "small"/"medium" gets 24px for both, and fixed offsets used to
 	// stack the label, value and detail on top of each other.
-	layout := toolsPanelMetrics(config, len(rows))
+	layout := toolsPanelMetrics(config, rows)
 	smallH := layout.smallH
 	medH := layout.medH
 	const (
@@ -610,14 +668,16 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	rowH := layout.rowH
 	headerH := layout.headerH
 	footerH := layout.footerH
-	panelW := int32(760)
-	if panelW > screenWidth-48 {
-		panelW = screenWidth - 48
+	sectionH := layout.sectionH
+	// A little wider than before: the values (addresses, "Network · Files ·
+	// Scripts") are the point of the panel and used to be ellipsised.
+	panelW := int32(880)
+	if panelW > screenWidth-64 {
+		panelW = screenWidth - 64
 	}
 	info := layout.info
 	infoLineH := layout.infoLineH
-	infoH := layout.infoH
-	panelH := headerH + int32(len(rows))*rowH + infoH + footerH
+	panelH := layout.contentH(len(rows))
 	if panelH > screenHeight-40 {
 		panelH = screenHeight - 40
 	}
@@ -635,12 +695,23 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Tools", ColorTextPrimary(), panelX+padX, panelY+18)
-	sub := "Network address and file transfer"
+	renderText(renderer, config, medium, "Tools", ColorTextPrimary(), panelX+padX, panelY+16)
+	sub := "Files, network and device utilities"
 	if !IsOnline() {
-		sub = "Offline — connect WiFi to use these"
+		sub = "Offline — connect WiFi to transfer files"
 	}
-	renderText(renderer, config, font, sub, ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	renderText(renderer, config, font, sub, ColorTextTertiary(), panelX+padX, panelY+16+medH+4)
+
+	// The address every transfer tool below needs is readable from the header
+	// without hunting for it in the list.
+	statusText, statusCol := "Offline", ColorToastWarn
+	if ip := toolsIPAddress(); ip != "" {
+		statusText, statusCol = "WiFi · "+ip, ColorTextTertiary()
+	}
+	if sw, _, err := font.SizeUTF8(statusText); err == nil {
+		renderText(renderer, config, font, statusText, statusCol,
+			panelX+panelW-padX-int32(sw), panelY+16+(medH-smallH)/2)
+	}
 
 	// The theme accent can be very dark (several presets use a near-black
 	// "info" colour), so reuse the install card's contrast check instead of
@@ -649,10 +720,21 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 
 	rowW := panelW - 2*padX
 	toolsRowRects = make([]sdl.Rect, len(rows))
+	y := panelY + headerH
 	for i, row := range rows {
-		y := panelY + headerH + int32(i)*rowH
-		r := sdl.Rect{X: panelX + padX, Y: y, W: rowW, H: rowH - 8}
+		if row.section != "" {
+			drawToolsSectionLabel(renderer, config, row.section, panelX+padX, y, rowW)
+			y += sectionH
+		}
+		rowGap := int32(8)
+		if layout.dense {
+			// Dense rows keep a 36px card at the shipped font size; the gap is
+			// trimmed instead of the text padding.
+			rowGap = 4
+		}
+		r := sdl.Rect{X: panelX + padX, Y: y, W: rowW, H: rowH - rowGap}
 		toolsRowRects[i] = r
+		y += rowH
 
 		focused := i == toolsPanel.cursor
 		rowBg := WithAlpha(ColorSurfaceRow, 190)
@@ -662,17 +744,20 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, rowBg)
 		if focused {
 			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
+			// Accent spine: the cursor position reads at a glance instead of
+			// relying on a 1px outline alone.
+			fillRoundedRect(renderer, r.X+1, r.Y+8, 4, r.H-16, 2, focusColor)
 		}
+		// A status dot per row: running / available / needs attention. It is
+		// cheaper to scan than the value text and gives the list a rhythm.
+		fillCircle(renderer, r.X+20, r.Y+r.H/2, 4, toolsStatusColor(row.status))
 
 		valueColor := ColorTextPrimary()
-		if (row.action == toolsActionFTP && ftpSrv.Running()) || (row.action == toolsActionSSH && sshSrv.Running()) {
+		switch {
+		case row.status == toolsStatusWarn:
+			valueColor = ColorToastWarn
+		case (row.action == toolsActionFTP || row.action == toolsActionSSH) && row.status == toolsStatusGood:
 			valueColor = ColorToastSuccess
-		}
-		if row.action == toolsActionPatch && availableUpdateTag() != "" {
-			valueColor = ColorToastWarn
-		}
-		if row.action == toolsActionCopyIP && row.value == "No WiFi address" {
-			valueColor = ColorToastWarn
 		}
 		value := row.value
 		if !layout.showDetail && value == "Running" && row.detail != "" {
@@ -681,25 +766,17 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 			value = row.detail
 		}
 
+		textX := r.X + 38
 		if layout.dense {
-			// One line per row: label on the left, value after it, hint on the
-			// right. Dense mode exists so Patch, Calculator and both servers fit
-			// on a 720p screen without shrinking the text.
-			hintColor := ColorTextSecondary()
-			if focused {
-				hintColor = focusColor
-			}
-			hintW := int32(0)
-			if row.hint != "" {
-				hw, _, _ := font.SizeUTF8(row.hint)
-				hintW = int32(hw)
-				renderText(renderer, config, font, row.hint, hintColor, r.X+r.W-hintW-16, r.Y+(r.H-smallH)/2)
-			}
-			label := ellipsize(font, row.label, r.W/3)
-			lw, _, _ := font.SizeUTF8(label)
-			renderText(renderer, config, font, label, ColorTextSecondary(), r.X+16, r.Y+(r.H-smallH)/2)
-			valueX := r.X + 16 + int32(lw) + 14
-			valueW := r.X + r.W - 16 - hintW - 16 - valueX
+			// One line per row: label in a fixed column, value after it, action
+			// chip on the right. The fixed column keeps every value aligned, so
+			// the list reads as a table instead of ragged text.
+			chipW := drawToolsHintChip(renderer, config, font, row.hint, r, focused, focusColor)
+			labelCol := (r.W - 38 - 24) * 34 / 100
+			label := ellipsize(font, row.label, labelCol)
+			renderText(renderer, config, font, label, ColorTextSecondary(), textX, r.Y+(r.H-smallH)/2)
+			valueX := textX + labelCol
+			valueW := r.X + r.W - 12 - chipW - 12 - valueX
 			if valueW > 0 {
 				renderText(renderer, config, medium, ellipsize(medium, value, valueW), valueColor, valueX, r.Y+(r.H-medH)/2)
 			}
@@ -709,28 +786,20 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 		labelY := r.Y + layout.rowPad
 		valueY := labelY + smallH + rowTextH
 		detailY := valueY + medH + rowTextH
-		renderText(renderer, config, font, row.label, ColorTextSecondary(), r.X+16, labelY)
-		renderText(renderer, config, medium, value, valueColor, r.X+16, valueY)
+		renderText(renderer, config, font, row.label, ColorTextSecondary(), textX, labelY)
+		renderText(renderer, config, medium, value, valueColor, textX, valueY)
 
-		detail := row.detail
-		if layout.showDetail && detail != "" {
-			maxW := r.W - 32 - 150
-			renderText(renderer, config, font, ellipsize(font, detail, maxW), ColorTextTertiary(), r.X+16, detailY)
+		if layout.showDetail && row.detail != "" {
+			maxW := r.W - (textX - r.X) - 150
+			renderText(renderer, config, font, ellipsize(font, row.detail, maxW), ColorTextTertiary(), textX, detailY)
 		}
-		if row.hint != "" {
-			hintColor := ColorTextSecondary()
-			if focused {
-				hintColor = focusColor
-			}
-			hw, _, _ := font.SizeUTF8(row.hint)
-			renderText(renderer, config, font, row.hint, hintColor, r.X+r.W-int32(hw)-16, valueY)
-		}
+		drawToolsHintChip(renderer, config, font, row.hint, r, focused, focusColor)
 	}
 
 	// Live details while a server is open: the SFTP password is shown here (it
 	// is random per run and never written to the config or the log), followed
 	// by the warning for whichever share is exposed.
-	infoY := panelY + headerH + int32(len(rows))*rowH + 2
+	infoY := panelY + headerH + int32(len(rows))*rowH + int32(layout.sections)*sectionH + 2
 	for _, line := range info {
 		color := ColorTextSecondary()
 		if line.warn {
@@ -744,4 +813,58 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+8)
+}
+
+// drawToolsSectionLabel paints a group heading: small uppercase text with a
+// hairline running to the panel edge, so the list reads in sections without
+// spending a filled row on a divider.
+func drawToolsSectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, w int32) {
+	font := getFontSized(config, "small", 15)
+	if font == nil {
+		return
+	}
+	label := strings.ToUpper(title)
+	tw, th, _ := font.SizeUTF8(label)
+	renderText(renderer, config, font, label, ColorTextTertiary(), x+38, y+4)
+	if lx := x + 38 + int32(tw) + 12; lx < x+w {
+		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
+		renderer.FillRect(&sdl.Rect{X: lx, Y: y + 4 + int32(th)/2, W: x + w - lx, H: 1})
+	}
+}
+
+// drawToolsHintChip paints the row's action ("A Start", "A Copy") as a pill on
+// the right edge and returns its width, so the value never runs under it.
+func drawToolsHintChip(renderer *sdl.Renderer, config *Config, font *ttf.Font, hint string, row sdl.Rect, focused bool, focus sdl.Color) int32 {
+	if font == nil || hint == "" {
+		return 0
+	}
+	tw, th, _ := font.SizeUTF8(hint)
+	padX := int32(9)
+	h := int32(th) + 6
+	w := int32(tw) + 2*padX
+	x := row.X + row.W - w - 10
+	y := row.Y + (row.H-h)/2
+	fill := WithAlpha(ColorSurface, 235)
+	border := WithAlpha(ColorBorder, 140)
+	label := ColorTextSecondary()
+	if focused {
+		fill = WithAlpha(accentColor, 90)
+		border = WithAlpha(focus, 220)
+		label = ColorTextPrimary()
+	}
+	fillRoundedRect(renderer, x, y, w, h, h/2, fill)
+	strokeRoundedRect(renderer, x, y, w, h, h/2, 1, border)
+	renderText(renderer, config, font, hint, label, x+padX, y+(h-int32(th))/2)
+	return w
+}
+
+// toolsStatusColor maps a row's state to the dot beside it.
+func toolsStatusColor(status toolsStatus) sdl.Color {
+	switch status {
+	case toolsStatusGood:
+		return ColorToastSuccess
+	case toolsStatusWarn:
+		return ColorToastWarn
+	}
+	return WithAlpha(ColorTextTertiary(), 120)
 }

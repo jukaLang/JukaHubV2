@@ -41,13 +41,14 @@ const builtinActionPrefix = "action:"
 
 // builtinApplets are JukaHub's own apps. They live at the bottom of the Apps
 // list so the launcher is complete even on a machine with no external apps.
+// Only entries that really open something belong here: the grid is presented as
+// launchable apps, so a row that cannot start is noise.
 var builtinApplets = []struct {
 	Name   string
 	Scene  string
 	Action string
 }{
 	{"JukaLand", "JukaLand", ""},
-	{"YouTube Shorts", "Shorts", ""},
 	{"Live TV", "LiveTV", ""},
 	{"Podcasts", "Podcasts", ""},
 	{"Tickers", "Tickers", ""},
@@ -63,6 +64,10 @@ var builtinApplets = []struct {
 // maxAppEntries caps a single source so a huge Start Menu cannot flood the
 // list with thousands of rows.
 const maxAppEntries = 300
+
+// deadAppPaths remembers programs that failed to start in this session, so the
+// Refresh button cannot bring a row back that the user already saw fail.
+var deadAppPaths = map[string]bool{}
 
 // builtinAppEntries renders the applet table as launcher rows. A nil config
 // keeps every applet (the merge-order tests use it); scanInstalledApps always
@@ -161,6 +166,16 @@ func collectAppEntries(config *Config, appsFolder string, systemDirs []string) [
 		}
 		seen[key] = true
 		entries = append(entries, e)
+	}
+	if len(deadAppPaths) > 0 {
+		alive := entries[:0]
+		for _, e := range entries {
+			if deadAppPaths[e.Path] {
+				continue
+			}
+			alive = append(alive, e)
+		}
+		entries = alive
 	}
 	return entries
 }
@@ -329,12 +344,56 @@ func launchAppEntry(config *Config, entry FileEntry) {
 		log.Printf("[apps] unknown built-in app scene %q", scene)
 		return
 	}
-	launchInstalledApp(external)
+	if !launchInstalledApp(external) {
+		// A shortcut whose target vanished (uninstalled program, deleted
+		// script) would fail again on every press: take the row out of the
+		// launcher so what is listed really opens.
+		dropAppEntry(config, external)
+	}
 }
 
-// builtinAppActionSupported reports whether an applet action has a handler.
+// dropAppEntry removes a launcher row after its program failed to start.
+func dropAppEntry(config *Config, path string) {
+	if config == nil {
+		return
+	}
+	entries, ok := config.Variables.Custom[appsEntriesVar].([]FileEntry)
+	if !ok || len(entries) == 0 {
+		return
+	}
+	kept := make([]FileEntry, 0, len(entries))
+	removed := ""
+	for _, e := range entries {
+		if e.Path == path {
+			removed = appGridDisplayName(e.Name)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if removed == "" {
+		return
+	}
+	config.Variables.Custom[appsEntriesVar] = kept
+	deadAppPaths[path] = true
+	if focusedFileIndex >= len(kept) {
+		focusedFileIndex = len(kept) - 1
+		if focusedFileIndex < 0 {
+			focusedFileIndex = 0
+		}
+	}
+	log.Printf("[apps] removed unlaunchable row %q (%s)", removed, path)
+	ShowToast("Removed "+removed+" — it no longer opens", ToastKindWarning)
+}
+
+// builtinAppActionSupported reports whether an applet action has a handler on
+// this device. A panel that needs a helper the build cannot run is left out of
+// the launcher instead of opening a screen that only says it is unavailable.
 func builtinAppActionSupported(action string) bool {
-	return action == "chiaki"
+	switch action {
+	case "chiaki":
+		return psRemoteSupported()
+	}
+	return false
 }
 
 // launchBuiltinAppAction opens a panel-backed built-in applet. Keeping the
@@ -363,24 +422,25 @@ func isLaunchableAppPath(path string) bool {
 
 // launchInstalledApp starts an external program detached from JukaHub. .lnk,
 // .exe, .bat and .url files go through the shell so shortcuts resolve their
-// targets; shell scripts run with their folder as the working directory.
-func launchInstalledApp(path string) {
+// targets; shell scripts run with their folder as the working directory. It
+// reports whether the program actually started.
+func launchInstalledApp(path string) bool {
 	// Only an existing regular file with a launchable extension is started.
 	// The launcher deliberately runs user-installed programs, but a malformed
 	// list entry must never point at an arbitrary command or a directory.
 	clean, err := cleanUserPath(path)
 	if err != nil {
-		return
+		return false
 	}
 	if !isLaunchableAppPath(clean) {
 		log.Printf("[SECURITY] [apps] refusing to launch %q: outside the app folders", clean)
 		showToast("Refusing to launch an app outside the app folders", ToastError())
-		return
+		return false
 	}
 	info, err := os.Stat(clean)
 	if err != nil || !info.Mode().IsRegular() {
 		showToast("Could not launch "+filepath.Base(path), ToastError())
-		return
+		return false
 	}
 	ext := strings.ToLower(filepath.Ext(clean))
 	switch ext {
@@ -388,7 +448,7 @@ func launchInstalledApp(path string) {
 	default:
 		log.Printf("[apps] refusing to launch unsupported file type %q", ext)
 		showToast("Unsupported app type "+ext, ToastError())
-		return
+		return false
 	}
 	log.Printf("[apps] launching %s", clean)
 	var cmd *exec.Cmd
@@ -407,9 +467,10 @@ func launchInstalledApp(path string) {
 	if err := cmd.Start(); err != nil {
 		log.Printf("[apps] launch failed for %s: %v", clean, err)
 		showToast("Could not launch "+filepath.Base(clean), ToastError())
-		return
+		return false
 	}
 	go func() { _ = cmd.Wait() }() // reap the child, keep JukaHub responsive
+	return true
 }
 
 // openAppsFolder makes sure the portable apps folder exists and opens it in

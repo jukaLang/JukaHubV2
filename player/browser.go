@@ -51,6 +51,9 @@ type browserPage struct {
 	Text     string
 	Links    []browserLink
 	FinalURL string
+	// Doc is the styled document the renderer draws instead of the plain text
+	// extract (nil when the page had no readable markup).
+	Doc *webDocument
 }
 
 var browserState = struct {
@@ -104,9 +107,14 @@ func ensureBrowserScene(config *Config) {
 		{"Forward", "browser_forward"},
 		{"Reload", "browser_reload"},
 		{"Links", "browser_links"},
+		// Search is the controller shortcut to the web search box; without
+		// it the address bar was the only way in, and that needed a mouse.
+		{"Search", "browser_search"},
 		{"Home", "browser_home"},
 		{"Issues", "browser_issues"},
 	}
+	// Seven chips share the content width: 168 + 6*172 keeps the row inside
+	// the 1232px design column and still renders legibly at 800x480.
 	elements := []Element{textBrowser}
 	for i, b := range buttons {
 		elements = append(elements, Element{
@@ -114,9 +122,9 @@ func ensureBrowserScene(config *Config) {
 			Text:    b.label,
 			Color:   "$labelColor",
 			BgColor: "$buttonColor",
-			X:       scaleX(int32(24+i*206), width),
+			X:       scaleX(int32(24+i*172), width),
 			Y:       scaleY(584, height),
-			Width:   StringOrInt(strconv.Itoa(int(scaleX(190, width)))),
+			Width:   StringOrInt(strconv.Itoa(int(scaleX(168, width)))),
 			Height:  StringOrInt(strconv.Itoa(int(scaleY(44, height)))),
 			Trigger: b.trigger,
 			Font:    "small",
@@ -338,6 +346,7 @@ func resetBrowserStateForTest() {
 	browserState.mu.Unlock()
 	browserHomeLoaded = false
 	browserLinkPanel = browserLinkPanelState{}
+	resetBrowserDocumentsForTest()
 }
 
 // ── Link extraction ──────────────────────────────────────────────────────
@@ -734,4 +743,359 @@ func browserLinkHost(address string) string {
 		return host + truncate(path, 70)
 	}
 	return host
+}
+
+// ── Page focus: links, search and the D-pad ──────────────────────────────
+//
+// The handheld has no pointer, and the browser used to be a one-way street:
+// the D-pad scrolled the page and the only way to open an anchor was the X
+// link list, while the address bar and the button row were mouse-only. The
+// page now owns a link cursor (Left/Right walk the anchors in reading order,
+// A opens the focused one, Y searches) and the D-pad steps out of the panel
+// at either end, so every button on the scene is reachable with the pad.
+
+const (
+	// browserSearchVariable holds the query typed with the Search shortcut.
+	// It is separate from the address so cancelling the keyboard leaves the
+	// address bar, and the page on screen, untouched.
+	browserSearchVariable = "browser_search_query"
+	browserSearchPrompt   = "Search the web"
+)
+
+type browserLinkCursorState struct {
+	key    string // page identity, so the cursor resets on navigation
+	cursor int    // index into the laid-out links, -1 when nothing is picked
+}
+
+var browserLinkCursor browserLinkCursorState
+
+// browserPageLayout returns the laid-out page the renderer draws, or nil when
+// the page has no styled document (a plain-text fallback).
+func browserPageLayout(config *Config, elem Element) *webLayout {
+	doc := browserDocumentFor(elem.Variable)
+	if doc == nil {
+		return nil
+	}
+	layout, _ := webDocumentRows(doc, config, elem, getElementWidth(elem, 1100)-14)
+	return layout
+}
+
+// browserVisibleRows is how many page rows fit under the toolbar. It mirrors
+// the renderer's measurement so the link cursor scrolls to the right place.
+func browserVisibleRows(elem Element, layout *webLayout) int {
+	if layout == nil || layout.RowH <= 0 {
+		return 0
+	}
+	height := getElementHeight(elem, 480) - 28 - textBrowserURLBarHeight - 12
+	rows := int(height / layout.RowH)
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
+}
+
+// browserScrollMax is the last scroll row for the page: the point where the
+// final line sits at the bottom of the viewport.
+func browserScrollMax(elem Element, layout *webLayout) int32 {
+	if layout == nil {
+		return 0
+	}
+	extra := len(layout.Rows) - browserVisibleRows(elem, layout)
+	if extra < 0 {
+		extra = 0
+	}
+	return int32(extra)
+}
+
+// browserFocusedLink validates the stored link cursor against the page on
+// screen and returns -1 when no link is picked. A new page resets it, so a
+// cursor never points at a link from the previous page with the same index.
+func browserFocusedLink(elem Element, layout *webLayout) int {
+	if layout == nil || len(layout.Links) == 0 {
+		browserLinkCursor = browserLinkCursorState{cursor: -1}
+		return -1
+	}
+	doc := browserDocumentFor(elem.Variable)
+	key := elem.Variable + "|" + strconv.Itoa(len(layout.Links))
+	if doc != nil {
+		key = doc.URL + "|" + key
+	}
+	if browserLinkCursor.key != key {
+		browserLinkCursor = browserLinkCursorState{key: key, cursor: -1}
+	}
+	if browserLinkCursor.cursor < 0 || browserLinkCursor.cursor >= len(layout.Links) {
+		return -1
+	}
+	return browserLinkCursor.cursor
+}
+
+// browserRevealLink scrolls the page just enough to show the focused link,
+// moving it only when it would otherwise sit off screen.
+func browserRevealLink(elem Element, layout *webLayout, hit webLinkHit) {
+	max := browserScrollMax(elem, layout)
+	if max <= 0 {
+		textBrowserScrollY = 0
+		return
+	}
+	visible := browserVisibleRows(elem, layout)
+	scroll := int(textBrowserScrollY)
+	if hit.Row < scroll {
+		scroll = hit.Row
+	} else if hit.Row >= scroll+visible {
+		scroll = hit.Row - visible + 1
+	}
+	if scroll < 0 {
+		scroll = 0
+	}
+	if int32(scroll) > max {
+		scroll = int(max)
+	}
+	textBrowserScrollY = int32(scroll)
+	textBrowserScrollVelocity = 0
+	textBrowserScrollCooldown = 0
+}
+
+// browserMovePageLink walks the page's links. With nothing picked, Right lands
+// on the first link and Left on the last, so one press always does something.
+func browserMovePageLink(config *Config, elem Element, delta int) bool {
+	layout := browserPageLayout(config, elem)
+	if layout == nil {
+		return false
+	}
+	if len(layout.Links) == 0 {
+		showToast("No links on this page", ToastInfo())
+		return true
+	}
+	cursor := browserFocusedLink(elem, layout)
+	if cursor < 0 {
+		if delta >= 0 {
+			cursor = 0
+		} else {
+			cursor = len(layout.Links) - 1
+		}
+	} else {
+		cursor = (cursor + delta + len(layout.Links)) % len(layout.Links)
+	}
+	browserLinkCursor.cursor = cursor
+	browserRevealLink(elem, layout, layout.Links[cursor])
+	PlayNavSound()
+	return true
+}
+
+// browserResolveLink turns a raw href into an absolute http(s) address. Only
+// http and https survive: the same allowlist the link picker uses, so a
+// javascript: or file: href in a page cannot be followed from the pad.
+func browserResolveLink(baseURL, href string) (string, bool) {
+	href = strings.TrimSpace(href)
+	if href == "" || strings.HasPrefix(href, "#") {
+		return "", false
+	}
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", false
+	}
+	ref, err := url.Parse(href)
+	if err != nil {
+		return "", false
+	}
+	target := base.ResolveReference(ref)
+	target.Scheme = strings.ToLower(strings.TrimSpace(target.Scheme))
+	if target.Scheme != "http" && target.Scheme != "https" {
+		return "", false
+	}
+	if target.Hostname() == "" || target.User != nil {
+		return "", false
+	}
+	target.Fragment = ""
+	return target.String(), true
+}
+
+// browserOpenFocusedPageLink follows the link under the cursor. It reports
+// false when no link is picked, which leaves A on its old meaning (edit the
+// address bar).
+func browserOpenFocusedPageLink(config *Config, elem Element) bool {
+	layout := browserPageLayout(config, elem)
+	if layout == nil {
+		return false
+	}
+	cursor := browserFocusedLink(elem, layout)
+	if cursor < 0 {
+		return false
+	}
+	base := textBrowserAddress(config)
+	if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
+		base = doc.URL
+	}
+	target, ok := browserResolveLink(base, layout.Links[cursor].Href)
+	if !ok {
+		showToast("That link cannot be opened here", ToastInfo())
+		return true
+	}
+	browserLinkCursor = browserLinkCursorState{}
+	loadTextBrowserURL(config, elem, target)
+	return true
+}
+
+// browserScrollButton scrolls one line and, at either end of the page, hands
+// the D-pad to the scene: Up leaves to the chrome above, Down to the button
+// row below. That is what makes the browser's own buttons reachable from the
+// page without a mouse.
+func browserScrollButton(config *Config, elem Element, dir int) bool {
+	layout := browserPageLayout(config, elem)
+	max := browserScrollMax(elem, layout)
+	if dir < 0 {
+		if textBrowserScrollY <= 0 {
+			textBrowserScrollVelocity = 0
+			textBrowserScrollCooldown = 0
+			moveSelection(config, ActionNavigateUp)
+			return true
+		}
+		textBrowserScrollVelocity -= textBrowserScrollAccel
+		if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
+			textBrowserScrollVelocity = -textBrowserScrollMaxVel
+		}
+		textBrowserScrollCooldown = 8
+		return true
+	}
+	if max <= 0 || textBrowserScrollY >= max {
+		textBrowserScrollVelocity = 0
+		textBrowserScrollCooldown = 0
+		moveSelection(config, ActionNavigateDown)
+		return true
+	}
+	textBrowserScrollVelocity += textBrowserScrollAccel
+	if textBrowserScrollVelocity > textBrowserScrollMaxVel {
+		textBrowserScrollVelocity = textBrowserScrollMaxVel
+	}
+	textBrowserScrollCooldown = 8
+	return true
+}
+
+// browserScrollByPage is the L1/R1 jump, clamped to the page.
+func browserScrollByPage(config *Config, elem Element, dir int) {
+	layout := browserPageLayout(config, elem)
+	max := browserScrollMax(elem, layout)
+	step := int32(browserVisibleRows(elem, layout) - 1)
+	if step < 1 {
+		step = 1
+	}
+	textBrowserScrollY += int32(dir) * step
+	if textBrowserScrollY < 0 {
+		textBrowserScrollY = 0
+	}
+	if textBrowserScrollY > max {
+		textBrowserScrollY = max
+	}
+	textBrowserScrollVelocity = 0
+	textBrowserScrollCooldown = 0
+	PlayNavSound()
+}
+
+// openBrowserSearch is the Search shortcut: it opens the keyboard for a query
+// and searches for it, without typing over the address bar. A query that is
+// itself an address opens it, exactly like the address field.
+func openBrowserSearch(renderer *sdl.Renderer, config *Config, elem Element) {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	for i, current := range config.Scenes[currentSceneIndex].Elements {
+		if current.Type != "textbrowser" || current.Variable != elem.Variable {
+			continue
+		}
+		if config.Variables.Custom == nil {
+			config.Variables.Custom = map[string]interface{}{}
+		}
+		config.Variables.Custom[browserSearchVariable] = ""
+		textBrowserSearchEditing = true
+		textBrowserSearchSubmitted = false
+		vkOpenSceneInput(config, currentSceneIndex, i)
+		runInputModal(renderer, config)
+		textBrowserSearchEditing = false
+		activeSceneIndex = -1
+		activeElementIndex = -1
+		if textBrowserSearchSubmitted {
+			if query, ok := config.Variables.Custom[browserSearchVariable].(string); ok {
+				if q := strings.TrimSpace(query); q != "" {
+					loadTextBrowserURL(config, current, q)
+				}
+			}
+		}
+		textBrowserSearchSubmitted = false
+		return
+	}
+}
+
+// handleBrowserController gives the browser its own D-pad model. It returns
+// false for buttons it does not own, so the scene's generic handling still
+// runs (Y already means something else outside the browser).
+func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEvent, config *Config, elem Element) bool {
+	if e == nil || config == nil || textBrowserElementSource(elem) != textBrowserSourceWeb {
+		return false
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(config)
+		return true
+	case sdl.CONTROLLER_BUTTON_X:
+		openBrowserLinkPanel(config, elem)
+		return true
+	case sdl.CONTROLLER_BUTTON_Y:
+		openBrowserSearch(renderer, config, elem)
+		return true
+	case sdl.CONTROLLER_BUTTON_A:
+		if browserOpenFocusedPageLink(config, elem) {
+			return true
+		}
+		handleTextBrowserAddressInput(renderer, config, elem)
+		return true
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		return browserMovePageLink(config, elem, -1)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		return browserMovePageLink(config, elem, 1)
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		return browserScrollButton(config, elem, -1)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		return browserScrollButton(config, elem, 1)
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		browserScrollByPage(config, elem, -1)
+		return true
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		browserScrollByPage(config, elem, 1)
+		return true
+	}
+	return false
+}
+
+// browserDrawPageLinkFocus outlines the link the D-pad is on. Rows are document
+// rows and the page is drawn scrolled, so both are shifted the same way.
+func browserDrawPageLinkFocus(renderer *sdl.Renderer, elem Element, layout *webLayout, scroll int, contentTop, contentH int32) {
+	if renderer == nil || layout == nil || layout.RowH <= 0 || contentH <= 0 {
+		return
+	}
+	cursor := browserFocusedLink(elem, layout)
+	if cursor < 0 {
+		return
+	}
+	hit := layout.Links[cursor]
+	rel := hit.Row - scroll
+	if rel < 0 || int32(rel)*layout.RowH >= contentH {
+		return
+	}
+	left := elem.X + 7
+	right := left + getElementWidth(elem, 1100) - 14
+	x := left + hit.X - 4
+	w := hit.W + 8
+	if x < left {
+		w -= left - x
+		x = left
+	}
+	if x+w > right {
+		w = right - x
+	}
+	if w < 8 {
+		return
+	}
+	y := contentTop + int32(rel)*layout.RowH - 2
+	fillRoundedRect(renderer, x, y, w, layout.RowH, 4, WithAlpha(accentColor, 48))
+	strokeRoundedRect(renderer, x, y, w, layout.RowH, 4, 2, WithAlpha(accentColor, 235))
 }
