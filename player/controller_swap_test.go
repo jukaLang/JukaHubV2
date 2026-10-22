@@ -122,10 +122,34 @@ func TestApplyButtonSwapFlipsABOnly(t *testing.T) {
 		t.Fatalf("Y must be left alone, got %v", y.Button)
 	}
 
-	off := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	// With no explicit setting the default follows the platform: handhelds
+	// report the face buttons inverted and swap, desktops keep SDL's mapping.
+	// Pin the platform so the test means the same thing on every OS (it used to
+	// pass only on a Windows desktop and fail on the Linux/TrimUI platform).
+	prev := platform
+	defer func() { platform = prev }()
+
+	unset := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+
+	platform = &windowsPlatform{}
 	x := &sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_A}
-	applyButtonSwap(off, x)
+	applyButtonSwap(unset, x)
 	if x.Button != sdl.CONTROLLER_BUTTON_A {
-		t.Fatalf("disabled setting must not flip, got %v", x.Button)
+		t.Fatalf("desktop with no setting must not flip, got %v", x.Button)
+	}
+
+	platform = &trimuiLinuxPlatform{}
+	h := &sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_A}
+	applyButtonSwap(unset, h)
+	if h.Button != sdl.CONTROLLER_BUTTON_B {
+		t.Fatalf("handheld with no setting must flip A to B, got %v", h.Button)
+	}
+
+	// An explicit "off" wins over the handheld default.
+	explicitOff := &Config{Variables: Variables{Custom: map[string]interface{}{"swapABButtons": false}}}
+	e := &sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_A}
+	applyButtonSwap(explicitOff, e)
+	if e.Button != sdl.CONTROLLER_BUTTON_A {
+		t.Fatalf("explicit off must not flip even on a handheld, got %v", e.Button)
 	}
 }
