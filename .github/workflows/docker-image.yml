@@ -20,7 +20,7 @@ jobs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Generate Tag Name
         id: generate_tag
@@ -31,7 +31,7 @@ jobs:
 
       - name: Set Tag using GitHub Script
         id: set_tag
-        uses: actions/github-script@v5
+        uses: actions/github-script@v9
         with:
           script: |
             await github.rest.git.createRef({
@@ -76,7 +76,7 @@ jobs:
           fi
     
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Download and Install ARM Libraries
         run: |
@@ -203,7 +203,7 @@ jobs:
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Homebrew
         run: |
@@ -244,7 +244,7 @@ jobs:
           sudo cp -r SDL2_ttf-2.22.0/x86_64-w64-mingw32/* $MINGW_DIR/x86_64-w64-mingw32/
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: player/go.mod
 
