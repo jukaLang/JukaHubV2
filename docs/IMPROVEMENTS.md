@@ -118,7 +118,7 @@ exists now, what it found, and what is still advisory:
 | Builder jsdom tests (import, share sanitizer, hostile variable names) | blocking | `tests/web` |
 | Builder smoke test in Chromium: load, drop a component, undo/redo, export JSON, re-import | blocking | `tests/e2e` (`builder.spec.js`) |
 | Player vet + tests for packages without SDL | blocking | `ci.yml` `player-core` (`CGO_ENABLED=0`) |
-| Player vet + tests for the SDL package | advisory | `ci.yml` `player`; passes locally, but has never run on a GitHub runner |
+| Player vet + tests for the SDL package | blocking | `ci.yml` `player` (runner pinned to `ubuntu-24.04`). Its first GitHub run failed two tests that only passed on a Windows desktop; both fixed, then green |
 | `staticcheck` | advisory | `ci.yml` `player-staticcheck` |
 | `go test -race` | advisory | `ci.yml` `player-race` |
 
@@ -167,9 +167,13 @@ the `== false` comparisons.
 
 ### Not verified
 
-- The workflows have not run on GitHub: this pass ran the same commands locally
-  (Windows, SDL 2.30, Go 1.27) and on a portable Node 22. The `player` job stays
-  advisory until one green run on `main`.
+- The `player` job has now run on GitHub (Ubuntu 24.04) and is blocking. Its first
+  run found what a Windows-only local run could not: `retroArchCmdline` used
+  `filepath.Base`, which does not split a Windows path on Linux, and
+  `TestApplyButtonSwapFlipsABOnly` assumed a desktop although the unset default
+  is platform-dependent (handhelds swap A/B). Both are fixed and the handheld
+  default now has its own assertion. Failures are also written to annotations
+  and the step summary, because the raw log is easy to miss.
 - The race job is advisory because a full `-race` run of the SDL package takes
   minutes and was only spot-checked here (PS Remote tests, `-race`, pass).
 - Playwright was run against Chromium only; WebKit and Firefox are not in the
