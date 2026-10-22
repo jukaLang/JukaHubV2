@@ -11,10 +11,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   web:
     name: Web builder checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -40,6 +46,7 @@ jobs:
   player:
     name: Player vet and tests
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     # Not blocking yet: this job has not run on a GitHub runner. Once it is
     # green on main, delete the next line so failures block merges.
     continue-on-error: true
@@ -63,4 +70,23 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
-        run: go test ./... -count=1 -timeout 10m
+        run: |
+          set +e
+          go test ./... -count=1 -timeout 10m 2>&1 | tee "$RUNNER_TEMP/gotest.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # A failed step in a non-blocking job still shows a green run, so
+            # surface the failures where a reviewer will actually look.
+            {
+              echo "### go test failed"
+              echo '```'
+              grep -E '^\s*(--- FAIL|FAIL|panic:)' "$RUNNER_TEMP/gotest.log" | head -60
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            excerpt=$(grep -E -A2 '^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/gotest.log" | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=go test failed::${excerpt}"
+            grep -E '^\s*--- FAIL' "$RUNNER_TEMP/gotest.log" | head -9 | while IFS= read -r line; do
+              echo "::error title=Failing test::${line}"
+            done
+          fi
+          exit "$status"
