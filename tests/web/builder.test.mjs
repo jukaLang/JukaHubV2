@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { JSDOM, ResourceLoader, VirtualConsole } from 'jsdom';
+import { JSDOM, VirtualConsole, requestInterceptor } from 'jsdom';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
@@ -13,16 +13,26 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 // files are read from the repo; CDN fonts and icons are skipped so the suite is
 // offline-safe.
 const ORIGIN = 'http://localhost/';
-class LocalOnlyLoader extends ResourceLoader {
-  fetch(url) {
-    if (url.startsWith(ORIGIN)) {
-      const rel = decodeURIComponent(url.slice(ORIGIN.length).split(/[?#]/)[0]);
-      const file = path.join(root, rel);
-      if (file.startsWith(root) && fs.existsSync(file)) return Promise.resolve(fs.readFileSync(file));
+const MIME = { '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.html': 'text/html', '.png': 'image/png', '.jpg': 'image/jpeg' };
+
+// jsdom 27+ replaced the ResourceLoader class with request interceptors: the
+// callback returns a synthetic Response, or undefined to let the request go to
+// the network. Nothing may reach the network here, so every unknown URL gets an
+// empty reply.
+const localOnly = requestInterceptor(async request => {
+  const url = request.url;
+  if (url.startsWith(ORIGIN)) {
+    const rel = decodeURIComponent(url.slice(ORIGIN.length).split(/[?#]/)[0]) || 'index.html';
+    const file = path.join(root, rel);
+    if (file.startsWith(root) && fs.existsSync(file) && fs.statSync(file).isFile()) {
+      const type = MIME[path.extname(file).toLowerCase()] || 'application/octet-stream';
+      return new Response(fs.readFileSync(file), { headers: { 'Content-Type': type } });
     }
-    return Promise.resolve(Buffer.from(''));
+    return new Response('', { status: 404 });
   }
-}
+  // CDN fonts and icon CSS: an empty stylesheet keeps the suite offline-safe.
+  return new Response('', { headers: { 'Content-Type': 'text/css' } });
+});
 
 let dom;
 const pageErrors = [];
@@ -33,7 +43,7 @@ before(async () => {
   dom = await JSDOM.fromFile(path.join(root, 'index.html'), {
     url: ORIGIN,
     runScripts: 'dangerously',
-    resources: new LocalOnlyLoader(),
+    resources: { interceptors: [localOnly] },
     pretendToBeVisual: true,
     virtualConsole,
     beforeParse(window) {
