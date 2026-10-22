@@ -11,9 +11,17 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   create-tag:
     name: Create Tag and Release
+    # Only a push to main publishes. Pull requests (including Dependabot's) used
+    # to publish a real release and tag too, pointing at a merge ref that is not
+    # on main, and the newest one became "latest".
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.generate_tag.outputs.tag_name }}
@@ -55,6 +63,7 @@ jobs:
   build-and-publish-ubuntu:
     runs-on: ubuntu-latest
     needs: create-tag
+    if: ${{ !cancelled() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped') }}
     container:
       # Pinned by digest: the image has one tag (latest), last pushed long ago, and a
       # silent re-push would change every build. Dependabot does not bump this.
@@ -67,6 +76,7 @@ jobs:
         run: |
           echo "Debug TAG_NAME: ${TAG_NAME}"
       - name: Check Tag Name Variable
+        if: github.event_name == 'push'
         run: |
           if [ -z "${TAG_NAME}" ]; then
             echo "TAG_NAME variable does not exist. Exiting."
@@ -182,10 +192,11 @@ jobs:
           cp player/JukaPlayer.png JukaHub-Trimui/
           # Release stamp: the app shows this date and the auto updater uses it
           # to decide whether a newer release exists.
-          printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "$TAG_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui/release-info.json
+          printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "${TAG_NAME:-unreleased-build}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui/release-info.json
           zip -r JukaHub-Trimui.zip JukaHub-Trimui/
 
       - name: Upload Release Assets
+        if: github.event_name == 'push'
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
@@ -198,6 +209,7 @@ jobs:
   build-and-publish-windows:
     runs-on: macos-latest
     needs: create-tag
+    if: ${{ !cancelled() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped') }}
     env: 
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
@@ -287,10 +299,11 @@ jobs:
           cp jukaconfig.json Inter-Regular.ttf background.jpg SDL2.dll SDL2_image.dll SDL2_ttf.dll ../JukaHub-Trimui-Windows/
           cd ..
           # Release stamp: shown in the UI and used by the auto updater.
-          printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "$TAG_NAME" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui-Windows/release-info.json
+          printf '{\n  "tag": "%s",\n  "date": "%s"\n}\n' "${TAG_NAME:-unreleased-build}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > JukaHub-Trimui-Windows/release-info.json
           zip -r JukaHub-Windows.zip JukaHub-Trimui-Windows/
 
       - name: Upload Release Assets
+        if: github.event_name == 'push'
         uses: actions/upload-release-asset@v1
         with:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
