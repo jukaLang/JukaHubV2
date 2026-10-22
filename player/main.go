@@ -487,6 +487,14 @@ func main() {
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
 					screensaverNotifyInput()
+					// A video being prepared is modal: only Esc (cancel) is accepted,
+					// so the results grid cannot scroll behind the spinner.
+					if videoPrepareActive() {
+						if e.Keysym.Sym == sdl.K_ESCAPE {
+							cancelVideoPrepare()
+						}
+						continue
+					}
 					// The dock screen owns every key while it is up, including the
 					// first press that wakes a darked panel.
 					if ambientHandleKey(e, config) {
@@ -1050,6 +1058,12 @@ func main() {
 					continue
 				}
 				if e.Button == sdl.BUTTON_LEFT {
+					// Taps are swallowed while a video is being prepared: the
+					// spinner is modal, and a stray tap must not press the grid
+					// behind it.
+					if videoPrepareActive() {
+						continue
+					}
 					mx, my := physicalToLogical(int32(e.X), int32(e.Y))
 					if e.Type == sdl.MOUSEBUTTONDOWN {
 						if launchFailure.open {
@@ -1560,6 +1574,14 @@ func main() {
 					continue
 				}
 				if e.Type == sdl.CONTROLLERBUTTONDOWN {
+					// A video being prepared owns the pad: the spinner says so, and
+					// B is the one way out of it.
+					if videoPrepareActive() {
+						if e.Button == sdl.CONTROLLER_BUTTON_B {
+							cancelVideoPrepare()
+						}
+						continue
+					}
 					if handleLaunchFailureController(e) {
 						continue
 					}
@@ -2106,7 +2128,9 @@ func main() {
 		}
 
 		// Loading overlay (spinner, status line and a wrapped JukaLang slogan).
-		if config.Variables.LoadingSpinner || transitionPhase != "none" {
+		// A video being resolved by yt-dlp uses the same card: it is the moment
+		// the app has nothing else to show, and it also blocks input below.
+		if config.Variables.LoadingSpinner || transitionPhase != "none" || videoPrepareActive() {
 			renderLoadingCard(renderer, config)
 		}
 

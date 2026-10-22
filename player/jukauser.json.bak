@@ -57,7 +57,7 @@
       "chat_input": "hi",
       "diskpie_data": {
         "Total": 510718431232,
-        "Used": 339884273664,
+        "Used": 341323902976,
         "Pct": 66
       },
       "ftp_address": "",
@@ -70,19 +70,20 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "total": 426,
+        "total": 436,
         "scenes": {
-          "Main": 412,
-          "Tube": 17
+          "Main": 397,
+          "Tube": 41
         },
         "days": {
           "2026-10-21": 275,
-          "2026-10-22": 154
+          "2026-10-22": 163
         },
         "unlocked": {}
       },
       "recently_played": [
-        "https://www.youtube.com/watch?v=CgEsze2BQ4c"
+        "https://www.youtube.com/watch?v=-KPeZqUch08",
+        "https://www.youtube.com/watch?v=1YnkZS9e8MA"
       ],
       "ssh_address": "",
       "ssh_fingerprint": "",
@@ -102,6 +103,42 @@
   "favorites": {
     "videos": [],
     "recent": [
+      {
+        "Type": "video",
+        "Data": {
+          "id": "1YnkZS9e8MA",
+          "title": "Moneybagg Yo - Trending [Federal 3]",
+          "uploader": "DatPiff",
+          "channel": "DatPiff",
+          "duration": 210,
+          "thumbnail": "https://i.ytimg.com/vi/1YnkZS9e8MA/hq720.jpg?sqp=-oaymwE2COgCEMoBSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhlIEsoSzAP\u0026rs=AOn4CLBNJnRfkz4I6F8704V9w-8VAmWH3w",
+          "description": "Listen \u0026 Subscribe to Datpiff's Official Spotify Playlist: https://spoti.fi/2OVygic Download: http://piff.me/2785754 Download: ...",
+          "view_count": 10460683,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=1YnkZS9e8MA",
+          "position": 1.7870936
+        },
+        "Timestamp": "2026-10-22T00:47:34.3967351-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "-KPeZqUch08",
+          "title": "Trending",
+          "uploader": "Miguel Cornejo - Topic",
+          "channel": "Miguel Cornejo - Topic",
+          "duration": 142,
+          "thumbnail": "https://i.ytimg.com/vi/-KPeZqUch08/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLCMbzG-Y3BWOTOPRfndgHdeLGDIfA",
+          "description": "Provided to YouTube by KM Records/Sony Music Latin Trending · Miguel Cornejo · El Makako · VAD BOYZ Trending ℗ 2026 KM ...",
+          "view_count": 988249,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=-KPeZqUch08",
+          "position": 5.0453304
+        },
+        "Timestamp": "2026-10-22T00:47:23.9342558-04:00"
+      },
       {
         "Type": "video",
         "Data": {
@@ -137,24 +174,6 @@
           "position": 5.0536655
         },
         "Timestamp": "2026-10-21T23:51:42.4125412-04:00"
-      },
-      {
-        "Type": "video",
-        "Data": {
-          "id": "1YnkZS9e8MA",
-          "title": "Moneybagg Yo - Trending [Federal 3]",
-          "uploader": "DatPiff",
-          "channel": "DatPiff",
-          "duration": 210,
-          "thumbnail": "https://i.ytimg.com/vi/1YnkZS9e8MA/hq720.jpg?sqp=-oaymwE2COgCEMoBSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhlIEsoSzAP\u0026rs=AOn4CLBNJnRfkz4I6F8704V9w-8VAmWH3w",
-          "description": "Listen \u0026 Subscribe to Datpiff's Official Spotify Playlist: https://spoti.fi/2OVygic Download: http://piff.me/2785754 Download: ...",
-          "view_count": 10460619,
-          "upload_date": "",
-          "webpage_url": "",
-          "url": "https://www.youtube.com/watch?v=1YnkZS9e8MA",
-          "position": 7.367314799999999
-        },
-        "Timestamp": "2026-10-21T23:41:21.0717976-04:00"
       }
     ],
     "files": [],

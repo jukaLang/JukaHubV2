@@ -2591,14 +2591,28 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 			if textW < 24 {
 				textW = 24
 			}
-			title := ellipsize(titleFont, vid.Title, textW)
-			meta := ellipsize(font, resultMetaLine(vid), textW)
-
 			th := int32(titleFont.Height())
 			mh := int32(font.Height())
 			stackH := th + 6 + mh
 			textTop := cardY + (cardH-stackH)/2
-			drawText(r, titleFont, title, textX, textTop, ColorTextPrimary(), textAlignLeft)
+
+			// Preloaded cards get a lightning bolt and a yellow title: yt-dlp
+			// already resolved the stream, so Play starts without a wait.
+			titleX, titleW := textX, textW
+			titleColor := ColorTextPrimary()
+			if videoStreamPreloaded(vid.GetURL()) {
+				const boltSize = 16
+				titleColor = ColorWarning
+				drawPreloadBolt(r, textX, textTop+(th-boltSize)/2, boltSize, ColorWarning)
+				titleX = textX + boltSize + 6
+				titleW = textW - boltSize - 6
+				if titleW < 24 {
+					titleW = 24
+				}
+			}
+			title := ellipsize(titleFont, vid.Title, titleW)
+			meta := ellipsize(font, resultMetaLine(vid), textW)
+			drawText(r, titleFont, title, titleX, textTop, titleColor, textAlignLeft)
 			drawText(r, font, meta, textX, textTop+th+6, ColorTextMuted(), textAlignLeft)
 		}
 	})
@@ -2700,8 +2714,20 @@ func renderSearchResultsGrid(renderer *sdl.Renderer, config *Config, element Ele
 				textW = 24
 			}
 
-			title := ellipsize(titleFont, vid.Title, textW)
-			renderText(r, config, titleFont, title, ColorTextPrimary(), textStartX, textY)
+			titleX, titleW := textStartX, textW
+			titleColor := ColorTextPrimary()
+			if videoStreamPreloaded(vid.GetURL()) {
+				const boltSize = 12
+				titleColor = ColorWarning
+				drawPreloadBolt(r, textStartX, textY+2, boltSize, ColorWarning)
+				titleX = textStartX + boltSize + 5
+				titleW = textW - boltSize - 5
+				if titleW < 24 {
+					titleW = 24
+				}
+			}
+			title := ellipsize(titleFont, vid.Title, titleW)
+			renderText(r, config, titleFont, title, titleColor, titleX, textY)
 
 			meta := ellipsize(font, resultMetaLine(vid), textW)
 			renderText(r, config, font, meta, ColorTextTertiary(), textStartX, textY+24)
@@ -2951,14 +2977,32 @@ func playVideoInfo(config *Config, v VideoInfo) {
 		}
 
 		log.Printf("[DEBUG] playVideoInfo: url=%q yt-dlp=%q", sanitizeLogURL(url), ytDlpPath)
+		// While yt-dlp resolves, the media screens show a modal spinner and
+		// ignore navigation: the grid used to keep scrolling behind a player
+		// that had not started yet, so a second push looked like a dead press.
+		prepareSeq, prepareCtx := beginVideoPrepare(v.Title)
 		// Stream straight from the CDN when possible: ffmpeg reads the media
 		// URL directly, so the first frame arrives without waiting for a full
 		// download. Anything ffmpeg cannot open falls back to the download path.
-		if tryStreamPlayback(config, ytDlpPath, url, v.Position) {
+		started, cancelled := tryStreamPlayback(prepareCtx, config, ytDlpPath, url, v.Position)
+		if cancelled {
+			finishVideoPrepare(prepareSeq)
+			log.Printf("[STREAM] preparation cancelled for %s", sanitizeLogURL(url))
+			return
+		}
+		if started {
+			finishVideoPrepare(prepareSeq)
 			recordPlayed(config, url)
 			return
 		}
-		playWithTempFile(config, ytDlpPath, url, v.Position)
+		// Every streaming strategy failed: this is the slow path, and it is
+		// worth saying so in the log next to the reasons logged above.
+		log.Printf("[STREAM] no direct stream for %s; downloading the file instead", sanitizeLogURL(url))
+		// The spinner stays up for the download and is cleared by
+		// playWithTempFile once the player overlay can report progress. The
+		// download honours prepareCtx, so B does not leave a download running
+		// invisibly behind a screen the user already left.
+		playWithTempFile(prepareCtx, config, ytDlpPath, url, v.Position, prepareSeq)
 		recordPlayed(config, url)
 	}()
 }
@@ -2982,7 +3026,10 @@ func videoFormatSelector(config *Config) string {
 // playWithTempFile downloads the stream with yt-dlp and hands the file to the
 // embedded player. Downloading first (instead of piping) keeps seeking and
 // resume positions working and avoids holding two decoders in memory.
-func playWithTempFile(config *Config, ytDlpPath, url string, startSec float64) {
+func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url string, startSec float64, prepareSeq uint64) {
+	// The caller's spinner covers the download; every way out of here has to
+	// clear it, including failures, or the media screen stays blocked.
+	defer finishVideoPrepare(prepareSeq)
 	log.Printf("[DEBUG] playWithTempFile: downloading to temp file for %s (resume %.1fs)", url, startSec)
 
 	videoPlaybackMutex.Lock()
@@ -3003,7 +3050,10 @@ func playWithTempFile(config *Config, ytDlpPath, url string, startSec float64) {
 	os.Remove(tempPath)
 
 	var stderrBuf bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 	defer cancel()
 	dlArgs := []string{
 		"-o", tempPath,
@@ -3042,6 +3092,13 @@ func playWithTempFile(config *Config, ytDlpPath, url string, startSec float64) {
 		select {
 		case err := <-done:
 			if err != nil {
+				if ctx.Err() != nil {
+					// Cancelled by B / Esc (or the 5-minute cap): not a network
+					// failure, so no error toast and no half-download left behind.
+					log.Printf("[STREAM] download cancelled for %s", sanitizeLogURL(url))
+					os.Remove(tempPath)
+					return
+				}
 				log.Printf("[ERROR] playWithTempFile: download failed: %v", err)
 				log.Printf("[ERROR] playWithTempFile: stderr: %s", stderrBuf.String())
 				if !IsOnline() {
@@ -3061,6 +3118,12 @@ func playWithTempFile(config *Config, ytDlpPath, url string, startSec float64) {
 			// Parse progress from stderr
 			parseDownloadProgress(stderrBuf.String())
 		}
+	}
+
+	if ctx.Err() != nil {
+		log.Printf("[STREAM] download cancelled after it finished for %s", sanitizeLogURL(url))
+		os.Remove(tempPath)
+		return
 	}
 
 	// Verify the downloaded file is valid before playing
@@ -5899,6 +5962,9 @@ func moveGridSelection(config *Config, dx, dy int) {
 		newIdx = maxItems - 1
 	}
 	focusedResultIndex = newIdx
+	// Resolve the highlighted card's stream in the background while the user
+	// keeps moving: pressing Play then skips the yt-dlp round-trip.
+	prefetchFocusedResult(config, videos)
 }
 
 // handleSearchResultsAction applies a semantic action to the current
@@ -6139,6 +6205,9 @@ func moveSelection(config *Config, action Action) {
 		if focusedResultIndex < 0 && result >= 0 && result < len(currentScene.Elements) &&
 			currentScene.Elements[result].Type == "searchresults" {
 			focusedResultIndex = 0
+			if videos, ok := getSceneVideos(config, currentScene); ok {
+				prefetchFocusedResult(config, videos)
+			}
 		}
 	} else {
 		// Fallback to linear wrap if graph has no neighbor in that direction.

@@ -109,6 +109,23 @@ func drawDivider(renderer *sdl.Renderer, x, y, w int32, color sdl.Color) {
 	renderer.DrawLine(x, y, x+w, y)
 }
 
+// drawPreloadBolt draws the "plays immediately" mark that sits in front of a
+// media title: a filled lightning bolt. It is built from triangles rather than
+// a character because the bundled fonts do not all carry U+26A1, and a missing
+// glyph would leave an empty box where the marker should be.
+func drawPreloadBolt(renderer *sdl.Renderer, x, y, size int32, color sdl.Color) {
+	if renderer == nil || size < 6 {
+		return
+	}
+	at := func(fx, fy float64) pt {
+		return pt{x: x + int32(fx*float64(size)), y: y + int32(fy*float64(size))}
+	}
+	// An upper wedge leaning right and a lower wedge leaning left; they overlap
+	// in the middle and read as one bolt at 12-16px.
+	fillTriangleFilled(renderer, at(0.60, 0.02), at(0.24, 0.56), at(0.54, 0.56), color)
+	fillTriangleFilled(renderer, at(0.44, 0.44), at(0.76, 0.44), at(0.38, 0.98), color)
+}
+
 // drawChip renders a compact pill-style tag with an icon or text inside.
 func drawChip(renderer *sdl.Renderer, rect sdl.Rect, label string, color, textColor sdl.Color, font *ttf.Font) {
 	if renderer == nil {

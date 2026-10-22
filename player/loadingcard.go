@@ -138,9 +138,31 @@ func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
 	if status == "" {
 		status = "Loading..."
 	}
+	// A video being resolved names what is loading, so the wait is obviously
+	// about the item the user just picked rather than a frozen app.
+	preparing, prepareTitle := videoPrepareStatus()
+	if preparing {
+		if prepareTitle != "" {
+			status = "Loading " + ellipsize(statusFont, prepareTitle, cardW-2*loadingCardPad)
+		} else {
+			status = "Loading video…"
+		}
+	}
 	sw, _, _ := statusFont.SizeUTF8(status)
 	renderText(renderer, config, statusFont, status, sdl.Color{R: 226, G: 234, B: 246, A: 255},
 		cardX+(cardW-int32(sw))/2, cardY+116)
+	if preparing {
+		// The spinner blocks navigation; say how to back out of it. The hint
+		// sits below the slogan block so it cannot collide with it.
+		hintFont, _ := getCachedFont(config, "small")
+		if hintFont == nil {
+			hintFont = statusFont
+		}
+		hint := "B / Esc cancels"
+		hw, _, _ := hintFont.SizeUTF8(hint)
+		renderText(renderer, config, hintFont, hint, sdl.Color{R: 150, G: 162, B: 184, A: 255},
+			cardX+(cardW-int32(hw))/2, cardY+cardH-30)
+	}
 
 	sloganFont, _ := getCachedFont(config, "small")
 	if sloganFont == nil {

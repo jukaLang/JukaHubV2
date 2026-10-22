@@ -63,6 +63,12 @@ func fetchYouTubeShorts(config *Config, resultVar string, vars map[string]interf
 	executeYouTubeSearch(config, cmd, resultVar, vars)
 }
 
+// prefetchShortsFocused warms the highlighted short and the ones after it, so
+// Play does not wait for yt-dlp, matching the results grid.
+func prefetchShortsFocused(config *Config, videos []VideoInfo) {
+	prefetchVideos(config, videos, currentShortIdx)
+}
+
 func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	// Read from the config variable (published by executeYouTubeSearch).
 	shortsMutex.Lock()
@@ -162,8 +168,19 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 
 			drawDurationBadge(r, config, fontSmall, vid.Duration, xPos+thumbWidth-58, yPos+thumbHeight-23, 52, 18)
-			title := ellipsize(font, vid.Title, cellWidth-16)
-			renderText(r, config, font, title, ColorTextPrimary(), cellX+8, yPos+thumbHeight+12)
+			// Same preload marker as the results list: bolt plus yellow title
+			// once the stream is resolved, so Play starts immediately.
+			titleX, titleW := cellX+8, cellWidth-16
+			titleColor := ColorTextPrimary()
+			if videoStreamPreloaded(vid.GetURL()) {
+				const boltSize = 12
+				titleColor = ColorWarning
+				drawPreloadBolt(r, titleX, yPos+thumbHeight+14, boltSize, ColorWarning)
+				titleX += boltSize + 5
+				titleW -= boltSize + 5
+			}
+			title := ellipsize(font, vid.Title, titleW)
+			renderText(r, config, font, title, titleColor, titleX, yPos+thumbHeight+12)
 		}
 	})
 }
@@ -188,6 +205,7 @@ func handleShortsInput(e *sdl.KeyboardEvent, config *Config) {
 				currentShortIdx = next
 			}
 		}
+		prefetchShortsFocused(config, videos)
 	case sdl.K_DOWN:
 		if currentShortIdx < 0 && len(videos) > 0 {
 			currentShortIdx = 0
@@ -196,14 +214,17 @@ func handleShortsInput(e *sdl.KeyboardEvent, config *Config) {
 				currentShortIdx = next
 			}
 		}
+		prefetchShortsFocused(config, videos)
 	case sdl.K_LEFT:
 		if currentShortIdx > 0 {
 			currentShortIdx--
 		}
+		prefetchShortsFocused(config, videos)
 	case sdl.K_RIGHT:
 		if currentShortIdx < len(videos)-1 {
 			currentShortIdx++
 		}
+		prefetchShortsFocused(config, videos)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		if currentShortIdx >= 0 && currentShortIdx < len(videos) {
 			playVideoInfo(config, videos[currentShortIdx])
