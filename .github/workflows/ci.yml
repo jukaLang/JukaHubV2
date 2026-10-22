@@ -45,11 +45,10 @@ jobs:
 
   player:
     name: Player vet and tests
-    runs-on: ubuntu-latest
+    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
+    # ubuntu-latest label is moving to Ubuntu 26.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
-    # Not blocking yet: this job has not run on a GitHub runner. Once it is
-    # green on main, delete the next line so failures block merges.
-    continue-on-error: true
     defaults:
       run:
         working-directory: player
