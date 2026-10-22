@@ -100,7 +100,7 @@ writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
 | Viewport locked pinch-zoom (`user-scalable=no`) | removed |
 | Theme preference read `localStorage` unguarded and threw when storage was blocked | wrapped in try/catch |
 | Eight inline `onclick`/`onchange` attributes blocked any future strict CSP | moved to `data-click` / `data-change` bindings |
-| Nothing ran the player's ~150 test files in CI | `.github/workflows/ci.yml` (player job is non-blocking until it has been green once) |
+| Nothing ran the player's ~150 test files in CI | `.github/workflows/ci.yml` (blocking; its first run found two tests that only passed on a Windows desktop, now fixed) |
 | `docker-image.yml` built with Go 1.23 while `go.mod` needs 1.25 | `go-version-file: player/go.mod` |
 
 Also added: `robots.txt`, `sitemap.xml`, Netlify `_headers` (nosniff, referrer and permissions policy), Dependabot for Actions, Go modules and the test package.

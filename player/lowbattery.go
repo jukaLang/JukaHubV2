@@ -204,7 +204,13 @@ func retroArchCmdline(cmdline []byte) bool {
 	if i := strings.IndexByte(argv0, 0); i >= 0 {
 		argv0 = argv0[:i]
 	}
-	name := strings.ToLower(filepath.Base(strings.TrimSpace(argv0)))
+	// Split on both separators by hand: filepath.Base only knows the host OS's
+	// separator, so a Windows path would keep its directory on Linux.
+	name := strings.TrimSpace(argv0)
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	name = strings.ToLower(name)
 	return name == "retroarch" || name == "retroarch.exe"
 }
 
