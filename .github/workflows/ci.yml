@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
       - name: Syntax check builder scripts
@@ -52,8 +52,8 @@ jobs:
       run:
         working-directory: tests/e2e
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -68,7 +68,7 @@ jobs:
         run: npx playwright test
       - name: Upload the failure trace
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: |
@@ -86,8 +86,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -110,8 +110,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -162,8 +162,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -191,8 +191,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -216,8 +216,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum

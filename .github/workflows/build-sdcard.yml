@@ -40,10 +40,10 @@ jobs:
       image: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Cache Go modules and build cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             /home/toolchain/go/pkg/mod
@@ -64,7 +64,7 @@ jobs:
           ./package-sdcard.sh
 
       - name: Upload SD card package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: JukaHub-SDCARD
           if-no-files-found: error
