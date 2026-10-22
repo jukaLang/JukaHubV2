@@ -56,7 +56,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: create-tag
     container:
-      image: anibaldeboni/trimui-smart-pro-toolchain:latest
+      # Pinned by digest: the image has one tag (latest), last pushed long ago, and a
+      # silent re-push would change every build. Dependabot does not bump this.
+      image: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
     env: 
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}

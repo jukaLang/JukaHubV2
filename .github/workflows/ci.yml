@@ -12,10 +12,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to the same branch makes the older run pointless.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   web:
     name: Web builder checks
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -41,6 +47,7 @@ jobs:
   web-e2e:
     name: Web builder smoke test (Chromium)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: tests/e2e
@@ -72,6 +79,7 @@ jobs:
   player-core:
     name: Player helpers (no SDL)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # These packages do not import SDL, so they build and test with cgo off and
     # are the blocking half of the player checks.
     defaults:
@@ -94,10 +102,10 @@ jobs:
 
   player:
     name: Player vet and tests
-    runs-on: ubuntu-latest
-    # Not blocking yet: this job has not run on a GitHub runner. Once it is
-    # green on main, delete the next line so failures block merges.
-    continue-on-error: true
+    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
+    # ubuntu-latest label is moving to Ubuntu 26.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: player
@@ -118,11 +126,33 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
-        run: go test ./... -count=1 -timeout 10m
+        run: |
+          set +e
+          go test ./... -count=1 -timeout 10m 2>&1 | tee "$RUNNER_TEMP/gotest.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Put the failures where a reviewer looks: the step summary and
+            # annotations on the run, not 25 s of scrollback.
+            {
+              echo "### go test failed"
+              echo '```'
+              grep -E '^\s*(--- FAIL|FAIL|panic:)' "$RUNNER_TEMP/gotest.log" | head -60
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            excerpt=$(grep -E -A2 '^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/gotest.log" | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=go test failed::${excerpt}"
+            grep -E '^\s*--- FAIL' "$RUNNER_TEMP/gotest.log" | head -9 | while IFS= read -r line; do
+              echo "::error title=Failing test::${line}"
+            done
+          fi
+          exit "$status"
 
   player-boot-bench:
     name: Player cold-boot budget
-    runs-on: ubuntu-latest
+    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
+    # ubuntu-latest label is moving to Ubuntu 26.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     # Blocking on purpose: a regression that makes the app slower than five
     # seconds to first frame should not reach main, even while the full player
     # suite is still advisory. The desktop runner limit is deliberately looser
@@ -149,7 +179,10 @@ jobs:
 
   player-staticcheck:
     name: Player staticcheck (non-blocking)
-    runs-on: ubuntu-latest
+    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
+    # ubuntu-latest label is moving to Ubuntu 26.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     # Advisory until the existing findings are triaged. Tracked in
     # docs/IMPROVEMENTS.md: the remaining reports are deliberate (the PS4
     # protocol needs CFB) or cosmetic (ST1005 error phrasing).
@@ -174,7 +207,10 @@ jobs:
 
   player-race:
     name: Player race detector (non-blocking)
-    runs-on: ubuntu-latest
+    # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
+    # ubuntu-latest label is moving to Ubuntu 26.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     continue-on-error: true
     defaults:
       run:
