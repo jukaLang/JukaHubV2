@@ -143,3 +143,54 @@ test('the editor produces a JSON-serializable config with scenes', () => {
   const round = JSON.parse(JSON.stringify(config));
   assert.ok(round.scenes && typeof round.scenes === 'object');
 });
+
+test('clicking a Dynamic List element previews its items instead of throwing', () => {
+  const { window } = dom;
+  const el = window.document.createElement('div');
+  el.className = 'element';
+  el.setAttribute('data-type', 'dynamiclist');
+  el.setAttribute('data-command', '/bin/ls');
+  el.setAttribute('data-variable', 'picked');
+  window.document.body.appendChild(el);
+  window.setupDynamicListExecution(el);
+
+  const errorsBefore = pageErrors.length;
+  el.click();
+
+  // The handler used to read an `el` that was not in scope: a ReferenceError on
+  // every click, reported by jsdom as an uncaught page error.
+  assert.equal(pageErrors.length, errorsBefore, pageErrors.slice(errorsBefore).map(e => String(e.message)).join('; '));
+  const select = el.querySelector('select.dynamic-list-select');
+  assert.ok(select, 'a preview <select> replaces the element content');
+  assert.equal(select.options.length, 2);
+  el.remove();
+});
+
+test('the remove button of a Dynamic List does not trigger the preview', () => {
+  const { window } = dom;
+  const el = window.document.createElement('div');
+  el.setAttribute('data-command', '/bin/ls');
+  el.setAttribute('data-variable', 'picked');
+  const remove = window.document.createElement('span');
+  remove.className = 'remove-button';
+  el.appendChild(remove);
+  window.document.body.appendChild(el);
+  window.setupDynamicListExecution(el);
+
+  remove.click();
+  assert.equal(el.querySelector('select'), null);
+  el.remove();
+});
+
+test('welcome cards use valid markup: no headings or paragraphs inside buttons', () => {
+  const bad = [...dom.window.document.querySelectorAll('button h1, button h2, button h3, button h4, button h5, button h6, button p, button div')]
+    .map(el => el.outerHTML.slice(0, 60));
+  assert.deepEqual(bad, []);
+  assert.equal(dom.window.document.querySelectorAll('.welcome-card .welcome-card-title').length, 3);
+});
+
+test('the AI key field asks browsers not to autofill or autocorrect it', () => {
+  const input = dom.window.document.getElementById('aiApiKey');
+  assert.equal(input.getAttribute('autocomplete'), 'off');
+  assert.equal(input.getAttribute('spellcheck'), 'false');
+});

@@ -908,64 +908,6 @@ function snapshotWorkspace() {
   };
 }
 
-function restoreWorkspaceFromSnapshot(data) {
-  if (!data) return;
-  scenes = {};
-  variables = {};
-  variablesList.innerHTML = '';
-  canvas.innerHTML = '';
-
-  for (const [name, htmlArr] of Object.entries(data.scenes || {})) {
-    scenes[name] = htmlArr.map(html => {
-      const tmp = document.createElement('div');
-      tmp.innerHTML = html;
-      return tmp.firstChild;
-    });
-  }
-
-  currentScene = data.currentScene || Object.keys(scenes)[0] || 'Scene 1';
-  canvasWidth = data.canvasWidth || 1280;
-  canvasHeight = data.canvasHeight || 720;
-  backgroundPath = data.backgroundPath || '';
-
-  document.getElementById('title').value = data.title || '';
-  document.getElementById('author').value = data.author || '';
-  document.getElementById('description').value = data.description || '';
-  if (data.titleSize != null) titleSizeInput.value = data.titleSize;
-  if (data.bigSize != null) bigSizeInput.value = data.bigSize;
-  if (data.mediumSize != null) mediumSizeInput.value = data.mediumSize;
-  if (data.smallSize != null) smallSizeInput.value = data.smallSize;
-
-  if (backgroundPath) {
-    canvas.style.backgroundImage = `url(${backgroundPath})`;
-    canvas.style.backgroundSize = 'cover';
-  }
-
-  const sceneSelectorEl = document.getElementById('sceneSelector');
-  sceneSelectorEl.innerHTML = '';
-  for (const name of Object.keys(scenes)) {
-    const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name;
-    sceneSelectorEl.appendChild(option);
-  }
-  sceneSelectorEl.value = data.sceneSelectorValue || currentScene;
-
-  updateCanvasSize();
-  loadScene(currentScene);
-
-  for (const [key, val] of Object.entries(variables)) {
-    const variableItem = createVariableItem(key, val);
-    variablesList.appendChild(variableItem);
-  }
-
-  updateSceneBadge();
-  updateSceneChangeSelector();
-  updateVariableChangeSelector();
-  updateAllMenuSceneButtons();
-  updateAllStoredMenus();
-}
-
 // The chatbox and its launcher float over the workspace, so they have to clear
 // the footer band that is pinned to the bottom of the 100dvh shell. How tall
 // that band is depends on how the help links wrap, so measure it.
@@ -4409,14 +4351,6 @@ function deleteScene() {
   }
 }
 
-// Load initial config
-function loadInitialConfig() {
-  // This would typically fetch from a server
-  console.log('Loading initial configuration...');
-}
-
-
-
 function loadDefaultConfig() {
   fetch('player/jukaconfig.json')
     .then(response => {
@@ -4451,7 +4385,8 @@ function loadJukaApp(input) {
   syncCanvasSizeControls();
 
   // Clear existing elements
-  variableChangeSelector.innerHTML = '';
+  const variableChangeSelectorEl = document.getElementById('variableChangeSelector');
+  if (variableChangeSelectorEl) variableChangeSelectorEl.innerHTML = '';
   canvas.innerHTML = '';
 
   // Load app info
@@ -4828,56 +4763,7 @@ function setupMobileDoubleTap() {
   }
 }
 
-function setupDynamicListProperties(el) {
-  // Remove any existing dynamic list properties
-  document.querySelectorAll('.dynamic-list-properties').forEach(item => item.remove());
-
-  // Create container for dynamic list properties
-  const container = document.createElement('div');
-  container.className = 'dynamic-list-properties';
-
-  // Command Path input
-  const commandGroup = document.createElement('div');
-  commandGroup.className = 'control-group';
-  commandGroup.innerHTML = `
-    <label for="dynamicCommand"><i class="fas fa-terminal"></i> Command Path:</label>
-    <input type="text" id="dynamicCommand" class="dynamic-command-input" 
-           placeholder="Path to executable" value="${escapeHtml(el.getAttribute('data-command') || '')}">
-  `;
-  container.appendChild(commandGroup);
-
-  // Variable input
-  const variableGroup = document.createElement('div');
-  variableGroup.className = 'control-group';
-  variableGroup.innerHTML = `
-    <label for="dynamicVariable"><i class="fas fa-code"></i> Variable:</label>
-    <input type="text" id="dynamicVariable" class="dynamic-variable-input" 
-           placeholder="Variable to store selection" value="${escapeHtml(el.getAttribute('data-variable') || '')}">
-  `;
-  container.appendChild(variableGroup);
-
-  // Add event listeners
-  const commandInput = container.querySelector('#dynamicCommand');
-  const variableInput = container.querySelector('#dynamicVariable');
-
-  commandInput.onchange = () => {
-    el.setAttribute('data-command', commandInput.value);
-  };
-
-  variableInput.onchange = () => {
-    el.setAttribute('data-variable', variableInput.value);
-  };
-
-  // Add to properties panel - insert after the style controls
-  const styleControls = document.querySelector('.style-controls');
-  if (styleControls) {
-    styleControls.parentNode.insertBefore(container, styleControls.nextSibling);
-  } else {
-    elementProperties.appendChild(container);
-  }
-}
-
-function executeDynamicListCommand(command, variable) {
+function executeDynamicListCommand(el, command, variable) {
   // This would be implemented in the Juka runtime
   console.log(`Executing command: ${command}, storing in: ${variable}`);
   // Simulate command execution
@@ -4948,14 +4834,16 @@ function setupMobileCanvasClick() {
 
 function setupDynamicListExecution(el) {
   el.addEventListener('click', (e) => {
-    if (e.target !== el && !e.target.classList.contains('remove-button')) return;
+    // Only a click on the element itself previews the list; the remove button
+    // deletes the element and must not also swap its content.
+    if (e.target !== el) return;
 
     const command = el.getAttribute('data-command');
     const variable = el.getAttribute('data-variable');
 
     if (command && variable) {
       // Execute command and store result
-      executeDynamicListCommand(command, variable);
+      executeDynamicListCommand(el, command, variable);
     }
   });
 }
