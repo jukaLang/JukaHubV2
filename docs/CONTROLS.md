@@ -352,6 +352,23 @@ highlighted. Long files — audiobooks and podcasts of eight minutes or more —
 resume where you stopped, and the listening speed is remembered between
 launches.
 
+## Wi-Fi picker
+
+Open it from **Quick Settings → Wi-Fi Networks**, **Hardware → Wi-Fi**, or a
+`wifi_open` button. The radio switch itself stays in Quick Settings.
+
+| Input | Action |
+|-------|--------|
+| Up / Down | Move through networks |
+| A | Join the highlighted network (a saved one reconnects without a password) |
+| X / `d` | Disconnect, keeping the saved network |
+| Y / `r` | Rescan |
+| SELECT / `f` | Forget the saved network — press twice to confirm |
+| B / Esc | Close the picker |
+
+A new secured network opens the on-screen keyboard for its password. The field
+is masked, and **A** on the keyboard's key submits; closing the keyboard cancels.
+
 ## Power tools
 
 Open **Tools → Power tools** for the developer and power-user panel. The

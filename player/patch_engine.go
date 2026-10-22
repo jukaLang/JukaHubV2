@@ -697,13 +697,172 @@ func helperToolEnv(toolPath string, extra ...string) []string {
 		env = append(env, kv)
 	}
 	env = append(env, extra...)
-	if runtime.GOOS != "windows" && toolPath != "" {
-		tmp := filepath.Join(filepath.Dir(toolPath), ".tmp")
-		if err := os.MkdirAll(tmp, 0o755); err == nil {
-			env = append(env, "TMPDIR="+tmp)
-		}
+	if tmp := helperTempDir(toolPath); tmp != "" {
+		env = append(env, "TMPDIR="+tmp)
 	}
 	return env
+}
+
+// minHelperUnpackBytes is roughly what a PyInstaller one-file helper needs
+// while it unpacks itself. A folder with less room is only used when nothing
+// better exists, and is logged so the failure can be understood afterwards.
+const minHelperUnpackBytes = 160 << 20
+
+// helperTempDir picks the directory a PyInstaller one-file helper can unpack
+// into. Every candidate is created, probed with a real write and has
+// stale unpack directories cleared first: a folder that merely exists can
+// still be read-only (the card remounts read-only after a filesystem error) or
+// full, and both failures surface much later as a cryptic decompression error.
+// An empty result means "keep the inherited temp directory".
+func helperTempDir(toolPath string) string {
+	if runtime.GOOS == "windows" {
+		// Windows one-file builds unpack into %TEMP%, which is already correct.
+		return ""
+	}
+	var candidates []string
+	if toolPath != "" {
+		candidates = append(candidates, filepath.Join(filepath.Dir(toolPath), ".tmp"))
+	}
+	if tmp := os.TempDir(); tmp != "" {
+		candidates = append(candidates, filepath.Join(tmp, "jukahub-tmp"))
+	}
+	return pickHelperTempDir(candidates)
+}
+
+// pickHelperTempDir chooses the first candidate that is writable and has room
+// for an unpack, falling back to whichever writable candidate has the most free
+// space. It is split out from helperTempDir so the selection can be tested
+// without depending on the host platform's temp layout.
+func pickHelperTempDir(candidates []string) string {
+	best := ""
+	var bestFree int64 = -1
+	for _, dir := range candidates {
+		if err := os.MkdirAll(dir, PermDir); err != nil {
+			logPatch("[TOOLS] temp dir %s is unusable: %v", dir, err)
+			continue
+		}
+		purgeStaleHelperDirs(dir)
+		if err := tempDirWritable(dir); err != nil {
+			logPatch("[TOOLS] temp dir %s is not writable: %v", dir, err)
+			continue
+		}
+		free, err := freeBytes(dir)
+		if err != nil {
+			// Writable but unmeasured: good enough, and better than giving up.
+			return dir
+		}
+		if free >= minHelperUnpackBytes {
+			logPatch("[TOOLS] helper tools unpack into %s (%s free)", dir, humanBytes(free))
+			return dir
+		}
+		if free > bestFree {
+			best, bestFree = dir, free
+		}
+	}
+	if best != "" {
+		logPatch("[TOOLS] helper temp %s has only %s free; unpacking may fail", best, humanBytes(bestFree))
+	}
+	return best
+}
+
+// purgeStaleHelperDirs deletes the _MEIxxxxxx directories a killed or crashed
+// PyInstaller one-file run leaves behind. Each one is tens of megabytes, so on
+// a handheld they are what fills the card and makes the next run fail to
+// unpack. A directory whose owning process is still running is left alone: a
+// long download keeps its unpacked files for the whole run.
+func purgeStaleHelperDirs(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-30 * time.Minute)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !entry.IsDir() || !strings.HasPrefix(name, "_MEI") {
+			continue
+		}
+		if pid, ok := helperUnpackPID(name); ok {
+			if processAlive(pid) {
+				continue
+			}
+		} else if info, err := entry.Info(); err != nil || info.ModTime().After(cutoff) {
+			// Not a PID-named directory: fall back to age so a run that is
+			// currently unpacking is not deleted from under itself.
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			logPatch("[TOOLS] could not remove stale unpack dir %s: %v", name, err)
+			continue
+		}
+		logPatch("[TOOLS] removed stale unpack dir %s", name)
+	}
+}
+
+// helperUnpackPID extracts the owning process ID from a PyInstaller one-file
+// unpack directory name (_MEI<pid>).
+func helperUnpackPID(name string) (int, bool) {
+	digits, ok := strings.CutPrefix(name, "_MEI")
+	if !ok || digits == "" {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(digits)
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	return pid, true
+}
+
+// tempDirWritable proves dir accepts files by writing one, which a read-only
+// mount or a full card refuses even though stat() succeeds.
+func tempDirWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".probe-*")
+	if err != nil {
+		return err
+	}
+	name := f.Name()
+	_, writeErr := f.WriteString("ok")
+	closeErr := f.Close()
+	_ = os.Remove(name)
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
+}
+
+// helperUnpackFailure reports whether a helper died before it could run. These
+// errors come from the PyInstaller bootloader unpacking itself, so they say
+// nothing about the site, the query or the network.
+func helperUnpackFailure(stderr string) bool {
+	return strings.Contains(stderr, "Failed to extract") ||
+		strings.Contains(stderr, "decompression resulted in return code") ||
+		strings.Contains(stderr, "[PYI-")
+}
+
+// ytDlpFailureReason turns a failed yt-dlp run into one short line for the UI.
+// The results area used to show the raw bootloader stderr, and the toast
+// blamed the network, which sent people chasing Wi-Fi when the real cause was
+// a full SD card or a leftover unpack directory.
+func ytDlpFailureReason(stderr string, err error, toolPath string) string {
+	if helperUnpackFailure(stderr) {
+		if dir := helperTempDir(toolPath); dir != "" {
+			if free, freeErr := freeBytes(dir); freeErr == nil {
+				if free < minHelperUnpackBytes {
+					return fmt.Sprintf("yt-dlp could not unpack itself (%s free) — free space on the SD card, then retry", humanBytes(free))
+				}
+				// There is room, so the unpack failed for another reason (a stale
+				// or read-only mount, or a half-written tool binary).
+				return "yt-dlp could not unpack itself — retry; if it keeps failing, restart JukaHub"
+			}
+		}
+		return "yt-dlp could not unpack itself — free space on the SD card, then retry"
+	}
+	if line := firstLine(strings.TrimSpace(stderr)); line != "" {
+		return line
+	}
+	if err != nil {
+		return err.Error()
+	}
+	return "yt-dlp failed"
 }
 
 // retryHelperToolInstall starts a fresh background install after a failure.

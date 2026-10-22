@@ -2,36 +2,21 @@ package main
 
 // ps4tile.go — the PS4 Remote Play launcher in the home header.
 //
-// It is the stable-build twin of ps5tile.go: it sits immediately left of the
-// PS5 tile (and therefore two slots left of the Phone Companion QR), in the
-// empty band above the action cards. It is part of the D-pad focus graph
-// (HomeFocusPS4): Up from the card it sits over lands on the PS5 tile, Left
-// reaches this one, and A installs or plays. While the tile is not drawn its
-// focus entry stays disabled, so the D-pad can never stall on an invisible
-// button.
+// It is the PS4 twin of ps5tile.go: it sits immediately left of the PS5 tile
+// (and therefore two slots left of the Phone Companion QR), in the same band
+// above the action cards, and is part of the D-pad focus graph (HomeFocusPS4).
+// Up from the card it sits over lands on the PS5 tile, Left reaches this one.
 //
-// One press does the whole job: launch the installed PS4 build, otherwise
-// download the latest release and launch it the moment it is ready. The launch
-// itself runs on the event thread, never on the download goroutine, because it
-// hides the main window and runs the child process.
+// One press opens JukaHub's own Remote Play client filtered to PS4: a paired
+// console starts straight away, an unpaired one gets the PIN prompt.
 
 import (
-	"sync/atomic"
-
 	"github.com/veandco/go-sdl2/sdl"
 )
 
 // ps4TileRect is this frame's launcher rectangle; it is cleared when the tile
 // is not drawn (small screens), so a stale rect cannot swallow clicks.
 var ps4TileRect sdl.Rect
-
-// chiakiPS4LaunchAfterInstall remembers that the press came from "download and
-// play", not from the installer panel.
-var chiakiPS4LaunchAfterInstall atomic.Bool
-
-// ps4LaunchPending is set by the install goroutine and consumed by the frame
-// loop on the event thread.
-var ps4LaunchPending atomic.Bool
 
 type ps4TileState int
 
@@ -43,19 +28,22 @@ const (
 
 // ps4TileCurrentState reports what a press would do right now.
 func ps4TileCurrentState() ps4TileState {
-	if chiakiInstalling() {
+	if !psRemoteSupported() {
 		return ps4TileBusy
 	}
-	if chiakiInstalled() {
-		return ps4TileLaunch
+	for _, c := range loadPSHosts().Hosts {
+		if c.PS5 || c.Target >= psTargetPS5 {
+			continue
+		}
+		if c.paired() {
+			return ps4TileLaunch
+		}
 	}
 	return ps4TileInstall
 }
 
 // ps4TileRectFor places the launcher in the slot left of the PS5 launcher. The
-// second result is false when the slot would start too far left, where it would
-// collide with the brand text or the greeting column; the tile is then simply
-// not drawn and its focus entry is disabled.
+// second result is false when there is no room.
 func ps4TileRectFor(neighbor sdl.Rect, gap, minX int32) (sdl.Rect, bool) {
 	if neighbor.W <= 0 || neighbor.H <= 0 {
 		return sdl.Rect{}, false
@@ -64,7 +52,6 @@ func ps4TileRectFor(neighbor sdl.Rect, gap, minX int32) (sdl.Rect, bool) {
 	if x < minX {
 		return sdl.Rect{}, false
 	}
-	// Never overlap the neighbour, even if a caller passes a negative gap.
 	if x+neighbor.W > neighbor.X {
 		return sdl.Rect{}, false
 	}
@@ -89,19 +76,19 @@ func renderPS4HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 	hit := rect // the press dip moves the paint, never the hit box
 	state := ps4TileCurrentState()
 	// Deliberately darker than the PS5 tile: two identical blue squares in one
-	// header would be unreadable at arm's length.
-	fill := sdl.Color{R: 0, G: 55, B: 145, A: 255}
+	// header read as a mistake.
+	fill := sdl.Color{R: 18, G: 62, B: 118, A: 255}
 	caption := "PLAY"
 	switch state {
 	case ps4TileBusy:
-		fill = sdl.Color{R: 34, G: 48, B: 71, A: 255}
-		caption = "WAIT"
+		fill = sdl.Color{R: 38, G: 50, B: 66, A: 255}
+		caption = "N/A"
 	case ps4TileInstall:
-		caption = "GET"
+		caption = "PAIR"
 	}
-	border := WithAlpha(sdl.Color{R: 150, G: 190, B: 255, A: 255}, 210)
+	border := WithAlpha(sdl.Color{R: 130, G: 180, B: 240, A: 255}, 200)
 	if v.Focused {
-		fill = sdl.Color{R: 12, G: 79, B: 168, A: 255}
+		fill = sdl.Color{R: 32, G: 96, B: 176, A: 255}
 		border = sdl.Color{R: 235, G: 245, B: 255, A: 255}
 	}
 
@@ -110,7 +97,7 @@ func renderPS4HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 		if v.Depth > 0 && v.Depth < 1 {
 			draw.Y += int32(2 * v.Depth)
 		}
-		fill = sdl.Color{R: 20, G: 96, B: 186, A: 255}
+		fill = sdl.Color{R: 36, G: 104, B: 186, A: 255}
 		border = ColorAccent
 	}
 
@@ -155,47 +142,12 @@ func renderPS4HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 	return hit
 }
 
-// ps4TileActivate runs the single press action: play, or fetch and play.
+// ps4TileActivate opens the client on a PS4.
 func ps4TileActivate() {
-	switch ps4TileCurrentState() {
-	case ps4TileBusy:
-		ShowToast("The Chiaki-ng installer is already running", ToastKindInfo)
-		return
-	case ps4TileLaunch:
-		PlayActivateSound()
-		launchChiaki()
-		return
-	}
-	chiakiPS4LaunchAfterInstall.Store(true)
-	if err := startChiakiInstall(); err != nil {
-		// Nothing was queued, so do not leave a launch armed for a later,
-		// unrelated install.
-		chiakiPS4LaunchAfterInstall.Store(false)
-		ShowToast(err.Error(), ToastKindWarning)
+	if ps4TileCurrentState() == ps4TileBusy {
+		ShowToast("Remote Play needs the TrimUI Linux build", ToastKindWarning)
 		return
 	}
 	PlayActivateSound()
-	ShowToast("Downloading Chiaki-ng — it will start when ready", ToastKindInfo)
-}
-
-// chiakiPS4InstallSucceeded hands a finished install over to the event thread
-// when the press came from the launcher tile.
-func chiakiPS4InstallSucceeded() {
-	if chiakiPS4LaunchAfterInstall.Swap(false) {
-		ps4LaunchPending.Store(true)
-	}
-}
-
-// ps4PollPendingLaunch is called once per frame on the event thread. It clears
-// the flag even when the build vanished, so a launch can never be retried
-// forever.
-func ps4PollPendingLaunch() {
-	if !ps4LaunchPending.Swap(false) {
-		return
-	}
-	if !chiakiInstalled() {
-		ShowToast("Chiaki-ng is not installed", ToastKindWarning)
-		return
-	}
-	launchChiaki()
+	psOpenPanelFor("", psTargetPS4FW10)
 }

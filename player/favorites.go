@@ -415,7 +415,7 @@ func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
 			lw, _, _ := font.SizeUTF8(label)
 			lx := tx + (tabWidth-int32(lw))/2
 			ly := tabY + (tabHeight-int32(14))/2
-			tc := ColorTextPrimary()
+			var tc sdl.Color
 			if active {
 				tc = tabColors[i]
 			} else {

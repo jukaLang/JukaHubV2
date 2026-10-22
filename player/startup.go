@@ -17,9 +17,11 @@ package main
 // splash, not less).
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -153,4 +155,168 @@ func startupBudgetNote(elapsed time.Duration) string {
 // keeping Info for the summary.
 func startupMarkBoot() {
 	startupMarkNow("pre-sdl")
+}
+
+// ── Warm starts ───────────────────────────────────────────────────────────
+//
+// A splash is a greeting for a fresh launch. Relaunching the app within a few
+// minutes — after changing a setting, or when an update restarts it — has the
+// font files and the card's directory entries still cached by the OS, so the
+// same animation costs most of the remaining budget and teaches nothing.
+//
+// "Warm" is a proxy, not a promise: the only portable signal is when the last
+// successful first frame happened. A restart within the window skips the
+// splash; anything older gets the normal cold boot. On the device this is the
+// difference between ~1.2 s and ~0.4 s for the common relaunch.
+
+const (
+	startupWarmWindow   = 10 * time.Minute
+	startupStateVersion = 1
+	startupStateEnv     = "JUKAHUB_STARTUP_STATE"
+)
+
+// startupState is the tiny marker written after a successful first frame.
+type startupState struct {
+	Version    int       `json:"version"`
+	LastLaunch time.Time `json:"lastLaunch"`
+	TotalMS    int64     `json:"totalMs"`
+	TargetMS   int64     `json:"targetMs"`
+}
+
+// Overridden by tests and by JUKAHUB_STARTUP_STATE, which lets the bench run
+// with an isolated marker instead of the user's real one.
+var startupStatePathOverride string
+
+func startupStatePath() string {
+	if raw := strings.TrimSpace(os.Getenv(startupStateEnv)); raw != "" {
+		return raw
+	}
+	if startupStatePathOverride != "" {
+		return startupStatePathOverride
+	}
+	if dir, err := P().DataDir(); err == nil && dir != "" {
+		return filepath.Join(dir, "startup-state.json")
+	}
+	return ""
+}
+
+func loadStartupState(path string) (startupState, bool) {
+	if strings.TrimSpace(path) == "" {
+		return startupState{}, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return startupState{}, false
+	}
+	var state startupState
+	if err := json.Unmarshal(raw, &state); err != nil || state.Version != startupStateVersion {
+		return startupState{}, false
+	}
+	return state, true
+}
+
+func saveStartupState(path string, state startupState) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// warmStartWithin reports whether lastLaunch is recent enough to call this
+// launch warm. Future timestamps are rejected: a clock set back must not keep
+// the splash away forever.
+func warmStartWithin(lastLaunch, now time.Time) bool {
+	if lastLaunch.IsZero() {
+		return false
+	}
+	age := now.Sub(lastLaunch)
+	return age >= 0 && age <= startupWarmWindow
+}
+
+// startupWarmStart reports whether the splash should be skipped. The bench
+// mode forces the cold path so CI measures the same boot a first-time user
+// gets; otherwise every run after the first would look artificially fast.
+func startupWarmStart(now time.Time) bool {
+	// The bench measures the cold path by default. JUKAHUB_BENCH_WARM=1 lets a
+	// device run exercise the warm path with the same exit-after-first-frame
+	// harness instead of needing a second script.
+	if startupBenchEnabled() && !startupBenchWarm() {
+		return false
+	}
+	state, ok := loadStartupState(startupStatePath())
+	return ok && warmStartWithin(state.LastLaunch, now)
+}
+
+func startupBenchWarm() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("JUKAHUB_BENCH_WARM")))
+	return v == "1" || v == "true" || v == "yes"
+}
+
+// startupRecordFirstFrame writes the marker used by the next launch. It is
+// best-effort: a read-only card must never turn a completed boot into a crash.
+func startupRecordFirstFrame(total time.Duration) {
+	if startupBenchEnabled() {
+		return
+	}
+	_ = saveStartupState(startupStatePath(), startupState{
+		Version:    startupStateVersion,
+		LastLaunch: time.Now(),
+		TotalMS:    total.Milliseconds(),
+		TargetMS:   startupTarget().Milliseconds(),
+	})
+}
+
+// ── After the first frame ─────────────────────────────────────────────────
+//
+// Weather, update checks, tool installation, the companion listener and the
+// network monitor all touch the network. None of them are needed to paint the
+// home screen, and starting them beside the first frame competes with cold
+// font rasterisation for the same core. They are queued here and run once the
+// first frame has been presented, so the splash and UI get the CPU first.
+
+type startupTask struct {
+	name string
+	fn   func()
+}
+
+var deferredStartup struct {
+	mu    sync.Mutex
+	tasks []startupTask
+}
+
+func deferStartupTask(name string, fn func()) {
+	if fn == nil {
+		return
+	}
+	deferredStartup.mu.Lock()
+	deferredStartup.tasks = append(deferredStartup.tasks, startupTask{name: name, fn: fn})
+	deferredStartup.mu.Unlock()
+}
+
+// runDeferredStartup drains the queue on the main thread after Present. A task
+// that takes long enough to be interesting is logged, because "boot felt slow"
+// is usually one of these, not the renderer.
+func runDeferredStartup() {
+	deferredStartup.mu.Lock()
+	tasks := deferredStartup.tasks
+	deferredStartup.tasks = nil
+	deferredStartup.mu.Unlock()
+	for _, task := range tasks {
+		started := time.Now()
+		task.fn()
+		if took := time.Since(started); took > 20*time.Millisecond {
+			log.Printf("[startup] %s after first frame took %dms", task.name, took.Milliseconds())
+		}
+	}
 }

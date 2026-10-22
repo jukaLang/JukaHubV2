@@ -86,9 +86,9 @@ test('no inline event-handler attributes remain in the markup', () => {
   assert.deepEqual(offenders, []);
 });
 
-test('external links that open a new tab set rel=noopener', () => {
+test('external links that open a new tab set rel=noopener noreferrer', () => {
   const bad = [...dom.window.document.querySelectorAll('a[target="_blank"]')]
-    .filter(a => !/noopener/.test(a.rel))
+    .filter(a => !/noopener/.test(a.rel) || !/noreferrer/.test(a.rel))
     .map(a => a.href);
   assert.deepEqual(bad, []);
 });

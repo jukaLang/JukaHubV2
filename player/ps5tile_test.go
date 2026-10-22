@@ -1,7 +1,6 @@
 package main
 
 import (
-	"path/filepath"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -13,6 +12,15 @@ import (
 func clearToastAfterTest(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() { currentToast = ToastState{} })
+}
+
+// closePSPanelAfterTest keeps the modal panel from leaking into the next test.
+func closePSPanelAfterTest(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		chiakiPanel = chiakiPanelState{}
+		chiakiRowHits = nil
+	})
 }
 
 func TestPS5TileRectSitsLeftOfQR(t *testing.T) {
@@ -45,76 +53,58 @@ func TestPS5TileRectSitsLeftOfQR(t *testing.T) {
 	}
 }
 
-func TestPS5TileStateFollowsTheInstall(t *testing.T) {
-	prev := ps5LaunchPending.Load()
-	t.Cleanup(func() {
-		setChiakiInstalling(false)
-		ps5LaunchPending.Store(prev)
-	})
-
-	root := withChiakiSDRoot(t)
+func TestPS5TileStateFollowsThePairing(t *testing.T) {
+	if !psRemoteSupported() {
+		t.Skip("the native client runs on the TrimUI Linux build")
+	}
+	useTempPSHosts(t)
 	if got := ps5TileCurrentState(); got != ps5TileInstall {
-		t.Fatalf("state without a build = %v, want install", got)
+		t.Fatalf("state without a paired PS5 = %v, want pair", got)
 	}
 
-	app := filepath.Join(root, "Apps", "Chiaki-PS5")
-	writeChiakiTestFile(t, filepath.Join(app, "launch.sh"), "#!/bin/sh\n")
-	writeChiakiTestFile(t, filepath.Join(app, "app.py"), "print('ps5')\n")
-	if got := ps5TileCurrentState(); got != ps5TileLaunch {
-		t.Fatalf("state with a build = %v, want launch", got)
-	}
-
-	setChiakiInstalling(true)
-	if got := ps5TileCurrentState(); got != ps5TileBusy {
-		t.Fatalf("state while installing = %v, want busy", got)
-	}
-}
-
-// A launcher press that cannot start a download must not leave a launch armed
-// for whatever install happens later.
-func TestPS5TilePressClearsLaunchWhenInstallCannotStart(t *testing.T) {
-	clearToastAfterTest(t)
-	t.Cleanup(func() { chiakiPS5LaunchAfterInstall.Store(false) })
-	// A desktop build has no TrimUI package support, so the install refuses.
-	ps5TileActivate()
-	if chiakiPS5LaunchAfterInstall.Load() {
-		t.Fatal("a refused install left the launch flag set")
-	}
-	if ps5LaunchPending.Load() {
-		t.Fatal("a refused install queued a launch")
-	}
-}
-
-func TestPS5InstallSuccessHandsOverToTheFrameLoop(t *testing.T) {
-	clearToastAfterTest(t)
-	t.Cleanup(func() {
-		chiakiPS5LaunchAfterInstall.Store(false)
-		ps5LaunchPending.Store(false)
+	upsertPSConsole(psConsole{
+		Host:      "192.168.1.50",
+		Name:      "Living Room",
+		Target:    psTargetPS5_1,
+		PS5:       true,
+		RegistKey: "0a1b2c3d",
+		RPKey:     "AAECAwQFBgcICQoLDA0ODw==",
 	})
-
-	// Install triggered from the panel: nothing to launch.
-	chiakiPS5LaunchAfterInstall.Store(false)
-	chiakiPS5InstallSucceeded()
-	if ps5LaunchPending.Load() {
-		t.Fatal("panel install queued a launch")
+	if got := ps5TileCurrentState(); got != ps5TileLaunch {
+		t.Fatalf("state with a paired PS5 = %v, want play", got)
 	}
 
-	// Install triggered from the launcher: hand over once, then forget.
-	chiakiPS5LaunchAfterInstall.Store(true)
-	chiakiPS5InstallSucceeded()
-	if !ps5LaunchPending.Load() {
-		t.Fatal("launcher install did not queue a launch")
+	// A paired PS4 must not turn the PS5 tile into a play button.
+	useTempPSHosts(t)
+	upsertPSConsole(psConsole{
+		Host:      "192.168.1.40",
+		Name:      "Desk",
+		Target:    psTargetPS4FW10,
+		RegistKey: "0a1b2c3d",
+		RPKey:     "AAECAwQFBgcICQoLDA0ODw==",
+	})
+	if got := ps5TileCurrentState(); got != ps5TileInstall {
+		t.Fatalf("a PS4-only pairing changed the PS5 tile to %v", got)
 	}
-	if chiakiPS5LaunchAfterInstall.Load() {
-		t.Fatal("launch flag should be consumed")
-	}
+}
 
-	// The frame loop consumes it exactly once, and clears it when there is
-	// nothing to launch so it cannot loop forever.
-	withChiakiSDRoot(t)
-	ps5PollPendingLaunch()
-	if ps5LaunchPending.Load() {
-		t.Fatal("poll left the pending flag set")
+func TestPS4TileStateFollowsThePairing(t *testing.T) {
+	if !psRemoteSupported() {
+		t.Skip("the native client runs on the TrimUI Linux build")
+	}
+	useTempPSHosts(t)
+	if got := ps4TileCurrentState(); got != ps4TileInstall {
+		t.Fatalf("state without a paired PS4 = %v, want pair", got)
+	}
+	upsertPSConsole(psConsole{
+		Host:      "192.168.1.40",
+		Name:      "Desk",
+		Target:    psTargetPS4FW10,
+		RegistKey: "0a1b2c3d",
+		RPKey:     "AAECAwQFBgcICQoLDA0ODw==",
+	})
+	if got := ps4TileCurrentState(); got != ps4TileLaunch {
+		t.Fatalf("state with a paired PS4 = %v, want play", got)
 	}
 }
 
@@ -125,7 +115,6 @@ func TestHomeHeaderDrawsPS5TileBesideQR(t *testing.T) {
 	snapshotHomeGlobals(t)
 	prevTile := ps5TileRect
 	t.Cleanup(func() { ps5TileRect = prevTile })
-	withChiakiSDRoot(t)
 
 	// A 21x21 module pattern is enough for the header code to have something to
 	// draw; the launcher only needs the QR's rectangle to exist.
@@ -151,10 +140,15 @@ func TestHomeHeaderDrawsPS5TileBesideQR(t *testing.T) {
 		t.Fatalf("launcher %+v is not in the QR's band %+v", ps5TileRect, companionHeaderRect)
 	}
 
-	// The tile body is PlayStation blue; sample above the centred label.
+	// The tile body is PlayStation blue; sample above the centred label. A
+	// host that cannot run the native client shows the disabled fill instead.
+	want := sdl.Color{R: 0, G: 112, B: 209}
+	if !psRemoteSupported() {
+		want = sdl.Color{R: 38, G: 66, B: 102}
+	}
 	probe := frame.at(ps5TileRect.X+ps5TileRect.W/2, ps5TileRect.Y+8)
-	if !nearColor(probe, sdl.Color{R: 0, G: 112, B: 209}, 40) {
-		t.Fatalf("tile pixel %v is not the launcher fill", probe)
+	if !nearColor(probe, want, 40) {
+		t.Fatalf("tile pixel %v is not the launcher fill %v", probe, want)
 	}
 }
 
@@ -164,7 +158,6 @@ func TestPS5TileAppearsInCompactLayout(t *testing.T) {
 	snapshotHomeGlobals(t)
 	prevTile := ps5TileRect
 	t.Cleanup(func() { ps5TileRect = prevTile })
-	withChiakiSDRoot(t)
 
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
@@ -202,13 +195,13 @@ func TestPS5TileAppearsInCompactLayout(t *testing.T) {
 // is consumed by the launcher and never falls through to the cards underneath.
 func TestHomeClickRoutesToPS5Tile(t *testing.T) {
 	clearToastAfterTest(t)
+	closePSPanelAfterTest(t)
 	snapshotHomeGlobals(t)
 	prevTile := ps5TileRect
 	prevLayout := homeLayout
 	t.Cleanup(func() {
 		ps5TileRect = prevTile
 		homeLayout = prevLayout
-		chiakiPS5LaunchAfterInstall.Store(false)
 	})
 
 	// A layout is needed for the click handler to run at all; the tile check
@@ -218,11 +211,6 @@ func TestHomeClickRoutesToPS5Tile(t *testing.T) {
 
 	if !handleHomeMouseClick(950, 100, &Config{}) {
 		t.Fatal("a click on the PS5 tile was not consumed")
-	}
-	// The press tried to install (this test platform cannot), so nothing may be
-	// left queued for launch.
-	if ps5LaunchPending.Load() || chiakiPS5LaunchAfterInstall.Load() {
-		t.Fatal("click left a launch queued")
 	}
 
 	// A click that misses the tile and every card is not consumed.
@@ -241,7 +229,6 @@ func TestHomePS5LauncherLinksTheCardBeneathItOnWideHeader(t *testing.T) {
 	snapshotHomeGlobals(t)
 	prevTile := ps5TileRect
 	t.Cleanup(func() { ps5TileRect = prevTile })
-	withChiakiSDRoot(t)
 
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
@@ -320,14 +307,10 @@ func TestPS5TileHiddenWithoutRoom(t *testing.T) {
 // the device has a D-pad, no touchscreen.
 func TestHomePS5TileIsTheDpadTargetAboveItsCard(t *testing.T) {
 	clearToastAfterTest(t)
+	closePSPanelAfterTest(t)
 	snapshotHomeGlobals(t)
 	prevTile := ps5TileRect
-	t.Cleanup(func() {
-		ps5TileRect = prevTile
-		chiakiPS5LaunchAfterInstall.Store(false)
-		ps5LaunchPending.Store(false)
-	})
-	withChiakiSDRoot(t)
+	t.Cleanup(func() { ps5TileRect = prevTile })
 
 	companion.qr = make([][]bool, 21)
 	for y := range companion.qr {
@@ -377,9 +360,9 @@ func TestHomePS5TileIsTheDpadTargetAboveItsCard(t *testing.T) {
 		t.Fatal("cannot focus the launcher")
 	}
 
-	// A must run the launcher. This host cannot install the TrimUI package, so a
-	// refused install (no queued launch) is the observable, non-crashing proof
-	// that A is wired to the tile.
+	// A must run the launcher. On a host without the native client the press
+	// refuses (no panel), which is the observable, non-crashing proof that A is
+	// wired to the tile.
 	a := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_A}
 	if !handleHomeController(a, &Config{}) {
 		t.Fatal("A was not handled on home")
@@ -387,7 +370,7 @@ func TestHomePS5TileIsTheDpadTargetAboveItsCard(t *testing.T) {
 	if homePressedID != HomeFocusPS5 {
 		t.Fatalf("A on the launcher gave press feedback for %q", homePressedID)
 	}
-	if ps5LaunchPending.Load() || chiakiPS5LaunchAfterInstall.Load() {
-		t.Fatal("a refused install left a launch queued")
+	if !psRemoteSupported() && chiakiPanel.open {
+		t.Fatal("the client opened on a host that cannot run it")
 	}
 }

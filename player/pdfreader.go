@@ -345,7 +345,7 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 
 			// Scroll indicator.
 			if len(page.Text) > 500 {
-				scrollStr := fmt.Sprintf("Scroll: PgUp/PgDn")
+				scrollStr := "Scroll: PgUp/PgDn"
 				sw, _, _ := font.SizeUTF8(scrollStr)
 				renderText(renderer, config, font, scrollStr,
 					sdl.Color{R: 100, G: 110, B: 130, A: 140},

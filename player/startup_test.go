@@ -4,6 +4,8 @@ package main
 // the timing report says.
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +117,138 @@ func TestStartupReportListsPhases(t *testing.T) {
 		if !strings.Contains(report, want) {
 			t.Errorf("report %q is missing %q", report, want)
 		}
+	}
+}
+
+func TestWarmStartWithin(t *testing.T) {
+	now := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	if warmStartWithin(time.Time{}, now) {
+		t.Error("a missing marker counted as a warm start")
+	}
+	if !warmStartWithin(now.Add(-time.Minute), now) {
+		t.Error("a launch one minute ago should be warm")
+	}
+	if warmStartWithin(now.Add(-startupWarmWindow-time.Second), now) {
+		t.Error("a launch outside the window counted as warm")
+	}
+	if warmStartWithin(now.Add(time.Minute), now) {
+		t.Error("a future marker counted as warm; a clock change would hide the splash forever")
+	}
+}
+
+func TestStartupStateRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup-state.json")
+	want := startupState{
+		Version:    startupStateVersion,
+		LastLaunch: time.Now().UTC().Truncate(time.Second),
+		TotalMS:    1120,
+		TargetMS:   2000,
+	}
+	if err := saveStartupState(path, want); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := loadStartupState(path)
+	if !ok {
+		t.Fatal("saved state did not load")
+	}
+	if !got.LastLaunch.Equal(want.LastLaunch) || got.TotalMS != want.TotalMS || got.Version != want.Version {
+		t.Errorf("state = %+v, want %+v", got, want)
+	}
+	if err := os.WriteFile(path, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := loadStartupState(path); ok {
+		t.Error("corrupt state loaded as a warm start")
+	}
+}
+
+func TestStartupWarmStartUsesTheMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup-state.json")
+	t.Setenv(startupStateEnv, path)
+	t.Setenv("JUKAHUB_STARTUP_BENCH", "")
+	t.Setenv("JUKAHUB_BENCH_WARM", "")
+	t.Cleanup(func() { startupStatePathOverride = "" })
+
+	if startupWarmStart(time.Now()) {
+		t.Error("warm start reported without a marker")
+	}
+	if err := saveStartupState(path, startupState{
+		Version:    startupStateVersion,
+		LastLaunch: time.Now().Add(-time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !startupWarmStart(time.Now()) {
+		t.Error("recent marker did not produce a warm start")
+	}
+	if err := saveStartupState(path, startupState{
+		Version:    startupStateVersion,
+		LastLaunch: time.Now().Add(-startupWarmWindow - time.Minute),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if startupWarmStart(time.Now()) {
+		t.Error("old marker still produced a warm start")
+	}
+}
+
+func TestStartupRecordFirstFrameWritesTheMarker(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup-state.json")
+	t.Setenv(startupStateEnv, path)
+	t.Setenv("JUKAHUB_STARTUP_BENCH", "")
+	startupRecordFirstFrame(1234 * time.Millisecond)
+	state, ok := loadStartupState(path)
+	if !ok {
+		t.Fatal("first frame did not write a marker")
+	}
+	if state.TotalMS != 1234 || state.TargetMS != startupTarget().Milliseconds() {
+		t.Errorf("marker = %+v, want total 1234 and the current target", state)
+	}
+
+	// The bench must not leave a marker behind: a CI run would then make the
+	// next sample look warm.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JUKAHUB_STARTUP_BENCH", "1")
+	startupRecordFirstFrame(1234 * time.Millisecond)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Errorf("bench mode wrote a warm-start marker: %v", err)
+	}
+}
+
+func TestStartupBenchForcesColdUnlessAsked(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "startup-state.json")
+	t.Setenv(startupStateEnv, path)
+	if err := saveStartupState(path, startupState{Version: startupStateVersion, LastLaunch: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("JUKAHUB_BENCH_WARM", "")
+	t.Setenv("JUKAHUB_STARTUP_BENCH", "1")
+	if startupWarmStart(time.Now()) {
+		t.Error("the bench skipped the splash without being asked")
+	}
+	t.Setenv("JUKAHUB_BENCH_WARM", "1")
+	if !startupWarmStart(time.Now()) {
+		t.Error("JUKAHUB_BENCH_WARM did not exercise the warm path")
+	}
+}
+
+func TestDeferredStartupRunsInOrderAndOnlyOnce(t *testing.T) {
+	runDeferredStartup() // drop anything a previous test queued
+	t.Cleanup(runDeferredStartup)
+
+	var order []string
+	deferStartupTask("first", func() { order = append(order, "first") })
+	deferStartupTask("second", func() { order = append(order, "second") })
+	deferStartupTask("", nil) // ignored
+	runDeferredStartup()
+	if strings.Join(order, ",") != "first,second" {
+		t.Fatalf("task order = %v, want first,second", order)
+	}
+	runDeferredStartup()
+	if len(order) != 2 {
+		t.Errorf("deferred tasks ran twice: %v", order)
 	}
 }
 

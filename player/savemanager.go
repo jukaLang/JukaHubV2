@@ -155,7 +155,7 @@ func resolveRetroArchSaveDir(value, cfgPath string) string {
 		return ""
 	}
 	if configRelative && cfgPath != "" {
-		return filepath.Clean(filepath.Join(filepath.Dir(cfgPath), strings.TrimLeft(v, `/\\`)))
+		return filepath.Clean(filepath.Join(filepath.Dir(cfgPath), strings.TrimLeft(v, `/\`)))
 	}
 	if strings.HasPrefix(v, "~") {
 		if home, err := os.UserHomeDir(); err == nil && home != "" {

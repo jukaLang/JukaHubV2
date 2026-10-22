@@ -179,9 +179,7 @@ func renderShortcutsOverlay(renderer *sdl.Renderer, config *Config) {
 			drawText(renderer, keyFont, item.keys, colX+6, colY+2, colorNew(180, 180, 200, 255), textAlignLeft)
 			// Description
 			drawText(renderer, descFont, item.desc, colX+150, colY+2, colorNew(200, 200, 215, 255), textAlignLeft)
-			colY += 22
 		}
-		colY += 10
 	}
 
 	// Footer

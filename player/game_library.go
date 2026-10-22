@@ -308,6 +308,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	if !regularFile(launcher) {
 		return fmt.Errorf("launcher is missing: %s", filepath.Base(launcher))
 	}
+	// A RetroArch launcher gets the two cfg switches that make the next boot
+	// continue from the auto state. Standalone emulators are left alone.
+	prepareSavestateResume(launcher)
 	name, args := gameLaunchCommand(launcher, game.Path)
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(launcher)

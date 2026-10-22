@@ -26,10 +26,17 @@ Titles are the filename with the extension, underscores and trailing release
 tags removed: `Pokemon_Emerald_(USA).gba` appears as **Pokemon Emerald**.
 Nothing is renamed on the card.
 
-Box art comes from `data/game-art/<Console_Name>/<Title>.png`, which is what
-**onboarding → fetch artwork** fills from the libretro thumbnail set. A game
-without art shows its initials on an accent tile instead, so the layout stays
-the same while the download is missing.
+Box art comes from `data/game-art/<Console_Name>/<Title>.png`. Onboarding fills
+it from the libretro thumbnail set, and the library can fetch the rest itself:
+press **L1** (or **F**) to download covers for every scanned game that does not
+have one. A game without art shows its initials on an accent tile instead, so
+the layout stays the same while the download is missing.
+
+The fetch runs on a worker; covers appear when it finishes, without reopening
+the panel. A title the thumbnail set does not have is remembered in
+`data/game-art/.missing-art.json` and not requested again for 30 days, so a
+library full of unlisted homebrew does not re-download 200 404s every time.
+Network errors are not cached — only a real 404 is.
 
 ## Launching
 
@@ -54,6 +61,30 @@ Windows `.bat`/`.cmd` launchers go through `cmd /c`, and an `.exe` (PPSSPP,
 RetroArch) is started directly with the ROM as its argument. JukaHub raises the
 game power profile for the child process and restores it when the emulator
 exits, exactly like the Emulators screen.
+
+### Resume and auto-save
+
+When the resolved launcher runs RetroArch (its path contains a `RetroArch`
+segment, or the `launch.sh` script mentions `retroarch`), JukaHub turns on two
+switches in `retroarch.cfg` before the game starts:
+
+```ini
+savestate_auto_save = "true"
+savestate_auto_load = "true"
+```
+
+RetroArch then writes an auto state when the emulator exits and loads it the
+next time that content starts, so the Continue row and the library both put you
+back where you stopped. The edit is line-based — comments, ordering and every
+other key survive — and the original file is kept once as
+`retroarch.cfg.jukahub-backup`. Only the auto state is involved; manual save
+slots are untouched.
+
+This is deliberately RetroArch-only. mGBA, PPSSPP, DraStic and the other
+standalone emulators own their own state formats, so the hub does not pretend it
+can resume them. To opt out entirely, set `savestateResume` to `false` in
+`variables.Custom` in `jukauser.json`; JukaHub will stop editing the config, and
+the values already there are left as they are.
 
 ### Pinning a launcher by hand
 
@@ -149,6 +180,7 @@ reconnect.
 | D-pad left | back to the console column |
 | **A** | open the highlighted console, or play the highlighted game |
 | **X** | LAN play for the highlighted game (host or join over Wi-Fi) |
+| **L1** / **F** | fetch missing box art for the scanned library |
 | **Y** | rescan the card (after copying new ROMs) |
 | **B** / Back | close the panel |
 | Mouse | click a console to select it, a game to play it, outside to close |
@@ -160,8 +192,12 @@ reconnect.
   the toast on launch tells you what is missing instead of hiding the game.
 - The library is a modal overlay, so it works on the desktop config too, where
   there is no `Roms` folder and the panel simply reports that it found none.
-- Artwork is only read locally. The library does not download art by itself;
-  run the onboarding artwork step (or drop PNGs into `data/game-art/`).
+- Artwork is never uploaded. The fetch only reads the public libretro
+  thumbnail set; local PNGs in `data/game-art/` are used as-is and never
+  replaced.
+- Resume is the emulator's auto state, not a JukaHub snapshot. Quitting the
+  emulator in a way that skips its shutdown hook (a hard power-off, for example)
+  can lose the most recent state.
 
 ## What is deliberately not here yet
 
@@ -170,7 +206,7 @@ pieces that fit the same data, in the order they are worth building:
 
 | Next | Why it is not in this version |
 |------|-------------------------------|
-| Save-state slots and resume-at-frame | The library would have to write core-specific state files and know each core's slot naming. Recents resume the game; the emulator still owns the save state. |
+| Save-state slots and resume-at-frame | Auto-save/auto-load now resumes a RetroArch game where it stopped, but named slots and exact-frame control still belong to the emulator's own menu. |
 | Cheats from the libretro database | Needs a downloaded cheat catalogue per core and a `.cht` writer. The covered consoles are the ones the catalog reports, so it can reuse `findGameLauncher`. |
 | Collections and pinned games | A second index over the same paths (`Collections` is already a protected folder in the patch engine). |
 | Per-game launch options | The library can pass extra flags today via `game-launchers.json`; per-game overrides need a profile file keyed by ROM path. |

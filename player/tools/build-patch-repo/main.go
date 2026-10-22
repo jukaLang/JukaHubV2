@@ -1,15 +1,18 @@
 // build-patch-repo assembles the JukaHub Patch repository.
 //
 // Usage:
-//   PATCH_SIGN_KEY=<hex private key> go run ./tools/build-patch-repo --src ./patch-packages --out ./patch-repo
+//
+//	PATCH_SIGN_KEY=<hex private key> go run ./tools/build-patch-repo --src ./patch-packages --out ./patch-repo
 //
 // Layout of --src:
-//   <src>/<pkg-name>/manifest.json   (PackageManifest, schema 1)
-//   <src>/<pkg-name>/payload/...     (files referenced by operation "src")
+//
+//	<src>/<pkg-name>/manifest.json   (PackageManifest, schema 1)
+//	<src>/<pkg-name>/payload/...     (files referenced by operation "src")
 //
 // Outputs under --out:
-//   packages/<name>.zip     deterministic package archives
-//   repository/index.json   signed repository index
+//
+//	packages/<name>.zip     deterministic package archives
+//	repository/index.json   signed repository index
 //
 // The private key is read from the PATCH_SIGN_KEY environment variable only —
 // it is never written by this tool and never committed. The matching public
@@ -229,7 +232,7 @@ func writeDeterministicZip(path, pkgDir, name string) error {
 		return err
 	}
 	hdr := &zip.FileHeader{Name: "manifest.json", Method: zip.Deflate}
-	hdr.SetModTime(time.Unix(0, 0))
+	hdr.Modified = time.Unix(0, 0)
 	w, err := zw.CreateHeader(hdr)
 	if err != nil {
 		return err
@@ -249,7 +252,7 @@ func writeDeterministicZip(path, pkgDir, name string) error {
 	sort.Strings(files)
 	for _, rel := range files {
 		hdr := &zip.FileHeader{Name: "payload/" + filepath.ToSlash(rel), Method: zip.Deflate}
-		hdr.SetModTime(time.Unix(0, 0))
+		hdr.Modified = time.Unix(0, 0)
 		w, err := zw.CreateHeader(hdr)
 		if err != nil {
 			return err

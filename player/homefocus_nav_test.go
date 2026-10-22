@@ -122,12 +122,8 @@ func TestHomePS5LauncherTileLinkFollowsTheTile(t *testing.T) {
 // touch-only tile had on the Smart Pro.
 func TestHomePS5LauncherIsReachableWithDpad(t *testing.T) {
 	clearToastAfterTest(t)
+	closePSPanelAfterTest(t)
 	useHomeAsCurrent(t)
-	t.Cleanup(func() {
-		chiakiPS5LaunchAfterInstall.Store(false)
-		ps5LaunchPending.Store(false)
-	})
-	withChiakiSDRoot(t)
 
 	if !homeLayout.Focus.Set(HomeFocusFiles) {
 		t.Fatal("cannot focus files")
@@ -140,9 +136,8 @@ func TestHomePS5LauncherIsReachableWithDpad(t *testing.T) {
 		t.Fatalf("D-pad Up from files focused %q, want the PS5 launcher", got)
 	}
 
-	// A must press it. This platform cannot install the TrimUI package, so the
-	// observable outcome is a refused install, not a queued launch - which is
-	// exactly what proves the button is wired to the launcher.
+	// A must press it. Where the native client cannot run the press is refused,
+	// which is exactly what proves the button is wired to the launcher.
 	a := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_A}
 	if !handleHomeController(a, &Config{}) {
 		t.Fatal("A was not handled on home")
@@ -150,8 +145,8 @@ func TestHomePS5LauncherIsReachableWithDpad(t *testing.T) {
 	if homePressedID != HomeFocusPS5 {
 		t.Fatalf("A on the launcher gave press feedback for %q", homePressedID)
 	}
-	if ps5LaunchPending.Load() || chiakiPS5LaunchAfterInstall.Load() {
-		t.Fatal("pressing A left a launch queued")
+	if !psRemoteSupported() && chiakiPanel.open {
+		t.Fatal("pressing A opened the client on a host that cannot run it")
 	}
 }
 

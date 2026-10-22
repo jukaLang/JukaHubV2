@@ -474,7 +474,7 @@ func extractFilesFromZip(ctx context.Context, archivePath, requiredDir string, w
 // reimplemented zip sanitization. It now routes through extractFilesFromZip via
 // extractZipSafe so there is a single safe-zip code path.
 func extractFFmpegZip(archivePath, requiredDir string) error {
-	return extractFilesFromZip(nil, archivePath, requiredDir, []string{"ffplay.exe", "ffmpeg.exe"})
+	return extractFilesFromZip(context.TODO(), archivePath, requiredDir, []string{"ffplay.exe", "ffmpeg.exe"})
 }
 
 // extractFFmpegTarXz downloads an archive to a temp file and then extracts it

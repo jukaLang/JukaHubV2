@@ -582,9 +582,8 @@ func fitTextWidth(renderer *sdl.Renderer, config *Config, font *ttf.Font, text s
 	if int32(tw) <= maxW {
 		return text
 	}
-	runes := []rune(text)
 	cur := ""
-	for _, r := range runes {
+	for _, r := range text {
 		test := cur + string(r) + "…"
 		tw, _, _ := font.SizeUTF8(test)
 		if int32(tw) > maxW {

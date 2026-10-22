@@ -74,9 +74,11 @@ JukaHubV2/
    updates and network work off for this launch).
 4. Inject the scenes the config does not ship: the alarm editor and the Smart
    Widgets page. Both are in-memory only, so a user config is never rewritten.
-5. Start the background services — tool health, Patch, updater, disk chart,
-   network monitor, FTP/SSH servers, screensaver, notifications — each behind a
-   safe-mode check.
+5. Start the background services — Patch, disk chart, FTP/SSH servers,
+   screensaver — each behind a safe-mode check. Network work (weather, tool
+   health, telemetry, the update check, the network monitor, the companion
+   listener and social notifications) is queued with `deferStartupTask` and run
+   after the first frame instead of competing with cold font rasterisation.
 
 The boot budget is two seconds from process start to a usable first frame,
 managed in `startup.go`. `startupMarkNow` records a cheap timestamp per phase
@@ -84,7 +86,7 @@ managed in `startup.go`. `startupMarkNow` records a cheap timestamp per phase
 `startupLog` prints one line with the deltas and the total:
 
 ```
-startup: pre-sdl=0ms sdl=+21ms config=+5ms modules=+101ms window=+180ms splash=+780ms first-frame=+124ms total=1210ms target=2000ms
+startup: pre-sdl=0ms sdl=+18ms config=+5ms modules=+71ms window=+152ms splash=+761ms first-frame=+112ms total=1122ms target=2000ms
 ```
 
 The splash is not a fixed animation: it receives what is left of the budget
@@ -95,16 +97,59 @@ directly instead of adding an animation on top. The whole 3.6 s splash timeline
 is compressed into whatever window it gets, so a short run still shows the
 complete sequence.
 
-Two environment variables exist for measuring and tuning:
+A relaunch within ten minutes skips the splash entirely. The marker in
+`<data>/startup-state.json` is written only after a successful first frame, so
+a crashed or still-booting launch is never mistaken for a warm one. The bench
+mode always measures the cold path; `JUKAHUB_BENCH_WARM=1` exercises the warm
+path with the same exit harness.
+
+### Boot measurements
+
+Headless Windows desktop (SDL dummy drivers, shipped 1280x720 config, cold
+runs before and after the October 2026 pass):
+
+| Phase | Before | After |
+|---|---:|---:|
+| SDL init | 20–24 ms | 17–19 ms |
+| config | 3–5 ms | 3–5 ms |
+| modules (scene setup, deferred listeners removed) | 90–110 ms | 66–83 ms |
+| window + renderer | 148–300 ms | 148–161 ms |
+| splash | 757–776 ms | 757–770 ms |
+| first frame | 121–133 ms | 109–112 ms |
+| **cold total** | **1165–1321 ms** | **1107–1129 ms** |
+| **warm total (splash skipped)** | — | **370–408 ms** |
+
+These are desktop numbers. On the TrimUI the SD card and the 1 GB CPU move the
+phases, which is why the same script runs on the device; the 2 s target is a
+device claim. The important comparison is warm vs cold, not the absolute
+desktop milliseconds.
+
+`GODEBUG=inittrace=1` shows only ~2.8 ms of package initialisation in total
+(`main` 1.2 ms, `net` 1.0 ms, gopsutil 0.6 ms), so lazy-loading imports is not
+where the remaining time is. The first frame is rasterisation, not init.
+
+Environment variables:
 
 | Variable | Effect |
 |----------|--------|
 | `JUKAHUB_STARTUP_TARGET_MS` | boot budget in ms (500–30000), default 2000 |
 | `JUKAHUB_STARTUP_BENCH=1` | exit after the first frame, so a headless run can be timed |
+| `JUKAHUB_BENCH_WARM=1` | with bench mode, use the warm path instead of forcing cold |
+| `JUKAHUB_STARTUP_STATE` | override the marker path (the bench uses a temp file) |
+| `JUKAHUB_BENCH_RUNS`, `JUKAHUB_BENCH_LIMIT_MS` | sample count and threshold for `startup-bench.sh` |
+
+`startup-bench.sh` builds once, deletes the marker before every sample and
+fails on a median over the limit. CI runs it with a 5 s limit (the runner is
+shared and slower); on a device run it with the 2 s budget:
+
+```bash
+cd player
+JUKAHUB_BENCH_RUNS=5 JUKAHUB_BENCH_LIMIT_MS=2000 ./startup-bench.sh
+```
 
 `JUKAHUB_STARTUP_BENCH=1` with `SDL_VIDEODRIVER=dummy` is how boot time is
 checked without a display; on a development machine the reported total is
-~1.2 s and the wall time including process start ~1.3 s.
+~1.1 s cold and ~0.38 s warm.
 
 ### Render loop and cadence
 

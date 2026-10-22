@@ -6,34 +6,19 @@ package main
 // above the action cards, and never overlaps it: the QR keeps its own rectangle
 // and the launcher is only drawn when there is room for both. Unlike the QR it
 // is part of the D-pad focus graph (HomeFocusPS5): Up from the card it sits over
-// lands on it and A installs or plays, so the handheld can use it without a
-// touchscreen. Which card that is depends on the width of the status cluster in
-// the header, so the focus edge is derived from the drawn rect each frame rather
-// than hard-coded. While the tile is not drawn its focus entry stays disabled,
-// so the D-pad can never stall on an invisible button.
-//
-// One press does the whole job: launch the PS5 build when it is installed,
-// otherwise download it and launch it the moment it is ready. The launch itself
-// runs on the event thread, never on the download goroutine, because it hides
-// the main window and runs the child process.
+// lands on it and A opens the client on the PS5, so the handheld can use it
+// without a touchscreen. Which card that is depends on the width of the status
+// cluster in the header, so the focus edge is derived from the drawn rect each
+// frame rather than hard-coded. While the tile is not drawn its focus entry
+// stays disabled, so the D-pad can never stall on an invisible button.
 
 import (
-	"sync/atomic"
-
 	"github.com/veandco/go-sdl2/sdl"
 )
 
 // ps5TileRect is this frame's launcher rectangle; it is cleared when the tile
 // is not drawn (small screens), so a stale rect cannot swallow clicks.
 var ps5TileRect sdl.Rect
-
-// chiakiPS5LaunchAfterInstall remembers that the press came from "download and
-// play", not from the installer panel.
-var chiakiPS5LaunchAfterInstall atomic.Bool
-
-// ps5LaunchPending is set by the install goroutine and consumed by the frame
-// loop on the event thread.
-var ps5LaunchPending atomic.Bool
 
 type ps5TileState int
 
@@ -43,13 +28,16 @@ const (
 	ps5TileInstall
 )
 
-// ps5TileCurrentState reports what a press would do right now.
+// ps5TileCurrentState reports what a press would do right now: play a paired
+// console, or open the client to pair one.
 func ps5TileCurrentState() ps5TileState {
-	if chiakiInstalling() {
+	if !psRemoteSupported() {
 		return ps5TileBusy
 	}
-	if chiakiPS5Installed() {
-		return ps5TileLaunch
+	for _, c := range loadPSHosts().Hosts {
+		if (c.PS5 || c.Target >= psTargetPS5) && c.paired() {
+			return ps5TileLaunch
+		}
 	}
 	return ps5TileInstall
 }
@@ -95,9 +83,9 @@ func renderPS5HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 	switch state {
 	case ps5TileBusy:
 		fill = sdl.Color{R: 38, G: 66, B: 102, A: 255}
-		caption = "WAIT"
+		caption = "N/A"
 	case ps5TileInstall:
-		caption = "GET"
+		caption = "PAIR"
 	}
 	border := WithAlpha(sdl.Color{R: 150, G: 205, B: 255, A: 255}, 210)
 	if v.Focused {
@@ -165,47 +153,14 @@ func renderPS5HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 	return hit
 }
 
-// ps5TileActivate runs the single press action: play, or fetch and play.
+// ps5TileActivate opens the client on the PS5. A paired console starts
+// immediately; otherwise the panel asks for the PIN, which is exactly the step
+// the old flow buried behind an installer.
 func ps5TileActivate() {
-	switch ps5TileCurrentState() {
-	case ps5TileBusy:
-		ShowToast("The Chiaki-ng installer is already running", ToastKindInfo)
-		return
-	case ps5TileLaunch:
-		PlayActivateSound()
-		launchChiakiPS5()
-		return
-	}
-	chiakiPS5LaunchAfterInstall.Store(true)
-	if err := startChiakiPS5Install(); err != nil {
-		// Nothing was queued, so do not leave a launch armed for a later,
-		// unrelated install.
-		chiakiPS5LaunchAfterInstall.Store(false)
-		ShowToast(err.Error(), ToastKindWarning)
+	if ps5TileCurrentState() == ps5TileBusy {
+		ShowToast("Remote Play needs the TrimUI Linux build", ToastKindWarning)
 		return
 	}
 	PlayActivateSound()
-	ShowToast("Downloading the PS5 beta — it will start when ready", ToastKindInfo)
-}
-
-// chiakiPS5InstallSucceeded hands a finished install over to the event thread
-// when the press came from the launcher tile.
-func chiakiPS5InstallSucceeded() {
-	if chiakiPS5LaunchAfterInstall.Swap(false) {
-		ps5LaunchPending.Store(true)
-	}
-}
-
-// ps5PollPendingLaunch is called once per frame on the event thread. It clears
-// the flag even when the build vanished, so a launch can never be retried
-// forever.
-func ps5PollPendingLaunch() {
-	if !ps5LaunchPending.Swap(false) {
-		return
-	}
-	if !chiakiPS5Installed() {
-		ShowToast("PS5 beta is not installed", ToastKindWarning)
-		return
-	}
-	launchChiakiPS5()
+	psOpenPanelFor("", psTargetPS5_1)
 }

@@ -82,6 +82,10 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 * **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather,
   and **Browser**, a text web browser with GitHub issue quick links; see
   [docs/BROWSER.md](docs/BROWSER.md)).
+* **Wi-Fi** — a first-party network picker: scan, join with the on-screen
+  keyboard, reconnect saved networks without retyping the password, disconnect
+  and forget. Open it from **Quick Settings → Wi-Fi Networks** or **Hardware →
+  Wi-Fi**; see [docs/WIFI.md](docs/WIFI.md).
 * **Settings** — playback resolution, weather and 25 colour themes
   (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
   **Smart Widgets** (from General) holds the settings that react to the device
@@ -127,18 +131,16 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   three colour-blind-safe palettes and a system-wide A/B / X/Y controller
   remap, all from one panel in the Start menu; see
   [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md).
-* **PS Remote Play** — install and launch the TrimUI Chiaki-ng port from the
-  Start menu, with its SDL2/FFmpeg runtime bundled in the package. Releases are
-  PS4-only; the author's withdrawn PS5 beta can be installed beside it from its
-  tag and launched separately, with every file checked against the tag's
-  manifest. A **PS5** tile in the home header, left of the phone-pairing QR,
-  plays it in one press and downloads it first when it is missing; on a handheld
-  it is selected with the D-pad (`Up` from the card beneath it) and pressed with
-  **A**, so no touchscreen is needed. JukaHub hands the screen to the port and
-  closes while it runs (the stock menu returns when the stream ends), and
-  **Interface language** rows switch Chiaki-ng's menus between English and
-  Vietnamese, translating the few strings that bypass its catalogue. See
-  [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
+* **PS Remote Play** — JukaHub's own PS4/PS5 client, with no Python launcher
+  and no dependency on a separate Chiaki-ng install. It scans the LAN, pairs
+  over the LAN (**Link Device** PIN; PS5 also needs the PSN Account-ID),
+  remembers consoles and quality, and streams through the bundled
+  `chiaki-stream` native helper. PS4 pairing is pure Go, so a PS4 works even
+  before the helper is present. **PS4** and **PS5** tiles in the home header,
+  left of the phone-pairing QR, open the panel in one press and are reachable
+  with the D-pad (`Up` from the card beneath them) and **A**. JukaHub hands the
+  screen to the helper and closes while it runs; the stock menu returns when the
+  stream ends. See [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
 * **Smart home** — **Start → Smart Home** drives Home Assistant entities,
   mirrors every toggle to MQTT, shows the Pi-hole, router and Tailscale state,
   and connects or disconnects the tunnel. WireGuard is status-only because
@@ -155,7 +157,8 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   jukauser.json snapshots with diff/rollback, and a read/write benchmark
   board.
 
-Turn Wi-Fi on before using YouTube or weather. Your settings are stored in
+Turn Wi-Fi on in Quick Settings, then join a network from **Quick Settings →
+Wi-Fi Networks** before using YouTube or weather. Your settings are stored in
 `Apps/JukaHub/jukauser.json` and survive updates.
 
 ## Controls
@@ -339,11 +342,12 @@ JukaHub on a PC.
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
 | [Windows Apps](docs/WINDOWS_APPS.md) | Wine, Box64, WestonPack and the no-X11 display bridge |
-| [PS Remote Play](docs/REMOTE_PLAY.md) | Chiaki-ng install, PS4 pairing, the opt-in PS5 beta and its setup |
+| [PS Remote Play](docs/REMOTE_PLAY.md) | the built-in PS4/PS5 client, pairing, quality profiles and troubleshooting |
 | [Accessibility](docs/ACCESSIBILITY.md) | text scaling, high-contrast and colour-blind palettes, controller remap |
 | [Smart home](docs/SMART_HOME.md) | Home Assistant, the MQTT toggle mirror, Pi-hole, router, Tailscale and WireGuard |
 | [Device tuning](docs/DEVICE_TUNING.md) | PPSSPP stick calibration, power profiles per launch, port audio, 32-bit port flags |
 | [Recovery](docs/RECOVERY.md) | low-battery save/suspend, the recovery chord, SD-card health |
+| [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
 | [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |

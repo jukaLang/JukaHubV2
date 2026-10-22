@@ -555,10 +555,7 @@ func hexToRGB(hex string) (uint8, uint8, uint8) {
 // parseHexColor parses a "#rrggbb" or "rrggbb" string into an opaque color,
 // reporting whether the string was valid.
 func parseHexColor(s string) (sdl.Color, bool) {
-	h := strings.TrimSpace(s)
-	if strings.HasPrefix(h, "#") {
-		h = h[1:]
-	}
+	h := strings.TrimPrefix(strings.TrimSpace(s), "#")
 	if len(h) != 6 {
 		return sdl.Color{}, false
 	}
@@ -726,6 +723,8 @@ func finalizeConfig(config *Config) {
 	ensureToolsMenuEntry(config)
 	// Give the Hardware screen its interactive process list entry point.
 	ensureHardwareProcessEntry(config)
+	// And the Wi-Fi picker, beside it on the Hardware action row.
+	ensureHardwareWiFiEntry(config)
 	// IPStream library entry points (IPStream screen + Media page).
 	ensureIPStreamEntries(config)
 }
@@ -1910,7 +1909,7 @@ func ytDlpExtraArgs(config *Config) string {
 		if apiKey != "" {
 			parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
 		}
-	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || strings.Contains(err.Error(), "not encrypted") == false && strings.Contains(err.Error(), "missing") == false {
+	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || !strings.Contains(err.Error(), "not encrypted") && !strings.Contains(err.Error(), "missing") {
 		// Only log when the value was encrypted but could not be decrypted.
 		// "not encrypted" and "missing" are not actionable failures here.
 		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
@@ -1949,7 +1948,7 @@ func ytDlpExtraArgsSlice(config *Config) []string {
 		if apiKey != "" {
 			parts = append(parts, "--extractor-args", "youtube:api_key="+apiKey)
 		}
-	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || (strings.Contains(err.Error(), "not encrypted") == false && strings.Contains(err.Error(), "missing") == false) {
+	} else if strings.Contains(err.Error(), "decryption failed") || strings.Contains(err.Error(), "empty") || (!strings.Contains(err.Error(), "not encrypted") && !strings.Contains(err.Error(), "missing")) {
 		log.Printf("[SECURITY] yt-dlp API key unavailable: %v", err)
 	}
 	// Cookies file path - not encrypted (it's a file path, not a secret).
@@ -2291,12 +2290,16 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	if err != nil {
 		log.Printf("[ERROR] yt-dlp execution error: %v", err)
 		log.Printf("[ERROR] stderr: %s", stderr.String())
-		publishCustom("search_error", fmt.Sprintf("yt-dlp error: %v\n%s", err, stderr.String()))
+		reason := ytDlpFailureReason(stderr.String(), err, fullToolPath)
+		publishCustom("search_error", reason)
 		publishCustom(resultVar, []VideoInfo{})
-		if !IsOnline() {
+		switch {
+		case !IsOnline():
 			showToast("Search failed — offline, connect WiFi", ToastWarn())
-		} else {
-			showToast("Search failed. Check network.", ToastError())
+		case helperUnpackFailure(stderr.String()):
+			showToast(reason, ToastError())
+		default:
+			showToast("Search failed — "+reason, ToastError())
 		}
 		return
 	}
@@ -2433,13 +2436,20 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 		elemHeight := getElementHeight(element, 456)
 		font, _ := getCachedFont(config, "small")
 		if font != nil {
-			msg := fmt.Sprintf("Error: %v", errMsg)
-			w, h, _ := font.SizeUTF8(msg)
-			renderText(renderer, config, font, msg, sdl.Color{R: 255, G: 107, B: 122, A: 255},
-				element.X+(elemWidth-int32(w))/2, element.Y+(elemHeight-int32(h))/2-14)
-			w2, _, _ := font.SizeUTF8("Check terminal for details.")
-			renderText(renderer, config, font, "Check terminal for details.", ColorTextMuted(),
-				element.X+(elemWidth-int32(w2))/2, element.Y+(elemHeight-int32(h))/2+10)
+			// Wrap instead of blitting one long line: error text used to run
+			// off both edges of the card and hide its own beginning.
+			lines := wrapTextLines(font, fmt.Sprintf("Error: %v", errMsg), elemWidth-48, 3)
+			lineH := int32(font.Height()) + 4
+			y := element.Y + (elemHeight-int32(len(lines))*lineH)/2 - 8
+			for i, line := range lines {
+				w, _, _ := font.SizeUTF8(line)
+				renderText(renderer, config, font, line, sdl.Color{R: 255, G: 107, B: 122, A: 255},
+					element.X+(elemWidth-int32(w))/2, y+int32(i)*lineH)
+			}
+			hint := "See Logs for details."
+			w, _, _ := font.SizeUTF8(hint)
+			renderText(renderer, config, font, hint, ColorTextMuted(),
+				element.X+(elemWidth-int32(w))/2, y+int32(len(lines))*lineH+8)
 		}
 		return
 	}
@@ -5451,6 +5461,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		toggleCompanionOverlay()
 	case "processes_open":
 		openProcessPanel()
+	case "wifi_open":
+		openWiFiPanel()
 	case "ip_open":
 		openIPStreamPanel()
 	case "ip_add":

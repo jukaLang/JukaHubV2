@@ -49,13 +49,13 @@ writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
    lists as "downloaded covers could appear black after texture creation in the
    worker thread failed". Worth a `runtime.LockOSThread` audit plus a test that
    hammers the thumbnail queue.
-5. **Wi-Fi: verify instead of assume.** BrickOS's three Wi-Fi entries are all
-   failure modes of reporting success too early: credentials that "saved" while
-   the old connection stayed up, a connect that completed after the UI declared
-   failure, and a reboot where the interface came up without a DHCP client. Our
-   `netmon.go`/`systemcontrol.go` paths need a device session to test, but the
-   pattern — reconnect to verify, poll for the address, never trust the write —
-   is worth copying into whatever command we use on the Brick.
+5. **Wi-Fi: verify on hardware.** The picker in [wifi.go](../player/wifi.go) now
+   follows the pattern BrickOS's three Wi-Fi bugs point at: it polls `status`
+   for the requested SSID rather than trusting `select_network`, asks for a DHCP
+   lease and re-reads the address, and reports a failed `save_config` as
+   session-only instead of success. It still needs a session on both stock
+   images (Smart Pro and Brick) to confirm the interface name, `wpa_cli`
+   location and DHCP client the firmware actually ships.
 6. **LED policies.** [ledsync.go](../player/ledsync.go) only mirrors audio.
    Battery/charging/temperature presets plus a custom effect and colour are a
    small, self-contained addition with real device value.
@@ -106,3 +106,223 @@ writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
 Also added: `robots.txt`, `sitemap.xml`, Netlify `_headers` (nosniff, referrer and permissions policy), Dependabot for Actions, Go modules and the test package.
 
 Not done, and why: a Content-Security-Policy (inline `style=` attributes and LAN device pushes over `http:` need a careful allow-list first), a service worker (a stale-cache bug would be hard to recover from; the favicon is 48 px, below the 192 px installable-PWA minimum), and any change under `player/` (the SDL2/CGO build could not be run in the environment used for this pass).
+
+## Phase 1 safety nets (October 2026)
+
+The upgrade brief's first phase was CI that actually catches regressions. What
+exists now, what it found, and what is still advisory:
+
+| Check | Status | Where |
+|---|---|---|
+| Builder syntax (`node --check` on the four scripts) | blocking | `ci.yml` `web` |
+| Builder jsdom tests (import, share sanitizer, hostile variable names) | blocking | `tests/web` |
+| Builder smoke test in Chromium: load, drop a component, undo/redo, export JSON, re-import | blocking | `tests/e2e` (`builder.spec.js`) |
+| Player vet + tests for packages without SDL | blocking | `ci.yml` `player-core` (`CGO_ENABLED=0`) |
+| Player vet + tests for the SDL package | advisory | `ci.yml` `player`; passes locally, but has never run on a GitHub runner |
+| `staticcheck` | advisory | `ci.yml` `player-staticcheck` |
+| `go test -race` | advisory | `ci.yml` `player-race` |
+
+### The smoke test paid for itself immediately
+
+Its first run failed on the undo step. The cause was not the test:
+
+```css
+.app-bar-button:hover, ... {;
+  transform: translateY(100%);
+  opacity: 0;
+  pointer-events: none;
+}
+```
+
+A bad merge had copied the closed AI-panel state into the toolbar hover rule, so
+hovering any app-bar button moved it off-screen and made it ignore the pointer.
+The click then landed on the toolbar behind it: Undo and Redo were silently dead
+for mouse users, and the rule also left a duplicated `.ai-panel.ai-open` block,
+an orphaned declaration and a duplicate `:active` rule. Replaced with the
+intended hover style (`--surface-tertiary` + `--secondary` border). The
+Playwright test now presses the real buttons, so this cannot regress through the
+CSS route again.
+
+### staticcheck triage
+
+232 reports on the first run, 199 after this pass, in four groups:
+
+| Code | Count | Decision |
+|---|---|---|
+| `U1000` (unused symbol) | 166 | Deferred to the `core.go` / `tools.go` split in Phase 3. 45 are in `tools.go`, 28 in `core.go`; deleting them without the split makes review harder than the cleanup is worth. |
+| `ST1005` (capitalised error string) | 28 | Deferred: those strings are surfaced verbatim in device toasts, so rewriting them is a user-facing copy change, not a lint fix. |
+| `SA1019` (deprecated API) | 4 | Deliberate: the PS4 registration protocol requires CFB (`crypto/cipher.NewCFBDecrypter`), and `jukaland.go`/`morefeatures.go` use `math/rand` intentionally. |
+| `SA6005` (`EqualFold`) | 1 | Left as-is: `ToLower(a) == ToLower(b)` and `EqualFold` differ for a few Unicode case pairs, and the dictionary highlight should not change behaviour for a lint suggestion. |
+
+Fixed in this pass (each behaviour-preserving, all covered by the existing
+suite): all nine `SA4006` dead stores (including one in a test), both `SA4003`
+impossible `uint8` comparisons (one was a dead clamp in the spinner, the other a
+tautological test now checking drawing tokens are not fully transparent), the
+`SA4031` test whose nil check could never fail (replaced with a mirror-parity
+assertion), `SA1012` (`nil` → `context.TODO()`), `SA1024` duplicate `TrimLeft`
+cutset, `SA6005` in discovery sorting, `SetModTime` → `Modified`,
+`tar.TypeRegA` → `tar.TypeReg`, `[]rune` range → string range, `fmt.Sprintf` on a
+constant, a redundant `len()` nil check, `append` spread over a copy loop, and
+the `== false` comparisons.
+
+### Not verified
+
+- The workflows have not run on GitHub: this pass ran the same commands locally
+  (Windows, SDL 2.30, Go 1.27) and on a portable Node 22. The `player` job stays
+  advisory until one green run on `main`.
+- The race job is advisory because a full `-race` run of the SDL package takes
+  minutes and was only spot-checked here (PS Remote tests, `-race`, pass).
+- Playwright was run against Chromium only; WebKit and Firefox are not in the
+  matrix, and no mobile device profile is covered.
+
+### Next
+
+Phase 2 of the brief, in order: split `script.js` into modules (the largest
+single-file risk in the repository), then the CSP that the inline-style and
+device-push allow-list blocks, then self-hosted fonts and the PWA.
+
+## Builder design pass (October 2026)
+
+The web builder had a stylesheet that had survived a bad merge, and the damage was
+structural rather than cosmetic. `style.css` opened with ~20 copies of the closed
+AI-panel state; ten `.ai-panel.ai-open` blocks, twelve top-level declarations and
+four `prop {;` fragments sat outside any rule. The file ended at brace depth -12.
+Browsers kept rendering by dropping the invalid fragments, which hid three real
+bugs:
+
+- **The AI assistant never appeared.** A duplicate `.ai-panel` rule at the top of
+  the file still applied `transform: translateY(100%)`, `opacity: 0` and
+  `pointer-events: none`. The later floating-card rule overrode position and size
+  but not those three, so the AI button lit up and no panel was painted.
+- **Hover killed four kinds of control.** `.export-dropdown button:hover`,
+  `.context-menu button:hover`, `.action-button:hover` and `.mobile-menu-item:hover`
+  had each had their body replaced by the closed-panel state, so hovering moved
+  the control off-screen and set `pointer-events: none` (the same defect already
+  recorded for the app-bar buttons in Phase 1).
+- **Motion and Text Browser colours were undefined.** `--transition-*` and `--tb-*`
+  only existed in the orphaned block, so every transition resolved to nothing.
+
+### What changed
+
+- **CSS repair:** one canonical `.ai-panel`, tokens folded back into `:root`, four
+  hover rules restored, the duplicate theme block removed. `style.css` now parses
+  at brace depth 0 with no orphan declarations.
+- **App bar:** 60 px, grouped tools separated by hairlines, quiet buttons, one
+  filled action (Export). The title no longer ellipsises at 1024 px and "Dark Mode"
+  no longer wraps. The theme toggle is icon-only and keeps a state-carrying
+  `aria-label`. The subtitle follows the device picker.
+- **Canvas:** fit-to-window zoom with `- / % / +` controls and a real status bar.
+  The scale is applied through a sizing wrapper and every pointer delta is divided
+  by it. Safe centring fixes a separate bug where a 1280 px device in a 500 px pane
+  was centred *outside* the scroll origin, making its left edge unreachable.
+- **Palette:** denser cards (all nine components fit at 1280x800), sticky filter,
+  a scroll fade, fixed search-icon gutter (the generic `input[type=search]` reset
+  used to win on specificity), and single-line variable rows.
+- **Inspector:** the App Info panel was four unbalanced, nested fieldsets; it is
+  now four titled cards. Position inputs share the grid, colours pair up, tabs are
+  sticky, and the section headings read as labels instead of notched legends.
+- **Guide modal:** the heading, subtitle, quick-start cards and close button were
+  all direct flex children, so they laid out side by side and overlapped. The
+  quick starts now open the body in a three-up grid (one-up on phones).
+- **Mobile:** the fixed tab bar was painting over the canvas toolbar and the drawer
+  header; both now offset it. The app bar keeps one row, drops desktop-only tools,
+  and no longer cuts tools off the left edge. The AI glyph is no longer hidden by
+  the label-hiding rule.
+
+### Verification
+
+```
+tests/web   npm test                     8/8 PASS
+tests/e2e   npx playwright test          5/5 PASS (4.3 s)
+node --check (web + test scripts)        PASS
+style.css                                depth 0, 0 orphan declarations, 1 .ai-panel
+```
+
+The two new e2e tests cover the regressions that were invisible in a build: a drop
+at 200,100 screen px lands at 200/scale on the device, zoom in/fit round-trips, and
+the AI panel is visible with `opacity: 1` and no transform.
+
+Screenshots for review: `screenshots/design-desktop.png`, `design-laptop.png`,
+`design-compact.png`, `design-light.png`, `design-phone.png`,
+`state-element.png`, `state-ai.png`, `state-guide.png`.
+
+### Not verified
+
+- Chromium only. Firefox and WebKit are not in the Playwright matrix, and no
+  physical device was used for touch sizing.
+- Contrast was checked by eye against the existing tokens, not measured against
+  WCAG thresholds.
+- The gallery and device dialogs need network/hardware and were not re-styled.
+
+## Startup pass (October 2026)
+
+The launcher already had a two-second budget and phase marks, but the marks were
+only ever read on a desk. This pass made the number something CI and a device can
+both answer, and removed the two costs that were actually measurable.
+
+### What changed
+
+- **Network work moved after the first frame.** Weather, tool health, the update
+  check, telemetry, the network monitor, the phone companion listener and social
+  notifications are queued with `deferStartupTask` and start only after the
+  first `Present()`. Before, they competed with cold font rasterisation on the
+  same core. A task that takes over 20 ms is logged after the frame.
+- **Warm starts skip the splash.** `<data>/startup-state.json` records the first
+  frame of a successful boot. A relaunch within ten minutes skips the 750 ms
+  animation; a cold launch keeps it. The marker is versioned, future timestamps
+  are ignored, and a failed/partial boot never writes one.
+- **`startup-bench.sh` is the repeatable measurement.** It builds once, runs the
+  binary headless with SDL's dummy drivers, deletes the warm marker before each
+  sample and fails if the median exceeds `JUKAHUB_BENCH_LIMIT_MS`. CI runs it as
+  a blocking `player-boot-bench` job with a 5 s runner limit; on a device the
+  same script is run with `JUKAHUB_BENCH_LIMIT_MS=2000`.
+- **`JUKAHUB_BENCH_WARM=1`** exercises the warm path through the same
+  exit-after-first-frame harness, so the improvement can be measured rather
+  than inferred.
+
+### Numbers
+
+Windows desktop, SDL dummy drivers, 1280x720 config, cold samples:
+
+| Phase | Before | After |
+|---|---:|---:|
+| SDL init | 20–24 ms | 17–19 ms |
+| config | 3–5 ms | 3–5 ms |
+| modules | 90–110 ms | 66–83 ms |
+| window + renderer | 148–300 ms | 148–161 ms |
+| splash | 757–776 ms | 757–770 ms |
+| first frame | 121–133 ms | 109–112 ms |
+| **cold total** | **1165–1321 ms** | **1107–1129 ms** |
+| **warm total** | — | **370–408 ms** |
+
+The warm column is the useful one: the same binary drops from ~1.1 s to ~0.38 s
+when the splash is skipped. The absolute desktop milliseconds are not a device
+claim; the SD card and the 1 GB CPU move the phases, which is why the script is
+meant to be run on the TrimUI.
+
+`GODEBUG=inittrace=1` reports ~2.8 ms of package initialisation in total
+(`main` 1.2 ms, `net` 1.0 ms, gopsutil 0.6 ms). Lazy-loading the heavy imports
+would save low single-digit milliseconds, not the splash-length gap, so it was
+not done.
+
+### Deliberately not done
+
+- **A persisted label/glyph cache.** The first frame is ~110 ms of cold text
+  rasterisation. Serialising label textures would trade CPU for thousands of
+  small reads on the slowest storage in the device, with theme/font/size keys to
+  invalidate. Not worth it before the device numbers exist.
+- **Idle CPU and game-launch timing on the device.** The headless desktop uses
+  the software renderer, so its idle CPU is a rendering benchmark, not a battery
+  measurement, and launching a real emulator needs the hardware. Both need a
+  device session; reporting desktop numbers as battery figures would be
+  misleading.
+
+### Verification
+
+```
+go vet ./...                              PASS
+go test ./...                             PASS (all player packages, 11.7 s)
+startup-bench.sh (3 cold runs)            median 1135 ms, limit 5000 ms PASS
+warm bench (JUKAHUB_BENCH_WARM=1)         370–408 ms, splash=0 ms
+.github/workflows/ci.yml                  YAML parses; new blocking job present
+```

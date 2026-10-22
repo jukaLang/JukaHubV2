@@ -81,6 +81,10 @@ document.addEventListener('DOMContentLoaded', () => {
     loadDefaultConfig();
   }
 
+  // Fit the device once the layout (and the measured footer height) settles.
+  fitCanvasToViewport();
+  requestAnimationFrame(fitCanvasToViewport);
+
   // New features
   setupExportDropdowns();
   setupContextMenu();
@@ -560,6 +564,14 @@ let previewVariables = {};
 let previewOriginScene = null;
 let previewScale = 1;
 
+// Canvas zoom. The device is 1280x720 while the middle pane is usually around
+// 800px wide, so the editor opens fitted to the window. Every pointer delta is
+// divided by this scale before it becomes a canvas coordinate.
+let canvasScale = 1;
+let zoomIsManual = false;
+const CANVAS_MIN_SCALE = 0.25;
+const CANVAS_MAX_SCALE = 2;
+
 // Mirrors Variables.Get in player/config.go: custom variables first, then the
 // known colour names, whose RGB objects the runtime formats as "r,g,b".
 function previewVariableValue(name) {
@@ -649,17 +661,53 @@ function previewSceneIndex() {
   return index < 0 ? 0 : index;
 }
 
-function fitPreviewCanvas() {
-  if (!previewMode) return;
+// Room the device can occupy inside the canvas pane, excluding its padding.
+function canvasAvailableSize() {
   const host = document.getElementById('canvasWrapper');
-  if (!host) return;
+  if (!host) return null;
   const hostStyle = window.getComputedStyle(host);
   const padX = parseFloat(hostStyle.paddingLeft) + parseFloat(hostStyle.paddingRight);
   const padY = parseFloat(hostStyle.paddingTop) + parseFloat(hostStyle.paddingBottom);
-  const availableW = Math.max(240, host.clientWidth - padX);
-  const availableH = Math.max(160, host.clientHeight - padY);
-  previewScale = Math.min(1, availableW / canvasWidth, availableH / canvasHeight);
-  canvas.style.transform = `scale(${previewScale})`;
+  return {
+    width: Math.max(120, host.clientWidth - padX - 2),
+    height: Math.max(90, host.clientHeight - padY - 2),
+  };
+}
+
+function applyCanvasScale(scale) {
+  canvasScale = Math.max(CANVAS_MIN_SCALE, Math.min(CANVAS_MAX_SCALE, scale));
+  canvas.style.transform = canvasScale === 1 ? '' : `scale(${canvasScale})`;
+  // The scaler keeps scrollbars aligned with what is actually on screen.
+  const scaler = document.getElementById('canvasScaler');
+  if (scaler) {
+    scaler.style.width = `${canvasWidth * canvasScale}px`;
+    scaler.style.height = `${canvasHeight * canvasScale}px`;
+  }
+  const percent = `${Math.round(canvasScale * 100)}%`;
+  const readout = document.getElementById('zoomReadout');
+  if (readout) readout.textContent = percent;
+  const fitBtn = document.getElementById('zoomFitBtn');
+  if (fitBtn) fitBtn.title = `Canvas at ${percent} — click to fit the device to the window`;
+}
+
+function fitCanvasToViewport() {
+  const size = canvasAvailableSize();
+  if (!size) return;
+  zoomIsManual = false;
+  applyCanvasScale(Math.min(1, size.width / canvasWidth, size.height / canvasHeight));
+}
+
+function zoomCanvas(factor) {
+  zoomIsManual = true;
+  applyCanvasScale(canvasScale * factor);
+}
+
+function fitPreviewCanvas() {
+  if (!previewMode) return;
+  const size = canvasAvailableSize();
+  if (!size) return;
+  previewScale = Math.min(1, size.width / canvasWidth, size.height / canvasHeight);
+  applyCanvasScale(previewScale);
   const readout = document.getElementById('previewScale');
   if (readout) readout.textContent = `${Math.round(previewScale * 100)}%`;
 }
@@ -753,8 +801,8 @@ function leavePreviewMode() {
   if (bar) bar.setAttribute('hidden', '');
   const toggle = document.getElementById('previewToggle');
   if (toggle) toggle.removeAttribute('tabindex');
-  canvas.style.transform = '';
   previewScale = 1;
+  fitCanvasToViewport();
 
   // Return to the scene the user was editing, rebuilt from the clean snapshot
   // (which never contains resolved variable text).
@@ -1128,12 +1176,26 @@ function setupEventListeners() {
     darkModeToggle.addEventListener('click', () => {
       const isLight = document.body.classList.toggle('theme-light');
       document.body.classList.toggle('theme-dark', !isLight);
-      darkModeToggle.innerHTML = isLight ?
-        '<i class="fas fa-sun" aria-hidden="true"></i> <span>Light Mode</span>' :
-        '<i class="fas fa-moon" aria-hidden="true"></i> <span>Dark Mode</span>';
+      setThemeToggleLabel(isLight);
       try { localStorage.setItem('jukahub-theme', isLight ? 'light' : 'dark'); } catch (e) { /* storage blocked */ }
     });
   }
+
+  // Canvas zoom: fit by default, with explicit stepping. Refit on resize while
+  // the user has not chosen a scale, so the device stays fully visible.
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomFitBtn = document.getElementById('zoomFitBtn');
+  if (zoomOutBtn) zoomOutBtn.addEventListener('click', () => zoomCanvas(1 / 1.2));
+  if (zoomInBtn) zoomInBtn.addEventListener('click', () => zoomCanvas(1.2));
+  if (zoomFitBtn) zoomFitBtn.addEventListener('click', () => fitCanvasToViewport());
+
+  let canvasFitTimer = null;
+  window.addEventListener('resize', () => {
+    if (previewMode || zoomIsManual) return;
+    clearTimeout(canvasFitTimer);
+    canvasFitTimer = setTimeout(fitCanvasToViewport, 120);
+  });
 
   // Guide panel toggle
   if (toggleGuide && guidePanel) {
@@ -1266,8 +1328,9 @@ function setupEventListeners() {
     e.preventDefault();
     const type = e.dataTransfer.getData('type');
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // The canvas is scaled to fit the pane, so screen pixels are not canvas pixels.
+    const x = (e.clientX - rect.left) / canvasScale;
+    const y = (e.clientY - rect.top) / canvasScale;
     addElement(type, x, y);
   });
 
@@ -1341,6 +1404,18 @@ function setupEventListeners() {
   });
 }
 
+// The theme control is icon-only, so its accessible name has to carry the
+// current state instead of a hidden label.
+function setThemeToggleLabel(isLight) {
+  if (!darkModeToggle) return;
+  const label = isLight ? 'Switch to dark theme' : 'Switch to light theme';
+  darkModeToggle.innerHTML = isLight
+    ? '<i class="fas fa-sun" aria-hidden="true"></i>'
+    : '<i class="fas fa-moon" aria-hidden="true"></i>';
+  darkModeToggle.setAttribute('aria-label', label);
+  darkModeToggle.title = label;
+}
+
 // Theme helpers
 function loadTheme() {
   let saved = null;
@@ -1348,11 +1423,7 @@ function loadTheme() {
   const prefersLight = saved === 'light';
   document.body.classList.toggle('theme-light', prefersLight);
   document.body.classList.toggle('theme-dark', !prefersLight);
-  if (darkModeToggle) {
-    darkModeToggle.innerHTML = prefersLight ?
-      '<i class="fas fa-sun" aria-hidden="true"></i> <span>Light Mode</span>' :
-      '<i class="fas fa-moon" aria-hidden="true"></i> <span>Dark Mode</span>';
-  }
+  setThemeToggleLabel(prefersLight);
 }
 
 function openGuide() {
@@ -1371,7 +1442,18 @@ function closeGuideFn() {
 
 function updateCanvasReadout() {
   const readout = document.getElementById('canvasSizeReadout');
-  if (readout) readout.textContent = `${canvasWidth} x ${canvasHeight}`;
+  if (readout) readout.textContent = `${canvasWidth} × ${canvasHeight}`;
+  // The subtitle names the target hardware, so it must follow the device picker
+  // instead of claiming the Smart Pro while a Brick-size canvas is selected.
+  const subtitle = document.getElementById('projectTitle');
+  if (subtitle) {
+    const device = canvasWidth === 1280 && canvasHeight === 720
+      ? 'TrimUI Smart Pro'
+      : canvasWidth === 1024 && canvasHeight === 768
+        ? 'TrimUI Brick'
+        : 'Custom canvas';
+    subtitle.textContent = `${device} · ${canvasWidth} × ${canvasHeight}`;
+  }
 }
 
 function updateSceneBadge() {
@@ -1501,6 +1583,7 @@ function syncCanvasSizeControls() {
   if (customHeightInput) customHeightInput.value = canvasHeight;
   canvas.style.width = `${canvasWidth}px`;
   canvas.style.height = `${canvasHeight}px`;
+  applyCanvasScale(canvasScale);
 }
 
 // Update canvas size based on selection
@@ -1520,6 +1603,7 @@ function updateCanvasSize() {
   canvas.style.width = `${canvasWidth}px`;
   canvas.style.height = `${canvasHeight}px`;
   updateCanvasReadout();
+  fitCanvasToViewport();
 
   // Update menu position
   document.querySelectorAll('.element[data-type="menu"]').forEach(menu => {
@@ -1820,8 +1904,10 @@ function addElement(type, x, y, recordHistory = true) {
 
 function setupElementEvents(el) {
   let isDragging = false;
-  let startX, startY;
-  let startTouchX, startTouchY;
+  // Pointer start plus the element's canvas offset at that moment. Dividing the
+  // pointer delta by canvasScale keeps 1:1 tracking when the device is zoomed.
+  let dragStartX = 0, dragStartY = 0;
+  let dragStartLeft = 0, dragStartTop = 0;
   let dragUndoBase = null;
 
   // Canvas elements are part of the keyboard editing surface: Tab reaches them,
@@ -1839,8 +1925,10 @@ function setupElementEvents(el) {
     if (event.touches.length === 1) {
       event.preventDefault();
       const touch = event.touches[0];
-      startTouchX = touch.clientX - el.offsetLeft;
-      startTouchY = touch.clientY - el.offsetTop;
+      dragStartX = touch.clientX;
+      dragStartY = touch.clientY;
+      dragStartLeft = el.offsetLeft;
+      dragStartTop = el.offsetTop;
       isDragging = true;
       dragUndoBase = captureWorkspace('move');
       el.style.cursor = 'grabbing';
@@ -1854,13 +1942,11 @@ function setupElementEvents(el) {
     event.preventDefault();
 
     const touch = event.touches[0];
-    const canvasRect = canvas.getBoundingClientRect();
-    let newX = touch.clientX - startTouchX;
-    let newY = touch.clientY - startTouchY;
-    const elRect = el.getBoundingClientRect();
+    let newX = dragStartLeft + (touch.clientX - dragStartX) / canvasScale;
+    let newY = dragStartTop + (touch.clientY - dragStartY) / canvasScale;
 
-    newX = Math.max(0, Math.min(newX, canvasRect.width - elRect.width));
-    newY = Math.max(0, Math.min(newY, canvasRect.height - elRect.height));
+    newX = Math.round(Math.max(0, Math.min(newX, canvasWidth - el.offsetWidth)));
+    newY = Math.round(Math.max(0, Math.min(newY, canvasHeight - el.offsetHeight)));
 
     el.style.transition = 'none';
     el.style.left = `${newX}px`;
@@ -1892,8 +1978,10 @@ function setupElementEvents(el) {
       }
 
       isDragging = true;
-      startX = event.clientX - el.offsetLeft;
-      startY = event.clientY - el.offsetTop;
+      dragStartX = event.clientX;
+      dragStartY = event.clientY;
+      dragStartLeft = el.offsetLeft;
+      dragStartTop = el.offsetTop;
       dragUndoBase = captureWorkspace('move');
       el.style.cursor = 'grabbing';
 
@@ -1906,13 +1994,11 @@ function setupElementEvents(el) {
   document.addEventListener('mousemove', (event) => {
     if (!isDragging) return;
 
-    const canvasRect = canvas.getBoundingClientRect();
-    let newX = event.clientX - startX;
-    let newY = event.clientY - startY;
-    const elRect = el.getBoundingClientRect();
+    let newX = dragStartLeft + (event.clientX - dragStartX) / canvasScale;
+    let newY = dragStartTop + (event.clientY - dragStartY) / canvasScale;
 
-    newX = Math.max(0, Math.min(newX, canvasRect.width - elRect.width));
-    newY = Math.max(0, Math.min(newY, canvasRect.height - elRect.height));
+    newX = Math.round(Math.max(0, Math.min(newX, canvasWidth - el.offsetWidth)));
+    newY = Math.round(Math.max(0, Math.min(newY, canvasHeight - el.offsetHeight)));
 
     // Remove any transition effects
     el.style.transition = 'none';
@@ -2054,8 +2140,8 @@ function handleResize(el, event) {
   const undoBase = captureWorkspace('resize');
 
   const onMouseMove = (e) => {
-    const newWidth = Math.max(50, startWidth + (e.clientX - startX));
-    const newHeight = Math.max(50, startHeight + (e.clientY - startY));
+    const newWidth = Math.max(50, Math.round(startWidth + (e.clientX - startX) / canvasScale));
+    const newHeight = Math.max(50, Math.round(startHeight + (e.clientY - startY) / canvasScale));
     el.style.width = `${newWidth}px`;
     el.style.height = `${newHeight}px`;
     el.setAttribute('data-width', newWidth);
@@ -4627,9 +4713,8 @@ function setupMobileElementAdding() {
         elementType = element.type;
         mobileMenu.style.display = 'none';
         // Add element to center of canvas
-        const rect = canvas.getBoundingClientRect();
-        const x = rect.width / 2 - 60;
-        const y = rect.height / 2 - 20;
+        const x = canvasWidth / 2 - 60;
+        const y = canvasHeight / 2 - 20;
         addElement(elementType, x, y);
       });
 

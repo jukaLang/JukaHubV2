@@ -190,9 +190,13 @@ func TestDesignTokenColorsAreValid(t *testing.T) {
 		{"ColorIconTertiary", ColorIconTertiary},
 	}
 
+	// sdl.Color components are uint8, so a range check above 255 can never
+	// fail; what actually matters is that a drawing token stayed visible. A
+	// fully transparent token silently erases whatever it paints, and that has
+	// happened before when a theme table gained a zero value.
 	for _, tk := range tokens {
-		if tk.c.R > 255 || tk.c.G > 255 || tk.c.B > 255 || tk.c.A > 255 {
-			t.Errorf("%s has out-of-range color component: %v", tk.name, tk.c)
+		if tk.c.A == 0 {
+			t.Errorf("%s is fully transparent, so it would draw nothing", tk.name)
 		}
 	}
 }

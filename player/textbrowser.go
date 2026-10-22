@@ -172,9 +172,6 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				x := spinnerX + int32(math.Cos(angle+a)*6)
 				y := spinnerY + int32(math.Sin(angle+a)*6)
 				alpha := uint8(255 - (i * 28))
-				if alpha > 255 {
-					alpha = 255
-				}
 				renderer.SetDrawColor(255, 255, 255, alpha)
 				renderer.FillRect(&sdl.Rect{X: x, Y: y, W: 2, H: 2})
 			}

@@ -60,11 +60,29 @@ type qsCycle struct {
 	Value int // seconds
 }
 
+// qsLinkAction names a row that opens another panel instead of changing a
+// value. Keeping it a separate row type means the switch stays a switch.
+type qsLinkAction int
+
+const (
+	qsLinkNone qsLinkAction = iota
+	qsLinkWiFi
+)
+
+type qsLink struct {
+	Label     string
+	Icon      string
+	Action    qsLinkAction
+	Available bool
+	Detail    string
+}
+
 type qsState struct {
 	open    bool
 	cursor  int
 	toggles []qsToggle
 	sliders []qsSlider
+	links   []qsLink
 	cycle   qsCycle
 	enter   uiEnter // rise + fade entrance
 
@@ -112,6 +130,9 @@ func qsInit() {
 			{Label: "Brightness", Icon: "[L]", Action: "brightness",
 				Value: 1, Min: float64(qsBrightnessFloorPct) / 100, Max: 1},
 		},
+		links: []qsLink{
+			{Label: "Wi-Fi Networks", Icon: "[N]", Action: qsLinkWiFi},
+		},
 		// The app's idle timer drives the screensaver overlay, not a display
 		// blank, so the row says what it actually controls.
 		cycle: qsCycle{Label: "Screensaver", Icon: "[T]", Value: 300},
@@ -145,6 +166,16 @@ func qsRefreshAvailability() {
 		t := &qs.toggles[i]
 		t.Available = available[t.Action]
 		t.Detail = detail[t.Action]
+	}
+	for i := range qs.links {
+		l := &qs.links[i]
+		switch l.Action {
+		case qsLinkWiFi:
+			l.Available = wifiControlAvailable()
+			// The row is 400 px wide; the full reason lives in the picker's
+			// header and in the toast, so the row only says there is no backend.
+			l.Detail = "N/A"
+		}
 	}
 	volumeOK := volumeBackend() != ""
 	brightnessOK := brightnessAvailable()
@@ -205,9 +236,9 @@ func clampQSPercent(v int) float64 {
 	return float64(v) / 100
 }
 
-// qsRowCount is the number of interactive rows: toggles, sliders, then the
-// timeout cycle.
-func qsRowCount() int { return len(qs.toggles) + len(qs.sliders) + 1 }
+// qsRowCount is the number of interactive rows: toggles, sliders, links, then
+// the timeout cycle.
+func qsRowCount() int { return len(qs.toggles) + len(qs.sliders) + len(qs.links) + 1 }
 
 // qsSyncFromConfig refreshes the rows whose truth lives in the config, then
 // asks the host for the radio and level state.
@@ -366,7 +397,29 @@ func qsSelect() {
 		qsStepSlider(idx, 10)
 		return
 	}
+	idx -= len(qs.sliders)
+	if idx < len(qs.links) {
+		qsOpenLink(qs.links[idx])
+		return
+	}
 	qsCycleTimeout(1)
+}
+
+// qsOpenLink opens the panel behind a link row. It is a no-op with a reason on
+// devices where that panel's backend is missing.
+func qsOpenLink(l qsLink) {
+	if !l.Available {
+		reason := l.Detail
+		if l.Action == qsLinkWiFi {
+			reason = wifiUnavailableReason()
+		}
+		ShowToast(l.Label+" is unavailable on this device ("+reason+")", ToastKindInfo)
+		return
+	}
+	switch l.Action {
+	case qsLinkWiFi:
+		openWiFiPanel()
+	}
 }
 
 // qsNavigateSlider handles the left/right input. On the sliders dr is the
@@ -381,7 +434,7 @@ func qsNavigateSlider(dr int) {
 		qsStepSlider(idx, dr)
 		return
 	}
-	if qs.cursor >= len(qs.toggles)+len(qs.sliders) {
+	if qs.cursor >= len(qs.toggles)+len(qs.sliders)+len(qs.links) {
 		if dr > 0 {
 			qsCycleTimeout(1)
 		} else {
@@ -540,7 +593,7 @@ func qsStepSlider(idx, deltaPct int) {
 
 // qsCycleTimeout moves the screen timeout to the next (or previous) step.
 func qsCycleTimeout(dir int) {
-	next := qs.cycle.Value
+	var next int
 	if dir >= 0 {
 		next = nextScreenTimeout(qs.cycle.Value)
 	} else {
@@ -675,11 +728,21 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 				qs.cursor == len(qs.toggles)+i)
 			y += itemH + qsItemGap
 		}
+		for i := range qs.links {
+			drawQSLinkRow(renderer, config, font, itemX, y, itemW, itemH, &qs.links[i],
+				qs.cursor == len(qs.toggles)+len(qs.sliders)+i)
+			y += itemH + qsItemGap
+		}
 		drawQSCycleRow(renderer, config, font, itemX, y, itemW, itemH,
-			qs.cursor == len(qs.toggles)+len(qs.sliders))
+			qs.cursor == len(qs.toggles)+len(qs.sliders)+len(qs.links))
 
 		// System info at the bottom: battery on the left, connectivity right.
-		infoY := panelY + panelH - 52
+		// Both lines are positioned from the font height rather than fixed
+		// offsets: with a large UI scale the footer used to sit on the panel's
+		// bottom edge and the connectivity line touched it.
+		smallH := int32(font.Height())
+		footerY := panelY + panelH - smallH - 8
+		infoY := footerY - smallH - 8
 		if bat := getBatteryPercent(); bat >= 0 {
 			renderText(renderer, config, font, fmt.Sprintf("Battery %d%%", bat),
 				sdl.Color{R: 140, G: 155, B: 180, A: 200}, panelX+qsPadX, infoY)
@@ -697,8 +760,27 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		hw, _, _ := font.SizeUTF8(hint)
 		renderText(renderer, config, font, hint,
 			sdl.Color{R: 90, G: 100, B: 125, A: 190},
-			panelX+(panelW-int32(hw))/2, panelY+panelH-28)
+			panelX+(panelW-int32(hw))/2, footerY)
 	})
+}
+
+// qsLabelWidth is the room left for a row label after the icon column and the
+// right-aligned detail (a missing backend, a level or "Open >"). Measuring the
+// detail instead of reserving a fixed strip keeps "Airplane Mode" whole while
+// still stopping "Bluetooth" from running into "bluetoothctl/rfkill" on dev
+// builds where every backend is missing.
+func qsLabelWidth(font *ttf.Font, rowW int32, detail string) int32 {
+	reserve := int32(0)
+	if detail != "" {
+		if dw, _, err := font.SizeUTF8(detail); err == nil {
+			reserve = int32(dw) + 24
+		}
+	}
+	w := rowW - 52 - 12 - reserve
+	if w < 60 {
+		w = 60
+	}
+	return w
 }
 
 func qsPanelHeight(rows int, itemH int32) int32 {
@@ -721,15 +803,17 @@ func drawQSToggleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	iconCol := sdl.Color{R: 200, G: 210, B: 230, A: 220}
 	detail := ""
 	if !t.Available {
-		// A row with no backend is dimmed and says why; the switch is not drawn
-		// because there is nothing for it to represent.
+		// A row with no backend is dimmed; the switch is not drawn because
+		// there is nothing for it to represent. The row says only "N/A": the
+		// specific reason ("no nmcli/rfkill") is too long for a 400 px row and
+		// is shown in the toast when A is pressed.
 		labelCol = sdl.Color{R: 110, G: 118, B: 135, A: 180}
 		iconCol = labelCol
-		detail = t.Detail
+		detail = "N/A"
 	}
 
 	renderText(renderer, config, font, t.Icon, iconCol, x+8, y+10)
-	renderText(renderer, config, font, t.Label, labelCol, x+36, y+10)
+	renderText(renderer, config, font, ellipsize(font, t.Label, qsLabelWidth(font, w, detail)), labelCol, x+52, y+10)
 	if detail != "" {
 		dw, _, _ := font.SizeUTF8(detail)
 		renderText(renderer, config, font, detail,
@@ -765,12 +849,18 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 		iconCol = labelCol
 	}
 
-	renderText(renderer, config, font, s.Icon, iconCol, x+8, y+6)
-	renderText(renderer, config, font, s.Label, labelCol, x+36, y+6)
-
+	detail := ""
 	if !s.Available {
-		dw, _, _ := font.SizeUTF8(s.Detail)
-		renderText(renderer, config, font, s.Detail,
+		// See drawQSToggleRow: the full reason belongs in the toast, not in a
+		// row that also has to fit its label.
+		detail = "N/A"
+	}
+	renderText(renderer, config, font, s.Icon, iconCol, x+8, y+6)
+	renderText(renderer, config, font, ellipsize(font, s.Label, qsLabelWidth(font, w, detail)), labelCol, x+52, y+6)
+
+	if detail != "" {
+		dw, _, _ := font.SizeUTF8(detail)
+		renderText(renderer, config, font, detail,
 			sdl.Color{R: 90, G: 98, B: 115, A: 160}, x+w-int32(dw)-12, y+6)
 		return
 	}
@@ -807,13 +897,33 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 		sdl.Color{R: 240, G: 245, B: 255, A: 240})
 }
 
+func drawQSLinkRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, l *qsLink, focused bool) {
+	qsRowBackground(renderer, x, y, w, h, focused)
+
+	labelCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
+	iconCol := sdl.Color{R: 200, G: 210, B: 230, A: 220}
+	if !l.Available {
+		labelCol = sdl.Color{R: 110, G: 118, B: 135, A: 180}
+		iconCol = labelCol
+	}
+	right := "Open >"
+	if !l.Available {
+		right = l.Detail
+	}
+	renderText(renderer, config, font, l.Icon, iconCol, x+8, y+10)
+	renderText(renderer, config, font, ellipsize(font, l.Label, qsLabelWidth(font, w, right)), labelCol, x+52, y+10)
+	rw, _, _ := font.SizeUTF8(right)
+	renderText(renderer, config, font, right,
+		sdl.Color{R: 120, G: 132, B: 152, A: 190}, x+w-int32(rw)-12, y+10)
+}
+
 func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, focused bool) {
 	qsRowBackground(renderer, x, y, w, h, focused)
 
 	renderText(renderer, config, font, qs.cycle.Icon,
 		sdl.Color{R: 200, G: 210, B: 230, A: 220}, x+8, y+10)
 	renderText(renderer, config, font, qs.cycle.Label,
-		sdl.Color{R: 180, G: 190, B: 210, A: 220}, x+36, y+10)
+		sdl.Color{R: 180, G: 190, B: 210, A: 220}, x+52, y+10)
 
 	value := screenTimeoutLabel(qs.cycle.Value)
 	vw, _, _ := font.SizeUTF8(value)

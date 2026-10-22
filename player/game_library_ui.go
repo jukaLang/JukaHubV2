@@ -4,9 +4,10 @@ package main
 //
 // Three columns: consoles (with a leading Continue row built from the recents
 // file), the games of the selected console, and a box-art preview. A launches,
-// X opens LAN play (netplay_ui.go), Y rescans after copying new files onto the
-// card, B closes. It is a modal overlay like the Emulators panel, so it works
-// on every config, including the desktop one with no Roms folder.
+// X opens LAN play (netplay_ui.go), L1 fetches missing covers, Y rescans after
+// copying new files onto the card, B closes. It is a modal overlay like the
+// Emulators panel, so it works on every config, including the desktop one with
+// no Roms folder.
 
 import (
 	"path/filepath"
@@ -30,7 +31,10 @@ type gameLibraryPanel struct {
 	scroll   int
 	focus    int // 0 = console column, 1 = games column
 	artCache map[string]*sdl.Texture
-	panel    sdl.Rect
+	// artSeen is the artwork-fetch generation whose images are in artCache. A
+	// newer generation means the cache holds "missing" entries that now exist.
+	artSeen uint64
+	panel   sdl.Rect
 
 	systemHits []gameLibRowHit
 	gameHits   []gameLibRowHit
@@ -116,6 +120,7 @@ func openGameLibraryPanel() {
 	gameLib.system = 0
 	gameLib.cursor = 0
 	gameLib.scroll = 0
+	gameLib.artSeen = artworkFetchGeneration()
 	gameLib.systemHits = nil
 	gameLib.gameHits = nil
 	gameLib.recents = recentGames()
@@ -174,6 +179,9 @@ func gameLibraryStatus() string {
 	status := itoa(gameLib.lib.Total) + " game(s) in " + itoa(len(gameLib.lib.Systems)) + " console(s)"
 	if len(gameLib.recents) > 0 {
 		status += " · " + itoa(len(gameLib.recents)) + " recent"
+	}
+	if artworkFetchRunning() {
+		status += " · fetching art…"
 	}
 	return status
 }
@@ -254,6 +262,32 @@ func launchSelectedGame() bool {
 	return true
 }
 
+// fetchMissingLibraryArtwork starts a background download for every scanned
+// game without a local cover. The scan is repeated here instead of reusing the
+// panel's snapshot because a card can be updated while the panel is open.
+func fetchMissingLibraryArtwork() {
+	if artworkFetchRunning() {
+		ShowToast(artworkFetchSummary(), ToastKindInfo)
+		return
+	}
+	artRoot := libraryArtworkRoot()
+	if strings.TrimSpace(artRoot) == "" {
+		ShowToast("The artwork folder is unavailable.", ToastKindWarning)
+		return
+	}
+	report := scanROMLibrary(romLibraryRoots())
+	missing := romsMissingArtwork(report.Games, artRoot)
+	if len(missing) == 0 {
+		ShowToast("Every scanned game already has box art.", ToastKindSuccess)
+		return
+	}
+	if !startLibraryArtworkFetch(missing) {
+		ShowToast("An artwork fetch is already running.", ToastKindInfo)
+		return
+	}
+	ShowToast("Fetching "+itoa(len(missing))+" missing cover(s) in the background", ToastKindInfo)
+}
+
 // handleGameLibraryKey consumes every key while the panel is open so the scene
 // underneath never reacts behind the modal.
 func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
@@ -273,6 +307,8 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 		launchSelectedGame()
 	case sdl.K_x:
 		openNetplayForSelectedGame()
+	case sdl.K_f:
+		fetchMissingLibraryArtwork()
 	case sdl.K_y:
 		refreshGameLibrary()
 		ShowToast(gameLibraryStatus(), ToastKindInfo)
@@ -299,6 +335,8 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		launchSelectedGame()
 	case sdl.CONTROLLER_BUTTON_X:
 		openNetplayForSelectedGame()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		fetchMissingLibraryArtwork()
 	case sdl.CONTROLLER_BUTTON_Y:
 		refreshGameLibrary()
 		ShowToast(gameLibraryStatus(), ToastKindInfo)
@@ -420,6 +458,13 @@ func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game 
 func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if !gameLib.open || renderer == nil {
 		return
+	}
+	// A fetch that finished after the last frame turned placeholder tiles into
+	// real covers. The textures must be released on the render thread, so the
+	// reload happens here rather than in the downloader.
+	if gen := artworkFetchGeneration(); gen != gameLib.artSeen {
+		closeGameLibraryArt()
+		gameLib.artSeen = gen
 	}
 	if gameLib.artCache == nil {
 		gameLib.artCache = map[string]*sdl.Texture{}
@@ -629,7 +674,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		gameLib.artRect = sdl.Rect{}
 	}
 
-	hint := "D-Pad: browse   A: play   X: LAN play   Y: rescan   B: close"
+	hint := "D-Pad: browse   A: play   X: LAN play   L1/F: fetch art   Y: rescan   B: close"
 	if gameLib.lib.Total == 0 {
 		hint = "Y: rescan   B: close"
 	}

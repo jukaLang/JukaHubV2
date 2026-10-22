@@ -129,7 +129,7 @@ type httpError struct {
 
 func (e *httpError) Error() string {
 	status := http.StatusText(e.Code)
-	if e.Body != nil && len(e.Body) > 0 {
+	if len(e.Body) > 0 {
 		// Include a snippet of the response body for debugging
 		snippet := string(e.Body)
 		if len(snippet) > 200 {

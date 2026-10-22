@@ -63,10 +63,19 @@ func TestRepoPkgCompatibleByExactDeviceMismatchMustRejectMarketingOnly(t *testin
 
 func TestRepoPkgCompatibleByExactDeviceIsTheOnlyExactDeviceTest(t *testing.T) {
 	// The exact-device mirror and the marketing-only regression test are the
-	// two distinct targets in this file. I keep them separate so a future
-	// refactoring cannot silently merge them.
-	mirror := repoPkgCompatibleWithDeviceExactSameDevice
-	if mirror == nil {
-		t.Fatal("exact-device mirror missing")
+	// two distinct targets in this file. This pins the mirror to the gate it
+	// mirrors: a future refactor that makes one stricter than the other has to
+	// fail here rather than silently changing what the installer accepts.
+	pkg := &RepoPkg{Architecture: "arm64", OS: []string{"trimui-stock"}, Devices: []string{"TG5040"}, Risk: "low"}
+	for _, device := range []DeviceModel{
+		DeviceTrimuiSmartPro, DeviceTrimuiSmartProS, DeviceTrimuiBrick,
+		DeviceTrimuiBrickPro, DeviceTrimuiHammer, DeviceUnknown, DeviceDevBuild,
+	} {
+		for _, windows := range []bool{false, true} {
+			want := repoPkgCompatibleWithDevice(pkg, device, "arm64", windows)
+			if got := repoPkgCompatibleWithDeviceExactSameDevice(pkg, device, "arm64", windows); got != want {
+				t.Fatalf("exact-device mirror disagrees for %q (windows=%t): %t vs %t", device, windows, got, want)
+			}
+		}
 	}
 }

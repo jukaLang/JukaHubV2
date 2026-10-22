@@ -66,6 +66,18 @@ echo "    SYSROOT     = $SYSROOT"
 go version
 go build -trimpath -ldflags "-s -w" -o "$PKG/$APP_NAME" .
 
+# Remote Play helpers, when native/build-helpers.sh has produced them. The
+# GitHub release uses it; this script does not build them itself.
+if [ -x native/bin/chiaki-stream ] && [ -x native/bin/chiaki-regist ]; then
+    mkdir -p "$PKG/bin"
+    cp native/bin/chiaki-stream native/bin/chiaki-regist "$PKG/bin/"
+    chmod +x "$PKG/bin/chiaki-stream" "$PKG/bin/chiaki-regist"
+fi
+if [ -d native/libs/brick-stock ]; then
+    mkdir -p "$PKG/libs/brick-stock"
+    cp -a native/libs/brick-stock/. "$PKG/libs/brick-stock/"
+fi
+
 # `file` is not installed in every toolchain image; it is only for the log.
 if command -v file >/dev/null 2>&1; then
     file "$PKG/$APP_NAME"

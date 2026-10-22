@@ -44,18 +44,25 @@ const (
 	vkTargetScene vkTargetKind = iota
 	vkTargetChat
 	vkTargetUnit
-	vkTargetTerm    // terminal command line
-	vkTargetName    // chat display name
-	vkTargetTV      // Live TV channel search
-	vkTargetParty   // Watch Party invite / shared link
-	vkTargetRA      // RetroAchievements username / Web API key
-	vkTargetMusic   // audio player initialism search
-	vkTargetNetplay // LAN play host address
+	vkTargetTerm     // terminal command line
+	vkTargetName     // chat display name
+	vkTargetTV       // Live TV channel search
+	vkTargetParty    // Watch Party invite / shared link
+	vkTargetRA       // RetroAchievements username / Web API key
+	vkTargetMusic    // audio player initialism search
+	vkTargetNetplay  // LAN play host address
+	vkTargetPSRemote // PS Remote Play pairing / account / address entry
+	vkTargetWiFi     // Wi-Fi passphrase for the network picker
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
 // committed to the user config when the keyboard submits.
 var vkNameBuffer string
+
+// wifiPassphraseBuffer holds a Wi-Fi password while it is typed. It is cleared
+// when the keyboard closes or submits, so the secret does not outlive the
+// dialog that needed it.
+var wifiPassphraseBuffer string
 
 var (
 	vkLayer     = vkLayerLetters
@@ -255,6 +262,8 @@ func vkEnsureLayout() {
 		target = 5
 	case vkTargetMusic:
 		target = 6
+	case vkTargetPSRemote:
+		target = 7
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -488,6 +497,10 @@ func vkCurrentText() string {
 		return musicSearchQueryValue()
 	case vkTargetNetplay:
 		return netplayPanel.address
+	case vkTargetPSRemote:
+		return vkPSRemoteBuffer
+	case vkTargetWiFi:
+		return wifiPassphraseBuffer
 	}
 	return inputTextBuffer
 }
@@ -518,6 +531,10 @@ func vkSetText(text string, config *Config) {
 		musicSetSearchQuery(text)
 	case vkTargetNetplay:
 		netplayPanel.address = text
+	case vkTargetPSRemote:
+		vkPSRemoteBuffer = text
+	case vkTargetWiFi:
+		wifiPassphraseBuffer = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -593,6 +610,16 @@ func vkTitle() string {
 		return "SEARCH SONGS"
 	case vkTargetNetplay:
 		return "HOST ADDRESS"
+	case vkTargetPSRemote:
+		switch psPanelEditField {
+		case psEditPIN:
+			return "PAIRING PIN"
+		case psEditAccount:
+			return "PSN ACCOUNT-ID"
+		}
+		return "CONSOLE ADDRESS"
+	case vkTargetWiFi:
+		return "WI-FI PASSWORD"
 	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
@@ -633,6 +660,16 @@ func vkPlaceholder() string {
 		return "Type initials: iwyn = I Want You Now"
 	case vkTargetNetplay:
 		return "192.168.1.5"
+	case vkTargetPSRemote:
+		switch psPanelEditField {
+		case psEditPIN:
+			return "8 digits from Link Device"
+		case psEditAccount:
+			return "Base64 Account-ID (12 chars)"
+		}
+		return "192.168.1.51"
+	case vkTargetWiFi:
+		return "At least 8 characters"
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -658,6 +695,11 @@ func vkHints() string {
 		return "Type initials    A / Y search    B / Esc close"
 	case vkTargetNetplay:
 		return "A type    Start join    B / Esc close"
+	case vkTargetPSRemote:
+		if psPanelEditField == psEditPIN {
+			return "A type    Ready pair    B / Esc close"
+		}
+		return "A type    Y save    B / Esc close"
 	}
 	return "A type    Y save    B / Esc close"
 }
@@ -789,6 +831,24 @@ func vkOpenRetroAchievementsInput() {
 	vkEnsureLayout()
 }
 
+// vkOpenWiFi opens the keyboard for the password of the network recorded in
+// wifiPendingSSID. The picker stays behind it and receives the passphrase
+// through wifiSubmitPassphrase, so the secret lives in this buffer only for as
+// long as it is being typed.
+func vkOpenWiFi() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetWiFi
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	wifiPassphraseBuffer = ""
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
 // vkOpenMusicSearch opens the keyboard for the audio player's initialism
 // search. The panel is already open behind it, so the hits update live.
 func vkOpenMusicSearch() {
@@ -841,6 +901,11 @@ func vkCloseKeyboard() {
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	vkAnimStart = 0
+	if vkTarget == vkTargetWiFi {
+		// A dismissed password field must not keep the secret around.
+		wifiPassphraseBuffer = ""
+		wifiPendingSSID = ""
+	}
 	if vkTarget == vkTargetScene {
 		activeSceneIndex = -1
 		activeElementIndex = -1
@@ -961,6 +1026,15 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetNetplay:
 		vkCloseKeyboard()
 		netplayJoinSubmit(text)
+	case vkTargetPSRemote:
+		vkCloseKeyboard()
+		psPanelApplyEdit(text)
+	case vkTargetWiFi:
+		// Passphrases are not trimmed: a leading or trailing space is part of
+		// the WPA key, and quietly removing it would fail with "wrong password".
+		// Submit before closing: closing clears the pending network and buffer.
+		wifiSubmitPassphrase(vkCurrentText())
+		vkCloseKeyboard()
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may
@@ -1474,9 +1548,9 @@ func vkDrawField(renderer *sdl.Renderer, config *Config, font *ttf.Font, field s
 		renderText(renderer, config, font, vkPlaceholder(), ColorTextTertiary(), field.X+padX, textY)
 	} else {
 		display := text
-		if vkTarget == vkTargetRA && raPanel.edit == raEditAPIKey {
-			// Do not leave the Web API key readable on the handheld screen
-			// while it is being typed or corrected.
+		if (vkTarget == vkTargetRA && raPanel.edit == raEditAPIKey) || vkTarget == vkTargetWiFi {
+			// Do not leave the Web API key or a Wi-Fi password readable on the
+			// handheld screen while it is being typed or corrected.
 			display = strings.Repeat("•", utf8.RuneCountInString(text))
 		}
 		visible, w := vkFitTail(font, display, maxW)
@@ -1490,9 +1564,10 @@ func vkDrawField(renderer *sdl.Renderer, config *Config, font *ttf.Font, field s
 		}
 	}
 
-	// Right-hand hint: remaining characters before the cap.
+	// Right-hand hint: remaining characters before the cap. A masked secret
+	// gets no counter; its limit is the WPA rule, not the field cap.
 	remaining := vkMaxTextLen - len(text)
-	if remaining < 200 && remaining >= 0 {
+	if vkTarget != vkTargetWiFi && remaining < 200 && remaining >= 0 {
 		smallFont, _ := getCachedFont(config, "small")
 		if smallFont != nil {
 			label := fmt.Sprintf("%d", remaining)

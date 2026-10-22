@@ -1332,7 +1332,6 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		fillRoundedRect(renderer, tipX, tipY+8, 3, tipH-16, 2, WithAlpha(uiHighlightColor(), 170))
 		dots := strings.Repeat("•", 1+int((sdl.GetTicks64()/350)%3))
 		renderText(renderer, config, font, "Juka is typing "+dots, ColorTextSecondary(), tipX+bubblePad, tipY+bubblePad)
-		startY = tipY - bubbleGap
 	}
 
 	processChatImageDownloads(renderer)

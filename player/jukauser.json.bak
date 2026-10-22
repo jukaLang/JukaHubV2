@@ -57,8 +57,8 @@
       "chat_input": "hi",
       "diskpie_data": {
         "Total": 510718431232,
-        "Used": 332647739392,
-        "Pct": 65
+        "Used": 339274379264,
+        "Pct": 66
       },
       "ftp_address": "",
       "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
@@ -70,12 +70,12 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "total": 9,
+        "total": 151,
         "scenes": {
-          "Main": 9
+          "Main": 153
         },
         "days": {
-          "2026-10-21": 9
+          "2026-10-21": 153
         },
         "unlocked": {}
       },
@@ -93,5 +93,30 @@
       "tools_status": "All tools available",
       "weatherUnitAuto": true
     }
+  },
+  "favorites": {
+    "videos": [],
+    "recent": [
+      {
+        "Type": "video",
+        "Data": {
+          "id": "1YnkZS9e8MA",
+          "title": "Moneybagg Yo - Trending [Federal 3]",
+          "uploader": "DatPiff",
+          "channel": "DatPiff",
+          "duration": 210,
+          "thumbnail": "https://i.ytimg.com/vi/1YnkZS9e8MA/hq720.jpg?sqp=-oaymwE2COgCEMoBSFXyq4qpAygIARUAAIhCGAFwAcABBvABAfgB_gmAAtAFigIMCAAQARhlIEsoSzAP\u0026rs=AOn4CLBNJnRfkz4I6F8704V9w-8VAmWH3w",
+          "description": "Listen \u0026 Subscribe to Datpiff's Official Spotify Playlist: https://spoti.fi/2OVygic Download: http://piff.me/2785754 Download: ...",
+          "view_count": 10460619,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=1YnkZS9e8MA",
+          "position": 7.367314799999999
+        },
+        "Timestamp": "2026-10-21T23:41:21.0717976-04:00"
+      }
+    ],
+    "files": [],
+    "iptv": []
   }
 }

@@ -12,6 +12,8 @@ device.
 | Continue card with real play data | `getRecentItems` in [recent.go](../player/recent.go) merges the game recents (`game-recents.json`, already written by every library launch) with media recents into one timeline. Games relaunch through the same launcher resolution as the library (`resolveGameLauncher` in [game_library.go](../player/game_library.go)), report a missing ROM or emulator as a toast, and name the console on the tile. | `continue_games_test.go` |
 | Offline weather | [weather_cache.go](../player/weather_cache.go) writes the last good forecast after each fetch and restores it before the first network attempt, so an offline boot shows weather instead of "unavailable". The popover header says `Saved 3 hours ago` when the data is from the cache; anything older than a week, future-stamped, or unparseable is discarded. | `weather_cache_test.go` |
 | LAN play (link cable over Wi-Fi) | [netplay.go](../player/netplay.go) + [netplay_ui.go](../player/netplay_ui.go): **X** on a library game opens Host / Join. Hosting resolves RetroArch and a netplay core, prints this device's `ip:port` before launching, and starts `retroarch -L <core> <rom> --host --port N --nick X`; joining takes `ip[:port]` on the on-screen keyboard and starts `--connect`. Both sides need the same core and ROM, and the panel says so. | `netplay_test.go`, `netplay_ui_test.go` |
+| Save-state resume with auto-save | [savestate_resume.go](../player/savestate_resume.go) turns on RetroArch's `savestate_auto_save` and `savestate_auto_load` for a launch when the resolved launcher actually runs RetroArch. The edit is line-based, keeps a one-time `retroarch.cfg.jukahub-backup`, and never touches a standalone emulator. `savestateResume: false` opts out. | `savestate_resume_test.go` |
+| Fetch missing box art from the library | **L1** / **F** in the Games Library rescans and downloads covers for games without a local PNG, reusing the onboarding downloader. Recent 404s are cached in `game-art/.missing-art.json` for 30 days; worker-thread textures are reloaded on the render thread when the fetch finishes. | `artwork_fetch_test.go` |
 
 ## Already there (the list assumed these were missing)
 
@@ -89,30 +91,24 @@ never appear. The working design is to configure the emulator's own OSD:
 - It is a *focus* mode, not security: the SD card can be edited from a PC. Say so
   in the settings row so nobody trusts it as parental control.
 
-### 4. Box art for the rest of the library
+### 4. Box art for the rest of the library (shipped)
 
-The fetch already exists (`startROMArtworkFetch` in `romsetup.go`, driven by the
-onboarding ROM setup), so this is a smaller job than it looks:
+The library now has the missing-art action (**L1** / **F**), the per-title
+not-found cache and the render-thread texture reload. What is still open is the
+quality of the match, not the plumbing: titles the libretro set spells
+differently (`Zelda II` vs `Zelda II - The Adventure of Link`) are recorded as
+not found. A manual "choose image" action and a title-normalisation table are
+the next step; neither needs a new downloader.
 
-- Add a **Fetch missing art** action to the Game Library (and behind the
-  Continue card's empty tile) that runs the same fetch over the *scanned* list
-  rather than the onboarding one.
-- Keep a per-title "not found" marker so an unmatched ROM is not retried on
-  every scan, and cache under the existing artwork root.
-- Textures must be created on the render thread; the download stays on a worker —
-  the exact BrickOS failure noted in [IMPROVEMENTS.md](IMPROVEMENTS.md)
-  (worker-thread texture creation produced black covers).
-
-### 5. Game switcher with quick resume
+### 5. Game switcher with quick resume (first half shipped)
 
 - Foundation exists: recents, play time, game profiles, low-battery auto-save.
-- The missing piece is state automation: `savestate_auto_save`,
-  `savestate_auto_load` and a per-ROM state slot, so "Resume" boots the game with
-  the last state already loaded. RetroArch does the work; JukaHub only sets the
-  switches and remembers which game is "open".
-- A real switcher (suspend one game, start another, come back) needs two emulator
-  processes suspended on a 1 GB device. Treat that as experimental and start
-  with save-state resume instead.
+- **Resume is now wired:** a RetroArch launch enables `savestate_auto_save` and
+  `savestate_auto_load`, so quitting writes an auto state and the next launch
+  loads it. See [GAME_LIBRARY.md](GAME_LIBRARY.md#resume-and-auto-save).
+- A real switcher (suspend one game, start another, come back) still needs two
+  emulator processes suspended on a 1 GB device, and named per-game save slots
+  need core-specific state handling. Treat those as experimental.
 
 ### 6. LED policies and haptics
 

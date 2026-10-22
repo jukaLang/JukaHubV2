@@ -29,10 +29,7 @@ func gameRecentItem(g recentGame) FavoriteItem {
 // device that had played ten games still showed "Nothing played recently".
 func getRecentItems() []FavoriteItem {
 	favoritesMutex.Lock()
-	out := make([]FavoriteItem, 0, len(favoritesStore.Recent))
-	for _, it := range favoritesStore.Recent {
-		out = append(out, it)
-	}
+	out := append([]FavoriteItem{}, favoritesStore.Recent...)
 	favoritesMutex.Unlock()
 
 	for _, g := range recentGames() {
@@ -223,9 +220,8 @@ func renderRecent(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		w, _, _ := f.SizeUTF8(label)
 		if int32(w) > lw {
-			runes := []rune(label)
 			cur := ""
-			for _, r := range runes {
+			for _, r := range label {
 				test := cur + string(r) + "…"
 				tw, _, _ := f.SizeUTF8(test)
 				if int32(tw) > lw {

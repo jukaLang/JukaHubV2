@@ -23,8 +23,28 @@ go vet ./...
 go test ./...
 ```
 
-`go vet` and `go test ./...` are the bar; CI additionally builds the ARM64
-SD-card package for handheld changes.
+For a startup, render-loop or dependency change, also run the cold-boot
+benchmark. It builds once, runs headless three times and fails on a median over
+the limit; CI uses the same script as a blocking gate.
+
+```bash
+cd player
+JUKAHUB_BENCH_RUNS=3 JUKAHUB_BENCH_LIMIT_MS=5000 ./startup-bench.sh
+```
+
+For a builder change, also run the web checks from the repository root:
+
+```bash
+node --check script.js && node --check builder-device.js \
+  && node --check builder-gallery.js && node --check gallery/layouts.js
+(cd tests/web && npm ci && npm test)      # jsdom: import, share, security
+(cd tests/e2e && npm ci && npx playwright test)   # Chromium: add, undo/redo, round trip
+```
+
+The first Playwright run needs `npx playwright install chromium`. CI runs the
+same four checks plus `go vet`/`go test` for the player; a builder change is not
+finished until the Chromium smoke test passes, because it is the only check that
+drives the real drop handler, history buttons and import path.
 
 > **One known flaky test.** `TestVideoFullscreenHidesControlBar` crashes
 > intermittently in `SDL_RenderReadPixels` (a native SDL assertion while the

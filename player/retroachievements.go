@@ -1064,7 +1064,6 @@ func raSubmitCredential(text string) {
 		return
 	}
 	settings := raLoadSettings()
-	creds := raEffectiveCredentials()
 
 	switch field {
 	case raEditUsername:
@@ -1096,7 +1095,7 @@ func raSubmitCredential(text string) {
 	invalidateEmulatorCache()
 	raOnCredentialsChanged()
 	raEnsureCacheLoaded()
-	creds = raEffectiveCredentials()
+	creds := raEffectiveCredentials()
 	if creds.complete() {
 		raPanel.settings = false
 		raPanel.cursor = 0

@@ -60,7 +60,7 @@ func maybeOfferUpdate() {
 	}
 	if virtualKeyboardActive || toolsPanel.open || imageViewerPath != "" || qs.open ||
 		patchModal != nil || transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
-		nc.open || tb.startOpen || processPanel.open || ipPanelOpen || emuPanel.open || gpPanel.open || winAppsPanel.open || portsPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open || raPanel.open || a11y.open ||
+		nc.open || tb.startOpen || processPanel.open || wifiPanel.open || ipPanelOpen || emuPanel.open || gpPanel.open || winAppsPanel.open || portsPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open || raPanel.open || a11y.open ||
 		wpOpen || socialNotifOpen || shortcutsOpen || globalSearchOpen || clipSearchOpen || smartHomePanel.open {
 		return
 	}

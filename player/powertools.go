@@ -1085,7 +1085,7 @@ func powerPageSize(page powerPage, rowH int32) (int32, int32) {
 	}
 	header := int32(86)
 	footer := int32(36)
-	panelH := header + footer + 14
+	var panelH int32
 	if page == powerPageOutput {
 		panelH = 640
 	} else {

@@ -15,3 +15,7 @@ partyhistory.json
 # Build bootstrap temp items
 .msys2-installer.exe
 .sdl2/
+
+# Remote Play helpers (built by native/build-helpers.sh)
+native/bin/
+native/libs/

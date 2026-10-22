@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -154,9 +158,122 @@ func romArtworkPath(rom scannedROM, root string) string {
 	return filepath.Join(root, strings.ReplaceAll(rom.System, " ", "_"), stem+".png")
 }
 
-func fetchROMArtwork(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string) (fetched, skipped, missing int) {
+// artworkMissTTL is how long a "not found" answer is trusted. The thumbnail
+// set gains covers over time, so a miss is retried after a month instead of
+// being permanent — but a library with 200 unmatched homebrew ROMs does not hit
+// the network for all of them on every fetch.
+const artworkMissTTL = 30 * 24 * time.Hour
+
+const artworkMissFile = ".missing-art.json"
+
+// artworkBaseURL is a variable so the tests can point at an httptest server.
+var artworkBaseURL = "https://thumbnails.libretro.com"
+
+// artworkMissStore is the on-disk shape of the not-found cache: title keys
+// mapped to the time the lookup failed. It lives beside the images so deleting
+// data/game-art also resets the cache.
+type artworkMissStore struct {
+	Version int                  `json:"version"`
+	Missing map[string]time.Time `json:"missing"`
+}
+
+func artworkMissPath(dest string) string {
+	if strings.TrimSpace(dest) == "" {
+		return ""
+	}
+	return filepath.Join(dest, artworkMissFile)
+}
+
+// artworkMissKey identifies a lookup: collection plus the stem sent to the
+// thumbnail server. The stem is what the match actually depends on.
+func artworkMissKey(collection, stem string) string {
+	return strings.TrimSpace(collection) + "/" + strings.TrimSpace(stem)
+}
+
+// loadArtworkMisses never fails the caller. A corrupt cache is treated as empty
+// and rewritten on the next fetch.
+func loadArtworkMisses(dest string) map[string]time.Time {
+	out := map[string]time.Time{}
+	path := artworkMissPath(dest)
+	if path == "" {
+		return out
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return out
+	}
+	var store artworkMissStore
+	if err := json.Unmarshal(raw, &store); err != nil {
+		log.Printf("[art] ignoring %s: %v", path, err)
+		return out
+	}
+	now := time.Now()
+	for key, at := range store.Missing {
+		key = strings.TrimSpace(key)
+		if key == "" || at.IsZero() || at.After(now) {
+			continue
+		}
+		out[key] = at
+	}
+	return out
+}
+
+// saveArtworkMisses prunes entries that have already expired several times
+// over, so the file stays a few kilobytes even after years of scanning.
+func saveArtworkMisses(dest string, misses map[string]time.Time) error {
+	path := artworkMissPath(dest)
+	if path == "" {
+		return nil
+	}
+	now := time.Now()
+	kept := make(map[string]time.Time, len(misses))
+	for key, at := range misses {
+		if key == "" || at.IsZero() || now.Sub(at) > 4*artworkMissTTL {
+			continue
+		}
+		kept[key] = at
+	}
+	if len(kept) == 0 {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	payload, err := json.MarshalIndent(artworkMissStore{Version: 1, Missing: kept}, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func artworkRecentlyMissing(misses map[string]time.Time, key string, now time.Time, ttl time.Duration) bool {
+	at, ok := misses[key]
+	if !ok || at.IsZero() {
+		return false
+	}
+	if ttl <= 0 {
+		ttl = artworkMissTTL
+	}
+	age := now.Sub(at)
+	return age >= 0 && age < ttl
+}
+
+// fetchROMArtworkWithMisses is the shared downloader. A nil misses map keeps
+// the old behaviour (always retry); a map both skips recent misses and records
+// new ones, which is what the library action uses.
+func fetchROMArtworkWithMisses(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string, misses map[string]time.Time, now time.Time, ttl time.Duration) (fetched, skipped, missing int) {
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
+	}
+	if now.IsZero() {
+		now = time.Now()
 	}
 	for _, rom := range roms {
 		path := romArtworkPath(rom, dest)
@@ -173,9 +290,19 @@ func fetchROMArtwork(ctx context.Context, roms []scannedROM, client *http.Client
 			missing++
 			continue
 		}
+		key := artworkMissKey(rom.Collection, stem)
+		if misses != nil && artworkRecentlyMissing(misses, key, now, ttl) {
+			missing++
+			continue
+		}
 		image, err := fetchROMArtworkImage(ctx, client, baseURL, rom.Collection, stem)
 		if err != nil {
 			missing++
+			// A 404 is a real answer worth remembering. A timeout or a dropped
+			// connection is not: retrying that next time is the whole point.
+			if misses != nil && errors.Is(err, os.ErrNotExist) {
+				misses[key] = now
+			}
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -186,9 +313,16 @@ func fetchROMArtwork(ctx context.Context, roms []scannedROM, client *http.Client
 			missing++
 			continue
 		}
+		if misses != nil {
+			delete(misses, key)
+		}
 		fetched++
 	}
 	return fetched, skipped, missing
+}
+
+func fetchROMArtwork(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string) (fetched, skipped, missing int) {
+	return fetchROMArtworkWithMisses(ctx, roms, client, baseURL, dest, nil, time.Now(), artworkMissTTL)
 }
 
 func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, collection, title string) ([]byte, error) {
@@ -218,7 +352,15 @@ func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, col
 		if readErr != nil {
 			return nil, readErr
 		}
-		if resp.StatusCode != http.StatusOK || len(data) < 8 || len(data) > 8<<20 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
+		if resp.StatusCode == http.StatusNotFound {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			// A 5xx or a throttling response is not a missing cover; the caller
+			// must not cache it as "not found" and give up for a month.
+			return nil, fmt.Errorf("thumbnail server returned %s", resp.Status)
+		}
+		if len(data) < 8 || len(data) > 8<<20 || string(data[:8]) != "\x89PNG\r\n\x1a\n" {
 			continue
 		}
 		return data, nil
@@ -228,14 +370,29 @@ func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, col
 
 var artworkFetchState = struct {
 	sync.Mutex
-	running bool
-	total   int
-	fetched int
-	skipped int
-	missing int
+	running  bool
+	total    int
+	fetched  int
+	skipped  int
+	missing  int
+	finished uint64 // bumped on every completion; the library redraws art when it moves
 }{}
 
 func startROMArtworkFetch(roms []scannedROM) bool {
+	return startArtworkFetch(roms, nil, romArtworkDir())
+}
+
+// startLibraryArtworkFetch downloads the covers for a scanned list and keeps the
+// not-found cache, so pressing the action again only asks about new titles.
+func startLibraryArtworkFetch(roms []scannedROM) bool {
+	dest := romArtworkDir()
+	if strings.TrimSpace(dest) == "" {
+		return false
+	}
+	return startArtworkFetch(roms, loadArtworkMisses(dest), dest)
+}
+
+func startArtworkFetch(roms []scannedROM, misses map[string]time.Time, dest string) bool {
 	artworkFetchState.Lock()
 	if artworkFetchState.running {
 		artworkFetchState.Unlock()
@@ -248,16 +405,52 @@ func startROMArtworkFetch(roms []scannedROM) bool {
 	artworkFetchState.missing = 0
 	artworkFetchState.Unlock()
 	go func() {
-		fetched, skipped, missing := fetchROMArtwork(context.Background(), roms, nil,
-			"https://thumbnails.libretro.com", romArtworkDir())
+		fetched, skipped, missing := fetchROMArtworkWithMisses(context.Background(), roms, nil,
+			artworkBaseURL, dest, misses, time.Now(), artworkMissTTL)
+		if misses != nil {
+			if err := saveArtworkMisses(dest, misses); err != nil {
+				log.Printf("[art] cannot save the not-found cache: %v", err)
+			}
+		}
 		artworkFetchState.Lock()
 		artworkFetchState.running = false
 		artworkFetchState.fetched = fetched
 		artworkFetchState.skipped = skipped
 		artworkFetchState.missing = missing
+		artworkFetchState.finished++
 		artworkFetchState.Unlock()
 	}()
 	return true
+}
+
+func artworkFetchRunning() bool {
+	artworkFetchState.Lock()
+	defer artworkFetchState.Unlock()
+	return artworkFetchState.running
+}
+
+// artworkFetchGeneration changes once per completed fetch, on any thread, so
+// the renderer can drop its texture cache without touching it from here.
+func artworkFetchGeneration() uint64 {
+	artworkFetchState.Lock()
+	defer artworkFetchState.Unlock()
+	return artworkFetchState.finished
+}
+
+// romsMissingArtwork filters a scan down to the games with no local image.
+func romsMissingArtwork(roms []scannedROM, artRoot string) []scannedROM {
+	missing := make([]scannedROM, 0, len(roms))
+	for _, rom := range roms {
+		path := romArtworkPath(rom, artRoot)
+		if path == "" {
+			continue
+		}
+		if _, err := os.Stat(path); err == nil {
+			continue
+		}
+		missing = append(missing, rom)
+	}
+	return missing
 }
 
 func artworkFetchSummary() string {

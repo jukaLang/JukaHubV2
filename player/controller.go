@@ -37,6 +37,14 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if processPanel.open {
 		return ctrlProcessPanel(e, config)
 	}
+	// The Wi-Fi picker is modal. While its password keyboard is up the
+	// controller belongs to the keyboard, which runs after these overlays.
+	if wifiPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
+		return ctrlWiFi(e, config)
+	}
 	// Update prompt is the topmost modal.
 	if updatePrompt.open {
 		return ctrlUpdatePrompt(e, config)
@@ -106,7 +114,7 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if calibrationPanel.open {
 		return ctrlStickCalibration(e, config)
 	}
-	// PS Remote Play installer/launcher is modal too.
+	// The PS Remote Play client panel is modal too.
 	if chiakiPanel.open {
 		return ctrlChiakiPanel(e)
 	}
@@ -189,14 +197,7 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e.Button == sdl.CONTROLLER_BUTTON_A {
 		if tool, ok := installBarRetryPending(); ok {
 			PlayActivateSound()
-			switch tool {
-			case chiakiAppName:
-				retryChiakiInstall()
-			case chiakiPS5AppName:
-				retryChiakiPS5Install()
-			default:
-				retryHelperToolInstall(tool)
-			}
+			retryHelperToolInstall(tool)
 			return true
 		}
 	}

@@ -165,8 +165,12 @@ func main() {
 	// Restore the audio-reactive LEDs if the user left them on. SetLEDSync is a
 	// no-op on a device with no addressable LED, and logs why.
 	StartLEDSyncIfEnabled(config)
+	// Network work is queued until after the first frame: weather, the tool
+	// probe, telemetry, the update check and the network/companion listeners all
+	// compete with cold font rasterisation, and none of them are needed to paint
+	// the home screen. See runDeferredStartup.
 	if safeModeAllows(SafeFeatureNetwork) {
-		startWeather(config)
+		deferStartupTask("weather", func() { startWeather(config) })
 	}
 
 	// Tool readiness: check whether the helper tools (yt-dlp, ffmpeg, ffprobe)
@@ -174,7 +178,7 @@ func main() {
 	// while they download. This is non-fatal: offline launches stay usable and
 	// retry on the next run.
 	if safeModeAllows(SafeFeatureToolInstall) {
-		startToolHealthCheck()
+		deferStartupTask("tool-health", startToolHealthCheck)
 	}
 
 	// Patch module: load persisted state and roll back any interrupted update
@@ -205,14 +209,14 @@ func main() {
 	}
 	// Opt-in device census (off by default, no identifier).
 	if safeModeAllows(SafeFeatureNetwork) {
-		TelemetryBoot(config)
+		deferStartupTask("telemetry", func() { TelemetryBoot(config) })
 	}
 
 	// Automatic updater: check the release feed in the background and offer a
 	// newer build in Patch. It never downloads or installs without the user
 	// confirming there.
 	if safeModeAllows(SafeFeatureUpdates) {
-		startAutoUpdateCheck(config)
+		deferStartupTask("update-check", func() { startAutoUpdateCheck(config) })
 	}
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
@@ -221,7 +225,7 @@ func main() {
 	// Start network connectivity monitoring (tool health is already started
 	// above; running it twice would double the startup probes).
 	if safeModeAllows(SafeFeatureNetwork) {
-		startNetworkMonitor()
+		deferStartupTask("network-monitor", startNetworkMonitor)
 	}
 
 	// Tools panel / FTP: publish the initial IP and server state, and make sure
@@ -230,9 +234,10 @@ func main() {
 	publishSSHState()
 	defer ftpSrv.Stop()
 	defer sshSrv.Stop()
-	// The Phone Companion starts with the app so the QR in the home header is
-	// live immediately. It retries from Home if Wi-Fi comes up later.
-	companionEnsureStarted()
+	// The Phone Companion starts just after the first frame so the QR in the
+	// home header is live by the time the user looks at it. It retries from the
+	// event loop if Wi-Fi comes up later.
+	deferStartupTask("companion", companionEnsureStarted)
 	defer stopCompanionServer()
 
 	// Start screensaver idle monitor.
@@ -242,10 +247,9 @@ func main() {
 	}
 	startScreensaverMonitor()
 
-	// Start periodic social notifications.
-	// Start periodic social notifications (if enabled)
+	// Start periodic social notifications (if enabled).
 	if config.Variables.SocialNotifs {
-		startSocialNotifs()
+		deferStartupTask("social-notifs", startSocialNotifs)
 	}
 
 	// Game tick for Pong/Snake/Tetris.
@@ -335,13 +339,17 @@ func main() {
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
 	// Boot splash: the starfield warp in splash.go, played for whatever is left
-	// of the two-second boot budget. A warm launch sees a short, complete
-	// animation instead of a fixed one; a cold card with nothing left opens the
-	// UI directly (see startup.go).
+	// of the two-second boot budget. A warm launch skips it entirely — the
+	// greeting is for a cold start, and a relaunch has the card's caches warm.
+	// A cold card with nothing left opens the UI directly (see startup.go).
 	startupMarkNow("window")
 	bootElapsed := startupElapsed()
 	allotment := splashAllotment(bootElapsed, startupTarget(), splashReserve(bootElapsed))
-	if note := startupBudgetNote(bootElapsed); note != "" {
+	if startupWarmStart(time.Now()) {
+		allotment = 0
+		log.Printf("startup: warm start (last launch within %s); splash skipped", startupWarmWindow)
+	}
+	if note := startupBudgetNote(bootElapsed); note != "" && allotment > 0 {
 		log.Printf("startup: %s", note)
 	}
 	ShowSplash(renderer, config, allotment)
@@ -438,8 +446,11 @@ func main() {
 	lastAlarmCheck := time.Now()
 	for running {
 		// Keep the home-header pairing QR live: start the companion when Wi-Fi
-		// appears and rebuild the code if DHCP moved the address.
-		companionEnsureStarted()
+		// appears and rebuild the code if DHCP moved the address. The first
+		// frame is painted before this runs, so the listener never delays boot.
+		if startupReported {
+			companionEnsureStarted()
+		}
 		// Phone Companion actions arrive on an HTTP goroutine. They are queued
 		// and applied here, on the main loop, so a phone keypress takes the same
 		// path as the handheld's own input.
@@ -521,6 +532,11 @@ func main() {
 					if processPanel.open && handleProcessKey(e, config) {
 						continue
 					}
+					// The Wi-Fi picker is modal. Its password keyboard is handled at
+					// the bottom of the chain, so the panel yields while it is up.
+					if wifiPanel.open && handleWiFiKey(e, config) {
+						continue
+					}
 					// Update prompt is the topmost modal.
 					if updatePrompt.open && handleUpdatePromptKey(e, config) {
 						continue
@@ -573,7 +589,7 @@ func main() {
 					if a11y.open && handleAccessibilityKey(e, config) {
 						continue
 					}
-					// PS Remote Play installer/launcher is modal too.
+					// The PS Remote Play client panel is modal too.
 					if chiakiPanel.open && handleChiakiKey(e) {
 						continue
 					}
@@ -1080,6 +1096,11 @@ func main() {
 						// Process panel is modal the same way.
 						if processPanel.open {
 							handleProcessMouse(mx, my, config)
+							break
+						}
+						// Wi-Fi picker is modal the same way.
+						if wifiPanel.open {
+							handleWiFiMouse(mx, my, config)
 							break
 						}
 						// Update prompt is modal and above every other overlay.
@@ -2115,11 +2136,6 @@ func main() {
 			continue
 		}
 
-		// A home-launcher press that downloaded the PS5 beta launches it as soon
-		// as the install reports success. Polled here, on the event thread.
-		ps5PollPendingLaunch()
-		ps4PollPendingLaunch()
-
 		// Offer a newly discovered release once.
 		maybeOfferUpdate()
 
@@ -2163,6 +2179,11 @@ func main() {
 			renderProcessPanel(renderer, config)
 		}
 
+		// Wi-Fi network picker (scan, join, disconnect, forget).
+		if wifiPanel.open {
+			renderWiFiPanel(renderer, config)
+		}
+
 		// IPStream library overlay.
 		if ipPanelOpen {
 			renderIPPanel(renderer, config)
@@ -2198,7 +2219,7 @@ func main() {
 			renderWindowsAppsPanel(renderer, config)
 		}
 
-		// PS Remote Play overlay (install and launch the TrimUI Chiaki-ng port).
+		// PS Remote Play overlay (JukaHub's own PS4/PS5 client).
 		if chiakiPanel.open {
 			renderChiakiPanel(renderer, config)
 		}
@@ -2302,12 +2323,17 @@ func main() {
 			startupReported = true
 			startupMarkNow("first-frame")
 			startupLog()
+			// Remember this successful boot so a relaunch inside the warm window
+			// can skip the splash. Best-effort; a read-only card still boots.
+			startupRecordFirstFrame(startupElapsed())
 			// Bench mode measures boot and stops before the event loop settles
 			// into idle work, so CI can assert on the number.
 			if startupBenchEnabled() {
 				running = false
 				continue
 			}
+			// Only now do the network/background tasks get the CPU.
+			runDeferredStartup()
 		}
 		animTime = float64(sdl.GetTicks64()) / 1000.0
 

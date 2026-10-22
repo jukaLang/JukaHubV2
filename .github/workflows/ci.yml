@@ -1,7 +1,8 @@
 name: CI
 
-# Runs on every push and pull request. The player has ~150 test files but no
-# workflow ran them; the existing workflows only build packages.
+# Runs on every push and pull request: syntax-check the builder scripts and run
+# the jsdom/Playwright web tests, then vet and test the player on Linux with SDL2
+# installed so the offscreen render tests can run headless.
 
 on:
   push:
@@ -37,6 +38,60 @@ jobs:
           done
           true
 
+  web-e2e:
+    name: Web builder smoke test (Chromium)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tests/e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install Playwright and Chromium
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Run the builder smoke test
+        # Loads the real page, drops a palette component on the canvas, checks
+        # undo/redo, then exports JSON and re-imports it.
+        run: npx playwright test
+      - name: Upload the failure trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results
+          retention-days: 7
+
+  player-core:
+    name: Player helpers (no SDL)
+    runs-on: ubuntu-latest
+    # These packages do not import SDL, so they build and test with cgo off and
+    # are the blocking half of the player checks.
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: go vet
+        env:
+          CGO_ENABLED: "0"
+        run: go vet ./internal/... ./web/... ./tools/...
+      - name: go test
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./internal/... ./web/... ./tools/... -count=1
+
   player:
     name: Player vet and tests
     runs-on: ubuntu-latest
@@ -64,3 +119,78 @@ jobs:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
         run: go test ./... -count=1 -timeout 10m
+
+  player-boot-bench:
+    name: Player cold-boot budget
+    runs-on: ubuntu-latest
+    # Blocking on purpose: a regression that makes the app slower than five
+    # seconds to first frame should not reach main, even while the full player
+    # suite is still advisory. The desktop runner limit is deliberately looser
+    # than the 2 s device target measured by running the same script on a
+    # TrimUI; see docs/DEVELOPMENT.md.
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: Cold-boot median
+        env:
+          JUKAHUB_BENCH_LIMIT_MS: "5000"
+          JUKAHUB_BENCH_RUNS: "3"
+        run: bash ./startup-bench.sh
+
+  player-staticcheck:
+    name: Player staticcheck (non-blocking)
+    runs-on: ubuntu-latest
+    # Advisory until the existing findings are triaged. Tracked in
+    # docs/IMPROVEMENTS.md: the remaining reports are deliberate (the PS4
+    # protocol needs CFB) or cosmetic (ST1005 error phrasing).
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: staticcheck
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.2
+          "$(go env GOPATH)/bin/staticcheck" ./...
+
+  player-race:
+    name: Player race detector (non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: go test -race
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: go test -race ./... -count=1 -timeout 20m

@@ -58,21 +58,40 @@ for device in "${TRIMUI_DEVICES[@]}"; do
     GOOS=linux GOARCH=arm64 CGO_ENABLED=1 go build -trimpath -ldflags "$LDFLAGS" -o "$TARGET_DIR/JukaHub" .
     cp Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png "$TARGET_DIR/"
 
+    # Remote Play helpers. They are built separately by native/build-helpers.sh
+    # because they need the TG5050 SDK and chiaki-ng's sources; a release without
+    # them still runs, and the panel reports the helper as missing.
+    PKG_FILES=(JukaHub Inter-Regular.ttf background.jpg jukaconfig.json launch.sh config.json JukaPlayer.png)
+    if [ -x native/bin/chiaki-stream ] && [ -x native/bin/chiaki-regist ]; then
+        mkdir -p "$TARGET_DIR/bin"
+        cp native/bin/chiaki-stream native/bin/chiaki-regist "$TARGET_DIR/bin/"
+        chmod +x "$TARGET_DIR/bin/chiaki-stream" "$TARGET_DIR/bin/chiaki-regist"
+        PKG_FILES+=(bin/chiaki-stream bin/chiaki-regist)
+    else
+        echo "WARNING: native/bin helpers missing; ${device} will ship without Remote Play streaming" >&2
+    fi
+    # The Brick Pro needs the bundled FFmpeg/OpenSSL runtime next to the app.
+    if [ -d native/libs/brick-stock ]; then
+        mkdir -p "$TARGET_DIR/libs/brick-stock"
+        cp -a native/libs/brick-stock/. "$TARGET_DIR/libs/brick-stock/"
+        PKG_FILES+=(libs/brick-stock)
+    fi
+
     ASSET="JukaHub-${device}-linux-arm64.tar.gz"
-    tar -C "$TARGET_DIR" -czf "$OUT/$ASSET" \
-        JukaHub \
-        Inter-Regular.ttf \
-        background.jpg \
-        jukaconfig.json \
-        launch.sh \
-        config.json \
-        JukaPlayer.png
+    tar -C "$TARGET_DIR" -czf "$OUT/$ASSET" "${PKG_FILES[@]}"
     SHA="$(sha256sum "$OUT/$ASSET" | cut -d' ' -f1)"
     SIZE="$(stat -c %s "$OUT/$ASSET")"
+    FILES_JSON=""
+    for entry in "${PKG_FILES[@]}"; do
+        if [[ -n "$FILES_JSON" ]]; then
+            FILES_JSON+=", "
+        fi
+        FILES_JSON+="\"${entry}\""
+    done
     if [[ -n "$TARGETS_JSON" ]]; then
         TARGETS_JSON+=$',\n'
     fi
-    TARGETS_JSON+="    {\"device\": \"${device}\", \"os\": \"linux\", \"arch\": \"arm64\", \"asset\": \"${ASSET}\", \"sha256\": \"${SHA}\", \"size\": ${SIZE}, \"min_firmware\": \"1.0.4\", \"files\": [\"JukaHub\", \"Inter-Regular.ttf\", \"background.jpg\", \"jukaconfig.json\", \"launch.sh\", \"config.json\", \"JukaPlayer.png\"]}"
+    TARGETS_JSON+="    {\"device\": \"${device}\", \"os\": \"linux\", \"arch\": \"arm64\", \"asset\": \"${ASSET}\", \"sha256\": \"${SHA}\", \"size\": ${SIZE}, \"min_firmware\": \"1.0.4\", \"files\": [${FILES_JSON}]}"
 done
 
 cat > "$OUT/manifest.json" <<EOF

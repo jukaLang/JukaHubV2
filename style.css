@@ -33,16 +33,9 @@
   --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
   --warning: #f4b860;
   --text-main: #f4f7fb;
-  --ai-surface: #131722;
-
-  /* AI panel surface */
-  --ai-surface: #131722;
   --text-muted: #9aa6b6;
   --text-on-primary: #ffffff;
   --focus: #7c5cff;
-
-  /* AI panel surface */
-  --ai-surface: #131722;
 
   /* Semantic aliases */
   --canvas-bg: #07080c;
@@ -61,7 +54,7 @@
   --space-2xl: 2rem;
 
   /* Layout */
-  --header-height: 64px;
+  --header-height: 60px;
   --left-sidebar-width: 260px;
   --right-sidebar-width: 340px;
   --sidebar-collapsed: 52px;
@@ -87,225 +80,20 @@
   /* Shadows */
   --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.45);  --shadow-inset: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-
-  /* AI panel surface */
-  --ai-surface: #131722;
-}
-
-.ai-panel {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-ai-bottom-sheet);
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-tertiary);
-  border-top: 1px solid var(--border);
-  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-  transition: transform var(--transition-base), opacity var(--transition-base);
-  opacity: 0;
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-.ai-panel {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-ai-bottom-sheet);
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-.ai-panel {
-  max-width: 100%;
-  width: 100%;
-}
-
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.45);
   --shadow-inset: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
 
   /* AI panel surface */
   --ai-surface: #131722;
 
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* AI panel surface */
-  --ai-surface: #131722;
-}  ;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-.ai-panel {
-  max-width: 100%;
-  width: 100%;
-}
-
-
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* Welcome-surface treatment */
-  --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
-
-  /* Transitions */
+  /* Motion. These used to live in a block that lost its selector during a bad
+     merge, so every `var(--transition-*)` resolved to nothing and no control
+     in the app had a transition. */
   --transition-fast: 150ms ease;
   --transition-base: 200ms ease;
   --transition-slow: 300ms ease;
-}  ;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
 
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-.ai-panel {
-  max-width: 100%;
-  width: 100%;
-}
-
-  ;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-.ai-panel {
-  max-width: 100%;
-  width: 100%;
-}
-
-  ;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-.ai-panel {
-  max-width: 100%;
-  width: 100%;
-}
-
-
-  /* Z-index layers */
-  --z-base: 0;
-  --z-sticky: 10;
-  --z-dropdown: 20;
-  --z-sidebar: 30;
-  --z-modal-backdrop: 45;
-  --z-modal: 50;
-  --z-toast: 60;
-  --z-mobile-fab: 35;
-  --z-ai-bottom-sheet: 55;
-
-  /* Text Browser source colors */
+  /* Text Browser source colours */
   --tb-system: #7c5cff;
   --tb-system-light: rgba(124, 92, 255, 0.12);
   --tb-zeroconf: #25c2a0;
@@ -314,6 +102,10 @@
   --tb-json-light: rgba(244, 184, 96, 0.12);
 }
 
+/* The AI assistant is defined once, further down, as a floating card. The
+   duplicate bottom-sheet rule that used to live here was never overridden: it
+   kept the card at translateY(100%) with opacity 0, so clicking AI lit the
+   button but no panel ever appeared. */
 /* Light theme override — a full, coherent palette. Every surface uses a
    slightly-cool neutral so whites stay consistent and components read as
    raised layers instead of a patchwork of mismatched whites. */
@@ -447,10 +239,14 @@ textarea {
 }
 
 /* === App Bar === */
+/* A single quiet toolbar: the brand owns the free space, tools sit in groups
+   separated by hairlines, and only Export is filled. Earlier the row was twelve
+   equal-weight pills, which squeezed the title into an ellipsis and wrapped
+   "Dark Mode" onto two lines. */
 .app-bar {
   flex: 0 0 auto;
   height: var(--header-height);
-  padding: 0 var(--space-xl);
+  padding: 0 20px;
   background: var(--header-bg);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -467,34 +263,39 @@ textarea {
   bottom: -1px;
   left: 0;
   right: 0;
-  height: 2px;
+  height: 1px;
   background: linear-gradient(90deg, var(--primary), var(--secondary), var(--primary));
-  opacity: 0.6;
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .app-bar-brand {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 10px;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
 .app-bar-logo {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   flex-shrink: 0;
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
+  box-shadow: 0 0 0 1px var(--border), var(--shadow-sm);
 }
 
 .app-bar-titles {
-  /* Let the title shrink so its ellipsis works instead of pushing the
-     action buttons off the bar on narrow screens. */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
   min-width: 0;
 }
 
 .app-bar-titles h1 {
-  font-size: var(--text-lg);
+  font-size: 1rem;
   font-weight: 700;
+  letter-spacing: -0.01em;
   line-height: 1.2;
   margin: 0;
   white-space: nowrap;
@@ -503,13 +304,14 @@ textarea {
 }
 
 .app-bar-titles h1 span {
-  font-weight: 400;
+  font-weight: 500;
   color: var(--primary);
 }
 
 .app-bar-subtitle {
   margin: 0;
-  font-size: var(--text-sm);
+  font-size: 0.7rem;
+  letter-spacing: 0.01em;
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -519,7 +321,51 @@ textarea {
 .app-bar-actions {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.tool-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
+/* Undo/Redo share one capsule so they read as a single control. */
+.tool-group--joined {
+  gap: 2px;
+  padding: 2px;
+  background: var(--surface-secondary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
+}
+
+.tool-group--joined .app-bar-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.tool-group--joined .app-bar-button:hover:not(:disabled) {
+  background: var(--surface-tertiary);
+  border: 0;
+  color: var(--text-main);
+}
+
+.tool-group--joined .app-bar-button:disabled {
+  opacity: 0.35;
+}
+
+.bar-divider {
+  width: 1px;
+  height: 20px;
+  flex: 0 0 auto;
+  background: var(--border);
 }
 
 .app-bar-button,
@@ -528,77 +374,112 @@ textarea {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-sm);
-  height: 38px;
-  padding: 0 var(--space-md);
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border);
-  background: var(--surface-secondary);
-  color: var(--text-main);
+  gap: 7px;
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 600;
+  white-space: nowrap;
   cursor: pointer;
-  transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+  transition: background var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
-.app-bar-button:hover,
+/* Hover must only restyle the button. A bad merge had copied the closed
+   ai-panel state here, so hovering moved the button off-screen and set
+   pointer-events:none - the click landed on the bar and Undo/Redo died. */
+.app-bar-button:hover:not(:disabled),
 .load-button:hover,
-.reload-button:hover {;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
+.reload-button:hover:not(:disabled) {
+  background: var(--surface-secondary);
+  border-color: var(--border-subtle);
+  color: var(--text-main);
 }
 
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-;
-  border-color: var(--secondary);
-}
-
-.app-bar-button:active,
+.app-bar-button:active:not(:disabled),
 .load-button:active,
-.reload-button:active {
+.reload-button:active:not(:disabled) {
   transform: translateY(1px);
 }
 
-.reload-button {
-  animation: spin 1s linear infinite;
-  animation-play-state: paused;
+.app-bar-button:focus-visible,
+.load-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
-.reload-button.spinning {
-  animation-play-state: running;
+.app-bar-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.icon-button {
+  width: 34px;
+  padding: 0;
 }
 
-.app-bar-button:active,
-.load-button:active {
-  transform: translateY(1px);
+/* The theme control is icon-only now; the accessible name lives in aria-label. */
+.dark-mode-toggle span {
+  display: none;
+}
+
+/* AI, Device and Gallery are persistent tools, so they keep a surface. */
+.tool-group--modes .app-bar-button {
+  background: var(--surface-secondary);
+  border-color: var(--border-subtle);
+  color: var(--text-main);
+}
+
+.tool-group--modes .app-bar-button:hover {
+  background: var(--surface-tertiary);
+  border-color: var(--border);
+}
+
+.ai-toggle-button[aria-expanded="true"] {
+  background: rgba(124, 92, 255, 0.18);
+  border-color: rgba(124, 92, 255, 0.55);
+  color: var(--text-main);
+}
+
+.ai-toggle-icon {
+  display: inline-flex;
+  color: var(--primary);
+}
+
+.validate-button {
+  background: var(--surface-secondary);
+  border-color: var(--border-subtle);
+  color: var(--text-main);
+}
+
+.validate-button:hover {
+  background: var(--surface-tertiary);
+  border-color: var(--border);
 }
 
 .export-button {
-  background: var(--primary);
-  border-color: var(--primary);
+  padding: 0 12px;
+  background: linear-gradient(135deg, var(--primary), #6a4fe0);
+  border-color: transparent;
   color: var(--text-on-primary);
+  box-shadow: 0 6px 16px -8px rgba(124, 92, 255, 0.9);
 }
 
 .export-button:hover {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
+  background: linear-gradient(135deg, var(--primary-hover), #7a5ff0);
+  border-color: transparent;
+  color: var(--text-on-primary);
+  filter: brightness(1.04);
+}
+
+.export-caret {
+  font-size: 0.68em;
+  opacity: 0.8;
+  margin-left: -1px;
 }
 
 /* === Export Dropdown === */
@@ -643,26 +524,8 @@ textarea {
   transition: background var(--transition-fast);
 }
 
-.export-dropdown button:hover {;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-;
+.export-dropdown button:hover {
+  background: var(--surface-tertiary);
 }
 
 @keyframes dropdown-in {
@@ -743,8 +606,15 @@ textarea {
   flex: 1 1 auto;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: var(--space-lg);
+  padding: 14px;
   min-height: 0;
+}
+
+/* A fade at the bottom edge says "there is more" instead of cutting a card in
+   half with no affordance. */
+.left-sidebar .sidebar-content {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
 }
 
 /* Scrollbars */
@@ -771,9 +641,15 @@ textarea {
 }
 
 /* === Component Search === */
+/* Sticky so filtering stays reachable once the palette scrolls on short
+   screens. The negative offset cancels the sidebar padding. */
 .search-box {
-  position: relative;
-  margin-bottom: var(--space-lg);
+  position: sticky;
+  top: -14px;
+  z-index: 3;
+  padding: 6px 0 8px;
+  margin: -6px 0 8px;
+  background: var(--sidebar-bg);
 }
 
 .search-box i {
@@ -785,41 +661,76 @@ textarea {
   pointer-events: none;
 }
 
-.search-box input {
+/* The generic `input[type="search"]` reset further down has the same
+   specificity and used to win, so the placeholder started underneath the
+   magnifier. Scoping the selector keeps the icon gutter. */
+.search-box input[type="search"] {
   width: 100%;
-  height: var(--control-height);
-  padding: 0 var(--space-md) 0 2.2rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  height: 34px;
+  padding: 0 var(--space-md) 0 2.15rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 9px;
   background: var(--app-bg);
   color: var(--text-main);
   font-size: var(--text-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.search-box input:focus {
+.search-box input[type="search"]::placeholder {
+  color: var(--text-muted);
+}
+
+.search-box input[type="search"]:focus {
   border-color: var(--primary);
   outline: none;
-  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.2);
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.18);
 }
 
 /* === Component Sections === */
 .component-section {
-  margin-bottom: var(--space-lg);
+  margin-bottom: 14px;
+}
+
+.component-section:last-child {
+  margin-bottom: 0;
 }
 
 .component-section-title {
-  font-size: var(--text-xs);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.6rem;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.1em;
   color: var(--text-muted);
-  margin: 0 0 var(--space-sm);
+  margin: 0 0 6px;
+}
+
+.component-section-title::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border-subtle);
 }
 
 .elements-container {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--space-sm);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+/* The canvas toolbar repeats the global Export; keep it quiet so the one
+   filled button in the app stays the primary export at the end of the bar. */
+.canvas-header .action-button.primary {
+  background: var(--surface-secondary);
+  border-color: var(--border-subtle);
+  color: var(--text-main);
+}
+
+.canvas-header .action-button.primary:hover {
+  background: var(--surface-tertiary);
+  border-color: var(--border);
 }
 
 /* Sidebar draggable component cards */
@@ -829,27 +740,30 @@ textarea {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-xs);
-  padding: var(--space-md) var(--space-sm);
+  gap: 3px;
+  min-height: 52px;
+  padding: 8px 4px;
   background: var(--surface-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
   color: var(--text-main);
-  font-size: var(--text-xs);
+  font-size: 0.68rem;
   font-weight: 500;
+  line-height: 1.2;
   text-align: center;
   cursor: grab;
-  transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast);
+  transition: transform var(--transition-fast), border-color var(--transition-fast), box-shadow var(--transition-fast), background var(--transition-fast);
 }
 
 .left-sidebar .element:hover {
-  transform: translateY(-2px);
+  transform: translateY(-1px);
+  background: var(--surface-tertiary);
   border-color: var(--primary);
   box-shadow: var(--shadow-sm);
 }
 
 .left-sidebar .element i {
-  font-size: 1.1rem;
+  font-size: 0.95rem;
   color: var(--primary);
 }
 
@@ -873,18 +787,19 @@ textarea {
   display: flex;
   flex-direction: column;
   border-top: 1px solid var(--border);
-  max-height: 35%;
-  min-height: 140px;
+  max-height: 30%;
+  min-height: 118px;
 }
 
 .variables-header {
+  height: 44px;
   border-bottom: 1px solid var(--border);
 }
 
 .variables-list {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: var(--space-sm) var(--space-lg);
+  padding: 8px 12px 10px;
 }
 
 .variables-empty {
@@ -903,33 +818,53 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
+  gap: 6px;
+  min-height: 32px;
+  padding: 4px 6px 4px 9px;
   background: var(--surface-secondary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  margin-bottom: var(--space-sm);
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  margin-bottom: 5px;
   font-size: var(--text-sm);
 }
 
+/* One line per variable: the value used to wrap onto a second line and made
+   every row twice as tall as it needed to be. */
+.variable-item > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .variable-name {
+  flex: 0 0 auto;
   font-weight: 600;
+  font-size: 0.73rem;
   color: var(--text-main);
 }
 
 .variable-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-muted);
-  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
 }
 
 .variable-actions {
   display: flex;
-  gap: var(--space-xs);
+  gap: 3px;
+  flex: 0 0 auto;
 }
 
 .variable-actions button {
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -995,9 +930,10 @@ textarea {
   font-size: var(--text-sm);
 }
 
+/* The scene selector already names the current scene; the badge repeated it on
+   its own row and cost the canvas 30px of height. */
 .scene-readout {
-  font-size: var(--text-xs);
-  color: var(--text-muted);
+  display: none;
 }
 
 #sceneNameBadge {
@@ -1015,19 +951,32 @@ textarea {
 .canvas-container {
   flex: 1 1 auto;
   display: flex;
-  align-items: flex-start;
+  /* `safe` keeps the left edge reachable when the device is wider than the
+     pane. Plain centering let the canvas overflow past the scroll origin, so
+     the first ~250px could never be scrolled into view. */
+  align-items: center;
+  align-items: safe center;
   justify-content: center;
+  justify-content: safe center;
   overflow: auto;
-  padding: var(--space-xl);
+  padding: 24px;
   background-image:
     linear-gradient(var(--canvas-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--canvas-grid) 1px, transparent 1px);
   background-size: 20px 20px;
 }
 
+/* Layout box that mirrors the scaled device, so scrollbars track the visible
+   canvas rather than its unscaled 1280x720 size. */
+.canvas-scaler {
+  position: relative;
+  flex: 0 0 auto;
+}
+
 .canvas {
   position: relative;
   flex-shrink: 0;
+  transform-origin: top left;
   background: var(--canvas-device);
   background-size: cover;
   background-position: center;
@@ -1091,26 +1040,8 @@ textarea {
   transition: background var(--transition-fast);
 }
 
-.context-menu button:hover {;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-;
+.context-menu button:hover {
+  background: var(--surface-tertiary);
 }
 
 .context-menu button[data-action="delete"]:hover {
@@ -1224,11 +1155,75 @@ body.preview-mode .element:hover {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  padding: var(--space-sm) var(--space-lg);
+  padding: 6px 12px 6px 16px;
   background: var(--surface-raised);
   border-top: 1px solid var(--border);
   font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+.status-device {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+.status-device i {
+  font-size: 0.85em;
+  opacity: 0.75;
+}
+
+.zoom-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  background: var(--app-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.zoom-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.zoom-button:hover {
+  background: var(--surface-secondary);
+  color: var(--text-main);
+}
+
+.zoom-button:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.zoom-fit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 58px;
+  padding: 0 6px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.zoom-fit i {
+  font-size: 0.58rem;
+  opacity: 0.7;
 }
 
 .zoom-readout {
@@ -1253,26 +1248,8 @@ body.preview-mode .element:hover {
   transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
 }
 
-.action-button:hover {;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-;
+.action-button:hover {
+  background: var(--surface-tertiary);
   border-color: var(--primary);
 }
 
@@ -1330,9 +1307,13 @@ body.preview-mode .element:hover {
 .properties-tabs {
   display: flex;
   gap: var(--space-xs);
-  margin-bottom: var(--space-lg);
+  margin: -14px 0 var(--space-lg);
+  padding: 10px 0 var(--space-sm);
   border-bottom: 1px solid var(--border);
-  padding-bottom: var(--space-sm);
+  position: sticky;
+  top: -14px;
+  z-index: 4;
+  background: var(--sidebar-bg);
 }
 
 .properties-tab {
@@ -1402,9 +1383,40 @@ body.preview-mode .element:hover {
   gap: var(--space-md);
   padding: var(--space-md);
   background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
   margin-bottom: var(--space-lg);
+}
+
+.control-group {
+  min-width: 0;
+}
+
+/* Number inputs default to a content width that overflowed the grid and
+   squeezed the Y/Height column to half the width of X/Width. */
+.position-controls .coordinate-input {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Color and font pickers pair up instead of each taking a full row with a
+   lonely swatch on the left. */
+.style-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 10px;
+}
+
+.style-controls .control-group {
+  margin-bottom: 10px;
+}
+
+.style-controls .control-group:last-child {
+  grid-column: 1 / -1;
+}
+
+.style-controls input[type="color"] {
+  width: 100%;
 }
 
 .coordinate-input,
@@ -1467,29 +1479,82 @@ textarea:focus {
   color: var(--border);
 }
 
-/* App info sections */
+/* App info sections. Cards replace the old unbalanced fieldsets: each block
+   reads as a titled group instead of a legend line that crossed the panel. */
 .input-container {
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
+  gap: 10px;
+}
+
+.inspector-section {
+  padding: 12px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+}
+
+.inspector-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.inspector-section-title::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border);
+  opacity: 0.7;
+}
+
+.inspector-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-main);
+}
+
+.inspector-subtitle i {
+  color: var(--primary);
+}
+
+.inspector-section .input-group:last-child {
+  margin-bottom: 0;
 }
 
 .font-size-controls,
 .theme-controls {
-  margin-top: var(--space-lg);
-  padding-top: var(--space-lg);
-  border-top: 1px solid var(--border);
+  margin: 0;
+  padding: 0;
+  border-top: 0;
 }
 
-.font-size-controls h4,
-.theme-controls h4 {
-  font-size: var(--text-sm);
-  font-weight: 600;
-  margin: 0 0 var(--space-md);
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  color: var(--text-main);
+.inspector-section .theme-controls {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.field-help {
+  display: block;
+  margin: 2px 0 10px;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.field-help:last-child {
+  margin-bottom: 0;
 }
 
 .size-inputs {
@@ -2225,8 +2290,9 @@ body.ai-open .ai-panel {
   text-align: right;
 }
 
-/* Text Browser element */
-.element[data-type="textbrowser"] {
+/* Text Browser element. Dashed borders read as "drop target", so they only
+   belong on the canvas element, never on the palette card. */
+#canvas .element[data-type="textbrowser"] {
   border: 2px dashed rgba(124, 92, 255, 0.4);
   background: rgba(124, 92, 255, 0.04);
 }
@@ -2234,9 +2300,9 @@ body.ai-open .ai-panel {
 /* === Guide Modal === */
 .welcome-quick-starts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
-  margin: 0 0 14px 0;
+  margin: 0 0 4px;
 }
 
 .welcome-card {
@@ -2313,22 +2379,63 @@ body.ai-open .ai-panel {
 
 .guide-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: var(--space-lg);
   padding: var(--space-lg) var(--space-xl);
   border-bottom: 1px solid var(--border);
 }
 
+.guide-heading {
+  min-width: 0;
+}
+
 .guide-header h2 {
   font-size: var(--text-md);
+  margin: 0 0 3px;
+}
+
+.guide-subtitle {
   margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.guide-section-title {
+  margin: 0 0 10px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.guide-body .guide-section-title:not(:first-child) {
+  margin-top: var(--space-lg);
 }
 
 .guide-body {
   padding: var(--space-xl);
+  padding-bottom: 28px;
   overflow-y: auto;
   font-size: var(--text-sm);
   line-height: 1.7;
+}
+
+@media (max-width: 560px) {
+  .welcome-quick-starts {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-header {
+    padding: 14px 16px;
+  }
+
+  .guide-body {
+    padding: 16px;
+    padding-bottom: 24px;
+  }
 }
 
 .guide-body ol {
@@ -2482,12 +2589,16 @@ body.ai-open .ai-panel {
 /* === Footer === */
 .app-footer {
   flex: 0 0 auto;
-  padding: var(--space-md) var(--space-xl);
+  padding: 7px var(--space-xl);
   background: var(--surface-raised);
   border-top: 1px solid var(--border);
   text-align: center;
-  font-size: var(--text-sm);
+  font-size: var(--text-xs);
   color: var(--text-muted);
+}
+
+.app-footer p {
+  margin: 0;
 }
 
 .app-footer a {
@@ -2617,26 +2728,31 @@ body.ai-open .ai-panel {
 }
 
 .mobile-menu-item:hover {
-  border-color: var(--primary);;
-  border-top: 1px solid var(--border);  box-shadow: var(--shadow-lg);
-  transform: translateY(100%);
-
-  transition: transform var(--transition-base), opacity var(--transition-base);  opacity: 0;
-
-  pointer-events: none;
-}
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
+  border-color: var(--primary);
+  background: var(--surface-tertiary);
 }
 
-.ai-panel.ai-open {
-  transform: translateY(0);
-  opacity: 1;
-  pointer-events: auto;
-}
-;
+/* Short windows: tighten the palette so all nine components still fit above
+   the Variables panel instead of leaving an "Advanced" header with its card
+   clipped below the fold. */
+@media (max-height: 860px) {
+  .left-sidebar .element {
+    min-height: 46px;
+    padding: 6px 4px;
+  }
+
+  .component-section {
+    margin-bottom: 10px;
+  }
+
+  .search-box {
+    padding: 4px 0 6px;
+    margin: -4px 0 6px;
+  }
+
+  .variables-panel {
+    max-height: 27%;
+  }
 }
 
 /* === Responsive === */
@@ -2656,7 +2772,8 @@ body.ai-open .ai-panel {
   .left-sidebar,
   .right-sidebar {
     position: fixed;
-    top: var(--header-height);
+    /* Clear the fixed mobile tab bar; otherwise it covers the drawer header. */
+    top: calc(var(--header-height) + 48px);
     bottom: 0;
     width: min(340px, 85vw);
     z-index: var(--z-sidebar);
@@ -2696,6 +2813,9 @@ body.ai-open .ai-panel {
 
   .canvas-area {
     z-index: 1;
+    /* The fixed mobile tab bar occupies the top 48px of the canvas column;
+       reserve that space or it covers the scene controls. */
+    padding-top: 48px;
   }
 
   .workspace-status,
@@ -2713,15 +2833,60 @@ body.ai-open .ai-panel {
 }
 
 @media (max-width: 768px) {
+  /* Keep the bar one row: the brand stays put and the tools become a
+     horizontally scrollable strip instead of pushing the title off-screen. */
   .app-bar {
     padding: 0 var(--space-md);
-    height: auto;
-    min-height: 56px;
+    height: var(--header-height);
+    gap: var(--space-sm);
+    flex-wrap: nowrap;
   }
 
-  .app-bar-actions .app-bar-button span,
+  .app-bar-brand {
+    flex: 0 0 auto;
+  }
+
+  .app-bar-actions {
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  /* A phone cannot hold nine tools plus the brand. Keep the actions that
+     matter on a small screen (history, AI, theme, load, share, export) and
+     drop the desktop-only modes instead of letting the row overflow to the
+     left, where the clipped buttons were unreachable. */
+  #validateBtn,
+  #deviceBtn,
+  #galleryBtn,
+  .load-button,
+  #reloadConfigBtn,
+  #shareDesignBtn {
+    display: none;
+  }
+
+  /* Hide labels, not icon wrappers: the AI glyph lives in a span. */
+  .app-bar-actions .app-bar-button span:not(.ai-toggle-icon),
   .app-bar-actions .load-button span,
   .app-bar-actions .export-button span {
+    display: none;
+  }
+
+  .app-bar-actions .app-bar-button {
+    width: 32px;
+    padding: 0;
+  }
+
+  .app-bar-actions .export-button {
+    width: 34px;
+  }
+
+  .app-bar-actions .export-caret {
+    display: none;
+  }
+
+  .bar-divider {
     display: none;
   }
 
@@ -3299,7 +3464,7 @@ body.preview-mode .canvas-container {
 }
 
 body.preview-mode .canvas {
-  transform-origin: center center;
+  transform-origin: top left;
   transition: transform 0.2s ease;
   border-radius: 10px;
   box-shadow:

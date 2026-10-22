@@ -154,7 +154,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		}
 		if font != nil {
 			lw, _, _ := font.SizeUTF8(catLabels[cat])
-			tc := ColorTextPrimary()
+			var tc sdl.Color
 			if cat == unitCategory {
 				tc = ColorTextPrimary()
 			} else {

@@ -196,11 +196,10 @@ func TestCompanionTextChunksRespectRunes(t *testing.T) {
 
 func TestCompanionAuth(t *testing.T) {
 	srv, _ := newTestCompanion(t)
-	req := httptest.NewRequest(http.MethodPost, "/api/key", nil)
 	if !srv.authorized(companionRequest(http.MethodPost, "/api/key", "123456", nil)) {
 		t.Fatal("correct header PIN was rejected")
 	}
-	req = httptest.NewRequest(http.MethodPost, "/api/key?p=123456", nil)
+	req := httptest.NewRequest(http.MethodPost, "/api/key?p=123456", nil)
 	if !srv.authorized(req) {
 		t.Fatal("query PIN from the QR link was rejected")
 	}

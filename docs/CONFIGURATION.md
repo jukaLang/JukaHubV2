@@ -246,7 +246,7 @@ literal `$name` so a typo is visible rather than silently empty.
 | `packages_refresh` | refresh the Patch package index |
 | `textbrowser_refresh` | reload the textbrowser from its source |
 | `textbrowser_system`, `_zeroconf`, `_json`, `_processes`, `_network`, `_temps`, `_services`, `_files`, `_copy`, `_clear` | textbrowser data sources and clipboard |
-| `tools_open`, `processes_open`, `ip_open`, `ip_add`, `ip_fetch` | the built-in tool panels |
+| `tools_open`, `processes_open`, `wifi_open`, `ip_open`, `ip_add`, `ip_fetch` | the built-in tool panels (including the [Wi-Fi picker](WIFI.md)) |
 | `companion_open` | the phone companion QR card (toggles) |
 | `ftp_toggle`, `ftp_start`, `ftp_stop`, `ssh_toggle`, `ssh_start`, `ssh_stop` | FTP and SSH/SFTP servers |
 | anything starting with `http://` or `https://` | opens the URL in the system browser |

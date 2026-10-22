@@ -389,7 +389,6 @@ func updateJukaLand() {
 
 	targetVX := moveX * playerSpeed
 	if jukaland.InCar {
-		targetVX = moveX * carSpeed
 		jukaland.PlayerVY = moveY * carSpeed
 	} else {
 		if math.Abs(jukaland.PlayerVX-targetVX) > 10 {
