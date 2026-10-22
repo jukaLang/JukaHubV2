@@ -1,15 +1,27 @@
 version: 2
+# Grouped so one week produces one PR per ecosystem instead of one per module;
+# each PR runs three workflows, so ungrouped updates cost hours of CI.
 updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: "gomod"
     directory: "/player"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    groups:
+      go-minor-and-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: "npm"
     directory: "/tests/web"
     schedule:
       interval: "monthly"
+    groups:
+      web-tests:
+        patterns: ["*"]
