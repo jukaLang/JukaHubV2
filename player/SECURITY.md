@@ -340,14 +340,20 @@ Note: Key rotation requires access to both the old and new keys during the trans
 
 ## Static-analysis triage (CodeQL)
 
-CodeQL reports on `main` flagged a set of path, command and allocation sinks. They
-are handled in one of two ways:
+CodeQL reports on `main` flag path, command, hash and allocation sinks. Every
+alert is handled in one of three ways: fixed in code, guarded and covered by a
+test (the analyzer cannot see through the helper, so it re-reports the sink),
+or accepted by design.
 
 **Fixed in code**
 
 - Paths read from a config value or a scene row are resolved against a known
   root before use: File Explorer navigation and listing, PDF opening, chat file
   attachment, archive extraction and app launch entries (`paths.go`).
+- Chat attachments are only read from disk when they are an image below the
+  folder the File Explorer attached from (`chatAttachmentRoot` in `chat.go`).
+  A path typed into a message, restored from an edited history file or attached
+  by a remote room is refused instead of read.
 - Archive entries (tool downloads and File Explorer unzip) are reduced to a
   plain base name or checked to stay below the destination directory, so a
   hostile archive cannot write outside it.
@@ -358,6 +364,34 @@ are handled in one of two ways:
 - yt-dlp search commands from the scene config run without a shell, and options
   that launch other programs (`--exec`, `--downloader`, `--postprocessor-args`,
   `--update`, ...) are rejected before the process starts.
+- The browser's link picker decides by *parsed* scheme: only `http` and `https`
+  survive. The old blocklist of `javascript:`/`data:`/... spellings missed the
+  whitespace and mixed-case forms a browser tolerates (`browser.go`).
+- A config-declared canvas size is clamped before it becomes an `int32`, so a
+  huge number cannot wrap negative and scale scene geometry into nothing
+  (`canvasDimension` in `uiprofile.go`).
+- MQTT strings are truncated to what their `uint16` length prefix can describe,
+  on a rune boundary, so an oversized topic or payload is a shorter packet
+  rather than a malformed one (`mqttString` in `smart_home.go`).
+- The SSH password is compared through a salted HMAC-SHA256 digest, and a
+  server started without a password refuses password auth instead of accepting
+  an empty one (`sshPasswordDigest` in `ssh_server.go`).
+
+**Guarded and tested (re-reported because the guard is a helper call)**
+
+- Archive extraction: `runtimeArchivePath` and `archiveLinkTarget` contain every
+  entry and symlink target below the destination; `windows_runtime_install_test.go`
+  builds archives with `../` entries and escaping links and asserts the error.
+- App launch: `isLaunchableAppPath` confines a row to the scanned app folders and
+  the extension allowlist; `apps_test.go` covers the refusals.
+- Plugin scripts: `resolveWithinRoot` confines the entry to the plugin folder.
+- Lyrics and subtitle sidecars (`lyrics.go`, `videosubs.go`) and the photo
+  gallery (`ambient.go`) open files next to media the user already chose. The
+  path is cleaned, but it is deliberately not confined to one root: the media
+  library spans the SD card.
+- `make([]string, 0, len(a)+len(b)+len(c)+1)` in `streaming.go` sizes an argument
+  vector from three slice lengths; integer overflow would need more live slices
+  than an address space can hold, so this is a false positive.
 
 **Accepted by design**
 

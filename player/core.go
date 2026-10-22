@@ -5575,6 +5575,12 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		browserForward(config)
 	case "browser_reload":
 		browserReload(config)
+	case "browser_home":
+		browserHome(config)
+	case "browser_links":
+		if elem, ok := findBrowserElement(config); ok {
+			openBrowserLinkPanel(config, elem)
+		}
 	case "browser_repo":
 		browserOpenURL(config, browserReposURL)
 	case "browser_issues":

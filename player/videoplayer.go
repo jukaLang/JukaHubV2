@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -683,15 +684,46 @@ func parseProbeOutput(s string) probeFields {
 // ffprobeStream asks ffprobe for the first video stream's size, duration and
 // frame rate. A nil error with zero dimensions means the source has no video.
 func ffprobeStream(ctx context.Context, ffprobePath, path string) (probeFields, error) {
-	cmd := exec.CommandContext(ctx, ffprobePath, "-v", "error",
+	args := []string{"-v", "error"}
+	if isHTTPMediaURL(path) {
+		// A signed CDN URL was issued for the browser identity yt-dlp used
+		// when it extracted it. ffprobe sends "Lavf/..." by default, which
+		// some CDNs answer with 403 — the handheld then rejected a stream
+		// the decoder itself plays, and fell back to downloading the file.
+		args = append(args, "-user_agent", streamUserAgent,
+			"-rw_timeout", "15000000")
+	}
+	args = append(args,
 		"-select_streams", "v:0",
 		"-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration",
 		"-of", "default=noprint_wrappers=1", path)
+	cmd := exec.CommandContext(ctx, ffprobePath, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
+		// "exit status 1" alone says nothing about why a stream was
+		// rejected; ffprobe's first stderr line is the reason.
+		if reason := firstNonEmptyLine(stderr.String()); reason != "" {
+			return probeFields{}, fmt.Errorf("%w (%s)", err, reason)
+		}
 		return probeFields{}, err
 	}
 	return parseProbeOutput(string(out)), nil
+}
+
+// firstNonEmptyLine returns the first non-blank line of a tool's stderr, which
+// is where ffmpeg-family tools put the actual error.
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			if len(line) > 160 {
+				line = line[:160] + "…"
+			}
+			return line
+		}
+	}
+	return ""
 }
 
 func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestSmartHomeEndpoint(t *testing.T) {
@@ -215,6 +216,36 @@ func TestMQTTPackets(t *testing.T) {
 	}
 	if !strings.Contains(mqttConnackReason(4), "password") {
 		t.Errorf("connack reason 4 = %q", mqttConnackReason(4))
+	}
+}
+
+// The MQTT string length is a uint16. A longer topic or client id used to
+// produce a truncated prefix that disagreed with the bytes that followed it,
+// which is a malformed packet rather than a long one.
+func TestMQTTStringTruncatesToTheLengthPrefix(t *testing.T) {
+	short := mqttString("ON")
+	if len(short) != 2+2 || short[0] != 0 || short[1] != 2 {
+		t.Fatalf("mqttString(\"ON\") = %v", short)
+	}
+
+	huge := strings.Repeat("a", 70000)
+	packet := mqttString(huge)
+	if want := 2 + mqttMaxStringLen; len(packet) != want {
+		t.Fatalf("truncated string is %d bytes, want %d", len(packet), want)
+	}
+	if got := int(packet[0])<<8 | int(packet[1]); got != mqttMaxStringLen {
+		t.Fatalf("length prefix = %d, want %d", got, mqttMaxStringLen)
+	}
+	if len(packet)-2 != int(packet[0])<<8|int(packet[1]) {
+		t.Fatal("length prefix disagrees with the payload it describes")
+	}
+
+	// Truncation stops on a rune boundary, so the broker never receives half a
+	// multi-byte character.
+	multi := strings.Repeat("\u00e9", mqttMaxStringLen) // 2 bytes each
+	packet = mqttString(multi)
+	if !utf8.Valid(packet[2:]) {
+		t.Fatal("truncated MQTT string is not valid UTF-8")
 	}
 }
 

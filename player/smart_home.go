@@ -44,6 +44,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // smartHomeTimeout bounds every request and command probe. A handheld on hotel
@@ -471,6 +472,9 @@ func mqttTopicFor(prefix, entityID string) string {
 // mqttEncodingLength is the remaining-length varint used by every MQTT 3.1.1
 // control packet.
 func mqttEncodingLength(n int) []byte {
+	if n < 0 {
+		n = 0
+	}
 	var out []byte
 	for {
 		digit := byte(n % 128)
@@ -485,8 +489,21 @@ func mqttEncodingLength(n int) []byte {
 	}
 }
 
-// mqttString is the length-prefixed UTF-8 string MQTT uses everywhere.
+// mqttMaxStringLen is the longest string an MQTT 3.1.1 length prefix can
+// describe: the field is a uint16, so a longer topic or payload would put a
+// truncated length on the wire and the broker would read the packet wrongly.
+const mqttMaxStringLen = 0xFFFF
+
+// mqttString is the length-prefixed UTF-8 string MQTT uses everywhere. A value
+// longer than the prefix can describe is truncated at a rune boundary, which is
+// the only safe thing to do for a fire-and-forget publish.
 func mqttString(s string) []byte {
+	if len(s) > mqttMaxStringLen {
+		s = s[:mqttMaxStringLen]
+		for len(s) > 0 && !utf8.ValidString(s) {
+			s = trimLastRune(s)
+		}
+	}
 	buf := make([]byte, 2+len(s))
 	binary.BigEndian.PutUint16(buf, uint16(len(s)))
 	copy(buf[2:], s)

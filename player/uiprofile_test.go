@@ -6,6 +6,33 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
+// A config dimension is a JSON number, and the renderer works in int32. A value
+// that does not fit has to fall back to the built-in canvas instead of wrapping
+// negative, which would leave the UI drawing into an empty coordinate space.
+func TestCanvasDimensionRejectsOutOfRangeValues(t *testing.T) {
+	cases := map[int]int32{
+		0: 0, -1: 0, 1280: 1280, 720: 720,
+		maxCanvasDimension:     maxCanvasDimension,
+		maxCanvasDimension + 1: 0,
+		1 << 40:                 0,
+	}
+	for in, want := range cases {
+		if got := canvasDimension(in); got != want {
+			t.Errorf("canvasDimension(%d) = %d, want %d", in, got, want)
+		}
+	}
+
+	// A config with an absurd size keeps the profile canvas rather than
+	// scaling into a negative design size.
+	config := &Config{Width: 1 << 33, Height: 1 << 33}
+	if !applyUIProfileForDevice(config, DeviceTrimuiBrick) {
+		t.Fatal("profile was not applied")
+	}
+	if config.Width != int(uiCanvasCompactW) || config.Height != int(uiCanvasCompactH) {
+		t.Fatalf("canvas = %dx%d, want %dx%d", config.Width, config.Height, uiCanvasCompactW, uiCanvasCompactH)
+	}
+}
+
 func TestDeviceScreenProfiles(t *testing.T) {
 	wide := []DeviceModel{DeviceTrimuiSmartPro, DeviceTrimuiSmartProS}
 	for _, device := range wide {

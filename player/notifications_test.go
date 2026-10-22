@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -198,6 +199,145 @@ func TestNotificationCenterControllerNavigation(t *testing.T) {
 	}
 	if nc.open {
 		t.Fatal("B did not close the notification center")
+	}
+}
+
+// Long messages are the ones worth reading: an error carrying a whole path
+// must keep both of its wrapped lines, and its row must grow enough to hold
+// them plus the timestamp underneath.
+func TestNotifLongMessageKeepsTwoLines(t *testing.T) {
+	newProbeFrame(t) // initialises SDL_ttf for the font cache
+	font, _ := getCachedFont(&Config{}, "small")
+	if font == nil {
+		t.Skip("no font available")
+	}
+	long := "/storage/roms/psp/Games/Castlevania - The Dracula X Chronicles.iso could not be opened: permission denied"
+	rows := notifMeasureRows(font, []notification{{Message: long, Priority: notifError}}, notifMessageWidth(notifDropWidth()), 1)
+	if len(rows) != 1 {
+		t.Fatalf("measured %d rows, want 1", len(rows))
+	}
+	row := rows[0]
+	if len(row.lines) < 2 {
+		t.Fatalf("long message kept %d line(s), want 2: %q", len(row.lines), row.lines)
+	}
+	if len(row.lines) > notifMsgLines {
+		t.Fatalf("row used %d lines, cap is %d", len(row.lines), notifMsgLines)
+	}
+	lineH := int32(font.Height())
+	need := notifRowPad*2 + int32(len(row.lines))*lineH + 2 + lineH
+	if row.height < need {
+		t.Fatalf("row is %dpx tall but its lines plus timestamp need %dpx", row.height, need)
+	}
+	if row.height <= notifRowMinH {
+		t.Fatalf("two-line row stayed at the one-line minimum %dpx", notifRowMinH)
+	}
+
+	// A short message still gets the compact one-line row.
+	short := notifMeasureRows(font, []notification{{Message: "Saved", Priority: notifSuccess}}, notifMessageWidth(notifDropWidth()), 1)
+	if len(short) != 1 || len(short[0].lines) != 1 {
+		t.Fatalf("short message measured %+v, want one line", short)
+	}
+	if want := notifRowPad*2 + 2*lineH + 2; short[0].height < want {
+		t.Fatalf("short row is %dpx, want at least one line plus its timestamp (%dpx)", short[0].height, want)
+	}
+	if short[0].height > row.height {
+		t.Fatalf("short row (%dpx) is taller than the two-line row (%dpx)", short[0].height, row.height)
+	}
+}
+
+// Paths and URLs have no spaces to wrap at. The tail of such a message is the
+// part worth reading (the file name, the reason), so it is split across lines
+// rather than ellipsized away.
+func TestNotifWrapSplitsLongPath(t *testing.T) {
+	newProbeFrame(t)
+	font, _ := getCachedFont(&Config{}, "small")
+	if font == nil {
+		t.Skip("no font available")
+	}
+	maxW := notifMessageWidth(notifDropWidth())
+	long := "/storage/roms/psp/Games/Castlevania.iso could not be opened: permission denied"
+	lines := notifWrapLines(font, long, maxW, notifMsgLines)
+	if len(lines) != notifMsgLines {
+		t.Fatalf("got %d lines (%q), want %d", len(lines), lines, notifMsgLines)
+	}
+	for _, l := range lines {
+		if w, _, _ := font.SizeUTF8(l); int32(w) > maxW {
+			t.Fatalf("line %q is %dpx wide, card allows %dpx", l, w, maxW)
+		}
+	}
+	// The first line must be all text, not cut with a marker: the path is split
+	// at a glyph boundary instead of giving up after its first third.
+	if strings.HasSuffix(lines[0], "…") {
+		t.Fatalf("first line %q was ellipsized instead of split", lines[0])
+	}
+	if len(lines[0]) < 12 {
+		t.Fatalf("first line %q reused too little of the card width", lines[0])
+	}
+
+	// Text that fits is untouched and still wraps at spaces.
+	if got := notifWrapLines(font, "Saved", maxW, notifMsgLines); len(got) != 1 || got[0] != "Saved" {
+		t.Fatalf("short message wrapped to %q", got)
+	}
+}
+
+// The D-pad must not walk onto a row the dropdown measured out of the card,
+// so the cursor limit comes from the last frame's visible row count.
+func TestNotifNavigateRespectsVisibleRows(t *testing.T) {
+	prevNC := nc
+	t.Cleanup(func() { nc = prevNC })
+	resetNotifCenter(t)
+
+	for i := 0; i < 5; i++ {
+		notifPush("event", notifInfo)
+		nc.history[0].Read = true
+	}
+	nc.open = true
+	nc.visibleRows = 2
+	for i := 0; i < 6; i++ {
+		notifNavigate(1)
+	}
+	if nc.cursor != 1 {
+		t.Fatalf("cursor = %d, want the last visible row (1)", nc.cursor)
+	}
+	nc.visibleRows = 0 // before the first frame renders
+	for i := 0; i < notifMaxRows+4; i++ {
+		notifNavigate(1)
+	}
+	if nc.cursor != len(nc.history)-1 {
+		t.Fatalf("cursor = %d, want the last history row (%d)", nc.cursor, len(nc.history)-1)
+	}
+}
+
+// Clicking a row moves the selection there, and a click anywhere else in the
+// card is still swallowed so it cannot reach the scene underneath.
+func TestNotifClickSelectsRow(t *testing.T) {
+	prevNC := nc
+	t.Cleanup(func() { nc = prevNC })
+	resetNotifCenter(t)
+
+	notifPush("one", notifInfo)
+	notifPush("two", notifInfo)
+	nc.open = true
+	nc.dropRect = sdl.Rect{X: 100, Y: 100, W: 400, H: 300}
+	nc.rowRects = []sdl.Rect{
+		{X: 104, Y: 140, W: 392, H: 50},
+		{X: 104, Y: 190, W: 392, H: 50},
+	}
+
+	if !notifHandleClick(200, 200) {
+		t.Fatal("click inside the dropdown was not consumed")
+	}
+	if nc.cursor != 1 {
+		t.Fatalf("cursor = %d, want the clicked row (1)", nc.cursor)
+	}
+	if !notifHandleClick(450, 380) {
+		t.Fatal("click inside the card but outside every row was not consumed")
+	}
+	if nc.cursor != 1 {
+		t.Fatalf("cursor moved to %d on a non-row click", nc.cursor)
+	}
+	if notifHandleClick(10, 10) {
+		t.Fatal("click outside the dropdown was consumed")
 	}
 }
 

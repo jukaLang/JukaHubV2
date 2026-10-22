@@ -296,7 +296,10 @@ func feEnterFocused(config *Config) {
 	ext := strings.ToLower(filepath.Ext(entry.Path))
 	if isImageExtension(ext) {
 		if config.Variables.Custom["chat_attach_image"] == "1" {
-			// Send image as chat message attachment
+			// Send image as chat message attachment. The chat renderer only reads
+			// a local attachment from this root, so record which folder the user
+			// was browsing when the image was picked.
+			chatAttachmentRoot = feRoot(config)
 			config.Variables.Custom["chat_attach_image"] = ""
 			// Create a ChatMessage with ImageURL set to the file path
 			chatMessages = append(chatMessages, ChatMessage{

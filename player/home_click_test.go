@@ -55,7 +55,10 @@ func TestHomeActionCardDrawsSingleIcon(t *testing.T) {
 			t.Errorf("%s: icon tile %+v escapes card %+v", id, tile, item.Rect)
 		}
 
-		narrow := id == HomeFocusFiles || id == HomeFocusSettings
+		// Favorites and Browser share the bottom row as half-width cards, so
+		// they use the same stacked composition as Files and Settings.
+		narrow := id == HomeFocusFiles || id == HomeFocusSettings ||
+			id == HomeFocusFavorites || id == HomeFocusBrowser
 		if stacked != narrow {
 			t.Errorf("%s: stacked = %v, want %v", id, stacked, narrow)
 		}

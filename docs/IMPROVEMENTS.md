@@ -19,6 +19,7 @@ one-off reading.
 | The update modal named a version and nothing else | "a short changelog of the available update (What's new)" | `updatePromptHighlights` shows up to three cleaned release-note bullets in the modal |
 | The update modal passed `\n` straight to the renderer: the body drew as one line that ran off the card and across the screen | — | `wrapTextLines` in [core.go](../player/core.go), verified by [updateprompt_render_test.go](../player/updateprompt_render_test.go) |
 | Patch confirmations cut the body after two rune-split lines, so an install or an error was explained only halfway | "long Settings confirmations now show their whole text instead of ending with '...'" | `layoutPatchModal` in [patch.go](../player/patch.go) grows the card to the wrapped body and only ellipsizes what the screen cannot hold |
+| The notification history ellipsized every message to one line and then drew the timestamp on top of the clipped text — the long errors were the least readable rows | "notification history keeps the whole message" | `notifMeasureRows` and `notifWrapLines` in [notifications.go](../player/notifications.go): per-row measured height (up to two wrapped lines plus the timestamp), a path with no spaces split at `/` instead of truncated, and the cursor limit plus click selection taken from the rows the frame actually drew |
 
 Run the checks with the usual command list in [CONTRIBUTING.md](../CONTRIBUTING.md);
 `JUKA_PREVIEW=1 go test -run 'TestUpdatePromptPreview|TestPatchModalRendersLongBody' ./`
@@ -26,44 +27,37 @@ writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
 
 ## Next, in the order I would take them
 
-1. **Notification history shows whole messages.** Rows in
-   [notifications.go](../player/notifications.go) are a fixed `notifRowH` with
-   the message ellipsized on one line, and the dropdown layout, the cursor hit
-   test and the ticker all assume that height. The fix is a per-row measured
-   height (message wrapped to two lines + timestamp) carried through
-   `notifDropdownLayout` and the hit test, not a bigger constant — otherwise the
-   rows overlap on the longest errors, which are the ones worth reading.
-2. **A component-versions view.** We already store per-file sha256 digests in
+1. **A component-versions view.** We already store per-file sha256 digests in
    patch manifests and a release stamp in `release-info.json`, but the UI only
    shows one version string. A Diagnostics card listing app, launcher, bundled
    tools and their hashes would make bug reports checkable — BrickOS exposes
    ten components plus build IDs and hashes.
-3. **Real button remapping.** [a11y.go](../player/a11y.go) can only swap A/B and
+2. **Real button remapping.** [a11y.go](../player/a11y.go) can only swap A/B and
    X/Y; every handler reads physical SDL codes. A keymap layer
    (physical → logical) applied once before dispatch would give Nintendo/Xbox
    presets, remapped Select/Start and a "disabled" state, and would let the
    accessibility panel grow without touching scene code.
-4. **Audit texture creation threads.** [thumbstore.go](../player/thumbstore.go)
+3. **Audit texture creation threads.** [thumbstore.go](../player/thumbstore.go)
    and the video path decode off the render thread. SDL textures belong to the
    renderer that made them; creating one on a worker is exactly what BrickOS
    lists as "downloaded covers could appear black after texture creation in the
    worker thread failed". Worth a `runtime.LockOSThread` audit plus a test that
    hammers the thumbnail queue.
-5. **Wi-Fi: verify on hardware.** The picker in [wifi.go](../player/wifi.go) now
+4. **Wi-Fi: verify on hardware.** The picker in [wifi.go](../player/wifi.go) now
    follows the pattern BrickOS's three Wi-Fi bugs point at: it polls `status`
    for the requested SSID rather than trusting `select_network`, asks for a DHCP
    lease and re-reads the address, and reports a failed `save_config` as
    session-only instead of success. It still needs a session on both stock
    images (Smart Pro and Brick) to confirm the interface name, `wpa_cli`
    location and DHCP client the firmware actually ships.
-6. **LED policies.** [ledsync.go](../player/ledsync.go) only mirrors audio.
+5. **LED policies.** [ledsync.go](../player/ledsync.go) only mirrors audio.
    Battery/charging/temperature presets plus a custom effect and colour are a
    small, self-contained addition with real device value.
-7. **Boot visuals.** [splash.go](../player/splash.go) and
+6. **Boot visuals.** [splash.go](../player/splash.go) and
    [wallpaper.go](../player/wallpaper.go) each pick one image. BrickOS browses
    presets with previews, marks the applied one and offers independent Random
    modes — the same shape we already use for wallpapers.
-8. **Checkpoints / quick switch.** We have Continue, play time, save manager and
+7. **Checkpoints / quick switch.** We have Continue, play time, save manager and
    power profiles, but nothing that snapshots a running emulator. This is the
    largest item on the list; treat it as a milestone, not a task.
 

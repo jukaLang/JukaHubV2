@@ -141,6 +141,10 @@ func homeSceneTarget(config *Config, id HomeFocusID) string {
 		return "Apps"
 	case HomeFocusFavorites:
 		return "Favorites"
+	case HomeFocusBrowser:
+		// The browser scene is injected into memory at startup, so it has no
+		// tile of its own in the shipped config.
+		return browserSceneName
 	case HomeFocusChat:
 		return "Chat"
 	case HomeFocusTools:
@@ -325,6 +329,12 @@ func homeActivate(config *Config) {
 	// instead of a static launcher label.
 	if id == HomeFocusEmulator {
 		openEmulatorPanel()
+		return
+	}
+	// The Browser card opens the in-app browser on its start page; the scene is
+	// injected on demand so a config that predates it still works.
+	if id == HomeFocusBrowser {
+		openBrowserHome(config)
 		return
 	}
 	target := homeSceneTarget(config, id)

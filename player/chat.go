@@ -10,7 +10,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -104,6 +106,32 @@ func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 	return nil
 }
 
+// chatAttachmentRoot is the directory local chat attachments may be read from.
+// The File Explorer sets it to its own root when it attaches an image, and the
+// chat renderer seeds it from the configured explorer root so an attachment
+// restored from a saved history still previews after a restart. Anything else
+// — a path typed into a message, or one carried in from a remote room — is
+// refused rather than read and drawn.
+var chatAttachmentRoot = "."
+
+// chatLocalAttachment resolves a message's local attachment path against
+// chatAttachmentRoot. It returns false unless the result is an existing image
+// file inside the root and small enough to decode.
+func chatLocalAttachment(path string) (string, bool) {
+	if !isImageExtension(strings.ToLower(filepath.Ext(path))) {
+		return "", false
+	}
+	resolved, err := regularFileWithin(chatAttachmentRoot, path)
+	if err != nil {
+		log.Printf("[SECURITY] [chat] refusing local attachment %q: %v", path, err)
+		return "", false
+	}
+	if info, err := os.Stat(resolved); err != nil || info.Size() > 32<<20 {
+		return "", false
+	}
+	return resolved, true
+}
+
 func fetchChatImage(url string) {
 	chatImageDLMutex.Lock()
 	if _, done := chatImageDownloads[url]; done || chatImageFetching[url] {
@@ -123,12 +151,10 @@ func fetchChatImage(url string) {
 				data, _ = io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 			}
 		}
-	} else {
+	} else if path, ok := chatLocalAttachment(url); ok {
 		// Chat attachments store a local file path; read it directly instead
 		// of sending it through http.Get.
-		if info, err := os.Stat(url); err == nil && info.Size() <= 32<<20 {
-			data, _ = os.ReadFile(url)
-		}
+		data, _ = os.ReadFile(path)
 	}
 
 	chatImageDLMutex.Lock()
@@ -263,11 +289,13 @@ var chatInputRect sdl.Rect
 // clicking it opens the keyboard to rename the local chat user.
 var chatNameRect sdl.Rect
 
-// chatLinkHit is a playable URL rendered inside a chat bubble. Clicking the
-// pill plays it in the media player (YouTube links, MP3/MP4 URLs).
+// chatLinkHit is a URL rendered as a preview card inside a chat bubble. Media
+// links play in the media player; every other page opens in the built-in
+// browser.
 type chatLinkHit struct {
 	rect sdl.Rect
 	url  string
+	play bool
 }
 
 var chatLinkRects []chatLinkHit
@@ -338,6 +366,95 @@ func chatPlayableURL(text string) string {
 	return ""
 }
 
+// chatLinkCardLimit bounds how many link cards one message may draw. Each card
+// costs a texture and a network fetch, and a handheld must not turn a wall of
+// pasted URLs into a stall.
+const chatLinkCardLimit = 3
+
+// chatMessageLinks returns the distinct http(s) links in a message, in order.
+func chatMessageLinks(text string) []string {
+	links := make([]string, 0, chatLinkCardLimit)
+	seen := make(map[string]bool, chatLinkCardLimit)
+	for _, m := range urlRegex.FindAllString(text, -1) {
+		u := trimChatURL(m)
+		if u == "" || seen[u] {
+			continue
+		}
+		seen[u] = true
+		links = append(links, u)
+		if len(links) >= chatLinkCardLimit {
+			break
+		}
+	}
+	return links
+}
+
+// chatLinkOpensInPlayer reports whether a link is media the player handles
+// (YouTube or a direct audio/video URL) rather than a page to browse.
+func chatLinkOpensInPlayer(u string) bool {
+	return isYouTubeURL(u) || hasMediaExtension(u)
+}
+
+// chatYouTubeID extracts a YouTube video id from a watch or short link.
+func chatYouTubeID(u string) string {
+	parsed, err := url.Parse(u)
+	if err != nil {
+		return ""
+	}
+	id := parsed.Query().Get("v")
+	if id == "" && strings.EqualFold(strings.TrimPrefix(parsed.Hostname(), "www."), "youtu.be") {
+		id = strings.Trim(parsed.Path, "/")
+	}
+	for _, r := range id {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return ""
+		}
+	}
+	if len(id) < 6 {
+		return ""
+	}
+	return id
+}
+
+// chatLinkPreviewURL picks the image tile shown on a link card. A YouTube link
+// gets its poster frame, an image link shows itself, and any other page gets
+// its 64px site icon: a few KB instead of downloading a preview picture for
+// every link on a 1 GB device.
+func chatLinkPreviewURL(u string) string {
+	if imageURLRegex.MatchString(u) {
+		return u
+	}
+	if isYouTubeURL(u) {
+		if id := chatYouTubeID(u); id != "" {
+			return "https://i.ytimg.com/vi/" + id + "/default.jpg"
+		}
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Hostname() == "" {
+		return ""
+	}
+	return "https://www.google.com/s2/favicons?sz=64&domain=" + parsed.Hostname()
+}
+
+// chatLinkHostLabel splits a link into the site name and a short path, which is
+// what a card shows: the host identifies where the click goes, the path says
+// which page.
+func chatLinkHostLabel(u string) (string, string) {
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Hostname() == "" {
+		return truncate(u, 40), ""
+	}
+	host := strings.TrimPrefix(strings.ToLower(parsed.Hostname()), "www.")
+	path := strings.TrimSuffix(parsed.Path, "/")
+	if parsed.RawQuery != "" {
+		path += "?" + parsed.RawQuery
+	}
+	if path == "" || path == "/" {
+		path = "/"
+	}
+	return host, path
+}
+
 // currentSceneHasChat reports whether the visible scene owns a chat panel. Link
 // hitboxes are only meaningful there; they are not cleared when another scene
 // renders, so the click handler must not consult stale ones.
@@ -353,12 +470,17 @@ func currentSceneHasChat(config *Config) bool {
 	return false
 }
 
-// handleChatLinkClick plays a link pill drawn by renderChat. It reports whether
-// the click landed on one, so the generic composer handler does not also run.
+// handleChatLinkClick activates a link card drawn by renderChat: media plays,
+// web pages open in the browser. It reports whether the click landed on one,
+// so the generic composer handler does not also run.
 func handleChatLinkClick(mx, my int32, config *Config) bool {
 	for _, hit := range chatLinkRects {
 		if pointInRect(mx, my, hit.rect) {
-			playSmartURL(config, hit.url)
+			if hit.play {
+				playSmartURL(config, hit.url)
+			} else {
+				openBrowserAtURL(config, hit.url)
+			}
 			return true
 		}
 	}
@@ -1076,6 +1198,64 @@ func renderChatAvatar(renderer *sdl.Renderer, config *Config, font *ttf.Font, x,
 	renderText(renderer, config, font, initial, sdl.Color{R: 255, G: 255, B: 255, A: 255}, textX, textY)
 }
 
+// drawChatLinkCard draws one link preview: a thumbnail, the site and path, and
+// the action the click performs. Every link in a message is one card, so a
+// reader can see where it goes before opening it.
+func drawChatLinkCard(renderer *sdl.Renderer, config *Config, font, small *ttf.Font, rect sdl.Rect, linkURL string) {
+	if font == nil {
+		return
+	}
+	if small == nil {
+		small = font
+	}
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusSM, WithAlpha(ColorSurface, 235))
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusSM, 1, WithAlpha(ColorInfo, 110))
+
+	pad := int32(5)
+	icon := rect.H - pad*2
+	iconX, iconY := rect.X+pad, rect.Y+pad
+	host, path := chatLinkHostLabel(linkURL)
+	if tex := getChatImageTexture(renderer, chatLinkPreviewURL(linkURL)); tex != nil {
+		// Keep the preview's aspect inside the square tile instead of
+		// stretching a 4:3 poster frame into it.
+		dw, dh := icon, icon
+		if _, _, tw, th, err := tex.Query(); err == nil && tw > 0 && th > 0 {
+			dh = icon * th / tw
+			if dh > icon {
+				dh = icon
+				dw = icon * tw / th
+			}
+		}
+		renderer.Copy(tex, nil, &sdl.Rect{X: iconX + (icon-dw)/2, Y: iconY + (icon-dh)/2, W: dw, H: dh})
+	} else {
+		fillRoundedRect(renderer, iconX, iconY, icon, icon, 4, WithAlpha(ColorInfo, 45))
+		if host != "" {
+			initial := strings.ToUpper(string([]rune(host)[0]))
+			if iw, ih, err := small.SizeUTF8(initial); err == nil {
+				renderText(renderer, config, small, initial, ColorTextPrimary(), iconX+(icon-int32(iw))/2, iconY+(icon-int32(ih))/2)
+			}
+		}
+	}
+
+	action := "OPEN"
+	actionCol := WithAlpha(ColorInfo, 235)
+	if chatLinkOpensInPlayer(linkURL) {
+		action = "PLAY"
+		actionCol = ColorTextAccent()
+	}
+	aw, _, _ := small.SizeUTF8(action)
+	actionX := rect.X + rect.W - int32(aw) - 8
+	renderText(renderer, config, small, action, actionCol, actionX, rect.Y+(rect.H-int32(small.Height()))/2)
+
+	textX := iconX + icon + 7
+	textW := actionX - textX - 8
+	if textW <= 0 {
+		return
+	}
+	renderText(renderer, config, font, ellipsize(font, host, textW), ColorTextPrimary(), textX, rect.Y+5)
+	renderText(renderer, config, small, ellipsize(small, path, textW), ColorTextSecondary(), textX, rect.Y+5+int32(font.Height()))
+}
+
 func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	font, _ := getCachedFont(config, element.Font)
 	if font == nil {
@@ -1096,6 +1276,11 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	chatInputRect = sdl.Rect{}
 	chatLinkRects = chatLinkRects[:0]
 	chatImageRects = chatImageRects[:0]
+	// One stat per session: the explorer root only changes with the config, and
+	// the attach path updates this as soon as the user picks a new folder.
+	if chatAttachmentRoot == "." && config != nil {
+		chatAttachmentRoot = feRoot(config)
+	}
 
 	listX := int32(element.X) + SpaceMD
 	listY := int32(element.Y) + SpaceMD
@@ -1220,13 +1405,32 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 				imageH = 80 + SpaceXS
 			}
 		}
-		playURL := ""
-		if msg.ImageURL == "" {
-			playURL = chatPlayableURL(text)
+		// Every link becomes a preview card. The bubble grows to a card width so
+		// a short message with one URL still shows a readable preview.
+		links := chatMessageLinks(text)
+		if thumbURL != "" {
+			// The image already has its own preview tile; a card for the same
+			// URL would draw it twice.
+			kept := links[:0]
+			for _, l := range links {
+				if l != thumbURL {
+					kept = append(kept, l)
+				}
+			}
+			links = kept
 		}
+		linkCardH := int32(44)
+		linkCardGap := int32(SpaceXS)
 		linkH := int32(0)
-		if playURL != "" {
-			linkH = 28 + SpaceXS
+		if len(links) > 0 {
+			linkH = int32(len(links))*linkCardH + int32(len(links)-1)*linkCardGap + SpaceXS
+			minBubble := int32(280)
+			if minBubble > maxBubbleW {
+				minBubble = maxBubbleW
+			}
+			if bw < minBubble {
+				bw = minBubble
+			}
 		}
 		bh += imageH + linkH
 
@@ -1301,22 +1505,19 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			})
 		}
 
-		// Play pill for links the media player understands. The hit target is
-		// recorded for the mouse handler in main.go.
-		if playURL != "" {
-			pillW, pillH := int32(128), int32(26)
-			px := bx + bubblePad
-			py := by + bubblePad + int32(len(lines))*lineH + imageH
-			UIButton(renderer, config, sdl.Rect{X: px, Y: py, W: pillW, H: pillH}, "Play link", UIButtonStyle{
-				Variant:    UIButtonCustom,
-				Fill:       WithAlpha(ColorInfo, 55),
-				Border:     WithAlpha(ColorInfo, 140),
-				LabelColor: ColorTextPrimary(),
-				Font:       statusFont,
-				Pill:       true,
-				NoShadow:   true,
-			}, UIButtonState{})
-			chatLinkRects = append(chatLinkRects, chatLinkHit{rect: sdl.Rect{X: px, Y: py, W: pillW, H: pillH}, url: playURL})
+		// One card per link: thumbnail, site, path and the action it performs.
+		// The rects are recorded for the click handler in main.go.
+		if len(links) > 0 {
+			cardW := bw - bubblePad*2
+			if cardW > 360 {
+				cardW = 360
+			}
+			cy := by + bubblePad + int32(len(lines))*lineH + imageH
+			for i, link := range links {
+				r := sdl.Rect{X: bx + bubblePad, Y: cy + int32(i)*(linkCardH+linkCardGap), W: cardW, H: linkCardH}
+				drawChatLinkCard(renderer, config, font, statusFont, r, link)
+				chatLinkRects = append(chatLinkRects, chatLinkHit{rect: r, url: link, play: chatLinkOpensInPlayer(link)})
+			}
 		}
 
 		startY = by - bubbleGap - int32(statusFont.Height()) - 2

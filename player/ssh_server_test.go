@@ -6,8 +6,10 @@ package main
 // the way a laptop would use them.
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -114,6 +116,36 @@ func TestSSHAuthCallbacks(t *testing.T) {
 	passwordOnly := buildSSHServerConfig(signer, password, nil)
 	if passwordOnly.PublicKeyCallback != nil {
 		t.Fatal("public key callback set without an authorized keys file")
+	}
+}
+
+// A server with no password must not accept an empty one: sha256("") matched
+// sha256(""), so every password attempt used to succeed.
+func TestSSHRejectsEmptyPassword(t *testing.T) {
+	signer := testSSHSigner(t)
+	config := buildSSHServerConfig(signer, "", nil)
+	if _, err := config.PasswordCallback(testSSHMeta{user: sshUserName}, nil); err == nil {
+		t.Fatal("empty password accepted when none is configured")
+	}
+	if _, err := config.PasswordCallback(testSSHMeta{user: sshUserName}, []byte("")); err == nil {
+		t.Fatal("blank password accepted when none is configured")
+	}
+}
+
+// The digest is salted per process, so a value captured from one run cannot be
+// replayed against the next.
+func TestSSHPasswordDigestDependsOnTheSalt(t *testing.T) {
+	const password = "abcd-efgh-jkmn-pqrs"
+	salted := sshPasswordDigest(password)
+	plain := sha256.Sum256([]byte(password))
+	if bytes.Equal(salted, plain[:]) {
+		t.Fatal("password digest is an unsalted SHA-256")
+	}
+	prev := sshPasswordSalt
+	t.Cleanup(func() { sshPasswordSalt = prev })
+	sshPasswordSalt = [32]byte{1}
+	if bytes.Equal(sshPasswordDigest(password), salted) {
+		t.Fatal("digest does not change with the salt")
 	}
 }
 

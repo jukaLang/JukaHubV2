@@ -17,6 +17,7 @@ import (
 	"fmt"
 	htmlstd "html"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -26,10 +27,13 @@ import (
 const (
 	browserSceneName       = "Browser"
 	browserContentVariable = "browser_content"
-	browserHomeURL         = "https://github.com/jukaLang/JukaHubV2/issues"
-	browserReposURL        = "https://github.com/jukaLang/JukaHubV2"
-	browserIssuesURL       = "https://github.com/jukaLang/JukaHubV2/issues"
-	browserNewIssueURL     = "https://github.com/jukaLang/JukaHubV2/issues/new"
+	// The start page is a text-first search engine: it loads in a few KB, needs
+	// no JavaScript, and gives the address bar something useful to open with.
+	browserHomeURL     = "https://lite.duckduckgo.com/lite/"
+	browserSearchURL   = "https://lite.duckduckgo.com/lite/?q="
+	browserReposURL    = "https://github.com/jukaLang/JukaHubV2"
+	browserIssuesURL   = "https://github.com/jukaLang/JukaHubV2/issues"
+	browserNewIssueURL = "https://github.com/jukaLang/JukaHubV2/issues/new"
 
 	browserHistoryLimit = 40
 	browserLinkLimit    = 80
@@ -72,14 +76,23 @@ func ensureBrowserScene(config *Config) {
 		}
 	}
 
+	// Scale the injected scene from the 1280x720 design so it fits the smaller
+	// handheld panels too instead of running off the bottom of the screen.
+	width, height := screenWidth, screenHeight
+	if width <= 0 {
+		width = 1280
+	}
+	if height <= 0 {
+		height = 720
+	}
 	textBrowser := Element{
 		Type:     "textbrowser",
 		Text:     "web",
 		Color:    "#0c0f16",
-		X:        24,
-		Y:        72,
-		Width:    "1232",
-		Height:   "496",
+		X:        scaleX(24, width),
+		Y:        scaleY(72, height),
+		Width:    StringOrInt(strconv.Itoa(int(scaleX(1232, width)))),
+		Height:   StringOrInt(strconv.Itoa(int(scaleY(496, height)))),
 		Variable: browserContentVariable,
 		Font:     "small",
 	}
@@ -88,10 +101,11 @@ func ensureBrowserScene(config *Config) {
 		trigger string
 	}{
 		{"Back", "browser_back"},
+		{"Forward", "browser_forward"},
 		{"Reload", "browser_reload"},
-		{"Repo", "browser_repo"},
+		{"Links", "browser_links"},
+		{"Home", "browser_home"},
 		{"Issues", "browser_issues"},
-		{"New Issue", "browser_new_issue"},
 	}
 	elements := []Element{textBrowser}
 	for i, b := range buttons {
@@ -100,10 +114,10 @@ func ensureBrowserScene(config *Config) {
 			Text:    b.label,
 			Color:   "$labelColor",
 			BgColor: "$buttonColor",
-			X:       int32(24 + i*228),
-			Y:       584,
-			Width:   "220",
-			Height:  "44",
+			X:       scaleX(int32(24+i*206), width),
+			Y:       scaleY(584, height),
+			Width:   StringOrInt(strconv.Itoa(int(scaleX(190, width)))),
+			Height:  StringOrInt(strconv.Itoa(int(scaleY(44, height)))),
 			Trigger: b.trigger,
 			Font:    "small",
 		})
@@ -154,6 +168,62 @@ func findBrowserElementByVariable(config *Config, variable string) (Element, boo
 	return Element{}, false
 }
 
+// openBrowserHome opens the Browser scene on its start page. The scene is
+// injected on demand, so a config that predates the browser still works.
+func openBrowserHome(config *Config) {
+	if config == nil {
+		return
+	}
+	ensureBrowserScene(config)
+	idx := sceneIndexExact(config, browserSceneName)
+	if idx < 0 {
+		showToast("The browser is not available on this build", ToastError())
+		return
+	}
+	browserHomeLoaded = false
+	config.Variables.Custom[textBrowserURLVariable] = browserHomeURL
+	changeSceneTo(config, idx)
+	if currentSceneIndex == idx {
+		// Already on the Browser scene: no transition will refresh the page.
+		if elem, ok := findBrowserElement(config); ok {
+			browserHomeLoaded = true
+			loadTextBrowserURL(config, elem, browserHomeURL)
+		}
+	}
+}
+
+// openBrowserAtURL opens the in-app browser on a specific page. Chat links use
+// it, so a URL in a message is one click away from being read instead of only
+// being copied out of the bubble.
+func openBrowserAtURL(config *Config, rawURL string) bool {
+	if config == nil {
+		return false
+	}
+	address, err := normalizeTextBrowserURL(rawURL)
+	if err != nil {
+		showToast("Cannot open that link: "+err.Error(), ToastError())
+		return false
+	}
+	ensureBrowserScene(config)
+	idx := sceneIndexExact(config, browserSceneName)
+	if idx < 0 {
+		showToast("The browser is not available on this build", ToastError())
+		return false
+	}
+	// Claim the start page so the scene's own refresh cannot replace the URL
+	// the user asked for with the home page.
+	browserHomeLoaded = true
+	config.Variables.Custom[textBrowserURLVariable] = address
+	config.Variables.Custom[browserContentVariable] = "Loading " + address + " ..."
+	changeSceneTo(config, idx)
+	if currentSceneIndex == idx {
+		if elem, ok := findBrowserElement(config); ok {
+			loadTextBrowserURL(config, elem, address)
+		}
+	}
+	return true
+}
+
 // browserOpenURL loads a URL into the current browser element.
 func browserOpenURL(config *Config, rawURL string) bool {
 	elem, ok := findBrowserElement(config)
@@ -187,6 +257,16 @@ func browserForward(config *Config) {
 	}
 }
 
+// browserHome loads the browser's start page, the same way a browser's home
+// button does.
+func browserHome(config *Config) {
+	elem, ok := findBrowserElement(config)
+	if !ok {
+		return
+	}
+	loadTextBrowserURL(config, elem, browserHomeURL)
+}
+
 func browserReload(config *Config) {
 	elem, ok := findBrowserElement(config)
 	if !ok {
@@ -195,7 +275,7 @@ func browserReload(config *Config) {
 	loadTextBrowserURLAt(config, elem, textBrowserAddress(config), false)
 }
 
-// browserEnsureHome loads the issue list the first time the Browser scene is
+// browserEnsureHome loads the start page the first time the Browser scene is
 // opened. Returning to an already-used browser keeps the current page.
 func browserEnsureHome(config *Config) {
 	if config == nil || browserHomeLoaded {
@@ -302,17 +382,16 @@ func extractBrowserLinks(source string, base *url.URL) []browserLink {
 		if href == "" || strings.HasPrefix(href, "#") {
 			continue
 		}
-		scheme := strings.ToLower(href)
-		if strings.HasPrefix(scheme, "javascript:") || strings.HasPrefix(scheme, "mailto:") ||
-			strings.HasPrefix(scheme, "tel:") || strings.HasPrefix(scheme, "data:") {
-			continue
-		}
+		// No scheme blocklist here: url.Parse below decides, and only http and
+		// https survive the allowlist. A HasPrefix list missed the spellings a
+		// browser tolerates ("java\tscript:", leading whitespace, upper case in
+		// the middle), which is exactly what a blocklist gets wrong.
 		parsed, err := url.Parse(href)
 		if err != nil {
 			continue
 		}
 		parsed = base.ResolveReference(parsed)
-		parsed.Scheme = strings.ToLower(parsed.Scheme)
+		parsed.Scheme = strings.ToLower(strings.TrimSpace(parsed.Scheme))
 		if parsed.Scheme != "http" && parsed.Scheme != "https" {
 			continue
 		}

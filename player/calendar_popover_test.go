@@ -142,27 +142,31 @@ func TestCalendarPopoverClickTargets(t *testing.T) {
 	}
 }
 
-// A long notification message must be clipped to the card's inner width, so
-// the text can never spill past the dropdown background.
-func TestNotifMessageClippedToCardWidth(t *testing.T) {
+// Each notification line must fit the card's inner width, so no text can
+// spill past the dropdown background.
+func TestNotifMessageWrapsToCardWidth(t *testing.T) {
 	prevW := screenWidth
 	t.Cleanup(func() { screenWidth = prevW })
 	screenWidth = 1280
 
-	w := notifDropW
-	maxW := w - 32 - 16
+	maxW := notifMessageWidth(notifDropWidth())
+	newProbeFrame(t) // initialises SDL_ttf for the font cache
 	font, _ := getCachedFont(&Config{}, "small")
 	if font == nil {
 		t.Skip("no font available")
 	}
 	long := "A very long notification message that would run far past the right edge of the panel if it were not clipped"
-	got := ellipsize(font, long, maxW)
-	gw, _, _ := font.SizeUTF8(got)
-	if int32(gw) > maxW {
-		t.Fatalf("clipped message is %dpx wide, card allows %dpx", gw, maxW)
+	lines := notifWrapLines(font, long, maxW, notifMsgLines)
+	if len(lines) == 0 {
+		t.Fatal("long message produced no lines")
 	}
-	if got == long {
-		t.Fatal("long message was not clipped at all")
+	for _, line := range lines {
+		if gw, _, _ := font.SizeUTF8(line); int32(gw) > maxW {
+			t.Fatalf("wrapped line %q is %dpx wide, card allows %dpx", line, gw, maxW)
+		}
+	}
+	if len(lines) == 1 && lines[0] == long {
+		t.Fatal("long message was left on one line")
 	}
 }
 
@@ -171,24 +175,34 @@ func TestNotifMessageClippedToCardWidth(t *testing.T) {
 func TestNotifDropdownFitsBelowBell(t *testing.T) {
 	config := &Config{}
 	by := int32(100)
-	w, h, rows := notifDropdownLayout(config, by, 50)
+	newProbeFrame(t) // initialises SDL_ttf for the font cache
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		t.Skip("no font available")
+	}
+	history := make([]notification, 50)
+	for i := range history {
+		history[i] = notification{Message: "a notification", Priority: notifInfo}
+	}
+	rows := notifMeasureRows(font, history, notifMessageWidth(notifDropWidth()), len(history))
+	w, h, visible := notifDropdownLayout(config, by, rows)
 	if w <= 0 || w > screenWidth {
 		t.Fatalf("dropdown width %d does not fit screen %d", w, screenWidth)
 	}
-	if rows > notifMaxRows {
-		t.Fatalf("dropdown wants %d rows, max is %d", rows, notifMaxRows)
+	if visible > notifMaxRows {
+		t.Fatalf("dropdown wants %d rows, max is %d", visible, notifMaxRows)
 	}
 	if by+h > screenHeight {
 		t.Fatalf("dropdown bottom %d exceeds screen height %d", by+h, screenHeight)
 	}
-	if want := notifHeaderH + int32(rows)*notifRowH + 12; h != want {
+	if want := notifHeaderH + notifRowSpan(rows[:visible]) + 12; h != want {
 		t.Fatalf("dropdown height %d, want header + rows + padding = %d", h, want)
 	}
 
 	// An empty history reserves the empty state's measured height, not one
 	// notification row: the bell glyph and two text lines used to overflow the
 	// card, which made the background look truncated behind the message.
-	_, emptyH, emptyRows := notifDropdownLayout(config, by, 0)
+	_, emptyH, emptyRows := notifDropdownLayout(config, by, nil)
 	if emptyRows != 0 {
 		t.Fatalf("empty dropdown reports %d rows, want its empty state", emptyRows)
 	}

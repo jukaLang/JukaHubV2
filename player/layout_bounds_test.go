@@ -23,9 +23,9 @@ func TestHomeLayoutFitsViewport(t *testing.T) {
 	for _, size := range sizes {
 		t.Run(size.name, func(t *testing.T) {
 			h := NewHomeLayout(size.w, size.h)
-			// 13 cards plus the update download chip and the notification bell
+			// 14 cards plus the update download chip and the notification bell
 			// in the header band.
-			if got, want := len(h.Order), 15; got != want {
+			if got, want := len(h.Order), 16; got != want {
 				t.Fatalf("items = %d, want %d", got, want)
 			}
 			for _, problem := range h.BoundsViolations() {

@@ -108,9 +108,6 @@ func main() {
 	// startup (in-memory, never written back) so the status-bar clock and the
 	// Start menu can open it on every config. The loader stays pure.
 	ensureAlarmScene(config)
-	// The Browser has no shipped handheld scene either. It is injected here so
-	// the Apps entry, Start menu and GitHub quick links work on every config.
-	ensureBrowserScene(config)
 	// Contextual widget toggles (start at login, battery saver, time-of-day
 	// theme) live on the Smart Widgets page, reached from Settings → General.
 	// Injected in memory like the alarm scene, so no shipped config is edited.
@@ -300,6 +297,10 @@ func main() {
 		"resizable", P().ResizableDefault(),
 	)
 	screenWidth, screenHeight = int32(screenW), int32(screenH)
+	// The Browser has no shipped handheld scene either. It is injected once the
+	// panel size is known so its address bar, page area and toolbar scale to
+	// that display instead of assuming the 1280x720 design size.
+	ensureBrowserScene(config)
 	window, err := sdl.CreateWindow(config.Title, sdl.WINDOWPOS_CENTERED, sdl.WINDOWPOS_CENTERED, screenWidth, screenHeight, uint32(windowFlags))
 	mainWindow = window
 	if err != nil {
@@ -1355,7 +1356,8 @@ func main() {
 						if currentSceneHasChat(config) && handleChatImageClick(mx, my) {
 							break
 						}
-						// Chat link pills open YouTube/media links in the player.
+						// Chat link cards play media links or open web pages in the
+						// built-in browser.
 						if currentSceneHasChat(config) && handleChatLinkClick(mx, my, config) {
 							break
 						}

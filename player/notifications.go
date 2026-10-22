@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -41,6 +42,11 @@ type notifCenter struct {
 	dropRect  sdl.Rect
 	clearRect sdl.Rect // "Clear All" hit area
 	enter     uiEnter  // drop-down + fade entrance
+	// visibleRows and rowRects describe the rows the last frame drew; the
+	// cursor limit and click selection are driven by them instead of a
+	// hard-coded row count.
+	visibleRows int
+	rowRects    []sdl.Rect
 }
 
 var nc notifCenter
@@ -246,9 +252,158 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 const (
 	notifDropW   = int32(400)
 	notifHeaderH = int32(40)
-	notifRowH    = int32(52)
+	// notifRowMinH is the shortest row (one line plus its timestamp); taller
+	// rows grow from their measured content instead.
+	notifRowMinH = int32(52)
 	notifMaxRows = 8
+	// notifMsgLines is how many lines a message may use. Two covers the long
+	// path and error strings that a single ellipsized line used to swallow.
+	notifMsgLines = 2
+	notifRowPad   = int32(8)
 )
+
+// notifRowLayout is one history row's measured geometry: the wrapped message
+// lines and the height they plus the timestamp need.
+type notifRowLayout struct {
+	lines  []string
+	height int32
+	rect   sdl.Rect
+}
+
+// notifDropWidth is the card width, clamped so it never runs off the panel.
+func notifDropWidth() int32 {
+	w := notifDropW
+	if maxW := screenWidth - 24; w > maxW {
+		w = maxW
+	}
+	return w
+}
+
+// notifMessageWidth is the inner width a message may occupy: the card minus
+// the priority-dot gutter and the right padding.
+func notifMessageWidth(w int32) int32 {
+	m := w - 32 - 16
+	if m < 40 {
+		m = 40
+	}
+	return m
+}
+
+// notifRowMessage is the text a row shows: the message plus the fold count when
+// identical events were merged. ASCII on purpose, since the handheld's bundled
+// fonts are not guaranteed to carry U+00D7.
+func notifRowMessage(n notification) string {
+	if n.Repeat > 1 {
+		return fmt.Sprintf("%s  x%d", n.Message, n.Repeat)
+	}
+	return n.Message
+}
+
+// notifWrapLines wraps a notification message. It behaves like wrapTextLines
+// except for a token wider than the whole line: paths and URLs have no spaces
+// to break at, and ellipsizing them kept the folder and threw away the file
+// name and the reason (".../Dracula X Chroni..."). Those are cut into chunks
+// that fit instead, so both lines carry text the user can actually read.
+func notifWrapLines(font *ttf.Font, text string, maxW, maxLines int32) []string {
+	if font == nil || maxLines <= 0 || maxW <= 0 {
+		return nil
+	}
+	limit := int(maxLines)
+	measure := func(s string) int32 {
+		w, _, _ := font.SizeUTF8(s)
+		return int32(w)
+	}
+	var out []string
+	cur := ""
+	flush := func() {
+		if cur != "" {
+			out = append(out, cur)
+			cur = ""
+		}
+	}
+	for _, word := range strings.Fields(text) {
+		if measure(word) > maxW {
+			// Over-long token: split it at the widest prefix that still fits.
+			flush()
+			rest := []rune(word)
+			for len(rest) > 0 {
+				n := 0
+				for n < len(rest) && measure(string(rest[:n+1])) <= maxW {
+					n++
+				}
+				if n == 0 {
+					n = 1 // one glyph at a time, so the loop always ends
+				}
+				// Paths read far better split at a separator ("/storage/roms/
+				// psp/") than mid-word (".../Games/Ca"). If a slash lands in
+				// the back half of the chunk, end the line there instead.
+				cut := -1
+				for i := n - 1; i > 0; i-- {
+					if rest[i] == '/' {
+						cut = i
+						break
+					}
+				}
+				if cut > 0 && cut >= n/2 {
+					n = cut + 1
+				}
+				out = append(out, string(rest[:n]))
+				rest = rest[n:]
+			}
+			continue
+		}
+		cand := word
+		if cur != "" {
+			cand = cur + " " + word
+		}
+		if cur == "" || measure(cand) <= maxW {
+			cur = cand
+			continue
+		}
+		flush()
+		cur = word
+	}
+	flush()
+
+	truncated := len(out) > limit
+	if truncated {
+		out = out[:limit]
+	}
+	if truncated && len(out) > 0 {
+		out[len(out)-1] = fitTextToWidth(font, out[len(out)-1]+"…", maxW)
+	}
+	return out
+}
+
+// notifMeasureRows wraps each visible message and gives its row a height that
+// fits the lines plus the timestamp. The fixed height these rows used to share
+// ellipsized long errors to one line — exactly the messages worth reading — and
+// the timestamp then sat on top of the clipped text.
+func notifMeasureRows(font *ttf.Font, history []notification, maxW int32, limit int) []notifRowLayout {
+	if font == nil || limit <= 0 {
+		return nil
+	}
+	lineH := int32(font.Height())
+	rows := make([]notifRowLayout, 0, limit)
+	for i := 0; i < limit && i < len(history); i++ {
+		lines := notifWrapLines(font, notifRowMessage(history[i]), maxW, notifMsgLines)
+		h := notifRowPad*2 + int32(len(lines))*lineH + 2 + lineH
+		if h < notifRowMinH {
+			h = notifRowMinH
+		}
+		rows = append(rows, notifRowLayout{lines: lines, height: h})
+	}
+	return rows
+}
+
+// notifRowSpan is the total height of the given measured rows.
+func notifRowSpan(rows []notifRowLayout) int32 {
+	total := int32(0)
+	for _, r := range rows {
+		total += r.height
+	}
+	return total
+}
 
 // notifEmptyContentH is the vertical space the empty state needs below the
 // dropdown header: the drawn bell glyph, both text lines and breathing room.
@@ -264,33 +419,32 @@ func notifEmptyContentH(config *Config) int32 {
 
 // notifDropdownLayout sizes the dropdown so it always fits on screen: the
 // panel is measured from the bell's anchor, and the visible row count shrinks
-// until the card (header + rows + padding) fits below it. An empty history
-// gets the empty state's measured height instead of a guessed row count.
-func notifDropdownLayout(config *Config, by int32, count int) (w, h int32, rows int) {
-	w = notifDropW
-	if maxW := screenWidth - 24; w > maxW {
-		w = maxW
-	}
+// until the card (header + measured rows + padding) fits below it. Rows have
+// their own measured heights, so a two-line message is never clipped to make
+// the arithmetic work. An empty history gets the empty state's measured height
+// instead of a guessed row count.
+func notifDropdownLayout(config *Config, by int32, rows []notifRowLayout) (w, h int32, visible int) {
+	w = notifDropWidth()
 	maxH := screenHeight - by - 12
-	if maxH < notifHeaderH+notifRowH+12 {
-		maxH = notifHeaderH + notifRowH + 12
+	if maxH < notifHeaderH+notifRowMinH+12 {
+		maxH = notifHeaderH + notifRowMinH + 12
 	}
-	if count <= 0 {
+	if len(rows) == 0 {
 		h = notifHeaderH + notifEmptyContentH(config)
 		if h > maxH {
 			h = maxH
 		}
 		return w, h, 0
 	}
-	rows = count
-	if rows > notifMaxRows {
-		rows = notifMaxRows
+	visible = len(rows)
+	if visible > notifMaxRows {
+		visible = notifMaxRows
 	}
-	for rows > 0 && notifHeaderH+int32(rows)*notifRowH+12 > maxH {
-		rows--
+	for visible > 0 && notifHeaderH+notifRowSpan(rows[:visible])+12 > maxH {
+		visible--
 	}
-	h = notifHeaderH + int32(rows)*notifRowH + 12
-	return w, h, rows
+	h = notifHeaderH + notifRowSpan(rows[:visible]) + 12
+	return w, h, visible
 }
 
 // renderNotifDropdown draws the notification history dropdown.
@@ -304,9 +458,12 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Position below the bell, then size the card to the rows that fit.
+	// Position below the bell, then size the card to the rows that fit. Rows
+	// are measured first: their heights depend on the wrapped message, and the
+	// card has to be tall enough for whatever survives the wrap.
 	by := nc.bellRect.Y + nc.bellRect.H + 8
-	dropW, dropH, numRows := notifDropdownLayout(config, by, len(nc.history))
+	rowLayouts := notifMeasureRows(font, nc.history, notifMessageWidth(notifDropWidth()), len(nc.history))
+	dropW, dropH, numRows := notifDropdownLayout(config, by, rowLayouts)
 	bx := nc.bellRect.X
 	if bx+dropW > screenWidth {
 		bx = screenWidth - dropW - 12
@@ -314,7 +471,10 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	if bx < 12 {
 		bx = 12
 	}
-	rowH := notifRowH
+	// Navigation and click selection need the same row count the render used,
+	// otherwise the D-pad could walk onto a row that was not drawn.
+	nc.visibleRows = numRows
+	nc.rowRects = nc.rowRects[:0]
 	headerH := notifHeaderH
 
 	// Entrance keyframes: the scrim fades while the card drops out from under
@@ -358,25 +518,30 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 				clearX, by+12)
 		}
 
-		// Notification rows. The message is clipped to the card's inner width
-		// in pixels (not characters) so no text can spill past the background.
+		// Notification rows. Each row is as tall as its wrapped message needs,
+		// so a long error shows both lines and its timestamp stays inside the
+		// row instead of overlapping the clipped text.
 		listY := by + headerH
-		msgMaxW := dropW - 32 - 16
+		lineH := int32(font.Height())
+		ry := listY
 		for i := 0; i < numRows && i < len(nc.history); i++ {
 			n := nc.history[i]
-			ry := listY + int32(i)*rowH
+			row := rowLayouts[i]
 
-			if ry+rowH > by+dropH {
+			if ry+row.height > by+dropH {
 				break
 			}
 
+			rowRect := sdl.Rect{X: bx + 4, Y: ry, W: dropW - 8, H: row.height - 2}
+			nc.rowRects = append(nc.rowRects, rowRect)
+
 			// Row background.
 			if i == nc.cursor {
-				fillRoundedRect(renderer, bx+4, ry, dropW-8, rowH-2, 8,
+				fillRoundedRect(renderer, rowRect.X, rowRect.Y, rowRect.W, rowRect.H, 8,
 					sdl.Color{R: 30, G: 36, B: 50, A: 255})
 			}
 
-			// Priority dot.
+			// Priority dot, aligned with the first message line.
 			dotCol := sdl.Color{R: 80, G: 160, B: 255, A: 220}
 			switch n.Priority {
 			case notifSuccess:
@@ -386,23 +551,19 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			case notifError:
 				dotCol = sdl.Color{R: 220, G: 70, B: 70, A: 220}
 			}
-			fillCircle(renderer, bx+20, ry+rowH/2, 4, dotCol)
+			fillCircle(renderer, bx+20, ry+notifRowPad+lineH/2, 4, dotCol)
 
-			// Message, with the fold count when identical events were merged.
-			msg := n.Message
-			if n.Repeat > 1 {
-				// ASCII on purpose: the handheld's bundled fonts are not
-				// guaranteed to carry U+00D7.
-				msg = fmt.Sprintf("%s  x%d", msg, n.Repeat)
-			}
-			msg = ellipsize(font, msg, msgMaxW)
+			// Message lines, wrapped by notifMeasureRows.
 			msgCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
 			if n.Read {
 				msgCol = sdl.Color{R: 110, G: 120, B: 140, A: 180}
 			}
-			renderText(renderer, config, font, msg, msgCol, bx+32, ry+8)
+			for li, line := range row.lines {
+				renderText(renderer, config, font, line, msgCol,
+					bx+32, ry+notifRowPad+int32(li)*lineH)
+			}
 
-			// Timestamp, on its own line inside the taller row.
+			// Timestamp under the last message line.
 			ago := time.Since(n.Timestamp)
 			timeStr := ""
 			switch {
@@ -414,7 +575,10 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 				timeStr = fmt.Sprintf("%dh ago", int(ago.Hours()))
 			}
 			renderText(renderer, config, font, timeStr,
-				sdl.Color{R: 80, G: 90, B: 110, A: 150}, bx+32, ry+28)
+				sdl.Color{R: 80, G: 90, B: 110, A: 150},
+				bx+32, ry+notifRowPad+int32(len(row.lines))*lineH+2)
+
+			ry += row.height
 		}
 
 		if len(nc.history) == 0 {
@@ -450,7 +614,9 @@ func notifToggle() {
 	PlayActivateSound()
 }
 
-// notifNavigate moves the cursor in the dropdown.
+// notifNavigate moves the cursor in the dropdown. The limit is the number of
+// rows the last frame actually drew, so the D-pad cannot land on a row that was
+// measured out of the card.
 func notifNavigate(dr int) {
 	if !nc.open {
 		return
@@ -459,9 +625,15 @@ func notifNavigate(dr int) {
 	if nc.cursor < 0 {
 		nc.cursor = 0
 	}
-	max := len(nc.history) - 1
-	if max > 7 {
-		max = 7
+	max := nc.visibleRows - 1
+	if max < 0 {
+		max = notifMaxRows - 1
+	}
+	if last := len(nc.history) - 1; max > last {
+		max = last
+	}
+	if max < 0 {
+		max = 0
 	}
 	if nc.cursor > max {
 		nc.cursor = max
@@ -507,6 +679,18 @@ func notifHandleClick(x, y int32) bool {
 		y >= nc.clearRect.Y && y <= nc.clearRect.Y+nc.clearRect.H {
 		notifClearAll()
 		PlayActivateSound()
+		return true
+	}
+	// Clicking a row moves the selection there, so a touch user can see which
+	// message the next action would apply to instead of only dismissing the card.
+	for i, r := range nc.rowRects {
+		if pointInRect(x, y, r) {
+			if nc.cursor != i {
+				nc.cursor = i
+				PlayNavSound()
+			}
+			break
+		}
 	}
 	return true
 }

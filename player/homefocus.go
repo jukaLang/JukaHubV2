@@ -10,6 +10,7 @@ const (
 	HomeFocusPackages  HomeFocusID = "packages"
 	HomeFocusApps      HomeFocusID = "apps"
 	HomeFocusFavorites HomeFocusID = "favorites"
+	HomeFocusBrowser   HomeFocusID = "browser"
 	HomeFocusChat      HomeFocusID = "chat"
 	HomeFocusTools     HomeFocusID = "tools"
 	HomeFocusEmulator  HomeFocusID = "emulator"
@@ -94,11 +95,17 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	},
 	HomeFocusFavorites: {
 		Up: HomeFocusContinue, Down: HomeFocusExit,
+		Left: HomeFocusFavorites, Right: HomeFocusBrowser,
+	},
+	// The browser card sits between Favorites and Chat in the bottom row, so
+	// Right walks Favorites -> Browser -> Chat -> Tools -> Emulator.
+	HomeFocusBrowser: {
+		Up: HomeFocusContinue, Down: HomeFocusExit,
 		Left: HomeFocusFavorites, Right: HomeFocusChat,
 	},
 	HomeFocusChat: {
 		Up: HomeFocusContinue, Down: HomeFocusChat,
-		Left: HomeFocusFavorites, Right: HomeFocusTools,
+		Left: HomeFocusBrowser, Right: HomeFocusTools,
 	},
 	HomeFocusTools: {
 		Up: HomeFocusPackages, Down: HomeFocusTools,

@@ -39,6 +39,7 @@ const (
 	textBrowserURLVariable  = "textbrowser_url"
 	textBrowserDefaultURL   = "https://example.com"
 	textBrowserMaxPageBytes = 2 << 20
+	textBrowserMaxTextBytes = 512 << 10
 	textBrowserURLBarHeight = int32(36)
 )
 
@@ -113,10 +114,21 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		headerColor = sdl.Color{R: 67, G: 97, B: 238, A: 255}
 	}
 
-	lines := strings.Split(text, "\n")
+	// A web page is wrapped once per page and then reused every frame. Wrapping
+	// a long page with per-word width measurement was the most expensive thing
+	// the handheld did while a page was open: at 20 fps it re-wrapped hundreds
+	// of kilobytes each frame and handed the GC a mountain of throwaway
+	// strings, which is what made the browser feel like it would fall over on a
+	// 1 GB device.
 	lineH := int32(22)
 	contentH := elemH - headerH - 8
 	maxLines := int((contentH) / lineH)
+	var lines []string
+	if source == textBrowserSourceWeb {
+		lines = textBrowserWrappedLines(text, font, elemW-28)
+	} else {
+		lines = strings.Split(text, "\n")
+	}
 	totalLines := len(lines)
 
 	fillRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 4, headerColor)
@@ -196,9 +208,6 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		contentTop += textBrowserURLBarHeight + 4
 	}
 	if source == textBrowserSourceWeb {
-		text = wrapTextBrowserContent(text, font, elemW-28)
-		lines = strings.Split(text, "\n")
-		totalLines = len(lines)
 		contentH = elemH - headerH - textBrowserURLBarHeight - 12
 		maxLines = int(contentH / lineH)
 	}
@@ -228,7 +237,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		ln := lines[i]
 		if strings.HasPrefix(ln, "===") || strings.HasPrefix(ln, "---") {
 			renderText(renderer, config, font, ln, accentColor, element.X+10, y)
-		} else if strings.Contains(ln, ":") && !strings.HasPrefix(ln, " ") {
+		} else if source != textBrowserSourceWeb && strings.Contains(ln, ":") && !strings.HasPrefix(ln, " ") {
 			parts := strings.SplitN(ln, ":", 2)
 			if len(parts) == 2 {
 				renderText(renderer, config, font, parts[0]+":", ColorTextSecondary(), element.X+10, y)
@@ -409,12 +418,49 @@ func loadTextBrowserURLAt(config *Config, element Element, rawURL string, record
 	}(outputVariable, address, requestID)
 }
 
+// textBrowserSearchURL turns an address-bar entry that is clearly not a host
+// into a web search, so the browser doubles as a search box the way a handheld
+// user expects from a single field.
+func textBrowserSearchURL(query string) string {
+	return "https://duckduckgo.com/html/?q=" + url.QueryEscape(query)
+}
+
+// textBrowserLooksLikeAddress reports whether the entry names a host rather
+// than being something the user typed to look up.
+func textBrowserLooksLikeAddress(address string) bool {
+	// Whitespace means the user typed a query, not a URL: "github issues"
+	// searches, while "example.com/docs" opens.
+	if strings.ContainsAny(address, " \t") {
+		return false
+	}
+	host := address
+	if i := strings.IndexAny(host, "/?#"); i >= 0 {
+		host = host[:i]
+	}
+	if host == "" {
+		return false
+	}
+	host = strings.TrimPrefix(strings.ToLower(host), "www.")
+	if host == "localhost" || strings.HasPrefix(host, "[") {
+		return true
+	}
+	if i := strings.LastIndexByte(host, ':'); i > 0 {
+		host = host[:i]
+	}
+	// Something like example.com, 192.168.1.4 or api.github.com. A bare word
+	// with no dot is a search, not a host.
+	return strings.Contains(host, ".") && !strings.HasSuffix(host, ".")
+}
+
 func normalizeTextBrowserURL(rawURL string) (string, error) {
 	address := strings.TrimSpace(rawURL)
 	if address == "" {
 		return "", fmt.Errorf("address is empty")
 	}
 	if !strings.Contains(address, "://") {
+		if !textBrowserLooksLikeAddress(address) {
+			return textBrowserSearchURL(address), nil
+		}
 		address = "https://" + address
 	}
 	parsed, err := url.Parse(address)
@@ -486,6 +532,7 @@ func browseWebPageResult(rawURL string) browserPage {
 	if pageText == "" {
 		pageText = "This page has no readable text content."
 	}
+	pageText = capTextBrowserText(pageText)
 	links := extractBrowserLinks(source, resp.Request.URL)
 	text := fmt.Sprintf("Title: %s\nURL: %s\n", title, resp.Request.URL.String())
 	if len(links) > 0 {
@@ -493,6 +540,21 @@ func browseWebPageResult(rawURL string) browserPage {
 	}
 	text += "\n" + pageText
 	return browserPage{Text: text, Links: links, FinalURL: resp.Request.URL.String()}
+}
+
+// capTextBrowserText bounds how much readable text a page may contribute. The
+// text is what the renderer keeps wrapped in memory, and the TrimUI Smart Pro
+// has 1 GB of RAM shared with everything else: a handful of very long articles
+// must never be able to grow the page buffer without limit.
+func capTextBrowserText(text string) string {
+	if len(text) <= textBrowserMaxTextBytes {
+		return text
+	}
+	cut := strings.LastIndexByte(text[:textBrowserMaxTextBytes], '\n')
+	if cut < textBrowserMaxTextBytes/2 {
+		cut = textBrowserMaxTextBytes
+	}
+	return text[:cut] + "\n\n[Page truncated after 512 KiB of text. Follow a link to keep reading.]"
 }
 
 func extractTextBrowserHTML(source string) (string, string) {
@@ -615,6 +677,51 @@ func cleanTextBrowserHTML(raw string) string {
 		lines = append(lines, line)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// textBrowserWrapCache keeps the wrapped page for the text that is currently
+// loaded. The page only changes on navigation, so one entry is all it needs.
+type textBrowserWrapCacheEntry struct {
+	text  string
+	width int32
+	fontH int32
+	lines []string
+}
+
+var textBrowserWrapCache struct {
+	mu    sync.Mutex
+	entry textBrowserWrapCacheEntry
+}
+
+// textBrowserWrappedLines returns the page as display lines, wrapping it only
+// when the text, the element width or the font size changed.
+func textBrowserWrappedLines(text string, font *ttf.Font, width int32) []string {
+	var fontH int32
+	if font != nil {
+		fontH = int32(font.Height())
+	}
+	cache := &textBrowserWrapCache
+	cache.mu.Lock()
+	entry := cache.entry
+	cache.mu.Unlock()
+	// Length first: a page that changed size never pays for a full compare.
+	if len(entry.lines) > 0 && entry.width == width && entry.fontH == fontH &&
+		len(entry.text) == len(text) && entry.text == text {
+		return entry.lines
+	}
+	lines := strings.Split(wrapTextBrowserContent(text, font, width), "\n")
+	cache.mu.Lock()
+	cache.entry = textBrowserWrapCacheEntry{text: text, width: width, fontH: fontH, lines: lines}
+	cache.mu.Unlock()
+	return lines
+}
+
+// resetTextBrowserWrapCache drops the cached wrap; the next render pays for
+// one fresh wrap. Used by tests.
+func resetTextBrowserWrapCache() {
+	textBrowserWrapCache.mu.Lock()
+	textBrowserWrapCache.entry = textBrowserWrapCacheEntry{}
+	textBrowserWrapCache.mu.Unlock()
 }
 
 func wrapTextBrowserContent(text string, font *ttf.Font, maxWidth int32) string {

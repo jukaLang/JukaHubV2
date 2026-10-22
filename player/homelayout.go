@@ -20,6 +20,7 @@ const (
 	HomeActionPackages       HomeAction = "packages"
 	HomeActionApps           HomeAction = "apps"
 	HomeActionFavorites      HomeAction = "favorites"
+	HomeActionBrowser        HomeAction = "browser"
 	HomeActionChat           HomeAction = "chat"
 	HomeActionTools          HomeAction = "tools"
 	HomeActionEmulator       HomeAction = "emulator"
@@ -106,7 +107,7 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 		Order: []HomeFocusID{
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
-			HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
+			HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
 			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusBell, HomeFocusUpdate, HomeFocusExit,
 		},
 	}
@@ -149,12 +150,17 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 536, Y: 301, W: 348, H: 121})
 	card(HomeFocusApps, "Apps", "Launch installed apps", "apps", HomeActionApps,
 		sdl.Rect{X: 900, Y: 301, W: 348, H: 121})
-	card(HomeFocusFavorites, "Favorites", "Saved content", "favorites", HomeActionFavorites,
-		sdl.Rect{X: 32, Y: 454, W: 292, H: 158})
+	// The old full-width Favorites card now holds two half-width cards:
+	// Favorites and the in-app web browser. They use the narrow stacked
+	// composition, which is why the text below each tile is centred.
+	card(HomeFocusFavorites, "Favorites", "Saved", "favorites", HomeActionFavorites,
+		sdl.Rect{X: 32, Y: 454, W: 138, H: 158})
+	card(HomeFocusBrowser, "Browser", "Internet", "browser", HomeActionBrowser,
+		sdl.Rect{X: 186, Y: 454, W: 138, H: 158})
 	// Card subtitles are single lines that must fit beside the icon; the long
 	// ones ("Messages and sharing", "Personalize JukaHub") were ellipsised on
 	// the shipped layout, which read as a rendering bug. Keep them short.
-	card(HomeFocusChat, "Chat", "Chat with AI", "chat", HomeActionChat,
+	card(HomeFocusChat, "Chat", "Chat with others", "chat", HomeActionChat,
 		sdl.Rect{X: 340, Y: 454, W: 292, H: 158})
 	card(HomeFocusTools, "Tools", "Network and utilities", "tools", HomeActionTools,
 		sdl.Rect{X: 648, Y: 454, W: 292, H: 158})
@@ -1282,6 +1288,23 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 		}
 	case "favorites":
 		fillStar(renderer, cx, cy, min32(w, h)/2-1, color)
+	case "browser":
+		// Globe: an outlined circle with the equator and two meridians, which
+		// still reads at the 40px stacked-tile size.
+		r := min32(w, h)/2 - 1
+		strokeCircle(renderer, cx, cy, r, color)
+		renderer.SetDrawColor(color.R, color.G, color.B, color.A)
+		renderer.DrawLine(cx-r, cy, cx+r, cy)
+		for _, dx := range []int32{-r / 2, r / 2} {
+			steps := max32(8, r)
+			for i := int32(0); i < steps; i++ {
+				t := float64(i)/float64(steps)*2 - 1
+				yy := int32(float64(r) * t)
+				wid := int32(math.Sqrt(float64(r*r - yy*yy)))
+				x := cx + dx*wid/r
+				renderer.DrawPoint(x, cy+yy)
+			}
+		}
 	case "chat":
 		// Filled speech bubble with a tail.
 		bubble := sdl.Rect{X: rect.X + w/10, Y: rect.Y + h/8, W: w - w/5, H: h / 2}

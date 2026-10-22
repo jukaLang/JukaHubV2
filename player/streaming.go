@@ -22,7 +22,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"runtime"
@@ -187,6 +189,9 @@ func resetStreamCache() {
 	streamFailuresMu.Lock()
 	streamFailures = map[string]time.Time{}
 	streamFailuresMu.Unlock()
+	streamReachMu.Lock()
+	streamReach = map[string]time.Time{}
+	streamReachMu.Unlock()
 	resetProbeCache()
 }
 
@@ -443,10 +448,25 @@ func probePlayableStream(ctx context.Context, ffprobePath, url string) bool {
 	if snap, ok := cachedProbe(url); ok {
 		return snap.width > 0 && snap.height > 0
 	}
+	// A URL that a previous window already reached is not probed again: the
+	// second ffprobe is a second of waiting before the first frame.
+	if streamRecentlyReachable(url) {
+		return true
+	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	fields, err := ffprobeStream(ctx, ffprobePath, url)
 	if err != nil {
+		// ffprobe failing to describe a URL does not mean the decoder cannot
+		// play it: the handheld's build rejected signed googlevideo links while
+		// ffmpeg streamed them fine, so every preloaded card was thrown away and
+		// the video was downloaded instead. Confirm the CDN accepts the URL
+		// before giving up on streaming.
+		if probeStreamReachable(ctx, url) {
+			rememberStreamReachable(url)
+			log.Printf("[STREAM] ffprobe could not describe %s (%v); the CDN accepts it, streaming anyway", sanitizeLogURL(url), err)
+			return true
+		}
 		log.Printf("[STREAM] ffprobe rejected %s: %v", sanitizeLogURL(url), err)
 		return false
 	}
@@ -456,6 +476,78 @@ func probePlayableStream(ctx context.Context, ffprobePath, url string) bool {
 	}
 	rememberProbe(url, fields)
 	return true
+}
+
+// streamReachTTL mirrors the probe cache: a URL the CDN accepted stays trusted
+// for the same short window.
+const streamReachTTL = 2 * time.Minute
+
+var (
+	streamReachMu sync.Mutex
+	streamReach   = map[string]time.Time{}
+)
+
+// streamRecentlyReachable reports whether the CDN answered for this URL.
+func streamRecentlyReachable(url string) bool {
+	key := streamResolutionKey(url)
+	if key == "" {
+		return false
+	}
+	streamReachMu.Lock()
+	defer streamReachMu.Unlock()
+	at, ok := streamReach[key]
+	if !ok {
+		return false
+	}
+	if time.Since(at) > streamReachTTL {
+		delete(streamReach, key)
+		return false
+	}
+	return true
+}
+
+// rememberStreamReachable notes that the CDN served a range of this URL.
+func rememberStreamReachable(url string) {
+	key := streamResolutionKey(url)
+	if key == "" {
+		return
+	}
+	streamReachMu.Lock()
+	streamReach[key] = time.Now()
+	streamReachMu.Unlock()
+}
+
+// probeStreamReachable fetches the first kilobyte of a resolved stream with the
+// same client identity yt-dlp used. A 200/206 carrying a media type proves the
+// signed URL is live even when ffprobe cannot open it.
+func probeStreamReachable(ctx context.Context, url string) bool {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("User-Agent", streamUserAgent)
+	req.Header.Set("Range", "bytes=0-1023")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return false
+	}
+	ctype := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Type")))
+	return strings.HasPrefix(ctype, "video/") || strings.HasPrefix(ctype, "audio/") ||
+		strings.HasPrefix(ctype, "application/mp4") || strings.Contains(ctype, "octet-stream")
+}
+
+// isHTTPMediaURL reports whether a source is fetched over HTTP(S), where the
+// client identity matters to the CDN.
+func isHTTPMediaURL(raw string) bool {
+	s := strings.ToLower(strings.TrimSpace(raw))
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
 }
 
 // tryStreamPlayback starts the embedded player on a direct stream. started is
@@ -620,10 +712,13 @@ func toolPathRunnable(path string) bool {
 // is marked as soon as its own extraction finishes, in whatever order that is.
 //
 // The pool is hard-bounded so the app can never be buried in yt-dlp processes:
-// at most prefetchWorkerCount() children exist at any moment, each has a fixed
-// budget, its process is killed when the context is cancelled, the window is
-// cancelled the instant the user presses Play, and a slot is only released when
-// its child has really exited. Nothing is left running once a window is done.
+// at most prefetchWorkerCount() children exist at any moment across every
+// window, each has a fixed budget, its process is killed when the context is
+// cancelled, the whole batch is cancelled the instant the user presses Play,
+// and a slot is only released when its child has really exited. Windows overlap
+// so a new one is not stuck behind the previous window's budget, but a window
+// never kills the extractions it already started: on the handheld those were
+// routinely the cards that ended up being played.
 
 const (
 	// prefetchSettleDelay lets a burst of navigation finish before work starts;
@@ -680,9 +775,21 @@ var (
 	prefetchPending    []string
 	prefetchConfig     *Config
 	prefetchGen        uint64
-	prefetchWorkCancel context.CancelFunc
 	prefetchWorkerOnce sync.Once
 	prefetchWake       = make(chan struct{}, 1)
+
+	// prefetchWindows holds the cancel func of every window still running.
+	// Play cancels all of them; a newer window does not, because the
+	// extractions already in flight are for the cards around the same focus
+	// ring and killing them threw away the seconds spent on them.
+	prefetchWindows   = map[uint64]context.CancelFunc{}
+	prefetchWindowSeq uint64
+
+	// prefetchSlotPool is one process-wide bound shared by every window, so
+	// overlapping windows cannot double the number of yt-dlp children on a
+	// handheld with 1 GB of RAM.
+	prefetchSlots     chan struct{}
+	prefetchSlotsOnce sync.Once
 )
 
 // prefetchWindowSize is how many cards ahead of the focus ring are resolved.
@@ -803,7 +910,11 @@ func prefetchWorker() {
 		if videoPrepareActive() {
 			continue
 		}
-		prefetchResolveWindow(config, gen, batch)
+		// Windows overlap: a window waits on the shared slot pool, so the next
+		// one can start while an older one's last extractions finish. With one
+		// blocking loop the newest window queued behind the previous window's
+		// 45 s budget, which is how preloading fell behind on the handheld.
+		go prefetchResolveWindow(config, gen, batch)
 	}
 }
 
@@ -815,29 +926,51 @@ func prefetchSuperseded(gen uint64) bool {
 	return prefetchGen != gen
 }
 
-// setPrefetchCancel stores the cancel func of the running window.
-func setPrefetchCancel(cancel context.CancelFunc) {
+// registerPrefetchWindow records a running window's cancel func and returns its
+// id.
+func registerPrefetchWindow(cancel context.CancelFunc) uint64 {
 	prefetchMu.Lock()
-	prefetchWorkCancel = cancel
+	defer prefetchMu.Unlock()
+	prefetchWindowSeq++
+	prefetchWindows[prefetchWindowSeq] = cancel
+	return prefetchWindowSeq
+}
+
+// unregisterPrefetchWindow forgets a window that finished on its own.
+func unregisterPrefetchWindow(id uint64) {
+	prefetchMu.Lock()
+	delete(prefetchWindows, id)
 	prefetchMu.Unlock()
 }
 
-// cancelPrefetchWork stops the running window and every child process in it,
+// cancelPrefetchWork stops every running window and every child process in it,
 // freeing the CPU and the helper processes for the video the user just asked
 // for. It is called when playback starts.
 func cancelPrefetchWork() {
 	prefetchMu.Lock()
-	cancel := prefetchWorkCancel
-	prefetchWorkCancel = nil
+	draining := make([]context.CancelFunc, 0, len(prefetchWindows))
+	for id, cancel := range prefetchWindows {
+		draining = append(draining, cancel)
+		delete(prefetchWindows, id)
+	}
 	prefetchMu.Unlock()
-	if cancel != nil {
+	for _, cancel := range draining {
 		cancel()
 	}
 }
 
-// prefetchResolveWindow resolves one window with a bounded pool. Each link gets
-// its own yt-dlp, so a card is marked the moment its extraction lands instead of
-// after the whole window.
+// prefetchSlotPool returns the shared child-process budget, sized once from the
+// device's memory and handheld status.
+func prefetchSlotPool() chan struct{} {
+	prefetchSlotsOnce.Do(func() {
+		prefetchSlots = make(chan struct{}, prefetchWorkerCount())
+	})
+	return prefetchSlots
+}
+
+// prefetchResolveWindow resolves one window with the shared child budget. Each
+// link gets its own yt-dlp, so a card is marked the moment its extraction lands
+// instead of after the whole window.
 func prefetchResolveWindow(config *Config, gen uint64, sources []string) {
 	if !prefetchMemoryOK() {
 		log.Printf("[STREAM] preload skipped: low memory (%d MB free)", freeMemoryMB())
@@ -857,16 +990,25 @@ func prefetchResolveWindow(config *Config, gen uint64, sources []string) {
 	if !toolPathRunnable(ffprobePath) {
 		ffprobePath = ""
 	}
+	prefetchResolveWindowWith(gen, sources, func(ctx context.Context, source string) bool {
+		return prefetchResolveOne(ctx, config, ytDlpPath, ffprobePath, source)
+	})
+}
 
+// prefetchResolveWindowWith is the window's scheduling core, with the resolver
+// injected so the cancellation rules can be tested without subprocesses.
+func prefetchResolveWindowWith(gen uint64, sources []string, resolve func(context.Context, string) bool) {
+	if len(sources) == 0 || resolve == nil {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	setPrefetchCancel(cancel)
+	windowID := registerPrefetchWindow(cancel)
 	defer func() {
 		cancel()
-		setPrefetchCancel(nil)
+		unregisterPrefetchWindow(windowID)
 	}()
 
-	workers := prefetchWorkerCount()
-	slots := make(chan struct{}, workers)
+	slots := prefetchSlotPool()
 	var wg sync.WaitGroup
 	var resolved int32
 	queue := sources
@@ -882,12 +1024,19 @@ dispatch:
 			<-slots
 			break
 		}
-		// Play, or a newer window, outranks the rest of this queue. The jobs
-		// already running are cancelled with the context below.
-		if videoPrepareActive() || prefetchSuperseded(gen) {
+		// Play outranks the rest of this queue; it cancels the context and the
+		// jobs below notice within one extraction attempt.
+		if videoPrepareActive() {
 			<-slots
-			cancel()
-			break
+			break dispatch
+		}
+		// A newer window took over: stop queueing this window's remaining
+		// cards, but let the extractions already running finish. They are for
+		// the cards around the same focus ring, and cancelling them is what
+		// threw away every window's last results.
+		if prefetchSuperseded(gen) {
+			<-slots
+			break dispatch
 		}
 		source := queue[0]
 		queue = queue[1:]
@@ -899,17 +1048,19 @@ dispatch:
 		go func(source string) {
 			defer wg.Done()
 			defer func() { <-slots }()
-			if prefetchResolveOne(ctx, config, ytDlpPath, ffprobePath, source) {
+			if resolve(ctx, source) {
 				atomic.AddInt32(&resolved, 1)
 			}
 		}(source)
 	}
 
-	// The window is over: kill anything still running so no yt-dlp outlives it,
-	// then wait for the slots to come back. Every child started above is reaped
-	// before this function returns.
-	cancel()
+	// Wait for the jobs already running instead of killing them. Cancelling
+	// first ended every window by killing its last prefetchWorkerCount()
+	// extractions — on the handheld the card the user was about to play was
+	// routinely one of them, so preloading never marked anything. Each job is
+	// bounded by prefetchJobBudget and by ctx, so this cannot hang the pool.
 	wg.Wait()
+	cancel()
 
 	if n := atomic.LoadInt32(&resolved); n > 0 {
 		log.Printf("[STREAM] preloaded %d/%d card(s)", n, len(sources))

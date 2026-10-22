@@ -132,6 +132,23 @@ func TestAppEntryTarget(t *testing.T) {
 	}
 }
 
+// TestLaunchableAppPathStaysInTheAppFolders pins the guard that keeps an Apps
+// row from starting an arbitrary program: only paths below the scanned folders
+// are launchable, so a tampered entry outside them is refused before exec.
+func TestLaunchableAppPathStaysInTheAppFolders(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "evil.exe")
+	if isLaunchableAppPath(outside) {
+		t.Fatalf("%q outside the app folders was launchable", outside)
+	}
+	escape := filepath.Join(appsFolder(), "..", "..", "evil.exe")
+	if isLaunchableAppPath(escape) {
+		t.Fatalf("traversal path %q was launchable", escape)
+	}
+	if !isLaunchableAppPath(filepath.Join(appsFolder(), "Game.exe")) {
+		t.Fatal("a program inside the apps folder was refused")
+	}
+}
+
 // TestBuiltinAppletScenesExist guards against listing an applet whose scene is
 // missing from jukaconfig.json: activating it would silently do nothing.
 func TestBuiltinAppletScenesExist(t *testing.T) {

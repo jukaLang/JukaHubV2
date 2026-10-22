@@ -3,9 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -419,6 +422,214 @@ func TestVideoPrepareLifecycle(t *testing.T) {
 		t.Fatal("a second cancel reported work in flight")
 	}
 	finishVideoPrepare(seq) // harmless after a cancel
+}
+
+// Every card a window dispatches must be allowed to finish. The window used to
+// cancel its context before waiting for the jobs it had just started, which
+// killed the last prefetchWorkerCount() extractions of every batch — on the
+// handheld that was often the card the user was about to play.
+func TestPrefetchWindowLetsDispatchedJobsFinish(t *testing.T) {
+	cancelVideoPrepare()
+	t.Cleanup(func() { cancelVideoPrepare() })
+	prefetchMu.Lock()
+	gen := prefetchGen
+	prefetchMu.Unlock()
+
+	const cards = 6
+	sources := make([]string, 0, cards)
+	for i := 0; i < cards; i++ {
+		sources = append(sources, "https://www.youtube.com/watch?v=card"+string(rune('a'+i)))
+	}
+	var mu sync.Mutex
+	resolved := map[string]bool{}
+	resolve := func(ctx context.Context, source string) bool {
+		// Long enough that the window's dispatch loop reaches its end while
+		// this extraction is still running.
+		time.Sleep(40 * time.Millisecond)
+		if ctx.Err() != nil {
+			return false
+		}
+		mu.Lock()
+		resolved[source] = true
+		mu.Unlock()
+		return true
+	}
+
+	prefetchResolveWindowWith(gen, sources, resolve)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(resolved) != cards {
+		t.Fatalf("resolved %d/%d cards; the window killed its own last jobs", len(resolved), cards)
+	}
+}
+
+// A newer window must not kill extractions that are already running: they cover
+// the same focus ring, and the seconds already spent on them are the whole
+// reason preloading exists. It only stops queueing the rest of its list.
+func TestPrefetchWindowKeepsInFlightOnSupersede(t *testing.T) {
+	cancelVideoPrepare()
+	prefetchMu.Lock()
+	prevGen := prefetchGen
+	gen := prefetchGen
+	prefetchMu.Unlock()
+	t.Cleanup(func() {
+		cancelVideoPrepare()
+		prefetchMu.Lock()
+		prefetchGen = prevGen
+		prefetchMu.Unlock()
+	})
+
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	outcome := make(chan bool, 2)
+	resolve := func(ctx context.Context, source string) bool {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-release
+		outcome <- ctx.Err() != nil
+		return ctx.Err() == nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		prefetchResolveWindowWith(gen, []string{"https://youtu.be/a", "https://youtu.be/b"}, resolve)
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no extraction started")
+	}
+	// The user moves the focus ring: a newer window replaces the queue.
+	prefetchMu.Lock()
+	prefetchGen++
+	prefetchMu.Unlock()
+	close(release)
+
+	select {
+	case wasCancelled := <-outcome:
+		if wasCancelled {
+			t.Fatal("a running extraction was cancelled by a newer window")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("extraction never finished")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("window did not return")
+	}
+}
+
+// Pressing Play does cancel the batch: the decoder needs the CPU and the RAM
+// the helper would otherwise hold.
+func TestCancelPrefetchWorkStopsRunningJobs(t *testing.T) {
+	cancelVideoPrepare()
+	prefetchMu.Lock()
+	gen := prefetchGen
+	prefetchMu.Unlock()
+
+	started := make(chan struct{}, 1)
+	cancelled := make(chan struct{}, 1)
+	resolve := func(ctx context.Context, source string) bool {
+		select {
+		case started <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		select {
+		case cancelled <- struct{}{}:
+		default:
+		}
+		return false
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		prefetchResolveWindowWith(gen, []string{"https://youtu.be/a", "https://youtu.be/b"}, resolve)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("no extraction started")
+	}
+	cancelPrefetchWork()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Play did not cancel the running extraction")
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("window did not return after cancellation")
+	}
+}
+
+// A resolved URL is only worth keeping if the CDN will serve it. When ffprobe
+// cannot describe the stream, a ranged request with the extractor's user agent
+// is the proof that streaming is worth attempting.
+func TestProbeStreamReachable(t *testing.T) {
+	cases := []struct {
+		name   string
+		status int
+		ctype  string
+		want   bool
+	}{
+		{"ranged mp4", http.StatusPartialContent, "video/mp4", true},
+		{"full mp4", http.StatusOK, "video/mp4", true},
+		{"octet stream", http.StatusOK, "application/octet-stream", true},
+		{"html error page", http.StatusOK, "text/html; charset=utf-8", false},
+		{"forbidden", http.StatusForbidden, "video/mp4", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Header.Get("User-Agent") != streamUserAgent {
+					t.Errorf("request UA = %q, want the extractor's", r.Header.Get("User-Agent"))
+				}
+				if r.Header.Get("Range") == "" {
+					t.Error("probe sent no Range header")
+				}
+				w.Header().Set("Content-Type", tc.ctype)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte("data"))
+			}))
+			defer srv.Close()
+			if got := probeStreamReachable(context.Background(), srv.URL+"/videoplayback?expire=1"); got != tc.want {
+				t.Fatalf("probeStreamReachable = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// The reachability mark is short-lived and scoped to the exact URL, so an
+// expired signed link is not trusted on the next Play.
+func TestStreamReachCacheExpires(t *testing.T) {
+	resetStreamCache()
+	t.Cleanup(resetStreamCache)
+	url := "https://cdn.example/videoplayback?expire=1"
+	if streamRecentlyReachable(url) {
+		t.Fatal("a fresh cache reports a reachable URL")
+	}
+	rememberStreamReachable(url)
+	if !streamRecentlyReachable(url) {
+		t.Fatal("a just-probed URL was not remembered")
+	}
+	if streamRecentlyReachable("https://cdn.example/videoplayback?expire=2") {
+		t.Fatal("the mark leaked to another URL")
+	}
+	streamReachMu.Lock()
+	streamReach[url] = time.Now().Add(-streamReachTTL - time.Second)
+	streamReachMu.Unlock()
+	if streamRecentlyReachable(url) {
+		t.Fatal("an expired reachability mark was reused")
+	}
 }
 
 // A preloaded card draws the bolt and a yellow title; a cold one keeps the

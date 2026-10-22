@@ -75,12 +75,12 @@ func applyUIProfileForDevice(config *Config, device DeviceModel) bool {
 		return false
 	}
 
-	designW, designH := int32(config.Width), int32(config.Height)
+	designW, designH := canvasDimension(config.Width), canvasDimension(config.Height)
 	if designW <= 0 {
-		designW = int32(config.Variables.ScreenWidth)
+		designW = canvasDimension(config.Variables.ScreenWidth)
 	}
 	if designH <= 0 {
-		designH = int32(config.Variables.ScreenHeight)
+		designH = canvasDimension(config.Variables.ScreenHeight)
 	}
 	if designW <= 0 {
 		designW = uiCanvasWideWidth
@@ -107,6 +107,22 @@ func applyUIProfileForDevice(config *Config, device DeviceModel) bool {
 		deviceDisplayName(device), profile.NativeW, profile.NativeH,
 		mode, profile.CanvasW, profile.CanvasH)
 	return true
+}
+
+// maxCanvasDimension bounds a canvas dimension read from the config. The
+// renderer works in int32, so a larger JSON number would wrap negative — and a
+// negative design size is what scaleSceneGeometry then refuses to use at all.
+const maxCanvasDimension = 8192
+
+// canvasDimension converts a config-declared dimension to the int32 the
+// renderer uses. Values that are absent, negative or absurd return 0 so the
+// caller falls back to the built-in canvas instead of drawing into a wrapped
+// (and therefore negative) coordinate space.
+func canvasDimension(v int) int32 {
+	if v <= 0 || v > maxCanvasDimension {
+		return 0
+	}
+	return int32(v)
 }
 
 // scaleSceneGeometry maps the authored scene coordinates into the target
