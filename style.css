@@ -219,15 +219,6 @@ textarea {
   outline-offset: 2px;
 }
 
-/* === App Shell === */
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
-}
-
 
 /* === App Shell === */
 .app-shell {
@@ -1569,12 +1560,11 @@ textarea:focus {
 }
 
 .custom-size-fields {
-  display: grid;
+  display: none; /* shown as a grid by JS when the size is Custom */
   grid-template-columns: 1fr auto 1fr;
   gap: var(--space-sm);
   align-items: center;
   margin-bottom: var(--space-md);
-  display: none;
 }
 
 .checkbox-label {
@@ -2322,21 +2312,19 @@ body.ai-open .ai-panel {
   background: linear-gradient(145deg, #1b2231 0%, #131923 100%);
 }
 
-.welcome-card h5 {
+.welcome-card-title {
+  display: block;
   margin: 0 0 4px 0;
   font-size: var(--text-sm);
   font-weight: 600;
 }
 
-.welcome-card p {
+.welcome-card-desc {
+  display: block;
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: 1.35;
-}
-
-.guide-modal[hidden] {
-  display: none;
 }
 
 .guide-modal {
