@@ -1,6 +1,6 @@
 module jukahub/JukaHub
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/bwmarrin/discordgo v0.29.0
@@ -8,8 +8,8 @@ require (
 	github.com/pkg/sftp v1.13.11
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	github.com/tidwall/gjson v1.17.0
-	github.com/ulikunitz/xz v0.5.15
+	github.com/tidwall/gjson v1.20.0
+	github.com/ulikunitz/xz v0.5.17
 	github.com/veandco/go-sdl2 v0.4.40
 	go.etcd.io/bbolt v1.5.0
 )
@@ -29,7 +29,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.14 // indirect
 	github.com/tklauser/numcpus v0.8.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
-	golang.org/x/crypto v0.55.0
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
+	golang.org/x/crypto v0.58.0
+	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
 )
