@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/big"
 	"net"
 	"net/http"
@@ -276,8 +277,11 @@ func (s *companionServer) Start() error {
 	s.port = ln.Addr().(*net.TCPAddr).Port
 	s.mu.Unlock()
 	go func() {
+		// A closed listener is the normal shutdown path; anything else is worth
+		// a line in the log, since the companion silently stopped answering
+		// phones before.
 		if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-			// A closed listener is the normal shutdown path.
+			log.Printf("[companion] server stopped: %v", err)
 		}
 	}()
 	return nil

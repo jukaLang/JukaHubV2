@@ -18,18 +18,17 @@ package main
 // until one yields a muxed stream.
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"os/exec"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -320,6 +319,9 @@ func streamFailureFatal(reason string) bool {
 func ytDlpGetURL(ctx context.Context, ytDlpPath string, args []string) (string, error) {
 	cmd := exec.CommandContext(ctx, ytDlpPath, args...)
 	cmd.Env = helperToolEnv(ytDlpPath)
+	// A killed extractor must not keep Wait blocked on a pipe its child still
+	// holds open: preload cancels these processes whenever the user presses Play.
+	cmd.WaitDelay = 3 * time.Second
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -589,195 +591,6 @@ func cancelVideoPrepare() bool {
 	return true
 }
 
-// --- Preloading --------------------------------------------------------------
-//
-// A yt-dlp run costs seconds before it prints anything, and almost all of that
-// is the frozen Python build unpacking and starting. One process resolves a
-// whole window of links (yt-dlp accepts several URLs and prints one JSON object
-// per video), so preloading four cards costs one start instead of four. That is
-// what lets the lightning-bolt marker keep up with browsing on the handheld.
-//
-// Everything here is single-process by design: a 1 GB TrimUI dies when two
-// Python builds compete for RAM with the decoder, so the batch is one child, it
-// is cancelled the moment the user presses Play, and it is skipped entirely when
-// free memory is low.
-
-const (
-	// prefetchSettleDelay lets a burst of navigation finish before a batch
-	// starts; resolving a window the user already scrolled past is pure waste
-	// when a start costs seconds.
-	prefetchSettleDelay = 300 * time.Millisecond
-	// prefetchBatchMax bounds one batch. Each link still costs extraction time
-	// inside the shared process, and a huge batch would delay the next window.
-	prefetchBatchMax = 6
-	// prefetchMemoryFloorMB keeps preloading off a device that is already tight
-	// on RAM: yt-dlp needs tens of megabytes next to the decoder and the UI.
-	prefetchMemoryFloorMB = 200
-	// streamBatchBudget bounds one batch extraction.
-	streamBatchBudget = 2 * time.Minute
-)
-
-// batchLine is one video's answer from a batch run: the id, the page URL and
-// the selected muxed stream. The batch prints fields rather than `-j` JSON on
-// purpose: a YouTube JSON dump is ~11 MB per video, which is far too much to
-// buffer on a 1 GB handheld, while these five fields are a single short line.
-type batchLine struct {
-	id      string
-	pageURL string
-	stream  string
-}
-
-// batchPrintTemplate is the --print format runYtDlpBatch asks for. The codecs
-// are printed so a video-only format can be rejected: one ffmpeg input plays one
-// URL, so a separate video track would give silent playback.
-const batchPrintTemplate = "%(id)s\t%(webpage_url)s\t%(vcodec)s\t%(acodec)s\t%(url)s"
-
-// parseBatchLine reads one line of batchPrintTemplate output.
-func parseBatchLine(line string) (batchLine, bool) {
-	fields := strings.Split(line, "\t")
-	if len(fields) < 5 {
-		return batchLine{}, false
-	}
-	res := batchLine{
-		id:      strings.TrimSpace(fields[0]),
-		pageURL: strings.TrimSpace(fields[1]),
-		stream:  strings.TrimSpace(fields[4]),
-	}
-	if strings.TrimSpace(fields[2]) == "none" || strings.TrimSpace(fields[3]) == "none" {
-		return batchLine{}, false // one track only: it would play silent or blank
-	}
-	if !strings.HasPrefix(res.stream, "http://") && !strings.HasPrefix(res.stream, "https://") {
-		return batchLine{}, false
-	}
-	return res, true
-}
-
-// youtubeVideoID extracts the video id from the URL shapes YouTube hands out.
-func youtubeVideoID(raw string) string {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil {
-		return ""
-	}
-	host := strings.ToLower(u.Host)
-	switch {
-	case strings.HasSuffix(host, "youtu.be"):
-		return strings.Trim(u.Path, "/")
-	case strings.Contains(host, "youtube.com"):
-		if v := u.Query().Get("v"); v != "" {
-			return v
-		}
-		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-		if len(parts) == 2 && (parts[0] == "shorts" || parts[0] == "embed" || parts[0] == "live") {
-			return parts[1]
-		}
-	}
-	return ""
-}
-
-// batchSourceIndex maps the entries of a batch run back onto the sources that
-// were queued. Page URL first, video id second, because yt-dlp normalizes (and
-// sometimes rewrites) the URL it reports.
-type batchSourceIndex struct {
-	byPage map[string]string
-	byID   map[string]string
-}
-
-func newBatchSourceIndex(sources []string) batchSourceIndex {
-	ix := batchSourceIndex{
-		byPage: make(map[string]string, len(sources)),
-		byID:   make(map[string]string, len(sources)),
-	}
-	for _, s := range sources {
-		ix.byPage[s] = s
-		if id := youtubeVideoID(s); id != "" {
-			ix.byID[id] = s
-		}
-	}
-	return ix
-}
-
-// sourceFor returns the queued source a result belongs to, or "" when it is a
-// video nobody asked for (a redirect, a playlist entry, ...).
-func (ix batchSourceIndex) sourceFor(pageURL, id string) string {
-	if pageURL != "" {
-		if source, ok := ix.byPage[pageURL]; ok {
-			return source
-		}
-	}
-	if id != "" {
-		if source, ok := ix.byID[id]; ok {
-			return source
-		}
-	}
-	return ""
-}
-
-// runYtDlpBatch resolves several sources with ONE yt-dlp process and hands every
-// video to handle as its JSON line arrives. Streaming the lines matters: the
-// focused card is first in the batch, so it is marked while the extractor is
-// still working through the ones after it, instead of after the whole batch.
-func runYtDlpBatch(ctx context.Context, config *Config, ytDlpPath string, sources []string, handle func(batchLine)) error {
-	if ytDlpPath == "" || len(sources) == 0 {
-		return nil
-	}
-	args := []string{
-		"--simulate",
-		"--print", batchPrintTemplate,
-		"--no-warnings",
-		"--no-playlist",
-		"--no-check-certificate",
-		"--geo-bypass",
-		"--ignore-errors",
-		"--user-agent", streamUserAgent,
-		"--extractor-args", "youtube:player_client=android",
-		// The same muxed selector the single-video path uses, so a batch hit and
-		// a direct play pick the same format.
-		"-f", streamFormatSelector(playbackMaxHeight(config)),
-	}
-	// Config-provided args last, so cookies or an API key win over the defaults.
-	args = append(args, ytDlpExtraArgsSlice(config)...)
-	args = append(args, sources...)
-
-	ctx, cancel := context.WithTimeout(ctx, streamBatchBudget)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, ytDlpPath, args...)
-	cmd.Env = helperToolEnv(ytDlpPath)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	scanner := bufio.NewScanner(stdout)
-	// One line is an id, a page URL and a signed media URL: a few KB. The cap
-	// is generous but small enough that a runaway line cannot eat the handheld's
-	// memory.
-	scanner.Buffer(make([]byte, 0, 16*1024), 1<<20)
-	for scanner.Scan() {
-		if res, ok := parseBatchLine(scanner.Text()); ok {
-			handle(res)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		// The pipe must be drained or the child blocks forever writing into a
-		// full buffer, so stop it before waiting instead of hanging the worker.
-		cancel()
-		_ = cmd.Wait()
-		return fmt.Errorf("read yt-dlp output: %w", err)
-	}
-	runErr := cmd.Wait()
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if runErr != nil {
-		return fmt.Errorf("%w (%s)", runErr, streamFailureReason(stderr.String()))
-	}
-	return nil
-}
-
 // toolPathRunnable reports whether a resolved tool path is a real executable.
 // getToolPath returns the bare name when the tool is not installed (so callers
 // can report it), and running that bare name would fail on every card.
@@ -794,6 +607,40 @@ func toolPathRunnable(path string) bool {
 	return err == nil
 }
 
+// --- Preloading --------------------------------------------------------------
+//
+// Preloading resolves a window of cards ahead of the focus ring so the
+// lightning-bolt marker means what it says: Play starts the video instead of
+// waiting for an extractor.
+//
+// It runs a small pool of ONE JOB PER LINK: two extractors on a handheld, three
+// elsewhere. A single process walking the whole window looks cheaper, but it
+// makes the fourth card wait for the first three, and that queue is exactly
+// where preloading stopped keeping up on a TrimUI. Per-link jobs mean each card
+// is marked as soon as its own extraction finishes, in whatever order that is.
+//
+// The pool is hard-bounded so the app can never be buried in yt-dlp processes:
+// at most prefetchWorkerCount() children exist at any moment, each has a fixed
+// budget, its process is killed when the context is cancelled, the window is
+// cancelled the instant the user presses Play, and a slot is only released when
+// its child has really exited. Nothing is left running once a window is done.
+
+const (
+	// prefetchSettleDelay lets a burst of navigation finish before work starts;
+	// resolving a window the user already scrolled past is pure waste.
+	prefetchSettleDelay = 250 * time.Millisecond
+	// prefetchWindowMax bounds how many links one window may queue.
+	prefetchWindowMax = 8
+	// prefetchMemoryFloorMB keeps preloading off a device that is already tight
+	// on RAM: yt-dlp needs tens of megabytes next to the decoder and the UI.
+	prefetchMemoryFloorMB = 200
+	// prefetchSingleWorkerMB is the free-memory band where only one extractor
+	// runs, so a device with the decoder already loaded never runs two.
+	prefetchSingleWorkerMB = 420
+	// prefetchJobBudget bounds one link, including its retry attempts.
+	prefetchJobBudget = 45 * time.Second
+)
+
 // prefetchMemoryOK reports whether there is room for a helper process next to
 // the UI and the decoder. Non-Linux hosts always pass: the floor is about the
 // handheld, not the dev machine.
@@ -801,17 +648,38 @@ func prefetchMemoryOK() bool {
 	if runtime.GOOS != "linux" {
 		return true
 	}
+	return freeMemoryMB() >= prefetchMemoryFloorMB
+}
+
+// freeMemoryMB is the available RAM in MB, or a value that never blocks preload
+// when /proc/meminfo cannot be read.
+func freeMemoryMB() uint64 {
 	info := readProcMeminfo()
 	if info.MemTotal == 0 {
-		return true
+		return ^uint64(0)
 	}
-	return info.MemAvail/1024 >= prefetchMemoryFloorMB
+	return info.MemAvail / 1024
+}
+
+// prefetchWorkerCount is how many extractors may run at once. Handhelds get two:
+// one keeps the focused card fast while the other works ahead, and two Python
+// builds still fit beside the decoder on a 1 GB device.
+func prefetchWorkerCount() int {
+	limit := 3
+	if IsTrimuiDevice() || P().IsHandheld() {
+		limit = 2
+	}
+	if runtime.GOOS == "linux" && freeMemoryMB() < prefetchSingleWorkerMB && limit > 1 {
+		limit = 1
+	}
+	return limit
 }
 
 var (
 	prefetchMu         sync.Mutex
 	prefetchPending    []string
 	prefetchConfig     *Config
+	prefetchGen        uint64
 	prefetchWorkCancel context.CancelFunc
 	prefetchWorkerOnce sync.Once
 	prefetchWake       = make(chan struct{}, 1)
@@ -820,9 +688,9 @@ var (
 // prefetchWindowSize is how many cards ahead of the focus ring are resolved.
 func prefetchWindowSize() int {
 	if IsTrimuiDevice() || P().IsHandheld() {
-		return 4
+		return 6
 	}
-	return prefetchBatchMax
+	return prefetchWindowMax
 }
 
 // prefetchFirstResult warms the first search result, which is the card the focus
@@ -890,18 +758,21 @@ func prefetchTargets(urls []string) []string {
 	return targets
 }
 
-// prefetchSources queues a set of page URLs for background resolution.
+// prefetchSources queues a set of page URLs for background resolution. The
+// newest window replaces the queue: the cards around the focus ring are the
+// ones the user may actually play.
 func prefetchSources(config *Config, urls []string) {
 	targets := prefetchTargets(urls)
 	if len(targets) == 0 {
 		return
 	}
-	if len(targets) > prefetchBatchMax {
-		targets = targets[:prefetchBatchMax]
+	if len(targets) > prefetchWindowMax {
+		targets = targets[:prefetchWindowMax]
 	}
 	prefetchMu.Lock()
-	prefetchPending = targets // the newest window wins outright
+	prefetchPending = targets
 	prefetchConfig = config
+	prefetchGen++
 	prefetchMu.Unlock()
 	ensurePrefetchWorker()
 	select {
@@ -914,12 +785,15 @@ func ensurePrefetchWorker() {
 	prefetchWorkerOnce.Do(func() { go prefetchWorker() })
 }
 
+// prefetchWorker is the only place a window is started. It settles after a
+// navigation burst, takes the newest queue, and resolves it with a bounded pool.
 func prefetchWorker() {
 	for range prefetchWake {
 		time.Sleep(prefetchSettleDelay)
 		prefetchMu.Lock()
 		batch := prefetchPending
 		config := prefetchConfig
+		gen := prefetchGen
 		prefetchPending = nil
 		prefetchMu.Unlock()
 		if len(batch) == 0 {
@@ -929,19 +803,28 @@ func prefetchWorker() {
 		if videoPrepareActive() {
 			continue
 		}
-		prefetchBatch(config, batch)
+		prefetchResolveWindow(config, gen, batch)
 	}
 }
 
-// setPrefetchCancel stores the cancel func of the running batch.
+// prefetchSuperseded reports whether a newer window took over while this one was
+// running. The newest window wins; old links are dropped rather than finished.
+func prefetchSuperseded(gen uint64) bool {
+	prefetchMu.Lock()
+	defer prefetchMu.Unlock()
+	return prefetchGen != gen
+}
+
+// setPrefetchCancel stores the cancel func of the running window.
 func setPrefetchCancel(cancel context.CancelFunc) {
 	prefetchMu.Lock()
 	prefetchWorkCancel = cancel
 	prefetchMu.Unlock()
 }
 
-// cancelPrefetchWork stops the running batch, freeing the CPU and the helper
-// process for a video the user just asked for.
+// cancelPrefetchWork stops the running window and every child process in it,
+// freeing the CPU and the helper processes for the video the user just asked
+// for. It is called when playback starts.
 func cancelPrefetchWork() {
 	prefetchMu.Lock()
 	cancel := prefetchWorkCancel
@@ -952,76 +835,110 @@ func cancelPrefetchWork() {
 	}
 }
 
-// prefetchBatch resolves a batch, probes each result and caches what is
-// playable. The probe is part of preloading on purpose: the bolt promises Play
-// starts immediately, and the player would otherwise still wait for ffprobe.
-func prefetchBatch(config *Config, sources []string) {
+// prefetchResolveWindow resolves one window with a bounded pool. Each link gets
+// its own yt-dlp, so a card is marked the moment its extraction lands instead of
+// after the whole window.
+func prefetchResolveWindow(config *Config, gen uint64, sources []string) {
+	if !prefetchMemoryOK() {
+		log.Printf("[STREAM] preload skipped: low memory (%d MB free)", freeMemoryMB())
+		return
+	}
 	ytDlpPath := ""
+	ffprobePath := ""
 	if config != nil {
 		ytDlpPath = getToolPath("yt-dlp", config)
+		ffprobePath = getToolPath("ffprobe", config)
 	}
-	if ytDlpPath == "" {
+	if !toolPathRunnable(ytDlpPath) {
 		return
 	}
-	if !prefetchMemoryOK() {
-		log.Printf("[STREAM] preload skipped: low memory")
-		return
+	// A missing ffprobe must not reject every card: with no probe the result is
+	// cached as-is, which is what the player falls back to anyway.
+	if !toolPathRunnable(ffprobePath) {
+		ffprobePath = ""
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	setPrefetchCancel(cancel)
 	defer func() {
 		cancel()
 		setPrefetchCancel(nil)
 	}()
-	// Play may have been pressed between the worker's check and this point.
-	if videoPrepareActive() {
-		return
+
+	workers := prefetchWorkerCount()
+	slots := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var resolved int32
+	queue := sources
+
+dispatch:
+	for len(queue) > 0 {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			break dispatch
+		}
+		if ctx.Err() != nil {
+			<-slots
+			break
+		}
+		// Play, or a newer window, outranks the rest of this queue. The jobs
+		// already running are cancelled with the context below.
+		if videoPrepareActive() || prefetchSuperseded(gen) {
+			<-slots
+			cancel()
+			break
+		}
+		source := queue[0]
+		queue = queue[1:]
+		if _, ok := cachedDirectStream(source); ok {
+			<-slots
+			continue
+		}
+		wg.Add(1)
+		go func(source string) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			if prefetchResolveOne(ctx, config, ytDlpPath, ffprobePath, source) {
+				atomic.AddInt32(&resolved, 1)
+			}
+		}(source)
 	}
 
-	index := newBatchSourceIndex(sources)
-	ffprobePath := ""
-	if config != nil {
-		ffprobePath = getToolPath("ffprobe", config)
+	// The window is over: kill anything still running so no yt-dlp outlives it,
+	// then wait for the slots to come back. Every child started above is reaped
+	// before this function returns.
+	cancel()
+	wg.Wait()
+
+	if n := atomic.LoadInt32(&resolved); n > 0 {
+		log.Printf("[STREAM] preloaded %d/%d card(s)", n, len(sources))
 	}
-	// A missing ffprobe must not reject every card: with no probe the result is
-	// cached as-is, which is exactly what the player falls back to anyway.
-	if !toolPathRunnable(ffprobePath) {
-		ffprobePath = ""
-	}
-	done := make(map[string]bool, len(sources))
-	resolved := 0
-	runErr := runYtDlpBatch(ctx, config, ytDlpPath, sources, func(res batchLine) {
-		if ctx.Err() != nil || resolved == len(sources) {
-			return
-		}
-		source := index.sourceFor(res.pageURL, res.id)
-		if source == "" || done[source] {
-			return
-		}
-		done[source] = true
-		// The probe runs while the extractor is still working through the
-		// remaining links: yt-dlp writes into the pipe buffer meanwhile.
-		if ffprobePath != "" && !probePlayableStream(ctx, ffprobePath, res.stream) {
-			rememberStreamFailure(source)
-			return
-		}
-		rememberDirectStream(source, res.stream)
-		resolved++
-	})
+}
+
+// prefetchResolveOne resolves, checks and caches one link. It never records a
+// failure for a cancelled job: a cancelled extraction says nothing about the
+// video, and remembering it would hide the card for a whole cooldown.
+func prefetchResolveOne(ctx context.Context, config *Config, ytDlpPath, ffprobePath, source string) bool {
+	jobCtx, cancel := context.WithTimeout(ctx, prefetchJobBudget)
+	defer cancel()
+
+	direct, ok := resolveDirectStream(jobCtx, config, ytDlpPath, source)
 	if ctx.Err() != nil {
-		return // the user pressed Play; that video owns the process now
+		return false // superseded or Play: leave the cache alone
 	}
-	if runErr != nil {
-		log.Printf("[STREAM] preload batch ended with: %v", runErr)
+	if !ok || direct == "" {
+		rememberStreamFailure(source)
+		return false
 	}
-	if resolved > 0 {
-		log.Printf("[STREAM] preloaded %d/%d card(s)", resolved, len(sources))
-	}
-	// A source the batch could not resolve is left alone for a while so
-	// scrolling does not re-ask for it; pressing Play still tries again.
-	for _, source := range sources {
-		if !done[source] {
+	// Probing here is what makes Play immediate: the player would otherwise
+	// spend the first seconds of the "instant" start waiting for ffprobe.
+	if ffprobePath != "" && !probePlayableStream(jobCtx, ffprobePath, direct) {
+		if ctx.Err() == nil {
 			rememberStreamFailure(source)
 		}
+		return false
 	}
+	rememberDirectStream(source, direct)
+	return true
 }

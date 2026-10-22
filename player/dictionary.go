@@ -249,7 +249,7 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 				sy := sugY + 4 + int32(i)*30
 				// Highlight if matches query exactly.
 				col := sdl.Color{R: 160, G: 175, B: 200, A: 200}
-				if strings.ToLower(s) == strings.ToLower(dict.query) {
+				if strings.EqualFold(s, dict.query) {
 					col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 220}
 				}
 				renderText(renderer, config, font, s, col, searchX+16, sy)

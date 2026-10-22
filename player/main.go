@@ -687,14 +687,30 @@ func main() {
 							handleAlarmInput(e, config)
 							continue
 						}
+						// A playing video is modal over the scene chrome: its controls are
+						// the only thing on screen the D-pad may reach. This runs before
+						// the top-bar focus handling, which otherwise swallowed the
+						// arrows while a chrome button held the focus and left the player
+						// unreachable.
+						if HandleVideoKeyInput(e) {
+							continue
+						}
+						// Media scenes keep the search field reachable from anywhere:
+						// X opens the keyboard even while the results grid has focus,
+						// which is the state after playing a video. Without this the
+						// field could only be reached by walking back up the grid.
+						if e.Keysym.Sym == sdl.K_x && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+							if openSearchShortcut(config) {
+								continue
+							}
+						}
 						// Top-bar chrome (back pill, status clock) is focusable on
 						// non-home scenes; while it holds focus it owns the keys so
 						// the element dispatch cannot steal the focus back.
 						if handleChromeKey(e, config) {
 							continue
 						}
-						// Video control shortcuts (always active when video is playing)
-						HandleVideoKeyInput(e)
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
@@ -1656,7 +1672,17 @@ func main() {
 						// Remember whether the press was consumed by a player: B there
 						// stops playback instead of also leaving the scene.
 						videoWasPlaying := snapshotVideoState().phase != "idle"
-						HandleVideoControllerInput(e)
+						if HandleVideoControllerInput(e) {
+							continue
+						}
+						// X opens the media search field from anywhere in a results
+						// scene, matching the keyboard path above.
+						if e.Button == sdl.CONTROLLER_BUTTON_X && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+							if openSearchShortcut(config) {
+								continue
+							}
+						}
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
@@ -2058,6 +2084,10 @@ func main() {
 		// Contextual widgets: battery saver and time-of-day theme, checked once a
 		// second before the frame is drawn so a theme switch lands immediately.
 		widgetsTick(config)
+		// A video whose decoder reached the end releases the player here, even
+		// when its scene is not the one on screen (the flag used to wait for a
+		// repaint of a scene the user had already left).
+		videoSyncPlaybackEnd()
 		playtimeTick(config)
 		// Dock and ambient screen: clock, weather, now-playing and photos when the
 		// device is charging or idle (see ambient.go). Runs here, on the event

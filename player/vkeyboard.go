@@ -1055,20 +1055,29 @@ func vkSubmit(config *Config, askAI bool) {
 	}
 }
 
-// vkTriggerSceneSearch clicks the search button of a search scene on submit.
+// vkTriggerSceneSearch runs the search a search scene declares when the
+// keyboard is submitted. It used to look for a button whose trigger was
+// literally "yt_search", which no media scene uses: the Tube search button is
+// "youtube_smart", so typing a query and pressing Save closed the keyboard and
+// started nothing. It now dispatches whatever search trigger the scene has and
+// falls back to a plain YouTube search.
 func vkTriggerSceneSearch(config *Config) {
-	if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
 		return
 	}
-	if !sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
+	scene := config.Scenes[currentSceneIndex]
+	if !sceneHasSearchResults(scene) {
 		return
 	}
-	for _, elem := range config.Scenes[currentSceneIndex].Elements {
-		if elem.Type == "button" && elem.Trigger == "yt_search" {
-			go executeYouTubeSearch(config, elem.TriggerTarget, elem.TriggerValue, snapshotVars(config))
+	if elem, ok := sceneMediaSearchButton(scene); ok {
+		if runMediaSearchTrigger(config, elem.Trigger, elem.TriggerTarget, elem.TriggerValue) {
 			return
 		}
 	}
+	if q, _ := config.Variables.Custom["search_query"].(string); strings.TrimSpace(q) == "" {
+		return
+	}
+	go executeYouTubeSearch(config, ytSearchCmd(config), "search_results", snapshotVars(config))
 }
 
 // toggleKeyboardCase flips letter case without losing the focused key.

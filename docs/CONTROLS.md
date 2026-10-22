@@ -82,16 +82,29 @@ A text web browser for GitHub issues, release notes and documentation. See
 
 ## Video player
 
+The control bar is a focus ring: **Left / Right** walk it from stop through
+rewind, play/pause, fast-forward, speed, subtitles, settings and full screen, and
+**A** presses the highlighted button.
+
 | Button | Action |
 |--------|--------|
-| A | Play / pause |
-| B | Stop and go back |
-| Left / Right | Seek |
+| Left / Right | Move the selection along the control bar |
+| A | Press the selected control (play/pause when nothing is selected) |
 | Up / Down | Volume |
+| X | Subtitles on / off |
+| Y | Video settings sheet |
 | L1 / R1 | Playback speed ±0.25× |
+| B | Close the settings sheet, then stop and go back |
+
+The rewind and fast-forward buttons skip 10 seconds per press. With the settings
+sheet open, **Up / Down** move between its rows and **A** applies the row, so
+subtitles, full screen and speed are reachable without a touch screen. A tap on
+a control also moves the ring there, so touch and D-pad never disagree.
 
 Progress, resume position and subtitles are handled automatically; the control
-bar hides itself while playback continues and reappears on any input.
+bar hides itself while playback continues and reappears on any input. When a
+video reaches its end the player closes and returns to the scene — the frozen
+last frame no longer keeps the grid behind it locked.
 
 ## On-screen keyboard
 

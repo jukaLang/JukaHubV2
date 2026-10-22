@@ -57,8 +57,8 @@
       "chat_input": "hi",
       "diskpie_data": {
         "Total": 510718431232,
-        "Used": 341323902976,
-        "Pct": 66
+        "Used": 343081099264,
+        "Pct": 67
       },
       "ftp_address": "",
       "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
@@ -70,21 +70,19 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "total": 436,
+        "total": 604,
         "scenes": {
-          "Main": 397,
-          "Tube": 41
+          "FileExplorer": 6,
+          "Main": 600
         },
         "days": {
           "2026-10-21": 275,
-          "2026-10-22": 163
+          "2026-10-22": 331
         },
-        "unlocked": {}
+        "unlocked": {
+          "first_steps": "2026-10-22T01:45:41-04:00"
+        }
       },
-      "recently_played": [
-        "https://www.youtube.com/watch?v=-KPeZqUch08",
-        "https://www.youtube.com/watch?v=1YnkZS9e8MA"
-      ],
       "ssh_address": "",
       "ssh_fingerprint": "",
       "ssh_port": "2222",
@@ -117,9 +115,9 @@
           "upload_date": "",
           "webpage_url": "",
           "url": "https://www.youtube.com/watch?v=1YnkZS9e8MA",
-          "position": 1.7870936
+          "position": 5.1183678
         },
-        "Timestamp": "2026-10-22T00:47:34.3967351-04:00"
+        "Timestamp": "2026-10-22T01:15:58.9256427-04:00"
       },
       {
         "Type": "video",

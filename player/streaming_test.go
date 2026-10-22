@@ -277,73 +277,33 @@ func TestParseProbeOutput(t *testing.T) {
 	}
 }
 
-func TestParseBatchLine(t *testing.T) {
-	const stream = "https://rr1---sn-bvvbax4pcxg-gq0s.googlevideo.com/videoplayback?itag=18"
-	line := "lcjGBhLi_qQ\thttps://www.youtube.com/watch?v=lcjGBhLi_qQ\tavc1.42001E\tmp4a.40.2\t" + stream
-	res, ok := parseBatchLine(line)
-	if !ok {
-		t.Fatalf("valid line rejected: %q", line)
+// The preload pool must stay small and must always obey the newest window.
+func TestPrefetchPoolBoundsAndSupersede(t *testing.T) {
+	if n := prefetchWorkerCount(); n < 1 || n > 3 {
+		t.Fatalf("prefetchWorkerCount() = %d, want 1..3", n)
 	}
-	if res.id != "lcjGBhLi_qQ" || res.pageURL != "https://www.youtube.com/watch?v=lcjGBhLi_qQ" || res.stream != stream {
-		t.Fatalf("parsed %+v", res)
+	if !prefetchMemoryOK() {
+		t.Log("memory floor not met on this host; preload would be skipped")
 	}
 
-	// A single ffmpeg input plays one URL, so a one-track format must be
-	// rejected rather than streamed silently or blank.
-	if _, ok := parseBatchLine("id\tpage\tavc1\tnone\thttps://cdn/a.mp4"); ok {
-		t.Error("a video-only format was accepted")
-	}
-	if _, ok := parseBatchLine("id\tpage\tnone\tmp4a\thttps://cdn/a.m4a"); ok {
-		t.Error("an audio-only format was accepted")
-	}
-	// Error lines and partial lines are not results.
-	if _, ok := parseBatchLine("ERROR: [youtube] x: Video unavailable"); ok {
-		t.Error("an error line was accepted")
-	}
-	if _, ok := parseBatchLine("id\tpage\tavc1\tmp4a"); ok {
-		t.Error("a line without a URL was accepted")
-	}
-	if _, ok := parseBatchLine("id\tpage\tavc1\tmp4a\tNA"); ok {
-		t.Error("a placeholder URL was accepted")
-	}
-}
+	prefetchMu.Lock()
+	prevGen := prefetchGen
+	gen := prefetchGen
+	prefetchMu.Unlock()
+	t.Cleanup(func() {
+		prefetchMu.Lock()
+		prefetchGen = prevGen
+		prefetchMu.Unlock()
+	})
 
-func TestYouTubeVideoID(t *testing.T) {
-	cases := map[string]string{
-		"https://www.youtube.com/watch?v=lcjGBhLi_qQ":      "lcjGBhLi_qQ",
-		"https://www.youtube.com/watch?feature=x&v=abc123": "abc123",
-		"https://youtu.be/-KPeZqUch08":                     "-KPeZqUch08",
-		"https://www.youtube.com/shorts/Zz9x1":             "Zz9x1",
-		"https://m.youtube.com/watch?v=qq":                 "qq",
-		"https://vimeo.com/12345":                          "",
-		"not a url":                                        "",
+	if prefetchSuperseded(gen) {
+		t.Fatal("the current window reported as superseded")
 	}
-	for in, want := range cases {
-		if got := youtubeVideoID(in); got != want {
-			t.Errorf("youtubeVideoID(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-// Both URL shapes the media lists can hold must map back to the resolved stream.
-func TestBatchSourceIndexMapsResults(t *testing.T) {
-	sources := []string{
-		"https://www.youtube.com/watch?v=ready",
-		"https://youtu.be/-KPeZqUch08",
-		"https://www.youtube.com/watch?v=dead",
-	}
-	ix := newBatchSourceIndex(sources)
-
-	if got := ix.sourceFor("https://www.youtube.com/watch?v=ready", "ready"); got != sources[0] {
-		t.Errorf("page-URL result mapped to %q", got)
-	}
-	// The short-link source is matched by video id: yt-dlp reports the watch URL.
-	if got := ix.sourceFor("https://www.youtube.com/watch?v=-KPeZqUch08", "-KPeZqUch08"); got != sources[1] {
-		t.Errorf("short-link result mapped to %q, want the match by video id", got)
-	}
-	// A result nobody queued must not be mistaken for a source.
-	if got := ix.sourceFor("https://www.youtube.com/watch?v=stranger", "stranger"); got != "" {
-		t.Errorf("an unqueued video mapped to %q", got)
+	prefetchMu.Lock()
+	prefetchGen++
+	prefetchMu.Unlock()
+	if !prefetchSuperseded(gen) {
+		t.Fatal("a newer window did not supersede the older one")
 	}
 }
 

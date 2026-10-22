@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -87,7 +88,201 @@ var (
 	videoChromeUntil  uint64
 	videoSettingsOpen bool
 	videoSettingsItem int
+	// videoControlFocus is the control the D-pad ring currently sits on. Zero
+	// value means "no ring": a touch or the A button then uses the default
+	// action instead of a stale selection from the last video.
+	videoControlFocus videoControlID
 )
+
+// videoControlID names one on-screen player button. The ring walks them in
+// drawing order, so it moves left to right along the bar.
+type videoControlID int
+
+const (
+	vcNone videoControlID = iota
+	vcStop
+	vcSeekBack
+	vcPlayPause
+	vcSeekFwd
+	vcSpeed
+	vcSubs
+	vcSettings
+	vcFullscreen
+)
+
+// videoControlEntry pairs a control with the rect it was laid out at.
+type videoControlEntry struct {
+	id   videoControlID
+	rect sdl.Rect
+}
+
+// videoControlsInOrder returns the bar buttons left to right. Volume and the
+// seek bar are excluded: volume belongs to Up/Down, and the bar is a pointer
+// target, so neither is part of the ring.
+func videoControlsInOrder() []videoControlEntry {
+	return []videoControlEntry{
+		{vcStop, videoControlRects.stop},
+		{vcSeekBack, videoControlRects.seekBack},
+		{vcPlayPause, videoControlRects.playPause},
+		{vcSeekFwd, videoControlRects.seekFwd},
+		{vcSpeed, videoControlRects.speed},
+		{vcSubs, videoControlRects.subs},
+		{vcSettings, videoControlRects.settings},
+		{vcFullscreen, videoControlRects.fullscreen},
+	}
+}
+
+// moveVideoControlFocus steps the ring by delta, wrapping at both ends. With no
+// ring yet, the first press lands on the nearest end of the bar.
+func moveVideoControlFocus(delta int) {
+	items := videoControlsInOrder()
+	if len(items) == 0 {
+		return
+	}
+	idx := -1
+	for i, it := range items {
+		if it.id == videoControlFocus {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		// No ring yet: start from play/pause, the button users reach for, so
+		// the first press lands on rewind or forward next to it instead of on
+		// Stop at the far end of the bar.
+		for i, it := range items {
+			if it.id == vcPlayPause {
+				idx = i
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		idx = 0
+	}
+	idx = (idx + delta + len(items)) % len(items)
+	videoControlFocus = items[idx].id
+}
+
+// videoControlFocusedRect reports where the ring should be drawn.
+func videoControlFocusedRect() (sdl.Rect, bool) {
+	if videoControlFocus == vcNone {
+		return sdl.Rect{}, false
+	}
+	for _, it := range videoControlsInOrder() {
+		if it.id == videoControlFocus {
+			if it.rect.W <= 0 || it.rect.H <= 0 {
+				return sdl.Rect{}, false
+			}
+			return it.rect, true
+		}
+	}
+	return sdl.Rect{}, false
+}
+
+// drawVideoControlRing highlights the focused control so a D-pad user can see
+// what A will press. It is drawn per frame, above the cached control layer.
+func drawVideoControlRing(renderer *sdl.Renderer) {
+	rect, ok := videoControlFocusedRect()
+	if !ok || renderer == nil {
+		return
+	}
+	accent := ColorInfo
+	strokeRoundedRect(renderer, rect.X-4, rect.Y-4, rect.W+8, rect.H+8, 10, 2, WithAlpha(accent, 230))
+}
+
+// clampSeekFraction converts a relative skip into an absolute clamped fraction.
+func clampSeekFraction(progress, duration, seconds float64) float64 {
+	if duration <= 0 {
+		return 0
+	}
+	fraction := progress + seconds/duration
+	if fraction < 0 {
+		return 0
+	}
+	if fraction > 1 {
+		return 1
+	}
+	return fraction
+}
+
+// seekVideoBySeconds seeks relative to the current position, clamped to the
+// clip. A media player's skip buttons are counted in seconds, not percent:
+// five percent of a ten-minute video is half a minute, which overshot badly.
+func seekVideoBySeconds(state videoStateSnapshot, seconds float64) {
+	if state.duration <= 0 {
+		return
+	}
+	SeekVideo(clampSeekFraction(state.progress, state.duration, seconds))
+}
+
+// cyclePlaybackSpeed steps to the next preset speed.
+func cyclePlaybackSpeed() {
+	speeds := []float64{0.5, 0.75, 1.0, 1.25, 1.5, 2.0}
+	current := snapshotVideoState().speed
+	next := speeds[0]
+	for _, s := range speeds {
+		if s > current {
+			next = s
+			break
+		}
+	}
+	SetPlaybackSpeed(next)
+}
+
+// toggleSubtitlesWithFeedback toggles subtitles and reports the result, since
+// the button gives no other visible confirmation.
+func toggleSubtitlesWithFeedback() {
+	if !subtitlesAvailable() {
+		showToast("No subtitles found for this video", ToastInfo())
+		return
+	}
+	if toggleSubtitles() {
+		showToast("Subtitles on", ToastInfo())
+		return
+	}
+	showToast("Subtitles off", ToastInfo())
+}
+
+// moveVideoSettingsItem steps the settings sheet selection, wrapping.
+func moveVideoSettingsItem(delta int) {
+	videoSettingsItem = (videoSettingsItem + delta + videoSettingsSheetRows) % videoSettingsSheetRows
+}
+
+// activateVideoControl runs the control under the ring. With no ring, A keeps
+// its old meaning (play/pause) so a single press still does the obvious thing.
+func activateVideoControl() {
+	state := snapshotVideoState()
+	if state.phase == "idle" {
+		return
+	}
+	switch videoControlFocus {
+	case vcStop:
+		StopEmbeddedPlayback()
+	case vcSeekBack:
+		PlayNavSound()
+		seekVideoBySeconds(state, -10)
+	case vcSeekFwd:
+		PlayNavSound()
+		seekVideoBySeconds(state, 10)
+	case vcSpeed:
+		PlayActivateSound()
+		cyclePlaybackSpeed()
+	case vcSubs:
+		PlayActivateSound()
+		toggleSubtitlesWithFeedback()
+	case vcSettings:
+		PlayActivateSound()
+		toggleVideoSettings()
+	case vcFullscreen:
+		PlayActivateSound()
+		toggleVideoFullscreen()
+	default:
+		PlayActivateSound()
+		ToggleVideoPlayback()
+	}
+	revealVideoChrome()
+}
 
 // videoChromeVisible reports whether the controls should be drawn. While not in
 // full screen they are always visible; in full screen they fade after a moment.
@@ -142,6 +337,12 @@ var (
 	// (and shutdown paths) can wait until they have really exited before a
 	// shared SDL renderer is destroyed.
 	videoDecoderWG sync.WaitGroup
+
+	// playbackEnded is raised by the decoder when ffmpeg reaches the end of the
+	// file. It is consumed on the render thread, which tears the session down:
+	// the phase used to stay "playing" forever, leaving a frozen last frame and
+	// a player that kept swallowing input over the scene underneath it.
+	playbackEnded atomic.Bool
 )
 
 // waitForVideoDecoders waits until every playback goroutine has returned,
@@ -656,6 +857,13 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 			log.Printf("[VIDEO] First frame received: %dx%d, %d bytes, fps=%.1f, frameDur=%v", width, height, len(buf), fps, frameDuration)
 		}
 	}
+
+	// The pipe closed. A cancelled session (stop, seek, next video) is not an
+	// end of stream; only a decoder that ran to EOF raises the flag.
+	if sess.ctx.Err() == nil && playbackCurrentSession() == sess && frameCount > 0 {
+		log.Printf("[VIDEO] Reached end of stream after %d frames", frameCount)
+		playbackEnded.Store(true)
+	}
 }
 
 func startFFmpegAudio(sess *playbackSession, ffmpegPath, path string, startSec float64) {
@@ -874,6 +1082,7 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 }
 
 func StopEmbeddedPlayback() {
+	playbackEnded.Store(false)
 	playbackMu.Lock()
 	sess := playbackCurrent
 	playbackCurrent = nil
@@ -908,6 +1117,7 @@ func StopEmbeddedPlayback() {
 	// Leaving playback also leaves full screen and the settings sheet behind.
 	videoFullscreen = false
 	videoSettingsOpen = false
+	videoControlFocus = vcNone
 	setSubtitlesEnabled(false)
 
 	videoPlaybackMutex.Lock()
@@ -1138,7 +1348,23 @@ func computeVideoControlLayout(x, y, w, h int32, state videoStateSnapshot) {
 }
 
 // RenderVideoOverlay renders the current video frame and on-screen controls.
+// videoSyncPlaybackEnd closes a session whose decoder hit the end of the file.
+// It runs on the render thread so the phase change, the frame-queue flush and
+// the repaint all happen in one place, and it is called from the main loop so a
+// video that finished while its scene was off screen still releases the player.
+func videoSyncPlaybackEnd() {
+	if !playbackEnded.Swap(false) {
+		return
+	}
+	if playerPhase() == "idle" {
+		return
+	}
+	log.Printf("[VIDEO] Playback finished; returning to the scene")
+	StopEmbeddedPlayback()
+}
+
 func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
+	videoSyncPlaybackEnd()
 	state := snapshotVideoState()
 	if state.phase == "idle" {
 		return
@@ -1399,6 +1625,9 @@ func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoSta
 		videoControlRects.settings.W)
 	drawIconBtn(renderer, iconFullscreen, videoControlRects.fullscreen.X, videoControlRects.fullscreen.Y,
 		videoControlRects.fullscreen.W)
+
+	// The D-pad ring, on top of the button it selects.
+	drawVideoControlRing(renderer)
 
 	// Active subtitle cue above the control bar.
 	currentTime := state.progress * state.duration
@@ -1748,36 +1977,36 @@ func HandleVideoControlClick(mx, my int32) bool {
 	}
 
 	if pointInRect(mx, my, videoControlRects.subs) {
-		if subtitlesAvailable() {
-			on := toggleSubtitles()
-			if on {
-				showToast("Subtitles on", ToastInfo())
-			} else {
-				showToast("Subtitles off", ToastInfo())
-			}
-		} else {
-			showToast("No subtitles found for this video", ToastInfo())
-		}
+		videoControlFocus = vcSubs
+		toggleSubtitlesWithFeedback()
 		return true
 	} else if pointInRect(mx, my, videoControlRects.settings) {
+		videoControlFocus = vcSettings
 		videoSettingsOpen = true
 		videoSettingsItem = 0
 		return true
 	} else if pointInRect(mx, my, videoControlRects.fullscreen) {
+		videoControlFocus = vcFullscreen
 		toggleVideoFullscreen()
 		return true
 	}
 
+	// A click also moves the D-pad ring, so the two input paths agree on what
+	// is selected instead of the ring jumping when the D-pad is next used.
 	if pointInRect(mx, my, videoControlRects.overlayPlay) {
+		videoControlFocus = vcPlayPause
 		ToggleVideoPlayback()
 	} else if pointInRect(mx, my, videoControlRects.playPause) {
+		videoControlFocus = vcPlayPause
 		ToggleVideoPlayback()
 	} else if pointInRect(mx, my, videoControlRects.stop) {
 		StopEmbeddedPlayback()
 	} else if pointInRect(mx, my, videoControlRects.seekBack) {
-		SeekVideo(state.progress - 0.05)
+		videoControlFocus = vcSeekBack
+		seekVideoBySeconds(state, -10)
 	} else if pointInRect(mx, my, videoControlRects.seekFwd) {
-		SeekVideo(state.progress + 0.05)
+		videoControlFocus = vcSeekFwd
+		seekVideoBySeconds(state, 10)
 	} else if pointInRect(mx, my, videoControlRects.volDown) {
 		AdjustVolume(-0.1)
 	} else if pointInRect(mx, my, videoControlRects.volUp) {
@@ -1786,19 +2015,8 @@ func HandleVideoControlClick(mx, my int32) bool {
 		fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
 		SeekVideo(fraction)
 	} else if pointInRect(mx, my, videoControlRects.speedCycle) {
-		speeds := []float64{0.5, 0.75, 1.0, 1.25, 1.5, 2.0}
-		current := state.speed
-		next := current
-		for _, s := range speeds {
-			if s > current {
-				next = s
-				break
-			}
-		}
-		if next == current {
-			next = speeds[0]
-		}
-		SetPlaybackSpeed(next)
+		videoControlFocus = vcSpeed
+		cyclePlaybackSpeed()
 	} else if pointInRect(mx, my, videoControlRects.back) {
 		StopEmbeddedPlayback()
 	}
@@ -1836,48 +2054,67 @@ func videoSettingsActivate(idx int) {
 	}
 }
 
-// HandleVideoKeyInput processes keyboard input for video controls.
-func HandleVideoKeyInput(e *sdl.KeyboardEvent) {
-	if e.Type != sdl.KEYDOWN {
-		return
+// HandleVideoKeyInput processes keyboard input for video controls. It reports
+// whether the key belonged to the player: a consumed key must not also scroll
+// the scene underneath the video, which is what made the grid move while a
+// video was on screen.
+func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
+	if e == nil || e.Type != sdl.KEYDOWN {
+		return false
 	}
 	state := snapshotVideoState()
 	if state.phase == "idle" {
-		return
+		return false
+	}
+
+	// The settings sheet is modal over the player while it is open.
+	if videoSettingsOpen {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			moveVideoSettingsItem(-1)
+			PlayNavSound()
+			return true
+		case sdl.K_DOWN:
+			moveVideoSettingsItem(1)
+			PlayNavSound()
+			return true
+		case sdl.K_RETURN, sdl.K_SPACE:
+			videoSettingsActivate(videoSettingsItem)
+			PlayActivateSound()
+			return true
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_s:
+			videoSettingsOpen = false
+			PlayBackSound()
+			return true
+		}
 	}
 
 	switch e.Keysym.Sym {
 	case sdl.K_SPACE, sdl.K_RETURN:
-		ToggleVideoPlayback()
+		activateVideoControl()
+	case sdl.K_LEFT:
+		moveVideoControlFocus(-1)
+		PlayNavSound()
+	case sdl.K_RIGHT:
+		moveVideoControlFocus(1)
+		PlayNavSound()
 	case sdl.K_f:
 		toggleVideoFullscreen()
 	case sdl.K_c:
-		if subtitlesAvailable() {
-			toggleSubtitles()
-		} else {
-			showToast("No subtitles found for this video", ToastInfo())
-		}
+		toggleSubtitlesWithFeedback()
 	case sdl.K_s:
 		videoSettingsOpen = !videoSettingsOpen
 		videoSettingsItem = 0
 	case sdl.K_ESCAPE:
 		// Escape leaves full screen (and the settings sheet) before it ends
 		// playback, so a mistaken tap does not kill the video.
-		if videoSettingsOpen {
-			videoSettingsOpen = false
-			return
-		}
 		if videoFullscreen {
 			videoFullscreen = false
-			return
+			return true
 		}
 		StopEmbeddedPlayback()
 	case sdl.K_q:
 		StopEmbeddedPlayback()
-	case sdl.K_LEFT:
-		SeekVideo(state.progress - 0.02)
-	case sdl.K_RIGHT:
-		SeekVideo(state.progress + 0.02)
 	case sdl.K_UP:
 		AdjustVolume(0.1)
 	case sdl.K_DOWN:
@@ -1890,28 +2127,57 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) {
 		SetPlaybackSpeed(1.5)
 	case sdl.K_4:
 		SetPlaybackSpeed(2.0)
+	default:
+		return false
 	}
+	revealVideoChrome()
+	return true
 }
 
-// HandleVideoControllerInput processes gamepad input for video controls.
-func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) {
-	if e.Type != sdl.CONTROLLERBUTTONDOWN {
-		return
+// HandleVideoControllerInput processes gamepad input for video controls. Like
+// the key handler it reports consumption, so D-pad presses move the control
+// ring instead of also scrolling the scene behind the player.
+func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
+	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
+		return false
 	}
 	state := snapshotVideoState()
 	if state.phase == "idle" {
-		return
+		return false
+	}
+
+	if videoSettingsOpen {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			moveVideoSettingsItem(-1)
+			PlayNavSound()
+			return true
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			moveVideoSettingsItem(1)
+			PlayNavSound()
+			return true
+		case sdl.CONTROLLER_BUTTON_A:
+			videoSettingsActivate(videoSettingsItem)
+			PlayActivateSound()
+			return true
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+			videoSettingsOpen = false
+			PlayBackSound()
+			return true
+		}
 	}
 
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_A:
-		ToggleVideoPlayback()
+		activateVideoControl()
 	case sdl.CONTROLLER_BUTTON_B:
 		StopEmbeddedPlayback()
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-		SeekVideo(state.progress - 0.02)
+		moveVideoControlFocus(-1)
+		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-		SeekVideo(state.progress + 0.02)
+		moveVideoControlFocus(1)
+		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		AdjustVolume(0.1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
@@ -1920,7 +2186,16 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) {
 		SetPlaybackSpeed(state.speed - 0.25)
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		SetPlaybackSpeed(state.speed + 0.25)
+	case sdl.CONTROLLER_BUTTON_X:
+		toggleSubtitlesWithFeedback()
+	case sdl.CONTROLLER_BUTTON_Y:
+		videoSettingsOpen = !videoSettingsOpen
+		videoSettingsItem = 0
+	default:
+		return false
 	}
+	revealVideoChrome()
+	return true
 }
 
 func pointInRect(px, py int32, r sdl.Rect) bool {

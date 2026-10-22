@@ -183,9 +183,10 @@ jobs:
     # ubuntu-latest label is moving to Ubuntu 26.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
-    # Advisory until the existing findings are triaged. Tracked in
-    # docs/IMPROVEMENTS.md: the remaining reports are deliberate (the PS4
-    # protocol needs CFB) or cosmetic (ST1005 error phrasing).
+    # The backlog is triaged in player/staticcheck.conf (unused scene helpers,
+    # player-facing error wording, and the deliberate CFB/math-rand deprecations
+    # are off); every other check fails the run, so the output stays readable.
+    # Still advisory so a new finding does not block a release build.
     continue-on-error: true
     defaults:
       run:

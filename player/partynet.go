@@ -748,8 +748,9 @@ func partyTick(config *Config) {
 	}
 	partySession.mu.Unlock()
 
-	if due && client.Poll(watch) {
-		// The result lands on the next tick; nothing here waits for the LAN.
+	if due {
+		// The poll result lands on the next tick; nothing here waits for the LAN.
+		client.Poll(watch)
 	}
 	partyApplyRemote(config)
 }

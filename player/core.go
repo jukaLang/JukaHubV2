@@ -2189,12 +2189,197 @@ func splitShellArgs(s string) []string {
 	return args
 }
 
-func executeYouTubeSearch(config *Config, command string, resultVar string, vars map[string]interface{}) {
-	// debug removed
+// mediaSearchTimeout bounds one yt-dlp search. Without it a wedged extractor
+// (dead Wi-Fi, a stalled DNS lookup, a throttled host) left the spinner up and
+// the results screen empty forever, which on the handheld reads as "search is
+// broken".
+const mediaSearchTimeout = 75 * time.Second
 
-	config.Variables.LoadingSpinner = true
-	config.Variables.SpinnerText = "Loading videos..."
-	defer func() { config.Variables.LoadingSpinner = false }()
+// A search is keyed by the variable it fills. Starting a newer search for the
+// same variable cancels the older one, so two yt-dlp processes never compete
+// for the 1 GB of RAM on a TrimUI, and the older result cannot land after the
+// newer one and show videos for a query the user already replaced.
+var (
+	mediaSearchMu     sync.Mutex
+	mediaSearchGen    = map[string]uint64{}
+	mediaSearchCancel = map[string]context.CancelFunc{}
+	mediaSearchBusy   int
+)
+
+// beginMediaSearch claims the result variable for a new search and returns its
+// generation. The spinner is owned by the set of running searches, not by each
+// one, so a cancelled run cannot clear the spinner of the run still working.
+func beginMediaSearch(config *Config, resultVar string) uint64 {
+	mediaSearchMu.Lock()
+	defer mediaSearchMu.Unlock()
+	if cancel, ok := mediaSearchCancel[resultVar]; ok && cancel != nil {
+		cancel()
+	}
+	mediaSearchGen[resultVar]++
+	mediaSearchBusy++
+	if mediaSearchBusy == 1 && config != nil {
+		config.Variables.LoadingSpinner = true
+		config.Variables.SpinnerText = "Loading videos..."
+	}
+	return mediaSearchGen[resultVar]
+}
+
+// finishMediaSearch releases the search and clears the spinner once none is
+// running any more.
+func finishMediaSearch(config *Config) {
+	mediaSearchMu.Lock()
+	if mediaSearchBusy > 0 {
+		mediaSearchBusy--
+	}
+	remaining := mediaSearchBusy
+	mediaSearchMu.Unlock()
+	if remaining == 0 && config != nil {
+		config.Variables.LoadingSpinner = false
+	}
+}
+
+// mediaSearchSuperseded reports whether a newer search took over the variable.
+func mediaSearchSuperseded(resultVar string, gen uint64) bool {
+	mediaSearchMu.Lock()
+	defer mediaSearchMu.Unlock()
+	return mediaSearchGen[resultVar] != gen
+}
+
+// registerMediaSearchCancel stores the cancel func for a running search.
+func registerMediaSearchCancel(resultVar string, cancel context.CancelFunc) {
+	mediaSearchMu.Lock()
+	mediaSearchCancel[resultVar] = cancel
+	mediaSearchMu.Unlock()
+}
+
+// clearMediaSearchCancel forgets a search's cancel func if it is still ours.
+func clearMediaSearchCancel(resultVar string, gen uint64) {
+	mediaSearchMu.Lock()
+	if mediaSearchGen[resultVar] == gen {
+		delete(mediaSearchCancel, resultVar)
+	}
+	mediaSearchMu.Unlock()
+}
+
+// sanitizeSearchVars removes the characters that would break the search
+// command. The query is pasted into a double-quoted yt-dlp argument, so a
+// literal quote would unbalance the tokenizer and search for the wrong text;
+// typos like `song "official` are easy on the on-screen keyboard, so the quotes
+// are dropped instead of failing the whole search.
+func sanitizeSearchVars(vars map[string]interface{}) map[string]interface{} {
+	q, ok := vars["search_query"].(string)
+	if !ok || !strings.Contains(q, `"`) {
+		return vars
+	}
+	safe := make(map[string]interface{}, len(vars))
+	for k, v := range vars {
+		safe[k] = v
+	}
+	safe["search_query"] = strings.ReplaceAll(q, `"`, " ")
+	return safe
+}
+
+// sceneMediaSearchButton returns the scene button that runs a search for the
+// typed query. The order prefers a button that searches over one that plays:
+// submitting after typing means "find this", even when the scene also offers a
+// separate "Play Link" button.
+func sceneMediaSearchButton(scene SceneConfig) (Element, bool) {
+	for _, want := range []string{"youtube_smart", "youtube_search", "yt_search"} {
+		for _, elem := range scene.Elements {
+			if elem.Type == "button" && elem.Trigger == want {
+				return elem, true
+			}
+		}
+	}
+	return Element{}, false
+}
+
+// runMediaSearchTrigger runs a media scene's search action from the trigger the
+// scene already declares. The on-screen Search button and the on-screen
+// keyboard's submit key both come through here, so typing a query and saving it
+// does exactly what pressing Search does. It reports whether the trigger was a
+// media search it handled.
+// mediaSearchPlan is the work a media trigger asks for, worked out without
+// running anything so it can be tested.
+type mediaSearchPlan struct {
+	command   string // yt-dlp command to run
+	resultVar string // variable the results fill
+	playURL   string // play this link instead of searching
+	errMsg    string // shown to the user when the trigger cannot run
+}
+
+// planMediaSearchTrigger decides what a media search trigger should do. It
+// reports false for triggers that are not searches ("youtube_play" and friends).
+func planMediaSearchTrigger(config *Config, trigger, target, value string) (mediaSearchPlan, bool) {
+	if config == nil {
+		return mediaSearchPlan{}, false
+	}
+	query := ""
+	if v, ok := config.Variables.Custom["search_query"].(string); ok {
+		query = strings.TrimSpace(v)
+	}
+	switch trigger {
+	case "yt_search":
+		if strings.TrimSpace(target) == "" {
+			return mediaSearchPlan{errMsg: "This scene has no search command configured."}, true
+		}
+		return mediaSearchPlan{command: target, resultVar: value}, true
+	case "youtube_search":
+		if query == "" {
+			return mediaSearchPlan{errMsg: "Type a search query first."}, true
+		}
+		return mediaSearchPlan{command: ytSearchCmd(config), resultVar: "search_results"}, true
+	case "youtube_smart":
+		if query == "" {
+			return mediaSearchPlan{errMsg: "Type a search query or paste a link first."}, true
+		}
+		if strings.Contains(query, "youtube.com") || strings.Contains(query, "youtu.be") {
+			return mediaSearchPlan{playURL: query}, true
+		}
+		return mediaSearchPlan{command: ytSearchCmd(config), resultVar: "search_results"}, true
+	}
+	return mediaSearchPlan{}, false
+}
+
+func runMediaSearchTrigger(config *Config, trigger, target, value string) bool {
+	plan, handled := planMediaSearchTrigger(config, trigger, target, value)
+	if !handled {
+		return false
+	}
+	if plan.errMsg != "" {
+		publishCustom("search_error", plan.errMsg)
+		return true
+	}
+	if plan.playURL != "" {
+		playVideoURL(config, plan.playURL)
+		return true
+	}
+	go executeYouTubeSearch(config, plan.command, plan.resultVar, snapshotVars(config))
+	return true
+}
+
+func executeYouTubeSearch(config *Config, command string, resultVar string, vars map[string]interface{}) {
+	gen := beginMediaSearch(config, resultVar)
+	defer finishMediaSearch(config)
+	defer clearMediaSearchCancel(resultVar, gen)
+	// stale is true once a newer search owns the results variable; an old run
+	// must then neither publish results nor clear the error line.
+	stale := func() bool { return mediaSearchSuperseded(resultVar, gen) }
+	publishVideos := func(videos []VideoInfo) {
+		if stale() {
+			log.Printf("[STREAM] dropping superseded search results for %s", resultVar)
+			return
+		}
+		publishCustom(resultVar, videos)
+	}
+	publishSearchError := func(msg string) {
+		if stale() {
+			return
+		}
+		publishCustom("search_error", msg)
+	}
+
+	vars = sanitizeSearchVars(vars)
 
 	// Substitute variables (e.g., $search_query)
 	cmdWithVars := substituteVars(command, vars)
@@ -2220,8 +2405,8 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	tokens := splitShellArgs(cmdWithVars)
 	if len(tokens) == 0 {
 		log.Printf("[ERROR] Empty command after substitution")
-		publishCustom("search_error", "Empty search command")
-		publishCustom(resultVar, []VideoInfo{})
+		publishSearchError("Empty search command")
+		publishVideos([]VideoInfo{})
 		return
 	}
 	tool := strings.ToLower(strings.TrimSuffix(filepath.Base(tokens[0]), ".exe"))
@@ -2230,14 +2415,14 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	// is then derived from that fixed name, never from the command text.
 	if tool != "yt-dlp" {
 		log.Printf("[SECURITY] executeYouTubeSearch: refusing tool %q", tool)
-		publishCustom("search_error", "Unsupported search command")
-		publishCustom(resultVar, []VideoInfo{})
+		publishSearchError("Unsupported search command")
+		publishVideos([]VideoInfo{})
 		return
 	}
 	if err := rejectYtDlpExecFlags(args); err != nil {
 		log.Printf("[SECURITY] executeYouTubeSearch: %v", err)
-		publishCustom("search_error", "Unsupported search command")
-		publishCustom(resultVar, []VideoInfo{})
+		publishSearchError("Unsupported search command")
+		publishVideos([]VideoInfo{})
 		return
 	}
 	// Resolve before searching. If the tool is missing, start the repair in
@@ -2255,8 +2440,8 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 			refreshToolHealth()
 		}()
 		log.Printf("[WARN] yt-dlp is not installed yet; install started")
-		publishCustom("search_error", "yt-dlp is being installed — try the search again in a moment.")
-		publishCustom(resultVar, []VideoInfo{})
+		publishSearchError("yt-dlp is being installed — try the search again in a moment.")
+		publishVideos([]VideoInfo{})
 		showToast("Installing yt-dlp…", ToastInfo())
 		return
 	}
@@ -2268,6 +2453,9 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 			var videos []VideoInfo
 			if json.Unmarshal(cached, &videos) == nil {
 				db.Close()
+				if stale() {
+					return
+				}
 				publishCustom(resultVar, videos)
 				publishCustom("search_error", nil)
 				focusedResultIndex = -1
@@ -2279,20 +2467,39 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 	}
 
 	// Run the tool directly (no shell) so special characters are not
-	// interpreted by cmd.exe / sh (e.g. "<" as input redirection).
-	cmd := exec.Command(fullToolPath, args...)
+	// interpreted by cmd.exe / sh (e.g. "<" as input redirection). The
+	// context bounds the run: a stalled extractor is killed instead of leaving
+	// the spinner and an empty grid up until the app restarts, and a newer
+	// search for the same variable cancels this one through the same context.
+	ctx, cancel := context.WithTimeout(context.Background(), mediaSearchTimeout)
+	registerMediaSearchCancel(resultVar, cancel)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, fullToolPath, args...)
 	cmd.Env = helperToolEnv(fullToolPath)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
+	if ctx.Err() == context.Canceled {
+		// A newer search owns the results variable now; say nothing.
+		log.Printf("[STREAM] search for %s cancelled", resultVar)
+		return
+	}
+	if ctx.Err() == context.DeadlineExceeded {
+		log.Printf("[ERROR] yt-dlp search timed out after %v", mediaSearchTimeout)
+		reason := "Search timed out — check the connection and try again"
+		publishSearchError(reason)
+		publishVideos([]VideoInfo{})
+		showToast(reason, ToastWarn())
+		return
+	}
 	if err != nil {
 		log.Printf("[ERROR] yt-dlp execution error: %v", err)
 		log.Printf("[ERROR] stderr: %s", stderr.String())
 		reason := ytDlpFailureReason(stderr.String(), err, fullToolPath)
-		publishCustom("search_error", reason)
-		publishCustom(resultVar, []VideoInfo{})
+		publishSearchError(reason)
+		publishVideos([]VideoInfo{})
 		switch {
 		case !IsOnline():
 			showToast("Search failed — offline, connect WiFi", ToastWarn())
@@ -2306,8 +2513,8 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 
 	if stdout.Len() == 0 {
 		log.Printf("[WARN] yt-dlp returned empty stdout")
-		publishCustom("search_error", "yt-dlp returned no data. Check your query or network.")
-		publishCustom(resultVar, []VideoInfo{})
+		publishSearchError("yt-dlp returned no data. Check your query or network.")
+		publishVideos([]VideoInfo{})
 		showToast("No results found.", ToastWarn())
 		return
 	}
@@ -2363,7 +2570,11 @@ func executeYouTubeSearch(config *Config, command string, resultVar string, vars
 
 	if len(videos) == 0 {
 		log.Printf("[ERROR] No videos could be parsed from yt-dlp output")
-		publishCustom("search_error", "No videos found. Try a different query.")
+		publishSearchError("No videos found. Try a different query.")
+	}
+
+	if stale() {
+		return
 	}
 
 	// Cache successful YouTube search results for 1 hour.
@@ -4947,34 +5158,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 		}
 		log.Printf("change_scene: scene not found: %s", target)
-	case "yt_search":
-		go executeYouTubeSearch(config, element.TriggerTarget, element.TriggerValue, snapshotVars(config))
-	case "youtube_search":
-		q := ""
-		if v, ok := config.Variables.Custom["search_query"].(string); ok {
-			q = strings.TrimSpace(v)
-		}
-		if q == "" {
-			publishCustom("search_error", "Type a search query first.")
-			return
-		}
-		cmd := ytSearchCmd(config)
-		go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
-	case "youtube_smart":
-		q := ""
-		if v, ok := config.Variables.Custom["search_query"].(string); ok {
-			q = strings.TrimSpace(v)
-		}
-		if q == "" {
-			publishCustom("search_error", "Type a search query or paste a link first.")
-			return
-		}
-		if strings.Contains(q, "youtube.com") || strings.Contains(q, "youtu.be") {
-			playVideoURL(config, q)
-			return
-		}
-		cmd := ytSearchCmd(config)
-		go executeYouTubeSearch(config, cmd, "search_results", snapshotVars(config))
+	case "yt_search", "youtube_search", "youtube_smart":
+		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
 	case "youtube_trending":
 		go fetchTrendingVideos(config, "search_results", snapshotVars(config))
 	case "youtube_play":
@@ -5815,10 +6000,6 @@ func completeSceneTransition(config *Config) {
 	// Initialize terminal when entering the Terminal scene.
 	if config.Scenes[currentSceneIndex].Name == "Terminal" {
 		termInit()
-	}
-	// Initialize emulator when entering the Emulator scene.
-	if config.Scenes[currentSceneIndex].Name == "Emulator" {
-		// Emulator scene initialized - label displays launcher info
 	}
 	// Initialize dashboard when entering the Dashboard scene.
 	if config.Scenes[currentSceneIndex].Name == "Dashboard" {

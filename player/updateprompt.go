@@ -138,6 +138,59 @@ func startHeaderUpdate() bool {
 // drawUpdateBadge draws the download pill ending at rightX and returns the
 // horizontal space it consumed (including the gap before the bell). It records
 // the hit rect used by handleChromeBarClick.
+// updatePillLabel is the word both headers put on the release offer. One label
+// and one footprint everywhere is what keeps the top bar recognisable: the home
+// header used to show a bare download glyph while every scene header showed a
+// wider pill with text.
+const updatePillLabel = "Update"
+
+// updatePillSize is the shared footprint of the release pill: the label plus
+// room for the arrow, at the same height as the notification bell (font height
+// + 10, at least 24).
+func updatePillSize(font *ttf.Font) (int32, int32) {
+	if font == nil {
+		return 0, 0
+	}
+	h := int32(font.Height()) + 10
+	if h < 24 {
+		h = 24
+	}
+	tw, _, _ := font.SizeUTF8(updatePillLabel)
+	return int32(tw) + 46, h
+}
+
+// drawUpdatePill draws the "a release is available" pill inside rect: warning
+// fill, a download arrow, the label and a focus ring while the header focus
+// sits on it. The home header and the scene header both call this, so the
+// offer cannot drift into two different controls again.
+func drawUpdatePill(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect, focused bool) sdl.Rect {
+	if renderer == nil || font == nil || rect.W < 24 || rect.H < 18 || !updateAvailable() {
+		return sdl.Rect{}
+	}
+	radius := rect.H / 2
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, WithAlpha(ColorWarning, 40))
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, WithAlpha(ColorWarning, 200))
+	// Focus ring while the D-pad/arrows sit on the pill. Every other top-bar
+	// control draws one; without it a controller user cannot tell the offer is
+	// selected rather than merely present.
+	if focused {
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+		renderer.DrawRect(&sdl.Rect{X: rect.X - 3, Y: rect.Y - 3, W: rect.W + 6, H: rect.H + 6})
+	}
+
+	// Down-arrow drawn with lines: Inter may not contain U+2193 on the device.
+	cx := rect.X + 16
+	cy := rect.Y + rect.H/2
+	renderer.SetDrawColor(ColorWarning.R, ColorWarning.G, ColorWarning.B, 235)
+	renderer.DrawLine(cx, cy-7, cx, cy+5)
+	renderer.DrawLine(cx-5, cy, cx, cy+5)
+	renderer.DrawLine(cx+5, cy, cx, cy+5)
+
+	renderText(renderer, config, font, updatePillLabel, ColorTextPrimary(),
+		rect.X+30, rect.Y+(rect.H-int32(font.Height()))/2)
+	return rect
+}
+
 func drawUpdateBadge(renderer *sdl.Renderer, config *Config, rightX, y, h int32) int32 {
 	updatePrompt.badge = sdl.Rect{}
 	if renderer == nil || !updateAvailable() {
@@ -147,34 +200,18 @@ func drawUpdateBadge(renderer *sdl.Renderer, config *Config, rightX, y, h int32)
 	if font == nil {
 		return 0
 	}
-	text := "Update"
-	tw, _, _ := font.SizeUTF8(text)
-	pillW := int32(tw) + 46
-	pillH := h
-	if pillH <= 0 {
-		pillH = int32(font.Height()) + 8
+	// h is the bell height, and the bell uses the same metric the pill does, so
+	// the two controls line up on the bar without a special case.
+	pillW, pillH := updatePillSize(font)
+	if h > pillH {
+		pillH = h
 	}
-	x := rightX - pillW
-	rect := sdl.Rect{X: x, Y: y, W: pillW, H: pillH}
-	fillRoundedRect(renderer, x, y, pillW, pillH, pillH/2, WithAlpha(ColorWarning, 40))
-	strokeRoundedRect(renderer, x, y, pillW, pillH, pillH/2, 1, WithAlpha(ColorWarning, 200))
-	// Focus ring while the D-pad/arrows sit on the pill. Every other top-bar
-	// control draws one; without it a controller user cannot tell the offer is
-	// selected rather than merely present.
-	if focusEngine.ElementIndex() == ChromeUpdateIndex {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-		renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: pillW + 6, H: pillH + 6})
+	rect := drawUpdatePill(renderer, config, font,
+		sdl.Rect{X: rightX - pillW, Y: y, W: pillW, H: pillH},
+		focusEngine.ElementIndex() == ChromeUpdateIndex)
+	if rect.W == 0 {
+		return 0
 	}
-
-	// Down-arrow drawn with lines: Inter may not contain U+2193 on the device.
-	cx := x + 16
-	cy := y + pillH/2
-	renderer.SetDrawColor(ColorWarning.R, ColorWarning.G, ColorWarning.B, 235)
-	renderer.DrawLine(cx, cy-7, cx, cy+5)
-	renderer.DrawLine(cx-5, cy, cx, cy+5)
-	renderer.DrawLine(cx+5, cy, cx, cy+5)
-
-	renderText(renderer, config, font, text, ColorTextPrimary(), x+30, y+(pillH-int32(font.Height()))/2)
 	updatePrompt.badge = rect
 	return pillW + SpaceSM
 }
@@ -184,61 +221,30 @@ func drawUpdateBadge(renderer *sdl.Renderer, config *Config, rightX, y, h int32)
 // Hit-testing and the focus entry are driven from it.
 var homeUpdateRect sdl.Rect
 
-// homeUpdateChipSize is the chip's footprint for a given text font: a small
-// pill that sits inside the header band without competing with the status text
-// it is next to.
+// homeUpdateChipSize is the chip's footprint for a given text font. It is the
+// same pill the scene header draws, measured by the shared helper, so the offer
+// keeps one size and one label across the app.
 func homeUpdateChipSize(font *ttf.Font) (int32, int32) {
-	h := int32(24)
-	if font != nil {
-		if fh := int32(font.Height()) + 8; fh > h {
-			h = fh
-		}
-	}
-	// Wider than tall: room for a readable download glyph and a comfortable
-	// focus ring on a small screen.
-	return h + 20, h
+	return updatePillSize(font)
 }
 
-// renderHomeUpdateChip draws the "a new JukaHub release is available" download
-// icon in the home header. Focused, it takes the theme highlight and a ring, so
-// the D-pad position is obvious on a handheld screen without a pointer.
+// renderHomeUpdateChip draws the release offer in the home header with the same
+// pill the scene headers use. Focused, it takes the shared focus ring, so the
+// D-pad position is obvious on a handheld screen without a pointer.
 func renderHomeUpdateChip(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect, focused bool) sdl.Rect {
 	homeUpdateRect = sdl.Rect{}
-	if renderer == nil || fonts.Small == nil || rect.W < 18 || rect.H < 18 || !updateAvailable() {
+	// The home layout is rendered in tests (and on the splash path) before the
+	// app config exists; renderText only needs a config for variable lookup.
+	config := appConfig
+	if config == nil {
+		config = &Config{}
+	}
+	drawn := drawUpdatePill(renderer, config, fonts.Small, rect, focused)
+	if drawn.W == 0 {
 		return sdl.Rect{}
 	}
-
-	fill := WithAlpha(ColorWarning, 36)
-	border := WithAlpha(ColorWarning, 200)
-	// The glyph is always the primary text colour: a warning-tinted arrow on a
-	// warning-tinted pill disappeared at handheld size.
-	glyph := ColorTextPrimary()
-	if focused {
-		fill = sdl.Color{R: 22, G: 60, B: 96, A: 255}
-		border = uiHighlightColor()
-	}
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, fill)
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, 1, border)
-
-	// Download glyph: a bar, an arrow head and a tray. SDL's line drawing is one
-	// pixel wide, so each stroke is drawn twice to survive a 1280x720 panel.
-	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	setDrawColor(renderer, glyph)
-	cx := rect.X + rect.W/2
-	top := rect.Y + rect.H/2 - 6
-	for _, dx := range []int32{0, 1} {
-		renderer.DrawLine(cx+dx, top, cx+dx, top+8)
-	}
-	for _, d := range []int32{0, 1} {
-		renderer.DrawLine(cx-5, top+3, cx, top+8+d)
-		renderer.DrawLine(cx+5, top+3, cx, top+8+d)
-	}
-	for _, dy := range []int32{0, 1} {
-		renderer.DrawLine(cx-6, top+12+dy, cx+6, top+12+dy)
-	}
-
-	homeUpdateRect = rect
-	return rect
+	homeUpdateRect = drawn
+	return drawn
 }
 
 func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
