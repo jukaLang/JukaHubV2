@@ -6,6 +6,8 @@
     "test": "node --test"
   },
   "devDependencies": {
+    "eslint": "^9.39.5",
+    "globals": "^17.13.0",
     "jsdom": "^30.1.3"
   }
 }

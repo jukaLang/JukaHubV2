@@ -37,6 +37,10 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm test
+      - name: Lint builder scripts (undefined names, duplicate keys, unreachable code)
+        run: >
+          tests/web/node_modules/.bin/eslint -c tests/web/eslint.config.mjs
+          script.js builder-device.js builder-gallery.js gallery/layouts.js
       - name: Audit test dependencies
         working-directory: tests/web
         # Advisory, like staticcheck: an advisory in jsdom's own tree should be
