@@ -387,7 +387,8 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 		"Files land in the PhoneDrop folder, links open in the player."
 	drawCompanionParagraph(renderer, smallFont, help, rightX, y+2, rightW, dim, line, limit)
 
-	drawText(renderer, smallFont, "Y  new PIN        B / Esc  close", rightX, footerY, dim, textAlignLeft)
+	drawText(renderer, smallFont, hintLine(FooterHint{"Y", "New PIN"}, FooterHint{"B / Esc", "Close"}),
+		rightX, footerY, dim, textAlignLeft)
 }
 
 // drawCompanionParagraph wraps text at word boundaries and returns the y of

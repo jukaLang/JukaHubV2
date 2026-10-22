@@ -500,7 +500,8 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 
 	// Footer hint. Use words, not key glyphs, so it survives any controller
 	// mapping.
-	footer := "Left / Right move · A / Enter next · F / X action · B skip"
+	footer := hintLine(FooterHint{"Left / Right", "Move"}, FooterHint{"A / Enter", "Next"},
+		FooterHint{"F / X", "Action"}, FooterHint{"B", "Skip"})
 	fw, _, _ := smallFont.SizeUTF8(footer)
 	renderText(renderer, config, smallFont, footer, WithAlpha(ColorTextTertiary(), 170),
 		cx+(cardW-int32(fw))/2, cy+cardH-18)

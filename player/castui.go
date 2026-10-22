@@ -276,11 +276,11 @@ func renderCastPanel(renderer *sdl.Renderer, config *Config) {
 		on := castIsEnabled()
 		fill := colorNew(38, 44, 58, 255)
 		fg := ink
-		label := "A   Start casting"
+		label := "Start Casting"
 		if on {
 			fill = accent
 			fg = sdl.Color{R: 10, G: 14, B: 22, A: 255}
-			label = "A   Stop casting"
+			label = "Stop Casting"
 		}
 		UIButton(renderer, config, castToggleRect, label, UIButtonStyle{
 			Variant:    UIButtonCustom,
@@ -293,7 +293,8 @@ func renderCastPanel(renderer *sdl.Renderer, config *Config) {
 		}, UIButtonState{})
 	}
 
-	hints := "A / Enter  toggle cast      Y  new PIN      B / Esc  close"
+	hints := hintLine(FooterHint{"A / Enter", "Toggle Cast"}, FooterHint{"Y", "New PIN"},
+		FooterHint{"B / Esc", "Close"})
 	hw, _, _ := smallFont.SizeUTF8(hints)
 	drawText(renderer, smallFont, hints, cardX+(cardW-int32(hw))/2, footerY, dim, textAlignLeft)
 }

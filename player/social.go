@@ -185,7 +185,7 @@ func renderSocialNotifPanel(renderer *sdl.Renderer, config *Config) {
 
 	// Footer
 	if smallFont != nil {
-		footer := "↑↓ navigate  •  Esc close  •  X clear all"
+		footer := hintLine(FooterHint{"↑ ↓", "Navigate"}, FooterHint{"Esc", "Close"}, FooterHint{"X", "Clear All"})
 		fw, _, _ := smallFont.SizeUTF8(footer)
 		drawText(renderer, smallFont, footer, cx+(cardW-int32(fw))/2, cy+cardH-28, ColorTextTertiary(), textAlignLeft)
 	}

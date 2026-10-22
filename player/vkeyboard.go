@@ -679,29 +679,25 @@ func vkPlaceholder() string {
 
 func vkHints() string {
 	switch vkTarget {
-	case vkTargetName:
-		return "A type    Y save    B / Esc close"
-	case vkTargetChat:
-		return "A type    Y ask AI    B / Esc close"
-	case vkTargetUnit:
-		return "A type    Y convert    B / Esc close"
-	case vkTargetTerm:
-		return "A type    Done run    B / Esc close"
-	case vkTargetTV:
-		return "A type    live filter    B / Esc close"
-	case vkTargetRA:
-		return "A type    Y save    B / Esc close"
-	case vkTargetMusic:
-		return "Type initials    A / Y search    B / Esc close"
-	case vkTargetNetplay:
-		return "A type    Start join    B / Esc close"
-	case vkTargetPSRemote:
-		if psPanelEditField == psEditPIN {
-			return "A type    Ready pair    B / Esc close"
+	case vkTargetName, vkTargetRA, vkTargetPSRemote:
+		if vkTarget == vkTargetPSRemote && psPanelEditField == psEditPIN {
+			return hintLine(FooterHint{"A", "Type"}, FooterHint{"A", "Ready to Pair"}, FooterHint{"B / Esc", "Close"})
 		}
-		return "A type    Y save    B / Esc close"
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetChat:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Ask AI"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetUnit:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Convert"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetTerm:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Done", "Run"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetTV:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{Label: "Live Filter"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetMusic:
+		return hintLine(FooterHint{Label: "Type Initials"}, FooterHint{"A / Y", "Search"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetNetplay:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Start", "Join"}, FooterHint{"B / Esc", "Close"})
 	}
-	return "A type    Y save    B / Esc close"
+	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
 
 // --- Opening / closing ------------------------------------------------------

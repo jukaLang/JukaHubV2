@@ -633,7 +633,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		windowsAppRowHits = nil
 		drawWindowsSetupButton(renderer, config, font, panelX, panelY, panelW)
 		y := panelY + headerH
-		renderText(renderer, config, medium, "No .exe files found", ColorTextPrimary(), panelX+padX, y)
+		renderText(renderer, config, medium, "No Windows apps yet", ColorTextPrimary(), panelX+padX, y)
 		y += medH + 4
 		renderText(renderer, config, font, "Copy Windows apps into:", ColorTextSecondary(), panelX+padX, y)
 		y += smallH + 4
@@ -690,14 +690,19 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A: launch   X: setup   Y: rescan   B: back"
-	if winAppsPanel.help {
-		hint = "A: install the selected runtime   B: back to the app list"
-	} else if len(entries) == 0 {
-		hint = "X: setup   Y: rescan   B: back"
-	}
+	backLabel := "Back"
 	if winAppsPanel.returnEmu {
-		hint = strings.Replace(hint, "B: back", "B: emulators", 1)
+		backLabel = "Emulators"
+	}
+	var hint string
+	switch {
+	case winAppsPanel.help:
+		hint = hintLine(FooterHint{"A", "Install Runtime"}, FooterHint{"B", "Back"})
+	case len(entries) == 0:
+		hint = hintLine(FooterHint{"X", "Setup"}, FooterHint{"Y", "Rescan"}, FooterHint{"B", backLabel})
+	default:
+		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"X", "Setup"},
+			FooterHint{"Y", "Rescan"}, FooterHint{"B", backLabel})
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

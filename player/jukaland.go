@@ -680,7 +680,8 @@ func renderJukaLand(renderer *sdl.Renderer, config *Config) {
 				renderText(renderer, config, font, r[0], color, panelX+24, ry)
 				renderText(renderer, config, font, r[1], ColorTextTertiary(), panelX+300, ry)
 			}
-			renderText(renderer, config, font, "A: Craft  B: Close", ColorTextTertiary(), panelX+16, panelY+panelH-36)
+			renderText(renderer, config, font, hintLine(FooterHint{"A", "Craft"}, FooterHint{"B", "Close"}),
+				ColorTextTertiary(), panelX+16, panelY+panelH-36)
 		}
 	}
 }

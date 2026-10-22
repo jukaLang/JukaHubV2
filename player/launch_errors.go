@@ -152,7 +152,7 @@ func renderLaunchFailure(renderer *sdl.Renderer, config *Config) {
 		}
 		renderText(renderer, config, font, "Log: "+name, ColorTextTertiary(), panelX+24, panelY+panelH-82)
 	}
-	footer := "A / Enter / B to dismiss"
+	footer := hintLine(FooterHint{"A / Enter / B", "Dismiss"})
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(), panelX+(panelW-int32(fw))/2, panelY+panelH-34)
 }

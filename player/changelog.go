@@ -334,7 +334,7 @@ func renderCommunityChangelog(renderer *sdl.Renderer, config *Config, font *ttf.
 		fillRoundedRect(renderer, track.X, thumbY, track.W, thumbH, 2, WithAlpha(accentColor, 170))
 	}
 
-	footer := "Up/Down scroll    B back"
+	footer := hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"B", "Back"})
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)

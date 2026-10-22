@@ -128,7 +128,7 @@ func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
 
 	// Footer
 	if smallFont != nil {
-		footer := "↑↓←→ navigate • A select • B back"
+		footer := hintLine(FooterHint{"↑ ↓ ← →", "Navigate"}, FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
 		fw, _, _ := smallFont.SizeUTF8(footer)
 		drawText(renderer, smallFont, footer, (screenWidth-int32(fw))/2, screenHeight-40, ColorTextTertiary(), textAlignLeft)
 	}
@@ -1103,7 +1103,7 @@ func renderPong(renderer *sdl.Renderer, config *Config) {
 	if !gameOver {
 		smallFont, _ := getCachedFont(config, "small")
 		if smallFont != nil {
-			hint := "↑↓ move paddle  •  Q quit"
+			hint := hintLine(FooterHint{"↑ ↓", "Move Paddle"}, FooterHint{"Q", "Quit"})
 			hw, _, _ := smallFont.SizeUTF8(hint)
 			drawText(renderer, smallFont, hint, (screenWidth-int32(hw))/2, offsetY+pongH+16, ColorTextTertiary(), textAlignLeft)
 		}
@@ -1142,7 +1142,7 @@ func renderGameOver(renderer *sdl.Renderer, config *Config, title string, score 
 		drawText(renderer, bodyFont, scoreText, cx+(cardW-int32(sw))/2, cy+80, ColorTextPrimary(), textAlignLeft)
 	}
 	if smallFont != nil {
-		hint := "Press R to restart  •  Q to quit"
+		hint := hintLine(FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
 		hw, _, _ := smallFont.SizeUTF8(hint)
 		drawText(renderer, smallFont, hint, cx+(cardW-int32(hw))/2, cy+130, ColorTextTertiary(), textAlignLeft)
 	}
@@ -1597,7 +1597,8 @@ func renderMinesweeper(renderer *sdl.Renderer, config *Config) {
 		drawText(renderer, font, header, (screenWidth-int32(hw))/2, offsetY-58, getAccentColor(config), textAlignLeft)
 	}
 	if small != nil {
-		hint := "Arrows move  •  Enter reveal  •  F flag  •  R restart  •  Q quit"
+		hint := hintLine(FooterHint{"Arrows", "Move"}, FooterHint{"Enter", "Reveal"},
+			FooterHint{"F", "Flag"}, FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
 		hw, _, _ := small.SizeUTF8(hint)
 		drawText(renderer, small, hint, (screenWidth-int32(hw))/2, offsetY+boardH+18, ColorTextTertiary(), textAlignLeft)
 	}
@@ -1781,7 +1782,7 @@ func renderFlappy(renderer *sdl.Renderer, config *Config) {
 		drawText(renderer, font, score, (screenWidth-int32(sw))/2, offsetY+18, sdl.Color{R: 255, G: 255, B: 255, A: 240}, textAlignLeft)
 	}
 	if small != nil {
-		hint := "Space / A flap  •  R restart  •  Q quit"
+		hint := hintLine(FooterHint{"Space / A", "Flap"}, FooterHint{"R", "Restart"}, FooterHint{"Q", "Quit"})
 		hw, _, _ := small.SizeUTF8(hint)
 		drawText(renderer, small, hint, (screenWidth-int32(hw))/2, offsetY+flappyH+12, ColorTextTertiary(), textAlignLeft)
 	}

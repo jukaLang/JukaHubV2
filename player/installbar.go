@@ -370,7 +370,7 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 		status = formatInstallSpeed(speed)
 	}
 	if phase == installPhaseError && installBar.retryable {
-		status = "A: retry"
+		status = hintLine(FooterHint{"A", "Retry"})
 	}
 	if status != "" {
 		pw, _, _ := font.SizeUTF8(status)

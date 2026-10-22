@@ -767,7 +767,7 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A select    Y forget    B close"
+	hint := hintLine(FooterHint{"A", "Select"}, FooterHint{"Y", "Forget"}, FooterHint{"B", "Close"})
 	renderText(renderer, config, font, hint, ColorTextTertiary(), panelX+padX, panelY+panelH-footerH+6)
 }
 

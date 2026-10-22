@@ -504,7 +504,7 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "IPStream library", ColorTextPrimary(), panelX+padX, panelY+18)
+	renderText(renderer, config, medium, "IPStream Library", ColorTextPrimary(), panelX+padX, panelY+18)
 	sub := fmt.Sprintf("%d saved streams", len(list))
 	if ipPanelStatus != "" {
 		sub = ipPanelStatus
@@ -548,9 +548,11 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 		rowY += lineH
 	}
 
-	footer := "A play · X save link · Y import from GitHub · START remove · B close"
+	footer := hintLine(FooterHint{"A", "Play"}, FooterHint{"X", "Save Link"},
+		FooterHint{"Y", "Import from GitHub"}, FooterHint{"Start", "Remove"}, FooterHint{"B", "Close"})
 	if fw, _, _ := font.SizeUTF8(footer); int32(fw) > rowW {
-		footer = "A play · X save · Y import · START remove · B close"
+		footer = hintLine(FooterHint{"A", "Play"}, FooterHint{"X", "Save"},
+			FooterHint{"Y", "Import"}, FooterHint{"Start", "Remove"}, FooterHint{"B", "Close"})
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),

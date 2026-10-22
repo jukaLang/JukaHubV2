@@ -325,7 +325,7 @@ func renderDashboard(renderer *sdl.Renderer, config *Config) {
 
 	// Controls hint.
 	if font != nil {
-		hint := "B/Esc: Back"
+		hint := hintLine(FooterHint{"B / Esc", "Back"})
 		hw, _, _ := font.SizeUTF8(hint)
 		renderText(renderer, config, font, hint,
 			sdl.Color{R: 80, G: 90, B: 110, A: 120},

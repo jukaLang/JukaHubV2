@@ -327,11 +327,11 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	}
 
 	renderText(renderer, config, med, "Playtime & Achievements", ColorTextPrimary(), 28, 18)
-	back := "B  Back"
+	back := hintLine(FooterHint{"B", "Back"})
 	bw, _, _ := font.SizeUTF8(back)
 	renderText(renderer, config, font, back, ColorTextTertiary(), screenWidth-int32(bw)-28, 22)
 	if retroAchievementsSupported() {
-		raHint := "Y  RetroAchievements"
+		raHint := hintLine(FooterHint{"Y", "RetroAchievements"})
 		raw, _, _ := font.SizeUTF8(raHint)
 		raHintW := int32(raw)
 		x := screenWidth - int32(bw) - 28 - 24 - raHintW

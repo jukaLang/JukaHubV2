@@ -1313,9 +1313,10 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 		raRenderOverview(renderer, config, font, med, panelX, contentY, panelW, footerY, cache, creds, loading)
 	}
 
-	hint := "D-Pad scroll   X settings   Y refresh   B close"
+	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"X", "Settings"},
+		FooterHint{"Y", "Refresh"}, FooterHint{"B", "Close"})
 	if raPanel.settings {
-		hint = "A edit   B back   Y refresh"
+		hint = hintLine(FooterHint{"A", "Edit"}, FooterHint{"Y", "Refresh"}, FooterHint{"B", "Back"})
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+28, footerY)
 	if loading {
@@ -1530,7 +1531,7 @@ func raRenderSettings(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 			value = "Not set"
 		}
 		renderText(renderer, config, med, ellipsize(med, value, r.W-140), ColorTextPrimary(), r.X+16, r.Y+30)
-		a := "A  edit"
+		a := hintLine(FooterHint{"A", "Edit"})
 		aw, _, _ := font.SizeUTF8(a)
 		renderText(renderer, config, font, a, ColorTextTertiary(), r.X+r.W-16-int32(aw), r.Y+30)
 	}

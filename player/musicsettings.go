@@ -403,7 +403,8 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "UP/DOWN row   LEFT/RIGHT change   A select   B close"
+	hint := hintLine(FooterHint{"Up/Down", "Row"}, FooterHint{"Left/Right", "Change"},
+		FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 200},
 		x+(panelW-int32(hw))/2, y+panelH-footerH+6)

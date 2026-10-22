@@ -1077,7 +1077,7 @@ func renderMusicFullVisualizer(renderer *sdl.Renderer, config *Config) {
 	sw, _, _ := font.SizeUTF8(state)
 	renderText(renderer, config, font, state, ColorTextTertiary(), (screenWidth-int32(sw))/2, screenHeight-38)
 
-	hint := "V  Close visualizer     SPACE  Pause     B  Back"
+	hint := hintLine(FooterHint{"V", "Close Visualizer"}, FooterHint{"Space", "Pause"}, FooterHint{"B", "Back"})
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, WithAlpha(ColorTextTertiary(), 170), (screenWidth-int32(hw))/2, screenHeight-20)
 }
@@ -1147,7 +1147,7 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(255, 255, 255, 18)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: headerH - 1, W: screenWidth, H: 1})
 	renderText(renderer, config, medFont, "Audio Player", ColorTextPrimary(), 24, (headerH-int32(medFont.Height()))/2)
-	back := "B  Back"
+	back := hintLine(FooterHint{"B", "Back"})
 	bw, _, _ := font.SizeUTF8(back)
 	renderText(renderer, config, font, back, ColorTextTertiary(), screenWidth-int32(bw)-24, (headerH-int32(font.Height()))/2)
 

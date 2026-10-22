@@ -509,7 +509,7 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A / Enter  play    ↑ ↓  choose    B  close"
+	hint := hintLine(FooterHint{"A / Enter", "Play"}, FooterHint{"↑ ↓", "Choose"}, FooterHint{"B", "Close"})
 	if virtualKeyboardActive {
 		hint = "Type the initials on the keyboard, then A to search"
 	}

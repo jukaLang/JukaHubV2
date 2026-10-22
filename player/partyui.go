@@ -700,11 +700,12 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// Status and footer.
-	footer := "ENTER select   A add   X remove   B close"
+	footer := hintLine(FooterHint{"Enter", "Select"}, FooterHint{"A", "Add"},
+		FooterHint{"X", "Remove"}, FooterHint{"B", "Close"})
 	if history {
-		footer = "UP/DOWN scroll   B back"
+		footer = hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"B", "Back"})
 	} else if !active {
-		footer = "ENTER select   B close"
+		footer = hintLine(FooterHint{"Enter", "Select"}, FooterHint{"B", "Close"})
 	}
 	fw, _, _ := small.SizeUTF8(footer)
 	renderText(renderer, config, small, footer, sdl.Color{R: 110, G: 125, B: 150, A: 180},

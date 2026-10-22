@@ -204,7 +204,7 @@ func saveManagerRows() []saveManagerRow {
 				label:   saveSnapshotTime(snap) + " · " + snap.Manifest.Label,
 				value:   humanBytes(snap.Manifest.TotalBytes),
 				detail:  saveSnapshotDetail(snap),
-				hint:    "A: restore",
+				hint:    hintLine(FooterHint{"A", "Restore"}),
 				enabled: true,
 			})
 		}
@@ -232,7 +232,7 @@ func saveManagerRows() []saveManagerRow {
 			label:   "Snapshot now",
 			value:   snapshotValue,
 			detail:  "Copy every save folder into a versioned snapshot.",
-			hint:    "A: snapshot",
+			hint:    hintLine(FooterHint{"A", "Snapshot"}),
 			action:  saveActionSnapshot,
 			enabled: len(savePanel.roots) > 0,
 		},
@@ -240,7 +240,7 @@ func saveManagerRows() []saveManagerRow {
 			label:   "Restore latest",
 			value:   latest,
 			detail:  "Takes a safety snapshot first. Press A twice to confirm.",
-			hint:    "A: restore",
+			hint:    hintLine(FooterHint{"A", "Restore"}),
 			action:  saveActionRestoreLatest,
 			enabled: len(savePanel.snapshots) > 0,
 		},
@@ -248,7 +248,7 @@ func saveManagerRows() []saveManagerRow {
 			label:   "Browse snapshots",
 			value:   fmt.Sprintf("%d", len(savePanel.snapshots)),
 			detail:  "Older copies stay on the card; ten are kept.",
-			hint:    "A: open",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  saveActionBrowse,
 			enabled: len(savePanel.snapshots) > 0,
 		},
@@ -256,7 +256,7 @@ func saveManagerRows() []saveManagerRow {
 			label:   "Save folders",
 			value:   fmt.Sprintf("%d", len(savePanel.roots)),
 			detail:  saveFolderNames(savePanel.roots),
-			hint:    "A: rescan",
+			hint:    hintLine(FooterHint{"A", "Rescan"}),
 			action:  saveActionFolders,
 			enabled: true,
 		},
@@ -264,7 +264,7 @@ func saveManagerRows() []saveManagerRow {
 			label:   "Syncthing setup",
 			value:   syncValue,
 			detail:  "Mark each save folder and write the folder IDs to data/save-manager/sync.",
-			hint:    "A: prepare",
+			hint:    hintLine(FooterHint{"A", "Prepare"}),
 			action:  saveActionSync,
 			enabled: len(savePanel.roots) > 0,
 		},
@@ -272,14 +272,14 @@ func saveManagerRows() []saveManagerRow {
 			label:   "Phone resume bundle",
 			value:   resumeValue,
 			detail:  "Zip the newest snapshot for the Companion or FTP file transfer.",
-			hint:    "A: create",
+			hint:    hintLine(FooterHint{"A", "Create"}),
 			action:  saveActionResume,
 			enabled: len(savePanel.snapshots) > 0,
 		},
 		{
 			label:   "Refresh",
 			detail:  "Rescan save folders, snapshots and the sync manifest.",
-			hint:    "A: refresh",
+			hint:    hintLine(FooterHint{"A", "Refresh"}),
 			action:  saveActionRefresh,
 			enabled: true,
 		},
@@ -648,21 +648,22 @@ func renderSaveManagerPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A: open   B: close"
+	hints := []FooterHint{{"A", "Open"}, {"B", "Close"}}
 	if savePanel.mode == saveModeSnapshots {
-		hint = "A: restore   X: delete   B: back"
+		hints = []FooterHint{{"A", "Restore"}, {"X", "Delete"}, {"B", "Back"}}
 	}
 	if savePanel.confirm != "" {
 		if savePanel.mode == saveModeSnapshots {
-			hint = "A again: restore   X again: delete   B: cancel"
+			hints = []FooterHint{{"A Again", "Restore"}, {"X Again", "Delete"}, {"B", "Cancel"}}
 		} else {
-			hint = "A again: restore   B: cancel"
+			hints = []FooterHint{{"A Again", "Restore"}, {"B", "Cancel"}}
 		}
 	}
 	if len(rows) > int(visible) {
-		hint = fmt.Sprintf("L/R: page %d-%d of %d   %s",
-			savePanel.scroll+1, savePanel.scroll+int(visible), len(rows), hint)
+		hints = append([]FooterHint{{Button: "L / R", Label: fmt.Sprintf("Page %d-%d of %d",
+			savePanel.scroll+1, savePanel.scroll+int(visible), len(rows))}}, hints...)
 	}
+	hint := hintLine(hints...)
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 
 	if len(rows) > int(visible) {

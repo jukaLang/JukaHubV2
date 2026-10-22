@@ -435,7 +435,7 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 
 	// Controls.
 	if font != nil {
-		controls := "Type to search | Enter: Look up | Esc: Back"
+		controls := hintLine(FooterHint{Label: "Type to Search"}, FooterHint{"Enter", "Look Up"}, FooterHint{"Esc", "Back"})
 		cw, _, _ := font.SizeUTF8(controls)
 		renderText(renderer, config, font, controls,
 			sdl.Color{R: 80, G: 90, B: 110, A: 120},

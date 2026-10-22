@@ -506,7 +506,8 @@ func renderMusicPEQPanel(renderer *sdl.Renderer, config *Config) {
 
 	title := "31-band PEQ   ·   " + musicPEQStatus()
 	renderText(renderer, config, font, title, ColorTextPrimary(), panel.X+24, panel.Y+18)
-	hint := "LEFT/RIGHT band   UP/DOWN gain   Y preset   X flatten band   G close"
+	hint := hintLine(FooterHint{"Left/Right", "Band"}, FooterHint{"Up/Down", "Gain"},
+		FooterHint{"Y", "Preset"}, FooterHint{"X", "Flatten Band"}, FooterHint{"G", "Close"})
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, ColorTextTertiary(),
 		panel.X+(panel.W-int32(hw))/2, panel.Y+46)

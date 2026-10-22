@@ -640,7 +640,7 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 		y += rowH
 	}
 
-	hint := "D-pad / mouse to choose · A or Enter opens"
+	hint := hintLine(FooterHint{"D-Pad / Mouse", "Choose"}, FooterHint{"A / Enter", "Open"})
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+22, panelY+panelH-footerH+8)
 }
 

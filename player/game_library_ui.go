@@ -472,22 +472,18 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
-	large, _ := getCachedFont(config, "large")
 	if font == nil {
 		return
 	}
 	if medium == nil {
 		medium = font
 	}
-	if large == nil {
-		large = medium
-	}
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
-	largeH := int32(large.Height())
 
 	const pad = int32(24)
-	headerH := int32(18) + largeH + int32(6) + smallH + int32(14)
+	// Same header metrics as every other panel: title, subtitle line, divider.
+	headerH := int32(18) + medH + int32(4) + smallH + int32(14)
 	footerH := int32(16) + smallH
 	panelW := int32(1120)
 	if panelW > screenWidth-48 {
@@ -509,9 +505,9 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, large, "Games", ColorTextPrimary(), panelX+pad, panelY+14)
+	renderText(renderer, config, medium, "Games", ColorTextPrimary(), panelX+pad, panelY+18)
 	renderText(renderer, config, font, gameLibraryStatus(), ColorTextTertiary(),
-		panelX+pad, panelY+14+largeH+6)
+		panelX+pad, panelY+18+medH+4)
 
 	systems := currentGameSystems()
 	if gameLib.system >= len(systems) {
@@ -674,9 +670,11 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		gameLib.artRect = sdl.Rect{}
 	}
 
-	hint := "D-Pad: browse   A: play   X: LAN play   L1/F: fetch art   Y: rescan   B: close"
+	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Play"},
+		FooterHint{"X", "LAN Play"}, FooterHint{"L1 / F", "Fetch Art"},
+		FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	if gameLib.lib.Total == 0 {
-		hint = "Y: rescan   B: close"
+		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+pad, panelY+panelH-footerH+4)
 	if artW > 0 && len(gameLib.lib.Roots) > 0 {

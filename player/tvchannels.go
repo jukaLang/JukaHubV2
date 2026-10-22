@@ -776,9 +776,9 @@ func renderTVFilterBar(renderer *sdl.Renderer, config *Config, x, y, w int32) in
 
 	// Right side: the search state doubles as a touch target for the search
 	// keyboard, so it is measured before the category label is placed.
-	hint := "X Search   Y Favorite"
+	hint := hintLine(FooterHint{"X", "Search"}, FooterHint{"Y", "Favorite"})
 	if q := tvQuery(); q != "" {
-		hint = "Filter: " + ellipsize(font, q, 200) + "   X change"
+		hint = hintLine(FooterHint{Label: "Filter: " + ellipsize(font, q, 200)}, FooterHint{"X", "Change"})
 	}
 	hw, _, _ := font.SizeUTF8(hint)
 	hintX := x + w - int32(hw) - 12

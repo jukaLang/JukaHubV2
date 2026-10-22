@@ -563,10 +563,11 @@ func renderSmartHomePanel(renderer *sdl.Renderer, config *Config) {
 	detailY := panelY + headerH + int32(visible)*rowH + 10
 	renderText(renderer, config, font, ellipsize(font, detail, rowW), ColorTextTertiary(), panelX+padX, detailY)
 
-	footer := "A toggle   X / R refresh   B close"
+	hints := []FooterHint{{"A", "Toggle"}, {"X / R", "Refresh"}, {"B", "Close"}}
 	if len(rows) > visible {
-		footer = fmt.Sprintf("%d/%d   %s", smartHomePanel.cursor+1, len(rows), footer)
+		hints = append([]FooterHint{{Label: fmt.Sprintf("%d/%d", smartHomePanel.cursor+1, len(rows))}}, hints...)
 	}
+	footer := hintLine(hints...)
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextSecondary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+8)

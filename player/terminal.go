@@ -499,10 +499,10 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	dotCol := sdl.Color{R: 110, G: 220, B: 150, A: 255}
 	fillCircle(renderer, padX+3, barH/2, 4, dotCol)
 	titleX := padX + 16
-	_, th, _ := medium.SizeUTF8("TERMINAL")
+	_, th, _ := medium.SizeUTF8("Terminal")
 	titleY := barH/2 - int32(th)/2
-	renderText(renderer, config, medium, "TERMINAL", primary, titleX, titleY)
-	titleW, _, _ := medium.SizeUTF8("TERMINAL")
+	renderText(renderer, config, medium, "Terminal", primary, titleX, titleY)
+	titleW, _, _ := medium.SizeUTF8("Terminal")
 
 	cwd, _ := os.Getwd()
 	if cwd != "" {
@@ -642,7 +642,8 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	}
 
 	// ── Footer hints ────────────────────────────────────────────────────
-	hintStr := "Enter run   ·   Tab complete (empty: keyboard)   ·   PgUp PgDn scroll   ·   Esc back"
+	hintStr := hintLine(FooterHint{"Enter", "Run"}, FooterHint{"Tab", "Complete (empty: keyboard)"},
+		FooterHint{"PgUp / PgDn", "Scroll"}, FooterHint{"Esc", "Back"})
 	hw, _, _ := font.SizeUTF8(hintStr)
 	renderText(renderer, config, font, hintStr,
 		sdl.Color{R: 96, G: 116, B: 146, A: 190},

@@ -549,9 +549,11 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 		renderCompatCoreDetail(renderer, config, rows, detailX, bodyY, detailW, bodyH, font, medium)
 	}
 
-	hint := "D-Pad: move   ←/→: tab   A: apply boost   X: revert   Y: rescan   B: back"
+	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"←/→", "Tab"},
+		FooterHint{"A", "Apply Boost"}, FooterHint{"X", "Revert"}, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"})
 	if cpPanel.tab == compatTabCores {
-		hint = "D-Pad: move   ←/→: tab   A: activate build   Y: rescan   B: back"
+		hint = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"←/→", "Tab"},
+			FooterHint{"A", "Activate Build"}, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"})
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+6)
 }
@@ -708,7 +710,7 @@ func renderCompatCoreList(renderer *sdl.Renderer, config *Config, rows []coreBui
 	rowW := listW - 2*padX
 	if len(rows) == 0 {
 		y := bodyY + 16
-		renderText(renderer, config, medium, "No core builds found", ColorTextPrimary(), panelX+padX, y)
+		renderText(renderer, config, medium, "No core builds yet", ColorTextPrimary(), panelX+padX, y)
 		y += int32(medium.Height()) + 8
 		for _, line := range compatTextLines(font, "Active cores: "+cpPanel.cores.Problem, rowW) {
 			renderText(renderer, config, font, line, ColorTextTertiary(), panelX+padX, y)

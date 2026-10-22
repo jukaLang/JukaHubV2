@@ -401,9 +401,9 @@ func renderProcessPanel(renderer *sdl.Renderer, config *Config) {
 		rowY += lineH
 	}
 
-	footer := "A kill · B close · Y refresh"
+	footer := hintLine(FooterHint{"A", "Kill"}, FooterHint{"Y", "Refresh"}, FooterHint{"B", "Close"})
 	if processPanel.confirmPID != 0 {
-		footer = "Press A again to confirm · B cancels"
+		footer = hintLine(FooterHint{"A", "Confirm Again"}, FooterHint{"B", "Cancel"})
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	footerColor := ColorTextTertiary()

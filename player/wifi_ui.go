@@ -754,14 +754,16 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	footer := "A join · X disconnect · Y rescan · SELECT forget · B close"
+	footer := hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Disconnect"},
+		FooterHint{"Y", "Rescan"}, FooterHint{"Select", "Forget"}, FooterHint{"B", "Close"})
 	footerColor := ColorTextTertiary()
 	switch {
 	case wifiPanel.confirmForget != "":
-		footer = "SELECT again to forget " + wifiPanel.confirmForget + " · B cancels"
+		footer = hintLine(FooterHint{Label: "Select again to forget " + wifiPanel.confirmForget},
+			FooterHint{"B", "Cancel"})
 		footerColor = ColorToastWarn
 	case !wifiPanel.available:
-		footer = "B close"
+		footer = hintLine(FooterHint{"B", "Close"})
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, footerColor,

@@ -177,7 +177,7 @@ func toolsRows(config *Config) []toolsRow {
 		label:   "FTP server",
 		value:   "Stopped",
 		detail:  "Share " + cachedFTPRoot() + " with a PC on this WiFi",
-		hint:    "A: start",
+		hint:    hintLine(FooterHint{"A", "Start"}),
 		action:  toolsActionFTP,
 		enabled: true,
 	}
@@ -188,7 +188,7 @@ func toolsRows(config *Config) []toolsRow {
 		}
 		ftp.value = "Running"
 		ftp.detail = fmt.Sprintf("ftp://%s:%d", ip, ftpSrv.Port())
-		ftp.hint = "A: stop"
+		ftp.hint = hintLine(FooterHint{"A", "Stop"})
 	}
 	rows = append(rows, ftp)
 
@@ -196,7 +196,7 @@ func toolsRows(config *Config) []toolsRow {
 		label:   "SSH / SFTP",
 		value:   "Stopped",
 		detail:  "Browse the file system from a PC with any SFTP client",
-		hint:    "A: start",
+		hint:    hintLine(FooterHint{"A", "Start"}),
 		action:  toolsActionSSH,
 		enabled: true,
 	}
@@ -207,7 +207,7 @@ func toolsRows(config *Config) []toolsRow {
 		}
 		sshRow.value = "Running"
 		sshRow.detail = fmt.Sprintf("sftp://%s@%s:%d", sshSrv.User(), ip, sshSrv.Port())
-		sshRow.hint = "A: stop"
+		sshRow.hint = hintLine(FooterHint{"A", "Stop"})
 	}
 	rows = append(rows, sshRow)
 
@@ -217,16 +217,16 @@ func toolsRows(config *Config) []toolsRow {
 		label:   "Phone companion",
 		value:   "Scan to connect",
 		detail:  "Type, use a remote and send files from your phone",
-		hint:    "A: show QR code",
+		hint:    hintLine(FooterHint{"A", "Show QR Code"}),
 		action:  toolsActionCompanion,
 		enabled: true,
 	}
 	if companion.err != "" {
 		companionRow.value = "Offline"
-		companionRow.hint = "A: details"
+		companionRow.hint = hintLine(FooterHint{"A", "Details"})
 	} else if companion.open {
 		companionRow.value = companionStatusLine()
-		companionRow.hint = "A: hide"
+		companionRow.hint = hintLine(FooterHint{"A", "Hide"})
 	}
 	rows = append(rows, companionRow)
 
@@ -234,7 +234,7 @@ func toolsRows(config *Config) []toolsRow {
 		label:   "Watch Party",
 		value:   "LAN",
 		detail:  "Watch the same stream together, with a shared queue",
-		hint:    "A: open",
+		hint:    hintLine(FooterHint{"A", "Open"}),
 		action:  toolsActionParty,
 		enabled: true,
 	}
@@ -249,7 +249,7 @@ func toolsRows(config *Config) []toolsRow {
 			label:   "Patch",
 			value:   "Check for updates",
 			detail:  "Updates, packages and rollback",
-			hint:    "A: open",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  toolsActionPatch,
 			enabled: true,
 		}
@@ -263,7 +263,7 @@ func toolsRows(config *Config) []toolsRow {
 			label:   "Calculator",
 			value:   "Open",
 			detail:  "Quick math with history",
-			hint:    "A: open",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  toolsActionCalculator,
 			enabled: true,
 		})
@@ -273,7 +273,7 @@ func toolsRows(config *Config) []toolsRow {
 		label:   "Community & support",
 		value:   "Changelog · Bugs",
 		detail:  "What's new, report a bug, anonymous diagnostics",
-		hint:    "A: open",
+		hint:    hintLine(FooterHint{"A", "Open"}),
 		action:  toolsActionCommunity,
 		enabled: true,
 	})
@@ -282,7 +282,7 @@ func toolsRows(config *Config) []toolsRow {
 		label:   "Power tools",
 		value:   "Network · Files · Scripts",
 		detail:  "Port scan, hex viewer, snippets, config history",
-		hint:    "A: open",
+		hint:    hintLine(FooterHint{"A", "Open"}),
 		action:  toolsActionPowerTools,
 		enabled: true,
 	})
@@ -292,7 +292,7 @@ func toolsRows(config *Config) []toolsRow {
 		label:   "IP address",
 		value:   "No WiFi address",
 		detail:  "Connect to WiFi to transfer files",
-		hint:    "A: copy",
+		hint:    hintLine(FooterHint{"A", "Copy"}),
 		action:  toolsActionCopyIP,
 		enabled: true,
 	}
@@ -310,7 +310,7 @@ func toolsRows(config *Config) []toolsRow {
 			label:   "System utilities",
 			value:   "Classic Tools",
 			detail:  "Terminal, cron, logs, patch and more",
-			hint:    "A: open",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  toolsActionUtilities,
 			enabled: true,
 		})
@@ -740,7 +740,7 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 		infoY += infoLineH
 	}
 
-	footer := "A select    B close"
+	footer := hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+8)

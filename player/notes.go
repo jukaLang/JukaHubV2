@@ -184,9 +184,11 @@ func renderNotes(renderer *sdl.Renderer, config *Config) {
 		controls := ""
 		switch notes.tab {
 		case 0:
-			controls = "D-Pad: Navigate | A: Edit | N: New | X: Delete | S: Search | F: Folder"
+			controls = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Edit"},
+				FooterHint{"Y", "New"}, FooterHint{"X", "Delete"}, FooterHint{"S", "Search"},
+				FooterHint{"B", "Back"})
 		case 1, 2:
-			controls = "Type to edit | A: Save & Back | B: Cancel"
+			controls = hintLine(FooterHint{Label: "Type to Edit"}, FooterHint{"A", "Save & Back"}, FooterHint{"B", "Cancel"})
 		}
 		cw2, _, _ := font.SizeUTF8(controls)
 		renderText(renderer, config, font, controls,

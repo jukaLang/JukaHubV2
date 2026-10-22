@@ -348,9 +348,9 @@ func renderStickCalibrationPanel(renderer *sdl.Renderer, config *Config) {
 	measured := "rest " + trimZeroes(calibrationPanel.idlePeak) + " · reach " + trimZeroes(calibrationPanel.maxDeflect)
 	renderText(renderer, config, small, measured, ColorTextTertiary(), boxX, boxY+boxSize+8)
 
-	hint := "B: cancel"
+	hint := hintLine(FooterHint{"B", "Cancel"})
 	if calibrationPanel.phase == calPhaseDone {
-		hint = "A: measure again   B: close"
+		hint = hintLine(FooterHint{"A", "Measure Again"}, FooterHint{"B", "Close"})
 	}
 	renderText(renderer, config, small, hint, ColorTextSecondary(), x+pad, top+panelH-16-smallH)
 }

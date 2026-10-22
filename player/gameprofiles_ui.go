@@ -391,12 +391,16 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A: launch   X: export   Y: rescan   B: back"
-	if len(entries) == 0 {
-		hint = "Y: rescan   B: back"
-	}
+	backLabel := "Back"
 	if gpPanel.returnEmu {
-		hint = strings.Replace(hint, "B: back", "B: emulators", 1)
+		backLabel = "Emulators"
+	}
+	var hint string
+	if len(entries) == 0 {
+		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", backLabel})
+	} else {
+		hint = hintLine(FooterHint{"A", "Launch"}, FooterHint{"X", "Export"},
+			FooterHint{"Y", "Rescan"}, FooterHint{"B", backLabel})
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

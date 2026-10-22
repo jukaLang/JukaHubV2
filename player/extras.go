@@ -854,6 +854,30 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	return hints
 }
 
+// hintLine formats the controller hints drawn inside overlay panels. One style
+// everywhere: a button, one space, a Title Case label, and three spaces between
+// groups ("D-Pad Navigate   A Open   B Back"). Scenes use the badge footer
+// instead; without this, the same button appeared as "A: open", "A open" and
+// "A: Open" on different screens.
+func hintLine(hints ...FooterHint) string {
+	parts := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		button := strings.TrimSpace(hint.Button)
+		label := strings.TrimSpace(hint.Label)
+		switch {
+		case button == "" && label == "":
+			continue
+		case button == "":
+			parts = append(parts, label)
+		case label == "":
+			parts = append(parts, button)
+		default:
+			parts = append(parts, button+" "+label)
+		}
+	}
+	return strings.Join(parts, "   ")
+}
+
 // renderFooter displays controller navigation hints pinned to the bottom of the viewport.
 // It shows only the bindings actually supported by the current input code.
 func renderFooter(renderer *sdl.Renderer, config *Config) {

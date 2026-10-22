@@ -265,7 +265,7 @@ func curationHomeRows(panel *curationPanelState) []curationRow {
 			label:   panel.essentials.Bundle.Name,
 			value:   essentialsValue,
 			detail:  panel.essentials.Bundle.Summary,
-			hint:    "A: open",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  curationActionOpenEssentials,
 			enabled: total > 0,
 		},
@@ -273,7 +273,7 @@ func curationHomeRows(panel *curationPanelState) []curationRow {
 			label:   "UI & theme profiles",
 			value:   profilesValue,
 			detail:  "Themes and text sizes tuned for this panel — apply or share one.",
-			hint:    "A: open",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  curationActionOpenProfiles,
 			enabled: true,
 		},
@@ -281,7 +281,7 @@ func curationHomeRows(panel *curationPanelState) []curationRow {
 			label:   "Compatibility votes",
 			value:   fmt.Sprintf("%d voted", voted),
 			detail:  "Mark games and PortMaster titles that need testing.",
-			hint:    "A: open",
+			hint:    hintLine(FooterHint{"A", "Open"}),
 			action:  curationActionOpenVotes,
 			enabled: true,
 		},
@@ -289,14 +289,14 @@ func curationHomeRows(panel *curationPanelState) []curationRow {
 			label:   "Community feed",
 			value:   curationFeedLabel(),
 			detail:  curationFeedDetail(),
-			hint:    "A: refresh",
+			hint:    hintLine(FooterHint{"A", "Refresh"}),
 			action:  curationActionRefreshFeed,
 			enabled: true,
 		},
 		{
 			label:   "Refresh",
 			detail:  "Rescan profiles, save folders, ports and the ROM library.",
-			hint:    "A: refresh",
+			hint:    hintLine(FooterHint{"A", "Refresh"}),
 			action:  curationActionRefresh,
 			enabled: true,
 		},
@@ -322,7 +322,7 @@ func curationEssentialsRows(panel *curationPanelState) []curationRow {
 		label:   "Apply essentials",
 		value:   fmt.Sprintf("%d/%d ready", panel.essentials.Ready, len(steps)),
 		detail:  "Fills gaps only — a theme or setting you chose is never overwritten.",
-		hint:    "A: apply",
+		hint:    hintLine(FooterHint{"A", "Apply"}),
 		action:  curationActionApplyBundle,
 		enabled: actionable,
 	}}
@@ -331,14 +331,14 @@ func curationEssentialsRows(panel *curationPanelState) []curationRow {
 			label:   curationStepLabel(step.Step.Kind),
 			value:   step.Value,
 			detail:  step.Line,
-			hint:    "A: apply",
+			hint:    hintLine(FooterHint{"A", "Apply"}),
 			action:  curationActionApplyStep,
 			index:   i,
 			enabled: step.CanApply,
 			accent:  !step.Done,
 		})
 	}
-	rows = append(rows, curationRow{label: "Back", value: "Curation Hub", hint: "B", action: curationActionBack})
+	rows = append(rows, curationRow{label: "Back", value: "Curation Hub", hint: hintLine(FooterHint{"B", "Back"}), action: curationActionBack})
 	return rows
 }
 
@@ -359,7 +359,7 @@ func curationProfileRows(panel *curationPanelState) []curationRow {
 			label:   "Capture this setup",
 			value:   current,
 			detail:  "Save the current theme and text size as a profile you can share.",
-			hint:    "A: save",
+			hint:    hintLine(FooterHint{"A", "Save"}),
 			action:  curationActionCaptureProfile,
 			enabled: true,
 		},
@@ -367,15 +367,15 @@ func curationProfileRows(panel *curationPanelState) []curationRow {
 			label:   "Import folder",
 			value:   fmt.Sprintf("%d file issue(s)", len(panel.profileIssues)),
 			detail:  "Drop profile JSON into data/curation/import, then refresh.",
-			hint:    "A: rescan",
+			hint:    hintLine(FooterHint{"A", "Rescan"}),
 			action:  curationActionRefreshProfiles,
 			enabled: true,
 		},
 	}
 	for i, profile := range panel.profiles {
-		hint := "A: apply   Y: share"
+		hint := hintLine(FooterHint{"A", "Apply"}, FooterHint{"Y", "Share"})
 		if profile.Source == "local" {
-			hint = "A: apply   X: delete   Y: share"
+			hint = hintLine(FooterHint{"A", "Apply"}, FooterHint{"X", "Delete"}, FooterHint{"Y", "Share"})
 		}
 		rows = append(rows, curationRow{
 			label:   profile.Name,
@@ -387,7 +387,7 @@ func curationProfileRows(panel *curationPanelState) []curationRow {
 			enabled: true,
 		})
 	}
-	rows = append(rows, curationRow{label: "Back", value: "Curation Hub", hint: "B", action: curationActionBack})
+	rows = append(rows, curationRow{label: "Back", value: "Curation Hub", hint: hintLine(FooterHint{"B", "Back"}), action: curationActionBack})
 	return rows
 }
 
@@ -401,7 +401,7 @@ func curationVoteRows(panel *curationPanelState) []curationRow {
 		label:   "Submit votes",
 		value:   fmt.Sprintf("%d", voted),
 		detail:  detail,
-		hint:    "A: submit",
+		hint:    hintLine(FooterHint{"A", "Submit"}),
 		action:  curationActionSubmitVotes,
 		enabled: voted > 0,
 	}}
@@ -421,10 +421,10 @@ func curationVoteRows(panel *curationPanelState) []curationRow {
 	}
 	for i, target := range panel.targets {
 		value := ""
-		hint := "A: vote"
+		hint := hintLine(FooterHint{"A", "Vote"})
 		if panel.voteIndex[curationVoteKey(target)] {
 			value = "▲ voted"
-			hint = "A: remove vote"
+			hint = hintLine(FooterHint{"A", "Remove Vote"})
 		}
 		rows = append(rows, curationRow{
 			label:   target.Title,
@@ -437,7 +437,7 @@ func curationVoteRows(panel *curationPanelState) []curationRow {
 			accent:  value != "",
 		})
 	}
-	rows = append(rows, curationRow{label: "Back", value: "Curation Hub", hint: "B", action: curationActionBack})
+	rows = append(rows, curationRow{label: "Back", value: "Curation Hub", hint: hintLine(FooterHint{"B", "Back"}), action: curationActionBack})
 	return rows
 }
 
@@ -893,18 +893,18 @@ func renderCurationPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A: open   B: close"
+	hint := hintLine(FooterHint{"A", "Open"}, FooterHint{"B", "Close"})
 	switch curationPanel.page {
 	case curationPageEssentials:
-		hint = "A: apply   B: back"
+		hint = hintLine(FooterHint{"A", "Apply"}, FooterHint{"B", "Back"})
 	case curationPageProfiles:
-		hint = "A: apply   X: delete saved   Y: export   B: back"
+		hint = hintLine(FooterHint{"A", "Apply"}, FooterHint{"X", "Delete Saved"}, FooterHint{"Y", "Export"}, FooterHint{"B", "Back"})
 	case curationPageVotes:
-		hint = "A: vote   Y: submit   B: back"
+		hint = hintLine(FooterHint{"A", "Vote"}, FooterHint{"Y", "Submit"}, FooterHint{"B", "Back"})
 	}
 	if len(rows) > int(visible) {
-		hint = fmt.Sprintf("L/R: page %d-%d of %d   %s",
-			curationPanel.scroll+1, curationPanel.scroll+int(visible), len(rows), hint)
+		hint = hintLine(FooterHint{"L / R", fmt.Sprintf("Page %d-%d of %d",
+			curationPanel.scroll+1, curationPanel.scroll+int(visible), len(rows))}, FooterHint{Label: hint})
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 

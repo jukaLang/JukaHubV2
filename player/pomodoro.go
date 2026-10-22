@@ -240,7 +240,7 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 	// Controls hint at bottom.
 	hintFont, _ := getCachedFont(config, "small")
 	if hintFont != nil {
-		controls := "A: Start/Pause  |  B: Skip  |  Y: Reset"
+		controls := hintLine(FooterHint{"A", "Start / Pause"}, FooterHint{"B", "Skip"}, FooterHint{"Y", "Reset"})
 		chw, _, _ := hintFont.SizeUTF8(controls)
 		chx := (screenWidth - int32(chw)) / 2
 		chy := screenHeight - 60

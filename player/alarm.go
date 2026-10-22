@@ -423,18 +423,20 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 		controls := ""
 		switch alarmUI.tab {
 		case 0:
-			controls = "D-Pad: Navigate | A: Edit | X: Toggle | Y: Add New | B: Back"
+			controls = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Edit"},
+				FooterHint{"X", "Toggle"}, FooterHint{"Y", "Add New"}, FooterHint{"B", "Back"})
 			if len(alarmStore.Alarms) > 0 {
-				controls = "D-Pad: Navigate | A: Edit | X: Toggle | Y: Add New | Hold Y+X: Delete"
+				controls = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Edit"},
+					FooterHint{"X", "Toggle"}, FooterHint{"Y", "Add New"}, FooterHint{"Y+X", "Hold to Delete"})
 			}
 		case 1:
-			controls = "D-Pad: Change Hour | A: Next →"
+			controls = hintLine(FooterHint{"D-Pad", "Change Hour"}, FooterHint{"A", "Next"}, FooterHint{"B", "Back"})
 		case 2:
-			controls = "D-Pad: Change Minute | A: Next →"
+			controls = hintLine(FooterHint{"D-Pad", "Change Minute"}, FooterHint{"A", "Next"}, FooterHint{"B", "Back"})
 		case 3:
-			controls = "Type label | A: Save | B: Back"
+			controls = hintLine(FooterHint{Label: "Type Label"}, FooterHint{"A", "Save"}, FooterHint{"B", "Back"})
 		case 4:
-			controls = "A: Confirm Delete | B: Cancel"
+			controls = hintLine(FooterHint{"A", "Confirm Delete"}, FooterHint{"B", "Cancel"})
 		}
 		chw, _, _ := smallFont.SizeUTF8(controls)
 		chx := (screenWidth - int32(chw)) / 2

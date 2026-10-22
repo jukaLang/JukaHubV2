@@ -765,18 +765,15 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A: launch   B: close"
+	hints := []FooterHint{{Button: "A", Label: "Launch"}}
 	if retroAchievementsSupported() {
-		hint = "A: launch   Y: achievements   B: close"
+		hints = append(hints, FooterHint{"Y", "Achievements"})
 	}
+	hints = append(hints, FooterHint{"B", "Close"})
 	if emuPanel.scroll > 0 || emuPanel.scroll+int(visible) < len(entries) {
-		if retroAchievementsSupported() {
-			hint = fmt.Sprintf("D-Pad: scroll %d-%d of %d   A: launch   Y: achievements   B: close",
-				emuPanel.scroll+1, emuPanel.scroll+int(visible), len(entries))
-		} else {
-			hint = fmt.Sprintf("D-Pad: scroll %d-%d of %d   A: launch   B: close",
-				emuPanel.scroll+1, emuPanel.scroll+int(visible), len(entries))
-		}
+		hints = append([]FooterHint{{Button: "D-Pad", Label: fmt.Sprintf("Scroll %d-%d of %d",
+			emuPanel.scroll+1, emuPanel.scroll+int(visible), len(entries))}}, hints...)
 	}
+	hint := hintLine(hints...)
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

@@ -784,7 +784,7 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 
 	title := strings.TrimSpace(state.Title)
 	subtitle := strings.TrimSpace(state.Subtitle)
-	action := "A  Open Media"
+	action := hintLine(FooterHint{"A", "Open Media"})
 	if state.HasRecent {
 		if title == "" {
 			title = "Continue playing"
@@ -792,7 +792,7 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 		if subtitle == "" {
 			subtitle = "Pick up where you left off."
 		}
-		action = "A  Resume"
+		action = hintLine(FooterHint{"A", "Resume"})
 	} else {
 		if title == "" {
 			title = "Nothing played recently"

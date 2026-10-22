@@ -213,7 +213,7 @@ func renderGlobalSearch(renderer *sdl.Renderer, config *Config) {
 
 	// Hint
 	hintFont := getBodyFont(config, 11)
-	hint := "↑↓ navigate • Enter select • Esc close"
+	hint := hintLine(FooterHint{"↑ ↓", "Navigate"}, FooterHint{"Enter", "Select"}, FooterHint{"Esc", "Close"})
 	hw, _, _ := hintFont.SizeUTF8(hint)
 	drawText(renderer, hintFont, hint, inputX+inputW-int32(hw)-4, inputY+14, colorNew(80, 90, 110, 120), textAlignLeft)
 

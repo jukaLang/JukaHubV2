@@ -207,7 +207,8 @@ func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf
 		}
 		y += lineH
 	}
-	footer := "Up/Down scroll · Y rescan · B back · Files stay untouched"
+	footer := hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"}) +
+		"   Files stay untouched"
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)

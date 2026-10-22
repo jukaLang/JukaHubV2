@@ -623,7 +623,7 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	entries := portEntries()
 	if len(entries) == 0 {
-		entries = []portEntry{{Name: "No ports found", Detail: "Nothing to list", Status: emuMissing}}
+		entries = []portEntry{{Name: "No ports yet", Detail: "Install PortMaster to add ports", Status: emuMissing}}
 	}
 	if portsPanel.cursor >= len(entries) {
 		portsPanel.cursor = len(entries) - 1
@@ -738,13 +738,14 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := "A: open   B: close"
+	hints := []FooterHint{{"A", "Open"}, {"B", "Close"}}
 	if len(entries) > 0 && entries[0].Install {
-		hint = "A: install PortMaster   B: close"
+		hints = []FooterHint{{"A", "Install PortMaster"}, {"B", "Close"}}
 	}
 	if portsPanel.scroll > 0 || portsPanel.scroll+int(visible) < len(entries) {
-		hint = fmt.Sprintf("D-Pad: scroll %d-%d of %d   %s",
-			portsPanel.scroll+1, portsPanel.scroll+int(visible), len(entries), hint)
+		hints = append([]FooterHint{{Button: "D-Pad", Label: fmt.Sprintf("Scroll %d-%d of %d",
+			portsPanel.scroll+1, portsPanel.scroll+int(visible), len(entries))}}, hints...)
 	}
+	hint := hintLine(hints...)
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

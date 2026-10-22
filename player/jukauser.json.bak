@@ -57,7 +57,7 @@
       "chat_input": "hi",
       "diskpie_data": {
         "Total": 510718431232,
-        "Used": 339274379264,
+        "Used": 339884273664,
         "Pct": 66
       },
       "ftp_address": "",
@@ -70,15 +70,20 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "total": 151,
+        "total": 426,
         "scenes": {
-          "Main": 153
+          "Main": 412,
+          "Tube": 17
         },
         "days": {
-          "2026-10-21": 153
+          "2026-10-21": 275,
+          "2026-10-22": 154
         },
         "unlocked": {}
       },
+      "recently_played": [
+        "https://www.youtube.com/watch?v=CgEsze2BQ4c"
+      ],
       "ssh_address": "",
       "ssh_fingerprint": "",
       "ssh_port": "2222",
@@ -97,6 +102,42 @@
   "favorites": {
     "videos": [],
     "recent": [
+      {
+        "Type": "video",
+        "Data": {
+          "id": "CgEsze2BQ4c",
+          "title": "Fall Fashion 2026 | 10 Trends beyond the basics",
+          "uploader": "That Trending Girl",
+          "channel": "That Trending Girl",
+          "duration": 1080,
+          "thumbnail": "https://i.ytimg.com/vi/CgEsze2BQ4c/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLAvMU6U0hWmmHCy8t-ZuXUbftF8cQ",
+          "description": "Discover the 10 most important fall 2026 fashion trends that go beyond the basics. In this video, we break down suede everything, ...",
+          "view_count": 121458,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=CgEsze2BQ4c",
+          "position": 5.3543096
+        },
+        "Timestamp": "2026-10-22T00:12:28.649348-04:00"
+      },
+      {
+        "Type": "video",
+        "Data": {
+          "id": "Y7kBmcWKLxg",
+          "title": "New Crime Trend You NEED To Know About",
+          "uploader": "TheDC Shorts",
+          "channel": "TheDC Shorts",
+          "duration": 190,
+          "thumbnail": "https://i.ytimg.com/vi/Y7kBmcWKLxg/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLAKuY4np1k2fQX_5ZVbYlW4-b1Okg",
+          "description": "Add this one to the list of scams you need to watch out for! Check out our Twitter: https://goo.gl/fnYe4v And Facebook: ...",
+          "view_count": 1455206,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=Y7kBmcWKLxg",
+          "position": 5.0536655
+        },
+        "Timestamp": "2026-10-21T23:51:42.4125412-04:00"
+      },
       {
         "Type": "video",
         "Data": {

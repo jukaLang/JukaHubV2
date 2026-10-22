@@ -440,7 +440,8 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 
 	// Controls hint.
 	if smallFont != nil {
-		controls := "D-Pad: Navigate  |  A: Select  |  C: Clear"
+		controls := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Select"},
+			FooterHint{"C", "Clear"}, FooterHint{"B", "Back"})
 		chw, _, _ := smallFont.SizeUTF8(controls)
 		chx := (screenWidth - int32(chw)) / 2
 		chy := screenHeight - 40

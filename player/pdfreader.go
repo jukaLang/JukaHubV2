@@ -411,7 +411,8 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 
 	// Controls hint.
 	if font != nil {
-		controls := "← Prev Page | → Next Page | PgUp/PgDn: Scroll | B: Back"
+		controls := hintLine(FooterHint{"←", "Prev Page"}, FooterHint{"→", "Next Page"},
+			FooterHint{"PgUp / PgDn", "Scroll"}, FooterHint{"B", "Back"})
 		cw, _, _ := font.SizeUTF8(controls)
 		renderText(renderer, config, font, controls,
 			sdl.Color{R: 80, G: 90, B: 110, A: 100},

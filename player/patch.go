@@ -252,7 +252,8 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 	var rows []uiRow
 	// Action rows.
 	for _, a := range patchActions() {
-		rows = append(rows, uiRow{id: "action:" + a.ID, title: a.Label, sub: a.Sub, right: "A  Open"})
+		rows = append(rows, uiRow{id: "action:" + a.ID, title: a.Label, sub: a.Sub,
+			right: hintLine(FooterHint{"A", "Open"})})
 	}
 	// Update class rows.
 	if patchSnap != nil {
@@ -275,16 +276,16 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 	if patchSnap != nil {
 		for _, p := range patchSnap.Packages {
 			status := StatusAvailable
-			right := "A  Install"
+			right := hintLine(FooterHint{"A", "Install"})
 			installed := IsPackageInstalled(&p)
 			current := installed && IsPackageCurrent(&p)
 			switch {
 			case installed && current:
 				status = StatusCurrent
-				right = "Installed · A  Menu"
+				right = "Installed · " + hintLine(FooterHint{"A", "Menu"})
 			case installed:
 				status = StatusAvailable
-				right = "Update · A  Menu"
+				right = "Update · " + hintLine(FooterHint{"A", "Menu"})
 			}
 			rows = append(rows, uiRow{
 				id:     "pkg:" + p.ID,
@@ -297,7 +298,8 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 	}
 	// Backup rows.
 	for _, b := range patchSnap.Backups {
-		rows = append(rows, uiRow{id: "backup:" + b, title: "Backup " + b, sub: "Restore this backup set", right: "A  Restore"})
+		rows = append(rows, uiRow{id: "backup:" + b, title: "Backup " + b, sub: "Restore this backup set",
+			right: hintLine(FooterHint{"A", "Restore"})})
 	}
 	if len(rows) == 0 {
 		renderText(renderer, config, font, "Nothing to show.", ColorTextSecondary(), 24, listTop+20)

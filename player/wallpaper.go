@@ -200,7 +200,8 @@ func renderWallpaperPicker(renderer *sdl.Renderer, config *Config) {
 
 	// Footer
 	if smallFont != nil {
-		footer := "↑↓ navigate • A select • B back • Esc close"
+		footer := hintLine(FooterHint{"↑ ↓", "Navigate"}, FooterHint{"A", "Select"},
+			FooterHint{"B", "Back"}, FooterHint{"Esc", "Close"})
 		fw, _, _ := smallFont.SizeUTF8(footer)
 		drawText(renderer, smallFont, footer, (screenWidth-int32(fw))/2, screenHeight-30, ColorTextTertiary(), textAlignLeft)
 	}

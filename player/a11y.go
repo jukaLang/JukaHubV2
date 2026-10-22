@@ -680,6 +680,6 @@ func renderAccessibilityPanel(renderer *sdl.Renderer, config *Config) {
 	detailY := panelY + headerH + visible*rowH + 10
 	renderText(renderer, config, font, ellipsize(font, detail, rowW), ColorTextTertiary(), panelX+padX, detailY)
 
-	hint := "Left/Right: change   A: next   B: close"
+	hint := hintLine(FooterHint{"Left/Right", "Change"}, FooterHint{"A", "Next"}, FooterHint{"B", "Close"})
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

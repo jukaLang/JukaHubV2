@@ -87,35 +87,35 @@ func communityRows(config *Config) []communityRow {
 			label:  "What's new",
 			value:  "Changelog",
 			detail: detail,
-			hint:   "A: read",
+			hint:   hintLine(FooterHint{"A", "Read"}),
 			action: communityActionWhatsNew,
 		},
 		{
 			label:  "BIOS Doctor",
 			value:  "PS1 · Dreamcast · Saturn",
 			detail: "Check required filenames and SHA-256 fingerprints",
-			hint:   "A: inspect",
+			hint:   hintLine(FooterHint{"A", "Inspect"}),
 			action: communityActionBIOSDoctor,
 		},
 		{
 			label:  "Diagnostics QR",
 			value:  "Redacted support report",
 			detail: "Save a report and show a time-limited phone link",
-			hint:   "A: export",
+			hint:   hintLine(FooterHint{"A", "Export"}),
 			action: communityActionDiagnosticsQR,
 		},
 		{
 			label:  "Report a bug",
 			value:  "GitHub issue",
 			detail: "Opens a prefilled report with redacted diagnostics",
-			hint:   "A: open",
+			hint:   hintLine(FooterHint{"A", "Open"}),
 			action: communityActionReportBug,
 		},
 		{
 			label:  "Anonymous diagnostics",
 			value:  telemetryStatusValue(),
 			detail: telemetryDetail,
-			hint:   "A: toggle",
+			hint:   hintLine(FooterHint{"A", "Toggle"}),
 			action: communityActionTelemetry,
 		},
 		{
@@ -635,7 +635,7 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	note := "Off by default. Never includes designs, files, links or account data."
 	renderText(renderer, config, font, ellipsize(font, note, rowW), ColorTextTertiary(), panelX+padX, noteY)
 
-	footer := "A select    B close"
+	footer := hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)
@@ -680,7 +680,7 @@ func renderCommunityDiagnosticsQR(renderer *sdl.Renderer, config *Config, font, 
 		renderText(renderer, config, font, ellipsize(font, label, panelW-2*padX), ColorTextTertiary(),
 			panelX+(panelW-int32(w))/2, labelY)
 	}
-	footer := "B back"
+	footer := hintLine(FooterHint{"B", "Back"})
 	fw, _, _ := medium.SizeUTF8(footer)
 	renderText(renderer, config, medium, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)

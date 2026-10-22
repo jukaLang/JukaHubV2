@@ -147,7 +147,7 @@ func TestToolsRowsPatchAndCalculator(t *testing.T) {
 	if calcRow == nil {
 		t.Fatalf("no Calculator row in %+v", rows)
 	}
-	if calcRow.value != "Open" || calcRow.hint != "A: open" {
+	if calcRow.value != "Open" || calcRow.hint != "A Open" {
 		t.Fatalf("Calculator row = %+v", calcRow)
 	}
 }

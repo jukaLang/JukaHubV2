@@ -148,8 +148,8 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 	if rows[0].value != "Running" {
 		t.Fatalf("FTP row value = %q, want Running", rows[0].value)
 	}
-	if rows[0].hint != "A: stop" {
-		t.Fatalf("FTP row hint = %q, want A: stop", rows[0].hint)
+	if rows[0].hint != "A Stop" {
+		t.Fatalf("FTP row hint = %q, want A Stop", rows[0].hint)
 	}
 	if !strings.HasPrefix(rows[0].detail, "ftp://") {
 		t.Fatalf("FTP row detail = %q, want the ftp:// address", rows[0].detail)
@@ -182,10 +182,10 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	if rows[0].value != "Stopped" {
 		t.Fatalf("FTP row value = %q, want Stopped", rows[0].value)
 	}
-	if rows[1].value != "Stopped" || rows[1].hint != "A: start" {
+	if rows[1].value != "Stopped" || rows[1].hint != "A Start" {
 		t.Fatalf("SSH row = %+v, want stopped with a start hint", rows[1])
 	}
-	if rows[2].value != "Scan to connect" || rows[2].hint != "A: show QR code" {
+	if rows[2].value != "Scan to connect" || rows[2].hint != "A Show QR Code" {
 		t.Fatalf("companion row = %+v, want the idle QR hint", rows[2])
 	}
 }
@@ -236,7 +236,7 @@ func TestToolsRowsRunningSSH(t *testing.T) {
 	defer sshSrv.Stop()
 
 	rows := toolsRows(&Config{})
-	if rows[1].value != "Running" || rows[1].hint != "A: stop" {
+	if rows[1].value != "Running" || rows[1].hint != "A Stop" {
 		t.Fatalf("SSH row = %+v, want running with a stop hint", rows[1])
 	}
 	if !strings.HasPrefix(rows[1].detail, "sftp://") {

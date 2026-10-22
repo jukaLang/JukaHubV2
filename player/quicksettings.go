@@ -756,7 +756,7 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 			sdl.Color{R: 140, G: 155, B: 180, A: 200},
 			panelX+panelW-int32(nw)-qsPadX, infoY)
 
-		hint := "A change · Left/Right adjust · B close"
+		hint := hintLine(FooterHint{"A", "Change"}, FooterHint{"Left/Right", "Adjust"}, FooterHint{"B", "Close"})
 		hw, _, _ := font.SizeUTF8(hint)
 		renderText(renderer, config, font, hint,
 			sdl.Color{R: 90, G: 100, B: 125, A: 190},

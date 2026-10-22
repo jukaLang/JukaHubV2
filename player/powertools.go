@@ -205,13 +205,13 @@ func powerToolRows(config *Config) []powerToolRow {
 			device = deviceDisplayName(DetectDevice())
 		}
 		return []powerToolRow{
-			{label: "Network probes", value: "Ports · DNS · Wi-Fi", detail: "Gateway scan, TCP ping, resolver and local signal", hint: "A: open", action: powerActionOpenNetwork, enabled: true},
-			{label: "File inspector", value: "Hex · JSON · logs", detail: "Reads the app's own files only, never a config path", hint: "A: open", action: powerActionOpenFiles, enabled: true},
-			{label: "Script snippets", value: fmt.Sprintf("%d snippets", scripts), detail: "Built-ins plus snippets saved from the clipboard", hint: "A: open", action: powerActionOpenScripts, enabled: true},
-			{label: "Folder sync", value: target, detail: "rsync without --delete, or check Syncthing", hint: "A: open", action: powerActionOpenSync, enabled: true},
-			{label: "Config history", value: fmt.Sprintf("%d snapshots", snaps), detail: "Diff jukauser.json and roll back a bad edit", hint: "A: open", action: powerActionOpenConfigs, enabled: true},
-			{label: "Benchmark board", value: device, detail: "Local read/write results, optional online feed", hint: "A: open", action: powerActionOpenBench, enabled: true},
-			{label: "Close", value: "Back to the app", hint: "B", action: powerActionClose, enabled: true},
+			{label: "Network probes", value: "Ports · DNS · Wi-Fi", detail: "Gateway scan, TCP ping, resolver and local signal", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenNetwork, enabled: true},
+			{label: "File inspector", value: "Hex · JSON · logs", detail: "Reads the app's own files only, never a config path", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenFiles, enabled: true},
+			{label: "Script snippets", value: fmt.Sprintf("%d snippets", scripts), detail: "Built-ins plus snippets saved from the clipboard", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenScripts, enabled: true},
+			{label: "Folder sync", value: target, detail: "rsync without --delete, or check Syncthing", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenSync, enabled: true},
+			{label: "Config history", value: fmt.Sprintf("%d snapshots", snaps), detail: "Diff jukauser.json and roll back a bad edit", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenConfigs, enabled: true},
+			{label: "Benchmark board", value: device, detail: "Local read/write results, optional online feed", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenBench, enabled: true},
+			{label: "Close", value: "Back to the app", hint: hintLine(FooterHint{"B", "Close"}), action: powerActionClose, enabled: true},
 		}
 	case powerPageNetwork:
 		gateway := powerTools.gateway
@@ -219,12 +219,12 @@ func powerToolRows(config *Config) []powerToolRow {
 			gateway = "no LAN address"
 		}
 		return []powerToolRow{
-			{label: "Scan gateway ports", value: gateway, detail: "13 common ports, read-only TCP connects", hint: "A: scan", action: powerActionScan, enabled: gateway != "no LAN address"},
-			{label: "Scan clipboard host", value: "Copy an IP or host name", detail: "Same 13 ports, limited to the copied host", hint: "A: scan", action: powerActionScanClipboard, enabled: true},
-			{label: "Ping", value: "1.1.1.1", detail: "ICMP if the device has ping, then TCP fallback", hint: "A: run", action: powerActionPing, enabled: true},
-			{label: "Traceroute", value: "1.1.1.1", detail: "Uses traceroute/tracert when installed", hint: "A: trace", action: powerActionTrace, enabled: true},
-			{label: "DNS lookup", value: "github.com · example.com", detail: "Uses the resolver configured on this device", hint: "A: run", action: powerActionDNS, enabled: true},
-			{label: "Wi-Fi signal", value: "Local interface", detail: "Link quality and dBm when associated", hint: "A: read", action: powerActionWiFi, enabled: true},
+			{label: "Scan gateway ports", value: gateway, detail: "13 common ports, read-only TCP connects", hint: hintLine(FooterHint{"A", "Scan"}), action: powerActionScan, enabled: gateway != "no LAN address"},
+			{label: "Scan clipboard host", value: "Copy an IP or host name", detail: "Same 13 ports, limited to the copied host", hint: hintLine(FooterHint{"A", "Scan"}), action: powerActionScanClipboard, enabled: true},
+			{label: "Ping", value: "1.1.1.1", detail: "ICMP if the device has ping, then TCP fallback", hint: hintLine(FooterHint{"A", "Run"}), action: powerActionPing, enabled: true},
+			{label: "Traceroute", value: "1.1.1.1", detail: "Uses traceroute/tracert when installed", hint: hintLine(FooterHint{"A", "Trace"}), action: powerActionTrace, enabled: true},
+			{label: "DNS lookup", value: "github.com · example.com", detail: "Uses the resolver configured on this device", hint: hintLine(FooterHint{"A", "Run"}), action: powerActionDNS, enabled: true},
+			{label: "Wi-Fi signal", value: "Local interface", detail: "Link quality and dBm when associated", hint: hintLine(FooterHint{"A", "Read"}), action: powerActionWiFi, enabled: true},
 			{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true},
 		}
 	case powerPageFiles:
@@ -233,8 +233,8 @@ func powerToolRows(config *Config) []powerToolRow {
 			rows = append(rows, powerToolRow{
 				label:   f.Name,
 				value:   powerHumanSize(f.Size),
-				detail:  "A: inspect · hex, JSON and log views",
-				hint:    "A: view",
+				detail:  "Hex, JSON and log views",
+				hint:    hintLine(FooterHint{"A", "View"}),
 				action:  powerActionInspectFile,
 				arg:     f.Path,
 				enabled: true,
@@ -249,10 +249,10 @@ func powerToolRows(config *Config) []powerToolRow {
 		rows := make([]powerToolRow, 0, len(powerTools.scripts)+2)
 		for i, s := range powerTools.scripts {
 			kind := "built-in"
-			hint := "A: run"
+			hint := hintLine(FooterHint{"A", "Run"})
 			if i >= builtins {
 				kind = "saved"
-				hint = "A: run · X: delete"
+				hint = hintLine(FooterHint{"A", "Run"}, FooterHint{"X", "Delete"})
 			}
 			rows = append(rows, powerToolRow{
 				label:   s.Name,
@@ -268,28 +268,28 @@ func powerToolRows(config *Config) []powerToolRow {
 			label:   "Save clipboard as snippet",
 			value:   "Clipboard command",
 			detail:  "Copy a command first, then save it as a button",
-			hint:    "A: save",
+			hint:    hintLine(FooterHint{"A", "Save"}),
 			action:  powerActionSaveClipboardScript,
 			enabled: true,
 		})
 		return append(rows, powerToolRow{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true})
 	case powerPageSync:
 		return []powerToolRow{
-			{label: "Source folder", value: powerShortPath(powerTools.syncSource), detail: "A: copy a folder path to the clipboard first", hint: "A: set", action: powerActionSetSyncSource, enabled: true},
-			{label: "Target", value: powerShortPath(powerTools.syncTarget), detail: "Local folder or user@host:/path", hint: "A: set", action: powerActionSetSyncTarget, enabled: true},
-			{label: "Dry run", value: "Preview changes", detail: "rsync -azn --itemize-changes", hint: "A: preview", action: powerActionRsyncDryRun, enabled: true},
-			{label: "Sync now", value: "Copy changed files", detail: "No --delete: the target never loses extra files", hint: "A: sync", action: powerActionRsyncNow, enabled: true},
-			{label: "Syncthing status", value: "Check localhost:8384", detail: "Reports binary and web UI without an API key", hint: "A: check", action: powerActionSyncthing, enabled: true},
+			{label: "Source folder", value: powerShortPath(powerTools.syncSource), detail: "Copy a folder path to the clipboard first", hint: hintLine(FooterHint{"A", "Set"}), action: powerActionSetSyncSource, enabled: true},
+			{label: "Target", value: powerShortPath(powerTools.syncTarget), detail: "Local folder or user@host:/path", hint: hintLine(FooterHint{"A", "Set"}), action: powerActionSetSyncTarget, enabled: true},
+			{label: "Dry run", value: "Preview changes", detail: "rsync -azn --itemize-changes", hint: hintLine(FooterHint{"A", "Preview"}), action: powerActionRsyncDryRun, enabled: true},
+			{label: "Sync now", value: "Copy changed files", detail: "No --delete: the target never loses extra files", hint: hintLine(FooterHint{"A", "Sync"}), action: powerActionRsyncNow, enabled: true},
+			{label: "Syncthing status", value: "Check localhost:8384", detail: "Reports binary and web UI without an API key", hint: hintLine(FooterHint{"A", "Check"}), action: powerActionSyncthing, enabled: true},
 			{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true},
 		}
 	case powerPageConfigs:
-		rows := []powerToolRow{{label: "Snapshot now", value: "jukauser.json", detail: "A timestamped copy appears in power-config-history", hint: "A: save", action: powerActionSnapshotNow, enabled: true}}
+		rows := []powerToolRow{{label: "Snapshot now", value: "jukauser.json", detail: "A timestamped copy appears in power-config-history", hint: hintLine(FooterHint{"A", "Save"}), action: powerActionSnapshotNow, enabled: true}}
 		for i, s := range powerTools.snapshots {
 			rows = append(rows, powerToolRow{
 				label:   s.ModTime.Format("Jan 2 15:04:05"),
 				value:   powerHumanSize(s.Size),
 				detail:  s.Name,
-				hint:    "A: diff · X: restore",
+				hint:    hintLine(FooterHint{"A", "Diff"}, FooterHint{"X", "Restore"}),
 				action:  powerActionDiffSnapshot,
 				arg:     fmt.Sprintf("%d", i),
 				enabled: true,
@@ -328,9 +328,9 @@ func powerToolRows(config *Config) []powerToolRow {
 			sameDetail = fmt.Sprintf("Best on this model: %.1f MB/s", bestSame)
 		}
 		rows := []powerToolRow{
-			{label: "Run benchmark", value: "32 MiB read/write", detail: "Records this device in power-bench.json", hint: "A: run", action: powerActionRunBenchmark, enabled: true},
-			{label: "Refresh online", value: online, detail: "Optional JSON feed of the same entries", hint: "A: fetch", action: powerActionRefreshBenchmark, enabled: enabled},
-			{label: "Copy board", value: "Clipboard JSON", detail: "Share local and fetched results", hint: "A: copy", action: powerActionExportBenchmark, enabled: true},
+			{label: "Run benchmark", value: "32 MiB read/write", detail: "Records this device in power-bench.json", hint: hintLine(FooterHint{"A", "Run"}), action: powerActionRunBenchmark, enabled: true},
+			{label: "Refresh online", value: online, detail: "Optional JSON feed of the same entries", hint: hintLine(FooterHint{"A", "Fetch"}), action: powerActionRefreshBenchmark, enabled: enabled},
+			{label: "Copy board", value: "Clipboard JSON", detail: "Share local and fetched results", hint: hintLine(FooterHint{"A", "Copy"}), action: powerActionExportBenchmark, enabled: true},
 			{label: "Same model", value: sameValue, detail: sameDetail, enabled: false},
 		}
 		for i, e := range combined {
@@ -1065,17 +1065,19 @@ func powerPageTitle(page powerPage) (string, string) {
 func powerFooter(page powerPage) string {
 	switch page {
 	case powerPageMenu:
-		return "A select    B close"
+		return hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
 	case powerPageFiles:
-		return "A view    B back"
+		return hintLine(FooterHint{"A", "View"}, FooterHint{"B", "Back"})
 	case powerPageScripts:
-		return "A run    X delete    Y save clipboard    B back"
+		return hintLine(FooterHint{"A", "Run"}, FooterHint{"X", "Delete"},
+			FooterHint{"Y", "Save to Clipboard"}, FooterHint{"B", "Back"})
 	case powerPageConfigs:
-		return "A diff    X restore    B back"
+		return hintLine(FooterHint{"A", "Diff"}, FooterHint{"X", "Restore"}, FooterHint{"B", "Back"})
 	case powerPageOutput:
-		return "Up/Down scroll    X hex    Y JSON    B back"
+		return hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"X", "Hex"},
+			FooterHint{"Y", "JSON"}, FooterHint{"B", "Back"})
 	}
-	return "A select    B back"
+	return hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
 }
 
 func powerPageSize(page powerPage, rowH int32) (int32, int32) {

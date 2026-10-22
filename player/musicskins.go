@@ -207,7 +207,7 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	renderer.FillRect(&sdl.Rect{X: 0, Y: headerH - 1, W: screenWidth, H: 1})
 	renderText(renderer, config, medFont, "Audio Player", ColorTextPrimary(), 24, (headerH-int32(medFont.Height()))/2)
 	renderText(renderer, config, font, "StockOS layout", ColorTextTertiary(), 190, (headerH-int32(font.Height()))/2)
-	back := "B  Back"
+	back := hintLine(FooterHint{"B", "Back"})
 	bw, _, _ := font.SizeUTF8(back)
 	renderText(renderer, config, font, back, ColorTextTertiary(), screenWidth-int32(bw)-24, (headerH-int32(font.Height()))/2)
 
@@ -396,11 +396,13 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hint := fmt.Sprintf("A Play   B Back   / Search   G PEQ   O Screen off   Vol %d%%",
-		int(math.Round(volume*100)))
+	hints := []FooterHint{{"A", "Play"}, {"B", "Back"}, {"/", "Search"},
+		{"G", "PEQ"}, {"O", "Screen Off"},
+		{Label: fmt.Sprintf("Vol %d%%", int(math.Round(volume*100)))}}
 	if queued > 0 {
-		hint += fmt.Sprintf("   ·   %d queued", queued)
+		hints = append(hints, FooterHint{Label: fmt.Sprintf("%d Queued", queued)})
 	}
+	hint := hintLine(hints...)
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 170},
 		(screenWidth-int32(hw))/2, screenHeight-34)

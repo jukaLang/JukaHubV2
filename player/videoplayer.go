@@ -362,23 +362,79 @@ func clampPosInt(v int64) int {
 	return int(v)
 }
 
-func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
-	if ffprobePath == "" {
-		log.Printf("[VIDEO] ffprobe missing; using default 1280x720@30 probe values")
-		return 1280, 720, 0, 30
+// probeFields is what ffprobe tells us about a source. Missing values are zero
+// so callers can tell "not in the container" from a real number.
+type probeFields struct {
+	width, height int32
+	duration, fps float64
+}
+
+type probeSnapshot struct {
+	probeFields
+	at time.Time
+}
+
+// probeCacheTTL keeps a probe result long enough to cover resolve -> probe ->
+// play. Without it the same remote URL is probed twice in a row (once to check
+// the stream, once by the player), which cost several seconds on the handheld.
+const probeCacheTTL = 2 * time.Minute
+
+var (
+	probeCacheMu sync.Mutex
+	probeCache   = map[string]probeSnapshot{}
+)
+
+// probeCacheKey is empty for local files, which are cheap to probe and can
+// change without the path changing.
+func probeCacheKey(path string) string {
+	lower := strings.ToLower(strings.TrimSpace(path))
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return path
 	}
-	cmd := exec.Command(ffprobePath, "-v", "error",
-		"-select_streams", "v:0",
-		"-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration",
-		"-of", "default=noprint_wrappers=1", path)
-	out, err := cmd.Output()
-	if err != nil {
-		log.Printf("[VIDEO] ffprobe failed for %s: %v", sanitizeLogURL(path), err)
-		return 1280, 720, 0, 30
+	return ""
+}
+
+func cachedProbe(path string) (probeFields, bool) {
+	key := probeCacheKey(path)
+	if key == "" {
+		return probeFields{}, false
 	}
-	s := strings.TrimSpace(string(out))
-	w, h, dur, fps := int32(1280), int32(720), 0.0, 30.0
-	avgFps := 0.0
+	probeCacheMu.Lock()
+	defer probeCacheMu.Unlock()
+	snap, ok := probeCache[key]
+	if !ok {
+		return probeFields{}, false
+	}
+	if time.Since(snap.at) > probeCacheTTL {
+		delete(probeCache, key)
+		return probeFields{}, false
+	}
+	return snap.probeFields, true
+}
+
+func rememberProbe(path string, fields probeFields) {
+	key := probeCacheKey(path)
+	if key == "" || fields.width <= 0 || fields.height <= 0 {
+		return
+	}
+	probeCacheMu.Lock()
+	probeCache[key] = probeSnapshot{probeFields: fields, at: time.Now()}
+	probeCacheMu.Unlock()
+}
+
+// resetProbeCache clears cached probe results. Used by tests.
+func resetProbeCache() {
+	probeCacheMu.Lock()
+	probeCache = map[string]probeSnapshot{}
+	probeCacheMu.Unlock()
+}
+
+// parseProbeOutput reads ffprobe's default=noprint_wrappers=1 key=value output.
+// avg_frame_rate wins over r_frame_rate when both are present because it is
+// what actually plays for variable-frame-rate sources.
+func parseProbeOutput(s string) probeFields {
+	var fields probeFields
+	rRate, avgRate := 0.0, 0.0
 	parseRate := func(v string) float64 {
 		parts := strings.Split(strings.TrimSpace(v), "/")
 		if len(parts) == 2 {
@@ -395,36 +451,80 @@ func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
 		if line == "" {
 			continue
 		}
-		if strings.HasPrefix(line, "width=") {
-			raw := strings.TrimPrefix(line, "width=")
-			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); err == nil && v > 0 {
-				w = int32(clampPosInt(v))
+		switch {
+		case strings.HasPrefix(line, "width="):
+			if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "width=")), 10, 32); err == nil && v > 0 {
+				fields.width = int32(clampPosInt(v))
 			}
-		} else if strings.HasPrefix(line, "height=") {
-			raw := strings.TrimPrefix(line, "height=")
-			if v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 32); err == nil && v > 0 {
-				h = int32(clampPosInt(v))
+		case strings.HasPrefix(line, "height="):
+			if v, err := strconv.ParseInt(strings.TrimSpace(strings.TrimPrefix(line, "height=")), 10, 32); err == nil && v > 0 {
+				fields.height = int32(clampPosInt(v))
 			}
-		} else if strings.HasPrefix(line, "duration=") {
-			raw := strings.TrimPrefix(line, "duration=")
-			if v, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil && v > 0 {
-				dur = v
+		case strings.HasPrefix(line, "duration="):
+			if v, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimPrefix(line, "duration=")), 64); err == nil && v > 0 {
+				fields.duration = v
 			}
-		} else if strings.HasPrefix(line, "r_frame_rate=") {
-			if v := parseRate(strings.TrimPrefix(line, "r_frame_rate=")); v > 0 {
-				fps = v
-			}
-		} else if strings.HasPrefix(line, "avg_frame_rate=") {
-			if v := parseRate(strings.TrimPrefix(line, "avg_frame_rate=")); v > 0 {
-				avgFps = v
-			}
+		case strings.HasPrefix(line, "r_frame_rate="):
+			rRate = parseRate(strings.TrimPrefix(line, "r_frame_rate="))
+		case strings.HasPrefix(line, "avg_frame_rate="):
+			avgRate = parseRate(strings.TrimPrefix(line, "avg_frame_rate="))
 		}
 	}
-	if avgFps > 0 {
-		fps = avgFps
+	switch {
+	case avgRate > 0:
+		fields.fps = avgRate
+	case rRate > 0:
+		fields.fps = rRate
 	}
-	log.Printf("[VIDEO] ffprobe result: %dx%d, dur=%.1f, fps=%.1f", w, h, dur, fps)
-	return w, h, dur, fps
+	return fields
+}
+
+// ffprobeStream asks ffprobe for the first video stream's size, duration and
+// frame rate. A nil error with zero dimensions means the source has no video.
+func ffprobeStream(ctx context.Context, ffprobePath, path string) (probeFields, error) {
+	cmd := exec.CommandContext(ctx, ffprobePath, "-v", "error",
+		"-select_streams", "v:0",
+		"-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate,duration",
+		"-of", "default=noprint_wrappers=1", path)
+	out, err := cmd.Output()
+	if err != nil {
+		return probeFields{}, err
+	}
+	return parseProbeOutput(string(out)), nil
+}
+
+func probeVideoInfo(ffprobePath, path string) (int32, int32, float64, float64) {
+	if snap, ok := cachedProbe(path); ok {
+		fps := snap.fps
+		if fps <= 0 {
+			fps = 30
+		}
+		log.Printf("[VIDEO] ffprobe (cached): %dx%d, dur=%.1f, fps=%.1f", snap.width, snap.height, snap.duration, fps)
+		return snap.width, snap.height, snap.duration, fps
+	}
+	if ffprobePath == "" {
+		log.Printf("[VIDEO] ffprobe missing; using default 1280x720@30 probe values")
+		return 1280, 720, 0, 30
+	}
+	// A remote URL needs a bound: ffprobe sits on the connection until the
+	// server answers, and playback must not hang on a dead CDN link.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	fields, err := ffprobeStream(ctx, ffprobePath, path)
+	if err != nil {
+		log.Printf("[VIDEO] ffprobe failed for %s: %v", sanitizeLogURL(path), err)
+		return 1280, 720, 0, 30
+	}
+	if fields.width <= 0 || fields.height <= 0 {
+		fields.width, fields.height = 1280, 720
+	}
+	fps := fields.fps
+	if fps <= 0 {
+		fps = 30
+	}
+	rememberProbe(path, fields)
+	log.Printf("[VIDEO] ffprobe result: %dx%d, dur=%.1f, fps=%.1f", fields.width, fields.height, fields.duration, fps)
+	return fields.width, fields.height, fields.duration, fps
 }
 
 // ffmpegDecoderArgs builds the rawvideo decoder command. When the source is

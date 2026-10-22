@@ -158,7 +158,8 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 
 	// Footer
 	footerFont := getBodyFont(config, 12)
-	footer := "↑↓ navigate • Enter copy • Del clear • Esc close"
+	footer := hintLine(FooterHint{"↑ ↓", "Navigate"}, FooterHint{"Enter", "Copy"},
+		FooterHint{"Del", "Clear"}, FooterHint{"Esc", "Close"})
 	fw, _, _ := footerFont.SizeUTF8(footer)
 	drawText(renderer, footerFont, footer, cardX+(cardW-int32(fw))/2, cardY+cardH-28, colorNew(100, 100, 120, 255), textAlignLeft)
 
