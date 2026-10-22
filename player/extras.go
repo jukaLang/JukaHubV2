@@ -967,45 +967,126 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	hints := footerHints(config, scene)
+	// Hint groups: a small button badge pill plus a separate label, centered as
+	// one row inside the footer. planFooterHints measures the row and re-lays it
+	// out until it fits, because on the Brick's 960-wide canvas the full Tube
+	// row used to run off both edges ("d Navigate" … "R2").
+	plan := planFooterHints(config, footerHints(config, scene), screenWidth-24)
+	font = plan.font
+	hints := plan.hints
+	total := plan.width
 
-	// Distinct hint groups: a small button badge pill plus a separate label,
-	// 32px group gaps, centered as one row inside the footer.
-	groupGap := int32(32)
-	badgeH := int32(20)
-	badgePad := int32(12)
-	badgeGap := int32(6)
-	fh := int32(font.Height())
-
-	type group struct {
-		badgeW int32
-		w      int32
+	x := (screenWidth - total) / 2
+	textY := y + (barH-plan.fontHeight)/2
+	badgeY := y + (barH-plan.badgeH)/2
+	for i, g := range hints {
+		badge := sdl.Rect{X: x, Y: badgeY, W: plan.badgeW[i], H: plan.badgeH}
+		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, ColorIconSurface)
+		renderText(renderer, config, font, g.Button, ColorTextPrimary(), badge.X+plan.badgePad, textY)
+		labelX := badge.X + plan.badgeW[i] + plan.badgeGap
+		renderText(renderer, config, font, g.Label, ColorTextSecondary(), labelX, textY)
+		x += plan.badgeW[i] + plan.badgeGap + plan.labelW[i] + plan.groupGap
 	}
-	groups := make([]group, 0, len(hints))
+}
+
+// footerPlan is one hint row laid out for a specific width: the font and
+// spacing that fit, the hints that survived, and every measured badge so
+// drawing never has to remeasure what planning already measured.
+//
+// The three navigation hints come first, so hints are dropped from the end: the
+// player must always keep navigate/open/back.
+type footerPlan struct {
+	font       *ttf.Font
+	hints      []FooterHint
+	badgeW     []int32
+	labelW     []int32
+	width      int32
+	fontHeight int32
+	badgeH     int32
+	groupGap   int32
+	badgePad   int32
+	badgeGap   int32
+}
+
+// planFooterHints picks the largest type and the tightest spacing that keep the
+// hint row inside avail pixels, dropping trailing hints only if even the
+// smallest type does not fit.
+func planFooterHints(config *Config, hints []FooterHint, avail int32) footerPlan {
+	font, size := getCachedFont(config, "small")
+	if font == nil || size <= 0 {
+		size = 16
+	}
+	spacings := []struct {
+		size     int
+		groupGap int32
+		badgePad int32
+		badgeGap int32
+	}{
+		{size, 32, 12, 6},
+		{size - 1, 24, 10, 5},
+		{size - 2, 18, 9, 5},
+		{size - 3, 14, 8, 4},
+		{size - 4, 10, 7, 4},
+	}
+
+	plan := footerPlan{hints: hints, groupGap: spacings[0].groupGap, badgePad: spacings[0].badgePad, badgeGap: spacings[0].badgeGap}
+	for _, sp := range spacings {
+		candidate := font
+		if sp.size != size && sp.size > 0 {
+			if smaller := getFontSized(config, "small", sp.size); smaller != nil {
+				candidate = smaller
+			}
+		}
+		plan.font = candidate
+		plan.groupGap, plan.badgePad, plan.badgeGap = sp.groupGap, sp.badgePad, sp.badgeGap
+		if footerHintsWidth(candidate, hints, sp.groupGap, sp.badgePad, sp.badgeGap) <= avail {
+			break
+		}
+	}
+	if plan.font == nil {
+		plan.font = font
+	}
+
+	// Still too wide for even the smallest type: drop hints from the end.
+	keep := len(plan.hints)
+	for keep > 1 && footerHintsWidth(plan.font, plan.hints[:keep], plan.groupGap, plan.badgePad, plan.badgeGap) > avail {
+		keep--
+	}
+	plan.hints = plan.hints[:keep]
+
+	plan.fontHeight = int32(plan.font.Height())
+	plan.badgeH = int32(20)
+	if plan.fontHeight+6 > plan.badgeH {
+		plan.badgeH = plan.fontHeight + 6
+	}
+	plan.badgeW = make([]int32, len(plan.hints))
+	plan.labelW = make([]int32, len(plan.hints))
+	for i, g := range plan.hints {
+		bw, _, _ := plan.font.SizeUTF8(g.Button)
+		lw, _, _ := plan.font.SizeUTF8(g.Label)
+		plan.badgeW[i] = int32(bw) + plan.badgePad*2
+		plan.labelW[i] = int32(lw)
+	}
+	plan.width = footerHintsWidth(plan.font, plan.hints, plan.groupGap, plan.badgePad, plan.badgeGap)
+	return plan
+}
+
+// footerHintsWidth measures one hint row laid out with the given font and
+// spacing, so the planner can compare it with the panel width before drawing.
+func footerHintsWidth(font *ttf.Font, hints []FooterHint, groupGap, badgePad, badgeGap int32) int32 {
+	if font == nil {
+		return 0
+	}
 	total := int32(0)
 	for _, g := range hints {
 		bw, _, _ := font.SizeUTF8(g.Button)
 		lw, _, _ := font.SizeUTF8(g.Label)
-		badgeW := int32(bw) + badgePad*2
-		w := badgeW + badgeGap + int32(lw)
-		groups = append(groups, group{badgeW: badgeW, w: w})
-		total += w
+		total += int32(bw) + badgePad*2 + badgeGap + int32(lw)
 	}
-	if len(groups) > 1 {
-		total += groupGap * int32(len(groups)-1)
+	if len(hints) > 1 {
+		total += groupGap * int32(len(hints)-1)
 	}
-
-	x := (screenWidth - total) / 2
-	textY := y + (barH-fh)/2
-	badgeY := y + (barH-badgeH)/2
-	for i, g := range hints {
-		badge := sdl.Rect{X: x, Y: badgeY, W: groups[i].badgeW, H: badgeH}
-		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, ColorIconSurface)
-		renderText(renderer, config, font, g.Button, ColorTextPrimary(), badge.X+badgePad, textY)
-		labelX := badge.X + groups[i].badgeW + badgeGap
-		renderText(renderer, config, font, g.Label, ColorTextSecondary(), labelX, textY)
-		x += groups[i].w + groupGap
-	}
+	return total
 }
 
 // volatileCustomVars lists runtime-only keys that should not be persisted to

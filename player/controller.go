@@ -28,6 +28,12 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return false
 	}
 
+	// The Start menu floats above the scene it was opened from, so it takes the
+	// pad before the scene and its elements see anything.
+	if tb.startOpen {
+		return ctrlStartMenu(e, config)
+	}
+
 	// ── Overlay priority (highest to lowest) ──
 	// The IPStream library is modal: nothing underneath may react.
 	if ipPanelOpen {
@@ -194,6 +200,14 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if imageViewerPath != "" {
 		return ctrlImageViewer(e)
 	}
+	// Chat member list and profile card float above the chat panel. The
+	// on-screen keyboard keeps the pad while it is typing.
+	if chatOverlayOpen() && !virtualKeyboardActive {
+		return ctrlChatOverlay(e, config)
+	}
+	if chatSelectionBar.open && !virtualKeyboardActive {
+		return ctrlChatSelection(e, config)
+	}
 
 	// A failed helper-tool install keeps its card on screen with an
 	// "A: retry" hint; A starts the download again instead of activating the
@@ -202,6 +216,17 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		if tool, ok := installBarRetryPending(); ok {
 			PlayActivateSound()
 			retryHelperToolInstall(tool)
+			return true
+		}
+	}
+	// Start opens the menu from every ordinary screen. Scenes that bind Start
+	// themselves (the arcade pause menu, Ambient) keep it, and no panel is
+	// covered up by a menu drawn beneath it.
+	if e.Button == sdl.CONTROLLER_BUTTON_START && !virtualKeyboardActive &&
+		!modalPanelBlocksShoulders() {
+		if currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) ||
+			!sceneClaimsStart(config.Scenes[currentSceneIndex].Name) {
+			startMenuToggle()
 			return true
 		}
 	}

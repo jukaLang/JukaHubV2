@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -65,6 +66,129 @@ func TestBuildGameLibraryGroupsSortsAndOrdersConsoles(t *testing.T) {
 	}
 	if lib.Roots[0] != "/roms" {
 		t.Errorf("roots = %v, want the scanned root", lib.Roots)
+	}
+}
+
+// TestGameLibraryCountsCoverCompleteness pins the figures behind the ring and
+// the console meters: they describe covers that exist on disk right now.
+func TestGameLibraryCountsCoverCompleteness(t *testing.T) {
+	root := t.TempDir()
+	art := filepath.Join(root, "art")
+	gbaArt := filepath.Join(art, "Game_Boy_Advance")
+	if err := os.MkdirAll(gbaArt, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gbaArt, "Zelda.png"), []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	report := romScanReport{Games: []scannedROM{
+		{Path: "/roms/GBA/Zelda.gba", System: "Game Boy Advance"},
+		{Path: "/roms/GBA/Aladdin.gba", System: "Game Boy Advance"},
+		{Path: "/roms/FC/Contra.nes", System: "NES"},
+	}}
+	lib := buildGameLibrary(report, art)
+	if lib.Total != 3 || lib.WithArt != 1 {
+		t.Fatalf("library = %d games, %d covers; want 3 and 1", lib.Total, lib.WithArt)
+	}
+	if got := lib.Systems[1].WithArt; got != 1 {
+		t.Errorf("GBA covers = %d, want 1", got)
+	}
+	if got := lib.Systems[0].WithArt; got != 0 {
+		t.Errorf("NES covers = %d, want 0", got)
+	}
+	for _, game := range lib.Systems[1].Games {
+		want := game.Title == "Zelda"
+		if game.HasArt != want {
+			t.Errorf("%s HasArt = %v, want %v", game.Title, game.HasArt, want)
+		}
+	}
+
+	// A directory at the cover path is not a cover.
+	if err := os.MkdirAll(filepath.Join(art, "NES", "Contra.png"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if lib := buildGameLibrary(report, art); lib.WithArt != 1 {
+		t.Errorf("a directory counted as a cover: WithArt = %d, want 1", lib.WithArt)
+	}
+
+	cases := []struct{ withArt, total, want int }{
+		{0, 0, 0}, {0, 5, 0}, {1, 3, 33}, {2, 3, 67}, {5, 5, 100}, {7, 5, 100},
+	}
+	for _, c := range cases {
+		if got := coverPercent(c.withArt, c.total); got != c.want {
+			t.Errorf("coverPercent(%d, %d) = %d, want %d", c.withArt, c.total, got, c.want)
+		}
+	}
+}
+
+// TestRecountLibraryArtworkPicksUpNewCovers checks the refresh that runs after
+// a fetch, without rescanning the card.
+func TestRecountLibraryArtworkPicksUpNewCovers(t *testing.T) {
+	root := t.TempDir()
+	art := filepath.Join(root, "art")
+	lib := buildGameLibrary(romScanReport{Games: []scannedROM{
+		{Path: "/roms/GBA/Zelda.gba", System: "Game Boy Advance"},
+		{Path: "/roms/GBA/Aladdin.gba", System: "Game Boy Advance"},
+	}}, art)
+	if lib.WithArt != 0 {
+		t.Fatalf("fresh library has %d covers, want 0", lib.WithArt)
+	}
+
+	prevLib, prevSeen := gameLib.lib, gameLib.artSeen
+	t.Cleanup(func() { gameLib.lib, gameLib.artSeen = prevLib, prevSeen })
+	gameLib.lib = lib
+
+	if err := os.MkdirAll(filepath.Join(art, "Game_Boy_Advance"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(art, "Game_Boy_Advance", "Zelda.png"), []byte("png"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recountLibraryArtwork()
+	if gameLib.lib.WithArt != 1 || gameLib.lib.Total != 2 {
+		t.Fatalf("after recount = %d/%d covers, want 1/2", gameLib.lib.WithArt, gameLib.lib.Total)
+	}
+	if gameLib.lib.Systems[0].WithArt != 1 {
+		t.Errorf("console count did not move: %d", gameLib.lib.Systems[0].WithArt)
+	}
+	if coverPercent(gameLib.lib.WithArt, gameLib.lib.Total) != 50 {
+		t.Errorf("status would report the wrong percentage")
+	}
+}
+
+// TestCoverCompletenessRingDrawsItsArc pins that the ring is actually painted,
+// that 100% closes the circle, and that the percentage sits inside it. A
+// segment-based ring that silently drew nothing would still pass every
+// non-pixel test.
+func TestCoverCompletenessRingDrawsItsArc(t *testing.T) {
+	renderer := probeRenderer(t)
+	cx, cy, radius := probeW/2, probeH/2, int32(60)
+	draw := func(percent int) []byte {
+		renderer.SetDrawColor(0, 0, 0, 255)
+		renderer.Clear()
+		drawCoverCompletenessRing(renderer, &Config{}, cx, cy, radius, percent)
+		buf := make([]byte, probeW*probeH*4)
+		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
+			t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		}
+		return buf
+	}
+
+	full := draw(100)
+	if litPixels(full, sdl.Rect{X: cx - radius, Y: cy - radius, W: 2 * radius, H: 2 * radius}, probeW) == 0 {
+		t.Fatal("the completeness ring drew nothing")
+	}
+	bottom := sdl.Rect{X: cx - 6, Y: cy + radius - 6, W: 12, H: 12}
+	fullBottom := litPixels(full, bottom, probeW)
+	if fullBottom == 0 {
+		t.Error("a full ring has a gap at the bottom")
+	}
+	// The arc stops at a quarter, so the bottom is only the faint track.
+	if quarterBottom := litPixels(draw(25), bottom, probeW); quarterBottom >= fullBottom/2 {
+		t.Errorf("a quarter ring lit %d pixels at the bottom versus %d at full; the arc did not stop", quarterBottom, fullBottom)
+	}
+	if litPixels(full, sdl.Rect{X: cx - 26, Y: cy - 12, W: 52, H: 24}, probeW) == 0 {
+		t.Error("the percentage label was not drawn inside the ring")
 	}
 }
 

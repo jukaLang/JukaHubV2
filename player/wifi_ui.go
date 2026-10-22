@@ -803,8 +803,8 @@ func ensureHardwareWiFiEntry(config *Config) {
 		scene.Elements = append(scene.Elements, Element{
 			Type:    "button",
 			Text:    "Wi-Fi",
-			Color:   "#F8FAFC",
-			BgColor: "#334155",
+			Color:   "$labelColor",
+			BgColor: "$buttonColor",
 			X:       x,
 			Y:       y,
 			Width:   "140",

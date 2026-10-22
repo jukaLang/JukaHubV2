@@ -17,6 +17,27 @@ import (
 
 var lastScreenshotTime time.Time
 
+// screenshotRequested is set from the menu, which runs on the input path and
+// has no renderer; the frame loop consumes it so the captured image is the
+// frame the user was looking at.
+var screenshotRequested bool
+
+// requestScreenshot asks the next rendered frame to save a copy of itself.
+func requestScreenshot() {
+	screenshotRequested = true
+}
+
+// capturePendingScreenshot saves the frame drawn this tick. It reports whether
+// a request was handled.
+func capturePendingScreenshot(renderer *sdl.Renderer) bool {
+	if !screenshotRequested || renderer == nil {
+		return false
+	}
+	screenshotRequested = false
+	captureScreenshot(renderer)
+	return true
+}
+
 // captureScreenshot saves the current renderer output to a BMP file.
 func captureScreenshot(renderer *sdl.Renderer) {
 	now := time.Now()

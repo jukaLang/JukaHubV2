@@ -71,6 +71,7 @@ func TestNoByteSlicedTextEdits(t *testing.T) {
 		"extras.go:parts":             "[]string measured words",
 		"games.go:snakeBody":          "[]point",
 		"ppsspp_calibration.go:lines": "[]string config lines",
+		"webpage.go:p.flexStack":      "[]webFlexFrame open flex containers, not text",
 	}
 	for _, e := range entries {
 		name := e.Name()

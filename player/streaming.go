@@ -724,6 +724,9 @@ const (
 	// prefetchSettleDelay lets a burst of navigation finish before work starts;
 	// resolving a window the user already scrolled past is pure waste.
 	prefetchSettleDelay = 250 * time.Millisecond
+	// prefetchRetryDelay is how long a queued window waits while the video the
+	// user pressed Play on is still being resolved.
+	prefetchRetryDelay = 400 * time.Millisecond
 	// prefetchWindowMax bounds how many links one window may queue.
 	prefetchWindowMax = 8
 	// prefetchMemoryFloorMB keeps preloading off a device that is already tight
@@ -897,6 +900,18 @@ func ensurePrefetchWorker() {
 func prefetchWorker() {
 	for range prefetchWake {
 		time.Sleep(prefetchSettleDelay)
+		// Never compete with the video the user is waiting for. The queued
+		// window is left in place and retried: dropping it here is why the
+		// Shorts feed had nothing resolved ahead of the one playing, so every
+		// next press waited for yt-dlp again.
+		if videoPrepareActive() {
+			time.Sleep(prefetchRetryDelay)
+			select {
+			case prefetchWake <- struct{}{}:
+			default:
+			}
+			continue
+		}
 		prefetchMu.Lock()
 		batch := prefetchPending
 		config := prefetchConfig
@@ -904,10 +919,6 @@ func prefetchWorker() {
 		prefetchPending = nil
 		prefetchMu.Unlock()
 		if len(batch) == 0 {
-			continue
-		}
-		// Never compete with the video the user is waiting for.
-		if videoPrepareActive() {
 			continue
 		}
 		// Windows overlap: a window waits on the shared slot pool, so the next

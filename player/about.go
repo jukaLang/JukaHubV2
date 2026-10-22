@@ -115,7 +115,7 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		{"JukaHub Team", "Core Development"},
 		{"Go + SDL2", "Runtime & Rendering"},
 		{"Inter Font", "Typography"},
-		{"Trimui Smart Pro", "Primary Target Device"},
+		{deviceCreditName(DetectDevice()), "Primary Target Device"},
 	}
 	for _, c := range credits {
 		renderText(renderer, config, font, c.name, WithAlpha(ColorAccent, 230), creditsRect.X+24, y)
@@ -187,3 +187,18 @@ func (aboutScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool
 }
 
 func init() { registerScene(aboutScene{sceneBase{name: "About"}}) }
+
+// deviceCreditName is the short, human name of the handheld the About screen
+// credits. It keeps the SoC suffix (TG3040…) of deviceDisplayName out of a
+// credits line, and falls back to the Smart Pro on development builds.
+func deviceCreditName(d DeviceModel) string {
+	switch d {
+	case DeviceTrimuiBrick:
+		return "Trimui Brick"
+	case DeviceTrimuiBrickPro:
+		return "Trimui Brick Pro"
+	case DeviceTrimuiHammer:
+		return "Trimui Hammer"
+	}
+	return "Trimui Smart Pro"
+}

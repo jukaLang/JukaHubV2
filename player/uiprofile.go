@@ -163,6 +163,44 @@ func scaleSceneGeometry(config *Config, designW, designH, targetW, targetH int32
 	}
 }
 
+// uiTextScaleFactor returns how far logical font sizes shrink when the
+// authored 1280-wide design is squeezed into a narrower canvas. The compact
+// panels keep the 720 height and lose a quarter of the width, so text has to
+// give the same 25% or every row of labels overflows: at the 1280 type scale
+// a 960-wide panel truncates "Play Link" to "Play …" and clips the whole
+// right end of the controller hint bar. Wide canvases are unscaled.
+func uiTextScaleFactor() float64 {
+	if screenWidth <= 0 || screenWidth >= uiCanvasWideWidth {
+		return 1
+	}
+	scale := float64(screenWidth) / float64(uiCanvasWideWidth)
+	if scale < 0.6 {
+		scale = 0.6
+	}
+	return scale
+}
+
+// uiScaleFontSize applies uiTextScaleFactor to a logical font size. The
+// result never grows past the requested size and never drops below a legible
+// floor, so tiny captions stay readable on the 4:3 panels.
+func uiScaleFontSize(size int) int {
+	if size <= 0 {
+		return size
+	}
+	scale := uiTextScaleFactor()
+	if scale >= 0.999 {
+		return size
+	}
+	scaled := int(math.Round(float64(size) * scale))
+	if scaled < 9 {
+		scaled = 9
+	}
+	if scaled > size {
+		scaled = size
+	}
+	return scaled
+}
+
 // setConfigDimension updates the typed screen size and every Custom spelling
 // of it. syncVariableOverrides reads Custom case-insensitively, so leaving the
 // authored 1280 there would let a later settings save restore the wrong canvas.

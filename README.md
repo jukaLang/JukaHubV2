@@ -1,9 +1,11 @@
 # JukaHub
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/dea0cf4b-3799-41d9-8f2a-b4fd2a270b15/deploy-status)](https://generate.jukalang.com)
+[![Latest release](https://img.shields.io/github/v/release/jukaLang/JukaHubV2?sort=semver)](https://github.com/jukaLang/JukaHubV2/releases/latest)
 [![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://golang.org/dl/)
 [![SDL2](https://img.shields.io/badge/SDL2-2.0+-3A75C0?logo=sdl)](https://www.libsdl.org/)
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/R9qgJjh5jG)
 
 <img width="1284" height="722" alt="Image" src="https://github.com/user-attachments/assets/c7c17162-7b10-4b12-8f9e-cc90fdc9edc1" />
 
@@ -18,6 +20,26 @@ controller-friendly app.
 [Developer guide](docs/DEVELOPMENT.md)
 
 ---
+
+## What it can do
+
+JukaHub is one controller-first app for the whole card, not only a video player:
+
+* **Watch** — YouTube search and trending, Shorts, saved favourites, podcasts,
+  IPTV playlists, a local video player with subtitles, and a text web browser.
+* **Play** — a console-by-console ROM library with box art, per-game launchers,
+  play time, RetroAchievements progress, save-state auto-resume and LAN play
+  (RetroArch netplay, hosted or joined from the library).
+* **Keep** — save-folder snapshots with one-tap restore, SD-card health checks,
+  battery health, and a Continue list built from what you actually used.
+* **Connect** — a LAN watch party, PS4/PS5 Remote Play, casting the screen to a
+  browser, typing from a phone, and SFTP/FTP plus SSH file access.
+* **Make it yours** — themes and the browser design builder, plus accessibility
+  settings: text scaling, high-contrast and colour-blind palettes, button swaps
+  and a one-handed chord.
+* **Extend** — signed packages from a repository with rollback, and plugins.
+
+Most of these have a page in the [documentation table](#documentation) below.
 
 ## Install on a TrimUI Smart Pro
 
@@ -79,9 +101,12 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   blanks the panel while audio keeps playing, and an alarm wakes it. Open it by
   hand from **Start → Ambient**; see [docs/AMBIENT.md](docs/AMBIENT.md).
 * **Favorites** — save links and reopen them later.
-* **Apps** — other apps on the card, plus built-in extras (JukaLand, Weather,
-  and **Browser**, a text web browser with GitHub issue quick links; see
-  [docs/BROWSER.md](docs/BROWSER.md)).
+* **Apps** — a tile launcher for the other apps on the card, plus built-in
+  extras (JukaLand, Weather, and **Browser**, a text web browser with GitHub
+  issue quick links; see [docs/BROWSER.md](docs/BROWSER.md)). Every installed
+  app is drawn with its own icon — the `icon.png`/`config.json` art of an app
+  folder, an image stored next to the program, or the icon Windows reports for
+  a shortcut — and falls back to a coloured initial when it has none.
 * **Wi-Fi** — a first-party network picker: scan, join with the on-screen
   keyboard, reconnect saved networks without retyping the password, disconnect
   and forget. Open it from **Quick Settings → Wi-Fi Networks** or **Hardware →
@@ -165,7 +190,12 @@ Wi-Fi Networks** before using YouTube or weather. Your settings are stored in
 
 D-pad moves, **A** confirms, **B** goes back, **X** and **Y** are the secondary
 and tertiary actions, **L1/R1** move between sections and pages, **Start** opens
-the start menu.
+the Start menu — scenes in one group, games, tools and device actions in the
+others, so switching screen or taking a screenshot is two presses away.
+
+To leave the app, hold **Select + Start** together. JukaHub saves and plays its
+goodbye screen, then returns to the stock launcher — this works from any screen,
+including while a video is playing or a panel is open.
 
 Press **F1** on a desktop build for the full list as an in-app overlay. Per-screen
 tables (Live TV, video player, on-screen keyboard, music player, Pomodoro,
@@ -334,6 +364,16 @@ on the Smart Pro and Smart Pro S, and a compact 960×720 canvas scaled to the
 1024×768 4:3 Brick, Brick Pro and Hammer screens. Windows builds are for trying
 JukaHub on a PC.
 
+## Contributing
+
+Small, well-scoped work is the best way in: issues labelled
+[`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue)
+come straight from [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
+[FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md), and both list what is already
+shipped so you do not rebuild it. Setup, test commands and the commit rules are
+in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
+[Discord](https://discord.gg/R9qgJjh5jG).
+
 ## Documentation
 
 | Page | Covers |
@@ -350,10 +390,12 @@ JukaHub on a PC.
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
+| [Time-lapse](docs/TIMELAPSE.md) | one frame every few seconds of a playthrough, assembled into a short mp4 on exit |
 | [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |
 | [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
+| [Feature slate](docs/FEATURE-SLATE.md) | the 36-idea slate ranked by cost, fit and device risk, with the next four |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
 | [Contributing](CONTRIBUTING.md) | local setup, tests, what to commit |
 | [TrimUI packaging](player/trimui/README-ID.md) | device package notes (Indonesian) |

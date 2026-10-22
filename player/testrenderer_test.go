@@ -13,5 +13,9 @@ func destroyTestRenderer(r *sdl.Renderer) {
 	}
 	ClearTextCache()
 	clearHomeTextCache()
+	clearAppIconCache()
+	// Avatar textures are cached by URL across frames; freeing them here keeps
+	// a later test from drawing one that this renderer already destroyed.
+	clearChatAvatarCache()
 	r.Destroy()
 }

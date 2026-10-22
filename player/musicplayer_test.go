@@ -710,3 +710,26 @@ func TestVideoSettingsSheetFitsCaption(t *testing.T) {
 		}
 	}
 }
+
+// Volume keys work from any screen (including the ambient dock), where the
+// player's own volume bar is not on screen. The toast is the only feedback, so
+// the label has to be right at both ends.
+func TestMusicVolumeLabel(t *testing.T) {
+	cases := []struct {
+		volume float64
+		want   string
+	}{
+		{0, "Muted"},
+		{0.001, "Muted"},
+		{0.05, "Volume 5%"},
+		{0.5, "Volume 50%"},
+		{0.8, "Volume 80%"},
+		{1, "Volume 100%"},
+		{1.4, "Volume 100%"},
+	}
+	for _, c := range cases {
+		if got := musicVolumeLabel(c.volume); got != c.want {
+			t.Errorf("musicVolumeLabel(%v) = %q, want %q", c.volume, got, c.want)
+		}
+	}
+}

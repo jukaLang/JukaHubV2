@@ -62,7 +62,7 @@ settings such as `search_query` or `stream_url`.
 | `backgroundImage` | string | background image path |
 | `fonts`, `fontSizes` | object | per-role font file and size (e.g. `small`, `medium`, `big`) |
 | `fullscreen` | bool | start in fullscreen |
-| `screenWidth`, `screenHeight` | int | window size on desktop. On supported TrimUI models the runtime uses the device's canvas: 1280×720 on the Smart Pro / Smart Pro S and a compact 960×720 canvas scaled to the 1024×768 Brick, Brick Pro and Hammer panels. |
+| `screenWidth`, `screenHeight` | int | window size on desktop. On supported TrimUI models the runtime uses the device's canvas: 1280×720 on the Smart Pro / Smart Pro S and a compact 960×720 canvas scaled to the 1024×768 Brick, Brick Pro and Hammer panels. Logical font sizes follow that canvas (0.75× on the compact one) so text keeps its proportion to the layout. |
 | `tools_path` | string | where yt-dlp / ffmpeg live |
 | `fileExplorerRoot` | string | starting directory of the file explorer |
 | `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country |
@@ -138,6 +138,11 @@ Dock and ambient settings are plain custom keys, documented in
 between the ambient idle screen and the starfield screensaver, `ambientWeather`
 (default true) shows the dock forecast, and `ambientPhotos` points the slideshow
 at a folder.
+
+Time-lapse recording is two custom keys, documented in
+[Time-lapse](TIMELAPSE.md): `timelapse` (bool, default true) films every game
+launch, and `timelapse_interval` is the seconds between stills (default 20,
+clamped to 3–300).
 
 `ledSync` is opt-in and writes only inside `/sys/class/leds`: LEDs exposing
 `multi_intensity` or `color`, plus brightness-only LEDs whose names look like
@@ -229,6 +234,7 @@ literal `$name` so a typo is visible rather than silently empty.
 | `save_config` | save settings and confirm with a toast |
 | `theme_preset` | apply the theme named in `triggerTarget` |
 | `yt_search`, `youtube_search`, `youtube_smart`, `youtube_trending`, `youtube_play`, `play_video_from_var`, `play_focused`, `shorts_fetch`, `shorts_play`, `shorts_refresh` | YouTube search, trending, playback and Shorts |
+| `shorts_open` | open the Shorts feed, pre-load it and start playing (the Media scene's **Shorts** button) |
 | `custom_link`, `ip_stream`, `play_video_from_var` | play a typed/pasted URL, a stream URL, or a URL held in a variable |
 | `music_player`, `podcast_load`, `iptv_load` | audio player, podcasts, Live TV playlists |
 | `canvas_run`, `canvas_clear`, `canvas_open`, `jukaland_init` | canvas sandbox and JukaLand |

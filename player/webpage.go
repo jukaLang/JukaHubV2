@@ -56,6 +56,40 @@ type webElement struct {
 	classes []string
 }
 
+// The layout enums are small integers rather than strings: they are copied into
+// every block and compared while laying out, and the reader runs on a handheld.
+const (
+	webDisplayBlock = iota
+	webDisplayFlex
+)
+
+const (
+	webFlexRow = iota
+	webFlexColumn
+)
+
+const (
+	webPositionStatic = iota
+	webPositionRelative
+	webPositionAbsolute
+	webPositionFixed
+)
+
+const (
+	webItemStart = iota
+	webItemCenter
+	webItemEnd
+	webItemStretch
+)
+
+const (
+	webJustifyStart = iota
+	webJustifyCenter
+	webJustifyEnd
+	webJustifyBetween
+	webJustifyAround
+)
+
 // webStyle is a resolved style for one element. Zero values are meaningful:
 // HasColor/HasBg distinguish "author asked for this" from "inherit".
 type webStyle struct {
@@ -89,6 +123,39 @@ type webStyle struct {
 	BorderColor    sdl.Color
 	HasBorderColor bool
 	ListNone       bool
+	// --- Flex and stacking -------------------------------------------------
+	// Display is block or flex. A flex container lays its direct children out
+	// side by side (row) or one under the other (column); the reader has no
+	// DOM, so the parser marks each direct child as one flex item and the
+	// layout stacks those items into columns.
+	Display    int
+	FlexDir    int
+	Justify    int
+	AlignItems int
+	GapX, GapY float64
+	FlexWrap   bool
+	// FlexGrow/Basis describe the element as a flex item. Basis is -1 when the
+	// author did not state one (auto), which is different from 0px.
+	FlexGrow  float64
+	FlexBasis float64
+	BasisPct  float64
+	AlignSelf int
+	// Width/WidthPct size a flex item explicitly, the way a card with
+	// `width: 33%` or `width: 240px` does.
+	Width    float64
+	WidthPct float64
+	// ZIndex and Position place an element in the stacking order. Absolute and
+	// fixed elements leave the flow and are painted over the text in z order.
+	ZIndex    int
+	Position  int
+	Top       float64
+	Right     float64
+	Bottom    float64
+	Left      float64
+	HasTop    bool
+	HasRight  bool
+	HasBottom bool
+	HasLeft   bool
 	// Href is the target of the anchor this text belongs to, empty for every
 	// other text. Elements inside an <a> inherit it, so a bold or spanned
 	// label still knows where it points and the browser can walk links with
@@ -123,6 +190,36 @@ type webBlock struct {
 	BorderColor    sdl.Color
 	HasBorderColor bool
 	Rule           bool
+	// FlexGroup/FlexItem tie a block to its flex container and direct child.
+	// Zero means "not in a flex container". The container's own row settings
+	// are copied onto every item so a sub-layout can be built without the
+	// parser's element stack.
+	FlexGroup   int
+	FlexItem    int
+	FlexDir     int
+	FlexJustify int
+	FlexAlign   int
+	FlexGapX    float64
+	FlexGapY    float64
+	FlexWrap    bool
+	FlexGrow    float64
+	FlexBasis   float64
+	BasisPct    float64
+	Width       float64
+	WidthPct    float64
+	AlignSelf   int
+	// Float marks an absolutely or fixed-positioned block: it is measured on
+	// its own and painted over the flow in ZIndex order.
+	Float     bool
+	ZIndex    int
+	PosTop    float64
+	PosRight  float64
+	PosBottom float64
+	PosLeft   float64
+	HasTop    bool
+	HasRight  bool
+	HasBottom bool
+	HasLeft   bool
 	// InMain marks text inside <main>/<article>. When a page has any, the
 	// reader shows that content instead of the site's navigation furniture.
 	InMain bool
@@ -173,6 +270,20 @@ type webRect struct {
 	Color     sdl.Color
 	Stroke    bool
 	Thickness int32
+	// Z orders the fills and borders of the page. Text is always painted after
+	// every rect, so z-index decides which background or border wins where
+	// two elements overlap.
+	Z int
+}
+
+// webFloat is an absolutely positioned block: it is laid out at its own width,
+// then painted over the flow in z order. A page's badge, sticky header or modal
+// is exactly this.
+type webFloat struct {
+	Z     int
+	X, Y  int32
+	Rows  []webRow
+	Rects []webRect
 }
 
 // webLayout is the measured page for one width and font configuration.
@@ -184,6 +295,9 @@ type webLayout struct {
 	// Links are the page's clickable runs in reading order, one entry per
 	// destination. The browser walks this list with the D-pad.
 	Links []webLinkHit
+	// Floats are the absolutely positioned blocks, painted over the rows in
+	// ascending z order.
+	Floats []webFloat
 }
 
 // webLinkHit is one link on a laid-out page: the row it starts on and its
@@ -210,6 +324,23 @@ type webFrame struct {
 	el    webElement
 	style webStyle
 	kind  string // "block", "inline", "list", "skip"
+	// flexGroup is non-zero when this element opened a flex container. The
+	// matching frame is popped when the element closes.
+	flexGroup int
+}
+
+// webFlexFrame is one open flex container while parsing. item counts its
+// direct children so every block can be tagged with the item it belongs to.
+type webFlexFrame struct {
+	group   int
+	item    int
+	depth   int
+	dir     int
+	justify int
+	align   int
+	gapX    float64
+	gapY    float64
+	wrap    bool
 }
 
 // webListState tracks <ul>/<ol> numbering.
@@ -1097,6 +1228,207 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			break
 		}
 	}
+	applyWebLayoutDecls(st, decls)
+}
+
+// applyWebLayoutDecls reads the flex and stacking properties. They are kept
+// separate from the text properties because the layout engine consumes them as
+// a unit: a flex container's settings describe its children, not its text.
+func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
+	if v, ok := decls["display"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "flex", "inline-flex":
+			st.Display = webDisplayFlex
+		case "block", "flow-root", "grid", "inline-block":
+			st.Display = webDisplayBlock
+		}
+	}
+	if v, ok := decls["flex-direction"]; ok {
+		lower := strings.ToLower(strings.TrimSpace(v))
+		st.FlexDir = webFlexRow
+		if strings.HasPrefix(lower, "column") {
+			st.FlexDir = webFlexColumn
+		}
+	}
+	if v, ok := decls["flex-wrap"]; ok {
+		lower := strings.ToLower(strings.TrimSpace(v))
+		st.FlexWrap = strings.HasPrefix(lower, "wrap")
+	}
+	if v, ok := decls["justify-content"]; ok {
+		st.Justify = webJustifyValue(v)
+	}
+	if v, ok := decls["align-items"]; ok {
+		st.AlignItems = webAlignValue(v)
+	}
+	if v, ok := decls["align-self"]; ok {
+		st.AlignSelf = webAlignValue(v)
+	}
+	if v, ok := decls["gap"]; ok {
+		fields := strings.Fields(v)
+		st.GapX = webLength(fields[0], st.FontPx)
+		st.GapY = st.GapX
+		if len(fields) > 1 {
+			st.GapY = webLength(fields[1], st.FontPx)
+		}
+	}
+	if v, ok := decls["column-gap"]; ok {
+		st.GapX = webLength(v, st.FontPx)
+	}
+	if v, ok := decls["row-gap"]; ok {
+		st.GapY = webLength(v, st.FontPx)
+	}
+	if v, ok := decls["flex-grow"]; ok {
+		if grow, err := strconv.ParseFloat(strings.TrimSpace(v), 64); err == nil && grow >= 0 {
+			st.FlexGrow = grow
+		}
+	}
+	if v, ok := decls["flex-basis"]; ok {
+		webFlexBasis(st, v)
+	}
+	if v, ok := decls["flex"]; ok {
+		webFlexShorthand(st, v)
+	}
+	if v, ok := decls["width"]; ok {
+		if pct, valid := webPercentValue(v); valid {
+			st.WidthPct = pct
+		} else if px := webLength(v, st.FontPx); px > 0 {
+			st.Width = px
+		}
+	}
+	if v, ok := decls["position"]; ok {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "relative":
+			st.Position = webPositionRelative
+		case "absolute", "fixed", "sticky":
+			// The reader has no sticky scrolling; a fixed or sticky element
+			// keeps its place on the page and is stacked like an absolute one.
+			st.Position = webPositionAbsolute
+		}
+	}
+	if v, ok := decls["z-index"]; ok {
+		if z, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			st.ZIndex = z
+		}
+	}
+	for _, edge := range []struct {
+		key  string
+		val  *float64
+		flag *bool
+	}{
+		{"top", &st.Top, &st.HasTop},
+		{"right", &st.Right, &st.HasRight},
+		{"bottom", &st.Bottom, &st.HasBottom},
+		{"left", &st.Left, &st.HasLeft},
+	} {
+		v, ok := decls[edge.key]
+		if !ok {
+			continue
+		}
+		if px := webLength(v, st.FontPx); px != 0 {
+			*edge.val = px
+			*edge.flag = true
+		}
+	}
+}
+
+// webFlexBasis reads flex-basis, keeping a percentage unresolved: the layout
+// resolves it against the container's width.
+func webFlexBasis(st *webStyle, value string) {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	if lower == "auto" || lower == "content" || lower == "max-content" || lower == "min-content" {
+		st.FlexBasis = -1
+		st.BasisPct = 0
+		return
+	}
+	if pct, ok := webPercentValue(value); ok {
+		st.BasisPct = pct
+		st.FlexBasis = -1
+		return
+	}
+	st.FlexBasis = webLength(value, st.FontPx)
+	st.BasisPct = 0
+}
+
+// webFlexShorthand reads the common `flex: 1`, `flex: 1 1 200px` and
+// `flex: 0 0 33%` forms. The shrink factor has no meaning in a one-pass text
+// layout, so it is accepted and ignored.
+func webFlexShorthand(st *webStyle, value string) {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	switch lower {
+	case "none":
+		st.FlexGrow = 0
+		st.FlexBasis = -1
+		return
+	case "auto", "initial":
+		st.FlexGrow = 1
+		st.FlexBasis = -1
+		return
+	}
+	fields := strings.Fields(lower)
+	if len(fields) == 0 {
+		return
+	}
+	if grow, err := strconv.ParseFloat(fields[0], 64); err == nil {
+		st.FlexGrow = grow
+	} else if pct, ok := webPercentValue(fields[0]); ok {
+		// `flex: 33%` is a basis, not a grow factor.
+		st.BasisPct, st.FlexBasis = pct, -1
+		return
+	}
+	if len(fields) > 2 {
+		webFlexBasis(st, fields[2])
+		return
+	}
+	if len(fields) == 2 {
+		if pct, ok := webPercentValue(fields[1]); ok {
+			st.BasisPct, st.FlexBasis = pct, -1
+		} else if px := webLength(fields[1], st.FontPx); px > 0 {
+			st.FlexBasis = px
+		}
+		return
+	}
+	// A bare number means "grow from zero": `flex: 1` is `1 1 0%`.
+	if st.FlexBasis == 0 && st.BasisPct == 0 {
+		st.FlexBasis = 0
+	}
+}
+
+func webPercentValue(value string) (float64, bool) {
+	v := strings.TrimSpace(strings.ToLower(value))
+	if !strings.HasSuffix(v, "%") {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(strings.TrimSuffix(v, "%")), 64)
+	if err != nil || f < 0 {
+		return 0, false
+	}
+	return f, true
+}
+
+func webJustifyValue(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "center":
+		return webJustifyCenter
+	case "flex-end", "end", "right":
+		return webJustifyEnd
+	case "space-between":
+		return webJustifyBetween
+	case "space-around", "space-evenly":
+		return webJustifyAround
+	}
+	return webJustifyStart
+}
+
+func webAlignValue(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "center":
+		return webItemCenter
+	case "flex-end", "end":
+		return webItemEnd
+	case "stretch":
+		return webItemStretch
+	}
+	return webItemStart
 }
 
 // --- HTML parsing ---------------------------------------------------------
@@ -1115,6 +1447,8 @@ type webParser struct {
 	space     bool
 	pendingB  string
 	mainDepth int
+	flexSeq   int
+	flexStack []webFlexFrame
 }
 
 // parseWebPage parses HTML plus any already-fetched CSS into a document.
@@ -1500,13 +1834,46 @@ func (p *webParser) endTag(name string) {
 		if name == "li" {
 			p.pendingB = ""
 		}
+		// Closing an element also closes every flex container it opened, even
+		// when its own end tag was missing (real pages are full of those).
+		for len(p.flexStack) > 0 && p.flexStack[len(p.flexStack)-1].depth >= i {
+			p.flexStack = p.flexStack[:len(p.flexStack)-1]
+		}
 		p.stack = p.stack[:i]
 		return
 	}
 }
 
 func (p *webParser) push(el webElement, style webStyle, kind string) {
-	p.stack = append(p.stack, webFrame{el: el, style: style, kind: kind})
+	depth := len(p.stack)
+	// A block element pushed directly under an open flex container is one of
+	// its items; nested elements belong to the same item. Text-only children
+	// are tagged by ensureBlock instead, which is why the counter starts at
+	// zero rather than one.
+	if (kind == "block" || kind == "list") && len(p.flexStack) > 0 {
+		// The container was pushed at its own depth, so its direct children
+		// are pushed one level deeper. Comparing equal depths never matched,
+		// which left every item in one column.
+		if top := &p.flexStack[len(p.flexStack)-1]; top.depth+1 == depth {
+			top.item++
+		}
+	}
+	group := 0
+	if (kind == "block" || kind == "list") && style.Display == webDisplayFlex {
+		p.flexSeq++
+		group = p.flexSeq
+		p.flexStack = append(p.flexStack, webFlexFrame{
+			group:   group,
+			depth:   depth,
+			dir:     style.FlexDir,
+			justify: style.Justify,
+			align:   style.AlignItems,
+			gapX:    style.GapX,
+			gapY:    style.GapY,
+			wrap:    style.FlexWrap,
+		})
+	}
+	p.stack = append(p.stack, webFrame{el: el, style: style, kind: kind, flexGroup: group})
 }
 
 func (p *webParser) topStyle() webStyle {
@@ -1534,6 +1901,16 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	st.BorderLeft, st.ListNone = false, false
 	st.BoxBorder, st.BorderTop, st.BorderBottom = false, false, false
 	st.BorderColor, st.HasBorderColor = sdl.Color{}, false
+	// Layout properties are per element too: a child of a flex container is
+	// not itself a container, and an item's grow factor belongs to it alone.
+	st.Display, st.FlexDir = webDisplayBlock, webFlexRow
+	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
+	st.GapX, st.GapY, st.FlexWrap = 0, 0, false
+	st.FlexGrow, st.FlexBasis, st.BasisPct = 0, -1, 0
+	st.Width, st.WidthPct = 0, 0
+	st.ZIndex, st.Position = 0, webPositionStatic
+	st.Top, st.Right, st.Bottom, st.Left = 0, 0, 0, 0
+	st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = false, false, false, false
 	// Link colour, underline and strikethrough are not reset: a decoration
 	// on <a> or <s> has to keep showing on the <strong>/<span> inside it,
 	// which is how every browser renders `<a><b>text</b></a>`.
@@ -1619,6 +1996,39 @@ func (p *webParser) ensureBlock() *webBlock {
 		HasBorderColor: st.HasBorderColor,
 		Bullet:         p.pendingB,
 		InMain:         p.mainDepth > 0,
+		FlexGrow:       st.FlexGrow,
+		FlexBasis:      st.FlexBasis,
+		BasisPct:       st.BasisPct,
+		Width:          st.Width,
+		WidthPct:       st.WidthPct,
+		AlignSelf:      st.AlignSelf,
+		ZIndex:         st.ZIndex,
+		Float:          st.Position == webPositionAbsolute,
+		PosTop:         st.Top,
+		PosRight:       st.Right,
+		PosBottom:      st.Bottom,
+		PosLeft:        st.Left,
+		HasTop:         st.HasTop,
+		HasRight:       st.HasRight,
+		HasBottom:      st.HasBottom,
+		HasLeft:        st.HasLeft,
+	}
+	// The innermost open flex container owns this block. A container's own
+	// leading text gets item 1, the same slot the first child would take; a
+	// block that starts a fresh element has already bumped the counter.
+	if n := len(p.flexStack); n > 0 {
+		f := &p.flexStack[n-1]
+		if f.item == 0 {
+			f.item = 1
+		}
+		block.FlexGroup = f.group
+		block.FlexItem = f.item
+		block.FlexDir = f.dir
+		block.FlexJustify = f.justify
+		block.FlexAlign = f.align
+		block.FlexGapX = f.gapX
+		block.FlexGapY = f.gapY
+		block.FlexWrap = f.wrap
 	}
 	p.pendingB = ""
 	p.current = block
@@ -1814,6 +2224,48 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		return nil
 	}
 	padX := (width - contentW) / 2
+	l := &webLayouter{doc: d, layout: layout, rowH: rowH, baseSize: baseSize, fontAt: fontAt}
+	// Absolutely positioned blocks are measured on their own and painted over
+	// the flow, so they take no room in it.
+	flow := make([]webBlock, 0, len(d.Blocks))
+	var floats []webBlock
+	for _, b := range d.Blocks {
+		if b.Float {
+			floats = append(floats, b)
+			continue
+		}
+		flow = append(flow, b)
+	}
+	l.layoutBlocks(flow, padX, contentW)
+
+	layout.Height = int32(len(layout.Rows)) * rowH
+	l.layoutFloats(floats, padX, contentW)
+	sort.SliceStable(layout.Rects, func(i, j int) bool { return layout.Rects[i].Z < layout.Rects[j].Z })
+	layout.Links = collectWebLinks(layout)
+	return layout
+}
+
+// webLayouter is the geometry shared by the page and every flex item inside it:
+// the row grid, the font mapper and the document whose colours the runs use. A
+// flex item is laid out by a second webLayouter into its own small webLayout,
+// which is then merged into the page at an offset.
+type webLayouter struct {
+	doc      *webDocument
+	layout   *webLayout
+	rowH     int32
+	baseSize float64
+	fontAt   func(float64) *ttf.Font
+}
+
+// layoutBlocks lays out a column of blocks into l.layout. Positions are
+// relative to the column's own width, with padX as its left edge, so a flex
+// item can be laid out at 0 and moved later.
+func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
+	layout := l.layout
+	rowH := l.rowH
+	baseSize := l.baseSize
+	fontAt := l.fontAt
+	d := l.doc
 	nextY := func() int32 { return int32(len(layout.Rows)) * rowH }
 	skipRows := func(n int32) {
 		for i := int32(0); i < n && len(layout.Rows) < webMaxRows; i++ {
@@ -1857,10 +2309,37 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	// does it. Summing them stacked a heading's own spacing on top of the
 	// previous block's and filled real pages with holes on a small screen.
 	previousMarginBot := 0.0
-	for _, block := range d.Blocks {
+	lastFlexItem := 0
+	for i := 0; i < len(blocks); i++ {
+		block := blocks[i]
 		if len(layout.Rows) >= webMaxRows {
 			break
 		}
+		// A run of blocks tagged with one flex group is that container's
+		// items. In a row they become side-by-side columns; in a column they
+		// are ordinary blocks separated by the container's gap.
+		if block.FlexGroup != 0 && block.FlexDir == webFlexRow {
+			j := i
+			for j < len(blocks) && blocks[j].FlexGroup == block.FlexGroup && blocks[j].FlexDir == webFlexRow {
+				j++
+			}
+			gap := block.MarginTop
+			if previousMarginBot > gap {
+				gap = previousMarginBot
+			}
+			if len(layout.Rows) > 0 {
+				skipRows(marginRows(gap))
+			}
+			l.layoutFlexRow(blocks[i:j], padX, contentW)
+			previousMarginBot = 0
+			i = j - 1
+			continue
+		}
+		if block.FlexGroup != 0 && block.FlexDir == webFlexColumn &&
+			block.FlexItem != lastFlexItem && lastFlexItem != 0 {
+			skipRows(marginRows(block.FlexGapY))
+		}
+		lastFlexItem = block.FlexItem
 		gap := block.MarginTop
 		if previousMarginBot > gap {
 			gap = previousMarginBot
@@ -2055,12 +2534,14 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 			layout.Rects = append(layout.Rects, webRect{
 				Rect:  sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: contentW + 8, H: height},
 				Color: block.Background,
+				Z:     block.ZIndex,
 			})
 		}
 		if block.BorderLeft && height > 0 {
 			layout.Rects = append(layout.Rects, webRect{
 				Rect:  sdl.Rect{X: padX + indent - 8, Y: startGrid * rowH, W: 3, H: height},
 				Color: sdl.Color{R: 170, G: 178, B: 192, A: 255},
+				Z:     block.ZIndex,
 			})
 		}
 		if height > 0 && (block.BoxBorder || block.BorderTop || block.BorderBottom) {
@@ -2081,27 +2562,27 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 					Color:     color,
 					Stroke:    true,
 					Thickness: 2,
+					Z:         block.ZIndex,
 				})
 			} else {
 				if block.BorderTop {
 					layout.Rects = append(layout.Rects, webRect{
 						Rect:  sdl.Rect{X: padX, Y: top, W: contentW, H: 2},
 						Color: color,
+						Z:     block.ZIndex,
 					})
 				}
 				if block.BorderBottom {
 					layout.Rects = append(layout.Rects, webRect{
 						Rect:  sdl.Rect{X: padX, Y: top + height - 2, W: contentW, H: 2},
 						Color: color,
+						Z:     block.ZIndex,
 					})
 				}
 			}
 		}
 	}
 
-	layout.Height = int32(len(layout.Rows)) * rowH
-	layout.Links = collectWebLinks(layout)
-	return layout
 }
 
 // webHrefFollowable reports whether an anchor target is worth a cursor stop:
@@ -2245,6 +2726,9 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 		r.FillRect(&sdl.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: rect.H})
 
 		offset := int32(startRow) * layout.RowH
+		if len(layout.Floats) > 0 {
+			drawWebFloats(r, config, layout, rect, offset, true)
+		}
 		for _, bg := range layout.Rects {
 			y := rect.Y + bg.Rect.Y - offset
 			if y+bg.Rect.H <= rect.Y || y >= rect.Y+rect.H {
@@ -2323,6 +2807,9 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 					}
 				}
 			}
+		}
+		if len(layout.Floats) > 0 {
+			drawWebFloats(r, config, layout, rect, offset, false)
 		}
 	})
 }

@@ -130,6 +130,94 @@ func TestArtworkMissesRoundTripAndPruneExpiredEntries(t *testing.T) {
 	}
 }
 
+func TestArtworkFetchReportsProgressPerGame(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\nimage")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(png)
+	}))
+	defer server.Close()
+
+	dest := t.TempDir()
+	roms := []scannedROM{
+		artworkTestROM(dest, "One.nes", "NES", "Nintendo - NES"),
+		artworkTestROM(dest, "Two.nes", "NES", "Nintendo - NES"),
+		artworkTestROM(dest, "Three.nes", "NES", "Nintendo - NES"),
+	}
+	var seen []int
+	fetched, _, missing, stopped := fetchROMArtworkTracked(context.Background(), roms, server.Client(),
+		server.URL, dest, nil, time.Now(), artworkMissTTL, func(done int) { seen = append(seen, done) })
+	if stopped {
+		t.Error("a complete fetch reported itself as stopped")
+	}
+	if fetched != 3 || missing != 0 {
+		t.Fatalf("fetched %d, missing %d; want 3 and 0", fetched, missing)
+	}
+	if len(seen) != len(roms) || seen[0] != 1 || seen[len(seen)-1] != len(roms) {
+		t.Fatalf("progress = %v, want one tick per game ending at %d", seen, len(roms))
+	}
+}
+
+// TestArtworkFetchStopsBetweenGames is what makes the action interruptible: a
+// cancelled context ends the loop, and the covers already written stay put.
+func TestArtworkFetchStopsBetweenGames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	dest := t.TempDir()
+	roms := []scannedROM{
+		artworkTestROM(dest, "One.nes", "NES", "Nintendo - NES"),
+		artworkTestROM(dest, "Two.nes", "NES", "Nintendo - NES"),
+	}
+	var seen []int
+	fetched, _, _, stopped := fetchROMArtworkTracked(ctx, roms, nil, "http://127.0.0.1:1", dest, nil,
+		time.Now(), artworkMissTTL, func(done int) { seen = append(seen, done) })
+	if !stopped {
+		t.Error("cancelled fetch did not report stopped")
+	}
+	if fetched != 0 || len(seen) != 0 {
+		t.Fatalf("cancelled fetch did %d covers, %d ticks; want none", fetched, len(seen))
+	}
+}
+
+func TestArtworkFetchCancelsDuringARequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel()
+		http.Error(w, "gone", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	dest := t.TempDir()
+	roms := []scannedROM{
+		artworkTestROM(dest, "One.nes", "NES", "Nintendo - NES"),
+		artworkTestROM(dest, "Two.nes", "NES", "Nintendo - NES"),
+	}
+	var seen []int
+	_, _, _, stopped := fetchROMArtworkTracked(ctx, roms, server.Client(), server.URL, dest, nil,
+		time.Now(), artworkMissTTL, func(done int) { seen = append(seen, done) })
+	if !stopped {
+		t.Error("stopped flag was not set after the request was cancelled")
+	}
+	if len(seen) != 1 {
+		t.Fatalf("progress ticks = %v, want one game handled before the stop", seen)
+	}
+}
+
+func TestStopArtworkFetchWithoutARunIsANoOp(t *testing.T) {
+	artworkFetchState.Lock()
+	running, prevCancel := artworkFetchState.running, artworkFetchState.cancel
+	artworkFetchState.running, artworkFetchState.cancel, artworkFetchState.stopping = false, nil, false
+	artworkFetchState.Unlock()
+	t.Cleanup(func() {
+		artworkFetchState.Lock()
+		artworkFetchState.running, artworkFetchState.cancel, artworkFetchState.stopping = running, prevCancel, false
+		artworkFetchState.Unlock()
+	})
+	if stopArtworkFetch() {
+		t.Error("stopArtworkFetch reported a stop with nothing running")
+	}
+}
+
 func TestRomsMissingArtworkFiltersLocalCovers(t *testing.T) {
 	dest := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dest, "Game_Boy_Advance"), 0o755); err != nil {

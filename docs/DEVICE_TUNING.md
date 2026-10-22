@@ -4,6 +4,31 @@ Four fixes for the quirks of running other people's software on an A133P
 handheld. Each one is opt-out, scoped as narrowly as it can be, and reports what
 it could not do instead of pretending.
 
+## The Brick-family canvas: type follows geometry
+
+The Brick, Brick Pro and Hammer run the 1280×720 design on a **960×720** canvas
+(same height, three quarters of the width) so SDL fills the 1024×768 panel
+instead of letterboxing it. Scene geometry is scaled once at load — and so is
+every logical font size (`uiScaleFontSize`: 0.75×, floor 9px). Text that kept its
+1280 size on a 960 canvas overflows: buttons ellipsised to "Play …" and the
+seven-group Media hint row ran off both edges.
+
+Two rows adapt instead of clipping:
+
+- The controller hint bar is measured before it is drawn (`planFooterHints`),
+  then laid out with tighter gaps and, if needed, a smaller size. Hints are
+  dropped from the end only when even the smallest type does not fit, so
+  navigate / open / back always stay on screen.
+- Home cards whose title no longer fits step down one type tier
+  (card → helper → small) before the title is ellipsised, which is why the
+  narrow Favorites and Browser cards keep the whole word.
+
+Scenes are still authored at 1280×720, and labels with no width of their own are
+ellipsised at the panel edge rather than drawn past it. Nothing in a config has
+to change for the compact canvas. `JUKAHUB_BRICK_DUMP=1 go test -run
+TestCompactCanvasRendersEveryScene` renders every shipped scene at 960×720 and
+writes the frames to `tmp/` for a visual pass.
+
 ## PPSSPP stick calibration
 
 `Start → Stick Calibration` (also offered on desktop when a `ppsspp.ini` is

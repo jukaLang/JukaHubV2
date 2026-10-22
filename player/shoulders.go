@@ -180,10 +180,13 @@ func modalPanelBlocksShoulders() bool {
 		weatherPopoverOpen || socialNotifOpen || imageViewerPath != "" || virtualKeyboardActive
 }
 
-// startMenuShoulder pages the app menu; the triggers jump to its ends.
+// startMenuShoulder pages the entries of the open group; the triggers jump to
+// the ends of that group. The rail keeps its selection, so paging never loses
+// the user in another part of the menu.
 func startMenuShoulder(s padShoulder, config *Config) bool {
-	apps := getStartMenuApps(config)
-	if len(apps) == 0 {
+	group, _ := startMenuCurrentGroup(config)
+	items := group.items
+	if len(items) == 0 {
 		return true
 	}
 	rows := startMenuRows()
@@ -196,19 +199,14 @@ func startMenuShoulder(s padShoulder, config *Config) bool {
 	case padL2:
 		tb.cursor = 0
 	case padR2:
-		tb.cursor = len(apps) - 1
+		tb.cursor = len(items) - 1
 	}
 	if step != 0 {
 		tb.cursor += step
 	}
-	tb.cursor = clampIndex(tb.cursor, len(apps))
-	if tb.cursor < tb.scroll {
-		tb.scroll = tb.cursor
-	}
-	if tb.cursor >= tb.scroll+rows {
-		tb.scroll = tb.cursor - rows + 1
-	}
-	tb.scroll = clampIndex(tb.scroll, len(apps)-rows+1)
+	tb.focus = 1
+	tb.cursor = clampIndex(tb.cursor, len(items))
+	startMenuClampScroll(len(items))
 	PlayNavSound()
 	return true
 }
@@ -362,6 +360,8 @@ func handleListShoulder(s padShoulder, config *Config) bool {
 		return shortsListShoulder(s, config)
 	case "textbrowser":
 		return textBrowserShoulder(s, elem)
+	case "chat":
+		return chatShoulder(s, config)
 	}
 	return false
 }
@@ -500,6 +500,31 @@ func shortsListShoulder(s padShoulder, config *Config) bool {
 	prefetchShortsFocused(config, videos)
 	PlayNavSound()
 	return true
+}
+
+// chatShoulder maps the triggers onto the history: L2 jumps to the oldest
+// message, R2 back to the newest. The bumpers walk the message selection and
+// are handled with the chat element's own buttons, so they are left alone here.
+func chatShoulder(s padShoulder, config *Config) bool {
+	switch s {
+	case padL2, padR2:
+		chatMutex.Lock()
+		count := len(chatMessages)
+		chatMutex.Unlock()
+		if count == 0 {
+			return false
+		}
+		clearChatSelection()
+		if s == padL2 {
+			chatScrollOffset = count - 1
+		} else {
+			chatScrollOffset = 0
+			chatSeenCount = count
+		}
+		PlayNavSound()
+		return true
+	}
+	return false
 }
 
 func textBrowserShoulder(s padShoulder, element Element) bool {

@@ -14,6 +14,7 @@ device.
 | LAN play (link cable over Wi-Fi) | [netplay.go](../player/netplay.go) + [netplay_ui.go](../player/netplay_ui.go): **X** on a library game opens Host / Join. Hosting resolves RetroArch and a netplay core, prints this device's `ip:port` before launching, and starts `retroarch -L <core> <rom> --host --port N --nick X`; joining takes `ip[:port]` on the on-screen keyboard and starts `--connect`. Both sides need the same core and ROM, and the panel says so. | `netplay_test.go`, `netplay_ui_test.go` |
 | Save-state resume with auto-save | [savestate_resume.go](../player/savestate_resume.go) turns on RetroArch's `savestate_auto_save` and `savestate_auto_load` for a launch when the resolved launcher actually runs RetroArch. The edit is line-based, keeps a one-time `retroarch.cfg.jukahub-backup`, and never touches a standalone emulator. `savestateResume: false` opts out. | `savestate_resume_test.go` |
 | Fetch missing box art from the library | **L1** / **F** in the Games Library rescans and downloads covers for games without a local PNG, reusing the onboarding downloader. Recent 404s are cached in `game-art/.missing-art.json` for 30 days; worker-thread textures are reloaded on the render thread when the fetch finishes. | `artwork_fetch_test.go` |
+| Library completeness and resumable fill-the-gaps | The library header draws a cover-completeness ring, each console row a meter, and the status line names the count. The fetch reports progress per game, can be stopped with the same action, and resumes from the files already on the card; the counts are recounted from disk after each run. | `game_library_test.go`, `artwork_fetch_test.go` |
 
 ## Already there (the list assumed these were missing)
 
@@ -94,11 +95,16 @@ never appear. The working design is to configure the emulator's own OSD:
 ### 4. Box art for the rest of the library (shipped)
 
 The library now has the missing-art action (**L1** / **F**), the per-title
-not-found cache and the render-thread texture reload. What is still open is the
-quality of the match, not the plumbing: titles the libretro set spells
-differently (`Zelda II` vs `Zelda II - The Adventure of Link`) are recorded as
-not found. A manual "choose image" action and a title-normalisation table are
-the next step; neither needs a new downloader.
+not-found cache, the render-thread texture reload, the completeness ring/meters
+and a stop/resume path for the download. What is still open is the quality of
+the match, not the plumbing: titles the libretro set spells differently
+(`Zelda II` vs `Zelda II - The Adventure of Link`) are recorded as not found. A
+manual "choose image" action and a title-normalisation table are the next step;
+neither needs a new downloader.
+
+Descriptions, genres, release dates and screenshots are a separate source
+problem: libretro only publishes images, so that data needs a provider with an
+account or key (ScreenScraper, TheGamesDB) behind the same downloader.
 
 ### 5. Game switcher with quick resume (first half shipped)
 

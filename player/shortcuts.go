@@ -37,6 +37,7 @@ var shortcutCategories = []struct {
 		items: []shortcutEntry{
 			{"L1 / R1", "Page lists; skip -10/+10 s in the player"},
 			{"L2 / R2", "Results page; previous / next video"},
+			{"N / P", "Next / previous video (Shorts feed too)"},
 			{"PgUp/PgDn", "Previous / next results page"},
 			{"Shift+Left/Right", "Skip -10 / +10 s"},
 		},
@@ -55,6 +56,7 @@ var shortcutCategories = []struct {
 	{
 		title: "Global",
 		items: []shortcutEntry{
+			{"Select + Start", "Quit JukaHub (TrimUI)"},
 			{"F1", "Keyboard shortcuts"},
 			{"F2", "Search"},
 			{"F5", "Refresh"},

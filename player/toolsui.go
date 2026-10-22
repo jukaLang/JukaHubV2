@@ -159,8 +159,8 @@ func ensureToolsMenuEntry(config *Config) {
 		scene.Elements = append(scene.Elements, Element{
 			Type:    "button",
 			Text:    "FTP & IP",
-			Color:   "#F8FAFC",
-			BgColor: "#334155",
+			Color:   "$labelColor",
+			BgColor: "$buttonColor",
 			X:       24,
 			Y:       y,
 			Width:   "296",

@@ -573,7 +573,7 @@ func ensureIPStreamEntries(config *Config) {
 				continue
 			}
 			scene.Elements = append(scene.Elements, Element{
-				Type: "button", Text: "Library", Color: "#F8FAFC", BgColor: "#334155",
+				Type: "button", Text: "Library", Color: "$labelColor", BgColor: "$buttonColor",
 				X: 912, Y: 72, Width: "160", Height: "48", Trigger: "ip_open",
 			})
 		case "Tube":
@@ -589,11 +589,22 @@ func ensureIPStreamEntries(config *Config) {
 					}
 				}
 			}
-			if x+116 > screenWidth-16 {
-				x = screenWidth - 16 - 116
+			// Clamp against the config's own canvas, not the global screenWidth:
+			// this runs while the config loads, before the window size is known,
+			// so screenWidth was still 0 and pushed the button off the left edge
+			// (very visible on the Brick, where it should follow Shorts).
+			canvasW := int32(config.Width)
+			if canvasW <= 0 {
+				canvasW = int32(config.Variables.ScreenWidth)
+			}
+			if canvasW <= 0 {
+				canvasW = 1280
+			}
+			if x+116 > canvasW-16 {
+				x = canvasW - 16 - 116
 			}
 			scene.Elements = append(scene.Elements, Element{
-				Type: "button", Text: "IPStream", Color: "#F8FAFC", BgColor: "#334155",
+				Type: "button", Text: "IPStream", Color: "$labelColor", BgColor: "$buttonColor",
 				X: x, Y: 72, Width: "116", Height: "48", Trigger: "ip_open",
 			})
 		}

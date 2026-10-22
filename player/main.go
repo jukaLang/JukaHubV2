@@ -384,6 +384,9 @@ func main() {
 		}
 		if c := sdl.GameControllerOpen(0); c != nil {
 			defer c.Close()
+			// Kept for the keyboard's hold-to-repeat poller; every other path
+			// stays driven by controller events.
+			gameController = c
 			log.Printf("[GAMEPAD] Opened controller 0: %s", c.Name())
 		}
 	} else {
@@ -643,6 +646,15 @@ func main() {
 						handleQSInput(e, config)
 						continue
 					}
+					// Chat member list and profile card float above the chat panel
+					// and take every key while one is up.
+					if chatOverlayOpen() && !virtualKeyboardActive && handleChatOverlayKey(e, config) {
+						continue
+					}
+					// A selected message turns the composer into its action bar.
+					if chatSelectionBar.open && !virtualKeyboardActive && handleChatSelectionKey(e, config) {
+						continue
+					}
 					focusEngine.SyncSelected()
 					if imageViewerPath != "" {
 						handleImageViewerInput(e)
@@ -841,8 +853,14 @@ func main() {
 						} else if curElem.Type == "chat" {
 							// Pressing A/Enter/Space opens the virtual keyboard
 							// with chat routing (works for both controller and keyboard).
+							// With a message selected, the same key opens its actions,
+							// which is how the profile of a speaker is reached.
 							if e.Keysym.Sym == sdl.K_RETURN || e.Keysym.Sym == sdl.K_SPACE || e.Keysym.Sym == sdl.K_a {
-								vkOpenChat()
+								if _, _, ok := selectedChatMessage(); ok {
+									openChatActionsForSelected()
+								} else {
+									vkOpenChat()
+								}
 							} else {
 								handleChatInput(e, config)
 							}
@@ -1325,6 +1343,12 @@ func main() {
 							break
 						}
 
+						// Chat member list / profile card: a scrim over the scene, so
+						// they take every click before anything underneath sees it.
+						if chatOverlayOpen() && chatOverlayClick(mx, my, config) {
+							break
+						}
+
 						// Start menu click.
 						if tb.startOpen && startMenuIsPointIn(mx, my) {
 							startMenuHandleClick(mx, my, config)
@@ -1379,6 +1403,12 @@ func main() {
 						if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
 							config.Scenes[currentSceneIndex].Name == playtimeSceneName &&
 							handlePlaytimeMouse(mx, my) {
+							break
+						}
+						// Chat names, avatars, message bodies and the composer action bar
+						// own their clicks: a name or picture opens that speaker's
+						// profile, a body selects the message.
+						if currentSceneHasChat(config) && chatMessageClick(mx, my, config) {
 							break
 						}
 						// Chat image previews open full screen; clicking again closes.
@@ -1633,9 +1663,20 @@ func main() {
 				// press felt late (the frame rate never woke up).
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
+				// Select + Start is the handheld's system quit chord and is read
+				// from the physical buttons, before remapping or any overlay: it
+				// has to leave the app from a panel, a video or the keyboard too.
+				if exitChordPressed(e) {
+					requestAppExit()
+					continue
+				}
 				// Accessibility remapping rewrites the physical button once, here,
-				// before the overlay router or the scene sees the event.
-				a11yRemapEvent(e)
+				// before the overlay router or the scene sees the event. A chord
+				// modifier press is consumed: it arms the next direction instead of
+				// firing its own action.
+				if a11yRemapEvent(e) {
+					continue
+				}
 				if e.Type == sdl.CONTROLLERBUTTONDOWN && ambientHandleController(e) {
 					continue
 				}
@@ -1661,46 +1702,7 @@ func main() {
 					}
 					focusEngine.SyncSelected()
 					if virtualKeyboardActive {
-
-						switch e.Button {
-
-						case sdl.CONTROLLER_BUTTON_DPAD_UP:
-
-							vkMoveFocus(0, -1)
-
-						case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-
-							vkMoveFocus(0, 1)
-
-						case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-
-							vkMoveFocus(-1, 0)
-
-						case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-
-							vkMoveFocus(1, 0)
-
-						case sdl.CONTROLLER_BUTTON_A:
-
-							vkActivateFocused(config)
-
-						case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
-
-							vkCloseKeyboard()
-
-						case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-
-							toggleKeyboardCase()
-
-						case sdl.CONTROLLER_BUTTON_Y:
-							if vkTarget == vkTargetChat {
-								vkSubmit(config, true)
-							} else {
-								vkSubmit(config, false)
-							}
-
-						}
-
+						vkHandleControllerButton(e.Button, config)
 					} else if activeSceneIndex != -1 {
 						// Input field active - handled by virtualKeyboardActive
 					} else {
@@ -1976,19 +1978,43 @@ func main() {
 								if chatScrollOffset > 0 {
 									chatScrollOffset--
 								}
+							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+								moveChatSelection(-1)
+							case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+								moveChatSelection(1)
+							case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+								moveChatSelection(-1)
+							case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+								moveChatSelection(1)
 							case sdl.CONTROLLER_BUTTON_A:
-								// A opens the virtual keyboard to type a message.
-								vkOpenChat()
+								// A opens the actions for a selected message (Profile is
+								// one of them); with nothing selected it types a message.
+								if _, _, ok := selectedChatMessage(); ok {
+									openChatActionsForSelected()
+								} else {
+									vkOpenChat()
+								}
 							case sdl.CONTROLLER_BUTTON_Y:
 								if strings.TrimSpace(chatInputText) != "" {
 									sendGroqChatMessage(chatInputText)
 									chatInputText = ""
+								} else {
+									// An empty composer makes Y the member list: the
+									// controller way to pick a person by name.
+									openChatMembers()
 								}
 							case sdl.CONTROLLER_BUTTON_X:
 								// X renames the local chat user.
 								vkOpenName()
 							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-								goBackScene(config)
+								// B first drops the message selection, then leaves the
+								// chat on the next press, the same two-step as Escape.
+								if _, _, ok := selectedChatMessage(); ok {
+									clearChatSelection()
+									PlayBackSound()
+								} else {
+									goBackScene(config)
+								}
 							}
 						} else {
 							// Normal button/input navigation
@@ -2233,6 +2259,16 @@ func main() {
 			renderLoadingCard(renderer, config)
 		}
 
+		// A held D-pad keeps moving the keyboard highlight; without this a long
+		// walk across the grid was twenty separate presses. Holding a direction
+		// also counts as input, or the idle cadence would drop the repeat rate
+		// after three seconds.
+		if virtualKeyboardActive {
+			vkTickNavRepeat()
+			if dx, dy := vkControllerNavDirection(); dx != 0 || dy != 0 {
+				frameRateCtrl.NotifyInput()
+			}
+		}
 		// SDL text input stays enabled for the whole session: the on-screen
 		// keyboard, the chat composer and the unit converter all depend on
 		// text-input events, and the keyboard target decides where each
@@ -2402,13 +2438,23 @@ func main() {
 			renderCompanionOverlay(renderer, config)
 		}
 
+		// Chat overlays: the member list and the speaker's profile card float
+		// above the chat panel (which was drawn with the scene). The card is
+		// drawn last so opening a profile from the list covers it.
+		if chatMembers.open {
+			renderChatMembers(renderer, config)
+		}
+		if chatProfile.open {
+			renderChatProfile(renderer, config)
+		}
+
 		// Update prompt is the topmost modal.
 		if updatePrompt.open {
 			renderUpdatePrompt(renderer, config)
 		}
 
 		// Shortcut hint at bottom (hidden when overlays are open).
-		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open && !companion.open && !smartHomePanel.open && !calibrationPanel.open && !ambientIsActive() {
+		if !shortcutsOpen && !clipSearchOpen && !globalSearchOpen && !qs.open && !updatePrompt.open && !companion.open && !smartHomePanel.open && !calibrationPanel.open && !chatOverlayOpen() && !ambientIsActive() {
 			renderShortcutHint(renderer, config)
 		}
 
@@ -2434,12 +2480,18 @@ func main() {
 			renderLaunchFailure(renderer, config)
 		}
 
+		// A finished time-lapse is assembled off the render thread; its notice is
+		// shown here, where the toast state belongs.
+		timelapseDrainNotice()
 		renderToast(renderer, config)
 		renderInstallBar(renderer, config)
 
 		// Companion screen view: capture on the render thread only when the
 		// phone asked for a frame (see companion_screen.go).
 		captureCompanionScreen(renderer)
+		// A Screenshot picked from the Start menu lands on the frame the user
+		// was looking at, not on whatever is drawn next.
+		capturePendingScreenshot(renderer)
 
 		renderer.Present()
 		if !startupReported {

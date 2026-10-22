@@ -34,6 +34,9 @@ const (
 	a11yKeySwapAB     = "a11y_swap_ab"
 	a11yKeySwapXY     = "a11y_swap_xy"
 	a11yKeyPrevTheme  = "a11y_prev_theme"
+	a11yKeyOneHanded  = "a11y_one_handed"
+	a11yKeyChordBtn   = "a11y_chord_button"
+	a11yKeySlowRepeat = "a11y_slow_repeat"
 
 	a11yPanelTitle = "Accessibility"
 
@@ -68,9 +71,45 @@ type a11ySettings struct {
 	colorblind   string
 	swapAB       bool
 	swapXY       bool
+	// One-handed mode turns the chord button plus the d-pad into the four
+	// face buttons, so a player who can only reach one side of the device can
+	// still navigate and confirm.
+	oneHanded bool
+	// chordButton is the stored key of the button that acts as the chord
+	// modifier ("l1" by default); see a11yChordButtons.
+	chordButton string
+	// slowRepeat doubles the on-screen keyboard's held-direction delay and
+	// interval, for hands that overshoot a key.
+	slowRepeat bool
+}
+
+// a11yChordButtons are the physical buttons that can act as the chord
+// modifier. They are all reachable with the index finger while a thumb stays
+// on the d-pad, which is the whole point of the mode. SDL2 exposes L2/R2 as
+// axes, not buttons, so they are not candidates.
+var a11yChordButtons = []struct {
+	key    string
+	label  string
+	button uint8
+}{
+	{key: "l1", label: "L1", button: sdl.CONTROLLER_BUTTON_LEFTSHOULDER},
+	{key: "r1", label: "R1", button: sdl.CONTROLLER_BUTTON_RIGHTSHOULDER},
+	{key: "back", label: "Back", button: sdl.CONTROLLER_BUTTON_BACK},
+	{key: "l3", label: "L3", button: sdl.CONTROLLER_BUTTON_LEFTSTICK},
+}
+
+// a11yChordRuntime is the transient state of the one-handed chord: whether the
+// modifier is physically held, whether a tap has armed the next direction, and
+// which physical button is currently standing in for a face button so its
+// release is rewritten the same way.
+type a11yChordRuntime struct {
+	latched bool
+	held    bool
+	pressed map[uint8]uint8
 }
 
 var a11y a11ySettings
+var a11yChordState a11yChordRuntime
 
 var a11yPanelRect sdl.Rect
 var a11yRowHits []struct {
@@ -103,6 +142,12 @@ func a11yLoad(config *Config) {
 	a11y.highContrast = a11yCustomBool(config, a11yKeyContrast)
 	a11y.swapAB = a11yCustomBool(config, a11yKeySwapAB)
 	a11y.swapXY = a11yCustomBool(config, a11yKeySwapXY)
+	a11y.oneHanded = a11yCustomBool(config, a11yKeyOneHanded)
+	a11y.slowRepeat = a11yCustomBool(config, a11yKeySlowRepeat)
+	a11y.chordButton = "l1"
+	if s, ok := customString(config.Variables.Custom, a11yKeyChordBtn); ok {
+		a11y.chordButton = a11yChordKey(s)
+	}
 	if s, ok := customString(config.Variables.Custom, a11yKeyColorblind); ok {
 		if a11yColorblindPreset(s) != "" {
 			a11y.colorblind = s
@@ -122,9 +167,10 @@ func a11yCustomBool(config *Config, key string) bool {
 	return err == nil && b
 }
 
-// a11ySave writes the settings back through the same user-config writer the
-// Settings scenes use, so nothing else in the snapshot is lost.
-func a11ySave(config *Config) {
+// a11yStore writes the settings into the config map only. It is the part a
+// test can exercise without touching the card, and the part every caller
+// actually depends on: a11ySave adds the disk write on top.
+func a11yStore(config *Config) {
 	if config == nil {
 		return
 	}
@@ -136,6 +182,18 @@ func a11ySave(config *Config) {
 	config.Variables.Custom[a11yKeyColorblind] = a11y.colorblind
 	config.Variables.Custom[a11yKeySwapAB] = a11y.swapAB
 	config.Variables.Custom[a11yKeySwapXY] = a11y.swapXY
+	config.Variables.Custom[a11yKeyOneHanded] = a11y.oneHanded
+	config.Variables.Custom[a11yKeyChordBtn] = a11y.chordButton
+	config.Variables.Custom[a11yKeySlowRepeat] = a11y.slowRepeat
+}
+
+// a11ySave writes the settings back through the same user-config writer the
+// Settings scenes use, so nothing else in the snapshot is lost.
+func a11ySave(config *Config) {
+	a11yStore(config)
+	if config == nil {
+		return
+	}
 	saveUserConfig(userConfigFromVariables(config))
 }
 
@@ -321,16 +379,130 @@ func a11yRemapButton(b uint8) uint8 {
 	return b
 }
 
-// a11yRemapEvent rewrites the event in place before any handler sees it. It is
-// a no-op when the user has not swapped anything.
-func a11yRemapEvent(e *sdl.ControllerButtonEvent) {
-	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
-		return
+// ── One-handed chord ──────────────────────────────────────────────────────
+
+// a11yChordKey normalises a stored chord button name. An unknown value falls
+// back to L1 rather than leaving the mode with no modifier at all.
+func a11yChordKey(key string) string {
+	wanted := strings.ToLower(strings.TrimSpace(key))
+	for _, option := range a11yChordButtons {
+		if option.key == wanted {
+			return option.key
+		}
 	}
-	if !a11y.swapAB && !a11y.swapXY {
-		return
+	return "l1"
+}
+
+func a11yChordLabel(key string) string {
+	wanted := a11yChordKey(key)
+	for _, option := range a11yChordButtons {
+		if option.key == wanted {
+			return option.label
+		}
 	}
-	e.Button = a11yRemapButton(e.Button)
+	return "L1"
+}
+
+// a11yChordCode is the SDL button the chord modifier currently refers to.
+func a11yChordCode() uint8 {
+	wanted := a11yChordKey(a11y.chordButton)
+	for _, option := range a11yChordButtons {
+		if option.key == wanted {
+			return option.button
+		}
+	}
+	return sdl.CONTROLLER_BUTTON_LEFTSHOULDER
+}
+
+// a11yChordTarget maps a direction to the face button it stands in for while
+// the chord is armed. Up is the neutral "confirm" so a single thumb can walk a
+// list with Down and press Up to open the entry.
+func a11yChordTarget(dir uint8) (uint8, bool) {
+	switch dir {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		return sdl.CONTROLLER_BUTTON_A, true
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		return sdl.CONTROLLER_BUTTON_B, true
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		return sdl.CONTROLLER_BUTTON_X, true
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		return sdl.CONTROLLER_BUTTON_Y, true
+	}
+	return 0, false
+}
+
+func a11yChordReset() {
+	a11yChordState = a11yChordRuntime{}
+}
+
+// a11yRemapEvent rewrites the event in place before any handler sees it and
+// reports whether the event must be dropped. Two things happen here, in order:
+//
+//   - the one-handed chord. Tapping the chord button arms the next d-pad press
+//     (tap again to cancel), holding it does the same for as long as it is
+//     down, and the direction is rewritten to A/B/X/Y before the swap rules.
+//   - the A/B and X/Y swaps, as they always were.
+//
+// The physical button is rewritten once, on the way into the event loop, so
+// overlays, the browser's own pad handler and the on-screen keyboard all agree
+// on what "select" means.
+func a11yRemapEvent(e *sdl.ControllerButtonEvent) bool {
+	if e == nil {
+		return false
+	}
+	mod := a11yChordCode()
+	if e.Type == sdl.CONTROLLERBUTTONUP {
+		if a11y.oneHanded && e.Button == mod {
+			a11yChordState.held = false
+		}
+		// A press that was rewritten on the way down has to be released as the
+		// button it became, or the two events disagree about what was pressed.
+		if logical, ok := a11yChordState.pressed[e.Button]; ok && a11y.oneHanded {
+			delete(a11yChordState.pressed, e.Button)
+			e.Button = logical
+		}
+		return false
+	}
+	if e.Type != sdl.CONTROLLERBUTTONDOWN {
+		return false
+	}
+
+	if a11y.oneHanded {
+		if e.Button == mod {
+			if a11yChordState.held {
+				// A duplicate press (some pads repeat on hold): keep the latch.
+				return true
+			}
+			a11yChordState.held = true
+			a11yChordState.latched = !a11yChordState.latched
+			return true
+		}
+		if a11yChordState.latched {
+			if logical, ok := a11yChordTarget(e.Button); ok {
+				a11yChordState.latched = false
+				if a11yChordState.pressed == nil {
+					a11yChordState.pressed = map[uint8]uint8{}
+				}
+				a11yChordState.pressed[e.Button] = logical
+				e.Button = logical
+			}
+		}
+	}
+
+	if a11y.swapAB || a11y.swapXY {
+		e.Button = a11yRemapButton(e.Button)
+	}
+	return false
+}
+
+// a11yRepeatMs scales a held-direction repeat delay. The slow setting is twice
+// as deliberate, which is the difference between "I held a direction" and "the
+// cursor ran away" for a player with a tremor.
+func a11yRepeatMs(base int64) int64 {
+	if a11y.slowRepeat {
+		return base * 2
+	}
+	return base
 }
 
 // ── Panel ─────────────────────────────────────────────────────────────────
@@ -343,6 +515,9 @@ const (
 	a11yRowColorblind
 	a11yRowSwapAB
 	a11yRowSwapXY
+	a11yRowOneHanded
+	a11yRowChordButton
+	a11yRowSlowRepeat
 	a11yRowReset
 )
 
@@ -366,12 +541,23 @@ func a11yRows() []a11yRow {
 	if a11y.swapXY {
 		swapXY = "Swapped"
 	}
+	oneHanded := "Off"
+	if a11y.oneHanded {
+		oneHanded = "On"
+	}
+	repeat := "Normal"
+	if a11y.slowRepeat {
+		repeat = "Slow"
+	}
 	return []a11yRow{
 		{label: "Text size", detail: "Scales every menu, overlay and keyboard label.", value: a11yScaleLabel(), kind: a11yRowTextSize},
 		{label: "High contrast", detail: "Stronger borders and brighter text on every screen.", value: contrast, kind: a11yRowContrast},
 		{label: "Colour-blind palette", detail: "Replaces the theme colours with a safer set.", value: a11yColorblindLabel(a11y.colorblind), kind: a11yRowColorblind},
 		{label: "Swap A / B", detail: "For players used to the Japanese button order.", value: swapAB, kind: a11yRowSwapAB},
 		{label: "Swap X / Y", detail: "Moves the secondary and tertiary actions.", value: swapXY, kind: a11yRowSwapXY},
+		{label: "One-handed mode", detail: "Tap the chord button, then a direction, to press A, B, X or Y with one thumb. Tap the chord button again to cancel.", value: oneHanded, kind: a11yRowOneHanded},
+		{label: "Chord button", detail: "The button that arms the one-handed chord. Pick one your other hand's index finger can reach.", value: a11yChordLabel(a11y.chordButton), kind: a11yRowChordButton},
+		{label: "Key repeat", detail: "How fast a held direction repeats on the on-screen keyboard. Slow is for hands that overshoot a key.", value: repeat, kind: a11yRowSlowRepeat},
 		{label: "Reset to defaults", detail: "Back to 100% text, default colours, standard buttons.", value: "", kind: a11yRowReset},
 	}
 }
@@ -487,12 +673,44 @@ func a11yAdjust(dir int, config *Config) {
 	case a11yRowSwapXY:
 		a11y.swapXY = !a11y.swapXY
 		changed = true
+	case a11yRowOneHanded:
+		a11y.oneHanded = !a11y.oneHanded
+		a11yChordReset()
+		if a11y.oneHanded {
+			ShowToast("One-handed: tap "+a11yChordLabel(a11y.chordButton)+", then a direction", ToastKindInfo)
+		} else {
+			ShowToast("One-handed mode off", ToastKindInfo)
+		}
+		changed = true
+	case a11yRowChordButton:
+		idx := 0
+		for i, option := range a11yChordButtons {
+			if option.key == a11yChordKey(a11y.chordButton) {
+				idx = i
+			}
+		}
+		if dir < 0 {
+			idx += len(a11yChordButtons) - 1
+		} else {
+			idx++
+		}
+		a11y.chordButton = a11yChordButtons[idx%len(a11yChordButtons)].key
+		a11yChordReset()
+		ShowToast("Chord button: "+a11yChordLabel(a11y.chordButton), ToastKindInfo)
+		changed = true
+	case a11yRowSlowRepeat:
+		a11y.slowRepeat = !a11y.slowRepeat
+		changed = true
 	case a11yRowReset:
 		a11y.fontScale = 1.0
 		a11y.highContrast = false
 		a11y.colorblind = ""
 		a11y.swapAB = false
 		a11y.swapXY = false
+		a11y.oneHanded = false
+		a11y.chordButton = "l1"
+		a11y.slowRepeat = false
+		a11yChordReset()
 		a11yRefreshFonts()
 		a11yApplyPalette(config)
 		changed = true

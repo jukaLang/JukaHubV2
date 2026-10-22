@@ -59,6 +59,43 @@ Only the four face buttons are remapped. The d-pad drives focus everywhere, so
 swapping it would make navigation impossible to learn; L1/R1, Start and Back are
 left alone for the same reason.
 
+## One-handed mode
+
+Playable with one hand: the d-pad does the navigating *and* the confirming, so
+the thumb never has to leave it. Turn on **One-handed mode**, then **tap the
+chord button** (L1 by default) and the next d-pad press becomes a face button:
+
+| Direction | Becomes |
+|-----------|---------|
+| D-pad Up | **A** (open, confirm) |
+| D-pad Down | **B** (back, cancel) |
+| D-pad Left | **X** |
+| D-pad Right | **Y** |
+
+* Tap the chord button once to arm the next press. The arm is one-shot: after
+  that press the d-pad is a d-pad again.
+* Tap it a second time to cancel. Holding it works the same as tapping once and
+  never leaves the latched state behind.
+* The chord output still goes through Swap A/B and Swap X/Y, so the two settings
+  compose.
+* **Chord button** chooses which shoulder or Back acts as the modifier, so it can
+  be the one your other hand reaches. The chosen button stops doing its own
+  action while the mode is on (L1 normally pages a list, for example).
+* The mode applies everywhere the app reads the pad, including the on-screen
+  keyboard and every panel.
+
+This is an in-app aid. JukaHub launches emulators as child processes and does
+not see their input, so the chord cannot press buttons inside a running game;
+for in-game one-handed play, RetroArch's own hotkey remapping is the tool, and
+standalone emulators each need their own configuration.
+
+## Slower key repeat
+
+**Key repeat → Slow** doubles the delay before a held direction starts repeating
+on the on-screen keyboard, and doubles the repeat interval. The press itself is
+unchanged, so typing a single character still feels immediate; it is only the
+runaway after a long hold that goes away.
+
 ## Where the settings live
 
 Everything is stored in `Apps/JukaHub/jukauser.json` under
@@ -71,6 +108,9 @@ Everything is stored in `Apps/JukaHub/jukauser.json` under
 | `a11y_colorblind` | string | `""`, `deuteranopia`, `protanopia`, `tritanopia` |
 | `a11y_swap_ab` | bool | face buttons A/B swapped |
 | `a11y_swap_xy` | bool | face buttons X/Y swapped |
+| `a11y_one_handed` | bool | one-handed chord mode on |
+| `a11y_chord_button` | string | `l1`, `r1`, `back` or `l3` |
+| `a11y_slow_repeat` | bool | keyboard repeat delay and interval doubled |
 | `a11y_prev_theme` | string | theme restored when the palettes are switched off |
 
 Because they are plain config values, they can be set from a PC before the
@@ -83,3 +123,8 @@ device ever boots, and they survive updates like every other setting.
 * The colour-blind palettes replace the whole theme. Re-selecting a theme in
   Settings → Theme restores ordinary colours and turns the palette off.
 * Remapping covers the controller only. Keyboard bindings are unchanged.
+* One-handed mode changes what the app itself does with the pad. A game that is
+  already running is outside it — see the note above.
+* The slow key repeat applies to the on-screen keyboard, which is the only place
+  the app repeats a held direction itself; SDL's own key repeat for a physical
+  keyboard is left at the system default.

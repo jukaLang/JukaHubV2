@@ -448,8 +448,8 @@ func ensureHardwareProcessEntry(config *Config) {
 		scene.Elements = append(scene.Elements, Element{
 			Type:    "button",
 			Text:    "Processes",
-			Color:   "#F8FAFC",
-			BgColor: "#334155",
+			Color:   "$labelColor",
+			BgColor: "$buttonColor",
 			X:       x,
 			Y:       y,
 			Width:   "160",

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // appgrid.go draws the Apps scene as a launcher grid of tiles instead of the
@@ -12,13 +13,25 @@ import (
 // apps.go; only the presentation and navigation change, so scan/launch code
 // keeps working and user configs that still declare a dynamiclist on
 // app_entries get the grid too.
+//
+// Each tile shows the app's own artwork when one can be found (see appicons.go)
+// and a tinted initial when it cannot, so a launcher full of shortcuts without
+// pictures still reads as a deliberate grid rather than a list of letters.
 
 const (
-	appGridMinTileW = int32(150)
-	appGridTileH    = int32(118)
-	appGridGap      = int32(14)
-	appGridPad      = int32(14)
-	appGridHeadH    = int32(30)
+	appGridMinTileW = int32(152)
+	appGridTileH    = int32(132)
+	appGridGap      = int32(12)
+	appGridPad      = int32(12)
+	appGridHeadH    = int32(44)
+	// appIconBox is the square an app's artwork is fitted into at the top of a
+	// tile; appIconTop is its distance from the tile's top edge.
+	appIconBox = int32(52)
+	appIconTop = int32(8)
+	// appTileLabelSize is the pixel size of a tile's name. It is smaller than
+	// the theme's list font because a tile is a square, not a row: the theme
+	// size would fit one clipped word where two readable lines fit here.
+	appTileLabelSize = 22
 )
 
 // appGridLayout is the measured grid: tile size, columns and the panel origin.
@@ -134,6 +147,21 @@ func appGridGlyph(name string) string {
 		return strings.ToUpper(string(r))
 	}
 	return "?"
+}
+
+// appGridTileTint picks a stable colour for a tile that has no artwork. The
+// same app keeps its colour across launches and neighbouring tiles rarely share
+// one, so a launcher of initials still looks composed.
+func appGridTileTint(name string) sdl.Color {
+	palette := [...]sdl.Color{
+		ColorAccent, ColorAccentSecondary, ColorSuccess, ColorInfo, ColorWarning, ColorDanger,
+	}
+	var h uint32 = 2166136261
+	for _, r := range strings.ToLower(name) {
+		h ^= uint32(r)
+		h *= 16777619
+	}
+	return palette[h%uint32(len(palette))]
 }
 
 // appGridIndexAt returns the tile index under a click, or -1.
@@ -269,8 +297,129 @@ func appGridActivate(config *Config) {
 	launchAppEntry(config, entries[focusedFileIndex])
 }
 
-// renderAppGrid draws the launcher: a header line with the app count, then
-// rounded tiles with a letter badge and the app name.
+// drawAppTileIcon draws the app's own artwork when it has some, and otherwise a
+// tinted well holding the app's initial.
+func drawAppTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry, name string, focused bool, medium *ttf.Font) {
+	box := appIconBox
+	x := cell.X + (cell.W-box)/2
+	y := cell.Y + appIconTop
+
+	if tex := appIconTexture(r, appEntryIconPath(entry)); tex != nil {
+		if _, _, tw, th, err := tex.Query(); err == nil && tw > 0 && th > 0 {
+			// Fit inside the box without distorting the artwork; a wide or tall
+			// icon stays centred in the same square as every other tile.
+			dw, dh := box, box
+			if tw >= th {
+				dh = max32(1, box*th/tw)
+			} else {
+				dw = max32(1, box*tw/th)
+			}
+			dst := sdl.Rect{X: x + (box-dw)/2, Y: y + (box-dh)/2, W: dw, H: dh}
+			_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
+			_ = r.Copy(tex, nil, &dst)
+			return
+		}
+	}
+
+	// The initial keeps the tile's own colour while focused: the card border
+	// and spine already say which tile is selected, and swapping the colour
+	// would make every focused tile look the same.
+	tint := appGridTileTint(name)
+	wellAlpha := uint8(42)
+	if focused {
+		wellAlpha = 62
+	}
+	fillRoundedRect(r, x, y, box, box, 14, WithAlpha(tint, wellAlpha))
+	strokeRoundedRect(r, x, y, box, box, 14, 1, WithAlpha(tint, 140))
+	// The initial is sized to the well so it reads as artwork rather than a
+	// small label left in the corner of a tile.
+	glyphFont := medium
+	if sized := getFontSized(config, "medium", int(box)*45/100); sized != nil {
+		glyphFont = sized
+	}
+	glyph := appGridGlyph(name)
+	gw, gh, _ := glyphFont.SizeUTF8(glyph)
+	renderText(r, config, glyphFont, glyph, tint, x+(box-int32(gw))/2, y+(box-int32(gh))/2)
+}
+
+// appTileLabelFont is the font a tile draws its name in. It scales with the
+// accessibility text setting like every other font, so a large-text user gets
+// fewer, bigger lines instead of text spilling out of the tile.
+func appTileLabelFont(config *Config) *ttf.Font {
+	if label := getFontSized(config, "small", appTileLabelSize); label != nil {
+		return label
+	}
+	label, _ := getCachedFont(config, "small")
+	return label
+}
+
+// drawAppTile renders one launcher tile: the icon (or initial), the app name
+// underneath, and the focus treatment shared with the rest of the shell.
+func drawAppTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry, focused, hovered bool, labelFont, medium *ttf.Font) {
+	drawCard(r, cell.X, cell.Y, cell.W, cell.H, 12)
+	if focused {
+		// Focus reads at a glance: a raised surface, an accent border and an
+		// accent spine, not just a tint that darker themes hide.
+		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, ColorSurfaceRaised)
+		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 70))
+		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 2, WithAlpha(accentColor, 235))
+		fillRoundedRect(r, cell.X+2, cell.Y+12, 3, cell.H-24, 2, accentColor)
+	} else if hovered {
+		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 26))
+		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 1, WithAlpha(accentColor, 110))
+	}
+
+	name := appGridDisplayName(entry.Name)
+	drawAppTileIcon(r, config, cell, entry, name, focused, medium)
+
+	// A small accent dot marks JukaHub's own applets; external programs get no
+	// marker, because their tile already carries the program's own icon.
+	if appGridIsBuiltin(entry.Name) {
+		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 3, WithAlpha(accentColor, 200))
+	}
+
+	// Names wrap under the icon. They start at the same offset on every tile so
+	// the grid keeps one baseline, and the number of lines follows the room the
+	// tile really has (a large-text setting fits one taller line, not two that
+	// spill out of the card).
+	if labelFont == nil {
+		return
+	}
+	lineH := int32(labelFont.Height() + 1)
+	textTop := cell.Y + appIconTop + appIconBox + 8
+	maxLines := int((cell.Y + cell.H - 6 - textTop) / lineH)
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	if maxLines > 2 {
+		maxLines = 2
+	}
+	lines := wrapTextLines(labelFont, name, cell.W-16, maxLines)
+	for li, line := range lines {
+		lw, _, _ := labelFont.SizeUTF8(line)
+		renderText(r, config, labelFont, line, ColorTextPrimary(),
+			cell.X+(cell.W-int32(lw))/2, textTop+int32(li)*lineH)
+	}
+}
+
+// renderAppGridEmpty fills a launcher that found nothing: a glyph, what
+// happened, and where apps come from.
+func renderAppGridEmpty(renderer *sdl.Renderer, config *Config, element Element, elemW, elemH int32, font *ttf.Font) {
+	glyphBox := sdl.Rect{X: element.X + (elemW-46)/2, Y: element.Y + elemH/2 - 76, W: 46, H: 46}
+	DrawHomeIcon(renderer, "apps", glyphBox, false)
+
+	title := ellipsize(font, "No launchable apps yet", elemW-32)
+	tw, th, _ := font.SizeUTF8(title)
+	renderText(renderer, config, font, title, ColorTextPrimary(),
+		element.X+(elemW-int32(tw))/2, element.Y+elemH/2-12)
+	hint := ellipsize(font, "Drop an app in the apps folder next to JukaHub, then refresh", elemW-32)
+	hw, _, _ := font.SizeUTF8(hint)
+	renderText(renderer, config, font, hint, ColorTextTertiary(),
+		element.X+(elemW-int32(hw))/2, element.Y+elemH/2+int32(th))
+}
+
+// renderAppGrid draws the launcher: a header with the app count, then the grid
+// of tiles.
 func renderAppGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	elemW := appGridElementWidth(element)
 	elemH := getElementHeight(element, 500)
@@ -284,18 +433,15 @@ func renderAppGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	if medium == nil {
 		medium = font
 	}
+	labelFont := appTileLabelFont(config)
+	if labelFont == nil {
+		labelFont = font
+	}
 
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
 
 	if len(entries) == 0 {
-		title := "No launchable apps found"
-		hint := "Drop programs in the apps folder next to JukaHub"
-		tw, th, _ := font.SizeUTF8(title)
-		renderText(renderer, config, font, title, ColorTextPrimary(),
-			element.X+(elemW-int32(tw))/2, element.Y+elemH/2-int32(th))
-		hw, _, _ := font.SizeUTF8(hint)
-		renderText(renderer, config, font, hint, ColorTextTertiary(),
-			element.X+(elemW-int32(hw))/2, element.Y+elemH/2+6)
+		renderAppGridEmpty(renderer, config, element, elemW, elemH, font)
 		return
 	}
 
@@ -303,15 +449,14 @@ func renderAppGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	rows := appGridRows(element, elemH, layout)
 	first := appGridFirstRow(focusedFileIndex, rows, len(entries), layout.cols)
 
-	// A quiet count sits in the panel's bottom-right corner: the header belongs
-	// to the scene label above, and the corner keeps it clear of the tiles.
+	// A quiet count sits in the reserved header band: the grid opens on a wall
+	// of tiles, so the panel says how much is in it without scrolling first.
 	count := fmt.Sprintf("%d apps", len(entries))
 	if len(entries) == 1 {
 		count = "1 app"
 	}
-	cw, _, _ := font.SizeUTF8(count)
-	renderText(renderer, config, font, count, ColorTextTertiary(),
-		element.X+elemW-int32(cw)-appGridPad-2, element.Y+elemH-int32(font.Height())-8)
+	renderText(renderer, config, labelFont, count, ColorTextTertiary(),
+		element.X+appGridPad, element.Y+9)
 
 	hovered := -1
 	if mouseX >= element.X && mouseX <= element.X+elemW && mouseY >= element.Y && mouseY <= element.Y+elemH {
@@ -321,52 +466,14 @@ func renderAppGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	renderWithClip(renderer, element.X+2, element.Y+appGridHeadH-4, elemW-4, elemH-appGridHeadH, func(r *sdl.Renderer) {
 		for i, entry := range entries {
 			cell := appGridCellRect(layout, i, first)
-			if cell.Y+cell.H < element.Y+appGridHeadH || cell.Y > element.Y+elemH {
+			// Rows are drawn whole: a card sliced by the panel edge reads as a
+			// rendering fault, and the scrollbar already says there is more.
+			// The focused tile is the exception: in a panel too short for one row
+			// it still has to be visible, so it is drawn and clipped.
+			if cell.Y < element.Y+appGridHeadH || (cell.Y+cell.H > element.Y+elemH-4 && i != focusedFileIndex) {
 				continue
 			}
-			focused := i == focusedFileIndex
-
-			drawCard(r, cell.X, cell.Y, cell.W, cell.H, 12)
-			if focused {
-				// Focus reads at a glance: a raised surface, an accent border and
-				// an accent spine, not just a tint that darker themes hide.
-				fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, ColorSurfaceRaised)
-				fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 70))
-				strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 2, WithAlpha(accentColor, 235))
-				fillRoundedRect(r, cell.X+2, cell.Y+12, 3, cell.H-24, 2, accentColor)
-			} else if i == hovered {
-				fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 26))
-				strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 1, WithAlpha(accentColor, 110))
-			}
-
-			name := appGridDisplayName(entry.Name)
-
-			// Letter badge.
-			badge := int32(38)
-			bx := cell.X + 12
-			by := cell.Y + 12
-			badgeFill := WithAlpha(accentColor, 34)
-			if focused {
-				badgeFill = WithAlpha(accentColor, 90)
-			}
-			fillRoundedRect(r, bx, by, badge, badge, 10, badgeFill)
-			glyph := appGridGlyph(name)
-			gw, gh, _ := medium.SizeUTF8(glyph)
-			renderText(r, config, medium, glyph, ColorTextPrimary(),
-				bx+(badge-int32(gw))/2, by+(badge-int32(gh))/2)
-
-			// A small accent dot marks JukaHub's own applets; external programs
-			// get no marker.
-			if appGridIsBuiltin(entry.Name) {
-				fillCircle(r, cell.X+cell.W-14, cell.Y+14, 3, WithAlpha(accentColor, 200))
-			}
-
-			// Word wrap keeps names readable instead of cutting mid-word
-			// ("Visual Studi / o Code").
-			nameY := cell.Y + 56
-			for li, line := range wrapTextLines(font, name, cell.W-22, 2) {
-				renderText(r, config, font, line, ColorTextPrimary(), cell.X+12, nameY+int32(li)*int32(font.Height()+1))
-			}
+			drawAppTile(r, config, cell, entry, i == focusedFileIndex, i == hovered, labelFont, medium)
 		}
 	})
 

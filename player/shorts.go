@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -23,7 +24,21 @@ var (
 	// shortsPendingStart waits for the feed to download before playing the
 	// first short, so the combo does not open an empty grid.
 	shortsPendingStart bool
+	// shortsPreloadIdx is the feed index whose ahead-window has already been
+	// queued, so the main loop asks for it once per short instead of every
+	// frame.
+	shortsPreloadIdx = -1
 )
+
+// shortsPreloadAhead is how many upcoming shorts are resolved in the
+// background while the current one plays. Four is the floor the feed needs:
+// pressing next a few times in a row must never sit on a cold card.
+const shortsPreloadAhead = 4
+
+// triggerShortsOpen is the scene trigger behind the Media screen's Shorts
+// button. It is shared with the trigger switch so the config cannot drift away
+// from the code.
+const triggerShortsOpen = "shorts_open"
 
 type shortsGridLayout struct {
 	thumbWidth  int32
@@ -133,9 +148,71 @@ func startShortAt(config *Config, index int) {
 		return
 	}
 	currentShortIdx = index
+	// The ahead-window is queued again once this short is actually running:
+	// starting a video cancels preload work, so a window queued here would be
+	// thrown away (see ensureShortsPreload).
+	shortsPreloadIdx = -1
 	prefetchShortsFocused(config, videos)
 	playVideoInfo(config, videos[index])
 	shortsAutoplay = true
+}
+
+// shortsAheadURLs lists the sources of the next `ahead` videos after index.
+// It is the preload window of the feed, kept separate so its bounds are easy
+// to test.
+func shortsAheadURLs(videos []VideoInfo, index, ahead int) []string {
+	if ahead < 1 {
+		ahead = 1
+	}
+	start := index + 1
+	if start < 0 {
+		start = 0
+	}
+	end := start + ahead
+	if end > len(videos) {
+		end = len(videos)
+	}
+	urls := make([]string, 0, end-start)
+	for _, v := range videos[start:end] {
+		if u := strings.TrimSpace(v.GetURL()); u != "" {
+			urls = append(urls, u)
+		}
+	}
+	return urls
+}
+
+// shortsPreloadDue reports whether the ahead-window still has to be queued for
+// this feed index: the feed is armed, a short is really playing, and this index
+// has not been queued yet.
+func shortsPreloadDue(index, queued int, autoplay, playing bool) bool {
+	if index < 0 || !autoplay || !playing {
+		return false
+	}
+	return queued != index
+}
+
+// shortsQueuePrefetch queues a preload window. It is prefetchSources in the
+// app; tests swap it so a window can be checked without starting yt-dlp.
+var shortsQueuePrefetch = prefetchSources
+
+// ensureShortsPreload keeps at least shortsPreloadAhead videos resolved ahead
+// of the one playing. It only asks once the player is really running: the
+// resolution of the current short cancels background preload work, so the
+// window has to be requested after that, not when the short is started.
+func ensureShortsPreload(config *Config) {
+	if config == nil {
+		return
+	}
+	playing := snapshotVideoState().phase == "playing"
+	if !shortsPreloadDue(currentShortIdx, shortsPreloadIdx, shortsAutoplay, playing) {
+		return
+	}
+	urls := shortsAheadURLs(shortsVideos(config), currentShortIdx, shortsPreloadAhead)
+	if len(urls) == 0 {
+		return
+	}
+	shortsPreloadIdx = currentShortIdx
+	shortsQueuePrefetch(config, urls)
 }
 
 // drainShortsAutoplay runs on the main loop: it starts a feed that was waiting
@@ -157,23 +234,22 @@ func drainShortsAutoplay(config *Config) {
 		}
 		shortsPendingStart = false
 		startShortAt(config, 0)
-		return
+	} else if shortsAutoAdvance {
+		shortsAutoAdvance = false
+		if shortsAutoplay {
+			videos := shortsVideos(config)
+			next, ok := nextShortIndex(currentShortIdx, len(videos))
+			if !ok {
+				shortsAutoplay = false
+				shortsPreloadIdx = -1
+				ShowToast("That was the last Short", ToastKindInfo)
+			} else {
+				startShortAt(config, next)
+			}
+		}
 	}
-	if !shortsAutoAdvance {
-		return
-	}
-	shortsAutoAdvance = false
-	if !shortsAutoplay {
-		return
-	}
-	videos := shortsVideos(config)
-	next, ok := nextShortIndex(currentShortIdx, len(videos))
-	if !ok {
-		shortsAutoplay = false
-		ShowToast("That was the last Short", ToastKindInfo)
-		return
-	}
-	startShortAt(config, next)
+	// Keep the next shorts warm while this one plays.
+	ensureShortsPreload(config)
 }
 
 func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {

@@ -37,6 +37,14 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm test
+      - name: Audit test dependencies
+        working-directory: tests/web
+        # Advisory, like staticcheck: an advisory in jsdom's own tree should be
+        # visible on every run but must not block a release of the player. The
+        # builder ships no npm dependencies at runtime (it is plain ES modules
+        # plus CDN fonts), so this covers the test harness, not shipping code.
+        continue-on-error: true
+        run: npm audit --audit-level=high
       - name: Config files are valid JSON
         run: |
           for f in player/jukaconfig.json; do
@@ -75,6 +83,39 @@ jobs:
             tests/e2e/playwright-report
             tests/e2e/test-results
           retention-days: 7
+
+  govulncheck:
+    name: Go vulnerability scan
+    # Pinned for the same reason as the player jobs: the SDL2 dev packages
+    # differ between Ubuntu releases. The scan builds the package to find the
+    # calls that can reach a known vulnerability, so it needs the headers too.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Scan the player
+        # Advisory for now, like staticcheck. The scan includes the standard
+        # library of whichever toolchain go.mod selects, so a fresh Go patch
+        # release (or an unfixed one) can turn this red without any change in
+        # this repository; the fix for that is a toolchain bump, not a code
+        # change. Unreachable findings are printed but never fail either way.
+        # Promote to blocking once the pinned toolchain is one release behind
+        # the current patch line.
+        continue-on-error: true
+        run: govulncheck ./...
 
   player-core:
     name: Player helpers (no SDL)

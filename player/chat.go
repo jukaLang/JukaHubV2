@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"image/color"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,9 +36,22 @@ type ChatMessage struct {
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
 	ImageURL  string    `json:"image_url,omitempty"`
+	// AvatarURL is the sender's own picture when the service behind the chat
+	// provides one (Discord does). The avatar column falls back to the initial
+	// circle for senders without a picture, or while it is still downloading.
+	AvatarURL string `json:"avatar_url,omitempty"`
 	// Own marks messages sent from this device so the user's bubbles stay
 	// right-aligned (and styled as "me") even after a display-name change.
 	Own bool `json:"own,omitempty"`
+	// UserID and Handle are the Discord account behind the display name. They
+	// let a profile card tell two people with the same name apart and ask
+	// Discord for roles and a join date.
+	UserID string `json:"user_id,omitempty"`
+	Handle string `json:"handle,omitempty"`
+	Bot    bool   `json:"bot,omitempty"`
+	// Quote is the message a reply answers, kept with the reply so the history
+	// still shows what was being discussed after a restart.
+	Quote *ChatQuote `json:"quote,omitempty"`
 }
 
 // LinkPreview holds metadata for a URL link
@@ -225,6 +240,230 @@ func processChatImageDownloads(renderer *sdl.Renderer) {
 		delete(chatImageDownloads, item.url)
 		chatImageDLMutex.Unlock()
 	}
+}
+
+// --- Sender avatars ---
+
+// Chat avatars are separate from message images: they are decoded, centre
+// cropped and masked into a circle once, then cached by URL. The download is a
+// plain goroutine that only stores bytes; decoding and texture creation happen
+// on the render thread, because SDL textures belong to it.
+var (
+	chatAvatarMutex   sync.Mutex
+	chatAvatars       = map[string]*sdl.Texture{}
+	chatAvatarOrder   []string
+	chatAvatarDLMutex sync.Mutex
+	chatAvatarData    = map[string][]byte{}
+	chatAvatarPending = map[string]bool{}
+	chatAvatarFailed  = map[string]bool{}
+)
+
+const (
+	// chatAvatarCacheMax bounds the cache: a chat holds a handful of speakers
+	// and each avatar is 64x64.
+	chatAvatarCacheMax = 48
+	// chatAvatarPixels is the decoded size. Discord serves 64 px avatars and
+	// the bubble draws them at 28, so this stays sharp on a hidpi panel.
+	chatAvatarPixels = 64
+	// chatAvatarMaxBytes caps what a single avatar download may read.
+	chatAvatarMaxBytes = 1 << 20
+)
+
+// getChatAvatarTexture returns the circular avatar for url, starting a download
+// on first sight. A nil result means "no picture yet": the caller draws the
+// initial circle instead, and the avatar replaces it on a later frame.
+func getChatAvatarTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
+	if renderer == nil || url == "" {
+		return nil
+	}
+	chatAvatarMutex.Lock()
+	if tex, ok := chatAvatars[url]; ok {
+		chatAvatarMutex.Unlock()
+		return tex
+	}
+	chatAvatarMutex.Unlock()
+
+	chatAvatarDLMutex.Lock()
+	data := chatAvatarData[url]
+	failed := chatAvatarFailed[url]
+	chatAvatarDLMutex.Unlock()
+	if len(data) > 0 {
+		return uploadChatAvatar(renderer, url, data)
+	}
+	if !failed {
+		go fetchChatAvatar(url)
+	}
+	return nil
+}
+
+// fetchChatAvatar downloads one avatar into its byte cache.
+func fetchChatAvatar(url string) {
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return
+	}
+	chatAvatarDLMutex.Lock()
+	if chatAvatarPending[url] || len(chatAvatarData[url]) > 0 || chatAvatarFailed[url] {
+		chatAvatarDLMutex.Unlock()
+		return
+	}
+	chatAvatarPending[url] = true
+	chatAvatarDLMutex.Unlock()
+
+	succeeded := false
+	defer func() {
+		chatAvatarDLMutex.Lock()
+		delete(chatAvatarPending, url)
+		if !succeeded {
+			chatAvatarFailed[url] = true
+		}
+		chatAvatarDLMutex.Unlock()
+	}()
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		log.Printf("[chat] avatar download failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("[chat] avatar download failed: %s", resp.Status)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, chatAvatarMaxBytes))
+	if err != nil || len(data) == 0 {
+		return
+	}
+	chatAvatarDLMutex.Lock()
+	chatAvatarData[url] = data
+	chatAvatarDLMutex.Unlock()
+	succeeded = true
+}
+
+// uploadChatAvatar turns downloaded bytes into a cached circular texture.
+func uploadChatAvatar(renderer *sdl.Renderer, url string, data []byte) *sdl.Texture {
+	chatAvatarDLMutex.Lock()
+	delete(chatAvatarData, url)
+	chatAvatarDLMutex.Unlock()
+
+	img, _, err := image.Decode(bytes.NewReader(data))
+	if err != nil {
+		chatAvatarDLMutex.Lock()
+		chatAvatarFailed[url] = true
+		chatAvatarDLMutex.Unlock()
+		log.Printf("[chat] avatar decode failed: %v", err)
+		return nil
+	}
+	pixels := circularAvatarPixels(img, chatAvatarPixels)
+	if len(pixels) == 0 {
+		return nil
+	}
+	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STATIC, chatAvatarPixels, chatAvatarPixels)
+	if err != nil {
+		return nil
+	}
+	if err := tex.Update(nil, unsafe.Pointer(&pixels[0]), chatAvatarPixels*4); err != nil {
+		tex.Destroy()
+		return nil
+	}
+	tex.SetBlendMode(sdl.BLENDMODE_BLEND)
+
+	chatAvatarMutex.Lock()
+	if old, ok := chatAvatars[url]; ok {
+		if old != nil {
+			old.Destroy()
+		}
+	} else {
+		chatAvatarOrder = append(chatAvatarOrder, url)
+	}
+	chatAvatars[url] = tex
+	evictChatAvatarsLocked(url)
+	chatAvatarMutex.Unlock()
+	return tex
+}
+
+// evictChatAvatarsLocked destroys the oldest avatar textures past the limit.
+// The caller holds chatAvatarMutex.
+func evictChatAvatarsLocked(keep string) {
+	for len(chatAvatarOrder) > chatAvatarCacheMax {
+		oldest := chatAvatarOrder[0]
+		chatAvatarOrder = chatAvatarOrder[1:]
+		if oldest == keep {
+			continue
+		}
+		if tex, ok := chatAvatars[oldest]; ok {
+			if tex != nil {
+				tex.Destroy()
+			}
+			delete(chatAvatars, oldest)
+		}
+	}
+}
+
+// circularAvatarPixels centre-crops img to a square, scales it to size and
+// writes RGBA pixels that fade out along a round rim, so the avatar reads as a
+// circle instead of a square tile with clipped corners.
+func circularAvatarPixels(img image.Image, size int) []byte {
+	if img == nil || size <= 0 {
+		return nil
+	}
+	bounds := img.Bounds()
+	w, h := bounds.Dx(), bounds.Dy()
+	if w <= 0 || h <= 0 {
+		return nil
+	}
+	side := w
+	if h < side {
+		side = h
+	}
+	x0 := bounds.Min.X + (w-side)/2
+	y0 := bounds.Min.Y + (h-side)/2
+
+	pixels := make([]byte, size*size*4)
+	// One-and-a-half pixels of feather keeps the rim smooth at 28 px without
+	// needing a real anti-aliased mask.
+	feather := 1.5 / float64(size)
+	for py := 0; py < size; py++ {
+		dy := (float64(py)+0.5)/float64(size)*2 - 1
+		for px := 0; px < size; px++ {
+			dx := (float64(px)+0.5)/float64(size)*2 - 1
+			if dx*dx+dy*dy >= 1 {
+				continue
+			}
+			dist := math.Sqrt(dx*dx + dy*dy)
+			cover := 1.0
+			if dist > 1-feather {
+				cover = (1 - dist) / feather
+			}
+			src := color.NRGBAModel.Convert(img.At(x0+px*side/size, y0+py*side/size)).(color.NRGBA)
+			i := (py*size + px) * 4
+			pixels[i] = src.R
+			pixels[i+1] = src.G
+			pixels[i+2] = src.B
+			pixels[i+3] = uint8(float64(src.A) * cover)
+		}
+	}
+	return pixels
+}
+
+// clearChatAvatarCache drops every cached avatar texture. The textures belong
+// to one renderer, so they must go before it is destroyed.
+func clearChatAvatarCache() {
+	chatAvatarMutex.Lock()
+	for _, tex := range chatAvatars {
+		if tex != nil {
+			tex.Destroy()
+		}
+	}
+	chatAvatars = map[string]*sdl.Texture{}
+	chatAvatarOrder = nil
+	chatAvatarMutex.Unlock()
+
+	chatAvatarDLMutex.Lock()
+	chatAvatarData = map[string][]byte{}
+	chatAvatarPending = map[string]bool{}
+	chatAvatarFailed = map[string]bool{}
+	chatAvatarDLMutex.Unlock()
 }
 
 // ChatSection is the chat history section persisted inside jukauser.json.
@@ -728,13 +967,174 @@ func discordMessageParts(m *discordgo.Message) (string, string) {
 		sender = m.Author.Username
 	}
 	text := m.Content
-	if m.Author != nil && strings.HasPrefix(strings.ToLower(m.Author.Username), "trimuismartprojuka") {
+	if m.Author != nil && strings.HasPrefix(strings.ToLower(m.Author.Username), discordBridgeAuthorPrefix) {
 		if idx := strings.Index(text, ":"); idx > 0 {
 			sender = strings.TrimSpace(text[:idx])
 			text = strings.TrimSpace(text[idx+1:])
 		}
 	}
-	return sender, text
+	rememberDiscordUser(m.Author)
+	for _, u := range m.Mentions {
+		rememberDiscordUser(u)
+	}
+	return sender, discordResolveMentions(text, m)
+}
+
+// discordMentionPattern matches the three things Discord sends as markup: a
+// user ping (<@id> or the nickname form <@!id>), a role ping (<@&id>) and a
+// channel link (<#id>). The raw markup is unreadable on the handheld - a ping
+// showed up as "@417829…", an id nobody can recognise.
+var discordMentionPattern = regexp.MustCompile(`<(@!?|@&|#)([0-9]+)>`)
+
+// discordResolveMentions rewrites those tokens into names. User names come from
+// the message itself (Discord lists every pinged user in the payload); roles and
+// channels come from the small cache filled when the chat connects.
+func discordResolveMentions(text string, m *discordgo.Message) string {
+	if text == "" || !strings.Contains(text, "<") {
+		return text
+	}
+	return discordMentionPattern.ReplaceAllStringFunc(text, func(token string) string {
+		parts := discordMentionPattern.FindStringSubmatch(token)
+		if len(parts) != 3 {
+			return token
+		}
+		kind, id := parts[1], parts[2]
+		switch kind {
+		case "@", "@!":
+			if name := discordMentionedUserName(id, m); name != "" {
+				return "@" + name
+			}
+			// The id is missing from the payload (an old or edited message):
+			// still say someone was pinged instead of printing the number.
+			return "@user"
+		case "@&":
+			if name := discordCachedName(discordRoleNames, id); name != "" {
+				return "@" + name
+			}
+		case "#":
+			if name := discordCachedName(discordChannelNames, id); name != "" {
+				return "#" + name
+			}
+		}
+		return token
+	})
+} // Names seen in the chat are cached: the message payload only carries the ids
+// for roles and channels, and an edited message can arrive without its mention
+// list. The caches are tiny (one name per id) and refreshed per connection.
+var (
+	discordNameMu       sync.Mutex
+	discordUserNames    = map[string]string{}
+	discordRoleNames    = map[string]string{}
+	discordChannelNames = map[string]string{}
+)
+
+// rememberDiscordUser caches a name so later mentions of the same id resolve
+// even when the payload names only one of them.
+func rememberDiscordUser(u *discordgo.User) {
+	if u == nil || u.ID == "" || u.Username == "" {
+		return
+	}
+	discordNameMu.Lock()
+	discordUserNames[u.ID] = u.Username
+	discordNameMu.Unlock()
+}
+
+// discordMentionedUserName resolves a pinged user id, first from the message's
+// own mention list (which Discord always fills for a ping) and then from names
+// seen earlier in the chat.
+func discordMentionedUserName(id string, m *discordgo.Message) string {
+	discordNameMu.Lock()
+	defer discordNameMu.Unlock()
+	if m != nil {
+		for _, u := range m.Mentions {
+			if u != nil && u.ID == id && u.Username != "" {
+				discordUserNames[id] = u.Username
+				return u.Username
+			}
+		}
+	}
+	return discordUserNames[id]
+}
+
+func discordCachedName(names map[string]string, id string) string {
+	discordNameMu.Lock()
+	defer discordNameMu.Unlock()
+	return names[id]
+}
+
+// cacheDiscordNames stores the role and channel names used by mention markup.
+func cacheDiscordNames(roles []*discordgo.Role, channels []*discordgo.Channel) {
+	discordNameMu.Lock()
+	defer discordNameMu.Unlock()
+	discordRoleNames = make(map[string]string, len(roles))
+	for _, r := range roles {
+		if r != nil && r.ID != "" && r.Name != "" {
+			discordRoleNames[r.ID] = r.Name
+		}
+	}
+	discordChannelNames = make(map[string]string, len(channels))
+	for _, c := range channels {
+		if c != nil && c.ID != "" && c.Name != "" {
+			discordChannelNames[c.ID] = c.Name
+		}
+	}
+}
+
+// discordBridgeAuthorPrefix marks the relay bot that reposts messages as
+// "username: message". Its own picture is not the speaker's, so those messages
+// keep the initial circle instead of borrowing the bot's avatar.
+const discordBridgeAuthorPrefix = "trimuismartprojuka"
+
+// discordAvatarURL returns the CDN URL of a message author's avatar, or "" when
+// the author has none (Discord accounts can be pictureless) or when the
+// message was relayed by the bridge bot on someone else's behalf.
+func discordAvatarURL(m *discordgo.Message) string {
+	if m == nil || m.Author == nil {
+		return ""
+	}
+	author := m.Author
+	if author.ID == "" || author.Avatar == "" {
+		return ""
+	}
+	if strings.HasPrefix(strings.ToLower(author.Username), discordBridgeAuthorPrefix) {
+		return ""
+	}
+	// Animated avatar hashes start with "a_"; the PNG endpoint still answers
+	// with a static frame, which is all a 28 px bubble can show.
+	return fmt.Sprintf("https://cdn.discordapp.com/avatars/%s/%s.png?size=%d", author.ID, author.Avatar, chatAvatarPixels)
+}
+
+// discordIdentity returns the Discord account behind a message. A message the
+// bridge bot relayed on someone's behalf is the bot's own message, so it has no
+// account of its own and must not show the bot's profile.
+func discordIdentity(m *discordgo.Message) (userID, handle string, bot bool) {
+	if m == nil || m.Author == nil {
+		return "", "", false
+	}
+	author := m.Author
+	if strings.HasPrefix(strings.ToLower(author.Username), discordBridgeAuthorPrefix) {
+		return "", "", false
+	}
+	return author.ID, author.Username, author.Bot
+}
+
+// chatMessageFromDiscord builds one history entry from a Discord message. Live
+// messages and fetched history both come through here, so a message renders the
+// same way no matter how it arrived.
+func chatMessageFromDiscord(m *discordgo.Message) ChatMessage {
+	sender, text := discordMessageParts(m)
+	userID, handle, bot := discordIdentity(m)
+	return ChatMessage{
+		ID:        m.ID,
+		Sender:    sender,
+		Text:      text,
+		Timestamp: time.Time(m.Timestamp),
+		ImageURL:  extractImageURL(m),
+		AvatarURL: discordAvatarURL(m),
+		UserID:    userID,
+		Handle:    handle,
+		Bot:       bot,
+	}
 }
 
 func extractImageURL(msg *discordgo.Message) string {
@@ -782,14 +1182,9 @@ func discordConnect() error {
 			return
 		}
 		sender, text := discordMessageParts(m.Message)
+		entry := chatMessageFromDiscord(m.Message)
 		chatMutex.Lock()
-		chatMessages = append(chatMessages, ChatMessage{
-			ID:        m.ID,
-			Sender:    sender,
-			Text:      text,
-			Timestamp: time.Time(m.Timestamp),
-			ImageURL:  extractImageURL(m.Message),
-		})
+		chatMessages = append(chatMessages, entry)
 		if len(chatMessages) > 500 {
 			chatMessages = chatMessages[len(chatMessages)-500:]
 		}
@@ -807,6 +1202,18 @@ func discordConnect() error {
 	discordStatus = "Discord: connecting..."
 	// Fetch recent history in the background.
 	go func() {
+		// Role and channel names first: message text is rewritten when it is
+		// stored, so the cache has to be ready before the history is read or a
+		// role ping would keep its numeric id forever.
+		if info, cerr := dg.Channel(ch); cerr == nil && info != nil && info.GuildID != "" {
+			// The guild id is what a profile needs to ask Discord for roles
+			// and a join date, so it is remembered for the session.
+			discordGuildID = info.GuildID
+			resetDiscordMemberDetails()
+			if guild, gerr := dg.Guild(info.GuildID); gerr == nil && guild != nil {
+				cacheDiscordNames(guild.Roles, guild.Channels)
+			}
+		}
 		msgs, ferr := dg.ChannelMessages(ch, 10, "", "", "")
 		if ferr != nil {
 			discordStatus = "Discord: " + ferr.Error()
@@ -815,14 +1222,7 @@ func discordConnect() error {
 		chatMutex.Lock()
 		chatMessages = chatMessages[:0]
 		for _, m := range msgs {
-			sender, text := discordMessageParts(m)
-			chatMessages = append(chatMessages, ChatMessage{
-				ID:        m.ID,
-				Sender:    sender,
-				Text:      text,
-				Timestamp: time.Time(m.Timestamp),
-				ImageURL:  extractImageURL(m),
-			})
+			chatMessages = append(chatMessages, chatMessageFromDiscord(m))
 		}
 		// Discord returns newest-first; reverse to chronological.
 		for i, j := 0, len(chatMessages)-1; i < j; i, j = i+1, j-1 {
@@ -839,6 +1239,13 @@ func discordConnect() error {
 // live gateway session. The sender is prefixed ("username: message") so the
 // message interoperates with the TSP bot bridge used elsewhere in the community.
 func discordSendMessage(sender, text string) error {
+	return discordSendMessageReply(sender, text, "")
+}
+
+// discordSendMessageReply posts a message and, when replyToID names a Discord
+// message, sends it as a real reply so the quoted context is visible on both
+// sides. A deleted original is not an error (FailIfNotExists is false).
+func discordSendMessageReply(sender, text, replyToID string) error {
 	if discordSession == nil {
 		return fmt.Errorf("discord not connected")
 	}
@@ -850,7 +1257,16 @@ func discordSendMessage(sender, text string) error {
 	if sender != "" {
 		payload = sender + ": " + text
 	}
-	if _, err := discordSession.ChannelMessageSend(ch, payload); err != nil {
+	data := &discordgo.MessageSend{Content: payload}
+	if replyToID != "" {
+		failIfMissing := false
+		data.Reference = &discordgo.MessageReference{
+			MessageID:       replyToID,
+			ChannelID:       ch,
+			FailIfNotExists: &failIfMissing,
+		}
+	}
+	if _, err := discordSession.ChannelMessageSendComplex(ch, data); err != nil {
 		discordStatus = "Discord send: " + err.Error()
 		return err
 	}
@@ -1189,19 +1605,28 @@ func saveChatMessages() {
 	saveUserConfig(userConfigCache)
 }
 
+// newChatMessageID gives a local message a stable id, so the selection and the
+// quote target follow it even when the history scrolls or is trimmed.
+func newChatMessageID() string {
+	idBytes := make([]byte, 8)
+	rand.Read(idBytes)
+	return fmt.Sprintf("%x", idBytes)
+}
+
 func sendChatMessage(sender, text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
 	chatMutex.Lock()
-	idBytes := make([]byte, 8)
-	rand.Read(idBytes)
 	msg := ChatMessage{
-		ID:        fmt.Sprintf("%x", idBytes),
+		ID:        newChatMessageID(),
 		Sender:    sender,
 		Text:      strings.TrimSpace(text),
 		Timestamp: time.Now(),
 		Own:       isLocalChatSender(sender),
+		// A reply picked from the action bar travels with the message, so
+		// the quote survives a restart and becomes a Discord reply.
+		Quote: takeChatReply(sender),
 	}
 	chatMessages = append(chatMessages, msg)
 	if len(chatMessages) > 500 {
@@ -1214,10 +1639,15 @@ func sendChatMessage(sender, text string) {
 		noteScreensaverChat(msg.Sender, msg.Text)
 	}
 
-	// Mirror the message to Discord when configured.
+	// Mirror the message to Discord when configured, quoting the original when
+	// the reply points at a Discord message.
 	if appConfig != nil {
+		replyID := ""
+		if msg.Quote != nil {
+			replyID = msg.Quote.ID
+		}
 		go func() {
-			if err := discordSendMessage(sender, text); err != nil {
+			if err := discordSendMessageReply(sender, text, replyID); err != nil {
 				log.Printf("[discord] send failed: %v", err)
 			}
 		}()
@@ -1253,8 +1683,14 @@ func senderColorForName(name string) sdl.Color {
 	return colors[h%len(colors)]
 }
 
-// renderChatAvatar draws a small colored circle with the sender's first initial.
-func renderChatAvatar(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, size int32, name string, col sdl.Color) {
+// renderChatAvatar draws the sender's picture when the chat behind it supplies
+// one, and the colored initial circle when it does not (or while the picture is
+// still being fetched).
+func renderChatAvatar(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, size int32, name, avatarURL string, col sdl.Color) {
+	if tex := getChatAvatarTexture(renderer, avatarURL); tex != nil {
+		renderer.Copy(tex, nil, &sdl.Rect{X: x, Y: y, W: size, H: size})
+		return
+	}
 	fillCircle(renderer, x+size/2, y+size/2, size/2, col)
 	initial := "?"
 	runes := []rune(name)
@@ -1325,6 +1761,35 @@ func drawChatLinkCard(renderer *sdl.Renderer, config *Config, font, small *ttf.F
 	renderText(renderer, config, small, ellipsize(small, path, textW), ColorTextSecondary(), textX, rect.Y+5+int32(font.Height()))
 }
 
+// drawPencilGlyph draws the small edit mark used by the chat name pill. It is
+// a filled 45° pencil (tip bottom-left) rather than a character, because the
+// bundled fonts have no pencil glyph and a substituted one read as a slash.
+func drawPencilGlyph(renderer *sdl.Renderer, x, y, size int32, col sdl.Color) {
+	if size < 8 {
+		size = 8
+	}
+	fs := float64(size)
+	dirX, dirY := 0.7071, -0.7071
+	perpX, perpY := 0.7071, 0.7071
+	bodyW := fs * 0.34
+	bodyLen := fs * 0.86
+	round := func(v float64) int32 { return int32(math.Round(v)) }
+	at := func(px, py float64) pt { return pt{round(px), round(py)} }
+
+	tip := pt{x, y + size/2}
+	baseX := float64(x) + dirX*bodyW*0.8
+	baseY := float64(y+size/2) + dirY*bodyW*0.8
+	endX := baseX + dirX*bodyLen
+	endY := baseY + dirY*bodyLen
+	c1 := at(baseX+perpX*bodyW/2, baseY+perpY*bodyW/2)
+	c2 := at(baseX-perpX*bodyW/2, baseY-perpY*bodyW/2)
+	c3 := at(endX-perpX*bodyW/2, endY-perpY*bodyW/2)
+	c4 := at(endX+perpX*bodyW/2, endY+perpY*bodyW/2)
+
+	fillTriangleFilled(renderer, tip, c1, c2, col)
+	fillQuad(renderer, c1, c2, c3, c4, col)
+}
+
 func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	font, _ := getCachedFont(config, element.Font)
 	if font == nil {
@@ -1346,6 +1811,11 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	chatLinkRects = chatLinkRects[:0]
 	chatTextLinkRects = chatTextLinkRects[:0]
 	chatImageRects = chatImageRects[:0]
+	chatMessageHits = chatMessageHits[:0]
+	chatHeaderMembersRect = sdl.Rect{}
+	chatJumpRect = sdl.Rect{}
+	chatReplyCancelRect = sdl.Rect{}
+	chatReplyStrip = sdl.Rect{}
 	// One stat per session: the explorer root only changes with the config, and
 	// the attach path updates this as soon as the user picks a new folder.
 	if chatAttachmentRoot == "." && config != nil {
@@ -1360,7 +1830,6 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	const headerH = int32(44)
 	const inputH = int32(50)
 	msgAreaTop := listY + headerH + SpaceSM
-	msgAreaBottom := listY + listH - inputH - SpaceSM
 
 	// Panel background with subtle border.
 	fillRoundedRect(renderer, listX, listY, listW, listH, RadiusMD, ColorSurfaceRaised)
@@ -1378,12 +1847,25 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		statusFont = font
 	}
 	statusRight := listX + listW - SpaceMD
+	statusLeft := statusRight
+
+	// The reply strip sits above the composer and takes its room from the
+	// message area, so the newest bubble is never covered by it.
+	replyH := int32(0)
+	if !chatSelectionBar.open {
+		replyH = chatReplyStripHeight(statusFont)
+	}
+	msgAreaBottom := listY + listH - inputH - SpaceSM - replyH
+	if replyH > 0 {
+		msgAreaBottom -= SpaceXS
+	}
 
 	// Discord status (right-aligned).
 	if discordStatus != "" {
 		dsw, _, _ := statusFont.SizeUTF8(discordStatus)
 		statusRight -= int32(dsw) + SpaceSM
 		renderText(renderer, config, statusFont, discordStatus, ColorTextTertiary(), statusRight, statusY)
+		statusLeft = statusRight
 		statusRight -= SpaceSM
 	}
 
@@ -1395,18 +1877,33 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			groqX = listX + SpaceMD
 		}
 		renderText(renderer, config, statusFont, groqStatus, groqStatusColor(), groqX, statusY)
+		statusLeft = groqX
 	}
 
 	// Display-name pill (left of the status labels): tap to rename the local
 	// chat user. The label shows the active name so the change is discoverable.
-	nameLabel := chatDisplayName() + " ✎"
+	// The edit mark is drawn, not typed: Inter has no pencil codepoint and the
+	// font substitution replaced the old "✎" with an ellipsis, so the pill read
+	// "You …" on every device.
+	nameLabel := chatDisplayName()
 	nw, _, _ := statusFont.SizeUTF8(nameLabel)
 	npad := int32(10)
+	pencil := int32(12)
 	nph := int32(statusFont.Height()) + SpaceXS*2
-	chatNameRect = sdl.Rect{X: listX + SpaceMD, Y: statusY - SpaceXS, W: int32(nw) + npad*2, H: nph}
+	chatNameRect = sdl.Rect{X: listX + SpaceMD, Y: statusY - SpaceXS, W: int32(nw) + npad*2 + pencil + SpaceXS, H: nph}
 	fillRoundedRect(renderer, chatNameRect.X, chatNameRect.Y, chatNameRect.W, chatNameRect.H, nph/2, WithAlpha(ColorInfo, 45))
 	strokeRoundedRect(renderer, chatNameRect.X, chatNameRect.Y, chatNameRect.W, chatNameRect.H, nph/2, 1, WithAlpha(ColorInfo, 120))
 	renderText(renderer, config, statusFont, nameLabel, ColorTextSecondary(), chatNameRect.X+npad, statusY)
+	drawPencilGlyph(renderer, chatNameRect.X+npad+int32(nw)+SpaceXS, chatNameRect.Y+nph/2, pencil, WithAlpha(ColorInfo, 220))
+
+	// Members chip: the controller path to a speaker's profile. It is dropped
+	// rather than crowded when the status labels already reach the name pill.
+	membersCount := len(chatMembersList())
+	membersLabel := fmt.Sprintf("Members %d", membersCount)
+	if mw, _, _ := statusFont.SizeUTF8(membersLabel); int32(mw)+18+SpaceSM <= statusLeft-(chatNameRect.X+chatNameRect.W) {
+		chipX := chatNameRect.X + chatNameRect.W + SpaceSM
+		chatHeaderMembersRect = drawChatMembersChip(renderer, config, statusFont, chipX, chatNameRect.Y, membersCount)
+	}
 
 	// Divider under status.
 	dividerY := statusY + int32(statusFont.Height()) + SpaceXS
@@ -1435,14 +1932,42 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		chatScrollOffset = 0
 	}
 
+	// Reading the newest message marks the history seen; a reader scrolled back
+	// keeps the count so the jump pill can say how many messages arrived.
+	chatMutex.Lock()
+	total := len(chatMessages)
+	chatMutex.Unlock()
+	if chatScrollOffset == 0 {
+		chatSeenCount = total
+	}
+	if chatSeenCount > total {
+		chatSeenCount = total
+	}
+	if chatSeenCount < 0 {
+		chatSeenCount = 0
+	}
+	chatUnread = total - chatSeenCount
+	chatClampSelection()
+
 	// Render messages from the bottom up so the latest message sits at the bottom.
 	startY := msgAreaBottom
 	endIdx := len(messages) - 1 - chatScrollOffset
+	chatNewestShown = endIdx
+	chatOldestShown = endIdx
 	for i := endIdx; i >= 0 && startY > msgAreaTop; i-- {
 		msg := messages[i]
 		isUser := msg.Own || isLocalChatSender(msg.Sender)
 		isAI := strings.EqualFold(msg.Sender, "Juka AI")
 		isSystem := strings.EqualFold(msg.Sender, "System") && !isAI
+
+		// A follow-up from the same speaker is a continuation: the name and
+		// avatar are already on screen above it. A reply or a new day always
+		// starts a fresh group.
+		grouped := !isSystem && chatContinuesGroup(messages, i)
+		quoteH := int32(0)
+		if msg.Quote != nil {
+			quoteH = int32(statusFont.Height())*2 + 6 + SpaceXS
+		}
 
 		text := msg.Text
 		lines := wrapChatLines(font, text, maxBubbleW-bubblePad*2, 8)
@@ -1460,6 +1985,10 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		bw += bubblePad * 2
 		if bw < 120 {
 			bw = 120
+		}
+		if msg.Quote != nil && bw < 240 && maxBubbleW >= 240 {
+			// Leave the quote header room for a readable author and preview.
+			bw = 240
 		}
 		if bw > maxBubbleW {
 			bw = maxBubbleW
@@ -1507,7 +2036,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 				bw = minBubble
 			}
 		}
-		bh += imageH + linkH
+		bh += imageH + linkH + quoteH
 
 		by := startY - bh
 		if by < msgAreaTop {
@@ -1516,21 +2045,29 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 
 		var bx int32
 		var senderCol sdl.Color
+		var avatarHit, senderHit sdl.Rect
 		if isUser {
 			bx = listX + listW - bw - SpaceSM
 			senderCol = ColorInfo
 		} else if isAI {
 			bx = listX + avatarSize + SpaceSM*2
 			senderCol = ColorTextAccent()
-			renderChatAvatar(renderer, config, font, listX+SpaceSM, by+(bh-avatarSize)/2, avatarSize, "J", uiHighlightColor())
+			if !grouped {
+				avatarHit = sdl.Rect{X: listX + SpaceSM, Y: by + (bh-avatarSize)/2, W: avatarSize, H: avatarSize}
+				renderChatAvatar(renderer, config, font, avatarHit.X, avatarHit.Y, avatarSize, "J", "", uiHighlightColor())
+			}
 		} else if isSystem {
 			bx = listX + (listW-bw)/2
 			senderCol = ColorWarning
 		} else {
 			bx = listX + avatarSize + SpaceSM*2
 			senderCol = senderColorForName(msg.Sender)
-			// Avatar.
-			renderChatAvatar(renderer, config, font, listX+SpaceSM, by+(bh-avatarSize)/2, avatarSize, msg.Sender, senderCol)
+			if !grouped {
+				// Avatar: the speaker's own picture when it exists. Clicking it
+				// opens their profile, exactly like the name does.
+				avatarHit = sdl.Rect{X: listX + SpaceSM, Y: by + (bh-avatarSize)/2, W: avatarSize, H: avatarSize}
+				renderChatAvatar(renderer, config, font, avatarHit.X, avatarHit.Y, avatarSize, msg.Sender, msg.AvatarURL, senderCol)
+			}
 		}
 
 		// Bubble background.
@@ -1549,18 +2086,31 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			// Accent spine marks assistant replies without shouting.
 			fillRoundedRect(renderer, bx, by+8, 3, bh-16, 2, uiHighlightColor())
 		}
+		// The selected message wears the accent ring the whole UI uses for
+		// focus, so it is obvious which message the action bar acts on.
+		if i == chatSelected {
+			strokeRoundedRect(renderer, bx-2, by-2, bw+4, bh+4, RadiusMD+2, 2, WithAlpha(accentColor, 210))
+		}
 
-		// Sender name + timestamp above the bubble.
-		if !isSystem {
+		// Sender name + timestamp above the bubble, once per group. Clicking
+		// either opens the sender's profile card.
+		if !isSystem && !grouped {
 			nameText := fmt.Sprintf("%s • %s", msg.Sender, msg.Timestamp.Format("15:04"))
 			nameX := bx
 			nameY := by - int32(statusFont.Height()) - 2
+			nameW, _, _ := statusFont.SizeUTF8(msg.Sender)
+			senderHit = sdl.Rect{X: nameX, Y: nameY, W: int32(nameW), H: int32(statusFont.Height())}
 			renderText(renderer, config, statusFont, nameText, senderCol, nameX, nameY)
+		}
+
+		// Quote header for a reply.
+		if msg.Quote != nil {
+			drawChatQuoteBlock(renderer, config, statusFont, bx+bubblePad, by+bubblePad, bw-bubblePad*2, msg.Quote)
 		}
 
 		// Message text (wrapped so long AI answers stay readable).
 		for li, line := range lines {
-			lineY := by + bubblePad + int32(li)*lineH
+			lineY := by + bubblePad + quoteH + int32(li)*lineH
 			renderText(renderer, config, font, line, ColorTextPrimary(), bx+bubblePad, lineY)
 			// A tap on the link text itself plays or opens it, not only the
 			// preview card below. Only a link that survived the wrap intact is
@@ -1583,7 +2133,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			iw := int32(120)
 			ih := int32(80)
 			ix := bx + bubblePad
-			iy2 := by + bubblePad + int32(len(lines))*lineH + SpaceXS
+			iy2 := by + bubblePad + quoteH + int32(len(lines))*lineH + SpaceXS
 			fillRoundedRect(renderer, ix, iy2, iw, ih, RadiusSM, ColorSurface)
 			renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
 			renderer.DrawRect(&sdl.Rect{X: ix, Y: iy2, W: iw, H: ih})
@@ -1601,7 +2151,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			if cardW > 360 {
 				cardW = 360
 			}
-			cy := by + bubblePad + int32(len(lines))*lineH + imageH
+			cy := by + bubblePad + quoteH + int32(len(lines))*lineH + imageH
 			for i, link := range links {
 				r := sdl.Rect{X: bx + bubblePad, Y: cy + int32(i)*(linkCardH+linkCardGap), W: cardW, H: linkCardH}
 				drawChatLinkCard(renderer, config, font, statusFont, r, link)
@@ -1609,7 +2159,38 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 		}
 
-		startY = by - bubbleGap - int32(statusFont.Height()) - 2
+		// Record the targets this message owns: the body selects it, the avatar
+		// and the name open the speaker's profile.
+		chatMessageHits = append(chatMessageHits, chatMessageHit{
+			index:      i,
+			body:       sdl.Rect{X: bx, Y: by, W: bw, H: bh},
+			avatar:     avatarHit,
+			name:       senderHit,
+			sender:     msg.Sender,
+			userID:     msg.UserID,
+			ownMessage: msg.Own,
+		})
+		chatOldestShown = i
+
+		aboveY := by - bubbleGap
+		if !isSystem && !grouped {
+			aboveY -= int32(statusFont.Height()) + 2
+		}
+		// A divider closes a group: a new day, or the boundary between what the
+		// reader had already seen and what arrived since.
+		label := chatDayLabel(msg.Timestamp)
+		unreadBoundary := chatUnread > 0 && i == len(messages)-chatUnread
+		if i == 0 || !chatSameDay(messages[i-1].Timestamp, msg.Timestamp) || unreadBoundary {
+			dividerH := int32(statusFont.Height()) + 10
+			if aboveY-dividerH > msgAreaTop {
+				if unreadBoundary {
+					label = "NEW MESSAGES"
+				}
+				drawChatDayDivider(renderer, config, statusFont, listX+SpaceSM, listW-SpaceSM*2, aboveY-dividerH, label, unreadBoundary)
+				aboveY -= dividerH
+			}
+		}
+		startY = aboveY
 	}
 
 	// Assistant typing indicator.
@@ -1628,6 +2209,29 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 
 	// Single composer: click the input area to type, Send to send, Ask AI for Groq.
 	inputY := listY + listH - inputH - SpaceSM
+	if replyH > 0 {
+		drawChatReplyStrip(renderer, config, statusFont, sdl.Rect{
+			X: listX + SpaceSM,
+			Y: inputY - replyH - SpaceXS,
+			W: listW - 2*SpaceSM,
+			H: replyH,
+		})
+	}
+	// Unread pill: how many messages arrived while the reader is scrolled back.
+	drawChatJumpPill(renderer, config, statusFont, listX+SpaceSM, inputY-replyH-SpaceXS, listW-2*SpaceSM)
+
+	// A selected message turns the composer into its action bar, so a
+	// controller never needs a second navigation mode to act on a message.
+	if chatSelectionBar.open {
+		drawChatSelectionBar(renderer, config, statusFont, sdl.Rect{
+			X: listX + SpaceSM, Y: inputY, W: listW - 2*SpaceSM, H: inputH,
+		})
+		chatInputRect = sdl.Rect{}
+		chatSendBtnRect = sdl.Rect{}
+		chatAskAIBtnRect = sdl.Rect{}
+		chatAttachBtnRect = sdl.Rect{}
+		return
+	}
 	inputX := listX + SpaceSM
 	inputW := listW - 2*SpaceSM
 	inputBorderCol := ColorBorder
@@ -1724,6 +2328,15 @@ func handleChatInput(e *sdl.KeyboardEvent, config *Config) {
 			}
 		case sdl.K_ESCAPE:
 			chatInputText = ""
+			clearChatSelection()
+		case sdl.K_LEFT:
+			moveChatSelection(-1)
+		case sdl.K_RIGHT:
+			moveChatSelection(1)
+		case sdl.K_TAB:
+			// Tab opens the member list, the keyboard way to reach someone who
+			// has not written recently enough for their name to be on screen.
+			openChatMembers()
 		case sdl.K_y:
 			if strings.TrimSpace(chatInputText) != "" {
 				sendGroqChatMessage(chatInputText)

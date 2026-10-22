@@ -10,7 +10,9 @@ Open it from **Apps → Browser** or **Start → Browser**.
 
 ## What it can do
 
-* Open a URL from the address bar, with or without `https://`.
+* Open a URL from the address bar, with or without `https://`. The bar opens
+  with the current address selected, so typing replaces it (BACKSPACE clears
+  it) instead of appending to the old one.
 * Follow links on the page without typing: press **X** (or `L`) to open the
   link picker, choose with the D-pad, and press **A**.
 * Go **Back** through visited pages and **Reload** the current one.
@@ -18,6 +20,9 @@ Open it from **Apps → Browser** or **Start → Browser**.
   issue form for `jukaLang/JukaHubV2`.
 * Read GitHub issues, release notes, README files, documentation sites and
   other server-rendered HTML.
+* Keep the page's shape: type scale, colours, boxes and rules, flex rows (cards
+  and icon+label pairs side by side), and absolutely positioned or fixed
+  layers painted over the text in `z-index` order.
 
 Pages are capped at 2 MiB and 10 seconds. Redirects must stay on HTTP or HTTPS.
 
@@ -37,7 +42,8 @@ In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 ## What it cannot do
 
 This is a reading browser, not a full web engine. It does not run JavaScript,
-render images or CSS, log in to sites, or submit forms. GitHub issue pages and
+render images, implement grid or float layouts, log in to sites, or submit
+forms. GitHub issue pages and
 release pages work; a site that renders its content only with JavaScript will
 show little or no text. The companion app is the way to send a link from a
 phone if typing on the handheld is awkward.

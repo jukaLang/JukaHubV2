@@ -33,10 +33,31 @@ have one. A game without art shows its initials on an accent tile instead, so
 the layout stays the same while the download is missing.
 
 The fetch runs on a worker; covers appear when it finishes, without reopening
-the panel. A title the thumbnail set does not have is remembered in
+the panel. While it runs the footer shows **Stop** instead of **Fill Gaps**, and
+the status line counts the covers already handled (`fetching 42/120`). Pressing
+the action again stops within a moment — a cover still downloading is dropped,
+but nothing already saved is thrown away, and starting again scans the card and
+queues only what is still missing, so an interrupted or crashed run resumes
+where it left off. A title the
+thumbnail set does not have is remembered in
 `data/game-art/.missing-art.json` and not requested again for 30 days, so a
 library full of unlisted homebrew does not re-download 200 404s every time.
 Network errors are not cached — only a real 404 is.
+
+## Completeness
+
+The header carries a ring that fills as the library gains covers, with the
+percentage inside it, and every console row has a thin meter showing that
+console's share. The status line spells the same figure out
+(`412 game(s) in 9 console(s) · 330 cover(s) (80%)`), so a card with a few gaps
+is visible without opening a settings panel.
+
+The numbers are counted from the files on the card, not from the download
+attempts: a cover that exists is counted whatever put it there, including one
+copied from a PC or a scraper. Deleting a cover lowers the figure again.
+Providers beyond the libretro thumbnail set (descriptions, screenshots, release
+dates) need a metadata source with its own account or key, so they are not part
+of this pass.
 
 ## Launching
 
@@ -180,7 +201,7 @@ reconnect.
 | D-pad left | back to the console column |
 | **A** | open the highlighted console, or play the highlighted game |
 | **X** | LAN play for the highlighted game (host or join over Wi-Fi) |
-| **L1** / **F** | fetch missing box art for the scanned library |
+| **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
 | **Y** | rescan the card (after copying new ROMs) |
 | **B** / Back | close the panel |
 | Mouse | click a console to select it, a game to play it, outside to close |

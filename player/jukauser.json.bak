@@ -16,18 +16,18 @@
       "b": 32
     },
     "fullscreen": false,
-    "fileExplorerRoot": "",
-    "weatherEnabled": false,
+    "fileExplorerRoot": "/media",
+    "weatherEnabled": true,
     "weatherUnit": "",
     "tspUsername": "",
-    "playbackResolution": "",
+    "playbackResolution": "720",
     "reducedMotion": false,
     "lowPower": false,
     "ledSync": false,
     "gridColumns": 5,
     "searchWidth": 940,
     "dynamicBg": false,
-    "screensaverTimeout": 300,
+    "screensaverTimeout": 25,
     "socialNotifs": false,
     "volume": 0,
     "volumeSet": false,
@@ -53,12 +53,13 @@
       "a11y_high_contrast": true,
       "a11y_swap_ab": true,
       "a11y_swap_xy": false,
+      "browser_content": "Title: DuckDuckGo Lite: Fast, Lightweight Private Search\nURL: https://lite.duckduckgo.com/lite/\nLinks: 1 (press X or L to choose one)\n\nDuckDuckGo",
       "buttonColor": "#1e293b",
       "chat_input": "hi",
       "diskpie_data": {
-        "Pct": 66,
         "Total": 510718431232,
-        "Used": 339261935616
+        "Used": 349043884032,
+        "Pct": 68
       },
       "ftp_address": "",
       "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
@@ -70,15 +71,22 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "days": {
-          "2026-10-21": 275
-        },
+        "total": 1710,
         "scenes": {
-          "Main": 275
+          "Browser": 18,
+          "Main": 1695,
+          "Misc": 2,
+          "Tube": 12
         },
-        "total": 273,
-        "unlocked": {}
+        "days": {
+          "2026-10-21": 275,
+          "2026-10-22": 1452
+        },
+        "unlocked": {
+          "first_steps": "2026-10-22T17:01:35-04:00"
+        }
       },
+      "screensaverTimeoutMigrated": true,
       "ssh_address": "",
       "ssh_fingerprint": "",
       "ssh_port": "2222",
@@ -86,6 +94,7 @@
       "ssh_status": "stopped",
       "ssh_user": "juka",
       "swapABButtons": false,
+      "textbrowser_url": "https://lite.duckduckgo.com/lite/",
       "tool_ffmpeg": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffmpeg.exe",
       "tool_ffplay": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffplay.exe",
       "tool_ffprobe": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\required\\ffprobe.exe",
@@ -97,6 +106,24 @@
   "favorites": {
     "videos": [],
     "recent": [
+      {
+        "Type": "video",
+        "Data": {
+          "id": "TO9fteLS4qQ",
+          "title": "Most VIEWED YouTube Shorts of 2026!",
+          "uploader": "Infinite",
+          "channel": "Infinite",
+          "duration": 1995,
+          "thumbnail": "https://i.ytimg.com/vi/TO9fteLS4qQ/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==\u0026rs=AOn4CLDaE-i6HJRiUKS2manZgKLu9KXg6A",
+          "description": "Play Waterpark Simulator NOW - https://store.steampowered.com/app/3293260/Waterpark_Simulator/ COME HANG OUT WITH ...",
+          "view_count": 1228576,
+          "upload_date": "",
+          "webpage_url": "",
+          "url": "https://www.youtube.com/watch?v=TO9fteLS4qQ",
+          "position": 15.1157534
+        },
+        "Timestamp": "2026-10-22T15:36:45.1718513-04:00"
+      },
       {
         "Type": "video",
         "Data": {
@@ -172,5 +199,69 @@
     ],
     "files": [],
     "iptv": []
+  },
+  "chat": {
+    "messages": [
+      {
+        "id": "1562225186294468672",
+        "sender": "jukalang",
+        "text": "@everyone Looking for beta testers to test the new JukaHub features.",
+        "timestamp": "2026-10-20T22:05:09.153Z"
+      },
+      {
+        "id": "1562526758278926367",
+        "sender": "lohesu",
+        "text": "thats awesome",
+        "timestamp": "2026-10-21T18:03:29.517Z"
+      },
+      {
+        "id": "1562550647528759397",
+        "sender": "jukalang",
+        "text": "if you have any suggestions on what to add next, let me know. My progress is a little bet slower compared to the \"new Apps that are developed\" as I tend to manually test and rewrite things. I try to add more safety checks and maintain applications long term.",
+        "timestamp": "2026-10-21T19:38:25.158Z"
+      },
+      {
+        "id": "1562606820277887048",
+        "sender": "jukalang",
+        "text": "I've tried Claude AI code to improve my code and it just made a mess...Claude may be good for simple project but for complex dealing with system files, it just glitches. I think I will rely on my own edits going forward with JukaHub (especially when it comes to system files).",
+        "timestamp": "2026-10-21T23:21:37.785Z"
+      },
+      {
+        "id": "1562607184830005320",
+        "sender": "jukalang",
+        "text": "My UI might not be the best looking or get the best features, but I will try to focus more on security, reliability, and long term support",
+        "timestamp": "2026-10-21T23:23:04.701Z"
+      },
+      {
+        "id": "1562636605045346305",
+        "sender": "You",
+        "text": "j",
+        "timestamp": "2026-10-22T01:19:59.027Z"
+      },
+      {
+        "id": "1562636681679732747",
+        "sender": "jukalang",
+        "text": "Hi",
+        "timestamp": "2026-10-22T01:20:17.298Z"
+      },
+      {
+        "id": "1562636703267819593",
+        "sender": "jukalang",
+        "text": "How are you?",
+        "timestamp": "2026-10-22T01:20:22.445Z"
+      },
+      {
+        "id": "1562817315202932797",
+        "sender": "davidemaglio",
+        "text": "hi. if i want to install it into NextUI (i have a Trimui Brick) I need to add .pak to folder and put into Tools? i created Apps folder but it's missing into NextUI",
+        "timestamp": "2026-10-22T13:18:03.686Z"
+      },
+      {
+        "id": "1562851299572318330",
+        "sender": "jukalang",
+        "text": "\u003c@703521917419651142\u003e If I remember correctly, did you dump the actual contents of the folder into .pak folder or did you keep JukaHub-Trimui as a subdirectory? I believe you have to dump the actual files into JukaHub-Trimui.pak and it will show up.",
+        "timestamp": "2026-10-22T15:33:06.191Z"
+      }
+    ]
   }
 }

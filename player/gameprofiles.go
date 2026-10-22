@@ -872,9 +872,11 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 	pid := cmd.Process.Pid
 	gameProfileSetRunning(id, pid)
 	log.Printf("[gameprofiles] launched %s (pid %d, dir %s)", id, pid, gameDir)
+	recorder := startTimelapse(appConfig, id)
 	go func() {
 		err := cmd.Wait()
 		gameProfileSetRunning(id, 0)
+		recorder.Stop()
 		if logFile != nil {
 			if err != nil {
 				fmt.Fprintf(logFile, "exit: %v\n", err)

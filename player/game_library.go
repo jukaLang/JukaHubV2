@@ -32,12 +32,17 @@ type libraryGame struct {
 	System string
 	Title  string
 	Art    string
+	// HasArt is true when the cover file exists right now. It is filled at
+	// scan time and recounted after a download, so the completeness figures
+	// describe the card rather than the intent.
+	HasArt bool
 }
 
 // librarySystem is one console row with its games.
 type librarySystem struct {
-	Name  string
-	Games []libraryGame
+	Name    string
+	Games   []libraryGame
+	WithArt int
 }
 
 // gameLibraryReport is the built library. Total counts every game, including
@@ -45,6 +50,7 @@ type librarySystem struct {
 type gameLibraryReport struct {
 	Systems []librarySystem
 	Total   int
+	WithArt int
 	Roots   []string
 }
 
@@ -104,11 +110,13 @@ func buildGameLibrary(report romScanReport, artRoot string) gameLibraryReport {
 		if title == "" || strings.TrimSpace(rom.System) == "" {
 			continue
 		}
+		art := romArtworkPath(rom, artRoot)
 		grouped[rom.System] = append(grouped[rom.System], libraryGame{
 			Path:   rom.Path,
 			System: rom.System,
 			Title:  title,
-			Art:    romArtworkPath(rom, artRoot),
+			Art:    art,
+			HasArt: artworkCoverPresent(art),
 		})
 	}
 	for name, games := range grouped {
@@ -119,8 +127,10 @@ func buildGameLibrary(report romScanReport, artRoot string) gameLibraryReport {
 			}
 			return left < right
 		})
-		lib.Systems = append(lib.Systems, librarySystem{Name: name, Games: games})
+		withArt := countCoveredGames(games)
+		lib.Systems = append(lib.Systems, librarySystem{Name: name, Games: games, WithArt: withArt})
 		lib.Total += len(games)
+		lib.WithArt += withArt
 	}
 	sort.SliceStable(lib.Systems, func(i, j int) bool {
 		ri, iKnown := consoleOrder[lib.Systems[i].Name]
@@ -135,6 +145,29 @@ func buildGameLibrary(report romScanReport, artRoot string) gameLibraryReport {
 		}
 	})
 	return lib
+}
+
+// countCoveredGames is the number of games in a list whose cover exists.
+func countCoveredGames(games []libraryGame) int {
+	n := 0
+	for _, game := range games {
+		if game.HasArt {
+			n++
+		}
+	}
+	return n
+}
+
+// coverPercent is the share of a list that has box art, rounded to the nearest
+// whole percent. An empty list reads as 0 rather than dividing by zero.
+func coverPercent(withArt, total int) int {
+	if total <= 0 || withArt <= 0 {
+		return 0
+	}
+	if withArt >= total {
+		return 100
+	}
+	return (withArt*200 + total) / (2 * total)
 }
 
 // ── Emulator resolution ──────────────────────────────────────────────────
@@ -319,9 +352,14 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		restoreProfile()
 		return err
 	}
+	// The time-lapse covers exactly this child's life: it starts when the game
+	// does and is assembled when the game exits. A machine with no readable
+	// framebuffer returns nil here and the launch is unchanged.
+	recorder := startTimelapse(appConfig, game.Title)
 	go func() {
 		_ = cmd.Wait()
 		restoreProfile()
+		recorder.Stop()
 	}()
 	recordGameLaunch(game)
 	return nil

@@ -10,6 +10,7 @@ package main
 // no Roms folder.
 
 import (
+	"math"
 	"path/filepath"
 	"strings"
 
@@ -58,17 +59,23 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 			if title == "" {
 				title = gameDisplayTitle(it.Path)
 			}
+			art := romArtworkPath(scannedROM{
+				Path:   it.Path,
+				System: it.System,
+			}, libraryArtworkRoot())
 			recentGames = append(recentGames, libraryGame{
 				Path:   it.Path,
 				System: it.System,
 				Title:  title,
-				Art: romArtworkPath(scannedROM{
-					Path:   it.Path,
-					System: it.System,
-				}, libraryArtworkRoot()),
+				Art:    art,
+				HasArt: artworkCoverPresent(art),
 			})
 		}
-		systems = append(systems, librarySystem{Name: continueSystemName, Games: recentGames})
+		systems = append(systems, librarySystem{
+			Name:    continueSystemName,
+			Games:   recentGames,
+			WithArt: countCoveredGames(recentGames),
+		})
 	}
 	systems = append(systems, lib.Systems...)
 	return systems
@@ -177,11 +184,13 @@ func gameLibraryStatus() string {
 		return "No games found — copy ROMs into Roms/<system>/ and press Y"
 	}
 	status := itoa(gameLib.lib.Total) + " game(s) in " + itoa(len(gameLib.lib.Systems)) + " console(s)"
+	status += " · " + itoa(gameLib.lib.WithArt) + " cover(s) (" + itoa(coverPercent(gameLib.lib.WithArt, gameLib.lib.Total)) + "%)"
 	if len(gameLib.recents) > 0 {
 		status += " · " + itoa(len(gameLib.recents)) + " recent"
 	}
 	if artworkFetchRunning() {
-		status += " · fetching art…"
+		done, total, _ := artworkFetchProgress()
+		status += " · fetching " + itoa(done) + "/" + itoa(total)
 	}
 	return status
 }
@@ -263,11 +272,17 @@ func launchSelectedGame() bool {
 }
 
 // fetchMissingLibraryArtwork starts a background download for every scanned
-// game without a local cover. The scan is repeated here instead of reusing the
-// panel's snapshot because a card can be updated while the panel is open.
+// game without a local cover, or stops one that is already running. The scan is
+// repeated here instead of reusing the panel's snapshot because a card can be
+// updated while the panel is open; that also makes the action resumable, since
+// only the covers still missing are queued.
 func fetchMissingLibraryArtwork() {
 	if artworkFetchRunning() {
-		ShowToast(artworkFetchSummary(), ToastKindInfo)
+		if stopArtworkFetch() {
+			ShowToast("Stopping the artwork fetch…", ToastKindInfo)
+		} else {
+			ShowToast(artworkFetchSummary(), ToastKindInfo)
+		}
 		return
 	}
 	artRoot := libraryArtworkRoot()
@@ -285,7 +300,25 @@ func fetchMissingLibraryArtwork() {
 		ShowToast("An artwork fetch is already running.", ToastKindInfo)
 		return
 	}
-	ShowToast("Fetching "+itoa(len(missing))+" missing cover(s) in the background", ToastKindInfo)
+	ShowToast("Fetching "+itoa(len(missing))+" missing cover(s) — L1 / F stops and resumes", ToastKindInfo)
+}
+
+// recountLibraryArtwork refreshes the HasArt flags and the completeness counts
+// after a fetch. The card is not rescanned: only the stat calls change, and
+// they run once per completed fetch rather than on every frame.
+func recountLibraryArtwork() {
+	total, with := 0, 0
+	for i := range gameLib.lib.Systems {
+		system := &gameLib.lib.Systems[i]
+		for j := range system.Games {
+			system.Games[j].HasArt = artworkCoverPresent(system.Games[j].Art)
+		}
+		system.WithArt = countCoveredGames(system.Games)
+		total += len(system.Games)
+		with += system.WithArt
+	}
+	gameLib.lib.Total = total
+	gameLib.lib.WithArt = with
 }
 
 // handleGameLibraryKey consumes every key while the panel is open so the scene
@@ -454,6 +487,62 @@ func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game 
 		rect.X+(rect.W-int32(tw))/2, rect.Y+(rect.H-int32(th))/2)
 }
 
+// drawCoverCompletenessRing draws a ring filled clockwise to percent, with the
+// percentage inside it. Line segments keep it independent of SDL_gfx, and one
+// completed arc is cheap enough to redraw with the panel.
+func drawCoverCompletenessRing(renderer *sdl.Renderer, config *Config, cx, cy, radius int32, percent int) {
+	if renderer == nil || radius <= 4 {
+		return
+	}
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	// Alpha is used for the unfinished part of the ring, and the caller may
+	// have left the renderer in an opaque mode.
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	const segments = 48
+	filled := segments * percent / 100
+	if percent > 0 && filled == 0 {
+		filled = 1
+	}
+	accent := installHighlight()
+	// Two concentric circles give the ring a 2px stroke on a 720p panel.
+	for _, r := range []int32{radius, radius - 1} {
+		for i := 0; i < segments; i++ {
+			a0 := 2*math.Pi*float64(i)/segments - math.Pi/2
+			a1 := 2*math.Pi*float64(i+1)/segments - math.Pi/2 + 0.03
+			// The unfinished track stays faint: it is a hint, not a value. The
+			// segments overlap slightly at their joins, so this is drawn twice
+			// per pixel and the alpha has to stay low to avoid a bright ring.
+			col, alpha := ColorBorderDefault, uint8(24)
+			if i < filled {
+				col, alpha = accent, 240
+			}
+			renderer.SetDrawColor(col.R, col.G, col.B, alpha)
+			renderer.DrawLine(
+				cx+int32(float64(r)*math.Cos(a0)), cy+int32(float64(r)*math.Sin(a0)),
+				cx+int32(float64(r)*math.Cos(a1)), cy+int32(float64(r)*math.Sin(a1)))
+		}
+	}
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	label := itoa(percent) + "%"
+	tw, th, _ := font.SizeUTF8(label)
+	if int32(tw) > 2*radius-8 {
+		// "100%" does not fit inside the ring on the compact canvas; the number
+		// alone still reads as the completion figure.
+		label = itoa(percent)
+		tw, th, _ = font.SizeUTF8(label)
+	}
+	renderText(renderer, config, font, label, ColorTextSecondary(),
+		cx-int32(tw)/2, cy-int32(th)/2)
+}
+
 // renderGameLibraryPanel draws the three-column browser.
 func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if !gameLib.open || renderer == nil {
@@ -464,7 +553,11 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	// reload happens here rather than in the downloader.
 	if gen := artworkFetchGeneration(); gen != gameLib.artSeen {
 		closeGameLibraryArt()
+		recountLibraryArtwork()
 		gameLib.artSeen = gen
+		// The counters move only here, after a completed or stopped fetch, so a
+		// long download does not appear to do nothing.
+		ShowToast(artworkFetchSummary(), ToastKindInfo)
 	}
 	if gameLib.artCache == nil {
 		gameLib.artCache = map[string]*sdl.Texture{}
@@ -509,6 +602,14 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, gameLibraryStatus(), ColorTextTertiary(),
 		panelX+pad, panelY+18+medH+4)
 
+	// Cover completeness at a glance: a ring that fills as the library gains
+	// art, with the percentage inside it.
+	if gameLib.lib.Total > 0 {
+		drawCoverCompletenessRing(renderer, config,
+			panelX+panelW-pad-26, panelY+18+medH/2, 26,
+			coverPercent(gameLib.lib.WithArt, gameLib.lib.Total))
+	}
+
 	systems := currentGameSystems()
 	if gameLib.system >= len(systems) {
 		gameLib.system = len(systems) - 1
@@ -545,7 +646,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	focusColor := installHighlight()
 
 	// ── Consoles ────────────────────────────────────────────────────────
-	sysRowH := int32(44)
+	sysRowH := int32(46)
 	visibleSys := int(bodyH / sysRowH)
 	if visibleSys < 1 {
 		visibleSys = 1
@@ -578,6 +679,16 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			ColorTextPrimary(), rect.X+12, rect.Y+(rect.H-medH)/2)
 		renderText(renderer, config, font, count, ColorTextTertiary(),
 			rect.X+rect.W-12-int32(cw), rect.Y+(rect.H-smallH)/2)
+		// A thin meter under each console row: the share of that console's
+		// covers that are already on the card.
+		if games := len(systems[idx].Games); games > 0 {
+			meterW := rect.W - 24
+			meterY := rect.Y + rect.H - 5
+			fillRoundedRect(renderer, rect.X+12, meterY, meterW, 3, 1, WithAlpha(ColorBorderDefault, 130))
+			if filled := meterW * int32(coverPercent(systems[idx].WithArt, games)) / 100; filled > 0 {
+				fillRoundedRect(renderer, rect.X+12, meterY, filled, 3, 1, WithAlpha(focusColor, 200))
+			}
+		}
 	}
 
 	// ── Games ───────────────────────────────────────────────────────────
@@ -670,8 +781,12 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		gameLib.artRect = sdl.Rect{}
 	}
 
+	artHint := FooterHint{"L1 / F", "Fill Gaps"}
+	if artworkFetchRunning() {
+		artHint = FooterHint{"L1 / F", "Stop"}
+	}
 	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Play"},
-		FooterHint{"X", "LAN Play"}, FooterHint{"L1 / F", "Fetch Art"},
+		FooterHint{"X", "LAN Play"}, artHint,
 		FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	if gameLib.lib.Total == 0 {
 		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})

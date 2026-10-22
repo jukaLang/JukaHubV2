@@ -36,8 +36,16 @@ shortcuts overlay, **B** or **F1** to close it.
 | Y | Tertiary action — new/create, save, submit in the chat keyboard |
 | L1 / R1 | Previous / next page of the focused list, or a −10/+10 s skip in the player |
 | L2 / R2 | Bigger jump: previous / next page (fetching the next page of Media results), previous / next video in the player, first / last row in a list, previous / next section on Home |
-| Start | Open the start menu (pause) |
-| Back | Settings / menu |
+| Start | Open the Start menu (scenes, games, tools, device) |
+| Back / Select | Settings / menu |
+| Select + Start (hold both) | Quit JukaHub and return to the launcher |
+
+The TrimUI's **Select** button is the one the app sees as **Back**. Holding
+**Select + Start** together quits the app the way every other launcher on the
+card does: JukaHub saves, plays its goodbye screen, then exits. The pair is
+read from the physical buttons before any panel sees it, so it also works from
+a video, a settings panel or the on-screen keyboard — you never need the Home
+screen or a mouse to leave the app.
 
 Shoulders are contextual, not scene-specific: whatever list holds the focus
 owns them. **L1/R1** step one window and **L2/R2** jump further, so the pad
@@ -52,8 +60,38 @@ behaves the same in a menu as it does in a media grid.
 | Image viewer | Previous / next image | Jump ten images back / forward |
 | Notification centre, clipboard history, global search, social notifications | One window of rows | First / last row |
 | Quick Settings | Five rows, or ±5 on a slider | First / last row |
-| Start menu (Apps) | One window of apps | First / last app |
+| Start menu | One window of the open group | First / last row of the open group |
 | Home | — | Previous / next section |
+
+## Start menu
+
+**Start**, or the **Apps** pill in the top bar, opens one menu over whatever is
+on screen: a rail of groups on the left and their entries on the right. The
+footer names the scene the menu was opened over.
+
+| Group | Holds |
+|-------|-------|
+| Scenes | Every scene in `jukaconfig.json` — the quickest way to switch screen |
+| Games | Emulators, Games Library, Game Profiles, PS Remote Play, RetroAchievements, Save Manager, Windows Apps, PortMaster Ports, Smart Pro Compatibility |
+| Tools | Curation Hub, Audio settings, Smart Home, Remote Cast, Accessibility, Stick Calibration (when the install has one) |
+| Device | Quick Settings, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, About, Quit JukaHub |
+
+Settings sub-screens and the maintenance scenes (Patch, Exit) are not listed:
+**Settings** leads to them. Rows whose backend is missing on this device are
+left out rather than shown greyed.
+
+| Button | Action |
+|--------|--------|
+| Up / Down | Move through the open group; the rail switches groups when it has the focus |
+| Left / Right | Move between the rail and the entries |
+| A | Open the highlighted entry, or step into its group from the rail |
+| B / Back / Start | Close the menu |
+| L1 / R1 | One window of entries; L2 / R2 jump to the first / last row of the group |
+| Mouse | Click a group, a row to open it, or outside the card to close |
+
+**Start** itself opens this menu on every ordinary screen. The arcade (**Games**)
+and **Ambient** bind Start to their own pause and exit, so the menu stays out of
+their way, and no panel is covered by a menu drawn beneath it.
 
 ## Home
 
@@ -72,6 +110,7 @@ behaves the same in a menu as it does in a media grid.
 |--------|--------|
 | X | Search YouTube |
 | Y | Shorts feed: opens Shorts, pre-loads it and plays the first clip, then keeps going after each one ends |
+| **Shorts** button | The same feed, from the button row next to Search / Play Link / Trending |
 | L1 / R1 | Previous / next screenful of the loaded results |
 | L2 / R2 | Previous / next results page; **R2** fetches the next page when it has not been loaded |
 | B | Back |
@@ -144,10 +183,47 @@ sheet open, **Up / Down** move between its rows and **A** applies the row, so
 subtitles, full screen and speed are reachable without a touch screen. A tap on
 a control also moves the ring there, so touch and D-pad never disagree.
 
+On a keyboard **N** and **P** move to the next and previous video of the list
+that launched the current one — in the Shorts feed that is the next short. In
+the feed the four videos after the one playing are resolved in the background,
+so skipping does not wait for yt-dlp.
+
 Progress, resume position and subtitles are handled automatically; the control
 bar hides itself while playback continues and reappears on any input. When a
 video reaches its end the player closes and returns to the scene — the frozen
 last frame no longer keeps the grid behind it locked.
+
+## Chat
+
+The Chat screen shows the Discord channel (when configured) and the local
+history. Every speaker can be opened as a profile card with their picture,
+handle, roles and last message.
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down | Scroll the history |
+| D-pad Left / Right | Select the previous / next message |
+| L1 / R1 | Walk the message selection one message at a time |
+| L2 / R2 | Jump to the oldest / newest message |
+| A | Type a message; with a message selected, open its actions |
+| Y | Ask Juka AI about the typed text; with an empty composer, open the member list |
+| X | Rename yourself in the chat |
+| B / Back | Leave the chat, or close an open card |
+| Tab (keyboard) | Open the member list |
+
+**Names and pictures are the way to a profile**: click a speaker's name or
+avatar in a bubble (or use **Actions → Profile** on a selected message). The
+card offers **Mention**, **Latest** (jump to their newest message), **Copy ID**
+and **Picture** (open the full image in the viewer); tapping the card's picture
+does the same. The **Members N** chip in
+the header opens the list of everyone in the history, so a name that has
+scrolled away is still one press away.
+
+A selected message turns the composer into its action bar: **Reply** (a quote
+header in the bubble, sent as a real Discord reply), **Copy**, **Ask AI**,
+**Profile**, and **Delete** for your own messages. The member list and the
+profile card are modal: **Up/Down** walks the rows, **A** opens a profile,
+**Left/Right** picks an action, and **B** closes.
 
 ## On-screen keyboard
 
@@ -155,14 +231,17 @@ Opens for search fields, the chat composer, the terminal and the unit converter.
 
 | Button | Action |
 |--------|--------|
-| D-pad | Move between keys |
+| D-pad | Move between keys; **hold** to keep moving (320 ms, then every 70 ms) |
 | A | Type the selected key |
 | L1 | Shift (upper/lower case), without losing the focused key |
+| R1 | Switch between the letters and the numbers/symbols layer |
 | Y | Submit (send in chat, search elsewhere) |
 | B / Back / Start | Close |
 
 It also closes with its own close button, by tapping outside the panel, or when
-you press **Done** / **Send**.
+you press **Done** / **Send**. A tapped key flashes as pressed, a moving mouse
+pointer lights up the key it is over before you click, and an empty field keeps
+its caret visible so it is obvious where typing will land.
 
 ## First-run tour
 
@@ -172,9 +251,32 @@ clock and notification bell, Appearance settings, and the Start menu. **A** or
 
 Replay it any time from **Settings → General → Replay tour**.
 
+## Emulators
+
+**Emulators** is a page of tiles, one per installed emulator, RetroArch core
+and pinned tool. Each tile shows the emulator's own picture when the install
+ships one — the `icon.png` (or `config.json` icon) inside a TrimUI `Emus/`
+folder, or the icon Windows reports for an executable — and a gamepad glyph on
+a tinted tile when it has none. A dot in the corner is the availability:
+green available, red installed without a launcher, grey not installed. The
+footer names the highlighted entry and its path.
+
+| Input | Action |
+|-------|--------|
+| D-pad | Move between tiles; Up/Down move a whole row |
+| **A** | Open the highlighted tool, or launch the emulator |
+| **Y** | RetroAchievements |
+| **B** / Esc | Back |
+| Touch / mouse | Tap a tile to select and open it |
+
+Pinned rows (Games Library, Game Profiles, Compatibility, BIOS Doctor,
+RetroAchievements, Windows Apps, PortMaster) keep their place above the
+emulators. Rows with no emulator show a grey dot and explain themselves when
+opened instead of disappearing.
+
 ## Game profiles
 
-Open **Start → Game Profiles**, or the pinned **Game Profiles** row in
+Open **Start → Game Profiles**, or the pinned **Game Profiles** tile in
 **Emulators**. The panel launches Windows games through Box64/Wine, native
 binaries and scripts. Profiles are JSON files in
 `data/game-profiles/`; see [GAME_PROFILES.md](GAME_PROFILES.md) for the format
@@ -637,7 +739,7 @@ Opened from **Emulators → Smart Pro Compatibility**.
 | F12 | Screenshot |
 | PgUp / PgDn | Page up / down (previous / next results page in Media) |
 | Shift+Left / Shift+Right | Skip −10 / +10 s in the video player |
-| Shift+Down (or N) / Shift+Up (or P) | Next / previous video in the player's list |
+| N / P | Next / previous video in the player's list (also Shift+Down / Shift+Up) |
 
 Mouse and touch work as well: clicking activates a card or tile, and hovering
 highlights the card under the pointer.

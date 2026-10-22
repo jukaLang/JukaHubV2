@@ -834,6 +834,32 @@ func musicAdjustVolume(delta float64) {
 	v := music.volume + delta
 	music.mu.Unlock()
 	musicSetVolume(v)
+	musicVolumeFeedback()
+}
+
+// musicVolumeLabel is the feedback for a volume change: a percentage, or
+// "Muted" at the bottom. The player card has its own volume bar, but the keys
+// also work from the ambient screen and with the player closed, where a bar
+// drawn under a panel is not visible at all.
+func musicVolumeLabel(v float64) string {
+	if v <= 0.001 {
+		return "Muted"
+	}
+	pct := int(math.Round(v * 100))
+	if pct < 1 {
+		pct = 1
+	}
+	if pct > 100 {
+		pct = 100
+	}
+	return fmt.Sprintf("Volume %d%%", pct)
+}
+
+func musicVolumeFeedback() {
+	music.mu.Lock()
+	v := music.volume
+	music.mu.Unlock()
+	ShowToast(musicVolumeLabel(v), ToastKindInfo)
 }
 
 // musicNext advances the transport: the play-next queue first, then the

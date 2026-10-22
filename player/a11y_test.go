@@ -9,6 +9,7 @@ import (
 
 func resetA11yForTest() {
 	a11y = a11ySettings{fontScale: 1.0}
+	a11yChordReset()
 }
 
 func TestA11yScaleFontSize(t *testing.T) {
@@ -196,10 +197,10 @@ func TestA11yLoadFromConfig(t *testing.T) {
 func TestA11yRowsReportCurrentSettings(t *testing.T) {
 	defer resetA11yForTest()
 
-	a11y = a11ySettings{fontScale: 1.3, highContrast: true, swapAB: true, colorblind: "tritanopia"}
+	a11y = a11ySettings{fontScale: 1.3, highContrast: true, swapAB: true, colorblind: "tritanopia", oneHanded: true, chordButton: "r1", slowRepeat: true}
 	rows := a11yRows()
-	if len(rows) != 6 {
-		t.Fatalf("row count: got %d, want 6", len(rows))
+	if len(rows) != 9 {
+		t.Fatalf("row count: got %d, want 9", len(rows))
 	}
 	if rows[0].value != "130%" {
 		t.Fatalf("text size row: got %q", rows[0].value)
@@ -212,6 +213,240 @@ func TestA11yRowsReportCurrentSettings(t *testing.T) {
 	}
 	if rows[3].value != "Swapped" || rows[4].value != "Normal" {
 		t.Fatalf("swap rows: got %q / %q", rows[3].value, rows[4].value)
+	}
+	if rows[5].value != "On" {
+		t.Fatalf("one-handed row: got %q", rows[5].value)
+	}
+	if rows[6].value != "R1" {
+		t.Fatalf("chord button row: got %q", rows[6].value)
+	}
+	if rows[7].value != "Slow" {
+		t.Fatalf("key repeat row: got %q", rows[7].value)
+	}
+}
+
+// ── One-handed mode ───────────────────────────────────────────────────────
+
+func chordEvent(kind uint32, button uint8) *sdl.ControllerButtonEvent {
+	return &sdl.ControllerButtonEvent{Type: kind, Button: button}
+}
+
+// A tap on the chord button arms the next direction, and the direction arrives
+// as a face button. The latch is one-shot, so the following press is a normal
+// d-pad move again.
+func TestA11yOneHandedChordMapsOneDirection(t *testing.T) {
+	defer resetA11yForTest()
+	a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "l1"}
+	mod := uint8(sdl.CONTROLLER_BUTTON_LEFTSHOULDER)
+
+	if !a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, mod)) {
+		t.Fatal("a chord tap must be consumed, not fire the shoulder action")
+	}
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONUP, mod))
+	if !a11yChordState.latched {
+		t.Fatal("the tap did not arm the chord")
+	}
+
+	down := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_UP)
+	if a11yRemapEvent(down) {
+		t.Fatal("the direction press must reach the handlers")
+	}
+	if down.Button != sdl.CONTROLLER_BUTTON_A {
+		t.Fatalf("Up became %d, want A", down.Button)
+	}
+	if a11yChordState.latched {
+		t.Fatal("the latch survived its one press")
+	}
+
+	up := chordEvent(sdl.CONTROLLERBUTTONUP, sdl.CONTROLLER_BUTTON_DPAD_UP)
+	a11yRemapEvent(up)
+	if up.Button != sdl.CONTROLLER_BUTTON_A {
+		t.Fatalf("the release became %d, want it mirrored to A", up.Button)
+	}
+
+	// A second direction without a new tap is an ordinary d-pad move.
+	again := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_DOWN)
+	a11yRemapEvent(again)
+	if again.Button != sdl.CONTROLLER_BUTTON_DPAD_DOWN {
+		t.Fatalf("a spent latch remapped %d", again.Button)
+	}
+}
+
+// Every direction has a face button, and B/X/Y are reachable too: one thumb
+// can walk the UI without ever crossing to the face buttons.
+func TestA11yOneHandedCoversAllDirections(t *testing.T) {
+	cases := map[uint8]uint8{
+		sdl.CONTROLLER_BUTTON_DPAD_UP:    sdl.CONTROLLER_BUTTON_A,
+		sdl.CONTROLLER_BUTTON_DPAD_DOWN:  sdl.CONTROLLER_BUTTON_B,
+		sdl.CONTROLLER_BUTTON_DPAD_LEFT:  sdl.CONTROLLER_BUTTON_X,
+		sdl.CONTROLLER_BUTTON_DPAD_RIGHT: sdl.CONTROLLER_BUTTON_Y,
+	}
+	t.Cleanup(resetA11yForTest)
+	for dir, want := range cases {
+		resetA11yForTest()
+		a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "r1"}
+		a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER))
+		e := chordEvent(sdl.CONTROLLERBUTTONDOWN, dir)
+		a11yRemapEvent(e)
+		if e.Button != want {
+			t.Fatalf("direction %d became %d, want %d", dir, e.Button, want)
+		}
+	}
+}
+
+// Tapping the chord button twice cancels instead of leaving a latch armed.
+func TestA11yOneHandedChordCancelsOnSecondTap(t *testing.T) {
+	defer resetA11yForTest()
+	a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "l1"}
+	mod := uint8(sdl.CONTROLLER_BUTTON_LEFTSHOULDER)
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, mod))
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONUP, mod))
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, mod))
+	if a11yChordState.latched {
+		t.Fatal("a second tap must cancel the chord")
+	}
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONUP, mod))
+	up := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_UP)
+	a11yRemapEvent(up)
+	if up.Button != sdl.CONTROLLER_BUTTON_DPAD_UP {
+		t.Fatalf("a cancelled chord still remapped to %d", up.Button)
+	}
+}
+
+// Holding the modifier works the same as tapping it once: the next direction
+// is a face button and the latch does not stay armed after it.
+func TestA11yOneHandedHeldModifierDoesNotStick(t *testing.T) {
+	defer resetA11yForTest()
+	a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "l1"}
+	mod := uint8(sdl.CONTROLLER_BUTTON_LEFTSHOULDER)
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, mod))
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_RIGHT))
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONUP, sdl.CONTROLLER_BUTTON_DPAD_RIGHT))
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONUP, mod))
+
+	after := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_RIGHT)
+	a11yRemapEvent(after)
+	if after.Button != sdl.CONTROLLER_BUTTON_DPAD_RIGHT {
+		t.Fatalf("the chord stayed armed after the modifier was released: %d", after.Button)
+	}
+}
+
+// The chord output goes through the A/B swap rules, so a player who also needs
+// the Japanese button order keeps it.
+func TestA11yOneHandedChordRespectsSwaps(t *testing.T) {
+	defer resetA11yForTest()
+	a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "l1", swapAB: true}
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_LEFTSHOULDER))
+	e := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_UP)
+	a11yRemapEvent(e)
+	if e.Button != sdl.CONTROLLER_BUTTON_B {
+		t.Fatalf("Up became %d, want B after the swap", e.Button)
+	}
+}
+
+// The chord has to reach real handlers, not only the remap function: an armed
+// chord plus D-pad Down is B, and B closes the panel that is open.
+func TestA11yOneHandedChordDrivesThePanel(t *testing.T) {
+	resetA11yForTest()
+	t.Cleanup(resetA11yForTest)
+	a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "l1", open: true}
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+
+	mod := chordEvent(sdl.CONTROLLERBUTTONDOWN, uint8(sdl.CONTROLLER_BUTTON_LEFTSHOULDER))
+	if !a11yRemapEvent(mod) {
+		t.Fatal("the chord tap was not consumed")
+	}
+	down := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_DOWN)
+	a11yRemapEvent(down)
+	if down.Button != sdl.CONTROLLER_BUTTON_B {
+		t.Fatalf("Down became %d, want B", down.Button)
+	}
+	if !handleControllerEvent(down, config) {
+		t.Fatal("the remapped B was not routed to the panel")
+	}
+	if a11y.open {
+		t.Fatal("B did not close the accessibility panel")
+	}
+}
+
+// With the mode off, nothing about the d-pad or the shoulders changes.
+func TestA11yOneHandedOffLeavesEventsAlone(t *testing.T) {
+	defer resetA11yForTest()
+	a11y = a11ySettings{fontScale: 1.0, chordButton: "l1"}
+	mod := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_LEFTSHOULDER)
+	if a11yRemapEvent(mod) {
+		t.Fatal("the shoulder press was consumed while the mode is off")
+	}
+	if a11yChordState.latched {
+		t.Fatal("the chord armed while the mode is off")
+	}
+	down := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_UP)
+	a11yRemapEvent(down)
+	if down.Button != sdl.CONTROLLER_BUTTON_DPAD_UP {
+		t.Fatalf("d-pad was remapped with the mode off: %d", down.Button)
+	}
+}
+
+// The chord button is a real setting, saved and loaded like the rest.
+func TestA11yOneHandedSettingsRoundTrip(t *testing.T) {
+	resetA11yForTest()
+	t.Cleanup(resetA11yForTest)
+
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "back", slowRepeat: true}
+	a11yStore(config)
+
+	a11y = a11ySettings{fontScale: 1.0}
+	a11yLoad(config)
+	if !a11y.oneHanded || a11y.chordButton != "back" || !a11y.slowRepeat {
+		t.Fatalf("round-trip lost the one-handed settings: %+v", a11y)
+	}
+
+	// An unknown stored button falls back to L1 instead of disabling the mode.
+	a11yLoad(&Config{Variables: Variables{Custom: map[string]interface{}{
+		a11yKeyChordBtn: "pedal",
+	}}})
+	if a11y.chordButton != "l1" {
+		t.Fatalf("unknown chord button loaded as %q, want l1", a11y.chordButton)
+	}
+}
+
+func TestA11ySlowRepeatDoublesDelays(t *testing.T) {
+	defer resetA11yForTest()
+	a11y = a11ySettings{fontScale: 1.0}
+	if got := a11yRepeatMs(vkNavRepeatDelayMs); got != vkNavRepeatDelayMs {
+		t.Fatalf("normal repeat: got %d, want %d", got, vkNavRepeatDelayMs)
+	}
+	a11y.slowRepeat = true
+	if got := a11yRepeatMs(vkNavRepeatDelayMs); got != vkNavRepeatDelayMs*2 {
+		t.Fatalf("slow repeat: got %d, want %d", got, vkNavRepeatDelayMs*2)
+	}
+}
+
+// Cycling the chord button wraps through every option and survives a restart
+// of the panel cursor.
+func TestA11yChordButtonCycles(t *testing.T) {
+	defer resetA11yForTest()
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	a11y = a11ySettings{fontScale: 1.0, chordButton: "l1"}
+	// The panel edits the focused row, so park the cursor on the chord row.
+	for i, row := range a11yRows() {
+		if row.kind == a11yRowChordButton {
+			a11y.cursor = i
+		}
+	}
+	seen := map[string]bool{}
+	for i := 0; i < len(a11yChordButtons); i++ {
+		seen[a11y.chordButton] = true
+		a11yAdjust(1, config)
+	}
+	if !seen["l1"] || a11y.chordButton != "l1" {
+		t.Fatalf("cycling did not visit every button and return: %+v", seen)
+	}
+	for _, option := range a11yChordButtons {
+		if !seen[option.key] {
+			t.Fatalf("cycling skipped %q", option.key)
+		}
 	}
 }
 

@@ -2236,6 +2236,13 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		StopEmbeddedPlayback()
 	case sdl.K_q:
 		StopEmbeddedPlayback()
+	case sdl.K_n:
+		// Next / previous video of the list that launched this one. Plain keys,
+		// so one press skips a short without a chord; the pad does the same on
+		// its triggers.
+		skipPlayback(appConfig, 1)
+	case sdl.K_p:
+		skipPlayback(appConfig, -1)
 	case sdl.K_UP:
 		AdjustVolume(0.1)
 	case sdl.K_DOWN:

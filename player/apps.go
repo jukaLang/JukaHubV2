@@ -134,6 +134,9 @@ func scanInstalledApps(config *Config) {
 	entries := collectAppEntries(config, appsFolder(), systemAppDirs())
 	config.Variables.Custom[appsEntriesVar] = entries
 	log.Printf("[apps] scanned %d app entries", len(entries))
+	// Icons for desktop shortcuts are extracted by the shell in the background;
+	// the call is a cheap no-op when every tile already has a picture.
+	requestAppIconExtraction(appProgramPaths(entries))
 }
 
 // collectAppEntries merges the app sources in priority order: portable apps
@@ -178,6 +181,64 @@ func collectAppEntries(config *Config, appsFolder string, systemDirs []string) [
 		entries = alive
 	}
 	return entries
+}
+
+// appIconImageExts are the image formats a launcher icon may be stored in,
+// best first. A TrimUI app folder normally ships icon.png; portable apps on a
+// desktop can drop a matching .png/.ico next to the program.
+var appIconImageExts = []string{".png", ".webp", ".jpg", ".jpeg", ".bmp", ".ico"}
+
+// isAppIconFile reports whether path names an image the launcher can draw.
+func isAppIconFile(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	for _, want := range appIconImageExts {
+		if ext == want {
+			return true
+		}
+	}
+	return false
+}
+
+// regularIconFile returns path when it is an existing regular image file.
+func regularIconFile(path string) string {
+	if !isAppIconFile(path) {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return path
+}
+
+// iconInFolder finds the icon inside an application folder. "icon" is the
+// TrimUI name (config.json points at it and the launcher itself uses it);
+// "logo" and "app" are common alternatives in hand-made app folders.
+func iconInFolder(dir string) string {
+	for _, base := range []string{"icon", "logo", "app"} {
+		for _, ext := range appIconImageExts {
+			if icon := regularIconFile(filepath.Join(dir, base+ext)); icon != "" {
+				return icon
+			}
+		}
+	}
+	return ""
+}
+
+// sidecarIcon finds an image stored next to a program under the same name, so
+// "Notepad.lnk" can carry "Notepad.png" without a config file.
+func sidecarIcon(programPath string) string {
+	dir, file := filepath.Split(programPath)
+	stem := strings.TrimSuffix(file, filepath.Ext(file))
+	if stem == "" {
+		return ""
+	}
+	for _, ext := range appIconImageExts {
+		if icon := regularIconFile(filepath.Join(dir, stem+ext)); icon != "" {
+			return icon
+		}
+	}
+	return ""
 }
 
 // isLauncherFile reports whether a file is something we can offer to launch.
@@ -226,10 +287,12 @@ func scanAppsFolder(dir string) []FileEntry {
 		if !isLauncherFile(name) || skipAppName(name) {
 			continue
 		}
+		path := filepath.Join(dir, name)
 		entries = append(entries, FileEntry{
 			Name:  appDisplayName(name),
-			Path:  filepath.Join(dir, name),
+			Path:  path,
 			IsDir: false,
+			Icon:  sidecarIcon(path),
 		})
 	}
 	sort.Slice(entries, func(i, j int) bool {
@@ -249,6 +312,7 @@ func scanAppSubdir(dir string) (FileEntry, bool) {
 	var cfg struct {
 		Label  string `json:"label"`
 		Launch string `json:"launch"`
+		Icon   string `json:"icon"`
 	}
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		log.Printf("[apps] bad app config %s: %v", cfgPath, err)
@@ -273,7 +337,18 @@ func scanAppSubdir(dir string) (FileEntry, bool) {
 	if name == "" {
 		name = filepath.Base(dir)
 	}
-	return FileEntry{Name: name, Path: launchPath, IsDir: false}, true
+	// The icon lives in the app's own folder: honour config.json's "icon" when
+	// it is a safe path, otherwise fall back to the conventional file names.
+	icon := ""
+	if declared := strings.TrimSpace(cfg.Icon); declared != "" {
+		if resolved, err := resolveWithinRoot(dir, declared); err == nil {
+			icon = regularIconFile(resolved)
+		}
+	}
+	if icon == "" {
+		icon = iconInFolder(dir)
+	}
+	return FileEntry{Name: name, Path: launchPath, IsDir: false, Icon: icon}, true
 }
 
 // scanSystemApps walks a system app folder (Windows Start Menu programs, or
@@ -294,6 +369,14 @@ func scanSystemApps(dir string) []FileEntry {
 			if depth > 3 {
 				return filepath.SkipDir
 			}
+			// A TrimUI application folder (config.json + launch script) is one
+			// app, not a tree of scripts: take its label and icon and skip the
+			// rest, so the launcher never lists the same app as a bare
+			// "launch" row once per installed app.
+			if app, ok := scanAppSubdir(path); ok && !isSelfAppFolder(path) {
+				entries = append(entries, app)
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		name := info.Name()
@@ -304,6 +387,7 @@ func scanSystemApps(dir string) []FileEntry {
 			Name:  appDisplayName(name),
 			Path:  path,
 			IsDir: false,
+			Icon:  sidecarIcon(path),
 		})
 		return nil
 	})
@@ -311,6 +395,25 @@ func scanSystemApps(dir string) []FileEntry {
 		return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name)
 	})
 	return entries
+}
+
+// isSelfAppFolder reports whether dir is the folder JukaHub itself runs from.
+// Listing the running app in its own launcher only restarts it, so it is left
+// out of the list.
+func isSelfAppFolder(dir string) bool {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		return false
+	}
+	exeDir, err := filepath.Abs(filepath.Dir(exe))
+	if err != nil {
+		return false
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(filepath.Clean(exeDir), filepath.Clean(absDir))
 }
 
 // appEntryTarget splits an Apps row into its action: either a built-in scene

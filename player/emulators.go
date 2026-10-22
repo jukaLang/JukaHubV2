@@ -1,14 +1,15 @@
 package main
 
-// emulators.go — the Emulators panel: a cross-platform list of emulators with
-// their availability.
+// emulators.go — the Emulators page: a cross-platform catalog of emulators
+// with their availability.
 //
 // It is an overlay (like Tools) so it works on every config: the desktop
 // config has no "Emulator" scene (the home card used to dead-end there), and
 // on the handheld the card must list every emulator with its availability
-// instead of a static launcher label. The list is built from the platform's
+// instead of a static launcher label. The catalog is built from the platform's
 // real emulator locations: known install folders on Windows, the SD-card
-// Emus/ and Roms/ trees plus RetroArch cores on TrimUI.
+// Emus/ and Roms/ trees plus RetroArch cores on TrimUI. emutiles.go draws it as
+// a page of tiles.
 
 import (
 	"fmt"
@@ -32,15 +33,21 @@ const (
 	emuMissing                    // expected but not installed
 )
 
-// emuEntry is one row of the availability list. Launch is the entry point to
-// execute for available emulators; rows without one are listed for
+// emuEntry is one tile of the availability page. Launch is the entry point to
+// execute for available emulators; entries without one are listed for
 // availability only (e.g. RetroArch cores).
 type emuEntry struct {
 	Name   string
 	Detail string
 	Status emuStatus
 	Launch string
-	Pinned bool // RetroAchievements sits at the top of the list
+	Pinned bool // RetroAchievements and the tool rows come first
+	// IconPath is the emulator's own picture when the install ships one: the
+	// icon in a TrimUI Emus/ folder, or an image next to a Windows executable.
+	IconPath string
+	// Glyph is the fallback icon key (see DrawHomeIcon) for entries with no
+	// picture, so a missing icon still reads as an emulator tile.
+	Glyph string
 }
 
 // ── Windows catalog ──────────────────────────────────────────────────────
@@ -119,11 +126,12 @@ func windowsEmulatorEntries(dirs []string, lookPath func(string) (string, error)
 				}
 			}
 		}
-		e := emuEntry{Name: spec.name}
+		e := emuEntry{Name: spec.name, Glyph: "gamepad"}
 		if found != "" {
 			e.Status = emuAvailable
 			e.Launch = found
 			e.Detail = found
+			e.IconPath = sidecarIcon(found)
 		} else {
 			e.Status = emuMissing
 			e.Detail = "Not installed"
@@ -177,7 +185,7 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				continue
 			}
 			folder := filepath.Join(root, de.Name())
-			e := emuEntry{Name: de.Name(), Detail: folder}
+			e := emuEntry{Name: de.Name(), Detail: folder, Glyph: "gamepad", IconPath: emuFolderIcon(folder)}
 			// launch.sh is the launcher on stock and CrossMix; a folder
 			// without one still gets listed, as installed-but-unusable.
 			switch {
@@ -209,6 +217,7 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 					Name:   name,
 					Detail: "RetroArch core — " + filepath.Join(coresDir, c.Name()),
 					Status: emuAvailable,
+					Glyph:  "gamepad",
 				})
 			}
 		}
@@ -229,6 +238,7 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 					Name:   r.Name(),
 					Detail: "Games in " + filepath.Join(romsRoot, r.Name()) + " — no emulator found",
 					Status: emuMissing,
+					Glyph:  "gamepad",
 				})
 			}
 		}
@@ -289,25 +299,29 @@ func emulatorEntries() []emuEntry {
 	// was the original top row), followed by BIOS Doctor and the launchers.
 	// The profile row is always present so the folder is discoverable before
 	// the first import.
-	if retroAchievementsSupported() {
-		re := retroAchievementsEmuEntry()
-		re.Pinned = true
-		entries = append(entries, re)
+	// Every pinned row gets a glyph so its tile reads before any icon exists;
+	// the catalog functions themselves stay unaware of presentation.
+	pin := func(e emuEntry, glyph string) emuEntry {
+		e.Pinned = true
+		e.Glyph = glyph
+		return e
 	}
-	entries = append(entries, emuEntry{
+	if retroAchievementsSupported() {
+		entries = append(entries, pin(retroAchievementsEmuEntry(), "favorites"))
+	}
+	entries = append(entries, pin(emuEntry{
 		Name:   biosDoctorEntryName,
 		Detail: "Check PS1, Dreamcast and Saturn firmware",
 		Status: emuAvailable,
-		Pinned: true,
-	})
-	entries = append(entries, gamesLibraryEmuEntry())
-	entries = append(entries, gameProfilesEmuEntry())
-	entries = append(entries, compatibilityEmuEntry())
+	}, "tools"))
+	entries = append(entries, pin(gamesLibraryEmuEntry(), "gamepad"))
+	entries = append(entries, pin(gameProfilesEmuEntry(), "apps"))
+	entries = append(entries, pin(compatibilityEmuEntry(), "tools"))
 	if !IsWindows() {
-		entries = append(entries, windowsAppsEmuEntry())
+		entries = append(entries, pin(windowsAppsEmuEntry(), "apps"))
 		// PortMaster is a handheld app; listing it on Windows would only offer
 		// an installer that cannot produce a working runtime there.
-		entries = append(entries, portMasterEmuEntry())
+		entries = append(entries, pin(portMasterEmuEntry(), "packages"))
 	}
 	sortEmulatorEntries(entries)
 	emuCache.entries = entries
@@ -401,18 +415,18 @@ type emuPanelState struct {
 
 var emuPanel emuPanelState
 
-// emuRowHit maps one visible row back to its catalog index for clicks.
+// emuRowHit maps one visible tile back to its catalog index for clicks.
 type emuRowHit struct {
 	index int
 	rect  sdl.Rect
 }
 
-// emuRowHits and emuPanelRect are filled by renderEmuPanel. Only touched on
-// the render/event thread.
+// emuRowHits and emuPanelRect are filled by renderEmuPanel: the visible tile
+// rects and the page rect. Only touched on the render/event thread.
 var emuRowHits []emuRowHit
 var emuPanelRect sdl.Rect
 
-// openEmulatorPanel shows the availability list.
+// openEmulatorPanel shows the tile page.
 func openEmulatorPanel() {
 	// Never stack modals: this panel replaces Quick Settings and Tools.
 	qs.open = false
@@ -420,6 +434,9 @@ func openEmulatorPanel() {
 	invalidateEmulatorCache()
 	// The pinned Game Profiles row reports catalog totals, so rebuild those too.
 	invalidateGameProfileCache()
+	// On Windows an executable's icon comes from the shell in the background;
+	// tiles show the gamepad glyph until the picture lands in the cache.
+	requestAppIconExtraction(emuProgramPaths(emulatorEntries()))
 	emuPanel.open = true
 	emuPanel.cursor = 0
 	emuPanel.scroll = 0
@@ -433,18 +450,19 @@ func closeEmulatorPanel() {
 	PlayBackSound()
 }
 
-func emuPanelMove(delta int) {
+// emuPanelMove walks the tile grid. Left/Right stay inside the row and
+// Up/Down move a whole row, clamping at the ends so focus never jumps across
+// the page the way a flat list did.
+func emuPanelMove(dx, dy int) {
 	entries := emulatorEntries()
 	if len(entries) == 0 {
 		return
 	}
-	emuPanel.cursor += delta
-	if emuPanel.cursor < 0 {
-		emuPanel.cursor = len(entries) - 1
+	next := emuGridTarget(emuPanel.cursor, len(entries), emuGridView().cols, dx, dy)
+	if next == emuPanel.cursor {
+		return
 	}
-	if emuPanel.cursor >= len(entries) {
-		emuPanel.cursor = 0
-	}
+	emuPanel.cursor = next
 	PlayNavSound()
 }
 
@@ -492,9 +510,11 @@ func launchEmulatorEntry(e emuEntry) {
 		showLaunchFailureDialog(e.Name, err, "")
 		return
 	}
+	recorder := startTimelapse(appConfig, e.Name)
 	go func() {
 		_ = cmd.Wait() // reap the child, keep JukaHub responsive
 		restoreProfile()
+		recorder.Stop()
 	}()
 	PlaySuccessSound()
 	ShowToast("Launching "+e.Name, ToastKindSuccess)
@@ -559,9 +579,13 @@ func emuPanelActivate(config *Config) {
 func ctrlEmuPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		emuPanelMove(-1)
+		emuPanelMove(0, -1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		emuPanelMove(1)
+		emuPanelMove(0, 1)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		emuPanelMove(-1, 0)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		emuPanelMove(1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
 		emuPanelActivate(config)
 	case sdl.CONTROLLER_BUTTON_Y:
@@ -582,9 +606,13 @@ func handleEmuKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
-		emuPanelMove(-1)
+		emuPanelMove(0, -1)
 	case sdl.K_DOWN:
-		emuPanelMove(1)
+		emuPanelMove(0, 1)
+	case sdl.K_LEFT:
+		emuPanelMove(-1, 0)
+	case sdl.K_RIGHT:
+		emuPanelMove(1, 0)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		emuPanelActivate(config)
 	case sdl.K_y:
@@ -597,7 +625,7 @@ func handleEmuKey(e *sdl.KeyboardEvent, config *Config) bool {
 	return true
 }
 
-// handleEmuMouse activates a clicked row or closes the panel on a click
+// handleEmuMouse activates a clicked tile or closes the page on a click
 // outside it. Returns true when the click was consumed.
 func handleEmuMouse(mx, my int32, config *Config) bool {
 	if !emuPanel.open {
@@ -611,7 +639,7 @@ func handleEmuMouse(mx, my int32, config *Config) bool {
 		}
 	}
 	if emuPanelRect.W > 0 && pointInRect(mx, my, emuPanelRect) {
-		// Clicks inside the panel but off a row only consume.
+		// Clicks inside the page but off a tile only consume.
 		return true
 	}
 	closeEmulatorPanel()
@@ -649,131 +677,4 @@ func emuSummary(entries []emuEntry) string {
 		parts = append(parts, fmt.Sprintf("%d not installed", missing))
 	}
 	return strings.Join(parts, " · ")
-}
-
-// renderEmuPanel draws the modal availability list. Rows that do not fit are
-// scrolled with the cursor.
-func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
-	if !emuPanel.open || renderer == nil {
-		return
-	}
-	entries := emulatorEntries()
-	if len(entries) == 0 {
-		entries = []emuEntry{{
-			Name:   "No emulators found",
-			Detail: "Nothing to list on this platform",
-			Status: emuMissing,
-		}}
-	}
-	if emuPanel.cursor >= len(entries) {
-		emuPanel.cursor = len(entries) - 1
-	}
-	if emuPanel.cursor < 0 {
-		emuPanel.cursor = 0
-	}
-
-	font, _ := getCachedFont(config, "small")
-	medium, _ := getCachedFont(config, "medium")
-	if font == nil {
-		return
-	}
-	if medium == nil {
-		medium = font
-	}
-	smallH := int32(font.Height())
-	medH := int32(medium.Height())
-
-	const padX = int32(24)
-	rowH := 8 + medH + 4 + smallH + 8
-	headerH := 18 + medH + 4 + smallH + 14
-	footerH := 20 + smallH
-
-	panelW := int32(820)
-	if panelW > screenWidth-48 {
-		panelW = screenWidth - 48
-	}
-	maxRows := (screenHeight - 40 - headerH - footerH) / rowH
-	if maxRows < 3 {
-		maxRows = 3
-	}
-	visible := int32(len(entries))
-	if visible > maxRows {
-		visible = maxRows
-	}
-	panelH := headerH + visible*rowH + footerH
-	panelX := (screenWidth - panelW) / 2
-	panelY := (screenHeight - panelH) / 2
-	emuPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
-
-	// Keep the cursor inside the visible window.
-	if emuPanel.cursor < emuPanel.scroll {
-		emuPanel.scroll = emuPanel.cursor
-	}
-	if emuPanel.cursor >= emuPanel.scroll+int(visible) {
-		emuPanel.scroll = emuPanel.cursor - int(visible) + 1
-	}
-	if emuPanel.scroll > len(entries)-int(visible) {
-		emuPanel.scroll = len(entries) - int(visible)
-	}
-	if emuPanel.scroll < 0 {
-		emuPanel.scroll = 0
-	}
-
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	// Accent hairline at the top of the panel.
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
-
-	renderText(renderer, config, medium, "Emulators", ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, emuSummary(entries), ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
-
-	// The theme accent can be very dark, so reuse the install card's contrast
-	// check instead of painting the selected row with an invisible tint.
-	focusColor := installHighlight()
-
-	rowW := panelW - 2*padX
-	emuRowHits = make([]emuRowHit, 0, visible)
-	for i := int32(0); i < visible; i++ {
-		idx := emuPanel.scroll + int(i)
-		e := entries[idx]
-		y := panelY + headerH + i*rowH
-		r := sdl.Rect{X: panelX + padX, Y: y, W: rowW, H: rowH - 8}
-		emuRowHits = append(emuRowHits, emuRowHit{index: idx, rect: r})
-
-		focused := idx == emuPanel.cursor
-		rowBg := WithAlpha(ColorSurfaceRow, 190)
-		if focused {
-			rowBg = WithAlpha(focusColor, 46)
-		}
-		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, rowBg)
-		if focused {
-			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
-		}
-
-		renderText(renderer, config, medium, e.Name, ColorTextPrimary(), r.X+16, r.Y+8)
-		label, labelColor := emuStatusLabel(e.Status)
-		lw, _, _ := font.SizeUTF8(label)
-		renderText(renderer, config, font, label, labelColor, r.X+r.W-16-int32(lw), r.Y+8+(medH-smallH)/2)
-		if e.Detail != "" {
-			renderText(renderer, config, font, ellipsize(font, e.Detail, r.W-32),
-				ColorTextTertiary(), r.X+16, r.Y+8+medH+4)
-		}
-	}
-
-	hints := []FooterHint{{Button: "A", Label: "Launch"}}
-	if retroAchievementsSupported() {
-		hints = append(hints, FooterHint{"Y", "Achievements"})
-	}
-	hints = append(hints, FooterHint{"B", "Close"})
-	if emuPanel.scroll > 0 || emuPanel.scroll+int(visible) < len(entries) {
-		hints = append([]FooterHint{{Button: "D-Pad", Label: fmt.Sprintf("Scroll %d-%d of %d",
-			emuPanel.scroll+1, emuPanel.scroll+int(visible), len(entries))}}, hints...)
-	}
-	hint := hintLine(hints...)
-	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+8)
 }

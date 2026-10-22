@@ -3708,6 +3708,50 @@ function exportConfig(force) {
   createJukaApp();
 }
 
+// Copy as JSON: the same config Export writes, straight to the clipboard. This
+// is for people pasting into Discord, a GitHub issue or a chat with the phone
+// companion, where a downloaded file is one extra step.
+function copyConfigJsonText() {
+  return JSON.stringify(buildEditorConfig(), null, 2);
+}
+
+async function copyConfigJson() {
+  if (!exportWithValidation('json')) return;
+  let text;
+  try {
+    text = copyConfigJsonText();
+  } catch (e) {
+    showToast('Could not build the config: ' + e.message, 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (e) {
+    // The Clipboard API needs a secure context. A hidden textarea still works on
+    // file:// previews and older browsers, which is how the builder is often
+    // opened straight from a folder.
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.setAttribute('readonly', '');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    let copied = false;
+    try {
+      copied = document.execCommand('copy');
+    } catch (err) {
+      copied = false;
+    }
+    area.remove();
+    if (!copied) {
+      showToast('Could not copy — use Export as JSON instead', 'warning');
+      return;
+    }
+  }
+  showToast('Config JSON copied to the clipboard', 'success');
+}
+
 // ---
 // Design sharing (theme + layout in a URL)
 // ---
@@ -6662,6 +6706,7 @@ function setupEditorQuality() {
   const actions = {
     exportConfig: () => exportConfig(),
     exportConfigXml: () => exportConfigXml(),
+    copyConfigJson: () => copyConfigJson(),
     addScene: () => addScene(),
     renameScene: () => renameScene(),
     deleteScene: () => deleteScene(),

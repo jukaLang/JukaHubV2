@@ -76,6 +76,24 @@ var (
 	// vkAnimStart is the tick when the keyboard opened, used for a short
 	// slide/fade so the panel does not pop in.
 	vkAnimStart uint64
+
+	// vkPressedRect is the cap that was just actuated and vkPressedUntil is when
+	// its "pushed in" look ends, so a tap is acknowledged on the very next frame.
+	// The rect (not an index) is stored because a key like 123 swaps the grid
+	// under the press: the flash must stay on the cap the finger touched.
+	vkPressedRect  sdl.Rect
+	vkPressedUntil uint64
+
+	// gameController is the pad opened at startup. Presses stay event-driven;
+	// this handle exists so the keyboard can poll a held D-pad and repeat.
+	gameController *sdl.GameController
+)
+
+const (
+	// vkOpenDurationMs is the length of the slide/fade when the panel appears.
+	vkOpenDurationMs = 120
+	// vkPressFlashMs is how long a pressed key stays visibly pushed in.
+	vkPressFlashMs = 130
 )
 
 // uiHighlightColor is the shared "filled accent" colour for focused keys and
@@ -122,15 +140,30 @@ func vkAnimOffset() int32 {
 	if vkAnimStart == 0 {
 		return 0
 	}
-	now := sdl.GetTicks64()
-	if now <= vkAnimStart {
-		return 26
+	return int32((1 - vkEaseOut(vkOpenProgress())) * 26)
+}
+
+// vkOpenProgress is the 0..1 progress of the open animation. The slide and the
+// dimmed backdrop share it, so the screen darkens with the panel instead of
+// snapping dark a frame before it arrives.
+func vkOpenProgress() float64 {
+	if vkAnimStart == 0 {
+		return 1
 	}
-	elapsed := float64(now-vkAnimStart) / 120.0
-	if elapsed >= 1 {
+	return vkOpenProgressAt(sdl.GetTicks64())
+}
+
+// vkOpenProgressAt is the open progress for a given tick, split out so the fade
+// can be tested without waiting on the clock.
+func vkOpenProgressAt(now uint64) float64 {
+	if now <= vkAnimStart {
 		return 0
 	}
-	return int32((1 - vkEaseOut(elapsed)) * 26)
+	progress := float64(now-vkAnimStart) / float64(vkOpenDurationMs)
+	if progress >= 1 {
+		return 1
+	}
+	return progress
 }
 
 // --- Layout model -----------------------------------------------------------
@@ -564,6 +597,12 @@ func vkInsertText(text string, config *Config) {
 	if text == "" {
 		return
 	}
+	// A field that opened with its old value selected behaves like a browser
+	// address bar: the first character typed replaces the whole thing.
+	if vkTextSelected {
+		vkSetText("", config)
+		vkTextSelected = false
+	}
 	current := vkCurrentText()
 	if len(current) >= vkMaxTextLen {
 		return
@@ -573,6 +612,11 @@ func vkInsertText(text string, config *Config) {
 
 // vkBackspace removes the last rune (not byte) so multi-byte text survives.
 func vkBackspace(config *Config) {
+	if vkTextSelected {
+		vkSetText("", config)
+		vkTextSelected = false
+		return
+	}
 	current := vkCurrentText()
 	if current == "" {
 		return
@@ -894,6 +938,9 @@ func vkOpenSceneInput(config *Config, sceneIdx, elemIdx int) {
 	if variable != "" {
 		inputTextBuffer = inputVariableValue(config, variable)
 	}
+	// The address bar opens with the current URL selected so a new address
+	// replaces it, instead of being appended to the old one.
+	vkTextSelected = textBrowserAddressEditing && inputTextBuffer != ""
 	sdl.StartTextInput()
 	vkEnsureLayout()
 }
@@ -902,9 +949,12 @@ func vkOpenSceneInput(config *Config, sceneIdx, elemIdx int) {
 // element indices; chat and unit input keep their state.
 func vkCloseKeyboard() {
 	virtualKeyboardActive = false
+	vkTextSelected = false
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	vkAnimStart = 0
+	vkResetNavRepeat()
+	vkClearPressFlash()
 	if vkTarget == vkTargetWiFi {
 		// A dismissed password field must not keep the secret around.
 		wifiPassphraseBuffer = ""
@@ -946,16 +996,17 @@ func vkActivateFocused(config *Config) {
 		return
 	}
 	key := row[keyboardPosX]
+	// Acknowledge the press before it changes anything, so a key that also
+	// rebuilds the layout (123, SHIFT) still flashes where it was.
+	if i := vkFocusedRectIndex(); i >= 0 && i < len(keyboardRects) {
+		vkFlashPressedRect(keyboardRects[i])
+	}
 
 	switch key {
 	case "⇧":
 		toggleKeyboardCase()
-	case "123":
-		vkLayer = vkLayerSymbols
-		vkLayoutSig = ""
-	case "ABC":
-		vkLayer = vkLayerLetters
-		vkLayoutSig = ""
+	case "123", "ABC":
+		vkToggleLayer()
 	case "BACK":
 		vkBackspace(config)
 	case "ENTER", "SEND":
@@ -968,6 +1019,102 @@ func vkActivateFocused(config *Config) {
 		}
 	}
 	vkEnsureLayout()
+}
+
+// vkFocusedRectIndex returns the index of the highlighted cap in keyboardRects.
+func vkFocusedRectIndex() int {
+	for i := range keyboardRowCol {
+		if keyboardRowCol[i][0] == keyboardPosY && keyboardRowCol[i][1] == keyboardPosX {
+			return i
+		}
+	}
+	return -1
+}
+
+// vkHoverIndex maps a logical pointer position to a cap index, or -1 when the
+// pointer is not over the key grid.
+func vkHoverIndex(mx, my int32) int {
+	row, col, ok := vkHitTest(mx, my)
+	if !ok {
+		return -1
+	}
+	for i := range keyboardRowCol {
+		if keyboardRowCol[i][0] == row && keyboardRowCol[i][1] == col {
+			return i
+		}
+	}
+	return -1
+}
+
+// vkHoverWindowMs is how long a pointer stays "live" after it last moved.
+const vkHoverWindowMs = 400
+
+var (
+	vkPointerX, vkPointerY int32
+	vkPointerMovedAt       uint64
+)
+
+// vkHoverFresh reports whether the pointer moved recently enough to count as a
+// mouse. Touch backends leave SDL's emulated pointer parked on the last tap, and
+// a parked pointer would keep a stale cap lit while the D-pad moves.
+func vkHoverFresh(now uint64) bool {
+	if vkPointerMovedAt == 0 || now < vkPointerMovedAt {
+		return false
+	}
+	return now-vkPointerMovedAt <= vkHoverWindowMs
+}
+
+// vkHoverFromPointer is vkHoverIndex for the current mouse position, while the
+// pointer is being moved. Without it a mouse gave no hint which key a click
+// would press.
+func vkHoverFromPointer() int {
+	if vkPanelRect.W <= 0 || len(keyboardRects) == 0 {
+		return -1
+	}
+	mx, my, _ := sdl.GetMouseState()
+	now := sdl.GetTicks64()
+	if mx != vkPointerX || my != vkPointerY {
+		vkPointerX, vkPointerY = mx, my
+		vkPointerMovedAt = now
+	}
+	if !vkHoverFresh(now) {
+		return -1
+	}
+	lx, ly := physicalToLogical(mx, my)
+	if !pointInRect(lx, ly, vkPanelRect) {
+		return -1
+	}
+	return vkHoverIndex(lx, ly)
+}
+
+// vkHandleControllerButton applies one controller button to the open keyboard,
+// so the main loop and the modal input loop (the text browser's address bar)
+// behave identically. It reports whether the keyboard consumed the button.
+func vkHandleControllerButton(button uint8, config *Config) bool {
+	switch sdl.GameControllerButton(button) {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		vkMoveFocus(0, -1)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		vkMoveFocus(0, 1)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		vkMoveFocus(-1, 0)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		vkMoveFocus(1, 0)
+	case sdl.CONTROLLER_BUTTON_A:
+		vkActivateFocused(config)
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
+		vkCloseKeyboard()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		toggleKeyboardCase()
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		vkToggleLayer()
+	case sdl.CONTROLLER_BUTTON_Y:
+		// Y is the secondary submit: Ask AI in chat, Done everywhere else.
+		vkSubmit(config, vkTarget == vkTargetChat)
+	default:
+		return false
+	}
+	return true
 }
 
 // vkMoveFocus moves the highlight by (dx, dy) with clamping.
@@ -1096,6 +1243,127 @@ func toggleKeyboardCase() {
 	keyboardUpper = !keyboardUpper
 	vkLayoutSig = ""
 	vkEnsureLayout()
+}
+
+// vkToggleLayer switches between the letters and symbols layer. The 123/ABC key
+// and the right shoulder both use it, so punctuation is one press away instead
+// of a walk down to the bottom row.
+func vkToggleLayer() {
+	if vkLayer == vkLayerSymbols {
+		vkLayer = vkLayerLetters
+	} else {
+		vkLayer = vkLayerSymbols
+	}
+	vkLayoutSig = ""
+	vkEnsureLayout()
+}
+
+// --- Press feedback ---------------------------------------------------------
+
+// vkFlashPressedRect marks a cap as just pressed. The flash is drawn on top of
+// the cached layer for a couple of frames, which is what makes a tap feel
+// acknowledged immediately - most of all on touch, where the finger covers the
+// cap that would otherwise show the new focus.
+func vkFlashPressedRect(r sdl.Rect) {
+	if r.W <= 0 || r.H <= 0 {
+		return
+	}
+	vkPressedRect = r
+	vkPressedUntil = sdl.GetTicks64() + vkPressFlashMs
+}
+
+// vkPressedRectAt returns the cap that is still showing its press flash.
+func vkPressedRectAt(now uint64) (sdl.Rect, bool) {
+	if vkPressedUntil == 0 || now >= vkPressedUntil {
+		return sdl.Rect{}, false
+	}
+	return vkPressedRect, true
+}
+
+// vkClearPressFlash drops the flash, e.g. when the keyboard closes.
+func vkClearPressFlash() {
+	vkPressedRect = sdl.Rect{}
+	vkPressedUntil = 0
+}
+
+// --- Hold-to-repeat ---------------------------------------------------------
+
+const (
+	// vkNavRepeatDelayMs is the pause before a held D-pad starts repeating; the
+	// press itself moves the highlight straight away, so this is only the wait
+	// for the second step.
+	vkNavRepeatDelayMs = 320
+	// vkNavRepeatIntervalMs is the cadence after that: fast enough to cross the
+	// keyboard in a couple of seconds, slow enough to stop on a key.
+	vkNavRepeatIntervalMs = 70
+)
+
+// vkRepeatTracker follows one held direction. A direction change restarts the
+// delay, so switching keys is a normal press and never inherits the old cadence.
+type vkRepeatTracker struct {
+	dx, dy int
+	next   uint64
+}
+
+// step advances the tracker for one frame and returns the move to apply, if any.
+func (t *vkRepeatTracker) step(now uint64, dx, dy int) (int, int) {
+	if dx == 0 && dy == 0 {
+		*t = vkRepeatTracker{}
+		return 0, 0
+	}
+	if dx != t.dx || dy != t.dy {
+		*t = vkRepeatTracker{dx: dx, dy: dy, next: now + uint64(a11yRepeatMs(vkNavRepeatDelayMs))}
+		return 0, 0
+	}
+	if now < t.next {
+		return 0, 0
+	}
+	t.next = now + uint64(a11yRepeatMs(vkNavRepeatIntervalMs))
+	return dx, dy
+}
+
+var vkNavRepeat vkRepeatTracker
+
+// vkControllerNavDirection reads the D-pad that is held right now. Physical
+// arrow keys are left to SDL's own key repeat; polling them too would double
+// the rate of a desktop hold.
+func vkControllerNavDirection() (int, int) {
+	if gameController == nil {
+		return 0, 0
+	}
+	dx, dy := 0, 0
+	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_LEFT) != 0 {
+		dx = -1
+	}
+	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_RIGHT) != 0 {
+		dx = 1
+	}
+	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_UP) != 0 {
+		dy = -1
+	}
+	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_DOWN) != 0 {
+		dy = 1
+	}
+	return dx, dy
+}
+
+// vkTickNavRepeat advances the held-D-pad state. The main loop and the modal
+// input loop call it once per frame while the keyboard is open.
+func vkTickNavRepeat() {
+	if !virtualKeyboardActive {
+		vkNavRepeat = vkRepeatTracker{}
+		return
+	}
+	dx, dy := vkControllerNavDirection()
+	if stepX, stepY := vkNavRepeat.step(sdl.GetTicks64(), dx, dy); stepX != 0 || stepY != 0 {
+		vkMoveFocus(stepX, stepY)
+	}
+}
+
+// vkResetNavRepeat forgets the held direction, so a repeat does not survive the
+// keyboard being closed and reopened.
+func vkResetNavRepeat() {
+	vkNavRepeat = vkRepeatTracker{}
 }
 
 func initKeyboard() {
@@ -1451,9 +1719,11 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 	closeBtn := vkCloseRect
 	closeBtn.Y += offset
 
-	// Dim the content behind the panel.
-	fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, WithAlpha(ColorBackground, 190))
-	fillRoundedRect(renderer, 0, 0, screenWidth, panel.Y, 0, WithAlpha(ColorBackground, 60))
+	// Dim the content behind the panel, fading in with the slide so the screen
+	// does not go dark a frame before the panel arrives.
+	progress := vkOpenProgress()
+	fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, WithAlpha(ColorBackground, uint8(float64(190)*progress)))
+	fillRoundedRect(renderer, 0, 0, screenWidth, panel.Y, 0, WithAlpha(ColorBackground, uint8(float64(60)*progress)))
 
 	font, _ := getCachedFont(config, "medium")
 	if font == nil {
@@ -1472,7 +1742,20 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 		dst := sdl.Rect{X: panel.X, Y: panel.Y, W: panel.W, H: panel.H}
 		_ = renderer.Copy(cache, &src, &dst)
 		vkDrawField(renderer, config, font, field)
+		// Mouse affordance: show which cap a click would press. The focused cap
+		// keeps its own fill, so hover never competes with it.
+		if hover := vkHoverFromPointer(); hover >= 0 && hover != vkFocusedRectIndex() && hover < len(keyboardRects) {
+			r := keyboardRects[hover]
+			r.Y += offset
+			vkDrawHoverKey(renderer, r)
+		}
 		vkDrawFocusedKey(renderer, config, font, offset)
+		// Press feedback on top of everything: the cap the finger just touched
+		// reads as pushed in even though the highlight already moved on.
+		if pressed, ok := vkPressedRectAt(sdl.GetTicks64()); ok {
+			pressed.Y += offset
+			vkDrawPressedKey(renderer, pressed)
+		}
 	} else {
 		vkDrawPanel(renderer, panel)
 		vkDrawHeader(renderer, config, smallFont, panel, closeBtn)
@@ -1561,7 +1844,12 @@ func vkDrawField(renderer *sdl.Renderer, config *Config, font *ttf.Font, field s
 	text := vkCurrentText()
 
 	if text == "" {
-		renderText(renderer, config, font, vkPlaceholder(), ColorTextTertiary(), field.X+padX, textY)
+		// A steady caret marks the focused field before the first character;
+		// once there is text the caret blinks behind it instead. The placeholder
+		// moves aside so the two never overlap.
+		caretY := field.Y + field.H/2 - textH/2 + 2
+		fillRoundedRect(renderer, field.X+padX, caretY, 2, textH-4, 1, vkFocusColor())
+		renderText(renderer, config, font, vkPlaceholder(), ColorTextTertiary(), field.X+padX+10, textY)
 	} else {
 		display := text
 		if (vkTarget == vkTargetRA && raPanel.edit == raEditAPIKey) || vkTarget == vkTargetWiFi {
@@ -1570,8 +1858,13 @@ func vkDrawField(renderer *sdl.Renderer, config *Config, font *ttf.Font, field s
 			display = strings.Repeat("•", utf8.RuneCountInString(text))
 		}
 		visible, w := vkFitTail(font, display, maxW)
+		if vkTextSelected {
+			// The whole value is selected: the first key typed replaces it. The
+			// fill says so before the user finds out the hard way.
+			fillRoundedRect(renderer, field.X+padX-3, textY-2, w+6, textH+2, 3, WithAlpha(vkFocusColor(), 110))
+		}
 		renderText(renderer, config, font, visible, ColorTextPrimary(), field.X+padX, textY)
-		if uint32(sdl.GetTicks64()/530)%2 == 0 {
+		if !vkTextSelected && uint32(sdl.GetTicks64()/530)%2 == 0 {
 			cx := field.X + padX + w + 2
 			if cx > field.X+field.W-padX {
 				cx = field.X + field.W - padX
@@ -1663,9 +1956,12 @@ func vkDrawSingleKey(renderer *sdl.Renderer, config *Config, font *ttf.Font, r s
 	}
 	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, radius, base)
 
-	// Top sheen + border give keys a crisp, modern edge.
+	// Top sheen and a shadowed bottom edge give keys a crisp, slightly raised
+	// look without a gradient; both are cheap enough for the cached layer.
 	renderer.SetDrawColor(255, 255, 255, 10)
 	renderer.FillRect(&sdl.Rect{X: r.X + 6, Y: r.Y + 1, W: r.W - 12, H: 1})
+	renderer.SetDrawColor(0, 0, 0, 44)
+	renderer.FillRect(&sdl.Rect{X: r.X + 6, Y: r.Y + r.H - 2, W: r.W - 12, H: 1})
 	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 110)
 	renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
 
@@ -1722,6 +2018,24 @@ func vkDrawKeys(renderer *sdl.Renderer, config *Config, font *ttf.Font, offset i
 		r.Y += offset
 		vkDrawSingleKey(renderer, config, font, r, key, vkKeyLabel(key), focused)
 	}
+}
+
+// vkDrawHoverKey tints the cap under the mouse pointer.
+func vkDrawHoverKey(renderer *sdl.Renderer, r sdl.Rect) {
+	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, RadiusMD, WithAlpha(vkFocusColor(), 30))
+	renderer.SetDrawColor(vkFocusColor().R, vkFocusColor().G, vkFocusColor().B, 110)
+	renderer.DrawRect(&sdl.Rect{X: r.X, Y: r.Y, W: r.W, H: r.H})
+}
+
+// vkDrawPressedKey makes a cap look pushed in: the face darkens and an inner
+// line takes the place of the top sheen.
+func vkDrawPressedKey(renderer *sdl.Renderer, r sdl.Rect) {
+	if r.W <= 4 || r.H <= 4 {
+		return
+	}
+	fillRoundedRect(renderer, r.X+1, r.Y+1, r.W-2, r.H-2, RadiusMD-1, sdl.Color{R: 0, G: 0, B: 0, A: 52})
+	renderer.SetDrawColor(0, 0, 0, 90)
+	renderer.DrawRect(&sdl.Rect{X: r.X + 2, Y: r.Y + 2, W: r.W - 4, H: r.H - 4})
 }
 
 // vkDrawFocusedKey redraws only the highlighted cap on top of the cached layer.

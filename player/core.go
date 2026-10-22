@@ -46,6 +46,7 @@ var (
 	activeSceneIndex           int = -1
 	activeElementIndex         int = -1
 	inputTextBuffer            string
+	vkTextSelected             bool // pre-filled field is selected: typing replaces it
 	virtualKeyboardActive      bool
 	keyboard                   [][]string
 	keyboardPosX, keyboardPosY int
@@ -778,9 +779,10 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 			break
 		}
 	}
-	// Accessibility text scaling applies here, at the one place every logical
-	// font is resolved, so no screen can be left behind at the default size.
-	size = a11yScaleFontSize(size)
+	// The compact canvas squeezes the 1280-wide design into 960, so type is
+	// scaled with it; then accessibility scaling applies here, at the one place
+	// every logical font is resolved, so no screen is left behind.
+	size = a11yScaleFontSize(uiScaleFontSize(size))
 	return loadCachedFont(fontPath, size), size
 }
 
@@ -796,7 +798,7 @@ func getFontSized(config *Config, fontName string, size int) *ttf.Font {
 			break
 		}
 	}
-	return loadCachedFont(fontPath, a11yScaleFontSize(size))
+	return loadCachedFont(fontPath, a11yScaleFontSize(uiScaleFontSize(size)))
 }
 
 // loadCachedFont opens path at size (already accessibility-scaled) and caches it
@@ -1695,9 +1697,18 @@ func renderLabelShadowed(renderer *sdl.Renderer, config *Config, elem Element) {
 	if font == nil {
 		return
 	}
+	// Labels carry no box of their own, so an authored sentence longer than the
+	// panel used to run straight off the screen edge (the Apps blurb did on the
+	// Brick). Keep it inside the viewport instead of drawing past it.
+	text := elem.Text
+	if strings.TrimSpace(string(elem.Width)) == "" && screenWidth > 0 {
+		if maxW := screenWidth - elem.X - 8; maxW > 0 {
+			text = fitTextWidth(renderer, config, font, text, maxW)
+		}
+	}
 	color := resolveColor(config, elem.Color, sdl.Color{R: 255, G: 255, B: 255, A: 255})
-	renderText(renderer, config, font, elem.Text, sdl.Color{R: 0, G: 0, B: 0, A: 140}, elem.X+2, elem.Y+2)
-	renderText(renderer, config, font, elem.Text, color, elem.X, elem.Y)
+	renderText(renderer, config, font, text, sdl.Color{R: 0, G: 0, B: 0, A: 140}, elem.X+2, elem.Y+2)
+	renderText(renderer, config, font, text, color, elem.X, elem.Y)
 }
 
 // isMissingDLL reports whether err indicates the process failed to start
@@ -3541,6 +3552,7 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 	exitInput := false
 	for !exitInput {
 		drainCustom(config)
+		vkTickNavRepeat()
 		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
 		renderer.Clear()
 		if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
@@ -3580,35 +3592,27 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 			case *sdl.TextInputEvent:
 				vkInsertText(e.GetText(), config)
 			case *sdl.ControllerButtonEvent:
+				// The keyboard runs its own event loop, so the system quit chord
+				// has to be checked here as well as in the main loop.
+				if exitChordPressed(e) {
+					vkCloseKeyboard()
+					requestAppExit()
+					return
+				}
+				// The modal owns the pad while the keyboard is up, so the
+				// accessibility chord and swaps have to be applied here too.
+				// Otherwise one-handed mode worked everywhere except the place a
+				// user types, which is exactly where it is needed most.
+				if a11yRemapEvent(e) {
+					continue
+				}
 				if e.Type != sdl.CONTROLLERBUTTONDOWN {
 					continue
 				}
-				switch e.Button {
-				case sdl.CONTROLLER_BUTTON_DPAD_UP:
-					vkMoveFocus(0, -1)
-				case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-					vkMoveFocus(0, 1)
-				case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-					vkMoveFocus(-1, 0)
-				case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-					vkMoveFocus(1, 0)
-				case sdl.CONTROLLER_BUTTON_A:
-					key := vkFocusedKey()
-					vkActivateFocused(config)
-					if vkIsActionKey(key) {
-						exitInput = true
-					}
-				case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
-					vkCloseKeyboard()
-					exitInput = true
-				case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-					toggleKeyboardCase()
-				case sdl.CONTROLLER_BUTTON_Y:
-					if vkTarget == vkTargetChat {
-						vkSubmit(config, true)
-					} else {
-						vkSubmit(config, false)
-					}
+				// The same handler as the main loop: the modal input owns the pad
+				// while the keyboard is up, and any button that closes it leaves
+				// the modal loop.
+				if vkHandleControllerButton(e.Button, config) && !virtualKeyboardActive {
 					exitInput = true
 				}
 			case *sdl.MouseButtonEvent:
@@ -3643,6 +3647,9 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 				handleMultiGesture(e, config)
 			}
 		}
+		// Cap the modal at the main loop's frame rate. Without a delay this loop
+		// spun flat out for as long as the address bar was open.
+		sdl.Delay(16)
 	}
 }
 
@@ -5222,6 +5229,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
 	case "youtube_trending":
 		go fetchTrendingVideos(config, "search_results", snapshotVars(config))
+	case triggerShortsOpen:
+		// The Media screen's Shorts button: open the feed, start it and keep it
+		// running. Same path as the Y button and Ctrl+Shift+S.
+		openShortsFeed(config)
 	case "youtube_play":
 		videos, ok := getSceneVideos(config, config.Scenes[currentSceneIndex])
 		if ok && focusedResultIndex >= 0 && focusedResultIndex < len(videos) {
@@ -6409,9 +6420,21 @@ func handleChromeOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if tb.startOpen {
 		switch e.Keysym.Sym {
 		case sdl.K_UP:
-			startMenuNavigate(-1, config)
+			if tb.focus == 0 {
+				startMenuMoveGroup(-1, config)
+			} else {
+				startMenuNavigate(-1, config)
+			}
 		case sdl.K_DOWN:
-			startMenuNavigate(1, config)
+			if tb.focus == 0 {
+				startMenuMoveGroup(1, config)
+			} else {
+				startMenuNavigate(1, config)
+			}
+		case sdl.K_LEFT:
+			startMenuFocusRail()
+		case sdl.K_RIGHT, sdl.K_TAB:
+			startMenuFocusItems(config)
 		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 			startMenuActivate(config)
 		case sdl.K_ESCAPE, sdl.K_b:

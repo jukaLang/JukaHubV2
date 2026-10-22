@@ -666,16 +666,27 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 // render loop never allocates per frame.
 func loadHomeFonts() HomeFonts {
 	homeFontsOnce.Do(func() {
+		// The compact 4:3 canvas keeps the 720 height but loses a quarter of the
+		// width, so the home type scale shrinks with it; otherwise the narrow
+		// feature row truncates "Favorites" to "Favo…".
 		homeFontsCache = HomeFonts{
-			Brand:    openHomeFont(26),
-			Greeting: openHomeFont(32),
-			Subtitle: openHomeFont(19),
-			Card:     openHomeFont(23),
-			Helper:   openHomeFont(17),
-			Small:    openHomeFont(16),
+			Brand:    openHomeFont(uiScaleFontSize(26)),
+			Greeting: openHomeFont(uiScaleFontSize(32)),
+			Subtitle: openHomeFont(uiScaleFontSize(19)),
+			Card:     openHomeFont(uiScaleFontSize(23)),
+			Helper:   openHomeFont(uiScaleFontSize(17)),
+			Small:    openHomeFont(uiScaleFontSize(16)),
 		}
 	})
 	return homeFontsCache
+}
+
+// resetHomeFonts drops the cached home type scale so it is reopened for the
+// current canvas. The fonts are sized from the canvas width, which is only
+// known once the window exists.
+func resetHomeFonts() {
+	homeFontsCache = HomeFonts{}
+	homeFontsOnce = sync.Once{}
 }
 
 func openHomeFont(size int) *ttf.Font {

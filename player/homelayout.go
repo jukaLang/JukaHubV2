@@ -615,6 +615,29 @@ func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data 
 	drawText(renderer, fonts.Subtitle, subtitle, scaleX(32, h.Width), scaleY(119, h.Height), ColorTextMuted(), textAlignLeft)
 }
 
+// fitHomeTitle picks the largest of the card fonts that prints the whole title
+// inside maxW. The bottom feature row on the compact 4:3 canvas is only ~100px
+// wide per card, and a title that ellipsizes there ("Favo…", "Brow…") reads as
+// a broken label, so the type steps down a tier instead before it truncates.
+func fitHomeTitle(fonts HomeFonts, text string, maxW int32) (*ttf.Font, string) {
+	for _, font := range []*ttf.Font{fonts.Card, fonts.Helper, fonts.Small} {
+		if font == nil {
+			continue
+		}
+		if w, _, _ := font.SizeUTF8(text); int32(w) <= maxW {
+			return font, text
+		}
+	}
+	fallback := fonts.Helper
+	if fallback == nil {
+		fallback = fonts.Card
+	}
+	if fallback == nil {
+		return fonts.Card, text
+	}
+	return fallback, ellipsize(fallback, text, maxW)
+}
+
 func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, item HomeItem, focused, pressed bool, pressDepth, lift float64) {
 	if fonts.Card == nil {
 		return
@@ -657,24 +680,32 @@ func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, ite
 
 	if stacked {
 		stackPad := scaleX(16, h.Width)
+		// A narrow card on the compact canvas is ~100px wide; the authored 16px
+		// side padding would eat a third of the space the title needs.
+		if rect.W < scaleX(180, h.Width) {
+			stackPad = scaleX(8, h.Width)
+		}
 
 		textW := rect.W - stackPad*2
 		if textW < 48 {
 			textW = 48
 		}
 		cx := rect.X + rect.W/2
-		th := int32(fonts.Card.Height())
+		titleFont, title := fitHomeTitle(fonts, item.Title, textW)
+		if titleFont == nil {
+			return
+		}
+		th := int32(titleFont.Height())
 		sh := int32(fonts.Helper.Height())
-		title := ellipsize(fonts.Card, item.Title, textW)
 		subtitle := ellipsize(fonts.Helper, item.Subtitle, textW)
 		textTop := iconTile.Y + iconTile.H + scaleY(10, h.Height)
 		if textTop+th+scaleY(4, h.Height)+sh > rect.Y+rect.H-scaleY(8, h.Height) {
 			// Too short for both lines: keep the title only.
 			textTop = rect.Y + rect.H - scaleY(8, h.Height) - th
-			drawText(renderer, fonts.Card, title, cx, textTop, ColorTextPrimary(), textAlignCenter)
+			drawText(renderer, titleFont, title, cx, textTop, ColorTextPrimary(), textAlignCenter)
 			return
 		}
-		drawText(renderer, fonts.Card, title, cx, textTop, ColorTextPrimary(), textAlignCenter)
+		drawText(renderer, titleFont, title, cx, textTop, ColorTextPrimary(), textAlignCenter)
 		drawText(renderer, fonts.Helper, subtitle, cx, textTop+th+scaleY(4, h.Height), ColorTextMuted(), textAlignCenter)
 		return
 	}
@@ -1339,6 +1370,22 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 		drawClockHand(renderer, cx, cy, -math.Pi/2+0.7, w/4, 2, color)
 		drawClockHand(renderer, cx, cy, -math.Pi/2+2.4, w/3, 2, color)
 		fillCircle(renderer, cx, cy, 2, color)
+	case "gamepad", "emulators", "controller":
+		// Gamepad: a rounded body with two grips, a d-pad and two buttons. At
+		// tile size the silhouette is what reads; the details are cut-outs in
+		// the tile's own surface colour.
+		body := sdl.Rect{X: rect.X + w/12, Y: rect.Y + h/3, W: w - w/6, H: h / 3}
+		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, body.H/2, color)
+		fillCircle(renderer, rect.X+w/4, rect.Y+h*2/3, w/9, color)
+		fillCircle(renderer, rect.X+w-w/4, rect.Y+h*2/3, w/9, color)
+		cut := ColorIconSurface
+		if focused {
+			cut = ColorAccent
+		}
+		fillRoundedRect(renderer, cx-w/6, cy-2, w/5, 4, 2, cut)
+		fillRoundedRect(renderer, cx-w/6+w/10-2, cy-w/8, 4, w/5, 2, cut)
+		fillCircle(renderer, cx+w/4, cy-w/12, w/22, cut)
+		fillCircle(renderer, cx+w/3, cy+w/12, w/22, cut)
 	case "exit":
 		// Power icon: a ring with a vertical bar through the top.
 		tileBG := ColorIconSurface

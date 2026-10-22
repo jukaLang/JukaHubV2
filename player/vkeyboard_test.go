@@ -30,6 +30,7 @@ func resetKeyboardState(t *testing.T) {
 	prevUnit, prevUnitActive := unitInputValue, unitInputActive
 	prevActive := virtualKeyboardActive
 	prevAnim := vkAnimStart
+	prevRepeat, prevPressed, prevPressedUntil := vkNavRepeat, vkPressedRect, vkPressedUntil
 	t.Cleanup(func() {
 		vkTarget, vkLayer = prevTarget, prevLayer
 		keyboardUpper = prevUpper
@@ -39,6 +40,7 @@ func resetKeyboardState(t *testing.T) {
 		unitInputValue, unitInputActive = prevUnit, prevUnitActive
 		virtualKeyboardActive = prevActive
 		vkAnimStart = prevAnim
+		vkNavRepeat, vkPressedRect, vkPressedUntil = prevRepeat, prevPressed, prevPressedUntil
 		vkLayoutSig = ""
 	})
 	vkLayoutSig = ""
@@ -51,6 +53,8 @@ func resetKeyboardState(t *testing.T) {
 	unitInputActive = false
 	virtualKeyboardActive = true
 	vkAnimStart = 0
+	vkNavRepeat = vkRepeatTracker{}
+	vkClearPressFlash()
 }
 
 func rowIndex(rows [][]string, label string) (int, int) {

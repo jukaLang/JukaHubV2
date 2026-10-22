@@ -158,6 +158,17 @@ func romArtworkPath(rom scannedROM, root string) string {
 	return filepath.Join(root, strings.ReplaceAll(rom.System, " ", "_"), stem+".png")
 }
 
+// artworkCoverPresent reports whether a cover file is there right now. A
+// library scan uses it to count completeness; a directory at that path is not a
+// cover, so it counts as missing.
+func artworkCoverPresent(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
 // artworkMissTTL is how long a "not found" answer is trusted. The thumbnail
 // set gains covers over time, so a miss is retried after a month instead of
 // being permanent — but a library with 200 unmatched homebrew ROMs does not hit
@@ -269,56 +280,84 @@ func artworkRecentlyMissing(misses map[string]time.Time, key string, now time.Ti
 // the old behaviour (always retry); a map both skips recent misses and records
 // new ones, which is what the library action uses.
 func fetchROMArtworkWithMisses(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string, misses map[string]time.Time, now time.Time, ttl time.Duration) (fetched, skipped, missing int) {
+	fetched, skipped, missing, _ = fetchROMArtworkTracked(ctx, roms, client, baseURL, dest, misses, now, ttl, nil)
+	return fetched, skipped, missing
+}
+
+// fetchROMArtworkTracked is the loop behind every artwork download.
+//
+// progress is called once per ROM with the number handled so far, so the library
+// can move a counter while the fetch runs instead of waiting for the end. A
+// cancelled ctx stops between games and returns stopped=true: the covers already
+// written stay on the card, which is what makes the job resumable — running it
+// again scans the disk and only asks about what is still missing.
+func fetchROMArtworkTracked(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string, misses map[string]time.Time, now time.Time, ttl time.Duration, progress func(done int)) (fetched, skipped, missing int, stopped bool) {
 	if client == nil {
 		client = &http.Client{Timeout: 8 * time.Second}
 	}
 	if now.IsZero() {
 		now = time.Now()
 	}
-	for _, rom := range roms {
+	// classify handles one ROM and reports which bucket it landed in. Keeping
+	// it separate is what lets the loop count progress for skipped games too.
+	const (
+		artFetched = iota
+		artSkipped
+		artMissing
+	)
+	classify := func(rom scannedROM) int {
 		path := romArtworkPath(rom, dest)
 		if path == "" {
-			missing++
-			continue
+			return artMissing
 		}
-		if _, err := os.Stat(path); err == nil {
-			skipped++
-			continue
+		if artworkCoverPresent(path) {
+			return artSkipped
 		}
 		stem := strings.TrimSuffix(filepath.Base(rom.Path), filepath.Ext(rom.Path))
 		if stem == "" {
-			missing++
-			continue
+			return artMissing
 		}
 		key := artworkMissKey(rom.Collection, stem)
 		if misses != nil && artworkRecentlyMissing(misses, key, now, ttl) {
-			missing++
-			continue
+			return artMissing
 		}
 		image, err := fetchROMArtworkImage(ctx, client, baseURL, rom.Collection, stem)
 		if err != nil {
-			missing++
 			// A 404 is a real answer worth remembering. A timeout or a dropped
 			// connection is not: retrying that next time is the whole point.
 			if misses != nil && errors.Is(err, os.ErrNotExist) {
 				misses[key] = now
 			}
-			continue
+			return artMissing
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			missing++
-			continue
+			return artMissing
 		}
 		if err := os.WriteFile(path, image, 0o644); err != nil {
-			missing++
-			continue
+			return artMissing
 		}
 		if misses != nil {
 			delete(misses, key)
 		}
-		fetched++
+		return artFetched
 	}
-	return fetched, skipped, missing
+	for i, rom := range roms {
+		if ctx != nil && ctx.Err() != nil {
+			return fetched, skipped, missing, true
+		}
+		switch classify(rom) {
+		case artFetched:
+			fetched++
+		case artSkipped:
+			skipped++
+		default:
+			missing++
+		}
+		if progress != nil {
+			progress(i + 1)
+		}
+	}
+	return fetched, skipped, missing, false
 }
 
 func fetchROMArtwork(ctx context.Context, roms []scannedROM, client *http.Client, baseURL, dest string) (fetched, skipped, missing int) {
@@ -371,11 +410,15 @@ func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, col
 var artworkFetchState = struct {
 	sync.Mutex
 	running  bool
+	stopping bool
 	total    int
+	done     int
 	fetched  int
 	skipped  int
 	missing  int
-	finished uint64 // bumped on every completion; the library redraws art when it moves
+	stopped  bool
+	finished uint64             // bumped on every completion; the library redraws art when it moves
+	cancel   context.CancelFunc // stops the loop between two games
 }{}
 
 func startROMArtworkFetch(roms []scannedROM) bool {
@@ -398,15 +441,25 @@ func startArtworkFetch(roms []scannedROM, misses map[string]time.Time, dest stri
 		artworkFetchState.Unlock()
 		return false
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	artworkFetchState.running = true
+	artworkFetchState.stopping = false
+	artworkFetchState.stopped = false
 	artworkFetchState.total = len(roms)
+	artworkFetchState.done = 0
 	artworkFetchState.fetched = 0
 	artworkFetchState.skipped = 0
 	artworkFetchState.missing = 0
+	artworkFetchState.cancel = cancel
 	artworkFetchState.Unlock()
 	go func() {
-		fetched, skipped, missing := fetchROMArtworkWithMisses(context.Background(), roms, nil,
-			artworkBaseURL, dest, misses, time.Now(), artworkMissTTL)
+		fetched, skipped, missing, stopped := fetchROMArtworkTracked(ctx, roms, nil,
+			artworkBaseURL, dest, misses, time.Now(), artworkMissTTL, func(done int) {
+				artworkFetchState.Lock()
+				artworkFetchState.done = done
+				artworkFetchState.Unlock()
+			})
+		cancel()
 		if misses != nil {
 			if err := saveArtworkMisses(dest, misses); err != nil {
 				log.Printf("[art] cannot save the not-found cache: %v", err)
@@ -414,13 +467,38 @@ func startArtworkFetch(roms []scannedROM, misses map[string]time.Time, dest stri
 		}
 		artworkFetchState.Lock()
 		artworkFetchState.running = false
+		artworkFetchState.stopping = false
+		artworkFetchState.stopped = stopped
 		artworkFetchState.fetched = fetched
 		artworkFetchState.skipped = skipped
 		artworkFetchState.missing = missing
+		artworkFetchState.cancel = nil
 		artworkFetchState.finished++
 		artworkFetchState.Unlock()
 	}()
 	return true
+}
+
+// stopArtworkFetch asks a running fetch to stop after the cover it is on. It
+// returns false when nothing is running, so the caller does not promise a stop
+// that never happens.
+func stopArtworkFetch() bool {
+	artworkFetchState.Lock()
+	defer artworkFetchState.Unlock()
+	if !artworkFetchState.running || artworkFetchState.cancel == nil || artworkFetchState.stopping {
+		return false
+	}
+	artworkFetchState.stopping = true
+	artworkFetchState.cancel()
+	return true
+}
+
+// artworkFetchProgress returns how far the running fetch has got. The pair is
+// zero when nothing has run this session.
+func artworkFetchProgress() (done, total int, running bool) {
+	artworkFetchState.Lock()
+	defer artworkFetchState.Unlock()
+	return artworkFetchState.done, artworkFetchState.total, artworkFetchState.running
 }
 
 func artworkFetchRunning() bool {
@@ -457,10 +535,18 @@ func artworkFetchSummary() string {
 	artworkFetchState.Lock()
 	defer artworkFetchState.Unlock()
 	if artworkFetchState.running {
-		return "Artwork fetch is running for " + itoa(artworkFetchState.total) + " scanned game(s)."
+		line := "Fetching covers: " + itoa(artworkFetchState.done) + " of " + itoa(artworkFetchState.total)
+		if artworkFetchState.stopping {
+			return line + " — stopping after this one…"
+		}
+		return line + ". Press L1 / F to stop."
 	}
 	if artworkFetchState.total == 0 {
 		return "Scan ROM folders first to find games."
+	}
+	if artworkFetchState.stopped {
+		return "Stopped after " + itoa(artworkFetchState.done) + " of " + itoa(artworkFetchState.total) +
+			": " + itoa(artworkFetchState.fetched) + " saved. Press Fill Gaps to resume."
 	}
 	return "Saved " + itoa(artworkFetchState.fetched) + " image(s); " + itoa(artworkFetchState.skipped) + " already present; " + itoa(artworkFetchState.missing) + " not found."
 }

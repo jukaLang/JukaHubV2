@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -68,6 +67,9 @@ type FileEntry struct {
 	Name  string `json:"name"`
 	Path  string `json:"path"`
 	IsDir bool   `json:"isDir"`
+	// Icon is an optional image that belongs to the entry. Only the Apps
+	// launcher sets it: the file explorer and the media lists leave it empty.
+	Icon string `json:"icon,omitempty"`
 }
 
 // focusedFileIndex is the currently highlighted entry inside a dynamiclist.
@@ -301,13 +303,16 @@ func feEnterFocused(config *Config) {
 			// was browsing when the image was picked.
 			chatAttachmentRoot = feRoot(config)
 			config.Variables.Custom["chat_attach_image"] = ""
-			// Create a ChatMessage with ImageURL set to the file path
+			// Create a ChatMessage with ImageURL set to the file path. It is the
+			// local user's own message, so it can be selected, quoted and deleted
+			// like one typed in the composer.
 			chatMessages = append(chatMessages, ChatMessage{
-				ID:        fmt.Sprintf("%x", []byte{}),
-				Sender:    "You",
+				ID:        newChatMessageID(),
+				Sender:    chatDisplayName(),
 				Text:      "",
 				Timestamp: time.Now(),
 				ImageURL:  entry.Path,
+				Own:       true,
 			})
 			saveChatMessages()
 			showToast("Image attached to chat", ToastSuccess())
