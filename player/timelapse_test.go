@@ -17,16 +17,40 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 // timelapseRig is what the fake capture and encoder leave behind for the test.
 type timelapseRig struct {
-	root       string
+	root string
+
+	// The fake encoder and notifier run on the recorder's goroutine while the
+	// test polls from its own, so the fields below are guarded by mu. Read them
+	// through the accessors; touching them directly is a data race.
+	mu         sync.Mutex
 	encodeArgs []string
 	frameCount int
 	toasts     []string
+}
+
+func (r *timelapseRig) encoded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.encodeArgs
+}
+
+func (r *timelapseRig) frames() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.frameCount
+}
+
+func (r *timelapseRig) notices() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.toasts...)
 }
 
 // useTimelapseRig installs fakes for every seam the recorder has. The fake grab
@@ -60,6 +84,7 @@ func useTimelapseRig(t *testing.T) *timelapseRig {
 		return os.WriteFile(args[0], []byte("png"), 0o644)
 	}
 	timelapseEncode = func(_ string, args []string) error {
+		rig.mu.Lock()
 		rig.encodeArgs = append([]string(nil), args...)
 		for _, arg := range args {
 			if filepath.Base(arg) == "frame_%04d.png" {
@@ -67,10 +92,13 @@ func useTimelapseRig(t *testing.T) *timelapseRig {
 				rig.frameCount = len(entries)
 			}
 		}
+		rig.mu.Unlock()
 		return os.WriteFile(args[len(args)-1], []byte("mp4"), 0o644)
 	}
 	timelapseNotify = func(message string, _ ToastKind) {
+		rig.mu.Lock()
 		rig.toasts = append(rig.toasts, message)
+		rig.mu.Unlock()
 	}
 	return rig
 }
@@ -157,21 +185,21 @@ func TestTimelapseRecordsAndAssembles(t *testing.T) {
 	waitForTimelapseFrames(t, rig.root, timelapseMinFrames+2)
 	recorder.Stop()
 
-	if rig.frameCount < timelapseMinFrames {
-		t.Fatalf("encoder saw %d frames, want at least %d", rig.frameCount, timelapseMinFrames)
+	if rig.frames() < timelapseMinFrames {
+		t.Fatalf("encoder saw %d frames, want at least %d", rig.frames(), timelapseMinFrames)
 	}
-	if !hasFFmpegArg(rig.encodeArgs, strconv.Itoa(timelapseOutputFPS)) {
-		t.Errorf("encoder args %v do not pin %d fps", rig.encodeArgs, timelapseOutputFPS)
+	if !hasFFmpegArg(rig.encoded(), strconv.Itoa(timelapseOutputFPS)) {
+		t.Errorf("encoder args %v do not pin %d fps", rig.encoded(), timelapseOutputFPS)
 	}
-	if !hasFFmpegArg(rig.encodeArgs, "yuv420p") {
-		t.Errorf("encoder args %v do not pin a phone-friendly pixel format", rig.encodeArgs)
+	if !hasFFmpegArg(rig.encoded(), "yuv420p") {
+		t.Errorf("encoder args %v do not pin a phone-friendly pixel format", rig.encoded())
 	}
 	films := globMatches(filepath.Join(rig.root, "timelapse_zelda-a-link-to-the-past_*.mp4"))
 	if len(films) != 1 {
 		t.Fatalf("films = %v, want one named after the game", films)
 	}
-	if len(rig.toasts) != 1 || !strings.Contains(rig.toasts[0], "Time-lapse ready") {
-		t.Fatalf("toasts = %v, want one completion notice", rig.toasts)
+	if len(rig.notices()) != 1 || !strings.Contains(rig.notices()[0], "Time-lapse ready") {
+		t.Fatalf("toasts = %v, want one completion notice", rig.notices())
 	}
 	// The session folder is gone; only the film remains.
 	if dirs := globMatches(filepath.Join(rig.root, ".*")); len(dirs) != 0 {
@@ -191,14 +219,14 @@ func TestTimelapseShortSessionLeavesNothing(t *testing.T) {
 	waitForTimelapseFrames(t, rig.root, 1)
 	recorder.Stop()
 
-	if rig.encodeArgs != nil {
-		t.Fatalf("a one-frame session was encoded: %v", rig.encodeArgs)
+	if rig.encoded() != nil {
+		t.Fatalf("a one-frame session was encoded: %v", rig.encoded())
 	}
 	if files := globMatches(filepath.Join(rig.root, "*")); len(files) != 0 {
 		t.Fatalf("a discarded session left %v", files)
 	}
-	if len(rig.toasts) != 0 {
-		t.Fatalf("toasts = %v, want none for a discarded session", rig.toasts)
+	if len(rig.notices()) != 0 {
+		t.Fatalf("toasts = %v, want none for a discarded session", rig.notices())
 	}
 }
 
@@ -220,8 +248,8 @@ func TestTimelapseEncodeFailureKeepsFrames(t *testing.T) {
 	if films := globMatches(filepath.Join(rig.root, "*.mp4")); len(films) != 0 {
 		t.Fatalf("a failed encode wrote %v", films)
 	}
-	if len(rig.toasts) != 1 || !strings.Contains(rig.toasts[0], "could not be encoded") {
-		t.Fatalf("toasts = %v, want an encode warning", rig.toasts)
+	if len(rig.notices()) != 1 || !strings.Contains(rig.notices()[0], "could not be encoded") {
+		t.Fatalf("toasts = %v, want an encode warning", rig.notices())
 	}
 }
 
@@ -310,8 +338,8 @@ func TestLibraryLaunchTimeLapsesTheSession(t *testing.T) {
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if films := globMatches(filepath.Join(rig.root, "timelapse_chrono-trigger_*.mp4")); len(films) == 1 {
-			if rig.frameCount < timelapseMinFrames {
-				t.Fatalf("film has %d frames, want at least %d", rig.frameCount, timelapseMinFrames)
+			if rig.frames() < timelapseMinFrames {
+				t.Fatalf("film has %d frames, want at least %d", rig.frames(), timelapseMinFrames)
 			}
 			return
 		}
