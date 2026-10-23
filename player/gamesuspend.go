@@ -37,8 +37,19 @@ func noteGameChildStarted() {
 // tolerated: the count clamps at zero instead of turning the detection off
 // forever for later launches.
 func noteGameChildExited() {
-	if runningGameChildren.Add(-1) < 0 {
-		runningGameChildren.Store(0)
+	// Decrement-and-clamp as one compare-and-swap. The earlier Add(-1) followed
+	// by Store(0) let a launch that started in between have its increment
+	// overwritten, so the loop un-parked under a live game (a blink); worse, a
+	// lost increment could later go negative and hide the next launch.
+	for {
+		cur := runningGameChildren.Load()
+		next := cur - 1
+		if next < 0 {
+			next = 0
+		}
+		if runningGameChildren.CompareAndSwap(cur, next) {
+			return
+		}
 	}
 }
 
