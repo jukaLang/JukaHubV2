@@ -3522,8 +3522,18 @@ function parseConfigText(text, fileName) {
 
 // One import path for the Load button and for dropping a file on the canvas, so
 // a dropped file and a picked file behave identically.
+// A real jukaconfig is tens of kilobytes. Reading a huge or wrong file (a video
+// dropped on the canvas, say) as text would freeze the tab, so refuse it first.
+const MAX_CONFIG_BYTES = 5 * 1024 * 1024;
+
 function importConfigFile(file) {
   if (!file) return;
+  if (file.size > MAX_CONFIG_BYTES) {
+    const mb = (file.size / (1024 * 1024)).toFixed(1);
+    showToast(`That file is ${mb} MB, too large for a JukaHub config (limit 5 MB)`, 'error');
+    announce('Import failed: file too large');
+    return;
+  }
   const reader = new FileReader();
   reader.onerror = () => showToast('Could not read that file', 'error');
   reader.onload = event => {
