@@ -123,7 +123,7 @@
   --primary-pressed: #5a3fc9;
   --secondary: #16897a;
   --secondary-hover: #1ca18e;
-  --danger: #d6455d;
+  --danger: #c0304a;
   --danger-hover: #e25a71;
   --warning: #c98a1e;
   --text-main: #1b2230;
@@ -572,7 +572,7 @@ textarea {
   border-bottom: 1px solid var(--border);
 }
 
-.panel-header h3 {
+.panel-header h2 {
   font-size: var(--text-md);
   font-weight: 600;
   margin: 0;
@@ -1796,11 +1796,11 @@ body.ai-open .ai-panel {
   flex: 0 0 auto;
 }
 
-.ai-panel-header h3 {
+.ai-panel-header h2 {
   color: var(--text-main);
 }
 
-.ai-panel-header h3 .fa-wand-magic-sparkles {
+.ai-panel-header h2 .fa-wand-magic-sparkles {
   color: var(--primary);
   margin-right: var(--space-xs);
 }
@@ -2345,8 +2345,9 @@ body.ai-open .ai-panel {
 }
 
 .menu-scene-button.active {
-  background: var(--primary);
-  border-color: var(--primary);
+  /* White on --primary is 4.34:1; the pressed shade passes 4.5:1. */
+  background: var(--primary-pressed);
+  border-color: var(--primary-pressed);
   color: var(--text-on-primary);
 }
 
@@ -2675,7 +2676,8 @@ body.ai-open .ai-panel {
 }
 
 .app-footer a {
-  color: var(--primary);
+  /* --primary on the dark footer is 4.2:1; the hover tint clears 4.5:1. */
+  color: var(--primary-hover);
   font-weight: 600;
 }
 
@@ -3148,6 +3150,11 @@ body.ai-open .ai-panel {
   border: 1px solid var(--border);
 }
 
+/* Light surface: --primary already clears 4.5:1 here, the hover tint does not. */
+.theme-light .app-footer a {
+  color: var(--primary);
+}
+
 .theme-light .menu-scene-button.active {
   background: var(--primary);
   border-color: var(--primary);
@@ -3259,13 +3266,13 @@ body.element-selected #elementPropertiesPanel {
     padding: var(--space-md) var(--space-xs);
   }
 
-  .sidebar.collapsed .panel-header h3 {
+  .sidebar.collapsed .panel-header h2 {
     flex-direction: column;
     gap: var(--space-xs);
     font-size: 0; /* hides the text label while keeping the icon */
   }
 
-  .sidebar.collapsed .panel-header h3 i {
+  .sidebar.collapsed .panel-header h2 i {
     font-size: var(--text-md);
   }
 
