@@ -67,7 +67,7 @@
                     <button id="darkModeToggle" class="app-bar-button icon-button dark-mode-toggle" type="button" aria-label="Switch to light theme" title="Switch to light theme">
                         <i class="fas fa-moon" aria-hidden="true"></i>
                     </button>
-                    <label for="loadFile" class="app-bar-button icon-button load-button" role="button" aria-label="Load a config file" title="Load a jukaconfig.json or XML file">
+                    <label for="loadFile" class="app-bar-button icon-button load-button" title="Load a jukaconfig.json or XML file">
                         <i class="fas fa-upload" aria-hidden="true"></i>
                     </label>
                     <input type="file" id="loadFile" accept=".json,.xml,application/json,application/xml,text/xml" class="sr-only" aria-label="Load jukaconfig.json or jukaconfig.xml">
@@ -233,7 +233,7 @@
                         <input type="search" id="componentSearch" placeholder="Filter components..." aria-label="Filter components">
                     </div>
                     <div class="component-section">
-                        <h4 class="component-section-title">Basic</h4>
+                        <h3 class="component-section-title">Basic</h3>
                         <div class="elements-container">
                             <div class="element" draggable="true" data-type="button" title="Button" role="button" tabindex="0" aria-label="Add Button to canvas">
                                 <i class="fas fa-square" aria-hidden="true"></i> <span>Button</span>
@@ -253,7 +253,7 @@
                         </div>
                     </div>
                     <div class="component-section">
-                        <h4 class="component-section-title">Data</h4>
+                        <h3 class="component-section-title">Data</h3>
                         <div class="elements-container">
                             <div class="element" draggable="true" data-type="dynamiclist" title="Dynamic List" role="button" tabindex="0" aria-label="Add Dynamic List to canvas">
                                 <i class="fas fa-list" aria-hidden="true"></i> <span>Dynamic List</span>
@@ -267,7 +267,7 @@
                         </div>
                     </div>
                     <div class="component-section">
-                        <h4 class="component-section-title">Advanced</h4>
+                        <h3 class="component-section-title">Advanced</h3>
                         <div class="elements-container">
                             <div class="element" draggable="true" data-type="searchresults" title="YouTube / Search Results" role="button" tabindex="0" aria-label="Add Search Results to canvas">
                                 <i class="fas fa-th-large" aria-hidden="true"></i> <span>Search Results</span>
@@ -567,7 +567,7 @@
                     <div id="appInfoPanel" class="properties-panel active" role="tabpanel" aria-label="App info">
                         <div class="input-container">
                             <section class="inspector-section" aria-labelledby="sectionGeneral">
-                                <h4 class="inspector-section-title" id="sectionGeneral">General</h4>
+                                <h3 class="inspector-section-title" id="sectionGeneral">General</h3>
                                 <div class="input-group">
                                     <label for="title"><i class="fas fa-heading" aria-hidden="true"></i> Title</label>
                                     <input type="text" id="title" placeholder="App Title">
@@ -608,9 +608,9 @@
                             </section>
 
                             <section class="inspector-section" aria-labelledby="sectionDisplay">
-                                <h4 class="inspector-section-title" id="sectionDisplay">Display</h4>
+                                <h3 class="inspector-section-title" id="sectionDisplay">Display</h3>
                                 <div class="font-size-controls">
-                                    <h5 class="inspector-subtitle"><i class="fas fa-text-height" aria-hidden="true"></i> Font sizes</h5>
+                                    <h4 class="inspector-subtitle"><i class="fas fa-text-height" aria-hidden="true"></i> Font sizes</h4>
                                     <div class="size-inputs">
                                         <div class="size-group">
                                             <label for="titleSize">Title</label>
@@ -636,7 +636,7 @@
                                     <small class="field-help">Font roles map to the player's font system. Title is for the app name, Big for card headers, Medium for body text, Small for captions.</small>
                                 </div>
                                 <div class="theme-controls">
-                                    <h5 class="inspector-subtitle"><i class="fas fa-palette" aria-hidden="true"></i> Theme &amp; colors</h5>
+                                    <h4 class="inspector-subtitle"><i class="fas fa-palette" aria-hidden="true"></i> Theme &amp; colors</h4>
                                     <div class="size-inputs">
                                         <div class="size-group">
                                             <label for="buttonColorPicker">Button Color</label>
@@ -652,7 +652,7 @@
                             </section>
 
                             <section class="inspector-section" aria-labelledby="sectionPaths">
-                                <h4 class="inspector-section-title" id="sectionPaths">Paths</h4>
+                                <h3 class="inspector-section-title" id="sectionPaths">Paths</h3>
                                 <div class="input-group">
                                     <label for="toolsPath"><i class="fas fa-folder" aria-hidden="true"></i> Tools Path</label>
                                     <input type="text" id="toolsPath" placeholder="./required" value="./required">
@@ -688,7 +688,7 @@
                             </section>
 
                             <section class="inspector-section" aria-labelledby="sectionFonts">
-                                <h4 class="inspector-section-title" id="sectionFonts">Font files</h4>
+                                <h3 class="inspector-section-title" id="sectionFonts">Font files</h3>
                                 <small class="field-help">Paths relative to the app folder. Leave blank to use the device default. Used at runtime, not by the builder.</small>
                                 <div class="size-inputs">
                                     <div class="size-group">
