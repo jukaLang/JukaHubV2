@@ -275,4 +275,14 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_AUDIODRIVER: dummy
-        run: go test -race ./... -count=1 -timeout 20m
+        run: |
+          set +e
+          go test -race ./... -count=1 -timeout 20m 2>&1 | tee "$RUNNER_TEMP/race.log"
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # Surface the cause as annotations: the raw log is hard to reach.
+            excerpt=$(grep -E -A3 'WARNING: DATA RACE|^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/race.log" | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=go test -race failed::${excerpt}"
+            { echo "### go test -race failed"; echo '```'; grep -E 'WARNING: DATA RACE|--- FAIL|^FAIL|panic:' "$RUNNER_TEMP/race.log" | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
