@@ -223,7 +223,7 @@ jobs:
         run: bash ./startup-bench.sh
 
   player-staticcheck:
-    name: Player staticcheck (non-blocking)
+    name: Player staticcheck
     # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
     # ubuntu-latest label is moving to Ubuntu 26.
     runs-on: ubuntu-24.04
@@ -231,8 +231,8 @@ jobs:
     # The backlog is triaged in player/staticcheck.conf (unused scene helpers,
     # player-facing error wording, and the deliberate CFB/math-rand deprecations
     # are off); every other check fails the run, so the output stays readable.
-    # Still advisory so a new finding does not block a release build.
-    continue-on-error: true
+    # Blocking: it has been green on main since the S1016 fix. Releases are a
+    # separate workflow, so a finding turns CI red without stopping a build.
     defaults:
       run:
         working-directory: player
@@ -252,12 +252,11 @@ jobs:
           "$(go env GOPATH)/bin/staticcheck" ./...
 
   player-race:
-    name: Player race detector (non-blocking)
+    name: Player race detector
     # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
     # ubuntu-latest label is moving to Ubuntu 26.
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    continue-on-error: true
     defaults:
       run:
         working-directory: player
