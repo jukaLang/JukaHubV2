@@ -1086,6 +1086,21 @@ textarea {
   border-color: var(--secondary);
 }
 
+/* The label is redundant with aria-label and would spill out of the 44px
+   circle (it did when the icon font was slow or blocked), so keep it for
+   assistive tech only. */
+.preview-toggle span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* On desktop the eye button would otherwise sit dead-centre of the Variables
    panel's footer; anchor it to the canvas corner instead. Sidebar can collapse
    to a 52px rail, so track the body collapse class too. */
@@ -2360,6 +2375,12 @@ body.ai-open .ai-panel {
 }
 
 .welcome-card {
+  /* Buttons centre their content vertically, which made the title of a
+     shorter card sit lower than its taller neighbour. Pin it to the top. */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
   text-align: left;
   background: var(--welcome-surface);
   border: 1px solid var(--border);
