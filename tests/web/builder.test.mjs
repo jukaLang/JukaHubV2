@@ -316,3 +316,18 @@ test('typed setting fallback reads the real camelCase key, not a lowercased one'
   // A key absent everywhere resolves to undefined rather than throwing.
   assert.equal(window.effectiveConfigValue('definitelyNotAKey'), undefined);
 });
+
+test('importing an oversized file is refused before it is read', () => {
+  const { window } = dom;
+  const toasts = () => [...window.document.querySelectorAll('#toastContainer .toast')].map(n => n.textContent);
+  let read = false;
+  const RealReader = window.FileReader;
+  window.FileReader = class { readAsText() { read = true; } };
+  try {
+    window.eval("importConfigFile({ name: 'movie.json', size: 6 * 1024 * 1024 })");
+  } finally {
+    window.FileReader = RealReader;
+  }
+  assert.equal(read, false, 'the oversized file must not be read');
+  assert.ok(toasts().some(t => /too large/i.test(t)), 'user is told why: ' + toasts().join(' | '));
+});
