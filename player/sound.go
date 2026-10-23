@@ -98,34 +98,44 @@ func playTone(freq float64, ms int, volume float64) {
 	_ = sdl.QueueAudio(audioDev, data)
 }
 
+// Each Play* helper also fires the matching vibration pulse from haptics.go.
+// These six functions are where every button, touch and toast already lands,
+// so feedback stays consistent without adding haptics at call sites.
+
 // PlayNavSound plays on focus movement (D-pad / arrows).
 func PlayNavSound() {
 	playTone(880, 28, 0.28)
+	playHaptic(hapticNavPulse)
 }
 
 // PlayActivateSound plays when an action is triggered (A / Enter / click).
 func PlayActivateSound() {
 	playTone(1046, 55, 0.45)
+	playHaptic(hapticActivatePulse)
 }
 
 // PlayBackSound plays when navigating back (B / Escape).
 func PlayBackSound() {
 	playTone(659, 45, 0.35)
+	playHaptic(hapticBackPulse)
 }
 
 // PlayToggleSound plays when a toggle switch flips.
 func PlayToggleSound() {
 	playTone(1318, 40, 0.35)
+	playHaptic(hapticTogglePulse)
 }
 
 // PlaySuccessSound plays for success / scene-switch toasts.
 func PlaySuccessSound() {
 	playTone(1568, 60, 0.4)
+	playHaptic(hapticSuccessPulse)
 }
 
 // PlayErrorSound plays for error and warning toasts.
 func PlayErrorSound() {
 	playTone(233, 140, 0.5)
+	playHaptic(hapticErrorPulse)
 }
 
 // --- Video playback audio ---

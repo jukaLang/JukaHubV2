@@ -236,6 +236,9 @@ func a11yScaleFontSize(base int) int {
 // a closed face is a crash, while an unreferenced one is collected at exit.
 func a11yRefreshFonts() {
 	fontCache = make(map[string]*ttf.Font)
+	// Fitted button labels hold faces at the previous size; they must be looked
+	// up again or every button would keep drawing the old text size.
+	resetButtonFitCache()
 	ClearTextCache()
 	clearHomeTextCache()
 }

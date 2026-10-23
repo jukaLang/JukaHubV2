@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	htmlstd "html"
@@ -36,11 +37,21 @@ const (
 	textBrowserSourceJSON     = "json"
 	textBrowserSourceWeb      = "web"
 
-	textBrowserURLVariable  = "textbrowser_url"
-	textBrowserDefaultURL   = "https://example.com"
-	textBrowserMaxPageBytes = 2 << 20
+	textBrowserURLVariable = "textbrowser_url"
+	textBrowserDefaultURL  = "https://example.com"
+	// 8 MiB of HTML: modern news, docs and social pages routinely pass the
+	// old 2 MiB mark, and refusing to open them was worse than the cost of
+	// holding one page in RAM. Anything past this is not an error: the first
+	// 8 MiB are parsed and drawn, with a note where the page was cut.
+	textBrowserMaxPageBytes = 8 << 20
 	textBrowserMaxTextBytes = 512 << 10
 	textBrowserURLBarHeight = int32(36)
+
+	// textBrowserFetchTimeout bounds a page download. A TrimUI on handheld
+	// Wi-Fi takes several times longer than a desktop for the same 1.5 MiB of
+	// GitHub HTML, and cutting it off at ten seconds showed "Could not load"
+	// on pages that were about to arrive. Reload still refetches from scratch.
+	textBrowserFetchTimeout = 20 * time.Second
 )
 
 // textBrowserMode constants
@@ -59,6 +70,10 @@ const textBrowserAutoRefreshInterval = 5 * time.Second
 var textBrowserAutoRefreshTimers = make(map[string]*time.Timer)
 var textBrowserAutoRefreshMutex sync.Mutex
 var textBrowserRequestSequence = make(map[string]uint64)
+
+// browserPageFetcher loads one page. It is a variable so the browser's load
+// path (cache, stale-request guard, history) can be tested without a network.
+var browserPageFetcher = browseWebPageResult
 var textBrowserRequestMutex sync.Mutex
 var textBrowserAddressEditing bool
 var textBrowserAddressSubmitted bool
@@ -540,6 +555,20 @@ func loadTextBrowserURL(config *Config, element Element, rawURL string) {
 }
 
 func loadTextBrowserURLAt(config *Config, element Element, rawURL string, recordHistory bool) {
+	browserLoadURL(config, element, rawURL, recordHistory, true)
+}
+
+// reloadTextBrowserURL refetches a page even when the cache still holds a copy,
+// which is what the Reload button promises after a page rendered badly or a
+// connection dropped halfway.
+func reloadTextBrowserURL(config *Config, element Element, rawURL string) {
+	browserLoadURL(config, element, rawURL, false, false)
+}
+
+// browserLoadURL is the single path into the reader for web pages. A cached
+// page is shown immediately (no request, no "Loading" card); everything else is
+// fetched on a goroutine, so a slow page never stalls a frame.
+func browserLoadURL(config *Config, element Element, rawURL string, recordHistory, useCache bool) {
 	if config == nil {
 		return
 	}
@@ -554,30 +583,60 @@ func loadTextBrowserURLAt(config *Config, element Element, rawURL string, record
 		return
 	}
 	config.Variables.Custom[textBrowserURLVariable] = address
-	config.Variables.Custom[outputVariable] = "Loading " + address + " ..."
-	setBrowserLinks(outputVariable, nil)
-	if recordHistory {
-		browserRecordURL(address)
-	}
 	textBrowserScrollY = 0
 	textBrowserScrollVelocity = 0
 
+	// Bumping the sequence here cancels anything still on the wire for this
+	// variable: a cached page must not be replaced a second later by an older
+	// request the user already navigated away from.
 	textBrowserRequestMutex.Lock()
 	textBrowserRequestSequence[outputVariable]++
 	requestID := textBrowserRequestSequence[outputVariable]
 	textBrowserRequestMutex.Unlock()
 
+	if useCache {
+		if page, ok := browserCachedPage(address); ok {
+			showBrowserPage(config, outputVariable, page)
+			if recordHistory {
+				browserRecordURL(address)
+			}
+			return
+		}
+	}
+
+	config.Variables.Custom[outputVariable] = "Loading " + address + " ..."
+	setBrowserLinks(outputVariable, nil)
+	setBrowserDocument(outputVariable, nil)
+	if recordHistory {
+		browserRecordURL(address)
+	}
+
 	go func(variable, pageURL string, id uint64) {
-		page := browseWebPageResult(pageURL)
+		page := browserPageFetcher(pageURL)
 		textBrowserRequestMutex.Lock()
 		isCurrent := textBrowserRequestSequence[variable] == id
 		textBrowserRequestMutex.Unlock()
-		if isCurrent {
-			setBrowserLinks(variable, page.Links)
-			setBrowserDocument(variable, page.Doc)
-			publishCustom(variable, page.Text)
+		if !isCurrent {
+			return
 		}
+		// Remember the page for Back/Forward before publishing it: the next
+		// visit to the same address is then a map lookup instead of a download.
+		browserCachePage(pageURL, page)
+		setBrowserLinks(variable, page.Links)
+		setBrowserDocument(variable, page.Doc)
+		publishCustom(variable, page.Text)
 	}(outputVariable, address, requestID)
+}
+
+// showBrowserPage publishes a page the cache already holds, synchronously:
+// there is nothing to wait for, so Back can land in the same frame.
+func showBrowserPage(config *Config, variable string, page browserPage) {
+	setBrowserLinks(variable, page.Links)
+	setBrowserDocument(variable, page.Doc)
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	config.Variables.Custom[variable] = page.Text
 }
 
 // textBrowserSearchURL turns an address-bar entry that is clearly not a host
@@ -648,7 +707,7 @@ func browseWebPageResult(rawURL string) browserPage {
 	if err != nil {
 		return browserPage{Text: "Browser error: " + err.Error()}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), textBrowserFetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
@@ -656,7 +715,7 @@ func browseWebPageResult(rawURL string) browserPage {
 	}
 	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
 	client := &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout: textBrowserFetchTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
 				return fmt.Errorf("redirected to an unsupported URL scheme")
@@ -669,6 +728,10 @@ func browseWebPageResult(rawURL string) browserPage {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if ctx.Err() != nil {
+			return browserPage{Text: fmt.Sprintf("Could not load %s\nTimed out after %s. Check Wi-Fi, then press Reload (or Y to search).",
+				address, textBrowserFetchTimeout)}
+		}
 		return browserPage{Text: fmt.Sprintf("Could not load %s\n%s", address, err.Error())}
 	}
 	defer resp.Body.Close()
@@ -683,9 +746,7 @@ func browseWebPageResult(rawURL string) browserPage {
 	if err != nil {
 		return browserPage{Text: fmt.Sprintf("Could not read %s\n%s", address, err.Error())}
 	}
-	if len(body) > textBrowserMaxPageBytes {
-		return browserPage{Text: "Page is larger than the 2 MiB browser limit."}
-	}
+	body, truncated := truncateTextBrowserBody(body, textBrowserMaxPageBytes)
 	// Page scripts run first, so the text, link, CSS and image passes below see
 	// the markup they produced (webscript.go).
 	source := runWebPageScripts(string(body), resp.Request.URL)
@@ -699,6 +760,9 @@ func browseWebPageResult(rawURL string) browserPage {
 	pageText = capTextBrowserText(pageText)
 	links := extractBrowserLinks(source, resp.Request.URL)
 	text := fmt.Sprintf("Title: %s\nURL: %s\n", title, resp.Request.URL.String())
+	if truncated {
+		text += strings.TrimSpace(textBrowserTruncationNote()) + "\n"
+	}
 	if len(links) > 0 {
 		text += fmt.Sprintf("Links: %d (press X or L to choose one)\n", len(links))
 	}
@@ -707,6 +771,12 @@ func browseWebPageResult(rawURL string) browserPage {
 	// ones is cheap; the parser then applies the presentation subset it can
 	// draw, and the plain text above remains the fallback for everything else.
 	pageCSS := fetchWebStylesheets(source, resp.Request.URL)
+	if truncated {
+		// Say so on the drawn page itself: the reader shows the styled document
+		// rather than the plain text, so a note only in the text would be
+		// invisible, and a page that simply stops mid-sentence looks broken.
+		source = withTextBrowserTruncationNote(source)
+	}
 	doc := parseWebPage(source, pageCSS, resp.Request.URL.String())
 	// Images load with the page: one bounded concurrent pass stores the bytes
 	// and natural sizes the reader paints from (webpage_image.go).
@@ -718,6 +788,50 @@ func browseWebPageResult(rawURL string) browserPage {
 		doc = nil
 	}
 	return browserPage{Text: text, Links: links, FinalURL: resp.Request.URL.String(), Doc: doc}
+}
+
+// truncateTextBrowserBody keeps the first limit bytes of a page and reports
+// whether the rest was dropped. The cut lands after the last complete tag so
+// the fragment still parses: cutting through a tag or an attribute value would
+// swallow the remainder of the document.
+func truncateTextBrowserBody(body []byte, limit int) ([]byte, bool) {
+	if len(body) <= limit {
+		return body, false
+	}
+	cut := limit
+	if i := bytes.LastIndexByte(body[:limit], '>'); i >= limit/2 {
+		cut = i + 1
+	}
+	return body[:cut], true
+}
+
+// textBrowserTruncationNote is the sentence shown where a page was cut off.
+func textBrowserTruncationNote() string {
+	return fmt.Sprintf("\n[Page truncated: only the first %d MiB were downloaded. Follow a link to keep reading.]", textBrowserMaxPageBytes>>20)
+}
+
+// withTextBrowserTruncationNote puts that sentence at the top of the page,
+// inside the body. A truncated page is far past the parser's text budget, so a
+// note at the end would be dropped along with the rest of the unread tail.
+func withTextBrowserTruncationNote(source string) string {
+	note := "<p>" + textBrowserTruncationNote() + "</p>"
+	lower := strings.ToLower(source)
+	for from := 0; from < len(lower); {
+		at := strings.Index(lower[from:], "<body")
+		if at < 0 {
+			break
+		}
+		at += from
+		after := at + len("<body")
+		if after < len(source) && (source[after] == '>' || source[after] == ' ' || source[after] == '\t' || source[after] == '\n' || source[after] == '\r') {
+			if end := strings.IndexByte(source[after:], '>'); end >= 0 {
+				cut := after + end + 1
+				return source[:cut] + note + source[cut:]
+			}
+		}
+		from = after
+	}
+	return note + source
 }
 
 // capTextBrowserText bounds how much readable text a page may contribute. The

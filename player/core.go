@@ -792,6 +792,13 @@ func getCachedFont(config *Config, fontName string) (*ttf.Font, int) {
 // shares the cache, fallback chain and accessibility scaling with
 // getCachedFont.
 func getFontSized(config *Config, fontName string, size int) *ttf.Font {
+	return loadRoleFont(config, fontName, a11yScaleFontSize(uiScaleFontSize(size)))
+}
+
+// loadRoleFont opens a logical font role at an already-scaled pixel size. It
+// skips the accessibility multiplier because callers use it to step through
+// sizes themselves; loadCachedFont still shares the cache and fallback chain.
+func loadRoleFont(config *Config, fontName string, size int) *ttf.Font {
 	fontPath := "Inter-Regular.ttf"
 	for k, p := range config.Variables.Fonts {
 		if strings.EqualFold(k, fontName) {
@@ -799,7 +806,96 @@ func getFontSized(config *Config, fontName string, size int) *ttf.Font {
 			break
 		}
 	}
-	return loadCachedFont(fontPath, a11yScaleFontSize(uiScaleFontSize(size)))
+	return loadCachedFont(fontPath, size)
+}
+
+// fontRoleSize is the size a logical font role is authored at on this canvas,
+// before accessibility scaling.
+func fontRoleSize(config *Config, fontName string) int {
+	size := 24
+	for k, v := range config.Variables.FontSizes {
+		if strings.EqualFold(k, fontName) {
+			size = v
+			break
+		}
+	}
+	return uiScaleFontSize(size)
+}
+
+// buttonLabelFont fits a button's label inside its width. A fixed-width button
+// cannot grow when the text size is raised, and drawing "Play…" for "Play
+// Link" defeats the setting that asked for larger text. The label therefore
+// steps down a pixel at a time until it fits, but never below the size the
+// same label has at 100% text scale — every shipped button fits at that size,
+// so the search always ends and the user's own size is only given up where the
+// layout leaves no other choice.
+func buttonLabelFont(config *Config, fontName, label string, width int32) *ttf.Font {
+	font, _ := getCachedFont(config, fontName)
+	if font == nil || label == "" {
+		return font
+	}
+	inner := width - 2*SpaceXS
+	if inner <= 0 {
+		return font
+	}
+	// The result is cached even when the label already fits: this runs for
+	// every button on every frame, and a map lookup is cheaper on the handheld
+	// than measuring the label again.
+	key := buttonFitKey{base: font, label: label, width: width}
+	buttonFitMutex.Lock()
+	cached, ok := buttonFitCache[key]
+	buttonFitMutex.Unlock()
+	if ok {
+		return cached
+	}
+	fitted := font
+	if tw, _, err := font.SizeUTF8(label); err != nil || int32(tw) > inner {
+		authored := fontRoleSize(config, fontName)
+		floor := authored
+		if floor < 9 {
+			floor = 9
+		}
+		for size := a11yScaleFontSize(authored) - 1; size >= floor; size-- {
+			candidate := loadRoleFont(config, fontName, size)
+			if candidate == nil {
+				break
+			}
+			if tw, _, err := candidate.SizeUTF8(label); err == nil && int32(tw) <= inner {
+				fitted = candidate
+				break
+			}
+		}
+	}
+	buttonFitMutex.Lock()
+	if len(buttonFitCache) >= 512 {
+		buttonFitCache = map[buttonFitKey]*ttf.Font{}
+	}
+	buttonFitCache[key] = fitted
+	buttonFitMutex.Unlock()
+	return fitted
+}
+
+// buttonFitKey identifies one fitted label: the face it starts from (which
+// already encodes the role, the canvas and the accessibility size) plus the
+// text and the width it had to fit into.
+type buttonFitKey struct {
+	base  *ttf.Font
+	label string
+	width int32
+}
+
+var (
+	buttonFitMutex sync.Mutex
+	buttonFitCache = map[buttonFitKey]*ttf.Font{}
+)
+
+// resetButtonFitCache drops the fitted fonts. Every cache entry points at a
+// face the font cache owned, so a text-size change or a test reload must not
+// keep handing out the old size.
+func resetButtonFitCache() {
+	buttonFitMutex.Lock()
+	buttonFitCache = map[buttonFitKey]*ttf.Font{}
+	buttonFitMutex.Unlock()
 }
 
 // loadCachedFont opens path at size (already accessibility-scaled) and caches it
@@ -1565,6 +1661,9 @@ func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, e
 func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Element, selected, hovered bool, hoverProgress float64, pressed bool) {
 	font, _ := getCachedFont(config, elem.Font)
 	width, height := buttonHitSize(elem, font)
+	// The hit size is measured from the requested label, so the button keeps
+	// the geometry the focus graph and hit testing already know about.
+	font = buttonLabelFont(config, elem.Font, elem.Text, width)
 	x, y := elem.X, elem.Y
 	r := RadiusMD
 

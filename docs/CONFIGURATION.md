@@ -90,6 +90,17 @@ else a toggle changes) into `jukauser.json`, which is merged over the design
 defaults at startup. Settings → **Smart Widgets** adds `batterySaver`,
 `timeOfDayTheme` and `autoStart` there, for example.
 
+`hapticsEnabled` (Settings → General → **Vibration**, on by default) turns the
+short vibration feedback on or off. Detection checks the handheld's own motor
+nodes first — `/sys/class/motor/voltage` plus `/sys/class/gpio/gpio227/value` on
+the TG5040 family, `/sys/class/motor/level` plus gpio236 on the TG5050 — and
+falls back to SDL controller rumble for a USB or Bluetooth pad. The row is
+injected only when one of those answered, so hardware without a motor never
+shows a switch that cannot do anything; the startup log says which path was
+chosen (`[HAPTIC] vibration ready on …`). Because it is an ordinary toggle
+variable, a hand-edited `"hapticsEnabled": false` in `jukauser.json` behaves
+the same as the switch.
+
 `autoStart` (Settings → Smart Widgets → **Start JukaHub at login**, off by
 default) writes exactly one launcher and removes exactly that file again:
 

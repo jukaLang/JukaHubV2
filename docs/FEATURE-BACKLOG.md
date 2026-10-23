@@ -116,12 +116,16 @@ account or key (ScreenScraper, TheGamesDB) behind the same downloader.
   emulator processes suspended on a 1 GB device, and named per-game save slots
   need core-specific state handling. Treat those as experimental.
 
-### 6. LED policies and haptics
+### 6. LED policies and haptics (haptics shipped)
 
 - Extend [ledsync.go](../player/ledsync.go) from audio-only to a policy: per
   scene/emulator colour, battery (green→red), charging pulse.
-- Haptics exist only if the kernel exposes a rumble device; detect it and hide
-  the setting when it does not, rather than showing a dead toggle.
+- Haptics are in [haptics.go](../player/haptics.go): navigation, confirm, back,
+  toggle and toast pulses drive the TrimUI's vendor GPIO motor (SDL rumble for
+  an external pad), and the Vibration switch is only injected into Settings →
+  General when a motor was found. Left: an intensity step, and per-emulator
+  rumble (a core runs in another process, so that needs a hook the launchers
+  can call).
 
 ### 7. Controller legend on first launch
 

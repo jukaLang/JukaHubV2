@@ -263,14 +263,19 @@ type webDocument struct {
 
 	// Images holds the fetched bytes of every <img> in the document, keyed by
 	// resolved URL or data URI; ImageMeta records the natural pixel sizes the
-	// layout needs. Both are written once by the page-load pass (before the
-	// document reaches the render thread) and read under mu afterwards.
+	// layout needs. Set imageMu (the field below) guards these two maps.
 	Images    map[string][]byte
 	ImageMeta map[string]webImageMeta
 
 	mu     sync.Mutex
 	stamp  string
 	layout *webLayout
+
+	// imageMu guards Images and ImageMeta separately from mu. They need their
+	// own lock because the layouter reads the natural sizes while layoutFor
+	// holds mu: sharing one mutex deadlocked the reader on the first page with
+	// an image whose size the markup did not give, which froze the whole app.
+	imageMu sync.Mutex
 }
 
 // webRunPos is a measured run, ready to draw.
@@ -1916,14 +1921,19 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	}
 	p.walk(source)
 	p.flush()
-	if p.trunc {
-		p.blocks = append(p.blocks, webBlock{
-			Style:  webStyle{FontPx: 13, Italic: true},
-			InMain: true,
-			Runs:   []webRun{{Text: "[Page content truncated so the handheld keeps its memory.]", Style: webStyle{FontPx: 13, Italic: true}}},
-		})
-	}
 	doc.Blocks = filterWebMainContent(p.blocks)
+	if p.trunc {
+		// The note goes in after the <main> filter, and at the top. Tagging it
+		// as main content made the filter keep only this one sentence and drop
+		// every real block, so an article past the text budget drew as a
+		// single line; left at the end it would sit below thousands of rows
+		// that the layout never reaches.
+		note := webBlock{
+			Style: webStyle{FontPx: 13, Italic: true},
+			Runs:  []webRun{{Text: "[Page content truncated so the handheld keeps its memory.]", Style: webStyle{FontPx: 13, Italic: true}}},
+		}
+		doc.Blocks = append([]webBlock{note}, doc.Blocks...)
+	}
 	return doc
 }
 
@@ -2731,7 +2741,11 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 		return nil
 	}
 	padX := (width - contentW) / 2
-	l := &webLayouter{doc: d, layout: layout, rowH: rowH, baseSize: baseSize, fontAt: fontAt}
+	l := &webLayouter{
+		doc: d, layout: layout, rowH: rowH, baseSize: baseSize, fontAt: fontAt,
+		spaceWidths: map[*ttf.Font]int32{},
+		sanitized:   make(map[webSanitizeKey]string, 256),
+	}
 	// Absolutely positioned blocks are measured on their own and painted over
 	// the flow, so they take no room in it.
 	flow := make([]webBlock, 0, len(d.Blocks))
@@ -2762,6 +2776,50 @@ type webLayouter struct {
 	rowH     int32
 	baseSize float64
 	fontAt   func(float64) *ttf.Font
+
+	// Measured facts reused within one layout. Wrapping asks for the width of
+	// a space once per word and for the same words over and over, and both
+	// TTF_SizeUTF8 and the missing-glyph scan cost real time on a 1-core
+	// handheld: the caches cut the work without changing the layout.
+	spaceWidths map[*ttf.Font]int32
+	sanitized   map[webSanitizeKey]string
+}
+
+// webSanitizeKey identifies one word for the sanitize cache.
+type webSanitizeKey struct {
+	font *ttf.Font
+	text string
+}
+
+// spaceWidth returns the width of one space in font, measured once per layout.
+func (l *webLayouter) spaceWidth(font *ttf.Font) int32 {
+	if w, ok := l.spaceWidths[font]; ok {
+		return w
+	}
+	w := int32(6)
+	if sw, _, err := font.SizeUTF8(" "); err == nil {
+		w = int32(sw)
+	}
+	if l.spaceWidths == nil {
+		l.spaceWidths = map[*ttf.Font]int32{}
+	}
+	l.spaceWidths[font] = w
+	return w
+}
+
+// sanitizedWord drops characters the font cannot draw, remembering the result
+// so the same word is scanned once.
+func (l *webLayouter) sanitizedWord(font *ttf.Font, text string) string {
+	key := webSanitizeKey{font: font, text: text}
+	if out, ok := l.sanitized[key]; ok {
+		return out
+	}
+	out := sanitizeForFont(font, text)
+	if l.sanitized == nil {
+		l.sanitized = make(map[webSanitizeKey]string, 256)
+	}
+	l.sanitized[key] = out
+	return out
 }
 
 // layoutBlocks lays out a column of blocks into l.layout. Positions are
@@ -2989,7 +3047,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						continue
 					}
 					word = webTransformWord(word, run.Style.Transform)
-					text := sanitizeForFont(font, word)
+					text := l.sanitizedWord(font, word)
 					if text == "" {
 						continue
 					}
@@ -2999,10 +3057,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					}
 					wordW := int32(width)
 					if len(line) > 0 && (wi > 0 || leadingSpace) {
-						spaceW := int32(6)
-						if sw, _, e := font.SizeUTF8(" "); e == nil {
-							spaceW = int32(sw)
-						}
+						spaceW := l.spaceWidth(font)
 						if x+spaceW+wordW > padX+contentW {
 							flushLine()
 						} else {

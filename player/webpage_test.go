@@ -296,9 +296,13 @@ func TestParseWebPageCapsHugeText(t *testing.T) {
 	if len(doc.Blocks) == 0 {
 		t.Fatal("no blocks")
 	}
-	last := doc.Blocks[len(doc.Blocks)-1]
+	// The note leads the page: it has to be visible without scrolling, and it
+	// must not displace the text the page did fit.
+	if len(doc.Blocks) < 2 {
+		t.Fatalf("truncated page kept %d blocks, want text plus a note", len(doc.Blocks))
+	}
 	found := false
-	for _, run := range last.Runs {
+	for _, run := range doc.Blocks[0].Runs {
 		if strings.Contains(run.Text, "truncated") {
 			found = true
 		}

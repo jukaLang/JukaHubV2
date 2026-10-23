@@ -47,7 +47,12 @@ const (
 	webMaxImageBytes     = 1 << 20 // 1 MiB per image
 	webMaxImagesBytes    = 4 << 20 // 4 MiB of images per page
 	webImageFetchTimeout = 8 * time.Second
-	webMinImagePx        = 16 // smallest drawable image
+	// webImagePassTimeout bounds the whole image pass, not one image. The page
+	// text is published after this pass, so a page of slow hero banners must
+	// not keep the reader on the loading card for eight seconds each; anything
+	// still in flight when it expires is drawn as a placeholder.
+	webImagePassTimeout = 6 * time.Second
+	webMinImagePx       = 16 // smallest drawable image
 )
 
 // webImageMeta is one image's decoded-at-fetch natural size. No HasSize means
@@ -102,26 +107,26 @@ func webImageCacheKey(src string) string {
 	return "webimg:" + hex.EncodeToString(sum[:])
 }
 
-// imageBytes returns one image's fetched bytes under the document mutex.
+// imageBytes returns one image's fetched bytes under the image mutex.
 func (d *webDocument) imageBytes(key string) []byte {
 	if d == nil {
 		return nil
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.imageMu.Lock()
+	defer d.imageMu.Unlock()
 	if d.Images == nil {
 		return nil
 	}
 	return d.Images[key]
 }
 
-// imageMeta returns one image's recorded natural size under the mutex.
+// imageMeta returns one image's recorded natural size under the image mutex.
 func (d *webDocument) imageMeta(key string) (webImageMeta, bool) {
 	if d == nil {
 		return webImageMeta{}, false
 	}
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.imageMu.Lock()
+	defer d.imageMu.Unlock()
 	m, ok := d.ImageMeta[key]
 	return m, ok
 }
@@ -264,6 +269,8 @@ func fetchWebImages(doc *webDocument) {
 	var budget int64 = webMaxImagesBytes
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	ctx, cancel := context.WithTimeout(context.Background(), webImagePassTimeout)
+	defer cancel()
 
 	for _, src := range srcs {
 		// Data URIs decode inline: no network, no budget.
@@ -287,7 +294,7 @@ func fetchWebImages(doc *webDocument) {
 		wg.Add(1)
 		go func(src string) {
 			defer wg.Done()
-			body := fetchWebImageBytes(src)
+			body := fetchWebImageBytes(ctx, src)
 			if len(body) == 0 {
 				mu.Lock()
 				fetched[src] = webImageMeta{}
@@ -314,17 +321,18 @@ func fetchWebImages(doc *webDocument) {
 	}
 	mu.Unlock()
 
-	doc.mu.Lock()
+	doc.imageMu.Lock()
 	doc.Images = images
 	doc.ImageMeta = fetched
-	doc.mu.Unlock()
+	doc.imageMu.Unlock()
 }
 
 // fetchWebImageBytes downloads one image with the reader's browser identity
 // and only accepts bytes the device can decode as an image, so an HTML error
 // page never reaches the decoder and a text response never eats the budget.
-func fetchWebImageBytes(address string) []byte {
-	ctx, cancel := context.WithTimeout(context.Background(), webImageFetchTimeout)
+// The caller's context bounds the whole pass; this one only caps one request.
+func fetchWebImageBytes(parent context.Context, address string) []byte {
+	ctx, cancel := context.WithTimeout(parent, webImageFetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {

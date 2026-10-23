@@ -341,6 +341,9 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		ClearTextCache()
 		clearHomeTextCache()
 		clearThumbnailCache()
+		// The page cache holds whole articles and their images. Dropping it
+		// costs the user one refetch on Back, which beats being killed for RAM.
+		browserClearPageCache()
 		// Reclaim the freed heap off the render thread. runtime.GC() here used
 		// to block the frame that was drawing a transition.
 		go debug.FreeOSMemory()

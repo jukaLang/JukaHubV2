@@ -8,6 +8,7 @@ import (
 	"image/color"
 	"image/png"
 	"testing"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -29,6 +30,39 @@ func tinyTestPNG(t *testing.T, w, h int) []byte {
 		t.Fatalf("png encode: %v", err)
 	}
 	return raw.Bytes()
+}
+
+// Regression: the layouter reads an image's natural size while layoutFor holds
+// the document lock. When one mutex guarded both, the first page with an image
+// whose markup gave no size deadlocked the render thread — the browser (and the
+// whole app) froze while opening it. The image maps now have their own lock, so
+// this has to return.
+func TestWebLayoutUnsizedImageDoesNotDeadlock(t *testing.T) {
+	newProbeFrame(t)
+	config, err := loadConfig("jukaconfig.json")
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	doc := parseWebPage(`<body><p>Before the picture</p>`+
+		`<img src="https://cdn.example.com/hero.png">`+
+		`<p>After the picture</p></body>`, "", "https://example.com/")
+	if doc == nil {
+		t.Fatal("page did not parse")
+	}
+	elem := Element{Type: "textbrowser", Font: "small"}
+	done := make(chan *webLayout, 1)
+	go func() { done <- doc.layoutFor(config, elem, 900) }()
+	select {
+	case layout := <-done:
+		if layout == nil || len(layout.Rows) == 0 {
+			t.Fatalf("layout = %+v, want laid-out rows", layout)
+		}
+		if len(layout.Images) != 1 {
+			t.Fatalf("reserved %d image boxes, want 1", len(layout.Images))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("layoutFor deadlocked on an image without a recorded natural size")
+	}
 }
 
 func TestParseWebImageBlocks(t *testing.T) {

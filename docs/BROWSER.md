@@ -15,9 +15,16 @@ Open it from **Apps → Browser** or **Start → Browser**.
   it) instead of appending to the old one.
 * Follow links on the page without typing: press **X** (or `L`) to open the
   link picker, choose with the D-pad, and press **A**.
-* Go **Back** through visited pages and **Reload** the current one.
-* Quick links for the repository, the issue list (the start page) and a new
-  issue form for `jukaLang/JukaHubV2`.
+* Go **Back** through visited pages and **Reload** the current one. Back and
+  Forward are served from an in-memory page cache (up to eight pages, about
+  12 MB of text and images), so returning to a page is instant instead of
+  re-downloading it. **Reload** always asks the server again and replaces that
+  cached copy.
+* Open on the project repository, with quick links for the issue list and a
+  new issue form for `jukaLang/JukaHubV2`. The start page is a real page the
+  reader can draw; **Search** (Y) opens a DuckDuckGo Lite search instead.
+* Draw the first part of a big page instead of refusing it: a page larger than
+  8 MiB is cut at the cap and the top of the page says so.
 * Read GitHub issues, release notes, README files, documentation sites and
   other server-rendered HTML.
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows (cards
@@ -28,7 +35,13 @@ Open it from **Apps → Browser** or **Start → Browser**.
   over `px`, `em` and `rem`. A page whose palette lives in `--custom`
   properties keeps its colours instead of falling back to the reader's paper.
 
-Pages are capped at 2 MiB and 10 seconds. Redirects must stay on HTTP or HTTPS.
+Pages are capped at 8 MiB and 20 seconds; anything past 8 MiB is drawn partially
+from what arrived, with a note at the top of the page. Redirects must stay on
+HTTP or HTTPS.
+A page's images are given at most six seconds in total, so photo-heavy pages
+show their text promptly and draw any image that missed the budget as a plain
+placeholder. Laying out a very long article (1,500+ rows) takes a moment once,
+then scrolling reuses that layout.
 
 ## Controls
 

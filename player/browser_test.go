@@ -331,6 +331,97 @@ func TestBrowseWebPageResultExtractsReadableTextAndLinks(t *testing.T) {
 	}
 }
 
+// A page past the byte cap must still draw. Refusing the download left the
+// reader with an error and nothing to read; now the first part loads and the
+// page itself says where it stopped.
+func TestBrowseWebPageResultRendersHugePagePartially(t *testing.T) {
+	const filler = "a line of body text that the reader can wrap and draw. "
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.WriteString(w, "<html><head><title>Huge</title></head><body><h1>Start of the page</h1>")
+		for written := 0; written <= textBrowserMaxPageBytes; written += len(filler) + 7 {
+			io.WriteString(w, "<p>"+filler+"</p>")
+		}
+		io.WriteString(w, "<p>END OF PAGE</p></body></html>")
+	}))
+	defer server.Close()
+
+	page := browseWebPageResult(server.URL)
+	if page.Doc == nil || len(page.Doc.Blocks) == 0 {
+		t.Fatalf("truncated page was not parsed into a document: %+v", page.Doc)
+	}
+	if !strings.Contains(page.Text, "Page truncated") {
+		t.Fatalf("reader text has no truncation note: %.200q", page.Text)
+	}
+	if strings.Contains(page.Text, "END OF PAGE") {
+		// The tail is past every cap, so seeing it would mean nothing was cut.
+		t.Fatal("the whole oversized page was loaded despite the cap")
+	}
+	// The page must still be a page. Tagging the parser's own truncation note
+	// as <main> content once made the main filter drop every real block, so a
+	// long article drew as a single sentence.
+	if blocks := len(page.Doc.Blocks); blocks < 100 {
+		t.Fatalf("truncated page drew %d blocks, want the page's own content", blocks)
+	}
+	shown := false
+	for i, block := range page.Doc.Blocks {
+		if i > 3 {
+			break
+		}
+		for _, run := range block.Runs {
+			if strings.Contains(run.Text, "Page truncated") {
+				shown = true
+			}
+		}
+	}
+	if !shown {
+		t.Fatal("the drawn page never says it was truncated, at least not where it is visible")
+	}
+}
+
+func TestTruncateTextBrowserBodyCutsOnATagBoundary(t *testing.T) {
+	body := []byte(`<p>first</p><p>second</p>`)
+	if got, truncated := truncateTextBrowserBody(body, len(body)); truncated || string(got) != string(body) {
+		t.Fatalf("a page at the cap must pass through untouched: %q truncated=%v", got, truncated)
+	}
+	got, truncated := truncateTextBrowserBody(body, 20)
+	if !truncated {
+		t.Fatal("an oversized page was not reported as truncated")
+	}
+	if string(got) != `<p>first</p><p>` {
+		t.Fatalf("cut = %q, want the last complete tag", got)
+	}
+	if got, truncated := truncateTextBrowserBody([]byte("no tags at all"), 4); !truncated || string(got) != "no t" {
+		t.Fatalf("markup-free cut = %q truncated=%v", got, truncated)
+	}
+}
+
+// The Browser card on Home is the way in. Opening it must actually load a page
+// and publish the styled document the renderer draws, not leave a blank panel.
+func TestOpenBrowserHomeLoadsAndDrawsTheStartPage(t *testing.T) {
+	config, _, _ := browserCacheFixture(t, func(rawURL string) browserPage {
+		return browserPage{
+			Text:     "Title: Start page\nURL: " + rawURL + "\n\nwelcome to the browser",
+			FinalURL: rawURL,
+			Doc:      parseWebPage("<h1>Start page</h1><p>welcome to the browser</p>", "", rawURL),
+		}
+	})
+	ensureBrowserScene(config)
+	previousScene := currentSceneIndex
+	currentSceneIndex = sceneIndexExact(config, browserSceneName)
+	t.Cleanup(func() { currentSceneIndex = previousScene })
+
+	openBrowserHome(config)
+	waitBrowserText(t, config, func(s string) bool { return strings.Contains(s, "welcome to the browser") })
+	if address := textBrowserAddress(config); address != browserHomeURL {
+		t.Fatalf("start page address = %q, want %q", address, browserHomeURL)
+	}
+	doc := browserDocumentFor(browserContentVariable)
+	if doc == nil || len(doc.Blocks) == 0 {
+		t.Fatalf("start page has no document to draw: %+v", doc)
+	}
+}
+
 func TestBrowserLinkPanelRendersSelectableRows(t *testing.T) {
 	if testing.Short() {
 		t.Skip("render probe skipped in -short mode")

@@ -22,8 +22,19 @@ resize together. A change drops the font and label caches and the next frame is
 drawn at the new size.
 
 What it does not do: reflow layouts. Cards and buttons keep their configured
-geometry, so at 145% long labels are ellipsised sooner. The scale is a
-readability aid, not a zoom.
+geometry. A button that cannot grow fits its label by stepping the text down a
+pixel at a time instead of cutting it to "Play…" — but never below the size the
+same label has at 100%, so the word stays whole wherever the layout allows and
+the accessibility size is only given up where there is no room at all. A label
+that still does not fit at that floor is ellipsised. The scale is a readability
+aid, not a zoom.
+
+The two checks that keep this honest are in `ui_access_audit_test.go`: at 145%
+every button label in both shipped configs must draw in full, and the fitted
+size may not drop below normal. They run on both real canvases — 1280×720 for
+the 16:9 handhelds and 960×720 for the 4:3 Brick family — together with a
+minimum tap size for every pressable control and a bounds check on the compact
+canvas.
 
 ## High contrast
 

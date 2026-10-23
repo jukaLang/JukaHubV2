@@ -208,7 +208,8 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 	x := padX + start
 	for i, b := range items {
 		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt}
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt,
+			spaceWidths: l.spaceWidths, sanitized: l.sanitized}
 		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, widths[i])
 		align := items[i].FlexAlign
 		if b.AlignSelf >= 0 {
@@ -304,7 +305,8 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 		}
 
 		sub := &webLayout{RowH: l.rowH}
-		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt}
+		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt,
+			spaceWidths: l.spaceWidths, sanitized: l.sanitized}
 		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, w)
 		if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 {
 			continue

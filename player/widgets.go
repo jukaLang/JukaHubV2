@@ -544,6 +544,14 @@ func widgetToggleSideEffect(config *Config, variable string, on bool) bool {
 			return true
 		}
 		return false
+	case "hapticsenabled":
+		// Apply at once. The switch's own click already played under the old
+		// value, so turning feedback on confirms itself with one pulse here.
+		hapticsSetEnabled(on)
+		if on {
+			playHaptic(hapticTogglePulse)
+		}
+		return false
 	case "timeofdaytheme":
 		// Re-evaluate from scratch so turning it on applies the preset for this
 		// hour right away.

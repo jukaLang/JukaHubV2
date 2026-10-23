@@ -401,6 +401,11 @@ func main() {
 		log.Printf("[GAMEPAD] No joysticks/gamepads detected")
 	}
 
+	// Find the vibration motor before the Settings switch is injected: the row
+	// exists only on hardware that can actually buzz.
+	hapticsBind(config)
+	ensureHapticsSetting(config)
+
 	initKeyboard()
 
 	thumbnailDownloadCh = make(chan string, 256)
@@ -429,6 +434,10 @@ func main() {
 		// Update the global config pointer atomically
 		appConfig = newCfg
 		config = newCfg
+		// In-memory injections are lost with the replaced scene list, so the
+		// Vibration row and its saved value are re-applied here.
+		hapticsBind(newCfg)
+		ensureHapticsSetting(newCfg)
 		showToast("Config reloaded", ColorToastSuccess)
 	})
 	defer StopConfigWatcher()

@@ -59,6 +59,19 @@ read from the physical buttons before any panel sees it, so it also works from
 a video, a settings panel or the on-screen keyboard — you never need the Home
 screen or a mouse to leave the app.
 
+The TrimUI Smart Pro's rumble motor echoes the beeps: a short tick when the
+selection moves, a firmer bump on open, a longer jolt on an error. The handheld
+motor is a vendor GPIO (`/sys/class/gpio/gpio227/value` with
+`/sys/class/motor/voltage` on the TG5040 family, gpio236 and
+`/sys/class/motor/level` on the Smart Pro S), not the pad's force-feedback node,
+so JukaHub writes it directly; a USB or Bluetooth pad with rumble answers SDL
+instead.
+
+Feedback is on by default and can be switched off in **Settings → General →
+Vibration**. That row only appears when a motor was actually found — a switch
+that cannot do anything is not offered — and a motor that stops answering turns
+the feedback off rather than retrying on every key press.
+
 Shoulders are contextual, not scene-specific: whatever list holds the focus
 owns them. **L1/R1** step one window and **L2/R2** jump further, so the pad
 behaves the same in a menu as it does in a media grid.

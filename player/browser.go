@@ -27,11 +27,14 @@ import (
 const (
 	browserSceneName       = "Browser"
 	browserContentVariable = "browser_content"
-	// The start page is a text-first search engine: it loads in a few KB, needs
-	// no JavaScript, and gives the address bar something useful to open with.
-	browserHomeURL     = "https://lite.duckduckgo.com/lite/"
+	browserReposURL        = "https://github.com/jukaLang/JukaHubV2"
+	// The start page is the project repository. DuckDuckGo Lite draws its home
+	// screen with JavaScript, so it rendered as a nearly blank panel; the
+	// repository is server-rendered HTML and gives the browser a real page the
+	// moment the tile is opened. Search is still one key away (Y) and still
+	// goes through DuckDuckGo Lite.
+	browserHomeURL     = browserReposURL
 	browserSearchURL   = "https://lite.duckduckgo.com/lite/?q="
-	browserReposURL    = "https://github.com/jukaLang/JukaHubV2"
 	browserIssuesURL   = "https://github.com/jukaLang/JukaHubV2/issues"
 	browserNewIssueURL = "https://github.com/jukaLang/JukaHubV2/issues/new"
 
@@ -280,7 +283,16 @@ func browserReload(config *Config) {
 	if !ok {
 		return
 	}
-	loadTextBrowserURLAt(config, elem, textBrowserAddress(config), false)
+	address := textBrowserAddress(config)
+	// Reload means "ask the server again": drop the cached copy so a page that
+	// rendered stale or half-loaded is not served from memory. The key is the
+	// normalized address, which is what the loader stored it under.
+	forget := address
+	if normalized, err := normalizeTextBrowserURL(address); err == nil {
+		forget = normalized
+	}
+	browserForgetPage(forget)
+	reloadTextBrowserURL(config, elem, address)
 }
 
 // browserEnsureHome loads the start page the first time the Browser scene is
@@ -344,6 +356,7 @@ func resetBrowserStateForTest() {
 	browserState.history = nil
 	browserState.index = -1
 	browserState.mu.Unlock()
+	browserClearPageCache()
 	browserHomeLoaded = false
 	browserLinkPanel = browserLinkPanelState{}
 	resetBrowserDocumentsForTest()
