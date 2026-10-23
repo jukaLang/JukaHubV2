@@ -37,6 +37,46 @@ let globalTooltip = null;
 // the undo stack. Set once the editor is fully constructed.
 let editorReady = false;
 
+// Settings keys the App Info panel owns. They never show up in the flat
+// Variables list — every panel rebuild (import, snapshot restore, auto-save
+// load) must filter them out or the panel gets cluttered with entries the
+// user cannot meaningfully edit, plus "Custom" whose value is an object.
+const SETTING_VARIABLE_KEYS = ['backgroundImage', 'fontSizes', 'buttonColor', 'labelColor', 'fonts',
+  'inputColor', 'fullscreen', 'screenWidth', 'screenHeight', 'tools_path',
+  'fileExplorerRoot', 'weatherEnabled', 'weatherUnit', 'tspUsername',
+  'playbackResolution', 'reducedMotion', 'swapABButtons', 'lowPower', 'Custom'];
+
+function isSettingVariableKey(key) {
+  return SETTING_VARIABLE_KEYS.includes(key);
+}
+
+// Drop the settings keys the dedicated controls manage from a restored flat
+// variables map, keeping their round-trip home in importedConfig untouched.
+// "Custom" stays: it is the working copy the effective-value lookups read.
+function scrubSettingVariables(map) {
+  if (!map || typeof map !== 'object') return map;
+  for (const key of Object.keys(map)) {
+    if (isSettingVariableKey(key) && key !== 'Custom') delete map[key];
+  }
+  if (typeof map.Custom !== 'object' || map.Custom === null) map.Custom = {};
+  return map;
+}
+
+// One shared variable-row builder so the list looks identical whichever path
+// filled it. Object values render as compact JSON instead of "[object Object]".
+function appendVariableItem(key, val) {
+  variablesList.appendChild(createVariableItem(key, val));
+}
+
+function renderVariablePanelValue(val) {
+  if (val === undefined || val === null) return '';
+  if (typeof val === 'object') {
+    const json = JSON.stringify(val);
+    return json.length > 80 ? json.slice(0, 77) + '…' : json;
+  }
+  return String(val);
+}
+
 // Initialize the editor
 document.addEventListener('DOMContentLoaded', () => {
   // Set initial canvas size
@@ -253,9 +293,10 @@ function restoreSnapshot(snapshot) {
 
   // Rebuild variables UI
   variablesList.innerHTML = '';
+  scrubSettingVariables(variables);
   for (const [key, val] of Object.entries(variables)) {
-    const variableItem = createVariableItem(key, val);
-    variablesList.appendChild(variableItem);
+    if (isSettingVariableKey(key)) continue;
+    appendVariableItem(key, val);
   }
 
   loadScene(currentScene);
@@ -508,9 +549,10 @@ function loadAutoSave() {
 
     // Rebuild variables UI
     variablesList.innerHTML = '';
+    scrubSettingVariables(variables);
     for (const [key, val] of Object.entries(variables)) {
-      const variableItem = createVariableItem(key, val);
-      variablesList.appendChild(variableItem);
+      if (isSettingVariableKey(key)) continue;
+      appendVariableItem(key, val);
     }
 
     updateSceneBadge();
@@ -575,9 +617,17 @@ const CANVAS_MAX_SCALE = 2;
 // Mirrors Variables.Get in player/config.go: custom variables first, then the
 // known colour names, whose RGB objects the runtime formats as "r,g,b".
 function previewVariableValue(name) {
-  const custom = previewVariables[name] !== undefined
-    ? previewVariables[name]
-    : ((importedConfig.variables || {})[name]);
+  let custom;
+  if (previewMode && previewVariables[name] !== undefined) {
+    custom = previewVariables[name];
+  } else {
+    // Edit-mode resolution follows the player too: Custom first
+    // (case-insensitive, strings win), then the panel's own variables,
+    // then the imported top-level fields.
+    custom = customValueJs(flattenedConfigCustom(), name);
+    if (custom === undefined && variables && variables[name] !== undefined) custom = variables[name];
+    if (custom === undefined) custom = (importedConfig.variables || {})[name];
+  }
   if (custom === undefined || custom === null) return '';
   if (typeof custom === 'object') {
     if ('r' in custom && 'g' in custom && 'b' in custom) return `${custom.r},${custom.g},${custom.b}`;
@@ -588,29 +638,158 @@ function previewVariableValue(name) {
 
 // The three theme slots resolve through the active theme preset in the player
 // (player/themes.go: effectiveThemeColor), where zero RGB means "never chosen",
-// not black. The builder's dark chrome is a close stand-in for the default
-// preset; explicit config colours still win.
-const PREVIEW_THEME_PRESETS = {
-  dark: { buttonColor: '#1c2230', labelColor: '#e8eefc', inputColor: '#141a26', background: '#0f1115' },
-  light: { buttonColor: '#ffffff', labelColor: '#1a1d26', inputColor: '#e8eaef', background: '#f0f2f5' }
+// not black. This is the same colour set the player ships: a config that picks
+// "oled" or "sakura" must preview on the website with the exact palette the
+// device renders, so keep this table in sync with themePresets in
+// player/themes.go (background, buttonColor, labelColor, inputColor).
+const PLAYER_THEME_PRESETS = {
+  dark: { background: '#0f1115', buttonColor: '#1c2230', labelColor: '#e8eefc', inputColor: '#141a26' },
+  light: { background: '#f0f2f5', buttonColor: '#ffffff', labelColor: '#1a1d26', inputColor: '#e8eaef' },
+  oled: { background: '#000000', buttonColor: '#0a0a0a', labelColor: '#ffffff', inputColor: '#050505' },
+  midnight: { background: '#090b14', buttonColor: '#151927', labelColor: '#f5f7ff', inputColor: '#0f1320' },
+  hub: { background: '#090E19', buttonColor: '#1E293B', labelColor: '#F6F8FC', inputColor: '#0F1420' },
+  ocean: { background: '#0B1526', buttonColor: '#142740', labelColor: '#E8F1FF', inputColor: '#0E1C31' },
+  sunset: { background: '#1A0F14', buttonColor: '#2B1A24', labelColor: '#FFF0F3', inputColor: '#201219' },
+  highcontrast: { background: '#000000', buttonColor: '#000000', labelColor: '#ffffff', inputColor: '#000000' },
+  'cb-deuteranopia': { background: '#0d1117', buttonColor: '#1b2534', labelColor: '#f2f6ff', inputColor: '#131a24' },
+  'cb-protanopia': { background: '#0e1116', buttonColor: '#1c2431', labelColor: '#f6f5ec', inputColor: '#141a22' },
+  'cb-tritanopia': { background: '#101316', buttonColor: '#1f242a', labelColor: '#f4f6f5', inputColor: '#15191d' },
+  red: { background: '#140708', buttonColor: '#241014', labelColor: '#ffecec', inputColor: '#1b0a0c' },
+  green: { background: '#07120c', buttonColor: '#0e2418', labelColor: '#e9fff1', inputColor: '#0a1a11' },
+  blue: { background: '#071426', buttonColor: '#0f2542', labelColor: '#eaf4ff', inputColor: '#0a1c33' },
+  anime: { background: '#12091f', buttonColor: '#2e1d52', labelColor: '#f7ecff', inputColor: '#1a1030' },
+  cute: { background: '#fff7fb', buttonColor: '#ffd6e8', labelColor: '#3d2230', inputColor: '#fff0f7' },
+  girly: { background: '#fff0f7', buttonColor: '#ffc7df', labelColor: '#3a1226', inputColor: '#ffe6f2' },
+  sakura: { background: '#fff6f4', buttonColor: '#ffdcd6', labelColor: '#3b2523', inputColor: '#ffefec' },
+  lavender: { background: '#f4f1fb', buttonColor: '#e3daf7', labelColor: '#241a3a', inputColor: '#efe9fa' },
+  sand: { background: '#f6efe4', buttonColor: '#e6d6bd', labelColor: '#2f2618', inputColor: '#f0e5d3' },
+  nord: { background: '#2e3440', buttonColor: '#434c5e', labelColor: '#eceff4', inputColor: '#3b4252' },
+  gruvbox: { background: '#282828', buttonColor: '#3c3836', labelColor: '#fbf1c7', inputColor: '#32302f' },
+  dracula: { background: '#282a36', buttonColor: '#44475a', labelColor: '#f8f8f2', inputColor: '#21222c' },
+  matrix: { background: '#000600', buttonColor: '#06240c', labelColor: '#b6ffb6', inputColor: '#021004' },
+  fallout: { background: '#0d0f07', buttonColor: '#242a12', labelColor: '#ffd27a', inputColor: '#141709' },
+  cyberpunk: { background: '#0a0416', buttonColor: '#26164a', labelColor: '#f5f0ff', inputColor: '#120a24' },
+  mono: { background: '#101010', buttonColor: '#282828', labelColor: '#f2f2f2', inputColor: '#161616' },
+  vaporwave: { background: '#140b26', buttonColor: '#371d66', labelColor: '#ffe9ff', inputColor: '#1e1038' }
 };
+// Kept as an alias: both the preview theme resolver and the config's effective
+// theme colours read this table.
+const PREVIEW_THEME_PRESETS = PLAYER_THEME_PRESETS;
+
+// --- Effective config values (the player's resolution order) -----------------
+// The player never reads settings straight out of variables.Custom: it first
+// flattens nested Custom blocks, then looks a key up case-insensitively with
+// string values winning (config.go customValue), and only then falls back to
+// the typed fields. Mirroring that order here is what keeps a jukaconfig.json
+//"reading" the same on the website as it does on the device.
+
+// Mirror of player/core.go flattenCustomBlocks: nested "Custom" blocks merge
+// into their parent one level at a time, and an empty Custom disappears.
+function flattenCustomBlocksJs(custom) {
+  if (!custom || typeof custom !== 'object' || Array.isArray(custom)) return custom || {};
+  const copy = JSON.parse(JSON.stringify(custom));
+  for (let depth = 0; depth < 4; depth++) {
+    const nested = copy.Custom;
+    if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
+      if (typeof nested === 'string' || nested === undefined) delete copy.Custom;
+      break;
+    }
+    for (const key of Object.keys(nested)) {
+      if (!(key in copy)) copy[key] = nested[key];
+    }
+    delete copy.Custom;
+  }
+  return copy;
+}
+
+// Mirror of player/core.go customValue: exact key first, then case-insensitive
+// with a string value winning over a same-named non-string.
+function customValueJs(custom, name) {
+  if (!custom || typeof custom !== 'object') return undefined;
+  if (name in custom) return custom[name];
+  let fallback;
+  for (const key of Object.keys(custom)) {
+    if (key.toLowerCase() === String(name).toLowerCase()) {
+      if (typeof custom[key] === 'string') return custom[key];
+      if (fallback === undefined) fallback = custom[key];
+    }
+  }
+  return fallback;
+}
+
+// The flattened, case-normalised view of a config's variables.Custom.
+function flattenedConfigCustom() {
+  const imported = importedConfig.variables || {};
+  const custom = customValueJs(imported, 'Custom');
+  const merged = (typeof custom === 'object' && custom && !Array.isArray(custom) ? JSON.parse(JSON.stringify(custom)) : {});
+  // The panel's own Custom copy (colour picker write-backs) wins over the raw
+  // import, exactly like a user change should overwrite the stored value.
+  const panelCustom = (variables && typeof variables.Custom === 'object' && variables.Custom) ? variables.Custom : {};
+  for (const key of Object.keys(panelCustom)) merged[key] = panelCustom[key];
+  return flattenCustomBlocksJs(merged);
+}
+
+// The theme slot colours a config actually resolves to on the player, in the
+// same order effectiveThemeColor uses: an explicit string in Custom, then the
+// typed RGB struct (zero channels mean "unset"), then the active preset.
+function effectiveThemeColour(name) {
+  const key = String(name || '').toLowerCase();
+  if (!['buttoncolor', 'labelcolor', 'inputcolor'].includes(key)) return '';
+  const custom = flattenedConfigCustom();
+  const explicit = customValueJs(custom, key);
+  if (typeof explicit === 'string' && colourIsCss(explicit)) return explicit;
+  const importedVars = importedConfig.variables || {};
+  const rgb = importedVars[camelCaseThemeKey(key)];
+  if (rgb && typeof rgb === 'object' && (rgb.r || rgb.g || rgb.b)) {
+    return `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+  }
+  const presetName = String(customValueJs(custom, 'theme_preset') || 'dark').toLowerCase();
+  const preset = PLAYER_THEME_PRESETS[presetName] || PLAYER_THEME_PRESETS.dark;
+  return preset[key === 'buttoncolor' ? 'buttonColor' : key === 'labelcolor' ? 'labelColor' : 'inputColor'] || '';
+}
+
+function camelCaseThemeKey(key) {
+  return key === 'buttoncolor' ? 'buttonColor' : key === 'labelcolor' ? 'labelColor' : key === 'inputcolor' ? 'inputColor' : key;
+}
+
+// Effective value for the settings the player keeps as typed fields with
+// Custom overrides (screen size, weather, paths, ...): the authoritative
+// lookup is Custom (case-insensitive), like the player's syncVariableOverrides.
+function effectiveConfigValue(name) {
+  const typedCasing = String(name || '');
+  const importedVars = importedConfig.variables || {};
+  const custom = flattenedConfigCustom();
+  const customHit = customValueJs(custom, name);
+  if (customHit !== undefined && (typeof customHit === 'string' ? customHit.trim() !== '' : true)) return customHit;
+  if (variables && variables[name] !== undefined) return variables[name];
+  if (importedVars[name] !== undefined) return importedVars[name];
+  return importedVars[camelCaseThemeKey(typedCasing)];
+}
 
 function previewThemeColour(name) {
   const key = String(name || '').toLowerCase();
   const camel = key === 'buttoncolor' ? 'buttonColor'
     : key === 'labelcolor' ? 'labelColor'
     : key === 'inputcolor' ? 'inputColor' : key;
+  // Preview's set_variable writes go first so a colour variable set at runtime
+  // recolours live; then the flattened Custom view, where the panel's own
+  // Custom copy (colour-picker write-backs) wins over the raw import.
+  if (previewMode && previewVariables[name] !== undefined) {
+    const set = String(previewVariables[name]);
+    if (colourIsCss(set)) return set;
+  }
   const importedVars = importedConfig.variables || {};
-  const custom = (variables && variables.Custom) || {};
-  const explicit = custom[name] ?? custom[camel] ?? importedVars.Custom?.[camel];
+  const custom = flattenedConfigCustom();
+  const explicit = customValueJs(custom, key) ?? customValueJs(custom, camel);
   if (typeof explicit === 'string' && colourIsCss(explicit)) return explicit;
   const rgb = importedVars[camel] || importedVars[name];
   if (rgb && typeof rgb === 'object' && (rgb.r || rgb.g || rgb.b)) {
     return `rgb(${rgb.r},${rgb.g},${rgb.b})`;
   }
-  const presetName = String(importedVars.theme_preset || variables.theme_preset || 'dark').toLowerCase();
+  // Unset theme slots resolve like the player: through the active preset.
+  const presetName = String(customValueJs(custom, 'theme_preset') || 'dark').toLowerCase();
   const preset = PREVIEW_THEME_PRESETS[presetName] || PREVIEW_THEME_PRESETS.dark;
-  return preset[key] || '';
+  return preset[camel] || '';
 }
 
 function previewColourValue(name) {
@@ -812,6 +991,8 @@ function leavePreviewMode() {
   }
   previewOriginScene = null;
   previewVariables = {};
+  // Restored design: repaint the $colour references with the edit-mode values.
+  applyEditorVariablePaint();
 
   // Persist the workspace as it stands after preview, without reverting edits.
   scheduleAutoSave();
@@ -881,6 +1062,10 @@ loadScene = function (sceneName) {
     applyPreviewVariables();
     updatePreviewBar();
     fitPreviewCanvas();
+  } else {
+    // Edit mode repaints $colour references like the player draws them. Stored
+    // clones carry the resolved inline styles, so restoring a scene keeps them.
+    applyEditorVariablePaint();
   }
 };
 
@@ -943,6 +1128,13 @@ function setAiPanelOpen(open) {
   const launcher = document.getElementById('aiLauncher');
   aiPanelOpen = Boolean(open);
   document.body.classList.toggle('ai-open', aiPanelOpen);
+  // The stylesheet makes [hidden] beat every author display rule, so the
+  // panel's hidden attribute must track visibility itself: flipping only the
+  // body class left the panel display:none forever (aria-hidden agreed).
+  if (panel) {
+    panel.hidden = !aiPanelOpen;
+    panel.setAttribute('aria-hidden', String(!aiPanelOpen));
+  }
   if (btn) {
     btn.classList.toggle('active', aiPanelOpen);
     btn.setAttribute('aria-expanded', String(aiPanelOpen));
@@ -2213,6 +2405,67 @@ function showElementProperties(el) {
     textBrowserProperties.style.display = 'none';
   }
 
+  // Search-results grid properties - only show for searchresults elements.
+  const searchResultsProperties = document.querySelector('.searchresults-properties');
+  if (searchResultsProperties) {
+    if (el.getAttribute('data-type') === 'searchresults') {
+      searchResultsProperties.style.display = 'block';
+
+      const resultsVariable = document.getElementById('resultsVariable');
+      if (resultsVariable) {
+        resultsVariable.value = el.getAttribute('data-variable') || '';
+        resultsVariable.onchange = () => {
+          const value = resultsVariable.value.trim();
+          if (value) el.setAttribute('data-variable', value);
+          else el.removeAttribute('data-variable');
+        };
+      }
+
+      // Grid geometry: blank means "use the player default", so an emptied
+      // field removes the attribute instead of exporting columns: "".
+      const gridColumnsInput = document.getElementById('gridColumns');
+      if (gridColumnsInput) {
+        gridColumnsInput.value = el.getAttribute('data-columns') || '';
+        gridColumnsInput.onchange = () => {
+          const value = String(gridColumnsInput.value).trim();
+          if (value !== '') el.setAttribute('data-columns', Math.max(1, Math.min(8, parseInt(value, 10) || 1)));
+          else el.removeAttribute('data-columns');
+        };
+      }
+
+      const gridRowsInput = document.getElementById('gridRows');
+      if (gridRowsInput) {
+        gridRowsInput.value = el.getAttribute('data-rows') || '';
+        gridRowsInput.onchange = () => {
+          const value = String(gridRowsInput.value).trim();
+          if (value !== '') el.setAttribute('data-rows', Math.max(1, Math.min(12, parseInt(value, 10) || 1)));
+          else el.removeAttribute('data-rows');
+        };
+      }
+    } else {
+      searchResultsProperties.style.display = 'none';
+    }
+  }
+
+  // Input properties - the config key the player stores typed text under.
+  const inputProperties = document.querySelector('.input-properties');
+  if (inputProperties) {
+    if (el.getAttribute('data-type') === 'input') {
+      inputProperties.style.display = 'block';
+      const inputVariable = document.getElementById('inputVariable');
+      if (inputVariable) {
+        inputVariable.value = el.getAttribute('data-variable') || '';
+        inputVariable.onchange = () => {
+          const value = inputVariable.value.trim();
+          if (value) el.setAttribute('data-variable', value);
+          else el.removeAttribute('data-variable');
+        };
+      }
+    } else {
+      inputProperties.style.display = 'none';
+    }
+  }
+
   function updateSourceBadges(activeSource) {
     const badges = document.querySelectorAll('.source-badge');
     badges.forEach(badge => {
@@ -2369,6 +2622,20 @@ function showElementProperties(el) {
     mediaVariableSelector.onchange = () => {
       el.setAttribute('data-media-variable', mediaVariableSelector.value);
     };
+  } else if (triggerSelector.value === 'youtube_search') {
+    // The player reads the command override and result variable from the
+    // element's TriggerTarget/TriggerValue (core.go planMediaSearchTrigger),
+    // so both fields map onto those attributes.
+    const ytSearchCommand = document.getElementById('ytSearchCommand');
+    const ytSearchResultVar = document.getElementById('ytSearchResultVar');
+    ytSearchCommand.style.display = 'block';
+    ytSearchCommand.value = el.getAttribute('data-trigger-target') || '';
+    ytSearchResultVar.style.display = 'block';
+    ytSearchResultVar.value = el.getAttribute('data-trigger-value') || '';
+  } else if (triggerSelector.value === 'play_video_from_var') {
+    const playFromVarSelector = document.getElementById('playFromVarSelector');
+    playFromVarSelector.style.display = 'block';
+    updateVariableSelector(playFromVarSelector, el.getAttribute('data-trigger-target') || '');
   }
 
 
@@ -2409,8 +2676,21 @@ function showElementProperties(el) {
       mediaVariableSelector.onchange = () => {
         el.setAttribute('data-media-variable', mediaVariableSelector.value);
       };
+    } else if (value === 'youtube_search') {
+      const ytSearchCommand = document.getElementById('ytSearchCommand');
+      const ytSearchResultVar = document.getElementById('ytSearchResultVar');
+      ytSearchCommand.style.display = 'block';
+      ytSearchCommand.value = el.getAttribute('data-trigger-target') || '';
+      ytSearchResultVar.style.display = 'block';
+      ytSearchResultVar.value = el.getAttribute('data-trigger-value') || '';
+    } else if (value === 'play_video_from_var') {
+      const playFromVarSelector = document.getElementById('playFromVarSelector');
+      playFromVarSelector.style.display = 'block';
+      updateVariableSelector(playFromVarSelector, el.getAttribute('data-trigger-target') || '');
     }
+    // youtube_play / youtube_trending / play_focused carry no options.
 
+    scheduleAutoSave();
   };
 
   const videoVariableEl = document.getElementById('videoVariable');
@@ -2462,6 +2742,33 @@ function showElementProperties(el) {
   if (variableChangeValueEl) {
     variableChangeValueEl.onchange = () => {
       el.setAttribute('data-variable-change-value', variableChangeValueEl.value);
+    };
+  }
+
+  const ytSearchCommandEl = document.getElementById('ytSearchCommand');
+  if (ytSearchCommandEl) {
+    ytSearchCommandEl.onchange = () => {
+      const value = ytSearchCommandEl.value.trim();
+      if (value) el.setAttribute('data-trigger-target', value);
+      else el.removeAttribute('data-trigger-target');
+    };
+  }
+
+  const ytSearchResultVarEl = document.getElementById('ytSearchResultVar');
+  if (ytSearchResultVarEl) {
+    ytSearchResultVarEl.onchange = () => {
+      const value = ytSearchResultVarEl.value.trim();
+      if (value) el.setAttribute('data-trigger-value', value);
+      else el.removeAttribute('data-trigger-value');
+    };
+  }
+
+  const playFromVarSelectorEl = document.getElementById('playFromVarSelector');
+  if (playFromVarSelectorEl) {
+    playFromVarSelectorEl.onchange = () => {
+      const value = playFromVarSelectorEl.value.trim();
+      if (value) el.setAttribute('data-trigger-target', value);
+      else el.removeAttribute('data-trigger-target');
     };
   }
 
@@ -2532,33 +2839,45 @@ function updateMenuClock(clockEl) {
 
 // Variable Management
 function addVariable() {
-  const variableName = prompt('Enter variable name:');
-  if (variableName && !variables[variableName]) {
-    variables[variableName] = '';
-
-    // Create variable item
-    const variableItem = createVariableItem(variableName, variables[variableName]);
-
-    variablesList.appendChild(variableItem);
-
-    document.querySelectorAll('.dynamic-variable-selector').forEach(selector => {
-      const currentValue = selector.value;
-      updateVariableSelector(selector, currentValue);
-    });
-
-    updateVariableChangeSelector();
+  const asked = prompt('Enter variable name:');
+  if (!asked) return;
+  const variableName = asked.trim();
+  if (!variableName) return showToast('Variable name cannot be empty.', 'error');
+  // The player only substitutes $name references made of letters, digits and
+  // underscores, so a name it can never read would be a silent dead end.
+  if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(variableName)) {
+    return showToast(`Use letters, digits or underscores — "${variableName}" is not referable in text.`, 'error');
   }
+  if (variables[variableName] !== undefined) return showToast(`Variable "${variableName}" already exists.`, 'info');
+
+  pushUndo('add variable');
+  variables[variableName] = '';
+
+  // Create variable item
+  const variableItem = createVariableItem(variableName, variables[variableName]);
+
+  variablesList.appendChild(variableItem);
+
+  document.querySelectorAll('.dynamic-variable-selector').forEach(selector => {
+    const currentValue = selector.value;
+    updateVariableSelector(selector, currentValue);
+  });
+
+  updateVariableChangeSelector();
+  scheduleAutoSave();
+  scheduleValidationRefresh();
 }
 
 function editVariable(name) {
   const newValue = prompt(`Enter new value for ${name}:`, variables[name]);
-  if (newValue !== null) {
+  if (newValue !== null && newValue !== variables[name]) {
+    pushUndo('edit variable');
     variables[name] = newValue;
 
     // Update UI
     document.querySelectorAll('.variable-item').forEach(item => {
       if (item.querySelector('.variable-name').textContent === name) {
-        item.querySelector('.variable-value').textContent = newValue;
+        item.querySelector('.variable-value').textContent = renderVariablePanelValue(newValue);
       }
     });
 
@@ -2566,11 +2885,14 @@ function editVariable(name) {
     document.querySelectorAll('.text-content').forEach(textEl => {
       processTextForVariables(textEl);
     });
+    scheduleAutoSave();
+    scheduleValidationRefresh();
   }
 }
 
 function deleteVariable(name) {
   if (confirm(`Delete variable ${name}?`)) {
+    pushUndo('delete variable');
     delete variables[name];
 
     // Remove from UI
@@ -2592,6 +2914,8 @@ function deleteVariable(name) {
     document.querySelectorAll('.text-content').forEach(textEl => {
       processTextForVariables(textEl);
     });
+    scheduleAutoSave();
+    scheduleValidationRefresh();
   }
 }
 
@@ -2884,6 +3208,9 @@ function elementToConfig(el) {
   }
 
   assign('triggerValue', attr('data-trigger-value'));
+  // Target of youtube_search (command override), play_video_from_var (variable
+  // name) and other trigger payloads; the player decodes it per trigger.
+  assign('triggerTarget', attr('data-trigger-target'));
   assign('variable', attr('data-variable'));
   assign('command', attr('data-command'));
   assign('listVariable', attr('data-list-variable'));
@@ -2940,6 +3267,7 @@ function applyElementConfigAttributes(el, data) {
 
   set('data-trigger', data.trigger);
   set('data-trigger-value', data.triggerValue);
+  set('data-trigger-target', data.triggerTarget);
   set('data-scene-change', data.sceneChange);
   set('data-external-app-path', data.externalAppPath);
   set('data-external-app-return', data.externalAppReturn);
@@ -3024,6 +3352,20 @@ const PLAYER_ELEMENT_TYPES = [
   'themegallery', 'toggle'
 ];
 const FONT_ROLES = ['title', 'big', 'medium', 'small'];
+
+// Scenes the Go player builds UI for at runtime (registerScene in about.go,
+// calculator.go, dashboard.go, …). A config ships them as menu targets with an
+// empty elements list on purpose, so an empty scene is not a mistake for these.
+// Keep this in sync with the registerScene init() calls in player/*.go.
+const PLAYER_BUILT_SCENES = [
+  'Alarm', 'Calculator', 'About', 'Dashboard', 'Dictionary', 'Games',
+  'JukaLand', 'MusicPlayer', 'Notes', 'Patch', 'Pomodoro', 'PDFReader', 'Terminal'
+];
+
+// Element types whose renderer fills its own background and lays out its own
+// text, so naive contrast and text-width checks against the scene colours do
+// reflect nothing the player actually draws.
+const PLAYER_SELF_PAINTING_TYPES = ['textbrowser', 'chat', 'shortslist', 'canvas', 'themegallery'];
 const DEFAULT_SCENE_WIDTH = 1280;
 const DEFAULT_SCENE_HEIGHT = 720;
 
@@ -3349,7 +3691,7 @@ function validateProject(config) {
     }
 
     const elements = Array.isArray(scene.elements) ? scene.elements : [];
-    if (elements.length === 0) {
+    if (elements.length === 0 && !PLAYER_BUILT_SCENES.includes(sceneName)) {
       add('warning', 'scene-empty', 'This scene has no elements.', 'Add a label or a button, or remove the scene.', whereScene, { sceneIndex });
     }
     let menuRect = null;
@@ -3419,11 +3761,13 @@ function validateProject(config) {
         const resolved = allVariables[ref];
         return typeof resolved === 'string' ? resolved : '';
       };
-      const fg = parseConfigColour(resolveColour(el.color) || '#F8FAFC');
-      const bg = parseConfigColour(resolveColour(el.bgColor) || resolveColour(scene.background) || '');
-      const ratio = bg ? contrastRatio(fg, bg) : null;
-      if (ratio !== null && ratio < 4.5 && (text.trim() || type === 'button')) {
-        add('warning', 'contrast', `Text contrast is ${ratio.toFixed(1)}:1, below the 4.5:1 readable minimum.`, 'Lighten the text or darken the background.', where, target);
+      if (!PLAYER_SELF_PAINTING_TYPES.includes(type)) {
+        const fg = parseConfigColour(resolveColour(el.color) || '#F8FAFC');
+        const bg = parseConfigColour(resolveColour(el.bgColor) || resolveColour(scene.background) || '');
+        const ratio = bg ? contrastRatio(fg, bg) : null;
+        if (ratio !== null && ratio < 4.5 && (text.trim() || type === 'button')) {
+          add('warning', 'contrast', `Text contrast is ${ratio.toFixed(1)}:1, below the 4.5:1 readable minimum.`, 'Lighten the text or darken the background.', where, target);
+        }
       }
 
       const trigger = String(el.trigger || '').trim();
@@ -3447,7 +3791,7 @@ function validateProject(config) {
         }
       });
 
-      if (text.trim() && w) {
+      if (text.trim() && w && !PLAYER_SELF_PAINTING_TYPES.includes(type)) {
         const size = toIntOrNull(fontSizes[String(el.font || 'medium').toLowerCase()]) || toIntOrNull(fontSizes.medium) || 24;
         const estimated = estimateTextWidth(text, size);
         if (estimated > w * 1.15) {
@@ -3503,8 +3847,10 @@ function renderValidationPanel(result, report) {
 
   list.innerHTML = '';
   const total = result.errors + result.warnings;
+  // When the design is clean the honour-banner (validateEmpty) already says
+  // "No problems found"; keep the header for what the check actually covers.
   summary.textContent = total === 0
-    ? 'No problems found — this design will load on the device.'
+    ? 'Checked values, scene links, contrast and thumb-fit.'
     : `${result.errors} error${result.errors === 1 ? '' : 's'} and ${result.warnings} warning${result.warnings === 1 ? '' : 's'}. Errors block export; warnings do not.`;
   if (report) {
     summary.textContent += ` Imported: ${importReportMessage(report)}.`;
@@ -3545,7 +3891,7 @@ function createVariableItem(key, val) {
   nameEl.textContent = String(key);
   const valueEl = document.createElement('span');
   valueEl.className = 'variable-value';
-  valueEl.textContent = val === undefined || val === null ? '' : String(val);
+  valueEl.textContent = renderVariablePanelValue(val);
   info.append(nameEl, ' ', valueEl);
 
   const actions = document.createElement('div');
@@ -4409,19 +4755,29 @@ function loadJukaApp(input) {
   variables = {};
   variablesList.innerHTML = '';
 
-  // Load variables
+  // Load variables. Keys the panel edits through dedicated controls stay out
+  // of the flat list, but their values still round-trip: the settings controls
+  // carry the device-resolved values on import and write changes back, so the
+  // export always produces what the player would read.
   if (data.variables) {
-    const excludedKeys = ['backgroundImage', 'fontSizes', 'buttonColor', 'labelColor', 'fonts'];
     for (const key in data.variables) {
-      if (!excludedKeys.includes(key)) {
+      if (!isSettingVariableKey(key)) {
         variables[key] = data.variables[key];
 
         // Add variable to UI
-        const variableItem = createVariableItem(key, data.variables[key]);
-        variablesList.appendChild(variableItem);
+        appendVariableItem(key, data.variables[key]);
       }
     }
+    // A working copy of the config's Custom object (colour refs, theme_preset,
+    // nested blocks?) feeds the effective-value lookups and export write-backs.
+    variables.Custom = JSON.parse(JSON.stringify(
+      (typeof data.variables.Custom === 'object' && data.variables.Custom) ? data.variables.Custom : {}));
   }
+  if (!variables.Custom) variables.Custom = {};
+
+  // Settings section of the App Info panel ← the values the device resolves
+  // (Custom keys beat typed fields, exactly like cfg syncVariableOverrides).
+  applyConfigSettingsToControls();
 
   // Load scenes
   const sceneSelector = document.getElementById('sceneSelector');
@@ -4469,9 +4825,199 @@ function loadJukaApp(input) {
   updateAllMenuSceneButtons();
   updateSceneBadge();
   updateCanvasReadout();
+
+  // Paint $buttonColor-style colour refs the way the player draws them (after
+  // the canvas holds the loaded scenes).
+  applyEditorVariablePaint();
 }
 
+// --- Settings ↔ jukaconfig.json sync -----------------------------------------
+// The App Info panel's settings section edits exactly the values the player
+// resolves out of jukaconfig.json: variables.Custom first (case-insensitive,
+// strings win — customValueJs mirrors customValue in player/core.go), then the
+// typed fields. Import fills the controls with those effective values and edits
+// write them back, so the export contains what the device would read.
 
+const SETTING_CONTROLS = [
+  { key: 'fullscreen', id: 'fullscreenToggle', kind: 'bool' },
+  { key: 'screenWidth', id: 'screenWidthInput', kind: 'int' },
+  { key: 'screenHeight', id: 'screenHeightInput', kind: 'int' },
+  { key: 'tools_path', id: 'toolsPath', kind: 'string' },
+  { key: 'fileExplorerRoot', id: 'fileExplorerRoot', kind: 'string' },
+  { key: 'weatherUnit', id: 'weatherUnit', kind: 'select' }
+];
+
+function panelCustomMap() {
+  if (!variables || typeof variables !== 'object') variables = {};
+  if (typeof variables.Custom !== 'object' || variables.Custom === null || Array.isArray(variables.Custom)) {
+    variables.Custom = {};
+  }
+  return variables.Custom;
+}
+
+function coerceBoolJs(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  return String(value === undefined || value === null ? '' : value).trim().toLowerCase() === 'true';
+}
+
+// Push the imported config's effective settings into the settings controls and
+// the theme/font inputs, so the panel shows what the device actually uses.
+function applyConfigSettingsToControls() {
+  SETTING_CONTROLS.forEach(control => {
+    const input = document.getElementById(control.id);
+    if (!input) return;
+    const raw = effectiveConfigValue(control.key);
+    if (control.kind === 'bool') {
+      input.checked = coerceBoolJs(raw);
+    } else if (control.kind === 'int') {
+      const n = parseInt(raw, 10);
+      if (Number.isFinite(n)) input.value = String(n);
+    } else if (control.kind === 'select') {
+      // The player stores an unset weatherUnit as "" (location-based auto).
+      const text = (raw === undefined || raw === null ? '' : String(raw)).trim().toUpperCase();
+      const option = (text === 'C' || text === 'F')
+        ? input.querySelector(`option[value="${text}"]`)
+        : input.querySelector('option[value=""]');
+      if (option) input.value = option.value;
+    } else {
+      input.value = raw === undefined || raw === null ? '' : String(raw);
+    }
+  });
+  applyConfigColoursToControls();
+  applyConfigFontFilesToControls();
+}
+
+// The theme pickers show hex colours, so "r,g,b" strings are converted first —
+// matching what the player's rgbHex writes for an appearance field.
+function hexOrCssValue(value) {
+  const parsed = parseConfigColour(value);
+  if (parsed && parsed.named === undefined) {
+    return '#' + [parsed.r, parsed.g, parsed.b].map(c => c.toString(16).padStart(2, '0')).join('');
+  }
+  if (typeof value === 'string' && value.startsWith('#') && value.length >= 7) return value.slice(0, 7);
+  return '';
+}
+
+function applyConfigColoursToControls() {
+  const buttonPick = document.getElementById('buttonColorPicker');
+  const labelPick = document.getElementById('labelColorPicker');
+  if (buttonPick) {
+    const hex = hexOrCssValue(effectiveThemeColour('buttoncolor'));
+    if (hex) buttonPick.value = hex;
+  }
+  if (labelPick) {
+    const hex = hexOrCssValue(effectiveThemeColour('labelcolor'));
+    if (hex) labelPick.value = hex;
+  }
+}
+
+// variables.fonts holds the font-file paths (EqualFold keys, like the player's
+// typed Fonts map).
+function applyConfigFontFilesToControls() {
+  const fontsValue = effectiveConfigValue('fonts');
+  const map = (fontsValue && typeof fontsValue === 'object' && !Array.isArray(fontsValue)) ? fontsValue : {};
+  [['title', 'titleFontFile'], ['big', 'bigFontFile'], ['medium', 'mediumFontFile'], ['small', 'smallFontFile']]
+    .forEach(([role, id]) => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      const hit = customValueJs(map, role);
+      input.value = typeof hit === 'string' ? hit : (hit === undefined || hit === null ? '' : String(hit));
+    });
+}
+
+// Write-back: an edit becomes a Custom entry with the player's key casing
+// ("Fullscreen", not "fullscreen") because Custom overrides the typed fields —
+// the same call order syncVariableOverrides uses on the device.
+function setupSettingsControlListeners() {
+  SETTING_CONTROLS.forEach(control => {
+    const input = document.getElementById(control.id);
+    if (!input) return;
+    const capitalKey = control.key.charAt(0).toUpperCase() + control.key.slice(1);
+    const write = () => {
+      let value;
+      if (control.kind === 'bool') value = input.checked;
+      else if (control.kind === 'int') {
+        value = parseInt(input.value, 10);
+        if (!value || !Number.isFinite(value)) return;
+      } else value = input.value;
+      if (control.kind === 'bool') {
+        // Booleans always mean a choice: true or false, never "default".
+        panelCustomMap()[capitalKey] = value;
+      } else {
+        assignSettingValue(control.key, value);
+      }
+      scheduleAutoSave();
+      scheduleValidationRefresh();
+    };
+    if (control.kind === 'bool' || control.kind === 'select') {
+      input.addEventListener('change', write);
+    } else {
+      input.addEventListener('input', write);
+    }
+  });
+
+  ['buttonColorPicker', 'labelColorPicker'].forEach(id => {
+    const input = document.getElementById(id);
+    if (!input) return;
+    input.addEventListener('input', () => {
+      panelCustomMap()[id === 'buttonColorPicker' ? 'ButtonColor' : 'LabelColor'] = input.value;
+      applyEditorVariablePaint();
+      scheduleAutoSave();
+    });
+  });
+
+  [['titleFontFile', 'title'], ['bigFontFile', 'big'], ['mediumFontFile', 'medium'], ['smallFontFile', 'small']]
+    .forEach(([id, role]) => {
+      const input = document.getElementById(id);
+      if (!input) return;
+      input.addEventListener('input', () => {
+        if (typeof variables !== 'object' || !variables) variables = {};
+        if (typeof variables.fonts !== 'object' || variables.fonts === null) variables.fonts = {};
+        variables.fonts[role] = input.value;
+        scheduleAutoSave();
+      });
+    });
+}
+
+// The player's precedence for these settings: the typed variable wins, Custom
+// only overrides it (syncVariableOverrides on the device writes the typed
+// struct). So an edit writes the typed key and clears any Custom override in
+// either casing — otherwise a stale Custom key would silently mask the new
+// value at export. An empty value clears both: "player default" (weatherUnit
+// "" is auto).
+function assignSettingValue(key, value) {
+  if (typeof variables !== 'object' || !variables) variables = {};
+  delete variables[key];
+  const custom = panelCustomMap();
+  delete custom[key];
+  delete custom[key.charAt(0).toUpperCase() + key.slice(1)];
+  if (value !== '' && value !== undefined && value !== null) variables[key] = value;
+}
+
+// Edit-mode colour resolution: paints $name references on the canvas and the
+// saved scene snapshots with the values the player resolves, so what you design
+// against is what the device draws. Attributes keep the raw "$name" strings for
+// the round trip.
+function applyEditorVariablePaint() {
+  const paintElement = el => {
+    if (!el || el.nodeType !== 1) return;
+    [['data-color', 'color'], ['data-bg-color', 'background']].forEach(([attr, styleProp]) => {
+      const raw = el.getAttribute(attr);
+      if (!raw || !raw.trim().startsWith('$')) return;
+      const resolved = previewColourValue(raw.trim().slice(1));
+      if (resolved) el.style[styleProp === 'background' ? 'backgroundColor' : 'color'] = resolved;
+    });
+  };
+  if (canvas) canvas.querySelectorAll('.element').forEach(paintElement);
+  Object.values(scenes || {}).forEach(elements => (elements || []).forEach(paintElement));
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', setupSettingsControlListeners);
+} else {
+  setupSettingsControlListeners();
+}
 
 function calculateTextDimensions(text, fontSize, fontFamily = 'Inter, sans-serif', fontWeight = '900') {
   const canvas = document.createElement('canvas');
@@ -4673,7 +5219,8 @@ function setupMobileElementAdding() {
       { type: 'image', icon: 'fas fa-image', name: 'Image' },
       { type: 'input', icon: 'fas fa-edit', name: 'Input' },
       { type: 'menu', icon: 'fas fa-bars', name: 'Menu' },
-      { type: 'collapsedlist', icon: 'fas fa-bars', name: 'Collapsed List' },
+      { type: 'dynamiclist', icon: 'fas fa-list', name: 'Dynamic List' },
+      { type: 'textlog', icon: 'fas fa-align-left', name: 'Text Log' },
       { type: 'textbrowser', icon: 'fas fa-globe', name: 'Text Browser' }
     ];
 

@@ -1,0 +1,111 @@
+name: Bug report
+description: Something in the app or the builder is broken or behaves unexpectedly
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Two minutes of detail here saves a round trip.
+
+        Before filing: search the existing issues and skim the
+        [documentation](https://github.com/jukaLang/JukaHubV2/tree/main/docs) —
+        the answer may already be written down. Vulnerabilities belong in
+        [player/SECURITY.md](https://github.com/jukaLang/JukaHubV2/blob/main/player/SECURITY.md),
+        not in a public issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The behaviour you saw, in your own words.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the exact buttons or keys, and the screen you were on.
+      placeholder: |
+        1. Open Games → Library
+        2. Select a game and press A
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "From the About screen: Version and Compiled."
+      placeholder: "Version 0.9.x, compiled 2026-10-01T12:00:00Z"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options:
+        - TrimUI Smart Pro
+        - TrimUI Smart Pro S
+        - TrimUI Brick
+        - TrimUI Brick Pro
+        - TrimUI Hammer
+        - Windows PC (source or release build)
+        - Linux PC (source or release build)
+        - Other / not a JukaHub device
+    validations:
+      required: true
+
+  - type: dropdown
+    id: build
+    attributes:
+      label: How it was installed
+      options:
+        - Release artifact from GitHub
+        - Built from source
+        - Installed from the SD-card package
+        - Updated through the app's updater
+        - Do not know
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        Open **Community → Diagnostics QR → Export** (or **Patch → Export diagnostics**)
+        and attach the report, or paste the text here. The report is redacted: paths,
+        serial numbers and secrets are removed before it is written.
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        `logs.txt` and `errors.txt` live next to the executable on the device.
+        Paste the lines around the failure, not the whole file.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I removed API keys, tokens and personal paths from anything pasted above.
+          required: true

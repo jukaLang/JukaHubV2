@@ -89,4 +89,3 @@ func (e Element) Alpha() float64 {
 	}
 	return v
 }
-

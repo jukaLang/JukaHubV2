@@ -149,11 +149,11 @@ func TestDrawDividerZeroWidth(t *testing.T) {
 }
 
 func TestDrawChipNilRenderer(t *testing.T) {
-	drawChip(nil, sdl.Rect{}, "test", ColorChip, ColorTextPrimary(), nil)
+	drawChip(nil, &Config{}, sdl.Rect{}, "test", ColorChip, ColorTextPrimary(), nil)
 }
 
 func TestDrawChipEmptyLabel(t *testing.T) {
-	drawChip(nil, sdl.Rect{}, "", ColorChip, ColorTextPrimary(), nil)
+	drawChip(nil, &Config{}, sdl.Rect{}, "", ColorChip, ColorTextPrimary(), nil)
 }
 
 func TestDrawSimpleProgressNilRenderer(t *testing.T) {

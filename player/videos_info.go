@@ -63,4 +63,3 @@ func (v *VideoInfo) GetURL() string {
 	}
 	return ""
 }
-

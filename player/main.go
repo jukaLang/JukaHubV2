@@ -449,6 +449,30 @@ func main() {
 	// make a frame-counted check ring late.
 	lastAlarmCheck := time.Now()
 	for running {
+		// A game, emulator, port or Wine app owns the screen. JukaHub and the
+		// child share one framebuffer on handheld firmwares (see
+		// launch_handover_test.go for the same fight after a self-update), so
+		// any frame presented here makes the panel blink between the UI and
+		// the game. Park the presentation loop: drain events so the queue
+		// cannot fill and a quit request still stops the app, keep the
+		// widgets tick running (the low-battery guard must still save and
+		// suspend mid-game, and the battery saver via toastText), and let the
+		// child have the framebuffer to itself.
+		if gameScreenSuspended() {
+			for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+				if _, quit := event.(*sdl.QuitEvent); quit {
+					running = false
+				}
+			}
+			widgetsTick(config)
+			if now := time.Now(); now.Sub(lastAlarmCheck) >= time.Second {
+				lastAlarmCheck = now
+				alarmCheck(now)
+			}
+			sdl.Delay(100)
+			frameCount++
+			continue
+		}
 		// Keep the home-header pairing QR live: start the companion when Wi-Fi
 		// appears and rebuild the code if DHCP moved the address. The first
 		// frame is painted before this runs, so the listener never delays boot.
@@ -2205,8 +2229,9 @@ func main() {
 			renderCalendarPopover(renderer, config)
 		}
 
-		// Scene transition effects
-		if config.Variables.ReducedMotion && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
+		// Scene transition effects. Reduced motion and the transition config
+		// both snap the change instead of waiting out a fade.
+		if (config.Variables.ReducedMotion || motionInstant(config)) && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
 			if transitionPhase == "fade-out" {
 				completeSceneTransition(config)
 			} else {
@@ -2217,20 +2242,20 @@ func main() {
 		// snappy transition and both phases read the same theme colour.
 		if transitionPhase == "fade-out" || transitionPhase == "fade-in" {
 			elapsed := float64(sdl.GetTicks64() - sceneFadeStart)
-			alive := !uiSceneFadeDone(transitionPhase, elapsed)
+			alive := !uiSceneFadeDone(config, transitionPhase, elapsed)
 			if transitionPhase == "fade-out" {
 				if !alive {
 					sceneFadeAlpha = 255
 					completeSceneTransition(config)
 				} else {
-					sceneFadeAlpha = uiSceneScrimAlpha(transitionPhase, elapsed)
+					sceneFadeAlpha = uiSceneScrimAlpha(config, transitionPhase, elapsed)
 				}
 			} else {
 				if !alive {
 					sceneFadeAlpha = 0
 					transitionPhase = "none"
 				} else {
-					sceneFadeAlpha = uiSceneScrimAlpha(transitionPhase, elapsed)
+					sceneFadeAlpha = uiSceneScrimAlpha(config, transitionPhase, elapsed)
 				}
 			}
 

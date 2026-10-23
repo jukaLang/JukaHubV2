@@ -16,11 +16,11 @@
       "b": 32
     },
     "fullscreen": false,
-    "fileExplorerRoot": "/media",
-    "weatherEnabled": true,
+    "fileExplorerRoot": "",
+    "weatherEnabled": false,
     "weatherUnit": "",
     "tspUsername": "",
-    "playbackResolution": "720",
+    "playbackResolution": "",
     "reducedMotion": false,
     "lowPower": false,
     "ledSync": false,
@@ -57,9 +57,9 @@
       "buttonColor": "#1e293b",
       "chat_input": "hi",
       "diskpie_data": {
+        "Pct": 68,
         "Total": 510718431232,
-        "Used": 349043884032,
-        "Pct": 68
+        "Used": 349020450816
       },
       "ftp_address": "",
       "ftp_root": "C:\\Users\\Stepan\\Desktop\\JukaHubV2\\player\\shared",
@@ -71,17 +71,16 @@
       "onboarding_done": true,
       "onboarding_skipped": true,
       "playtime_v1": {
-        "total": 1710,
-        "scenes": {
-          "Browser": 18,
-          "Main": 1695,
-          "Misc": 2,
-          "Tube": 12
-        },
         "days": {
           "2026-10-21": 275,
-          "2026-10-22": 1452
+          "2026-10-22": 1408
         },
+        "scenes": {
+          "Browser": 7,
+          "Main": 1664,
+          "Tube": 12
+        },
+        "total": 1680,
         "unlocked": {
           "first_steps": "2026-10-22T17:01:35-04:00"
         }

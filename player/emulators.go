@@ -510,9 +510,11 @@ func launchEmulatorEntry(e emuEntry) {
 		showLaunchFailureDialog(e.Name, err, "")
 		return
 	}
+	noteGameChildStarted()
 	recorder := startTimelapse(appConfig, e.Name)
 	go func() {
 		_ = cmd.Wait() // reap the child, keep JukaHub responsive
+		noteGameChildExited()
 		restoreProfile()
 		recorder.Stop()
 	}()

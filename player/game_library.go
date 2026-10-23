@@ -352,12 +352,14 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		restoreProfile()
 		return err
 	}
+	noteGameChildStarted()
 	// The time-lapse covers exactly this child's life: it starts when the game
 	// does and is assembled when the game exits. A machine with no readable
 	// framebuffer returns nil here and the launch is unchanged.
 	recorder := startTimelapse(appConfig, game.Title)
 	go func() {
 		_ = cmd.Wait()
+		noteGameChildExited()
 		restoreProfile()
 		recorder.Stop()
 	}()

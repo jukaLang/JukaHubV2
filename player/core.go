@@ -670,6 +670,7 @@ func finalizeConfig(config *Config) {
 	if config == nil {
 		return
 	}
+	normalizeMotionConfig(config)
 	if config.SchemaVersion == 0 {
 		config.SchemaVersion = ConfigSchemaVersion
 	}
@@ -1744,14 +1745,19 @@ func getToolPath(tool string, config *Config) string {
 	}
 	// Check tools_path variable (config-driven). It may name a directory that
 	// holds the tools or the tool binary itself; never return a directory as
-	// the executable path, or exec would fail with "is a directory".
-	if tp := strings.TrimSpace(config.Variables.ToolsPath); tp != "" {
-		fullPath := filepath.Join(tp, exeName)
-		if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
-			return resolve(fullPath)
-		}
-		if info, err := os.Stat(tp); err == nil && !info.IsDir() {
-			return resolve(tp)
+	// the executable path, or exec would fail with "is a directory". A nil
+	// config is legal here: launch helpers run in tests and before the config
+	// is loaded, and they must fall through to the platform dir and PATH rather
+	// than dereference it.
+	if config != nil {
+		if tp := strings.TrimSpace(config.Variables.ToolsPath); tp != "" {
+			fullPath := filepath.Join(tp, exeName)
+			if info, err := os.Stat(fullPath); err == nil && !info.IsDir() {
+				return resolve(fullPath)
+			}
+			if info, err := os.Stat(tp); err == nil && !info.IsDir() {
+				return resolve(tp)
+			}
 		}
 	}
 	// Check the platform tools dir ("required" next to the binary) — the same

@@ -258,6 +258,13 @@ func beginGamePowerProfile(config *Config) func() {
 	if !cfg.Enabled {
 		return func() {}
 	}
+	// A machine with no cpufreq at all (a desktop, a CI runner) has nothing to
+	// switch, and saying so on every launch turned an expected "not here" into
+	// a warning toast and a log line. The depth counter still runs so nested
+	// launches stay balanced; nothing is written, logged or toasted. A handheld
+	// whose governor files exist but refuse the write still gets the one
+	// warning below, because that one is a fact about the firmware.
+	switchable := len(cpuGovernorPaths(cpufreqRoot)) > 0
 	launchPowerProfile.mu.Lock()
 	launchPowerProfile.depth++
 	first := launchPowerProfile.depth == 1
@@ -274,7 +281,7 @@ func beginGamePowerProfile(config *Config) func() {
 			launchPowerProfile.depth = 0
 		}
 		launchPowerProfile.mu.Unlock()
-		if !last {
+		if !last || !switchable {
 			return
 		}
 		if _, err := applyPowerProfile(powerProfileBattery, cfg); err != nil {
@@ -284,7 +291,7 @@ func beginGamePowerProfile(config *Config) func() {
 		logPatch("power profile: battery restored")
 	}
 
-	if !first {
+	if !first || !switchable {
 		return release
 	}
 	if _, err := applyPowerProfile(powerProfilePerformance, cfg); err != nil {

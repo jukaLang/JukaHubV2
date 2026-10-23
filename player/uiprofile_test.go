@@ -14,7 +14,7 @@ func TestCanvasDimensionRejectsOutOfRangeValues(t *testing.T) {
 		0: 0, -1: 0, 1280: 1280, 720: 720,
 		maxCanvasDimension:     maxCanvasDimension,
 		maxCanvasDimension + 1: 0,
-		1 << 40:                 0,
+		1 << 40:                0,
 	}
 	for in, want := range cases {
 		if got := canvasDimension(in); got != want {

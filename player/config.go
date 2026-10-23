@@ -81,6 +81,12 @@ type Variables struct {
 	PlaybackResolution string            `json:"playbackResolution"`
 	ReducedMotion      bool              `json:"reducedMotion"`
 	LowPower           bool              `json:"lowPower"`
+	// Motion model (see motion.go): one field per motion role, empty = this
+	// build's default. normalizeMotionConfig canonicalizes unknown values.
+	Transition  string `json:"transition"`
+	FocusMotion string `json:"focusMotion"`
+	IdleMotion  string `json:"idleMotion"`
+	ListScroll  string `json:"listScroll"`
 	// LEDSync drives the stick/ring LEDs from the audio being played. Off by
 	// default: it writes to sysfs, so it is opt-in like the other hardware
 	// features.

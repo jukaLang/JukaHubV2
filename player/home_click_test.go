@@ -143,27 +143,40 @@ func TestClickPressAnimatesAndDips(t *testing.T) {
 // budget, and the scrim follows the theme background instead of hardcoded
 // near-black.
 func TestSceneFadeUsesTokensAndTheme(t *testing.T) {
-	if uiSceneFadeMS("fade-out") != uiSceneOutMS || uiSceneFadeMS("fade-in") != uiSceneInMS {
+	// The zero value keeps the build's default fade: an unset transition must
+	// never snap a scene change on its own.
+	var def Config
+	if uiSceneFadeMS(&def, "fade-out") != uiSceneOutMS || uiSceneFadeMS(&def, "fade-in") != uiSceneInMS {
 		t.Fatalf("fade durations = %v/%v, want %d/%d",
-			uiSceneFadeMS("fade-out"), uiSceneFadeMS("fade-in"), uiSceneOutMS, uiSceneInMS)
+			uiSceneFadeMS(&def, "fade-out"), uiSceneFadeMS(&def, "fade-in"), uiSceneOutMS, uiSceneInMS)
 	}
 	if uiSceneOutMS > 200 || uiSceneInMS > 250 {
 		t.Errorf("scene fades (%d/%d ms) are too slow for the handheld", uiSceneOutMS, uiSceneInMS)
 	}
 
-	if got := uiSceneScrimAlpha("fade-out", 0); got != 0 {
+	// transition instant snaps: duration 0 in both phases.
+	snap := &Config{}
+	snap.Variables.Transition = TransitionInstant
+	if d := uiSceneFadeMS(snap, "fade-out") + uiSceneFadeMS(snap, "fade-in"); d != 0 {
+		t.Errorf("instant transition durations = %v, want 0", d)
+	}
+	if !motionInstant(snap) || motionInstant(nil) {
+		t.Error("motionInstant does not follow Variables.Transition")
+	}
+
+	if got := uiSceneScrimAlpha(&def, "fade-out", 0); got != 0 {
 		t.Errorf("fade-out alpha at t=0 = %d, want 0", got)
 	}
-	if got := uiSceneScrimAlpha("fade-out", float64(uiSceneOutMS)); got != 255 {
+	if got := uiSceneScrimAlpha(&def, "fade-out", float64(uiSceneOutMS)); got != 255 {
 		t.Errorf("fade-out alpha at the end = %d, want 255", got)
 	}
-	if got := uiSceneScrimAlpha("fade-in", 0); got != 255 {
+	if got := uiSceneScrimAlpha(&def, "fade-in", 0); got != 255 {
 		t.Errorf("fade-in alpha at t=0 = %d, want 255", got)
 	}
-	if got := uiSceneScrimAlpha("fade-in", float64(uiSceneInMS)); got != 0 {
+	if got := uiSceneScrimAlpha(&def, "fade-in", float64(uiSceneInMS)); got != 0 {
 		t.Errorf("fade-in alpha at the end = %d, want 0", got)
 	}
-	if !uiSceneFadeDone("fade-out", float64(uiSceneOutMS)) || uiSceneFadeDone("fade-out", 0) {
+	if !uiSceneFadeDone(&def, "fade-out", float64(uiSceneOutMS)) || uiSceneFadeDone(&def, "fade-out", 0) {
 		t.Error("fade done flag does not follow the token duration")
 	}
 	if got, want := uiSceneScrimColor(), ColorBackground; got != want {

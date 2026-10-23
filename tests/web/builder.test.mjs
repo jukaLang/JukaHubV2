@@ -194,3 +194,97 @@ test('the AI key field asks browsers not to autofill or autocorrect it', () => {
   assert.equal(input.getAttribute('autocomplete'), 'off');
   assert.equal(input.getAttribute('spellcheck'), 'false');
 });
+
+test('searchresults and input elements reveal their inspector blocks and keep them wired', () => {
+  const { window } = dom;
+  const doc = window.document;
+
+  const results = doc.createElement('div');
+  results.className = 'element';
+  results.setAttribute('data-type', 'searchresults');
+  results.setAttribute('data-variable', 'search_results');
+  results.setAttribute('data-columns', '3');
+  results.setAttribute('data-rows', '6');
+  doc.body.appendChild(results);
+  window.showElementProperties(results);
+
+  const block = doc.querySelector('.searchresults-properties');
+  assert.equal(block.style.display, 'block');
+  assert.equal(doc.getElementById('resultsVariable').value, 'search_results');
+  assert.equal(doc.getElementById('gridColumns').value, '3');
+
+  // Blank fields mean "use the player default", so they must remove the
+  // attribute instead of exporting nulls/empty strings.
+  doc.getElementById('gridColumns').value = '';
+  doc.getElementById('gridColumns').onchange();
+  assert.equal(results.hasAttribute('data-columns'), false);
+  assert.equal(window.elementToConfig(results).columns, undefined);
+  assert.equal(window.elementToConfig(results).variable, 'search_results');
+
+  // Another element type hides the block again.
+  const button = doc.createElement('div');
+  button.className = 'element';
+  button.setAttribute('data-type', 'button');
+  doc.body.appendChild(button);
+  window.showElementProperties(button);
+  assert.equal(block.style.display, 'none');
+
+  const input = doc.createElement('div');
+  input.className = 'element';
+  input.setAttribute('data-type', 'input');
+  input.setAttribute('data-variable', 'terminal_cmd');
+  doc.body.appendChild(input);
+  window.showElementProperties(input);
+  const inputBlock = doc.querySelector('.input-properties');
+  assert.equal(inputBlock.style.display, 'block');
+  assert.equal(doc.getElementById('inputVariable').value, 'terminal_cmd');
+  doc.getElementById('inputVariable').value = '';
+  doc.getElementById('inputVariable').onchange();
+  assert.equal(input.hasAttribute('data-variable'), false);
+
+  [results, button, input].forEach(el => el.remove());
+});
+
+test('youtube trigger options are visible, prefilled and round-trip to triggerTarget', () => {
+  const { window } = dom;
+  const doc = window.document;
+
+  const search = doc.createElement('button');
+  search.className = 'element';
+  search.setAttribute('data-type', 'button');
+  search.setAttribute('data-trigger', 'youtube_search');
+  search.setAttribute('data-trigger-target', 'yt-dlp ytsearch20:$search_query');
+  search.setAttribute('data-trigger-value', 'search_results');
+  doc.body.appendChild(search);
+  window.showElementProperties(search);
+  const cmd = doc.getElementById('ytSearchCommand');
+  const resultVar = doc.getElementById('ytSearchResultVar');
+  assert.equal(cmd.style.display, 'block');
+  assert.equal(cmd.value, 'yt-dlp ytsearch20:$search_query');
+  assert.equal(resultVar.style.display, 'block');
+  assert.equal(resultVar.value, 'search_results');
+
+  const play = doc.createElement('button');
+  play.className = 'element';
+  play.setAttribute('data-type', 'button');
+  play.setAttribute('data-trigger', 'play_video_from_var');
+  doc.body.appendChild(play);
+  window.showElementProperties(play);
+  const playFromVar = doc.getElementById('playFromVarSelector');
+  assert.equal(playFromVar.style.display, 'block');
+
+  // Choosing a target variable writes the attribute the player reads
+  // (core.go reads TriggerTarget for play_video_from_var).
+  if (playFromVar.options.length > 0) {
+    playFromVar.value = playFromVar.options[playFromVar.options.length - 1].value;
+    playFromVar.onchange();
+    assert.equal(play.getAttribute('data-trigger-target'), playFromVar.value);
+  }
+
+  // Export maps the trigger payloads onto the fields core.go reads.
+  const exported = window.elementToConfig(search);
+  assert.equal(exported.triggerTarget, 'yt-dlp ytsearch20:$search_query');
+  assert.equal(exported.triggerValue, 'search_results');
+
+  [search, play].forEach(el => el.remove());
+});

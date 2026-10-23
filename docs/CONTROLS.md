@@ -257,9 +257,11 @@ Replay it any time from **Settings → General → Replay tour**.
 and pinned tool. Each tile shows the emulator's own picture when the install
 ships one — the `icon.png` (or `config.json` icon) inside a TrimUI `Emus/`
 folder, or the icon Windows reports for an executable — and a gamepad glyph on
-a tinted tile when it has none. A dot in the corner is the availability:
-green available, red installed without a launcher, grey not installed. The
-footer names the highlighted entry and its path.
+a tinted tile when it has none. Availability is a labelled pill at the bottom
+of the tile — green **Available**, red **Unavailable** (installed without a
+launcher), grey **Not installed** — and an unusable tile's picture is dimmed,
+so the grid reads without opening anything. The footer names the highlighted
+entry and its path.
 
 | Input | Action |
 |-------|--------|
@@ -271,8 +273,11 @@ footer names the highlighted entry and its path.
 
 Pinned rows (Games Library, Game Profiles, Compatibility, BIOS Doctor,
 RetroAchievements, Windows Apps, PortMaster) keep their place above the
-emulators. Rows with no emulator show a grey dot and explain themselves when
-opened instead of disappearing.
+emulators; they are doors rather than emulators, so a working pinned row shows
+no pill. Emulator tiles below them are sorted by availability — usable first,
+then installed-but-unusable, then absent — and alphabetically inside each
+group. Rows with no emulator explain themselves when opened instead of
+disappearing.
 
 ## Game profiles
 

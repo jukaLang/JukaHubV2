@@ -127,7 +127,9 @@ func drawPreloadBolt(renderer *sdl.Renderer, x, y, size int32, color sdl.Color) 
 }
 
 // drawChip renders a compact pill-style tag with an icon or text inside.
-func drawChip(renderer *sdl.Renderer, rect sdl.Rect, label string, color, textColor sdl.Color, font *ttf.Font) {
+// It takes the config because the label goes through renderText, which resolves
+// $variables: a nil config panics there.
+func drawChip(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label string, color, textColor sdl.Color, font *ttf.Font) {
 	if renderer == nil {
 		return
 	}
@@ -147,7 +149,7 @@ func drawChip(renderer *sdl.Renderer, rect sdl.Rect, label string, color, textCo
 		lw, lh, _ := font.SizeUTF8(label)
 		tx := rect.X + (rect.W-int32(lw))/2
 		ty := rect.Y + (rect.H-int32(lh))/2
-		renderText(renderer, nil, font, label, textColor, tx, ty)
+		renderText(renderer, config, font, label, textColor, tx, ty)
 	}
 }
 

@@ -6,18 +6,27 @@ checks green, and know which files are safe to commit.
 ## Set up
 
 ```bash
-cd player
-./build.bat          # Windows: installs Go/GCC/SDL2 as needed, then runs
-go build -o JukaHub . # Linux/macOS with SDL2 dev packages installed
+make dev    # build and launch the player
+make        # list every target
 ```
 
-Details, cross-builds and packaging are in [docs/BUILDING.md](docs/BUILDING.md).
+On Windows that bootstraps Go, GCC and SDL2 through `player\build.bat` (the
+first build compiles the SDL2 cgo bindings and takes a few minutes). On
+Linux/macOS install the SDL2 dev packages first. Both paths, cross-builds and
+packaging are in [docs/BUILDING.md](docs/BUILDING.md); if you do not have make,
+the raw commands are `player\build.bat` on Windows and `cd player && go build -o
+JukaHub .` elsewhere.
 
 ## Checks to run before opening a pull request
 
 ```bash
-cd player
-gofmt -l .            # your files must not be listed
+make check   # gofmt, go vet, builder syntax, config JSON, player + jsdom tests
+```
+
+Or run the pieces yourself, from `player/`:
+
+```bash
+gofmt -l $(find . -path './vendor' -prune -o -name '*.go' -print)   # your files must not be listed
 go build ./...
 go vet ./...
 go test ./...
@@ -117,7 +126,7 @@ JukaHubV2/
 
 | File | Commit? |
 |------|---------|
-| `player/*.go`, `docs/`, `CONTRIBUTING.md`, `README.md` | yes |
+| `player/*.go`, `docs/`, `CONTRIBUTING.md`, `README.md`, `CHANGELOG.md` | yes |
 | `player/jukaconfig.json` — the design config | yes (it is tracked, and the app's default UI) |
 | `player/trimui/jukaconfig.device.json` | yes — regenerate it when the full config changes (see [`player/trimui/README-ID.md`](player/trimui/README-ID.md)) |
 | `player/jukauser.json` | **never** — your personal settings; git-ignored |
@@ -167,7 +176,9 @@ Fix the device config being excluded by .gitignore
 Add Clean Cache action to the storage screen
 ```
 
-In the pull request, describe the user-visible change, how you verified it
+The pull request template asks for the same thing in checklist form, including
+a `CHANGELOG.md` entry under `Unreleased` for anything a user can see. In the
+pull request, describe the user-visible change, how you verified it
 (commands, rendered screenshots, on-device checks) and anything you could not
 verify. Say explicitly which checks failed, if any — "the suite's video
 fullscreen test crashed as usual" is useful information, not a failure.

@@ -725,10 +725,12 @@ func launchWindowsApp(entry windowsAppEntry) error {
 		return fmt.Errorf("start %s: %w", filepath.Base(command), err)
 	}
 	windowsAppSetRunning(entry.Path, cmd.Process.Pid)
+	noteGameChildStarted()
 	log.Printf("[windowsapps] launched %s (pid %d)", entry.Title, cmd.Process.Pid)
 
 	go func() {
 		waitErr := cmd.Wait()
+		noteGameChildExited()
 		windowsAppSetRunning(entry.Path, 0)
 		if logFile != nil {
 			if waitErr != nil {

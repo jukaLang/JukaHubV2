@@ -6,6 +6,23 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
+// SDL stores events in a union that is 56 bytes on a 64-bit target, and
+// go-sdl2 hands SDL a pointer to one of its own — smaller — Go event structs.
+// Under `go test -race` checkptr rejects that conversion ("converted pointer
+// straddles multiple allocations") and kills the whole test binary, so events
+// are queued through these wrappers: the embedded struct keeps SDL's field
+// layout at offset 0, and the padding makes the allocation large enough for the
+// union SDL is going to read through the pointer.
+type queuedTextInput struct {
+	sdl.TextInputEvent
+	_ [20]byte
+}
+
+type queuedKeyboard struct {
+	sdl.KeyboardEvent
+	_ [32]byte
+}
+
 // browserEditURLFixture opens the browser scene and returns the element that
 // owns the address bar, its scene index and a test renderer.
 func browserEditURLFixture(t *testing.T) (*Config, *sdl.Renderer, Element, int, int) {
@@ -57,10 +74,10 @@ func TestBrowserEditURLReplacesTheAddress(t *testing.T) {
 	defer resetBrowserEditURLState()
 	config.Variables.Custom[textBrowserURLVariable] = "https://old.example/"
 
-	sdl.PushEvent(&sdl.TextInputEvent{Type: sdl.TEXTINPUT, Text: [32]byte{
+	sdl.PushEvent(&queuedTextInput{TextInputEvent: sdl.TextInputEvent{Type: sdl.TEXTINPUT, Text: [32]byte{
 		'h', 't', 't', 'p', 's', ':', '/', '/', 'n', 'e', 'w', '.', 'e', 'x', 'a', 'm', 'p', 'l', 'e', '/',
-	}})
-	sdl.PushEvent(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_RETURN}})
+	}}})
+	sdl.PushEvent(&queuedKeyboard{KeyboardEvent: sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_RETURN}}})
 	handleTextBrowserAddressInput(renderer, config, elem)
 
 	if got := textBrowserAddress(config); got != "https://new.example/" {
@@ -87,7 +104,7 @@ func TestBrowserEditURLOpensSelectedAndCancelKeepsPage(t *testing.T) {
 	textBrowserAddressEditing = false
 	vkCloseKeyboard()
 
-	sdl.PushEvent(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_ESCAPE}})
+	sdl.PushEvent(&queuedKeyboard{KeyboardEvent: sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_ESCAPE}}})
 	handleTextBrowserAddressInput(renderer, config, elem)
 
 	if got := config.Variables.Custom[textBrowserURLVariable]; got != page {

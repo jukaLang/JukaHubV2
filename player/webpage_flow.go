@@ -27,7 +27,7 @@ type flexCell struct {
 // wrapper element with no text of its own would otherwise claim a whole empty
 // column and squeeze the content next to it.
 func webItemVisible(b webBlock) bool {
-	if len(b.Runs) > 0 || b.Rule {
+	if len(b.Runs) > 0 || b.Rule || b.Image {
 		return true
 	}
 	return b.HasBg || b.BoxBorder || b.BorderLeft || b.BorderTop || b.BorderBottom
@@ -253,6 +253,11 @@ func (l *webLayouter) layoutFlexRow(items []webBlock, padX, contentW int32) {
 			r.Rect.Y += (baseRow + drop) * l.rowH
 			l.layout.Rects = append(l.layout.Rects, r)
 		}
+		for _, im := range cell.sub.Images {
+			im.Rect.X += x
+			im.Rect.Y += (baseRow + drop) * l.rowH
+			l.layout.Images = append(l.layout.Images, im)
+		}
 		x += cell.w + gap + gapExtra
 	}
 }
@@ -301,7 +306,7 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 		sub := &webLayout{RowH: l.rowH}
 		subLayouter := &webLayouter{doc: l.doc, layout: sub, rowH: l.rowH, baseSize: l.baseSize, fontAt: l.fontAt}
 		subLayouter.layoutBlocksFlat([]webBlock{b}, 0, w)
-		if len(sub.Rows) == 0 && len(sub.Rects) == 0 {
+		if len(sub.Rows) == 0 && len(sub.Rects) == 0 && len(sub.Images) == 0 {
 			continue
 		}
 		h := int32(len(sub.Rows)) * l.rowH
@@ -324,11 +329,12 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 			y = 0
 		}
 		l.layout.Floats = append(l.layout.Floats, webFloat{
-			Z:     b.ZIndex,
-			X:     x,
-			Y:     y,
-			Rows:  sub.Rows,
-			Rects: sub.Rects,
+			Z:      b.ZIndex,
+			X:      x,
+			Y:      y,
+			Rows:   sub.Rows,
+			Rects:  sub.Rects,
+			Images: sub.Images,
 		})
 	}
 	sort.SliceStable(l.layout.Floats, func(i, j int) bool {
@@ -340,7 +346,7 @@ func (l *webLayouter) layoutFloats(blocks []webBlock, padX, contentW int32) {
 // page's clip rect, so a layer that scrolls out of view is clipped as a whole
 // instead of leaking over the toolbar. under selects the layers with a
 // negative z-index, which belong behind the text; the rest go on top.
-func drawWebFloats(r *sdl.Renderer, config *Config, layout *webLayout, rect sdl.Rect, offset int32, under bool) {
+func drawWebFloats(r *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, offset int32, under bool) {
 	for _, f := range layout.Floats {
 		if (f.Z < 0) != under {
 			continue
@@ -348,6 +354,13 @@ func drawWebFloats(r *sdl.Renderer, config *Config, layout *webLayout, rect sdl.
 		top := rect.Y + f.Y - offset
 		if top+int32(len(f.Rows))*layout.RowH <= rect.Y || top >= rect.Y+rect.H {
 			continue
+		}
+		for _, im := range f.Images {
+			y := top + im.Rect.Y
+			if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
+				continue
+			}
+			drawWebImage(r, config, doc, im, rect.X+f.X+im.Rect.X, y)
 		}
 		for _, bg := range f.Rects {
 			y := top + bg.Rect.Y

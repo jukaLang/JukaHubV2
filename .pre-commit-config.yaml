@@ -1,0 +1,30 @@
+# Optional commit-time gate. `make check` runs the same checks by hand; this
+# file is for people who want them enforced before the commit exists.
+#
+#   pipx install pre-commit   # or: pip install --user pre-commit
+#   pre-commit install
+#
+# The hooks use the tools you already build with (gofmt, go, node), so nothing
+# is downloaded at commit time and the versions cannot drift from CI.
+repos:
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt (player, vendored packages skipped)
+        entry: bash -c 'out=$(find player -path "*/vendor" -prune -o -name "*.go" -print | xargs gofmt -l); if [ -n "$out" ]; then echo "not gofmt:"; echo "$out"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        files: \.go$
+
+      - id: go-vet
+        name: go vet (player)
+        entry: bash -c 'cd player && go vet ./...'
+        language: system
+        pass_filenames: false
+        files: ^player/.*\.go$
+
+      - id: builder-syntax
+        name: node --check (builder scripts)
+        entry: node --check
+        language: system
+        files: ^(script\.js|builder-device\.js|builder-gallery\.js|gallery/layouts\.js)$

@@ -1,4 +1,4 @@
-﻿package main
+package main
 
 // patch_flow.go bridges the safe engine to the Patch scene. Every operation
 // runs on a worker goroutine and reports through a bounded event channel; the
@@ -284,7 +284,6 @@ func OpRestoreBackup(ctx context.Context, config *Config, name string) error {
 	patchRowStatus(ComponentApp, StatusCurrent)
 	return nil
 }
-
 
 // --- Package operations (apt-style) ---
 

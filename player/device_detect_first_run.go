@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	detectedDevice      DeviceModel
+	detectedDevice     DeviceModel
 	detectedDeviceOnce sync.Once
-	detectOnceInit      sync.Once
+	detectOnceInit     sync.Once
 )
 
 func DetectDeviceFirstRun() {

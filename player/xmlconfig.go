@@ -398,5 +398,3 @@ func xmlCustomString(m map[string]interface{}, key string) string {
 func IsXMLConfig(filename string) bool {
 	return strings.HasSuffix(strings.ToLower(filename), ".xml")
 }
-
-

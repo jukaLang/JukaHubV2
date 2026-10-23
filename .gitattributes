@@ -4,3 +4,7 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.json text eol=lf
+# Go sources are stored as LF and `gofmt -l` reports CRLF as unformatted, so a
+# Windows checkout must not convert them: without this every contributor with
+# core.autocrlf=true sees the whole tree as unformatted.
+*.go text eol=lf

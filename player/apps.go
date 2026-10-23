@@ -572,7 +572,11 @@ func launchInstalledApp(path string) bool {
 		showToast("Could not launch "+filepath.Base(clean), ToastError())
 		return false
 	}
-	go func() { _ = cmd.Wait() }() // reap the child, keep JukaHub responsive
+	noteGameChildStarted()
+	go func() {
+		_ = cmd.Wait() // reap the child, keep JukaHub responsive
+		noteGameChildExited()
+	}()
 	return true
 }
 

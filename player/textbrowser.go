@@ -706,6 +706,9 @@ func browseWebPageResult(rawURL string) browserPage {
 	// draw, and the plain text above remains the fallback for everything else.
 	pageCSS := fetchWebStylesheets(source, resp.Request.URL)
 	doc := parseWebPage(source, pageCSS, resp.Request.URL.String())
+	// Images load with the page: one bounded concurrent pass stores the bytes
+	// and natural sizes the reader paints from (webpage_image.go).
+	fetchWebImages(doc)
 	if doc.Title == "" {
 		doc.Title = title
 	}

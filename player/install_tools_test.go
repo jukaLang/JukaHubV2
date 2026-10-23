@@ -231,6 +231,20 @@ func TestGetToolPathFindsPATHInstall(t *testing.T) {
 	}
 }
 
+// A nil config is a real caller: a launch helper can run before the config is
+// loaded (and in tests), and resolving a tool must fall through to the platform
+// tools directory and PATH instead of dereferencing it. This is the panic that
+// took the whole test binary down on Linux.
+func TestGetToolPathToleratesNilConfig(t *testing.T) {
+	got := getToolPath("jukahub-test-probe", nil)
+	if got == "" {
+		t.Error("getToolPath returned an empty name")
+	}
+	if info, err := os.Stat(got); err == nil && info.IsDir() {
+		t.Fatalf("getToolPath returned the directory %q", got)
+	}
+}
+
 func TestGetToolPathNeverReturnsDirectory(t *testing.T) {
 	// A configured tools_path that exists but does not contain the tool must
 	// fall through, not return the directory itself (exec would fail with

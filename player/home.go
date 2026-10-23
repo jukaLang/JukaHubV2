@@ -650,7 +650,9 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 
 	// Hover/focus lift honours reduced motion; the layout also owns the win
 	// animations for the apps menu and notification dropdown.
-	homeLayout.Motion = uiMotionEnabled(config)
+	// Reduced motion and focusMotion none both drop the eased lift; the
+	// colour/press feedback stays either way (motion.go).
+	homeLayout.Motion = uiMotionEnabled(config) && motionFocusEnabled(config)
 	_ = homeLayout.Render(renderer, loadHomeFonts(), homeViewData(config))
 
 	// The header clock toggles the mini calendar (trigger: toggle_calendar).

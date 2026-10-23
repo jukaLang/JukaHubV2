@@ -14,6 +14,25 @@ needs no network access and no `go mod download`.
 | TrimUI SD-card package | `cd player && SYSROOT=<sdk> ./package-sdcard.sh` |
 | Release artifacts (all platforms) | `cd player && ./release.sh` |
 
+## From the repository root
+
+[`Makefile`](../Makefile) names the commands the docs and CI use, so you do not
+have to remember which of them to run on which platform. `make` on its own
+lists every target.
+
+| Target | Effect |
+|--------|--------|
+| `make dev` | build and launch (Windows: bootstraps the toolchain first) |
+| `make build` | build without launching |
+| `make test` | player tests; `make test-web` / `make e2e` for the builder |
+| `make lint` | gofmt, `go vet`, builder syntax, config JSON |
+| `make bench` | cold-boot benchmark against the 2 s device budget |
+| `make check` | everything a pull request must pass locally |
+| `make release` | the same packaging as `player/release.sh` |
+
+On Windows the player targets are thin wrappers around `player\build.bat`, so
+the sections below still apply to what actually runs.
+
 ---
 
 ## Windows

@@ -160,8 +160,15 @@ func TestAppEntryIconPathSkipsBuiltins(t *testing.T) {
 // Every tile keeps a colour of its own but the same app keeps the same colour
 // between launches.
 func TestAppGridTileTintIsStable(t *testing.T) {
-	if appGridTileTint("Firefox") != appGridTileTint("Firefox") {
-		t.Error("tile tint is not stable for the same app")
+	// The tint is derived from the name alone, so two calls must agree — that is
+	// what "between launches" means for a pure function — and a differently
+	// cased name is the same app, so it must land on the same colour too.
+	firefox := appGridTileTint("Firefox")
+	if again := appGridTileTint("Firefox"); again != firefox {
+		t.Errorf("tile tint is not stable for the same app: %v then %v", firefox, again)
+	}
+	if lowered := appGridTileTint("firefox"); lowered != firefox {
+		t.Errorf("tile tint changed with case: %v vs %v", firefox, lowered)
 	}
 	seen := map[sdl.Color]bool{}
 	for _, name := range []string{"Firefox", "Steam", "Terminal", "Notes", "Files", "Music"} {

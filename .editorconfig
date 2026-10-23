@@ -1,0 +1,31 @@
+root = true
+
+# Formatting defaults. These match what the code already looks like; the file
+# exists so an editor cannot introduce line-ending or indentation noise into an
+# unrelated diff. Anything not listed here is deliberately left alone.
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 2
+
+[*.go]
+indent_style = tab
+
+[Makefile]
+indent_style = tab
+
+[*.md]
+trim_trailing_whitespace = false
+
+# Scripts run inside the Linux device/CI, so their endings matter.
+[*.{sh,yml,yaml}]
+end_of_line = lf
+
+# Batch files must keep CRLF to run on Windows.
+[*.{bat,cmd}]
+end_of_line = crlf
+
+[*.{json,html,css}]
+indent_size = 2

@@ -385,8 +385,13 @@ const (
 )
 
 // uiSceneFadeMS returns the duration of a scene fade phase ("fade-out" or
-// "fade-in"). Unknown phases report 0 so callers can snap.
-func uiSceneFadeMS(phase string) float64 {
+// "fade-in"). Unknown phases report 0 so callers can snap. A config with
+// transition "instant" reports 0 for both phases, which settles the scrim on
+// the same frame instead of waiting out the fade.
+func uiSceneFadeMS(config *Config, phase string) float64 {
+	if motionInstant(config) {
+		return 0
+	}
 	switch phase {
 	case "fade-out":
 		return uiSceneOutMS
@@ -400,8 +405,8 @@ func uiSceneFadeMS(phase string) float64 {
 // Fade-out eases toward fully covered; fade-in eases from covered back to
 // clear. The curve is the same ease-out the loop used before the timings were
 // tokenized, so the motion feels identical, only faster.
-func uiSceneScrimAlpha(phase string, elapsedMS float64) uint8 {
-	dur := uiSceneFadeMS(phase)
+func uiSceneScrimAlpha(config *Config, phase string, elapsedMS float64) uint8 {
+	dur := uiSceneFadeMS(config, phase)
 	if dur <= 0 {
 		if phase == "fade-in" {
 			return 0
@@ -423,7 +428,7 @@ func uiSceneScrimColor() sdl.Color {
 }
 
 // uiSceneFadeDone reports whether a fade phase has run its course.
-func uiSceneFadeDone(phase string, elapsedMS float64) bool {
-	dur := uiSceneFadeMS(phase)
+func uiSceneFadeDone(config *Config, phase string, elapsedMS float64) bool {
+	dur := uiSceneFadeMS(config, phase)
 	return dur <= 0 || elapsedMS >= dur
 }

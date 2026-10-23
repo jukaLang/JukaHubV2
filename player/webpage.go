@@ -223,6 +223,13 @@ type webBlock struct {
 	// InMain marks text inside <main>/<article>. When a page has any, the
 	// reader shows that content instead of the site's navigation furniture.
 	InMain bool
+	// Image marks an <img> block. ImageSrc is the resolved http(s) URL or a
+	// data:image/...;base64 URI; ImageW/ImageH are the width/height attrs in
+	// CSS px (zero when absent — the natural pixel size fills in at layout).
+	Image    bool
+	ImageSrc string
+	ImageW   float64
+	ImageH   float64
 }
 
 // webDocument is one parsed page. It holds no raw HTML.
@@ -232,6 +239,13 @@ type webDocument struct {
 	Blocks []webBlock
 	Paper  sdl.Color
 	Text   sdl.Color
+
+	// Images holds the fetched bytes of every <img> in the document, keyed by
+	// resolved URL or data URI; ImageMeta records the natural pixel sizes the
+	// layout needs. Both are written once by the page-load pass (before the
+	// document reaches the render thread) and read under mu afterwards.
+	Images    map[string][]byte
+	ImageMeta map[string]webImageMeta
 
 	mu     sync.Mutex
 	stamp  string
@@ -280,10 +294,11 @@ type webRect struct {
 // then painted over the flow in z order. A page's badge, sticky header or modal
 // is exactly this.
 type webFloat struct {
-	Z     int
-	X, Y  int32
-	Rows  []webRow
-	Rects []webRect
+	Z      int
+	X, Y   int32
+	Rows   []webRow
+	Rects  []webRect
+	Images []webImagePos
 }
 
 // webLayout is the measured page for one width and font configuration.
@@ -298,6 +313,9 @@ type webLayout struct {
 	// Floats are the absolutely positioned blocks, painted over the rows in
 	// ascending z order.
 	Floats []webFloat
+	// Images are the reader's <img> boxes, in layout-local coordinates like
+	// Rects. They draw after the icon rects and before the text rows.
+	Images []webImagePos
 }
 
 // webLinkHit is one link on a laid-out page: the row it starts on and its
@@ -1774,9 +1792,27 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		})
 		return
 	case "img":
-		if alt := strings.TrimSpace(htmlTagAttribute(attrs, "alt")); alt != "" {
-			p.addText(" " + alt + " ")
+		if p.inHead {
+			return
 		}
+		src := strings.TrimSpace(htmlTagAttribute(attrs, "src"))
+		alt := strings.TrimSpace(htmlTagAttribute(attrs, "alt"))
+		resolved := p.webImageURL(src)
+		if resolved == "" {
+			// A dead or undecodable src keeps its alt text; a loadable one
+			// becomes a real image block below.
+			if alt != "" {
+				p.addText(" " + alt + " ")
+			}
+			return
+		}
+		p.flush()
+		block := p.ensureBlock()
+		block.Image = true
+		block.ImageSrc = resolved
+		block.ImageW = htmlTagAttributeFloat(attrs, "width")
+		block.ImageH = htmlTagAttributeFloat(attrs, "height")
+		p.flush()
 		return
 	case "td", "th":
 		if p.current != nil && len(p.current.Runs) > 0 {
@@ -2135,7 +2171,7 @@ func (p *webParser) flush() {
 			break
 		}
 	}
-	if !hasText && block.Bullet == "" && !block.Rule {
+	if !hasText && block.Bullet == "" && !block.Rule && !block.Image {
 		return
 	}
 	for i := range block.Runs {
@@ -2356,6 +2392,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 				Color: sdl.Color{R: 200, G: 206, B: 216, A: 255},
 			})
 			skipRows(1)
+			continue
+		}
+		if block.Image {
+			l.layoutImage(block, padX, contentW)
 			continue
 		}
 		startGrid := int32(len(layout.Rows))
@@ -2727,7 +2767,7 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 
 		offset := int32(startRow) * layout.RowH
 		if len(layout.Floats) > 0 {
-			drawWebFloats(r, config, layout, rect, offset, true)
+			drawWebFloats(r, config, doc, layout, rect, offset, true)
 		}
 		for _, bg := range layout.Rects {
 			y := rect.Y + bg.Rect.Y - offset
@@ -2743,6 +2783,16 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				continue
 			}
 			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, 2, bg.Color)
+		}
+		// Images draw on their own reserved rows, before the text, so a page
+		// with a header image scrolls the photo away like a normal line.
+		for i := range layout.Images {
+			im := layout.Images[i]
+			y := rect.Y + im.Rect.Y - offset
+			if im.Rect.H <= 0 || y >= rect.Y+rect.H || y+im.Rect.H <= rect.Y {
+				continue
+			}
+			drawWebImage(r, config, doc, im, rect.X+im.Rect.X, y)
 		}
 		for i := startRow; i < len(layout.Rows); i++ {
 			row := layout.Rows[i]
@@ -2809,7 +2859,7 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 			}
 		}
 		if len(layout.Floats) > 0 {
-			drawWebFloats(r, config, layout, rect, offset, false)
+			drawWebFloats(r, config, doc, layout, rect, offset, false)
 		}
 	})
 }

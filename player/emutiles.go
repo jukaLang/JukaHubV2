@@ -7,9 +7,13 @@ package main
 // own icon when the install ships one — the icon inside a TrimUI Emus/ folder,
 // or the shell icon of a Windows executable — and a gamepad glyph otherwise.
 //
-// Status stays off the tile name: a coloured dot in the corner says available /
-// unavailable / not installed, and the footer spells out the highlighted entry
-// and its path, so a long launcher path never has to fit inside a tile.
+// Status is spelled out, not implied: every usable-or-not tile carries a pill
+// at its bottom edge reading "Available", "Unavailable" or "Not installed", and
+// the picture of an unusable emulator is dimmed. A 4px corner dot was there
+// before and it was the one thing people could not read from a metre away, which
+// is exactly the distance a handheld is held at. The footer still spells out the
+// highlighted entry and its path, so a long launcher path never has to fit
+// inside a tile.
 
 import (
 	"encoding/json"
@@ -30,6 +34,13 @@ const (
 	emuPageHeaderH = int32(96)
 	emuPageFooterH = int32(82)
 	emuPageMargin  = int32(20)
+	// emuStatusChipSize is the pill's own type size. It is deliberately smaller
+	// than the tile name (22): the name identifies, the pill classifies.
+	emuStatusChipSize = 15
+	emuStatusChipPad  = int32(16)
+	// emuTileMinIconBox is as small as the icon well may shrink before the name
+	// and pill give way instead.
+	emuTileMinIconBox = int32(36)
 )
 
 // emuGridLayout is the measured page: the outer page, the tile area inside it,
@@ -196,23 +207,131 @@ func emuTileDisplayName(name string) string {
 	return strings.Join(strings.Fields(strings.ReplaceAll(name, "_", " ")), " ")
 }
 
-// emuStatusDotColor is the corner dot on a tile: the same three states the
-// text label uses, kept to one glanceable colour.
-func emuStatusDotColor(status emuStatus) sdl.Color {
+// emuStatusChipFont is the type used inside the status pill. It goes through
+// getFontSized so accessibility text scaling still applies to it.
+func emuStatusChipFont(config *Config) *ttf.Font {
+	if font := getFontSized(config, "small", emuStatusChipSize); font != nil {
+		return font
+	}
+	font, _ := getCachedFont(config, "small")
+	return font
+}
+
+// emuStatusChipHeight follows the font, so a scaled-up pill stays readable
+// instead of clipping its own label.
+func emuStatusChipHeight(font *ttf.Font) int32 {
+	if font != nil {
+		if h := int32(font.Height()) + 6; h > 18 {
+			return h
+		}
+	}
+	return 18
+}
+
+// emuStatusChipRect centres the pill on the tile's bottom edge, wide enough for
+// its label and never wider than the tile.
+func emuStatusChipRect(cell sdl.Rect, font *ttf.Font, label string) sdl.Rect {
+	w := int32(0)
+	if font != nil {
+		if tw, _, err := font.SizeUTF8(label); err == nil {
+			w = int32(tw)
+		}
+	}
+	w += emuStatusChipPad
+	if w < 56 {
+		w = 56
+	}
+	if max := cell.W - 16; w > max {
+		w = max
+	}
+	h := emuStatusChipHeight(font)
+	return sdl.Rect{
+		X: cell.X + (cell.W-w)/2,
+		Y: cell.Y + cell.H - 8 - h,
+		W: w,
+		H: h,
+	}
+}
+
+// emuStatusChipColors is the pill body and its label: a tint of the status
+// colour so the three states read at a glance, not just by their wording.
+func emuStatusChipColors(status emuStatus) (fill, text sdl.Color) {
+	text = ColorTextTertiary()
 	switch status {
 	case emuAvailable:
-		return ColorToastSuccess
+		text = ColorToastSuccess
+		return WithAlpha(text, 38), text
 	case emuBroken:
-		return ColorToastError
-	default:
-		return ColorTextTertiary()
+		text = ColorToastError
+		return WithAlpha(text, 40), text
 	}
+	return WithAlpha(text, 34), text
+}
+
+// emuStatusVeilAlpha dims an unusable tile's picture. A missing emulator is
+// veiled harder than one that is installed but has no launcher: the first is
+// absent, the second is close to working.
+func emuStatusVeilAlpha(status emuStatus) uint8 {
+	switch status {
+	case emuBroken:
+		return 70
+	case emuMissing:
+		return 135
+	}
+	return 0
+}
+
+// drawEmuTileStatus draws the pill at the bottom of a tile. Rows that are
+// actions rather than emulators (the pinned entries) and are usable stay bare:
+// a column of "Available" pills on doors you can always open is noise.
+//
+// nameTop and lineH describe the space the tile name needs; when the pill would
+// leave less than one line for it (the largest accessibility text on a 150px
+// tile), the name wins and the pill is skipped. The footer always names the
+// status, so nothing is lost, and text never draws through the pill.
+func drawEmuTileStatus(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry, nameTop, lineH int32) sdl.Rect {
+	if entry.Pinned && entry.Status == emuAvailable {
+		return sdl.Rect{}
+	}
+	font := emuStatusChipFont(config)
+	if font == nil {
+		return sdl.Rect{}
+	}
+	label, _ := emuStatusLabel(entry.Status)
+	chip := emuStatusChipRect(cell, font, label)
+	if lineH > 0 && chip.Y-4-nameTop < lineH {
+		return sdl.Rect{}
+	}
+	fill, text := emuStatusChipColors(entry.Status)
+	drawChip(r, config, chip, label, fill, text, font)
+	return chip
+}
+
+// emuTileIconSize is the height of the icon well. It is emuIconBox normally and
+// shrinks when the accessibility text scale leaves no room for a name line, a
+// picture and the status pill together — the icon is the part that can give way
+// without losing information. It never drops below emuTileMinIconBox, and an
+// entry with no chip keeps the full box.
+func emuTileIconSize(cell sdl.Rect, labelFont *ttf.Font, chipH int32) int32 {
+	if labelFont == nil {
+		return emuIconBox
+	}
+	lineH := int32(labelFont.Height() + 1)
+	const topPad, nameGap, chipGap, bottomPad = int32(12), int32(8), int32(4), int32(8)
+	need := topPad + emuIconBox + nameGap + lineH + chipGap + chipH + bottomPad
+	if need <= cell.H {
+		return emuIconBox
+	}
+	box := cell.H - (topPad + nameGap + lineH + chipGap + chipH + bottomPad)
+	if box < emuTileMinIconBox {
+		return emuTileMinIconBox
+	}
+	return box
 }
 
 // drawEmuTileIcon draws the emulator's picture fitted inside the square well,
 // or the entry's glyph on a tinted well when there is no picture.
-func drawEmuTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry, focused bool) {
-	box := emuIconBox
+func drawEmuTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry, focused bool, box int32) {
 	x := cell.X + (cell.W-box)/2
 	y := cell.Y + 12
 
@@ -251,8 +370,8 @@ func drawEmuTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEn
 	}, false)
 }
 
-// drawEmuTile renders one tile: card, picture or glyph, wrapped name, and a
-// status dot. The footer carries the long detail, so the tile stays legible.
+// drawEmuTile renders one tile: card, picture or glyph, wrapped name, and the
+// status pill. The footer carries the long detail, so the tile stays legible.
 func drawEmuTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry, focused, hovered bool, labelFont *ttf.Font) {
 	drawCard(r, cell.X, cell.Y, cell.W, cell.H, 14)
 	if focused {
@@ -265,10 +384,18 @@ func drawEmuTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry,
 		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, 1, WithAlpha(accentColor, 110))
 	}
 
-	drawEmuTileIcon(r, config, cell, entry, focused)
+	chipFont := emuStatusChipFont(config)
+	chipH := int32(0)
+	if chipFont != nil && !(entry.Pinned && entry.Status == emuAvailable) {
+		chipH = emuStatusChipHeight(chipFont)
+	}
+	box := emuTileIconSize(cell, labelFont, chipH)
 
-	dot := emuStatusDotColor(entry.Status)
-	fillCircle(r, cell.X+cell.W-13, cell.Y+13, 4, WithAlpha(dot, 220))
+	drawEmuTileIcon(r, config, cell, entry, focused, box)
+	if veil := emuStatusVeilAlpha(entry.Status); veil > 0 {
+		boxX := cell.X + (cell.W-box)/2
+		fillRoundedRect(r, boxX, cell.Y+12, box, box, 16, WithAlpha(ColorShadow, veil))
+	}
 
 	if labelFont == nil {
 		return
@@ -278,8 +405,16 @@ func drawEmuTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry,
 		name = "Emulator"
 	}
 	lineH := int32(labelFont.Height() + 1)
-	textTop := cell.Y + 12 + emuIconBox + 8
-	maxLines := int((cell.Y + cell.H - 8 - textTop) / lineH)
+	textTop := cell.Y + 12 + box + 8
+	chip := drawEmuTileStatus(r, config, cell, entry, textTop, lineH)
+
+	// The pill owns the bottom strip when it is there, so the name gets the
+	// space above it and never draws through it.
+	nameBottom := cell.Y + cell.H - 8
+	if chip.W > 0 {
+		nameBottom = chip.Y - 4
+	}
+	maxLines := int((nameBottom - textTop) / lineH)
 	if maxLines < 1 {
 		maxLines = 1
 	}

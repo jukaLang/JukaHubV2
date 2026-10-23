@@ -816,10 +816,6 @@ func TestBrowseWebPageAppliesLinkedCSS(t *testing.T) {
 }
 
 func TestFetchWebStylesheetsBoundsAndResolves(t *testing.T) {
-	base, err := url.Parse("https://example.com/docs/page")
-	if err != nil {
-		t.Fatal(err)
-	}
 	var requested []string
 	var requestedMu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -835,7 +831,10 @@ func TestFetchWebStylesheetsBoundsAndResolves(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	base, _ = url.Parse(server.URL + "/docs/page")
+	base, err := url.Parse(server.URL + "/docs/page")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	source := `<link rel="stylesheet" href="/a.css">` +
 		`<link rel="stylesheet" href="/a.css">` +

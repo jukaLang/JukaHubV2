@@ -88,8 +88,12 @@ func TestThemePresetsAreReadable(t *testing.T) {
 		if ratio := contrastRatio(primary, bg); ratio < 4.5 {
 			t.Errorf("%s: primary text contrast %.2f on %s, want >= 4.5", name, ratio, p.Background)
 		}
-		if ratio := contrastRatio(secondary, bg); ratio < 3.0 {
-			t.Errorf("%s: secondary text contrast %.2f on %s, want >= 3.0", name, ratio, p.Background)
+		if ratio := contrastRatio(secondary, bg); ratio < 4.5 {
+			t.Errorf("%s: secondary text contrast %.2f on %s, want >= 4.5 (WCAG AA body text)", name, ratio, p.Background)
+		}
+		tertiary := parseRGB(t, p.TextTertiary)
+		if ratio := contrastRatio(tertiary, bg); ratio < 4.5 {
+			t.Errorf("%s: tertiary text contrast %.2f on %s, want >= 4.5 (WCAG AA body text)", name, ratio, p.Background)
 		}
 		surface := parseRGB(t, p.Surface)
 		if ratio := contrastRatio(primary, surface); ratio < 3.5 {

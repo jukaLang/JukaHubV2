@@ -121,8 +121,8 @@ func (trimuiLinuxPlatform) DataDir() (string, error) {
 	return dir, nil
 }
 
-func (tspPlatform) ConfigPath() string      { return "jukaconfig.json" }
-func (tspPlatform) UserConfigPath() string  { return "jukauser.json" }
+func (tspPlatform) ConfigPath() string     { return "jukaconfig.json" }
+func (tspPlatform) UserConfigPath() string { return "jukauser.json" }
 func (tspPlatform) ToolsDir() string {
 	// Resolve relative to the binary dir, not CWD, so the app works when
 	// launched from a different working directory.
@@ -131,7 +131,7 @@ func (tspPlatform) ToolsDir() string {
 	}
 	return filepath.Join(".", "required")
 }
-func (tspPlatform) RequiredDir() string { return tspPlatform{}.ToolsDir() }
+func (tspPlatform) RequiredDir() string     { return tspPlatform{}.ToolsDir() }
 func (tspPlatform) IsHandheld() bool        { return true }
 func (tspPlatform) FullscreenDefault() bool { return true }
 func (tspPlatform) ResizableDefault() bool  { return false }
@@ -206,8 +206,8 @@ func (windowsPlatform) DataDir() (string, error) {
 	return dir, nil
 }
 
-func (windowsPlatform) ConfigPath() string      { return filepath.Join(".", "jukaconfig.json") }
-func (windowsPlatform) UserConfigPath() string  { return filepath.Join(".", "jukauser.json") }
+func (windowsPlatform) ConfigPath() string     { return filepath.Join(".", "jukaconfig.json") }
+func (windowsPlatform) UserConfigPath() string { return filepath.Join(".", "jukauser.json") }
 func (windowsPlatform) ToolsDir() string {
 	// Resolve relative to the binary dir, not CWD (same as tspPlatform), so
 	// install and lookup agree when the app is launched from elsewhere.
@@ -216,7 +216,7 @@ func (windowsPlatform) ToolsDir() string {
 	}
 	return filepath.Join(".", "required")
 }
-func (windowsPlatform) RequiredDir() string { return windowsPlatform{}.ToolsDir() }
+func (windowsPlatform) RequiredDir() string     { return windowsPlatform{}.ToolsDir() }
 func (windowsPlatform) IsHandheld() bool        { return false }
 func (windowsPlatform) FullscreenDefault() bool { return false }
 func (windowsPlatform) ResizableDefault() bool  { return true }

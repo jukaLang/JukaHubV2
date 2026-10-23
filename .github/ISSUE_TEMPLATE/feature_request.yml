@@ -1,0 +1,61 @@
+name: Feature request
+description: Suggest something the hub should do, or do better
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing: [docs/FEATURE-BACKLOG.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/FEATURE-BACKLOG.md)
+        and [docs/FEATURE-SLATE.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/FEATURE-SLATE.md)
+        record what is already built, what is planned, and what cannot work on this
+        hardware (no second display, no overlay over the emulator, no reading game RAM).
+        Checking there first keeps the list honest.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve
+      description: Describe the moment it goes wrong today, not the feature you have in mind.
+      placeholder: "I keep forgetting which game I was halfway through, because ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like to happen
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Home screen, theme or layout
+        - Games library or emulators
+        - Music, video or streaming
+        - Packages, Patch or the updater
+        - Smart home, network or tools
+        - Web builder
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Includes "I currently do this by hand / with another app".
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and the feature documents above.
+          required: true

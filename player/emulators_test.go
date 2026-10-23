@@ -264,6 +264,161 @@ func writeTestIconPNG(t *testing.T, path string, c color.Color) {
 	}
 }
 
+// TestEmulatorEntriesSortAvailableFirst pins the order the page depends on:
+// usable emulators first, then installed-but-broken, then absent, alphabetical
+// inside each group, with the pinned action rows kept above all of them.
+func TestEmulatorEntriesSortAvailableFirst(t *testing.T) {
+	entries := []emuEntry{
+		{Name: "Zeta", Status: emuMissing},
+		{Name: "Beta", Status: emuAvailable},
+		{Name: "Broken", Status: emuBroken},
+		{Name: "Pinned", Status: emuMissing, Pinned: true},
+		{Name: "Alpha", Status: emuMissing},
+		{Name: "Yoshi", Status: emuAvailable},
+	}
+	sortEmulatorEntries(entries)
+
+	want := []string{"Pinned", "Beta", "Yoshi", "Broken", "Alpha", "Zeta"}
+	got := make([]string, len(entries))
+	for i, e := range entries {
+		got[i] = e.Name
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("order = %v, want %v", got, want)
+		}
+	}
+}
+
+// TestEmuStatusChipFitsEveryTile keeps the pill inside the tile at the narrowest
+// supported width: text wider than its own chip is the failure mode this guards.
+func TestEmuStatusChipFitsEveryTile(t *testing.T) {
+	probeRenderer(t) // initialises SDL_ttf so the chip font can be opened
+	font := emuStatusChipFont(&Config{})
+	if font == nil {
+		t.Skip("no font available in this build")
+	}
+	cell := sdl.Rect{X: 100, Y: 100, W: emuTileMinW, H: emuTileH}
+	for _, status := range []emuStatus{emuAvailable, emuBroken, emuMissing} {
+		label, _ := emuStatusLabel(status)
+		if label == "" {
+			t.Fatalf("status %d has no label", status)
+		}
+		chip := emuStatusChipRect(cell, font, label)
+		if chip.X < cell.X+8 || chip.X+chip.W > cell.X+cell.W-8 {
+			t.Errorf("%s chip %+v does not fit inside tile %+v", label, chip, cell)
+		}
+		if chip.Y < cell.Y || chip.Y+chip.H > cell.Y+cell.H-8 {
+			t.Errorf("%s chip %+v overlaps the tile edge", label, chip)
+		}
+		if tw, _, err := font.SizeUTF8(label); err == nil && int32(tw) > chip.W-emuStatusChipPad {
+			t.Errorf("%s chip is %dpx wide but its text needs %dpx", label, chip.W, tw)
+		}
+	}
+}
+
+// TestEmuTileStatusChipIsDrawn checks the pill is painted in the status colour,
+// so availability is readable without the footer.
+func TestEmuTileStatusChipIsDrawn(t *testing.T) {
+	renderer := probeRenderer(t)
+	cell := sdl.Rect{X: 100, Y: 100, W: emuTileMinW, H: emuTileH}
+
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.Clear()
+	chip := drawEmuTileStatus(renderer, &Config{}, cell, emuEntry{Name: "GBA", Status: emuAvailable}, cell.Y+84, 23)
+	if chip.W == 0 {
+		t.Fatal("no status chip for an available emulator")
+	}
+
+	buf := make([]byte, probeW*probeH*4)
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+	}
+	green := 0
+	for y := chip.Y + 2; y < chip.Y+chip.H-2; y++ {
+		for x := chip.X + 2; x < chip.X+chip.W-2; x++ {
+			i := (int(y)*int(probeW) + int(x)) * 4
+			if buf[i+1] > buf[i]+25 && buf[i+1] > buf[i+2]+15 {
+				green++
+			}
+		}
+	}
+	if green == 0 {
+		t.Errorf("no green pixels inside the available chip %+v", chip)
+	}
+
+	// The pinned action rows are doors, not emulators: no pill when they work.
+	if rect := drawEmuTileStatus(nil, &Config{}, cell, emuEntry{Name: "Profiles", Pinned: true, Status: emuAvailable}, cell.Y+84, 23); rect.W != 0 {
+		t.Errorf("pinned available row drew a status chip %+v", rect)
+	}
+
+	// With no room left for even one name line, the name wins and the pill is
+	// dropped rather than drawn through the text (largest accessibility size).
+	if rect := drawEmuTileStatus(nil, &Config{}, cell, emuEntry{Name: "GBA", Status: emuMissing}, cell.Y+84, 999); rect.W != 0 {
+		t.Errorf("status chip %+v drawn over the name", rect)
+	}
+}
+
+// TestEmuTileDimsUnavailablePicture is the at-a-glance half of the redesign:
+// the picture of an emulator you cannot start is veiled, so the grid separates
+// usable from unusable before any label is read.
+func TestEmuTileDimsUnavailablePicture(t *testing.T) {
+	renderer := probeRenderer(t)
+	cell := sdl.Rect{X: 100, Y: 100, W: emuTileMinW, H: emuTileH}
+	boxX := cell.X + (cell.W-emuIconBox)/2
+	boxY := cell.Y + 12
+
+	luma := func(status emuStatus) int {
+		renderer.SetDrawColor(0, 0, 0, 255)
+		renderer.Clear()
+		drawEmuTile(renderer, &Config{}, cell, emuEntry{Name: "GBA", Status: status, Glyph: "gamepad"}, false, false, nil)
+		buf := make([]byte, probeW*probeH*4)
+		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
+			t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		}
+		var sum int
+		for y := boxY; y < boxY+emuIconBox; y++ {
+			for x := boxX; x < boxX+emuIconBox; x++ {
+				i := (int(y)*int(probeW) + int(x)) * 4
+				sum += int(buf[i]) + int(buf[i+1]) + int(buf[i+2])
+			}
+		}
+		return sum
+	}
+
+	available := luma(emuAvailable)
+	if missing := luma(emuMissing); missing >= available {
+		t.Errorf("missing emulator icon is not dimmed: %d vs %d for available", missing, available)
+	}
+	if broken := luma(emuBroken); broken >= available {
+		t.Errorf("unlaunchable emulator icon is not dimmed: %d vs %d for available", broken, available)
+	}
+}
+
+// TestEmuTileIconShrinksForLargeText keeps the icon well from pushing the name
+// and the status pill off the tile when accessibility text scaling is at its
+// largest.
+func TestEmuTileIconShrinksForLargeText(t *testing.T) {
+	probeRenderer(t)
+	cell := sdl.Rect{X: 0, Y: 0, W: emuTileMinW, H: emuTileH}
+	if got := emuTileIconSize(cell, nil, 0); got != emuIconBox {
+		t.Errorf("tile without a name uses icon box %d, want %d", got, emuIconBox)
+	}
+	small := getFontSized(&Config{}, "small", 22)
+	large := getFontSized(&Config{}, "small", 32)
+	chipH := emuStatusChipHeight(emuStatusChipFont(&Config{}))
+	if small == nil || large == nil {
+		t.Skip("no font available in this build")
+	}
+	if got := emuTileIconSize(cell, small, chipH); got != emuIconBox {
+		t.Errorf("default text shrank the icon to %d, want %d", got, emuIconBox)
+	}
+	got := emuTileIconSize(cell, large, chipH)
+	if got >= emuIconBox || got < emuTileMinIconBox {
+		t.Errorf("large text icon box = %d, want between %d and %d", got, emuTileMinIconBox, emuIconBox)
+	}
+}
+
 // TestEmuTileDrawsTheEmulatorsPicture is the point of the page: a tile with an
 // icon file draws that picture, not just the glyph placeholder.
 func TestEmuTileDrawsTheEmulatorsPicture(t *testing.T) {
