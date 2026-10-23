@@ -3951,3 +3951,17 @@ body:not(.element-selected) .element:focus {
     flex-wrap: wrap;
   }
 }
+
+/* === Touch targets ===
+   Compact toolbar and panel controls are 22-36px, below the ~40px a thumb can
+   hit reliably. Only touch screens get the larger hit area; mouse layouts keep
+   their dense desktop sizing. */
+@media (pointer: coarse) {
+  .app-bar-button,
+  .panel-toggle,
+  .action-button,
+  .action-button.small {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
