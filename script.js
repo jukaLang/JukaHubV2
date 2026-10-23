@@ -21,7 +21,6 @@ const clearButton = document.getElementById('clearButton');
 const propertiesTabs = document.querySelectorAll('.properties-tab');
 const elementPropertiesPanel = document.getElementById('elementPropertiesPanel');
 const appInfoPanel = document.getElementById('appInfoPanel');
-const videoProperties = document.getElementById('videoProperties');
 
 // Global State
 let backgroundPath = '';
@@ -31,7 +30,6 @@ let variables = {};
 let currentElement = null;
 let canvasWidth = 1280;
 let canvasHeight = 720;
-let videoList = [];
 let globalTooltip = null;
 // Import/init also adds elements; those are not user edits and must not land on
 // the undo stack. Set once the editor is fully constructed.
@@ -576,7 +574,6 @@ function loadAutoSave() {
 // way out: the same eye/pen button now turns into an "Exit preview" control
 // while preview is active, plus Esc and Ctrl+P also toggle back.
 let previewMode = false;
-let previewAutoSaveKey = null;
 
 function setPreviewButtonLabel(active) {
   const btn = document.getElementById('previewToggle');
@@ -5665,7 +5662,7 @@ const AI = (() => {
     objectMatches.sort((a, b) => b.length - a.length);
     objectMatches.forEach(addCandidate);
 
-    const arrayMatches = [...text.matchAll(/\[(?:[^\[\]]|(?:\[[^\[\]]*\]))*\]/g)].map((m) => m[0]);
+    const arrayMatches = [...text.matchAll(/\[(?:[^[\]]|(?:\[[^[\]]*\]))*\]/g)].map((m) => m[0]);
     arrayMatches.sort((a, b) => b.length - a.length);
     arrayMatches.forEach(addCandidate);
 
@@ -5942,7 +5939,7 @@ const AI = (() => {
     // --- Title (only when explicitly requested, or as a last-resort fallback) ---
     if (hasTitle && titleText.length) {
       elements.push(makeElement('label', titleText, '#F8FAFC', 'none', 'title', 'center', canvasW - leftMargin - rightMargin, 64, leftMargin, titleY, ''));
-      suggestions.push('Added a centered title \"' + titleText + '\" near the top.');
+      suggestions.push('Added a centered title "' + titleText + '" near the top.');
       contentTopY = 136;
     } else if (hasTitle) {
       elements.push(makeElement('label', 'My Retro GUI', '#F8FAFC', 'none', 'title', 'center', canvasW - leftMargin - rightMargin, 64, leftMargin, titleY, ''));
