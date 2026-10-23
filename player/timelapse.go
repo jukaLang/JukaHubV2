@@ -61,6 +61,11 @@ const (
 	// timelapseGrabTimeout bounds one grab so a wedged capture can never hold
 	// the session open.
 	timelapseGrabTimeout = 15 * time.Second
+	// timelapseEncodeTimeout bounds one assembly. A wedged ffmpeg used to run
+	// forever while holding timelapseEncodeMu, which stalled every later
+	// session's Stop behind it. Ten minutes is far longer than any real film
+	// needs on the handheld's CPU.
+	timelapseEncodeTimeout = 10 * time.Minute
 	// timelapseFBDevice is the panel framebuffer on the handheld firmware.
 	timelapseFBDevice = "/dev/fb0"
 )
@@ -110,7 +115,7 @@ var (
 		return runQuietCommand(prog, args, timelapseGrabTimeout)
 	}
 	timelapseEncode = func(prog string, args []string) error {
-		return runQuietCommand(prog, args, 0)
+		return runQuietCommand(prog, args, timelapseEncodeTimeout)
 	}
 	timelapseNotify = queueTimelapseNotice
 )
