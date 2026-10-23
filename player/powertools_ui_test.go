@@ -20,13 +20,13 @@ func TestPowerToolsMenuRows(t *testing.T) {
 		syncTarget: "nas:/backup",
 	})
 	rows := powerToolRows(&Config{})
-	if len(rows) != 7 {
-		t.Fatalf("menu rows = %d, want 6 tools + Close", len(rows))
+	if len(rows) != 9 {
+		t.Fatalf("menu rows = %d, want 8 tools + Close", len(rows))
 	}
 	want := []powerAction{
 		powerActionOpenNetwork, powerActionOpenFiles, powerActionOpenScripts,
 		powerActionOpenSync, powerActionOpenConfigs, powerActionOpenBench,
-		powerActionClose,
+		powerActionOpenMemory, powerActionOpenCtrlDiag, powerActionClose,
 	}
 	for i, action := range want {
 		if rows[i].action != action {

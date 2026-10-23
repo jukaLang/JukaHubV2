@@ -202,9 +202,27 @@ reconnect.
 | **A** | open the highlighted console, or play the highlighted game |
 | **X** | LAN play for the highlighted game (host or join over Wi-Fi) |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
+| **S** / **/** / **R1** | search the library (on-screen keyboard; the list filters as you type) |
 | **Y** | rescan the card (after copying new ROMs) |
-| **B** / Back | close the panel |
+| **B** / Back | clear an active search, then close the panel |
 | Mouse | click a console to select it, a game to play it, outside to close |
+
+## Search
+
+**S** (or **R1**) opens the on-screen keyboard on a search field. The whole
+library is searched at once, not just the highlighted console:
+
+- a game matches on its title, its console, or its file name, so `zelda`,
+  `gba` and `minish` all find the same cart;
+- typing a console keeps that console's whole list, which is the quickest way
+  to browse one system;
+- the list narrows on every keystroke and the header shows the match count;
+- the **Continue** row is left out while searching, because it lists the same
+games a second time;
+- **B** clears the search first; a second **B** closes the library.
+
+Matching is a case-insensitive substring test, not fuzzy: `zeld` finds *Zelda*
+but `zld` does not.
 
 ## Notes and limits
 

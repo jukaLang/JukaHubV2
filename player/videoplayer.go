@@ -1095,6 +1095,13 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		currentPlaybackURL = pageURL
 	}
 	sess := beginPlaybackSession(url, pageURL, tempFile)
+	// Network sources have no sidecar; ask yt-dlp for the page's subtitles
+	// in the background so playback is not delayed.
+	videoSubs.mu.Lock()
+	videoSubs.cues = nil
+	videoSubs.status = ""
+	videoSubs.mu.Unlock()
+	go fetchNetworkSubtitles(sess, config, pageURL)
 	// If a Watch Party is open, opening a video makes it the room's stream.
 	// Remote peers get the original page URL, not the resolved CDN URL.
 	partyPublishStart(pageURL, startSec)

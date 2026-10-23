@@ -48,24 +48,6 @@ func getBatteryPercent() int {
 	return pct
 }
 
-func getWifiStatus() string {
-	// Quick heuristic: look for wireless interfaces under /sys/class/net
-	base := "/sys/class/net"
-	entries, err := os.ReadDir(base)
-	if err != nil {
-		return ""
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			wireless := filepath.Join(base, entry.Name(), "wireless")
-			if _, err := os.Stat(wireless); err == nil {
-				return "WiFi"
-			}
-		}
-	}
-	return ""
-}
-
 // safeStatusText strips characters that Inter font may not render and
 // collapses whitespace so the status bar never shows missing-glyph boxes.
 func safeStatusText(s string) string {
@@ -491,6 +473,8 @@ func sceneDisplayName(name string) string {
 		return "Apps"
 	case "Patch":
 		return "Patch"
+	case "Packages":
+		return "Package Manager"
 	case "MusicPlayer":
 		return "Music"
 	case "Games":
@@ -549,6 +533,7 @@ func headerTitle(config *Config, scene SceneConfig) string {
 func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	sceneTitleBackRect = sdl.Rect{}
 	statusClockRect = sdl.Rect{}
+	statusWiFiRect = sdl.Rect{}
 	weatherStatusRect = sdl.Rect{}
 	barH := HomeTopBarH
 	if screenHeight < 600 {
@@ -722,8 +707,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 		maxW = 120
 	}
 	parts = fitStatusParts(parts, func(p string) int32 {
-		pw, _, _ := statusFont.SizeUTF8(p)
-		return int32(pw)
+		return statusClusterPartWidth(statusFont, p)
 	}, gap, maxW)
 
 	// Vertically center the cluster in the bar (same 16px font and position
@@ -734,35 +718,44 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	}
 	clusterW := int32(0)
 	for _, p := range parts {
-		pw, _, _ := statusFont.SizeUTF8(p)
-		clusterW += int32(pw)
+		clusterW += statusClusterPartWidth(statusFont, p)
 	}
 	if len(parts) > 1 {
 		clusterW += gap * int32(len(parts)-1)
 	}
 	startX := rightX - clusterW
+	// Two parts are drawn as gauges rather than text: the leading network slot
+	// (signal bars, empty without a link) and the battery (a colour-coded cell).
+	// drawStatusClusterPart returns the same width statusClusterPartWidth
+	// measured, so the clock and the bell never move.
+	drawStatusText := func(text string, color sdl.Color, x, y int32) {
+		renderText(renderer, config, statusFont, text, color, x, y)
+	}
 	for _, p := range parts {
-		pw, _, _ := statusFont.SizeUTF8(p)
-		col := secondary
-		if strings.HasPrefix(p, "! Offline") {
-			col = ColorWarning
-		}
-		renderText(renderer, config, statusFont, p, col, startX, statusY)
+		pw := statusClusterPartWidth(statusFont, p)
+		drawStatusClusterPart(renderer, statusFont, p, startX, statusY, drawStatusText)
 		if isClockStatusPart(p) {
 			// Measure the clock so it can hold focus like any other button.
 			statusClockRect = sdl.Rect{
 				X: startX - 6, Y: statusY - 6,
-				W: int32(pw) + 12, H: int32(statusFont.Height()) + 12,
+				W: pw + 12, H: int32(statusFont.Height()) + 12,
 			}
 		}
 		if isWeatherStatusPart(p) {
 			// The hi/lo chip is the Local weather button.
 			weatherStatusRect = sdl.Rect{
 				X: startX - 6, Y: statusY - 6,
-				W: int32(pw) + 12, H: int32(statusFont.Height()) + 12,
+				W: pw + 12, H: int32(statusFont.Height()) + 12,
 			}
 		}
-		startX += int32(pw) + gap
+		if isWiFiStatusPart(p) {
+			// The meter is the Wi-Fi button on every screen.
+			statusWiFiRect = sdl.Rect{
+				X: startX - 6, Y: statusY - 6,
+				W: pw + 12, H: int32(statusFont.Height()) + 12,
+			}
+		}
+		startX += pw + gap
 	}
 	if focusEngine.ElementIndex() == ChromeClockIndex && statusClockRect.W > 0 {
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
@@ -826,10 +819,13 @@ func headerStatusParts(config *Config) []string {
 	parts := make([]string, 0, 5)
 	// Offline indicator takes priority over the SSID so the user instantly
 	// knows why network features are failing.
+	// The slot always exists, even when the meter has no bars to fill: an empty
+	// meter next to the battery is the honest "no link" state, and it is the
+	// click target for the Wi-Fi picker.
 	if !IsOnline() {
 		parts = append(parts, "! Offline")
-	} else if wifi := strings.TrimSpace(getWifiStatus()); wifi != "" {
-		parts = append(parts, safeStatusText(wifi))
+	} else {
+		parts = append(parts, statusWiFiMarker)
 	}
 	wxMutex.Lock()
 	ready := weatherReady
@@ -844,7 +840,7 @@ func headerStatusParts(config *Config) []string {
 		parts = append(parts, safeStatusText(fmt.Sprintf("%d%s / %d%s", int(hi), unit, int(lo), unit)))
 	}
 	parts = append(parts, safeStatusText(time.Now().Format("15:04")))
-	if bat := getBatteryPercent(); bat >= 0 {
+	if bat := statusBatteryPercent(); bat >= 0 {
 		parts = append(parts, safeStatusText(fmt.Sprintf("%d%%", bat)))
 	}
 	return parts

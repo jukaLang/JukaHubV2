@@ -49,9 +49,46 @@ func initWallpaperPicker() {
 	scanWallpaperDir()
 }
 
+// wallpaperExts are the image types the wallpaper picker lists.
+var wallpaperExts = []string{".jpg", ".jpeg", ".png", ".bmp"}
+
+// listPickerEntries returns the visible subfolders of dir followed by the files
+// whose extension is in exts. Hidden folders are skipped. It is shared by the
+// wallpaper picker and the game library's cover picker.
+func listPickerEntries(dir string, exts []string) ([]wallpaperEntry, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var out []wallpaperEntry
+	for _, e := range entries {
+		if e.IsDir() {
+			if strings.HasPrefix(strings.ToLower(e.Name()), ".") {
+				continue
+			}
+			out = append(out, wallpaperEntry{
+				name: "[+] " + e.Name(),
+				path: filepath.Join(dir, e.Name()),
+			})
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(e.Name()))
+		for _, want := range exts {
+			if ext == want {
+				out = append(out, wallpaperEntry{
+					name: e.Name(),
+					path: filepath.Join(dir, e.Name()),
+				})
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func scanWallpaperDir() {
 	wpEntries = nil
-	entries, err := os.ReadDir(wpDir)
+	listed, err := listPickerEntries(wpDir, wallpaperExts)
 	if err != nil {
 		return
 	}
@@ -60,28 +97,7 @@ func scanWallpaperDir() {
 		name: "[+] .. (parent directory)",
 		path: filepath.Dir(wpDir),
 	})
-	for _, e := range entries {
-		if e.IsDir() {
-			name := strings.ToLower(e.Name())
-			if strings.HasPrefix(name, ".") {
-				continue
-			}
-			wpEntries = append(wpEntries, wallpaperEntry{
-				name: "[+] " + e.Name(),
-				path: filepath.Join(wpDir, e.Name()),
-			})
-		} else {
-			name := strings.ToLower(e.Name())
-			ext := filepath.Ext(name)
-			switch ext {
-			case ".jpg", ".jpeg", ".png", ".bmp":
-				wpEntries = append(wpEntries, wallpaperEntry{
-					name: e.Name(),
-					path: filepath.Join(wpDir, e.Name()),
-				})
-			}
-		}
-	}
+	wpEntries = append(wpEntries, listed...)
 	wpCursor = 0
 	wpScrollY = 0
 }

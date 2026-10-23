@@ -6360,6 +6360,13 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 		toggleWeatherPopover()
 		return true
 	}
+	// The Wi-Fi meter opens the network picker (scan, connect, enter a
+	// password) instead of a popover: the picker already owns that flow.
+	if statusWiFiRect.W > 0 && pointInRect(mx, my, statusWiFiRect) {
+		PlayActivateSound()
+		openWiFiPanel()
+		return true
+	}
 	return false
 }
 

@@ -24,13 +24,16 @@ type gameLibRowHit struct {
 }
 
 type gameLibraryPanel struct {
-	open     bool
-	lib      gameLibraryReport
-	recents  []recentGame
-	system   int
-	cursor   int
-	scroll   int
-	focus    int // 0 = console column, 1 = games column
+	open    bool
+	lib     gameLibraryReport
+	recents []recentGame
+	system  int
+	cursor  int
+	scroll  int
+	focus   int // 0 = console column, 1 = games column
+	// query narrows the whole library to the games whose title, console or
+	// file name matches. Empty is the normal console-by-console browser.
+	query    string
 	artCache map[string]*sdl.Texture
 	// artSeen is the artwork-fetch generation whose images are in artCache. A
 	// newer generation means the cache holds "missing" entries that now exist.
@@ -86,7 +89,74 @@ func librarySystemsForUI(lib gameLibraryReport, recents []recentGame) []libraryS
 var libraryArtworkRoot = romArtworkDir
 
 func currentGameSystems() []librarySystem {
-	return librarySystemsForUI(gameLib.lib, gameLib.recents)
+	return filterLibrarySystems(librarySystemsForUI(gameLib.lib, gameLib.recents), gameLib.query)
+}
+
+// normalizeGameSearch folds a query the way the matcher compares it: case does
+// not matter, and a run of spaces counts as one.
+func normalizeGameSearch(query string) string {
+	return strings.ToLower(strings.Join(strings.Fields(query), " "))
+}
+
+// filterLibrarySystems narrows the console list to one search. A game matches
+// on its title, its console or its file name, so "zelda", "gba" and "snes" all
+// find the same cart. A console whose own name matches keeps every game in it —
+// typing a console is a request for that console. The Continue row is dropped
+// while searching because it is a view over the same games and would list every
+// hit twice.
+func filterLibrarySystems(systems []librarySystem, query string) []librarySystem {
+	needle := normalizeGameSearch(query)
+	if needle == "" {
+		return systems
+	}
+	filtered := make([]librarySystem, 0, len(systems))
+	for _, system := range systems {
+		if system.Name == continueSystemName {
+			continue
+		}
+		consoleMatch := strings.Contains(normalizeGameSearch(system.Name), needle)
+		games := make([]libraryGame, 0, len(system.Games))
+		for _, game := range system.Games {
+			if consoleMatch ||
+				strings.Contains(normalizeGameSearch(game.Title), needle) ||
+				strings.Contains(normalizeGameSearch(filepath.Base(game.Path)), needle) {
+				games = append(games, game)
+			}
+		}
+		if len(games) == 0 {
+			continue
+		}
+		filtered = append(filtered, librarySystem{
+			Name:    system.Name,
+			Games:   games,
+			WithArt: countCoveredGames(games),
+		})
+	}
+	return filtered
+}
+
+// gameLibraryQuery is the active search text, empty when browsing.
+func gameLibraryQuery() string { return gameLib.query }
+
+// setGameLibraryQuery applies a new search and keeps the highlight on a real
+// row. The filter runs live while the on-screen keyboard is open, so this is
+// called once per keystroke.
+func setGameLibraryQuery(query string) {
+	query = strings.TrimSpace(query)
+	if query == gameLib.query {
+		return
+	}
+	gameLib.query = query
+	gameLib.system, gameLib.cursor, gameLib.scroll = 0, 0, 0
+	if query == "" {
+		gameLib.focus = 0
+		return
+	}
+	// Typing a search is a request to look at the results, so the games column
+	// takes the focus when there is anything in it.
+	if system, ok := selectedLibrarySystem(); ok && len(system.Games) > 0 {
+		gameLib.focus = 1
+	}
 }
 
 func selectedLibrarySystem() (librarySystem, bool) {
@@ -127,6 +197,7 @@ func openGameLibraryPanel() {
 	gameLib.system = 0
 	gameLib.cursor = 0
 	gameLib.scroll = 0
+	gameLib.query = ""
 	gameLib.artSeen = artworkFetchGeneration()
 	gameLib.systemHits = nil
 	gameLib.gameHits = nil
@@ -177,6 +248,17 @@ func refreshGameLibrary() {
 }
 
 func gameLibraryStatus() string {
+	if query := gameLib.query; query != "" {
+		games, systems := 0, 0
+		for _, system := range currentGameSystems() {
+			systems++
+			games += len(system.Games)
+		}
+		if games == 0 {
+			return "No match for \"" + query + "\" — press S to change it"
+		}
+		return itoa(games) + " match(es) for \"" + query + "\" in " + itoa(systems) + " console(s)"
+	}
 	if gameLib.lib.Total == 0 {
 		if len(gameLib.recents) > 0 {
 			return itoa(len(gameLib.recents)) + " recent game(s) — no ROM folders found, press Y to rescan"
@@ -345,7 +427,15 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_y:
 		refreshGameLibrary()
 		ShowToast(gameLibraryStatus(), ToastKindInfo)
+	case sdl.K_s, sdl.K_SLASH:
+		vkOpenGameSearch()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
+		if gameLib.query != "" {
+			// The first Back clears the search instead of leaving the library:
+			// a filtered list looks like a broken library otherwise.
+			setGameLibraryQuery("")
+			return true
+		}
 		closeGameLibraryPanel()
 	}
 	return true
@@ -373,7 +463,15 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_Y:
 		refreshGameLibrary()
 		ShowToast(gameLibraryStatus(), ToastKindInfo)
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		// R1 searches. The shoulders are otherwise blocked while this panel is
+		// open (shoulders.go), so the trigger is free here.
+		vkOpenGameSearch()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		if gameLib.query != "" {
+			setGameLibraryQuery("")
+			return true
+		}
 		closeGameLibraryPanel()
 	default:
 		return false
@@ -599,6 +697,15 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
 	renderText(renderer, config, medium, "Games", ColorTextPrimary(), panelX+pad, panelY+18)
+	// The active search sits on the title line so it is visible at a glance
+	// instead of being hidden in the subdued status line underneath.
+	if query := gameLib.query; query != "" {
+		label := ellipsize(font, "Search: "+query, panelW/2)
+		w, _, _ := font.SizeUTF8(label)
+		const ringReserve = int32(96)
+		renderText(renderer, config, font, label, accentColor,
+			panelX+panelW-pad-ringReserve-int32(w), panelY+18+(medH-smallH)/2)
+	}
 	renderText(renderer, config, font, gameLibraryStatus(), ColorTextTertiary(),
 		panelX+pad, panelY+18+medH+4)
 
@@ -727,6 +834,10 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		if strings.HasPrefix(system.Name, continueSystemName) {
 			detail = "Launch a game and it appears here for one-press resume."
 		}
+		if query := gameLib.query; query != "" {
+			message = "No match for \"" + query + "\""
+			detail = "Press S to change the search, or B to clear it and browse."
+		}
 		renderText(renderer, config, medium, message, ColorTextSecondary(), gameX, bodyY+8)
 		renderText(renderer, config, font, detail, ColorTextTertiary(), gameX, bodyY+8+medH+8)
 	} else {
@@ -786,7 +897,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		artHint = FooterHint{"L1 / F", "Stop"}
 	}
 	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Play"},
-		FooterHint{"X", "LAN Play"}, artHint,
+		FooterHint{"S / R1", "Search"}, FooterHint{"X", "LAN Play"}, artHint,
 		FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	if gameLib.lib.Total == 0 {
 		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})

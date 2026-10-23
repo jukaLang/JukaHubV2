@@ -3,10 +3,22 @@
 JukaHub is controller-first: every screen is reachable with the D-pad and the
 four face buttons. Keyboard and mouse are supported on desktop builds.
 
-The top bar always shows the system status — network, weather, clock, battery
-and the notification bell on the right, the **Apps** pill and a **back** pill on
-the left. The bottom of every screen is the hint bar for real controller
-bindings; there is no second clock or battery indicator down there.
+The top bar always shows the system status — a Wi-Fi meter, the weather chip,
+the clock, a battery gauge and the notification bell on the right, the **Apps**
+pill and a **back** pill on the left. The bottom of every screen is the hint bar
+for real controller bindings; there is no second clock or battery indicator
+down there.
+
+The **Wi-Fi meter** is the leftmost item of that right-hand cluster and a button
+on every screen: four bars that are hollow when there is no link and fill with
+signal strength, plus `! Offline` while the device has no network at all. A
+click or tap opens the Wi-Fi picker (scan, connect, enter a password); from a
+controller the same picker is **Start → Wi-Fi Networks**, and it is also the
+Wi-Fi row in Quick Settings.
+
+The **battery gauge** sits right of the clock: a cell filled to the charge left,
+with the percentage beside it. It is green above 50%, yellow from 50% down to
+20%, and red below that, so a dying battery is obvious from any screen.
 
 The header chips are buttons on every screen: the weather chip
 (`21C / 12C`, or `69F / 53F` in the US) opens **Local weather**, a seven-day
@@ -535,7 +547,7 @@ is masked, and **A** on the keyboard's key submits; closing the keyboard cancels
 ## Power tools
 
 Open **Tools → Power tools** for the developer and power-user panel. The
-landing page holds six tools; **A** opens one, **B** goes back, and the list
+landing page holds eight tools; **A** opens one, **B** goes back, and the list
 scrolls when the font is large.
 
 | Input | Action |
@@ -582,6 +594,47 @@ score. Set `powerBenchURL` in the config (or the `JUKAHUB_BENCH_URL`
 environment variable) to a JSON array of the same entries to fetch an online
 board; **A** on **Copy board** puts the local and fetched entries on the
 clipboard.
+
+**Memory scanner** opens the RAM scanner and **Controller test** opens the pad
+diagnostic; both are described in their own sections below. Power tools closes
+when either opens.
+
+## Memory scanner
+
+Open **Tools → Power tools → Memory scanner** to find and change a value in a
+running game's memory. See [docs/MEMORY.md](MEMORY.md) for what the scan does and
+what it cannot do.
+
+| Input | Action |
+|-------|--------|
+| Up / Down | Move through the process list, the actions or the found addresses |
+| PageUp / PageDown | Jump ten rows in the process list or the address table |
+| Left / Right | Change the search width (1, 2, 4 or 8 bytes) on the actions page |
+| A | Pick a process, open the value field, scan, narrow, browse results or write |
+| Y | Narrow the scan to the value in the field (the same as the Narrow row) |
+| R | Reload the process list on the picker page |
+| B / Esc | Back from the address table, then close the panel |
+
+The value field opens the on-screen keyboard on its digits layer. **ENTER** uses
+the number; an empty field clears it. Decimal and `0x` hex are both accepted,
+and a leading `-` is written as the two's complement the width allows.
+
+Writes are two presses: the first arms the address and the second writes it.
+There is no undo — the game keeps the new value until it overwrites it itself.
+
+## Controller test
+
+Open **Tools → Power tools → Controller test** to see the raw pad state. See
+[docs/CONTROLLER_TEST.md](CONTROLLER_TEST.md) for the drift verdict.
+
+| Input | Action |
+|-------|--------|
+| Click **Reset** / keyboard R | Clear every reading |
+| Hold **SELECT** 1.2 s | Close the panel |
+| Keyboard Esc, click outside | Close |
+
+The panel consumes every pad event while it is open, so no button acts on the
+UI — including B. Holding SELECT is the way out.
 
 ## Community & support
 

@@ -114,10 +114,9 @@ document.addEventListener('DOMContentLoaded', () => {
   // Update readouts
   updateCanvasReadout();
 
-  // Try auto-save first, then fall back to default config
-  if (!loadAutoSave()) {
-    loadDefaultConfig();
-  }
+  // Always start from the shipped player/jukaconfig.json so the website matches
+  // the app; fall back to the auto-save only if the config cannot be loaded.
+  loadDefaultConfig(() => { loadAutoSave(); });
 
   // Fit the device once the layout (and the measured footer height) settles.
   fitCanvasToViewport();
@@ -4694,7 +4693,7 @@ function deleteScene() {
   }
 }
 
-function loadDefaultConfig() {
+function loadDefaultConfig(onFailure) {
   fetch('player/jukaconfig.json')
     .then(response => {
       if (!response.ok) {
@@ -4707,6 +4706,7 @@ function loadDefaultConfig() {
     })
     .catch(error => {
       console.log('No default config found:', error.message);
+      if (onFailure) onFailure();
     });
 }
 

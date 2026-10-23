@@ -177,7 +177,8 @@ func modalPanelBlocksShoulders() bool {
 		castPanel.open || musicSettings.open || a11y.open || smartHomePanel.open ||
 		calibrationPanel.open || chiakiPanel.open || savePanel.open || curationPanel.open ||
 		portsPanel.open || toolsPanel.open || netplayPanel.open || gameLib.open || emuPanel.open ||
-		weatherPopoverOpen || socialNotifOpen || imageViewerPath != "" || virtualKeyboardActive
+		weatherPopoverOpen || socialNotifOpen || imageViewerPath != "" || virtualKeyboardActive ||
+		memPanel.open || ctrldiag.open
 }
 
 // startMenuShoulder pages the entries of the open group; the triggers jump to

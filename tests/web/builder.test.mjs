@@ -288,3 +288,31 @@ test('youtube trigger options are visible, prefilled and round-trip to triggerTa
 
   [search, play].forEach(el => el.remove());
 });
+
+test('typed setting fallback reads the real camelCase key, not a lowercased one', () => {
+  const { window } = dom;
+
+  // effectiveConfigValue resolves a setting in the player's order: Custom
+  // override first, then live variables, then the imported config's typed
+  // fields. The typed-field fallback used to look up a *lowercased* name
+  // ("gridcolumns"), so a config that only declared the player's camelCase
+  // "gridColumns" silently fell through and the panel showed a stale value.
+  //
+  // "gridColumns" is used as the probe because it is not one of the live
+  // variables the page seeds at load (screenWidth/screenHeight are), so the
+  // lookup exercises the imported-config branch rather than the live one.
+  // importedConfig is module-scoped, so it is seeded through restoreSnapshot
+  // (the real project-load path) rather than by assigning window.importedConfig.
+  const snapshot = {
+    scenes: {},
+    variables: {},
+    importedConfig: { top: {}, variables: { gridColumns: 7 }, scenes: {} },
+  };
+  window.restoreSnapshot(snapshot);
+
+  // The imported config's camelCase key must be found as-is.
+  assert.equal(window.effectiveConfigValue('gridColumns'), 7);
+
+  // A key absent everywhere resolves to undefined rather than throwing.
+  assert.equal(window.effectiveConfigValue('definitelyNotAKey'), undefined);
+});

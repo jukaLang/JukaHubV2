@@ -27,11 +27,12 @@ targets a 1280×720 logical canvas.
 | [PACKAGES.md](PACKAGES.md) | package format, the signed repository, Patch transactions |
 | [GAME_PROFILES.md](GAME_PROFILES.md) | game-profile schema, Box64/Wine launching, import/export |
 | [WINDOWS_APPS.md](WINDOWS_APPS.md) | .exe discovery, Wine display bridge, WestonPack setup |
+| [ANDROID.md](ANDROID.md) | the Android container engine: binder gate, package list, launch and display bridge |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
 | [SECURITY.md](../player/SECURITY.md) | secret storage, crypto, threat notes |
 | [IMPROVEMENTS.md](IMPROVEMENTS.md) | what we learned from BrickOS, the backlog it implies, and where we are ahead |
 | [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | netplay, OSD/recording, simple mode, box art, game switcher: what exists and what cannot work |
-| [trimui/README-ID.md](../player/trimui/README-ID.md) | device package and launcher details |
+| [trimui/README.md](../player/trimui/README.md) | device package and launcher details |
 
 ## Repository layout
 
@@ -305,8 +306,10 @@ Controller-first, dark, optimised for a 1280×720 canvas read at arm's length.
 ### Scene shell
 
 1. **Global header** (56 px) — brand, version and the active scene on the left;
-   network / weather / clock / battery on the right, from one shared helper so
-   it never shifts between screens.
+   the Wi-Fi meter, weather, clock and battery gauge on the right, from one
+   shared helper so it never shifts between screens. The meter and the gauge are
+   drawn by `player/statusbar_status.go` for both this bar and the home header;
+   the cluster itself is still `headerStatusParts` returning strings.
 2. **Scene body** — clipped inside a content panel that ends 16 px above the
    footer, so no element can reach the footer band.
 3. **Footer** (48 px) — hints that reflect real bindings.

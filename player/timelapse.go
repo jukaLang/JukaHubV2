@@ -115,6 +115,33 @@ var (
 	timelapseNotify = queueTimelapseNotice
 )
 
+// timelapseDeps is the set of helpers one session uses. They are read once,
+// when the session starts, and carried on the recorder: the capture goroutine
+// then never touches the seam variables above, which other code (and the tests)
+// may replace at any time.
+type timelapseDeps struct {
+	capture func(*Config, string) (string, []string, error)
+	grab    func(string, []string) error
+	encoder func(*Config) (string, error)
+	encode  func(string, []string) error
+	root    func() string
+	now     func() time.Time
+	notify  func(string, ToastKind)
+}
+
+// timelapseDepsNow takes a consistent copy of the current helpers.
+func timelapseDepsNow() timelapseDeps {
+	return timelapseDeps{
+		capture: timelapseCapture,
+		grab:    timelapseGrab,
+		encoder: timelapseEncoder,
+		encode:  timelapseEncode,
+		root:    timelapseRootDir,
+		now:     timelapseNow,
+		notify:  timelapseNotify,
+	}
+}
+
 // timelapseEncodeMu serialises assembly: two games finishing at once would
 // otherwise compete for the encoder on a small CPU.
 var timelapseEncodeMu sync.Mutex
@@ -262,6 +289,10 @@ type timelapseRecorder struct {
 	frames []string
 	warned bool
 
+	// deps is fixed for the session, so the goroutine below can use it
+	// without synchronising against the package-level seams.
+	deps timelapseDeps
+
 	stopCh chan struct{}
 	doneCh chan struct{}
 	once   sync.Once
@@ -295,6 +326,7 @@ func startTimelapse(config *Config, title string) *timelapseRecorder {
 		settings: settings,
 		title:    title,
 		dir:      dir,
+		deps:     timelapseDepsNow(),
 		stopCh:   make(chan struct{}),
 		doneCh:   make(chan struct{}),
 	}
@@ -327,12 +359,12 @@ func (r *timelapseRecorder) run(config *Config) {
 func (r *timelapseRecorder) capture(config *Config) {
 	name := fmt.Sprintf("frame_%04d.png", len(r.frames))
 	path := filepath.Join(r.dir, name)
-	prog, args, err := timelapseCapture(config, path)
+	prog, args, err := r.deps.capture(config, path)
 	if err != nil {
 		r.warn(err)
 		return
 	}
-	if err := timelapseGrab(prog, args); err != nil {
+	if err := r.deps.grab(prog, args); err != nil {
 		r.warn(err)
 		return
 	}
@@ -370,7 +402,7 @@ func (r *timelapseRecorder) finish(config *Config) {
 		}
 		return
 	}
-	out, err := assembleTimelapse(config, r.dir, r.title)
+	out, err := assembleTimelapseWith(r.deps, config, r.dir, r.title)
 	if err != nil {
 		// Keep the frames: they are the only copy of the session, and a later
 		// build may be able to assemble them.
@@ -386,26 +418,31 @@ func (r *timelapseRecorder) finish(config *Config) {
 }
 
 func (r *timelapseRecorder) notify(message string, kind ToastKind) {
-	if timelapseNotify != nil {
-		timelapseNotify(message, kind)
+	if r.deps.notify != nil {
+		r.deps.notify(message, kind)
 	}
 }
 
 // assembleTimelapse encodes the session's frames into one mp4. 24 fps keeps the
 // file short; each still stands for the seconds between captures.
 func assembleTimelapse(config *Config, dir, title string) (string, error) {
-	ffmpeg, err := timelapseEncoder(config)
+	return assembleTimelapseWith(timelapseDepsNow(), config, dir, title)
+}
+
+// assembleTimelapseWith is the assembly half, run against one session's helpers.
+func assembleTimelapseWith(deps timelapseDeps, config *Config, dir, title string) (string, error) {
+	ffmpeg, err := deps.encoder(config)
 	if err != nil {
 		return "", err
 	}
-	root := timelapseRootDir()
+	root := deps.root()
 	if root == "" {
 		return "", errors.New("no data folder for time-lapses")
 	}
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
-	out := filepath.Join(root, timelapseFilmName(title, timelapseNow()))
+	out := filepath.Join(root, timelapseFilmName(title, deps.now()))
 	args := []string{
 		"-loglevel", "error",
 		"-framerate", strconv.Itoa(timelapseOutputFPS),
@@ -418,7 +455,7 @@ func assembleTimelapse(config *Config, dir, title string) (string, error) {
 		"-y", out,
 	}
 	timelapseEncodeMu.Lock()
-	err = timelapseEncode(ffmpeg, args)
+	err = deps.encode(ffmpeg, args)
 	timelapseEncodeMu.Unlock()
 	if err != nil {
 		_ = os.Remove(out)

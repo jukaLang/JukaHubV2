@@ -251,6 +251,10 @@ func TestSmartWidgetsPageIsNavigable(t *testing.T) {
 // time of day moves on, and the switch must land on the new bucket's preset.
 func TestTimeOfDayThemeRespectsManualChoice(t *testing.T) {
 	t.Chdir(t.TempDir()) // applyThemePreset persists jukauser.json
+	// This test applies three presets: the palette has to come back, or every
+	// render test after it inherits "midnight".
+	palette := capturePalette()
+	t.Cleanup(func() { restorePalette(palette) })
 	prevBucket := lastTimeOfDayBucket
 	lastTimeOfDayBucket = -1
 	t.Cleanup(func() { lastTimeOfDayBucket = prevBucket })
@@ -291,6 +295,8 @@ func TestTimeOfDayThemeRespectsManualChoice(t *testing.T) {
 // the user's own values back when it releases.
 func TestBatterySaverPreservesUserSettings(t *testing.T) {
 	t.Chdir(t.TempDir()) // applyThemePreset persists jukauser.json
+	palette := capturePalette()
+	t.Cleanup(func() { restorePalette(palette) })
 	prevDelay := userConfigSaveDelay
 	userConfigSaveDelay = time.Hour
 	t.Cleanup(func() {

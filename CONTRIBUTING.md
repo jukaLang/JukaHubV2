@@ -128,7 +128,7 @@ JukaHubV2/
 |------|---------|
 | `player/*.go`, `docs/`, `CONTRIBUTING.md`, `README.md`, `CHANGELOG.md` | yes |
 | `player/jukaconfig.json` — the design config | yes (it is tracked, and the app's default UI) |
-| `player/trimui/jukaconfig.device.json` | yes — regenerate it when the full config changes (see [`player/trimui/README-ID.md`](player/trimui/README-ID.md)) |
+| `player/trimui/jukaconfig.device.json` | yes — regenerate it when the full config changes (see [`player/trimui/README.md`](player/trimui/README.md)) |
 | `player/jukauser.json` | **never** — your personal settings; git-ignored |
 | `player/errors.txt`, `logs.txt`, `jukaalarm.json`, `safe-mode.flag` | **never** — runtime files |
 | API keys, Discord tokens, `JUKAHUB_CRYPTO_KEY` values | **never** — see [`player/SECURITY.md`](player/SECURITY.md) |

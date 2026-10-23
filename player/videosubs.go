@@ -8,13 +8,16 @@ package main
 // button on the control bar toggles them.
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -191,16 +194,15 @@ func extractEmbeddedSubtitles(ffmpegPath, videoPath string) ([]subtitleCue, stri
 // use a sidecar first and fall back to an embedded track; network streams have
 // neither, so subtitles stay off with an explanatory status.
 func prepareVideoSubtitles(config *Config, source string) {
+	if isNetworkSource(source) {
+		// Cues for network sources come from fetchNetworkSubtitles, which may
+		// already have finished; do not clear them here.
+		return
+	}
 	videoSubs.mu.Lock()
 	videoSubs.cues = nil
 	videoSubs.status = ""
 	videoSubs.mu.Unlock()
-
-	lower := strings.ToLower(source)
-	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") ||
-		strings.HasPrefix(lower, "rtsp://") || strings.HasPrefix(lower, "rtmp://") {
-		return
-	}
 	cues, label := loadSidecarSubtitles(source)
 	if len(cues) == 0 {
 		ffmpegPath := ""
@@ -212,6 +214,80 @@ func prepareVideoSubtitles(config *Config, source string) {
 	videoSubs.mu.Lock()
 	videoSubs.cues = cues
 	videoSubs.status = label
+	videoSubs.mu.Unlock()
+}
+
+// isNetworkSource reports whether a playback source is a remote URL.
+func isNetworkSource(source string) bool {
+	lower := strings.ToLower(source)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "rtsp://") || strings.HasPrefix(lower, "rtmp://")
+}
+
+// pickSubtitleFile returns the first subtitle file yt-dlp wrote into dir,
+// preferring WebVTT over SRT. It returns "" when none was written.
+func pickSubtitleFile(dir string) string {
+	for _, ext := range []string{".vtt", ".srt"} {
+		matches, _ := filepath.Glob(filepath.Join(dir, "*"+ext))
+		if len(matches) > 0 {
+			return matches[0]
+		}
+	}
+	return ""
+}
+
+// fetchNetworkSubtitles asks yt-dlp for the page's own subtitles in the
+// background. It downloads only text tracks (no media), and sets cues only if
+// the playback session is still current when the download finishes.
+func fetchNetworkSubtitles(sess *playbackSession, config *Config, pageURL string) {
+	if sess == nil || config == nil || !isNetworkSource(pageURL) {
+		return
+	}
+	ytDlpPath := getToolPath("yt-dlp", config)
+	if ytDlpPath == "" {
+		return
+	}
+	dir, err := os.MkdirTemp("", "juka-subs-")
+	if err != nil {
+		return
+	}
+	defer os.RemoveAll(dir)
+
+	ctx, cancel := context.WithTimeout(sess.ctx, 2*time.Minute)
+	defer cancel()
+	args := []string{
+		"--skip-download",
+		"--no-playlist",
+		"--write-subs",
+		"--sub-langs", "en.*,en",
+		"--sub-format", "vtt/srt/best",
+		"-o", filepath.Join(dir, "subs"),
+		pageURL,
+	}
+	args = append(args, ytDlpExtraArgsSlice(config)...)
+	cmd := exec.CommandContext(ctx, ytDlpPath, args...)
+	cmd.Env = helperToolEnv(ytDlpPath)
+	cmd.WaitDelay = 3 * time.Second
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("[SUBS] yt-dlp subtitle fetch failed: %v (%s)", err, strings.TrimSpace(string(out)))
+		return
+	}
+
+	path := pickSubtitleFile(dir)
+	if path == "" || !sess.isCurrent() {
+		return
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	cues := parseSubtitles(string(data))
+	if len(cues) == 0 || !sess.isCurrent() {
+		return
+	}
+	videoSubs.mu.Lock()
+	videoSubs.cues = cues
+	videoSubs.status = "yt-dlp"
 	videoSubs.mu.Unlock()
 }
 

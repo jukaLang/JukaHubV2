@@ -686,7 +686,9 @@ func browseWebPageResult(rawURL string) browserPage {
 	if len(body) > textBrowserMaxPageBytes {
 		return browserPage{Text: "Page is larger than the 2 MiB browser limit."}
 	}
-	source := string(body)
+	// Page scripts run first, so the text, link, CSS and image passes below see
+	// the markup they produced (webscript.go).
+	source := runWebPageScripts(string(body), resp.Request.URL)
 	title, pageText := extractTextBrowserHTML(source)
 	if title == "" {
 		title = resp.Request.URL.Hostname()

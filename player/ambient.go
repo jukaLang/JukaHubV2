@@ -174,7 +174,8 @@ func ambientEntryBlocked(config *Config) bool {
 		transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
 		nc.open || tb.startOpen || processPanel.open || wifiPanel.open || ipPanelOpen || emuPanel.open || gameLib.open ||
 		gpPanel.open || winAppsPanel.open || portsPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open ||
-		raPanel.open || a11y.open || wpOpen || socialNotifOpen || smartHomePanel.open {
+		raPanel.open || a11y.open || wpOpen || socialNotifOpen || smartHomePanel.open || memPanel.open ||
+		ctrldiag.open {
 		return true
 	}
 	return retroArchRunning()

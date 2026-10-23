@@ -161,6 +161,27 @@ type webStyle struct {
 	// label still knows where it points and the browser can walk links with
 	// the D-pad.
 	Href string
+	// Vars is the custom-property scope in force for this element. Every
+	// var() is already resolved by the time a style reaches a block, so this
+	// only carries inheritance down the parse; it stays a pointer so a
+	// webStyle is still comparable and adjacent runs still merge.
+	Vars *webVarScope
+}
+
+// webVarScope is one element's view of the custom properties: the ones it
+// inherited plus the ones it declares, all expanded to plain text.
+type webVarScope struct {
+	props map[string]string
+}
+
+// lookup returns a property already expanded past var(). A nil scope is the
+// document before any `--name` was seen.
+func (s *webVarScope) lookup(name string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	value, ok := s.props[name]
+	return value, ok
 }
 
 // webRun is a styled span inside a block.
@@ -335,6 +356,10 @@ type webRule struct {
 	specificity int
 	order       int
 	decls       map[string]string
+	// important holds the !important declarations of the same rule. They are
+	// kept apart because they outrank every normal declaration, whatever the
+	// selector's specificity.
+	important map[string]string
 }
 
 // webFrame is an open element during the streaming parse.
@@ -449,8 +474,8 @@ func parseWebCSS(src string) []webRule {
 			}
 			continue
 		}
-		decls := parseWebDecls(body)
-		if len(decls) == 0 {
+		decls, important := parseWebDeclsSplit(body)
+		if len(decls) == 0 && len(important) == 0 {
 			continue
 		}
 		for _, selector := range strings.Split(selectorText, ",") {
@@ -463,6 +488,7 @@ func parseWebCSS(src string) []webRule {
 				specificity: webSelectorSpecificity(selector),
 				order:       order,
 				decls:       decls,
+				important:   important,
 			})
 			order++
 		}
@@ -520,8 +546,10 @@ func webCSSBlockEnd(src string, open int) int {
 	return -1
 }
 
-func parseWebDecls(src string) map[string]string {
-	decls := make(map[string]string, 8)
+// parseWebDeclsSplit reads one declaration block. Declarations marked
+// !important come back separately so the cascade can apply them last.
+func parseWebDeclsSplit(src string) (decls, important map[string]string) {
+	decls = make(map[string]string, 8)
 	var quote byte
 	start := 0
 	src += ";"
@@ -548,14 +576,419 @@ func parseWebDecls(src string) map[string]string {
 			if name == "" || value == "" {
 				continue
 			}
-			value = strings.TrimSpace(strings.Replace(value, "!important", "", 1))
-			if value == "" {
+			if stripped, marked := webDropImportant(value); marked {
+				if stripped == "" {
+					continue
+				}
+				if important == nil {
+					important = make(map[string]string, 2)
+				}
+				important[name] = stripped
 				continue
 			}
 			decls[name] = value
 		}
 	}
-	return decls
+	return decls, important
+}
+
+// webDropImportant removes a trailing !important, in any letter case, and
+// reports whether it was there. The flag has to be stripped before the value
+// reaches a length or colour parser.
+func webDropImportant(value string) (string, bool) {
+	lower := strings.ToLower(value)
+	idx := strings.LastIndex(lower, "!important")
+	if idx < 0 {
+		return value, false
+	}
+	if strings.TrimSpace(value[idx+len("!important"):]) != "" {
+		return value, false
+	}
+	return strings.TrimSpace(value[:idx]), true
+}
+
+// --- Custom properties, var() and calc() ----------------------------------
+
+// webVarScopeFor builds the scope one element sees. Inherited properties are
+// already expanded, so only the element's own ones are resolved here.
+func webVarScopeFor(parent *webVarScope, decls map[string]string) *webVarScope {
+	var own map[string]string
+	for name, value := range decls {
+		if !strings.HasPrefix(name, "--") {
+			continue
+		}
+		if own == nil {
+			own = make(map[string]string, 4)
+		}
+		own[name] = value
+	}
+	if len(own) == 0 {
+		return parent
+	}
+	props := make(map[string]string, len(own)+4)
+	if parent != nil {
+		for name, value := range parent.props {
+			props[name] = value
+		}
+	}
+	visiting := make(map[string]bool, len(own))
+	for name := range own {
+		if value, ok := webResolveCustomProperty(name, own, props, visiting, 0); ok {
+			props[name] = value
+		}
+	}
+	return &webVarScope{props: props}
+}
+
+// webResolveCustomProperty expands one `--name` to text with no var() left in
+// it. A cycle (`--a: var(--b); --b: var(--a)`) is invalid at computed-value
+// time, so it reports false and the property leaves the scope, which is what
+// makes a later `var(--a, 12px)` fall back to 12px.
+func webResolveCustomProperty(name string, own, props map[string]string, visiting map[string]bool, depth int) (string, bool) {
+	if depth > 8 || visiting[name] {
+		return "", false
+	}
+	raw, ok := own[name]
+	if !ok {
+		raw, ok = props[name]
+	}
+	if !ok {
+		return "", false
+	}
+	if !strings.Contains(strings.ToLower(raw), "var(") {
+		return raw, true
+	}
+	visiting[name] = true
+	defer delete(visiting, name)
+	value, changed := webReplaceVarRefs(raw, own, props, visiting, depth)
+	if !changed {
+		return "", false
+	}
+	return value, true
+}
+
+// webSubstituteVars replaces every var() in an ordinary declaration value.
+// A reference that resolves to nothing and has no fallback is invalid at
+// computed-value time: the whole declaration is then left as authored and the
+// property parsers ignore it, which is how a browser drops it too.
+func webSubstituteVars(value string, scope *webVarScope) string {
+	if !strings.Contains(strings.ToLower(value), "var(") {
+		return value
+	}
+	var props map[string]string
+	if scope != nil {
+		props = scope.props
+	}
+	current := value
+	for pass := 0; pass < 8; pass++ {
+		if !strings.Contains(strings.ToLower(current), "var(") {
+			return current
+		}
+		next, changed := webReplaceVarRefs(current, nil, props, map[string]bool{}, 0)
+		if !changed {
+			return value
+		}
+		current = next
+	}
+	return value
+}
+
+// webReplaceVarRefs substitutes the var() calls in one value. It reports false
+// when a reference cannot be resolved at all, so the caller can drop the
+// declaration instead of leaving a half-substituted string behind.
+func webReplaceVarRefs(value string, own, props map[string]string, visiting map[string]bool, depth int) (string, bool) {
+	var out strings.Builder
+	out.Grow(len(value))
+	lower := strings.ToLower(value)
+	changed := false
+	for i := 0; i < len(value); {
+		idx := strings.Index(lower[i:], "var(")
+		if idx < 0 {
+			out.WriteString(value[i:])
+			break
+		}
+		idx += i
+		out.WriteString(value[i:idx])
+		end := webCSSParenEnd(value, idx+3)
+		if end < 0 {
+			return "", false
+		}
+		name, fallback, hasFallback := webVarArgs(value[idx+4 : end])
+		replacement, ok := webResolveCustomProperty(name, own, props, visiting, depth+1)
+		if !ok {
+			if !hasFallback {
+				return "", false
+			}
+			// A fallback may itself hold var() calls, but plain text is the
+			// common case and has nothing to expand.
+			if nested, nestedChanged := webReplaceVarRefs(fallback, own, props, visiting, depth+1); nestedChanged {
+				replacement = nested
+			} else {
+				replacement = fallback
+			}
+		}
+		out.WriteString(replacement)
+		changed = true
+		i = end + 1
+	}
+	if !changed {
+		return value, false
+	}
+	return out.String(), true
+}
+
+// webVarArgs splits the inside of var(...) into the property name and its
+// fallback. Only a comma outside brackets separates the two.
+func webVarArgs(inner string) (name, fallback string, hasFallback bool) {
+	depth := 0
+	var quote byte
+	for i := 0; i < len(inner); i++ {
+		c := inner[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				return strings.TrimSpace(inner[:i]), strings.TrimSpace(inner[i+1:]), true
+			}
+		}
+	}
+	return strings.TrimSpace(inner), "", false
+}
+
+// webCSSParenEnd finds the bracket matching the one at open, skipping brackets
+// inside quoted strings.
+func webCSSParenEnd(src string, open int) int {
+	depth := 0
+	var quote byte
+	for i := open; i < len(src); i++ {
+		c := src[i]
+		if quote != 0 {
+			if c == '\\' {
+				i++
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch c {
+		case '\'', '"':
+			quote = c
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// webResolveValue prepares one declaration for the property parsers: var()
+// substituted first, then any calc() that can be reduced to a px length.
+func webResolveValue(value string, scope *webVarScope, em float64) string {
+	value = webSubstituteVars(value, scope)
+	if strings.Contains(strings.ToLower(value), "calc(") {
+		value = webSubstituteCalc(value, em)
+	}
+	return value
+}
+
+// webSubstituteCalc replaces each calc() it can evaluate with a px length. A
+// calc() that mixes in a unit the reader cannot resolve yet (`100% - 20px`)
+// is left as authored.
+func webSubstituteCalc(value string, em float64) string {
+	if em <= 0 {
+		em = 16
+	}
+	lower := strings.ToLower(value)
+	var out strings.Builder
+	out.Grow(len(value))
+	for i := 0; i < len(value); {
+		idx := strings.Index(lower[i:], "calc(")
+		if idx < 0 {
+			out.WriteString(value[i:])
+			break
+		}
+		idx += i
+		end := webCSSParenEnd(value, idx+4)
+		if end < 0 {
+			out.WriteString(value[i:])
+			break
+		}
+		out.WriteString(value[i:idx])
+		if px, ok := webEvalCalc(value[idx+5:end], em); ok {
+			out.WriteString(strconv.FormatFloat(px, 'f', -1, 64))
+			out.WriteString("px")
+		} else {
+			out.WriteString(value[idx : end+1])
+		}
+		i = end + 1
+	}
+	return out.String()
+}
+
+// webCalcValue is one operand of a calc() expression. A unitless number is
+// only legal against another unitless number or as a multiplier.
+type webCalcValue struct {
+	px       float64
+	unitless bool
+}
+
+// webCalcParser evaluates the arithmetic inside calc(). It handles + - * /,
+// nested brackets and px/em/rem operands; anything else fails and the caller
+// keeps the original text.
+type webCalcParser struct {
+	src string
+	pos int
+	em  float64
+}
+
+func webEvalCalc(expr string, em float64) (float64, bool) {
+	p := &webCalcParser{src: expr, em: em}
+	value, ok := p.sum()
+	if !ok {
+		return 0, false
+	}
+	p.skipSpace()
+	if p.pos != len(p.src) {
+		return 0, false
+	}
+	return value.px, true
+}
+
+func (p *webCalcParser) skipSpace() {
+	for p.pos < len(p.src) && (p.src[p.pos] == ' ' || p.src[p.pos] == '\t' || p.src[p.pos] == '\n') {
+		p.pos++
+	}
+}
+
+func (p *webCalcParser) sum() (webCalcValue, bool) {
+	left, ok := p.product()
+	if !ok {
+		return webCalcValue{}, false
+	}
+	for {
+		p.skipSpace()
+		if p.pos >= len(p.src) || (p.src[p.pos] != '+' && p.src[p.pos] != '-') {
+			return left, true
+		}
+		op := p.src[p.pos]
+		p.pos++
+		right, ok := p.product()
+		if !ok || left.unitless != right.unitless {
+			return webCalcValue{}, false
+		}
+		if op == '+' {
+			left.px += right.px
+		} else {
+			left.px -= right.px
+		}
+	}
+}
+
+func (p *webCalcParser) product() (webCalcValue, bool) {
+	left, ok := p.factor()
+	if !ok {
+		return webCalcValue{}, false
+	}
+	for {
+		p.skipSpace()
+		if p.pos >= len(p.src) || (p.src[p.pos] != '*' && p.src[p.pos] != '/') {
+			return left, true
+		}
+		op := p.src[p.pos]
+		p.pos++
+		right, ok := p.factor()
+		if !ok {
+			return webCalcValue{}, false
+		}
+		if op == '*' {
+			if !left.unitless && !right.unitless {
+				return webCalcValue{}, false
+			}
+			left.px *= right.px
+			left.unitless = left.unitless && right.unitless
+			continue
+		}
+		if !right.unitless || right.px == 0 {
+			return webCalcValue{}, false
+		}
+		left.px /= right.px
+	}
+}
+
+func (p *webCalcParser) factor() (webCalcValue, bool) {
+	p.skipSpace()
+	if p.pos >= len(p.src) {
+		return webCalcValue{}, false
+	}
+	switch p.src[p.pos] {
+	case '(':
+		p.pos++
+		value, ok := p.sum()
+		if !ok {
+			return webCalcValue{}, false
+		}
+		p.skipSpace()
+		if p.pos >= len(p.src) || p.src[p.pos] != ')' {
+			return webCalcValue{}, false
+		}
+		p.pos++
+		return value, true
+	case '-', '+':
+		sign := 1.0
+		if p.src[p.pos] == '-' {
+			sign = -1
+		}
+		p.pos++
+		value, ok := p.factor()
+		if !ok {
+			return webCalcValue{}, false
+		}
+		value.px *= sign
+		return value, true
+	}
+	start := p.pos
+	for p.pos < len(p.src) && (p.src[p.pos] >= '0' && p.src[p.pos] <= '9' || p.src[p.pos] == '.') {
+		p.pos++
+	}
+	if p.pos == start {
+		return webCalcValue{}, false
+	}
+	number, err := strconv.ParseFloat(p.src[start:p.pos], 64)
+	if err != nil {
+		return webCalcValue{}, false
+	}
+	unitStart := p.pos
+	for p.pos < len(p.src) && (p.src[p.pos] >= 'a' && p.src[p.pos] <= 'z' || p.src[p.pos] == '%') {
+		p.pos++
+	}
+	switch strings.ToLower(p.src[unitStart:p.pos]) {
+	case "":
+		return webCalcValue{px: number, unitless: true}, true
+	case "px":
+		return webCalcValue{px: number}, true
+	case "em":
+		return webCalcValue{px: number * p.em}, true
+	case "rem":
+		return webCalcValue{px: number * 16}, true
+	}
+	return webCalcValue{}, false
 }
 
 // webSelectorParts splits a selector into compounds on descendant combinators.
@@ -1971,12 +2404,50 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 		}
 		return matched[i].order < matched[j].order
 	})
+	// Cascade: every normal declaration in specificity order, then the
+	// !important ones. Collapsing the winners into one map also gives var()
+	// and calc() the final value to resolve against, so the property parsers
+	// below only ever see plain lengths and colours.
+	merged := make(map[string]string, 16)
 	for _, rule := range matched {
-		applyWebDecls(&st, rule.decls)
+		for name, value := range rule.decls {
+			merged[name] = value
+		}
+	}
+	for _, rule := range matched {
+		for name, value := range rule.important {
+			merged[name] = value
+		}
 	}
 	if inline := htmlTagAttribute(attrs, "style"); inline != "" {
-		applyWebDecls(&st, parseWebDecls(inline))
+		inlineDecls, inlineImportant := parseWebDeclsSplit(inline)
+		for name, value := range inlineDecls {
+			merged[name] = value
+		}
+		for name, value := range inlineImportant {
+			merged[name] = value
+		}
 	}
+	// Custom properties are inherited, so this element's own definitions are
+	// resolved once here and carried down by the frames below it.
+	st.Vars = webVarScopeFor(p.topStyle().Vars, merged)
+	for name := range merged {
+		if strings.HasPrefix(name, "--") {
+			delete(merged, name)
+		}
+	}
+	// `em` inside calc() is this element's font size, which font-size itself
+	// has to settle first.
+	em := st.FontPx
+	if raw, ok := merged["font-size"]; ok {
+		if px, valid := webFontSizePx(webResolveValue(raw, st.Vars, em), em); valid {
+			em = px
+		}
+	}
+	for name, value := range merged {
+		merged[name] = webResolveValue(value, st.Vars, em)
+	}
+	applyWebDecls(&st, merged)
 	// The anchor target is not a CSS property and is never inherited from a
 	// sibling: every <a> names its own, and its children inherit that.
 	if el.tag == "a" {

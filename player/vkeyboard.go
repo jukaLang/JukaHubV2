@@ -44,15 +44,17 @@ const (
 	vkTargetScene vkTargetKind = iota
 	vkTargetChat
 	vkTargetUnit
-	vkTargetTerm     // terminal command line
-	vkTargetName     // chat display name
-	vkTargetTV       // Live TV channel search
-	vkTargetParty    // Watch Party invite / shared link
-	vkTargetRA       // RetroAchievements username / Web API key
-	vkTargetMusic    // audio player initialism search
-	vkTargetNetplay  // LAN play host address
-	vkTargetPSRemote // PS Remote Play pairing / account / address entry
-	vkTargetWiFi     // Wi-Fi passphrase for the network picker
+	vkTargetTerm       // terminal command line
+	vkTargetName       // chat display name
+	vkTargetTV         // Live TV channel search
+	vkTargetParty      // Watch Party invite / shared link
+	vkTargetRA         // RetroAchievements username / Web API key
+	vkTargetMusic      // audio player initialism search
+	vkTargetNetplay    // LAN play host address
+	vkTargetPSRemote   // PS Remote Play pairing / account / address entry
+	vkTargetWiFi       // Wi-Fi passphrase for the network picker
+	vkTargetMemory     // Memory panel value field (scan / write value)
+	vkTargetGameSearch // game library search
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -297,6 +299,8 @@ func vkEnsureLayout() {
 		target = 6
 	case vkTargetPSRemote:
 		target = 7
+	case vkTargetGameSearch:
+		target = 8
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -534,6 +538,10 @@ func vkCurrentText() string {
 		return vkPSRemoteBuffer
 	case vkTargetWiFi:
 		return wifiPassphraseBuffer
+	case vkTargetMemory:
+		return memValueBuffer
+	case vkTargetGameSearch:
+		return gameLibraryQuery()
 	}
 	return inputTextBuffer
 }
@@ -568,6 +576,12 @@ func vkSetText(text string, config *Config) {
 		vkPSRemoteBuffer = text
 	case vkTargetWiFi:
 		wifiPassphraseBuffer = text
+	case vkTargetMemory:
+		memValueBuffer = text
+	case vkTargetGameSearch:
+		// The library re-filters on every keystroke, so matches appear while
+		// the query is typed instead of after submitting.
+		setGameLibraryQuery(text)
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -652,6 +666,8 @@ func vkTitle() string {
 		return "RETROACHIEVEMENTS USERNAME"
 	case vkTargetMusic:
 		return "SEARCH SONGS"
+	case vkTargetGameSearch:
+		return "SEARCH GAMES"
 	case vkTargetNetplay:
 		return "HOST ADDRESS"
 	case vkTargetPSRemote:
@@ -664,6 +680,8 @@ func vkTitle() string {
 		return "CONSOLE ADDRESS"
 	case vkTargetWiFi:
 		return "WI-FI PASSWORD"
+	case vkTargetMemory:
+		return "VALUE"
 	}
 	if textBrowserSearchEditing {
 		return "SEARCH WEB"
@@ -705,6 +723,8 @@ func vkPlaceholder() string {
 		return "Your RetroAchievements username"
 	case vkTargetMusic:
 		return "Type initials: iwyn = I Want You Now"
+	case vkTargetGameSearch:
+		return "Title, console or file: zelda"
 	case vkTargetNetplay:
 		return "192.168.1.5"
 	case vkTargetPSRemote:
@@ -717,6 +737,8 @@ func vkPlaceholder() string {
 		return "192.168.1.51"
 	case vkTargetWiFi:
 		return "At least 8 characters"
+	case vkTargetMemory:
+		return "Decimal, or 0x for hex"
 	}
 	if textBrowserSearchEditing {
 		return browserSearchPrompt
@@ -746,6 +768,10 @@ func vkHints() string {
 		return hintLine(FooterHint{Label: "Type Initials"}, FooterHint{"A / Y", "Search"}, FooterHint{"B / Esc", "Close"})
 	case vkTargetNetplay:
 		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Start", "Join"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetMemory:
+		return hintLine(FooterHint{"ENTER", "Use Value"}, FooterHint{"123", "Digits"}, FooterHint{"B / Esc", "Cancel"})
+	case vkTargetGameSearch:
+		return hintLine(FooterHint{Label: "Live Filter"}, FooterHint{"A / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
 	}
 	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
@@ -901,6 +927,23 @@ func vkOpenMusicSearch() {
 	chatInputActive = false
 	unitInputActive = false
 	vkTarget = vkTargetMusic
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenGameSearch opens the keyboard for the game library query. The library
+// stays behind it and re-filters on every keystroke, so the hits appear while
+// the query is typed. The current query seeds the field so a typo can be
+// corrected instead of retyped.
+func vkOpenGameSearch() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetGameSearch
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
@@ -1155,6 +1198,9 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetTV:
 		// The filter already applied while typing; submitting just dismisses.
 		vkCloseKeyboard()
+	case vkTargetGameSearch:
+		// Same here: the library narrowed as the query was typed.
+		vkCloseKeyboard()
 	case vkTargetTerm:
 		vkSetText("", config)
 		vkCloseKeyboard()
@@ -1186,6 +1232,11 @@ func vkSubmit(config *Config, askAI bool) {
 		// Submit before closing: closing clears the pending network and buffer.
 		wifiSubmitPassphrase(vkCurrentText())
 		vkCloseKeyboard()
+	case vkTargetMemory:
+		// The buffer is committed before closing, and an empty field clears the
+		// value so the panel shows "not set" instead of holding a stale number.
+		vkCloseKeyboard()
+		memApplyValueInput(text)
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may

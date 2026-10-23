@@ -2,19 +2,19 @@
 # ---------------------------------------------------------------------------
 #  JukaHub → TrimUI Smart Pro SD-card package
 #
-#  Menghasilkan folder siap-salin:
+#  Produces a copy-and-go folder:
 #      dist/JukaHub-SDCARD/Apps/JukaHub/...
-#  dan satu file zip:
+#  and one zip file:
 #      dist/JukaHub-SDCARD.zip
 #
-#  Cara pakai (di dalam container toolchain TrimUI / WSL / Linux):
+#  Usage (inside the TrimUI toolchain container / WSL / Linux):
 #      ./package-sdcard.sh
 #
 #  Environment:
-#      SYSROOT        sysroot SDK TrimUI (default: toolchain linaro)
-#      WITH_YTDLP     1 = unduh yt-dlp ARM64 statis   (default 1)
-#      WITH_FFMPEG    1 = unduh ffmpeg/ffprobe/ffplay  (default 1)
-#      FFMPEG_BUILD   nama aset BtbN                 (default rolling master)
+#      SYSROOT        TrimUI SDK sysroot (default: the linaro toolchain)
+#      WITH_YTDLP     1 = download the static ARM64 yt-dlp   (default 1)
+#      WITH_FFMPEG    1 = download ffmpeg/ffprobe/ffplay     (default 1)
+#      FFMPEG_BUILD   BtbN asset name                       (default rolling master)
 # ---------------------------------------------------------------------------
 set -euo pipefail
 

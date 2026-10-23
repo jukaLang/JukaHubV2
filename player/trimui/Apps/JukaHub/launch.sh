@@ -2,28 +2,28 @@
 # ---------------------------------------------------------------------------
 #  JukaHub launcher — TrimUI Smart Pro / Brick (stock OS / CrossMix)
 #
-#  Dipakai oleh launcher bawaan perangkat:
+#  Called by the device's stock launcher:
 #     /mnt/SDCARD/Apps/JukaHub/config.json  ->  "launch": "launch.sh"
 #
-#  Tugas script ini:
-#    1. ambil alih layar dari launcher bawaan (MainUI)
-#    2. set environment (library SDL2, PATH tool, HOME)
-#    3. jalankan binary JukaHub
-#    4. restart di tempat setelah self-update, atau kembalikan layar ke
-#       launcher saat aplikasi ditutup
+#  What this script does:
+#    1. take the display over from the stock launcher (MainUI)
+#    2. set up the environment (SDL2 libraries, tool PATH, HOME)
+#    3. run the JukaHub binary
+#    4. restart in place after a self-update, or hand the display back to the
+#       launcher when the app exits
 #
 #  jukahub-restart-protocol: 1
 #
-#  Baris di atas dibaca JukaHub sebelum update. Kalau ada, aplikasi menulis
-#  penanda .restart-pending saat akan mengganti dirinya sendiri, dan script ini
-#  yang menjalankan build baru — supervisor firmware tetap di-pause dan MainUI
-#  tidak pernah muncul lagi di tengah update. Tanpa penanda itu, dua UI
-#  menggambar ke /dev/fb0 yang sama dan layar tampak berkedip.
+#  JukaHub reads the line above before an update. When it is present the app
+#  writes a .restart-pending marker as it replaces itself, and this script runs
+#  the new build — the firmware supervisor stays paused and MainUI never
+#  reappears in the middle of an update. Without that marker two UIs draw to
+#  the same /dev/fb0 and the screen appears to flicker.
 # ---------------------------------------------------------------------------
 
 APP_DIR=/mnt/SDCARD/Apps/JukaHub
 
-# Folder app bisa diganti namanya; fallback ke lokasi script ini.
+# The app folder can be renamed; fall back to this script's own location.
 [ -d "$APP_DIR" ] || APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$APP_DIR" || exit 1
@@ -43,13 +43,13 @@ say "=== JukaHub launched from $APP_DIR ==="
 # Flush card writes first: FAT32 is slow and SDL reads the assets right away.
 sync
 
-# Penanda hanya berlaku untuk proses yang baru saja keluar. Sisa dari update
-# yang gagal akan membuat launch ini menunggu helper yang tidak akan datang.
+# The markers only belong to a process that has just exited. Leftovers from a
+# failed update would make this launch wait for a helper that never arrives.
 rm -f "$PENDING" "$SWAPPED" "$FAILED"
 
 # --------------------------------------------------- take over the display
-# MainUI bisa ditemukan lewat pidof (busybox) atau pgrep; kalau tidak ada
-# keduanya, pengecekan di bawah dilewati dan script berperilaku seperti dulu.
+# MainUI can be found through pidof (busybox) or pgrep; when neither exists,
+# the checks below are skipped and the script behaves as it did before.
 ui_pid() {
     if command -v pidof >/dev/null 2>&1; then
         pidof MainUI 2>/dev/null

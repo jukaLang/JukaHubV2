@@ -23,6 +23,10 @@ Open it from **Apps → Browser** or **Start → Browser**.
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows (cards
   and icon+label pairs side by side), and absolutely positioned or fixed
   layers painted over the text in `z-index` order.
+* Resolve the value layer most sites build their theme on: custom properties
+  (`:root { --brand: #0af }`, `var(--brand, #fff)`), `!important`, and `calc()`
+  over `px`, `em` and `rem`. A page whose palette lives in `--custom`
+  properties keeps its colours instead of falling back to the reader's paper.
 
 Pages are capped at 2 MiB and 10 seconds. Redirects must stay on HTTP or HTTPS.
 
@@ -43,7 +47,9 @@ In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 
 This is a reading browser, not a full web engine. It does not run JavaScript,
 render images, implement grid or float layouts, log in to sites, or submit
-forms. GitHub issue pages and
+forms. A `calc()` that mixes units the layout has not measured yet
+(`calc(100% - 20px)`) is left unresolved, and `vh`/`vw` say nothing about a
+reader with no window, so they are ignored rather than guessed. GitHub issue pages and
 release pages work; a site that renders its content only with JavaScript will
 show little or no text. The companion app is the way to send a link from a
 phone if typing on the handheld is awkward.

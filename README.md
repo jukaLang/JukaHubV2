@@ -111,6 +111,8 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   keyboard, reconnect saved networks without retyping the password, disconnect
   and forget. Open it from **Quick Settings → Wi-Fi Networks** or **Hardware →
   Wi-Fi**; see [docs/WIFI.md](docs/WIFI.md).
+
+  ![The Wi-Fi picker showing a connected network, saved networks and the button hints](screenshots/wifi-picker.png)
 * **Settings** — playback resolution, weather and 25 colour themes
   (Dark, Light, High Contrast, Anime, Cute, Girly, Fallout, Matrix and more).
   **Smart Widgets** (from General) holds the settings that react to the device
@@ -166,6 +168,9 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   with the D-pad (`Up` from the card beneath them) and **A**. JukaHub hands the
   screen to the helper and closes while it runs; the stock menu returns when the
   stream ends. See [docs/REMOTE_PLAY.md](docs/REMOTE_PLAY.md).
+
+  ![The PS Remote Play panel listing a PS5 ready to stream, unpaired PS4 and PS5 consoles, and scan and add options](screenshots/psremote-panel.png)
+
 * **Smart home** — **Start → Smart Home** drives Home Assistant entities,
   mirrors every toggle to MQTT, shows the Pi-hole, router and Tailscale state,
   and connects or disconnects the tunnel. WireGuard is status-only because
@@ -281,6 +286,30 @@ The stream is PIN-guarded like the rest of the companion API, so the link itself
 is the secret: share it only with people on the network you trust. Turn the cast
 off when you are done, or switch off Wi-Fi.
 
+## Build a screen in the web builder
+
+The [web builder](https://generate.jukalang.com) lays out a handheld screen
+without writing code. Start from the welcome dialog, then:
+
+1. Pick **Start blank**, **Start from template**, or **Load config** to import
+   an existing `jukaconfig.json` or `jukaconfig.xml`.
+2. Drag Button, Label, Image, Input, Menu and the other components from the
+   left sidebar onto the canvas.
+3. Select an element to edit its properties in the Inspector.
+4. Use **Check** to catch problems, then **Export** as JSON or XML.
+
+![The welcome dialog with Start blank, Start from template and Load config](screenshots/state-guide.png)
+
+![A 1280 × 720 TrimUI Smart Pro screen laid out on the desktop canvas](screenshots/design-desktop.png)
+
+![An element selected on the canvas, with its position and size in the Inspector](screenshots/state-element.png)
+
+![The AI assistant panel open beside the canvas](screenshots/state-ai.png)
+
+On a narrow screen the builder switches to Library, Canvas and Inspector tabs:
+
+![The builder on a phone-sized screen with the Library, Canvas and Inspector tabs](screenshots/design-phone.png)
+
 ## Share and remix a design
 
 In the [web builder](https://generate.jukalang.com), **Share** turns the current
@@ -390,6 +419,8 @@ in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
+| [Memory scanner](docs/MEMORY.md) | RAM search and edit for a running game: scan, narrow, write, and what it cannot do |
+| [Controller test](docs/CONTROLLER_TEST.md) | raw stick values, drift verdicts and a button check for a drifting pad |
 | [Time-lapse](docs/TIMELAPSE.md) | one frame every few seconds of a playthrough, assembled into a short mp4 on exit |
 | [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |
 | [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
@@ -398,7 +429,7 @@ in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
 | [Feature slate](docs/FEATURE-SLATE.md) | the 36-idea slate ranked by cost, fit and device risk, with the next four |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
 | [Contributing](CONTRIBUTING.md) | local setup, tests, what to commit |
-| [TrimUI packaging](player/trimui/README-ID.md) | device package notes (Indonesian) |
+| [TrimUI packaging](player/trimui/README.md) | device package, install and troubleshooting notes |
 | [Security](player/SECURITY.md) | secret storage and the security model |
 
 ## License and thanks

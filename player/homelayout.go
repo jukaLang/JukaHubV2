@@ -329,6 +329,7 @@ func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
 	weatherStatusRect = sdl.Rect{}
+	statusWiFiRect = sdl.Rect{}
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
@@ -365,8 +366,8 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	sepW := int32(sepWi)
 	total := int32(0)
 	for i, part := range data.StatusParts {
-		w, _, _ := fonts.Small.SizeUTF8(part)
-		total += int32(w)
+		w := statusClusterPartWidth(fonts.Small, part)
+		total += w
 		if i > 0 {
 			total += sepW
 		}
@@ -484,8 +485,14 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		}
 		updateChipDrawn = true
 	}
+	// The network slot and the battery are the two gauged parts — signal bars
+	// and a colour-coded cell — shared with every scene's status bar so the
+	// system corner looks the same on Home as it does in a menu.
+	drawStatusText := func(text string, color sdl.Color, x, y int32) {
+		drawText(renderer, fonts.Small, text, x, y, color, textAlignLeft)
+	}
 	for i, part := range data.StatusParts {
-		w, _, _ := fonts.Small.SizeUTF8(part)
+		w := statusClusterPartWidth(fonts.Small, part)
 		// The chip belongs immediately left of the weather text; with no
 		// weather part it leads the cluster instead of disappearing.
 		if updateChipW > 0 && !updateChipDrawn && ((weatherIdx < 0 && i == 0) || i == weatherIdx) {
@@ -495,7 +502,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		r := sdl.Rect{
 			X: x - scaleX(8, h.Width),
 			Y: y - scaleY(6, h.Height),
-			W: int32(w) + scaleX(16, h.Width),
+			W: w + scaleX(16, h.Width),
 			H: int32(fonts.Small.Height()) + scaleY(12, h.Height),
 		}
 		if isClockStatusPart(part) {
@@ -509,8 +516,11 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 			h.Items[HomeFocusWeather] = item
 			weatherStatusRect = r
 		}
-		drawText(renderer, fonts.Small, part, x, y, ColorTextMuted(), textAlignLeft)
-		x += int32(w) + sepW
+		if isWiFiStatusPart(part) {
+			statusWiFiRect = r
+		}
+		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
+		x += w + sepW
 	}
 	if updateChipW > 0 && !updateChipDrawn {
 		drawUpdateChip(x)

@@ -50,6 +50,8 @@ const (
 	powerActionOpenSync
 	powerActionOpenConfigs
 	powerActionOpenBench
+	powerActionOpenMemory
+	powerActionOpenCtrlDiag
 	powerActionScan
 	powerActionScanClipboard
 	powerActionPing
@@ -211,6 +213,8 @@ func powerToolRows(config *Config) []powerToolRow {
 			{label: "Folder sync", value: target, detail: "rsync without --delete, or check Syncthing", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenSync, enabled: true},
 			{label: "Config history", value: fmt.Sprintf("%d snapshots", snaps), detail: "Diff jukauser.json and roll back a bad edit", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenConfigs, enabled: true},
 			{label: "Benchmark board", value: device, detail: "Local read/write results, optional online feed", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenBench, enabled: true},
+			{label: "Memory scanner", value: memoryMenuValue(), detail: "Scan and edit a running game's RAM, then write a value back", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenMemory, enabled: true},
+			{label: "Controller test", value: "Sticks · triggers · buttons", detail: "Raw axis values, drift verdicts and a button check", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenCtrlDiag, enabled: true},
 			{label: "Close", value: "Back to the app", hint: hintLine(FooterHint{"B", "Close"}), action: powerActionClose, enabled: true},
 		}
 	case powerPageNetwork:
@@ -551,6 +555,12 @@ func powerActivate(config *Config) {
 	case powerActionOpenBench:
 		powerSetPage(powerPageBench)
 		PlayActivateSound()
+	case powerActionOpenMemory:
+		// openMemPanel closes Power tools: two full-screen overlays stacked
+		// would be unreadable.
+		openMemPanel()
+	case powerActionOpenCtrlDiag:
+		openCtrldiag()
 	case powerActionScan:
 		gateway := powerTools.gateway
 		if gateway == "" {

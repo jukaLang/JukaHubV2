@@ -43,6 +43,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if processPanel.open {
 		return ctrlProcessPanel(e, config)
 	}
+	// The memory panel is modal, but its value keyboard takes the pad first.
+	if memPanel.open {
+		return ctrlMemPanel(e, config)
+	}
 	// The Wi-Fi picker is modal. While its password keyboard is up the
 	// controller belongs to the keyboard, which runs after these overlays.
 	if wifiPanel.open {

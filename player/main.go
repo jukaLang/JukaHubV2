@@ -87,6 +87,14 @@ func main() {
 	// Merge mutable user settings from jukauser.json over design defaults.
 	mergeUserConfig(config, loadUserConfig())
 
+	// Register user theme files from themes/*.json before any preset is applied.
+	if added, failed := LoadThemeFiles(themeDir); len(added) > 0 || len(failed) > 0 {
+		LogScene("init").Info("theme files loaded", "added", added, "skipped", len(failed))
+		for path, err := range failed {
+			LogScene("init").Warn("theme file skipped", "path", path, "err", err)
+		}
+	}
+
 	// Expose the active config for sub-packages (Discord chat, canvas, ...).
 	appConfig = config
 
@@ -566,6 +574,14 @@ func main() {
 					}
 					// Process list is modal and consumes all keys while open.
 					if processPanel.open && handleProcessKey(e, config) {
+						continue
+					}
+					// Memory panel is modal and yields only to its value keyboard.
+					if memPanel.open && handleMemKey(e, config) {
+						continue
+					}
+					// Controller test is modal; the pad closes it by holding SELECT.
+					if ctrldiag.open && handleCtrldiagKey(e, config) {
 						continue
 					}
 					// The Wi-Fi picker is modal. Its password keyboard is handled at
@@ -1200,6 +1216,16 @@ func main() {
 							handleProcessMouse(mx, my, config)
 							break
 						}
+						// Memory panel is modal the same way.
+						if memPanel.open {
+							handleMemMouse(mx, my, config)
+							break
+						}
+						// Controller test is modal the same way.
+						if ctrldiag.open {
+							handleCtrldiagMouse(mx, my, config)
+							break
+						}
 						// Wi-Fi picker is modal the same way.
 						if wifiPanel.open {
 							handleWiFiMouse(mx, my, config)
@@ -1701,6 +1727,12 @@ func main() {
 				if a11yRemapEvent(e) {
 					continue
 				}
+				// The controller test owns every pad event, releases included: a
+				// held button is only visible if its release is seen.
+				if ctrldiag.open {
+					ctrldiagButtonEvent(e)
+					continue
+				}
 				if e.Type == sdl.CONTROLLERBUTTONDOWN && ambientHandleController(e) {
 					continue
 				}
@@ -2100,7 +2132,11 @@ func main() {
 			case *sdl.ControllerAxisEvent:
 				frameRateCtrl.NotifyInput()
 				screensaverNotifyInput()
-				handleControllerAxis(e, config)
+				if ctrldiag.open {
+					ctrldiagAxisEvent(int(e.Axis), e.Value)
+				} else {
+					handleControllerAxis(e, config)
+				}
 			}
 		}
 
@@ -2361,6 +2397,16 @@ func main() {
 		// Process list overlay (inspect and kill processes).
 		if processPanel.open {
 			renderProcessPanel(renderer, config)
+		}
+
+		// Memory panel (RAM scan and edit for one process).
+		if memPanel.open {
+			renderMemPanel(renderer, config)
+		}
+
+		// Controller test (raw axes, drift verdicts, button chips).
+		if ctrldiag.open {
+			renderCtrldiagPanel(renderer, config)
 		}
 
 		// Wi-Fi network picker (scan, join, disconnect, forget).
