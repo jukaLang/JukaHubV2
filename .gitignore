@@ -44,3 +44,8 @@ tests/e2e/node_modules/
 tests/e2e/test-results/
 tests/e2e/playwright-report/
 tests/e2e/design.json
+
+# Local runtime data and test leftovers
+player/jukauser.json*
+*.bak
+/test-results/
