@@ -241,6 +241,31 @@ function refreshHistoryControls() {
   }
 }
 
+// One place that drops the selection: the element reference, the highlight, the
+// inspector mode and the "nothing selected" hint. Deleting, undoing and loading
+// each used to clear only part of it, which left the inspector editing an
+// element that was no longer on the canvas.
+function clearSelectionState() {
+  currentElement = null;
+  document.querySelectorAll('.element.selected').forEach(el => el.classList.remove('selected'));
+  document.body.classList.remove('element-selected');
+  const noSelection = document.getElementById('noSelection');
+  if (noSelection) noSelection.style.display = '';
+  switchTab('app-properties');
+}
+
+// Snapshots and autosaves are serialised from the live DOM, so a selected
+// element is saved carrying its "selected" class. Restoring that as-is shows a
+// highlighted element the editor does not consider selected, and Escape cannot
+// clear it.
+function parseSavedElement(html) {
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const node = tmp.firstChild;
+  if (node && node.classList) node.classList.remove('selected');
+  return node;
+}
+
 function restoreSnapshot(snapshot) {
   // Restore scenes from HTML strings
   scenes = {};
@@ -248,11 +273,7 @@ function restoreSnapshot(snapshot) {
   sceneSelectorEl.innerHTML = '';
 
   for (const [name, htmlArr] of Object.entries(snapshot.scenes)) {
-    scenes[name] = htmlArr.map(html => {
-      const tmp = document.createElement('div');
-      tmp.innerHTML = html;
-      return tmp.firstChild;
-    });
+    scenes[name] = htmlArr.map(parseSavedElement);
     const option = document.createElement('option');
     option.value = name;
     option.textContent = name;
@@ -508,11 +529,7 @@ function loadAutoSave() {
     sceneSelectorEl.innerHTML = '';
 
     for (const [name, htmlArr] of Object.entries(data.scenes)) {
-      scenes[name] = htmlArr.map(html => {
-        const tmp = document.createElement('div');
-        tmp.innerHTML = html;
-        return tmp.firstChild;
-      });
+      scenes[name] = htmlArr.map(parseSavedElement);
       const option = document.createElement('option');
       option.value = name;
       option.textContent = name;
@@ -1269,7 +1286,7 @@ function setupKeyboardShortcuts() {
         const sceneElements = scenes[currentScene];
         const idx = sceneElements.findIndex(item => item.isEqualNode(currentElement));
         if (idx > -1) sceneElements.splice(idx, 1);
-        currentElement = null;
+        clearSelectionState();
         showToast('Element deleted', 'info');
       }
       return;
@@ -2250,6 +2267,7 @@ function setupElementEvents(el) {
       const sceneElements = scenes[currentScene];
       const index = sceneElements.findIndex(item => item.isEqualNode(el));
       if (index > -1) sceneElements.splice(index, 1);
+      if (currentElement === el) clearSelectionState();
       scheduleAutoSave();
     });
   }
