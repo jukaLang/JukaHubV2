@@ -1776,10 +1776,43 @@ function updateCanvasSize() {
 }
 
 // Update the addScene function to call the new function
+// Scene bookkeeping shared by add, rename, duplicate and delete.
+function sceneExists(name) {
+  return Object.prototype.hasOwnProperty.call(scenes, name);
+}
+
+// "Scene N" with N one past the count is not safe once a scene has been deleted
+// or renamed: with Scene 1 deleted, the next name would be "Scene 3" again and
+// silently replace the scene already called that.
+function nextSceneName() {
+  let n = Object.keys(scenes).length + 1;
+  while (sceneExists(`Scene ${n}`)) n += 1;
+  return `Scene ${n}`;
+}
+
+// Scene names are free text (imported configs use quotes and brackets), so look
+// the option up by comparing values instead of building a CSS selector from it.
+function findSceneOption(name) {
+  return Array.from(sceneSelector.options).find(option => option.value === name) || null;
+}
+
+// Buttons reach a scene by name ("change_scene:Tube" or data-scene-change).
+// Renaming the scene has to carry those links with it or navigation dead-ends.
+function retargetSceneLinks(oldName, newName) {
+  const retarget = el => {
+    if (el.getAttribute('data-scene-change') === oldName) el.setAttribute('data-scene-change', newName);
+    if ((el.getAttribute('data-trigger') || '').trim() === `change_scene:${oldName}`) {
+      el.setAttribute('data-trigger', `change_scene:${newName}`);
+    }
+  };
+  Object.values(scenes).forEach(list => list.forEach(retarget));
+  canvas.querySelectorAll('.element').forEach(retarget);
+}
+
 function addScene() {
   pushUndo('add scene');
   saveCurrentScene();
-  const newSceneName = `Scene ${Object.keys(scenes).length + 1}`;
+  const newSceneName = nextSceneName();
   scenes[newSceneName] = [];
 
   const option = document.createElement('option');
@@ -1824,7 +1857,7 @@ function updateAllStoredMenus() {
 function duplicateScene() {
   saveCurrentScene();
   const newSceneName = prompt('Name for duplicated scene:', `${currentScene} Copy`);
-  if (!newSceneName || scenes[newSceneName]) return;
+  if (!newSceneName || sceneExists(newSceneName)) return;
   pushUndo('duplicate scene');
 
   scenes[newSceneName] = scenes[currentScene].map(el => el.cloneNode(true));
@@ -4657,19 +4690,23 @@ function saveCurrentScene() {
 // Scene management functions
 function renameScene() {
   const newName = prompt('Enter new name for scene:', currentScene);
-  if (!newName || newName === currentScene || scenes[newName]) return;
+  if (!newName || newName === currentScene || sceneExists(newName)) return;
   pushUndo('rename scene');
+  const oldName = currentScene;
 
   // Update scenes object
   scenes[newName] = scenes[currentScene];
   delete scenes[currentScene];
 
   // Update scene selector
-  const option = sceneSelector.querySelector(`option[value="${currentScene}"]`);
-  option.value = newName;
-  option.textContent = newName;
+  const option = findSceneOption(oldName);
+  if (option) {
+    option.value = newName;
+    option.textContent = newName;
+  }
 
   currentScene = newName;
+  retargetSceneLinks(oldName, newName);
   sceneSelector.value = newName;
   updateSceneBadge();
 
@@ -4701,8 +4738,8 @@ function deleteScene() {
     delete scenes[currentScene];
 
     // Remove from selector
-    const option = sceneSelector.querySelector(`option[value="${currentScene}"]`);
-    option.remove();
+    const option = findSceneOption(currentScene);
+    if (option) option.remove();
 
     // Switch to next scene
     currentScene = nextScene;
