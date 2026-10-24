@@ -12,6 +12,9 @@ func destroyTestRenderer(r *sdl.Renderer) {
 		return
 	}
 	ClearTextCache()
+	// Shape textures follow the same rule as text textures: SDL frees them
+	// with the renderer, so drop the cache first.
+	DropShapeCacheForRenderer(r)
 	clearHomeTextCache()
 	clearAppIconCache()
 	// Avatar textures are cached by URL across frames; freeing them here keeps

@@ -1147,6 +1147,16 @@ func strokeCircle(renderer *sdl.Renderer, cx, cy, r int32, c sdl.Color) {
 	if r <= 0 {
 		return
 	}
+	// Clock dials and spinner rings redraw every frame; cache the pixel ring.
+	w := 2*r + 1
+	drawShapeCached(renderer, shapeKindStrokeCircle, cx-r, cy-r, w, w, r, 0, c, func(rr *sdl.Renderer, ox, oy, _, _ int32) {
+		drawCircleRing(rr, ox+r, oy+r, r, shapeOpaque(c))
+	})
+}
+
+// drawCircleRing paints a 1-point ring centred at (ccx, ccy). Kept identical
+// to the original strokeCircle step math so cached and fallback paths match.
+func drawCircleRing(renderer *sdl.Renderer, ccx, ccy, r int32, c sdl.Color) {
 	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
 	steps := r * 8
 	if steps < 32 {
@@ -1154,8 +1164,8 @@ func strokeCircle(renderer *sdl.Renderer, cx, cy, r int32, c sdl.Color) {
 	}
 	for i := int32(0); i < steps; i++ {
 		ang := float64(i) * 2 * math.Pi / float64(steps)
-		x := cx + int32(math.Round(float64(r)*math.Cos(ang)))
-		y := cy + int32(math.Round(float64(r)*math.Sin(ang)))
+		x := ccx + int32(math.Round(float64(r)*math.Cos(ang)))
+		y := ccy + int32(math.Round(float64(r)*math.Sin(ang)))
 		renderer.DrawPoint(x, y)
 	}
 }
@@ -1165,12 +1175,23 @@ func fillCircle(renderer *sdl.Renderer, cx, cy, r int32, c sdl.Color) {
 	if r <= 0 {
 		return
 	}
+	// Filled discs redraw every frame behind badges and calendar dots; cache
+	// the one-pixel disc instead of issuing a DrawLine per scanline.
+	w := 2*r + 1
+	drawShapeCached(renderer, shapeKindFillCircle, cx-r, cy-r, w, w, r, 0, c, func(rr *sdl.Renderer, ox, oy, _, _ int32) {
+		drawCircleDisc(rr, ox+r, oy+r, r, shapeOpaque(c))
+	})
+}
+
+// drawCircleDisc paints a filled disc centred at (ccx, ccy), same row math as
+// the original fillCircle so cached and direct draws stay identical.
+func drawCircleDisc(renderer *sdl.Renderer, ccx, ccy, r int32, c sdl.Color) {
 	renderer.SetDrawColor(c.R, c.G, c.B, c.A)
 	for dy := int32(0); dy <= r; dy++ {
 		dx := int32(math.Sqrt(float64(r*r - dy*dy)))
-		renderer.DrawLine(cx-dx, cy+dy, cx+dx, cy+dy)
+		renderer.DrawLine(ccx-dx, ccy+dy, ccx+dx, ccy+dy)
 		if dy != 0 {
-			renderer.DrawLine(cx-dx, cy-dy, cx+dx, cy-dy)
+			renderer.DrawLine(ccx-dx, ccy-dy, ccx+dx, ccy-dy)
 		}
 	}
 }
@@ -1400,22 +1421,36 @@ func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
 	if r > h/2 {
 		r = h / 2
 	}
+	// A card/dial/ring geometry repeats every frame; round-tripping it through
+	// the shape cache costs one blended Copy instead of dozens of fill passes
+	// (each a separate draw call on the GLES2 renderer). See shapeCache.go.
+	drawShapeCached(renderer, shapeKindFillRound, x, y, w, h, r, 0, c, func(rr *sdl.Renderer, ox, oy, ww, wh int32) {
+		drawRoundedFillRows(rr, ox, oy, ww, wh, r, shapeOpaque(c))
+	})
+}
+
+// shapeOpaque returns the shape in full alpha: the cache stores an opaque
+// texture and alpha-modulates it per draw, so per-draw transparency survives.
+func shapeOpaque(c sdl.Color) sdl.Color {
+	return sdl.Color{R: c.R, G: c.G, B: c.B, A: 255}
+}
+
+// drawRoundedFillRows paints a filled rounded rect with its top-left at
+// (ox, oy). Neighbouring scanlines with the same inset merge into one rect so
+// the flat middle of a card is a handful of fills (used directly when the
+// shape cannot be cached, and once per new geometry when filling the cache).
+func drawRoundedFillRows(renderer *sdl.Renderer, ox, oy, w, h, r int32, c sdl.Color) {
 	setDrawColor(renderer, c)
-	// Neighbouring scanlines with the same inset become one rectangle, so the
-	// flat middle of a card is a single fill instead of one call per pixel
-	// row. The pixels are identical; only the number of renderer calls drops,
-	// and that count is what a software renderer pays for on every frame. A
-	// launcher tile used to cost four panel-sized fills of 132 calls each.
 	for dy := int32(0); dy < h; {
 		inset := roundedRowInset(r, h, dy)
 		run := dy + 1
 		for run < h && roundedRowInset(r, h, run) == inset {
 			run++
 		}
-		x0 := x + inset
-		x1 := x + w - inset
+		x0 := ox + inset
+		x1 := ox + w - inset
 		if x1 > x0 {
-			renderer.FillRect(&sdl.Rect{X: x0, Y: y + dy, W: x1 - x0, H: run - dy})
+			renderer.FillRect(&sdl.Rect{X: x0, Y: oy + dy, W: x1 - x0, H: run - dy})
 		}
 		dy = run
 	}
@@ -1493,32 +1528,49 @@ func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c
 		}
 		return row
 	}
-	setDrawColor(renderer, c)
-	// Rows with the same geometry merge into one rectangle: the ring's
-	// straight sides are two tall bars rather than two 1px fills per row.
-	for dy := int32(0); dy < h; {
-		row := rowAt(dy)
-		run := dy + 1
-		for run < h && rowAt(run) == row {
-			run++
+	// A focus ring is redrawn every frame while nothing about it moves; run it
+	// through the shape cache like fills: one Copy per frame instead of
+	// per-scanline fill passes (shapeCache.go).
+	drawShapeCached(renderer, shapeKindStrokeRound, x, y, w, h, r, thickness, c, func(rr *sdl.Renderer, ox, oy, ww, wh int32) {
+		// rowAt yields absolute screen coordinates; shift them into the paint
+		// box so the cached texture and the direct fallback paint identically.
+		shift := ox - x
+		dyShift := oy - y
+		rowsAt := func(dy int32) ringRow {
+			row := rowAt(dy)
+			row.left += shift
+			row.right += shift
+			row.innerLeft += shift
+			row.innerRight += shift
+			return row
 		}
-		height := run - dy
-		if row.right > row.left {
-			switch {
-			case !row.hole:
-				// Top/bottom bands of the ring are solid.
-				renderer.FillRect(&sdl.Rect{X: row.left, Y: y + dy, W: row.right - row.left, H: height})
-			default:
-				if row.innerLeft > row.left {
-					renderer.FillRect(&sdl.Rect{X: row.left, Y: y + dy, W: row.innerLeft - row.left, H: height})
-				}
-				if row.right > row.innerRight {
-					renderer.FillRect(&sdl.Rect{X: row.innerRight, Y: y + dy, W: row.right - row.innerRight, H: height})
+		setDrawColor(rr, shapeOpaque(c))
+		// Rows with the same geometry merge into one rectangle: the ring's
+		// straight sides are two tall bars rather than two 1px fills per row.
+		for dy := int32(0); dy < wh; {
+			row := rowsAt(dy)
+			run := dy + 1
+			for run < h && rowsAt(run) == row {
+				run++
+			}
+			height := run - dy
+			if row.right > row.left {
+				switch {
+				case !row.hole:
+					// Top/bottom bands of the ring are solid.
+					rr.FillRect(&sdl.Rect{X: row.left, Y: y + dy + dyShift, W: row.right - row.left, H: height})
+				default:
+					if row.innerLeft > row.left {
+						rr.FillRect(&sdl.Rect{X: row.left, Y: y + dy + dyShift, W: row.innerLeft - row.left, H: height})
+					}
+					if row.right > row.innerRight {
+						rr.FillRect(&sdl.Rect{X: row.innerRight, Y: y + dy + dyShift, W: row.right - row.innerRight, H: height})
+					}
 				}
 			}
+			dy = run
 		}
-		dy = run
-	}
+	})
 }
 
 // gradientRoundedRect draws a smooth vertical gradient inside a rounded rect.

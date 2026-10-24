@@ -152,6 +152,17 @@ For anything older, the git log and the
 
 ### Changed
 
+- The shell now prefers the device's GLES2 GPU renderer on handheld targets
+  (the A133P's PowerVR GE8300 where the vendor stack provides it) and logs the
+  active video driver, renderer name, acceleration mode and maximum texture
+  size once at startup, so a software fallback is visible instead of assumed.
+- Rounded cards, rings and circles are drawn from a cached render-target
+  texture instead of repeating every scanline fill every frame
+  (`shapeCache.go`); the wallpaper readability scrim and day-cycle backdrop
+  gradients got the same treatment in `dynamicbg.go`, replacing 80 resp. 24
+  per-frame band fills with one blended Copy each. Both caches are
+  renderer-local, budget-bounded on the handheld, and pixel-equal to the
+  direct paths in the render tests.
 - **B** on the video player no longer stops playback: it closes the settings
   sheet, then leaves full screen, then floats the video into the mini window
   described above. Stop is the square button, `q` on a keyboard.

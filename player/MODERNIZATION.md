@@ -26,7 +26,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 | 3. Async & performance | 12 | 3 | 6 |
 | 4. Reliability | 24 | 1 | 1 |
 | 5. Features | 10 | 4 | 2 |
-| 6. Testing | 10 | 1 | 0 |
+| 6. Testing | 11 | 1 | 0 |
 | 7. Web builder | 5 | 2 | 5 |
 | 8. Handheld polish | 21 | 0 | 13 |
 | 9. Browser & handheld input | 8 | 0 | 4 |
@@ -84,6 +84,19 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - ❌ Icon consistency: Monochrome icons but mixed stroke weights
 - 🟡 Typography: semantic size roles and font-size config; one font weight
 - ✅ Spacing: 4pt scale plus density tokens
+- ✅ Metric-driven panel cards: the Downloads SD card and its legend lay
+  out from the font's own height (`downloadStorageCardHeight`), so a taller
+  accessibility scale pushes rows down instead of the bar drawing through the
+  title and the legend clipping at the card edge; the right-aligned capacity
+  reading also ellipsizes against the title column on narrow windows.
+- ✅ Downloads focus ring: the focused row wears the reference mockup's
+  bright rounded outline plus a faint halo (`drawDownloadFocusRing`) on both
+  the Add-a-link row and the track rows.
+- ✅ Per-row color identity: download art tiles are two-tone in a hue hashed
+  from title and URL (`downloadTileColors` over the shared `hsvToRGB`), so the
+  same track always wears the same colors and the queue scans by color.
+- ✅ Section headings carry counts ("FAILED · 2") in `downloadRowsFor`, so a
+  long list answers how much is stuck while scrolling.
 
 #### 4. Performance Issues (Phase 3)
 - ✅ Text textures are cached (`textcache.go`)
@@ -353,8 +366,8 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [x] ✅ Theme preview — scrollable theme gallery with live apply.
 
 ### Phase 6: Testing
-**Status**: 🟡 Partially complete (10 shipped, 1 partial) — bounds, cache, retry
-and persistence gaps closed
+**Status**: 🟡 Partially complete (11 shipped, 1 partial) — bounds, cache, retry,
+persistence and harness gaps closed
 
 - [x] ✅ Config validation tests — `config_schema_test.go`, `config_persist_test.go`.
 - [x] ✅ Focus graph navigation tests — `navselection_test.go`, `chrome_nav_test.go`,
@@ -386,6 +399,12 @@ and persistence gaps closed
       BenchmarkHomeFrame720pColdText  4.62 ms/frame  31 KB   1752 allocs
       BenchmarkHomeNavigation720p     130 ns/step     0 B        0 allocs
       ```
+- [x] ✅ Test harness renders at varied resolutions — `probeW`/`probeH` are
+      package vars and every offscreen probe reads pixels from a region limited
+      to the probe rectangle (`ReadPixels(&Rect{0, 0, probeW, probeH})`)
+      instead of the whole shared 1280×720 window, which used to overflow the
+      capture buffer through cgo and crash the suite intermittently when a
+      probe rendered a smaller frame.
 - [ ] 🟡 Platform path selection tests — path guards exist, platform-specific
       selection is only indirectly covered.
 
@@ -459,6 +478,81 @@ Open:
 - [ ] ⬜ On-device measurement of cold start (<1.5 s interactive), transition
       frame time and idle RSS (<5% CPU at the capped cadence) — all numbers so
       far are desktop proxies.
+
+### Phase 8b: GPU offload on the A133P / PowerVR GE8300
+**Status**: 🟡 First steps shipped (renderer selection + per-frame geometry
+moved off the CPU); compute offload deliberately not attempted (see findings).
+
+The A133P pairs four Cortex-A53 cores with a PowerVR Rogue GE8300. Research
+this revision (sources: SDL2 hint docs, Imagination's own forum thread on the
+GE8300, the Mesa PowerVR driver pages, the Knulli/muOS device threads) settled
+these constraints:
+
+1. **GLES2 is the only realistic GPU path in Go there.** OpenCL `libOpenCL.so`
+   exists inside some GE8300 vendor DDK bundles, but no A133P handheld image
+   ships a verified, working OpenCL runtime; Mesa's PowerVR Vulkan driver does
+   not support the GE8300; and a Vulkan attempt on the TrimUI Smart Pro already
+   failed in the wild (Knulli issue #487). Do not plan pipeline work around
+   OpenCL/Vulkan.
+2. **A working GLES2 stack is not guaranteed** — it depends on the exact
+   userspace/kernel PowerVR driver and the SDL backend in the OS image. The
+   practical move is: ask SDL for `opengles2` explicitly, log what we actually
+   got, and keep the software renderer as the honest fallback. That is what
+   shipped.
+3. **The biggest CPU cost in a busy shell was per-frame geometry/gradient
+   redraw.** Offloading starts by drawing those once into render-target
+   textures and re-issuing one blended Copy per frame — each of those becomes
+   a single GPU pass on the GLES2 renderer instead of dozens of CPU fills.
+
+Shipped with code evidence:
+
+- [x] ✅ Shape texture cache (`shapeCache.go`) — `fillRoundedRect`,
+      `strokeRoundedRect`, `fillCircle`, `strokeCircle` render their shape once
+      into a cached RGBA texture keyed by kind/colour/geometry and draw it with
+      one `Copy` per frame (alpha via `SetAlphaMod`). Renderer-local, LRU with
+      a 12 MB handheld / 48 MB desktop byte budget, invalidated on renderer
+      change and drop-all on theme change (`ClearShapeCache`) and memory
+      pressure (`adaptive.go`). Pixel-equivalence proven by
+      `roundedrect_render_test.go`, which compares every pixel of the cached
+      Copy against the original per-scanline reference for fills, strokes and
+      gradients, plus a two-pass cached-vs-direct whole-frame diff test. One
+      real bug found and fixed on the way: after drawing into the target
+      texture, the old code skipped restoring the render target when
+      `GetRenderTarget()` returned `nil` on the default backbuffer, which
+      would have painted every cached shape into nowhere.
+- [x] ✅ Gradient texture cache (`dynamicbg.go` `bgGrads`) — the wallpaper
+      readability scrim (80 one-pixel band fills per frame) and the day-cycle
+      backdrop (24 full-screen band fills per frame, re-rendered every frame
+      even though the palette barely changes within a slot) are now baked once
+      into render-target textures and re-drawn as one `Copy` per frame. Keyed
+      by the palette colours (weather/hour changes rebuild once), size and
+      renderer; a failed target build latches a failure flag so the per-pixel
+      fallback never retries per frame. Cleared alongside the other caches on
+      graceful quit and in the memory-pressure critical path.
+- [x] ✅ GPU renderer preference + diagnostics (`main.go`) — on non-Windows
+      targets SDL is given the `opengles2` hint before renderer creation (falls
+      back to the documented default if the stack can't provide it), and after
+      creation the app logs `video_driver`, `renderer` name, `acceleration`
+      (gpu/software) and `max_texture` — the first on-device run will make
+      explicit whether the shell is actually running on the GE8300 or falling
+      back to software.
+
+Open / next steps:
+
+- [ ] ⬜ Read the new "render pipeline" log line on the device; if it says
+      software, file the exact SDL/EGL driver config against the device image
+      (expected: PowerVR userspace + `libGLESv2` present but SDL picking the
+      dummy/software video backend).
+- [ ] ⬜ Icon atlas for the shared 32 px glyph set (removes hundreds of small
+      texture binds per frame on GLES).
+- [ ] ⬜ Virtualize lists and grids by row instead of drawing the full list
+      clipped — now the top remaining per-frame cost once shapes are cached.
+- [ ] ⬜ ffmpeg hardware decode/VPU offload investigation on the A133P
+      (cedar/sunxi path) — separate track from the UI thread, not attempted
+      here.
+- [ ] ⬜ OpenCL compute offload — parked until a verified runtime exists on a
+      real device image (see finding 1 above); do not ship speculative code
+      against unproven vendor libraries.
 
 ### Phase 9: Browser & handheld input
 **Status**: ✅ Landed this revision (8 shipped, 4 not started) — remaining
@@ -633,6 +727,15 @@ Evidence collected while re-checking every item against this tree:
 - Full suite: `go vet ./...`, `go test ./...` (including `-race` on the new
   concurrency tests), `go test -race ./...` and `go build .` all pass.
 
+- Downloads panel pass against the reference mockup: the SD card, its legend,
+  the tabs, the queue rows and their focus now follow the design — a
+  metric-driven card (`downloadStorageCardHeight`), an outline focus ring
+  (`drawDownloadFocusRing`), two-tone hashed-color art tiles
+  (`downloadTileColors`), section headings with counts, and an ellipsized
+  right-aligned capacity reading. Verified by rendering offscreen frames at
+  1280×720 (1.0× and 1.3× text scale) and 800×480 (1.0× and 1.15×) with real
+  storage values, then deleting the temporary probe.
+
 ## Next Steps
 
 The phases above are now mostly implemented. The highest-value remaining work:
@@ -656,6 +759,11 @@ The phases above are now mostly implemented. The highest-value remaining work:
    ambient glow, icon atlas, list virtualization, and on-device measurement of
    cold start, transition frame time, idle RSS and the GC/decode tuning above
    (all numbers so far are desktop proxies).
+8. **Convert remaining fixed-offset panel layouts to font metrics** — the
+   Downloads panel's SD card now derives its rows from `font.Height()`
+   (`downloadStorageCardHeight`); panels that still hard-code text offsets
+   (Start menu, Quick Settings, the browser chrome) can adopt the same
+   pattern so taller accessibility scales never overlap there either.
 
 ## Notes
 

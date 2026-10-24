@@ -382,18 +382,25 @@ func renderWallpaperBg(renderer *sdl.Renderer, t float64) {
 	_ = dynbg.wallpaper.SetAlphaMod(180)
 	renderer.Copy(dynbg.wallpaper, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
 
-	// Subtle gradient overlay at bottom for text readability. 80 one-pixel
-	// bands are 80 draw calls per frame; on Low Power a tenth of them is
-	// visually identical behind the scrim.
-	bands := int32(80)
-	if dynamicBgLowPower() {
-		bands = 10
+	// Subtle gradient overlay at bottom for text readability. This used to
+	// be 80 one-pixel band fills per frame (10 on Low Power); the ramp is
+	// static so it is built once into a texture and re-issued as one Copy
+	// per frame (bgGrads below).
+	scrim := bgGrads.scrim
+	if !bgGrads.scrimFailed && (bgGrads.renderer != renderer || scrim == nil) {
+		scrim = buildWallpaperScrim(renderer)
+		if scrim == nil {
+			bgGrads.scrimFailed = true
+		}
 	}
-	bandH := int32(80) / bands
-	for i := int32(0); i < bands; i++ {
-		a := uint8(200 * (1.0 - float64(i)*float64(bandH)/80.0))
-		renderer.SetDrawColor(0, 0, 0, a)
-		renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 80 + i*bandH, W: screenWidth, H: bandH})
+	if scrim != nil {
+		_ = renderer.Copy(scrim, nil, &sdl.Rect{X: 0, Y: screenHeight - 80, W: screenWidth, H: 80})
+	} else {
+		for i := int32(0); i < 80; i++ {
+			a := uint8(200 * (1.0 - float64(i)/80.0))
+			renderer.SetDrawColor(0, 0, 0, a)
+			renderer.FillRect(&sdl.Rect{X: 0, Y: screenHeight - 80 + i, W: screenWidth, H: 1})
+		}
 	}
 }
 
@@ -401,24 +408,171 @@ func renderGradientBg(renderer *sdl.Renderer, t float64) {
 	pal := getTimePalette()
 	// Animated gradient: vertical gradient with slowly shifting colors
 	hshift := dynbg.weatherHue * 30 // Subtle hue shift from weather
-	topR := clampByte(int(pal.top.R) + int(hshift))
-	topG := clampByte(int(pal.top.G) - int(hshift/2))
-	topB := clampByte(int(pal.top.B) + int(hshift/3))
+	top := sdl.Color{
+		R: clampByte(int(pal.top.R) + int(hshift)),
+		G: clampByte(int(pal.top.G) - int(hshift/2)),
+		B: clampByte(int(pal.top.B) + int(hshift/3)),
+		A: 255,
+	}
 
-	// Draw horizontal bands for gradient
+	// Draw horizontal bands for gradient — now baked into a texture so the
+	// 24 band fills become one Copy per frame.
+	dayTex := bgGrads.dayTex
+	if !bgGrads.dayFailed && (bgGrads.renderer != renderer || dayTex == nil ||
+		bgGrads.dayW != screenWidth || bgGrads.dayH != screenHeight ||
+		bgGrads.dayTop != top || bgGrads.dayBtm != pal.bottom) {
+		dayTex = buildDayGradientTexture(renderer, top, pal.bottom, screenWidth, screenHeight)
+		if dayTex != nil {
+			bgGrads.dayTex = dayTex
+			bgGrads.renderer = renderer
+			bgGrads.dayW, bgGrads.dayH = screenWidth, screenHeight
+			bgGrads.dayTop, bgGrads.dayBtm = top, pal.bottom
+		} else {
+			bgGrads.dayFailed = true
+		}
+	}
+	if dayTex != nil {
+		_ = renderer.Copy(dayTex, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+		// Render particles on top
+		renderBgParticles(renderer, t, pal)
+		return
+	}
+
+	// Fallback when targets are unavailable: draw the 24 bands directly.
 	bands := int32(24)
 	bandH := screenHeight / bands
 	for i := int32(0); i < bands; i++ {
 		frac := float64(i) / float64(bands)
-		r := uint8(float64(topR) + (float64(pal.bottom.R)-float64(topR))*frac)
-		g := uint8(float64(topG) + (float64(pal.bottom.G)-float64(topG))*frac)
-		b := uint8(float64(topB) + (float64(pal.bottom.B)-float64(topB))*frac)
+		r := uint8(float64(top.R) + (float64(pal.bottom.R)-float64(top.R))*frac)
+		g := uint8(float64(top.G) + (float64(pal.bottom.G)-float64(top.G))*frac)
+		b := uint8(float64(top.B) + (float64(pal.bottom.B)-float64(top.B))*frac)
 		renderer.SetDrawColor(r, g, b, 255)
 		renderer.FillRect(&sdl.Rect{X: 0, Y: i * bandH, W: screenWidth, H: bandH + 1})
 	}
 
 	// Render particles on top
 	renderBgParticles(renderer, t, pal)
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Gradient texture cache
+//
+// The wallpaper scrim and day-cycle backdrop were drawn as 80 resp. 24
+// one-pixel band fills every frame. On the GLES2 renderer each of those
+// bands is its own draw call and on the software renderer it is a full CPU
+// raster pass, so both are now built once into a render-target texture and
+// re-issued as a single blended Copy per frame — the same idea as the text
+// and shape texture caches. The day texture is keyed by its colours, so a
+// palette change (time of day, weather) rebuilds it once; a renderer swap
+// invalidates everything without Destroy since textures belong to the old
+// renderer.
+//
+// All fields are touched only from the render thread; no locking.
+// ──────────────────────────────────────────────────────────────────────
+
+var bgGrads struct {
+	renderer       *sdl.Renderer
+	scrim          *sdl.Texture // 80-pixel readability ramp under the wallpaper
+	dayTex         *sdl.Texture // full-screen day-cycle gradient
+	dayW, dayH     int32
+	dayTop, dayBtm sdl.Color
+	scrimFailed    bool // render targets unavailable; use the band fallback
+	dayFailed      bool
+}
+
+// buildBgGradientTexture renders paint into a fresh render-target texture of
+// w×h and returns it, or nil when targets are unavailable. Renderer state is
+// restored either way so later draws keep their colour and clip.
+func buildBgGradientTexture(renderer *sdl.Renderer, w, h int32, paint func(*sdl.Renderer, int32, int32)) *sdl.Texture {
+	tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA8888), sdl.TEXTUREACCESS_TARGET, w, h)
+	if err != nil {
+		return nil
+	}
+	_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
+
+	oldTarget := renderer.GetRenderTarget()
+	oldClip := renderer.GetClipRect()
+	_ = renderer.SetRenderTarget(tex)
+	_ = renderer.SetClipRect(nil)
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	_ = renderer.SetDrawColor(0, 0, 0, 0)
+	_ = renderer.Clear()
+	paint(renderer, w, h)
+	// On the default backbuffer GetRenderTarget() returns nil; a nil restore
+	// still returns off the target, so always restore.
+	_ = renderer.SetRenderTarget(oldTarget)
+	if oldClip.W > 0 && oldClip.H > 0 {
+		_ = renderer.SetClipRect(&oldClip)
+	} else {
+		_ = renderer.SetClipRect(nil)
+	}
+	return tex
+}
+
+// buildWallpaperScrim bakes the static alpha ramp into a texture and
+// registers it in bgGrads. On render targets being unavailable it returns nil
+// for good, and the caller keeps the one-pixel-band fallback.
+func buildWallpaperScrim(renderer *sdl.Renderer) *sdl.Texture {
+	bgGrads.renderer = renderer
+	tex := buildBgGradientTexture(renderer, screenWidth, 80, func(rr *sdl.Renderer, tw, th int32) {
+		// Same ramp the per-pixel fallback draws: 200-alpha at the top row
+		// of the strip fading to clear at the bottom.
+		for i := int32(0); i < th; i++ {
+			a := uint8(200 * (1.0 - float64(i)/float64(th)))
+			_ = rr.SetDrawColor(0, 0, 0, a)
+			_ = rr.FillRect(&sdl.Rect{X: 0, Y: i, W: tw, H: 1})
+		}
+	})
+	if tex != nil {
+		bgGrads.scrim = tex
+	}
+	return tex
+}
+
+// buildDayGradientTexture bakes the day-cycle palette into a full-screen
+// texture; the per-frame cost collapses from 24 band fills to one Copy.
+func buildDayGradientTexture(renderer *sdl.Renderer, top, bottom sdl.Color, w, h int32) *sdl.Texture {
+	tex := buildBgGradientTexture(renderer, w, h, func(rr *sdl.Renderer, tw, th int32) {
+		const bands = 24
+		bandH := th / bands
+		for i := int32(0); i < bands; i++ {
+			frac := float64(i) / float64(bands)
+			r := uint8(float64(top.R) + (float64(bottom.R)-float64(top.R))*frac)
+			g := uint8(float64(top.G) + (float64(bottom.G)-float64(top.G))*frac)
+			b := uint8(float64(top.B) + (float64(bottom.B)-float64(top.B))*frac)
+			_ = rr.SetDrawColor(r, g, b, 255)
+			_ = rr.FillRect(&sdl.Rect{X: 0, Y: i * bandH, W: tw, H: bandH + 1})
+		}
+	})
+	if tex == nil {
+		bgGrads.dayFailed = true
+		return nil
+	}
+	bgGrads.renderer = renderer
+	return tex
+}
+
+// ClearBgGradientCache frees the cached gradient textures (renderer shutdown
+// or wallpaper/theme change where colours were invalidated elsewhere).
+func ClearBgGradientCache() {
+	if bgGrads.renderer == nil {
+		return
+	}
+	if bgGrads.scrim != nil {
+		bgGrads.scrim.Destroy()
+	}
+	if bgGrads.dayTex != nil {
+		bgGrads.dayTex.Destroy()
+	}
+	bgGrads = struct {
+		renderer       *sdl.Renderer
+		scrim          *sdl.Texture
+		dayTex         *sdl.Texture
+		dayW, dayH     int32
+		dayTop, dayBtm sdl.Color
+		scrimFailed    bool
+		dayFailed      bool
+	}{}
 }
 
 func renderAmbientDynamicBg(renderer *sdl.Renderer, t float64) {

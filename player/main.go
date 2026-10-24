@@ -328,6 +328,15 @@ func main() {
 	}
 	defer window.Destroy()
 
+	// On the handheld prefer the device's GLES2 GPU renderer explicitly: on
+	// the A133P boards that is the PowerVR GE8300 driver. If the vendor stack
+	// can't provide it, SDL falls back to its normal default renderer per the
+	// hint's documented behaviour, and the software fallback below still
+	// stands. Windows development keeps its usual Direct3D default.
+	if !IsWindows() {
+		sdl.SetHint(sdl.HINT_RENDER_DRIVER, "opengles2")
+	}
+
 	renderer, err := sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
 	if err != nil {
 		// Fall back to a software renderer when the accelerated backend is
@@ -338,6 +347,31 @@ func main() {
 		}
 	}
 	defer renderer.Destroy()
+
+	// Log which renderer we actually ended up with. The GPU driver name
+	// decides where the per-frame cost lands (GPU passes vs CPU fills) and
+	// whether the cached texture paths stay cheap, so record driver, name
+	// and max texture size once at startup.
+	videoDriver := ""
+	if drv, err := sdl.GetCurrentVideoDriver(); err == nil {
+		videoDriver = drv
+	}
+	rendererName, rendererAccel, maxTexW, maxTexH := "unknown", "unknown", 0, 0
+	if info, giltErr := renderer.GetInfo(); giltErr == nil {
+		rendererName = info.Name
+		maxTexW, maxTexH = int(info.MaxTextureWidth), int(info.MaxTextureHeight)
+		if info.Flags&sdl.RENDERER_SOFTWARE != 0 {
+			rendererAccel = "software"
+		} else if info.Flags&sdl.RENDERER_ACCELERATED != 0 {
+			rendererAccel = "gpu"
+		}
+	}
+	Log().Info("render pipeline",
+		"video_driver", videoDriver,
+		"renderer", rendererName,
+		"acceleration", rendererAccel,
+		"max_texture", fmt.Sprintf("%dx%d", maxTexW, maxTexH),
+	)
 
 	// Mouse and touch arrive in physical window pixels. The handheld canvases
 	// are scaled to their panel (notably 960x720 onto the Brick's 1024x768), so
@@ -2730,6 +2764,8 @@ func main() {
 	partyHistoryFlush()
 	saveFavorites()
 	ClearTextCache()
+	ClearShapeCache()
+	ClearBgGradientCache()
 	DestroyVKStaticCache()
 	clearThumbnailCache()
 	DestroyVKVideoOverlayCache()

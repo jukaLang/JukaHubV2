@@ -632,7 +632,7 @@ func TestDownloadRowsGroupByStatus(t *testing.T) {
 	if len(rows) != 5 || !rows[0].add {
 		t.Fatalf("all rows = %d (first add=%v), want 5 starting with Add a link", len(rows), rows[0].add)
 	}
-	wantSections := []string{"", "Downloading", "Queued", "Failed", "Saved"}
+	wantSections := []string{"", "Downloading · 1", "Queued · 1", "Failed · 1", "Saved · 1"}
 	for i, want := range wantSections {
 		if rows[i].section != want {
 			t.Errorf("row %d section = %q, want %q", i, rows[i].section, want)

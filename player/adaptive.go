@@ -339,6 +339,10 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		logTextureMemoryStats("critical-evict")
 		log.Printf("[mem] Critical: clearing text and thumbnail texture caches")
 		ClearTextCache()
+		// Shape textures hold the palette in their pixels just like text does.
+		ClearShapeCache()
+		// The gradient textures are the largest cached surfaces — free first.
+		ClearBgGradientCache()
 		clearHomeTextCache()
 		clearThumbnailCache()
 		// The page cache holds whole articles and their images. Dropping it

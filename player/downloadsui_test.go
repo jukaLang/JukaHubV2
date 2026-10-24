@@ -69,7 +69,7 @@ func renderDownloadsProbe(t *testing.T, config *Config) (*probeFrame, sdl.Rect, 
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
 	renderDownloadsPanel(renderer, config)
-	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
+	if err := renderer.ReadPixels(&sdl.Rect{X: 0, Y: 0, W: probeW, H: probeH}, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
 		t.Skipf("renderer.ReadPixels unavailable: %v", err)
 	}
 	hits := make([]sdl.Rect, 0, len(dlPanel.hits))

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unsafe"
+
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -840,9 +840,14 @@ func ffmpegDecoderArgs(path string, width, height int32, scaling bool, startSec 
 	} else {
 		args = append(args, "-s", fmt.Sprintf("%dx%d", width, height))
 	}
+	// Planar IYUV (yuv420p) instead of RGBA: width is even and the stride is
+	// width, so the three planes are packed back to back in the raw stream. The
+	// decoder pipe drops from 4 to 1.5 bytes per pixel, and SDL's GLES2 driver
+	// converts IYUV→RGB in a shader on the GPU instead of ffmpeg doing the
+	// conversion on the CPU.
 	return append(args,
 		"-f", "rawvideo",
-		"-pix_fmt", "rgba",
+		"-pix_fmt", "yuv420p",
 		"-",
 	)
 }
@@ -873,7 +878,8 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	defer sess.clearVideoCmd(cmd)
 	defer cmd.Wait()
 
-	frameSize := int(width * height * 4)
+	// 1.5 bytes per pixel: the Y plane (w*h) then U and V quarters each.
+	frameSize := int(width * height * 3 / 2)
 	if frameSize <= 0 {
 		return
 	}
@@ -1032,7 +1038,7 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 	raw := embeddedPlayer.currentRaw
 	w := embeddedPlayer.width
 	h := embeddedPlayer.height
-	if raw == nil || w <= 0 || h <= 0 || len(raw) != int(w*h*4) {
+	if raw == nil || w <= 0 || h <= 0 || len(raw) != int(w*h*3/2) {
 		return
 	}
 	if embeddedPlayer.phase == "paused" {
@@ -1054,18 +1060,25 @@ func UpdateCurrentTexture(renderer *sdl.Renderer) {
 		}
 	}
 	if embeddedPlayer.current == nil {
-		tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA32), sdl.TEXTUREACCESS_STREAMING, w, h)
+		// IYUV: SDL's GLES2 driver converts the planar texture to RGB in a
+		// shader during Copy, so the YUV→RGB work lands on the GPU instead of
+		// the software path. ffmpeg output planes are packed: Y, then U, then V.
+		tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_IYUV), sdl.TEXTUREACCESS_STREAMING, w, h)
 		if err != nil {
 			log.Printf("[VIDEO] CreateTexture failed: %v (w=%d h=%d)", err, w, h)
 			return
 		}
 		embeddedPlayer.current = tex
-		log.Printf("[VIDEO] Created texture %dx%d", w, h)
+		log.Printf("[VIDEO] Created IYUV texture %dx%d", w, h)
 	}
 
 	tex := embeddedPlayer.current
-	if err := tex.Update(nil, unsafe.Pointer(&raw[0]), int(w)*4); err != nil {
-		log.Printf("[VIDEO] Update texture failed: %v", err)
+	yBytes, uvBytes := int(w*h), int(w*h)/4
+	uStart, vStart := yBytes, yBytes+uvBytes
+	if err := tex.UpdateYUV(nil, raw[:uStart], int(w),
+		raw[uStart:vStart], int(w)/2,
+		raw[vStart:], int(w)/2); err != nil {
+		log.Printf("[VIDEO] Update YUV texture failed: %v", err)
 		tex.Destroy()
 		embeddedPlayer.current = nil
 		return

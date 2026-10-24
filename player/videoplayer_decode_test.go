@@ -126,7 +126,7 @@ func TestEmbeddedPlayerDecodesFrames(t *testing.T) {
 
 	embeddedPlayer.mu.Lock()
 	tex := embeddedPlayer.current
-	hasRaw := len(embeddedPlayer.currentRaw) == int(w*h*4)
+	hasRaw := len(embeddedPlayer.currentRaw) == int(w*h*3/2)
 	embeddedPlayer.mu.Unlock()
 	if tex == nil {
 		t.Fatal("decoded frame was not uploaded to a texture")

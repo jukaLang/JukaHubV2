@@ -240,6 +240,7 @@ func a11yRefreshFonts() {
 	// up again or every button would keep drawing the old text size.
 	resetButtonFitCache()
 	ClearTextCache()
+	ClearShapeCache()
 	clearHomeTextCache()
 }
 

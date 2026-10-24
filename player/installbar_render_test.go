@@ -25,10 +25,10 @@ var (
 	renderErr  error
 )
 
-const (
-	probeW = int32(1280)
-	probeH = int32(720)
-)
+// Frame size vars so probe tests can vary the resolution (all probes except
+// the dumps use the default 1280x720).
+var probeW = int32(1280)
+var probeH = int32(720)
 
 // probeFrame renders one frame of the install card over a known background and
 // returns the RGBA buffer plus a pixel accessor.

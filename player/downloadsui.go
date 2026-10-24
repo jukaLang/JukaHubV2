@@ -148,12 +148,24 @@ func downloadRowsFor(tab downloadTab) []downloadRow {
 		groups = groups[3:]
 	}
 	for _, g := range groups {
+		// The heading carries its count ("FAILED · 2"), so scrolling a long
+		// list answers "how much is stuck" without remembering the tab label.
+		n := 0
+		for _, it := range items {
+			if it.Status == g.status {
+				n++
+			}
+		}
+		name := g.name
+		if n > 0 {
+			name = fmt.Sprintf("%s · %d", g.name, n)
+		}
 		first := true
 		for _, it := range items {
 			if it.Status != g.status {
 				continue
 			}
-			add(g.name, it, first)
+			add(name, it, first)
 			first = false
 		}
 	}
@@ -469,10 +481,7 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, small, ellipsize(small, status, textW), ColorTextSecondary(),
 		panelX+padX, panelY+16+medH+4)
 
-	cardH := int32(92)
-	if compact {
-		cardH = 64
-	}
+	cardH := downloadStorageCardHeight(small, !compact)
 	cardY := panelY + 16 + medH + 4 + smallH + 14
 	drawDownloadStorageCard(renderer, config, small, sdl.Rect{X: panelX + padX, Y: cardY, W: textW, H: cardH}, !compact)
 
@@ -623,8 +632,25 @@ func drawDownloadTabs(renderer *sdl.Renderer, config *Config, font *ttf.Font, x,
 	}
 }
 
+// downloadStorageCardHeight is the height the SD card needs at this font: the
+// title row, the bar with padding, and (when shown) the legend row. Fixed
+// offsets used to put the bar through the text and clip the legend at higher
+// accessibility scales.
+func downloadStorageCardHeight(font *ttf.Font, showLegend bool) int32 {
+	if font == nil {
+		return 92
+	}
+	h := 24 + int32(font.Height()) + 10 + 8 + 10
+	if showLegend {
+		h += int32(font.Height())
+	}
+	return h
+}
+
 // drawDownloadStorageCard paints the SD card summary: capacity on the right,
-// a segmented usage bar, and a legend under it.
+// a segmented usage bar, and a legend under it. The internal layout is driven
+// by the font's own height, so every row keeps its breathing room at any
+// text scale instead of a taller font sliding into the next row.
 func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect, showLegend bool) {
 	if font == nil || rect.W <= 0 {
 		return
@@ -633,24 +659,32 @@ func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.F
 	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusMD, 1, ColorBorderDefault)
 
 	label := "SD card"
+	rowH := int32(font.Height())
+	titleY := rect.Y + 12
 	// A tiny card glyph: rounded body with a notch, drawn rather than fonted so
 	// it renders on every theme.
 	iconX := rect.X + 20
-	iconY := rect.Y + 18
+	iconY := titleY + rowH/2 - 8
 	fillRoundedRect(renderer, iconX, iconY, 22, 16, 3, WithAlpha(ColorTextTertiary(), 160))
 	fillRoundedRect(renderer, iconX+14, iconY-3, 6, 4, 1, WithAlpha(ColorTextTertiary(), 160))
-	renderText(renderer, config, font, label, ColorTextPrimary(), iconX+32, iconY-2)
+	renderText(renderer, config, font, label, ColorTextPrimary(), iconX+32, titleY)
 
 	stats := downloadSpace()
 	if summary := downloadSpaceSummary(stats); summary != "" {
+		// The title column ends after the icon and its text; past that, the
+		// summary ellipsizes so a long reading never slides under the title on
+		// a narrow window.
+		if avail := rect.X + rect.W - 20 - (iconX + 32 + 24); avail > 0 {
+			summary = ellipsize(font, summary, avail)
+		}
 		if sw, _, err := font.SizeUTF8(summary); err == nil {
 			renderText(renderer, config, font, summary, ColorTextSecondary(),
-				rect.X+rect.W-20-int32(sw), iconY-2)
+				rect.X+rect.W-20-int32(sw), titleY)
 		}
 	}
 
 	barX := rect.X + 20
-	barY := rect.Y + 46
+	barY := titleY + rowH + 10
 	barW := rect.W - 40
 	barH := int32(8)
 	fillRoundedRect(renderer, barX, barY, barW, barH, barH/2, WithAlpha(ColorTrack, 255))
@@ -672,7 +706,8 @@ func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.F
 	if !showLegend {
 		return
 	}
-	legendY := barY + barH + 12
+	legendY := barY + barH + 10
+	baseY := legendY + rowH/2 - 8
 	value := func(n int64) string {
 		if !stats.Available {
 			return "—"
@@ -692,11 +727,11 @@ func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.F
 	}
 	lx := barX
 	for _, e := range entries {
-		fillRoundedRect(renderer, lx, legendY+3, 10, 10, 3, e.color)
-		renderText(renderer, config, font, e.label, ColorTextTertiary(), lx+16, legendY-2)
+		fillRoundedRect(renderer, lx, baseY, 10, 10, 3, e.color)
+		renderText(renderer, config, font, e.label, ColorTextTertiary(), lx+16, legendY)
 		lw, _, _ := font.SizeUTF8(e.label)
 		valueX := lx + 16 + int32(lw) + 6
-		renderText(renderer, config, font, e.value, ColorTextSecondary(), valueX, legendY-2)
+		renderText(renderer, config, font, e.value, ColorTextSecondary(), valueX, legendY)
 		vw, _, _ := font.SizeUTF8(e.value)
 		lx = valueX + int32(vw) + 20
 	}
@@ -716,6 +751,36 @@ func drawDownloadSectionLabel(renderer *sdl.Renderer, config *Config, title stri
 		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
 		renderer.FillRect(&sdl.Rect{X: lx, Y: y + 2 + int32(th)/2, W: x + w - lx, H: 1})
 	}
+}
+
+// downloadTileColors gives a row's art tile its own two-tone hue, like the
+// design: a stable color comes from the title hash, so the same track always
+// wears the same tile without any stored state.
+func downloadTileColors(it downloadItem) (top, bottom sdl.Color) {
+	var h uint32
+	for _, r := range it.displayTitle() {
+		h = h*31 + uint32(r)
+	}
+	for _, r := range it.URL {
+		h = h*31 + uint32(r)*7
+	}
+	hue := float64(h%1000) / 1000
+	r, g, b := hsvToRGB(hue, 0.55, 0.62)
+	top = sdl.Color{R: r, G: g, B: b, A: 255}
+	r, g, b = hsvToRGB(hue, 0.58, 0.40)
+	bottom = sdl.Color{R: r, G: g, B: b, A: 255}
+	return top, bottom
+}
+
+// drawDownloadFocusRing paints the outline the design uses for the focused
+// row: a bright rounded ring just outside the row plus a faint halo, so the
+// selection reads on a handheld screen even in direct light.
+func drawDownloadFocusRing(renderer *sdl.Renderer, rect sdl.Rect) {
+	if renderer == nil {
+		return
+	}
+	strokeRoundedRect(renderer, rect.X-2, rect.Y-2, rect.W+4, rect.H+4, RadiusMD, 2, WithAlpha(accentColor, 225))
+	strokeRoundedRect(renderer, rect.X-4, rect.Y-4, rect.W+8, rect.H+8, RadiusMD, 1, WithAlpha(accentColor, 70))
 }
 
 // drawDownloadAddRow is the first row: paste a link to start a download.
@@ -753,6 +818,9 @@ func drawDownloadAddRow(renderer *sdl.Renderer, config *Config, small, medium *t
 	renderText(renderer, config, medium, "Add a link", ColorTextPrimary(), textX, rect.Y+6)
 	renderText(renderer, config, small, "Paste a link to save its audio for offline listening",
 		ColorTextTertiary(), textX, rect.Y+6+lineH)
+	if focused {
+		drawDownloadFocusRing(renderer, rect)
+	}
 }
 
 // drawDownloadItemRow paints one track: title — source, a status on the right,
@@ -772,8 +840,11 @@ func drawDownloadItemRow(renderer *sdl.Renderer, config *Config, small, medium *
 	}
 	ax := rect.X + 16
 	ay := rect.Y + (rect.H-art)/2
-	fillRoundedRect(renderer, ax, ay, art, art, 8, WithAlpha(accentColor, 70))
-	fillRoundedRect(renderer, ax+art/2, ay, art/2, art, 0, WithAlpha(accentColor, 120))
+	// Two-tone tile in the row's own hue: the design's way of making the queue
+	// scannable by color before any text is read.
+	top, bottom := downloadTileColors(it)
+	fillRoundedRect(renderer, ax, ay, art, art/2, 8, top)
+	fillRoundedRect(renderer, ax, ay+art/2, art, art-art/2, 8, bottom)
 
 	statusText, statusColor := downloadRowStatus(it)
 	textX := ax + art + 14
@@ -833,6 +904,9 @@ func drawDownloadItemRow(renderer *sdl.Renderer, config *Config, small, medium *
 	if statusText != "" {
 		renderText(renderer, config, small, statusText, statusColor,
 			rect.X+rect.W-16-int32(statusW), rect.Y+(rect.H-smallH(small))/2)
+	}
+	if focused {
+		drawDownloadFocusRing(renderer, rect)
 	}
 }
 

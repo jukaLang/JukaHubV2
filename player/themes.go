@@ -839,9 +839,11 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 	config.Variables.Custom["theme_info"] = preset.Info
 	config.Variables.Custom["theme_overlay"] = preset.Overlay
 	ApplyThemeColors(preset)
-	// Cached text textures carry the old palette in their pixels; drop them so
-	// the new theme is visible at once instead of after the LRU ages them out.
+	// Cached text and shape textures carry the old palette in their pixels;
+	// drop them so the new theme is visible at once instead of after the LRU
+	// ages them out.
 	ClearTextCache()
+	ClearShapeCache()
 	clearHomeTextCache()
 	// The shared snapshot keeps Quick Settings levels and every other persisted
 	// field intact when the theme changes.
