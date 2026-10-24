@@ -10,6 +10,8 @@ make dev    # build and launch the player
 make        # list every target
 ```
 
+A complete five-minute walkthrough is in [docs/QUICK_START.md](docs/QUICK_START.md).
+
 On Windows that bootstraps Go, GCC and SDL2 through `player\build.bat` (the
 first build compiles the SDL2 cgo bindings and takes a few minutes). On
 Linux/macOS install the SDL2 dev packages first. Both paths, cross-builds and
@@ -62,6 +64,35 @@ drives the real drop handler, history buttons and import path.
 > `TestDecryptWithAuthRoundTrip` and `TestKeyboardCachedFrameIsCheaperThanFullRedraw`
 > have each been seen to fail once without a clear cause; re-run those too.
 > Fixing the flake is welcome.
+
+## Error handling conventions
+
+The codebase has settled on a few habits; match them when you add or touch
+error paths:
+
+- **Wrap with `%w` and say what the step was doing.** Every `fmt.Errorf` in
+  the player wraps with `%w` and names the operation or file, so a failure
+  reads as a path from cause to call site:
+  `fmt.Errorf("download %s: write failed: %w", url, err)`. Breaking the wrap
+  (`%v`) makes `errors.Is`/`errors.As` checks upstream impossible.
+- **Best-effort errors are logged, not returned.** Housekeeping that can fail
+  without changing app behaviour (cache drops, auxiliary saves, cleanup) logs
+  through `log/slog` with the operation fields (`LogScene`, `LogOp`) instead of
+  inventing new error plumbing. A silent `_ =` discard is only acceptable when
+  the value genuinely cannot matter — that precondition is worth a comment.
+- **User-facing text is not error text.** Internal errors keep their
+  technical wording (`os.PathError` and friends); what the user sees comes out
+  of the failure-message mapping in the UI layer (see
+  [`player/ui_helpers.go`](player/ui_helpers.go)). Don't paste a wrapped error
+  into a toast unmodified.
+- **Cancelled work publishes nothing.** Anything running under a scene or
+  playback context is already wired so that `ctx.Err() != nil` means "return,
+  do not publish" — see the scene-task rules in
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#scene-scoped-background-work).
+- **Nothing crashes on a malformed input.** Malformed configs, packs and
+  manifests degrade (skip the element, log, keep the app up); the schema and
+  loader tests pin behaviour for corrupt data. Reserve `panic` for
+  programmer-error invariants caught in tests.
 
 ## What a good change looks like
 
@@ -131,7 +162,7 @@ JukaHubV2/
 | `player/trimui/jukaconfig.device.json` | yes — regenerate it when the full config changes (see [`player/trimui/README.md`](player/trimui/README.md)) |
 | `player/jukauser.json` | **never** — your personal settings; git-ignored |
 | `player/errors.txt`, `logs.txt`, `jukaalarm.json`, `safe-mode.flag` | **never** — runtime files |
-| API keys, Discord tokens, `JUKAHUB_CRYPTO_KEY` values | **never** — see [`player/SECURITY.md`](player/SECURITY.md) |
+| API keys, Discord tokens, `JUKAHUB_CRYPTO_KEY` values | **never** — see [`SECURITY.md`](SECURITY.md) |
 
 Running the test suite can rewrite `player/jukauser.json.bak` (which is,
 unfortunately, tracked). If it shows up as modified and you did not mean to
@@ -154,6 +185,7 @@ User-facing docs live in [`docs/`](docs) and are linked from the
 | Packages and the Patch package manager | [docs/PACKAGES.md](docs/PACKAGES.md) |
 | Plugin manifest and execution contract | [docs/PLUGINS.md](docs/PLUGINS.md) |
 | Architecture, design system, key files | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
+| Component map of the three runtimes | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 
 Two rules for documentation changes:
 
@@ -188,7 +220,7 @@ fullscreen test crashed as usual" is useful information, not a failure.
 - Never commit credentials. Configs that can hold secrets are git-ignored for
   exactly this reason.
 - Report a vulnerability privately rather than in a public issue; see
-  [`player/SECURITY.md`](player/SECURITY.md).
+  [`SECURITY.md`](SECURITY.md).
 - Anything that executes a program — external apps, plugins, packages, the
   terminal — must stay explicit, path-confined and journaled. Do not wire in
   a silent auto-run path.

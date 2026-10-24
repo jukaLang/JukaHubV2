@@ -35,10 +35,18 @@ jobs:
       # every asset is attached. A published release with only GitHub's
       # auto-generated "Source code" archives is what made download links 404
       # while the build was still uploading. The next step publishes it.
+      # A tag with a prerelease suffix (v1.4.0-beta.1, v1.4.0-rc.2) is the
+      # beta channel: it gets its own release for people watching the
+      # releases page, but GitHub keeps prereleases out of /releases/latest
+      # and the latest/download redirect, which is exactly what the in-app
+      # updater (autoupdate.go) and the Patch package manager consume — so
+      # stable installs never offer the beta. The repo's GitHub pages stay
+      # the only thing beta testers need.
       - name: Upload release assets (draft)
         uses: softprops/action-gh-release@v3
         with:
           draft: true
+          prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') }}
           files: |
             player/dist/JukaHub-trimui-smart-pro-linux-arm64.tar.gz
             player/dist/JukaHub-win-x64.zip
@@ -49,4 +57,6 @@ jobs:
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh release edit cannot un-set a draft flag without --draft=false,
+          # and the prerelease flag set above survives this edit untouched.
         run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"

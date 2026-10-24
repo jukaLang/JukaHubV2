@@ -174,8 +174,12 @@ func (h *HomeLayout) rebuildItems() {
 	// The signal meter, weather chip and clock are the header text itself - no
 	// separate buttons are drawn. drawHeader replaces these rects with the
 	// measured cluster every frame, so focus and clicks land on the header.
+	// The meter is the leading part of the cluster, so its placeholder is the
+	// leftmost one. It must not overlap the update chip that shares the band:
+	// this rect is what a tap resolves against until the first frame measures
+	// the drawn meter, and an overlap made the chip select the update offer.
 	card(HomeFocusWiFi, "Wi-Fi", "Connect to a network", "wifi", HomeActionWiFi,
-		sdl.Rect{X: 900, Y: 10, W: 60, H: 36})
+		sdl.Rect{X: 880, Y: 10, W: 52, H: 36})
 	card(HomeFocusWeather, "Weather", "Local forecast", "weather", HomeActionToggleWeather,
 		sdl.Rect{X: 968, Y: 10, W: 92, H: 36})
 	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
@@ -197,7 +201,7 @@ func (h *HomeLayout) rebuildItems() {
 	// Like the clock and weather, its rect is replaced with the drawn chip
 	// every frame, and it is only focusable while a release is offered.
 	card(HomeFocusUpdate, "Update", "Install the new release", "update", HomeActionUpdate,
-		sdl.Rect{X: 930, Y: 12, W: 30, H: 24})
+		sdl.Rect{X: 936, Y: 12, W: 26, H: 24})
 	// Exit sits on the footer's left end (drawn above the footer band so it
 	// stays visible) and is the primary way to quit from the home screen.
 	// Back stays available through B/Esc and the footer hint.

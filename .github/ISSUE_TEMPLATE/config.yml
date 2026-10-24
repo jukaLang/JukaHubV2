@@ -8,7 +8,7 @@ contact_links:
     url: https://github.com/jukaLang/JukaHubV2/tree/main/docs
     about: Config reference, controls, packages, building, recovery, troubleshooting.
   - name: Report a vulnerability
-    url: https://github.com/jukaLang/JukaHubV2/blob/main/player/SECURITY.md
+    url: https://github.com/jukaLang/JukaHubV2/blob/main/SECURITY.md
     about: Security issues go here, privately, not in a public issue.
   - name: Latest release and known issues
     url: https://github.com/jukaLang/JukaHubV2/releases/latest

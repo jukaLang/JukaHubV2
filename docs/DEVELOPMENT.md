@@ -21,6 +21,8 @@ targets a 1280×720 logical canvas.
 | Page | Covers |
 |------|--------|
 | [CONTRIBUTING.md](../CONTRIBUTING.md) | local setup, the checks to run, tests, what to commit |
+| [QUICK_START.md](QUICK_START.md) | the five-minute path: build, run, check, open a PR |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | the three runtimes and where a change lands |
 | [BUILDING.md](BUILDING.md) | Windows/Linux/ARM64 builds, packaging, releases, CI |
 | [CONFIGURATION.md](CONFIGURATION.md) | config files, variables, elements and every trigger |
 | [CONTROLS.md](CONTROLS.md) | controller and keyboard bindings per screen |
@@ -29,7 +31,7 @@ targets a 1280×720 logical canvas.
 | [WINDOWS_APPS.md](WINDOWS_APPS.md) | .exe discovery, Wine display bridge, WestonPack setup |
 | [ANDROID.md](ANDROID.md) | the Android container engine: binder gate, package list, launch and display bridge |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
-| [SECURITY.md](../player/SECURITY.md) | secret storage, crypto, threat notes |
+| [SECURITY.md](../SECURITY.md) | secret storage, crypto, threat notes |
 | [IMPROVEMENTS.md](IMPROVEMENTS.md) | what we learned from BrickOS, the backlog it implies, and where we are ahead |
 | [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | netplay, OSD/recording, simple mode, box art, game switcher: what exists and what cannot work |
 | [trimui/README.md](../player/trimui/README.md) | device package and launcher details |
@@ -353,7 +355,7 @@ go test -run '^$' -bench 'BenchmarkHome' -benchmem
 ```
 
 The absolute values are a desktop software-renderer proxy (see the recorded
-numbers in [MODERNIZATION-CHECKLIST.md](../player/MODERNIZATION-CHECKLIST.md));
+numbers in [MODERNIZATION.md](../player/MODERNIZATION.md), Phase 6);
 their job is to catch a regression, not to predict the device.
 
 ## Design system
@@ -465,7 +467,7 @@ config, and the player warns about plaintext secrets, the built-in default key
 and tokens that fail validation. Never commit a config with real credentials —
 `jukaconfig.json` and `jukauser.json` are git-ignored for that reason.
 
-Full details: [player/SECURITY.md](../player/SECURITY.md).
+Full details: [SECURITY.md](../SECURITY.md).
 
 ## Key files
 

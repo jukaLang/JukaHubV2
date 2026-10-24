@@ -17,26 +17,64 @@ func isolateSceneSwitch(t *testing.T) {
 	})
 }
 
+// statusClusterRects is every top-bar button rect BuildGraph can read, saved
+// and restored around each chrome-nav test so its bar is exactly what it
+// asserts on, independent of which tests ran before it.
+type statusClusterRects struct {
+	back, clock, start, bell, weather, wifi, media, update sdl.Rect
+}
+
+// snapshotStatusClusterRects / restoreStatusClusterRects bracket a test that
+// sets its own bar; chrome-tests call restore via t.Cleanup.
+func snapshotStatusClusterRects() func() {
+	saved := statusClusterRects{
+		back:    sceneTitleBackRect,
+		clock:   statusClockRect,
+		start:   tb.startRect,
+		bell:    nc.bellRect,
+		weather: weatherStatusRect,
+		wifi:    statusWiFiRect,
+		media:   statusMediaRect,
+		update:  updatePrompt.badge,
+	}
+	return func() {
+		sceneTitleBackRect = saved.back
+		statusClockRect = saved.clock
+		tb.startRect = saved.start
+		nc.bellRect = saved.bell
+		weatherStatusRect = saved.weather
+		statusWiFiRect = saved.wifi
+		statusMediaRect = saved.media
+		updatePrompt.badge = saved.update
+	}
+}
+
 // useChromeBar measures a plausible top bar so BuildGraph includes the back
 // pill and status-clock chrome nodes. Must run after useNavScene (which zeroes
-// the rects for deterministic element-only navigation tests). The Apps pill and
-// bell are cleared so older two-button expectations stay exact.
+// the rects for deterministic element-only navigation tests) and clears every
+// other bar button — Apps pill, bell, weather, Wi-Fi, media chip and the update
+// pill — so older two-button expectations stay exact no matter which tests ran
+// before.
 func useChromeBar(t *testing.T) {
 	t.Helper()
+	restore := snapshotStatusClusterRects()
+	tb.startRect, nc.bellRect = sdl.Rect{}, sdl.Rect{}
+	weatherStatusRect, statusWiFiRect = sdl.Rect{}, sdl.Rect{}
+	statusMediaRect, updatePrompt.badge = sdl.Rect{}, sdl.Rect{}
 	sceneTitleBackRect = sdl.Rect{X: 300, Y: 14, W: 44, H: 22}
 	statusClockRect = sdl.Rect{X: 1100, Y: 10, W: 64, H: 28}
-	prevStart, prevBell := tb.startRect, nc.bellRect
-	tb.startRect, nc.bellRect = sdl.Rect{}, sdl.Rect{}
-	t.Cleanup(func() { tb.startRect, nc.bellRect = prevStart, prevBell })
+	t.Cleanup(restore)
 }
 
 // useTopChrome measures the complete top bar: back pill, Apps pill, status
-// clock and notification bell, and clears any overlay state left by another
-// test.
+// clock and notification bell, and clears any overlay or status-cluster state
+// left by another test (weather, Wi-Fi, media chip, update pill).
 func useTopChrome(t *testing.T) {
 	t.Helper()
+	restore := snapshotStatusClusterRects()
 	prevTB, prevNC := tb, nc
-	prevBack, prevClock := sceneTitleBackRect, statusClockRect
+	weatherStatusRect, statusWiFiRect = sdl.Rect{}, sdl.Rect{}
+	statusMediaRect, updatePrompt.badge = sdl.Rect{}, sdl.Rect{}
 	sceneTitleBackRect = sdl.Rect{X: 300, Y: 14, W: 44, H: 22}
 	tb.startRect = sdl.Rect{X: 352, Y: 14, W: 64, H: 22}
 	statusClockRect = sdl.Rect{X: 1100, Y: 10, W: 64, H: 28}
@@ -45,7 +83,7 @@ func useTopChrome(t *testing.T) {
 	tb.startOpen = false
 	t.Cleanup(func() {
 		tb, nc = prevTB, prevNC
-		sceneTitleBackRect, statusClockRect = prevBack, prevClock
+		restore()
 	})
 }
 

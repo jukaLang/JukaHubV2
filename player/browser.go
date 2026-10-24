@@ -407,6 +407,8 @@ func resetBrowserStateForTest() {
 	browserClearPageCache()
 	browserHomeLoaded = false
 	browserLinkPanel = browserLinkPanelState{}
+	browserLinkCursor = browserLinkCursorState{}
+	browserNav = browserModeScroll
 	resetBrowserDocumentsForTest()
 	resetBrowserAdBlockViewsForTest()
 	resetBrowserAdBlockCount()
@@ -999,6 +1001,146 @@ func browserOpenFocusedPageLink(config *Config, elem Element) bool {
 	return true
 }
 
+// ── Scroll ⇄ Link mode ─────────────────────────────────────────────────
+//
+// One D-pad, two jobs: scrolling the page and stepping through its links.
+// A cycle key switches between them so the same pad does both, the way a
+// TV remote alternates between arrow keys and colored buttons. On the
+// Trimui Smart Pro the pad arrives as keyboard events (browserKey below),
+// so Tab is the cycle and the mode is one shared piece of state.
+
+type browserNavMode int
+
+const (
+	browserModeScroll browserNavMode = iota
+	browserModeLinks
+)
+
+var browserNav = browserModeScroll
+
+func browserToggleNavMode() {
+	if browserNav == browserModeLinks {
+		browserNav = browserModeScroll
+		showToast("Scroll mode — D-Pad scrolls the page", ToastInfo())
+	} else {
+		browserNav = browserModeLinks
+		showToast("Link mode — D-Pad steps through links", ToastInfo())
+	}
+	PlayNavSound()
+}
+
+// browserEnsureLinkFocus focuses the first link when nothing is picked, so
+// entering link mode and pressing A always does something. It reports
+// whether a link can be followed.
+func browserEnsureLinkFocus(config *Config, elem Element) bool {
+	layout := browserPageLayout(config, elem)
+	if layout == nil || len(layout.Links) == 0 {
+		showToast("No links on this page", ToastInfo())
+		return false
+	}
+	if browserFocusedLink(elem, layout) < 0 {
+		browserLinkCursor.cursor = 0
+		browserRevealLink(elem, layout, layout.Links[0])
+		PlayNavSound()
+	}
+	return true
+}
+
+// browserActivateFocusedLink is what A/Enter do: in link mode it always
+// follows a link (focusing the first if none is set), in scroll mode it
+// keeps the old behaviour of opening the address bar when nothing is on.
+func browserActivateFocusedLink(config *Config, elem Element) bool {
+	if browserNav == browserModeLinks && browserEnsureLinkFocus(config, elem) {
+		browserOpenFocusedPageLink(config, elem)
+		return true
+	}
+	if browserOpenFocusedPageLink(config, elem) {
+		return true
+	}
+	return false
+}
+
+// handleBrowserKey mirrors handleBrowserController for the keyboard — which
+// is how the Trimui Smart Pro reports its D-pad and face buttons. Tab cycles
+// between scrolling the page and stepping through its links; in link mode the
+// D-pad walks the anchors and A opens the focused one. Keys outside the
+// browser's model return false so older handlers keep working.
+
+func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Config, elem Element) bool {
+	if e == nil || e.Type != sdl.KEYDOWN || config == nil ||
+		textBrowserElementSource(elem) != textBrowserSourceWeb {
+		return false
+	}
+	switch e.Keysym.Sym {
+	case sdl.K_TAB:
+		browserToggleNavMode()
+		return true
+	case sdl.K_UP:
+		if browserNav == browserModeLinks {
+			return browserMovePageLink(config, elem, -1)
+		}
+		textBrowserScrollVelocity -= textBrowserScrollAccel
+		if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
+			textBrowserScrollVelocity = -textBrowserScrollMaxVel
+		}
+		textBrowserScrollCooldown = 8
+		return true
+	case sdl.K_DOWN:
+		if browserNav == browserModeLinks {
+			return browserMovePageLink(config, elem, 1)
+		}
+		textBrowserScrollVelocity += textBrowserScrollAccel
+		if textBrowserScrollVelocity > textBrowserScrollMaxVel {
+			textBrowserScrollVelocity = textBrowserScrollMaxVel
+		}
+		textBrowserScrollCooldown = 8
+		return true
+	case sdl.K_LEFT:
+		return browserMovePageLink(config, elem, -1)
+	case sdl.K_RIGHT:
+		return browserMovePageLink(config, elem, 1)
+	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+		if browserActivateFocusedLink(config, elem) {
+			return true
+		}
+		if e.Keysym.Sym != sdl.K_RETURN {
+			return false
+		}
+		handleTextBrowserAddressInput(renderer, config, elem)
+		return true
+	case sdl.K_l, sdl.K_x:
+		openBrowserLinkPanel(config, elem)
+		return true
+	case sdl.K_PAGEUP:
+		browserScrollByPage(config, elem, -1)
+		return true
+	case sdl.K_PAGEDOWN:
+		browserScrollByPage(config, elem, 1)
+		return true
+	case sdl.K_HOME:
+		textBrowserScrollY = 0
+		textBrowserScrollVelocity = 0
+		textBrowserScrollCooldown = 0
+		return true
+	case sdl.K_END:
+		layout := browserPageLayout(config, elem)
+		textBrowserScrollY = browserScrollMax(elem, layout)
+		textBrowserScrollVelocity = 0
+		textBrowserScrollCooldown = 0
+		return true
+	case sdl.K_ESCAPE, sdl.K_b:
+		if browserNav == browserModeLinks {
+			browserNav = browserModeScroll
+			showToast("Scroll mode — D-Pad scrolls the page", ToastInfo())
+			PlayNavSound()
+			return true
+		}
+		goBackScene(config)
+		return true
+	}
+	return false
+}
+
 // browserScrollButton scrolls one line and, at either end of the page, hands
 // the D-pad to the scene: Up leaves to the chrome above, Down to the button
 // row below. That is what makes the browser's own buttons reachable from the
@@ -1106,7 +1248,7 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 		openBrowserSearch(renderer, config, elem)
 		return true
 	case sdl.CONTROLLER_BUTTON_A:
-		if browserOpenFocusedPageLink(config, elem) {
+		if browserActivateFocusedLink(config, elem) {
 			return true
 		}
 		handleTextBrowserAddressInput(renderer, config, elem)
@@ -1116,8 +1258,14 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
 		return browserMovePageLink(config, elem, 1)
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		if browserNav == browserModeLinks {
+			return browserMovePageLink(config, elem, -1)
+		}
 		return browserScrollButton(config, elem, -1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		if browserNav == browserModeLinks {
+			return browserMovePageLink(config, elem, 1)
+		}
 		return browserScrollButton(config, elem, 1)
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		browserScrollByPage(config, elem, -1)
@@ -1125,6 +1273,81 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
 		browserScrollByPage(config, elem, 1)
 		return true
+	}
+	return false
+}
+
+// ── Clicking links on the page ───────────────────────────────────────
+
+// browserPageContentBox mirrors renderTextBrowser's geometry for the styled
+// page: the toolbar, the focus outline and this hit-test share the same
+// numbers, so a tap lands on exactly the row the renderer drew.
+func browserPageContentBox(elem Element) (left, top, width, height int32) {
+	width = getElementWidth(elem, 1100) - 14
+	headerH := int32(28)
+	height = getElementHeight(elem, 480) - headerH - textBrowserURLBarHeight - 12
+	left = elem.X + 7
+	top = elem.Y + 8 + headerH + textBrowserURLBarHeight + 4
+	return left, top, width, height
+}
+
+// browserPageLinkRects maps the laid-out links into screen coordinates as the
+// renderer draws them at the current scroll. Off-screen links map too — the
+// caller decides visibility — so tests can assert where a row landed.
+func browserPageLinkRects(config *Config, elem Element, layout *webLayout) []sdl.Rect {
+	if layout == nil || layout.RowH <= 0 {
+		return nil
+	}
+	left, top, _, _ := browserPageContentBox(elem)
+	scroll := int(textBrowserScrollY)
+	if scroll > int(browserScrollMax(elem, layout)) {
+		scroll = int(browserScrollMax(elem, layout))
+	}
+	rects := make([]sdl.Rect, len(layout.Links))
+	for i, hit := range layout.Links {
+		y := top + int32(hit.Row-scroll)*layout.RowH - 2
+		rects[i] = sdl.Rect{
+			X: left + hit.X - 4,
+			Y: y,
+			W: hit.W + 8,
+			H: layout.RowH + 4,
+		}
+	}
+	return rects
+}
+
+// browserTapPageLink leaves a tap inside the rendered page on one of its
+// links: it fails when the tap is not on one, so the caller can keep the
+// click for whatever else wants it.
+func browserTapPageLink(config *Config, elem Element, mx, my int32) bool {
+	layout := browserPageLayout(config, elem)
+	if layout == nil || len(layout.Links) == 0 {
+		return false
+	}
+	left, top, width, height := browserPageContentBox(elem)
+	if mx < left || mx >= left+width || my < top || my >= top+height {
+		return false
+	}
+	for i, rect := range browserPageLinkRects(config, elem, layout) {
+		rel := int32(layout.Links[i].Row - int(textBrowserScrollY))
+		if rel < 0 || rel*layout.RowH >= height {
+			continue // off screen; the outline cannot be there either
+		}
+		if rect.W > 0 && pointInRect(mx, my, rect) {
+			base := textBrowserAddress(config)
+			if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
+				base = doc.URL
+			}
+			target, ok := browserResolveLink(base, layout.Links[i].Href)
+			if !ok {
+				showToast("That link cannot be opened here", ToastInfo())
+				return true
+			}
+			PlayActivateSound()
+			browserLinkCursor = browserLinkCursorState{}
+			loadTextBrowserURL(config, elem, target)
+			return true
+		}
 	}
 	return false
 }

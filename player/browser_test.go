@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -810,5 +811,147 @@ func TestBrowserSceneHasSearchChip(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("Browser scene has no Search chip")
+	}
+}
+
+// waitBrowserVariable drains background publishes until a browser variable's
+// content matches. waitBrowserText does the same for the shared browser
+// content variable; these tests give the scene its own name.
+func waitBrowserVariable(t *testing.T, config *Config, variable string, ok func(string) bool) string {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		drainCustom(config)
+		if text, _ := config.Variables.Custom[variable].(string); ok(text) {
+			return text
+		}
+		if time.Now().After(deadline) {
+			text, _ := config.Variables.Custom[variable].(string)
+			t.Fatalf("page never arrived, content = %q", text)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Tab (and B in link mode) switch between scrolling and picking links, so the
+// D-pad keeps its full-time role and the keyboard toggle is visible on a device
+// with one.
+func TestBrowserKeyCyclesScrollAndLinkModes(t *testing.T) {
+	// Drop any leftover browser state (a previous test's pages, mode or
+	// cursor) before this one builds its own scene.
+	resetBrowserStateForTest()
+	config := layoutTestConfig(t)
+	variable := "browser_key_modes"
+	doc := parseWebPage(`<body><p><a href="/one">one</a></p><p><a href="/two">two</a></p></body>`, "", "https://example.com/keys")
+	setBrowserDocument(variable, doc)
+	resetBrowserCursorForTest()
+
+	restoreFetch := setBrowserPageFetcherForTest(func(rawURL string) browserPage {
+		return browserPage{Text: "Title: next\n\nloaded the next page", FinalURL: rawURL}
+	})
+	t.Cleanup(func() {
+		waitForBrowserFetches()
+		restoreFetch()
+		setBrowserDocument(variable, nil)
+		resetBrowserStateForTest()
+	})
+
+	elem := browserCursorTestElement(variable)
+	key := func(sym sdl.Keycode) bool {
+		event := &sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sym}}
+		return handleBrowserKey(nil, event, config, elem)
+	}
+
+	// Scroll mode: Down scrolls and never picks a link.
+	layout := browserPageLayout(config, elem)
+	if layout == nil || len(layout.Links) != 2 {
+		t.Fatalf("web layout links = %+v", layout)
+	}
+	if !key(sdl.K_DOWN) {
+		t.Fatal("Down was not consumed in scroll mode")
+	}
+	if got := browserFocusedLink(elem, layout); got != -1 {
+		t.Fatalf("scroll-mode Down focused link %d", got)
+	}
+
+	// Tab cycles to link mode; the D-pad then walks the anchors and A opens
+	// the focused one.
+	if !key(sdl.K_TAB) || browserNav != browserModeLinks {
+		t.Fatal("Tab did not enter link mode")
+	}
+	if !key(sdl.K_DOWN) || browserFocusedLink(elem, layout) != 0 {
+		t.Fatal("Down in link mode did not focus the first link")
+	}
+	if !key(sdl.K_DOWN) || browserFocusedLink(elem, layout) != 1 {
+		t.Fatal("a second Down in link mode did not focus the next link")
+	}
+	if !key(sdl.K_a) {
+		t.Fatal("A did nothing in link mode")
+	}
+	waitBrowserVariable(t, config, variable, func(s string) bool {
+		return strings.Contains(s, "loaded the next page")
+	})
+
+	// Tab (or B) cycles back to scroll mode, where Down scrolls again.
+	if !key(sdl.K_TAB) || browserNav != browserModeScroll {
+		t.Fatal("Tab did not leave link mode")
+	}
+	if !key(sdl.K_TAB) || browserNav != browserModeLinks {
+		t.Fatal("Tab did not enter link mode again")
+	}
+	if !key(sdl.K_b) || browserNav != browserModeScroll {
+		t.Fatal("B did not leave link mode")
+	}
+
+	// Plain-text panels keep their old keyboard model.
+	plain := Element{Type: "textbrowser", Text: "system", Variable: variable}
+	if handleBrowserKey(nil, &sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_TAB}}, config, plain) {
+		t.Fatal("the keyboard handler ate Tab on a plain-text panel")
+	}
+}
+
+// If tapping a link only gave focus, the second tap would be the open step:
+// a tap must open the link directly.
+func TestBrowserTapOnPageLinkOpensIt(t *testing.T) {
+	resetBrowserStateForTest()
+	config := layoutTestConfig(t)
+	variable := "browser_tap_link"
+	doc := parseWebPage(`<body><p>plain text</p><p><a href="/one">one</a></p></body>`, "", "https://example.com/tap")
+	setBrowserDocument(variable, doc)
+	resetBrowserCursorForTest()
+
+	restoreFetch := setBrowserPageFetcherForTest(func(rawURL string) browserPage {
+		return browserPage{Text: "Title: opened\n\nthe tapped page", FinalURL: rawURL}
+	})
+	t.Cleanup(func() {
+		waitForBrowserFetches()
+		restoreFetch()
+		setBrowserDocument(variable, nil)
+		resetBrowserStateForTest()
+	})
+
+	elem := browserCursorTestElement(variable)
+	layout := browserPageLayout(config, elem)
+	if layout == nil || len(layout.Links) != 1 {
+		t.Fatalf("web layout links = %+v", layout)
+	}
+	rects := browserPageLinkRects(config, elem, layout)
+	if len(rects) != 1 {
+		t.Fatalf("link rects = %d, want 1", len(rects))
+	}
+	rect := rects[0]
+	if rect.W <= 0 || rect.H <= 0 {
+		t.Fatalf("link rect = %+v", rect)
+	}
+	if !browserTapPageLink(config, elem, rect.X+2, rect.Y+2) {
+		t.Fatal("tap on the link rect was not consumed")
+	}
+	waitBrowserVariable(t, config, variable, func(s string) bool {
+		return strings.Contains(s, "the tapped page")
+	})
+
+	// A tap away from a link stays with the caller.
+	if browserTapPageLink(config, elem, rect.X+rect.W/2, rect.Y+rect.H/2+120) {
+		t.Fatal("tap far from the link was consumed")
 	}
 }

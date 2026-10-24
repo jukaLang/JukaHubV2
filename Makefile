@@ -90,10 +90,15 @@ fmt-check: ## Fail if any Go file is not gofmt'd
 	@out="$$($(GO_SOURCES) | xargs gofmt -l)"; \
 	if [ -n "$$out" ]; then echo "not gofmt'd (run 'make fmt'):"; echo "$$out"; exit 1; fi
 
-lint: fmt-check vet ## Formatting, vet, builder syntax and config JSON
+lint: fmt-check vet ## Formatting, vet, builder syntax, ESLint and config JSON
 	@command -v $(NODE) >/dev/null 2>&1 || { echo "node is required for the builder syntax check: https://nodejs.org"; exit 1; }
 	@for f in $(WEB_SCRIPTS); do $(NODE) --check "$$f" || exit 1; done
 	@$(NODE) -e "JSON.parse(require('fs').readFileSync('$(PLAYER)/jukaconfig.json','utf8'))"
+	@if [ -x tests/web/node_modules/.bin/eslint ]; then \
+		tests/web/node_modules/.bin/eslint -c tests/web/eslint.config.mjs $(WEB_SCRIPTS); \
+	else \
+		echo "lint: ESLint skipped (run 'make test-web' to install the builder test dependencies)"; \
+	fi
 	@echo "lint: ok"
 
 bench: ## Cold-boot benchmark (see player/startup-bench.sh)
@@ -109,5 +114,5 @@ release: ## Package the release artifacts into player/dist
 clean: ## Remove build outputs (Windows also removes the local SDL copy)
 	$(CLEAN)
 
-check: lint test test-web ## Everything a pull request must pass (no browser needed)
+check: lint test test-web ## Everything a pull request must pass (no browser needed); ESLint is skipped by lint until test-web installs it
 	@echo "check: ok"

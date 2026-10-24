@@ -188,6 +188,71 @@ func TestHomeClockReachableAndTogglesCalendar(t *testing.T) {
 	}
 }
 
+// TestHomeWiFiMeterSelectableWithDpad covers the handheld report that the
+// signal meter could not be selected with the pad. The chip has no drawn rect
+// until the header measures the status cluster, so the test walks the real
+// controller path after a frame and also resolves a tap on the chip before the
+// first frame, where the layout still holds its placeholder rect.
+func TestHomeWiFiMeterSelectableWithDpad(t *testing.T) {
+	snapshotHomeGlobals(t)
+	prevActive := homeLayoutActive
+	homeLayoutActive = true
+	prevWifi := wifiPanel
+	t.Cleanup(func() {
+		homeLayoutActive = prevActive
+		// The click below opens the picker; leaving that modal open would leak
+		// into every later test in the package.
+		wifiPanel = prevWifi
+	})
+	config := &Config{Scenes: []SceneConfig{{Name: "Main", Layout: "home"}}}
+
+	// Before the first frame the placeholder must already be the meter, not a
+	// chip drawn on top of it: the update offer shares this band.
+	homeLayout = NewHomeLayout(probeW, probeH)
+	placeholder := homeLayout.Items[HomeFocusWiFi].Rect
+	if !homeLayout.FocusAt(placeholder.X+placeholder.W/2, placeholder.Y+placeholder.H/2) {
+		t.Fatal("the meter's placeholder does not hit-test")
+	}
+	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
+		t.Fatalf("tap on the meter placeholder selected %q", got)
+	}
+
+	renderHomeFrame(t, false)
+	meter := homeLayout.Items[HomeFocusWiFi].Rect
+	if meter.W <= 0 || !homeLayout.Focus.IsEnabled(HomeFocusWiFi) {
+		t.Fatalf("meter rect %+v enabled %v: the pad would skip it", meter, homeLayout.Focus.IsEnabled(HomeFocusWiFi))
+	}
+
+	press := func(button uint8) {
+		t.Helper()
+		e := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: button}
+		if !handleHomeController(e, config) {
+			t.Fatalf("home did not consume controller button %v", button)
+		}
+	}
+	if !homeLayout.Focus.Set(HomeFocusSettings) {
+		t.Fatal("cannot focus the Settings card")
+	}
+	press(sdl.CONTROLLER_BUTTON_DPAD_UP)
+	if got := homeLayout.Focus.Current(); got != HomeFocusClock {
+		t.Fatalf("Up from Settings focused %q, want the clock", got)
+	}
+	press(sdl.CONTROLLER_BUTTON_DPAD_LEFT)
+	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
+		t.Fatalf("Left from the clock focused %q, want the Wi-Fi meter", got)
+	}
+	// Clicking the drawn meter is the same target.
+	if !handleHomeMouseClick(meter.X+meter.W/2, meter.Y+meter.H/2, config) {
+		t.Fatal("click on the meter was not handled")
+	}
+	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
+		t.Fatalf("click on the meter selected %q", got)
+	}
+	if !wifiPanel.open {
+		t.Fatal("clicking the meter did not open the Wi-Fi picker")
+	}
+}
+
 // TestHomeLayoutGeometry pins the requested card layout: Continue takes over
 // the old Settings slot, Files halves its width and Settings fills the same
 // width right of Files.

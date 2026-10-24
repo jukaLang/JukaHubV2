@@ -89,35 +89,34 @@ func TestToolsPanelRenderLayout(t *testing.T) {
 		t.Fatalf("panel vertically out of bounds: y=%d h=%d screen=%d", panel.Y, panel.H, probeH)
 	}
 
+	// The grid scrolls, so only the window that fits is drawn and the rest
+	// keep zero rects. The drawn tiles form columns, so instead of a vertical
+	// no-overlap walk like a list, every tile is checked to stay inside its
+	// row lane and the panel.
 	rows := toolsRows(config)
 	if len(rects) != len(rows) {
-		t.Fatalf("drew %d row rects for %d rows", len(rects), len(rows))
+		t.Fatalf("drew %d tile rects for %d rows", len(rects), len(rows))
 	}
 	drawn := 0
-	var prev sdl.Rect
 	for i, r := range rects {
 		if r.W == 0 && r.H == 0 {
-			// Off screen: the list scrolls, so only the window in the body is
+			// Off screen: the grid scrolls, so only the window in the body is
 			// drawn and the rest keep zero rects.
 			continue
 		}
 		drawn++
 		if r.X < panel.X || r.X+r.W > panel.X+panel.W ||
 			r.Y < panel.Y || r.Y+r.H > panel.Y+panel.H {
-			t.Fatalf("row %d %+v escapes panel %+v", i, r, *panel)
+			t.Fatalf("tile %d %+v escapes panel %+v", i, r, *panel)
 		}
-		if prev.W > 0 && r.Y < prev.Y+prev.H {
-			t.Fatalf("row %d at y=%d overlaps the previous row ending at %d", i, r.Y, prev.Y+prev.H)
-		}
-		prev = r
 	}
 	if drawn == 0 {
-		t.Fatal("no rows were drawn")
+		t.Fatal("no tiles were drawn")
 	}
 
-	// The selected row must be visibly highlighted against its neighbours.
+	// The selected tile must be visibly highlighted against its neighbours.
 	if lit, plain := bandLuma(f, rects[0]), bandLuma(f, rects[1]); lit <= plain {
-		t.Fatalf("focused row is not highlighted: focused luma %d <= unfocused %d", lit, plain)
+		t.Fatalf("focused tile is not highlighted: focused luma %d <= unfocused %d", lit, plain)
 	}
 
 	// The panel body is opaque over the dimmed scene.
@@ -127,8 +126,8 @@ func TestToolsPanelRenderLayout(t *testing.T) {
 	}
 }
 
-// The list is longer than the panel, so moving the cursor to the end has to
-// scroll the window and keep the focused row on screen.
+// The tile grid is taller than the panel, so moving the cursor to the last
+// tile has to scroll the window and keep the focused tile fully in view.
 func TestToolsPanelScrollsToTheCursor(t *testing.T) {
 	config := &Config{}
 	rows := toolsRows(config)
@@ -137,24 +136,31 @@ func TestToolsPanelScrollsToTheCursor(t *testing.T) {
 	}
 	prevCursor, prevScroll := toolsPanel.cursor, toolsPanel.scroll
 	t.Cleanup(func() { toolsPanel.cursor, toolsPanel.scroll = prevCursor, prevScroll })
-	layout := toolsPanelMetrics(config, rows)
-	body := toolsPanelBodyHeight(rows, layout)
+	m := toolsPanelMetrics(config, rows)
+	g := toolsGridBuild(rows, m)
+	if g.bodyH <= m.tileH {
+		t.Skip("grid fits the body; nothing to scroll")
+	}
+	// One lane in view is the tightest scroll a small panel can give.
+	viewH := m.tileH
 
 	toolsPanel.cursor, toolsPanel.scroll = len(rows)-1, 0
-	toolsPanelClampScroll(rows, layout)
-	if toolsPanel.scroll == 0 {
-		t.Fatalf("cursor at the last of %d rows did not scroll the list", len(rows))
+	scroll := toolsGridEnsureVisible(g, toolsPanel.cursor, viewH)
+	if scroll == 0 {
+		t.Fatalf("cursor at the last of %d tiles did not scroll the grid", len(rows))
 	}
-	visible := toolsVisibleRows(rows, layout, toolsPanel.scroll, body)
-	if last := toolsPanel.scroll + visible - 1; last != len(rows)-1 {
-		t.Fatalf("window %d..%d does not end on the focused last row", toolsPanel.scroll, last)
+	last := g.rects[toolsPanel.cursor]
+	if last.Y-scroll < 0 || last.Y+last.H-scroll > viewH {
+		t.Fatalf("window %d..%d does not cover the focused tile %+v", scroll, scroll+viewH, last)
 	}
 
-	// Walking back up returns the window to the top.
+	// Walking back up keeps the focused tile fully in view; at this tight
+	// one-lane view that lands at the tile's own offset, not at zero.
 	toolsPanel.cursor = 0
-	toolsPanelClampScroll(rows, layout)
-	if toolsPanel.scroll != 0 {
-		t.Fatalf("cursor back at the top left scroll = %d", toolsPanel.scroll)
+	scroll = toolsGridEnsureVisible(g, toolsPanel.cursor, viewH)
+	first := g.rects[toolsPanel.cursor]
+	if first.Y-scroll < 0 || first.Y+first.H-scroll > viewH {
+		t.Fatalf("window %d..%d does not cover the focused tile %+v", scroll, scroll+viewH, first)
 	}
 }
 
@@ -203,8 +209,8 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 	// The warning line is pinned above the footer, so it is checked where the
 	// layout puts it rather than under the last row: the list scrolls now.
 	layout := toolsPanelMetrics(&Config{}, toolsRows(&Config{}))
-	warnTop := panel.Y + panel.H - layout.footerH - layout.infoH + 2
-	warnBottom := panel.Y + panel.H - layout.footerH
+	warnTop := panel.Y + panel.H - layout.footH - layout.infoH + 2
+	warnBottom := panel.Y + panel.H - layout.footH
 	if warnBottom <= warnTop {
 		t.Fatalf("no room for the warning: top=%d bottom=%d", warnTop, warnBottom)
 	}
@@ -327,7 +333,7 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
 	if len(rects) != 15 {
-		t.Fatalf("row rects = %d, want 15 with the Misc scene", len(rects))
+		t.Fatalf("tile rects = %d, want 15 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Skip("no usable font")
@@ -336,10 +342,10 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 	if panel.H > probeH-40 {
 		t.Fatalf("panel is %dpx tall on a %dpx screen", panel.H, probeH)
 	}
-	// The list is longer than the panel, so it scrolls; what has to hold is
-	// that the body still shows rows and that the credentials line survives.
-	if body := toolsPanelBodyHeight(toolsRows(config), layout); body < layout.rowH {
-		t.Fatalf("body is %dpx, shorter than one row (%dpx)", body, layout.rowH)
+	// The grid is longer than the panel, so it scrolls; what has to hold is
+	// that the body still shows tiles and that the credentials line survives.
+	if layout.tileH < 96 {
+		t.Fatalf("a tile is %dpx, shorter than its minimum height", layout.tileH)
 	}
 	if len(layout.info) == 0 {
 		t.Fatal("compact layout dropped the SFTP credentials line")

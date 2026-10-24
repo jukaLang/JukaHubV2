@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
-	"strings"
 	"encoding/base64"
 	"image"
 	"image/color"
 	"image/png"
+	"strings"
 	"testing"
 	"time"
 

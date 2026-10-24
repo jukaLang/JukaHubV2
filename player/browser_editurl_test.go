@@ -6,6 +6,21 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
+// browserEditURLStubFetcher replaces the fetch seam for the tests in this
+// file. Confirming a typed address used to start a real load of the typed
+// host; its goroutine kept running past the test and its error page landed in
+// whatever test drained the publish queue next.
+func browserEditURLStubFetcher(t *testing.T) {
+	t.Helper()
+	restore := setBrowserPageFetcherForTest(func(rawURL string) browserPage {
+		return browserPage{Text: "Title: typed\n\nstub page for " + rawURL, FinalURL: rawURL}
+	})
+	t.Cleanup(func() {
+		waitForBrowserFetches()
+		restore()
+	})
+}
+
 // SDL stores events in a union that is 56 bytes on a 64-bit target, and
 // go-sdl2 hands SDL a pointer to one of its own — smaller — Go event structs.
 // Under `go test -race` checkptr rejects that conversion ("converted pointer
@@ -70,6 +85,7 @@ func resetBrowserEditURLState() {
 // Typing a new address in the bar must replace the current one. It used to be
 // appended to it ("https://old/https://new"), which loaded a 404.
 func TestBrowserEditURLReplacesTheAddress(t *testing.T) {
+	browserEditURLStubFetcher(t)
 	config, renderer, elem, _, _ := browserEditURLFixture(t)
 	defer resetBrowserEditURLState()
 	config.Variables.Custom[textBrowserURLVariable] = "https://old.example/"

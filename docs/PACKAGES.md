@@ -274,4 +274,4 @@ using the GitHub digest (with the log warning above).
 
 - [Building](BUILDING.md) — release artifacts and the compile stamp the updater compares
 - [Configuration reference](CONFIGURATION.md) — `packages_refresh` and the package list element
-- [Security](../player/SECURITY.md) — secrets handling
+- [Security](../SECURITY.md) — secrets handling

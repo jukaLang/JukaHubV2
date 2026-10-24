@@ -225,4 +225,4 @@ destructive: they act on the real directories. Both validate the target name
 
 - [Configuration reference](CONFIGURATION.md) — the `plugin_action` / `plugin_refresh` triggers and variables
 - [Packages](PACKAGES.md) — the declarative package format for shipping files, including tools a plugin may call
-- [Security](../player/SECURITY.md) — how secrets are encrypted and kept out of configs
+- [Security](../SECURITY.md) — how secrets are encrypted and kept out of configs

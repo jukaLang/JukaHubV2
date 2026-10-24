@@ -10,6 +10,7 @@ has no way to enter a new password when it moves to another network.
 | From | How |
 |------|-----|
 | Status bar | tap the signal meter at the top right (Home and every scene) |
+| D-pad | **Up** into the top bar, then **Left** onto the meter (on Home: **Up** from Settings reaches the clock, **Left** walks the weather chip and the meter); **A** opens the picker |
 | Quick Settings | **Start → Quick Settings**, highlight **Wi-Fi Networks**, press **A** |
 | Hardware scene | **Settings → Hardware → Wi-Fi** (the button is added in memory; the config file is not changed) |
 | Config trigger | a button with `"trigger": "wifi_open"` on any scene |

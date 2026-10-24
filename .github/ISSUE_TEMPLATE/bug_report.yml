@@ -11,7 +11,7 @@ body:
         Before filing: search the existing issues and skim the
         [documentation](https://github.com/jukaLang/JukaHubV2/tree/main/docs) —
         the answer may already be written down. Vulnerabilities belong in
-        [player/SECURITY.md](https://github.com/jukaLang/JukaHubV2/blob/main/player/SECURITY.md),
+        [SECURITY.md](https://github.com/jukaLang/JukaHubV2/blob/main/SECURITY.md),
         not in a public issue.
 
   - type: textarea

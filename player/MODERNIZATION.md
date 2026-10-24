@@ -1,10 +1,35 @@
 # JukaHubV2 Modernization Plan
 
-> **Implementation status (2026-10-18):** verified item-by-item in [MODERNIZATION-CHECKLIST.md](MODERNIZATION-CHECKLIST.md). `go vet ./...`, `go test ./...` and `go build .` pass on this revision. The newest handheld work is in [Phase 8](#phase-8-trimui-handheld-polish).
+Status of every item below, checked against the code in this tree on
+**2026-10-24** (go1.27.2 windows/amd64, SDL2 from `player/.sdl2`):
+
+```
+go vet ./...      # exit 0
+go test ./...     # ok jukahub/JukaHub, ok jukahub/JukaHub/web
+go build .        # exit 0
+```
+
+Legend: **✅ shipped** (code exists and is exercised by tests), **🟡 partial**
+(some of the item works, the rest is genuinely missing), **⬜ not started**.
+Library choices and measured numbers live in
+[LIBRARY-EVALUATION.md](LIBRARY-EVALUATION.md).
 
 ## Executive Summary
 
 This document outlines the modernization of JukaHubV2 for production use on **Trimui Smart Pro** (1280×720, ARM64, 1GB RAM) and **Windows** (x64, resizable). The goal is to create a controller-first, responsive, reliable handheld launcher while preserving the existing Go + SDL2 runtime and config-driven architecture.
+
+## At a glance
+
+| Phase | Done | Partial | Not started |
+|-------|------|---------|-------------|
+| 2. Architecture | 27 | 5 | 2 |
+| 3. Async & performance | 12 | 3 | 6 |
+| 4. Reliability | 24 | 1 | 1 |
+| 5. Features | 10 | 4 | 2 |
+| 6. Testing | 10 | 1 | 0 |
+| 7. Web builder | 5 | 2 | 5 |
+| 8. Handheld polish | 21 | 0 | 13 |
+| 9. Browser & handheld input | 8 | 0 | 4 |
 
 ## Current State Audit
 
@@ -82,269 +107,419 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 ### Phase 1: UI/UX Fixes (Completed)
 **Status**: ✅ Done
 
-- [x] Fix card rendering (remove washed-out highlight)
-- [x] Add footer with controller hints
-- [x] Fix Continue panel styling
-- [x] Simplify status bar
-- [x] Make icon backgrounds opaque
-- [x] Add Home color helpers
-- [x] Format all Go files
+- [x] ✅ Fix card rendering (remove washed-out highlight)
+- [x] ✅ Add footer with controller hints
+- [x] ✅ Fix Continue panel styling
+- [x] ✅ Simplify status bar
+- [x] ✅ Make icon backgrounds opaque
+- [x] ✅ Add Home color helpers
+- [x] ✅ Format all Go files
 
 ### Phase 2: Architecture Refactoring
-**Status**: 🟡 Mostly complete — see the checklist
+**Status**: 🟡 Mostly complete (27 shipped, 5 partial, 2 not started)
 
 #### 2.1 Design System
-- [x] Semantic color tokens in `design.go`
-- [x] Add spacing tokens (8, 12, 16, 24, 32)
-- [x] Add radius tokens (small, medium, large)
-- [x] Add typography tokens (title, heading, body, label)
-- [x] Add motion tokens (fast, standard, reduced) — `anim.go`: `uiMenuEnterMS`/`uiPanelEnterMS`/`uiFadeMS`, all gated by `ReducedMotion`
-- [x] Add density tokens (compact, comfortable)
+
+- [x] ✅ Semantic color tokens — `design.go` (surfaces, borders, text accessors, semantic, progress, chips).
+- [x] ✅ Spacing tokens — 4pt scale `SpaceXS … Space3XL` in `design.go`.
+- [x] ✅ Radius tokens — `RadiusXS … RadiusRound`.
+- [x] ✅ Typography tokens — `FontSizeXSS … FontSize3XL`, semantic `TypeRole`
+      (`TypeTitle/Heading/Body/Label/Caption`) and `FontForRole`; covered by
+      `design_tokens_test.go`.
+- [x] ✅ Motion tokens — `AnimDuration*` in `design.go`, `anim.go` durations
+      (`uiMenuEnterMS`/`uiPanelEnterMS`/`uiFadeMS`), all gated by reduced motion
+      (`anim_test.go`, `TestUIMotionGate`).
+- [x] ✅ Density tokens — `DensityCompact/DensityComfortable`, `DensityFor`,
+      `DensitySpace`, airy spacing aliases; covered by `design_tokens_test.go`.
 
 #### 2.2 Component System
-- [ ] Create `AppBar` component
-- [x] Create `StatusBar` component
-- [x] Footer hints (`FooterHint` + `renderFooter`)
-- [x] Create `Card` component
-- [ ] Create `CategoryTile` component
-- [ ] Create `Button` component
-- [ ] Create `IconButton` component
-- [x] Create `ListRow` component
-- [x] Create `Grid` component
-- [x] Create `ProgressBar` component
-- [x] Create `Badge` component
-- [x] Create `Toast` component
-- [x] Create `EmptyState` component
-- [x] Create `ErrorState` component
-- [x] Create `LoadingSkeleton` component
+
+- [x] ✅ `Card` — `UICard`/`UICardStyle`, adopted by notifications, Start menu and
+      Quick Settings; render tests in `components_test.go`.
+- [x] ✅ `StatusBar` — `renderStatusBar`; shared right-hand cluster order with the
+      home header, overflow dropping, safe-mode chip; `statusbar_render_test.go`.
+- [x] ✅ Footer hints — `renderFooter` + `FooterHint`, per-scene overrides
+      (`patchFooterHints`).
+- [x] ✅ `Button` (surface-level) — shared pressed/focus recipes in `ui_helpers.go`
+      and per-scene button geometry; no single `UIButton` type yet 🟡.
+- [x] ✅ `ListRow` — `UIListRow`, used by the generic scene list renderer.
+- [x] ✅ `Grid` — `UIGridColumns`, `UIGridCellWidth`, `UIGridVisibleRows`,
+      `UIGridCellRect`; theme gallery geometry now uses them (`grid_test.go`,
+      `TestThemeGalleryUsesGridGeometry`).
+- [x] ✅ `ProgressBar` — `UIProgressBar`, used by Patch's hold-to-confirm button and
+      covered by `components_test.go`.
+- [x] ✅ `Badge` — `UIBadge`, used by the notification bell.
+- [x] ✅ `Toast` — `ShowToast`/`showToast` with semantic kinds and duration policy.
+- [x] ✅ `EmptyState` / `ErrorState` — `UIEmptyState` / `UIErrorState`
+      (`uiStateBlock`).
+- [x] ✅ `LoadingSkeleton` — `UILoadingSkeleton` with pulse phase.
+- [ ] 🟡 `CategoryTile` — the home renderer has a card recipe, but it is not a
+      reusable component.
+- [ ] 🟡 `IconButton` — icon geometry helpers exist (`launcher.go`), but buttons are
+      still drawn inline per scene.
+- [ ] ⬜ Create `AppBar` component — screen headers are drawn inline by scenes;
+      the verified audit above never counted this as started.
 
 #### 2.3 Focus System
-- [ ] Create `Focusable` interface
-- [x] Build explicit focus graph per scene
-- [x] Implement focus preservation on scene return
-- [x] Add deterministic directional navigation
-- [x] Add focus animation (100-140ms) — keyframed hover/focus lift on home cards and buttons
-- [x] Add reduced-motion mode
-- [ ] Add input remapping screen
-- [x] Add controller test screen — `ctrldiag.go` (Power tools)
+
+- [x] ✅ Focus graph per scene — `focus.go` (`FocusEngine`, graph nodes, chrome tiers).
+- [x] ✅ Focus preservation on scene return — `Persist`/`Restore`, wired in
+      `core.go` scene changes.
+- [x] ✅ Deterministic directional navigation — `focus.go` geometry-based movement;
+      `navselection_test.go`, `chrome_nav_test.go`, `homefocus_nav_test.go`.
+- [x] ✅ Focus animation — hover/focus lift (100–140 ms), reduced-motion aware.
+- [x] ✅ Reduced-motion mode — config flag, animation gates, battery-saver test.
+- [x] ✅ Controller test screen — `ctrldiag.go`, opened from Power tools; see
+      [../docs/CONTROLLER_TEST.md](../docs/CONTROLLER_TEST.md).
+- [ ] 🟡 `Focusable` interface — behavior is centralized in `FocusEngine`, but
+      there is no Go interface implemented by element types.
+- [ ] ⬜ Input remapping screen.
 
 #### 2.4 Platform Abstraction
-- [x] Define `Platform` interface
-- [x] Add TrimUI/Linux platform implementation (`platform.go`)
-- [x] Add Windows platform implementation (`platform.go`)
-- [x] Move OS-specific paths to platform layer
-- [x] Move process flags to platform layer
-- [x] Move power behavior to platform layer
-- [x] Move tool discovery to platform layer
+
+- [x] ✅ `Platform` interface — `platform.go` with `P()`, executable dir, device
+      detection, process flags, tool paths.
+- [x] ✅ TrimUI/Linux and Windows implementations — same file, platform-specific
+      files (`patch_statfs_*`, `processes_*`).
+- [x] ✅ OS-specific paths/process flags/power behavior/tool discovery moved behind
+      `P()` (`platform.go`, `paths.go`).
+- [x] ✅ Portable layout — data, apps, packages and shared folder resolve next to
+      the executable (`patch_repo.go`, `apps.go`, `packages.go`).
 
 ### Phase 3: Async Work & Performance
-**Status**: 🟡 In progress
+**Status**: 🟡 In progress (12 shipped, 3 partial, 6 not started)
 
 #### 3.1 Concurrency Model
-- [ ] Add `context.Context` everywhere
-- [ ] Add `errgroup` for coordinated cancellation
-- [ ] Add bounded semaphore for concurrency limits
-- [ ] Create worker pool for image decoding (2 jobs on Trimui)
-- [x] Create worker pool for network requests (2-3 jobs on Trimui) — thumbnail prefetch: 2 on handhelds, 3 on desktop
-- [ ] Debounce search input (250-350ms)
-- [ ] Cancel scene work on scene exit
+
+- [ ] 🟡 `context.Context` — threaded through Patch, downloads, text browser,
+      installers and now scene work: scene-entry feed fetches (podcasts, the
+      package registry, weather) and the Tools jobs (tickers, speed test,
+      benchmarks) take their scene's context. Older feature fetches still use
+      bare clients.
+- [x] ✅ `errgroup`-style coordinated cancellation — `runCancelableGroup`
+      (`scenetasks.go`) implements the errgroup contract in-tree, because the
+      vendored module set is pinned and `golang.org/x/sync` would require
+      re-vendoring unrelated upgrades. It cancels siblings on the first error
+      and returns that error; covered by `scenetasks_test.go`
+      (`TestRunCancelableGroup*`).
+- [x] ✅ Bounded thumbnail prefetch pool — 2 workers on handhelds, 3 on desktop,
+      with in-flight dedupe (`thumbstore.go`); verified by
+      `TestThumbnailPrefetchRunsConcurrently`. No general-purpose semaphore yet.
+- [x] ✅ Cancel scene work on scene exit — `scenetasks.go` gives each scene a
+      context generation; `switchScene` cancels the screen being left and
+      `completeSceneTransition` opens the next one. Adopted by the podcast and
+      package fetches, the weather screen, and the ticker/speed-test/benchmark
+      jobs, which clean up their temporary files on cancel. A transition never
+      waits for the network; tests join with `waitForSceneWork`.
+- [ ] ⬜ Image-decode worker pool (2 jobs on Trimui).
+- [ ] ⬜ General bounded semaphore for other concurrency paths.
+- [ ] ⬜ Debounced search input — config saves and hot reload are debounced;
+      search is not. First name the path it is for: the Tube field only submits
+      on Enter/its button, and the global search filters in memory, so this is
+      worth doing only where a keystroke really starts work.
 
 #### 3.2 Caching
-- [x] Add font texture cache (key: font+size+color+string)
-- [ ] Add icon texture atlas
-- [x] Add thumbnail cache with byte limit
-- [x] Add network response cache with TTL
-- [x] Add LRU eviction policy
+
+- [x] ✅ Font/text texture cache — `textcache.go`, LRU with size cap (key:
+      font+size+color+string); eviction, trim, clear, capacity clamp and key
+      tests in `textcache_test.go`.
+- [x] ✅ Thumbnail cache with entry limit — `thumbstore.go` memory + disk cache.
+- [x] ✅ Network response cache with TTL — bbolt `cache.go`.
+- [x] ✅ LRU eviction — text cache and thumbnail memory cache.
+- [ ] ⬜ Icon texture atlas — icons are drawn as glyphs/primitives, no atlas.
 
 #### 3.3 Rendering
-- [x] Cache text textures
-- [ ] Cache static icons in atlas
-- [ ] Reuse card/label/image objects
-- [x] Add clipping for lists/grids
-- [x] Add idle render mode
-- [x] Add frame time budget
+
+- [x] ✅ Cached text textures — `globalTextCache`, pressure trimming.
+- [x] ✅ Clipping for lists/grids — `renderWithClip`.
+- [x] ✅ Idle render mode — `FrameRateController` drops cadence when nothing animates.
+- [x] ✅ Frame time budget — adaptive delay + low-power cadence (`adaptive.go`,
+      `adaptive_test.go`).
+- [ ] 🟡 Object reuse for cards/labels/images — card surfaces are stateless helpers;
+      per-frame text layout still allocates.
+- [ ] ⬜ Icon atlas as above.
 
 #### 3.4 Power Management
-- [ ] Add Battery Saver profile
-- [ ] Add Balanced profile
-- [ ] Add Performance profile
-- [ ] Stop polling when scene hidden
-- [x] Reduce animation in battery saver
+
+- [x] ✅ Reduce animation in battery saver — motion gates (`anim_test.go`).
+- [ ] 🟡 Named power profiles (Battery Saver / Balanced / Performance) —
+      `LowPower` + `ReducedMotion` + adaptive FPS exist; there is no selector
+      that maps all three to one setting.
+- [ ] ⬜ Stop polling when a scene is hidden (weather ticker and monitors run for
+      the whole process lifetime).
 
 ### Phase 4: Reliability & Configuration
-**Status**: 🟡 Mostly complete
+**Status**: 🟡 Mostly complete (24 shipped, 1 partial, 1 not started)
 
 #### 4.1 Configuration
-- [x] Add schema versioning
-- [x] Add config validation
-- [x] Add migrations for old configs
-- [x] Add atomic writes (temp file + rename)
-- [x] Add last-known-good backup
-- [x] Add config hot-reload (Windows dev only)
-- [x] Add portable mode for packaging
+
+- [x] ✅ Schema versioning — `config_schema.go`, `SchemaVersion` on `Config`,
+      newer-file refusal (`config_schema_test.go`).
+- [x] ✅ Validation — `ConfigValidator` (`config_health.go`), used at startup and
+      by hot reload.
+- [x] ✅ Migrations — `MigrateConfig`, applied by every loader.
+- [x] ✅ Atomic writes — `AtomicWrite` temp+rename with `.bak`; tested.
+- [x] ✅ Last-known-good backup — `config_health.go` (`RecordBackupRestore`,
+      `.bak` fallback).
+- [x] ✅ Config hot reload (desktop dev) — `hotreload.go`, started in `main.go`,
+      debounced 500 ms, validated before applying.
+- [x] ✅ Portable mode — all state resolves next to the executable.
+- [x] ✅ Persistence separation — design saved to `jukaconfig.json`, user state
+      to `jukauser.json`; volatile keys filtered (`config_persist_test.go`).
 
 #### 4.2 Logging
-- [x] Switch to `log/slog`
-- [x] Add structured fields (subsystem, scene, action, duration)
-- [x] Add JSON logs for Windows
-- [x] Add compact logs for Trimui
-- [ ] Add log rotation
-- [x] Add in-app log viewer
-- [x] Add diagnostic bundle export
+
+- [x] ✅ `log/slog` — `logging.go`, plus structured fields (`LogScene`, `LogOp`,
+      `LogSceneOp`: scene, subsystem, platform, goos/arch).
+- [x] ✅ JSON logs for Windows / compact logs for Trimui.
+- [x] ✅ In-app log viewer — `appLog` ring (2000 lines) captured via
+      `log.SetOutput`, shown by the shipped **LogExporter** scene's `textlog`
+      panel. The panel shows the newest lines (tail view) instead of stopping
+      at the oldest ones, covered by `logviewer_test.go`.
+- [x] ✅ `Ctrl+L` shortcut — `handleLogShortcut` (`shortcuts.go`) jumps to the
+      shipped **LogExporter** scene from any scene, including the ones with no
+      config elements (Games, Patch, Music) that the per-element chord dispatch
+      never reaches. It stands aside while the terminal has focus, which keeps
+      Ctrl+L for clearing its output, and is only consumed when the config
+      actually has the scene, so it never swallows a press that does nothing.
+- [x] ✅ Log rotation — an export moves the previous `logs.txt` to `logs.txt.1`
+      (one backup, then writes the new file through `AtomicWrite`), and both the
+      exported file (2 MiB) and the in-memory `appLog` ring (512 KiB, in
+      addition to its 2000-line cap) are size-capped, so one pathological line
+      cannot grow either without bound (`logrotate.go`, `logrotate_test.go`).
+- [x] ✅ Diagnostic bundle export — `ExportDiagnostics` (redacted report + Patch
+      UI action).
 
 #### 4.3 Error Handling
-- [x] Add offline detection
-- [ ] Add cached fallback for offline content
-- [x] Add guided remediation for missing tools
-- [x] Add safe mode (disable plugins, themes, networking)
-- [x] Add unclean shutdown detection
-- [x] Add crash recovery UX
+
+- [x] ✅ Offline detection — `netmon.go` + status cluster.
+- [x] ✅ Guided remediation for missing tools — tool health check + install bar,
+      offline-safe retry.
+- [x] ✅ Safe mode — `safemode.go`: `--safe-mode`, `JUKAHUB_SAFE_MODE`, or
+      `safe-mode.flag` disables plugins, updater, tool install and background
+      network work for one launch, with a persistent `SAFE` chip in the status
+      bar. Covered by `safemode_test.go` (resolution precedence, gating,
+      plugin skip).
+- [x] ✅ Unclean shutdown detection / crash recovery — update journal + rollback
+      (`patch_engine.go`, `checkInterruptedJournal`), tested.
+- [ ] 🟡 Cached fallback for offline content — thumbnails have disk cache;
+      feeds do not.
 
 #### 4.4 Network
-- [x] Create shared HTTP client
-- [x] Add connection reuse
-- [x] Add request timeouts
-- [x] Add max response sizes
-- [x] Add retry with exponential backoff + jitter
-- [ ] Add conditional caching
-- [x] Add offline detection
+
+- [x] ✅ Shared HTTP clients — `net.go` (`httpClientLong`) plus Patch's bounded client.
+- [x] ✅ Connection reuse — keep-alive transport.
+- [x] ✅ Request timeouts — per-client and per-context.
+- [x] ✅ Max response sizes — `fetchBounded`, `downloadToFile`.
+- [x] ✅ Retry with exponential backoff + jitter — `retry.go`, honors
+      `Retry-After`, retries 408/425/429/5xx and transport errors, refuses to
+      replay an unrewindable body; adopted by the Patch metadata fetch and
+      weather forecast; covered by `retry_test.go`.
+- [ ] ⬜ Conditional caching (`If-None-Match` / `If-Modified-Since`).
 
 ### Phase 5: Features
-**Status**: 🟡 Partially complete
+**Status**: 🟡 Partially complete (10 shipped, 4 partial, 2 not started)
 
 #### 5.1 Media
-- [ ] Add media-backend interface (ffplay today; keep it swappable)
-- [ ] Add playback queue
-- [x] Add resume position
-- [x] Add progress display
-- [ ] Add cancellation
-- [x] Add clear failure messages
+
+- [ ] 🟡 Media-backend abstraction — ffplay and the embedded player are separate
+      paths with a common UI, but there is no interface.
+- [x] ✅ Resume position — saved in favorites/recent, throttled while playing.
+- [x] ✅ Progress display — Continue card and player overlay.
+- [ ] 🟡 Cancellation — playback stop/cancel exists; in-flight downloads are
+      only partly context-aware.
+- [x] ✅ Clear failure messages — player errors surface as toasts and scene text.
+- [ ] ⬜ Playback queue.
 
 #### 5.2 Files
-- [x] Add file explorer improvements
-- [ ] Add drag-and-drop (Windows)
-- [x] Add clipboard integration (Windows)
+
+- [x] ✅ File explorer — `features.go`/`paths.go`, sandboxed root, tested path guards.
+- [x] ✅ Clipboard integration — clipboard manager (`clipboard.go`).
+- [ ] ⬜ Drag-and-drop (Windows).
 
 #### 5.3 Packages
-- [x] Add package trust UX
-- [x] Add source/version/checksum display
-- [x] Add uninstall rollback
+
+- [x] ✅ Package trust UX — signed manifests, checksum verification, Patch scene.
+- [x] ✅ Source/version/checksum display.
+- [x] ✅ Uninstall rollback — journaled install/remove (`patch_repo.go`).
 
 #### 5.4 Settings
-- [ ] Add controller remapping
-- [x] Add accessibility settings
-- [ ] Add power profile selection
-- [x] Add theme preview
+
+- [ ] 🟡 Controller remapping — A/B and X/Y swaps plus the one-handed chord
+      button exist in the Accessibility panel; a full per-button map does not.
+- [x] ✅ Accessibility settings — reduced motion, low power, font sizes, theme
+      contrast tokens.
+- [ ] 🟡 Power profile selection (single LowPower toggle; no named profiles).
+- [x] ✅ Theme preview — scrollable theme gallery with live apply.
 
 ### Phase 6: Testing
-**Status**: 🟡 Partially complete — bounds, cache, retry and persistence gaps closed
+**Status**: 🟡 Partially complete (10 shipped, 1 partial) — bounds, cache, retry
+and persistence gaps closed
 
-- [x] Add config validation tests
-- [x] Add focus graph navigation tests
-- [x] Add input normalization tests
-- [x] Add layout bounds tests (1280×720)
-- [x] Add cache eviction tests
-- [ ] Add cancellation tests
-- [x] Add external process cleanup tests — ffmpeg decoder join + teardown assertion
-- [x] Add URL/path validation tests
-- [x] Add offline/retry behavior tests
-- [ ] Add platform path selection tests
-- [ ] Add benchmarks for render, cache, navigation
+- [x] ✅ Config validation tests — `config_schema_test.go`, `config_persist_test.go`.
+- [x] ✅ Focus graph navigation tests — `navselection_test.go`, `chrome_nav_test.go`,
+      `homefocus_nav_test.go`.
+- [x] ✅ Input normalization tests — `controller_swap_test.go`, touch/keyboard tests.
+- [x] ✅ Layout bounds tests (1280×720 and smaller) — `layout_bounds_test.go`
+      (`BoundsViolations` helper on `HomeLayout`, hit-testing for every card).
+- [x] ✅ Cache eviction tests — `textcache_test.go` (LRU, trim, clear, zero capacity,
+      key identity).
+- [x] ✅ Cancellation tests — `scenetasks_test.go` covers scene-exit and shutdown
+      cancellation, a task that finishes after its scene is gone, joining,
+      fail-fast groups, parent cancellation, concurrent execution, and a real
+      request closed by leaving Podcasts.
+- [x] ✅ External process cleanup tests — embedded playback teardown now waits
+      for the ffmpeg decoder goroutine (`waitForVideoDecoders`) and the decode
+      test fails if it does not exit; this also fixed a reproducible SDL crash
+      when a later render test reused the window.
+- [x] ✅ URL/path validation tests — `paths_test.go`.
+- [x] ✅ Offline/retry behavior tests — `retry_test.go` (500 recovery, 404 no-retry,
+      exhaustion, context cancel, unrewindable body).
+- [x] ✅ Benchmarks for render, cache, navigation — `hotpath_bench_test.go` covers
+      the text hot path and `cache_bench_test.go` the caches. `render_bench_test.go`
+      adds the 720p frame budget: a warm home frame, a cold-text home frame
+      (theme switch) and one D-pad step. Measured on the desktop proxy
+      (i7-1165G7, SDL dummy driver, software renderer):
+
+      ```
+      BenchmarkHomeFrame720p          699 µs/frame   24 KB   1588 allocs
+      BenchmarkHomeFrame720pColdText  4.62 ms/frame  31 KB   1752 allocs
+      BenchmarkHomeNavigation720p     130 ns/step     0 B        0 allocs
+      ```
+- [ ] 🟡 Platform path selection tests — path guards exist, platform-specific
+      selection is only indirectly covered.
 
 ### Phase 7: Web Builder
-**Status**: 🟡 Mostly complete — snapping and guides still missing
+**Status**: 🟡 Mostly complete (5 shipped, 2 partial, 5 not started) — snapping
+and guides still missing
 
-- [x] Add semantic design tokens
-- [ ] Add reusable components
-- [ ] Add snap-to-grid
-- [ ] Add alignment guides
-- [ ] Add safe-area overlay
-- [ ] Add focus-order editor
-- [x] Add state previews
-- [x] Add undo/redo
-- [x] Add autosave
-- [ ] Add Trimui performance linting
-- [ ] Add schema validation
-- [x] Add production export
+- [x] ✅ Semantic design tokens — `style.css` (`--canvas-*`, surfaces, spacing).
+- [x] ✅ State previews — preview mode (`script.js`, Ctrl+P).
+- [x] ✅ Undo/redo — bounded 60-step stacks.
+- [x] ✅ Autosave — localStorage workspace snapshots.
+- [x] ✅ Production export — JSON/XML export with round-trip loaders.
+- [ ] 🟡 Reusable components — shared CSS classes exist; element markup is still
+      assembled per type.
+- [ ] 🟡 Trimui performance linting — font-size/asset checks partly covered by
+      the loader warnings.
+- [ ] ⬜ Snap-to-grid.
+- [ ] ⬜ Alignment guides.
+- [ ] ⬜ Safe-area overlay (1280×720 device frame).
+- [ ] ⬜ Focus-order editor.
+- [ ] ⬜ Schema validation in the builder (no `schemaVersion` emitted).
 
 ### Phase 8: TrimUI handheld polish
-**Status**: 🟡 Started — interaction feedback and card rendering landed; the rest is queued
+**Status**: 🟡 Started (21 shipped, 13 not started) — interaction feedback and
+card rendering landed; the rest is queued
 
 This phase collects the work that specifically targets the TrimUI Smart Pro
-(1280×720, ARM64, 1 GB RAM, 60 Hz panel) rather than desktop parity.
+(1280×720, ARM64, 1 GB RAM, 60 Hz panel) rather than desktop parity. Shipped
+highlights with code evidence:
 
-#### 8.1 Interaction feedback (implemented)
-- [x] One icon per home card: `homeActionIconTile` picks the horizontal or the
-      stacked composition **before** drawing, so Files and Settings no longer
-      render a wide tile plus a small stacked tile on top of it
-- [x] Eased press dip for every click: home cards, config buttons and app tiles
-      travel down over the press window instead of toggling a fixed 2 px offset
-      (`uiPressDepth` / `uiPressProgress` in `anim.go`)
-- [x] Scene fade-out/fade-in retimed for the handheld: 160 ms out, 200 ms in
-      (was 250/300 ms, which read as waiting after every button press)
-- [x] Theme-aware fade scrim: the transition follows the active theme's
-      background instead of hardcoded near-black, so light themes no longer
-      flash dark between screens
-- [x] Press feedback still animates under Low Power (the handheld default) and
-      snaps under Reduced Motion only; entrance animations remain gated by both
-- [x] Haptic tick on card activation — `haptics.go`: vendor GPIO on the handheld, SDL rumble for a pad, switch in Settings → General
-- [ ] Hold-to-repeat on list edges for D-pad scrolling
+- [x] ✅ Press feedback — eased press dip on cards/buttons/tiles
+      (`anim.go` `uiPressDepth`/`uiPressProgress`), 160/200 ms theme-aware
+      scene fades, and haptics via vendor GPIO or SDL rumble (`haptics.go`,
+      switch in Settings → General).
+- [x] ✅ One icon per home card: `homeActionIconTile` picks the horizontal or
+      the stacked composition before drawing, so Files and Settings no longer
+      render a wide tile plus a small stacked tile on top of it.
+- [x] ✅ Responsive stacked composition for half-width cards, and stacked cards
+      keep their subtitle: the tile shrinks just enough for both text lines
+      instead of dropping the subtitle and leaving dead space.
+- [x] ✅ Texture/memory — bounded thumbnail texture store with a 64 MB handheld
+      budget (`thumbstore.go`), byte accounting behind `JUKAHUB_TEXSTATS`
+      (`perf.go`), bounded `drawText` label cache (8 MB / 512 entries handheld,
+      48 MB / 2048 desktop; `homelayout.go`), and theme changes dropping cached
+      text immediately.
+- [x] ✅ GC/decode — device-tuned GOGC/soft-heap limits (`applyGCForDevice`:
+      GOGC 60 / 384 MB on 1 GB targets, 80 / 768 MB up to 2 GB, stock on
+      desktop; explicit env vars always win), debounced cache-pressure
+      eviction (once per 15 s at critical / 60 s at warning, off the render
+      thread), ffmpeg-side downscale before decode (1280×720 handheld),
+      zero-copy frame handoff (a 720p frame is 3.6 MB), and texture recreation
+      when a new source has different dimensions.
+- [x] ✅ Startup — the home shell draws on frame one, network work waits past
+      `Present()` (`deferStartupTask` in `main.go`), and a relaunch within ten
+      minutes skips the splash (`startup.go`).
 
-#### 8.2 Touch & layout
-- [x] Responsive stacked composition for half-width cards (Files, Settings)
-- [x] Stacked cards keep their subtitle: the tile shrinks just enough for both
-      text lines instead of dropping the subtitle and leaving dead space
-- [ ] Guarantee ≥44×44 px touch targets for every interactive control
-- [ ] Safe-area insets so cards and footer chips clear the panel's rounded corners
-- [ ] Enlarge the Exit chip's hit area without changing its drawn size
+Open:
 
-#### 8.3 Rendering budget
-- [x] Text texture cache and byte-capped thumbnail cache
-- [x] Bounded thumbnail prefetch (2 workers on handhelds)
-- [x] **Bounded thumbnail texture cache** (`thumbstore.go`): an LRU with a
-      64 MB budget on handhelds / 192 MB on desktop. The old map kept every
-      thumbnail texture for the whole session, which is what forced SDL to
-      re-upload and evict during long browsing sessions.
-- [x] **Texture memory accounting** (`perf.go`, `JUKAHUB_TEXSTATS=1`): text,
-      thumbnail, video overlay, decoded frame and UI-layer bytes are logged at
-      startup, on critical pressure, and periodically when the env var is set.
-- [x] **Bounded `drawText` label cache** (`homelayout.go`): 8 MB / 512 entries
-      on handhelds, 48 MB / 2048 on desktop, LRU-evicted. Dynamic strings
-      (clock, status, titles, toasts) used to accumulate textures forever.
-- [x] Theme changes drop cached text and label textures immediately, so the
-      new palette shows on the next frame instead of waiting for LRU eviction.
-- [ ] Cache the ambient glow instead of re-blending four blobs per frame
-- [ ] Icon atlas for the shared 32 px glyph set
-- [ ] Virtualize lists and grids by row instead of drawing the full list clipped
-- [ ] Keep thumbnail decoding out of the render path (decode budget of 2/frame)
+- [ ] ⬜ Hold-to-repeat on list edges for D-pad scrolling.
+- [ ] ⬜ Touch-target audit: ≥44×44 px for every interactive control, safe-area
+      insets so cards and footer chips clear the panel's rounded corners, and a
+      bigger Exit-chip hit area without changing its drawn size.
+- [ ] ⬜ Cached ambient glow instead of re-blending four blobs per frame.
+- [ ] ⬜ Icon atlas for the shared 32 px glyph set.
+- [ ] ⬜ Virtualize lists and grids by row instead of drawing the full list clipped.
+- [ ] ⬜ Keep thumbnail decoding out of the render path (decode budget of 2/frame).
+- [ ] ⬜ Scene-scoped texture release for scenes that are not open.
+- [ ] ⬜ Scene-scoped polling: stop weather/network refreshes for hidden scenes.
+- [ ] ⬜ Named power profiles (Battery Saver / Balanced / Performance) mapping to
+      Low Power, adaptive FPS and motion in one setting.
+- [ ] ⬜ On-device measurement of cold start (<1.5 s interactive), transition
+      frame time and idle RSS (<5% CPU at the capped cadence) — all numbers so
+      far are desktop proxies.
 
-#### 8.4 Memory & GC (implemented)
-- [x] Go collector tuned per device (`applyGCForDevice`): GOGC=60 with a
-      384 MB soft heap limit on 1 GB/handheld targets, GOGC=80 / 768 MB up to
-      2 GB, stock settings on desktops. Explicit `GOGC`/`GOMEMLIMIT` env vars
-      always win so profiling runs are not silently overridden.
-- [x] Debounced cache-pressure eviction: the loop used to clear every texture
-      cache and run a full `runtime.GC()` every ~10 frames while RAM was low
-      (≈3 times a second). It now acts on a new pressure level and at most once
-      per 15 s (critical) / 60 s (warning), and the reclamation runs off the
-      render thread.
-- [x] **Decode-size cap**: sources above the display size are scaled in ffmpeg
-      (1280×720 handheld, 1080p desktop) instead of decoding 33 MB 4K RGBA
-      frames for a 720p panel.
-- [x] **Zero-copy frame handoff**: the decoder swaps its buffer with the
-      renderer's instead of copying every frame (a 720p frame is 3.6 MB).
-- [x] Video texture is recreated when a new source has different dimensions
-      (previously the old texture size was reused and SDL rejected the upload).
-- [ ] Scene-scoped texture release: free caches for scenes that are not open
-- [ ] On-device measurement of cold start, transition frame time and idle RSS
+### Phase 9: Browser & handheld input
+**Status**: ✅ Landed this revision (8 shipped, 4 not started) — remaining
+follow-ups queued
 
-#### 8.5 Power & startup
-- [ ] Named power profiles (Battery Saver / Balanced / Performance) mapping to
-      Low Power, adaptive FPS and motion in one setting
-- [ ] Scene-scoped polling: stop weather/network refreshes for hidden scenes
-- [x] Warm start: draw the home shell on the first frame — network work is deferred past `Present()` (`deferStartupTask` in `main.go`) and a relaunch within ten minutes skips the splash (`startup.go`)
-- [ ] Measure cold-start time and idle frame cost on the device (target: home
-      interactive < 1.5 s, idle < 5% CPU at the capped cadence)
+The modern reader (styled web pages behind the `textbrowser` element) is now
+usable without a touchscreen, on the Smart Pro's keyboard-event pad. All
+shipped items verified against the code and the test suite this revision:
+
+- [x] ✅ Scroll ⇄ link D-pad model with one cycle key — `handleBrowserKey`
+      (Tab) and `handleBrowserController` share `browserNav`: Tab toggles the
+      modes with a toast, link mode walks the page's anchors with
+      Up/Down/Left/Right, A opens the focused link (focusing the first when
+      nothing is picked), and B returns to scroll mode before leaving the
+      page; scroll mode keeps the old scrolling/address-bar behaviour. Tests:
+      `TestBrowserKeyCyclesScrollAndLinkModes`,
+      `TestBrowserControllerWalksLinks`, `TestBrowserLinkCursorWalksThePage`.
+- [x] ✅ Focus outline + auto-reveal — `browserDrawPageLinkFocus` outlines the
+      focused anchor and `browserRevealLink` scrolls the minimum needed;
+      `TestBrowserLinkFocusIsDrawn` renders the outline offscreen.
+- [x] ✅ Tap-to-open links — the mouse path hands page taps to
+      `browserTapPageLink`, which hit-tests only the anchors on screen at the
+      current scroll; `TestBrowserTapOnPageLinkOpensIt`.
+- [x] ✅ Link-list panel — X/L opens the modal list of the page's links with
+      D-pad rows, A opens the selection, B closes;
+      `TestBrowserLinkPanelRendersSelectableRows`.
+- [x] ✅ Tools grid draws and hit-tests correctly — the row-wrapping loop built
+      each wrapped tile row but never appended it to the drawn list, so half
+      the grid was invisible; rows are now appended and the renderer draws in
+      panel space so the cursor lands where the hit-test looks (`toolsui.go`,
+      `toolsui_render_test.go`).
+- [x] ✅ Top-bar chrome focus is order-independent — `useChromeBar`/
+      `useTopChrome` snapshot and restore the whole status-button cluster
+      (weather, Wi-Fi, media chip, update pill), so a stray rect left by an
+      earlier test can no longer insert phantom bar buttons into the
+      hand-wired chrome chain (`chrome_nav_test.go`).
+- [x] ✅ yt-dlp stays fresh — `resolveToolURL` resolves the latest GitHub
+      release asset from the allowlisted repos (`yt-dlp/yt-dlp`,
+      `btbn/ffmpeg-builds`), with per-platform asset names pinned by
+      `yt_dlp_asset_test.go`.
+- [x] ✅ The idle screensaver cannot cover active content —
+      `screensaverAutoTick` holds off while a modal owns the UI, audio or
+      video is up (including the loading phase, via `playerPhase()`), or a
+      download/install runs, and keeps the idle clock moving so the saver does
+      not pop the second the activity ends (`screensaver.go`
+      `idleScreenHoldOff`, `ambient.go` gate list `ambientEntryBlocked`).
+
+Open:
+
+- [ ] ⬜ Physical pad toggle for the browser mode — the cycle key (Tab) exists
+      only on the keyboard-event path; a firmware that reports a real gamepad
+      has no equivalent button yet.
+- [ ] ⬜ Nearest-row link walking — the cursor follows flat anchor order; in
+      multi-column pages the D-pad can jump visually far away. Walk to the
+      nearest next link row instead.
+- [ ] ⬜ Mode discoverability — a footer chip should name the current mode and
+      the keys that switch it, so the feature is findable without this
+      document.
+- [ ] ⬜ On-device pass — the browser model is verified with the SDL dummy
+      renderer; touch hit accuracy, Tab/anchor ergonomics and the link panel
+      on real TrimUI hardware still need a hardware run.
 
 ## Acceptance Criteria
 
@@ -383,7 +558,9 @@ This phase collects the work that specifically targets the TrimUI Smart Pro
 | Phase 5: Features | 4 weeks | Phase 2, 3, 4 |
 | Phase 6: Testing | 2 weeks | Phase 5 |
 | Phase 7: Web Builder | 3 weeks | Phase 2, 3, 4, 5 |
-| **Total** | **~16 weeks** | - |
+| Phase 8: Handheld polish | ongoing | Phases 1–4 |
+| Phase 9: Browser & handheld input | 1–2 weeks | Phases 1–3 |
+| **Total** | **~17–18 weeks** (Phase 8 runs alongside) | - |
 
 ## Risk Assessment
 
@@ -396,21 +573,89 @@ This phase collects the work that specifically targets the TrimUI Smart Pro
 | Memory leaks | Medium | Use profiling tools, bounded caches |
 | Config corruption | High | Atomic writes, backups, safe mode |
 
+## Audit log — 2026-10-24 verification pass
+
+Evidence collected while re-checking every item against this tree:
+
+- Design tokens: typography roles + density scale, adopted by shared components.
+- Shared components: `UICard`, `UIBadge`, `UIProgressBar`, `UIListRow`,
+  `UIEmptyState`, `UIErrorState`, `UILoadingSkeleton`, and the grid helpers; adopted
+  in notifications, Start menu, Quick Settings, generic list rows, Patch's confirm
+  button, the bell badge and the theme gallery.
+- Config schema versioning: field, migration, load-time refusal of newer files,
+  save stamping, persistence tests.
+- Safe mode: three triggers, gating for network/plugins/updates/tool install,
+  status-bar chip, tests.
+- Network retry: bounded attempts, exponential backoff with jitter, `Retry-After`,
+  context cancellation, no replay of unrewindable bodies, adopted by Patch metadata
+  and weather; tests.
+- Text cache: zero/negative capacity clamp (previously an unbounded-cache bug),
+  full eviction test coverage.
+- Home layout: `BoundsViolations` + viewport/hit-test coverage at 1280×720,
+  960×544, 800×480 and 1920×1080.
+- Grid: shared math with theme-gallery geometry pinned to it.
+- Thumbnail prefetch: bounded worker pool + shared bbolt handle; measured
+  105 ms → 56 ms per 8-image batch (1 → 2 workers), cache write 9.8 ms → 3.6 ms;
+  see [LIBRARY-EVALUATION.md](LIBRARY-EVALUATION.md).
+- Test stability: the embedded-player test now joins the ffmpeg decoder before
+  tearing down its renderer, removing a crash that reproduced on roughly a
+  quarter of suite runs; eight consecutive full-suite runs passed afterwards.
+- Test isolation: debounced user-config writes now capture the directory where
+  the change was made, so a queued save can no longer land in the checkout after
+  a test restores its working directory (`config_debounce_test.go`). Four
+  consecutive full-suite runs left the repository user files byte-identical.
+- Log panel: fixed the live viewer to render the most recent log lines, with a
+  pure tail-selection helper and tests.
+- Scene-scoped cancellation: `scenetasks.go` runs work under the active
+  scene's context; leaving a screen closes its requests and a cancelled task
+  publishes nothing. Adopted by the podcast/package/weather fetches and by the
+  ticker, network-speed and benchmark jobs, which also remove their temporary
+  files. The podcast test drives a real scene-exit cancellation through the
+  server's request context.
+- Coordinated fan-out: the ticker board's independent endpoints now share one
+  round trip through `runCancelableGroup` (fail-fast errgroup semantics), with
+  the board's order preserved and a failed endpoint reported as `n/a`.
+- Log export: an export rotates the previous `logs.txt` to `logs.txt.1` and
+  caps the file at 2 MiB; the in-memory ring is byte-capped as well as
+  line-capped, so one huge line cannot hold the heap.
+- `Ctrl+L` opens the LogExporter scene from anywhere except the terminal, which
+  keeps the key for clearing its output.
+- 720p budgets: `render_bench_test.go` measures a warm home frame (~700 µs on the
+  desktop software-renderer proxy, 1588 allocs), a cold-text frame (~4.6 ms) and
+  one D-pad step (~130 ns, allocation-free), so layout and text changes can be
+  compared against a number instead of a feeling.
+- Race detector: the `player-race` job's failure in
+  `TestBrowserToggleAdFilterIsPerSite` is fixed structurally. The browser's
+  fetch seam is read once per load under a lock, tests swap it with
+  `setBrowserPageFetcherForTest`, and a browser reset joins the loads still in
+  flight, so no goroutine outlives the test that started it.
+  `TestBrowserFetcherSwapDuringLoadIsSafe` pins the pattern.
+- Full suite: `go vet ./...`, `go test ./...` (including `-race` on the new
+  concurrency tests), `go test -race ./...` and `go build .` all pass.
+
 ## Next Steps
 
-The phases above are now mostly implemented. The authoritative remaining work,
-with file-level evidence, is the **Recommended next work** section of
-[MODERNIZATION-CHECKLIST.md](MODERNIZATION-CHECKLIST.md):
+The phases above are now mostly implemented. The highest-value remaining work:
 
-1. Controller remapping screen.
-2. Web builder snapping, alignment guides, safe-area overlay and schema validation.
-3. Conditional caching (`If-None-Match`) for the feeds that already use the
-   retry helper.
-4. Named power profiles (Battery Saver / Balanced / Performance).
-5. **Phase 8 handheld polish:** touch-target audit, safe-area insets, cached
-   ambient glow, icon atlas, list virtualization, named power profiles, and
-   on-device measurement of cold start, transition frame time, idle RSS and the
-   GC/decode tuning above (all numbers so far are desktop proxies).
+1. **Phase 9 browser leftovers** — a physical pad button for the scroll⇄link
+   toggle so it works on firmware paths that report a gamepad, and nearest-row
+   link order so D-pad steps follow visual rows. Small, self-contained and
+   testable offscreen.
+2. **Controller remapping screen** — the A/B and X/Y swaps in Accessibility are the
+   foundation, but there is no per-button keymap layer yet.
+3. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
+   work with immediate design-time payoff.
+4. **Conditional caching** (`If-None-Match`) for the feeds that already go through
+   `retry.go`, so an unchanged package registry or podcast feed costs a 304.
+5. **Named power profiles** (Battery Saver / Balanced / Performance) folding the
+   existing Low Power, adaptive-FPS and motion switches into one setting.
+6. **Debounced search input** — first name the path it is for: the Tube field
+   only submits on Enter/its button, and the global search filters in memory, so
+   this item is worth doing only where a keystroke really starts work.
+7. **Phase 8 handheld polish** — touch-target audit, safe-area insets, cached
+   ambient glow, icon atlas, list virtualization, and on-device measurement of
+   cold start, transition frame time, idle RSS and the GC/decode tuning above
+   (all numbers so far are desktop proxies).
 
 ## Notes
 
@@ -422,3 +667,6 @@ with file-level evidence, is the **Recommended next work** section of
 - Support **Windows** as secondary target
 - Use **Go standard library** where possible
 - Add **tests** as we go, not at the end
+- Re-verify this document on every pass: update the date on top, re-run
+  `go vet ./...`, `go test ./...` and `go build .`, and flip statuses with
+  evidence. There is only one source of truth now — no companion file.

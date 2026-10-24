@@ -966,8 +966,12 @@ func main() {
 						} else if curElem.Type == "canvas" {
 							handleCanvasInput(e, config)
 						} else if curElem.Type == "textbrowser" {
-							if e.Keysym.Sym == sdl.K_RETURN && textBrowserElementSource(curElem) == textBrowserSourceWeb {
-								handleTextBrowserAddressInput(renderer, config, curElem)
+							if textBrowserElementSource(curElem) == textBrowserSourceWeb {
+								// The web browser owns the keyboard too: on the Trimui
+								// Smart Pro the D-pad and face buttons arrive as SDL
+								// keys, and browser.go gives them the same model the
+								// controller path uses (Tab cycles scroll ⇄ links).
+								handleBrowserKey(renderer, e, config, curElem)
 							} else {
 								switch e.Keysym.Sym {
 								case sdl.K_UP:
@@ -1779,6 +1783,8 @@ func main() {
 											browserToggleAdFilter(config)
 										} else if mx >= goRect.X && mx <= goRect.X+goRect.W && my >= goRect.Y && my <= goRect.Y+goRect.H {
 											loadTextBrowserURL(config, elem, textBrowserAddress(config))
+										} else if browserTapPageLink(config, elem, mx, my) {
+											// Tapped a link inside the rendered page.
 										}
 									}
 								}

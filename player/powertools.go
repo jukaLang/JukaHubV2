@@ -1089,7 +1089,7 @@ func powerPageTitle(page powerPage) (string, string) {
 		}
 		return name, sub
 	}
-	return "Power tools", "Network, files, sync and device diagnostics"
+	return "Power tools", "Files, sync and device diagnostics"
 }
 
 func powerFooter(page powerPage) string {

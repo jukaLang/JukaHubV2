@@ -9,7 +9,7 @@ package main
 //
 //	go test -run '^$' -bench 'BenchmarkHome' -benchmem
 //
-// and compare against the numbers recorded in MODERNIZATION-CHECKLIST.md.
+// and compare against the numbers recorded in MODERNIZATION.md (Phase 6).
 //
 // The benchmarks run headless with SDL's dummy video driver and the software
 // renderer, so the absolute numbers are a desktop proxy: they are useful for

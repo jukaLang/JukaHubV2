@@ -10,6 +10,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -68,8 +69,9 @@ type toolsRow struct {
 type toolsPanelState struct {
 	open   bool
 	cursor int
-	// scroll is the first row drawn. The list is longer than a 720p panel, so
-	// the cursor moves the window instead of the panel growing off screen.
+	// scroll is the pixel offset of the tile window: the grid is taller than
+	// the panel, so the cursor moves the window instead of the panel growing
+	// off screen.
 	scroll int
 }
 
@@ -376,9 +378,11 @@ func toolsRows(config *Config) []toolsRow {
 	}
 
 	system = append(system, toolsRow{
+		// The FTP & IP probes live in this panel now, so the Power tools row
+		// only advertises what is still behind it.
 		label:   "Power tools",
-		value:   "Network · Files · Scripts",
-		detail:  "Port scan, hex viewer, snippets, config history",
+		value:   "Files · Scripts · Sync",
+		detail:  "Hex viewer, snippets, config history, memory scan",
 		hint:    hintLine(FooterHint{"A", "Open"}),
 		action:  toolsActionPowerTools,
 		enabled: true,
@@ -448,101 +452,221 @@ func markToolsSection(rows []toolsRow, title string) {
 	}
 }
 
-func toolsPanelMove(delta int) {
-	rows := toolsRows(appConfig)
+// toolsPanelMove moves the tile cursor. Left/Right walk the focused row,
+// Up/Down jump by the grid's column count — the same ragged-grid semantics as
+// the Apps launcher — and both clamp so focus can never wrap somewhere
+// unexpected.
+func toolsPanelMove(config *Config, dx, dy int) {
+	rows := toolsRows(config)
 	if len(rows) == 0 {
 		return
 	}
-	toolsPanel.cursor += delta
-	if toolsPanel.cursor < 0 {
-		toolsPanel.cursor = len(rows) - 1
+	prev := toolsPanel.cursor
+	switch {
+	case dx != 0:
+		toolsPanel.cursor += dx
+	case dy != 0:
+		toolsPanel.cursor += dy * toolsPanelMetrics(config, rows).cols
 	}
-	if toolsPanel.cursor >= len(rows) {
+	if toolsPanel.cursor < 0 {
 		toolsPanel.cursor = 0
 	}
-	toolsPanelClampScroll(rows, toolsPanelMetrics(appConfig, rows))
-	PlayNavSound()
+	if toolsPanel.cursor >= len(rows) {
+		toolsPanel.cursor = len(rows) - 1
+	}
+	if toolsPanel.cursor != prev {
+		PlayNavSound()
+	}
 }
 
-// toolsRowOffsets is the running height of each row, including the section
-// heading drawn above it. offsets[i] is where row i starts, offsets[len] the
-// total body height.
-func toolsRowOffsets(rows []toolsRow, layout toolsPanelLayout) []int32 {
-	offsets := make([]int32, len(rows)+1)
+// The tile grid reuses the Apps launcher's look with this panel's data. Each
+// tile shows an icon, the tool's name and its status dot; the value ("Running",
+// "192.168.1.42") and the detail ("ftp://…") that the rows used to print move
+// into a footer that always describes the focused tile, so long addresses no
+// longer fight with a small row for space.
+type toolsGridMetrics struct {
+	cols      int
+	tileW     int32
+	tileH     int32
+	gap       int32
+	padX      int32
+	panelW    int32
+	sectionH  int32
+	headerH   int32
+	footH     int32
+	infoLineH int32
+	infoH     int32
+	info      []toolsInfoLine
+}
+
+type toolsGridLine struct {
+	heading  string
+	headingY int32
+	tilesY   int32
+	h        int32
+	tiles    []int
+}
+
+type toolsGrid struct {
+	m     toolsGridMetrics
+	lines []toolsGridLine
+	rects []sdl.Rect
+	bodyH int32
+}
+
+// toolsPanelMetrics is the measured geometry for the tile grid. The column
+// count comes from the panel width, the bands from the loaded fonts: a device
+// theme can draw glyphs taller than their point size, so no measure here is a
+// fixed constant.
+func toolsPanelMetrics(config *Config, rows []toolsRow) toolsGridMetrics {
+	_ = rows
+	small, _ := getCachedFont(config, "small")
+	medium, _ := getCachedFont(config, "medium")
+	if medium == nil {
+		medium = small
+	}
+	smallH, medH := int32(28), int32(28)
+	if small != nil {
+		smallH = int32(small.Height())
+	}
+	if medium != nil {
+		medH = int32(medium.Height())
+	}
+
+	m := toolsGridMetrics{
+		padX: 24,
+		gap:  12,
+		info: toolsInfoLines(),
+	}
+	m.infoLineH = smallH + 8
+	if len(m.info) > 1 {
+		// One live line is what fits under the grid on a 720p panel, and the
+		// SFTP password must not be the thing that gets dropped.
+		m.info = m.info[:1]
+	}
+	if len(m.info) > 0 {
+		m.infoH = m.infoLineH + 5
+	}
+
+	m.headerH = 18 + medH + 4 + smallH + 10
+	// Footer: value line, detail line, and the closing hint.
+	m.footH = 6 + medH + 2 + smallH + 6 + smallH + 6
+
+	m.sectionH = 24
+	if label := getFontSized(config, "small", 15); label != nil {
+		m.sectionH = int32(label.Height()) + 10
+		if m.sectionH < 22 {
+			m.sectionH = 22
+		}
+	}
+
+	labelFont := getFontSized(config, "small", 22)
+	if labelFont == nil {
+		labelFont = small
+	}
+	labelH := int32(26)
+	if labelFont != nil {
+		labelH = int32(labelFont.Height() + 1)
+	}
+	m.tileH = 8 + 52 + 6 + labelH*2 + 8
+	if m.tileH < 96 {
+		m.tileH = 96
+	}
+
+	m.tileW = 188
+	m.panelW = 880
+	if m.panelW > screenWidth-64 {
+		m.panelW = screenWidth - 64
+	}
+	bodyW := m.panelW - 2*m.padX
+	cols := int((bodyW + m.gap) / (m.tileW + m.gap))
+	if cols < 1 {
+		cols = 1
+	}
+	m.cols = cols
+	m.tileW = (bodyW - int32(cols-1)*m.gap) / int32(cols)
+	return m
+}
+
+// toolsGridBuild lays the rows out: each section heading opens its own lane
+// and the section's tiles wrap to the grid's width, exactly like the Apps
+// launcher wraps its shortcuts. g.rects is in body coordinates; the renderer
+// subtracts the scroll offset when it draws.
+func toolsGridBuild(rows []toolsRow, m toolsGridMetrics) toolsGrid {
+	g := toolsGrid{m: m, rects: make([]sdl.Rect, len(rows))}
+	type pendingLine struct {
+		heading string
+		tiles   []int
+	}
+	var lines []pendingLine
+	cur := pendingLine{}
+	for i := range rows {
+		if rows[i].section != "" {
+			if len(cur.tiles) > 0 {
+				lines = append(lines, cur)
+				cur = pendingLine{}
+			}
+			cur.heading = rows[i].section
+		}
+		cur.tiles = append(cur.tiles, i)
+		if len(cur.tiles) == m.cols {
+			lines = append(lines, cur)
+			cur = pendingLine{}
+		}
+	}
+	if len(cur.tiles) > 0 || cur.heading != "" {
+		lines = append(lines, cur)
+	}
+
 	var y int32
-	for i, row := range rows {
-		if row.section != "" {
-			y += layout.sectionH
+	for _, l := range lines {
+		line := toolsGridLine{heading: l.heading, tiles: l.tiles}
+		if l.heading != "" {
+			line.headingY = y
+			y += m.sectionH
 		}
-		y += layout.rowH
-		offsets[i+1] = y
+		line.tilesY = y
+		n := (len(l.tiles) + m.cols - 1) / m.cols
+		line.h = int32(n)*m.tileH + int32(n-1)*m.gap
+		for k, idx := range l.tiles {
+			col := int32(k % m.cols)
+			rowOff := int32(k / m.cols)
+			g.rects[idx] = sdl.Rect{
+				X: m.padX + col*(m.tileW+m.gap),
+				Y: y + rowOff*(m.tileH+m.gap),
+				W: m.tileW,
+				H: m.tileH,
+			}
+		}
+		y += line.h + m.gap
+		g.lines = append(g.lines, line)
 	}
-	return offsets
+	g.bodyH = max32(0, y-m.gap)
+	return g
 }
 
-// toolsPanelBodyHeight is the space rows may use inside the panel. It is the
-// panel height (capped to the screen) minus the header, the live-server line
-// and the footer.
-func toolsPanelBodyHeight(rows []toolsRow, layout toolsPanelLayout) int32 {
-	if layout.rowH <= 0 {
+// toolsGridEnsureVisible returns the scroll offset that keeps the focused tile
+// fully in view and records it, so consecutive moves scroll smoothly instead
+// of snapping the focused tile to an edge every frame.
+func toolsGridEnsureVisible(g toolsGrid, cursor int, viewH int32) int32 {
+	if cursor < 0 || cursor >= len(g.rects) || viewH <= 0 {
 		return 0
 	}
-	h := layout.contentH(len(rows))
-	if maxH := screenHeight - 40; h > maxH {
-		h = maxH
+	scroll := max32(0, int32(toolsPanel.scroll))
+	r := g.rects[cursor]
+	if r.Y-scroll < 0 {
+		scroll = r.Y
 	}
-	body := h - layout.headerH - layout.footerH - layout.infoH
-	if body < layout.rowH {
-		body = layout.rowH
+	if r.Y+r.H-scroll > viewH {
+		scroll = r.Y + r.H - viewH
 	}
-	return body
-}
-
-// toolsVisibleRows reports how many rows fit below scroll in bodyH pixels. At
-// least one row is always reported so the cursor cannot land on nothing.
-func toolsVisibleRows(rows []toolsRow, layout toolsPanelLayout, scroll int, bodyH int32) int {
-	if layout.rowH <= 0 || scroll < 0 || scroll >= len(rows) {
-		return 0
+	if maxScroll := g.bodyH - viewH; maxScroll > 0 && scroll > maxScroll {
+		scroll = maxScroll
+	} else if maxScroll <= 0 {
+		scroll = 0
 	}
-	offsets := toolsRowOffsets(rows, layout)
-	start := offsets[scroll]
-	visible := 0
-	for i := scroll; i < len(rows); i++ {
-		if offsets[i+1]-start > bodyH && visible > 0 {
-			break
-		}
-		visible++
-	}
-	return visible
-}
-
-// toolsPanelClampScroll keeps the cursor inside the drawn window: scroll never
-// passes the cursor, and the window grows towards the end until the cursor is
-// the last visible row.
-func toolsPanelClampScroll(rows []toolsRow, layout toolsPanelLayout) {
-	if len(rows) == 0 {
-		return
-	}
-	if toolsPanel.cursor < 0 {
-		toolsPanel.cursor = 0
-	}
-	if toolsPanel.cursor >= len(rows) {
-		toolsPanel.cursor = len(rows) - 1
-	}
-	if toolsPanel.scroll > toolsPanel.cursor {
-		toolsPanel.scroll = toolsPanel.cursor
-	}
-	if toolsPanel.scroll < 0 || toolsPanel.scroll >= len(rows) {
-		toolsPanel.scroll = 0
-	}
-	body := toolsPanelBodyHeight(rows, layout)
-	for toolsPanel.scroll < len(rows) {
-		visible := toolsVisibleRows(rows, layout, toolsPanel.scroll, body)
-		if visible <= 0 || toolsPanel.cursor < toolsPanel.scroll+visible {
-			break
-		}
-		toolsPanel.scroll++
-	}
+	toolsPanel.scroll = int(scroll)
+	return scroll
 }
 
 func toolsPanelActivate(config *Config) {
@@ -667,9 +791,13 @@ func toggleFTPServer() {
 func ctrlToolsPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		toolsPanelMove(-1)
+		toolsPanelMove(config, 0, -1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		toolsPanelMove(1)
+		toolsPanelMove(config, 0, 1)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		toolsPanelMove(config, -1, 0)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		toolsPanelMove(config, 1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
 		toolsPanelActivate(config)
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
@@ -686,9 +814,13 @@ func handleToolsKey(e *sdl.KeyboardEvent, config *Config) bool {
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
-		toolsPanelMove(-1)
+		toolsPanelMove(config, 0, -1)
 	case sdl.K_DOWN:
-		toolsPanelMove(1)
+		toolsPanelMove(config, 0, 1)
+	case sdl.K_LEFT:
+		toolsPanelMove(config, -1, 0)
+	case sdl.K_RIGHT:
+		toolsPanelMove(config, 1, 0)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		toolsPanelActivate(config)
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
@@ -743,95 +875,6 @@ func toolsInfoLines() []toolsInfoLine {
 	return nil
 }
 
-// toolsPanelLayout is the measured geometry for the current font, rows and
-// server state. Handheld fonts can be taller than their point size, so a fixed
-// row height used to push the last row and the footer off a 720p screen. When
-// the full three-line row does not fit, the detail line is folded into the value
-// and the row padding shrinks; section headings are paid for from the same
-// budget.
-type toolsPanelLayout struct {
-	smallH, medH, sectionH, headerH, footerH, rowH, rowPad, infoLineH, infoH int32
-	showDetail, dense                                                        bool
-	info                                                                     []toolsInfoLine
-	sections                                                                 int
-}
-
-// contentH is the height the panel needs for rows, headings and the footer.
-func (l toolsPanelLayout) contentH(rows int) int32 {
-	return l.headerH + int32(rows)*l.rowH + int32(l.sections)*l.sectionH + l.infoH + l.footerH
-}
-
-func toolsPanelMetrics(config *Config, rows []toolsRow) toolsPanelLayout {
-	font, _ := getCachedFont(config, "small")
-	medium, _ := getCachedFont(config, "medium")
-	if font == nil {
-		return toolsPanelLayout{}
-	}
-	if medium == nil {
-		medium = font
-	}
-	const gap = int32(2)
-	layout := toolsPanelLayout{
-		smallH:     int32(font.Height()),
-		medH:       int32(medium.Height()),
-		showDetail: true,
-		info:       toolsInfoLines(),
-	}
-	for _, row := range rows {
-		if row.section != "" {
-			layout.sections++
-		}
-	}
-	// Section headings are a fixed, small size so they read as labels instead
-	// of another row, whatever the theme's body fonts are set to.
-	layout.sectionH = 24
-	if label := getFontSized(config, "small", 15); label != nil {
-		layout.sectionH = int32(label.Height()) + 10
-		if layout.sectionH < 22 {
-			layout.sectionH = 22
-		}
-	}
-	layout.headerH = 18 + layout.medH + 4 + layout.smallH + 12
-	layout.footerH = 18 + layout.smallH
-	layout.infoLineH = layout.smallH + 8
-	if len(layout.info) > 0 {
-		layout.infoH = int32(len(layout.info))*layout.infoLineH + 5
-	}
-	layout.rowPad = 10
-	layout.rowH = 2*layout.rowPad + layout.smallH + gap + layout.medH + gap + layout.smallH
-
-	available := screenHeight - 40
-	fits := func() bool { return layout.contentH(len(rows)) <= available }
-	if !fits() {
-		layout.showDetail = false
-		layout.rowPad = 8
-		layout.rowH = 2*layout.rowPad + layout.smallH + gap + layout.medH
-	}
-	if !fits() {
-		// Dense mode: label and value on one line. Patch, Calculator and the
-		// disc helpers add rows that do not fit the three-line row on a 720p
-		// screen.
-		layout.dense = true
-		layout.rowPad = 5
-		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
-	}
-	if !fits() && layout.dense && len(layout.info) > 0 {
-		// The SFTP credentials are the one line that must not be traded away
-		// for padding, so tighten the cards once more before dropping it.
-		layout.rowPad = 3
-		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
-	}
-	// The list scrolls now, so the live-server line is no longer traded for
-	// vertical space: it stays pinned above the footer and the rows move under
-	// it. That line is where the SFTP password is shown, which must not be the
-	// thing that disappears on a 720p panel.
-	if len(layout.info) > 1 {
-		layout.info = layout.info[:1]
-		layout.infoH = layout.infoLineH + 5
-	}
-	return layout
-}
-
 func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	if !toolsPanel.open || renderer == nil {
 		return
@@ -852,36 +895,37 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	if medium == nil {
 		medium = font
 	}
+	labelFont := getFontSized(config, "small", 22)
+	if labelFont == nil {
+		labelFont = font
+	}
 
 	// Sizes come from the fonts, not from constants: a config that does not
 	// override "small"/"medium" gets 24px for both, and fixed offsets used to
 	// stack the label, value and detail on top of each other.
-	layout := toolsPanelMetrics(config, rows)
-	smallH := layout.smallH
-	medH := layout.medH
-	const (
-		padX = int32(24)
-		// label + gap + value + gap + detail
-		rowTextH = int32(2)
-	)
-	rowH := layout.rowH
-	headerH := layout.headerH
-	footerH := layout.footerH
-	sectionH := layout.sectionH
-	// A little wider than before: the values (addresses, "Network · Files ·
-	// Scripts") are the point of the panel and used to be ellipsised.
-	panelW := int32(880)
-	if panelW > screenWidth-64 {
-		panelW = screenWidth - 64
+	m := toolsPanelMetrics(config, rows)
+	g := toolsGridBuild(rows, m)
+	padX := m.padX
+	smallH := int32(font.Height())
+	medH := int32(medium.Height())
+
+	// A little wider than before: the values (addresses, "Files · Scripts ·
+	// Sync") are the point of the panel and used to be ellipsised.
+	panelW := m.panelW
+	panelH := m.headerH + g.bodyH + m.footH + m.infoH
+	if maxH := screenHeight - 40; panelH > maxH {
+		panelH = maxH
 	}
-	info := layout.info
-	infoLineH := layout.infoLineH
-	panelH := layout.contentH(len(rows))
-	if panelH > screenHeight-40 {
-		panelH = screenHeight - 40
+	// A single line of tiles always has to fit, so the panel never shrinks to
+	// a header and a footer.
+	if minH := m.headerH + m.tileH + m.gap + m.footH; panelH < minH && minH <= screenHeight-40 {
+		panelH = minH
 	}
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
+	if panelY < 0 {
+		panelY = 0
+	}
 	toolsPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
@@ -895,7 +939,7 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
 	renderText(renderer, config, medium, "Tools", ColorTextPrimary(), panelX+padX, panelY+16)
-	sub := "Files, network and device utilities"
+	sub := "FTP & IP transfers, network probes and device utilities"
 	if !IsOnline() {
 		sub = "Offline — connect WiFi to transfer files"
 	}
@@ -912,135 +956,138 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 			panelX+panelW-padX-int32(sw), panelY+16+(medH-smallH)/2)
 	}
 
+	bodyTop := panelY + m.headerH
+	bodyViewH := panelH - m.headerH - m.footH - m.infoH
+	if bodyViewH < m.tileH {
+		bodyViewH = m.tileH
+	}
+	scrollY := toolsGridEnsureVisible(g, toolsPanel.cursor, bodyViewH)
+
 	// The theme accent can be very dark (several presets use a near-black
 	// "info" colour), so reuse the install card's contrast check instead of
-	// painting the selected row with an invisible tint.
+	// painting the selected tile with an invisible tint.
 	focusColor := installHighlight()
 
-	rowW := panelW - 2*padX
+	// The grid scrolls, so only the window that fits is drawn and the cursor
+	// scrolls it. Rects of off-screen tiles stay zero, which also keeps a tap
+	// from landing on a tile that is not on screen.
 	toolsRowRects = make([]sdl.Rect, len(rows))
-	// The list is longer than the panel, so only the window that fits is drawn
-	// and the cursor scrolls it. Rects of off-screen rows stay zero, which also
-	// keeps a tap from landing on a row that is not on screen.
-	toolsPanelClampScroll(rows, layout)
-	offsets := toolsRowOffsets(rows, layout)
-	bodyH := toolsPanelBodyHeight(rows, layout)
-	visible := toolsVisibleRows(rows, layout, toolsPanel.scroll, bodyH)
-	bodyTop := panelY + headerH
-	for i := toolsPanel.scroll; i < toolsPanel.scroll+visible && i < len(rows); i++ {
-		row := rows[i]
-		y := bodyTop + offsets[i] - offsets[toolsPanel.scroll]
-		if row.section != "" {
-			drawToolsSectionLabel(renderer, config, row.section, panelX+padX, y, rowW)
-			y += sectionH
-		}
-		rowGap := int32(8)
-		if layout.dense {
-			// Dense rows keep a 36px card at the shipped font size; the gap is
-			// trimmed instead of the text padding.
-			rowGap = 4
-		}
-		r := sdl.Rect{X: panelX + padX, Y: y, W: rowW, H: rowH - rowGap}
-		toolsRowRects[i] = r
-
-		focused := i == toolsPanel.cursor
-		rowBg := WithAlpha(ColorSurfaceRow, 190)
-		if focused {
-			rowBg = WithAlpha(focusColor, 46)
-		}
-		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, rowBg)
-		if focused {
-			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
-			// Accent spine: the cursor position reads at a glance instead of
-			// relying on a 1px outline alone.
-			fillRoundedRect(renderer, r.X+1, r.Y+8, 4, r.H-16, 2, focusColor)
-		}
-		// A status dot per row: running / available / needs attention. It is
-		// cheaper to scan than the value text and gives the list a rhythm.
-		fillCircle(renderer, r.X+20, r.Y+r.H/2, 4, toolsStatusColor(row.status))
-
-		valueColor := ColorTextPrimary()
-		switch {
-		case row.status == toolsStatusWarn:
-			valueColor = ColorToastWarn
-		case (row.action == toolsActionFTP || row.action == toolsActionSSH) && row.status == toolsStatusGood:
-			valueColor = ColorToastSuccess
-		}
-		value := row.value
-		if !layout.showDetail && value == "Running" && row.detail != "" {
-			// Fold the address into the value line when there is no room for a
-			// separate detail line: it is the part the user needs to type.
-			value = row.detail
-		}
-
-		textX := r.X + 38
-		if layout.dense {
-			// One line per row: label in a fixed column, value after it, action
-			// chip on the right. The fixed column keeps every value aligned, so
-			// the list reads as a table instead of ragged text.
-			chipW := drawToolsHintChip(renderer, config, font, row.hint, r, focused, focusColor)
-			labelCol := (r.W - 38 - 24) * 34 / 100
-			label := ellipsize(font, row.label, labelCol)
-			renderText(renderer, config, font, label, ColorTextSecondary(), textX, r.Y+(r.H-smallH)/2)
-			valueX := textX + labelCol
-			valueW := r.X + r.W - 12 - chipW - 12 - valueX
-			if valueW > 0 {
-				renderText(renderer, config, medium, ellipsize(medium, value, valueW), valueColor, valueX, r.Y+(r.H-medH)/2)
+	renderWithClip(renderer, panelX, bodyTop, panelW, bodyViewH, func(r *sdl.Renderer) {
+		for _, line := range g.lines {
+			top := line.headingY
+			if line.heading == "" {
+				top = line.tilesY
 			}
-			continue
+			bottom := line.tilesY + line.h
+			if top-scrollY >= bodyViewH || bottom-scrollY <= 0 {
+				continue
+			}
+			if line.heading != "" {
+				hy := bodyTop + line.headingY - scrollY
+				if hy+sectionH(m) > bodyTop {
+					drawToolsSectionLabel(r, config, line.heading, panelX+padX, hy, panelW-2*padX)
+				}
+			}
+			for _, idx := range line.tiles {
+				// The grid is laid out in body coordinates; the clip window
+				// starts at bodyTop on screen, so shift by it (and the scroll)
+				// instead of clipping away half the grid.
+				cell := g.rects[idx]
+				cell.X += panelX
+				cell.Y += bodyTop - scrollY
+				if cell.Y+cell.H <= bodyTop || cell.Y >= bodyTop+bodyViewH {
+					continue
+				}
+				// Tiles are drawn whole: a card sliced by the clip edge reads
+				// as a rendering fault. The focused tile is the exception — on
+				// a panel too short for one row it still has to show.
+				if (cell.Y < bodyTop || cell.Y+cell.H > bodyTop+bodyViewH) && idx != toolsPanel.cursor {
+					continue
+				}
+				drawToolsTile(r, config, cell, rows[idx], idx == toolsPanel.cursor, labelFont, medium)
+				toolsRowRects[idx] = cell
+			}
 		}
+	})
 
-		labelY := r.Y + layout.rowPad
-		valueY := labelY + smallH + rowTextH
-		detailY := valueY + medH + rowTextH
-		renderText(renderer, config, font, row.label, ColorTextSecondary(), textX, labelY)
-		renderText(renderer, config, medium, value, valueColor, textX, valueY)
-
-		if layout.showDetail && row.detail != "" {
-			maxW := r.W - (textX - r.X) - 150
-			renderText(renderer, config, font, ellipsize(font, row.detail, maxW), ColorTextTertiary(), textX, detailY)
-		}
-		drawToolsHintChip(renderer, config, font, row.hint, r, focused, focusColor)
-	}
-
-	// A scrollbar appears only when the list is taller than the body, so the
-	// user can tell there are more rows below the fold.
-	if total := offsets[len(rows)]; total > bodyH && bodyH > 0 {
+	// A scrollbar appears only when the grid is taller than the body, so the
+	// user can tell there are more tiles below the fold.
+	if maxScroll := g.bodyH - bodyViewH; maxScroll > 0 {
 		trackX := panelX + panelW - 9
 		trackY := bodyTop
-		trackH := bodyH
+		trackH := bodyViewH
 		fillRoundedRect(renderer, trackX, trackY, 3, trackH, 2, WithAlpha(ColorBorder, 120))
-		thumbH := trackH * bodyH / total
+		thumbH := trackH * bodyViewH / g.bodyH
 		if thumbH < 24 {
 			thumbH = 24
 		}
-		thumbY := trackY + (trackH-thumbH)*offsets[toolsPanel.scroll]/total
+		thumbY := trackY + (trackH-thumbH)*scrollY/maxScroll
 		fillRoundedRect(renderer, trackX, thumbY, 3, thumbH, 2, WithAlpha(accentColor, 200))
 	}
 
 	// Live details while a server is open: the SFTP password is shown here (it
 	// is random per run and never written to the config or the log), followed
 	// by the warning for whichever share is exposed. Pinned above the footer so
-	// scrolling the rows never pushes it away.
-	infoY := panelY + panelH - footerH - layout.infoH + 2
-	for _, line := range info {
+	// scrolling the tiles never pushes it away.
+	infoY := panelY + panelH - m.footH - m.infoH + 2
+	for _, line := range m.info {
 		color := ColorTextSecondary()
 		if line.warn {
 			color = ColorToastWarn
 		}
-		renderText(renderer, config, font, ellipsize(font, line.text, rowW), color, panelX+padX, infoY)
-		infoY += infoLineH
+		renderText(renderer, config, font, ellipsize(font, line.text, panelW-2*padX), color, panelX+padX, infoY)
+		infoY += m.infoLineH
 	}
 
-	footer := hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
-	fw, _, _ := font.SizeUTF8(footer)
-	renderText(renderer, config, font, footer, ColorTextTertiary(),
-		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+8)
+	// The focused tile's own state lives in the footer: the value ("Running",
+	// the LAN address) with the action chip on the right, then the detail line
+	// ("ftp://…") underneath — the parts a row used to squeeze next to the
+	// name.
+	row := rows[toolsPanel.cursor]
+	footY := panelY + panelH - m.footH
+	focusRect := sdl.Rect{X: panelX + padX, Y: footY, W: panelW - 2*padX, H: medH + 8}
+	chipW := drawToolsHintChip(renderer, config, font, row.hint, focusRect, true, focusColor)
+	valueW := panelW - 2*padX - chipW - 16
+	if valueW > 0 {
+		value := ellipsize(medium, row.value, valueW)
+		renderText(renderer, config, medium, value, toolsValueColor(row), panelX+padX, valueY(m, footY))
+	}
+	if row.detail != "" {
+		detailW := panelW - 2*padX
+		if detailW > 0 {
+			renderText(renderer, config, font, ellipsize(font, row.detail, detailW), ColorTextTertiary(),
+				panelX+padX, valueY(m, footY)+medH+2)
+		}
+	}
+	closeText := hintLine(FooterHint{"B", "Close"})
+	cw, _, _ := font.SizeUTF8(closeText)
+	renderText(renderer, config, font, closeText, ColorTextTertiary(),
+		panelX+(panelW-int32(cw))/2, panelY+panelH-smallH-6)
 }
 
+// toolsValueColor colours the focused tile's value line: warnings are amber,
+// running servers green.
+func toolsValueColor(row toolsRow) sdl.Color {
+	switch {
+	case row.status == toolsStatusWarn:
+		return ColorToastWarn
+	case (row.action == toolsActionFTP || row.action == toolsActionSSH) && row.status == toolsStatusGood:
+		return ColorToastSuccess
+	case !row.enabled:
+		return ColorTextTertiary()
+	}
+	return ColorTextPrimary()
+}
+
+// sectionH and valueY keep the layout arithmetic in one spot: both bands are
+// measured (fonts can be taller than their point size), never constant.
+func sectionH(m toolsGridMetrics) int32 { return m.sectionH }
+
+func valueY(m toolsGridMetrics, footY int32) int32 { return footY + 6 }
+
 // drawToolsSectionLabel paints a group heading: small uppercase text with a
-// hairline running to the panel edge, so the list reads in sections without
-// spending a filled row on a divider.
+// hairline running to the panel edge, so the grid reads in sections without
+// spending a filled tile on a divider.
 func drawToolsSectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, w int32) {
 	font := getFontSized(config, "small", 15)
 	if font == nil {
@@ -1048,8 +1095,8 @@ func drawToolsSectionLabel(renderer *sdl.Renderer, config *Config, title string,
 	}
 	label := strings.ToUpper(title)
 	tw, th, _ := font.SizeUTF8(label)
-	renderText(renderer, config, font, label, ColorTextTertiary(), x+38, y+4)
-	if lx := x + 38 + int32(tw) + 12; lx < x+w {
+	renderText(renderer, config, font, label, ColorTextTertiary(), x, y+4)
+	if lx := x + int32(tw) + 12; lx < x+w {
 		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
 		renderer.FillRect(&sdl.Rect{X: lx, Y: y + 4 + int32(th)/2, W: x + w - lx, H: 1})
 	}
@@ -1090,4 +1137,191 @@ func toolsStatusColor(status toolsStatus) sdl.Color {
 		return ColorToastWarn
 	}
 	return WithAlpha(ColorTextTertiary(), 120)
+}
+
+// drawToolsTile renders one Tools tile: the icon in a tinted well, the tool's
+// name underneath, the status dot on the corner, and the same focus treatment
+// the Apps grid uses (raised surface, accent border, accent spine).
+func drawToolsTile(r *sdl.Renderer, config *Config, cell sdl.Rect, row toolsRow, focused bool, labelFont, medium *ttf.Font) {
+	drawCard(r, cell.X, cell.Y, cell.W, cell.H, 12)
+	if focused {
+		// Focus reads at a glance: a raised surface, an accent border and an
+		// accent spine, not just a tint that darker themes hide.
+		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, ColorSurfaceRaised)
+		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 70))
+		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 2, WithAlpha(accentColor, 235))
+		fillRoundedRect(r, cell.X+2, cell.Y+12, 3, cell.H-24, 2, accentColor)
+	}
+
+	// A status dot on the corner: running / available / needs attention. It is
+	// cheaper to scan than any text and gives the grid a rhythm.
+	if row.status != toolsStatusNeutral {
+		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 4, toolsStatusColor(row.status))
+	}
+
+	box := int32(52)
+	x := cell.X + (cell.W-box)/2
+	y := cell.Y + 8
+	tint := appGridTileTint(row.label)
+	wellAlpha := uint8(42)
+	if focused {
+		wellAlpha = 62
+	}
+	fillRoundedRect(r, x, y, box, box, 14, WithAlpha(tint, wellAlpha))
+	strokeRoundedRect(r, x, y, box, box, 14, 1, WithAlpha(tint, 140))
+	drawToolsIcon(r, insetRect(sdl.Rect{X: x, Y: y, W: box, H: box}, 8), row.action, tint)
+
+	if labelFont == nil {
+		return
+	}
+	// Names wrap under the icon, at the same offset on every tile so the grid
+	// keeps one baseline; a tile fits two lines before it clips.
+	lineH := int32(labelFont.Height() + 1)
+	textTop := y + box + 6
+	maxLines := int((cell.Y + cell.H - 6 - textTop) / lineH)
+	if maxLines < 1 {
+		maxLines = 1
+	}
+	if maxLines > 2 {
+		maxLines = 2
+	}
+	color := ColorTextPrimary()
+	if !row.enabled {
+		color = ColorTextTertiary()
+	}
+	for li, line := range appTileLabelLines(labelFont, row.label, cell.W-16, maxLines) {
+		lw, _, _ := labelFont.SizeUTF8(line)
+		renderText(r, config, labelFont, line, color, cell.X+(cell.W-int32(lw))/2, textTop+int32(li)*lineH)
+	}
+}
+
+// drawToolsIcon paints the tile's glyph for one tool, built from the same
+// filled shapes and strokes as the home icons so the two sets read with one
+// visual weight. The glyph uses the tile's own tint, like the Apps grid's
+// initial does.
+func drawToolsIcon(r *sdl.Renderer, box sdl.Rect, action toolsAction, color sdl.Color) {
+	_ = r.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	w, h := box.W, box.H
+	cx, cy := box.X+w/2, box.Y+h/2
+
+	switch action {
+	case toolsActionFTP:
+		// Folder: a filled body with a tab, reading as "share this folder".
+		body := sdl.Rect{X: box.X + w/8, Y: box.Y + h/3, W: w - w/4, H: h / 2}
+		fillRoundedRect(r, body.X, body.Y, body.W, body.H, 4, color)
+		tab := sdl.Rect{X: box.X + w/8, Y: box.Y + h/6, W: w/2 - w/8, H: h / 5}
+		fillRoundedRect(r, tab.X, tab.Y, tab.W, tab.H, 2, color)
+	case toolsActionSSH, toolsActionUtilities:
+		// Terminal: a rounded frame holding a prompt.
+		strokeRoundedRect(r, box.X, box.Y, w, h, 6, 2, color)
+		ery := cy + h/6
+		r.DrawLine(cx-w/4, cy+h/8, cx-w/10, ery)
+		r.DrawLine(cx-w/10, ery, cx-w/4, cy+h*3/8)
+		fillRoundedRect(r, cx-w/20, ery-1, w*3/20, 3, 1, color)
+	case toolsActionCopyIP:
+		// LAN: the device linked to two peers, so the glyph says "the address
+		// other machines reach".
+		fillCircle(r, cx, cy, 5, color)
+		fillCircle(r, cx-w/3, box.Y+h/4, 3, color)
+		fillCircle(r, cx+w/3, box.Y+h/4, 3, color)
+		fillCircle(r, cx-w/3, box.Y+h*3/4, 3, color)
+		fillCircle(r, cx+w/3, box.Y+h*3/4, 3, color)
+		r.DrawLine(cx-3, cy-3, cx-w/3+3, box.Y+h/4+3)
+		r.DrawLine(cx+3, cy-3, cx+w/3-3, box.Y+h/4+3)
+		r.DrawLine(cx-3, cy+3, cx-w/3+3, box.Y+h*3/4-3)
+		r.DrawLine(cx+3, cy+3, cx+w/3-3, box.Y+h*3/4-3)
+	case toolsActionGatewayScan, toolsActionClipboardScan:
+		// Port scan: crosshair inside a frame.
+		strokeRoundedRect(r, box.X, box.Y, w, h, 5, 2, color)
+		strokeCircle(r, cx, cy, w*17/100, color)
+		r.DrawLine(cx, box.Y+3, cx, cy-w*17/100-2)
+		r.DrawLine(cx, cy+w*17/100+2, cx, box.Y+h-3)
+		r.DrawLine(box.X+3, cy, cx-w*17/100-2, cy)
+		r.DrawLine(cx+w*17/100+2, cy, box.X+w-3, cy)
+	case toolsActionPing:
+		// Ping: a dot with echo arcs above it.
+		fillCircle(r, cx, box.Y+h*3/4, 4, color)
+		for _, rad := range []int32{h / 4, h * 2 / 5} {
+			arc(r, cx, box.Y+h*3/4, rad, 215, 110, color)
+		}
+	case toolsActionTraceroute:
+		// Traceroute: hops along a path.
+		fillCircle(r, box.X+w/5, box.Y+h*3/4, 4, color)
+		fillCircle(r, cx, box.Y+h/2, 3, color)
+		fillCircle(r, box.X+w*4/5, box.Y+h/4, 4, color)
+		r.DrawLine(box.X+w/5+4, box.Y+h*3/4-3, cx-3, cy)
+		r.DrawLine(cx+3, cy-2, box.X+w*4/5-4, box.Y+h/4+3)
+	case toolsActionDNSLookup:
+		// DNS: the globe also used for the browser.
+		DrawHomeIcon(r, "browser", box, false)
+	case toolsActionWiFiSignal:
+		// Wi-Fi signal: a dot with two widening arcs.
+		fillCircle(r, cx, box.Y+h*3/4, 4, color)
+		arc(r, cx, box.Y+h*3/4, h/3, 200, 140, color)
+		arc(r, cx, box.Y+h*3/4, h*13/20, 200, 140, color)
+	case toolsActionCompanion:
+		// Phone: a rounded body with a home dot.
+		strokeRoundedRect(r, box.X+w/4, box.Y+h/8, w/2, h*3/4, 4, 2, color)
+		fillCircle(r, cx, box.Y+h*3/4, 2, color)
+	case toolsActionParty:
+		// Watch Party: two people side by side.
+		fillCircle(r, cx-w/6, box.Y+h/3, h/7, color)
+		fillCircle(r, cx+w/6, box.Y+h/3, h/7, color)
+		fillRoundedRect(r, cx-w/3, box.Y+h/2, w/3, h/4, 3, color)
+		fillRoundedRect(r, cx, box.Y+h/2, w/3, h/4, 3, color)
+	case toolsActionPatch:
+		// Updates: a rising arrow under a shelf.
+		fillTriangleFilled(r,
+			pt{x: cx, y: box.Y + h/6},
+			pt{x: cx - w/6, y: box.Y + h/2},
+			pt{x: cx + w/6, y: box.Y + h/2}, color)
+		fillRoundedRect(r, cx-2, box.Y+h/2, 4, h*3/8, 2, color)
+		fillRoundedRect(r, box.X+w/8, box.Y+h*5/6, w*3/4, 2, 1, color)
+	case toolsActionPowerTools:
+		// Reuse the home "tools" glyph: slider tracks with knobs.
+		DrawHomeIcon(r, "tools", box, false)
+	case toolsActionDiscHelpers:
+		// Disc: a ring with a hub.
+		strokeCircle(r, cx, cy, w*9/20, color)
+		strokeCircle(r, cx, cy, w/8, color)
+		fillCircle(r, cx, cy, w/20, color)
+	case toolsActionCalculator:
+		// Calculator: a rounded body with a key grid.
+		strokeRoundedRect(r, box.X+w/5, box.Y+h/8, w*3/5, h*3/4, 4, 2, color)
+		cell := h / 10
+		for row := int32(0); row < 2; row++ {
+			for col := int32(0); col < 2; col++ {
+				fillRoundedRect(r, cx-w/7+col*(cell*3), cy-2+row*(cell*3), cell, cell, 1, color)
+			}
+		}
+		fillRoundedRect(r, box.X+w*7/20, box.Y+h/4, w*3/10, h/10, 1, color)
+	case toolsActionCommunity:
+		// Speech bubble, matching the home "chat" glyph.
+		DrawHomeIcon(r, "chat", box, false)
+	default:
+		// Unknown action draws the safe ring fallback rather than an empty
+		// well: the tile must never look broken.
+		fillCircle(r, cx, cy, w/3, color)
+		fillCircle(r, cx, cy, w/6, ColorSurfaceRaised)
+	}
+}
+
+// arc strokes an arc from angle a0 spanning a1 degrees, in short segments, so
+// wifi-style glyphs stay smooth without adding an arc primitive per size.
+func arc(r *sdl.Renderer, cx, cy, radius int32, a0, a1 float64, color sdl.Color) {
+	if radius <= 0 {
+		return
+	}
+	steps := 18
+	rx := float64(radius)
+	px := int32(float64(cx) + rx*math.Cos(a0*math.Pi/180))
+	py := int32(float64(cy) + rx*math.Sin(a0*math.Pi/180))
+	r.SetDrawColor(color.R, color.G, color.B, color.A)
+	for i := 1; i <= steps; i++ {
+		a := a0 + a1*float64(i)/float64(steps)
+		x := int32(float64(cx) + rx*math.Cos(a*math.Pi/180))
+		y := int32(float64(cy) + rx*math.Sin(a*math.Pi/180))
+		r.DrawLine(px, py, x, y)
+		px, py = x, y
+	}
 }

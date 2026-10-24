@@ -12,9 +12,13 @@ down there.
 The **Wi-Fi meter** is the leftmost item of that right-hand cluster and a button
 on every screen: four bars that are hollow when there is no link and fill with
 signal strength, plus `! Offline` while the device has no network at all. A
-click or tap opens the Wi-Fi picker (scan, connect, enter a password); from a
-controller the same picker is **Start → Wi-Fi Networks**, and it is also the
-Wi-Fi row in Quick Settings.
+click or tap opens the Wi-Fi picker (scan, connect, enter a password). From a
+controller it is part of the same focus row as the clock and the forecast: on
+Home **Up** from the Settings card reaches the header, then **Left** walks the
+weather chip, the meter and the update offer; in any other scene **Up** leaves
+the content for the top bar and **Left**/**Right** walk it. **A** on the meter
+opens the picker, exactly like a tap. The same picker is also
+**Start → Wi-Fi Networks** and the Wi-Fi row in Quick Settings.
 
 The **battery gauge** sits right of the clock: a cell filled to the charge left,
 with the percentage beside it. It is green above 50%, yellow from 50% down to
@@ -152,7 +156,8 @@ their way, and no panel is covered by a menu drawn beneath it.
 |--------|--------|
 | A | Open the focused tile |
 | B | Close the calendar popover, or the video that is still playing |
-| D-pad | Move between tiles, the header chips (weather, clock, now-playing, bell, update offer, PS4/PS5) and the footer row |
+| D-pad | Move between tiles, the header chips (Wi-Fi meter, weather, clock, now-playing, bell, update offer, PS4/PS5) and the footer row |
+| Left (from the weather chip) | Move onto the Wi-Fi meter; **A** opens the Wi-Fi picker |
 | Right (from the clock) | Move onto the now-playing chip while something plays, else the notification bell; **A** opens that player or the notification centre |
 | L2 / R2 | Previous / next section of the grid |
 

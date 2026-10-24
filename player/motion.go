@@ -96,8 +96,8 @@ func normalizeMotionConfig(cfg *Config) {
 	case IdleMotionNone, IdleMotionBreathe, IdleMotionDrift, IdleMotionAmbient:
 		cfg.Variables.IdleMotion = i
 	default:
-// The default follows the existing screensaver/ambient toggles, which is
-// what "" meant before this field existed.
+		// The default follows the existing screensaver/ambient toggles, which is
+		// what "" meant before this field existed.
 		cfg.Variables.IdleMotion = IdleMotionAmbient
 	}
 	switch s := motionRoleValue(cfg.Variables.ListScroll, ListScrollSnap); s {

@@ -251,7 +251,12 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	detailW := elemW - listW - gap
 
 	// --- List column ---
-	lineH := int32(52)
+	// The row pitch comes from the fonts actually loaded, not a constant: a
+	// device theme can load glyphs taller than their point size, and a fixed
+	// 52px pitch used to draw the name over the next row's author line.
+	// Meta (version · author) sits under the name with the same measured gap;
+	// renderPackageList uses the whole triple.
+	lineH, nameH, _, rowPadY, lineGap := packageRowMetrics(listFont, smallFont)
 	maxVisible := int((elemH - 20) / lineH)
 	if maxVisible < 1 {
 		maxVisible = 1
@@ -275,8 +280,8 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 		drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == packagesFocusIndex, false)
 
 		if listFont != nil {
-			name := truncateRunesSuffix(p.Name, 34, "...")
-			renderText(renderer, config, listFont, name, ColorTextPrimary(), rowX+12, rowY+6)
+			name := ellipsize(listFont, p.Name, rowW-24)
+			renderText(renderer, config, listFont, name, ColorTextPrimary(), rowX+12, rowY+rowPadY)
 
 			meta := ""
 			if p.Version != "" {
@@ -289,18 +294,10 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 				meta += p.Author
 			}
 			if smallFont != nil && meta != "" {
-				renderText(renderer, config, smallFont, meta, ColorTextTertiary(), rowX+12, rowY+28)
+				meta = ellipsize(smallFont, meta, rowW-24)
+				renderText(renderer, config, smallFont, meta, ColorTextTertiary(), rowX+12, rowY+rowPadY+nameH+lineGap)
 			}
 		}
-	}
-
-	if len(pkgs) > maxVisible {
-		thumbFrac := float64(maxVisible) / float64(len(pkgs))
-		scrollFrac := 0.0
-		if len(pkgs) > maxVisible {
-			scrollFrac = float64(start) / float64(len(pkgs)-maxVisible)
-		}
-		drawScrollbar(renderer, element.X+listW-6, element.Y+8, 3, elemH-16, thumbFrac, scrollFrac)
 	}
 
 	// --- Details column ---
@@ -311,12 +308,22 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	if titleFont == nil {
 		titleFont = listFont
 	}
+	// Spacing is measured, not constant: the device font can be taller than
+	// its point size and fixed 22px lines used to stack on top of each other.
+	descLabelH, descLineH := int32(18), int32(16)
+	if smallFont != nil {
+		s := int32(smallFont.Height())
+		descLabelH, descLineH = s, s+5
+	}
+	// Lines below the description lead straight into the Install button and
+	// the URL, so the description stops above a band that always stays free.
+	const footerReserve = int32(66)
 	y := element.Y + 20
 	if titleFont != nil {
-		name := truncateRunesSuffix(p.Name, 30, "...")
+		name := ellipsize(titleFont, p.Name, detailW-28)
 		renderText(renderer, config, titleFont, name, accentColor, detailX+14, y)
+		y += int32(titleFont.Height()) + 8
 	}
-	y += 32
 
 	if smallFont != nil {
 		if p.Version != "" || p.Author != "" {
@@ -330,50 +337,50 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 				}
 				meta += "Author: " + p.Author
 			}
-			renderText(renderer, config, smallFont, meta, ColorTextSecondary(), detailX+14, y)
-			y += 22
+			renderText(renderer, config, smallFont, ellipsize(smallFont, meta, detailW-28), ColorTextSecondary(), detailX+14, y)
+			y += descLineH
 		}
 		if p.Date != "" {
 			renderText(renderer, config, smallFont, "Released: "+p.Date, ColorTextSecondary(), detailX+14, y)
-			y += 22
+			y += descLineH
 		}
 		if len(p.Device) > 0 {
-			devs := truncateRunesSuffix(strings.Join(p.Device, ", "), 40, "...")
-			renderText(renderer, config, smallFont, "Devices: "+devs, ColorTextSecondary(), detailX+14, y)
-			y += 22
+			devs := strings.Join(p.Device, ", ")
+			renderText(renderer, config, smallFont, ellipsize(smallFont, "Devices: "+devs, detailW-28), ColorTextSecondary(), detailX+14, y)
+			y += descLineH
 		}
 		if p.MainFilename != "" {
-			renderText(renderer, config, smallFont, "Entry: "+p.MainFilename, ColorTextSecondary(), detailX+14, y)
-			y += 22
+			renderText(renderer, config, smallFont, ellipsize(smallFont, "Entry: "+p.MainFilename, detailW-28), ColorTextSecondary(), detailX+14, y)
+			y += descLineH
 		}
 		if len(p.Dependencies) > 0 {
-			deps := truncateRunesSuffix(strings.Join(p.Dependencies, ", "), 40, "...")
-			renderText(renderer, config, smallFont, "Dependencies: "+deps, ColorTextTertiary(), detailX+14, y)
-			y += 22
+			deps := strings.Join(p.Dependencies, ", ")
+			renderText(renderer, config, smallFont, ellipsize(smallFont, "Dependencies: "+deps, detailW-28), ColorTextTertiary(), detailX+14, y)
+			y += descLineH
 		}
 
 		if p.Description != "" {
 			y += 8
 			renderText(renderer, config, smallFont, "Description", ColorTextTertiary(), detailX+14, y)
-			y += 20
-			availH := element.Y + elemH - 24 - y
+			y += descLabelH + 4
+			availH := element.Y + elemH - footerReserve - y
 			for _, line := range wrapPackageText(p.Description, smallFont, detailW-28) {
 				if availH <= 0 {
 					break
 				}
 				renderText(renderer, config, smallFont, line, ColorTextPrimary(), detailX+14, y)
-				y += 20
-				availH -= 20
+				y += descLineH
+				availH -= descLineH
 			}
 		}
 
 		// Install button at the bottom of the details pane.
 		if p.Download != "" {
 			installed := isPackageInstalled(p)
-			btnW := int32(160)
 			btnH := int32(32)
+			btnW := int32(160)
 			sx := detailX + detailW - btnW - 14
-			sy := element.Y + elemH - 50
+			sy := element.Y + elemH - btnH - 10
 
 			label, labelCol := "Install", sdl.Color{R: 255, G: 255, B: 255, A: 255}
 			fill := WithAlpha(ColorInfo, 200)
@@ -390,10 +397,31 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 				HideFocusRing: true,
 			}, UIButtonState{})
 
-			url := truncateRunesSuffix(p.Download, 44, "...")
-			renderText(renderer, config, smallFont, url, sdl.Color{R: 110, G: 200, B: 255, A: 255}, detailX+14, element.Y+elemH-16)
+			// The registry URL never fits a pane verbatim, so it is cut by
+			// pixel width (long hostnames are not served by a rune count),
+			// and it rides on the button row instead of under the pane.
+			url := ellipsize(smallFont, p.Download, detailW-btnW-42)
+			urlY := sy + (btnH-descLabelH)/2
+			renderText(renderer, config, smallFont, url, sdl.Color{R: 110, G: 200, B: 255, A: 255}, detailX+14, urlY)
 		}
 	}
+}
+
+// packageRowMetrics is the measured pitch of one package row, shared by the
+// renderer and the click handler so a click can never land on a differently
+// paced row. Handheld fonts can be taller than their point size, so the values
+// come off the loaded fonts instead of constants.
+func packageRowMetrics(listFont, smallFont *ttf.Font) (lineH, nameH, metaH, rowPadY, lineGap int32) {
+	nameH, metaH = 24, 16
+	if listFont != nil {
+		nameH = int32(listFont.Height())
+	}
+	if smallFont != nil {
+		metaH = int32(smallFont.Height())
+	}
+	rowPadY, lineGap = 10, 5
+	lineH = rowPadY + nameH + lineGap + metaH + rowPadY
+	return lineH, nameH, metaH, rowPadY, lineGap
 }
 
 // wrapPackageText breaks text into lines that fit within maxWidth pixels using
@@ -490,7 +518,12 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 		if mx < e.X || mx > e.X+listW || my < e.Y || my > e.Y+elemH {
 			return
 		}
-		lineH := int32(52)
+		listFont, _ := getCachedFont(config, e.Font)
+		smallFont, _ := getCachedFont(config, "small")
+		if listFont == nil {
+			listFont = smallFont
+		}
+		lineH, _, _, _, _ := packageRowMetrics(listFont, smallFont)
 		maxVisible := int((elemH - 20) / lineH)
 		if maxVisible < 1 {
 			maxVisible = 1

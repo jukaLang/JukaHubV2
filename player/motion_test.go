@@ -29,9 +29,9 @@ func TestNormalizeMotionConfigDefaults(t *testing.T) {
 func TestNormalizeMotionConfigUnknownFallsBack(t *testing.T) {
 	cfg := &Config{}
 	cfg.Variables.Transition = "flip"
-	cfg.Variables.FocusMotion = "glow"     // renderer not built yet -> scale
-	cfg.Variables.IdleMotion = "orbit"     // unknown -> ambient
-	cfg.Variables.ListScroll = "elastic"   // unknown -> snap
+	cfg.Variables.FocusMotion = "glow"   // renderer not built yet -> scale
+	cfg.Variables.IdleMotion = "orbit"   // unknown -> ambient
+	cfg.Variables.ListScroll = "elastic" // unknown -> snap
 	normalizeMotionConfig(cfg)
 	if cfg.Variables.Transition != TransitionFade ||
 		cfg.Variables.FocusMotion != FocusMotionScale ||
@@ -62,11 +62,11 @@ func TestApplyMotionPresets(t *testing.T) {
 	cases := map[string]struct {
 		Transition, FocusMotion, IdleMotion, ListScroll string
 	}{
-		MotionPresetCalm:      {TransitionFade, FocusMotionNone, IdleMotionNone, ListScrollSnap},
-		MotionPresetCinematic: {TransitionFade, FocusMotionScale, IdleMotionBreathe, ListScrollFree},
-		MotionPresetSnappy:    {TransitionInstant, FocusMotionScale, IdleMotionNone, ListScrollAccelerated},
+		MotionPresetCalm:       {TransitionFade, FocusMotionNone, IdleMotionNone, ListScrollSnap},
+		MotionPresetCinematic:  {TransitionFade, FocusMotionScale, IdleMotionBreathe, ListScrollFree},
+		MotionPresetSnappy:     {TransitionInstant, FocusMotionScale, IdleMotionNone, ListScrollAccelerated},
 		MotionPresetReducedAll: {TransitionInstant, FocusMotionNone, IdleMotionNone, ListScrollSnap},
-		MotionPresetDefault:   {TransitionFade, FocusMotionScale, IdleMotionAmbient, ListScrollSnap},
+		MotionPresetDefault:    {TransitionFade, FocusMotionScale, IdleMotionAmbient, ListScrollSnap},
 	}
 	for preset, want := range cases {
 		cfg := &Config{}

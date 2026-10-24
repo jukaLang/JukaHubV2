@@ -173,7 +173,7 @@ jobs:
           SDL_AUDIODRIVER: dummy
         run: |
           set +e
-          go test ./... -count=1 -timeout 10m 2>&1 | tee "$RUNNER_TEMP/gotest.log"
+          go test ./... -count=1 -timeout 10m -covermode=atomic -coverprofile="$RUNNER_TEMP/cover.out" 2>&1 | tee "$RUNNER_TEMP/gotest.log"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             # Put the failures where a reviewer looks: the step summary and
@@ -192,7 +192,33 @@ jobs:
           fi
           exit "$status"
 
-  player-boot-bench:
+      - name: Coverage summary
+        # Advisory: the profile exists even on failure as long as the test
+        # binary got far enough, and the numbers sit in the step summary, so a
+        # drop is visible without a third-party service reading the repo.
+        if: always()
+        run: |
+          set +e
+          if [ ! -f "$RUNNER_TEMP/cover.out" ] || [ ! -s "$RUNNER_TEMP/cover.out" ]; then
+            echo "No coverage profile produced by the test run." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          go tool cover -func="$RUNNER_TEMP/cover.out" > "$RUNNER_TEMP/cover-func.txt"
+          total=$(grep -E '^total:' "$RUNNER_TEMP/cover-func.txt" | awk '{print $3}')
+          missed=$(awk '$NF == "0.0%" && $1 != "total:" {n++} END {print n+0}' "$RUNNER_TEMP/cover-func.txt")
+          { echo "### Go coverage"
+            echo ""
+            echo "Total: **${total:-n/a}** — ${missed} functions with 0% coverage."
+            echo ""
+            echo "<details><summary>Functions with 0% coverage (first 25)</summary>"
+            echo ""
+            echo '```'
+            awk '$NF == "0.0%" && $1 != "total:" {print}' "$RUNNER_TEMP/cover-func.txt" | head -25
+            echo '```'
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
     name: Player cold-boot budget
     # Pinned: the SDL2 dev packages differ between Ubuntu releases and the
     # ubuntu-latest label is moving to Ubuntu 26.

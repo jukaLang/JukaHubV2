@@ -421,6 +421,7 @@ in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
 
 | Page | Covers |
 |------|--------|
+| [Quick start](docs/QUICK_START.md) | the five-minute path to a clone that builds, runs and checks |
 | [Controls](docs/CONTROLS.md) | every button and key, screen by screen |
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |
 | [Building](docs/BUILDING.md) | Windows/Linux/ARM64 builds, SD-card packaging, releases, CI |
@@ -442,9 +443,10 @@ in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
 | [Feature slate](docs/FEATURE-SLATE.md) | the 36-idea slate ranked by cost, fit and device risk, with the next four |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
+| [Architecture](docs/ARCHITECTURE.md) | the three runtimes (player, builder, patch repo), where a change lands |
 | [Contributing](CONTRIBUTING.md) | local setup, tests, what to commit |
 | [TrimUI packaging](player/trimui/README.md) | device package, install and troubleshooting notes |
-| [Security](player/SECURITY.md) | secret storage and the security model |
+| [Security](SECURITY.md) | secret storage and the security model |
 
 ## License and thanks
 
