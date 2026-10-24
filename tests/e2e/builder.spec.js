@@ -208,3 +208,67 @@ test("delete, undo and Escape keep the selection state consistent", async ({ pag
   await page.keyboard.press("Escape");
   expect(await state()).toEqual(none);
 });
+
+// Scene names are what links, menus and exports are keyed on, so add, rename and
+// delete have to keep them unique, safe to look up and consistent.
+test("adding a scene after a delete never replaces an existing scene", async ({ page }) => {
+  const result = await page.evaluate(() => {
+    loadJukaApp({
+      Width: 1280,
+      Height: 720,
+      scenes: [
+        { name: "Scene 1", elements: [] },
+        { name: "Scene 2", elements: [{ type: "label", text: "keep me", x: 5, y: 5, width: 100, height: 20 }] },
+        { name: "Scene 3", elements: [{ type: "label", text: "me too", x: 5, y: 5, width: 100, height: 20 }] },
+      ],
+    });
+    window.confirm = () => true;
+    sceneSelector.value = "Scene 1";
+    changeScene();
+    deleteScene(); // two scenes left, so "Scene N+1" would be "Scene 3" again
+    addScene();
+    return {
+      names: Object.keys(scenes),
+      options: [...sceneSelector.options].map((o) => o.value),
+      scene3: scenes["Scene 3"].map((el) => el.textContent.replace("✕", "").trim()),
+    };
+  });
+  expect(result.names).toEqual(["Scene 2", "Scene 3", "Scene 4"]);
+  expect(result.options).toEqual(result.names);
+  expect(result.scene3).toEqual(["me too"]);
+});
+
+test("renaming a scene carries the links to it, and quoted names are safe", async ({ page }) => {
+  const result = await page.evaluate(() => {
+    loadJukaApp({
+      Width: 1280,
+      Height: 720,
+      scenes: [
+        {
+          name: "Main",
+          elements: [
+            { type: "button", text: "Go", x: 10, y: 10, width: 100, height: 40, trigger: "change_scene:Tube" },
+            { type: "button", text: "Also", x: 10, y: 60, width: 100, height: 40, trigger: "", sceneChange: "Tube" },
+          ],
+        },
+        { name: 'The "Tube"', elements: [] },
+        { name: "Tube", elements: [] },
+      ],
+    });
+    sceneSelector.value = "Tube";
+    changeScene();
+    window.prompt = () => "Videos";
+    renameScene();
+    const links = buildEditorConfig().scenes[0].elements.map((el) => el.trigger || el.sceneChange);
+    // A quote in the name used to throw from the option selector.
+    sceneSelector.value = 'The "Tube"';
+    changeScene();
+    window.prompt = () => "Plain";
+    renameScene();
+    window.confirm = () => true;
+    deleteScene();
+    return { links, names: Object.keys(scenes) };
+  });
+  expect(result.links).toEqual(["change_scene:Videos", "Videos"]);
+  expect(result.names).toEqual(["Main", "Videos"]);
+});
