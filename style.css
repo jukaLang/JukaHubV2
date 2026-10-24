@@ -3965,3 +3965,25 @@ body:not(.element-selected) .element:focus {
     min-height: 40px;
   }
 }
+
+/* Widget placeholders. The shipped config gives widgets such as Recent a
+   near-black `color` (the player uses it for its own card art), so the label
+   inherited it and read as invisible text on the dark panel. The placeholder
+   label always uses a legible muted tone instead; the element's own colour is
+   untouched. */
+.element:is([data-type="recent"], [data-type="dynamiclist"], [data-type="textlog"],
+  [data-type="searchresults"], [data-type="textbrowser"], [data-type="chat"],
+  [data-type="favorites"], [data-type="shortslist"], [data-type="packagelist"],
+  [data-type="unitconverter"], [data-type="canvas"]) .text-content {
+  color: var(--text-muted);
+}
+
+/* A label with no width is one line that ends before the screen edge. */
+.element[data-fit-canvas] {
+  max-width: var(--label-room);
+  overflow-x: clip;
+  overflow-y: visible;
+  text-overflow: ellipsis;
+  text-align: left;
+  white-space: nowrap;
+}
