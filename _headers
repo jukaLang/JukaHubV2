@@ -1,7 +1,16 @@
 # Netlify response headers for generate.jukalang.com.
 # The builder uses the microphone for AI voice input, so it stays allowed for
 # this origin; camera and geolocation are never needed.
+#
+# The Content-Security-Policy works because the builder has no inline scripts
+# (handlers are bound from script.js) and no eval. connect-src stays open to
+# http/https because the live builder talks to a handheld on the LAN and the AI
+# assistant to whichever provider the user picks. tests/e2e/serve.mjs reads this
+# file, so the Playwright suite runs under the same policy and fails on a
+# violation. Inline style attributes are still used, hence 'unsafe-inline' in
+# style-src only.
 /*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; font-src 'self' https://fonts.gstatic.com https://cdnjs.cloudflare.com; img-src 'self' data: blob: https: http:; media-src 'self' blob: https: http:; connect-src 'self' http: https:; object-src 'none'; base-uri 'self'; form-action 'none'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), geolocation=(), microphone=(self)
