@@ -3951,3 +3951,11 @@ body:not(.element-selected) .element:focus {
     flex-wrap: wrap;
   }
 }
+
+/* Widget placeholders. The shipped config gives the Recent widget a near-black
+   `color` (the player uses it for its own card art), so the label inherited it
+   and read as invisible text on the dark panel. The placeholder label always
+   uses a legible muted tone instead; the element's own colour is untouched. */
+.element[data-type="recent"] .text-content {
+  color: var(--text-muted);
+}
