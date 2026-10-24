@@ -3952,10 +3952,38 @@ body:not(.element-selected) .element:focus {
   }
 }
 
-/* Widget placeholders. The shipped config gives the Recent widget a near-black
-   `color` (the player uses it for its own card art), so the label inherited it
-   and read as invisible text on the dark panel. The placeholder label always
-   uses a legible muted tone instead; the element's own colour is untouched. */
-.element[data-type="recent"] .text-content {
+/* === Touch targets ===
+   Compact toolbar and panel controls are 22-36px, below the ~40px a thumb can
+   hit reliably. Only touch screens get the larger hit area; mouse layouts keep
+   their dense desktop sizing. */
+@media (pointer: coarse) {
+  .app-bar-button,
+  .panel-toggle,
+  .action-button,
+  .action-button.small {
+    min-width: 40px;
+    min-height: 40px;
+  }
+}
+
+/* Widget placeholders. The shipped config gives widgets such as Recent a
+   near-black `color` (the player uses it for its own card art), so the label
+   inherited it and read as invisible text on the dark panel. The placeholder
+   label always uses a legible muted tone instead; the element's own colour is
+   untouched. */
+.element:is([data-type="recent"], [data-type="dynamiclist"], [data-type="textlog"],
+  [data-type="searchresults"], [data-type="textbrowser"], [data-type="chat"],
+  [data-type="favorites"], [data-type="shortslist"], [data-type="packagelist"],
+  [data-type="unitconverter"], [data-type="canvas"]) .text-content {
   color: var(--text-muted);
+}
+
+/* A label with no width is one line that ends before the screen edge. */
+.element[data-fit-canvas] {
+  max-width: var(--label-room);
+  overflow-x: clip;
+  overflow-y: visible;
+  text-overflow: ellipsis;
+  text-align: left;
+  white-space: nowrap;
 }

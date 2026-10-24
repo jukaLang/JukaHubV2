@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 type onboardingStep struct {
@@ -58,6 +59,12 @@ var onboardingSteps = []onboardingStep{
 		kind:  "artwork",
 	},
 	{
+		title: "Get set up",
+		body:  "These links unlock the rest of JukaHub: achievements, video, Remote Play and your phone. Everything here is optional, and the tour comes back when you close a panel.",
+		hint:  "Choose a row and press A to open it.",
+		kind:  "setup",
+	},
+	{
 		title: "Move around JukaHub",
 		body:  "Use the D-pad or arrow keys to move, A or Enter to select, and B or Escape to go back. Home, Start and Tools make the main features easy to find.",
 		hint:  "The on-screen footer shows the controls for each screen.",
@@ -73,6 +80,12 @@ var onboarding = struct {
 	action sdl.Rect
 	info   string
 	roms   *romScanReport
+	// The "Get set up" step's live checklist: the rows, the row the D-pad is
+	// on, their hit rects and when they were last rebuilt from the device.
+	setupCursor int
+	setupRows   []setupRow
+	setupHits   []sdl.Rect
+	setupAt     uint64
 }{
 	next: sdl.Rect{},
 	skip: sdl.Rect{},
@@ -104,6 +117,10 @@ func onboardingStart() {
 	onboarding.action = sdl.Rect{}
 	onboarding.info = ""
 	onboarding.roms = nil
+	onboarding.setupCursor = 0
+	onboarding.setupRows = nil
+	onboarding.setupHits = nil
+	onboarding.setupAt = 0
 }
 
 func onboardingFinish(config *Config, skipped bool) {
@@ -126,7 +143,95 @@ func onboardingAdvance(config *Config) {
 	onboarding.step++
 	onboarding.action = sdl.Rect{}
 	onboarding.enter.begin(uiClockMS(), 180)
+	// The checklist reads the device when it appears, so a step the user just
+	// finished is never shown as still needed.
+	if onboardingStepIsSetup() {
+		onboardingSetupRefresh(config, true)
+	}
 	PlayNavSound()
+}
+
+// onboardingStepIsSetup reports whether the tour is showing its checklist page.
+func onboardingStepIsSetup() bool {
+	if onboarding.step < 0 || onboarding.step >= len(onboardingSteps) {
+		return false
+	}
+	return onboardingSteps[onboarding.step].kind == "setup"
+}
+
+// ── "Get set up" checklist ──────────────────────────────────────────────
+
+// onboardingCoveredByOverlay reports whether a modal panel is on top of the
+// tour. The checklist opens those panels, so the tour stops drawing and stops
+// consuming input while one is open instead of covering it.
+func onboardingCoveredByOverlay() bool {
+	return modalPanelBlocksShoulders()
+}
+
+// onboardingSetupRefresh rebuilds the checklist from live device state. The
+// probes read the disk, so the render path refreshes at most twice a second;
+// every input and every action refreshes immediately.
+func onboardingSetupRefresh(config *Config, force bool) []setupRow {
+	now := sdl.GetTicks64()
+	if !force && onboarding.setupRows != nil && now-onboarding.setupAt < 500 {
+		return onboarding.setupRows
+	}
+	onboarding.setupRows = setupChecklist(liveSetupEnv(config), setupActionsFor())
+	onboarding.setupAt = now
+	if onboarding.setupCursor >= len(onboarding.setupRows) {
+		onboarding.setupCursor = len(onboarding.setupRows) - 1
+	}
+	if onboarding.setupCursor < 0 {
+		onboarding.setupCursor = 0
+	}
+	return onboarding.setupRows
+}
+
+// onboardingSetupMove walks the checklist rows.
+func onboardingSetupMove(delta int) {
+	if len(onboarding.setupRows) == 0 {
+		return
+	}
+	next := onboarding.setupCursor + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(onboarding.setupRows) {
+		next = len(onboarding.setupRows) - 1
+	}
+	if next == onboarding.setupCursor {
+		return
+	}
+	onboarding.setupCursor = next
+	PlayNavSound()
+}
+
+// onboardingSetupActivate opens the panel for the focused row. The tour stays
+// active but is hidden behind that panel until it closes.
+func onboardingSetupActivate(config *Config) {
+	rows := onboardingSetupRefresh(config, true)
+	if onboarding.setupCursor < 0 || onboarding.setupCursor >= len(rows) {
+		return
+	}
+	if action := rows[onboarding.setupCursor].Action; action != nil {
+		action()
+	}
+	// The panels change the state the row reports (an RA key was saved, a
+	// console paired), so re-read it before the tour is visible again.
+	onboardingSetupRefresh(config, true)
+}
+
+// onboardingSetupClick activates the row under a pointer.
+func onboardingSetupClick(mx, my int32, config *Config) bool {
+	for i, rect := range onboarding.setupHits {
+		if !pointInRect(mx, my, rect) {
+			continue
+		}
+		onboarding.setupCursor = i
+		onboardingSetupActivate(config)
+		return true
+	}
+	return false
 }
 
 func onboardingActionLabel(kind string) string {
@@ -264,6 +369,9 @@ func onboardingBack() {
 		onboarding.step--
 		onboarding.action = sdl.Rect{}
 		onboarding.enter.begin(uiClockMS(), 180)
+		if onboardingStepIsSetup() {
+			onboardingSetupRefresh(appConfig, true)
+		}
 		PlayNavSound()
 	}
 }
@@ -272,8 +380,26 @@ func handleOnboardingKey(e *sdl.KeyboardEvent) bool {
 	if !onboarding.active || e == nil || e.Type != sdl.KEYDOWN {
 		return false
 	}
+	if onboardingCoveredByOverlay() {
+		return false
+	}
+	setup := onboardingStepIsSetup()
+	if setup {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			onboardingSetupMove(-1)
+			return true
+		case sdl.K_DOWN:
+			onboardingSetupMove(1)
+			return true
+		}
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+		if setup {
+			onboardingSetupActivate(appConfig)
+			break
+		}
 		onboardingAdvance(appConfig)
 	case sdl.K_f:
 		onboardingPerformAction(appConfig)
@@ -294,10 +420,34 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 	if !onboarding.active || e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
 		return false
 	}
+	if onboardingCoveredByOverlay() {
+		return false
+	}
+	setup := onboardingStepIsSetup()
+	if setup {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			onboardingSetupMove(-1)
+			return true
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			onboardingSetupMove(1)
+			return true
+		}
+	}
 	switch e.Button {
-	case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_START:
+	case sdl.CONTROLLER_BUTTON_A:
+		if setup {
+			onboardingSetupActivate(config)
+			break
+		}
+		onboardingAdvance(config)
+	case sdl.CONTROLLER_BUTTON_START:
 		onboardingAdvance(config)
 	case sdl.CONTROLLER_BUTTON_X:
+		if setup {
+			onboardingSetupActivate(config)
+			break
+		}
 		onboardingPerformAction(config)
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		onboardingBack()
@@ -315,6 +465,12 @@ func handleOnboardingController(e *sdl.ControllerButtonEvent, config *Config) bo
 func handleOnboardingMouse(mx, my int32, config *Config) bool {
 	if !onboarding.active {
 		return false
+	}
+	if onboardingCoveredByOverlay() {
+		return false
+	}
+	if onboardingStepIsSetup() && onboardingSetupClick(mx, my, config) {
+		return true
 	}
 	if pointInRect(mx, my, onboarding.action) {
 		onboardingPerformAction(config)
@@ -334,6 +490,11 @@ func handleOnboardingMouse(mx, my int32, config *Config) bool {
 
 func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	if !onboarding.active || renderer == nil || config == nil {
+		return
+	}
+	// A panel the checklist opened is on screen: it belongs on top, and it owns
+	// the input until it closes.
+	if onboardingCoveredByOverlay() {
 		return
 	}
 	if onboarding.step < 0 {
@@ -364,6 +525,10 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 		cardW = screenWidth - 32
 	}
 	cardH := int32(470)
+	if step.kind == "setup" {
+		// The checklist needs a row per setting; the plain steps do not.
+		cardH = 600
+	}
 	if cardH > screenHeight-100 {
 		cardH = screenHeight - 72
 	}
@@ -417,30 +582,34 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, titleY)
 
 	bodyY := titleY + int32(titleFont.Height()) + 18
-	lines := wrapMeasured([]rune(step.body), textW, func(s string) int32 {
-		w, _, _ := bodyFont.SizeUTF8(s)
-		return int32(w)
-	})
-	lineH := int32(bodyFont.Height()) + 6
-	for i, line := range lines {
-		renderText(renderer, config, bodyFont, line, ColorTextSecondary(), textX, bodyY+int32(i)*lineH)
-	}
-
-	hintY := bodyY + int32(len(lines))*lineH + 16
-	if hintY < cy+cardH-140 {
-		renderText(renderer, config, smallFont, step.hint, ColorTextTertiary(), textX, hintY)
-	}
-	status := onboardingStatus(config, step.kind)
-	if status != "" {
-		statusY := hintY + int32(smallFont.Height()) + 8
-		if statusY < cy+cardH-162 {
-			renderText(renderer, config, smallFont, ellipsize(smallFont, status, textW), ColorTextSecondary(), textX, statusY)
+	if step.kind == "setup" {
+		onboardingRenderSetup(renderer, config, cy, cx, cardW, cardH, textX, textW, bodyY, bodyFont, smallFont, accent)
+	} else {
+		lines := wrapMeasured([]rune(step.body), textW, func(s string) int32 {
+			w, _, _ := bodyFont.SizeUTF8(s)
+			return int32(w)
+		})
+		lineH := int32(bodyFont.Height()) + 6
+		for i, line := range lines {
+			renderText(renderer, config, bodyFont, line, ColorTextSecondary(), textX, bodyY+int32(i)*lineH)
 		}
-	}
-	if onboarding.info != "" {
-		infoY := hintY + 2*int32(smallFont.Height()) + 14
-		if infoY < cy+cardH-162 {
-			renderText(renderer, config, smallFont, ellipsize(smallFont, onboarding.info, textW), accent, textX, infoY)
+
+		hintY := bodyY + int32(len(lines))*lineH + 16
+		if hintY < cy+cardH-140 {
+			renderText(renderer, config, smallFont, step.hint, ColorTextTertiary(), textX, hintY)
+		}
+		status := onboardingStatus(config, step.kind)
+		if status != "" {
+			statusY := hintY + int32(smallFont.Height()) + 8
+			if statusY < cy+cardH-162 {
+				renderText(renderer, config, smallFont, ellipsize(smallFont, status, textW), ColorTextSecondary(), textX, statusY)
+			}
+		}
+		if onboarding.info != "" {
+			infoY := hintY + 2*int32(smallFont.Height()) + 14
+			if infoY < cy+cardH-162 {
+				renderText(renderer, config, smallFont, ellipsize(smallFont, onboarding.info, textW), accent, textX, infoY)
+			}
 		}
 	}
 
@@ -502,9 +671,83 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	// mapping.
 	footer := hintLine(FooterHint{"Left / Right", "Move"}, FooterHint{"A / Enter", "Next"},
 		FooterHint{"F / X", "Action"}, FooterHint{"B", "Skip"})
+	footerY := cy + cardH - 18
+	if step.kind == "setup" {
+		footer = hintLine(FooterHint{"Up / Down", "Choose"}, FooterHint{"A / Enter", "Open"},
+			FooterHint{"B", "Done"})
+		footerY = cy + cardH - 26
+	}
 	fw, _, _ := smallFont.SizeUTF8(footer)
 	renderText(renderer, config, smallFont, footer, WithAlpha(ColorTextTertiary(), 170),
-		cx+(cardW-int32(fw))/2, cy+cardH-18)
+		cx+(cardW-int32(fw))/2, footerY)
+}
+
+// onboardingRenderSetup draws the "Get set up" checklist: one row per optional
+// link, each with its live state. The summary sits beside the step counter so
+// progress is visible before any row is read.
+func onboardingRenderSetup(renderer *sdl.Renderer, config *Config, cy, cx, cardW, cardH, textX, textW, bodyY int32, bodyFont, smallFont *ttf.Font, accent sdl.Color) {
+	rows := onboardingSetupRefresh(config, false)
+	onboarding.setupHits = onboarding.setupHits[:0]
+	if len(rows) == 0 {
+		return
+	}
+	if summary := setupSummary(rows); summary != "" {
+		w, _, _ := smallFont.SizeUTF8(summary)
+		renderText(renderer, config, smallFont, summary, ColorTextSecondary(),
+			cx+cardW-52-int32(w), cy+28)
+	}
+
+	const gap = int32(10)
+	top := bodyY - 6
+	bottom := cy + cardH - 116
+	pitch := int32(72)
+	if n := int32(len(rows)); n > 0 {
+		if fit := (bottom - top) / n; fit < pitch {
+			pitch = fit
+		}
+	}
+	rowH := pitch - gap
+	if rowH < 26 {
+		rowH = 26
+	}
+	if rowH > 62 {
+		rowH = 62
+	}
+
+	for i, row := range rows {
+		rect := sdl.Rect{X: textX - 10, Y: top + int32(i)*pitch, W: textW + 20, H: rowH}
+		onboarding.setupHits = append(onboarding.setupHits, rect)
+		UIListRow(renderer, rect, RadiusMD, i == onboarding.setupCursor, false)
+
+		// A filled tick means done; a hollow ring means this row is still open.
+		dotX := rect.X + 26
+		dotY := rect.Y + rowH/2
+		if row.Done {
+			fillCircle(renderer, dotX, dotY, 7, WithAlpha(accent, 235))
+			setDrawColor(renderer, ColorTopBar)
+			renderer.DrawLine(dotX-3, dotY, dotX-1, dotY+3)
+			renderer.DrawLine(dotX-1, dotY+3, dotX+4, dotY-3)
+		} else {
+			strokeCircle(renderer, dotX, dotY, 7, WithAlpha(ColorTextTertiary(), 170))
+		}
+
+		labelX := dotX + 18
+		labelW := rect.X + rect.W - 14 - labelX
+		titleColor := ColorTextPrimary()
+		if !row.Done {
+			titleColor = ColorTextSecondary()
+		}
+		if rowH >= 50 {
+			renderText(renderer, config, bodyFont, ellipsize(bodyFont, row.Title, labelW), titleColor, labelX, rect.Y+6)
+			detailY := rect.Y + 6 + int32(bodyFont.Height())
+			renderText(renderer, config, smallFont, ellipsize(smallFont, row.Detail, labelW),
+				ColorTextTertiary(), labelX, detailY)
+			continue
+		}
+		// A short card shows one line per row rather than spilling the detail.
+		renderText(renderer, config, smallFont, ellipsize(smallFont, row.Title, labelW), titleColor,
+			labelX, rect.Y+(rowH-int32(smallFont.Height()))/2)
+	}
 }
 
 // itoa is a tiny local helper: the tour only formats small positive integers,

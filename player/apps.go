@@ -133,6 +133,9 @@ func systemAppDirs() []string {
 func scanInstalledApps(config *Config) {
 	entries := collectAppEntries(config, appsFolder(), systemAppDirs())
 	config.Variables.Custom[appsEntriesVar] = entries
+	// A fresh scan may find icons that were missing last time (a program that
+	// was just installed, an extraction that finished), so re-resolve them.
+	dropAppIconPathCache()
 	log.Printf("[apps] scanned %d app entries", len(entries))
 	// Icons for desktop shortcuts are extracted by the shell in the background;
 	// the call is a cheap no-op when every tile already has a picture.
@@ -572,10 +575,10 @@ func launchInstalledApp(path string) bool {
 		showToast("Could not launch "+filepath.Base(clean), ToastError())
 		return false
 	}
-	noteGameChildStarted()
+	noteGameChildStarted(cmd)
 	go func() {
 		_ = cmd.Wait() // reap the child, keep JukaHub responsive
-		noteGameChildExited()
+		noteGameChildExited(cmd)
 	}()
 	return true
 }

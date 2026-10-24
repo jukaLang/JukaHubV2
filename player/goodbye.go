@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"math/rand"
+	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -495,11 +496,16 @@ func ShowGoodbye(renderer *sdl.Renderer, config *Config) {
 // textures/fonts, sdl.Quit) rather than a hard os.Exit.
 
 var (
-	exitRequested bool
+	// exitRequested is set from the render thread (Exit button, config
+	// trigger) but also from the signal goroutine in exitguard.go, and is read
+	// by the main loop, so it is atomic.
+	exitRequested atomic.Bool
 	goodbyePlayed bool
 )
 
 // requestAppExit asks the main loop to play the goodbye sequence and quit.
+// External callers (a stop signal, the firmware's power handling) land here
+// too, which is what keeps every exit on the same cleanup path.
 func requestAppExit() {
-	exitRequested = true
+	exitRequested.Store(true)
 }

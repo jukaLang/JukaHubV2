@@ -3,11 +3,17 @@ package main
 // powerprofile.go — the Fn-style power switch: performance while a game or port
 // runs, battery mode again when it returns to the hub.
 //
-// On the handheld the CPU governor is the only lever that matters: a 1.4 GHz
-// A133P on `powersave` stutters in PPSSPP, and on `performance` it drains the
-// battery while the hub sits idle. The switch is deliberately scoped to a
-// launch — JukaHub raises the profile before starting a child process and drops
-// it back when that child exits — so the hub never runs at full tilt.
+// On the handheld the CPU policy is the lever that matters: the A133P running
+// on `powersave` stutters in PPSSPP, and on `performance` it drains the battery
+// while the hub sits idle. The switch is deliberately scoped to a launch —
+// JukaHub raises the profile before starting a child process and drops it back
+// when that child exits — so the hub never runs at full tilt.
+//
+// A governor alone is not the whole story: the frequency the performance
+// governor may reach is capped by scaling_max_freq, and the TrimUI Smart Pro
+// advertises a 2 GHz top OPP that some firmware boots below. The launch
+// profile therefore lifts that ceiling too (performance only, restored on the
+// way back), which is what turns "performance" into the chip's full 2 GHz.
 //
 // Reality check: writing scaling_governor needs root on most firmwares. The
 // code probes for a writable governor first and reports what it found, so an
@@ -41,11 +47,14 @@ func (p powerProfile) String() string {
 }
 
 // powerProfileConfig is the saved setting. Both governor names are optional
-// overrides for firmwares that use their own names.
+// overrides for firmwares that use their own names. MaxFreqKHz caps the clock a
+// launch may use; zero means the highest frequency the CPU advertises (the 2 GHz
+// top OPP of the A133P).
 type powerProfileConfig struct {
 	Enabled         bool
 	PerfGovernor    string
 	BatteryGovernor string
+	MaxFreqKHz      int64
 }
 
 // loadPowerProfileConfig reads the custom keys. The feature is on by default:
@@ -64,7 +73,43 @@ func loadPowerProfileConfig(config *Config) powerProfileConfig {
 	if v, ok := customString(config.Variables.Custom, "powerProfileBattery"); ok {
 		cfg.BatteryGovernor = strings.TrimSpace(v)
 	}
+	if v, ok := customValue(config.Variables.Custom, "powerProfileMaxFreq"); ok {
+		cfg.MaxFreqKHz = parseProfileMaxFreqKHz(v)
+	}
 	return cfg
+}
+
+// parseProfileMaxFreqKHz reads the configured clock ceiling. "auto", "max"
+// and "" keep the top frequency the CPU offers. A bare number is read by
+// magnitude — "1.8" is GHz, "1800" is MHz, "1800000" is kHz — and a "mhz"/
+// "ghz" suffix pins the unit, so the friendly and the sysfs spellings both work.
+func parseProfileMaxFreqKHz(v interface{}) int64 {
+	raw := strings.ToLower(strings.TrimSpace(fmt.Sprintf("%v", v)))
+	switch raw {
+	case "", "0", "auto", "max", "highest":
+		return 0
+	}
+	scale := 0.0 // inferred from the magnitude
+	if strings.HasSuffix(raw, "ghz") {
+		raw, scale = strings.TrimSuffix(raw, "ghz"), 1_000_000
+	} else if strings.HasSuffix(raw, "mhz") {
+		raw, scale = strings.TrimSuffix(raw, "mhz"), 1_000
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+	if err != nil || f <= 0 {
+		return 0
+	}
+	if scale == 0 {
+		switch {
+		case f < 100:
+			scale = 1_000_000
+		case f < 100_000:
+			scale = 1_000
+		default:
+			scale = 1
+		}
+	}
+	return int64(f * scale)
 }
 
 // cpufreqRoot is a variable so tests can point at a fake sysfs tree.
@@ -135,6 +180,71 @@ func availableGovernors(governorPath string) []string {
 	return strings.Fields(string(raw))
 }
 
+// cpufreqDirs returns the cpufreq directory of every CPU, in the same numeric
+// order as cpuGovernorPaths.
+func cpufreqDirs(root string) []string {
+	paths := cpuGovernorPaths(root)
+	dirs := make([]string, 0, len(paths))
+	for _, p := range paths {
+		dirs = append(dirs, filepath.Dir(p))
+	}
+	return dirs
+}
+
+// readKHzFile parses one sysfs frequency file, or 0 when it is missing.
+func readKHzFile(path string) int64 {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64)
+	if err != nil || v < 0 {
+		return 0
+	}
+	return v
+}
+
+// advertisedMaxKHz is the highest clock the policy offers: cpuinfo_max_freq,
+// falling back to the largest entry of scaling_available_frequencies.
+func advertisedMaxKHz(cpufreqDir string) int64 {
+	if top := readKHzFile(filepath.Join(cpufreqDir, "cpuinfo_max_freq")); top > 0 {
+		return top
+	}
+	raw, err := os.ReadFile(filepath.Join(cpufreqDir, "scaling_available_frequencies"))
+	if err != nil {
+		return 0
+	}
+	var top int64
+	for _, field := range strings.Fields(string(raw)) {
+		if v, err := strconv.ParseInt(field, 10, 64); err == nil && v > top {
+			top = v
+		}
+	}
+	return top
+}
+
+// powerProfileCeilingKHz is the clock a launch may reach: the configured cap
+// when it is below the chip's top OPP, else the top OPP itself. Zero means the
+// policy exposes no frequencies to choose from.
+func powerProfileCeilingKHz(cpufreqDir string, cfg powerProfileConfig) int64 {
+	top := advertisedMaxKHz(cpufreqDir)
+	if top <= 0 {
+		return 0
+	}
+	if cfg.MaxFreqKHz > 0 && cfg.MaxFreqKHz < top {
+		return cfg.MaxFreqKHz
+	}
+	return top
+}
+
+// formatFrequencyKHz renders a clock for the log and the panel line.
+func formatFrequencyKHz(khz int64) string {
+	if khz <= 0 {
+		return "unknown"
+	}
+	return fmt.Sprintf("%.1f GHz", float64(khz)/1_000_000)
+}
+
 // readCurrentGovernors returns the governors in use, or "" when they differ.
 func readCurrentGovernors(paths []string) string {
 	current := ""
@@ -179,6 +289,60 @@ func writeGovernor(path, governor string) error {
 	return os.WriteFile(path, []byte(governor+"\n"), 0o644)
 }
 
+// cpuFrequencySave remembers one scaling_max_freq so a launch can put back the
+// ceiling the firmware booted with.
+type cpuFrequencySave struct {
+	path  string
+	value string
+}
+
+// applyFrequencyCeiling writes the profile's ceiling to scaling_max_freq. The
+// performance governor asks the policy for its maximum, so a firmware that
+// ships scaling_max_freq below the chip's top OPP — a TrimUI Smart Pro booted
+// at 1.8 GHz with a 2 GHz table — would otherwise keep a game at that lower
+// clock whatever governor is set. A cap below the current ceiling is written
+// too: that is what makes a per-game or global cap mean anything on a firmware
+// already running at full speed. The policy clamps to its nearest supported
+// frequency. It returns what it changed, the ceiling it aimed for, and the
+// first refusal.
+func applyFrequencyCeiling(cfg powerProfileConfig) ([]cpuFrequencySave, int64, error) {
+	var saved []cpuFrequencySave
+	var ceiling int64
+	for _, dir := range cpufreqDirs(cpufreqRoot) {
+		target := powerProfileCeilingKHz(dir, cfg)
+		if target <= 0 {
+			continue
+		}
+		ceiling = target
+		path := filepath.Join(dir, "scaling_max_freq")
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue // this policy exposes no writable ceiling
+		}
+		current := strings.TrimSpace(string(raw))
+		if cur, err := strconv.ParseInt(current, 10, 64); err == nil && cur == target {
+			continue // already exactly the ceiling
+		}
+		if err := os.WriteFile(path, []byte(strconv.FormatInt(target, 10)+"\n"), 0o644); err != nil {
+			return saved, ceiling, fmt.Errorf("frequency ceiling is read-only on this firmware")
+		}
+		saved = append(saved, cpuFrequencySave{path: path, value: current})
+	}
+	return saved, ceiling, nil
+}
+
+// restoreFrequencyCeiling puts every ceiling back exactly as it was found.
+func restoreFrequencyCeiling(saved []cpuFrequencySave) {
+	for _, s := range saved {
+		if s.value == "" {
+			continue
+		}
+		if err := os.WriteFile(s.path, []byte(s.value+"\n"), 0o644); err != nil {
+			logPatch("power profile: could not restore ceiling (%v)", err)
+		}
+	}
+}
+
 // applyPowerProfile switches every CPU. It returns the governor names it set,
 // and an error naming the first CPU that refused.
 func applyPowerProfile(profile powerProfile, cfg powerProfileConfig) ([]string, error) {
@@ -206,6 +370,8 @@ type powerProfileState struct {
 	Supported bool
 	Reason    string
 	Current   string
+	// Ceiling is the clock a launch may reach (0 when the policy exposes none).
+	Ceiling int64
 }
 
 // probePowerProfiles reports whether the switch can do anything here.
@@ -221,6 +387,9 @@ func probePowerProfiles(cfg powerProfileConfig) powerProfileState {
 		return state
 	}
 	state.Current = readCurrentGovernors(paths)
+	if dirs := cpufreqDirs(cpufreqRoot); len(dirs) > 0 {
+		state.Ceiling = powerProfileCeilingKHz(dirs[0], cfg)
+	}
 	for _, path := range paths {
 		target := powerProfileTarget(powerProfilePerformance, path, cfg)
 		if target == "" {
@@ -245,16 +414,35 @@ func probePowerProfiles(cfg powerProfileConfig) powerProfileState {
 // launchPowerProfile holds the profile applied for the running child, so a
 // second launch cannot restore the wrong one when the first exits.
 var launchPowerProfile struct {
-	mu     sync.Mutex
-	depth  int
-	warned bool
+	mu      sync.Mutex
+	depth   int
+	warned  bool
+	ceiling []cpuFrequencySave
 }
 
 // beginGamePowerProfile raises the performance profile and returns a function
 // that puts the battery profile back. It is safe to call without an emulator
 // ever starting: an unusable firmware only produces one log line.
 func beginGamePowerProfile(config *Config) func() {
+	return beginGamePowerProfileCap(config, 0)
+}
+
+// beginGamePowerProfileCap is beginGamePowerProfile with a ceiling for this one
+// child. A per-game clock (gameoptions.go) wins over the global
+// powerProfileMaxFreq for the length of that launch, and the firmware value is
+// restored with the rest of the profile when the game exits. Zero keeps the
+// global setting.
+func beginGamePowerProfileCap(config *Config, maxFreqKHz int64) func() {
 	cfg := loadPowerProfileConfig(config)
+	if maxFreqKHz > 0 {
+		cfg.MaxFreqKHz = maxFreqKHz
+	}
+	return beginGamePowerProfileWith(cfg)
+}
+
+// beginGamePowerProfileWith applies an already-loaded profile. Keeping the
+// switch separate lets a launch override one field without re-reading config.
+func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	if !cfg.Enabled {
 		return func() {}
 	}
@@ -277,13 +465,19 @@ func beginGamePowerProfile(config *Config) func() {
 		launchPowerProfile.mu.Lock()
 		launchPowerProfile.depth--
 		last := launchPowerProfile.depth <= 0
+		var ceiling []cpuFrequencySave
 		if last {
 			launchPowerProfile.depth = 0
+			// The ceiling belongs to the launch that raised it: nested launches
+			// share it, and only the outermost one puts the firmware value back.
+			ceiling = launchPowerProfile.ceiling
+			launchPowerProfile.ceiling = nil
 		}
 		launchPowerProfile.mu.Unlock()
 		if !last || !switchable {
 			return
 		}
+		restoreFrequencyCeiling(ceiling)
 		if _, err := applyPowerProfile(powerProfileBattery, cfg); err != nil {
 			logPatch("power profile: could not restore (%v)", err)
 			return
@@ -294,7 +488,14 @@ func beginGamePowerProfile(config *Config) func() {
 	if !first || !switchable {
 		return release
 	}
+	// Lift the ceiling before the governor: the performance governor asks the
+	// policy for its maximum, so a firmware that boots with scaling_max_freq
+	// below the top OPP would otherwise pin the game to that lower clock.
+	ceiling, ceilingKHz, ceilingErr := applyFrequencyCeiling(cfg)
 	if _, err := applyPowerProfile(powerProfilePerformance, cfg); err != nil {
+		// The governor was refused: leave the ceiling as it was too, so a
+		// partial profile does not outlive this launch.
+		restoreFrequencyCeiling(ceiling)
 		launchPowerProfile.mu.Lock()
 		warn := !launchPowerProfile.warned
 		launchPowerProfile.warned = true
@@ -305,7 +506,16 @@ func beginGamePowerProfile(config *Config) func() {
 		}
 		return release
 	}
-	logPatch("power profile: performance for the running game")
+	launchPowerProfile.mu.Lock()
+	launchPowerProfile.ceiling = ceiling
+	launchPowerProfile.mu.Unlock()
+	if ceilingErr != nil {
+		logPatch("power profile: %v", ceilingErr)
+	} else if ceilingKHz > 0 {
+		logPatch("power profile: %s ceiling, performance for the running game", formatFrequencyKHz(ceilingKHz))
+	} else {
+		logPatch("power profile: performance for the running game")
+	}
 	return release
 }
 
@@ -318,8 +528,18 @@ func powerProfileLine(config *Config) string {
 	if !state.Supported {
 		return "power profiles: " + state.Reason
 	}
-	if state.Current == "" {
+	line := ""
+	if state.Current != "" {
+		line = "now " + state.Current
+	}
+	if state.Ceiling > 0 {
+		if line != "" {
+			line += " · "
+		}
+		line += "max " + formatFrequencyKHz(state.Ceiling)
+	}
+	if line == "" {
 		return "performance on launch · battery on return"
 	}
-	return "now " + state.Current + " · performance on launch"
+	return line + " · performance on launch"
 }

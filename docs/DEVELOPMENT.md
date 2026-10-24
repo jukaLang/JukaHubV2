@@ -47,11 +47,12 @@ JukaHubV2/
 │   ├── design.go, themes.go           # design tokens and theme presets
 │   ├── homelayout.go, home.go         # Home screen
 │   ├── vkeyboard.go                   # on-screen keyboard
-│   ├── videoplayer.go, videosubs.go   # embedded ffmpeg playback	│   ├── patch_*.go, packages.go        # package manager
-	│   ├── community.go, changelog.go     # community hub, bug report, release notes
-	│   ├── powertools.go, powertools_backend.go  # developer tools overlay and probes
-	│   ├── telemetry.go                   # opt-in device/crash telemetry
-	│   ├── plugins.go                     # plugin loader and runner
+│   ├── videoplayer.go, videosubs.go   # embedded ffmpeg playback
+│   ├── patch_*.go, packages.go        # package manager
+│   ├── community.go, changelog.go     # community hub, bug report, release notes
+│   ├── powertools.go, powertools_backend.go  # developer tools overlay and probes
+│   ├── telemetry.go                   # opt-in device/crash telemetry
+│   ├── plugins.go                     # plugin loader and runner
 │   ├── widgets.go, autostart.go       # contextual widgets, start-at-login
 │   ├── config.go, xmlconfig.go        # config types and both loaders
 │   ├── *_test.go                      # unit, render and focus tests
@@ -306,10 +307,12 @@ Controller-first, dark, optimised for a 1280×720 canvas read at arm's length.
 ### Scene shell
 
 1. **Global header** (56 px) — brand, version and the active scene on the left;
-   the Wi-Fi meter, weather, clock and battery gauge on the right, from one
-   shared helper so it never shifts between screens. The meter and the gauge are
-   drawn by `player/statusbar_status.go` for both this bar and the home header;
-   the cluster itself is still `headerStatusParts` returning strings.
+   the Wi-Fi meter, weather, clock, battery gauge and (while playing) the
+   now-playing title with its headphone glyph on the right, from one shared
+   helper so it never shifts between screens. The meter and the gauge are drawn
+   by `player/statusbar_status.go`, the title by `player/statusbar_media.go`, for
+   both this bar and the home header; the cluster itself is still
+   `headerStatusParts` returning strings.
 2. **Scene body** — clipped inside a content panel that ends 16 px above the
    footer, so no element can reach the footer band.
 3. **Footer** (48 px) — hints that reflect real bindings.
@@ -317,24 +320,13 @@ Controller-first, dark, optimised for a 1280×720 canvas read at arm's length.
 
 ### Home screen
 
-```text
-┌──────────────────────────────────────────────────────────────────────────┐
-│  JukaHub - v0.4.0 · 2026-10-17                 Wi-Fi  24C/18C  16:47  82% │
-├──────────────────────────────────────────────────────────────────────────┤
-│  Good afternoon · What do you want to do?                                 │
-│  ┌───────────────────────┐  ┌─────────────┐ ┌─────────────┐              │
-│  │ CONTINUE              │  │    Media    │ │    Files    │              │
-│  │ Nothing played yet    │  └─────────────┘ └─────────────┘              │
-│  │ Open Media to start   │  ┌─────────────┐ ┌─────────────┐              │
-│  │               [A]     │  │  Packages   │ │     Apps    │              │
-│  └───────────────────────┘  └─────────────┘ └─────────────┘              │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐                 │
-│  │Favorites │ │  Chat    │ │  Tools   │ │  Settings    │                 │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────┘                 │
-├──────────────────────────────────────────────────────────────────────────┤
-│  D-Pad Navigate    A Open    B Back    L1/R1 Sections                     │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+The grid is fixed in `homelayout.go` (a config can retarget a card, not
+rearrange it): **Continue** spans the left column, **Media**, **Files**,
+**Packages** and **Apps** fill the middle-right, **Settings** takes the top-right
+corner, and **Favorites**, **Browser**, **Chat**, **Tools** and **Emulator** run
+along the bottom row. **Exit** sits on the footer's left end. The header carries
+the weather chip, the clock, the notification bell and the update offer, and the
+PS4/PS5 launcher tiles and phone-pairing QR are drawn just below it on the right.
 
 ### Ambient background
 
@@ -394,6 +386,11 @@ persisted in `jukauser.json`: `dark`, `light`, `oled`, `midnight`, `hub`,
 surfaces, text, borders and the accent colour. The gallery order is pinned in
 `themePresetOrder` — never rely on map iteration, which would shuffle the cards
 every frame.
+
+A `themes/*.json` file next to the app adds a preset to the gallery at startup
+(`themeloader.go`): every colour must be `#rrggbb` or `#rrggbbaa`, the file name
+is the preset id, a built-in id wins on a collision, and invalid files are
+logged and skipped.
 
 ## Security
 

@@ -236,6 +236,10 @@ func ctrlCompatPanel(e *sdl.ControllerButtonEvent) bool {
 		compatPanelRevert()
 	case sdl.CONTROLLER_BUTTON_Y:
 		compatPanelRescan()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		// L1 checks the libretro aarch64 index and fills the core pool; it never
+		// replaces the active core, so it is safe to press without reading up.
+		startEmulatorUpdates()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeCompatPanel()
 	}
@@ -261,6 +265,8 @@ func handleCompatKey(e *sdl.KeyboardEvent) bool {
 		compatPanelRevert()
 	case sdl.K_y, sdl.K_r:
 		compatPanelRescan()
+	case sdl.K_u:
+		startEmulatorUpdates()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		closeCompatPanel()
 	}
@@ -553,7 +559,8 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 		FooterHint{"A", "Apply Boost"}, FooterHint{"X", "Revert"}, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"})
 	if cpPanel.tab == compatTabCores {
 		hint = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"←/→", "Tab"},
-			FooterHint{"A", "Activate Build"}, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"})
+			FooterHint{"A", "Activate Build"}, FooterHint{"U/L1", "Update Cores"},
+			FooterHint{"Y", "Rescan"}, FooterHint{"B", "Back"})
 	}
 	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+padX, panelY+panelH-footerH+6)
 }

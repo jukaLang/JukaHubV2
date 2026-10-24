@@ -95,7 +95,7 @@ writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
 | Theme preference read `localStorage` unguarded and threw when storage was blocked | wrapped in try/catch |
 | Eight inline `onclick`/`onchange` attributes blocked any future strict CSP | moved to `data-click` / `data-change` bindings |
 | Nothing ran the player's ~150 test files in CI | `.github/workflows/ci.yml` (player, race detector and staticcheck jobs are all blocking; the npm audit and govulncheck advisories stay non-blocking) |
-| `docker-image.yml` built with Go 1.23 while `go.mod` needs 1.25 | `go-version-file: player/go.mod` |
+| `docker-image.yml` built with Go 1.23 while `go.mod` needs 1.26 | `go-version-file: player/go.mod` |
 
 Also added: `robots.txt`, `sitemap.xml`, Netlify `_headers` (nosniff, referrer and permissions policy), Dependabot for Actions, Go modules and the test package.
 

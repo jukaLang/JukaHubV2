@@ -535,6 +535,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	statusClockRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
 	weatherStatusRect = sdl.Rect{}
+	statusMediaRect = sdl.Rect{}
 	barH := HomeTopBarH
 	if screenHeight < 600 {
 		barH = HomeTopBarHSmall
@@ -755,7 +756,21 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 				W: pw + 12, H: int32(statusFont.Height()) + 12,
 			}
 		}
+		if isChipStatusPart(p) {
+			// The now-playing chip opens the player it is naming; the idle
+			// output chip is measured the same way so it draws in the same
+			// spot, but it does not join the focus graph.
+			statusMediaRect = sdl.Rect{
+				X: startX - 6, Y: statusY - 6,
+				W: pw + 12, H: int32(statusFont.Height()) + 12,
+			}
+		}
 		startX += pw + gap
+	}
+	// The meter is the Wi-Fi button, so its hit area is grown to a finger-sized
+	// target once the cluster is placed and the neighbours' rects are known.
+	if statusWiFiRect.W > 0 {
+		statusWiFiRect = statusFingerRect(statusWiFiRect, barH, weatherStatusRect, statusClockRect)
 	}
 	if focusEngine.ElementIndex() == ChromeClockIndex && statusClockRect.W > 0 {
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
@@ -764,6 +779,10 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if focusEngine.ElementIndex() == ChromeWeatherIndex && weatherStatusRect.W > 0 {
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
 		renderer.DrawRect(&weatherStatusRect)
+	}
+	if focusEngine.ElementIndex() == ChromeMediaIndex && statusMediaRect.W > 0 {
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+		renderer.DrawRect(&statusMediaRect)
 	}
 
 	// Notification bell: top-right corner, always reachable with the D-pad.
@@ -797,6 +816,12 @@ func fitStatusParts(parts []string, width func(string) int32, gap, maxW int32) [
 // The clock and the battery level are what the user glanced at, so they leave
 // last.
 func statusDropIndex(parts []string) int {
+	// The chip goes before any reading: it is the one part that can be
+	// arbitrarily long — a media title or a headset's name — and the network,
+	// forecast, clock and battery are what the corner exists for.
+	if n := len(parts); n > 2 && isChipStatusPart(parts[n-1]) {
+		return n - 1
+	}
 	if len(parts) > 2 && !strings.HasPrefix(parts[0], "! Offline") {
 		return 0
 	}
@@ -813,8 +838,10 @@ func statusDropIndex(parts []string) int {
 
 // headerStatusParts returns the right-side status cluster in one canonical
 // order shared by the home header and every scene's status bar: network,
-// weather (hi/lo), time (HH:MM), battery. Both headers draw this exact list,
-// so the right side of the top bar never shifts or reorders between screens.
+// weather (hi/lo), time (HH:MM), battery, and the chip — the now-playing title
+// while something plays, the connected output's name while nothing does. Both
+// headers draw this exact list, so the right side of the top bar never shifts or
+// reorders between screens.
 func headerStatusParts(config *Config) []string {
 	parts := make([]string, 0, 5)
 	// Offline indicator takes priority over the SSID so the user instantly
@@ -842,6 +869,11 @@ func headerStatusParts(config *Config) []string {
 	parts = append(parts, safeStatusText(time.Now().Format("15:04")))
 	if bat := statusBatteryPercent(); bat >= 0 {
 		parts = append(parts, safeStatusText(fmt.Sprintf("%d%%", bat)))
+	}
+	// The chip closes the cluster, so it sits in the far corner next to the
+	// bell: the one place a "what am I listening to?" glance expects it.
+	if chip, ok := statusMediaPart(); ok {
+		parts = append(parts, chip)
 	}
 	return parts
 }

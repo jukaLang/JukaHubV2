@@ -7,6 +7,7 @@ package main
 // display status.
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,6 +21,11 @@ type windowsAppsPanelState struct {
 	scroll    int
 	help      bool
 	returnEmu bool
+	// notice explains what the setup page is about to install when the user
+	// pressed A on an app the runtime cannot start yet. pending is that app:
+	// it launches by itself once the install finishes.
+	notice  string
+	pending *windowsAppEntry
 }
 
 var winAppsPanel windowsAppsPanelState
@@ -58,6 +64,8 @@ func closeWindowsAppsPanel() {
 		return
 	}
 	returnEmu := winAppsPanel.returnEmu
+	// Leaving the panel abandons the pending launch: the runtime install keeps
+	// running, but the app must not start behind the user's back later.
 	winAppsPanel = windowsAppsPanelState{}
 	windowsAppPanelRect = sdl.Rect{}
 	windowsAppRowHits = nil
@@ -102,14 +110,59 @@ func setupMove(delta int) {
 	setWindowsSetupCursor(setupCursor + delta)
 }
 
-// setupActivate runs the install action for the focused setup row.
+// setupActivate runs the install action for the focused setup row. When a
+// launch is waiting for its runtime, the whole missing chain runs instead: the
+// user pressed A once to install, and the app starts when the last piece is in.
 func setupActivate() {
+	if pending := winAppsPanel.pending; pending != nil {
+		windowsAppsPanelProvision(*pending)
+		return
+	}
 	switch setupCursor {
 	case windowsSetupRowDisplay:
 		windowsAppsPanelInstallDisplay()
+	case windowsSetupRowDXVK:
+		windowsAppsPanelInstallDXVK()
 	default:
 		windowsAppsPanelInstall()
 	}
+}
+
+// windowsAppsPanelProvision installs every missing runtime piece for entry and
+// launches it when the last one succeeds. The setup page keeps the progress on
+// its installer line while it runs.
+func windowsAppsPanelProvision(entry windowsAppEntry) {
+	if IsWindows() {
+		ShowToast("Windows runs .exe files directly; the Wine runtime is only needed on the handheld", ToastKindInfo)
+		return
+	}
+	if err := startWindowsProvisioning(&entry); err != nil {
+		ShowToast(err.Error(), ToastKindWarning)
+		return
+	}
+	PlayActivateSound()
+}
+
+// windowsAppsPanelInstallDXVK installs DXVK on its own, for a user who works
+// through the setup page row by row instead of pressing A on an app.
+func windowsAppsPanelInstallDXVK() {
+	if !beginWindowsRuntimeInstall("dxvk", "checking for a Vulkan loader") {
+		ShowToast("The runtime installer is already running", ToastKindInfo)
+		return
+	}
+	go func() {
+		err := installDXVKRuntime()
+		endWindowsRuntimeInstall()
+		invalidateWindowsAppsCache()
+		if err != nil {
+			setWindowsRuntimeStatus("DXVK install failed", err.Error(), false)
+			ShowToast(err.Error(), ToastKindWarning)
+			return
+		}
+		setWindowsRuntimeStatus("DXVK installed", "", false)
+		ShowToast("DXVK installed — Direct3D now runs through Vulkan", ToastKindSuccess)
+	}()
+	PlayActivateSound()
 }
 
 // windowsAppsPanelInstall starts the on-device runtime install. The setup
@@ -158,7 +211,7 @@ func windowsAppsPanelRescan() {
 	if winAppsPanel.cursor < 0 {
 		winAppsPanel.cursor = 0
 	}
-	runtime := currentWindowsRuntimeStatus()
+	runtime := windowsRuntimeStatusFor()
 	detail := fmt.Sprintf("Found %d app(s)", len(entries))
 	if !runtime.ready() {
 		detail += " · runtime setup needed"
@@ -177,6 +230,25 @@ func windowsAppsPanelActivate() {
 		return
 	}
 	entry := entries[winAppsPanel.cursor]
+	runtime := windowsRuntimeStatusFor()
+	if plan := windowsRuntimePlan(runtime); len(plan) > 0 {
+		// One press is the confirmation: the setup page names what will be
+		// downloaded and its size, and the next A installs the whole chain and
+		// starts the app. A 300 MB download never begins silently.
+		pending := entry
+		winAppsPanel.help = true
+		winAppsPanel.pending = &pending
+		winAppsPanel.notice = fmt.Sprintf("To run %s, install %s first. Press A to download and install it; %s starts when it is ready.",
+			entry.Title, windowsPlanLabel(plan), entry.Title)
+		setWindowsSetupCursor(windowsRuntimeStepRow(plan[0]))
+		PlayActivateSound()
+		ShowToast("Runtime needed — press A to install", ToastKindInfo)
+		return
+	}
+	if !runtime.ready() {
+		showLaunchFailureDialog(entry.Title, errors.New(runtime.Problem), "")
+		return
+	}
 	if err := launchWindowsApp(entry); err != nil {
 		showLaunchFailureDialog(entry.Title, err, "")
 		return
@@ -194,6 +266,10 @@ func windowsAppsPanelToggleHelp() {
 		PlayActivateSound()
 		return
 	}
+	// Closing setup drops a launch that was waiting for the runtime; the user
+	// asked for the launcher, not for the app to open later by itself.
+	winAppsPanel.pending = nil
+	winAppsPanel.notice = ""
 	PlayBackSound()
 }
 
@@ -358,8 +434,22 @@ func windowsAppsSummary(entries []windowsAppEntry, runtime windowsRuntimeStatus)
 const (
 	windowsSetupRowWine    = 0
 	windowsSetupRowDisplay = 1
-	windowsSetupRowCount   = 2
+	windowsSetupRowDXVK    = 2
+	windowsSetupRowCount   = 3
 )
+
+// windowsRuntimeStepRow maps a provisioning step to the setup row it belongs
+// to, so the page opens on the action the launch is waiting for.
+func windowsRuntimeStepRow(step windowsRuntimeStep) int {
+	switch step {
+	case windowsStepWine:
+		return windowsSetupRowWine
+	case windowsStepDisplay:
+		return windowsSetupRowDisplay
+	default:
+		return windowsSetupRowDXVK
+	}
+}
 
 var (
 	setupCursor        int
@@ -385,10 +475,23 @@ func windowsAppsSetupRows(runtime windowsRuntimeStatus) []windowsSetupRow {
 	if runtime.Weston != "" {
 		displayStatus, displayBad = "installed", false
 	}
+	dxvkStatus, dxvkBad := "missing", true
+	dxvkDetail := "Direct3D over Vulkan; installed automatically when a Vulkan driver exists."
+	if runtime.Vulkan {
+		dxvkDetail = "Direct3D over Vulkan; enabled automatically once installed."
+	} else {
+		dxvkStatus = "needs Vulkan"
+	}
+	if runtime.DXVK != "" {
+		dxvkStatus, dxvkBad = "installed", false
+	}
 	if target := windowsRuntimeInstallTarget(); target != "" {
-		if target == "wine" {
+		switch target {
+		case "wine":
 			wineStatus, wineBad = "installing", false
-		} else {
+		case "dxvk":
+			dxvkStatus, dxvkBad = "installing", false
+		default:
 			displayStatus, displayBad = "installing", false
 		}
 	} else if windowsWineInstallFailed() {
@@ -401,6 +504,9 @@ func windowsAppsSetupRows(runtime windowsRuntimeStatus) []windowsSetupRow {
 	if displayStatus == "missing" && windowsWestonInstallFailed() {
 		displayStatus = "failed"
 	}
+	if dxvkBad && windowsDXVKInstallFailed() {
+		dxvkStatus = "failed"
+	}
 
 	rows := []windowsSetupRow{
 		{
@@ -412,6 +518,11 @@ func windowsAppsSetupRows(runtime windowsRuntimeStatus) []windowsSetupRow {
 			Title:  "Install display runtime (WestonPack)",
 			Detail: "A stock TrimUI has no X11 or Wayland; Wine needs this bridge.",
 			Status: displayStatus, Bad: displayBad,
+		},
+		{
+			Title:  "Install DXVK (Direct3D over Vulkan)",
+			Detail: dxvkDetail,
+			Status: dxvkStatus, Bad: dxvkBad,
 		},
 	}
 	return rows
@@ -471,7 +582,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	entries := windowsAppEntries()
-	runtime := currentWindowsRuntimeStatus()
+	runtime := windowsRuntimeStatusFor()
 	if winAppsPanel.cursor >= len(entries) {
 		winAppsPanel.cursor = len(entries) - 1
 	}
@@ -503,8 +614,13 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	var bodyH int32
 	var visible int32
 	setupLines := windowsAppsSetupLines(runtime)
+	if winAppsPanel.help && winAppsPanel.notice != "" {
+		// The notice answers "why did pressing A open this page"; it sits above
+		// the detected runtime so it is read before the diagnostics.
+		setupLines = append([]string{winAppsPanel.notice, ""}, setupLines...)
+	}
 	if winAppsPanel.help {
-		bodyH = rowH*2 + 12 + int32(len(setupLines))*(smallH+4) + 12
+		bodyH = rowH*int32(windowsSetupRowCount) + 12 + int32(len(setupLines))*(smallH+4) + 12
 	} else if len(entries) == 0 {
 		bodyH = 18 + medH + 4 + smallH + 4 + smallH + 4 + smallH + 18
 	} else {
@@ -612,6 +728,8 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			}
 			color := ColorTextSecondary()
 			switch {
+			case line != "" && line == winAppsPanel.notice:
+				color = ColorWarning
 			case strings.HasPrefix(line, "Missing:"):
 				color = ColorToastError
 			case strings.HasPrefix(line, "Installer:") && strings.Contains(line, "failed"):
@@ -696,6 +814,8 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	var hint string
 	switch {
+	case winAppsPanel.help && winAppsPanel.pending != nil:
+		hint = hintLine(FooterHint{"A", "Install & Run"}, FooterHint{"B", "Cancel"})
 	case winAppsPanel.help:
 		hint = hintLine(FooterHint{"A", "Install Runtime"}, FooterHint{"B", "Back"})
 	case len(entries) == 0:

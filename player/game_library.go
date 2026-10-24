@@ -313,17 +313,30 @@ func resolveGameLauncher(system string) string {
 // gameLaunchCommand builds the command and arguments used to start a game.
 // Tested separately from exec so the handheld/Windows differences are pinned.
 func gameLaunchCommand(launcher, romPath string) (string, []string) {
+	return gameLaunchCommandArgs(launcher, romPath, nil)
+}
+
+// gameLaunchCommandArgs is gameLaunchCommand plus a game's own arguments. They
+// go after the ROM path, which is where a stock launch.sh stops reading and a
+// direct emulator binary (PPSSPP, RetroArch) starts parsing its options.
+func gameLaunchCommandArgs(launcher, romPath string, extra []string) (string, []string) {
 	ext := strings.ToLower(filepath.Ext(launcher))
+	var name string
+	var args []string
 	switch ext {
 	case ".sh", "":
 		// Stock and CrossMix launchers take the ROM path as their first
 		// argument and work out the core themselves.
-		return "sh", []string{launcher, romPath}
+		name, args = "sh", []string{launcher, romPath}
 	case ".bat", ".cmd":
-		return "cmd", []string{"/c", launcher, romPath}
+		name, args = "cmd", []string{"/c", launcher, romPath}
 	default:
-		return launcher, []string{romPath}
+		name, args = launcher, []string{romPath}
 	}
+	if len(extra) == 0 {
+		return name, args
+	}
+	return name, append(args, extra...)
 }
 
 // launchLibraryGame starts the game detached, records it in the recents list
@@ -344,22 +357,25 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	// A RetroArch launcher gets the two cfg switches that make the next boot
 	// continue from the auto state. Standalone emulators are left alone.
 	prepareSavestateResume(launcher)
-	name, args := gameLaunchCommand(launcher, game.Path)
+	// Per-game options are read here, at launch time, so an edit made in the
+	// options sheet applies to the very next start without a rescan.
+	options := gameOptionsFor(game.Path)
+	name, args := gameLaunchCommandArgs(launcher, game.Path, parseGameArgs(options.Args))
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(launcher)
-	restoreProfile := beginGamePowerProfile(appConfig)
+	restoreProfile := beginGamePowerProfileCap(appConfig, options.MaxFreqKHz)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
 		return err
 	}
-	noteGameChildStarted()
+	noteGameChildStarted(cmd)
 	// The time-lapse covers exactly this child's life: it starts when the game
 	// does and is assembled when the game exits. A machine with no readable
 	// framebuffer returns nil here and the launch is unchanged.
 	recorder := startTimelapse(appConfig, game.Title)
 	go func() {
 		_ = cmd.Wait()
-		noteGameChildExited()
+		noteGameChildExited(cmd)
 		restoreProfile()
 		recorder.Stop()
 	}()

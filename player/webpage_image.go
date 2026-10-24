@@ -294,7 +294,7 @@ func fetchWebImages(doc *webDocument) {
 		wg.Add(1)
 		go func(src string) {
 			defer wg.Done()
-			body := fetchWebImageBytes(ctx, src)
+			body := fetchWebImageBytes(ctx, doc.URL, src)
 			if len(body) == 0 {
 				mu.Lock()
 				fetched[src] = webImageMeta{}
@@ -331,7 +331,13 @@ func fetchWebImages(doc *webDocument) {
 // and only accepts bytes the device can decode as an image, so an HTML error
 // page never reaches the decoder and a text response never eats the budget.
 // The caller's context bounds the whole pass; this one only caps one request.
-func fetchWebImageBytes(parent context.Context, address string) []byte {
+func fetchWebImageBytes(parent context.Context, pageURL, address string) []byte {
+	// Ad images and tracking pixels are dropped before a connection is opened:
+	// a 1x1 pixel still costs a TLS handshake on handheld Wi-Fi. A page the
+	// user excepted fetches its images too.
+	if browserRequestBlocked(pageURL, address) {
+		return nil
+	}
 	ctx, cancel := context.WithTimeout(parent, webImageFetchTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
@@ -389,7 +395,7 @@ func (l *webLayouter) layoutImage(b webBlock, padX, contentW int32) {
 	x := padX
 	switch b.Align {
 	case 1: // center
-		x = padX + (contentW - w) / 2
+		x = padX + (contentW-w)/2
 	case 2: // right
 		x = padX + (contentW - w)
 	}

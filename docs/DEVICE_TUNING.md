@@ -65,18 +65,48 @@ Every emulator and PortMaster launch raises the CPU governor to `performance`
 and drops it back when the child process exits, so the hub idles cheap while a
 game runs at full speed.
 
+On the Smart Pro the governor alone is not the whole story. The A133P is an
+A100 bin that advertises a **2 GHz** top OPP, but some firmware boots with
+`scaling_max_freq` at 1.8 GHz, and the performance governor can only reach what
+that ceiling allows. The launch profile therefore also lifts the ceiling to the
+highest frequency the policy advertises (2 GHz here) and writes the firmware's
+own value back on return. That lift is the difference between "performance" and
+the chip's full clock:
+
+```
+power profile: 2.0 GHz ceiling, performance for the running game
+```
+
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `powerProfiles` | `true` | the whole switch |
 | `powerProfilePerf` | `performance` | governor name for the running game |
 | `powerProfileBattery` | `powersave` → `schedutil` → `ondemand` | first one the CPU offers |
+| `powerProfileMaxFreq` | `auto` (top OPP) | clock ceiling for a launch; `auto`/`max`, `2000` (MHz), `1.8` (GHz) or `1800000` (kHz) |
 
-Honest limits: writing `scaling_governor` needs root on most firmwares. The app
-checks whether the governor is writable before promising anything, and an
-unsupported device gets one line — `Performance mode unavailable: governor is
-read-only on this firmware` — instead of a switch that silently does nothing.
-Nested launches are depth-counted, so quitting one emulator does not drop the
-profile while another is still running.
+The ceiling belongs to a launch, never to the hub, and the kernel clamps the
+request to its nearest supported frequency — nothing invents an OPP it does not
+have. A cap below the boot ceiling is written as well as a lift: on a firmware
+that already runs at 2 GHz, `powerProfileMaxFreq: 1800` lowers the ceiling for
+the game and puts 2 GHz back on exit. A single game can override the global cap
+from the library's options sheet (**Start** / **O**), where its own clock wins
+for that launch only; see
+[docs/GAME_LIBRARY.md](GAME_LIBRARY.md#per-game-launch-options). All four cores share one policy on this chip, so a pinned
+`performance` governor heats the whole SoC; the community guide linked below
+measured the trade-off and recommends 1.8 GHz over 2 GHz for long sessions.
+
+Honest limits: writing `scaling_governor` and `scaling_max_freq` needs root on
+most firmwares. The app checks whether the governor is writable before promising
+anything, and an unsupported device gets one line — `Performance mode
+unavailable: governor is read-only on this firmware` — instead of a switch that
+silently does nothing. If an emulator's own `launch.sh`/`cpufreq.sh` writes its
+own governor or ceiling after the hub raised the profile, that script wins: the
+child runs last and the hub does not fight it. Nested launches are depth-counted,
+so quitting one emulator does not drop the profile while another is still
+running.
+
+Background on the TSP's shared policy, the stock `cpufreq.sh` defaults and the
+2 GHz heat trade-off: <https://github.com/guiopen/tsp-optimization>.
 
 ## PortMaster audio, per launch
 

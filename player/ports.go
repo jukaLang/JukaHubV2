@@ -470,11 +470,11 @@ func launchPortScript(name, path string) {
 		ShowToast("Could not launch "+name, ToastKindError)
 		return
 	}
-	noteGameChildStarted()
+	noteGameChildStarted(cmd)
 	recorder := startTimelapse(appConfig, name)
 	go func() {
 		_ = cmd.Wait()
-		noteGameChildExited()
+		noteGameChildExited(cmd)
 		restoreProfile()
 		recorder.Stop()
 	}()

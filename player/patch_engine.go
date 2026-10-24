@@ -325,6 +325,10 @@ var allowedPatchHosts = map[string]bool{
 	"objects.githubusercontent.com":        true,
 	"release-assets.githubusercontent.com": true,
 	"codeload.github.com":                  true,
+	// The libretro buildbot is where the aarch64 core builds come from
+	// (emulatorupdates.go). It is the only non-GitHub host: nothing else has a
+	// reason to be here, and it is still HTTPS-only.
+	"buildbot.libretro.com": true,
 }
 
 // validatePatchURL rejects non-HTTPS URLs and URLs whose host is not on the

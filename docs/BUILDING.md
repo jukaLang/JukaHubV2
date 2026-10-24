@@ -3,7 +3,7 @@
 JukaHub is a Go + SDL2 program, so every build needs CGO and SDL2 headers. The
 Windows wrapper installs both for you; on other hosts you install them yourself.
 
-Requirements are in [`player/go.mod`](../player/go.mod) (Go **1.25+**) and
+Requirements are in [`player/go.mod`](../player/go.mod) (Go **1.26+**) and
 [`player/vendor/`](../player/vendor) — dependencies are vendored, so a build
 needs no network access and no `go mod download`.
 
@@ -42,7 +42,7 @@ cd player
 ./build.bat
 ```
 
-`build.bat` is self-contained: it looks for Go 1.25+ and GCC, installs a private
+`build.bat` is self-contained: it looks for Go 1.26+ and GCC, installs a private
 copy of either into `%LOCALAPPDATA%\JukaHub\tools` when missing, downloads the
 SDL2 / SDL2_image / SDL2_ttf MinGW development packages into
 `player/.sdl2/x86_64-w64-mingw32/`, builds `JukaHub.exe`, copies the three SDL
@@ -167,8 +167,8 @@ numbers. See [Patch and package format](PACKAGES.md) for what consumes it.
 | Workflow | Trigger | Output |
 |----------|---------|--------|
 | [`.github/workflows/build-sdcard.yml`](../.github/workflows/build-sdcard.yml) | push to `main` touching `player/**`, pull requests, manual | `JukaHub-SDCARD` artifact (the SD-card package), built in the community TrimUI toolchain image |
-| [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) | push / pull request to `main` | `JukaHub-<timestamp>` release with `JukaHub-Trimui.zip` and `JukaHub-Windows.zip`, each carrying `release-info.json` (`tag` + RFC3339 `date`) |
-| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `v*` tag | runs `release.sh` on ubuntu-latest with `gcc-aarch64-linux-gnu` and attaches `JukaHub-trimui-smart-pro-linux-arm64.tar.gz`, `JukaHub-win-x64.zip`, `manifest.json` and `SHA256SUMS` to the GitHub release |
+| [`.github/workflows/docker-image.yml`](../.github/workflows/docker-image.yml) | push / pull request to `main` | `JukaHub-<timestamp>` release with `JukaHub-Trimui.zip` and `JukaHub-Windows.zip`, each carrying `release-info.json` (`tag` + RFC3339 `date`). The release is created as a draft and published only after both archives are attached, so a download link never points at an empty release. Pull-request runs stop at the draft. |
+| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | `v*` tag | runs `release.sh` on ubuntu-latest with `gcc-aarch64-linux-gnu` and attaches `JukaHub-trimui-smart-pro-linux-arm64.tar.gz`, `JukaHub-win-x64.zip`, `manifest.json` and `SHA256SUMS` to the GitHub release, then publishes it once the draft upload is complete |
 
 Both the updater and the version line in the UI read `release-info.json`, so a
 release built by CI advertises itself correctly without any extra steps.

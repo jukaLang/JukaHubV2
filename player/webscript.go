@@ -150,6 +150,9 @@ func fetchWebScript(base *url.URL, ref string, limit int, deadline time.Time) st
 	if err != nil || (target.Scheme != "http" && target.Scheme != "https") {
 		return ""
 	}
+	if browserRequestBlocked(base.String(), target.String()) {
+		return ""
+	}
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)

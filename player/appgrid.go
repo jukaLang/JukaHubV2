@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -342,6 +343,58 @@ func drawAppTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileE
 	renderText(r, config, glyphFont, glyph, tint, x+(box-int32(gw))/2, y+(box-int32(gh))/2)
 }
 
+// appLabelKey identifies one wrapped tile name. The font pointer is part of the
+// key because a different font means different metrics; ClearTextCache drops
+// the cache whenever fonts or text sizes are reloaded.
+type appLabelKey struct {
+	name  string
+	width int32
+	lines int
+	font  *ttf.Font
+}
+
+var (
+	appLabelMu    sync.Mutex
+	appLabelCache = map[appLabelKey][]string{}
+)
+
+const appLabelCacheMax = 256
+
+// appTileLabelLines wraps a tile's name and remembers the result. A launcher
+// frame used to measure every word of every visible tile, which cost more than
+// drawing the tiles themselves; the same names wrap identically frame after
+// frame, so one measurement per (name, width, lines, font) is enough.
+func appTileLabelLines(font *ttf.Font, name string, width int32, maxLines int) []string {
+	if font == nil || maxLines <= 0 {
+		return nil
+	}
+	key := appLabelKey{name: name, width: width, lines: maxLines, font: font}
+	appLabelMu.Lock()
+	if lines, ok := appLabelCache[key]; ok {
+		appLabelMu.Unlock()
+		return lines
+	}
+	appLabelMu.Unlock()
+
+	lines := wrapTextLines(font, name, width, maxLines)
+	appLabelMu.Lock()
+	if len(appLabelCache) >= appLabelCacheMax {
+		appLabelCache = map[appLabelKey][]string{}
+	}
+	appLabelCache[key] = lines
+	appLabelMu.Unlock()
+	return lines
+}
+
+// clearAppLabelCache drops the wrapped names. Text metrics change with the
+// theme's font or the accessibility text size, so this runs alongside the text
+// texture cache.
+func clearAppLabelCache() {
+	appLabelMu.Lock()
+	appLabelCache = map[appLabelKey][]string{}
+	appLabelMu.Unlock()
+}
+
 // appTileLabelFont is the font a tile draws its name in. It scales with the
 // accessibility text setting like every other font, so a large-text user gets
 // fewer, bigger lines instead of text spilling out of the tile.
@@ -394,7 +447,7 @@ func drawAppTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry
 	if maxLines > 2 {
 		maxLines = 2
 	}
-	lines := wrapTextLines(labelFont, name, cell.W-16, maxLines)
+	lines := appTileLabelLines(labelFont, name, cell.W-16, maxLines)
 	for li, line := range lines {
 		lw, _, _ := labelFont.SizeUTF8(line)
 		renderText(r, config, labelFont, line, ColorTextPrimary(),

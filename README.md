@@ -2,7 +2,7 @@
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/dea0cf4b-3799-41d9-8f2a-b4fd2a270b15/deploy-status)](https://generate.jukalang.com)
 [![Latest release](https://img.shields.io/github/v/release/jukaLang/JukaHubV2?sort=semver)](https://github.com/jukaLang/JukaHubV2/releases/latest)
-[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)](https://golang.org/dl/)
+[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://golang.org/dl/)
 [![SDL2](https://img.shields.io/badge/SDL2-2.0+-3A75C0?logo=sdl)](https://www.libsdl.org/)
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/R9qgJjh5jG)
@@ -80,8 +80,11 @@ only scans `Apps/` at boot. Also check that the folder is exactly
 
 ## First run
 
-Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
-**Favorites**, **Apps**, **Settings**, **Logs** and **Exit**.
+Home is a grid of tiles: **Continue**, **Media**, **Files**, **Packages**,
+**Apps**, **Favorites**, **Browser**, **Chat**, **Tools**, **Emulator**,
+**Settings**, plus **Exit** in the footer. The PS4/PS5 launcher tiles and the
+phone-pairing QR sit just under the top bar on the right; the weather chip, the
+clock and the notification bell are in the bar itself.
 
 * **Media / Tube** — YouTube search and trending.
 * **Music** — open any audio file from the browser and the player takes its
@@ -90,6 +93,11 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   synced `.lrc` lyrics and a full-screen spectrum. Playback continues while you
   browse; see [docs/MUSIC_PLAYER.md](docs/MUSIC_PLAYER.md) for the feature map
   and roadmap.
+* **Offline music** — **Start → Tools → Downloads** saves a link as an m4a on
+  the card:
+  a queue with live progress and speed, pause/resume, per-row retry and the SD
+  card's own usage bar. Saved tracks open in the audio player, so a downloaded
+  album plays with Wi-Fi off; see [docs/CONTROLS.md](docs/CONTROLS.md#downloads).
 * **Photos** — open PNG, JPG, BMP and WebP images from the file browser, then
   browse the folder with Left/Right and zoom with Up/Down. WebP box art decodes
   natively on the handheld, whose SDL_image links libwebp; a desktop runtime that
@@ -126,7 +134,11 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   import/export workflow.
 * **Smart Pro Compatibility** — per-game community reports, an honest
   hardware tier when nobody has reported a title yet, one-press boost plans for
-  N64/Dreamcast/PSP, and a manager for multiple libretro core builds. Reports
+  N64/Dreamcast/PSP, and a manager for multiple libretro core builds. **U**
+  (or **L1**) on the Core-builds tab checks the libretro aarch64 buildbot and
+  pools newer builds of the installed cores, checksum-checked and never
+  activated behind your back; standalone emulator releases are fetched to
+  `data/emulator-updates` and reported, not installed. Reports
   and core pools live in `Apps/JukaHub/data/performance`; see
   [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 * **Windows Apps** — scan for `.exe` files and launch basic Windows programs
@@ -140,7 +152,9 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
   the game with the emulator that owns its system. Every launch is recorded, so
   the **Continue** row at the top resumes the last game in one press. **X** on a
   game opens **LAN Play**: host it, or join another device over Wi-Fi, so link
-  cable titles like Mario Kart and Four Swords play without a cable. See
+  cable titles like Mario Kart and Four Swords play without a cable. **Tools →
+  Disc helpers** fills in the cue sheets and multi-disc playlists that
+  PlayStation and Sega CD rips need, without touching an existing file. See
   [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md).
 * **PortMaster Ports** — install PortMaster from the Emulators screen and launch
   the ports it manages without leaving JukaHub. Installed launchers are read
@@ -178,7 +192,7 @@ Home is a grid of tiles: **Continue**, **Media** (YouTube), **Shorts**,
 * **Logs** — view or export the app log if something misbehaves.
 * **Tools** — this device's IP address, a built-in FTP server for quick file
   drops over Wi-Fi, an SSH/SFTP server for browsing the file system from a PC
-  (also under **MISC → FTP & IP**), the phone companion that turns a phone
+  (also under **Tools → FTP & IP**), the phone companion that turns a phone
   into a keyboard, remote and file drop, **Remote Cast** to watch the screen
   live in a browser, and **Community & support** for the
   changelog, bug reports and the anonymous-diagnostics switch. **Power tools**
@@ -268,7 +282,7 @@ issues a new PIN on the spot (which also invalidates every link already shared).
 
 ## Cast the screen to a browser
 
-**Menu → Remote Cast** shows a link and a QR code for the device's own screen.
+**Start → Remote Cast** shows a link and a QR code for the device's own screen.
 Open the link on a phone, tablet or laptop on the same Wi-Fi and the page shows
 the handheld live, at up to ten frames a second, with no app to install — the
 stream is plain MJPEG inside an HTML page.
@@ -348,7 +362,7 @@ After the restart, **What's new** opens once with that release's notes (the
 notes are cached before the swap, so it also works offline). You can reopen it
 any time from **Tools → Community & support**. The version line shows the
 release build date, e.g. `v0.4.0 · 2026-10-17`, so you can tell which build is
-installed. **MISC → Patch → Check for updates** runs the same check manually.
+installed. **Tools → Patch → Check for updates** runs the same check manually.
 Set `JUKAHUB_NO_AUTOUPDATE=1` to disable automatic updates, or extract a release
 archive over `Apps/JukaHub` by hand.
 
@@ -374,7 +388,7 @@ Logs are on the SD card, so you can read them on a PC without SSH.
 | Black screen or closes at once | Send `Apps/JukaHub/errors.txt` — the launcher's log. |
 | A plugin or a bad update broke startup | Create an empty `safe-mode.flag` next to the app (or launch with `--safe-mode`). |
 | Screen blinks between the stock menu and JukaHub after an update | Both UIs are drawing at once: the launcher on the card is older than the app. Update once more, or copy `launch.sh` from the release archive over `Apps/JukaHub/launch.sh`, then reboot. |
-| YouTube search fails | Check Wi-Fi; open **Logs** on Home for the app's own log. |
+| YouTube search fails | Check Wi-Fi; open **Logs** from the Start menu for the app's own log. |
 | Video stutters | Settings → playback resolution → try `480` or `360`. |
 | Text shows as boxes | `Inter-Regular.ttf` is missing from `Apps/JukaHub`. |
 

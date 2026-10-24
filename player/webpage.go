@@ -2009,11 +2009,12 @@ func fetchWebStylesheets(source string, base *url.URL) string {
 	// reader on "Loading ..." for the better part of a minute.
 	bodies := make([]string, len(addresses))
 	var wg sync.WaitGroup
+	pageURL := base.String()
 	for i, address := range addresses {
 		wg.Add(1)
 		go func(i int, address string) {
 			defer wg.Done()
-			bodies[i] = fetchWebStylesheet(address)
+			bodies[i] = fetchWebStylesheet(pageURL, address)
 		}(i, address)
 	}
 	wg.Wait()
@@ -2028,7 +2029,13 @@ func fetchWebStylesheets(source string, base *url.URL) string {
 	return out.String()
 }
 
-func fetchWebStylesheet(address string) string {
+func fetchWebStylesheet(pageURL, address string) string {
+	// A stylesheet from an ad or analytics host is never part of what the
+	// reader draws; skipping it saves the request, not just the bytes. A page
+	// the user excepted fetches everything.
+	if browserRequestBlocked(pageURL, address) {
+		return ""
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)

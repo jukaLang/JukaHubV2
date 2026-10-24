@@ -177,6 +177,7 @@ func modalPanelBlocksShoulders() bool {
 		castPanel.open || musicSettings.open || a11y.open || smartHomePanel.open ||
 		calibrationPanel.open || chiakiPanel.open || savePanel.open || curationPanel.open ||
 		portsPanel.open || toolsPanel.open || netplayPanel.open || gameLib.open || emuPanel.open ||
+		dlPanel.open ||
 		weatherPopoverOpen || socialNotifOpen || imageViewerPath != "" || virtualKeyboardActive ||
 		memPanel.open || ctrldiag.open
 }
@@ -382,6 +383,8 @@ func searchResultsShoulder(s padShoulder, config *Config, element Element, video
 	if s == padL1 {
 		step = -pageSize
 	}
+	// Paging moves to a different row, so the button selection goes with it.
+	resetResultActions()
 	focusedResultIndex += step
 	if focusedResultIndex >= len(videos) {
 		// Paging past the end asks for the next page, exactly like the chip.

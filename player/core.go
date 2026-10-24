@@ -1368,6 +1368,19 @@ func roundedCornerInset(r, dy int32) int32 {
 	return r - isqrt(dy*(2*r-dy))
 }
 
+// roundedRowInset is the horizontal inset of one scanline inside a rounded
+// rectangle of height h: zero through the flat middle, widening towards the
+// corners.
+func roundedRowInset(r, h, dy int32) int32 {
+	if dy < r {
+		return roundedCornerInset(r, dy)
+	}
+	if dy >= h-r {
+		return roundedCornerInset(r, h-1-dy)
+	}
+	return 0
+}
+
 // fillRoundedRect draws a filled rounded rectangle using per-scanline
 // rendering. The radius is clamped to half the width/height and every pixel
 // stays inside the supplied rectangle.
@@ -1388,18 +1401,23 @@ func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
 		r = h / 2
 	}
 	setDrawColor(renderer, c)
-	for dy := int32(0); dy < h; dy++ {
-		var inset int32
-		if dy < r {
-			inset = roundedCornerInset(r, dy)
-		} else if dy >= h-r {
-			inset = roundedCornerInset(r, h-1-dy)
+	// Neighbouring scanlines with the same inset become one rectangle, so the
+	// flat middle of a card is a single fill instead of one call per pixel
+	// row. The pixels are identical; only the number of renderer calls drops,
+	// and that count is what a software renderer pays for on every frame. A
+	// launcher tile used to cost four panel-sized fills of 132 calls each.
+	for dy := int32(0); dy < h; {
+		inset := roundedRowInset(r, h, dy)
+		run := dy + 1
+		for run < h && roundedRowInset(r, h, run) == inset {
+			run++
 		}
 		x0 := x + inset
 		x1 := x + w - inset
 		if x1 > x0 {
-			renderer.FillRect(&sdl.Rect{X: x0, Y: y + dy, W: x1 - x0, H: 1})
+			renderer.FillRect(&sdl.Rect{X: x0, Y: y + dy, W: x1 - x0, H: run - dy})
 		}
+		dy = run
 	}
 }
 
@@ -1450,19 +1468,16 @@ func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c
 		innerR = 0
 	}
 	ih := h - 2*thickness
-	setDrawColor(renderer, c)
-	for dy := int32(0); dy < h; dy++ {
-		var oInset int32
-		if dy < r {
-			oInset = roundedCornerInset(r, dy)
-		} else if dy >= h-r {
-			oInset = roundedCornerInset(r, h-1-dy)
-		}
-		left := x + oInset
-		right := x + w - oInset
-		if right <= left {
-			continue
-		}
+	// One scanline of the ring: the outer span, plus the inner hole when the
+	// row cuts through the ring's sides rather than its top or bottom band.
+	type ringRow struct {
+		left, right           int32
+		innerLeft, innerRight int32
+		hole                  bool
+	}
+	rowAt := func(dy int32) ringRow {
+		oInset := roundedRowInset(r, h, dy)
+		row := ringRow{left: x + oInset, right: x + w - oInset}
 		if dy >= thickness && dy < h-thickness && ih > 0 {
 			// Punch the inner hole so only the ring remains.
 			id := dy - thickness
@@ -1472,18 +1487,37 @@ func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c
 			} else if id >= ih-innerR {
 				iInset = roundedCornerInset(innerR, ih-1-id)
 			}
-			innerLeft := x + thickness + iInset
-			innerRight := x + w - thickness - iInset
-			if innerLeft > left {
-				renderer.FillRect(&sdl.Rect{X: left, Y: y + dy, W: innerLeft - left, H: 1})
-			}
-			if right > innerRight {
-				renderer.FillRect(&sdl.Rect{X: innerRight, Y: y + dy, W: right - innerRight, H: 1})
-			}
-		} else {
-			// Top/bottom bands of the ring are solid.
-			renderer.FillRect(&sdl.Rect{X: left, Y: y + dy, W: right - left, H: 1})
+			row.innerLeft = x + thickness + iInset
+			row.innerRight = x + w - thickness - iInset
+			row.hole = true
 		}
+		return row
+	}
+	setDrawColor(renderer, c)
+	// Rows with the same geometry merge into one rectangle: the ring's
+	// straight sides are two tall bars rather than two 1px fills per row.
+	for dy := int32(0); dy < h; {
+		row := rowAt(dy)
+		run := dy + 1
+		for run < h && rowAt(run) == row {
+			run++
+		}
+		height := run - dy
+		if row.right > row.left {
+			switch {
+			case !row.hole:
+				// Top/bottom bands of the ring are solid.
+				renderer.FillRect(&sdl.Rect{X: row.left, Y: y + dy, W: row.right - row.left, H: height})
+			default:
+				if row.innerLeft > row.left {
+					renderer.FillRect(&sdl.Rect{X: row.left, Y: y + dy, W: row.innerLeft - row.left, H: height})
+				}
+				if row.right > row.innerRight {
+					renderer.FillRect(&sdl.Rect{X: row.innerRight, Y: y + dy, W: row.right - row.innerRight, H: height})
+				}
+			}
+		}
+		dy = run
 	}
 }
 
@@ -2520,6 +2554,7 @@ func executeYouTubeSearchMode(config *Config, command string, resultVar string, 
 		publishCustom(resultVar, videos)
 		publishCustom("search_error", nil)
 		focusedResultIndex = -1
+		resetResultActions()
 		prefetchFirstResult(config, videos)
 	}
 	publishVideos := func(videos []VideoInfo) {
@@ -2929,6 +2964,10 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 		PrefetchThumbnail(vid.Thumbnail)
 	}
 
+	// The Audio / Video / Chat pills are recorded while drawing so a tap
+	// addresses the pill it landed on; the list is the only layout that owns
+	// Left/Right.
+	resultActionHits = resultActionHits[:0]
 	renderWithClip(renderer, element.X, element.Y, elemWidth, elemHeight, func(r *sdl.Renderer) {
 		for i, vid := range videos {
 			y := element.Y + int32(i)*(rowH+gap) - scrollY
@@ -2964,9 +3003,14 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 			drawThumbnail(r, config, vid, thumbX, thumbY, thumbW, thumbH)
 			drawDurationBadge(r, config, font, vid.Duration, thumbX+thumbW-56, thumbY+thumbH-22, 48, 16)
 
+			// Audio / Video / Chat pills own the right edge of the row; the
+			// title column stops where they begin, on every row so text never
+			// jumps as the highlight moves.
+			textLimit := drawResultActions(r, config, font, sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, i, focused)
+
 			// Measured text block, vertically centered against the thumbnail.
 			textX := thumbX + thumbW + 16
-			textW := cardX + cardW - 14 - textX
+			textW := textLimit - textX
 			if textW < 24 {
 				textW = 24
 			}
@@ -5761,6 +5805,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		if elem, ok := findBrowserElement(config); ok {
 			openBrowserLinkPanel(config, elem)
 		}
+	case "browser_filter":
+		// Per-site ad/tracker exception: off for the page that broke, on again
+		// for the next visit to it.
+		browserToggleAdFilter(config)
 	case "browser_search":
 		// The Search chip and the Y button both open the query keyboard.
 		if elem, ok := findBrowserElement(config); ok {
@@ -6119,6 +6167,7 @@ func completeSceneTransition(config *Config) {
 	}
 
 	focusedResultIndex = -1
+	resetResultActions()
 	focusedFileIndex = 0
 	scrollY = 0
 	textBrowserScrollY = 0
@@ -6335,6 +6384,10 @@ func moveGridSelection(config *Config, dx, dy int) {
 		// Clamp to last valid index
 		newIdx = len(videos) - 1
 	}
+	if newIdx != focusedResultIndex {
+		// The Audio / Video / Chat selection belongs to the row that owned it.
+		resetResultActions()
+	}
 	focusedResultIndex = newIdx
 	// Resolve the highlighted card's stream in the background while the user
 	// keeps moving: pressing Play then skips the yt-dlp round-trip.
@@ -6351,6 +6404,15 @@ func handleSearchResultsAction(action Action, config *Config) {
 	scene := config.Scenes[currentSceneIndex]
 	if !sceneHasSearchResults(scene) {
 		return
+	}
+
+	// A single-column list has Left/Right free: they belong to the focused
+	// row's Audio / Video / Chat buttons. The grid keeps them for card
+	// navigation.
+	if srElem, ok := sceneSearchResultsElement(scene); ok {
+		if cols, _ := gridColsRows(srElem); cols <= 1 && listResultAction(action, config) {
+			return
+		}
 	}
 
 	switch action {
@@ -6430,6 +6492,11 @@ func activateChromeFocus(config *Config) bool {
 		PlayActivateSound()
 		startHeaderUpdate()
 		return true
+	case ChromeMediaIndex:
+		// The chip names what is playing; pressing it opens that player.
+		PlayActivateSound()
+		openNowPlaying(config)
+		return true
 	}
 	return false
 }
@@ -6464,6 +6531,14 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	if statusWiFiRect.W > 0 && pointInRect(mx, my, statusWiFiRect) {
 		PlayActivateSound()
 		openWiFiPanel()
+		return true
+	}
+	// The now-playing chip is a button too: a tap returns to the player. While
+	// it names an idle output device it is a reading, so the tap falls through
+	// instead of opening nothing.
+	if statusMediaRect.W > 0 && nowPlayingChipIsButton() && pointInRect(mx, my, statusMediaRect) {
+		PlayActivateSound()
+		openNowPlaying(config)
 		return true
 	}
 	return false

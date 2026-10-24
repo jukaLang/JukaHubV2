@@ -30,6 +30,7 @@ const (
 	HomeActionToggleWeather  HomeAction = "toggle_weather"
 	HomeActionUpdate         HomeAction = "install_update"
 	HomeActionNotifications  HomeAction = "toggle_notifications"
+	HomeActionNowPlaying     HomeAction = "now_playing"
 )
 
 type HomeFonts struct {
@@ -108,7 +109,8 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusBell, HomeFocusUpdate, HomeFocusExit,
+			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
+			HomeFocusBell, HomeFocusUpdate, HomeFocusExit,
 		},
 	}
 	layout.rebuildItems()
@@ -172,9 +174,17 @@ func (h *HomeLayout) rebuildItems() {
 	// buttons are drawn. drawHeader replaces these rects with the measured
 	// status text every frame, so focus and clicks land on the header.
 	card(HomeFocusWeather, "Weather", "Local forecast", "weather", HomeActionToggleWeather,
-		sdl.Rect{X: 1020, Y: 10, W: 92, H: 36})
+		sdl.Rect{X: 968, Y: 10, W: 92, H: 36})
 	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
-		sdl.Rect{X: 1120, Y: 10, W: 76, H: 36})
+		sdl.Rect{X: 1068, Y: 10, W: 76, H: 36})
+	// The now-playing chip sits between the clock and the bell. Like the clock
+	// and the weather text this is the header itself, not a card: drawHeader
+	// replaces the rect with the measured chip every frame and only enables the
+	// entry while something is actually playing. The placeholder keeps clear of
+	// its neighbours so a click on the clock or the bell still lands there
+	// before the first frame measures the real chip.
+	card(HomeFocusNowPlaying, "Now playing", "Open the player", "media", HomeActionNowPlaying,
+		sdl.Rect{X: 1152, Y: 10, W: 44, H: 36})
 	// The notification bell closes the header on the right. drawHeader replaces
 	// this rect with the one actually drawn, and only enables the entry while
 	// the bell is on screen.
@@ -215,6 +225,12 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 		return false
 	}
 	for _, id := range h.Order {
+		// A header chip that is not drawn (no weather forecast, no release on
+		// offer, nothing playing) keeps its placeholder rect; it must not
+		// swallow a click meant for the chip beside it.
+		if !h.Focus.IsEnabled(id) {
+			continue
+		}
 		item := h.Items[id]
 		if x >= item.Rect.X && x < item.Rect.X+item.Rect.W && y >= item.Rect.Y && y < item.Rect.Y+item.Rect.H {
 			return h.Focus.Set(id)
@@ -245,7 +261,8 @@ func (h *HomeLayout) BoundsViolations() []string {
 			item.Rect.X+item.Rect.W > h.Width || item.Rect.Y+item.Rect.H > h.Height {
 			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
 		}
-		if id == HomeFocusClock || id == HomeFocusWeather || id == HomeFocusUpdate || id == HomeFocusBell {
+		switch id {
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusNowPlaying:
 			continue
 		}
 		checked = append(checked, item)
@@ -304,10 +321,11 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, data.Continue, cardLift)
 		case HomeFocusExit:
 			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusBell:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
-			// (title and icon) over the header.
+			// (title and icon) over the header -- the now-playing entry sits on
+			// the bell's shoulder, so a stray card would cover it.
 		default:
 			h.drawActionCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, cardLift)
 		}
@@ -330,6 +348,7 @@ func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
 	weatherStatusRect = sdl.Rect{}
 	statusWiFiRect = sdl.Rect{}
+	statusMediaRect = sdl.Rect{}
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
@@ -519,16 +538,41 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		if isWiFiStatusPart(part) {
 			statusWiFiRect = r
 		}
+		if isChipStatusPart(part) {
+			// The now-playing chip is a header button: clicks land on the
+			// measured chip and the D-pad reaches it from the clock. The idle
+			// output chip is measured the same way so it draws in the same
+			// place, but it stays out of the focus order.
+			statusMediaRect = r
+			item := h.Items[HomeFocusNowPlaying]
+			item.Rect = r
+			h.Items[HomeFocusNowPlaying] = item
+		}
 		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
 		x += w + sepW
 	}
 	if updateChipW > 0 && !updateChipDrawn {
 		drawUpdateChip(x)
 	}
+	// The network meter is a tap target as well as a reading, so grow its hit
+	// area to finger size once the cluster is placed, stopping short of the
+	// forecast and the clock so their taps still belong to them.
+	if statusWiFiRect.W > 0 {
+		statusWiFiRect = statusFingerRect(statusWiFiRect, header.H,
+			weatherStatusRect, h.Items[HomeFocusClock].Rect)
+	}
 	// The D-pad may only focus the chip while it is on screen; with no update
 	// (or no room) it stays disabled and the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusUpdate, homeUpdateRect.W > 0)
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
+	// Chips that are not drawn are neither focusable nor clickable: the
+	// weather entry keeps its placeholder rect when there is no forecast, and
+	// that rect sits where the now-playing chip is drawn.
+	h.Focus.SetEnabled(HomeFocusWeather, weatherStatusRect.W > 0)
+	// The chip is a button only while a player is behind it: with nothing
+	// playing it may still be drawn (naming the headphones), but pressing it
+	// would open nothing, so the arrows skip it.
+	h.Focus.SetEnabled(HomeFocusNowPlaying, statusMediaRect.W > 0 && nowPlayingChipIsButton())
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusNowPlaying, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
 		if h.Focus.Current() != id {
 			continue
 		}
@@ -560,7 +604,8 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	bestY := int32(0)
 	for _, id := range h.Order {
 		switch id {
-		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell, HomeFocusExit:
+		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell,
+			HomeFocusNowPlaying, HomeFocusExit:
 			continue
 		}
 		item, ok := h.Items[id]

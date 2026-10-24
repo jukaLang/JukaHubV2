@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   create-tag:
-    name: Create Tag and Release
+    name: Create Tag and Draft Release
     runs-on: ubuntu-latest
     outputs:
       tag_name: ${{ steps.generate_tag.outputs.tag_name }}
@@ -41,13 +41,20 @@ jobs:
               sha: context.sha,
             })
 
-      - name: Create Release
+      # The release starts as a draft on purpose. GitHub publishes a release
+      # the moment it is created, and the two builds below take many minutes,
+      # so a published release showed only "Source code (zip)" while every
+      # download link (README, website, in-app updater) pointed at an archive
+      # that did not exist yet and answered 404. A draft keeps the tag and the
+      # upload target, stays out of /releases/latest, and only becomes public
+      # once publish-release has verified both archives are attached.
+      - name: Create Draft Release
         id: create_release
         uses: actions/create-release@v1
         with:
           tag_name: ${{ steps.generate_tag.outputs.tag_name }}
           release_name: ${{ steps.generate_tag.outputs.tag_name }}
-          draft: false
+          draft: true
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -299,4 +306,47 @@ jobs:
           asset_content_type: application/zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Publishing is the last step, not the first: the draft from create-tag only
+  # becomes visible after both build jobs succeeded and both archives are
+  # attached. A failed or half-uploaded build therefore never becomes the
+  # "latest" release, which is what produced the 404 on a download link during
+  # an update that was still building.
+  publish-release:
+    name: Publish Release
+    runs-on: ubuntu-latest
+    needs: [create-tag, build-and-publish-ubuntu, build-and-publish-windows]
+    # A pull-request build must not become a release: it was published before
+    # too, which is how a branch build could take over /releases/latest.
+    if: github.event_name != 'pull_request'
+    env:
+      TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
+    steps:
+      - name: Verify assets and publish
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const tag = process.env.TAG_NAME;
+            const wanted = ['JukaHub-Trimui.zip', 'JukaHub-Windows.zip'];
+            const {data: releases} = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const release = releases.find((r) => r.tag_name === tag);
+            if (!release) {
+              throw new Error(`no release found for ${tag}`);
+            }
+            const names = release.assets.map((a) => a.name);
+            const missing = wanted.filter((name) => !names.includes(name));
+            if (missing.length) {
+              throw new Error(`${tag} is missing ${missing.join(', ')}; keeping the release as a draft`);
+            }
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              draft: false,
+            });
+            core.info(`published ${tag} with ${names.join(', ')}`);
         

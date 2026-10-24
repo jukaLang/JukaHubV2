@@ -1,6 +1,6 @@
 # Packages and the Patch package manager
 
-**Patch** (MISC → Patch) is JukaHub's package manager: install, update, verify
+**Patch** (Tools → Patch) is JukaHub's package manager: install, update, verify
 and roll back files on the device without a PC, plus JukaHub's own update flow.
 It is deliberately declarative — a package describes *files*, never scripts
 that run behind your back.

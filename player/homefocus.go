@@ -34,6 +34,11 @@ const (
 	// cluster, left of the weather text. It is disabled unless a release is
 	// actually offered and drawn.
 	HomeFocusUpdate HomeFocusID = "update"
+	// HomeFocusNowPlaying is the now-playing chip at the right end of the status
+	// cluster, between the clock and the bell. It is a chrome control on other
+	// scenes, so Home needs its own entry to reach it; it is enabled only while
+	// the chip is drawn.
+	HomeFocusNowPlaying HomeFocusID = "nowplaying"
 )
 
 // FocusDirection indicates the direction to move focus.
@@ -135,16 +140,23 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusUpdate, Down: HomeFocusSettings,
 		Left: HomeFocusMedia, Right: HomeFocusWeather,
 	},
+	// The now-playing chip sits right of the clock and names the running
+	// player. Disabled while nothing plays, so Right from the clock falls
+	// through to the bell exactly as it did before.
+	HomeFocusNowPlaying: {
+		Up: HomeFocusNowPlaying, Down: HomeFocusSettings,
+		Left: HomeFocusClock, Right: HomeFocusBell,
+	},
 	HomeFocusClock: {
 		Up: HomeFocusClock, Down: HomeFocusSettings,
-		Left: HomeFocusWeather, Right: HomeFocusBell,
+		Left: HomeFocusWeather, Right: HomeFocusNowPlaying,
 	},
 	// The bell is the last control in the header, right of the clock. Right
 	// stays put at the screen edge and Down drops into the Settings column
 	// under it.
 	HomeFocusBell: {
 		Up: HomeFocusBell, Down: HomeFocusSettings,
-		Left: HomeFocusClock, Right: HomeFocusBell,
+		Left: HomeFocusNowPlaying, Right: HomeFocusBell,
 	},
 	// Exit sits on the footer's left end; Favorites drops down to it.
 	HomeFocusExit: {
@@ -316,7 +328,8 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
-		HomeFocusWeather, HomeFocusClock, HomeFocusBell, HomeFocusUpdate, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
+		HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying, HomeFocusBell,
+		HomeFocusUpdate, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 const (
@@ -56,6 +57,28 @@ var wifiPanel wifiPanelState
 var wifiRowRects []sdl.Rect
 
 var wifiPanelRect sdl.Rect
+
+// wifiActionID is one tappable row of action pills at the bottom of the panel.
+// The picker is reachable by touch from the status bar, so every action the pad
+// can perform (rescan, reconnect, disconnect, forget, close) also needs a
+// button: the footer hints alone are not usable with a finger.
+type wifiActionID int
+
+const (
+	wifiActionRescan wifiActionID = iota
+	wifiActionReconnect
+	wifiActionDisconnect
+	wifiActionForget
+	wifiActionClose
+)
+
+type wifiActionHit struct {
+	id   wifiActionID
+	rect sdl.Rect
+}
+
+// wifiActionRects is rebuilt on every frame, like wifiRowRects.
+var wifiActionRects []wifiActionHit
 
 // wifiPendingSSID is the network whose password the keyboard is typing.
 var wifiPendingSSID string
@@ -187,6 +210,7 @@ func openWiFiPanel() {
 	processPanel.open = false
 	toolsPanel.open = false
 	wifiRowRects = nil
+	wifiActionRects = nil
 	wifiPanel = wifiPanelState{open: true}
 	// Anything still in flight belongs to the previous visit.
 	wifiGeneration++
@@ -229,6 +253,8 @@ func wifiSupport() (bool, string) {
 
 func closeWiFiPanel() {
 	wifiPanel.open = false
+	wifiRowRects = nil
+	wifiActionRects = nil
 	wifiPanel.confirmForget = ""
 	wifiPendingSSID = ""
 	wifiPassphraseBuffer = ""
@@ -309,7 +335,10 @@ func wifiActivate() {
 		return
 	}
 	if n.Active && wifiPanel.status.Connected {
-		ShowToast("Already connected to "+n.SSID, ToastKindInfo)
+		// Tapping the row that already shows CONNECTED reconnects it. The
+		// common case (it says connected but nothing loads) is a stale
+		// association, and a touch user has no other way to ask for a retry.
+		wifiReconnectAsync(n.SSID)
 		return
 	}
 	if id, ok := wifiSavedID(n.SSID, wifiPanel.saved); ok {
@@ -409,6 +438,36 @@ func wifiJoinMessage(res wifiJoinResult) string {
 	return msg
 }
 
+// wifiReconnectSelected re-establishes the current connection with the saved
+// key. It backs the Reconnect pill and the reconnect on the active row.
+func wifiReconnectSelected() {
+	if wifiPanel.busy || !wifiPanel.available {
+		return
+	}
+	if !wifiPanel.status.Connected || wifiPanel.status.SSID == "" {
+		ShowToast("Not connected to a network", ToastKindInfo)
+		return
+	}
+	wifiReconnectAsync(wifiPanel.status.SSID)
+}
+
+func wifiReconnectAsync(ssid string) {
+	if wifiPanel.busy {
+		return
+	}
+	wifiStartWork("Reconnecting to "+ssid+"…", func() wifiUpdate {
+		res, err := wifiReconnect()
+		if err != nil {
+			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
+		}
+		u := wifiUpdate{kind: wifiUpdateJoin, msg: wifiJoinMessage(res)}
+		if snap, snapErr := wifiReadSnapshot(); snapErr == nil {
+			u.snap = &snap
+		}
+		return u
+	})
+}
+
 func wifiDisconnectSelected() {
 	if wifiPanel.busy || !wifiPanel.available {
 		return
@@ -447,7 +506,9 @@ func wifiForgetSelected() {
 		wifiPanel.confirmForget = n.SSID
 		wifiPanel.confirmAt = time.Now()
 		PlayNavSound()
-		ShowToast("Press SELECT again to forget "+n.SSID, ToastKindWarning)
+		// "Press again" rather than "Press SELECT": the same action is a touch
+		// pill now, and the second tap is the confirmation either way.
+		ShowToast("Press again to forget "+n.SSID, ToastKindWarning)
 		return
 	}
 	wifiPanel.confirmForget = ""
@@ -490,6 +551,8 @@ func handleWiFiKey(e *sdl.KeyboardEvent, config *Config) bool {
 		wifiRefreshAsync(true)
 	case sdl.K_x, sdl.K_d:
 		wifiDisconnectSelected()
+	case sdl.K_c:
+		wifiReconnectSelected()
 	case sdl.K_f:
 		wifiForgetSelected()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
@@ -522,14 +585,39 @@ func ctrlWiFi(e *sdl.ControllerButtonEvent, config *Config) bool {
 	return true
 }
 
-// handleWiFiMouse selects and activates a row, or closes the panel when the
-// click lands outside it.
+// wifiRunAction is the single entry point for the panel's actions, shared by
+// the tappable pills and the keyboard/controller handlers.
+func wifiRunAction(id wifiActionID) {
+	switch id {
+	case wifiActionRescan:
+		wifiRefreshAsync(true)
+	case wifiActionReconnect:
+		wifiReconnectSelected()
+	case wifiActionDisconnect:
+		wifiDisconnectSelected()
+	case wifiActionForget:
+		wifiForgetSelected()
+	case wifiActionClose:
+		closeWiFiPanel()
+	}
+}
+
+// handleWiFiMouse selects and activates a row, presses an action pill, or
+// closes the panel when the click lands outside it.
 func handleWiFiMouse(mx, my int32, config *Config) bool {
 	if !wifiPanel.open {
 		return false
 	}
 	if wifiPanel.confirmForget != "" && time.Since(wifiPanel.confirmAt) > wifiForgetConfirmWindow {
 		wifiPanel.confirmForget = ""
+	}
+	// Pills first: they sit below the list, but a tap that hits one must never
+	// be read as a row click if the two ever get close.
+	for _, hit := range wifiActionRects {
+		if hit.rect.W > 0 && pointInRect(mx, my, hit.rect) {
+			wifiRunAction(hit.id)
+			return true
+		}
 	}
 	for i, r := range wifiRowRects {
 		if r.W > 0 && pointInRect(mx, my, r) {
@@ -615,6 +703,9 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	wifiDrainUpdates()
+	// Rebuilt below; clearing here keeps a pill from staying tappable on a
+	// frame where the bar is not drawn (the backend became unavailable).
+	wifiActionRects = wifiActionRects[:0]
 	if wifiPanel.confirmForget != "" && time.Since(wifiPanel.confirmAt) > wifiForgetConfirmWindow {
 		wifiPanel.confirmForget = ""
 	}
@@ -638,10 +729,17 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	rowH := smallH + 22
 	headerH := 18 + medH + 6 + smallH + 14
 	footerH := 20 + smallH
+	// Touch users need visible buttons for rescan/reconnect/disconnect/forget;
+	// the hint line below stays for the pad. No backend means nothing to do, so
+	// the bar is only reserved while the picker can act.
+	actionH := int32(0)
+	if wifiPanel.available {
+		actionH = smallH + 18
+	}
 
 	// Fit the list to the screen before laying the panel out: on a 480p
-	// handheld the same panel must still show its header and footer.
-	maxListH := screenHeight - headerH - footerH - 48
+	// handheld the same panel must still show its header, actions and footer.
+	maxListH := screenHeight - headerH - footerH - actionH - 48
 	visible := len(wifiPanel.networks)
 	if visible < 1 {
 		visible = 1
@@ -657,7 +755,7 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	if panelW > screenWidth-48 {
 		panelW = screenWidth - 48
 	}
-	panelH := headerH + int32(visible)*rowH + footerH
+	panelH := headerH + int32(visible)*rowH + actionH + footerH
 	if panelH > screenHeight-40 {
 		panelH = screenHeight - 40
 	}
@@ -754,6 +852,11 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
+	if actionH > 0 {
+		wifiPanelActionBar(renderer, config, font, panelX,
+			panelY+panelH-footerH-actionH, panelW, actionH, smallH)
+	}
+
 	footer := hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Disconnect"},
 		FooterHint{"Y", "Rescan"}, FooterHint{"Select", "Forget"}, FooterHint{"B", "Close"})
 	footerColor := ColorTextTertiary()
@@ -768,6 +871,76 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, footerColor,
 		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+4)
+}
+
+// wifiPanelActionBar draws the tappable actions and records their rects. The
+// set follows the state: a disconnected radio has nothing to reconnect or
+// disconnect, and an unsaved row has nothing to forget, so those pills are not
+// drawn at all rather than greyed out and clickable-looking.
+func wifiPanelActionBar(renderer *sdl.Renderer, config *Config, font *ttf.Font,
+	x, y, w, h, textH int32) {
+	wifiActionRects = wifiActionRects[:0]
+	if renderer == nil || font == nil || h <= 0 || w <= 0 {
+		return
+	}
+	type pill struct {
+		id    wifiActionID
+		label string
+	}
+	pills := []pill{{wifiActionRescan, "Rescan"}}
+	if wifiPanel.status.Connected {
+		pills = append(pills,
+			pill{wifiActionReconnect, "Reconnect"},
+			pill{wifiActionDisconnect, "Disconnect"})
+	}
+	if n := wifiSelected(); n != nil && n.Saved {
+		label := "Forget"
+		if wifiPanel.confirmForget == n.SSID {
+			// The second press is the confirmation, so the pill says so.
+			label = "Forget?"
+		}
+		pills = append(pills, pill{wifiActionForget, label})
+	}
+	pills = append(pills, pill{wifiActionClose, "Close"})
+
+	const gap = int32(8)
+	padX := int32(14)
+	// A 4:3 handheld has less room than the 1280 canvas, so tighten the pills
+	// rather than letting the row spill out of the panel.
+	widths := make([]int32, len(pills))
+	total := int32(0)
+	for i, p := range pills {
+		tw, _, _ := font.SizeUTF8(p.label)
+		widths[i] = int32(tw) + 2*padX
+		total += widths[i]
+	}
+	total += gap * int32(len(pills)-1)
+	if total > w-16 {
+		padX = 8
+		total = 0
+		for i, p := range pills {
+			tw, _, _ := font.SizeUTF8(p.label)
+			widths[i] = int32(tw) + 2*padX
+			total += widths[i]
+		}
+		total += gap * int32(len(pills)-1)
+	}
+
+	pillH := textH + 10
+	if pillH > h-2 {
+		pillH = h - 2
+	}
+	px := x + (w-total)/2
+	py := y + (h-pillH)/2
+	for i, p := range pills {
+		r := sdl.Rect{X: px, Y: py, W: widths[i], H: pillH}
+		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, ColorIconSurface)
+		strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, r.H/2, 1, ColorBorder)
+		renderText(renderer, config, font, p.label, ColorTextSecondary(),
+			r.X+padX, r.Y+(r.H-textH)/2)
+		wifiActionRects = append(wifiActionRects, wifiActionHit{id: p.id, rect: r})
+		px += r.W + gap
+	}
 }
 
 // ensureHardwareWiFiEntry gives the Hardware scene a "Wi-Fi" button without
