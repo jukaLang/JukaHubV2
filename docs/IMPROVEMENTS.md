@@ -97,7 +97,7 @@ writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
 | Nothing ran the player's ~150 test files in CI | `.github/workflows/ci.yml` (player, race detector and staticcheck jobs are all blocking; the npm audit and govulncheck advisories stay non-blocking) |
 | `docker-image.yml` built with Go 1.23 while `go.mod` needs 1.26 | `go-version-file: player/go.mod` |
 
-Also added: `robots.txt`, `sitemap.xml`, Netlify `_headers` (nosniff, referrer and permissions policy), Dependabot for Actions, Go modules and the test package.
+Also added: `robots.txt`, `sitemap.xml`, Netlify `_headers` (nosniff, referrer and permissions policy, and a Content-Security-Policy that the Playwright suite enforces via tests/e2e/serve.mjs), Dependabot for Actions, Go modules and the test package.
 
 Not done, and why: a Content-Security-Policy (inline `style=` attributes and LAN device pushes over `http:` need a careful allow-list first), a service worker (a stale-cache bug would be hard to recover from; the favicon is 48 px, below the 192 px installable-PWA minimum), and any change under `player/` (the SDL2/CGO build could not be run in the environment used for this pass).
 

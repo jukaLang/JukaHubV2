@@ -7,11 +7,35 @@
 
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { extname, join, normalize, resolve, sep } from "node:path";
 
 const root = resolve(process.argv[2] || ".");
 const port = Number(process.env.PORT || 8123);
 const host = process.env.HOST || "127.0.0.1";
+
+// Response headers come from the site's own _headers file (the "/*" block), so
+// the tests run under the same Content-Security-Policy as production.
+function siteHeaders() {
+  const headers = {};
+  let inGlobalBlock = false;
+  try {
+    for (const raw of readFileSync(join(root, "_headers"), "utf8").split(/\r?\n/)) {
+      if (!raw.trim() || raw.trim().startsWith("#")) continue;
+      if (!/^\s/.test(raw)) {
+        inGlobalBlock = raw.trim() === "/*";
+        continue;
+      }
+      if (!inGlobalBlock) continue;
+      const colon = raw.indexOf(":");
+      if (colon > 0) headers[raw.slice(0, colon).trim()] = raw.slice(colon + 1).trim();
+    }
+  } catch {
+    // No _headers file: serve without extra headers.
+  }
+  return headers;
+}
+const extraHeaders = siteHeaders();
 
 const types = {
   ".html": "text/html; charset=utf-8",
@@ -45,6 +69,7 @@ const server = createServer(async (req, res) => {
     }
     const body = await readFile(target);
     res.writeHead(200, {
+      ...extraHeaders,
       "Content-Type": types[extname(target).toLowerCase()] || "application/octet-stream",
       "Cache-Control": "no-store",
       "Content-Length": body.length,
