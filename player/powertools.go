@@ -3,7 +3,6 @@ package main
 // powertools.go — the Developer & power-user tools overlay.
 //
 // One controller-first panel for jobs that usually need a PC:
-//   - network probes (gateway ports, TCP ping, DNS, Wi-Fi signal);
 //   - a fixed-list file inspector with hex, pretty JSON and log views;
 //   - shell snippets saved from the clipboard and run with visible output;
 //   - folder sync through rsync (never --delete) and a Syncthing check;
@@ -13,6 +12,10 @@ package main
 // It is an overlay so it works on every config, including configs with no
 // Misc/Tools scene. Long work runs off the render thread; results land in one
 // mutex-protected output buffer that the UI copies each frame.
+//
+// The result viewer is shared: the network probes now live in the Tools panel
+// (Tools → FTP & IP), and they show their output here with Back returning to
+// Tools instead of to a Power tools page the user never opened.
 
 import (
 	"encoding/json"
@@ -32,7 +35,6 @@ type powerPage int
 
 const (
 	powerPageMenu powerPage = iota
-	powerPageNetwork
 	powerPageFiles
 	powerPageScripts
 	powerPageSync
@@ -44,20 +46,13 @@ const (
 type powerAction int
 
 const (
-	powerActionOpenNetwork powerAction = iota
-	powerActionOpenFiles
+	powerActionOpenFiles powerAction = iota
 	powerActionOpenScripts
 	powerActionOpenSync
 	powerActionOpenConfigs
 	powerActionOpenBench
 	powerActionOpenMemory
 	powerActionOpenCtrlDiag
-	powerActionScan
-	powerActionScanClipboard
-	powerActionPing
-	powerActionTrace
-	powerActionDNS
-	powerActionWiFi
 	powerActionInspectFile
 	powerActionRunScript
 	powerActionSaveClipboardScript
@@ -101,8 +96,11 @@ type powerToolsState struct {
 
 	syncSource string
 	syncTarget string
-	gateway    string
 	device     string
+
+	// returnToTools is set while the output viewer shows a probe started from
+	// the Tools panel, so Back goes there rather than to a Power tools page.
+	returnToTools bool
 
 	confirmKey string
 	confirmAt  time.Time
@@ -165,7 +163,6 @@ func powerRefreshCaches() {
 	powerTools.bench, _ = loadPowerBenchFrom(resolvePath(powerBenchFile))
 	powerTools.syncSource = powerSyncSetting(powerSyncSourceKey)
 	powerTools.syncTarget = powerSyncSetting(powerSyncTargetKey)
-	powerTools.gateway = powerGatewayGuess(localIPv4())
 	powerTools.device = deviceDisplayName(DetectDevice())
 	if powerTools.syncSource == "" {
 		powerTools.syncSource = exeDir()
@@ -207,7 +204,6 @@ func powerToolRows(config *Config) []powerToolRow {
 			device = deviceDisplayName(DetectDevice())
 		}
 		return []powerToolRow{
-			{label: "Network probes", value: "Ports · DNS · Wi-Fi", detail: "Gateway scan, TCP ping, resolver and local signal", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenNetwork, enabled: true},
 			{label: "File inspector", value: "Hex · JSON · logs", detail: "Reads the app's own files only, never a config path", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenFiles, enabled: true},
 			{label: "Script snippets", value: fmt.Sprintf("%d snippets", scripts), detail: "Built-ins plus snippets saved from the clipboard", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenScripts, enabled: true},
 			{label: "Folder sync", value: target, detail: "rsync without --delete, or check Syncthing", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenSync, enabled: true},
@@ -216,20 +212,6 @@ func powerToolRows(config *Config) []powerToolRow {
 			{label: "Memory scanner", value: memoryMenuValue(), detail: "Scan and edit a running game's RAM, then write a value back", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenMemory, enabled: true},
 			{label: "Controller test", value: "Sticks · triggers · buttons", detail: "Raw axis values, drift verdicts and a button check", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenCtrlDiag, enabled: true},
 			{label: "Close", value: "Back to the app", hint: hintLine(FooterHint{"B", "Close"}), action: powerActionClose, enabled: true},
-		}
-	case powerPageNetwork:
-		gateway := powerTools.gateway
-		if gateway == "" {
-			gateway = "no LAN address"
-		}
-		return []powerToolRow{
-			{label: "Scan gateway ports", value: gateway, detail: "13 common ports, read-only TCP connects", hint: hintLine(FooterHint{"A", "Scan"}), action: powerActionScan, enabled: gateway != "no LAN address"},
-			{label: "Scan clipboard host", value: "Copy an IP or host name", detail: "Same 13 ports, limited to the copied host", hint: hintLine(FooterHint{"A", "Scan"}), action: powerActionScanClipboard, enabled: true},
-			{label: "Ping", value: "1.1.1.1", detail: "ICMP if the device has ping, then TCP fallback", hint: hintLine(FooterHint{"A", "Run"}), action: powerActionPing, enabled: true},
-			{label: "Traceroute", value: "1.1.1.1", detail: "Uses traceroute/tracert when installed", hint: hintLine(FooterHint{"A", "Trace"}), action: powerActionTrace, enabled: true},
-			{label: "DNS lookup", value: "github.com · example.com", detail: "Uses the resolver configured on this device", hint: hintLine(FooterHint{"A", "Run"}), action: powerActionDNS, enabled: true},
-			{label: "Wi-Fi signal", value: "Local interface", detail: "Link quality and dBm when associated", hint: hintLine(FooterHint{"A", "Read"}), action: powerActionWiFi, enabled: true},
-			{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true},
 		}
 	case powerPageFiles:
 		rows := make([]powerToolRow, 0, len(powerTools.files)+1)
@@ -363,6 +345,7 @@ func openPowerTools(config *Config) {
 	powerTools.open = true
 	powerTools.page = powerPageMenu
 	powerTools.returnPage = powerPageMenu
+	powerTools.returnToTools = false
 	powerTools.cursor = 0
 	powerTools.scroll = 0
 	powerTools.confirmKey = ""
@@ -382,6 +365,7 @@ func openPowerTools(config *Config) {
 
 func closePowerTools() {
 	powerTools.open = false
+	powerTools.returnToTools = false
 	PlayBackSound()
 }
 
@@ -397,6 +381,14 @@ func powerSetPage(page powerPage) {
 
 func powerBack() {
 	if powerTools.page == powerPageOutput {
+		if powerTools.returnToTools {
+			// The probe was started in Tools → FTP & IP, so Back returns there
+			// rather than to a Power tools menu the user never opened.
+			powerTools.returnToTools = false
+			powerTools.open = false
+			openToolsPanel()
+			return
+		}
 		powerSetPage(powerTools.returnPage)
 		PlayBackSound()
 		return
@@ -473,6 +465,85 @@ func powerOutputIsBusy() bool {
 	return atomic.LoadInt32(&powerTools.busy) == 1
 }
 
+// ── Network probes, run from Tools → FTP & IP ──────────────────────────────
+//
+// These checks used to be a Power tools page. They are file-transfer and
+// network tools, so their rows live in the Tools panel now (Tools → FTP & IP),
+// and Power tools no longer has a network page. The results still use the
+// shared output viewer, so the hex/JSON toggles and scrolling are the same.
+
+// powerRunFromTools opens the output viewer for a probe started in the Tools
+// panel and remembers that Back returns there.
+func powerRunFromTools(config *Config, title, working string, fn func() powerAsyncResult) {
+	openPowerTools(config)
+	powerTools.returnToTools = true
+	powerStartAsync(title, working, fn)
+}
+
+func powerProbeGatewayScan(config *Config) {
+	gateway := powerGatewayGuess(toolsIPAddress())
+	if gateway == "" {
+		ShowToast("No LAN address — connect to Wi-Fi first", ToastKindWarning)
+		return
+	}
+	powerRunFromTools(config, "Gateway port scan", "Scanning "+gateway+"…", func() powerAsyncResult {
+		return powerAsyncResult{text: powerScanText(gateway, 400*time.Millisecond)}
+	})
+}
+
+func powerProbeClipboardScan(config *Config) {
+	text, err := powerClipboardText()
+	if err != nil || text == "" {
+		ShowToast("Clipboard is empty — copy a host or IP first", ToastKindWarning)
+		return
+	}
+	host, err := powerCleanHost(text)
+	if err != nil {
+		ShowToast(err.Error(), ToastKindWarning)
+		return
+	}
+	powerRunFromTools(config, "Port scan · "+host, "Scanning "+host+"…", func() powerAsyncResult {
+		return powerAsyncResult{text: powerScanText(host, 400*time.Millisecond)}
+	})
+}
+
+func powerProbePing(config *Config) {
+	powerRunFromTools(config, "Ping", "Pinging 1.1.1.1…", func() powerAsyncResult {
+		return powerAsyncResult{text: powerPingSummary("1.1.1.1")}
+	})
+}
+
+func powerProbeTraceroute(config *Config) {
+	powerRunFromTools(config, "Traceroute", "Tracing to 1.1.1.1…", func() powerAsyncResult {
+		out, err := powerTraceRoute("1.1.1.1")
+		return powerAsyncResult{text: out, err: err}
+	})
+}
+
+func powerProbeDNS(config *Config) {
+	powerRunFromTools(config, "DNS lookup", "Resolving…", func() powerAsyncResult {
+		var b strings.Builder
+		for _, host := range []string{"github.com", "example.com"} {
+			ips, err := powerResolve(host)
+			if err != nil {
+				fmt.Fprintf(&b, "%s: %v\n", host, err)
+				continue
+			}
+			fmt.Fprintf(&b, "%s:\n", host)
+			for _, ip := range ips {
+				fmt.Fprintf(&b, "  %s\n", ip)
+			}
+		}
+		return powerAsyncResult{text: b.String()}
+	})
+}
+
+func powerProbeWiFiSignal(config *Config) {
+	powerRunFromTools(config, "Wi-Fi signal", "Reading the local interface…", func() powerAsyncResult {
+		return powerAsyncResult{text: powerWiFiSummary()}
+	})
+}
+
 func powerToggleHex() {
 	name, _, mode, raw := powerOutputSnapshot()
 	if len(raw) == 0 {
@@ -537,9 +608,6 @@ func powerActivate(config *Config) {
 		return
 	}
 	switch row.action {
-	case powerActionOpenNetwork:
-		powerSetPage(powerPageNetwork)
-		PlayActivateSound()
 	case powerActionOpenFiles:
 		powerSetPage(powerPageFiles)
 		PlayActivateSound()
@@ -561,58 +629,6 @@ func powerActivate(config *Config) {
 		openMemPanel()
 	case powerActionOpenCtrlDiag:
 		openCtrldiag()
-	case powerActionScan:
-		gateway := powerTools.gateway
-		if gateway == "" {
-			ShowToast("No LAN address — connect to Wi-Fi first", ToastKindWarning)
-			return
-		}
-		powerStartAsync("Gateway port scan", "Scanning "+gateway+"…", func() powerAsyncResult {
-			return powerAsyncResult{text: powerScanText(gateway, 400*time.Millisecond)}
-		})
-	case powerActionScanClipboard:
-		text, err := powerClipboardText()
-		if err != nil || text == "" {
-			ShowToast("Clipboard is empty — copy a host or IP first", ToastKindWarning)
-			return
-		}
-		host, err := powerCleanHost(text)
-		if err != nil {
-			ShowToast(err.Error(), ToastKindWarning)
-			return
-		}
-		powerStartAsync("Port scan · "+host, "Scanning "+host+"…", func() powerAsyncResult {
-			return powerAsyncResult{text: powerScanText(host, 400*time.Millisecond)}
-		})
-	case powerActionPing:
-		powerStartAsync("Ping", "Pinging 1.1.1.1…", func() powerAsyncResult {
-			return powerAsyncResult{text: powerPingSummary("1.1.1.1")}
-		})
-	case powerActionTrace:
-		powerStartAsync("Traceroute", "Tracing to 1.1.1.1…", func() powerAsyncResult {
-			out, err := powerTraceRoute("1.1.1.1")
-			return powerAsyncResult{text: out, err: err}
-		})
-	case powerActionDNS:
-		powerStartAsync("DNS lookup", "Resolving…", func() powerAsyncResult {
-			var b strings.Builder
-			for _, host := range []string{"github.com", "example.com"} {
-				ips, err := powerResolve(host)
-				if err != nil {
-					fmt.Fprintf(&b, "%s: %v\n", host, err)
-					continue
-				}
-				fmt.Fprintf(&b, "%s:\n", host)
-				for _, ip := range ips {
-					fmt.Fprintf(&b, "  %s\n", ip)
-				}
-			}
-			return powerAsyncResult{text: b.String()}
-		})
-	case powerActionWiFi:
-		powerStartAsync("Wi-Fi signal", "Reading the local interface…", func() powerAsyncResult {
-			return powerAsyncResult{text: powerWiFiSummary()}
-		})
 	case powerActionInspectFile:
 		path := row.arg
 		powerStartAsync(filepath.Base(path), "Reading "+filepath.Base(path)+"…", func() powerAsyncResult {
@@ -1011,6 +1027,12 @@ func handlePowerToolsMouse(mx, my int32, config *Config) bool {
 	}
 	if powerTools.page == powerPageOutput {
 		if powerPanelRect.W > 0 && !pointInRect(mx, my, powerPanelRect) {
+			if powerTools.returnToTools {
+				powerTools.returnToTools = false
+				powerTools.open = false
+				openToolsPanel()
+				return true
+			}
 			closePowerTools()
 		}
 		return true
@@ -1044,8 +1066,6 @@ func handlePowerToolsWheel(y int32) bool {
 
 func powerPageTitle(page powerPage) (string, string) {
 	switch page {
-	case powerPageNetwork:
-		return "Network probes", "Read-only checks on the local network"
 	case powerPageFiles:
 		return "File inspector", "App files only · hex, pretty JSON and logs"
 	case powerPageScripts:

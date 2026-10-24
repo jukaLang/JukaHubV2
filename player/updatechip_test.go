@@ -158,9 +158,15 @@ func TestHomeUpdateChipSelectableWithArrows(t *testing.T) {
 	if got := homeLayout.Focus.Current(); got != HomeFocusWeather {
 		t.Fatalf("Left from the clock focused %q, want weather", got)
 	}
+	// The Wi-Fi meter sits between the weather text and the update offer, so
+	// Left crosses it before reaching the chip.
+	homeKey(t, &Config{}, sdl.K_LEFT)
+	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
+		t.Fatalf("Left from weather focused %q, want the Wi-Fi meter", got)
+	}
 	homeKey(t, &Config{}, sdl.K_LEFT)
 	if got := homeLayout.Focus.Current(); got != HomeFocusUpdate {
-		t.Fatalf("Left from weather focused %q, want the update chip", got)
+		t.Fatalf("Left from the Wi-Fi meter focused %q, want the update chip", got)
 	}
 	// Down must not strand the user in the header.
 	homeKey(t, &Config{}, sdl.K_DOWN)
@@ -171,8 +177,8 @@ func TestHomeUpdateChipSelectableWithArrows(t *testing.T) {
 		t.Fatal("cannot focus the update chip")
 	}
 	homeKey(t, &Config{}, sdl.K_RIGHT)
-	if got := homeLayout.Focus.Current(); got != HomeFocusWeather {
-		t.Fatalf("Right from the update chip focused %q, want weather", got)
+	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
+		t.Fatalf("Right from the update chip focused %q, want the Wi-Fi meter", got)
 	}
 }
 

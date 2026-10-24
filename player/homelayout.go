@@ -31,6 +31,7 @@ const (
 	HomeActionUpdate         HomeAction = "install_update"
 	HomeActionNotifications  HomeAction = "toggle_notifications"
 	HomeActionNowPlaying     HomeAction = "now_playing"
+	HomeActionWiFi           HomeAction = "toggle_wifi"
 )
 
 type HomeFonts struct {
@@ -109,8 +110,8 @@ func NewHomeLayout(width, height int32) *HomeLayout {
 			HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 			HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 			HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
-			HomeFocusSettings, HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying,
-			HomeFocusBell, HomeFocusUpdate, HomeFocusExit,
+			HomeFocusSettings, HomeFocusUpdate, HomeFocusWiFi, HomeFocusWeather,
+			HomeFocusClock, HomeFocusNowPlaying, HomeFocusBell, HomeFocusExit,
 		},
 	}
 	layout.rebuildItems()
@@ -170,9 +171,11 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 956, Y: 454, W: 292, H: 158})
 	card(HomeFocusSettings, "Settings", "Preferences", "settings", HomeActionSettings,
 		sdl.Rect{X: 1082, Y: 164, W: 166, H: 121})
-	// The weather chip and clock are the header text itself - no separate
-	// buttons are drawn. drawHeader replaces these rects with the measured
-	// status text every frame, so focus and clicks land on the header.
+	// The signal meter, weather chip and clock are the header text itself - no
+	// separate buttons are drawn. drawHeader replaces these rects with the
+	// measured cluster every frame, so focus and clicks land on the header.
+	card(HomeFocusWiFi, "Wi-Fi", "Connect to a network", "wifi", HomeActionWiFi,
+		sdl.Rect{X: 900, Y: 10, W: 60, H: 36})
 	card(HomeFocusWeather, "Weather", "Local forecast", "weather", HomeActionToggleWeather,
 		sdl.Rect{X: 968, Y: 10, W: 92, H: 36})
 	card(HomeFocusClock, "Clock", "Toggle calendar", "clock", HomeActionToggleCalendar,
@@ -262,7 +265,7 @@ func (h *HomeLayout) BoundsViolations() []string {
 			out = append(out, fmt.Sprintf("%s: rect %+v escapes %dx%d", id, item.Rect, h.Width, h.Height))
 		}
 		switch id {
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusNowPlaying:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusBell, HomeFocusNowPlaying, HomeFocusWiFi:
 			continue
 		}
 		checked = append(checked, item)
@@ -321,7 +324,7 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 			h.drawContinueCard(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth, data.Continue, cardLift)
 		case HomeFocusExit:
 			h.drawChipButton(renderer, fonts, item, id == focused, data.Pressed == id, pressDepth)
-		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell:
+		case HomeFocusClock, HomeFocusWeather, HomeFocusUpdate, HomeFocusPS5, HomeFocusPS4, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi:
 			// Header chips are the buttons; drawHeader draws them and their focus
 			// rings. Rendering them as action cards would paint a clipped card
 			// (title and icon) over the header -- the now-playing entry sits on
@@ -561,6 +564,15 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		statusWiFiRect = statusFingerRect(statusWiFiRect, header.H,
 			weatherStatusRect, h.Items[HomeFocusClock].Rect)
 	}
+	// The meter is a button, not just a reading: the D-pad focuses the same
+	// grown hit area a fingertip taps, and the entry is disabled whenever the
+	// cluster had to drop the network slot for space.
+	if statusWiFiRect.W > 0 {
+		item := h.Items[HomeFocusWiFi]
+		item.Rect = statusWiFiRect
+		h.Items[HomeFocusWiFi] = item
+	}
+	h.Focus.SetEnabled(HomeFocusWiFi, statusWiFiRect.W > 0)
 	// The D-pad may only focus the chip while it is on screen; with no update
 	// (or no room) it stays disabled and the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusUpdate, homeUpdateRect.W > 0)
@@ -572,7 +584,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// playing it may still be drawn (naming the headphones), but pressing it
 	// would open nothing, so the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusNowPlaying, statusMediaRect.W > 0 && nowPlayingChipIsButton())
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusNowPlaying, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusNowPlaying, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
 		if h.Focus.Current() != id {
 			continue
 		}
@@ -605,7 +617,7 @@ func (h *HomeLayout) CardUnderTile(tile sdl.Rect) HomeFocusID {
 	for _, id := range h.Order {
 		switch id {
 		case HomeFocusPS5, HomeFocusPS4, HomeFocusClock, HomeFocusWeather, HomeFocusBell,
-			HomeFocusNowPlaying, HomeFocusExit:
+			HomeFocusNowPlaying, HomeFocusWiFi, HomeFocusExit:
 			continue
 		}
 		item, ok := h.Items[id]

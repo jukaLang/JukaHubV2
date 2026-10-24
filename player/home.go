@@ -321,6 +321,10 @@ func homeActivate(config *Config) {
 	}
 	// Header chips never map to a scene: their dedicated triggers run before
 	// the scene lookup.
+	if id == HomeFocusWiFi {
+		openWiFiPanel()
+		return
+	}
 	if id == HomeFocusWeather {
 		toggleWeatherPopover()
 		return

@@ -73,7 +73,62 @@ var textBrowserRequestSequence = make(map[string]uint64)
 
 // browserPageFetcher loads one page. It is a variable so the browser's load
 // path (cache, stale-request guard, history) can be tested without a network.
-var browserPageFetcher = browseWebPageResult
+//
+// A load runs on its own goroutine, so the seam is read under a lock and tests
+// swap it with setBrowserPageFetcherForTest: assigning the variable directly
+// races with a fetch that is still on the wire, which the race detector reports
+// as soon as a page load outlives the test that started it.
+var (
+	browserPageFetcherMu sync.RWMutex
+	browserPageFetcher   = browseWebPageResult
+)
+
+// browserFetches counts page loads still on the wire, so a test reset can wait
+// for them instead of wiping state a late fetch is about to publish into.
+var browserFetches sync.WaitGroup
+
+// browserFetchWait bounds how long a reset waits for page loads to return, so a
+// stuck fetch fails the suite with a log line rather than hanging it.
+const browserFetchWait = 10 * time.Second
+
+// currentBrowserPageFetcher returns the fetch function a new load should use.
+func currentBrowserPageFetcher() func(string) browserPage {
+	browserPageFetcherMu.RLock()
+	defer browserPageFetcherMu.RUnlock()
+	return browserPageFetcher
+}
+
+// setBrowserPageFetcherForTest replaces the network seam and returns the
+// function that restores it. Tests must use this instead of assigning
+// browserPageFetcher, which would race with an in-flight load.
+func setBrowserPageFetcherForTest(fn func(string) browserPage) func() {
+	browserPageFetcherMu.Lock()
+	prev := browserPageFetcher
+	browserPageFetcher = fn
+	browserPageFetcherMu.Unlock()
+	return func() {
+		browserPageFetcherMu.Lock()
+		browserPageFetcher = prev
+		browserPageFetcherMu.Unlock()
+	}
+}
+
+// waitForBrowserFetches blocks until the loads started by the test that just
+// finished have returned (or the wait is capped), so its cleanup can reset the
+// browser globals without a fetch publishing into the next test.
+func waitForBrowserFetches() {
+	done := make(chan struct{})
+	go func() {
+		browserFetches.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(browserFetchWait):
+		log.Printf("[browser] a page load is still running after %s; resetting anyway", browserFetchWait)
+	}
+}
+
 var textBrowserRequestMutex sync.Mutex
 var textBrowserAddressEditing bool
 var textBrowserAddressSubmitted bool
@@ -683,8 +738,13 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		browserRecordURL(address)
 	}
 
+	// The seam is read once, here: a load keeps the fetcher it started with even
+	// if a test swaps it while the request is still running.
+	fetch := currentBrowserPageFetcher()
+	browserFetches.Add(1)
 	go func(variable, pageURL string, id uint64) {
-		page := browserPageFetcher(pageURL)
+		defer browserFetches.Done()
+		page := fetch(pageURL)
 		textBrowserRequestMutex.Lock()
 		isCurrent := textBrowserRequestSequence[variable] == id
 		textBrowserRequestMutex.Unlock()
@@ -1451,13 +1511,26 @@ func browseJSONContent(element Element) (result string) {
 
 // fetchURL is a simple HTTP GET helper with timeout.
 func fetchURL(url string, timeout time.Duration) (string, error) {
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequest("GET", url, nil)
+	return fetchURLContext(context.Background(), url, timeout)
+}
+
+// fetchURLContext is fetchURL tied to a caller's context. Scene work uses it so
+// leaving the screen closes the request instead of waiting out the timeout.
+func fetchURLContext(ctx context.Context, url string, timeout time.Duration) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "JukaHub/1.0")
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		return "", err
 	}

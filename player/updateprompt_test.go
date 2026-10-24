@@ -152,10 +152,10 @@ func TestToolsRowsPatchAndCalculator(t *testing.T) {
 	}
 }
 
-// Eleven rows in three sections (IP, FTP, companion, SSH, party, Updates,
-// power tools, disc helpers, Calculator, Community, Classic Tools) plus the
-// SFTP credentials line must still fit a 720p panel, which is what dense mode
-// is for.
+// Fifteen rows in three sections (the ten FTP & IP rows, party, Updates, power
+// tools, disc helpers, Calculator, Community, Classic Tools) plus the SFTP
+// credentials line do not fit a 720p panel at the three-line row height, so the
+// panel goes dense and scrolls. The credentials line must survive both.
 func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
 	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
@@ -171,19 +171,25 @@ func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
 	}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 11 {
-		t.Fatalf("row rects = %d, want 11", len(rects))
+	if len(rects) != 17 {
+		t.Fatalf("row rects = %d, want 17 with Patch and Calculator", len(rects))
 	}
 	layout := toolsPanelMetrics(config, toolsRows(config))
 	if !layout.dense {
-		t.Fatal("expected dense rows for eleven items on a 720p screen")
+		t.Fatal("expected dense rows for fifteen items on a 720p screen")
 	}
-	content := layout.contentH(len(rects))
-	if content > probeH-40 || content > panel.H {
-		t.Fatalf("dense layout needs %dpx, panel is %+v with screen %d", content, *panel, probeH)
+	if panel.H > probeH-40 {
+		t.Fatalf("panel is %dpx tall with screen %d", panel.H, probeH)
 	}
 	if len(layout.info) == 0 {
 		t.Fatal("dense layout dropped the SFTP credentials")
+	}
+	// The cursor starts at the top, so the first rows are the ones on screen.
+	if rects[0].W == 0 {
+		t.Fatal("the first row should be visible at scroll 0")
+	}
+	if rects[len(rects)-1].W != 0 {
+		t.Fatal("the last row cannot be on screen with fifteen rows; the list must scroll")
 	}
 }
 

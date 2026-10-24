@@ -517,6 +517,8 @@ func TestHomeCardsResolve(t *testing.T) {
 		HomeFocusContinue: true, HomeFocusClock: true, HomeFocusWeather: true,
 		HomeFocusBell: true, HomeFocusUpdate: true, HomeFocusPS5: true,
 		HomeFocusPS4: true, HomeFocusEmulator: true, HomeFocusExit: true,
+		// The Wi-Fi meter opens the network picker overlay.
+		HomeFocusWiFi: true,
 		// The now-playing chip opens whichever player is running, so it has no
 		// single scene target.
 		HomeFocusNowPlaying: true,

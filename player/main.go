@@ -471,6 +471,11 @@ func main() {
 	defer memMonitor.Stop()
 	LogDeviceDiagnostics()
 
+	// Cancel the active scene's background work on the way out, before the
+	// Cleanup hooks and the display teardown run. Registered last so it is the
+	// first deferred call to execute.
+	defer shutdownSceneWork()
+
 	running := true
 	startupReported := false
 	// Alarms are checked on the clock, not on frameCount: the adaptive frame
@@ -757,6 +762,16 @@ func main() {
 						// The app menu and notification center are modal:
 						// while one is open it owns the D-pad and Confirm/Back keys.
 						if handleChromeOverlayKey(e, config) {
+							continue
+						}
+						// Log viewer (Ctrl+L). It is handled here, before the per-scene
+						// dispatch, because it has to work on scenes with no config
+						// elements (Games, Patch, Music) as well — that is exactly when
+						// a log is worth opening. The terminal keeps the key to clear
+						// its output.
+						inTerminalScene := currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+							config.Scenes[currentSceneIndex].Name == "Terminal"
+						if handleLogShortcut(e, config, inTerminalScene) {
 							continue
 						}
 						// The clock popover is shared by every scene, so Escape closes
@@ -1064,7 +1079,8 @@ func main() {
 							if idx := findSceneIndex(config, "Tube"); idx >= 0 {
 								changeSceneTo(config, idx)
 							}
-						} // Quick Settings (Ctrl+Q).
+						}
+						// Quick Settings (Ctrl+Q).
 						if e.Keysym.Sym == sdl.K_q && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
 							qsToggleOpen()
 						}

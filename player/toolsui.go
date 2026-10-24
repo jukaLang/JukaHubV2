@@ -32,6 +32,14 @@ const (
 	toolsActionDiscHelpers
 	toolsActionCopyIP
 	toolsActionUtilities
+	// Network probes. They used to be a Power tools page; they are transfer
+	// tools, so they live here under the same FTP & IP heading.
+	toolsActionGatewayScan
+	toolsActionClipboardScan
+	toolsActionPing
+	toolsActionTraceroute
+	toolsActionDNSLookup
+	toolsActionWiFiSignal
 )
 
 // toolsStatus colours the small dot on a row: a server that is running is
@@ -60,6 +68,9 @@ type toolsRow struct {
 type toolsPanelState struct {
 	open   bool
 	cursor int
+	// scroll is the first row drawn. The list is longer than a 720p panel, so
+	// the cursor moves the window instead of the panel growing off screen.
+	scroll int
 }
 
 var toolsPanel toolsPanelState
@@ -99,6 +110,7 @@ func openToolsPanel() {
 	}
 	toolsPanel.open = true
 	toolsPanel.cursor = 0
+	toolsPanel.scroll = 0
 	toolsPanelRect = sdl.Rect{}
 	toolsRowRects = nil
 	toolsIPCache.mu.Lock()
@@ -273,6 +285,63 @@ func toolsRows(config *Config) []toolsRow {
 	}
 	share = append(share, sshRow)
 
+	// The network probes used to be a page inside Power tools. They answer the
+	// same question as the rows above ("is this thing on the network?"), so they
+	// belong under the same heading instead of two menus deep.
+	gateway := powerGatewayGuess(ip)
+	if gateway == "" {
+		gateway = "No LAN address"
+	}
+	share = append(share, toolsRow{
+		label:   "Gateway port scan",
+		value:   gateway,
+		detail:  "13 common ports, read-only TCP connects",
+		hint:    hintLine(FooterHint{"A", "Scan"}),
+		action:  toolsActionGatewayScan,
+		enabled: gateway != "No LAN address",
+		status:  toolsStatusNeutral,
+	})
+	share = append(share, toolsRow{
+		label:   "Clipboard host scan",
+		value:   "Copy a host first",
+		detail:  "Same 13 ports, limited to the copied IP or host name",
+		hint:    hintLine(FooterHint{"A", "Scan"}),
+		action:  toolsActionClipboardScan,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Ping",
+		value:   "1.1.1.1",
+		detail:  "ICMP if the device has ping, then a TCP fallback",
+		hint:    hintLine(FooterHint{"A", "Run"}),
+		action:  toolsActionPing,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Traceroute",
+		value:   "1.1.1.1",
+		detail:  "Uses traceroute/tracert when installed",
+		hint:    hintLine(FooterHint{"A", "Trace"}),
+		action:  toolsActionTraceroute,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "DNS lookup",
+		value:   "github.com · example.com",
+		detail:  "Uses the resolver configured on this device",
+		hint:    hintLine(FooterHint{"A", "Run"}),
+		action:  toolsActionDNSLookup,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Wi-Fi signal",
+		value:   "Local interface",
+		detail:  "Link quality and dBm when associated",
+		hint:    hintLine(FooterHint{"A", "Read"}),
+		action:  toolsActionWiFiSignal,
+		enabled: true,
+	})
+
 	together := make([]toolsRow, 0, 1)
 	partyRow := toolsRow{
 		label:   "Watch Party",
@@ -360,7 +429,7 @@ func toolsRows(config *Config) []toolsRow {
 
 	// One heading per group; rows are added conditionally, so the label goes on
 	// whichever row ended up first.
-	markToolsSection(share, "SHARE & TRANSFER")
+	markToolsSection(share, "FTP & IP")
 	markToolsSection(together, "WATCH TOGETHER")
 	markToolsSection(system, "SYSTEM & UPDATES")
 
@@ -391,7 +460,89 @@ func toolsPanelMove(delta int) {
 	if toolsPanel.cursor >= len(rows) {
 		toolsPanel.cursor = 0
 	}
+	toolsPanelClampScroll(rows, toolsPanelMetrics(appConfig, rows))
 	PlayNavSound()
+}
+
+// toolsRowOffsets is the running height of each row, including the section
+// heading drawn above it. offsets[i] is where row i starts, offsets[len] the
+// total body height.
+func toolsRowOffsets(rows []toolsRow, layout toolsPanelLayout) []int32 {
+	offsets := make([]int32, len(rows)+1)
+	var y int32
+	for i, row := range rows {
+		if row.section != "" {
+			y += layout.sectionH
+		}
+		y += layout.rowH
+		offsets[i+1] = y
+	}
+	return offsets
+}
+
+// toolsPanelBodyHeight is the space rows may use inside the panel. It is the
+// panel height (capped to the screen) minus the header, the live-server line
+// and the footer.
+func toolsPanelBodyHeight(rows []toolsRow, layout toolsPanelLayout) int32 {
+	if layout.rowH <= 0 {
+		return 0
+	}
+	h := layout.contentH(len(rows))
+	if maxH := screenHeight - 40; h > maxH {
+		h = maxH
+	}
+	body := h - layout.headerH - layout.footerH - layout.infoH
+	if body < layout.rowH {
+		body = layout.rowH
+	}
+	return body
+}
+
+// toolsVisibleRows reports how many rows fit below scroll in bodyH pixels. At
+// least one row is always reported so the cursor cannot land on nothing.
+func toolsVisibleRows(rows []toolsRow, layout toolsPanelLayout, scroll int, bodyH int32) int {
+	if layout.rowH <= 0 || scroll < 0 || scroll >= len(rows) {
+		return 0
+	}
+	offsets := toolsRowOffsets(rows, layout)
+	start := offsets[scroll]
+	visible := 0
+	for i := scroll; i < len(rows); i++ {
+		if offsets[i+1]-start > bodyH && visible > 0 {
+			break
+		}
+		visible++
+	}
+	return visible
+}
+
+// toolsPanelClampScroll keeps the cursor inside the drawn window: scroll never
+// passes the cursor, and the window grows towards the end until the cursor is
+// the last visible row.
+func toolsPanelClampScroll(rows []toolsRow, layout toolsPanelLayout) {
+	if len(rows) == 0 {
+		return
+	}
+	if toolsPanel.cursor < 0 {
+		toolsPanel.cursor = 0
+	}
+	if toolsPanel.cursor >= len(rows) {
+		toolsPanel.cursor = len(rows) - 1
+	}
+	if toolsPanel.scroll > toolsPanel.cursor {
+		toolsPanel.scroll = toolsPanel.cursor
+	}
+	if toolsPanel.scroll < 0 || toolsPanel.scroll >= len(rows) {
+		toolsPanel.scroll = 0
+	}
+	body := toolsPanelBodyHeight(rows, layout)
+	for toolsPanel.scroll < len(rows) {
+		visible := toolsVisibleRows(rows, layout, toolsPanel.scroll, body)
+		if visible <= 0 || toolsPanel.cursor < toolsPanel.scroll+visible {
+			break
+		}
+		toolsPanel.scroll++
+	}
 }
 
 func toolsPanelActivate(config *Config) {
@@ -477,6 +628,18 @@ func toolsPanelActivate(config *Config) {
 		}
 		toolsPanel.open = false
 		changeSceneTo(config, idx)
+	case toolsActionGatewayScan:
+		powerProbeGatewayScan(config)
+	case toolsActionClipboardScan:
+		powerProbeClipboardScan(config)
+	case toolsActionPing:
+		powerProbePing(config)
+	case toolsActionTraceroute:
+		powerProbeTraceroute(config)
+	case toolsActionDNSLookup:
+		powerProbeDNS(config)
+	case toolsActionWiFiSignal:
+		powerProbeWiFiSignal(config)
 	}
 }
 
@@ -658,13 +821,13 @@ func toolsPanelMetrics(config *Config, rows []toolsRow) toolsPanelLayout {
 		layout.rowPad = 3
 		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
 	}
-	if !fits() && len(layout.info) > 1 {
+	// The list scrolls now, so the live-server line is no longer traded for
+	// vertical space: it stays pinned above the footer and the rows move under
+	// it. That line is where the SFTP password is shown, which must not be the
+	// thing that disappears on a 720p panel.
+	if len(layout.info) > 1 {
 		layout.info = layout.info[:1]
 		layout.infoH = layout.infoLineH + 5
-	}
-	if !fits() {
-		layout.info = nil
-		layout.infoH = 0
 	}
 	return layout
 }
@@ -756,8 +919,17 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 
 	rowW := panelW - 2*padX
 	toolsRowRects = make([]sdl.Rect, len(rows))
-	y := panelY + headerH
-	for i, row := range rows {
+	// The list is longer than the panel, so only the window that fits is drawn
+	// and the cursor scrolls it. Rects of off-screen rows stay zero, which also
+	// keeps a tap from landing on a row that is not on screen.
+	toolsPanelClampScroll(rows, layout)
+	offsets := toolsRowOffsets(rows, layout)
+	bodyH := toolsPanelBodyHeight(rows, layout)
+	visible := toolsVisibleRows(rows, layout, toolsPanel.scroll, bodyH)
+	bodyTop := panelY + headerH
+	for i := toolsPanel.scroll; i < toolsPanel.scroll+visible && i < len(rows); i++ {
+		row := rows[i]
+		y := bodyTop + offsets[i] - offsets[toolsPanel.scroll]
 		if row.section != "" {
 			drawToolsSectionLabel(renderer, config, row.section, panelX+padX, y, rowW)
 			y += sectionH
@@ -770,7 +942,6 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 		r := sdl.Rect{X: panelX + padX, Y: y, W: rowW, H: rowH - rowGap}
 		toolsRowRects[i] = r
-		y += rowH
 
 		focused := i == toolsPanel.cursor
 		rowBg := WithAlpha(ColorSurfaceRow, 190)
@@ -832,10 +1003,26 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 		drawToolsHintChip(renderer, config, font, row.hint, r, focused, focusColor)
 	}
 
+	// A scrollbar appears only when the list is taller than the body, so the
+	// user can tell there are more rows below the fold.
+	if total := offsets[len(rows)]; total > bodyH && bodyH > 0 {
+		trackX := panelX + panelW - 9
+		trackY := bodyTop
+		trackH := bodyH
+		fillRoundedRect(renderer, trackX, trackY, 3, trackH, 2, WithAlpha(ColorBorder, 120))
+		thumbH := trackH * bodyH / total
+		if thumbH < 24 {
+			thumbH = 24
+		}
+		thumbY := trackY + (trackH-thumbH)*offsets[toolsPanel.scroll]/total
+		fillRoundedRect(renderer, trackX, thumbY, 3, thumbH, 2, WithAlpha(accentColor, 200))
+	}
+
 	// Live details while a server is open: the SFTP password is shown here (it
 	// is random per run and never written to the config or the log), followed
-	// by the warning for whichever share is exposed.
-	infoY := panelY + headerH + int32(len(rows))*rowH + int32(layout.sections)*sectionH + 2
+	// by the warning for whichever share is exposed. Pinned above the footer so
+	// scrolling the rows never pushes it away.
+	infoY := panelY + panelH - footerH - layout.infoH + 2
 	for _, line := range info {
 		color := ColorTextSecondary()
 		if line.warn {

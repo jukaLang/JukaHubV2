@@ -5792,7 +5792,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 		config.Variables.Custom["plugin_list"] = strings.Join(list, "\n")
 	case "packages_refresh":
-		go fetchPackages(config)
+		runSceneTask(func(ctx context.Context) { fetchPackagesContext(ctx, config) })
 	case "browser_back":
 		browserBack(config)
 	case "browser_forward":
@@ -6120,6 +6120,9 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	if record {
 		pushSceneHistory(currentSceneIndex)
 	}
+	// Work started by this scene stops here: a speed test or a feed fetch must
+	// not keep the Wi-Fi and the CPU busy behind the next screen.
+	cancelSceneWork()
 	// Persist focus for the current scene before leaving it.
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 		focusEngine.Persist(config.Scenes[currentSceneIndex].Name)
@@ -6154,6 +6157,7 @@ func completeSceneTransition(config *Config) {
 
 	// Build focus graph for the new scene and restore persisted focus.
 	scene := config.Scenes[currentSceneIndex]
+	enterSceneWork(scene.Name)
 	// Home focus is managed by the dedicated controller; restore the last
 	// focused card when returning to the home scene.
 	homeLayoutActive = scene.Layout == "home"
@@ -6214,7 +6218,7 @@ func completeSceneTransition(config *Config) {
 		case "iptv_entries":
 			loadIPTV(config)
 		case "podcast_entries":
-			go loadPodcasts(config)
+			loadPodcasts(config)
 		case appsEntriesVar:
 			scanInstalledApps(config)
 		case "plugin_list":
@@ -6264,10 +6268,13 @@ func completeSceneTransition(config *Config) {
 	}
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "textlog" && e.Variable == "weather_screen_text" {
-			go func() {
-				fetchWeatherOnce()
+			runSceneTask(func(ctx context.Context) {
+				fetchWeatherOnceContext(ctx)
+				if ctx.Err() != nil {
+					return
+				}
 				publishCustom("weather_screen_text", weatherScreenText(config))
-			}()
+			})
 		}
 		if e.Type == "chat" {
 			loadChatMessages()
@@ -6314,7 +6321,7 @@ func completeSceneTransition(config *Config) {
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "packagelist" {
 			if _, ok := config.Variables.Custom["packages_list"]; !ok {
-				go fetchPackages(config)
+				runSceneTask(func(ctx context.Context) { fetchPackagesContext(ctx, config) })
 			}
 			break
 		}
@@ -6496,6 +6503,12 @@ func activateChromeFocus(config *Config) bool {
 		// The chip names what is playing; pressing it opens that player.
 		PlayActivateSound()
 		openNowPlaying(config)
+		return true
+	case ChromeWiFiIndex:
+		// The signal meter is the Wi-Fi button: it opens the same network
+		// picker a tap on the meter does.
+		PlayActivateSound()
+		openWiFiPanel()
 		return true
 	}
 	return false

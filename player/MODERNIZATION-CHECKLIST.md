@@ -1,7 +1,7 @@
 # JukaHubV2 Modernization — Verified Checklist
 
 Status of every item in [MODERNIZATION.md](MODERNIZATION.md), checked against the
-code in this tree on **2026-10-18** (go1.25.0 windows/amd64, SDL2 from
+code in this tree on **2026-10-24** (go1.27.2 windows/amd64, SDL2 from
 `player/.sdl2`).
 
 Legend: **✅ shipped** (code exists and is exercised), **🟡 partial** (some of the
@@ -23,10 +23,10 @@ go build .        # exit 0
 | Phase | Done | Partial | Not started |
 |-------|------|---------|-------------|
 | 2. Architecture | 27 | 3 | 1 |
-| 3. Async & performance | 10 | 3 | 8 |
-| 4. Reliability | 22 | 2 | 2 |
+| 3. Async & performance | 12 | 3 | 6 |
+| 4. Reliability | 24 | 1 | 1 |
 | 5. Features | 10 | 3 | 3 |
-| 6. Testing | 8 | 2 | 1 |
+| 6. Testing | 10 | 1 | 0 |
 | 7. Web builder | 5 | 2 | 5 |
 
 ---
@@ -103,9 +103,17 @@ go build .        # exit 0
 
 ### 3.1 Concurrency
 
-- [ ] 🟡 `context.Context` — threaded through Patch, downloads, text browser and
-      installers; older feature fetches still use bare clients.
-- [ ] ⬜ `errgroup` coordinated cancellation.
+- [ ] 🟡 `context.Context` — threaded through Patch, downloads, text browser,
+      installers and now scene work: scene-entry feed fetches (podcasts, the
+      package registry, weather) and the Tools jobs (tickers, speed test,
+      benchmarks) take their scene's context. Older feature fetches still use
+      bare clients.
+- [x] ✅ `errgroup` coordinated cancellation — `runCancelableGroup`
+      (`scenetasks.go`) implements the errgroup contract in-tree, because the
+      vendored module set is pinned and `golang.org/x/sync` would require
+      re-vendoring unrelated upgrades. It cancels siblings on the first error
+      and returns that error; covered by `scenetasks_test.go`
+      (`TestRunCancelableGroup*`).
 - [x] ✅ Bounded thumbnail prefetch pool — 2 workers on handhelds, 3 on desktop,
       with in-flight dedupe (`thumbstore.go`); verified by
       `TestThumbnailPrefetchRunsConcurrently`. No general-purpose semaphore yet.
@@ -113,7 +121,13 @@ go build .        # exit 0
 - [ ] ⬜ Network worker pool (2–3 jobs on Trimui).
 - [ ] ⬜ Debounced search input (config saves and hot reload are debounced; search
       is not).
-- [ ] ⬜ Cancel scene work on scene exit.
+- [x] ✅ Cancel scene work on scene exit — `scenetasks.go` gives each scene a
+      context generation; `switchScene` cancels the screen being left and
+      `completeSceneTransition` opens the next one. Adopted by the podcast and
+      package fetches, the weather screen, and the ticker/speed-test/benchmark
+      jobs, which clean up their temporary files on cancel. A transition never
+      waits for the network; tests join with `waitForSceneWork`
+      (`scenetasks_test.go`).
 
 ### 3.2 Caching
 
@@ -173,11 +187,17 @@ go build .        # exit 0
       shown by the shipped **LogExporter** scene's `textlog` panel. The panel now
       shows the newest lines (tail view) instead of stopping at the oldest ones,
       covered by `logviewer_test.go`.
-- [ ] 🟡 `Ctrl+L` shortcut — listed in `shortcuts.go`, but no global handler exists
-      (only the terminal uses Ctrl+L to clear). The viewer is reached through the
-      Logs scene.
-- [ ] ⬜ Log rotation — `logs.txt` is only written on explicit export; no size-based
-      rotation.
+- [x] ✅ `Ctrl+L` shortcut — `handleLogShortcut` (`shortcuts.go`) jumps to the
+      shipped **LogExporter** scene from any scene, including the ones with no
+      config elements (Games, Patch, Music) that the per-element chord dispatch
+      never reaches. It stands aside while the terminal has focus, which keeps
+      Ctrl+L for clearing its output, and is only consumed when the config
+      actually has the scene, so it never swallows a press that does nothing.
+- [x] ✅ Log rotation — an export moves the previous `logs.txt` to `logs.txt.1`
+      (one backup, then writes the new file through `AtomicWrite`), and both the
+      exported file (2 MiB) and the in-memory `appLog` ring (512 KiB, in addition
+      to its 2000-line cap) are size-capped, so one pathological line cannot
+      grow either without bound (`logrotate.go`, `logrotate_test.go`).
 - [x] ✅ Diagnostic bundle export — `ExportDiagnostics` (redacted report + Patch UI
       action).
 
@@ -256,16 +276,28 @@ go build .        # exit 0
 - [x] ✅ URL/path validation tests — `paths_test.go`.
 - [x] ✅ Offline/retry behavior tests — `retry_test.go` (500 recovery, 404 no-retry,
       exhaustion, context cancel, unrewindable body).
-- [ ] ⬜ Cancellation tests (beyond retry backoff cancellation).
+- [x] ✅ Cancellation tests (beyond retry backoff cancellation) —
+      `scenetasks_test.go` covers scene-exit and shutdown cancellation, a task that
+      finishes after its scene is gone, joining, fail-fast groups, parent
+      cancellation, concurrent execution, and a real request closed by leaving
+      Podcasts.
 - [x] ✅ External process cleanup tests — embedded playback teardown now waits
       for the ffmpeg decoder goroutine (`waitForVideoDecoders`) and the decode
       test fails if it does not exit; this also fixed a reproducible SDL crash
       when a later render test reused the window.
 - [ ] 🟡 Platform path selection tests — path guards exist, platform-specific
       selection is only indirectly covered.
-- [ ] 🟡 Benchmarks — text-cache and font cache benchmarks exist
-      (`hotpath_bench_test.go` for the text hot path, `cache_bench_test.go` for
-      the caches); no render/navigation benchmark suite.
+- [x] ✅ Benchmarks — `hotpath_bench_test.go` covers the text hot path and
+      `cache_bench_test.go` the caches. `render_bench_test.go` adds the 720p
+      frame budget: a warm home frame, a cold-text home frame (theme switch) and
+      one D-pad step. Measured on the desktop proxy (i7-1165G7, SDL dummy driver,
+      software renderer):
+
+      ```
+      BenchmarkHomeFrame720p          699 µs/frame   24 KB   1588 allocs
+      BenchmarkHomeFrame720pColdText  4.62 ms/frame  31 KB   1752 allocs
+      BenchmarkHomeNavigation720p     130 ns/step     0 B        0 allocs
+      ```
 
 ---
 
@@ -288,7 +320,7 @@ go build .        # exit 0
 
 ---
 
-## Verified in this pass (2026-10-18)
+## Verified in this pass (2026-10-24)
 
 - Design tokens: typography roles + density scale, adopted by shared components.
 - Shared components: `UICard`, `UIBadge`, `UIProgressBar`, `UIListRow`,
@@ -319,18 +351,43 @@ go build .        # exit 0
   consecutive full-suite runs left the repository user files byte-identical.
 - Log panel: fixed the live viewer to render the most recent log lines, with a
   pure tail-selection helper and tests.
-- Full suite: `go vet ./...`, `go test ./...`, `go build .` all pass.
+- Scene-scoped cancellation: `scenetasks.go` runs work under the active
+  scene's context; leaving a screen closes its requests and a cancelled task
+  publishes nothing. Adopted by the podcast/package/weather fetches and by the
+  ticker, network-speed and benchmark jobs, which also remove their temporary
+  files. The podcast test drives a real scene-exit cancellation through the
+  server's request context.
+- Coordinated fan-out: the ticker board's independent endpoints now share one
+  round trip through `runCancelableGroup` (fail-fast errgroup semantics), with
+  the board's order preserved and a failed endpoint reported as `n/a`.
+- Log export: an export rotates the previous `logs.txt` to `logs.txt.1` and
+  caps the file at 2 MiB; the in-memory ring is byte-capped as well as
+  line-capped, so one huge line cannot hold the heap.
+- `Ctrl+L` opens the LogExporter scene from anywhere except the terminal, which
+  keeps the key for clearing its output.
+- 720p budgets: `render_bench_test.go` measures a warm home frame (~700 µs on the
+  desktop software-renderer proxy, 1588 allocs), a cold-text frame (~4.6 ms) and
+  one D-pad step (~130 ns, allocation-free), so layout and text changes can be
+  compared against a number instead of a feeling.
+- Race detector: the `player-race` job's failure in
+  `TestBrowserToggleAdFilterIsPerSite` is fixed structurally. The browser's
+  fetch seam is read once per load under a lock, tests swap it with
+  `setBrowserPageFetcherForTest`, and a browser reset joins the loads still in
+  flight, so no goroutine outlives the test that started it.
+  `TestBrowserFetcherSwapDuringLoadIsSafe` pins the pattern.
+- Full suite: `go vet ./...`, `go test ./...` (including `-race` on the new
+  concurrency tests), `go test -race ./...` and `go build .` all pass.
 
 ## Recommended next work (highest value first)
 
-1. **General async + cancellation** — the thumbnail pool is bounded now; extend
-   that pattern to other background work and thread `context` through
-   scene-scoped tasks, the remaining performance risk on 1 GB RAM.
-2. **Log rotation** — cap `logs.txt`/`appLog` writes by size and rotate one backup.
-3. **Wire `Ctrl+L`** to the existing Logs scene, or remove the shortcut line.
-4. **Controller remapping screen** — the A/B and X/Y swaps in Accessibility are the
+1. **Controller remapping screen** — the A/B and X/Y swaps in Accessibility are the
    foundation, but there is no per-button keymap layer yet.
-5. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
+2. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
    work with immediate design-time payoff.
-6. **Benchmarks** for text rendering and home navigation at 720p, so future
-   rendering changes have a budget to compare against.
+3. **Conditional caching** (`If-None-Match`) for the feeds that already go through
+   `retry.go`, so an unchanged package registry or podcast feed costs a 304.
+4. **Named power profiles** (Battery Saver / Balanced / Performance) folding the
+   existing Low Power, adaptive-FPS and motion switches into one setting.
+5. **Debounced search input** — first name the path it is for: the Tube field
+   only submits on Enter/its button, and the global search filters in memory, so
+   this item is worth doing only where a keystroke really starts work.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -153,19 +154,27 @@ func isPackageInstalled(p Package) bool {
 	return err == nil
 }
 
-// fetchPackages downloads and parses the package registry, then publishes it
-// so the list element can render it. Runs in its own goroutine.
-func fetchPackages(config *Config) {
+// fetchPackagesContext downloads and parses the package registry, then
+// publishes it so the list element can render it. It is scene work: leaving the
+// package screen cancels the registry request, and a cancelled fetch says
+// nothing instead of showing an error on the next screen.
+func fetchPackagesContext(ctx context.Context, config *Config) {
 	config.Variables.LoadingSpinner = true
 	config.Variables.SpinnerText = "Loading packages..."
 	defer func() { config.Variables.LoadingSpinner = false }()
 
-	raw, err := fetchURL(packagesURL, 15*time.Second)
+	raw, err := fetchURLContext(ctx, packagesURL, 15*time.Second)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		log.Printf("packages: fetch error: %v", err)
 		publishCustom("packages_error", fmt.Sprintf("Failed to load packages: %v", err))
 		publishCustom("packages_list", []Package{})
 		showToast("Packages load failed. Check network.", ToastError())
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 
@@ -182,6 +191,9 @@ func fetchPackages(config *Config) {
 	sort.Slice(pkgs, func(i, j int) bool {
 		return strings.ToLower(pkgs[i].Name) < strings.ToLower(pkgs[j].Name)
 	})
+	if ctx.Err() != nil {
+		return
+	}
 
 	packagesMutex.Lock()
 	packagesList = pkgs

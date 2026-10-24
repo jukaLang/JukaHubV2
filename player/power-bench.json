@@ -1,0 +1,10 @@
+[
+  {
+    "device": "Development build",
+    "kind": "sequential",
+    "write": 854.7216996358017,
+    "read": 5049.533367363646,
+    "at": "2026-10-24T04:45:27Z",
+    "version": "0.4.0"
+  }
+]

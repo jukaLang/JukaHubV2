@@ -93,18 +93,26 @@ func TestToolsPanelRenderLayout(t *testing.T) {
 	if len(rects) != len(rows) {
 		t.Fatalf("drew %d row rects for %d rows", len(rects), len(rows))
 	}
+	drawn := 0
+	var prev sdl.Rect
 	for i, r := range rects {
+		if r.W == 0 && r.H == 0 {
+			// Off screen: the list scrolls, so only the window in the body is
+			// drawn and the rest keep zero rects.
+			continue
+		}
+		drawn++
 		if r.X < panel.X || r.X+r.W > panel.X+panel.W ||
 			r.Y < panel.Y || r.Y+r.H > panel.Y+panel.H {
 			t.Fatalf("row %d %+v escapes panel %+v", i, r, *panel)
 		}
-		if i > 0 {
-			// Section headings sit between groups, so the gap is not constant;
-			// what must hold is that rows stay in order and never overlap.
-			if r.Y < rects[i-1].Y+rects[i-1].H {
-				t.Fatalf("row %d at y=%d overlaps the previous row ending at %d", i, r.Y, rects[i-1].Y+rects[i-1].H)
-			}
+		if prev.W > 0 && r.Y < prev.Y+prev.H {
+			t.Fatalf("row %d at y=%d overlaps the previous row ending at %d", i, r.Y, prev.Y+prev.H)
 		}
+		prev = r
+	}
+	if drawn == 0 {
+		t.Fatal("no rows were drawn")
 	}
 
 	// The selected row must be visibly highlighted against its neighbours.
@@ -116,6 +124,37 @@ func TestToolsPanelRenderLayout(t *testing.T) {
 	body := f.at(panel.X+panel.W/2, panel.Y+panel.H-4)
 	if body.R == f.bg.R && body.G == f.bg.G && body.B == f.bg.B {
 		t.Fatal("panel body is transparent")
+	}
+}
+
+// The list is longer than the panel, so moving the cursor to the end has to
+// scroll the window and keep the focused row on screen.
+func TestToolsPanelScrollsToTheCursor(t *testing.T) {
+	config := &Config{}
+	rows := toolsRows(config)
+	if len(rows) < 2 {
+		t.Skip("not enough rows to scroll")
+	}
+	prevCursor, prevScroll := toolsPanel.cursor, toolsPanel.scroll
+	t.Cleanup(func() { toolsPanel.cursor, toolsPanel.scroll = prevCursor, prevScroll })
+	layout := toolsPanelMetrics(config, rows)
+	body := toolsPanelBodyHeight(rows, layout)
+
+	toolsPanel.cursor, toolsPanel.scroll = len(rows)-1, 0
+	toolsPanelClampScroll(rows, layout)
+	if toolsPanel.scroll == 0 {
+		t.Fatalf("cursor at the last of %d rows did not scroll the list", len(rows))
+	}
+	visible := toolsVisibleRows(rows, layout, toolsPanel.scroll, body)
+	if last := toolsPanel.scroll + visible - 1; last != len(rows)-1 {
+		t.Fatalf("window %d..%d does not end on the focused last row", toolsPanel.scroll, last)
+	}
+
+	// Walking back up returns the window to the top.
+	toolsPanel.cursor = 0
+	toolsPanelClampScroll(rows, layout)
+	if toolsPanel.scroll != 0 {
+		t.Fatalf("cursor back at the top left scroll = %d", toolsPanel.scroll)
 	}
 }
 
@@ -158,25 +197,32 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 	}
 
 	f, panel, rects := renderToolsProbe(t, &Config{}, 0)
-	last := rects[len(rects)-1]
-	warnTop := last.Y + last.H + 2
-	warnBottom := panel.Y + panel.H - 24
+	if len(rects) == 0 {
+		t.Fatal("no rows drawn")
+	}
+	// The warning line is pinned above the footer, so it is checked where the
+	// layout puts it rather than under the last row: the list scrolls now.
+	layout := toolsPanelMetrics(&Config{}, toolsRows(&Config{}))
+	warnTop := panel.Y + panel.H - layout.footerH - layout.infoH + 2
+	warnBottom := panel.Y + panel.H - layout.footerH
 	if warnBottom <= warnTop {
 		t.Fatalf("no room for the warning: top=%d bottom=%d", warnTop, warnBottom)
 	}
 	if n := f.countColor(ColorToastWarn, panel.X+24, warnTop, panel.X+panel.W-24, warnBottom); n < 20 {
-		t.Fatalf("warning text missing below the rows (only %d accent pixels)", n)
+		t.Fatalf("warning text missing above the footer (only %d accent pixels)", n)
 	}
 }
 
 func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
 	rows := toolsRows(config)
-	if len(rows) != 8 {
-		t.Fatalf("rows = %d, want IP, FTP, companion, SSH, party, power tools, disc helpers and community only", len(rows))
+	if len(rows) != 14 {
+		t.Fatalf("rows = %d, want the ten FTP & IP rows, party, power tools, disc helpers and community only", len(rows))
 	}
 	want := []toolsAction{
 		toolsActionCopyIP, toolsActionFTP, toolsActionCompanion, toolsActionSSH,
+		toolsActionGatewayScan, toolsActionClipboardScan, toolsActionPing,
+		toolsActionTraceroute, toolsActionDNSLookup, toolsActionWiFiSignal,
 		toolsActionParty, toolsActionPowerTools, toolsActionDiscHelpers, toolsActionCommunity,
 	}
 	for i, action := range want {
@@ -184,9 +230,18 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 			t.Fatalf("row %d = %v, want %v (order: %+v)", i, rows[i].action, action, rows)
 		}
 	}
-	// Most-used first: the copyable address, then the transfer tools.
-	if rows[0].section != "SHARE & TRANSFER" || rows[4].section != "WATCH TOGETHER" || rows[5].section != "SYSTEM & UPDATES" {
-		t.Fatalf("section headings are wrong: %q %q %q", rows[0].section, rows[4].section, rows[5].section)
+	// Most-used first: the copyable address, then the transfer tools and the
+	// network probes they go with.
+	if rows[0].section != "FTP & IP" || rows[10].section != "WATCH TOGETHER" || rows[11].section != "SYSTEM & UPDATES" {
+		t.Fatalf("section headings are wrong: %q %q %q", rows[0].section, rows[10].section, rows[11].section)
+	}
+	// The probes came out of Power tools; each one must still carry its action
+	// hint so the panel reads like the rest of the list.
+	for _, action := range want[4:10] {
+		row := toolsRowByAction(rows, action)
+		if row == nil || row.hint == "" {
+			t.Fatalf("probe row %v = %+v, want an action hint", action, row)
+		}
 	}
 	ftp := toolsRowByAction(rows, toolsActionFTP)
 	if ftp == nil || ftp.value != "Stopped" {
@@ -205,7 +260,7 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 func TestToolsRowsWithMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	rows := toolsRows(config)
-	if len(rows) != 9 {
+	if len(rows) != 15 {
 		t.Fatalf("rows = %d, want a Classic Tools row too", len(rows))
 	}
 	if rows[len(rows)-1].action != toolsActionUtilities {
@@ -271,19 +326,20 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 9 {
-		t.Fatalf("row rects = %d, want 9 with the Misc scene", len(rects))
+	if len(rects) != 15 {
+		t.Fatalf("row rects = %d, want 15 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Skip("no usable font")
 	}
 	layout := toolsPanelMetrics(config, toolsRows(config))
-	content := layout.contentH(len(rects))
-	if content > probeH-40 {
-		t.Fatalf("layout needs %dpx on a %dpx screen", content, probeH)
+	if panel.H > probeH-40 {
+		t.Fatalf("panel is %dpx tall on a %dpx screen", panel.H, probeH)
 	}
-	if content > panel.H {
-		t.Fatalf("layout needs %dpx but the panel is %dpx tall", content, panel.H)
+	// The list is longer than the panel, so it scrolls; what has to hold is
+	// that the body still shows rows and that the credentials line survives.
+	if body := toolsPanelBodyHeight(toolsRows(config), layout); body < layout.rowH {
+		t.Fatalf("body is %dpx, shorter than one row (%dpx)", body, layout.rowH)
 	}
 	if len(layout.info) == 0 {
 		t.Fatal("compact layout dropped the SFTP credentials line")

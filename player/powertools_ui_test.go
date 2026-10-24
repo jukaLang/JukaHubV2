@@ -20,11 +20,11 @@ func TestPowerToolsMenuRows(t *testing.T) {
 		syncTarget: "nas:/backup",
 	})
 	rows := powerToolRows(&Config{})
-	if len(rows) != 9 {
-		t.Fatalf("menu rows = %d, want 8 tools + Close", len(rows))
+	if len(rows) != 8 {
+		t.Fatalf("menu rows = %d, want 7 tools + Close", len(rows))
 	}
 	want := []powerAction{
-		powerActionOpenNetwork, powerActionOpenFiles, powerActionOpenScripts,
+		powerActionOpenFiles, powerActionOpenScripts,
 		powerActionOpenSync, powerActionOpenConfigs, powerActionOpenBench,
 		powerActionOpenMemory, powerActionOpenCtrlDiag, powerActionClose,
 	}
@@ -33,27 +33,17 @@ func TestPowerToolsMenuRows(t *testing.T) {
 			t.Fatalf("row %d action = %v, want %v", i, rows[i].action, action)
 		}
 	}
-	if !strings.Contains(rows[2].value, "1 snippet") || !strings.Contains(rows[4].value, "1 snapshot") {
+	if !strings.Contains(rows[1].value, "1 snippet") || !strings.Contains(rows[3].value, "1 snapshot") {
 		t.Fatalf("menu does not show cached counts: %+v", rows)
 	}
-	if rows[3].value != "nas:/backup" {
-		t.Fatalf("sync value = %q", rows[3].value)
+	if rows[2].value != "nas:/backup" {
+		t.Fatalf("sync value = %q", rows[2].value)
 	}
-}
-
-func TestPowerToolsNetworkRows(t *testing.T) {
-	withPowerToolsState(t, powerToolsState{page: powerPageNetwork})
-	rows := powerToolRows(&Config{})
-	if len(rows) != 7 {
-		t.Fatalf("network rows = %d, want 6 probes + Back", len(rows))
-	}
-	actions := []powerAction{
-		powerActionScan, powerActionScanClipboard, powerActionPing, powerActionTrace,
-		powerActionDNS, powerActionWiFi, powerActionBack,
-	}
-	for i, action := range actions {
-		if rows[i].action != action {
-			t.Fatalf("row %d action = %v, want %v", i, rows[i].action, action)
+	// The network probes moved to Tools → FTP & IP; the menu must not offer a
+	// second copy of them.
+	for _, row := range rows {
+		if strings.Contains(strings.ToLower(row.label), "network") {
+			t.Fatalf("Power tools still lists network probes: %+v", row)
 		}
 	}
 }

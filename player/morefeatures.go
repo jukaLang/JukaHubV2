@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,13 +26,27 @@ import (
 // ---------------------------------------------------------------------------
 
 func httpGetText(url string, timeout time.Duration) string {
-	client := &http.Client{Timeout: timeout}
-	req, err := http.NewRequest("GET", url, nil)
+	return httpGetTextContext(context.Background(), url, timeout)
+}
+
+// httpGetTextContext is httpGetText tied to a caller's context. Scene work uses
+// it so leaving the screen closes the request instead of waiting out the
+// timeout; the timeout still bounds a request nobody cancels.
+func httpGetTextContext(ctx context.Context, url string, timeout time.Duration) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return ""
 	}
 	req.Header.Set("User-Agent", "JukaHub/0.4")
-	resp, err := client.Do(req)
+	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		return ""
 	}
@@ -152,7 +167,13 @@ func stripCDATA(s string) string {
 }
 
 func parseRSSFeed(url string) []FileEntry {
-	data := httpGetText(url, 12*time.Second)
+	return parseRSSFeedContext(context.Background(), url)
+}
+
+// parseRSSFeedContext reads one feed under the caller's context, so leaving
+// the podcasts screen stops the remaining feeds instead of finishing all four.
+func parseRSSFeedContext(ctx context.Context, url string) []FileEntry {
+	data := httpGetTextContext(ctx, url, 12*time.Second)
 	if data == "" {
 		return nil
 	}
@@ -177,13 +198,24 @@ var curatedPodcasts = []string{
 	"https://feeds.megaphone.fm/vergecast",
 }
 
+// loadPodcasts loads the curated feeds for the podcasts scene. It runs as
+// scene work: four serial feeds can take half a minute on a weak connection,
+// and none of them should survive the screen that asked for them.
 func loadPodcasts(config *Config) {
-	var entries []FileEntry
-	for _, f := range curatedPodcasts {
-		entries = append(entries, parseRSSFeed(f)...)
-	}
-	publishCustom("podcast_entries", entries)
-	focusedFileIndex = 0
+	runSceneTask(func(ctx context.Context) {
+		var entries []FileEntry
+		for _, feed := range curatedPodcasts {
+			if ctx.Err() != nil {
+				return
+			}
+			entries = append(entries, parseRSSFeedContext(ctx, feed)...)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		publishCustom("podcast_entries", entries)
+		focusedFileIndex = 0
+	})
 }
 
 func loadPodcastURL(config *Config, url string) {
@@ -199,9 +231,9 @@ func loadPodcastURL(config *Config, url string) {
 // Crypto & Stock tickers
 // ---------------------------------------------------------------------------
 
-func fetchTickerPrice(symbol string) (float64, bool) {
+func fetchTickerPrice(ctx context.Context, symbol string) (float64, bool) {
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s", strings.ToUpper(strings.TrimSpace(symbol)))
-	txt := httpGetText(url, 8*time.Second)
+	txt := httpGetTextContext(ctx, url, 8*time.Second)
 	var ya struct {
 		Chart struct {
 			Result []struct {
@@ -217,51 +249,86 @@ func fetchTickerPrice(symbol string) (float64, bool) {
 	return 0, false
 }
 
+// fetchTickers refreshes the crypto/stock board for the scene that asked for
+// it. The endpoints are independent, so they share one round trip instead of
+// three serial ones; a failed endpoint is data ("n/a"), not a reason to stop
+// the others. Leaving the scene is.
 func fetchTickers(config *Config) {
-	go func() {
-		var sb strings.Builder
-		txt := httpGetText("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd", 8*time.Second)
-		var cg map[string]map[string]float64
-		if json.Unmarshal([]byte(txt), &cg) == nil {
+	runSceneTask(func(ctx context.Context) {
+		if config == nil {
+			return
+		}
+		custom, _ := config.Variables.Custom["custom_tickers"].([]string)
+		symbols := make([]string, 0, len(custom))
+		for _, raw := range custom {
+			if sym := strings.TrimSpace(raw); sym != "" {
+				symbols = append(symbols, sym)
+			}
+		}
+
+		// Each fetch owns one index, so the board keeps its order (BTC/ETH,
+		// AAPL, then the user's symbols) whether or not the network is slow.
+		lines := make([]string, 2+len(symbols))
+		fns := make([]func(context.Context) error, 0, len(lines))
+		fns = append(fns, func(ctx context.Context) error {
+			txt := httpGetTextContext(ctx, "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd", 8*time.Second)
+			var cg map[string]map[string]float64
+			if json.Unmarshal([]byte(txt), &cg) != nil {
+				return nil
+			}
+			var sb strings.Builder
 			if b, ok := cg["bitcoin"]["usd"]; ok {
 				sb.WriteString(fmt.Sprintf("BTC: $%.0f\n", b))
 			}
 			if e, ok := cg["ethereum"]["usd"]; ok {
 				sb.WriteString(fmt.Sprintf("ETH: $%.0f\n", e))
 			}
-		}
-		y := httpGetText("https://query1.finance.yahoo.com/v8/finance/chart/AAPL", 8*time.Second)
-		var ya struct {
-			Chart struct {
-				Result []struct {
-					Meta struct {
-						RegularMarketPrice float64
+			lines[0] = sb.String()
+			return nil
+		}, func(ctx context.Context) error {
+			y := httpGetTextContext(ctx, "https://query1.finance.yahoo.com/v8/finance/chart/AAPL", 8*time.Second)
+			var ya struct {
+				Chart struct {
+					Result []struct {
+						Meta struct {
+							RegularMarketPrice float64
+						}
 					}
 				}
 			}
-		}
-		if json.Unmarshal([]byte(y), &ya) == nil && len(ya.Chart.Result) > 0 {
-			sb.WriteString(fmt.Sprintf("AAPL: $%.2f\n", ya.Chart.Result[0].Meta.RegularMarketPrice))
-		}
-		// User-added custom tickers (stored as a slice of symbols).
-		if list, ok := config.Variables.Custom["custom_tickers"].([]string); ok {
-			for _, sym := range list {
-				sym = strings.TrimSpace(sym)
-				if sym == "" {
-					continue
-				}
-				if p, ok := fetchTickerPrice(sym); ok {
-					sb.WriteString(fmt.Sprintf("%s: $%.2f\n", strings.ToUpper(sym), p))
-				} else {
-					sb.WriteString(fmt.Sprintf("%s: n/a\n", strings.ToUpper(sym)))
-				}
+			if json.Unmarshal([]byte(y), &ya) == nil && len(ya.Chart.Result) > 0 {
+				lines[1] = fmt.Sprintf("AAPL: $%.2f\n", ya.Chart.Result[0].Meta.RegularMarketPrice)
 			}
+			return nil
+		})
+		for i, sym := range symbols {
+			index := 2 + i
+			symbol := sym
+			fns = append(fns, func(ctx context.Context) error {
+				if p, ok := fetchTickerPrice(ctx, symbol); ok {
+					lines[index] = fmt.Sprintf("%s: $%.2f\n", strings.ToUpper(symbol), p)
+				} else {
+					lines[index] = fmt.Sprintf("%s: n/a\n", strings.ToUpper(symbol))
+				}
+				return nil
+			})
+		}
+		if err := runCancelableGroup(ctx, fns...); err != nil {
+			// The scene was left; a publish now would land on the next screen.
+			return
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		var sb strings.Builder
+		for _, line := range lines {
+			sb.WriteString(line)
 		}
 		if sb.Len() == 0 {
 			sb.WriteString("Unable to fetch tickers (offline?)")
 		}
 		publishCustom("ticker_text", sb.String())
-	}()
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -269,16 +336,30 @@ func fetchTickers(config *Config) {
 // ---------------------------------------------------------------------------
 
 func runNetSpeed(config *Config) {
-	go func() {
+	runSceneTask(func(ctx context.Context) {
 		url := "https://cachefly.cachefly.net/100mb.test"
-		start := time.Now()
-		resp, err := httpClient.Get(url)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
-			publishCustom("netspeed_text", "Error: "+err.Error())
 			return
 		}
-		n, _ := io.Copy(io.Discard, resp.Body)
+		start := time.Now()
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			if ctx.Err() == nil {
+				publishCustom("netspeed_text", "Error: "+err.Error())
+			}
+			return
+		}
+		n, copyErr := io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
+		if ctx.Err() != nil {
+			// The test was cancelled: report nothing, the screen is gone.
+			return
+		}
+		if copyErr != nil {
+			publishCustom("netspeed_text", "Error: "+copyErr.Error())
+			return
+		}
 		dur := time.Since(start).Seconds()
 		if dur <= 0 {
 			dur = 0.001
@@ -286,7 +367,7 @@ func runNetSpeed(config *Config) {
 		mbps := (float64(n) * 8 / dur) / 1e6
 		publishCustom("netspeed_text", fmt.Sprintf(
 			"Downloaded %.1f MB in %.2fs\nSpeed: %.1f Mbit/s", float64(n)/1e6, dur, mbps))
-	}()
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -294,12 +375,18 @@ func runNetSpeed(config *Config) {
 // ---------------------------------------------------------------------------
 
 func runBenchmark(config *Config) {
-	go func() {
+	runSceneTask(func(ctx context.Context) {
 		path := ".jukabench.tmp"
 		f, err := os.Create(path)
 		if err != nil {
-			publishCustom("benchmark_text", "Error: "+err.Error())
+			if ctx.Err() == nil {
+				publishCustom("benchmark_text", "Error: "+err.Error())
+			}
 			return
+		}
+		discard := func() {
+			f.Close()
+			os.Remove(path)
 		}
 		sz := 50 * 1024 * 1024
 		buf := make([]byte, 1024*1024)
@@ -308,22 +395,37 @@ func runBenchmark(config *Config) {
 		}
 		start := time.Now()
 		for written := 0; written < sz; written += len(buf) {
+			if ctx.Err() != nil {
+				// Leaving the screen must not leave a 50 MB file behind.
+				discard()
+				return
+			}
 			f.Write(buf)
 		}
 		f.Sync()
 		d1 := time.Since(start)
+		if ctx.Err() != nil {
+			discard()
+			return
+		}
 		f.Seek(0, 0)
 		r := bufio.NewReader(f)
 		start = time.Now()
 		for {
+			if ctx.Err() != nil {
+				discard()
+				return
+			}
 			_, e := r.Read(buf)
 			if e != nil {
 				break
 			}
 		}
 		d2 := time.Since(start)
-		f.Close()
-		os.Remove(path)
+		discard()
+		if ctx.Err() != nil {
+			return
+		}
 		writeMB := float64(sz) / d1.Seconds() / 1e6
 		readMB := float64(sz) / d2.Seconds() / 1e6
 		if err := recordPowerBenchmark("sequential", writeMB, readMB, config.Version); err != nil {
@@ -331,14 +433,14 @@ func runBenchmark(config *Config) {
 		}
 		publishCustom("benchmark_text", fmt.Sprintf(
 			"Write: %.1f MB/s\nRead:  %.1f MB/s", writeMB, readMB))
-	}()
+	})
 }
 
 // runRandomBenchmark performs random-access I/O benchmarking: it writes
 // 10 MB of random data to a temp file at random offsets, then reads 10 MB
 // of random positions, reporting MB/s for each phase.
 func runRandomBenchmark(config *Config) {
-	go func() {
+	runSceneTask(func(ctx context.Context) {
 		const fileSize = 50 * 1024 * 1024
 		const ioBytes = 10 * 1024 * 1024
 		blockSize := 4 * 1024
@@ -346,13 +448,22 @@ func runRandomBenchmark(config *Config) {
 
 		f, err := os.Create(path)
 		if err != nil {
-			publishCustom("benchmark_text", "Random Error: "+err.Error())
+			if ctx.Err() == nil {
+				publishCustom("benchmark_text", "Random Error: "+err.Error())
+			}
 			return
 		}
 		if err := f.Truncate(fileSize); err != nil {
 			f.Close()
-			publishCustom("benchmark_text", "Random Error: "+err.Error())
+			os.Remove(path)
+			if ctx.Err() == nil {
+				publishCustom("benchmark_text", "Random Error: "+err.Error())
+			}
 			return
+		}
+		discard := func() {
+			f.Close()
+			os.Remove(path)
 		}
 
 		rnd := make([]byte, blockSize)
@@ -363,37 +474,49 @@ func runRandomBenchmark(config *Config) {
 
 		start := time.Now()
 		for _, off := range offsets {
+			if ctx.Err() != nil {
+				discard()
+				return
+			}
 			if _, err := rand.Read(rnd); err != nil {
 				rnd = []byte{byte(off), byte(off >> 8), byte(off >> 16)}
 			}
 			if _, err := f.WriteAt(rnd, off); err != nil {
-				f.Close()
-				os.Remove(path)
+				discard()
 				publishCustom("benchmark_text", "Random Write Error: "+err.Error())
 				return
 			}
 		}
 		f.Sync()
 		dWrite := time.Since(start)
+		if ctx.Err() != nil {
+			discard()
+			return
+		}
 
 		readBuf := make([]byte, blockSize)
 		start = time.Now()
 		for _, off := range offsets {
+			if ctx.Err() != nil {
+				discard()
+				return
+			}
 			if _, err := f.ReadAt(readBuf, off); err != nil {
-				f.Close()
-				os.Remove(path)
+				discard()
 				publishCustom("benchmark_text", "Random Read Error: "+err.Error())
 				return
 			}
 		}
 		dRead := time.Since(start)
 
-		f.Close()
-		os.Remove(path)
+		discard()
+		if ctx.Err() != nil {
+			return
+		}
 		publishCustom("benchmark_text", fmt.Sprintf(
 			"Random Write: %.1f MB/s\nRandom Read:  %.1f MB/s",
 			float64(ioBytes)/dWrite.Seconds()/1e6, float64(ioBytes)/dRead.Seconds()/1e6))
-	}()
+	})
 }
 
 // ---------------------------------------------------------------------------

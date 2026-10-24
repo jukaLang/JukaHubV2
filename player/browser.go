@@ -395,6 +395,10 @@ func browserHistoryStep(delta int) (string, bool) {
 }
 
 func resetBrowserStateForTest() {
+	// A load started by the test that just finished may still be on the wire;
+	// join it before wiping the state it publishes into, so it cannot land in
+	// the next test's browser.
+	waitForBrowserFetches()
 	browserState.mu.Lock()
 	browserState.links = map[string][]browserLink{}
 	browserState.history = nil

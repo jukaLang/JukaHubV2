@@ -284,18 +284,34 @@ type geoLocation struct {
 // ipwho.is goes first and ipinfo.io is the last fallback; a failure here only
 // costs the forecast its exact location and unit preference.
 func lookupLocation(client *http.Client) (geoLocation, bool) {
-	for _, provider := range []func(*http.Client) (geoLocation, bool){
+	return lookupLocationContext(context.Background(), client)
+}
+
+// lookupLocationContext tries the providers in order, stopping when the
+// caller's context ends so a cancelled scene does not wait out three timeouts.
+func lookupLocationContext(ctx context.Context, client *http.Client) (geoLocation, bool) {
+	for _, provider := range []func(context.Context, *http.Client) (geoLocation, bool){
 		lookupIPWhoIs, lookupIPAPICo, lookupIPInfo,
 	} {
-		if g, ok := provider(client); ok {
+		if ctx != nil && ctx.Err() != nil {
+			return geoLocation{}, false
+		}
+		if g, ok := provider(ctx, client); ok {
 			return g, true
 		}
 	}
 	return geoLocation{}, false
 }
 
-func getGeoJSON(client *http.Client, url string, dst any) bool {
-	resp, err := client.Get(url)
+func getGeoJSON(ctx context.Context, client *http.Client, url string, dst any) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return false
 	}
@@ -306,14 +322,14 @@ func getGeoJSON(client *http.Client, url string, dst any) bool {
 	return json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(dst) == nil
 }
 
-func lookupIPWhoIs(client *http.Client) (geoLocation, bool) {
+func lookupIPWhoIs(ctx context.Context, client *http.Client) (geoLocation, bool) {
 	var v struct {
 		Success     bool    `json:"success"`
 		Latitude    float64 `json:"latitude"`
 		Longitude   float64 `json:"longitude"`
 		CountryCode string  `json:"country_code"`
 	}
-	if !getGeoJSON(client, "https://ipwho.is/", &v) || !v.Success {
+	if !getGeoJSON(ctx, client, "https://ipwho.is/", &v) || !v.Success {
 		return geoLocation{}, false
 	}
 	if v.Latitude == 0 && v.Longitude == 0 {
@@ -322,14 +338,14 @@ func lookupIPWhoIs(client *http.Client) (geoLocation, bool) {
 	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode}, true
 }
 
-func lookupIPAPICo(client *http.Client) (geoLocation, bool) {
+func lookupIPAPICo(ctx context.Context, client *http.Client) (geoLocation, bool) {
 	var v struct {
 		Error       bool    `json:"error"`
 		Latitude    float64 `json:"latitude"`
 		Longitude   float64 `json:"longitude"`
 		CountryCode string  `json:"country_code"`
 	}
-	if !getGeoJSON(client, "https://ipapi.co/json/", &v) || v.Error {
+	if !getGeoJSON(ctx, client, "https://ipapi.co/json/", &v) || v.Error {
 		return geoLocation{}, false
 	}
 	if v.Latitude == 0 && v.Longitude == 0 {
@@ -338,12 +354,12 @@ func lookupIPAPICo(client *http.Client) (geoLocation, bool) {
 	return geoLocation{Latitude: v.Latitude, Longitude: v.Longitude, CountryCode: v.CountryCode}, true
 }
 
-func lookupIPInfo(client *http.Client) (geoLocation, bool) {
+func lookupIPInfo(ctx context.Context, client *http.Client) (geoLocation, bool) {
 	var v struct {
 		Loc     string `json:"loc"`
 		Country string `json:"country"`
 	}
-	if !getGeoJSON(client, "https://ipinfo.io/json", &v) {
+	if !getGeoJSON(ctx, client, "https://ipinfo.io/json", &v) {
 		return geoLocation{}, false
 	}
 	parts := strings.Split(v.Loc, ",")
@@ -359,17 +375,30 @@ func lookupIPInfo(client *http.Client) (geoLocation, bool) {
 }
 
 func fetchWeatherOnce() {
+	fetchWeatherOnceContext(context.Background())
+}
+
+// fetchWeatherOnceContext refreshes the forecast under a caller's context, so
+// the weather screen's fetch stops when the screen is left. The 20-second bound
+// still applies to the background ticker, which has no scene to cancel it.
+func fetchWeatherOnceContext(parent context.Context) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	defer cancel()
 	client := &http.Client{Timeout: 6 * time.Second}
 	lat, lon := 40.71, -74.0 // default fallback (New York) if geolocation fails
-	if g, ok := lookupLocation(client); ok {
+	g, ok := lookupLocationContext(ctx, client)
+	if ok {
 		lat, lon = g.Latitude, g.Longitude
 		setWeatherCountry(g.CountryCode)
+	} else if ctx.Err() != nil {
+		return
 	} else {
 		log.Printf("[WARN] Geolocation unavailable, using default weather location")
 	}
 	url := fmt.Sprintf("https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max&forecast_days=7&timezone=auto", lat, lon)
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return
@@ -392,6 +421,9 @@ func fetchWeatherOnce() {
 		} `json:"daily"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&w); err != nil {
+		return
+	}
+	if ctx.Err() != nil {
 		return
 	}
 	n := len(w.Daily.Time)
@@ -779,6 +811,10 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if focusEngine.ElementIndex() == ChromeWeatherIndex && weatherStatusRect.W > 0 {
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
 		renderer.DrawRect(&weatherStatusRect)
+	}
+	if focusEngine.ElementIndex() == ChromeWiFiIndex && statusWiFiRect.W > 0 {
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
+		renderer.DrawRect(&statusWiFiRect)
 	}
 	if focusEngine.ElementIndex() == ChromeMediaIndex && statusMediaRect.W > 0 {
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)

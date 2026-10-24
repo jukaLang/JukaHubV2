@@ -76,9 +76,44 @@ For anything older, the git log and the
   jack has a cable in — refreshed in the background every few seconds. That idle
   name is a reading, so it stays out of the focus order and a tap on it does
   nothing. See [docs/CONTROLS.md](docs/CONTROLS.md).
+- A random game picker in the Games Library. **R** (or a click of the right
+  stick, **R3**) asks whether to roll from the console on screen or from every
+  console, jumps the library to the game it picks — console, row and scroll
+  position — so **A** plays it and another **R** rolls again. The roll never
+  repeats the game already highlighted while the scope has another candidate,
+  and it follows an active search so the jump cannot land on a filtered row.
+  See [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#random-pick).
+- Scene-scoped background work: leaving a screen now cancels what it started.
+  The podcast feeds, package registry, weather screen, crypto/stock board, speed
+  test and both benchmarks take the screen's context, so a 100 MB download or a
+  50 MB benchmark stops (and removes its temp file) instead of running behind
+  the next screen, and a cancelled fetch publishes nothing. The board's
+  independent endpoints also share one round trip now instead of three serial
+  ones. Process-wide chrome (network monitor, weather ticker, audio output)
+  keeps running. See
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#scene-scoped-background-work).
+- `Ctrl+L` opens the log viewer from any scene. It stands aside in the terminal,
+  where the key keeps clearing the output, and it is only consumed when the
+  config actually has the LogExporter scene. See
+  [docs/CONTROLS.md](docs/CONTROLS.md#desktop-keyboard).
+- Log exports no longer destroy the previous file: an export moves `logs.txt` to
+  `logs.txt.1` and writes the new one atomically, so exporting after a crash
+  keeps the log from before it. The exported file is capped at 2 MiB and the
+  in-memory ring at 512 KiB as well as 2000 lines, so one huge line cannot grow
+  either without bound.
+- 720p frame budgets for the home screen: `go test -run '^$' -bench
+  BenchmarkHome` reports a warm frame, a cold-text frame (theme switch) and one
+  D-pad step, so layout and text changes can be compared against a number.
 
 ### Fixed
 
+- The `player-race` CI job is green again. The browser's fetch seam was a bare
+  package variable, so a test that swapped it to a stub while a page load was
+  still on the wire raced with the load goroutine reading it — reported as a
+  data race in `TestBrowserToggleAdFilterIsPerSite`. The seam is now read once
+  per load under a lock (`currentBrowserPageFetcher`), tests swap and restore it
+  through `setBrowserPageFetcherForTest`, and a browser reset joins the loads in
+  flight, so a late fetch cannot publish into the next test either.
 - A CPU cap below the ceiling the firmware booted with was ignored:
   `raiseFrequencyCeiling` only ever wrote a higher `scaling_max_freq`, so a
   device already running at 2 GHz kept 2 GHz despite `powerProfileMaxFreq:

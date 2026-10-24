@@ -20,7 +20,7 @@ func homeActionCards(h *HomeLayout) []HomeFocusID {
 	for _, id := range h.Order {
 		switch id {
 		case HomeFocusContinue, HomeFocusClock, HomeFocusWeather, HomeFocusExit,
-			HomeFocusPS5, HomeFocusUpdate, HomeFocusNowPlaying, HomeFocusBell:
+			HomeFocusPS5, HomeFocusUpdate, HomeFocusNowPlaying, HomeFocusBell, HomeFocusWiFi:
 			// Big continue card, header chips and the PS5 launcher tile are not
 			// action cards: they draw themselves through drawHeader.
 			continue

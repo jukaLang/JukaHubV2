@@ -48,6 +48,7 @@ const (
 	ChromeWeatherIndex = -6
 	ChromeUpdateIndex  = -7
 	ChromeMediaIndex   = -8
+	ChromeWiFiIndex    = -9
 	ChromeBackType     = "back"
 	ChromeClockType    = "clock"
 	ChromeStartType    = "start"
@@ -55,6 +56,7 @@ const (
 	ChromeWeatherType  = "weather"
 	ChromeUpdateType   = "update"
 	ChromeMediaType    = "media"
+	ChromeWiFiType     = "wifi"
 )
 
 // chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
@@ -63,7 +65,7 @@ const (
 // The bottom of the screen is now the hint bar only, so there is no tier 2.
 func chromeTier(idx int) int {
 	switch idx {
-	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex:
+	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex, ChromeWiFiIndex:
 		return 1
 	}
 	return 0
@@ -150,6 +152,13 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		}
 		if weatherStatusRect.W > 0 {
 			addNode(ChromeWeatherIndex, weatherStatusRect, ChromeWeatherType, "Local weather")
+		}
+		// The signal meter opens the network picker, the same as a tap on it.
+		// It joins the bar so the D-pad can reach Wi-Fi (and the network list)
+		// without a touchscreen: on the handheld the meter used to be the one
+		// drawn control the pad could not select.
+		if statusWiFiRect.W > 0 {
+			addNode(ChromeWiFiIndex, statusWiFiRect, ChromeWiFiType, "Wi-Fi")
 		}
 		if nc.bellRect.W > 0 {
 			addNode(ChromeBellIndex, nc.bellRect, ChromeBellType, "Notifications")

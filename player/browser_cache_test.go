@@ -18,18 +18,74 @@ func browserCacheFixture(t *testing.T, fn func(rawURL string) browserPage) (*Con
 	t.Helper()
 	resetBrowserStateForTest()
 	var calls int32
-	prev := browserPageFetcher
-	browserPageFetcher = func(rawURL string) browserPage {
+	// The seam is swapped under its lock and restored after the loads this test
+	// started have returned: both halves used to race with an in-flight fetch.
+	restore := setBrowserPageFetcherForTest(func(rawURL string) browserPage {
 		atomic.AddInt32(&calls, 1)
 		return fn(rawURL)
-	}
+	})
 	t.Cleanup(func() {
-		browserPageFetcher = prev
+		waitForBrowserFetches()
+		restore()
 		resetBrowserStateForTest()
 	})
 	config := &Config{}
 	config.Variables.Custom = map[string]interface{}{}
 	return config, Element{Type: "textbrowser", Variable: browserContentVariable}, &calls
+}
+
+// Swapping the fetch seam while a load is in flight must be safe, and the load
+// must keep the fetcher it started with. Under `go test -race` (the player-race
+// CI job) this test fails if the seam goes back to a bare package variable that
+// tests reassign — the exact race reported from TestBrowserToggleAdFilterIsPerSite.
+func TestBrowserFetcherSwapDuringLoadIsSafe(t *testing.T) {
+	resetBrowserStateForTest()
+	// The publish queue is shared with every other test in the package: drop
+	// anything a previous test left behind before this load publishes.
+	drainCustomForTest()
+	release := make(chan struct{})
+	started := make(chan struct{})
+
+	restoreFirst := setBrowserPageFetcherForTest(func(raw string) browserPage {
+		close(started)
+		<-release
+		return browserPage{Text: "Title: first\n", FinalURL: raw}
+	})
+	restoreSecond := func() {}
+	t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+		waitForBrowserFetches()
+		restoreSecond()
+		restoreFirst()
+		resetBrowserStateForTest()
+	})
+
+	config := &Config{}
+	config.Variables.Custom = map[string]interface{}{}
+	elem := Element{Type: "textbrowser", Variable: browserContentVariable}
+	loadTextBrowserURLAt(config, elem, "https://example.com/slow", true)
+
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the page load never started")
+	}
+
+	// The load is blocked inside its fetcher: swap the seam now, which used to
+	// be a plain assignment racing with the goroutine's read.
+	restoreSecond = setBrowserPageFetcherForTest(func(raw string) browserPage {
+		return browserPage{Text: "Title: second\n", FinalURL: raw}
+	})
+	close(release)
+
+	text := waitBrowserText(t, config, func(s string) bool { return strings.HasPrefix(s, "Title:") })
+	if !strings.HasPrefix(text, "Title: first") {
+		t.Fatalf("page = %q, want the fetcher the load started with", text)
+	}
 }
 
 // waitBrowserText drains background publishes until the content matches.

@@ -292,12 +292,18 @@ func TestBrowserAdBlockLabel(t *testing.T) {
 func TestBrowserToggleAdFilterIsPerSite(t *testing.T) {
 	browserAdBlockTestStore(t)
 	resetBrowserStateForTest()
-	prevFetcher := browserPageFetcher
-	browserPageFetcher = func(raw string) browserPage {
+	// The toggle reloads the page, so the seam is swapped under its lock and
+	// only restored once that load has returned. Restoring it first raced with
+	// the fetch goroutine reading it (reported by `go test -race`).
+	restoreFetcher := setBrowserPageFetcherForTest(func(raw string) browserPage {
 		return browserPage{Text: "Title: page\n", FinalURL: raw}
-	}
+	})
 	t.Cleanup(func() {
-		browserPageFetcher = prevFetcher
+		waitForBrowserFetches()
+		// The reloads above publish their page on the shared queue; drop it so a
+		// later test's drain cannot see this test's "Title: page".
+		drainCustomForTest()
+		restoreFetcher()
 		resetBrowserStateForTest()
 	})
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -70,7 +71,7 @@ func geoClient(body string) *http.Client {
 func TestLookupLocationParsesProviders(t *testing.T) {
 	cases := []struct {
 		name    string
-		lookup  func(*http.Client) (geoLocation, bool)
+		lookup  func(context.Context, *http.Client) (geoLocation, bool)
 		body    string
 		country string
 		lat     float64
@@ -84,7 +85,7 @@ func TestLookupLocationParsesProviders(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := tc.lookup(geoClient(tc.body))
+			got, ok := tc.lookup(context.Background(), geoClient(tc.body))
 			if !ok {
 				t.Fatal("lookup failed")
 			}

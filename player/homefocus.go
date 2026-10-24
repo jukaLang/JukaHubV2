@@ -39,6 +39,11 @@ const (
 	// scenes, so Home needs its own entry to reach it; it is enabled only while
 	// the chip is drawn.
 	HomeFocusNowPlaying HomeFocusID = "nowplaying"
+	// HomeFocusWiFi is the signal meter, left of the weather text. It opens the
+	// network picker, and it is a chrome control on every other scene, so Home
+	// needs its own entry for the D-pad; it is enabled only while the meter is
+	// drawn (the cluster drops the network slot first when space is short).
+	HomeFocusWiFi HomeFocusID = "wifi"
 )
 
 // FocusDirection indicates the direction to move focus.
@@ -126,19 +131,24 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 	},
 	// The Clock is the header time in the top-right corner: the top-right
 	// cards reach it Up and it drops back Down to Settings.
-	// The weather chip sits directly right of the update download chip, so Left
-	// steps onto the offer. With no update the chip is disabled and Move falls
-	// through to the update entry's own Left neighbour, Media, which is what
-	// the weather chip did before the offer existed.
+	// The weather chip sits between the signal meter and the clock.
 	HomeFocusWeather: {
 		Up: HomeFocusWeather, Down: HomeFocusSettings,
-		Left: HomeFocusUpdate, Right: HomeFocusClock,
+		Left: HomeFocusWiFi, Right: HomeFocusClock,
 	},
-	// The update download chip is a header button: Right returns to the weather
-	// text, Down drops to the first card in the settings column.
+	// The signal meter is the Wi-Fi button: Left reaches the update offer, Right
+	// the weather text, Down the settings column. It keeps its place when a
+	// release is not offered because Update's own Left neighbour is Media, so a
+	// disabled offer is skipped instead of trapping the pad on the bar.
+	HomeFocusWiFi: {
+		Up: HomeFocusWiFi, Down: HomeFocusSettings,
+		Left: HomeFocusUpdate, Right: HomeFocusWeather,
+	},
+	// The update download chip is a header button: Right returns to the network
+	// slot, Down drops to the first card in the settings column.
 	HomeFocusUpdate: {
 		Up: HomeFocusUpdate, Down: HomeFocusSettings,
-		Left: HomeFocusMedia, Right: HomeFocusWeather,
+		Left: HomeFocusMedia, Right: HomeFocusWiFi,
 	},
 	// The now-playing chip sits right of the clock and names the running
 	// player. Disabled while nothing plays, so Right from the clock falls

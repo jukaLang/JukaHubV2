@@ -219,6 +219,39 @@ Before adding a scene, check the name is not already taken by a different type
 in the file (for example the alarm editor already had an `alarmScene`); the
 registry logs and ignores a duplicate name instead of panicking at startup.
 
+### Scene-scoped background work
+
+Work that only matters while a screen is up belongs to that screen. A scene
+transition cancels the previous generation and starts a new one
+([`player/scenetasks.go`](../player/scenetasks.go)):
+
+```go
+runSceneTask(func(ctx context.Context) {
+	fetchSomethingContext(ctx)
+	if ctx.Err() != nil {
+		return // the scene is gone; do not publish into the next one
+	}
+	publishCustom("something", value)
+})
+```
+
+Rules that keep it honest:
+
+- pass `ctx` into the request (`httpGetTextContext`, `fetchURLContext`,
+  `doWithRetry`) so cancellation closes it instead of waiting out a timeout;
+- check `ctx.Err()` before publishing: a cancelled task must not leave a stale
+  value on the next screen;
+- use `runCancelableGroup` when one unit of scene work fans out into several
+  calls and one failure should stop the rest — it is the errgroup contract,
+  kept in-tree because the vendored module set is pinned;
+- clean up temporary state on the cancel path (the benchmarks remove their temp
+  file);
+- `runSceneTask` never blocks the caller: a transition does not wait for the
+  network. Tests join tasks with `waitForSceneWork`.
+
+Process-wide chrome (network monitor, weather ticker, audio output) is not scene
+work and keeps its own goroutine.
+
 ### Focus and navigation
 
 `focus.go` builds a spatial focus graph per scene from the focusable elements,
@@ -272,6 +305,15 @@ The test binary turns off `jukauser.json` writes (`TestMain` in
 `testmain_test.go`), so a run cannot rewrite the checkout's user config; the few
 tests that assert a real save re-enable `userConfigWritesEnabled` themselves.
 
+A test seam that production code reads **on a goroutine** must be swapped under
+a lock, not by assignment. `browserPageFetcher` is the worked example: the load
+path reads it once per request through `currentBrowserPageFetcher`, tests swap
+it with `setBrowserPageFetcherForTest`, and `resetBrowserStateForTest` joins the
+loads still on the wire (`waitForBrowserFetches`). A bare swap is a real data
+race — the `player-race` CI job caught exactly that, because a page load can
+outlive the test that started it. `TestBrowserFetcherSwapDuringLoadIsSafe` keeps
+the pattern honest.
+
 ### Text input and wrapping
 
 Every buffer that accepts typed text must delete with `trimLastRune`, never by
@@ -299,6 +341,20 @@ LRU is O(1)). The Live TV filter bar reads a cached count instead of filtering
 the whole playlist per frame, and the File Explorer toolbar caches its
 validated path instead of stat-ing the SD card. `go test -bench .` in `player/`
 measures those paths (`BenchmarkFrameTextPass`, `BenchmarkTVFilterBarCounts`).
+
+The frame itself has a budget too: `render_bench_test.go` draws a real 1280×720
+home frame (warm and with a cold text cache) and times one D-pad step, so a
+layout or text change can be compared against a number rather than a
+feeling:
+
+```
+cd player
+go test -run '^$' -bench 'BenchmarkHome' -benchmem
+```
+
+The absolute values are a desktop software-renderer proxy (see the recorded
+numbers in [MODERNIZATION-CHECKLIST.md](../player/MODERNIZATION-CHECKLIST.md));
+their job is to catch a regression, not to predict the device.
 
 ## Design system
 
@@ -446,8 +502,9 @@ Open work, documented here so it is not rediscovered:
 - Drawing callbacks for plugins (`PluginContext` is declared but never passed).
 - Fixing the intermittent native crash in the fullscreen video test — see the
   note in [CONTRIBUTING.md](../CONTRIBUTING.md).
-- The shortcuts overlay lists `F5` (refresh) and `Ctrl+L` (log viewer); only
-  `Ctrl+L` *inside the terminal* (clear output) is implemented.
+- The shortcuts overlay lists `F5` (refresh), which is not wired to anything
+  yet. `Ctrl+L` is: it opens the LogExporter scene everywhere except the
+  terminal, which keeps Ctrl+L to clear its output.
 
 [IMPROVEMENTS.md](IMPROVEMENTS.md) holds the comparison-driven backlog: update
 UX, button remapping, component versions, and the BrickOS failure modes worth

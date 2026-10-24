@@ -18,17 +18,40 @@ import (
 // ---------------------------------------------------------------------------
 
 type logBuffer struct {
-	mu    sync.Mutex
-	lines []string
-	max   int
+	mu       sync.Mutex
+	lines    []string
+	bytes    int
+	max      int
+	maxBytes int
 }
 
 func (b *logBuffer) Write(p []byte) (int, error) {
 	line := strings.TrimRight(string(p), "\n")
 	b.mu.Lock()
 	b.lines = append(b.lines, line)
-	if len(b.lines) > b.max {
-		b.lines = b.lines[len(b.lines)-b.max:]
+	b.bytes += len(line) + 1
+	if b.max <= 0 {
+		b.lines = nil
+		b.bytes = 0
+	} else if len(b.lines) > b.max {
+		drop := len(b.lines) - b.max
+		for i := 0; i < drop; i++ {
+			b.bytes -= len(b.lines[i]) + 1
+			b.lines[i] = "" // release the string before the backing array is kept
+		}
+		b.lines = b.lines[drop:]
+	}
+	// The line cap alone is not a byte cap: one malformed stack trace can hold
+	// most of the heap on the handheld. Trim the oldest lines, then the head of
+	// a single overlong line.
+	for b.maxBytes > 0 && b.bytes > b.maxBytes && len(b.lines) > 1 {
+		b.bytes -= len(b.lines[0]) + 1
+		b.lines[0] = ""
+		b.lines = b.lines[1:]
+	}
+	if b.maxBytes > 0 && len(b.lines) == 1 && len(b.lines[0]) > b.maxBytes {
+		b.lines[0] = b.lines[0][len(b.lines[0])-b.maxBytes:]
+		b.bytes = len(b.lines[0]) + 1
 	}
 	b.mu.Unlock()
 	// Also mirror to stderr so launch.sh's errors.txt capture still works.
@@ -44,10 +67,11 @@ func (b *logBuffer) String() string {
 func (b *logBuffer) Clear() {
 	b.mu.Lock()
 	b.lines = nil
+	b.bytes = 0
 	b.mu.Unlock()
 }
 
-var appLog = &logBuffer{max: 2000}
+var appLog = &logBuffer{max: 2000, maxBytes: logBufferMaxBytes}
 
 // initLogging redirects the standard logger to the in-memory buffer (which
 // also forwards to stderr).
@@ -55,13 +79,21 @@ func initLogging() {
 	log.SetOutput(appLog)
 }
 
-// exportLogs writes the captured log buffer to logs.txt in the app folder.
+// exportLogs writes the captured log buffer to logs.txt in the app folder,
+// rotating the previous export to logs.txt.1 and capping the file size.
 func exportLogs() {
-	if err := os.WriteFile("logs.txt", []byte(appLog.String()), 0644); err != nil {
+	// Cap here as well so the reported size matches the file (the writer caps
+	// again, which is a no-op on an already-capped slice).
+	data := capLogData([]byte(appLog.String()), logExportMaxBytes)
+	if err := writeRotatedLog("logs.txt", data, logExportMaxBytes); err != nil {
 		log.Printf("exportLogs: %v", err)
-	} else {
-		log.Printf("Logs exported to logs.txt (%d lines)", len(strings.Split(appLog.String(), "\n")))
+		return
 	}
+	lines := 0
+	if len(data) > 0 {
+		lines = strings.Count(string(data), "\n") + 1
+	}
+	log.Printf("Logs exported to logs.txt (%d lines, %d bytes)", lines, len(data))
 }
 
 // ---------------------------------------------------------------------------

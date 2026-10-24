@@ -225,6 +225,34 @@ func handleShortcutsInput(event *sdl.KeyboardEvent) bool {
 	return true // consume all input while open
 }
 
+// openLogScene jumps to the shipped log viewer. It reports false when the
+// config has no LogExporter scene, so the shortcut can stay unhandled instead
+// of consuming a key that does nothing.
+func openLogScene(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	idx := sceneIndexExact(config, "LogExporter")
+	if idx < 0 {
+		return false
+	}
+	changeSceneTo(config, idx)
+	return true
+}
+
+// handleLogShortcut implements Ctrl+L for the in-app log viewer. The terminal
+// keeps its own Ctrl+L (clear the output), so the global shortcut stands aside
+// there; every other scene gets it.
+func handleLogShortcut(event *sdl.KeyboardEvent, config *Config, inTerminal bool) bool {
+	if event == nil || event.Type != sdl.KEYDOWN || inTerminal {
+		return false
+	}
+	if event.Keysym.Sym != sdl.K_l || (event.Keysym.Mod&sdl.KMOD_CTRL) == 0 {
+		return false
+	}
+	return openLogScene(config)
+}
+
 // renderShortcutHint shows Xbox 360 controller hints at the bottom of scenes.
 func renderShortcutHint(renderer *sdl.Renderer, config *Config) {
 	// Controller hints are rendered by renderFooter in extras.go.

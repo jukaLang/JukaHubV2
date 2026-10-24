@@ -271,6 +271,7 @@ reconnect.
 | **X** | LAN play for the highlighted game (host or join over Wi-Fi) |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
 | **S** / **/** / **R1** | search the library (on-screen keyboard; the list filters as you type) |
+| **R** / **R3** | roll a random game from this console or the whole library |
 | **Y** | rescan the card (after copying new ROMs) |
 | **B** / Back | clear an active search, then close the panel |
 | Mouse | click a console to select it, a game to play it, outside to close |
@@ -291,6 +292,30 @@ games a second time;
 
 Matching is a case-insensitive substring test, not fuzzy: `zeld` finds *Zelda*
 but `zld` does not.
+
+## Random pick
+
+**R** (or clicking in the right stick, **R3**) opens a small sheet that rolls a
+game for you, like CrossMix's random picker — but it lands the highlight on the
+pick instead of starting it, so **A** plays it and **R** rolls again without
+leaving the library.
+
+| Row | What it rolls from |
+|-----|--------------------|
+| **This console** | only the console on screen; when **Continue** is highlighted, the console of that recent |
+| **Whole library** | every console at once, recents left out so a recently played game is not counted twice |
+
+The detail line under each row counts what the roll will actually draw from, so
+it follows an active search: with `metroid` typed, both rows roll only the
+matching games and the whole-library row says *matches*. The roll never picks
+the game already under the highlight while the scope has another candidate, so
+a second **R** always moves. **B** cancels the sheet.
+
+Picking jumps the library to the game's console, row and scroll position and
+shows a toast naming it (`Random: ... — A plays it, R for another`). A game
+that has disappeared from the card since the last scan is reported instead of
+moving the highlight somewhere unrelated, and **R** in an empty library explains
+that there are no games yet rather than opening an empty sheet.
 
 ## Notes and limits
 

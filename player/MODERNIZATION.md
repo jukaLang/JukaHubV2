@@ -402,12 +402,12 @@ The phases above are now mostly implemented. The authoritative remaining work,
 with file-level evidence, is the **Recommended next work** section of
 [MODERNIZATION-CHECKLIST.md](MODERNIZATION-CHECKLIST.md):
 
-1. Bounded async work and scene-scoped cancellation.
-2. Log rotation and wiring `Ctrl+L` to the existing Logs scene.
-3. Controller remapping screen.
-4. Web builder snapping, alignment guides, safe-area overlay and schema validation.
-5. Render/navigation benchmarks at 720p.
-6. **Phase 8 handheld polish:** touch-target audit, safe-area insets, cached
+1. Controller remapping screen.
+2. Web builder snapping, alignment guides, safe-area overlay and schema validation.
+3. Conditional caching (`If-None-Match`) for the feeds that already use the
+   retry helper.
+4. Named power profiles (Battery Saver / Balanced / Performance).
+5. **Phase 8 handheld polish:** touch-target audit, safe-area insets, cached
    ambient glow, icon atlas, list virtualization, named power profiles, and
    on-device measurement of cold start, transition frame time, idle RSS and the
    GC/decode tuning above (all numbers so far are desktop proxies).

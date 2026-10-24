@@ -895,6 +895,7 @@ Opened from **Emulators → Smart Pro Compatibility**.
 | Esc / B | Back |
 | Q / E | Previous / next scene (not in the terminal, where they are ordinary characters) |
 | Ctrl+K | Jump to the YouTube search screen |
+| Ctrl+L | Open the log viewer (the terminal keeps Ctrl+L to clear its output) |
 | Ctrl+Q | Quick settings |
 | Ctrl+Shift+V | Clipboard manager |
 | Ctrl+Shift+S | Shorts feed (the Media **Y** action) |

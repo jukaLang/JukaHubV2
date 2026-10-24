@@ -198,6 +198,7 @@ func openGameLibraryPanel() {
 	gameLib.cursor = 0
 	gameLib.scroll = 0
 	gameLib.query = ""
+	resetGameRandomPicker()
 	gameLib.artSeen = artworkFetchGeneration()
 	gameLib.systemHits = nil
 	gameLib.gameHits = nil
@@ -210,9 +211,10 @@ func closeGameLibraryPanel() {
 	if !gameLib.open {
 		return
 	}
-	// The options sheet cannot outlive the library it belongs to.
+	// The options and random sheets cannot outlive the library they belong to.
 	gameOptsUI.open = false
 	gameOptsUI.rowHits = nil
+	resetGameRandomPicker()
 	gameLib.open = false
 	closeGameLibraryArt()
 	PlayBackSound()
@@ -412,9 +414,12 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !gameLib.open {
 		return false
 	}
-	// The options sheet is stacked on the library, so it reads every key first.
+	// The sheets are stacked on the library, so they read every key first.
 	if gameOptsUI.open {
 		return handleGameOptionsKey(e)
+	}
+	if gameRandomUI.open {
+		return handleGameRandomKey(e)
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
@@ -429,6 +434,8 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 		launchSelectedGame()
 	case sdl.K_o:
 		openGameOptions()
+	case sdl.K_r:
+		openGameRandomPicker()
 	case sdl.K_x:
 		openNetplayForSelectedGame()
 	case sdl.K_f:
@@ -457,6 +464,9 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if gameOptsUI.open {
 		return ctrlGameOptions(e)
 	}
+	if gameRandomUI.open {
+		return ctrlGameRandom(e)
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		gameLibraryMove(0, -1)
@@ -481,6 +491,11 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// R1 searches. The shoulders are otherwise blocked while this panel is
 		// open (shoulders.go), so the trigger is free here.
 		vkOpenGameSearch()
+	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// R3 rolls a random game. The stick click has no other binding in the
+		// app, and a key that is not on the pad would leave handhelds without
+		// the picker.
+		openGameRandomPicker()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		if gameLib.query != "" {
 			setGameLibraryQuery("")
@@ -501,6 +516,9 @@ func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 	}
 	if gameOptsUI.open {
 		return handleGameOptionsMouse(mx, my)
+	}
+	if gameRandomUI.open {
+		return handleGameRandomMouse(mx, my)
 	}
 	for _, hit := range gameLib.systemHits {
 		if pointInRect(mx, my, hit.rect) {
@@ -919,7 +937,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if artworkFetchRunning() {
 		artHint = FooterHint{"L1 / F", "Stop"}
 	}
-	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Play"},
+	hint := hintLine(FooterHint{"A", "Play"}, FooterHint{"R / R3", "Random"},
 		FooterHint{"Start / O", "Options"}, FooterHint{"S / R1", "Search"},
 		FooterHint{"X", "LAN Play"}, artHint, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	if gameLib.lib.Total == 0 {
@@ -930,5 +948,6 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		root := ellipsize(font, gameLib.lib.Roots[0], panelW-pad*2-260)
 		renderText(renderer, config, font, root, ColorTextTertiary(), panelX+pad+260, panelY+panelH-footerH+4)
 	}
+	renderGameRandomPicker(renderer, config)
 	renderGameOptionsPanel(renderer, config)
 }
