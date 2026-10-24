@@ -5164,15 +5164,25 @@ function createElementFromData(elementData) {
     if (value === undefined || value === null || value === '') el.removeAttribute(name);
     else el.setAttribute(name, String(value));
   };
+  // Unset colours draw the way the player draws them (resolveColor falls back
+  // to the card surface and light text for buttons, white for labels), not
+  // black-on-white, so a config that leaves them blank looks the same here.
   if (elementData.type === 'button') {
-    el.style.color = elementData.color || '#000000';
-    el.style.backgroundColor = elementData.bgColor || '#ffffff';
+    el.style.color = elementData.color || '#F8FAFC';
+    el.style.backgroundColor = elementData.bgColor || '#182236';
     el.style.fontSize = getFontSize(elementData.font || 'medium') + 'px';
     declared('data-color', elementData.color);
     declared('data-bg-color', elementData.bgColor);
     declared('data-font', elementData.font);
   } else if (elementData.type === 'label') {
-    el.style.color = elementData.color || '#000000';
+    el.style.color = elementData.color || '#FFFFFF';
+    // The player shortens a label with no width to what fits before the screen
+    // edge instead of letting it run off; mirror that with an ellipsis.
+    if (String(elementData.width ?? '').trim() === '') {
+      const room = Math.max(40, (parseFloat(canvas.style.width) || 1280) - (parseFloat(elementData.x) || 0) - 8);
+      el.style.setProperty('--label-room', room + 'px');
+      el.setAttribute('data-fit-canvas', '1');
+    }
     el.style.fontSize = getFontSize(elementData.font || 'medium') + 'px';
     el.style.background = 'none';
     declared('data-color', elementData.color);
