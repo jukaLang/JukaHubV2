@@ -55,6 +55,8 @@ const (
 	vkTargetWiFi       // Wi-Fi passphrase for the network picker
 	vkTargetMemory     // Memory panel value field (scan / write value)
 	vkTargetGameSearch // game library search
+	vkTargetDownloads  // Downloads panel: a link to save for offline use
+	vkTargetGameArgs   // game library: extra launch arguments for one game
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -301,6 +303,10 @@ func vkEnsureLayout() {
 		target = 7
 	case vkTargetGameSearch:
 		target = 8
+	case vkTargetDownloads:
+		target = 9
+	case vkTargetGameArgs:
+		target = 10
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -542,6 +548,10 @@ func vkCurrentText() string {
 		return memValueBuffer
 	case vkTargetGameSearch:
 		return gameLibraryQuery()
+	case vkTargetDownloads:
+		return downloadLinkInput
+	case vkTargetGameArgs:
+		return gameArgsBuffer
 	}
 	return inputTextBuffer
 }
@@ -582,6 +592,13 @@ func vkSetText(text string, config *Config) {
 		// The library re-filters on every keystroke, so matches appear while
 		// the query is typed instead of after submitting.
 		setGameLibraryQuery(text)
+	case vkTargetDownloads:
+		// The link is only used when the field is submitted, so a mistyped
+		// character cannot start a download.
+		downloadLinkInput = text
+	case vkTargetGameArgs:
+		// Edited in its own buffer; the game's options change only on submit.
+		gameArgsBuffer = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -668,6 +685,10 @@ func vkTitle() string {
 		return "SEARCH SONGS"
 	case vkTargetGameSearch:
 		return "SEARCH GAMES"
+	case vkTargetDownloads:
+		return "SAVE TO SD CARD"
+	case vkTargetGameArgs:
+		return "LAUNCH ARGUMENTS"
 	case vkTargetNetplay:
 		return "HOST ADDRESS"
 	case vkTargetPSRemote:
@@ -725,6 +746,10 @@ func vkPlaceholder() string {
 		return "Type initials: iwyn = I Want You Now"
 	case vkTargetGameSearch:
 		return "Title, console or file: zelda"
+	case vkTargetDownloads:
+		return "https://www.youtube.com/watch?v=…"
+	case vkTargetGameArgs:
+		return "--profile \"My Game\""
 	case vkTargetNetplay:
 		return "192.168.1.5"
 	case vkTargetPSRemote:
@@ -772,6 +797,8 @@ func vkHints() string {
 		return hintLine(FooterHint{"ENTER", "Use Value"}, FooterHint{"123", "Digits"}, FooterHint{"B / Esc", "Cancel"})
 	case vkTargetGameSearch:
 		return hintLine(FooterHint{Label: "Live Filter"}, FooterHint{"A / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetGameArgs:
+		return hintLine(FooterHint{Label: "Quotes Group Words"}, FooterHint{"A / Enter", "Save"}, FooterHint{"B / Esc", "Close"})
 	}
 	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
@@ -944,6 +971,38 @@ func vkOpenGameSearch() {
 	chatInputActive = false
 	unitInputActive = false
 	vkTarget = vkTargetGameSearch
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenGameArgs opens the keyboard for the arguments of the game highlighted in
+// the options sheet. The saved value seeds the field so an option can be
+// corrected instead of retyped.
+func vkOpenGameArgs() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetGameArgs
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	gameArgsBuffer = gameOptsUI.opts.Args
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenDownloadLink opens the keyboard for a link to save for offline
+// listening. The Downloads panel stays open behind it.
+func vkOpenDownloadLink() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetDownloads
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
@@ -1201,6 +1260,11 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetGameSearch:
 		// Same here: the library narrowed as the query was typed.
 		vkCloseKeyboard()
+	case vkTargetDownloads:
+		// Submit before closing: closing is what clears the field, and an
+		// emptied link must not become a queued row.
+		downloadLinkSubmit(text)
+		vkCloseKeyboard()
 	case vkTargetTerm:
 		vkSetText("", config)
 		vkCloseKeyboard()
@@ -1232,6 +1296,11 @@ func vkSubmit(config *Config, askAI bool) {
 		// Submit before closing: closing clears the pending network and buffer.
 		wifiSubmitPassphrase(vkCurrentText())
 		vkCloseKeyboard()
+	case vkTargetGameArgs:
+		// The sheet stays open behind the keyboard, so saving just updates its
+		// row and the game's record; the next launch picks it up.
+		vkCloseKeyboard()
+		applyGameArgs()
 	case vkTargetMemory:
 		// The buffer is committed before closing, and an empty field clears the
 		// value so the panel shows "not set" instead of holding a stale number.

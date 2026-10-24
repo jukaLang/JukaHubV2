@@ -129,7 +129,7 @@ identical — a test rejects the build if they differ.
 | The app appears but exits immediately | Check `errors.txt` — usually `JukaHub` is not executable yet (`chmod +x`) or a library is missing. |
 | Text is missing or shows as boxes | `Inter-Regular.ttf` is missing from the app folder. |
 | The screen flickers between MainUI and JukaHub after an update | The `launch.sh` on the card is older than the app. Update once more (the release archive replaces `launch.sh`), or copy `launch.sh` from the archive into `Apps/JukaHub/`, then reboot. |
-| YouTube search fails | Check that `required/yt-dlp` exists; Wi-Fi is required. Also see `logs.txt` (the **Logs** scene on Home). |
+| YouTube search fails | Check that `required/yt-dlp` exists; Wi-Fi is required. Also see `logs.txt` (the **Logs** scene in the Start menu). |
 | Just opened the app and Wi-Fi is not connected yet | An **Offline — connect WiFi** message appears. Connect Wi-Fi; any missing tools are downloaded automatically once the connection is back. |
 | Downloading `yt-dlp` / `ffmpeg` fails | The download card shows `Could not install …` with an **A: retry** button. Press **A** to retry; once it succeeds, restart JukaHub so the new tools are used. |
 | Video is slow or stutters | Lower the playback resolution in Settings to `360` or `240`. |
@@ -141,7 +141,7 @@ files are not overwritten and a correct download is not deleted.
 All application logs live in:
 
 * `Apps/JukaHub/errors.txt` — process + launcher output
-* `Apps/JukaHub/logs.txt` — the app's internal log (the **Logs** button on Home)
+* `Apps/JukaHub/logs.txt` — the app's internal log (the **Logs** scene in the Start menu)
 
 Send those files along with a bug report; no SSH needed.
 
@@ -150,7 +150,7 @@ Send those files along with a bug report; no SSH needed.
 ## 4. Technical notes (for deeper tuning)
 
 * **Architecture:** TrimUI Smart Pro = Allwinner A133P, userspace **aarch64**
-  (glibc 2.23), 1280×768 display, 1–2 GB RAM, 1 Cortex-A7 core.
+  (glibc 2.23), 1280×720 display, 1–2 GB RAM, quad-core Cortex-A53.
 * **Libraries:** the binary links against SONAMEs that exist in the stock
   firmware (`libSDL2-2.0.so.0`, `libSDL2_image-2.0.so.0`,
   `libSDL2_ttf-2.0.so.0`), so it does not need to ship its own `.so` files.
@@ -160,7 +160,9 @@ Send those files along with a bug report; no SSH needed.
   (ffmpeg/ffprobe/ffplay).
 * **Trimmed config:** `player/trimui/make-config.ps1` generates
   `player/trimui/jukaconfig.device.json` from the full config — keeping only
-  Main / Tube / Shorts / Favorites / Settings / Logs / Exit.
+  the scenes the Home cards and Settings open: Main, Tube, Shorts, Apps,
+  Favorites, Chat, Tools (Misc), Emulator, Settings with its sub-pages, Themes,
+  Logs and Exit.
   It is deliberately **not** named `jukaconfig.json`, because `player/.gitignore`
   excludes that file (it may contain a user's API key) — with the same name the
   device config would not be committed and the CI build would fail.

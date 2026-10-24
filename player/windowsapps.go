@@ -256,10 +256,11 @@ func windowsWineCommand(exe string, args []string, lookPath func(string) (string
 
 // ── DXVK / Vulkan ────────────────────────────────────────────────────────
 
-// resolveDXVK finds a DXVK build the user installed beside Wine or PortMaster.
-// JukaHub never downloads it: the DLLs must match the Wine prefix's
-// architecture. A detected build is only used when a Vulkan loader is also
-// present, because DXVK cannot start without one.
+// resolveDXVK finds a DXVK build installed beside Wine, by JukaHub's own
+// installer or by PortMaster. The DLLs must match the Wine prefix's
+// architecture, which the x64/x32 layout of a release provides. A detected
+// build is only used when a Vulkan loader is also present, because DXVK cannot
+// start without one.
 func resolveDXVK() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_DXVK")); override != "" {
 		if !dxvkBuild(override) {
@@ -725,12 +726,12 @@ func launchWindowsApp(entry windowsAppEntry) error {
 		return fmt.Errorf("start %s: %w", filepath.Base(command), err)
 	}
 	windowsAppSetRunning(entry.Path, cmd.Process.Pid)
-	noteGameChildStarted()
+	noteGameChildStarted(cmd)
 	log.Printf("[windowsapps] launched %s (pid %d)", entry.Title, cmd.Process.Pid)
 
 	go func() {
 		waitErr := cmd.Wait()
-		noteGameChildExited()
+		noteGameChildExited(cmd)
 		windowsAppSetRunning(entry.Path, 0)
 		if logFile != nil {
 			if waitErr != nil {

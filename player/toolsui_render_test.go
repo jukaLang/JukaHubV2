@@ -172,12 +172,12 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
 	rows := toolsRows(config)
-	if len(rows) != 7 {
-		t.Fatalf("rows = %d, want IP, FTP, companion, SSH, party, power tools and community only", len(rows))
+	if len(rows) != 8 {
+		t.Fatalf("rows = %d, want IP, FTP, companion, SSH, party, power tools, disc helpers and community only", len(rows))
 	}
 	want := []toolsAction{
 		toolsActionCopyIP, toolsActionFTP, toolsActionCompanion, toolsActionSSH,
-		toolsActionParty, toolsActionPowerTools, toolsActionCommunity,
+		toolsActionParty, toolsActionPowerTools, toolsActionDiscHelpers, toolsActionCommunity,
 	}
 	for i, action := range want {
 		if rows[i].action != action {
@@ -205,7 +205,7 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 func TestToolsRowsWithMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	rows := toolsRows(config)
-	if len(rows) != 8 {
+	if len(rows) != 9 {
 		t.Fatalf("rows = %d, want a Classic Tools row too", len(rows))
 	}
 	if rows[len(rows)-1].action != toolsActionUtilities {
@@ -271,8 +271,8 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 8 {
-		t.Fatalf("row rects = %d, want 8 with the Misc scene", len(rects))
+	if len(rects) != 9 {
+		t.Fatalf("row rects = %d, want 9 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Skip("no usable font")

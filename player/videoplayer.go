@@ -1094,6 +1094,11 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		// the room had switched streams.
 		currentPlaybackURL = pageURL
 	}
+	// A new session owns the picture again: the floating window must not keep
+	// showing the previous video's scene.
+	videoMiniClear()
+	// The top bar names this session from its page URL (see statusbar_media.go).
+	rememberVideoPage(pageURL)
 	sess := beginPlaybackSession(url, pageURL, tempFile)
 	// Network sources have no sidecar; ask yt-dlp for the page's subtitles
 	// in the background so playback is not delayed.
@@ -1218,10 +1223,14 @@ func StopEmbeddedPlayback() {
 	// stream the moment the poll sees it again.
 	partyNoteStop(currentPlaybackURL)
 	currentPlaybackURL = ""
-	// Leaving playback also leaves full screen and the settings sheet behind.
+	// Nothing is playing any more, so the top bar drops its now-playing slot.
+	forgetVideoPage()
+	// Leaving playback also leaves full screen, the settings sheet and the
+	// floating window behind.
 	videoFullscreen = false
 	videoSettingsOpen = false
 	videoControlFocus = vcNone
+	videoMiniClear()
 	setSubtitlesEnabled(false)
 
 	videoPlaybackMutex.Lock()
@@ -1451,6 +1460,42 @@ func computeVideoControlLayout(x, y, w, h int32, state videoStateSnapshot) {
 	}
 }
 
+// videoAdvanceProgress moves the stored position forward from wall-clock time
+// and writes the throttled resume position. The in-scene overlay and the
+// floating mini window (videomini.go) both call it, so the position keeps
+// moving and the resume save keeps running whichever one is drawing.
+func videoAdvanceProgress(state *videoStateSnapshot) {
+	if state.duration <= 0 || state.phase != "playing" {
+		return
+	}
+	elapsed := time.Since(state.decoderStartTime).Seconds()
+	pausedTime := state.totalPausedDuration
+	if !state.pauseStartTime.IsZero() {
+		pausedTime += time.Since(state.pauseStartTime).Seconds()
+	}
+	effectiveElapsed := elapsed - pausedTime
+	if effectiveElapsed < 0 {
+		effectiveElapsed = 0
+	}
+	fraction := state.progressBase + effectiveElapsed/state.duration
+	if fraction > 1 {
+		fraction = 1
+	}
+	embeddedPlayer.mu.Lock()
+	embeddedPlayer.progress = fraction
+	embeddedPlayer.mu.Unlock()
+	state.progress = fraction
+
+	// Throttled resume-position safety net.
+	if now := sdl.GetTicks64(); now-lastResumeSaveTicks > 5000 {
+		lastResumeSaveTicks = now
+		if src := currentPlaybackURL; src != "" && state.duration > 0 {
+			updateRecentPosition(src, fraction*state.duration)
+			saveFavorites()
+		}
+	}
+}
+
 // RenderVideoOverlay renders the current video frame and on-screen controls.
 // videoSyncPlaybackEnd closes a session whose decoder hit the end of the file.
 // It runs on the render thread so the phase change, the frame-queue flush and
@@ -1521,34 +1566,7 @@ func RenderVideoOverlay(renderer *sdl.Renderer, config *Config, elem Element) {
 	}
 
 	// Update playback progress from elapsed wall time.
-	if state.duration > 0 && state.phase == "playing" {
-		elapsed := time.Since(state.decoderStartTime).Seconds()
-		pausedTime := state.totalPausedDuration
-		if !state.pauseStartTime.IsZero() {
-			pausedTime += time.Since(state.pauseStartTime).Seconds()
-		}
-		effectiveElapsed := elapsed - pausedTime
-		if effectiveElapsed < 0 {
-			effectiveElapsed = 0
-		}
-		fraction := state.progressBase + effectiveElapsed/state.duration
-		if fraction > 1 {
-			fraction = 1
-		}
-		embeddedPlayer.mu.Lock()
-		embeddedPlayer.progress = fraction
-		embeddedPlayer.mu.Unlock()
-		state.progress = fraction
-
-		// Throttled resume-position safety net.
-		if now := sdl.GetTicks64(); now-lastResumeSaveTicks > 5000 {
-			lastResumeSaveTicks = now
-			if src := currentPlaybackURL; src != "" && state.duration > 0 {
-				updateRecentPosition(src, fraction*state.duration)
-				saveFavorites()
-			}
-		}
-	}
+	videoAdvanceProgress(&state)
 
 	// Layout the controls first so hit testing works even when the cached
 	// overlay texture is used.
@@ -2057,6 +2075,12 @@ func HandleVideoControlClick(mx, my int32) bool {
 		return false
 	}
 
+	// While the video plays in the floating window the scene owns the panel;
+	// the window's own taps are routed by handleVideoMiniClick.
+	if videoMiniVisible() {
+		return false
+	}
+
 	// In full screen a tap anywhere brings the controls back first.
 	if videoFullscreen && !videoChromeVisible() {
 		revealVideoChrome()
@@ -2127,7 +2151,9 @@ func HandleVideoControlClick(mx, my int32) bool {
 		videoControlFocus = vcSpeed
 		cyclePlaybackSpeed()
 	} else if pointInRect(mx, my, videoControlRects.back) {
-		StopEmbeddedPlayback()
+		// Backing out keeps the video: full screen steps down to the window,
+		// and the window steps down to the floating mini player.
+		videoBackOut(appConfig)
 	}
 	return true
 }
@@ -2173,6 +2199,12 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 	}
 	state := snapshotVideoState()
 	if state.phase == "idle" {
+		return false
+	}
+
+	// While the video floats in its mini window the scene keeps the keyboard:
+	// Escape and B navigate back, arrows scroll the list under the window.
+	if videoMiniVisible() {
 		return false
 	}
 
@@ -2234,13 +2266,10 @@ func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 		videoSettingsOpen = !videoSettingsOpen
 		videoSettingsItem = 0
 	case sdl.K_ESCAPE:
-		// Escape leaves full screen (and the settings sheet) before it ends
-		// playback, so a mistaken tap does not kill the video.
-		if videoFullscreen {
-			videoFullscreen = false
-			return true
-		}
-		StopEmbeddedPlayback()
+		// Escape steps down a size instead of ending playback: full screen
+		// shrinks back into the scene's window, and the window shrinks into the
+		// floating mini player on the previous screen.
+		videoBackOut(appConfig)
 	case sdl.K_q:
 		StopEmbeddedPlayback()
 	case sdl.K_n:
@@ -2281,6 +2310,11 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 		return false
 	}
 
+	// The scene owns the pad while the video floats in its mini window.
+	if videoMiniVisible() {
+		return false
+	}
+
 	if videoSettingsOpen {
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -2306,7 +2340,9 @@ func HandleVideoControllerInput(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		activateVideoControl()
 	case sdl.CONTROLLER_BUTTON_B:
-		StopEmbeddedPlayback()
+		// B steps down a size (full screen -> window -> mini player) instead
+		// of stopping; the Stop control still ends playback.
+		videoBackOut(appConfig)
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		moveVideoControlFocus(-1)
 		PlayNavSound()

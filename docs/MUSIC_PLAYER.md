@@ -1,9 +1,9 @@
 # Music player
 
-JukaHub's audio player is the screen **Files → a song**, the **Media** entry, or
-the `MusicPlayer` scene. It plays the folder the file came from, keeps playing
-while you browse the rest of the app, and stores its own settings next to the
-other app data.
+JukaHub's audio player is the screen **Files → a song**, the **Music** entry in
+the Start menu (**Scenes → Music**), or the `MusicPlayer` scene. It plays the
+folder the file came from, keeps playing while you browse the rest of the app,
+and stores its own settings next to the other app data.
 
 This page describes what it does, how it compares with the handheld music
 players people know (NXT Retro Music in particular), and the order in which the

@@ -38,6 +38,7 @@ import (
 const (
 	windowsRuntimeReleaseAPI = "https://api.github.com/repos/AndreRH/hangover/releases/latest"
 	windowsWestonRuntimeURL  = "https://raw.githubusercontent.com/PortsMaster/PortMaster-New/main/runtimes/weston_pkg_0.2.aarch64.squashfs"
+	windowsDXVKReleaseAPI    = "https://api.github.com/repos/doitsujin/dxvk/releases/latest"
 	windowsRuntimeMaxBytes   = int64(2 << 30) // 2 GiB safety limit
 	windowsRuntimeMaxFiles   = 100000
 )
@@ -167,6 +168,22 @@ func endWindowsRuntimeInstall() {
 	windowsRuntimeState.running = false
 	windowsRuntimeState.target = ""
 	windowsRuntimeState.mu.Unlock()
+}
+
+// setWindowsRuntimeInstallTarget moves the progress line to the component the
+// provisioning chain is working on now.
+func setWindowsRuntimeInstallTarget(target string) {
+	windowsRuntimeState.mu.Lock()
+	windowsRuntimeState.target = target
+	windowsRuntimeState.mu.Unlock()
+}
+
+// windowsDXVKInstallFailed reports whether the last DXVK install ended with an
+// error, so the setup page can say so on the row.
+func windowsDXVKInstallFailed() bool {
+	windowsRuntimeState.mu.Lock()
+	defer windowsRuntimeState.mu.Unlock()
+	return !windowsRuntimeState.running && windowsRuntimeState.status == "DXVK install failed"
 }
 
 // startWindowsRuntimeInstall launches the Wine install in the background; the
@@ -916,4 +933,300 @@ func findWestonWrapper(root string) (string, error) {
 		return "", errors.New("WestonPack archive does not contain westonwrap.sh")
 	}
 	return found, nil
+}
+
+// ── DXVK ─────────────────────────────────────────────────────────────────
+
+// selectDXVKAsset picks the release tarball that carries the D3D DLLs. Hash
+// files and source archives are skipped: only the binary .tar.gz (or .zip)
+// contains x64/d3d11.dll, which is what makes DXVK usable.
+func selectDXVKAsset(assets []hangoverAsset) (string, string, error) {
+	for _, a := range assets {
+		lower := strings.ToLower(a.Name)
+		if strings.Contains(lower, "sha256") || strings.Contains(lower, ".asc") || strings.Contains(lower, "source") {
+			continue
+		}
+		if !strings.HasSuffix(lower, ".tar.gz") && !strings.HasSuffix(lower, ".tgz") && !strings.HasSuffix(lower, ".zip") {
+			continue
+		}
+		return a.Name, a.BrowserDownloadURL, nil
+	}
+	return "", "", errors.New("the latest DXVK release has no .tar.gz binary archive")
+}
+
+func latestDXVKAsset(apiURL string) (string, error) {
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "JukaHub/0.4")
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := windowsRuntimeClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("check DXVK release: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("check DXVK release: HTTP %d", resp.StatusCode)
+	}
+	var release hangoverRelease
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&release); err != nil {
+		return "", fmt.Errorf("read DXVK release: %w", err)
+	}
+	_, assetURL, err := selectDXVKAsset(release.Assets)
+	return assetURL, err
+}
+
+// findDXVKTree locates the directory that holds x64/d3d11.dll inside an
+// extracted release. Upstream keeps the DLLs under <version>/, but a flat
+// archive (d3d11.dll at the root) is accepted too.
+func findDXVKTree(root string) string {
+	best := ""
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() {
+			return nil
+		}
+		if info, err := os.Stat(filepath.Join(path, "x64", "d3d11.dll")); err == nil && info.Size() > 0 {
+			best = path
+			return io.EOF
+		}
+		return nil
+	})
+	if best != "" {
+		return best
+	}
+	if info, err := os.Stat(filepath.Join(root, "d3d11.dll")); err == nil && info.Size() > 0 {
+		return root
+	}
+	return ""
+}
+
+// installDXVKRuntime downloads the latest DXVK and installs its DLL trees in
+// data/windows-runtime/dxvk, which resolveDXVK already checks. DXVK is only
+// useful with a Vulkan loader, so installing it without one is refused rather
+// than leaving a directory that silently changes nothing.
+func installDXVKRuntime() error {
+	if windowsResolveVulkan() == "" {
+		return errors.New("DXVK needs a Vulkan loader (libvulkan.so.1); install a Vulkan driver first, or set JUKAHUB_VULKAN")
+	}
+	assetURL, err := latestDXVKAsset(windowsDXVKRelease)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(assetURL, "http://") && !strings.HasPrefix(assetURL, "https://") {
+		return fmt.Errorf("DXVK URL must be http(s): %s", assetURL)
+	}
+	base := windowsRuntimeDir()
+	downloads := filepath.Join(base, "downloads")
+	if err := os.MkdirAll(downloads, 0o755); err != nil {
+		return fmt.Errorf("create runtime folder: %w", err)
+	}
+	name := filepath.Base(assetURL)
+	if i := strings.IndexAny(name, "?#"); i >= 0 {
+		name = name[:i]
+	}
+	if name == "" || name == "." || name == "/" {
+		name = "dxvk.tar.gz"
+	}
+	archive := filepath.Join(downloads, name)
+	setWindowsRuntimeStatus("downloading "+name, "", true)
+	if err := downloadRuntimeFile(assetURL, archive); err != nil {
+		return err
+	}
+	staging := filepath.Join(base, fmt.Sprintf("staging-%d", time.Now().UnixNano()))
+	defer os.RemoveAll(staging)
+	setWindowsRuntimeStatus("extracting "+name, "", true)
+	if err := extractRuntimeArchive(archive, staging); err != nil {
+		return err
+	}
+	tree := findDXVKTree(runtimeArchiveRoot(staging))
+	if tree == "" {
+		return errors.New("the DXVK archive contains no x64/d3d11.dll")
+	}
+	installDir := filepath.Join(base, "dxvk")
+	if err := os.RemoveAll(installDir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(installDir, 0o755); err != nil {
+		return err
+	}
+	for _, dir := range []string{"x64", "x32"} {
+		src := filepath.Join(tree, dir)
+		if info, err := os.Stat(src); err == nil && info.IsDir() {
+			if err := copyTree(src, filepath.Join(installDir, dir)); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tree, "x64")); err != nil {
+		// A flat archive has the DLLs at its root instead of inside x64/.
+		entries, readErr := os.ReadDir(tree)
+		if readErr != nil {
+			return readErr
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".dll") {
+				continue
+			}
+			if err := copyArchiveFile(filepath.Join(tree, entry.Name()), filepath.Join(installDir, entry.Name()), 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	if !dxvkBuild(installDir) {
+		return fmt.Errorf("the DXVK archive did not install a usable build in %s", installDir)
+	}
+	setWindowsRuntimeStatus("DXVK installed", "", false)
+	return nil
+}
+
+// ── Provisioning ─────────────────────────────────────────────────────────
+
+// windowsRuntimeStep is one runtime component a launch may need.
+type windowsRuntimeStep int
+
+const (
+	windowsStepWine windowsRuntimeStep = iota
+	windowsStepDisplay
+	windowsStepDXVK
+)
+
+// key is the value the install state and the setup rows use for a step.
+func (s windowsRuntimeStep) key() string {
+	switch s {
+	case windowsStepWine:
+		return "wine"
+	case windowsStepDisplay:
+		return "weston"
+	default:
+		return "dxvk"
+	}
+}
+
+func (s windowsRuntimeStep) label() string {
+	switch s {
+	case windowsStepWine:
+		return "Wine"
+	case windowsStepDisplay:
+		return "WestonPack"
+	default:
+		return "DXVK"
+	}
+}
+
+// windowsRuntimePlan lists what a Wine launch still needs, in install order:
+// the Wine runtime first, then the display bridge, then DXVK (only when a
+// Vulkan loader makes it usable). An empty plan means the runtime is ready.
+func windowsRuntimePlan(status windowsRuntimeStatus) []windowsRuntimeStep {
+	var plan []windowsRuntimeStep
+	if strings.TrimSpace(status.Wine) == "" {
+		plan = append(plan, windowsStepWine)
+	}
+	if strings.TrimSpace(status.Display) == "" {
+		plan = append(plan, windowsStepDisplay)
+	}
+	if status.Vulkan && strings.TrimSpace(status.DXVK) == "" {
+		plan = append(plan, windowsStepDXVK)
+	}
+	return plan
+}
+
+// windowsPlanLabel names the missing pieces for the setup-page notice.
+func windowsPlanLabel(plan []windowsRuntimeStep) string {
+	names := make([]string, 0, len(plan))
+	for _, step := range plan {
+		names = append(names, step.label())
+	}
+	return strings.Join(names, " and ")
+}
+
+// The install steps and the status lookup are variables so the provisioning
+// chain can be tested without a network or a 300 MB download.
+var (
+	windowsRuntimeStatusFor   = currentWindowsRuntimeStatus
+	windowsInstallWineFn      = func() error { return installWineRuntime("") }
+	windowsInstallDisplayFn   = installWestonRuntime
+	windowsInstallDXVKFn      = installDXVKRuntime
+	windowsLaunchAfterInstall = launchWindowsApp
+	windowsResolveVulkan      = resolveVulkan
+	windowsDXVKRelease        = windowsDXVKReleaseAPI
+)
+
+// startWindowsProvisioning installs every missing piece in the background and
+// launches pending when the last one succeeds. It returns an error when an
+// install is already running or there is nothing to do for pending.
+func startWindowsProvisioning(pending *windowsAppEntry) error {
+	status := windowsRuntimeStatusFor()
+	plan := windowsRuntimePlan(status)
+	if len(plan) == 0 {
+		if pending == nil {
+			return errors.New("the Windows runtime is already installed")
+		}
+		return windowsLaunchAfterInstall(*pending)
+	}
+	if !beginWindowsRuntimeInstall(plan[0].key(), "checking the Windows runtime") {
+		return errors.New("a runtime install is already running")
+	}
+	if pending != nil {
+		copy := *pending
+		pending = &copy
+	}
+	go windowsProvisionLoop(pending)
+	return nil
+}
+
+// windowsProvisionLoop re-checks what is missing before every step, so an
+// install that also provides a later piece (or a component someone added by
+// hand meanwhile) is not installed twice. A step that reports success but
+// leaves its component missing stops the chain instead of looping forever.
+func windowsProvisionLoop(pending *windowsAppEntry) {
+	defer func() {
+		endWindowsRuntimeInstall()
+		invalidateWindowsAppsCache()
+	}()
+	attempted := map[windowsRuntimeStep]bool{}
+	for {
+		status := windowsRuntimeStatusFor()
+		plan := windowsRuntimePlan(status)
+		if len(plan) == 0 {
+			break
+		}
+		step := plan[0]
+		if attempted[step] {
+			setWindowsRuntimeStatus(step.label()+" not installed", "still missing after install", false)
+			ShowToast(step.label()+" is still missing after installing it", ToastKindError)
+			return
+		}
+		attempted[step] = true
+		setWindowsRuntimeInstallTarget(step.key())
+		setWindowsRuntimeStatus("installing "+step.label(), "", true)
+		var err error
+		switch step {
+		case windowsStepWine:
+			err = windowsInstallWineFn()
+		case windowsStepDisplay:
+			err = windowsInstallDisplayFn()
+		case windowsStepDXVK:
+			err = windowsInstallDXVKFn()
+		}
+		if err != nil {
+			setWindowsRuntimeStatus(step.label()+" install failed", err.Error(), false)
+			ShowToast(step.label()+" install failed: "+err.Error(), ToastKindError)
+			return
+		}
+	}
+	setWindowsRuntimeStatus("Windows runtime ready", "", false)
+	invalidateWindowsAppsCache()
+	if pending == nil {
+		ShowToast("Windows runtime ready", ToastKindSuccess)
+		return
+	}
+	if err := windowsLaunchAfterInstall(*pending); err != nil {
+		showLaunchFailureDialog(pending.Title, err, "")
+		return
+	}
+	ShowToast("Launching "+pending.Title, ToastKindSuccess)
 }

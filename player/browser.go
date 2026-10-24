@@ -57,6 +57,8 @@ type browserPage struct {
 	// Doc is the styled document the renderer draws instead of the plain text
 	// extract (nil when the page had no readable markup).
 	Doc *webDocument
+	// Blocked is how many ad/tracker subresource requests the load skipped.
+	Blocked int
 }
 
 var browserState = struct {
@@ -110,14 +112,24 @@ func ensureBrowserScene(config *Config) {
 		{"Forward", "browser_forward"},
 		{"Reload", "browser_reload"},
 		{"Links", "browser_links"},
+		// Filter turns ad/tracker blocking off for the current site and
+		// reloads it, which is the way back from a page that needs the very
+		// request the filter drops.
+		{"Filter", "browser_filter"},
 		// Search is the controller shortcut to the web search box; without
 		// it the address bar was the only way in, and that needed a mouse.
 		{"Search", "browser_search"},
 		{"Home", "browser_home"},
 		{"Issues", "browser_issues"},
 	}
-	// Seven chips share the content width: 168 + 6*172 keeps the row inside
-	// the 1232px design column and still renders legibly at 800x480.
+	// The chips share the content width, computed from how many there are so
+	// an added action never runs off the 1232px design column at 800x480.
+	const (
+		chipRowX = int32(24)
+		chipRowW = int32(1232)
+		chipGap  = int32(5)
+	)
+	chipW := (chipRowW - chipGap*int32(len(buttons)-1)) / int32(len(buttons))
 	elements := []Element{textBrowser}
 	for i, b := range buttons {
 		elements = append(elements, Element{
@@ -125,9 +137,9 @@ func ensureBrowserScene(config *Config) {
 			Text:    b.label,
 			Color:   "$labelColor",
 			BgColor: "$buttonColor",
-			X:       scaleX(int32(24+i*172), width),
+			X:       scaleX(chipRowX+int32(i)*(chipW+chipGap), width),
 			Y:       scaleY(584, height),
-			Width:   StringOrInt(strconv.Itoa(int(scaleX(168, width)))),
+			Width:   StringOrInt(strconv.Itoa(int(scaleX(chipW, width)))),
 			Height:  StringOrInt(strconv.Itoa(int(scaleY(44, height)))),
 			Trigger: b.trigger,
 			Font:    "small",
@@ -278,6 +290,38 @@ func browserHome(config *Config) {
 	loadTextBrowserURL(config, elem, browserHomeURL)
 }
 
+// browserToggleAdFilter flips ad/tracker filtering for the site on screen and
+// reloads the page, so the recovery is one press instead of a settings hunt.
+// The setting is per host, not per URL: an article and its comment page break
+// or work together.
+func browserToggleAdFilter(config *Config) bool {
+	elem, ok := findBrowserElement(config)
+	if !ok {
+		showToast("Browser is not available on this screen", ToastError())
+		return false
+	}
+	address := textBrowserAddress(config)
+	site := browserAdBlockSiteKey(address)
+	if site == "" {
+		showToast("Open a page before turning the filter off", ToastInfo())
+		return false
+	}
+	off := browserAdBlockOff(site)
+	if err := setBrowserAdBlockOff(site, !off); err != nil {
+		showToast("Cannot save the filter setting: "+err.Error(), ToastError())
+		return false
+	}
+	setBrowserAdBlockView(elem.Variable, browserAdBlockView{Site: site, Off: !off})
+	if off {
+		ShowToast("Ad filtering on for "+site, ToastKindInfo)
+	} else {
+		ShowToast("Ad filtering off for "+site+" — reloading", ToastKindInfo)
+	}
+	PlayActivateSound()
+	browserReload(config)
+	return true
+}
+
 func browserReload(config *Config) {
 	elem, ok := findBrowserElement(config)
 	if !ok {
@@ -360,6 +404,8 @@ func resetBrowserStateForTest() {
 	browserHomeLoaded = false
 	browserLinkPanel = browserLinkPanelState{}
 	resetBrowserDocumentsForTest()
+	resetBrowserAdBlockViewsForTest()
+	resetBrowserAdBlockCount()
 }
 
 // ── Link extraction ──────────────────────────────────────────────────────

@@ -44,6 +44,30 @@ thumbnail set does not have is remembered in
 library full of unlisted homebrew does not re-download 200 404s every time.
 Network errors are not cached — only a real 404 is.
 
+## Disc-based systems
+
+A PlayStation or Sega CD rip is only half a game as far as the emulator is
+concerned: a bare `.bin` needs a cue sheet before RetroArch will open it, and a
+set spread over `Game (Disc 1).chd` and `Game (Disc 2).chd` needs an `.m3u`
+before the disc-switch menu has anything to switch.
+
+**Tools → Disc helpers** adds both, in place, to the folders that need them
+(`PSX`, `PS1`, `PlayStation`, `Saturn`, `Sega CD`, `PC Engine CD`, and their
+`Sega - …` spellings):
+
+- a one-track `.cue` next to every `.bin` that has no sheet of its own, using
+  the sector mode the system uses — `MODE2/2352` on PlayStation,
+  `MODE1/2352` on the Sega and NEC CD systems;
+- one `.m3u` per multi-disc set, listing the discs in order and preferring the
+  `.cue` over the `.bin` it describes.
+
+Nothing is overwritten. An existing sheet or playlist — including a
+hand-written one with audio tracks — is left exactly as it is, and files named
+`(Track 1)` are skipped because they already belong to a multi-track sheet.
+Cartridge folders are not touched at all: a `.bin` in `Roms/GBA` is a game
+file, not a disc image. The action reports what it added, so pressing it again
+on an already-fixed card says so instead of writing anything.
+
 ## Completeness
 
 The header carries a ring that fills as the library gains covers, with the
@@ -82,6 +106,50 @@ Windows `.bat`/`.cmd` launchers go through `cmd /c`, and an `.exe` (PPSSPP,
 RetroArch) is started directly with the ROM as its argument. JukaHub raises the
 game power profile for the child process and restores it when the emulator
 exits, exactly like the Emulators screen.
+
+### Per-game launch options
+
+**Start** (or **O** on a keyboard) opens the options sheet for the highlighted
+game. It has three rows and applies to that title only:
+
+- **CPU limit** — `Auto`, then 2.0, 1.8, 1.6, 1.4 and 1.2 GHz. `Auto` follows the
+global `powerProfileMaxFreq`; any other value caps the clock for this game's  launch and nothing else. **A** and **Right** step one rung cooler, **Left** warms
+  back up. A cap can only lower the chip's top OPP, never invent a faster one, and
+  the firmware's own ceiling is written back when the emulator exits. With
+  `powerProfiles: false` the value is still stored, but JukaHub leaves cpufreq
+  alone, as that switch asks.
+- **Extra arguments** — appended after the ROM path:
+
+  ```sh
+  sh /mnt/SDCARD/Emus/PSP/launch.sh "/mnt/SDCARD/Roms/PSP/Game.iso" --fast
+  ```
+
+  Double quotes group a value with spaces (`--profile "My Game"`). Stock
+  `launch.sh` scripts read only `$1` and ignore the rest, so this row is for a
+  launcher that forwards its arguments, or for an emulator binary started
+directly.
+- **Reset** — clears both rows for the game and puts it back on the defaults.
+
+A game with a cap shows it in the library list (`PSP · God of War.iso ·
+1.8 GHz`), so a deliberately cool title is recognisable without opening the
+sheet. Settings live in `Apps/JukaHub/data/game-options.json`, keyed by ROM
+path; only games that differ from the defaults are written:
+
+```json
+{
+  "schemaVersion": 1,
+  "games": {
+    "/mnt/SDCARD/Roms/GBA/Zelda.gba": { "max_freq_khz": 1200000 },
+    "/mnt/SDCARD/Roms/PSP/God of War.iso": { "max_freq_khz": 1800000, "args": "--fast" }
+  }
+}
+```
+
+Because the key is the path, moving or renaming a ROM returns it to the defaults
+rather than inheriting another game's settings. A broken file reads as "no
+overrides" — the library still opens. The clock is applied through the same
+profile code as the global setting, so a firmware with a read-only
+`scaling_max_freq` logs one line and runs the game at its own clock instead.
 
 ### Resume and auto-save
 

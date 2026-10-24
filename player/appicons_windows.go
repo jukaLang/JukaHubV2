@@ -265,4 +265,7 @@ func extractAppIcons(programs []string) {
 		return
 	}
 	log.Printf("[apps] icons ready: %s", strings.TrimSpace(string(out)))
+	// The render path caches misses; forget them so the new pictures show up
+	// on the next frame instead of on the next scan.
+	dropAppIconPathCache()
 }

@@ -30,8 +30,8 @@ device.
   not the mechanism.
 - **Per-ROM box art, including the fetch.** `romsetup.go` downloads missing
   covers from libretro-thumbnails during ROM setup, and `game_library.go`
-  scans and previews them. Only an on-demand "fetch the rest" action from the
-  library itself is absent.
+  scans and previews them. An on-demand "fetch the rest" action now ships from
+  the library itself (see the table above).
 - **Screenshots.** `screenshot.go` captures the SDL frame from anywhere in the
   hub (not inside an emulator — see the OSD section).
 - **LED sync.** `ledsync.go` already mirrors music to the device LEDs through

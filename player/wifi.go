@@ -791,6 +791,40 @@ func wifiDisconnect() error {
 	return err
 }
 
+// wifiReconnect drops the current association and joins the same network again.
+// select_network on its own is a no-op while the supplicant still believes it
+// is connected, which is exactly the stale-link case a reconnect is for
+// (associated but no address after a suspend, or a router that rebooted), so
+// the association is dropped first and the saved key does the joining.
+func wifiReconnect() (wifiJoinResult, error) {
+	if !wifiControlAvailable() {
+		return wifiJoinResult{}, errors.New(wifiUnavailableReason())
+	}
+	status, err := wifiReadStatus()
+	if err != nil {
+		return wifiJoinResult{}, err
+	}
+	if !status.Connected || status.SSID == "" {
+		return wifiJoinResult{}, errors.New("not connected to a network")
+	}
+	saved, err := wifiReadSavedNetworks()
+	if err != nil {
+		return wifiJoinResult{}, err
+	}
+	id, ok := wifiSavedID(status.SSID, saved)
+	if !ok {
+		return wifiJoinResult{}, fmt.Errorf("%s is not saved, so it needs its password again", status.SSID)
+	}
+	if err := wifiDisconnect(); err != nil {
+		return wifiJoinResult{}, err
+	}
+	// Give the driver a moment to leave the old association; selecting a
+	// network while the disconnect is still settling re-associates to the
+	// link we just dropped.
+	time.Sleep(300 * time.Millisecond)
+	return wifiSelectSaved(id)
+}
+
 // wifiForget removes a saved network. The caller confirms first; this function
 // only refuses when the name is not actually saved.
 func wifiForget(ssid string) error {

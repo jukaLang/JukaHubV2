@@ -10,10 +10,10 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 
 ### Architecture Overview
 
-**Runtime**: Go 1.23 + SDL2 (go-sdl2) + SDL_ttf + SDL_image  
-**Config Model**: JSON-driven (`jukaconfig.json`, `jukauser.json`)  
-**Rendering**: Single-threaded SDL2 renderer with per-frame allocations  
-**State Management**: Global variables in `main.go`  
+**Runtime**: Go 1.26 + SDL2 (go-sdl2) + SDL_ttf + SDL_image\
+**Config Model**: JSON-driven (`jukaconfig.json`, `jukauser.json`)\
+**Rendering**: Single-threaded SDL2 renderer with per-frame allocations\
+**State Management**: Global variables in `main.go`\
 **Package Structure**: Monolithic `player/` package with feature files
 
 ### Key Files
@@ -27,7 +27,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 | `launcher.go` | Icon rendering helpers | Needs opaque backgrounds |
 | `homelayout.go` | Home screen layout computation | Responsive grid logic exists |
 | `recent.go` | Continue/recent panel | Partially updated |
-| `jukaconfig.json` | Scene configuration | Config-driven, 8 home tiles |
+| `jukaconfig.json` | Scene configuration | Config-driven scenes; the Home grid is drawn from `homelayout.go` |
 
 ### Current Issues Identified
 
@@ -43,7 +43,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - 🟡 **Global state**: still package-level, though ownership is now split by file
 - 🟡 **Async isolation**: most network work is off-thread; some render-path decoding remains
 - 🟡 **Context cancellation**: Patch, downloads and text browser use contexts; older fetches do not
-- 🟡 **Bounded concurrency**: thumbnail downloads are serialized; other paths are not pooled
+- 🟡 **Bounded concurrency**: thumbnail prefetch runs in a bounded pool; other paths are not pooled
 - ✅ **Platform abstraction**: `platform.go` behind `P()`
 - ✅ **Structured logging**: `log/slog` with scene/operation fields
 - ✅ **Config validation + schema versioning**: `config_schema.go`, `config_health.go`
@@ -126,7 +126,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [x] Add focus animation (100-140ms) — keyframed hover/focus lift on home cards and buttons
 - [x] Add reduced-motion mode
 - [ ] Add input remapping screen
-- [ ] Add controller test screen
+- [x] Add controller test screen — `ctrldiag.go` (Power tools)
 
 #### 2.4 Platform Abstraction
 - [x] Define `Platform` interface
@@ -287,7 +287,7 @@ This phase collects the work that specifically targets the TrimUI Smart Pro
       flash dark between screens
 - [x] Press feedback still animates under Low Power (the handheld default) and
       snaps under Reduced Motion only; entrance animations remain gated by both
-- [ ] Haptic tick on card activation (SDL haptic, best-effort, off by default)
+- [x] Haptic tick on card activation — `haptics.go`: vendor GPIO on the handheld, SDL rumble for a pad, switch in Settings → General
 - [ ] Hold-to-repeat on list edges for D-pad scrolling
 
 #### 8.2 Touch & layout
@@ -342,7 +342,7 @@ This phase collects the work that specifically targets the TrimUI Smart Pro
 - [ ] Named power profiles (Battery Saver / Balanced / Performance) mapping to
       Low Power, adaptive FPS and motion in one setting
 - [ ] Scene-scoped polling: stop weather/network refreshes for hidden scenes
-- [ ] Warm start: draw the home shell on the first frame, fetch afterwards
+- [x] Warm start: draw the home shell on the first frame — network work is deferred past `Present()` (`deferStartupTask` in `main.go`) and a relaunch within ten minutes skips the splash (`startup.go`)
 - [ ] Measure cold-start time and idle frame cost on the device (target: home
       interactive < 1.5 s, idle < 5% CPU at the capped cadence)
 

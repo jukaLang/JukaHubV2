@@ -31,12 +31,22 @@ jobs:
         working-directory: player
         run: bash ./release.sh
 
-      - name: Upload release assets
+      # Upload into a draft so the release stays out of /releases/latest until
+      # every asset is attached. A published release with only GitHub's
+      # auto-generated "Source code" archives is what made download links 404
+      # while the build was still uploading. The next step publishes it.
+      - name: Upload release assets (draft)
         uses: softprops/action-gh-release@v3
         with:
+          draft: true
           files: |
             player/dist/JukaHub-trimui-smart-pro-linux-arm64.tar.gz
             player/dist/JukaHub-win-x64.zip
             player/dist/manifest.json
             player/dist/SHA256SUMS
           generate_release_notes: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --repo "$GITHUB_REPOSITORY"

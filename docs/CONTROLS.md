@@ -4,8 +4,8 @@ JukaHub is controller-first: every screen is reachable with the D-pad and the
 four face buttons. Keyboard and mouse are supported on desktop builds.
 
 The top bar always shows the system status — a Wi-Fi meter, the weather chip,
-the clock, a battery gauge and the notification bell on the right, the **Apps**
-pill and a **back** pill on the left. The bottom of every screen is the hint bar
+the clock, a battery gauge, the now-playing title and the notification bell on
+the right, the **Apps** pill and a **back** pill on the left. The bottom of every screen is the hint bar
 for real controller bindings; there is no second clock or battery indicator
 down there.
 
@@ -19,6 +19,34 @@ Wi-Fi row in Quick Settings.
 The **battery gauge** sits right of the clock: a cell filled to the charge left,
 with the percentage beside it. It is green above 50%, yellow from 50% down to
 20%, and red below that, so a dying battery is obvious from any screen.
+
+The **media chip** closes that cluster. While something is playing it shows a
+headphone glyph and the name of the audio track, or the video in the embedded
+player. With nothing playing it names the output instead: the connected
+Bluetooth device (only devices that actually accept audio, so a paired
+controller is not mistaken for a headset) or **Headphones** when the 3.5mm jack
+has a cable in. It is identical on Home and in every scene, and disappears only
+when there is neither a session nor a connected output. A long name is
+ellipsized (a quarter of the screen at most), and the chip is the first thing
+the bar gives up when space runs out, before the network, clock or battery.
+
+The chip is a button only while a player is behind it: a tap opens the audio
+player for a track, and for a video it returns to the scene that owns the
+player — expanding it first if it was left in its floating window. From a
+controller the chip sits between the clock and the bell, so **Right** from the
+clock lands on it on Home, and **Up** from the content reaches it in any scene;
+**A** opens the same player. The idle output name is a reading, not a control:
+it stays out of the focus order and a tap on it does nothing. The output is
+re-probed in the background every few seconds, so plugging in headphones or
+connecting a headset shows up without leaving the screen.
+
+While media is loaded the chip shows its state without a second line of text:
+the headphone glyph becomes two pause bars while playback is paused, so paused
+never looks like playing. When the length of the track or video is known, a
+hairline under the title fills in as it plays; a live stream or a file whose
+length is still being probed simply gets no hairline rather than a made-up
+position. An idle output name has no playback state, so it never shows the pause
+bars or the hairline.
 
 The header chips are buttons on every screen: the weather chip
 (`21C / 12C`, or `69F / 53F` in the US) opens **Local weather**, a seven-day
@@ -49,7 +77,7 @@ shortcuts overlay, **B** or **F1** to close it.
 | L1 / R1 | Previous / next page of the focused list, or a −10/+10 s skip in the player |
 | L2 / R2 | Bigger jump: previous / next page (fetching the next page of Media results), previous / next video in the player, first / last row in a list, previous / next section on Home |
 | Start | Open the Start menu (scenes, games, tools, device) |
-| Back / Select | Settings / menu |
+| Back / Select | Back one screen, falling back to Home |
 | Select + Start (hold both) | Quit JukaHub and return to the launcher |
 
 The TrimUI's **Select** button is the one the app sees as **Back**. Holding
@@ -98,7 +126,7 @@ footer names the scene the menu was opened over.
 |-------|-------|
 | Scenes | Every scene in `jukaconfig.json` — the quickest way to switch screen |
 | Games | Emulators, Games Library, Game Profiles, PS Remote Play, RetroAchievements, Save Manager, Windows Apps, PortMaster Ports, Smart Pro Compatibility |
-| Tools | Curation Hub, Audio settings, Smart Home, Remote Cast, Accessibility, Stick Calibration (when the install has one) |
+| Tools | Downloads, Curation Hub, Audio settings, Smart Home, Remote Cast, Accessibility, Stick Calibration (when the install has one) |
 | Device | Quick Settings, Wi-Fi Networks, Screenshot, Sleep Screen, Ambient, Wallpapers, About, Quit JukaHub |
 
 Settings sub-screens and the maintenance scenes (Patch, Exit) are not listed:
@@ -123,11 +151,10 @@ their way, and no panel is covered by a menu drawn beneath it.
 | Button | Action |
 |--------|--------|
 | A | Open the focused tile |
-| B | Settings |
-| Y | Toggle theme (cycles the presets) |
-| X | Favourites |
-| D-pad | Move between tiles, the header chips and the footer row |
-| Right (from the clock) | Move onto the notification bell; **A** opens the notification centre |
+| B | Close the calendar popover, or the video that is still playing |
+| D-pad | Move between tiles, the header chips (weather, clock, now-playing, bell, update offer, PS4/PS5) and the footer row |
+| Right (from the clock) | Move onto the now-playing chip while something plays, else the notification bell; **A** opens that player or the notification centre |
+| L2 / R2 | Previous / next section of the grid |
 
 ## Media
 
@@ -136,9 +163,23 @@ their way, and no panel is covered by a menu drawn beneath it.
 | X | Search YouTube |
 | Y | Shorts feed: opens Shorts, pre-loads it and plays the first clip, then keeps going after each one ends |
 | **Shorts** button | The same feed, from the button row next to Search / Play Link / Trending |
+| Left / Right | Select **Audio**, **Video** or **Chat** on the focused result row, then back to the row |
+| A | Play the focused result, or press the highlighted **Audio** / **Video** / **Chat** button |
 | L1 / R1 | Previous / next screenful of the loaded results |
 | L2 / R2 | Previous / next results page; **R2** fetches the next page when it has not been loaded |
-| B | Back |
+| B | Return from the row's buttons, then back out of Media |
+
+Every result row carries three buttons at its right edge. **Audio** queues the
+track in the Downloads panel (the same yt-dlp path, saved as an m4a under
+`data/downloads/music`), **Video** queues the best picture and sound merged into
+an MP4 under `data/downloads/video`, and **Chat** posts the link into the chat
+as a message from you. The two downloads are separate because a track is small
+enough to keep a whole library on the card and a video is not. With a row
+focused, **Right** walks row → Audio → Video → Chat → row and **Left** walks the
+same ring the other way, so **A** can save the sound, save the picture or share
+a video without leaving the list. Tapping a pill works too, even on a row that
+is not highlighted. The legacy multi-column grid keeps Left/Right for moving
+between cards, so its buttons are tap-only.
 
 The **Next page** chip appears in the bottom-right corner of the grid once the
 focused card is on the last loaded row. Clicking it, pressing **R2**, or pressing
@@ -182,9 +223,15 @@ Links are walked in reading order and outlined as they come into focus, so a
 link deep in an article can be followed without opening the picker. **Y** (or
 the **SEARCH** chip beside the address bar) opens the keyboard on an empty
 field: type a phrase to search, or a host to open it. The **Back**, **Forward**,
-**Reload**, **Links**, **Search**, **Home** and **Issues** chips at the bottom
-are ordinary scene buttons, reachable by pressing Down past the end of the page
-and Up to come back.
+**Reload**, **Links**, **Filter**, **Search**, **Home** and **Issues** chips at
+the bottom are ordinary scene buttons, reachable by pressing Down past the end
+of the page and Up to come back.
+
+The chip at the right end of the address bar reports how many ad and tracker
+requests the page load skipped (`12 BLOCKED`, or `0 BLOCKED`). It turns amber as
+**FILTER OFF** when the site is excepted, and tapping it is the same as the
+**Filter** button: filtering is switched off for that host and the page reloads.
+Press **Filter** again to put the site back under the filter.
 
 ## Video player
 
@@ -201,7 +248,7 @@ rewind, play/pause, fast-forward, speed, subtitles, settings and full screen, an
 | Y | Video settings sheet |
 | L1 / R1 | Skip −10 / +10 seconds |
 | L2 / R2 | Previous / next video in the list that launched this one (search results or the Shorts feed) |
-| B | Close the settings sheet, then stop and go back |
+| B | Close the settings sheet, then step down: leave full screen, then float the video and go back |
 
 The rewind and fast-forward buttons skip 10 seconds per press. With the settings
 sheet open, **Up / Down** move between its rows and **A** applies the row, so
@@ -212,6 +259,15 @@ On a keyboard **N** and **P** move to the next and previous video of the list
 that launched the current one — in the Shorts feed that is the next short. In
 the feed the four videos after the one playing are resolved in the background,
 so skipping does not wait for yt-dlp.
+
+**Back never stops the video.** It steps down one size: in full screen it
+returns to the scene's player, and in the scene's player it shrinks the picture
+into a small window in the bottom-right corner and opens the previous screen.
+The session keeps playing — position, subtitles and audio are untouched — so
+the Media grid, Home or any other screen is usable while the video runs. Tap
+the window to return to the player; its **×** ends the session, as do the
+player's Stop button and `q`. The dock and the screensaver cover the window
+because they take the whole panel.
 
 Progress, resume position and subtitles are handled automatically; the control
 bar hides itself while playback continues and reappears on any input. When a
@@ -273,6 +329,14 @@ its caret visible so it is obvious where typing will land.
 The first launch opens a short, skippable tour of the D-pad controls, top-bar
 clock and notification bell, Appearance settings, and the Start menu. **A** or
 **Enter** advances, **Left** goes back, and **B** or **Esc** skips.
+
+Its **Get set up** page is a live checklist: Wi-Fi, RetroAchievements, the media
+tools YouTube and IPTV use, Remote Play and the phone companion. Each row shows
+whether it is already done and what is still missing; **Up**/**Down** chooses a
+row, **A** opens the panel that fixes it, and the tour comes back when that
+panel closes. Nothing on the page is required, and the states are read from the
+device every time the page appears — there is no checklist progress to keep in
+sync.
 
 Replay it any time from **Settings → General → Replay tour**.
 
@@ -465,7 +529,7 @@ on-screen keyboard, so it works without a physical keyboard.
 
 **Select** darkens the panel while the decoder keeps running — the player's
 lock screen. What the controls do while it is dark is chosen in
-**Menu → Audio → Screen-off controls**: *Any key* wakes on the first press,
+**Start → Audio → Screen-off controls**: *Any key* wakes on the first press,
 *Controls* keeps transport and volume working, and *Select only* ignores
 everything except the wake button.
 
@@ -492,7 +556,7 @@ one-third-octave centres from 20 Hz to 20 kHz, ±12 dB per band.
 
 Gains are saved to the config as `musicPEQGains`, and the curve restarts the
 decoder immediately so the change is audible. **Bit-perfect DAC output** (in
-**Menu → Audio**) turns the equaliser and the tempo filter off and hands the
+**Start → Audio**) turns the equaliser and the tempo filter off and hands the
 decoded samples straight to the device; the two cannot be on at the same time.
 
 **Shuffle**, **Repeat** and **Fav** also sit in the transport row and are tapped
@@ -504,7 +568,7 @@ listening speed, **T** cycles the sleep timer, **E** cycles the auto-exit timer,
 **V** opens the full-screen visualizer, **M** toggles shuffle, **R** cycles
 repeat off/all/one, **F** favorites the playing track, **Q** queues the
 highlighted row to play next, **/** opens search, **G** opens the equaliser,
-**O** turns the screen off, **K** opens **Menu → Audio**, and **-** / **+** set
+**O** turns the screen off, **K** opens **Start → Audio**, and **-** / **+** set
 the volume. Holding either volume key still skips a track instead of repeating
 the volume step.
 
@@ -518,7 +582,7 @@ number and the title.
 
 ### Layouts and the audio settings
 
-**Menu → Audio** (or **K** in the player) opens the audio settings:
+**Start → Audio** (or **K** in the player) opens the audio settings:
 
 | Row | Values |
 |-----|--------|
@@ -539,6 +603,37 @@ timed lines appear inside the artwork square and the current line is
 highlighted. Long files — audiobooks and podcasts of eight minutes or more —
 resume where you stopped, and the listening speed is remembered between
 launches.
+
+## Downloads
+
+**Start → Tools → Downloads** keeps music on the card so the audio player works
+without Wi-Fi. The card's own reading sits at the top — used, free, and how much
+of it is JukaHub's saved music — and the queue below is grouped into
+*Downloading*, *Queued*, *Failed* and *Saved*. The first row, **Add a link**,
+opens the on-screen keyboard: paste a YouTube (or any `http(s)`) link and it is
+queued as an m4a.
+
+| Button | Action |
+|--------|--------|
+| Up / Down | Move through the list |
+| Left / Right, L1 / R1 | Switch tab: All, Active, Saved |
+| A | Add a link, play a saved track, or retry a failed one |
+| X | Remove the highlighted row and delete its saved file |
+| Y | Pause / resume the whole queue |
+| B / Back / Start | Close |
+
+One track downloads at a time: the handheld has 1 GB of shared RAM and one
+yt-dlp is already a heavy child, so a second would starve the UI long before it
+made anything faster. **Y** cancels the running transfer and puts its row back
+in the queue, keeping the partial file, so resuming continues instead of
+starting over. A track that fails keeps its error line and **A** retries it.
+
+Saved tracks land in `data/downloads/music` and saved videos in
+`data/downloads/video`. **A** on a saved track opens it in the audio player
+with the rest of that folder as the playlist, so a downloaded album plays
+straight through; **A** on a saved video opens it in the embedded video player.
+Only `http(s)` links are accepted, and **X** only ever deletes files inside
+those folders — the rest of the card is off limits.
 
 ## Wi-Fi picker
 

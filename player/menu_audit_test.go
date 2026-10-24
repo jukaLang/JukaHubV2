@@ -517,6 +517,9 @@ func TestHomeCardsResolve(t *testing.T) {
 		HomeFocusContinue: true, HomeFocusClock: true, HomeFocusWeather: true,
 		HomeFocusBell: true, HomeFocusUpdate: true, HomeFocusPS5: true,
 		HomeFocusPS4: true, HomeFocusEmulator: true, HomeFocusExit: true,
+		// The now-playing chip opens whichever player is running, so it has no
+		// single scene target.
+		HomeFocusNowPlaying: true,
 		// The browser scene is injected into memory on demand, so the shipped
 		// config never declares it; homeActivate handles the card directly.
 		HomeFocusBrowser: true,

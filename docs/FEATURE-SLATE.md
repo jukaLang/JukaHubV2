@@ -173,7 +173,7 @@ feature itself, not guesses:
 | Widget system | No runtime. [homelayout.go](../player/homelayout.go) draws a fixed set of cards from code. |
 | Widgets authored as JS/Lua/WASM | No host. [plugins.go](../player/plugins.go) runs `python3` or `sh` with `--key=value` arguments and returns text; nothing renders UI from a plugin. |
 | Builder as layout editor | The builder is an HTTP receiver ([livebuilder.go](../player/livebuilder.go)) for config edits. There is no WebSocket transport and no preview of a widget tree. |
-| Theme-from-image | Theme presets are 16 compiled colours in a Go map ([themes.go](../player/themes.go#L10)). No user themes are loaded from disk. |
+| Theme-from-image | Theme presets are compiled colours in a Go map ([themes.go](../player/themes.go)); user themes already load from a `themes/` folder next to the app ([themeloader.go](../player/themeloader.go)). There is no palette extraction from an image. |
 | Save sync | [savemanager.go](../player/savemanager.go) snapshots, restores and writes a Syncthing folder list. No sync agent, no WebDAV, no conflict UI. |
 | Radio / podcasts / scrobbling | The music player decodes local files through ffmpeg; no station directory, RSS, Last.fm or ListenBrainz. |
 | AI configuration | No LLM client anywhere. The builder and [config_schema.go](../player/config_schema.go) can validate a config, which is the half that matters. |
@@ -203,8 +203,8 @@ feature itself, not guesses:
 | Idea | Cost | Note |
 |---|---|---|
 | **Playtime Wrapped / insights** | M | Data is ready: `playtimeData` already has `Total`, `Scenes`, `Days` and `Unlocked`. This is a page, a heatmap, a streak count and a PNG export. |
-| **User theme store** | M | Load `<data>/themes/*.json` into the gallery, validate like curation profiles, keep the compiled presets as fallback. |
-| **Theme-from-image** | M on top of the store | Needs median-cut/quantisation to the 16 roles, plus the store. Purely local, no key. |
+| ~~User theme store~~ (shipped) | — | `themes/*.json` loads into the gallery through [themeloader.go](../player/themeloader.go): colours are validated, invalid files are reported and skipped, and a built-in id wins on a collision. |
+| **Theme-from-image** | M on top of the shipped store | Needs median-cut/quantisation to the 16 roles and the picker; purely local, no key. |
 | **Save-sync conflict UI** | M (agent L) | Snapshots + Syncthing export exist; add a merged save index and a keep-device / keep-cloud / keep-both card. A real WebDAV agent is a second project. |
 | Internet radio | L | ffmpeg reads URLs, so playback is the easy half; a station directory, buffering state and metadata are the work. |
 | Podcasts | M (shares radio) | RSS parse, subscribe, offline cache, resume, speed. |
@@ -263,9 +263,9 @@ feature itself, not guesses:
    and it gives the Playtime scene a reason to exist. First slice: a 90-day
    heatmap from `Days`, top systems from `Scenes`, current streak, a generated
    PNG, and the same page on the companion.
-2. **User theme store + theme-from-image (M)** — the store comes first (it is
-   also how theme packages will land), then palette extraction against the 16
-   roles, then the picker.
+2. **Theme-from-image (M)** — the user theme store already ships
+   (`themes/*.json`), so this is palette extraction against the 16 roles plus
+   the picker that applies the result.
 3. **Save-sync conflict UI (M)** — the export half is shipped; the conflict card
    is what makes people trust it. Syncthing is the target to test against.
 4. **Radio + podcasts (L)** — the daily-use expansion, and the only one of the

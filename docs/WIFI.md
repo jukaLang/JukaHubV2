@@ -9,9 +9,14 @@ has no way to enter a new password when it moves to another network.
 
 | From | How |
 |------|-----|
+| Status bar | tap the signal meter at the top right (Home and every scene) |
 | Quick Settings | **Start → Quick Settings**, highlight **Wi-Fi Networks**, press **A** |
 | Hardware scene | **Settings → Hardware → Wi-Fi** (the button is added in memory; the config file is not changed) |
 | Config trigger | a button with `"trigger": "wifi_open"` on any scene |
+
+The meter's tap target is deliberately larger than the bars it draws (it spans
+the height of the top bar and extends into the empty space to its left), because
+the icon itself is smaller than a fingertip.
 
 The Wi-Fi radio itself is still switched on and off in Quick Settings (**Wi-Fi**
 row). The picker can also turn it on: with an empty list, pressing **A** switches
@@ -23,10 +28,21 @@ the radio on and scans.
 |-------|--------|
 | D-pad Up/Down, arrows | move through networks |
 | **A**, Enter, tap a row | join the highlighted network |
+| tap **Reconnect** (or tap the row tagged CONNECTED) | drop the association and join it again with the saved key |
 | **X**, `d` | disconnect (the saved network is kept) |
 | **Y**, `r` | rescan |
 | **SELECT**, `f` | forget the saved network (press twice) |
-| **B**, Esc | close the picker |
+| **B**, Esc, tap **Close** | close the picker |
+
+Every one of those actions is also a pill along the bottom of the panel, so the
+picker is fully usable by touch. The pills follow the state: Reconnect and
+Disconnect appear only while connected, Forget only while a saved network is
+selected.
+
+Tapping the row that already shows **CONNECTED** reconnects it instead of doing
+nothing. That is the useful retry when the panel says connected but a page still
+will not load (a stale association, or a router that rebooted while the handheld
+slept): the link is dropped and re-joined with the stored key.
 
 Choosing a network the device has joined before reconnects it with the stored
 key: no password prompt. A new secured network opens the on-screen keyboard,
@@ -57,7 +73,10 @@ The backend is `wpa_supplicant`, driven through `wpa_cli`:
   JukaHub asks the firmware's DHCP client for a lease (`udhcpc` first, then
   `dhcpcd`) and re-reads the status.
 * **Saved networks.** Reconnecting uses `select_network <id>` with the key the
-  supplicant already holds; the password is never asked for again.
+  supplicant already holds; the password is never asked for again. An explicit
+  reconnect issues `disconnect` first, because `select_network` is a no-op while
+  the supplicant still believes it is associated — the exact state a reconnect
+  is meant to clear.
 * **Forget.** `remove_network` plus `save_config`; if the network was the
   current one, it is disconnected too, because its key is gone.
 * **Failed joins** remove the half-created entry, so repeated attempts do not

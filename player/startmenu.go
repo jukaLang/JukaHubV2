@@ -146,6 +146,7 @@ func startMenuGroups(config *Config) []startMenuGroup {
 	}
 
 	tools := []startMenuEntry{
+		{name: "Downloads", icon: "D", action: func(*Config) { openDownloadsPanel() }},
 		{name: "Curation Hub", icon: "H", action: func(c *Config) { openCurationPanel(c) }},
 		{name: "Audio", icon: "A", action: func(c *Config) { openMusicSettingsPanel(c) }},
 		{name: "Smart Home", icon: "M", action: func(c *Config) { openSmartHomePanel(c) }},

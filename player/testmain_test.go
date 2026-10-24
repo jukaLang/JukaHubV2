@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -13,5 +14,16 @@ import (
 // its own check.
 func TestMain(m *testing.M) {
 	userConfigWritesEnabled = false
-	os.Exit(m.Run())
+	// Keep the browser's per-site filter exceptions away from the developer's
+	// real data directory: page loads in the suite consult that list.
+	dir, err := os.MkdirTemp("", "jukahub-browser-block")
+	if err == nil {
+		browserAdBlockSitesPath = func() string { return filepath.Join(dir, "browser-block.json") }
+		resetBrowserAdBlockSitesForTest()
+	}
+	code := m.Run()
+	if err == nil {
+		os.RemoveAll(dir)
+	}
+	os.Exit(code)
 }

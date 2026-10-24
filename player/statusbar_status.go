@@ -106,6 +106,49 @@ func isWiFiStatusPart(part string) bool {
 	return part == statusWiFiMarker || strings.HasPrefix(part, "! Offline")
 }
 
+// statusFingerRect turns a drawn status chip into a tap target a thumb can hit
+// without aiming. The meter itself is only about 18px of bars inside a 34px
+// chip, which is a miss on a 5-inch panel; the target grows to the full height
+// of the bar and to a comfortable width, then stops short of the neighbouring
+// controls so a tap on the clock or the forecast still belongs to them.
+func statusFingerRect(chip sdl.Rect, barH int32, neighbours ...sdl.Rect) sdl.Rect {
+	if chip.W <= 0 || barH <= 0 {
+		return chip
+	}
+	const (
+		padX       = int32(10)
+		minTargetW = int32(44)
+	)
+	r := sdl.Rect{X: chip.X - padX, Y: 0, W: chip.W + 2*padX, H: barH}
+	// A neighbour on the right is only a few pixels away (the cluster packs
+	// its chips tightly), so the right edge stops before it.
+	for _, n := range neighbours {
+		if n.W <= 0 || n.H <= 0 {
+			continue
+		}
+		if n.X >= chip.X+chip.W/2 && r.X+r.W > n.X-2 {
+			if limit := n.X - 2; limit > r.X {
+				r.W = limit - r.X
+			}
+		}
+	}
+	// The meter leads the cluster, so the space to its left is empty and a
+	// short target grows into it rather than into a neighbour.
+	if r.W < minTargetW {
+		extra := minTargetW - r.W
+		r.X -= extra
+		r.W += extra
+	}
+	if r.X < 0 {
+		r.W += r.X
+		r.X = 0
+	}
+	if r.W < chip.W {
+		r.W = chip.W
+	}
+	return r
+}
+
 // statusIconHeight derives the gauge height from the status font, so the icons
 // scale with the bar (and with the home header on a larger screen) instead of
 // being a fixed pixel size that looks wrong on one of them.
@@ -165,6 +208,12 @@ func statusClusterPartWidth(font *ttf.Font, part string) int32 {
 		pct, _ := statusBatteryPercentOf(part)
 		return statusBatteryIconWidth(iconH) + statusBatteryNubWidth(iconH) + 1 +
 			statusChipTextGap + statusWidth(font, statusBatteryLabel(pct))
+	case isChipStatusPart(part):
+		// The now-playing title and the idle output name share the same glyph
+		// and the same space, so the cluster does not move when playback starts
+		// or stops.
+		return statusMediaIconWidth(iconH) + statusChipTextGap +
+			statusWidth(font, statusMediaLabel(font, part))
 	}
 	return statusWidth(font, part)
 }
@@ -301,6 +350,8 @@ func drawStatusClusterPart(renderer *sdl.Renderer, font *ttf.Font, part string, 
 		return drawStatusWiFiChip(renderer, font, part, x, textTop, draw)
 	case isBatteryStatusPart(part):
 		return drawStatusBatteryChip(renderer, font, part, x, textTop, draw)
+	case isChipStatusPart(part):
+		return drawStatusMediaChip(renderer, font, part, x, textTop, draw)
 	}
 	if draw != nil {
 		draw(part, ColorTextSecondary(), x, textTop)

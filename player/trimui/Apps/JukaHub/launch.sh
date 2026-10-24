@@ -121,11 +121,47 @@ if [ ! -x "$APP_DIR/JukaHub" ]; then
     chmod +x "$APP_DIR/JukaHub" 2>/dev/null
 fi
 
+# ------------------------------------------------------- stop from outside
+# The firmware's power handling (and any supervisor) stops an app by signalling
+# the process group. The script is part of that group, so it used to die before
+# reaching the handover below: MainUI stayed dead and the panel kept JukaHub's
+# last frame, with no input able to leave it — the "device locked on the power
+# button" report. Catching the stop keeps the script alive long enough to hand
+# the screen back.
+#
+# The signal is not forwarded: the app received the same one directly, and it
+# treats a repeat as impatience (force quit, no cleanup). If the app did not
+# get it, it is still running and still owns the screen; waiting for it is the
+# right answer either way.
+APP_PID=""
+STOPPED=0
+on_stop() {
+    STOPPED=1
+    say "stop request received; waiting for JukaHub to finish shutting down"
+}
+trap on_stop TERM INT HUP
+
 while :; do
-    "$APP_DIR/JukaHub" >>"$LOG" 2>&1
+    # Also covers a stop that arrived while waiting for an update helper.
+    [ "$STOPPED" -eq 1 ] && break
+    "$APP_DIR/JukaHub" >>"$LOG" 2>&1 &
+    APP_PID=$!
+    wait "$APP_PID"
     RC=$?
+    # A stop signal interrupts wait, not the app. Wait again so the display is
+    # only touched once JukaHub has really exited (its own watchdog bounds
+    # this to a few seconds even if a cleanup step is stuck).
+    if [ "$STOPPED" -eq 1 ]; then
+        wait "$APP_PID"
+        RC=$?
+    fi
+    APP_PID=""
     say "=== JukaHub exited with code $RC ==="
     sync
+
+    # A stop request ends the session: never restart into an update in the
+    # middle of handing the screen back.
+    [ "$STOPPED" -eq 1 ] && break
 
     # A self-update is the only reason to restart without restoring the stock
     # launcher: the helper is replacing the files right now, so the new build

@@ -210,6 +210,9 @@ func closeGameLibraryPanel() {
 	if !gameLib.open {
 		return
 	}
+	// The options sheet cannot outlive the library it belongs to.
+	gameOptsUI.open = false
+	gameOptsUI.rowHits = nil
 	gameLib.open = false
 	closeGameLibraryArt()
 	PlayBackSound()
@@ -409,6 +412,10 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !gameLib.open {
 		return false
 	}
+	// The options sheet is stacked on the library, so it reads every key first.
+	if gameOptsUI.open {
+		return handleGameOptionsKey(e)
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		gameLibraryMove(0, -1)
@@ -420,6 +427,8 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 		gameLibraryMove(1, 0)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		launchSelectedGame()
+	case sdl.K_o:
+		openGameOptions()
 	case sdl.K_x:
 		openNetplayForSelectedGame()
 	case sdl.K_f:
@@ -445,6 +454,9 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil {
 		return false
 	}
+	if gameOptsUI.open {
+		return ctrlGameOptions(e)
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		gameLibraryMove(0, -1)
@@ -458,6 +470,8 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 		launchSelectedGame()
 	case sdl.CONTROLLER_BUTTON_X:
 		openNetplayForSelectedGame()
+	case sdl.CONTROLLER_BUTTON_START:
+		openGameOptions()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		fetchMissingLibraryArtwork()
 	case sdl.CONTROLLER_BUTTON_Y:
@@ -484,6 +498,9 @@ func ctrlGameLibrary(e *sdl.ControllerButtonEvent, config *Config) bool {
 func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 	if !gameLib.open {
 		return false
+	}
+	if gameOptsUI.open {
+		return handleGameOptionsMouse(mx, my)
 	}
 	for _, hit := range gameLib.systemHits {
 		if pointInRect(mx, my, hit.rect) {
@@ -860,7 +877,13 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 			game := system.Games[idx]
 			renderText(renderer, config, medium, ellipsize(medium, game.Title, rect.W-24),
 				ColorTextPrimary(), rect.X+12, rect.Y+8)
-			renderText(renderer, config, font, ellipsize(font, game.System+" · "+filepath.Base(game.Path), rect.W-24),
+			detail := game.System + " · " + filepath.Base(game.Path)
+			// A per-game clock is worth seeing in the list: it explains why
+			// this title runs cooler than the one above it.
+			if opts := gameOptionsFor(game.Path); opts.MaxFreqKHz > 0 {
+				detail += " · " + formatGameCeiling(opts.MaxFreqKHz)
+			}
+			renderText(renderer, config, font, ellipsize(font, detail, rect.W-24),
 				ColorTextTertiary(), rect.X+12, rect.Y+8+medH+2)
 		}
 		if gameLib.scroll > 0 || gameLib.scroll+visibleGames < len(system.Games) {
@@ -897,8 +920,8 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		artHint = FooterHint{"L1 / F", "Stop"}
 	}
 	hint := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Play"},
-		FooterHint{"S / R1", "Search"}, FooterHint{"X", "LAN Play"}, artHint,
-		FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
+		FooterHint{"Start / O", "Options"}, FooterHint{"S / R1", "Search"},
+		FooterHint{"X", "LAN Play"}, artHint, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	if gameLib.lib.Total == 0 {
 		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	}
@@ -907,4 +930,5 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		root := ellipsize(font, gameLib.lib.Roots[0], panelW-pad*2-260)
 		renderText(renderer, config, font, root, ColorTextTertiary(), panelX+pad+260, panelY+panelH-footerH+4)
 	}
+	renderGameOptionsPanel(renderer, config)
 }

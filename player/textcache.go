@@ -198,4 +198,7 @@ func ClearTextCache() {
 	if globalTextCache != nil {
 		globalTextCache.Clear()
 	}
+	// Wrapped text depends on the font metrics behind these textures, so the
+	// launcher's cached labels go with them.
+	clearAppLabelCache()
 }

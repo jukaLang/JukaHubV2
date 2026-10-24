@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"unsafe"
@@ -579,13 +580,13 @@ func TestBrowserResolveLink(t *testing.T) {
 	}
 }
 
-// The toolbar reserves a Search chip beside Go, and the three controls never
-// overlap or leave the element.
+// The toolbar reserves a Search chip and the filter chip beside Go, and the
+// four controls never overlap or leave the element.
 func TestBrowserToolbarHasSearchChip(t *testing.T) {
 	elem := browserCursorTestElement(browserContentVariable)
-	address, search, goBtn := textBrowserToolbarLayout(elem)
+	address, search, goBtn, filter := textBrowserToolbarLayout(elem)
 	width := getElementWidth(elem, 1100)
-	for _, r := range []sdl.Rect{address, search, goBtn} {
+	for _, r := range []sdl.Rect{address, search, goBtn, filter} {
 		if r.W <= 0 || r.H <= 0 {
 			t.Fatalf("empty toolbar control: %+v", r)
 		}
@@ -593,16 +594,55 @@ func TestBrowserToolbarHasSearchChip(t *testing.T) {
 			t.Fatalf("toolbar control %+v escapes the panel", r)
 		}
 	}
-	if address.X+address.W > search.X || search.X+search.W > goBtn.X {
-		t.Fatalf("toolbar controls overlap: address %+v search %+v go %+v", address, search, goBtn)
+	if address.X+address.W > search.X || search.X+search.W > goBtn.X || goBtn.X+goBtn.W > filter.X {
+		t.Fatalf("toolbar controls overlap: address %+v search %+v go %+v filter %+v", address, search, goBtn, filter)
 	}
 	if got := textBrowserSearchRect(elem); got != search {
 		t.Fatalf("search hit area = %+v, want %+v", got, search)
 	}
+	if got := textBrowserFilterRect(elem); got != filter {
+		t.Fatalf("filter hit area = %+v, want %+v", got, filter)
+	}
 	legacyAddress, legacyGo := textBrowserToolbarRects(elem)
 	if legacyAddress != address || legacyGo != goBtn {
-		t.Fatal("the two-rect accessor disagrees with the three-rect layout")
+		t.Fatal("the two-rect accessor disagrees with the four-rect layout")
 	}
+
+	// A narrow panel drops Search first, then the filter chip, and never lets
+	// one control overlap the next or leave the panel.
+	for _, w := range []int32{440, 380, 320} {
+		narrow := Element{Type: "textbrowser", Text: "web", Width: StringOrInt(strconv.Itoa(int(w))), Height: "480"}
+		a, s, g, f := textBrowserToolbarLayout(narrow)
+		if a.W <= 0 || g.W <= 0 {
+			t.Fatalf("%dpx: address %+v go %+v", w, a, g)
+		}
+		if a.X+a.W > g.X || (s.W > 0 && (a.X+a.W > s.X || s.X+s.W > g.X)) || (f.W > 0 && g.X+g.W > f.X) {
+			t.Fatalf("%dpx: toolbar controls overlap: %+v %+v %+v %+v", w, a, s, g, f)
+		}
+		last := g
+		if f.W > 0 {
+			last = f
+		}
+		if last.X+last.W > w {
+			t.Fatalf("%dpx: toolbar ends at %d, past the panel", w, last.X+last.W)
+		}
+	}
+}
+
+// The injected scene must offer the Filter action, or a filtered page that
+// broke would have no controller path back.
+func TestEnsureBrowserSceneHasFilterToggle(t *testing.T) {
+	config := &Config{}
+	ensureBrowserScene(config)
+	if len(config.Scenes) != 1 {
+		t.Fatalf("injected %d scenes, want 1", len(config.Scenes))
+	}
+	for _, elem := range config.Scenes[0].Elements {
+		if elem.Trigger == "browser_filter" {
+			return
+		}
+	}
+	t.Fatal("Browser scene has no browser_filter button")
 }
 
 // Searching must not overwrite the address of the page on screen: the query

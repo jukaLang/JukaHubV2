@@ -22,7 +22,7 @@ go build .        # exit 0
 
 | Phase | Done | Partial | Not started |
 |-------|------|---------|-------------|
-| 2. Architecture | 26 | 3 | 2 |
+| 2. Architecture | 27 | 3 | 1 |
 | 3. Async & performance | 10 | 3 | 8 |
 | 4. Reliability | 22 | 2 | 2 |
 | 5. Features | 10 | 3 | 3 |
@@ -84,7 +84,7 @@ go build .        # exit 0
 - [ ] 🟡 `Focusable` interface — behavior is centralized in `FocusEngine`, but there
       is no Go interface implemented by element types.
 - [ ] ⬜ Input remapping screen.
-- [ ] ⬜ Controller test screen.
+- [x] ✅ Controller test screen — `ctrldiag.go`, opened from Power tools; see [../docs/CONTROLLER_TEST.md](../docs/CONTROLLER_TEST.md).
 
 ### 2.4 Platform abstraction
 
@@ -235,7 +235,7 @@ go build .        # exit 0
 
 ### 5.4 Settings
 
-- [ ] ⬜ Controller remapping (only the A/B swap toggle exists).
+- [ ] 🟡 Controller remapping — A/B and X/Y swaps plus the one-handed chord button exist in the Accessibility panel; a full per-button map does not.
 - [x] ✅ Accessibility settings — reduced motion, low power, font sizes, theme
       contrast tokens.
 - [ ] 🟡 Power profile selection (single LowPower toggle).
@@ -264,7 +264,8 @@ go build .        # exit 0
 - [ ] 🟡 Platform path selection tests — path guards exist, platform-specific
       selection is only indirectly covered.
 - [ ] 🟡 Benchmarks — text-cache and font cache benchmarks exist
-      (`vkeyboard_cache_bench_test.go`); no render/navigation benchmark suite.
+      (`hotpath_bench_test.go` for the text hot path, `cache_bench_test.go` for
+      the caches); no render/navigation benchmark suite.
 
 ---
 
@@ -327,7 +328,8 @@ go build .        # exit 0
    scene-scoped tasks, the remaining performance risk on 1 GB RAM.
 2. **Log rotation** — cap `logs.txt`/`appLog` writes by size and rotate one backup.
 3. **Wire `Ctrl+L`** to the existing Logs scene, or remove the shortcut line.
-4. **Controller remapping screen** — the only Phase 2/5 feature with no foundation.
+4. **Controller remapping screen** — the A/B and X/Y swaps in Accessibility are the
+   foundation, but there is no per-button keymap layer yet.
 5. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
    work with immediate design-time payoff.
 6. **Benchmarks** for text rendering and home navigation at 720p, so future

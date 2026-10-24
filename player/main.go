@@ -29,14 +29,11 @@ func main() {
 		os.Exit(code)
 	}
 
-	// Register cleanup functions to run on exit
-	defer func() {
-		for _, fn := range Cleanup {
-			fn()
-		}
-	}()
-
 	initLogging()
+	// The stop signals (the firmware's power handling, a launcher that stops
+	// the app) have to land on the same exit path as the Exit button: killed by
+	// the default handler, the app would leave a running game over the display.
+	installExitSignalHandler()
 	startupMarkNow("pre-sdl")
 
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_AUDIO | sdl.INIT_JOYSTICK | sdl.INIT_GAMECONTROLLER); err != nil {
@@ -63,6 +60,16 @@ func main() {
 	// (both the on-screen keyboard modal and the main loop).
 	sdl.StartTextInput()
 	defer img.Quit()
+
+	// Cleanup runs before the SDL teardown below. Deferred earlier it would run
+	// after sdl.Quit(), where any entry that still touches an SDL-owned object
+	// (a listener posting a frame, a font) is a crash on the way out instead of
+	// a clean exit.
+	defer func() {
+		for _, fn := range Cleanup {
+			fn()
+		}
+	}()
 
 	// Try XML config first (exported by the web editor), then fall back to JSON.
 	config, configPath, err := LoadXMLConfigWithFallback("jukaconfig.json")
@@ -232,6 +239,11 @@ func main() {
 	if safeModeAllows(SafeFeatureNetwork) {
 		deferStartupTask("network-monitor", startNetworkMonitor)
 	}
+
+	// Watch the audio output (Bluetooth device or the 3.5mm jack) so the top-bar
+	// chip can name a connected headset while nothing plays. Local probes only,
+	// on their own ticker.
+	deferStartupTask("audio-output", startAudioOutputMonitor)
 
 	// Tools panel / FTP: publish the initial IP and server state, and make sure
 	// the listener never outlives the app.
@@ -486,6 +498,15 @@ func main() {
 				lastAlarmCheck = now
 				alarmCheck(now)
 			}
+			// An exit request while a game owns the screen (power-key shutdown,
+			// the Exit button reached from the companion, a signal) used to be
+			// ignored here, because this branch continues before the request is
+			// checked below. The farewell cannot be drawn over the game, but the
+			// app still has to quit: the shutdown path stops the child first.
+			if exitRequested.Load() {
+				running = false
+				continue
+			}
 			sdl.Delay(100)
 			frameCount++
 			continue
@@ -503,9 +524,14 @@ func main() {
 		// Exit request (home Exit button or config "exit" trigger): play the
 		// farewell sequence, then shut down through the deferred cleanup below
 		// (persist favorites, free textures/fonts, sdl.Quit).
-		if exitRequested && !goodbyePlayed {
+		if exitRequested.Load() && !goodbyePlayed {
 			goodbyePlayed = true
-			ShowGoodbye(renderer, config)
+			// A stop request from outside gets no farewell: whatever sent the
+			// signal is waiting for this process to be gone, and the animation
+			// would only delay the handoff back to the stock launcher.
+			if !exitRequestedBySignal.Load() {
+				ShowGoodbye(renderer, config)
+			}
 			running = false
 			continue
 		}
@@ -551,7 +577,9 @@ func main() {
 					}
 					// The first-run tour is the topmost modal: while it is open it
 					// owns every key, including escape and the usual global chords.
-					if onboarding.active {
+					// Its setup checklist opens real panels, so while one of those
+					// is up the tour steps aside and lets the keys through.
+					if onboarding.active && !onboardingCoveredByOverlay() {
 						handleOnboardingKey(e)
 						continue
 					}
@@ -678,6 +706,11 @@ func main() {
 					// on the on-screen keyboard, which is handled earlier, so only
 					// route here while no text field is capturing keys.
 					if netplayPanel.open && !virtualKeyboardActive && handleNetplayKey(e, config) {
+						continue
+					}
+					// Downloads is modal too, and yields to the keyboard it opens
+					// for a link.
+					if dlPanel.open && !virtualKeyboardActive && handleDownloadsKey(e, config) {
 						continue
 					}
 					// The game library is modal too. It yields to the on-screen
@@ -1342,6 +1375,11 @@ func main() {
 							handleNetplayMouse(mx, my)
 							break
 						}
+						// Downloads is modal the same way.
+						if dlPanel.open {
+							handleDownloadsMouse(mx, my, config)
+							break
+						}
 						// Game library is modal the same way.
 						if gameLib.open {
 							handleGameLibraryMouse(mx, my, config)
@@ -1357,6 +1395,12 @@ func main() {
 						// panel, so nothing underneath may react through it.
 						if videoFullscreen && playerPhase() != "idle" {
 							HandleVideoControlClick(mx, my)
+							break
+						}
+
+						// The floating mini player (videomini.go) is drawn above the
+						// scene, so a tap on it must not reach the elements underneath.
+						if handleVideoMiniClick(mx, my, config) {
 							break
 						}
 
@@ -1613,6 +1657,16 @@ func main() {
 										loadMoreMediaResults(config)
 										continue
 									}
+									// A click on a row's Audio / Video / Chat pill presses
+									// that pill, even when the row is not the highlighted one.
+									if action, idx := resultActionHitAt(mx, my); action != resultActionNone {
+										// The pressed row becomes the highlighted one, so the
+										// accent ring and the D-pad land where the finger did.
+										focusedResultIndex = idx
+										focusedResultAction = action
+										performResultAction(action, idx, videos)
+										continue
+									}
 									// Grid hit detection (account for smooth scroll offset)
 									cols, rows := gridColsRows(elem)
 									elemWidth := getElementWidth(elem, 1080)
@@ -1700,10 +1754,13 @@ func main() {
 									if textBrowserElementSource(elem) == textBrowserSourceWeb {
 										addressRect, goRect := textBrowserToolbarRects(elem)
 										searchRect := textBrowserSearchRect(elem)
+										filterRect := textBrowserFilterRect(elem)
 										if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
 											handleTextBrowserAddressInput(renderer, config, elem)
 										} else if searchRect.W > 0 && mx >= searchRect.X && mx <= searchRect.X+searchRect.W && my >= searchRect.Y && my <= searchRect.Y+searchRect.H {
 											openBrowserSearch(renderer, config, elem)
+										} else if filterRect.W > 0 && mx >= filterRect.X && mx <= filterRect.X+filterRect.W && my >= filterRect.Y && my <= filterRect.Y+filterRect.H {
+											browserToggleAdFilter(config)
 										} else if mx >= goRect.X && mx <= goRect.X+goRect.W && my >= goRect.Y && my <= goRect.Y+goRect.H {
 											loadTextBrowserURL(config, elem, textBrowserAddress(config))
 										}
@@ -1786,9 +1843,10 @@ func main() {
 							continue
 						}
 						// Video control shortcuts (always active when video is playing).
-						// Remember whether the press was consumed by a player: B there
-						// stops playback instead of also leaving the scene.
-						videoWasPlaying := snapshotVideoState().phase != "idle"
+						// The player owns B while it is on screen, so the scene's generic
+						// back must not fire on the same press. Once the video floats in
+						// its mini window the scene owns the pad again.
+						videoWasPlaying := snapshotVideoState().phase != "idle" && !videoMiniVisible()
 						if HandleVideoControllerInput(e) {
 							continue
 						}
@@ -2273,6 +2331,12 @@ func main() {
 			// renderer, every other scene draws it here above the status bar.
 			renderCalendarPopover(renderer, config)
 		}
+		// A video the user backed out of keeps playing in a small window over
+		// the scene. The dock and the screensaver take the whole panel, so the
+		// window stays out of them.
+		if !ambientIsActive() && !ss.active {
+			renderVideoMini(renderer, config)
+		}
 
 		// Scene transition effects. Reduced motion and the transition config
 		// both snap the change instead of waiting out a fade.
@@ -2426,6 +2490,11 @@ func main() {
 		// IPStream library overlay.
 		if ipPanelOpen {
 			renderIPPanel(renderer, config)
+		}
+
+		// Downloads overlay (offline music queue and SD card usage).
+		if dlPanel.open {
+			renderDownloadsPanel(renderer, config)
 		}
 
 		// Game library overlay (consoles, games and box art).
@@ -2616,6 +2685,20 @@ func main() {
 			alarmCheck(now)
 		}
 	}
+
+	// The loop is over: from here the process must be gone within the grace
+	// period. A cleanup step that blocks (a child that will not exit, a server
+	// Stop that waits on a connection, a flush on a dying SD card) is the other
+	// half of the "app locked" report, and the watchdog is what bounds it.
+	armExitDeadline(exitShutdownGrace)
+
+	// Stop what owns the screen or the speaker before the SDL teardown. A game
+	// child outliving JukaHub keeps the framebuffer and a stopped stock
+	// launcher behind it, which is a frozen picture no input can leave; an
+	// ffmpeg music or video decoder outliving it keeps the audio device.
+	stopScreenChildren(exitChildGrace)
+	musicStopIfPlaying()
+	StopEmbeddedPlayback()
 
 	// Persist favorites and resume positions on every graceful quit path
 	// (window close, exit button, scene-exit trigger).

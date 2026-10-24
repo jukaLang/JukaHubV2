@@ -17,6 +17,7 @@ package main
 import (
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -45,7 +46,42 @@ func appEntryIconPath(entry FileEntry) string {
 		// Built-in applets have no file on disk to take a picture of.
 		return ""
 	}
-	return extractedAppIcon(entry.Path)
+	return cachedExtractedAppIcon(entry.Path)
+}
+
+// appIconPathCache remembers resolved extracted-icon paths. On Windows that
+// lookup stats a cache file, and the launcher asks once per visible tile per
+// frame, so a miss was costing a filesystem call per tile per frame.
+var (
+	appIconPathMu    sync.Mutex
+	appIconPathCache = map[string]string{}
+)
+
+const appIconPathCacheMax = 512
+
+func cachedExtractedAppIcon(programPath string) string {
+	appIconPathMu.Lock()
+	icon, ok := appIconPathCache[programPath]
+	appIconPathMu.Unlock()
+	if ok {
+		return icon
+	}
+	icon = extractedAppIcon(programPath)
+	appIconPathMu.Lock()
+	if len(appIconPathCache) >= appIconPathCacheMax {
+		appIconPathCache = map[string]string{}
+	}
+	appIconPathCache[programPath] = icon
+	appIconPathMu.Unlock()
+	return icon
+}
+
+// dropAppIconPathCache forgets resolved icon paths, so a tile picks up an icon
+// that appeared after the frame which cached the miss.
+func dropAppIconPathCache() {
+	appIconPathMu.Lock()
+	appIconPathCache = map[string]string{}
+	appIconPathMu.Unlock()
 }
 
 // appIconTexture loads and caches a launcher icon texture. A file that cannot

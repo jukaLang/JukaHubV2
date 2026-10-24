@@ -47,12 +47,14 @@ const (
 	ChromeBellIndex    = -5
 	ChromeWeatherIndex = -6
 	ChromeUpdateIndex  = -7
+	ChromeMediaIndex   = -8
 	ChromeBackType     = "back"
 	ChromeClockType    = "clock"
 	ChromeStartType    = "start"
 	ChromeBellType     = "bell"
 	ChromeWeatherType  = "weather"
 	ChromeUpdateType   = "update"
+	ChromeMediaType    = "media"
 )
 
 // chromeTier groups focus targets by band. Tier 1 is the top bar (back pill,
@@ -61,7 +63,7 @@ const (
 // The bottom of the screen is now the hint bar only, so there is no tier 2.
 func chromeTier(idx int) int {
 	switch idx {
-	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex:
+	case ChromeBackIndex, ChromeClockIndex, ChromeStartIndex, ChromeBellIndex, ChromeWeatherIndex, ChromeUpdateIndex, ChromeMediaIndex:
 		return 1
 	}
 	return 0
@@ -151,6 +153,12 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		}
 		if nc.bellRect.W > 0 {
 			addNode(ChromeBellIndex, nc.bellRect, ChromeBellType, "Notifications")
+		}
+		// The now-playing chip is a button only while a player is behind it. The
+		// idle output chip is drawn in the same spot but names headphones, so it
+		// stays out of the focus order rather than becoming a dead stop.
+		if statusMediaRect.W > 0 && nowPlayingChipIsButton() {
+			addNode(ChromeMediaIndex, statusMediaRect, ChromeMediaType, "Now playing")
 		}
 		// The "Update" pill only exists while a release is advertised, so it
 		// joins the bar for that launch. Home has its own chip entry; this is

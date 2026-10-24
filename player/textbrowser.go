@@ -251,7 +251,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 
 	contentTop := element.Y + 8 + headerH
 	if source == textBrowserSourceWeb {
-		addressRect, searchRect, goRect := textBrowserToolbarLayout(element)
+		addressRect, searchRect, goRect, filterRect := textBrowserToolbarLayout(element)
 		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
 		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, 1, sdl.Color{R: 93, G: 110, B: 138, A: 210})
 		address := textBrowserAddress(config)
@@ -274,6 +274,31 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			tw, th, _ := labelFont.SizeUTF8("GO")
 			fillRoundedRect(renderer, goRect.X, goRect.Y, goRect.W, goRect.H, 6, accentColor)
 			renderText(renderer, config, labelFont, "GO", sdl.Color{R: 255, G: 255, B: 255, A: 255}, goRect.X+(goRect.W-int32(tw))/2, goRect.Y+(goRect.H-int32(th))/2)
+			if filterRect.W > 0 {
+				// The chip is the page's filter state and its count at once:
+				// amber says this site is excepted, accent says the load
+				// skipped something, and neutral means nothing was in the way.
+				view := browserAdBlockViewFor(element.Variable)
+				label := ellipsize(labelFont, browserAdBlockLabel(view), filterRect.W-8)
+				fill := sdl.Color{R: 36, G: 45, B: 63, A: 255}
+				ink := sdl.Color{R: 155, G: 170, B: 195, A: 255}
+				border := sdl.Color{R: 93, G: 110, B: 138, A: 170}
+				switch {
+				case view.Off:
+					fill = sdl.Color{R: 68, G: 48, B: 30, A: 255}
+					ink = ColorWarning
+					border = WithAlpha(ColorWarning, 190)
+				case view.Blocked > 0:
+					fill = sdl.Color{R: 24, G: 58, B: 66, A: 255}
+					ink = WithAlpha(accentColor, 240)
+					border = WithAlpha(accentColor, 170)
+				}
+				fillRoundedRect(renderer, filterRect.X, filterRect.Y, filterRect.W, filterRect.H, 6, fill)
+				strokeRoundedRect(renderer, filterRect.X, filterRect.Y, filterRect.W, filterRect.H, 6, 1, border)
+				fw, fh, _ := labelFont.SizeUTF8(label)
+				renderText(renderer, config, labelFont, label, ink,
+					filterRect.X+(filterRect.W-int32(fw))/2, filterRect.Y+(filterRect.H-int32(fh))/2)
+			}
 		}
 		contentTop += textBrowserURLBarHeight + 4
 	}
@@ -493,12 +518,33 @@ const (
 	textBrowserBarGap      = int32(8)
 )
 
-// textBrowserToolbarRects lays out the web toolbar: the address field, the
-// Search chip and Go. The chip exists so the controller has a visible target
-// for Y instead of a hidden shortcut.
+// textBrowserFilterWidth is the filter chip's share of the toolbar. It is
+// derived from the panel width rather than fixed, because the type scales with
+// the panel: a chip that fits "99+ BLOCKED" at 800x480 would clip it at
+// 1280x720.
+func textBrowserFilterWidth(width int32) int32 {
+	w := width / 7
+	if w < 96 {
+		w = 96
+	}
+	if w > 200 {
+		w = 200
+	}
+	return w
+}
+
+// textBrowserToolbarRects lays out the web toolbar: the address field and Go.
+// The Search chip exists so the controller has a visible target for Y instead
+// of a hidden shortcut, and the filter chip reports the page's blocked count.
 func textBrowserToolbarRects(element Element) (address, goButton sdl.Rect) {
-	address, _, goButton = textBrowserToolbarLayout(element)
+	address, _, goButton, _ = textBrowserToolbarLayout(element)
 	return
+}
+
+// textBrowserFilterRect is the ad-filter chip's hit area.
+func textBrowserFilterRect(element Element) sdl.Rect {
+	_, _, _, filter := textBrowserToolbarLayout(element)
+	return filter
 }
 
 // textBrowserScrollLimit is the last scroll row for an element, measured the
@@ -524,26 +570,45 @@ func textBrowserScrollLimit(config *Config, element Element) int32 {
 	return 0
 }
 
-func textBrowserToolbarLayout(element Element) (address, search, goButton sdl.Rect) {
+func textBrowserToolbarLayout(element Element) (address, search, goButton, filter sdl.Rect) {
 	width := getElementWidth(element, 1100)
 	y := element.Y + 36
-	addressW := width - textBrowserGoWidth - textBrowserSearchWidth - textBrowserBarGap*2 - 16
+	h := textBrowserURLBarHeight - 4
+	// Full row: address, Search, Go, filter. A narrow panel drops Search
+	// first (the Y button still opens it) and only then the filter, which is
+	// the one control that can rescue a page filtering broke.
+	filterW := textBrowserFilterWidth(width)
+	addressW := width - textBrowserGoWidth - textBrowserSearchWidth - filterW - textBrowserBarGap*3 - 16
+	showSearch, showFilter := true, true
 	if addressW < 160 {
-		// Very narrow panel: give the address the room and drop the chip.
-		addressW = width - textBrowserGoWidth - textBrowserBarGap - 16
-		address = sdl.Rect{X: element.X + 8, Y: y, W: addressW, H: textBrowserURLBarHeight - 4}
-		goButton = sdl.Rect{X: address.X + address.W + textBrowserBarGap, Y: y, W: textBrowserGoWidth, H: textBrowserURLBarHeight - 4}
-		return
+		showSearch = false
+		addressW = width - textBrowserGoWidth - filterW - textBrowserBarGap*2 - 16
 	}
-	address = sdl.Rect{X: element.X + 8, Y: y, W: addressW, H: textBrowserURLBarHeight - 4}
-	search = sdl.Rect{X: address.X + address.W + textBrowserBarGap, Y: y, W: textBrowserSearchWidth, H: textBrowserURLBarHeight - 4}
-	goButton = sdl.Rect{X: search.X + search.W + textBrowserBarGap, Y: y, W: textBrowserGoWidth, H: textBrowserURLBarHeight - 4}
+	if addressW < 160 {
+		showFilter = false
+		addressW = width - textBrowserGoWidth - textBrowserBarGap - 16
+	}
+	if addressW < 80 {
+		addressW = 80
+	}
+
+	address = sdl.Rect{X: element.X + 8, Y: y, W: addressW, H: h}
+	cursor := address.X + address.W + textBrowserBarGap
+	if showSearch {
+		search = sdl.Rect{X: cursor, Y: y, W: textBrowserSearchWidth, H: h}
+		cursor = search.X + search.W + textBrowserBarGap
+	}
+	goButton = sdl.Rect{X: cursor, Y: y, W: textBrowserGoWidth, H: h}
+	cursor = goButton.X + goButton.W + textBrowserBarGap
+	if showFilter {
+		filter = sdl.Rect{X: cursor, Y: y, W: filterW, H: h}
+	}
 	return
 }
 
 // textBrowserSearchRect is the Search chip's hit area.
 func textBrowserSearchRect(element Element) sdl.Rect {
-	_, search, _ := textBrowserToolbarLayout(element)
+	_, search, _, _ := textBrowserToolbarLayout(element)
 	return search
 }
 
@@ -585,6 +650,13 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	config.Variables.Custom[textBrowserURLVariable] = address
 	textBrowserScrollY = 0
 	textBrowserScrollVelocity = 0
+	// The toolbar's filter chip belongs to the address being opened, not to the
+	// page still on screen: a reload after turning filtering off shows the new
+	// state immediately.
+	setBrowserAdBlockView(outputVariable, browserAdBlockView{
+		Site: browserAdBlockSiteKey(address),
+		Off:  browserAdBlockOff(address),
+	})
 
 	// Bumping the sequence here cancels anything still on the wire for this
 	// variable: a cached page must not be replaced a second later by an older
@@ -622,6 +694,11 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		// Remember the page for Back/Forward before publishing it: the next
 		// visit to the same address is then a map lookup instead of a download.
 		browserCachePage(pageURL, page)
+		setBrowserAdBlockView(variable, browserAdBlockView{
+			Site:    browserAdBlockSiteKey(page.FinalURL),
+			Blocked: page.Blocked,
+			Off:     browserAdBlockOff(page.FinalURL),
+		})
 		setBrowserLinks(variable, page.Links)
 		setBrowserDocument(variable, page.Doc)
 		publishCustom(variable, page.Text)
@@ -631,6 +708,11 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 // showBrowserPage publishes a page the cache already holds, synchronously:
 // there is nothing to wait for, so Back can land in the same frame.
 func showBrowserPage(config *Config, variable string, page browserPage) {
+	setBrowserAdBlockView(variable, browserAdBlockView{
+		Site:    browserAdBlockSiteKey(page.FinalURL),
+		Blocked: page.Blocked,
+		Off:     browserAdBlockOff(page.FinalURL),
+	})
 	setBrowserLinks(variable, page.Links)
 	setBrowserDocument(variable, page.Doc)
 	if config.Variables.Custom == nil {
@@ -703,6 +785,9 @@ func browseWebPage(rawURL string) string {
 }
 
 func browseWebPageResult(rawURL string) browserPage {
+	// Every subresource this load requests is counted here, so the reader can
+	// say how much advertising it kept off the wire.
+	resetBrowserAdBlockCount()
 	address, err := normalizeTextBrowserURL(rawURL)
 	if err != nil {
 		return browserPage{Text: "Browser error: " + err.Error()}
@@ -747,9 +832,13 @@ func browseWebPageResult(rawURL string) browserPage {
 		return browserPage{Text: fmt.Sprintf("Could not read %s\n%s", address, err.Error())}
 	}
 	body, truncated := truncateTextBrowserBody(body, textBrowserMaxPageBytes)
+	// Ad and tracker scripts are removed before the script pass: there is no
+	// reason to spend the page's 5-second script budget running them, and some
+	// ship an inline fallback that would run even with the src blocked.
+	html := stripBlockedWebScripts(string(body), resp.Request.URL)
 	// Page scripts run first, so the text, link, CSS and image passes below see
 	// the markup they produced (webscript.go).
-	source := runWebPageScripts(string(body), resp.Request.URL)
+	source := runWebPageScripts(html, resp.Request.URL)
 	title, pageText := extractTextBrowserHTML(source)
 	if title == "" {
 		title = resp.Request.URL.Hostname()
@@ -759,14 +848,6 @@ func browseWebPageResult(rawURL string) browserPage {
 	}
 	pageText = capTextBrowserText(pageText)
 	links := extractBrowserLinks(source, resp.Request.URL)
-	text := fmt.Sprintf("Title: %s\nURL: %s\n", title, resp.Request.URL.String())
-	if truncated {
-		text += strings.TrimSpace(textBrowserTruncationNote()) + "\n"
-	}
-	if len(links) > 0 {
-		text += fmt.Sprintf("Links: %d (press X or L to choose one)\n", len(links))
-	}
-	text += "\n" + pageText
 	// Linked stylesheets carry most of a real page's look. Fetching a few small
 	// ones is cheap; the parser then applies the presentation subset it can
 	// draw, and the plain text above remains the fallback for everything else.
@@ -787,7 +868,40 @@ func browseWebPageResult(rawURL string) browserPage {
 	if len(doc.Blocks) == 0 {
 		doc = nil
 	}
-	return browserPage{Text: text, Links: links, FinalURL: resp.Request.URL.String(), Doc: doc}
+	// The reader text is assembled last: the blocked count and truncation state
+	// are only final once the stylesheet and image passes have run.
+	text := browserReaderText(title, resp.Request.URL.String(), len(links), pageText,
+		browserBlockedRequests(), browserAdBlockOff(resp.Request.URL.String()), truncated)
+	return browserPage{
+		Text:     text,
+		Links:    links,
+		FinalURL: resp.Request.URL.String(),
+		Doc:      doc,
+		Blocked:  browserBlockedRequests(),
+	}
+}
+
+// browserReaderText builds the plain-text view a page without a drawable
+// document falls back to. It states what was skipped, so a reader can tell a
+// trimmed page from a complete one.
+func browserReaderText(title, address string, linkCount int, pageText string, blocked int, filterOff bool, truncated bool) string {
+	var text strings.Builder
+	fmt.Fprintf(&text, "Title: %s\nURL: %s\n", title, address)
+	if filterOff {
+		text.WriteString("Ad filtering is off for this site\n")
+	} else if blocked > 0 {
+		fmt.Fprintf(&text, "Blocked: %d ad/tracker request(s)\n", blocked)
+	}
+	if truncated {
+		text.WriteString(strings.TrimSpace(textBrowserTruncationNote()))
+		text.WriteByte('\n')
+	}
+	if linkCount > 0 {
+		fmt.Fprintf(&text, "Links: %d (press X or L to choose one)\n", linkCount)
+	}
+	text.WriteByte('\n')
+	text.WriteString(pageText)
+	return text.String()
 }
 
 // truncateTextBrowserBody keeps the first limit bytes of a page and reports

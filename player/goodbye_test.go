@@ -105,11 +105,11 @@ func TestGoodbyeWordmarkAndCompletion(t *testing.T) {
 
 // requestAppExit must arm the exit flag the main loop watches.
 func TestRequestAppExitSetsFlag(t *testing.T) {
-	prev := exitRequested
-	defer func() { exitRequested = prev }()
-	exitRequested = false
+	prev := exitRequested.Load()
+	defer exitRequested.Store(prev)
+	exitRequested.Store(false)
 	requestAppExit()
-	if !exitRequested {
+	if !exitRequested.Load() {
 		t.Error("requestAppExit did not set exitRequested")
 	}
 }

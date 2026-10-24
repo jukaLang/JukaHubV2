@@ -29,6 +29,7 @@ const (
 	toolsActionCalculator
 	toolsActionCommunity
 	toolsActionPowerTools
+	toolsActionDiscHelpers
 	toolsActionCopyIP
 	toolsActionUtilities
 )
@@ -314,6 +315,18 @@ func toolsRows(config *Config) []toolsRow {
 		enabled: true,
 	})
 
+	// Disc-based systems need files the ripper often leaves out: a cue sheet
+	// for a bare .bin, and a playlist so a multi-disc set switches discs. Both
+	// are additive, so the row is safe to press on any card.
+	system = append(system, toolsRow{
+		label:   "Disc helpers",
+		value:   "CUE & M3U",
+		detail:  "Add missing cue sheets and multi-disc playlists in Roms/",
+		hint:    hintLine(FooterHint{"A", "Create"}),
+		action:  toolsActionDiscHelpers,
+		enabled: true,
+	})
+
 	if sceneIndexExact(config, "Calculator") >= 0 {
 		system = append(system, toolsRow{
 			label:   "Calculator",
@@ -428,6 +441,22 @@ func toolsPanelActivate(config *Config) {
 		PlayActivateSound()
 	case toolsActionPowerTools:
 		openPowerTools(config)
+	case toolsActionDiscHelpers:
+		report := generateDiscHelpers(romLibraryRoots())
+		if report.Created() == 0 {
+			if len(report.Errors) > 0 {
+				ShowToast(report.Summary(), ToastKindError)
+				return
+			}
+			ShowToast(report.Summary(), ToastKindInfo)
+			return
+		}
+		PlaySuccessSound()
+		kind := ToastKindSuccess
+		if len(report.Errors) > 0 {
+			kind = ToastKindWarning
+		}
+		ShowToast(report.Summary(), kind)
 	case toolsActionCopyIP:
 		ip := toolsIPAddress()
 		if ip == "" {
@@ -616,10 +645,17 @@ func toolsPanelMetrics(config *Config, rows []toolsRow) toolsPanelLayout {
 		layout.rowH = 2*layout.rowPad + layout.smallH + gap + layout.medH
 	}
 	if !fits() {
-		// Dense mode: label and value on one line. Patch and Calculator add
-		// two rows, which does not fit the three-line row on a 720p screen.
+		// Dense mode: label and value on one line. Patch, Calculator and the
+		// disc helpers add rows that do not fit the three-line row on a 720p
+		// screen.
 		layout.dense = true
 		layout.rowPad = 5
+		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
+	}
+	if !fits() && layout.dense && len(layout.info) > 0 {
+		// The SFTP credentials are the one line that must not be traded away
+		// for padding, so tighten the cards once more before dropping it.
+		layout.rowPad = 3
 		layout.rowH = max32(layout.smallH, layout.medH) + 2*layout.rowPad
 	}
 	if !fits() && len(layout.info) > 1 {

@@ -511,11 +511,11 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 		restoreProfile()
 		return fmt.Errorf("could not start RetroArch: %v", err)
 	}
-	noteGameChildStarted()
+	noteGameChildStarted(cmd)
 	recorder := startTimelapse(config, plan.Session.Game.Title)
 	go func() {
 		_ = cmd.Wait()
-		noteGameChildExited()
+		noteGameChildExited(cmd)
 		restoreProfile()
 		recorder.Stop()
 	}()

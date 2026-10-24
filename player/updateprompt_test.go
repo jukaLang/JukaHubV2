@@ -152,9 +152,10 @@ func TestToolsRowsPatchAndCalculator(t *testing.T) {
 	}
 }
 
-// Ten rows in three sections (IP, FTP, companion, SSH, party, Updates, power
-// tools, Calculator, Community, Classic Tools) plus the SFTP credentials line
-// must still fit a 720p panel, which is what dense mode is for.
+// Eleven rows in three sections (IP, FTP, companion, SSH, party, Updates,
+// power tools, disc helpers, Calculator, Community, Classic Tools) plus the
+// SFTP credentials line must still fit a 720p panel, which is what dense mode
+// is for.
 func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
 	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
@@ -170,12 +171,12 @@ func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
 	}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 10 {
-		t.Fatalf("row rects = %d, want 10", len(rects))
+	if len(rects) != 11 {
+		t.Fatalf("row rects = %d, want 11", len(rects))
 	}
 	layout := toolsPanelMetrics(config, toolsRows(config))
 	if !layout.dense {
-		t.Fatal("expected dense rows for ten items on a 720p screen")
+		t.Fatal("expected dense rows for eleven items on a 720p screen")
 	}
 	content := layout.contentH(len(rects))
 	if content > probeH-40 || content > panel.H {

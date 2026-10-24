@@ -153,8 +153,8 @@ func homeSceneTarget(config *Config, id HomeFocusID) string {
 		return "Emulator"
 	case HomeFocusSettings:
 		return "Settings"
-	case HomeFocusExit:
-		// Exit is handled by requestAppExit before any scene lookup.
+	case HomeFocusExit, HomeFocusNowPlaying:
+		// Exit and the now-playing chip are handled before any scene lookup.
 		return ""
 	}
 	return ""
@@ -295,6 +295,12 @@ func homeActivate(config *Config) {
 	// directly, without opening Patch or any other menu.
 	if id == HomeFocusUpdate {
 		startHeaderUpdate()
+		return
+	}
+	// The now-playing chip names a running session; A opens that player, the
+	// same as a tap on the chip or on the chrome control of any other scene.
+	if id == HomeFocusNowPlaying {
+		openNowPlaying(config)
 		return
 	}
 	if id == HomeFocusContinue {

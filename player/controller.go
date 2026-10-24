@@ -149,6 +149,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if netplayPanel.open {
 		return ctrlNetplay(e, config)
 	}
+	// Downloads is modal: the queue's own bindings must not leak into the
+	// panel it was opened from.
+	if dlPanel.open {
+		return ctrlDownloadsPanel(e, config)
+	}
 	// The game library is modal: nothing underneath may react while it is open.
 	if gameLib.open {
 		return ctrlGameLibrary(e, config)

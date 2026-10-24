@@ -44,6 +44,38 @@ no save state was written.
 The feature is a toggle in **Settings → General → Smart Widgets → Save & suspend
 at 3%** (on by default, variable `lowBatteryGuard`).
 
+## Quitting, and the power button
+
+On a TrimUI the app is usually stopped from outside: the firmware's power
+handling signals the foreground app, or a launcher stops it. A process stopped
+by a signal never runs its cleanup, and a game it launched keeps the frame
+buffer — with the stock launcher already killed, the panel then shows a frozen
+picture that no button leaves. That is the "it locked when I pressed power"
+report.
+
+JukaHub now treats those stops as a normal quit:
+
+- `SIGINT`, `SIGTERM`, `SIGHUP` and `SIGQUIT` become the same exit request the
+  Exit button uses, so favourites, playtime and LEDs are handled and the
+  farewell is skipped (the caller is waiting for the process, not watching it).
+  A second signal quits immediately.
+- A running game, emulator, port or Wine app is asked to quit (2 s), then
+  killed, so nothing is left owning the display. Music and video decoders are
+  stopped for the same reason, which used to leave audio playing after a quit.
+- The whole shutdown is bounded to **6 seconds**. If a cleanup step blocks — a
+  wedged server, a flush on a dying card, a child that ignores the request — the
+  watchdog kills the children, drops the LEDs and exits anyway.
+- When the watchdog fires it writes every goroutine stack to `errors.txt` first.
+  Send that file with a report: the blocked shutdown names the lock or channel
+  it was waiting on.
+- `launch.sh` catches the same stop, waits for JukaHub to exit and still hands
+  the screen back, so the stock launcher comes back even when the request
+  arrived as a signal to the whole process group.
+
+A short press of the power button is handled by the firmware (suspend), not by
+JukaHub; a long press force-quits the app. Both now end with the display handed
+back instead of a frozen last frame.
+
 ## Recovery chord (safe boot)
 
 Hold **L + R + Start** while JukaHub starts. The chord must stay down for the

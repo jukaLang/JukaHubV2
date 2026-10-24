@@ -156,8 +156,30 @@ build as `<core>_libretro.so` (or `.dll` on Windows). The previous core is never
 deleted.
 
 Each game's detail pane names the core its report was written for and whether
-that core is **active**, **outdated**, only **in the pool**, or **missing**. A
+that core is **active**, **outdated**, only in the **pool**, or **missing**. A
 recommendation therefore never points at a core the user does not have.
+
+### Fetching newer builds
+
+**U** (or **L1**) on the Core-builds tab checks the libretro aarch64 buildbot
+and fills the pool with copies of any installed core whose build differs from
+the one the index lists. The comparison is the CRC32 the index publishes, so a
+core that already matches is left alone, and a download that does not match the
+promised checksum is thrown away instead of installed.
+
+Fetched builds land in `data/performance/cores/<core>/<date>/`, next to a
+`source.json` that records the URL, checksum and fetch time. **Activating one is
+still a separate press** in the same tab: the download can never replace the core
+RetroArch is using, and activation keeps the previous binary as a `.bak`. This
+channel is nightly, not stable — the buildbot publishes no stable aarch64 tree —
+so treat a fetched build as a candidate to try, not as a guaranteed upgrade.
+
+Standalone emulators (PPSSPP, mGBA, Flycast) are looked up separately, because
+their upstream releases target desktop Linux rather than this device's userspace
+and launcher scripts. When a release publishes an aarch64 archive it is fetched
+to `data/emulator-updates/<app>/<tag>/` and reported, **not** unpacked over the
+installed emulator: switching the launcher stays a manual job. Releases without
+an aarch64 asset are reported as such rather than offering a desktop build.
 
 ## Controls
 
@@ -168,6 +190,7 @@ recommendation therefore never points at a core the user does not have.
 | A | Apply the boost plan | Activate a pool build |
 | X | Revert the selected plan | — |
 | Y / R | Rescan ROMs, catalog and cores | Rescan |
+| U / L1 | — | Check the buildbot for newer core builds |
 | B / Esc / Backspace | Back to Emulators | Back to Emulators |
 
 Mouse and touch select rows and tabs in the same way.
