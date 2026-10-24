@@ -272,3 +272,22 @@ test("renaming a scene carries the links to it, and quoted names are safe", asyn
   expect(result.links).toEqual(["change_scene:Videos", "Videos"]);
   expect(result.names).toEqual(["Main", "Videos"]);
 });
+
+// Resizing must stop at the device edge just like dragging does.
+test("resizing an element cannot stretch it past the canvas", async ({ page }) => {
+  const size = await page.evaluate(() => {
+    loadJukaApp({
+      Width: 1280,
+      Height: 720,
+      scenes: [{ name: "T", elements: [{ type: "button", text: "B", x: 1000, y: 600, width: 100, height: 60 }] }],
+    });
+    const el = document.querySelector("#canvas .element");
+    handleResize(el, { clientX: 0, clientY: 0 });
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 100000, clientY: 100000 }));
+    document.dispatchEvent(new MouseEvent("mouseup"));
+    return { w: parseFloat(el.style.width), h: parseFloat(el.style.height), x: parseFloat(el.style.left), y: parseFloat(el.style.top) };
+  });
+  expect(size.x + size.w).toBeLessThanOrEqual(1280);
+  expect(size.y + size.h).toBeLessThanOrEqual(720);
+  expect(size).toMatchObject({ w: 280, h: 120 });
+});
