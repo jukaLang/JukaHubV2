@@ -2320,9 +2320,16 @@ function handleResize(el, event) {
   const startHeight = el.offsetHeight;
   const undoBase = captureWorkspace('resize');
 
+  // Dragging keeps an element on the device; resizing has to as well, or a
+  // stretched button runs off the panel and the player clips it.
+  const left = parseFloat(el.style.left) || 0;
+  const top = parseFloat(el.style.top) || 0;
+  const maxWidth = Math.max(50, canvasWidth - left);
+  const maxHeight = Math.max(50, canvasHeight - top);
+
   const onMouseMove = (e) => {
-    const newWidth = Math.max(50, Math.round(startWidth + (e.clientX - startX) / canvasScale));
-    const newHeight = Math.max(50, Math.round(startHeight + (e.clientY - startY) / canvasScale));
+    const newWidth = Math.min(maxWidth, Math.max(50, Math.round(startWidth + (e.clientX - startX) / canvasScale)));
+    const newHeight = Math.min(maxHeight, Math.max(50, Math.round(startHeight + (e.clientY - startY) / canvasScale)));
     el.style.width = `${newWidth}px`;
     el.style.height = `${newHeight}px`;
     el.setAttribute('data-width', newWidth);
