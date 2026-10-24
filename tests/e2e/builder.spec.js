@@ -181,3 +181,30 @@ test("exported JSON re-imports as the same design", async ({ page }, testInfo) =
   expect(saved.Width).toBe(exported.Width);
   expect(saved.Height).toBe(exported.Height);
 });
+
+// Deleting, undoing and Escape must agree on what is selected. Before the fix,
+// Delete left the inspector in element mode with nothing selected, and Undo
+// brought the element back highlighted (the saved HTML carried its "selected"
+// class) while the editor held no selection, so Escape could not clear it.
+test("delete, undo and Escape keep the selection state consistent", async ({ page }) => {
+  const state = () =>
+    page.evaluate(() => ({
+      highlighted: document.querySelectorAll("#canvas .element.selected").length,
+      current: Boolean(currentElement),
+      inspector: document.body.classList.contains("element-selected"),
+    }));
+  const none = { highlighted: 0, current: false, inspector: false };
+
+  await page.locator("#canvas .element").first().click({ force: true });
+  expect(await state()).toEqual({ highlighted: 1, current: true, inspector: true });
+
+  await page.keyboard.press("Delete");
+  expect(await state()).toEqual(none);
+
+  await page.keyboard.press("Control+z");
+  expect(await state()).toEqual(none);
+
+  await page.locator("#canvas .element").first().click({ force: true });
+  await page.keyboard.press("Escape");
+  expect(await state()).toEqual(none);
+});
