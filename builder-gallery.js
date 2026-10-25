@@ -35,7 +35,6 @@
     container.style.background = thumbColour(scene.background, '#0B0F17');
     const width = Number(config.Width) || 1280;
     const height = Number(config.Height) || 720;
-    const fonts = (config.variables && config.variables.fontSizes) || {};
     const roleSize = { title: 15, big: 11, medium: 8, small: 6.5 };
     (scene.elements || []).forEach(element => {
       const node = document.createElement('div');
