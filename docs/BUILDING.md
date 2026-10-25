@@ -3,10 +3,9 @@
 JukaHub is a Go + SDL2 program, so every build needs CGO and SDL2 headers. The
 Windows wrapper installs both for you; on other hosts you install them yourself.
 
-Requirements are in [`player/go.mod`](../player/go.mod) (Go **1.27+**, toolchain pinned
-to 1.27.3) and
-[`player/vendor/`](../player/vendor) — dependencies are vendored, so a build
-needs no network access and no `go mod download`.
+Requirements are in [`player/go.mod`](../player/go.mod) (Go **1.26+**, toolchain
+pinned to 1.27.3). Dependencies are fetched with `go mod download` on first build,
+so the first build needs network access.
 
 | Task | Command |
 |------|---------|
