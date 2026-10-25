@@ -198,6 +198,9 @@ func TestRunCancelableGroupWithDeadContextRunsNothing(t *testing.T) {
 	if ran.Load() {
 		t.Fatal("group ran work for a cancelled context")
 	}
+	// runCancelableGroup documents a nil context as the background context, so
+	// this passes one on purpose.
+	//lint:ignore SA1012 the nil-context contract is what this checks
 	if err := runCancelableGroup(nil); err != nil {
 		t.Fatalf("empty group error = %v", err)
 	}
