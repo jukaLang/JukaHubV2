@@ -1821,8 +1821,10 @@ func main() {
 											browserToggleAdFilter(config)
 										} else if mx >= goRect.X && mx <= goRect.X+goRect.W && my >= goRect.Y && my <= goRect.Y+goRect.H {
 											loadTextBrowserURL(config, elem, textBrowserAddress(config))
-										} else if browserTapPageLink(config, elem, mx, my) {
-											// Tapped a link inside the rendered page.
+										} else {
+											// Tapped a link inside the rendered page (a no-op when the tap
+											// landed on none).
+											browserTapPageLink(config, elem, mx, my)
 										}
 									}
 								}
