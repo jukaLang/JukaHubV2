@@ -1538,12 +1538,21 @@ func fetchURLContext(ctx context.Context, url string, timeout time.Duration) (st
 		return "", err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	// Cap the body: a hostile or runaway server must not be able to exhaust the
+	// handheld's memory. Reading one byte past the cap tells "exactly at" from
+	// "over", and going over is an error rather than a silently cut document.
+	data, err := io.ReadAll(io.LimitReader(resp.Body, fetchURLMaxBytes+1))
 	if err != nil {
 		return "", err
 	}
+	if len(data) > fetchURLMaxBytes {
+		return "", fmt.Errorf("response is larger than %d MiB", fetchURLMaxBytes>>20)
+	}
 	return string(data), nil
 }
+
+// fetchURLMaxBytes bounds one fetchURL response (pages, JSON, package zips).
+const fetchURLMaxBytes = 64 << 20
 
 // formatUptime converts seconds to a human-readable duration.
 func formatUptime(seconds uint64) string {

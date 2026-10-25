@@ -754,7 +754,14 @@ func httpsGetBytes(url string, timeout time.Duration) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, fetchURLMaxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > fetchURLMaxBytes {
+		return nil, fmt.Errorf("response is larger than %d MiB", fetchURLMaxBytes>>20)
+	}
+	return data, nil
 }
 
 // readFileTrimmed reads path and returns its trimmed content, or "".
