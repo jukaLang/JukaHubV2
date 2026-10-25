@@ -8,3 +8,9 @@
 # Windows checkout must not convert them: without this every contributor with
 # core.autocrlf=true sees the whole tree as unformatted.
 *.go text eol=lf
+# Batch files must keep CRLF. cmd.exe indexes labels from the start of the file
+# and stops early on an LF-only script, so player/build.bat fails with "The
+# system cannot find the batch label specified - ensure_gcc" once a label sits
+# past that point.
+*.bat text eol=crlf
+*.cmd text eol=crlf

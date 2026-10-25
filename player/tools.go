@@ -363,7 +363,7 @@ func runTarExtract(archivePath, dstDir string) error {
 				if err == nil {
 					return nil
 				}
-				lastErr = fmt.Errorf("%v (%s)", err, strings.TrimSpace(string(out)))
+				lastErr = fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
 				log.Printf("[tools] tar %v failed: %v", args, lastErr)
 			}
 		}
@@ -375,12 +375,12 @@ func runTarExtract(archivePath, dstDir string) error {
 				if err == nil {
 					return nil
 				}
-				lastErr = fmt.Errorf("%v (%s)", err, strings.TrimSpace(string(out)))
+				lastErr = fmt.Errorf("%w (%s)", err, strings.TrimSpace(string(out)))
 				log.Printf("[tools] busybox %v failed: %v", args, lastErr)
 			}
 		}
 		if lastErr == nil {
-			lastErr = fmt.Errorf("no tar available: %v", tarErr)
+			lastErr = fmt.Errorf("no tar available: %w", tarErr)
 		}
 		return lastErr
 	}
@@ -395,7 +395,7 @@ func runTarExtract(archivePath, dstDir string) error {
 		plainTar := filepath.Join(dstDir, "archive.tar")
 		defer os.Remove(plainTar)
 		if err := decompressXZ(archivePath, plainTar); err != nil {
-			return fmt.Errorf("could not unpack %s: %v", base, err)
+			return fmt.Errorf("could not unpack %s: %w", base, err)
 		}
 		if err := untar(plainTar); err == nil {
 			return nil
@@ -503,7 +503,7 @@ func runCmd(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("%s %s: %v\n%s", name, strings.Join(args, " "), err, string(out))
+		return "", fmt.Errorf("%s %s: %w\n%s", name, strings.Join(args, " "), err, string(out))
 	}
 	return strings.TrimSpace(string(out)), nil
 }

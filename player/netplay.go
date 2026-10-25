@@ -495,7 +495,7 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	switch plan.Session.Role {
 	case netplayHost:
 		if err := netplayListenProbe(plan.Session.Port); err != nil {
-			return fmt.Errorf("port %d is already in use — close the other session (%v)", plan.Session.Port, err)
+			return fmt.Errorf("port %d is already in use — close the other session (%w)", plan.Session.Port, err)
 		}
 	case netplayJoin:
 		if err := netplayReachProbe(plan.Session.Host, plan.Session.Port, 1500*time.Millisecond); err != nil {
@@ -509,7 +509,7 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	restoreProfile := beginGamePowerProfile(config)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
-		return fmt.Errorf("could not start RetroArch: %v", err)
+		return fmt.Errorf("could not start RetroArch: %w", err)
 	}
 	noteGameChildStarted(cmd)
 	recorder := startTimelapse(config, plan.Session.Game.Title)

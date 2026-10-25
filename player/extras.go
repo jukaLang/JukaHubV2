@@ -642,7 +642,10 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	// rect is measured here so the focus graph, keyboard activation and
 	// mouse hit-testing all agree on where it is.
 	if font != nil {
-		label := "Apps"
+		// The old taskbar Start button opened an app menu, so it read "Apps" —
+		// which collided with the scene title on the Apps screen itself. "Menu"
+		// says what it opens and can never duplicate the title.
+		label := "Menu"
 		aw, _, _ := font.SizeUTF8(label)
 		pad := int32(10)
 		ah := int32(22)
@@ -1191,12 +1194,17 @@ type UserVariables struct {
 	PlaybackResolution string `json:"playbackResolution"`
 	ReducedMotion      bool   `json:"reducedMotion"`
 	LowPower           bool   `json:"lowPower"`
+	PowerMode          string `json:"powerMode"`
 	LedSync            bool   `json:"ledSync"`
 	GridColumns        int    `json:"gridColumns"`
 	SearchWidth        int    `json:"searchWidth"`
 	DynamicBg          bool   `json:"dynamicBg"`
 	ScreensaverTimeout int    `json:"screensaverTimeout"`
 	SocialNotifs       bool   `json:"socialNotifs"`
+	// NetPlayEnabled is a pointer in the user file so an upgrade from a build
+	// that predates the switch keeps the shipped default instead of reading a
+	// missing key as "off".
+	NetPlayEnabled *bool `json:"netPlayEnabled,omitempty"`
 
 	// Quick Settings levels. The *Set flags separate "never touched" from a
 	// real 0 (muted / dimmed), so a fresh install never overrides the device's
@@ -1209,32 +1217,66 @@ type UserVariables struct {
 	Custom map[string]interface{}
 }
 
+// userConfigRecoveryNotice is set when jukauser.json was unusable and the last
+// backup had to be loaded. It is shown once the render loop is up (main.go)
+// rather than during load, which runs before fonts and audio exist.
+var userConfigRecoveryNotice string
+
+// takeUserConfigRecoveryNotice returns the pending recovery notice once.
+func takeUserConfigRecoveryNotice() string {
+	notice := userConfigRecoveryNotice
+	userConfigRecoveryNotice = ""
+	return notice
+}
+
+// readUserConfigFile decodes one user-config file. A missing file reports the
+// os error so the caller can distinguish a first run from a damaged file.
+func readUserConfigFile(path string) (*UserConfig, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var uc UserConfig
+	if err := json.Unmarshal(data, &uc); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return &uc, nil
+}
+
 func loadUserConfig() *UserConfig {
 	if userConfigCache != nil {
 		return userConfigCache
 	}
-	data, err := os.ReadFile("jukauser.json")
+	uc, err := readUserConfigFile("jukauser.json")
+	recovered := false
+	if err != nil {
+		// AtomicWrite keeps the previous file as .bak. Recover from it instead of
+		// silently starting from defaults, which used to drop the theme, keymap
+		// and every other preference over one bad write.
+		if backup, backupErr := readUserConfigFile("jukauser.json.bak"); backupErr == nil {
+			log.Printf("[CONFIG] jukauser.json is unusable (%v); recovered settings from jukauser.json.bak", err)
+			uc, err, recovered = backup, nil, true
+		}
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
 			log.Printf("[CONFIG] jukauser.json not found; starting with defaults")
 		} else {
-			log.Printf("[CONFIG] cannot read jukauser.json: %v", err)
+			log.Printf("[CONFIG] cannot read jukauser.json: %v; starting with defaults", err)
 		}
-		userConfigCache = &UserConfig{
-			Variables: UserVariables{
-				Custom: make(map[string]interface{}),
-			},
-		}
-	} else {
-		var uc UserConfig
-		if err := json.Unmarshal(data, &uc); err != nil {
-			log.Printf("[CONFIG] jukauser.json parse error: %v; starting with defaults", err)
-			uc = UserConfig{}
-		}
-		if uc.Variables.Custom == nil {
-			uc.Variables.Custom = make(map[string]interface{})
-		}
-		userConfigCache = &uc
+	}
+	if uc == nil {
+		uc = &UserConfig{}
+	}
+	if uc.Variables.Custom == nil {
+		uc.Variables.Custom = make(map[string]interface{})
+	}
+	userConfigCache = uc
+	if recovered {
+		// Put the recovered settings back at the primary path so the next launch
+		// is clean, and tell the user once the UI can draw.
+		userConfigRecoveryNotice = "Settings were damaged and have been restored from the last backup. Check anything you changed recently."
+		saveUserConfig(userConfigCache)
 	}
 	// One-time migration: fold the legacy per-feature JSON files into their
 	// jukauser.json sections, then delete them so only the two canonical JSON
@@ -1430,6 +1472,9 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	config.Variables.ReducedMotion = user.Variables.ReducedMotion
 	config.Variables.LowPower = user.Variables.LowPower
 	config.Variables.LEDSync = user.Variables.LedSync
+	if user.Variables.NetPlayEnabled != nil {
+		config.Variables.NetPlayEnabled = *user.Variables.NetPlayEnabled
+	}
 	// A zero timeout means "not saved" (old user files), not "never sleep".
 	if user.Variables.ScreensaverTimeout > 0 {
 		config.Variables.ScreensaverTimeout = user.Variables.ScreensaverTimeout
@@ -1457,6 +1502,10 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 // --- Persist design-only config to jukaconfig.json ---
 
 func saveConfig(config *Config) {
+	// The Tools page lays its buttons out as tiles in memory; put the authored
+	// geometry back before anything is marshalled and re-apply it afterwards, so
+	// a save never writes the generated layout into jukaconfig.json.
+	defer menuTilesDetachForSave(config)()
 	saved := *config
 	saved.SchemaVersion = ConfigSchemaVersion
 	saved.Variables = config.Variables

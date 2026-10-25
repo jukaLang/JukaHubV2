@@ -83,7 +83,11 @@ type FrameRateController struct {
 	currentMode     FrameRateMode
 	animationActive bool // transitions, hover anims, etc. keep the fastest mode
 	lowPower        bool // user setting: always use the slowest cadence
-	profile         frameProfile
+	// performancePinned is the Performance power mode: never idle-throttle,
+	// even when nothing has been touched for a while. It is a user choice
+	// from quicksettings, not an animation trigger like animationActive.
+	performancePinned bool
+	profile           frameProfile
 }
 
 // NewFrameRateController creates a controller tuned for the given platform.
@@ -129,6 +133,12 @@ func (fc *FrameRateController) SetLowPower(low bool) {
 	fc.mu.Lock()
 	fc.lowPower = low
 	fc.mu.Unlock()
+} // SetPerformance pins the cadence at the active profile: the Performance
+// power mode keeps the full frame rate even when the app sits idle.
+func (fc *FrameRateController) SetPerformance(on bool) {
+	fc.mu.Lock()
+	fc.performancePinned = on
+	fc.mu.Unlock()
 }
 
 // Delay returns the recommended ms to sleep this frame and updates the
@@ -139,10 +149,15 @@ func (fc *FrameRateController) Delay() uint32 {
 	elapsed := now - fc.lastInputTime
 	animation := fc.animationActive
 	lowPower := fc.lowPower
+	pinned := fc.performancePinned
+
 	fc.mu.Unlock()
 
 	var mode FrameRateMode
 	switch {
+	case pinned:
+		// Performance: answer an idle query with the fastest cadence.
+		mode = FrameRateActive
 	case lowPower && elapsed < fc.deepThreshold:
 		mode = FrameRateIdle
 	case animation || elapsed < fc.idleThreshold:

@@ -549,7 +549,7 @@ const (
 // compact rhythm too, because fitting more content on screen means less
 // scrolling (and fewer redraws) on the handheld.
 func DensityFor(config *Config) Density {
-	if config != nil && config.Variables.LowPower {
+	if config != nil && effectiveLowPower(config) {
 		return DensityCompact
 	}
 	if screenHeight >= 600 {

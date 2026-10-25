@@ -401,3 +401,63 @@ func toolsRowByAction(rows []toolsRow, action toolsAction) *toolsRow {
 	}
 	return nil
 }
+
+// Every section heading gets a glyph for its group, and a group this build has
+// never seen still gets one, so adding a section can never leave a bare
+// heading behind.
+func TestToolsSectionGlyphPerGroup(t *testing.T) {
+	cases := map[string]toolsAction{
+		"FTP & IP":         toolsActionFTP,
+		"WATCH TOGETHER":   toolsActionParty,
+		"System & updates": toolsActionPatch,
+		"":                 toolsActionPowerTools,
+		"Something new":    toolsActionPowerTools,
+	}
+	for title, want := range cases {
+		if got := toolsSectionGlyph(title); got != want {
+			t.Errorf("toolsSectionGlyph(%q) = %v, want %v", title, got, want)
+		}
+	}
+}
+
+// The header and each section heading open with an icon now: the title has to
+// clear the header's glyph well, and the heading chips must carry real glyph
+// ink rather than an empty tinted box.
+func TestToolsPanelDrawsHeaderAndSectionGlyphs(t *testing.T) {
+	prevAccent := accentColor
+	accentColor = ColorAccent
+	t.Cleanup(func() { accentColor = prevAccent })
+
+	config := &Config{}
+	medium, _ := getCachedFont(config, "medium")
+	if medium == nil {
+		t.Skip("no usable font in this environment")
+	}
+	f, panel, _ := renderToolsProbe(t, config, 0)
+	box := int32(medium.Height()) + 10
+
+	// Header: the glyph lives in the well left of the title.
+	hdrX, hdrY := panel.X+24, panel.Y+12
+	if n := f.countColor(ColorTextPrimary(), hdrX, hdrY, hdrX+box, hdrY+box); n < 12 {
+		t.Fatalf("header icon has %d glyph pixels, want the Tools glyph", n)
+	}
+
+	// The title starts right of the well instead of on the panel pad.
+	titleX := panel.X + 24 + box + 14
+	if n := f.countColor(ColorTextPrimary(), titleX, panel.Y+12, titleX+140, panel.Y+12+box); n == 0 {
+		t.Fatal("panel title is missing to the right of the header icon")
+	}
+
+	// The first section heading opens with its chip at the left of its band.
+	rows := toolsRows(config)
+	m := toolsPanelMetrics(config, rows)
+	g := toolsGridBuild(rows, m)
+	if len(g.lines) == 0 || g.lines[0].heading == "" {
+		t.Fatal("first grid line has no section heading")
+	}
+	headTop := panel.Y + m.headerH + g.lines[0].headingY
+	tint := appGridTileTint(strings.ToUpper(g.lines[0].heading))
+	if n := f.countColor(tint, panel.X+24, headTop, panel.X+64, headTop+m.sectionH); n < 8 {
+		t.Fatalf("section heading %q has %d glyph pixels, want its chip icon", g.lines[0].heading, n)
+	}
+}

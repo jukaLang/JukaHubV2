@@ -35,6 +35,40 @@ var netplayLastAddress string
 
 var netplayMenuRows = []string{"Host this game", "Join a game"}
 
+// netplayEnabledKey is the custom-map copy of the LAN Play switch. The typed
+// field is what the config file documents; the custom key is what survives in
+// jukauser.json, so an upgrade from a build without the switch keeps the
+// shipped default instead of reading "missing" as off.
+const netplayEnabledKey = "netplay_enabled"
+
+// netplayEnabled reports whether the Game Library should offer the LAN Play
+// panel. A nil config (early startup, tests) behaves as enabled.
+func netplayEnabled(config *Config) bool {
+	if config == nil {
+		return true
+	}
+	if raw, ok := customString(config.Variables.Custom, netplayEnabledKey); ok {
+		switch strings.ToLower(strings.TrimSpace(raw)) {
+		case "true", "1", "yes", "on":
+			return true
+		case "false", "0", "no", "off":
+			return false
+		}
+	}
+	return config.Variables.NetPlayEnabled
+}
+
+func setNetplayEnabled(config *Config, on bool) {
+	if config == nil {
+		return
+	}
+	config.Variables.NetPlayEnabled = on
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	config.Variables.Custom[netplayEnabledKey] = on
+}
+
 // netplayReadiness describes whether this console can be played over the LAN
 // right now: the emulator and the core are both resolved before the panel draws
 // a red row instead of failing at launch.
@@ -68,6 +102,13 @@ func netplayLocalAddress() string {
 func openNetplayForSelectedGame() bool {
 	game, ok := selectedLibraryGame()
 	if !ok {
+		return false
+	}
+	// The switch lives in Quick Settings, not here: the panel is a host/join
+	// dialog, and a disabled feature that opens to an empty panel would look
+	// broken. Saying where to turn it on costs one toast.
+	if !netplayEnabled(appConfig) {
+		ShowToast("LAN play is off · turn it on in Quick Settings", ToastKindInfo)
 		return false
 	}
 	openNetplayPanel(game)

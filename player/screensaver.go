@@ -568,7 +568,9 @@ func applyScreensaverTimeout(config *Config, seconds int) int {
 		seconds = 25
 	}
 	screensaverIdleTimeout = time.Duration(seconds) * time.Second
-	qs.cycle.Value = seconds
+	if len(qs.cycles) > 0 {
+		qs.cycles[qsCycleScreensaverRow].Value = seconds
+	}
 	if config != nil {
 		config.Variables.ScreensaverTimeout = seconds
 		config.Variables.Custom["screensaverTimeout"] = strconv.Itoa(seconds)

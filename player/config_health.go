@@ -222,40 +222,83 @@ func SanitizeCustomString(value string) string {
 
 // --- Atomic config persistence ---
 
-// AtomicWrite writes data to filename atomically using a temp file + rename.
-// It creates a backup of the existing file if one exists.
+// AtomicWrite writes data to filename atomically using a temp file + fsync +
+// rename, and keeps the previous content as filename.bak.
+//
+// The live file is *copied* to .bak rather than renamed there. Renaming it away
+// first leaves the path missing until the new file lands, so a power cut or a
+// full card between the two steps used to lose the config outright — which on a
+// handheld is the normal way the machine stops, not an edge case.
 func AtomicWrite(filename string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(filename)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("mkdirall %s: %w", dir, err)
 	}
 
-	// Create backup if file exists.
-	if _, err := os.Stat(filename); err == nil {
-		backup := filename + ".bak"
-		if err := os.Rename(filename, backup); err != nil {
-			return fmt.Errorf("backup failed: %w", err)
+	// Best-effort backup of the previous content. A failed backup is logged but
+	// must not block the save: a read-only .bak is not a reason to lose the
+	// change the user just made.
+	if previous, err := os.ReadFile(filename); err == nil {
+		if err := writeFileSynced(filename+".bak", previous, perm); err != nil {
+			Log().Warn("config backup could not be written", "path", filename+".bak", "err", err)
 		}
 	}
 
-	// Write to temp file in same directory (atomic rename requires same fs).
+	// Write to a temp file in the same directory: rename is only atomic within
+	// one filesystem.
 	tmp := filename + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return fmt.Errorf("write temp failed: %w", err)
-	}
-	if err := os.Chmod(tmp, perm); err != nil {
+	if err := writeFileSynced(tmp, data, perm); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("chmod temp failed: %w", err)
+		return fmt.Errorf("write temp failed: %w", err)
 	}
 	if err := os.Rename(tmp, filename); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename failed: %w", err)
 	}
+	syncDirectory(dir)
 	return nil
+}
+
+// writeFileSynced writes a file and fsyncs it before closing. Without the
+// fsync, a rename can land while the data blocks are still in the page cache;
+// a power cut then leaves the destination present but empty.
+func writeFileSynced(path string, data []byte, perm os.FileMode) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
+}
+
+// syncDirectory flushes the directory entry after the rename so the new name is
+// durable too. Best-effort: Windows cannot fsync a directory handle and some
+// filesystems refuse it; both keep the rename in their metadata journal.
+func syncDirectory(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
 
 // SaveConfig marshals config to JSON and writes it atomically.
 func SaveConfig(filename string, config *Config) error {
+	// Same rule as saveConfig: a generated Tools page layout must not reach the
+	// file (menutiles.go).
+	defer menuTilesDetachForSave(config)()
 	config.SchemaVersion = ConfigSchemaVersion
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {

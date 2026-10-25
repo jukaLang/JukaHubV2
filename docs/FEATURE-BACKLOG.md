@@ -14,6 +14,7 @@ device.
 | LAN play (link cable over Wi-Fi) | [netplay.go](../player/netplay.go) + [netplay_ui.go](../player/netplay_ui.go): **X** on a library game opens Host / Join. Hosting resolves RetroArch and a netplay core, prints this device's `ip:port` before launching, and starts `retroarch -L <core> <rom> --host --port N --nick X`; joining takes `ip[:port]` on the on-screen keyboard and starts `--connect`. Both sides need the same core and ROM, and the panel says so. | `netplay_test.go`, `netplay_ui_test.go` |
 | Save-state resume with auto-save | [savestate_resume.go](../player/savestate_resume.go) turns on RetroArch's `savestate_auto_save` and `savestate_auto_load` for a launch when the resolved launcher actually runs RetroArch. The edit is line-based, keeps a one-time `retroarch.cfg.jukahub-backup`, and never touches a standalone emulator. `savestateResume: false` opts out. | `savestate_resume_test.go` |
 | Fetch missing box art from the library | **L1** / **F** in the Games Library rescans and downloads covers for games without a local PNG, reusing the onboarding downloader. Recent 404s are cached in `game-art/.missing-art.json` for 30 days; worker-thread textures are reloaded on the render thread when the fetch finishes. | `artwork_fetch_test.go` |
+| Recordings screen for emulator captures | [recordings.go](../player/recordings.go) points RetroArch's `recording_output_directory` at a folder the hub knows (or honours the folder the user already set), through the same crash-safe config writer the save-state switches use, then lists the clips newest first. **Apps → Recordings** plays one with A in the existing video player (the Media button row has no room left: the IPStream chip is injected into it at runtime). `recordingsDir` renames the folder, `recordings: false` opts out. | `recordings_test.go` |
 | Library completeness and resumable fill-the-gaps | The library header draws a cover-completeness ring, each console row a meter, and the status line names the count. The fetch reports progress per game, can be stopped with the same action, and resumes from the files already on the card; the counts are recounted from disk after each run. | `game_library_test.go`, `artwork_fetch_test.go` |
 
 ## Already there (the list assumed these were missing)
@@ -53,10 +54,12 @@ What the implementation decided differently from the sketch above, and why:
   flags, so the port and nickname are pinned per launch and the user's config
   is left untouched. Public announce and the relay stay at whatever the user
   chose; nothing is announced for a LAN session started from the hub.
-- **No `NetPlayEnabled` gate.** The flag exists in [config.go](../player/config.go)
-  but nothing writes it, so a config that predates this feature would ship the
-  panel switched off with no way to switch it back on. It stays a documented
-  field; the gate should arrive together with a Settings row that writes it.
+- **`NetPlayEnabled` now has a switch.** Quick Settings' **LAN Play** row
+  writes the flag (custom key `netplay_enabled` in `jukauser.json`, so a config
+  that predates the feature keeps the shipped default, on), and the panel
+  refuses to open with a toast pointing at the row. The gate lives in
+  [netplay_ui.go](../player/netplay_ui.go); the shipped default is in
+  [jukaconfig.json](../player/jukaconfig.json).
 - **No QR yet.** A QR would have to encode an address the other device still
   has to type into RetroArch's own netplay menu, so the panel prints the
   address in full and remembers the last one instead. A QR that only pre-fills
@@ -69,19 +72,23 @@ What the implementation decided differently from the sketch above, and why:
 Still needs two machines on one network to verify end to end. The command
 builder, address parsing, core mapping and both preflights are unit-tested.
 
-### 2. In-game OSD, screenshots and recording
+### 2. In-game OSD, screenshots and recording (recording shipped)
 
 JukaHub cannot draw over an emulator: the emulator owns the framebuffer and
 JukaHub is blocked waiting for it to exit. An "in-game OSD from the hub" would
 never appear. The working design is to configure the emulator's own OSD:
 
-- Write a JukaHub-managed overlay preset and hotkey bindings
-  (`input_menu_toggle`, `input_screenshot`, `input_toggle_fast_forward`) into
-  `retroarch.cfg`, pointing at a JukaHub-owned overlay directory.
-- Set `recording_output_directory` to the card, so RetroArch's own record
-  toggle writes a file we can list afterwards; add a "Recordings" row to Media
-  that plays them through the existing video player.
-- Pin both with a test that reads the cfg writer, not a screenshot.
+- ✅ Set `recording_output_directory` to the card, so RetroArch's own record
+  toggle writes a file the hub can list; the **Recordings** screen plays them
+  through the existing video player. See
+  [RECORDINGS.md](RECORDINGS.md). Pinned by `recordings_test.go`, which reads the
+  cfg writer instead of taking a screenshot.
+- Still open: a JukaHub-managed overlay preset and the hotkey bindings
+  (`input_menu_toggle`, `input_screenshot`, `input_toggle_fast_forward`).
+  Deliberately not written yet — the binds are numeric button codes, and a
+  guess breaks controls on a device whose mapping nobody measured. The overlay
+  also needs art the repo does not ship. What is left is assets plus a profile
+  per device, not more plumbing.
 
 ### 3. Simple mode with a PIN
 
@@ -114,7 +121,9 @@ account or key (ScreenScraper, TheGamesDB) behind the same downloader.
   loads it. See [GAME_LIBRARY.md](GAME_LIBRARY.md#resume-and-auto-save).
 - A real switcher (suspend one game, start another, come back) still needs two
   emulator processes suspended on a 1 GB device, and named per-game save slots
-  need core-specific state handling. Treat those as experimental.
+  need core-specific state handling. Treat those as experimental. The design
+  options, hard constraints and a phased plan are in
+  [CHECKPOINTS.md](CHECKPOINTS.md); nothing there is implemented yet.
 
 ### 6. LED policies and haptics (haptics shipped)
 
@@ -127,11 +136,16 @@ account or key (ScreenScraper, TheGamesDB) behind the same downloader.
   rumble (a core runs in another process, so that needs a hook the launchers
   can call).
 
-### 7. Controller legend on first launch
+### 7. Controller legend on first launch (shipped)
 
-- The footer hint registry already knows every binding per scene; a first-run
-  overlay can reuse `footerHints` instead of a second hardcoded list, and the
-  same overlay belongs behind a `?` chip in Quick Settings for later reference.
+[controlslegend.go](../player/controlslegend.go) adds the card: it appears once
+when the setup tour is completed (a skipped tour does not interject), a
+"Controller Legend" row in Quick Settings reopens it any time, and B closes it.
+There is no second hardcoded list — section one is `footerHints` output for the
+scene it opened over; section two lists only the three global pad facts (Start
+menu, Select + Start quit, F1 → the keyboard shortcuts reference). Tests:
+`controlslegend_test.go` (content mirrors the footer, the Quick Settings row
+replacement, the tour reveal, and an offscreen render).
 
 ### 8. A curated store
 

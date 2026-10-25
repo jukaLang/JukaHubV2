@@ -18,8 +18,8 @@ REM ============================================================================
 REM ---------------- configuration ----------------
 set "OUT=JukaHub.exe"
 set "ARCH=x86_64-w64-mingw32"
-set "GO_MIN_MINOR=25"
-set "GO_FALLBACK=go1.25.0"
+set "GO_MIN_MINOR=26"
+set "GO_FALLBACK=go1.26.0"
 set "W64DK_VER=2.0.0"
 set "SDL2_VER=2.30.5"
 set "IMG_VER=2.8.2"

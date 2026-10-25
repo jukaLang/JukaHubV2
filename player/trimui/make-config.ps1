@@ -16,6 +16,7 @@ $cfg = Get-Content $Src -Raw | ConvertFrom-Json
 $keep = @(
     "Main",
     "Tube",
+    "Recordings",
     "Shorts",
     "Apps",
     "Favorites",

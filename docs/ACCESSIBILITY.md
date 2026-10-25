@@ -59,16 +59,25 @@ the other to see it.
 
 ## Button remapping
 
-Two swaps, applied once per controller event before any overlay or scene sees
-it, so the whole app agrees on what "select" means:
+A physical → logical keymap, applied once per controller event before any
+overlay or scene sees it, so the whole app agrees on what "select" means. The
+panel edits it through four rows:
 
+* **Button layout** — the preset: **Standard** or **Nintendo** (A/B and X/Y both
+  swapped). A single swap reads **Custom**, so the preset never lies about the
+  fine-grained rows below it.
 * **Swap A / B** — the Japanese button order, and the usual fix for a player who
   keeps pressing the wrong button out of muscle memory.
 * **Swap X / Y** — moves the secondary and tertiary actions.
+* **Select button** — **Default**, **Swapped** (Select sends Start and Start
+  sends Select, so both stay reachable) or **Disabled** (Select is swallowed;
+  Start still opens the menu).
 
-Only the four face buttons are remapped. The d-pad drives focus everywhere, so
-swapping it would make navigation impossible to learn; L1/R1, Start and Back are
-left alone for the same reason.
+The rows write the stored keymap (`a11y_keymap` in `jukauser.json`, e.g.
+`select:start,start:select` or `select:none`), and the same layer is what a new
+remappable button would use: no scene or overlay needs to change. The d-pad is
+deliberately never remapped — it drives focus everywhere, and swapping it would
+make navigation impossible to learn.
 
 ## One-handed mode
 

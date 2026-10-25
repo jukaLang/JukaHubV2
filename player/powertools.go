@@ -143,15 +143,6 @@ var powerRowRects []sdl.Rect
 var powerPanelRect sdl.Rect
 var powerOutputRect sdl.Rect
 
-func powerRowLines(page powerPage) int32 {
-	// The landing page keeps every tool visible with two-line rows; deeper
-	// pages get the third detail line and scroll when the font is large.
-	if page == powerPageMenu {
-		return 2
-	}
-	return 3
-}
-
 func powerVisibleRowLimit() int { return 8 }
 
 // ── Caches ─────────────────────────────────────────────────────────────────
@@ -211,7 +202,6 @@ func powerToolRows(config *Config) []powerToolRow {
 			{label: "Benchmark board", value: device, detail: "Local read/write results, optional online feed", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenBench, enabled: true},
 			{label: "Memory scanner", value: memoryMenuValue(), detail: "Scan and edit a running game's RAM, then write a value back", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenMemory, enabled: true},
 			{label: "Controller test", value: "Sticks · triggers · buttons", detail: "Raw axis values, drift verdicts and a button check", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenCtrlDiag, enabled: true},
-			{label: "Close", value: "Back to the app", hint: hintLine(FooterHint{"B", "Close"}), action: powerActionClose, enabled: true},
 		}
 	case powerPageFiles:
 		rows := make([]powerToolRow, 0, len(powerTools.files)+1)
@@ -229,7 +219,7 @@ func powerToolRows(config *Config) []powerToolRow {
 		if len(rows) == 0 {
 			rows = append(rows, powerToolRow{label: "No app files found", value: "Start JukaHub once", detail: "jukauser.json and logs appear after the first save", enabled: false})
 		}
-		return append(rows, powerToolRow{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true})
+		return rows
 	case powerPageScripts:
 		builtins := powerBuiltinScriptCount()
 		rows := make([]powerToolRow, 0, len(powerTools.scripts)+2)
@@ -258,7 +248,7 @@ func powerToolRows(config *Config) []powerToolRow {
 			action:  powerActionSaveClipboardScript,
 			enabled: true,
 		})
-		return append(rows, powerToolRow{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true})
+		return rows
 	case powerPageSync:
 		return []powerToolRow{
 			{label: "Source folder", value: powerShortPath(powerTools.syncSource), detail: "Copy a folder path to the clipboard first", hint: hintLine(FooterHint{"A", "Set"}), action: powerActionSetSyncSource, enabled: true},
@@ -266,7 +256,6 @@ func powerToolRows(config *Config) []powerToolRow {
 			{label: "Dry run", value: "Preview changes", detail: "rsync -azn --itemize-changes", hint: hintLine(FooterHint{"A", "Preview"}), action: powerActionRsyncDryRun, enabled: true},
 			{label: "Sync now", value: "Copy changed files", detail: "No --delete: the target never loses extra files", hint: hintLine(FooterHint{"A", "Sync"}), action: powerActionRsyncNow, enabled: true},
 			{label: "Syncthing status", value: "Check localhost:8384", detail: "Reports binary and web UI without an API key", hint: hintLine(FooterHint{"A", "Check"}), action: powerActionSyncthing, enabled: true},
-			{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true},
 		}
 	case powerPageConfigs:
 		rows := []powerToolRow{{label: "Snapshot now", value: "jukauser.json", detail: "A timestamped copy appears in power-config-history", hint: hintLine(FooterHint{"A", "Save"}), action: powerActionSnapshotNow, enabled: true}}
@@ -284,7 +273,7 @@ func powerToolRows(config *Config) []powerToolRow {
 		if len(powerTools.snapshots) == 0 {
 			rows = append(rows, powerToolRow{label: "No snapshots yet", value: "Saves create them automatically", detail: "Install this build and change a setting once", enabled: false})
 		}
-		return append(rows, powerToolRow{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true})
+		return rows
 	case powerPageBench:
 		url := powerBenchRemoteURL()
 		online := "Set powerBenchURL"
@@ -326,12 +315,11 @@ func powerToolRows(config *Config) []powerToolRow {
 			rows = append(rows, powerToolRow{
 				label:   e.Device,
 				value:   fmt.Sprintf("%.1f MB/s", powerBenchScore(e)),
-				detail:  fmt.Sprintf("write %.1f · read %.1f · %s", e.Write, e.Read, e.At),
-				hint:    e.Kind,
+				detail:  fmt.Sprintf("%s · write %.1f · read %.1f · %s", e.Kind, e.Write, e.Read, e.At),
 				enabled: false,
 			})
 		}
-		return append(rows, powerToolRow{label: "Back", value: "Power tools", hint: "B", action: powerActionBack, enabled: true})
+		return rows
 	}
 	return nil
 }
@@ -1092,22 +1080,35 @@ func powerPageTitle(page powerPage) (string, string) {
 	return "Power tools", "Files, sync and device diagnostics"
 }
 
+// powerFooter lists the page-level actions no row carries: the way back, plus
+// a page-wide action such as saving a snippet. A row's own action is announced
+// for the focused row only; painting "A Open" on all eight rows turned the list
+// into a wall of pills.
 func powerFooter(page powerPage) string {
 	switch page {
 	case powerPageMenu:
-		return hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Close"})
-	case powerPageFiles:
-		return hintLine(FooterHint{"A", "View"}, FooterHint{"B", "Back"})
+		return hintLine(FooterHint{"B", "Close"})
 	case powerPageScripts:
-		return hintLine(FooterHint{"A", "Run"}, FooterHint{"X", "Delete"},
-			FooterHint{"Y", "Save to Clipboard"}, FooterHint{"B", "Back"})
-	case powerPageConfigs:
-		return hintLine(FooterHint{"A", "Diff"}, FooterHint{"X", "Restore"}, FooterHint{"B", "Back"})
+		return hintLine(FooterHint{"Y", "Save to Clipboard"}, FooterHint{"B", "Back"})
 	case powerPageOutput:
 		return hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"X", "Hex"},
 			FooterHint{"Y", "JSON"}, FooterHint{"B", "Back"})
 	}
-	return hintLine(FooterHint{"A", "Select"}, FooterHint{"B", "Back"})
+	return hintLine(FooterHint{"B", "Back"})
+}
+
+// powerFooterFor joins the focused row's own hint with the page-level actions.
+func powerFooterFor(page powerPage, rows []powerToolRow, cursor int) string {
+	parts := make([]string, 0, 2)
+	if cursor >= 0 && cursor < len(rows) {
+		if hint := strings.TrimSpace(rows[cursor].hint); hint != "" {
+			parts = append(parts, hint)
+		}
+	}
+	if rest := strings.TrimSpace(powerFooter(page)); rest != "" {
+		parts = append(parts, rest)
+	}
+	return strings.Join(parts, "   ")
 }
 
 func powerPageSize(page powerPage, rowH int32) (int32, int32) {
@@ -1115,7 +1116,7 @@ func powerPageSize(page powerPage, rowH int32) (int32, int32) {
 	if panelW > screenWidth-40 {
 		panelW = screenWidth - 40
 	}
-	header := int32(86)
+	header := int32(96)
 	footer := int32(36)
 	var panelH int32
 	if page == powerPageOutput {
@@ -1125,10 +1126,16 @@ func powerPageSize(page powerPage, rowH int32) (int32, int32) {
 		if n > powerVisibleRowLimit() {
 			n = powerVisibleRowLimit()
 		}
+		// Fit the panel to the rows it can actually show: capping the height
+		// afterwards left dead space under the last row, because the renderer
+		// had already decided on fewer rows than the size asked for.
+		if fit := int((screenHeight - 24 - header - footer - 16) / rowH); fit < n {
+			n = fit
+		}
 		if n < 1 {
 			n = 1
 		}
-		panelH = header + footer + int32(n)*rowH + 8
+		panelH = header + footer + int32(n)*rowH + 16
 	}
 	if panelH > screenHeight-24 {
 		panelH = screenHeight - 24
@@ -1207,13 +1214,11 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 	const rowPad = int32(9)
-	rowLines := powerRowLines(powerTools.page)
-	var rowH int32
-	if rowLines == 3 {
-		rowH = 2*rowPad + smallH + 2 + medH + 2 + smallH
-	} else {
-		rowH = 2*rowPad + smallH + 2 + medH
-	}
+	// Two lines per row, whatever the page: the tool's name set in the larger
+	// face with its value a quiet right-hand note, and the explanation under it.
+	// The old menu inverted that — a small name above a large description —
+	// which read as a stack of labels rather than a list of tools.
+	rowH := 2*rowPad + medH + 2 + smallH
 	panelW, panelH := powerPageSize(powerTools.page, rowH)
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
@@ -1250,7 +1255,7 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 	if powerTools.cursor < 0 {
 		powerTools.cursor = 0
 	}
-	headerH := int32(86)
+	headerH := int32(96)
 	footerH := int32(36)
 	limit := int((panelH - headerH - footerH - 8) / rowH)
 	if limit > powerVisibleRowLimit() {
@@ -1284,48 +1289,74 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 		r := sdl.Rect{X: panelX + padX, Y: y, W: rowW, H: rowH - 8}
 		powerRowRects[i] = r
 		focused := i == powerTools.cursor
-		rowBg := WithAlpha(ColorSurfaceRow, 190)
+		// Only the selected row is filled. Seven tinted slabs read as a stack
+		// of cards; a flat list with one lit row reads as a menu.
 		if focused {
-			rowBg = WithAlpha(focusColor, 46)
-		}
-		if !row.enabled {
-			rowBg = WithAlpha(ColorSurfaceRow, 110)
-		}
-		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, rowBg)
-		if focused {
+			fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, WithAlpha(focusColor, 42))
 			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
+			fillRoundedRect(renderer, r.X+2, r.Y+10, 3, r.H-20, 2, focusColor)
 		}
-		labelColor := ColorTextSecondary()
-		valueColor := ColorTextPrimary()
-		hintColor := ColorTextSecondary()
+		labelColor := ColorTextPrimary()
+		valueColor := ColorTextSecondary()
+		detailColor := ColorTextTertiary()
 		if !row.enabled {
 			labelColor = ColorTextTertiary()
-			valueColor = ColorTextTertiary()
-			hintColor = ColorTextTertiary()
 		} else if focused {
-			hintColor = focusColor
+			detailColor = ColorTextSecondary()
 		}
-		labelY := r.Y + rowPad
-		valueY := labelY + smallH + 2
-		renderText(renderer, config, font, ellipsize(font, row.label, r.W-190), labelColor, r.X+16, labelY)
-		renderText(renderer, config, medium, ellipsize(medium, row.value, r.W-190), valueColor, r.X+16, valueY)
-		if rowLines == 3 && row.detail != "" {
-			detailY := valueY + medH + 2
-			renderText(renderer, config, font, ellipsize(font, row.detail, r.W-16), ColorTextTertiary(), r.X+16, detailY)
+
+		// The value is a note on the right; the label keeps the left edge and
+		// as much width as it needs, so a long name is never squeezed by it.
+		valueW := int32(0)
+		if row.value != "" {
+			vw, _, _ := font.SizeUTF8(row.value)
+			valueW = int32(vw)
+			if maxV := rowW * 2 / 5; valueW > maxV {
+				valueW = maxV
+			}
 		}
-		if row.hint != "" {
-			hw, _, _ := font.SizeUTF8(row.hint)
-			renderText(renderer, config, font, row.hint, hintColor, r.X+r.W-int32(hw)-16, valueY)
+		labelW := r.W - 32 - valueW
+		if valueW > 0 {
+			labelW -= 16
+		}
+		if labelW < 40 {
+			labelW = 40
+		}
+		renderText(renderer, config, medium, ellipsize(medium, row.label, labelW), labelColor, r.X+16, r.Y+rowPad)
+		if valueW > 0 {
+			value := ellipsize(font, row.value, valueW)
+			vw, _, _ := font.SizeUTF8(value)
+			renderText(renderer, config, font, value, valueColor,
+				r.X+r.W-16-int32(vw), r.Y+rowPad+(medH-smallH)/2)
+		}
+		if row.detail != "" {
+			detailY := r.Y + rowPad + medH + 2
+			if detailY+smallH > r.Y+r.H {
+				detailY = r.Y + r.H - smallH
+			}
+			renderText(renderer, config, font, ellipsize(font, row.detail, r.W-32), detailColor, r.X+16, detailY)
 		}
 	}
-	// Scroll markers make a clipped list obvious on a handheld.
-	if powerTools.scroll > 0 {
-		renderText(renderer, config, font, "▲", ColorTextTertiary(), panelX+panelW-padX-int32(font.Height()), panelY+62)
+
+	// A thin scrollbar replaces the ▲/▼ glyphs: it says the same thing without
+	// adding two loose marks to the panel.
+	if maxScroll := len(rows) - limit; maxScroll > 0 {
+		trackX := panelX + panelW - 9
+		trackY := panelY + headerH
+		trackH := panelH - headerH - footerH - 4
+		if trackH > 0 {
+			fillRoundedRect(renderer, trackX, trackY, 3, trackH, 2, WithAlpha(ColorBorder, 120))
+			thumbH := trackH * int32(limit) / int32(len(rows))
+			if thumbH < 24 {
+				thumbH = 24
+			}
+			thumbY := trackY + (trackH-thumbH)*int32(powerTools.scroll)/int32(maxScroll)
+			fillRoundedRect(renderer, trackX, thumbY, 3, thumbH, 2, WithAlpha(accentColor, 200))
+		}
 	}
-	if powerTools.scroll+limit < len(rows) {
-		renderText(renderer, config, font, "▼", ColorTextTertiary(), panelX+panelW-padX-int32(font.Height()), panelY+panelH-58)
-	}
-	footer := powerFooter(powerTools.page)
+
+	// The footer names what the focused row does, so no row needs a pill.
+	footer := powerFooterFor(powerTools.page, rows, powerTools.cursor)
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)

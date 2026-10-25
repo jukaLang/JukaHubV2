@@ -13,6 +13,113 @@ For anything older, the git log and the
 
 ### Added
 
+- Hold-to-repeat on the D-pad outside the on-screen keyboard. The keyboard had
+  polled the pad for a while, but every other screen needed one press per row,
+  so walking a long library was one tap per game. `navrepeat.go` now watches the
+  held direction and, after 320 ms, re-queues the same D-pad press through SDL at
+  a 70 ms cadence — the existing router still decides what a repeat means, so
+  overlays, modals, the video player and the link picker all behave as if a
+  person tapped repeatedly. The keyboard keeps its own highlight repeat, the
+  analog stick's repeat is untouched, and the accessibility slow-repeat setting
+  doubles both intervals (`navrepeat_test.go`).
+- More of the CSS a real page ships, in the text browser: `line-height`
+  (unitless, percentage and length), `border-radius`, `opacity`, gradients
+  (`background-image`/`background`), `list-style-type`
+  (`decimal`, `lower/upper-alpha`, `lower/upper-roman`, `disc`, `circle`,
+  `square`, `none`, including on the list element so a nav menu's bullets
+  really disappear), and the `margin`/`padding` shorthands now fill all four
+  sides instead of only the vertical ones
+  ([player/webpage_css.go](player/webpage_css.go)). Properties the row grid
+  cannot honour are approximated rather than dropped: a gradient is drawn as
+  the average of its stops, `opacity` is blended into the painted colours,
+  `border-radius` is clamped to half the box, and `line-height` becomes extra
+  row slots. See [docs/BROWSER.md](docs/BROWSER.md#what-it-can-do).
+- Cookies in the text browser. Every browser request — the page, its
+  stylesheets, images and scripts, and each redirect hop inside a load — now
+  shares one in-memory cookie jar, so a consent answer, an age gate or a
+  redirect that only sticks with a session cookie actually works
+  ([player/browsercookies.go](player/browsercookies.go)). The jar is scoped by
+  host, path, `Secure` and expiry like a browser's, is never offered to another
+  site, and is never written to the card: the reader cannot submit a form, so a
+  cookie file would outlive its usefulness and become a privacy surface. Feeds,
+  update checks and the podcast fetcher keep their own clients, so a page's
+  cookie cannot ride along on an unrelated request. See
+  [docs/BROWSER.md](docs/BROWSER.md#cookies).
+- A **Recordings** screen for the captures an emulator writes. Before a
+  RetroArch launch the hub now points `recording_output_directory` at a folder
+  it knows (`Recordings` on the card, or `recordingsDir` in the config) through
+  the same crash-safe writer the save-state switches use, so the emulator's own
+  record toggle and the hub agree on one folder. A folder the user set in
+  `retroarch.cfg` is honoured and never rewritten, `recordings: false` keeps the
+  hub out of the file, and the hotkey itself stays RetroArch's — guessing button
+  codes would break controls on a device whose mapping we have not measured.
+  The screen opens from **Apps → Recordings** (the Media button row is full —
+  the IPStream chip is injected into it at runtime), lists the clips newest
+  first, and plays the highlighted one with A in the existing video player
+  ([player/recordings.go](player/recordings.go)).
+- Conditional requests for the shared fetchers: `httpcache.go` keeps the last
+  successful body next to its ETag / Last-Modified (bounded at 64 URLs and
+  1 MiB per body, process-lifetime by design) and the release-manifest fetch
+  plus the podcast/ticker text fetch now send those validators, answering an
+  unchanged resource from the cache on a 304 instead of downloading it again.
+  A server that answers 304 for a URL this process holds no copy of is reported
+  as an error rather than being mistaken for an empty document, a newer body
+  always replaces the cached one, and `Cache-Control: no-store` is honoured
+  (`httpcache_test.go`).
+- One-file support export: **Patch → Export diagnostics** now writes the
+  redacted report *and* the last few hundred log lines to
+  `reports/diagnostics-<timestamp>.txt`, which is the file to attach to a bug
+  report ([player/diagnostics_bundle.go](player/diagnostics_bundle.go)).
+  Credentials (tokens, API keys, passwords, bearer headers, URL userinfo) and
+  home-directory account names are scrubbed from the log first, and the bundle
+  says what was removed and that the user should read it before sharing. The QR
+  and prefilled-issue flows keep the short report, which has to fit in a URL.
+- Architecture decision records: [docs/adr/](docs/adr/) now holds the decisions
+  other code has to live with, with the process itself
+  ([0000](docs/adr/0000-record-architecture-decisions.md)), the
+  physical → logical keymap ([0001](docs/adr/0001-physical-logical-keymap.md))
+  and renderer-owned texture caches
+  ([0002](docs/adr/0002-renderer-owned-caches.md)); CONTRIBUTING says when one
+  is expected.
+- A documentation link check in the test suite
+  ([player/docs_links_test.go](player/docs_links_test.go)): every relative
+  Markdown link in the checkout must resolve, so a renamed page fails the build
+  instead of shipping a dead pointer. It found four broken links on the way in,
+  including the Android-on-A133P study the Android docs cite (restored as
+  [docs/ANDROID-GAMMAOS.md](docs/ANDROID-GAMMAOS.md)).
+- Component versions in Patch (and in the diagnostics report): a new row lists
+  the running app, launcher script, design config, helper tools and installed
+  packages with their SHA-256 digests, so a bug report names exact builds.
+  "Copy report" puts the full 64-character hashes on the clipboard; the
+  exported diagnostics carries the same section
+  ([player/componentreport.go](player/componentreport.go)).
+- A real button-remapping layer. The accessibility panel still has the A/B and
+  X/Y swaps, plus a "Button layout" preset (Nintendo order sets both) and a
+  "Select button" row that can move Select to Start or disable Select while
+  Start keeps opening the menu. Under the rows is a general physical → logical
+  keymap stored as `a11y_keymap` (`select:start,start:select`, `select:none`),
+  applied once before dispatch, so the next remappable button is data rather
+  than a scene change ([player/a11y.go](player/a11y.go)).
+- LED policies: the LED sync is no longer audio-only. Quick Settings' "LED
+  Mode" cycles Audio / Battery / Charging / Temperature / Custom; battery runs
+  red → green across 10–80%, charging breathes and goes dark unplugged,
+  temperature runs green → red across 45–80 °C, and Custom uses
+  `led_color` (`#rrggbb`) with an optional `led_effect` of `pulse`
+  ([player/ledsync.go](player/ledsync.go)).
+- LAN Play has a switch. Quick Settings' "LAN Play" row writes the previously
+  dead `netPlayEnabled` flag, and the Game Library explains where to turn it on
+  instead of opening a disabled panel. A config from a build without the switch
+  keeps the shipped default (on) because the user copy is only written when the
+  row is used ([player/netplay_ui.go](player/netplay_ui.go)).
+
+- Controller legend ([player/controlslegend.go](player/controlslegend.go)): a
+  first-run card that appears once the setup tour is completed, and stays
+  reachable from a new "Controller Legend" row in Quick Settings. Its rows are
+  generated live from the `footerHints` registry — the same audited bindings
+  the footers draw — for the scene it opened over, plus the three global pad
+  facts (Start menu, the Select + Start quit chord, F1). B closes it; F1 hands
+  over to the full keyboard shortcuts reference.
+
 - AndroidPak loader wiring for a real NDK APK's first run. JukaHub now hands
   the AndroidRT loader form what `launch.sh` used to arrange only for
   itself: `ANDROIDPAK_SHIMS` (the runtime's `shims/` directory, preloaded
@@ -267,6 +374,32 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
 
 ### Fixed
 
+- Config writes are crash-safe now. `AtomicWrite` previously renamed the live
+  file to `.bak` *before* writing the replacement and never fsynced, so a power
+  cut (the normal way a handheld stops) between those steps could leave the
+  config missing or empty. It now copies the previous content to `.bak`, writes
+  the temp file with an fsync, renames it over the live path and flushes the
+  directory ([player/config_health.go](player/config_health.go)). A damaged
+  `jukauser.json` is also recovered from `.bak` and written back, with a one-time
+  toast explaining what happened, instead of silently starting from defaults and
+  dropping the theme, keymap and every other preference
+  ([player/extras.go](player/extras.go)).
+- A LAN Play launch that cannot start RetroArch now keeps the underlying cause,
+  so the failure dialog suggests reinstalling the launcher instead of falling
+  back to the generic hint. Errors are wrapped with `%w` throughout the player
+  (netplay, tools, crypto, system control, the Windows runtime installer and
+  the patch resolver), and
+  [player/errorwrap_audit_test.go](player/errorwrap_audit_test.go) fails on a
+  new `%v` wrap instead of relying on review.
+- The intermittent `SDL_RenderReadPixels` crash in the test suite is fixed at
+  its cause. The static-layer caches (on-screen keyboard, chat, video overlay)
+  kept textures after their renderer was destroyed; a later probe then reused
+  or freed a dangling pointer and corrupted SDL's allocator. The caches now
+  record their owning renderer, drop a foreign texture without touching it, and
+  the test renderer releases them before destroying its renderer
+  ([player/vkeyboard.go](player/vkeyboard.go),
+  [player/renderer_cache_owner_test.go](player/renderer_cache_owner_test.go)).
+
 - One touch tap on a video card in the browser resolved the video twice.
   SDL synthesizes its own mouse press at finger-down, so a page's play card
   was hit by that ghost click plus the app's replayed tap at finger-up — two
@@ -319,6 +452,29 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
 
 ### Changed
 
+- The classic Tools menu (the config's `Misc` scene) is a launcher page instead
+  of a wall of wide buttons: a titled header with the Wi-Fi address, section
+  headings (SYSTEM, DIAGNOSTICS, UPDATES & TRANSFER), and icon tiles sized to
+  the content panel. The buttons are grouped by what they do, so a custom menu
+  still lands in a sensible section, and each tile gets its own glyph
+  (terminal, clock, gauge, drive, log, bin, update, transfer). The element
+  order and triggers are untouched, so focus memory, D-pad navigation, hover
+  and clicks all follow the tiles
+  ([player/menutiles.go](player/menutiles.go)). The layout is generated in
+  memory at scene entry and detached again for a config save, so
+  `jukaconfig.json` keeps the geometry its author placed; a panel too short for
+  the page (for example 960×544) keeps the authored buttons rather than drawing
+  tiles over the footer.
+- The disk pie chart only refreshes while its screen is up. The poller used to
+  statfs the card every five seconds for the whole session, keeping the CPU
+  awake for a chart nobody was looking at; it now skips while the active scene
+  has no `piechart` element and the scene takes a fresh reading on entry
+  (`hardware.go`, `hardware_poll_test.go`).
+- Element `width`/`height` values with surrounding whitespace are accepted, so a
+  padded number from the XML dialect behaves like the same number in JSON. A
+  `px` suffix, a fraction and a negative size still fall back to the element's
+  default, and [docs/CONFIGURATION.md](docs/CONFIGURATION.md#elements) says so
+  instead of leaving it to be discovered ([player/core.go](player/core.go)).
 - The shell now prefers the device's GLES2 GPU renderer on handheld targets
   (the A133P's PowerVR GE8300 where the vendor stack provides it) and logs the
   active video driver, renderer name, acceleration mode and maximum texture
@@ -361,3 +517,30 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   the rest of an entering screenful is queued through the prefetch workers and
   fills in over the following frames instead of one frame stuttering
   (`thumbstore.go`, covered in `thumbdecode_test.go`).
+- The Tools panel reads like the rest of the shell: its header opens with the
+  same tools glyph as the Home tile, and each section heading ("FTP & IP",
+  "Watch together", "System & updates") leads with a tinted chip carrying that
+  group's glyph, so the grid can be scanned by shape before the small-caps
+  label is read. A group the build has not seen yet falls back to the Tools
+  glyph instead of rendering a bare heading. A tile row cut by the panel edge
+  is drawn clipped like the Apps grid instead of hidden, which used to leave a
+  blank band at the top of a scrolled panel, and a heading is never left as a
+  fragment peeking above the footer (`toolsui.go`, pinned by
+  `toolsui_render_test.go`).
+- The browser's D-pad model is reachable on real gamepads and follows the page:
+  **L3** (left stick click) cycles scroll ⇄ link mode alongside Tab, the toggle
+  toast names both keys, and Up/Down in link mode now walk the nearest link on
+  the adjacent visual row instead of flat anchor order, so a two-column page no
+  longer throws the cursor across the screen. Left/Right keep reading order and
+  a one-row page stays put (`browserLinkRowStep` in `browser.go`, pinned by
+  `browser_test.go`).
+- Power tools reads as a list instead of a stack of labels. Each row now leads
+  with the tool's name in the larger face, the value ("20 snapshots", the sync
+  target) sits quietly on the right, and the explanation runs underneath; the
+  old menu put a small name above a large description, which inverted the
+  hierarchy. The per-row `A Open` pills, the ▲/▼ scroll marks and the
+  `Close`/`Back` rows are gone: the footer names what the focused row does, a
+  thin scrollbar shows the way down, and **B** is the only way out. The panel is
+  now sized to the rows it actually shows, so the capped height no longer left
+  a dead band under the last row (`powertools.go`, pinned by
+  `powertools_ui_test.go`).

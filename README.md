@@ -2,7 +2,7 @@
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/dea0cf4b-3799-41d9-8f2a-b4fd2a270b15/deploy-status)](https://generate.jukalang.com)
 [![Latest release](https://img.shields.io/github/v/release/jukaLang/JukaHubV2?sort=semver)](https://github.com/jukaLang/JukaHubV2/releases/latest)
-[![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://golang.org/dl/)
+[![Go Version](https://img.shields.io/Go-1.27+-00ADD8?logo=go)](https://golang.org/dl/)
 [![SDL2](https://img.shields.io/badge/SDL2-2.0+-3A75C0?logo=sdl)](https://www.libsdl.org/)
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2/badge)](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2)
@@ -24,7 +24,8 @@ to all of that: the walkthrough is [docs/TOUR.md](docs/TOUR.md).
 [Web builder](https://generate.jukalang.com) ·
 [Discord](https://discord.gg/R9qgJjh5jG) ·
 [Controls](docs/CONTROLS.md) ·
-[Developer guide](docs/DEVELOPMENT.md)
+[Developer guide](docs/DEVELOPMENT.md) ·
+[Dependencies](docs/DEPENDENCIES.md)
 
 ---
 
@@ -50,6 +51,32 @@ it back.
 * **Extend** — signed packages from a repository with rollback, and plugins.
 
 Most of these have a page in the [documentation table](#documentation) below.
+
+## Why JukaHub
+
+Four things separate it from the other TrimUI frontends, and each one has a page
+because it is a design decision rather than a feature bullet.
+
+* **The interface is data.** Every screen is `jukaconfig.json` — elements,
+  bounds, triggers and theme tokens — so a layout can be changed without
+  touching Go. The [web builder](https://generate.jukalang.com) edits the same
+  file the device reads; see [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+* **Updates work like a package manager.** A signed repository, staged
+  installs, SHA-256 *and* Ed25519 verification, a rollback copy and an
+  interrupted-install recovery — not "download the zip and hope". See
+  [docs/PACKAGES.md](docs/PACKAGES.md) and [Updating](#updating).
+* **The UI is tested, not just the logic.** Scene audits, offscreen render
+  probes and PNG dumps catch layout drift headlessly (`JUKAHUB_SCENE_DUMP_DIR`),
+  which is how several of the bugs in
+  [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md) were found before a user hit them.
+* **Breadth without a second app.** Watch party, PS4/PS5 streaming, the video
+  and music players, FTP/SFTP, plugins, the accessibility panel and opt-in
+  telemetry all ship in the same folder, on top of the stock firmware.
+
+The comparison that produced this list — item by item against BrickOS, including
+what is deliberately *not* copied — is in
+[docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md). What is still missing is listed
+honestly in [docs/FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md).
 
 ## Install on a TrimUI Smart Pro
 
@@ -423,9 +450,12 @@ Small, well-scoped work is the best way in: issues labelled
 [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue)
 come straight from [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 [FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md), and both list what is already
-shipped so you do not rebuild it. The 30/60/90 plan for project health lives
-in [ROADMAP.md](ROADMAP.md); setup, test commands and the commit rules are
-in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
+shipped so you do not rebuild it. Two plans cover the rest and do not overlap:
+[ROADMAP.md](ROADMAP.md) is the 30/60/90 plan for the *project* (GitHub setup,
+CI, releases, contributor path), and
+[player/MODERNIZATION.md](player/MODERNIZATION.md) is the *app's* engineering
+status, phase by phase, verified against the code. Setup, test commands and the
+commit rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
 [Discord](https://discord.gg/R9qgJjh5jG) and in
 [Discussions](https://github.com/jukaLang/JukaHubV2/discussions); support
 paths are listed in [SUPPORT.md](SUPPORT.md).
@@ -448,6 +478,7 @@ paths are listed in [SUPPORT.md](SUPPORT.md).
 | [Wi-Fi](docs/WIFI.md) | the network picker: scanning, joining, saved networks, troubleshooting |
 | [Games Library](docs/GAME_LIBRARY.md) | console-by-console ROM browser, box art, launcher resolution, Continue list |
 | [Save Manager](docs/SAVE_MANAGER.md) | snapshots of emulator save folders, restore, Syncthing setup, phone resume bundle |
+| [Recordings](docs/RECORDINGS.md) | captures the emulator writes: one folder for both sides, listed and playable, and what an in-game overlay cannot do |
 | [Memory scanner](docs/MEMORY.md) | RAM search and edit for a running game: scan, narrow, write, and what it cannot do |
 | [Controller test](docs/CONTROLLER_TEST.md) | raw stick values, drift verdicts and a button check for a drifting pad |
 | [Time-lapse](docs/TIMELAPSE.md) | one frame every few seconds of a playthrough, assembled into a short mp4 on exit |
@@ -456,9 +487,13 @@ paths are listed in [SUPPORT.md](SUPPORT.md).
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
 | [Feature slate](docs/FEATURE-SLATE.md) | the 36-idea slate ranked by cost, fit and device risk, with the next four |
+| [Roadmap](ROADMAP.md) | the 30/60/90 project plan: GitHub mechanics, CI, releases, contributor path |
+| [Modernization plan](player/MODERNIZATION.md) | the player's engineering status by phase, verified against the code on every pass |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
 | [Architecture](docs/ARCHITECTURE.md) | the three runtimes (player, builder, patch repo), where a change lands |
 | [Contributing](CONTRIBUTING.md) | local setup, tests, what to commit |
+| [Code style](docs/STYLE.md) | naming, comments, config keys, the device budget, test expectations |
+| [Checkpoints design](docs/CHECKPOINTS.md) | the quick-switch/save-slot milestone: options, constraints, phases (not implemented) |
 | [TrimUI packaging](player/trimui/README.md) | device package, install and troubleshooting notes |
 | [Security](SECURITY.md) | secret storage and the security model |
 
@@ -467,5 +502,6 @@ paths are listed in [SUPPORT.md](SUPPORT.md).
 AGPL-3.0 — see [LICENSE](LICENSE).
 
 Thanks to Nevrdid for finding and documenting bugs, Arthur Gregorio for Go
-guidance, StarDrive and DigestPrism for supporting the app, and everyone in the
-Juka Discord for making it possible.
+guidance, StarDrive and DigestPrism for supporting the app, @Dio for
+contributions to improving key security, and everyone in the Juka Discord for
+making it possible.

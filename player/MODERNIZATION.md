@@ -1,7 +1,7 @@
 # JukaHubV2 Modernization Plan
 
 Status of every item below, checked against the code in this tree on
-**2026-10-24** (go1.27.2 windows/amd64, SDL2 from `player/.sdl2`):
+**2026-10-25** (go1.27.2 windows/amd64, SDL2 from `player/.sdl2`):
 
 ```
 go vet ./...      # exit 0
@@ -14,6 +14,17 @@ Legend: **✅ shipped** (code exists and is exercised by tests), **🟡 partial*
 Library choices and measured numbers live in
 [LIBRARY-EVALUATION.md](LIBRARY-EVALUATION.md).
 
+**Scope, so this stays one list instead of two.** This file is the engineering
+status of the player: what the code does today, checked against the tree on every
+pass. Project plumbing — GitHub settings, CI jobs, release signing, contributor
+ladders, coverage gating — is [../ROADMAP.md](../ROADMAP.md), because those are
+facts about the repository rather than the app. The idea lists under `docs/`
+([FEATURE-SLATE](../docs/FEATURE-SLATE.md),
+[FEATURE-BACKLOG](../docs/FEATURE-BACKLOG.md),
+[IMPROVEMENTS](../docs/IMPROVEMENTS.md)) are inputs: an idea becomes work when it
+is adopted here with a status and a piece of code evidence, or into the roadmap
+as a process item.
+
 ## Executive Summary
 
 This document outlines the modernization of JukaHubV2 for production use on **Trimui Smart Pro** (1280×720, ARM64, 1GB RAM) and **Windows** (x64, resizable). The goal is to create a controller-first, responsive, reliable handheld launcher while preserving the existing Go + SDL2 runtime and config-driven architecture.
@@ -24,12 +35,12 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 |-------|------|---------|-------------|
 | 2. Architecture | 27 | 5 | 2 |
 | 3. Async & performance | 12 | 3 | 6 |
-| 4. Reliability | 24 | 1 | 1 |
+| 4. Reliability | 25 | 1 | 0 |
 | 5. Features | 10 | 4 | 2 |
 | 6. Testing | 11 | 1 | 0 |
 | 7. Web builder | 5 | 2 | 5 |
-| 8. Handheld polish | 21 | 0 | 13 |
-| 9. Browser & handheld input | 8 | 0 | 4 |
+| 8. Handheld polish | 24 | 0 | 10 |
+| 9. Browser & handheld input | 10 | 0 | 2 |
 
 ## Current State Audit
 
@@ -167,11 +178,18 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       (`uiStateBlock`).
 - [x] ✅ `LoadingSkeleton` — `UILoadingSkeleton` with pulse phase.
 - [ ] 🟡 `CategoryTile` — the home renderer has a card recipe, but it is not a
-      reusable component.
+      reusable component. The Tools page (`menutiles.go`) now draws its
+      shortcut tiles from the same recipe, so the next step is one shared
+      `UICategoryTile` (icon well + wrapped label + status dot) that the home
+      grid and the page both call, instead of two copies of the drawing code.
 - [ ] 🟡 `IconButton` — icon geometry helpers exist (`launcher.go`), but buttons are
       still drawn inline per scene.
 - [ ] ⬜ Create `AppBar` component — screen headers are drawn inline by scenes;
-      the verified audit above never counted this as started.
+      the verified audit above never counted this as started. It is now three
+      inline copies: the Tools overlay (`toolsui.go`), the Tools page
+      (`menutiles.go`) and About all draw a glyph well + title + subtitle band
+      by hand, so the component has a real shape to extract and three callers
+      to prove it against.
 
 #### 2.3 Focus System
 
@@ -257,14 +275,20 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 #### 3.4 Power Management
 
 - [x] ✅ Reduce animation in battery saver — motion gates (`anim_test.go`).
-- [ ] 🟡 Named power profiles (Battery Saver / Balanced / Performance) —
-      `LowPower` + `ReducedMotion` + adaptive FPS exist; there is no selector
-      that maps all three to one setting.
+- [x] ✅ Named power profiles (Battery Saver / Balanced / Performance) —
+      a "Power Mode" selector (`powermode.go`, `<variables>.powerMode`) now
+      maps all three onto one value: Battery Saver forces Low Power + reduced
+      motion, Performance pins the frame rate controller at the active
+      cadence, Balanced is the smooth middle, and Default hands everything
+      back to the individual toggles. Row in Quick Settings with A/←/→
+      cycling, a toast and a persisted save; while a mode is live its two
+      managed pills show the mode's verdict and their presses explain where
+      the control lives (`powermode_test.go`).
 - [ ] ⬜ Stop polling when a scene is hidden (weather ticker and monitors run for
       the whole process lifetime).
 
 ### Phase 4: Reliability & Configuration
-**Status**: 🟡 Mostly complete (24 shipped, 1 partial, 1 not started)
+**Status**: 🟡 Mostly complete (25 shipped, 1 partial, 0 not started)
 
 #### 4.1 Configuration
 
@@ -330,7 +354,20 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       `Retry-After`, retries 408/425/429/5xx and transport errors, refuses to
       replay an unrewindable body; adopted by the Patch metadata fetch and
       weather forecast; covered by `retry_test.go`.
-- [ ] ⬜ Conditional caching (`If-None-Match` / `If-Modified-Since`).
+- [x] ✅ Conditional caching (`If-None-Match` / `If-Modified-Since`) —
+      `httpcache.go` keeps the last successful body and its validators per URL
+      (bounded: 64 entries, 1 MiB per body, process-lifetime by design — a
+      restart costs one full fetch and an ETag from an older decoder can never
+      outlive the build that wrote it). `fetchBounded` (release manifest) and
+      `httpGetTextContext` (podcast feeds, ticker/quote endpoints) send the
+      validators and answer an unchanged resource from the cache, so the update
+      check and a screen re-entry cost a 304 instead of the body. A server that
+      answers 304 for a URL this process holds no copy of is reported as an
+      error rather than treated as an empty document, `Cache-Control: no-store`
+      is honoured, and an unvalidated or oversized response drops its cached
+      copy instead of leaving a body a later 304 could resurrect. Covered by `httpcache_test.go` (ETag path,
+      Last-Modified path, changed content adopted, both call paths, the
+      uncacheable-304 contract, eviction, oversize skip, concurrent use).
 
 ### Phase 5: Features
 **Status**: 🟡 Partially complete (10 shipped, 4 partial, 2 not started)
@@ -365,6 +402,9 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [x] ✅ Accessibility settings — reduced motion, low power, font sizes, theme
       contrast tokens.
 - [ ] 🟡 Power profile selection (single LowPower toggle; no named profiles).
+      The named "Power Mode" selector shipped in Quick Settings
+      (`powermode.go`); this entry waits on moving the individual Low Power
+      toggle rows themselves into the Accessibility panel.
 - [x] ✅ Theme preview — scrollable theme gallery with live apply.
 
 ### Phase 6: Testing
@@ -430,8 +470,8 @@ and guides still missing
 - [ ] ⬜ Schema validation in the builder (no `schemaVersion` emitted).
 
 ### Phase 8: TrimUI handheld polish
-**Status**: 🟡 Started (21 shipped, 13 not started) — interaction feedback and
-card rendering landed; the rest is queued
+**Status**: 🟡 Started (24 shipped, 10 not started) — interaction feedback,
+card rendering, the Tools page and a repeating D-pad landed; the rest is queued
 
 This phase collects the work that specifically targets the TrimUI Smart Pro
 (1280×720, ARM64, 1 GB RAM, 60 Hz panel) rather than desktop parity. Shipped
@@ -465,11 +505,25 @@ highlights with code evidence:
 
 Open:
 
-- [ ] ⬜ Hold-to-repeat on list edges for D-pad scrolling.
+- [x] ✅ Hold-to-repeat on the D-pad in menus — the on-screen keyboard had
+      polled the pad for a while (`vkTickNavRepeat`), but every other screen
+      needed one press per row, so a two-hundred-game library was two hundred
+      taps. `navrepeat.go` watches the held direction and, after a 320 ms delay,
+      re-queues the same D-pad press through SDL at a 70 ms cadence, so the
+      router stays in charge: overlays, modals, the video player and the
+      keyboard all see ordinary presses. The analog stick's existing repeat
+      (`handleStickDpad`) is untouched, the keyboard keeps moving its own
+      highlight instead (`padTickRepeat` stands aside while it is up), and the
+      accessibility slow-repeat setting doubles both intervals. Covered by
+      `navrepeat_test.go` (cadence, direction change, release, press queue,
+      diagonal preference, keyboard suppression, slow repeat).
 - [ ] ⬜ Touch-target audit: ≥44×44 px for every interactive control, safe-area
       insets so cards and footer chips clear the panel's rounded corners, and a
       bigger Exit-chip hit area without changing its drawn size.
-- [ ] ⬜ Cached ambient glow instead of re-blending four blobs per frame.
+- [x] ✅ Cached ambient glow — verified stale: `backgroundfx.go` bakes one
+      256×256 radial glow texture once and per frame is four tinted `Copy` calls
+      with `SetColorMod`/`SetAlphaMod`, not four per-pixel blends. The item was
+      already done when it was written down.
 - [x] ✅ Icon atlas for the shared 32 px glyph set — landed in Phase 8b
       (`iconatlas.go`), see that entry for the full description.
 - [x] ✅ Row-virtualize the launcher app grid: the render loop visits only
@@ -493,10 +547,32 @@ Open:
       queue, which re-fills it over the following frames (list fills
       progressively instead of one frame stuttering; `core.go`
       `loadThumbnailFromURLs`, `thumbdecode_test.go`).
+- [x] ✅ The classic Tools menu is a launcher page — the config's `Misc` scene
+      was a wall of wide buttons with no icons and no title. It now draws a page
+      header (glyph, title, subtitle, Wi-Fi address), section headings
+      (SYSTEM, DIAGNOSTICS, UPDATES & TRANSFER) and icon tiles sized to the
+      content panel, grouped by what each tool does (`menutiles.go`). The
+      element order, indices and triggers are untouched, so focus memory, D-pad
+      navigation, hover and clicks all follow the tiles; the layout is written
+      into the in-memory config at scene entry and detached again for a config
+      save, and a panel too short for the page keeps the authored buttons
+      (`menutiles_test.go`). This is also the shape a reusable `CategoryTile`
+      component should take — see the Phase 2 note.
+- [ ] ⬜ The Settings menu as a page — Settings is the same kind of screen the
+      Tools menu was (buttons on a fixed grid). The layout pass in
+      `menutiles.go` is deliberately restricted to `Misc`/`Tools`; Settings
+      mixes toggles and sliders in with its buttons, so it needs its own
+      section model before it can adopt the tiles.
 - [ ] ⬜ Scene-scoped texture release for scenes that are not open.
-- [ ] ⬜ Scene-scoped polling: stop weather/network refreshes for hidden scenes.
-- [ ] ⬜ Named power profiles (Battery Saver / Balanced / Performance) mapping to
-      Low Power, adaptive FPS and motion in one setting.
+- [ ] 🟡 Scene-scoped polling — started with the disk pie: `startDiskPieAutoRefresh`
+      used to statfs the card every five seconds for the whole session, so a
+      hidden Disk Space scene kept the CPU awake for a chart nobody was looking
+      at. The ticker now skips while the active scene has no `piechart` element
+      (`sceneHasPieChart`) and scene entry takes a fresh reading instead
+      (`hardware_poll_test.go`). What stays open: the weather ticker is a
+      process-lifetime ten-minute loop, which is deliberate — the forecast feeds
+      the status cluster on every screen — but the Weather screen's own refresh
+      and the network monitor are still not scoped to the screen that shows them.
 - [ ] ⬜ On-device measurement of cold start (<1.5 s interactive), transition
       frame time and idle RSS (<5% CPU at the capped cadence) — all numbers so
       far are desktop proxies.
@@ -651,7 +727,7 @@ Field expectations for the TrimUI Smart Pro / Smart Pro S / Brick family
       against unproven vendor libraries.
 
 ### Phase 9: Browser & handheld input
-**Status**: ✅ Landed this revision (8 shipped, 4 not started) — remaining
+**Status**: ✅ Landed this revision (10 shipped, 2 not started) — remaining
 follow-ups queued
 
 The modern reader (styled web pages behind the `textbrowser` element) is now
@@ -698,15 +774,22 @@ shipped items verified against the code and the test suite this revision:
 
 Open:
 
-- [ ] ⬜ Physical pad toggle for the browser mode — the cycle key (Tab) exists
-      only on the keyboard-event path; a firmware that reports a real gamepad
-      has no equivalent button yet.
-- [ ] ⬜ Nearest-row link walking — the cursor follows flat anchor order; in
-      multi-column pages the D-pad can jump visually far away. Walk to the
-      nearest next link row instead.
-- [ ] ⬜ Mode discoverability — a footer chip should name the current mode and
-      the keys that switch it, so the feature is findable without this
-      document.
+- [x] ✅ Physical pad toggle for the browser mode — **L3** (left stick click)
+      cycles scroll ⇄ link mode on the controller path, alongside Tab on the
+      keyboard path, and the toggle toast names both keys. `handleBrowserController`
+      owns the button for web panels only; plain-text panels keep it for the
+      scene behind them (`TestBrowserControllerTogglesNavMode`).
+- [x] ✅ Nearest-row link walking — Up/Down in link mode now follow the page's
+      visual rows instead of flat anchor order: `browserLinkRowStep` picks the
+      adjacent row and, within it, the link nearest the current column, wrapping
+      between the first and last rows (and staying put on a one-row page).
+      Left/Right keep reading order. Covered by `TestBrowserLinkRowStepWalksColumns`
+      (two-column walk, nearest-column pick, both wraps, one-row no-op), while
+      the existing controller/keyboard walk tests still pass through the new
+      row step.
+- [ ] ⬜ Mode discoverability — the toggle toast now names the keys and
+      [../docs/CONTROLS.md](../docs/CONTROLS.md)/[../docs/BROWSER.md](../docs/BROWSER.md)
+      document the model, but the page itself still shows no mode chip.
 - [ ] ⬜ On-device pass — the browser model is verified with the SDL dummy
       renderer; touch hit accuracy, Tab/anchor ergonomics and the link panel
       on real TrimUI hardware still need a hardware run.
@@ -762,6 +845,51 @@ Open:
 | Platform-specific bugs | Medium | Test on both Trimui and Windows |
 | Memory leaks | Medium | Use profiling tools, bounded caches |
 | Config corruption | High | Atomic writes, backups, safe mode |
+
+## Audit log — 2026-10-25 (second pass)
+
+Re-read every open item against this tree and worked the ones that were small,
+self-contained and user-visible. Evidence:
+
+- **Stale item found and corrected:** "cached ambient glow instead of
+  re-blending four blobs per frame" was already shipped — `backgroundfx.go`
+  bakes one radial texture and issues four tinted `Copy` calls per frame. It is
+  marked done rather than left as a task somebody would re-do.
+- **D-pad hold-to-repeat now works in menus** (`navrepeat.go`): the keyboard was
+  the only screen that repeated a held direction. The tracker and its 320 ms /
+  70 ms cadence moved out of `vkeyboard.go` into the shared file; menu presses
+  are re-queued through SDL so the existing router (overlays → scene → elements)
+  decides what a repeat means, the keyboard path keeps its own highlight move,
+  and the accessibility slow-repeat setting doubles both intervals.
+- **One hidden-screen poller retired:** `startDiskPieAutoRefresh` ran a 5 s
+  statfs loop for the whole session; it now skips while the active scene has no
+  `piechart` element and the scene takes a fresh reading on entry. The weather
+  ticker stays global on purpose (its forecast is on every screen's status
+  cluster), which is now written down instead of implied.
+- **Tools menu became a launcher page** (`menutiles.go`, see Phase 8): the
+  clearest remaining design mismatch after the Apps grid was restyled.
+- **Gaps the plan did not name**, now on the list: a shared `AppBar` has three
+  inline copies to consolidate (Tools overlay, Tools page, About); the Settings
+  menu is the same fixed-grid shape the Tools menu was; `CategoryTile` has two
+  copies of the tile drawing to merge into `UICategoryTile`.
+- Checks after the changes: `gofmt -l` clean on the touched files,
+  `go vet ./...` exit 0, `go test -count=1 ./...` green, including the new
+  `navrepeat_test.go` and `hardware_poll_test.go`.
+
+## Audit log — 2026-10-25 verification pass
+
+- Conditional requests: `httpcache.go` now holds ETag / Last-Modified plus the
+  body per URL (64 entries, 1 MiB bodies, in-memory), and `fetchBounded`
+  (release manifest) and `httpGetTextContext` (podcast feeds, ticker and quote
+  endpoints) revalidate. `httpcache_test.go` covers the ETag and Last-Modified
+  paths end to end, changed content, the uncacheable-304 contract, eviction,
+  oversize skip and concurrent use.
+- Browser input: **L3** cycles scroll ⇄ link mode on the controller path, and
+  Up/Down in link mode walk the nearest link row (`browserLinkRowStep`) instead
+  of flat anchor order, with Left/Right keeping reading order. The toggle toast
+  names Tab and L3. Tests: `TestBrowserControllerTogglesNavMode`,
+  `TestBrowserLinkRowStepWalksColumns`, plus the existing keyboard/controller
+  link-walk tests that now pass through the row step.
 
 ## Audit log — 2026-10-24 verification pass
 
@@ -836,30 +964,36 @@ Evidence collected while re-checking every item against this tree:
 
 The phases above are now mostly implemented. The highest-value remaining work:
 
-1. **Phase 9 browser leftovers** — a physical pad button for the scroll⇄link
-   toggle so it works on firmware paths that report a gamepad, and nearest-row
-   link order so D-pad steps follow visual rows. Small, self-contained and
-   testable offscreen.
-2. **Controller remapping screen** — the A/B and X/Y swaps in Accessibility are the
-   foundation, but there is no per-button keymap layer yet.
-3. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
+1. **Controller remapping screen** — the general physical → logical keymap
+   (`a11y_keymap`, [../docs/adr/0001-physical-logical-keymap.md](../docs/adr/0001-physical-logical-keymap.md))
+   and the Select/layout rows exist, but there is still no screen that maps every
+   button one by one.
+2. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
    work with immediate design-time payoff.
-4. **Conditional caching** (`If-None-Match`) for the feeds that already go through
-   `retry.go`, so an unchanged package registry or podcast feed costs a 304.
-5. **Named power profiles** (Battery Saver / Balanced / Performance) folding the
-   existing Low Power, adaptive-FPS and motion switches into one setting.
-6. **Debounced search input** — first name the path it is for: the Tube field
+3. **Browser mode chip** — the last Phase 9 item: the page itself should name the
+   current mode (scroll / links) and the keys that switch it, instead of relying
+   on the toggle toast and the docs.
+4. **Debounced search input** — first name the path it is for: the Tube field
    only submits on Enter/its button, and the global search filters in memory, so
    this item is worth doing only where a keystroke really starts work.
-7. **Phase 8 handheld polish** — touch-target audit, safe-area insets, cached
-   ambient glow, icon atlas, list virtualization, and on-device measurement of
+5. **Phase 8 handheld polish** — touch-target audit, safe-area insets, cached
+   ambient glow, list virtualization, and on-device measurement of
    cold start, transition frame time, idle RSS and the GC/decode tuning above
    (all numbers so far are desktop proxies).
-8. **Convert remaining fixed-offset panel layouts to font metrics** — the
+6. **Convert remaining fixed-offset panel layouts to font metrics** — the
    Downloads panel's SD card now derives its rows from `font.Height()`
    (`downloadStorageCardHeight`); panels that still hard-code text offsets
    (Start menu, Quick Settings, the browser chrome) can adopt the same
    pattern so taller accessibility scales never overlap there either.
+7. **`UICategoryTile` + `AppBar`** — the tile drawing now exists twice (home
+   grid, Tools page) and the page header three times (Tools overlay, Tools page,
+   About). Extracting both is mechanical, removes the drift risk between the
+   copies, and gives every future page one place to start from.
+8. **Measure the hold-to-repeat cadence on the device** — 320 ms / 70 ms is the
+   keyboard's long-standing value and feels right on a list, but a 1 GB ARM64
+   device under a slow SD card may want a shorter delay. It is one constant in
+   `navrepeat.go`; a hardware pass should confirm it before it is treated as
+   settled.
 
 ## Notes
 
@@ -873,4 +1007,6 @@ The phases above are now mostly implemented. The highest-value remaining work:
 - Add **tests** as we go, not at the end
 - Re-verify this document on every pass: update the date on top, re-run
   `go vet ./...`, `go test ./...` and `go build .`, and flip statuses with
-  evidence. There is only one source of truth now — no companion file.
+  evidence. Engineering status lives only here — there is no companion
+  checklist file; project-side work lives in the roadmap (see Scope at the
+  top), so neither list has to guess what the other one already covers.

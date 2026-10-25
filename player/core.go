@@ -370,8 +370,13 @@ func getElementHeight(elem Element, defaultHeight int32) int32 {
 
 // parsePosInt safely parses the given text as a non-negative int32, avoiding
 // silent truncation from very large values and non-numeric input.
+//
+// Surrounding whitespace is tolerated because the XML dialect hands over the
+// raw attribute value and the same fields arrive from JSON as plain strings;
+// the other numeric reader in the config layer (intOrString) trims too, so a
+// padded number behaves the same wherever it is written.
 func parsePosInt(text string) (int32, bool) {
-	v, err := strconv.ParseInt(text, 10, 32)
+	v, err := strconv.ParseInt(strings.TrimSpace(text), 10, 32)
 	if err != nil || v < 0 {
 		return 0, false
 	}
@@ -1733,6 +1738,10 @@ func buttonHitSize(elem Element, font *ttf.Font) (int32, int32) {
 func renderButtonElement(renderer *sdl.Renderer, config *Config, elem Element, elemIndex int, selected bool, hovered bool, hoverProgress float64, pressed bool) {
 	if elem.Style == "tile" {
 		renderAppTile(renderer, config, elem, elemIndex, selected, hovered, hoverProgress, pressed)
+		return
+	}
+	if elem.Style == menuTilesStyle {
+		renderMenuTile(renderer, config, elem, selected, hovered, hoverProgress, pressed)
 		return
 	}
 	// Every non-tile button renders through the shared flat dark primitive so
@@ -4173,6 +4182,7 @@ func syncVariableOverrides(config *Config) {
 	setBool("weatherEnabled", &config.Variables.WeatherEnabled)
 	setBool("reducedMotion", &config.Variables.ReducedMotion)
 	setBool("lowPower", &config.Variables.LowPower)
+	setStr("powerMode", &config.Variables.PowerMode)
 	setBool("dynamicBg", &config.Variables.DynamicBg)
 	setBool("socialNotifs", &config.Variables.SocialNotifs)
 	setStr("weatherUnit", &config.Variables.WeatherUnit)
@@ -4234,6 +4244,8 @@ func inputVariableValue(config *Config, variable string) string {
 			return "true"
 		}
 		return "false"
+	case "powerMode":
+		return currentPowerMode(config)
 	case "gridColumns":
 		return strconv.Itoa(config.Variables.GridColumns)
 	case "searchWidth":
@@ -4438,6 +4450,12 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		renderDynamicBackground(renderer)
 	} else {
 		renderAmbientBackground(renderer)
+	}
+
+	// The classic Tools menu draws its own page header and section headings; its
+	// buttons were placed as tiles when the scene was entered (menutiles.go).
+	if menuTilesScene(scene) {
+		renderMenuTilesDecor(renderer, config, scene)
 	}
 
 	for i, elem := range scene.Elements {
@@ -5621,6 +5639,13 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	case "iptv_load":
 		loadIPTV(config)
+	case triggerRecordingsScan:
+		count := loadRecordings(config)
+		kind := ToastSuccess()
+		if count == 0 {
+			kind = ToastInfo()
+		}
+		showToast(recordingsScanMessage(config, count), kind)
 	case "podcast_load":
 		if url, ok := config.Variables.Custom["podcast_url"].(string); ok && strings.TrimSpace(url) != "" {
 			loadPodcastURL(config, url)
@@ -5707,6 +5732,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 				applyColorVar(config, element.VariableChange, val)
 			case "weatherUnit":
 				config.Variables.WeatherUnit = strings.TrimSpace(val)
+			case "powerMode":
+				config.Variables.PowerMode = normalizePowerMode(val)
+				applyPowerMode(config)
 			default:
 				config.Variables.Custom[element.VariableChange] = val
 			}
@@ -6296,6 +6324,11 @@ func changeSceneTo(config *Config, targetIdx int) {
 func completeSceneTransition(config *Config) {
 	currentSceneIndex = pendingSceneIndex
 
+	// A Tools menu is laid out as a launcher page before the focus graph is
+	// built, so navigation, hover and click hit-testing all use the tiles that
+	// are actually drawn. The authored geometry comes back on save.
+	menuTilesApply(config, currentSceneIndex)
+
 	// Build focus graph for the new scene and restore persisted focus.
 	scene := config.Scenes[currentSceneIndex]
 	enterSceneWork(scene.Name)
@@ -6327,10 +6360,19 @@ func completeSceneTransition(config *Config) {
 		browserEnsureHome(config)
 	}
 
-	// The Hardware screen shows a live snapshot: refresh it on entry so the
-	// process list is not stale from the last visit (or empty on first open).
+	// The Hardware screen shows a live snapshot: load it synchronously on
+	// entry so the very first frame already has content. getHardwareInfo only
+	// reads /proc and gopsutil snapshots, near-instant even on the handheld;
+	// the earlier goroutine made the screen draw blank until the publish won
+	// the race with the first render.
 	if scene.Name == "Hardware" {
-		go func() { publishCustom("hw_text", getHardwareInfo()) }()
+		publishCustom("hw_text", getHardwareInfo())
+	}
+	// The disk pie's poller skips hidden screens, so the chart takes a fresh
+	// reading on the way in instead of opening with a reading from whenever the
+	// scene was last up.
+	if sceneHasPieChart(config) {
+		refreshDiskPie()
 	}
 
 	if sceneHasSearchResults(config.Scenes[currentSceneIndex]) {
@@ -6360,6 +6402,8 @@ func completeSceneTransition(config *Config) {
 			loadIPTV(config)
 		case "podcast_entries":
 			loadPodcasts(config)
+		case recordingsEntriesVar:
+			loadRecordings(config)
 		case appsEntriesVar:
 			scanInstalledApps(config)
 		case "plugin_list":

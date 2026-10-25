@@ -27,7 +27,13 @@ installs.
    ([CONTROLS.md](docs/CONTROLS.md)), recovery
    ([RECOVERY.md](docs/RECOVERY.md)), troubleshooting follows the
    [bug template](https://github.com/jukaLang/JukaHubV2/issues/new?template=bug_report.yml).
-4. **Update the config warning**: jukaconfigs older than the version that
+4. **Attach the diagnostics bundle** — **Patch → Export diagnostics** writes
+   one file (`reports/diagnostics-<timestamp>.txt` under the Patch data folder)
+   with the build and component digests, device and health facts, and the last
+   few hundred log lines. Credentials and account names are scrubbed before the
+   file is written; read it once before you attach it, since log lines can still
+   name games, folders and network addresses.
+5. **Update the config warning**: jukaconfigs older than the version that
    shipped warning messages can produce one-time errors that are gone after
    the first save; a startup warning is not necessarily a bug you need to
    report.

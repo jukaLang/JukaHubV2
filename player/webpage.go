@@ -123,6 +123,25 @@ type webStyle struct {
 	BorderColor    sdl.Color
 	HasBorderColor bool
 	ListNone       bool
+	// ListStyle is the marker the author asked for (0 = the reader default).
+	// It inherits like a real browser's, so `ul { list-style: none }` reaches
+	// the items, which is how nav menus hide their bullets.
+	ListStyle int
+	// LineHeight is the author's line-height in CSS px; 0 leaves the reader's
+	// row grid in charge. It inherits, so `body { line-height: 1.6 }` spaces
+	// every paragraph the way the design intended.
+	LineHeight float64
+	// Radius is border-radius in CSS px; 0 keeps the reader's crisp corners.
+	// A percentage (or a large value) is clamped to half the box at draw time.
+	Radius float64
+	// HasOpacity/Opacity carry the element's alpha. It is applied when text,
+	// fills and borders are painted, by blending toward whatever is behind
+	// them; children inherit the fade, like a real opacity group.
+	HasOpacity bool
+	Opacity    float64
+	// IndentRight is padding-right + margin-right in CSS px: it narrows the
+	// measure so an inset card wraps where the author intended.
+	IndentRight float64
 	// --- Flex and stacking -------------------------------------------------
 	// Display is block or flex. A flex container lays its direct children out
 	// side by side (row) or one under the other (column); the reader has no
@@ -321,6 +340,9 @@ type webRect struct {
 	Color     sdl.Color
 	Stroke    bool
 	Thickness int32
+	// Radius is the author's border-radius in design pixels, clamped to half
+	// the shorter side when drawn. 0 keeps the reader's crisp corner.
+	Radius int32
 	// Z orders the fills and borders of the page. Text is always painted after
 	// every rect, so z-index decides which background or border wins where
 	// two elements overlap.
@@ -1585,6 +1607,19 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			}
 		}
 	}
+	// A gradient is drawn as the average of its stops: the reader paints one
+	// fill, not one pixel at a time, and a blue header stays blue instead of
+	// losing its colour entirely. An explicit background-color still wins.
+	if !st.HasBg {
+		for _, key := range []string{"background-image", "background"} {
+			if v, ok := decls[key]; ok {
+				if c, valid := webGradientColor(v); valid {
+					st.Background, st.HasBg = c, true
+					break
+				}
+			}
+		}
+	}
 	if v, ok := decls["font-weight"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "bold", "bolder", "600", "700", "800", "900":
@@ -1626,8 +1661,14 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		}
 	}
 	if v, ok := decls["margin"]; ok {
-		top, bottom := webMarginPair(v, st.FontPx)
-		st.MarginTop, st.MarginBot = top, bottom
+		if top, right, bottom, left, valid := webBoxShorthand(v, st.FontPx); valid {
+			st.MarginTop, st.MarginBot = top, bottom
+			st.Indent += left
+			st.IndentRight += right
+		} else {
+			top, bottom := webMarginPair(v, st.FontPx)
+			st.MarginTop, st.MarginBot = top, bottom
+		}
 	}
 	if v, ok := decls["margin-top"]; ok {
 		st.MarginTop = webLength(v, st.FontPx)
@@ -1639,10 +1680,43 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		st.Indent += webLength(v, st.FontPx)
 	}
 	if v, ok := decls["padding"]; ok {
-		if top, _, bottom, left, valid := webBoxShorthand(v, st.FontPx); valid {
+		if top, right, bottom, left, valid := webBoxShorthand(v, st.FontPx); valid {
 			st.Indent += left
+			st.IndentRight += right
 			st.MarginTop += top
 			st.MarginBot += bottom
+		}
+	}
+	if v, ok := decls["padding-right"]; ok {
+		st.IndentRight += webLength(v, st.FontPx)
+	}
+	// margin-left/margin-right are the box the paragraph sits in: a 24px
+	// gutter narrows the line on that side. `auto` reads as 0, which is the
+	// honest result for a box the reader cannot measure.
+	if v, ok := decls["margin-left"]; ok {
+		st.Indent += webLength(v, st.FontPx)
+	}
+	if v, ok := decls["margin-right"]; ok {
+		st.IndentRight += webLength(v, st.FontPx)
+	}
+	if v, ok := decls["line-height"]; ok {
+		if px, valid := webLineHeightPx(v, st.FontPx); valid {
+			st.LineHeight = px
+		}
+	}
+	if v, ok := decls["border-radius"]; ok {
+		st.Radius = webFirstLength(v, st.FontPx)
+	}
+	for _, key := range []string{"border-top-left-radius", "border-top-right-radius", "border-bottom-left-radius", "border-bottom-right-radius"} {
+		if v, ok := decls[key]; ok {
+			if px := webFirstLength(v, st.FontPx); px > st.Radius {
+				st.Radius = px
+			}
+		}
+	}
+	if v, ok := decls["opacity"]; ok {
+		if alpha, valid := webOpacityValue(v); valid {
+			st.HasOpacity, st.Opacity = true, alpha
 		}
 	}
 	if v, ok := decls["border-color"]; ok {
@@ -1696,9 +1770,14 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 		st.BoxBorder = true
 	}
 	for _, key := range []string{"list-style-type", "list-style"} {
-		if v, ok := decls[key]; ok && strings.Contains(strings.ToLower(v), "none") {
-			st.ListNone = true
-			break
+		if v, ok := decls[key]; ok {
+			if marker := webListStyleValue(v); marker != webListStyleDefault {
+				st.ListStyle = marker
+				if marker == webListStyleNone {
+					st.ListNone = true
+				}
+				break
+			}
 		}
 	}
 	applyWebLayoutDecls(st, decls)
@@ -2060,7 +2139,9 @@ func fetchWebStylesheet(pageURL, address string) string {
 		return ""
 	}
 	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
-	client := &http.Client{Timeout: 6 * time.Second}
+	// Same jar as the page: a sheet served only to a session (a CDN that
+	// hands out a token with the HTML) has to see the page's cookie.
+	client := browserHTTPClient(6 * time.Second)
 	resp, err := client.Do(req)
 	if err != nil {
 		return ""
@@ -2404,6 +2485,9 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	st.HasBg, st.Background = false, sdl.Color{}
 	st.Indent, st.TextIndent, st.MarginTop, st.MarginBot = 0, 0, 0, 0
 	st.BorderLeft, st.ListNone = false, false
+	// A radius and a right gutter belong to the element that declared them;
+	// line-height, the list marker and the opacity group are inherited above.
+	st.Radius, st.IndentRight = 0, 0
 	st.BoxBorder, st.BorderTop, st.BorderBottom = false, false, false
 	st.BorderColor, st.HasBorderColor = sdl.Color{}, false
 	// Layout properties are per element too: a child of a flex container is
@@ -2511,9 +2595,8 @@ func (p *webParser) nextBullet(style webStyle) string {
 	list := &p.lists[len(p.lists)-1]
 	if list.ordered {
 		list.n++
-		return fmt.Sprintf("%d.", list.n)
 	}
-	return "•"
+	return webListMarker(style.ListStyle, list.ordered, list.n)
 }
 
 func (p *webParser) ensureBlock() *webBlock {
@@ -2974,6 +3057,21 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		if indent > contentW/2 {
 			indent = contentW / 2
 		}
+		// padding-right/margin-right narrow the measure from the other side,
+		// which is what an inset card or a page gutter asks for.
+		indentRight := int32(block.Style.IndentRight * baseSize / 16)
+		if indentRight < 0 {
+			indentRight = 0
+		}
+		if indentRight > contentW/3 {
+			indentRight = contentW / 3
+		}
+		// One radius per box, in design pixels; the draw clamps it to half the
+		// box so `border-radius: 999px` is a pill rather than an error.
+		radius := int32(block.Style.Radius * baseSize / 16)
+		if radius < 0 {
+			radius = 0
+		}
 		// text-indent pushes only the first line, like a print paragraph.
 		firstLineIndent := int32(block.TextIndent * baseSize / 16)
 		if firstLineIndent < 0 {
@@ -2993,9 +3091,12 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			}
 		}
 		textIndent := indent + bulletW
-		avail := contentW - textIndent
+		avail := contentW - textIndent - indentRight
 		if avail < 48 {
 			textIndent = indent
+			avail = contentW - textIndent - indentRight
+		}
+		if avail < 48 {
 			avail = contentW - textIndent
 		}
 
@@ -3045,7 +3146,18 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					line[i].X += offset
 				}
 			}
-			emit(line, lineFontH)
+			// The author's line-height, when it is larger than the glyphs,
+			// becomes the slot height: the row grid centres the text in the
+			// slot, which is exactly what extra leading looks like. Capped so
+			// `line-height: 400px` cannot spend the screen on one paragraph.
+			slotH := lineFontH
+			if lh := block.Style.LineHeight * baseSize / 16; lh > float64(slotH) {
+				if limit := float64(rowH * 3); lh > limit {
+					lh = limit
+				}
+				slotH = int32(lh)
+			}
+			emit(line, slotH)
 			firstLine = false
 			line = nil
 			lineMax, lineFontH = 0, 0
@@ -3136,15 +3248,16 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		height := (endGrid - startGrid) * rowH
 		if block.HasBg && height > 0 {
 			layout.Rects = append(layout.Rects, webRect{
-				Rect:  sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: contentW + 8, H: height},
-				Color: block.Background,
-				Z:     block.ZIndex,
+				Rect:   sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: contentW + 8, H: height},
+				Color:  webFadeColor(block.Background, d.Paper, block.Style),
+				Z:      block.ZIndex,
+				Radius: radius,
 			})
 		}
 		if block.BorderLeft && height > 0 {
 			layout.Rects = append(layout.Rects, webRect{
 				Rect:  sdl.Rect{X: padX + indent - 8, Y: startGrid * rowH, W: 3, H: height},
-				Color: sdl.Color{R: 170, G: 178, B: 192, A: 255},
+				Color: webFadeColor(sdl.Color{R: 170, G: 178, B: 192, A: 255}, d.Paper, block.Style),
 				Z:     block.ZIndex,
 			})
 		}
@@ -3153,6 +3266,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 			if block.HasBorderColor {
 				color = block.BorderColor
 			}
+			color = webFadeColor(color, d.Paper, block.Style)
 			top := startGrid * rowH
 			if block.BoxBorder {
 				x := padX + indent - 6
@@ -3167,6 +3281,7 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					Stroke:    true,
 					Thickness: 2,
 					Z:         block.ZIndex,
+					Radius:    radius,
 				})
 			} else {
 				if block.BorderTop {
@@ -3311,7 +3426,30 @@ func webResolveColor(style webStyle, doc *webDocument) sdl.Color {
 			color = sdl.Color{R: 130, G: 170, B: 255, A: 255}
 		}
 	}
-	return webReadableColor(color, bg)
+	// Opacity is painted by blending toward the surface the text sits on: the
+	// reader has no compositing layer, and a faded label should still read.
+	return webFadeColor(webReadableColor(color, bg), bg, style)
+}
+
+// webRectCorner is the radius a rect is painted with: the author's
+// border-radius clamped to half the shorter side (so a percentage or a huge
+// value is a pill, not an error), or the reader's own crisp default.
+func webRectCorner(bg webRect, fallback int32) int32 {
+	radius := bg.Radius
+	if radius <= 0 {
+		radius = fallback
+	}
+	limit := bg.Rect.W
+	if bg.Rect.H < limit {
+		limit = bg.Rect.H
+	}
+	if limit > 0 && radius > limit/2 {
+		radius = limit / 2
+	}
+	if radius < 0 {
+		radius = 0
+	}
+	return radius
 }
 
 // drawWebDocument paints the styled page inside rect starting at startRow.
@@ -3343,10 +3481,10 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				if thickness < 1 {
 					thickness = 1
 				}
-				strokeRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, 3, thickness, bg.Color)
+				strokeRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
 				continue
 			}
-			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, 2, bg.Color)
+			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
 		}
 		// Images draw on their own reserved rows, before the text, so a page
 		// with a header image scrolls the photo away like a normal line.

@@ -188,7 +188,7 @@ func runTransaction(ctx context.Context, plan *TransactionPlan, backupReason str
 				}
 			}
 			if rollbackErr != nil {
-				return fmt.Errorf("transaction failed (%v); rollback incomplete: %v", err, rollbackErr)
+				return fmt.Errorf("transaction failed (%w); rollback incomplete: %v", err, rollbackErr)
 			}
 			return fmt.Errorf("transaction failed at %s: %w", st.Pkg, err)
 		}

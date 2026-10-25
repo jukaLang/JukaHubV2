@@ -324,3 +324,36 @@ startup-bench.sh (3 cold runs)            median 1135 ms, limit 5000 ms PASS
 warm bench (JUKAHUB_BENCH_WARM=1)         370–408 ms, splash=0 ms
 .github/workflows/ci.yml                  YAML parses; new blocking job present
 ```
+
+## Technical pass (October 2026)
+
+This pass took the four technical items the backlog ranked highest, the flaky
+test, and the documentation gaps around them.
+
+| Item | What shipped | Pinned by |
+|---|---|---|
+| Component versions | Patch → **Component versions** lists app, launcher, design config, `yt-dlp`/`ffmpeg`/`ffprobe` and installed packages with SHA-256 digests; **A** copies the full report, and the exported diagnostics carries the same section. The card is path-free. | `player/componentreport_test.go` |
+| Button remapping | A general physical → logical keymap (`a11y_keymap`) applied once before dispatch, with a **Button layout** preset (Nintendo = both swaps) and a **Select button** row: Default / Swapped / Disabled. Disabled swallows the press; Start still opens the menu. | `player/a11y_keymap_test.go` |
+| LED policies | **LED Mode** in Quick Settings: Audio / Battery / Charging / Temperature / Custom. Battery red→green 10–80 %, charging breathes and is dark unplugged, temperature green→red 45–80 °C, custom colour plus optional pulse. | `player/ledpolicy_test.go` |
+| `NetPlayEnabled` | A **LAN Play** switch in Quick Settings writes the previously dead flag, the Game Library explains where to turn it on, and an upgrade without the switch keeps the shipped default (on). | `player/netplay_gate_test.go` |
+| Flaky video test | Root cause fixed: static-layer caches (keyboard, chat, video overlay) kept renderer-owned textures past their renderer, so a later probe reused or freed a dangling pointer and SDL crashed in `ReadPixels`. Caches now record their owner, drop a foreign texture instead of touching it, and test renderers release them before destroying the renderer. | `player/renderer_cache_owner_test.go` |
+
+Documentation in the same pass: [STYLE.md](STYLE.md) (the conventions a review
+checks, not a new standard), [CHECKPOINTS.md](CHECKPOINTS.md) (the milestone
+design, explicitly unimplemented), a curated-package section in
+[PACKAGES.md](PACKAGES.md), bug-report and feature-request issue forms, a
+"Why JukaHub" section in the README, and `make coverage` (the CI player job
+already publishes the coverage total and the 0 % functions to the step summary;
+it is advisory, not a gate).
+
+Deliberately not in this pass:
+
+- **Hardware verification** (Wi-Fi on both stock images, LED behaviour on the
+  device) still needs a device session; nothing here claims it.
+- **Texture creation on worker threads.** An audit of every `CreateTexture`
+  call site found them all on a render path: the thumbnail workers fetch bytes
+  only, and `loadThumbnailFromURLs` creates and uploads the texture while
+  drawing. So there was no `LockOSThread` change to make; the crash that was
+  blamed on that path was the cache ownership bug above.
+- **GitHub Issues being enabled** is a repository setting, not a code change;
+  the templates are in place for when it is on.

@@ -11,7 +11,7 @@ import (
 )
 
 func TestVkRepeatTrackerWaitsThenWalks(t *testing.T) {
-	var tracker vkRepeatTracker
+	var tracker navRepeatTracker
 	const start = 1000
 
 	// The press itself is handled by the button event, so the tracker's first
@@ -19,45 +19,45 @@ func TestVkRepeatTrackerWaitsThenWalks(t *testing.T) {
 	if dx, dy := tracker.step(start, 1, 0); dx != 0 || dy != 0 {
 		t.Fatalf("first frame moved by (%d,%d), want no step", dx, dy)
 	}
-	if dx, _ := tracker.step(start+vkNavRepeatDelayMs-1, 1, 0); dx != 0 {
-		t.Fatalf("repeated after %dms, want to wait %dms", vkNavRepeatDelayMs-1, vkNavRepeatDelayMs)
+	if dx, _ := tracker.step(start+navRepeatDelayMs-1, 1, 0); dx != 0 {
+		t.Fatalf("repeated after %dms, want to wait %dms", navRepeatDelayMs-1, navRepeatDelayMs)
 	}
-	if dx, _ := tracker.step(start+vkNavRepeatDelayMs, 1, 0); dx != 1 {
+	if dx, _ := tracker.step(start+navRepeatDelayMs, 1, 0); dx != 1 {
 		t.Fatalf("no repeat at the delay boundary")
 	}
-	if dx, _ := tracker.step(start+vkNavRepeatDelayMs+vkNavRepeatIntervalMs-1, 1, 0); dx != 0 {
+	if dx, _ := tracker.step(start+navRepeatDelayMs+navRepeatIntervalMs-1, 1, 0); dx != 0 {
 		t.Fatalf("repeated before the interval elapsed")
 	}
-	if dx, _ := tracker.step(start+vkNavRepeatDelayMs+vkNavRepeatIntervalMs, 1, 0); dx != 1 {
+	if dx, _ := tracker.step(start+navRepeatDelayMs+navRepeatIntervalMs, 1, 0); dx != 1 {
 		t.Fatalf("no repeat after one interval")
 	}
 }
 
 func TestVkRepeatTrackerRestartsForANewDirection(t *testing.T) {
-	var tracker vkRepeatTracker
+	var tracker navRepeatTracker
 	tracker.step(1000, 1, 0)
-	tracker.step(1000+vkNavRepeatDelayMs, 1, 0) // now walking right
+	tracker.step(1000+navRepeatDelayMs, 1, 0) // now walking right
 
 	// Down is a fresh direction: a nudge is a normal press, not an instant
 	// repeat inherited from the right hold.
-	if _, dy := tracker.step(1000+vkNavRepeatDelayMs+10, 0, 1); dy != 0 {
+	if _, dy := tracker.step(1000+navRepeatDelayMs+10, 0, 1); dy != 0 {
 		t.Fatalf("a new direction repeated immediately")
 	}
-	if _, dy := tracker.step(1000+2*vkNavRepeatDelayMs+10, 0, 1); dy != 1 {
+	if _, dy := tracker.step(1000+2*navRepeatDelayMs+10, 0, 1); dy != 1 {
 		t.Fatalf("the new direction never repeated")
 	}
 }
 
 func TestVkRepeatTrackerStopsOnRelease(t *testing.T) {
-	var tracker vkRepeatTracker
+	var tracker navRepeatTracker
 	tracker.step(1000, 0, 1)
-	tracker.step(1000+vkNavRepeatDelayMs, 0, 1)
-	if _, dy := tracker.step(1000+vkNavRepeatDelayMs+5, 0, 0); dy != 0 {
+	tracker.step(1000+navRepeatDelayMs, 0, 1)
+	if _, dy := tracker.step(1000+navRepeatDelayMs+5, 0, 0); dy != 0 {
 		t.Fatalf("moved after the D-pad was released")
 	}
 	// Re-pressing waits the full delay again.
 	tracker.step(2000, 0, 1)
-	if _, dy := tracker.step(2000+vkNavRepeatDelayMs-1, 0, 1); dy != 0 {
+	if _, dy := tracker.step(2000+navRepeatDelayMs-1, 0, 1); dy != 0 {
 		t.Fatalf("re-press skipped the initial delay")
 	}
 }

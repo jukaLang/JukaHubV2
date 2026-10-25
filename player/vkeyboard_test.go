@@ -53,7 +53,7 @@ func resetKeyboardState(t *testing.T) {
 	unitInputActive = false
 	virtualKeyboardActive = true
 	vkAnimStart = 0
-	vkNavRepeat = vkRepeatTracker{}
+	vkNavRepeat = navRepeatTracker{}
 	vkClearPressFlash()
 }
 

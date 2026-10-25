@@ -160,7 +160,9 @@ func fetchWebScript(base *url.URL, ref string, limit int, deadline time.Time) st
 		return ""
 	}
 	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
-	resp, err := (&http.Client{}).Do(req)
+	// The deadline is on the context, so the client needs no timeout of its
+	// own; it does need the jar, like every other browser request.
+	resp, err := browserHTTPClient(0).Do(req)
 	if err != nil {
 		return ""
 	}

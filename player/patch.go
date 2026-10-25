@@ -75,7 +75,8 @@ func patchActions() []patchAction {
 		{ID: "editrepo", Label: "Edit packages.json", Sub: "Add your own packages (fonts, themes, tools, configs)"},
 		{ID: "history", Label: "History & Rollback", Sub: "Transaction log with rollback to the last backup"},
 		{ID: "repair", Label: "Verify & repair", Sub: "Validate config, tools, assets; clear stale downloads"},
-		{ID: "diagnostics", Label: "Export diagnostics", Sub: "Redacted report for support"},
+		{ID: "components", Label: "Component versions", Sub: "App, launcher, tools and packages with SHA-256 digests"},
+		{ID: "diagnostics", Label: "Export diagnostics", Sub: "Report + recent log for support · redacted, component digests"},
 	}
 	if patchState.LastUpdateVer != "" {
 		actions = append(actions, patchAction{ID: "apply", Label: "Apply staged update", Sub: patchState.LastUpdateVer + " is staged and verified"})
@@ -250,10 +251,10 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 		status PatchRowStatus
 	}
 	var rows []uiRow
-	// Action rows.
+	// Action rows: the footer badge already names "A Open" for whichever row
+	// is focused, so repeating it inside every row just said Open twice.
 	for _, a := range patchActions() {
-		rows = append(rows, uiRow{id: "action:" + a.ID, title: a.Label, sub: a.Sub,
-			right: hintLine(FooterHint{"A", "Open"})})
+		rows = append(rows, uiRow{id: "action:" + a.ID, title: a.Label, sub: a.Sub})
 	}
 	// Update class rows.
 	if patchSnap != nil {
@@ -837,6 +838,14 @@ func patchConfirmModal() {
 		})
 	case "repair-report":
 		// informational; nothing to run
+	case "components-info":
+		// The card shows short digests so it stays readable; the clipboard copy
+		// carries the full hashes a maintainer needs to check a build.
+		if err := sdl.SetClipboardText(componentVersionsText(appConfig, true)); err == nil {
+			ShowToast("Component report copied", ToastKindSuccess)
+		} else {
+			ShowToast("Could not copy the component report", ToastKindWarning)
+		}
 	case "confirm-install":
 		RunPatchOp("Installing package", func(ctx context.Context) error {
 			return OpInstallPackage(ctx, appConfig, m.PackageID)
@@ -917,6 +926,13 @@ func patchActivate(config *Config) {
 			openPatchRepoEditor(config)
 		case "repair":
 			RunPatchOp("Repairing JukaHub", func(ctx context.Context) error { return OpRepair(ctx, config) })
+		case "components":
+			patchModal = &patchModalState{
+				ID:      "components-info",
+				Title:   "Component versions",
+				Body:    componentVersionsText(config, false),
+				Confirm: "Copy report",
+			}
 		case "diagnostics":
 			RunPatchOp("Exporting diagnostics", func(ctx context.Context) error { return OpExportDiagnostics(ctx, config) })
 		case "apply":

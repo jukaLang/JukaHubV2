@@ -133,6 +133,14 @@ func onboardingFinish(config *Config, skipped bool) {
 		config.Variables.Custom["onboarding_skipped"] = skipped
 		saveUserConfigDebounced(userConfigFromVariables(config))
 	}
+	// The completed tour's payoff: the controller legend appears once, drawn
+	// from the same footerHints registry the footers show, so the button rows
+	// the tour described in words are now on screen with real bindings. A
+	// skipped tour does not interject, and a "Get set up" panel still covering
+	// the screen keeps the spotlight.
+	if !skipped && !onboardingCoveredByOverlay() {
+		openControlsLegend()
+	}
 }
 
 func onboardingAdvance(config *Config) {
@@ -539,7 +547,7 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	}
 
 	progress := 1.0
-	if !config.Variables.ReducedMotion {
+	if !effectiveReducedMotion(config) {
 		progress = onboarding.enter.progress(uiClockMS())
 	}
 	rise := int32((1 - progress) * 18)

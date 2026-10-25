@@ -81,6 +81,10 @@ type Variables struct {
 	PlaybackResolution string            `json:"playbackResolution"`
 	ReducedMotion      bool              `json:"reducedMotion"`
 	LowPower           bool              `json:"lowPower"`
+	// PowerMode is the named selector ("battery"/"balanced"/"performance"
+	// or empty) that overrides LowPower and ReducedMotion while set. See
+	// powermode.go for the answers a mode gives.
+	PowerMode string `json:"powerMode"`
 	// Motion model (see motion.go): one field per motion role, empty = this
 	// build's default. normalizeMotionConfig canonicalizes unknown values.
 	Transition  string `json:"transition"`
@@ -227,6 +231,7 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"screensaverTimeout": true, "socialNotifs": true,
 		"reducedMotion": true,
 		"lowPower":      true,
+		"powerMode":     true,
 		"ledSync":       true,
 		"custom":        true,
 

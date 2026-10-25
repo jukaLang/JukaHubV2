@@ -12,7 +12,7 @@ runner. The web builder that generates `jukaconfig.json` lives one level up
 | understand the architecture and design tokens | [../docs/DEVELOPMENT.md](../docs/DEVELOPMENT.md) |
 | add a test or open a pull request | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | work on packages or plugins | [../docs/PACKAGES.md](../docs/PACKAGES.md), [../docs/PLUGINS.md](../docs/PLUGINS.md) |
-| handle secrets safely | [SECURITY.md](SECURITY.md) |
+| handle secrets safely | [../SECURITY.md](../SECURITY.md) |
 | build the TrimUI SD-card package | [trimui/README.md](trimui/README.md) |
 
 Quick checks, from this directory:

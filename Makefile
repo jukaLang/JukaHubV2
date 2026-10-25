@@ -55,7 +55,7 @@ GO_SOURCES := find $(PLAYER) -path '*/vendor' -prune -o -name '*.go' -print
 WEB_SCRIPTS := script.js builder-device.js builder-gallery.js gallery/layouts.js
 
 .PHONY: help dev build run test test-web e2e vet fmt fmt-check lint bench web \
-        release clean check
+        release clean check coverage
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -100,6 +100,17 @@ lint: fmt-check vet ## Formatting, vet, builder syntax, ESLint and config JSON
 		echo "lint: ESLint skipped (run 'make test-web' to install the builder test dependencies)"; \
 	fi
 	@echo "lint: ok"
+
+coverage: ## Go coverage total plus the worst-covered functions (advisory)
+	@cd $(PLAYER) && $(GO) test ./... -count=1 -covermode=atomic -coverprofile="$${TMPDIR:-/tmp}/jukahub-cover.out" >/dev/null 2>&1; \
+	status=$$?; \
+	if [ $$status -ne 0 ]; then echo "coverage: the test run failed (exit $$status)"; exit $$status; fi; \
+	$(GO) tool cover -func="$${TMPDIR:-/tmp}/jukahub-cover.out" > "$${TMPDIR:-/tmp}/jukahub-cover-func.txt"; \
+	grep -E '^total:' "$${TMPDIR:-/tmp}/jukahub-cover-func.txt"; \
+	echo ""; \
+	echo "Functions with 0% coverage (first 25):"; \
+	awk '$$NF == "0.0%" && $$1 != "total:" {print}' "$${TMPDIR:-/tmp}/jukahub-cover-func.txt" | head -25; \
+	rm -f "$${TMPDIR:-/tmp}/jukahub-cover.out" "$${TMPDIR:-/tmp}/jukahub-cover-func.txt"
 
 bench: ## Cold-boot benchmark (see player/startup-bench.sh)
 	cd $(PLAYER) && bash ./startup-bench.sh

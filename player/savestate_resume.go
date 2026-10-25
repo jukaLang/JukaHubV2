@@ -158,9 +158,18 @@ func ensureSavestateResume(cfg string) (string, bool) {
 	return updated, changedSave || changedLoad
 }
 
-// enableSavestateResume writes the edit through a temporary file so a power
-// loss cannot truncate retroarch.cfg. The original is copied to the backup once.
+// enableSavestateResume writes the edit through the shared config writer.
 func enableSavestateResume(path string) (bool, error) {
+	return editRetroArchConfig(path, ensureSavestateResume)
+}
+
+// editRetroArchConfig applies a pure text edit to a RetroArch config and writes
+// it through a temporary file so a power loss cannot truncate retroarch.cfg. The
+// original is copied to the backup once, before the first edit.
+//
+// Every managed edit goes through here, so the save-state switches and the
+// recording folder share one crash-safe write instead of two copies of it.
+func editRetroArchConfig(path string, edit func(string) (string, bool)) (bool, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return false, err
@@ -172,7 +181,7 @@ func enableSavestateResume(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	updated, changed := ensureSavestateResume(string(raw))
+	updated, changed := edit(string(raw))
 	if !changed {
 		return false, nil
 	}

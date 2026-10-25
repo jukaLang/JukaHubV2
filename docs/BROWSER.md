@@ -14,7 +14,11 @@ Open it from **Apps → Browser** or **Start → Browser**.
   with the current address selected, so typing replaces it (BACKSPACE clears
   it) instead of appending to the old one.
 * Follow links on the page without typing: press **X** (or `L`) to open the
-  link picker, choose with the D-pad, and press **A**.
+  link picker, choose with the D-pad, and press **A**. Or press **Tab** (a
+  keyboard) / **L3** (left stick click on a gamepad) to switch the D-pad from
+  scrolling to walking the page's links: Left/Right follow reading order,
+  Up/Down follow the rows and pick the nearest column, and **A** opens the
+  outlined link.
 * Go **Back** through visited pages and **Reload** the current one. Back and
   Forward are served from an in-memory page cache (up to eight pages, about
   12 MB of text and images), so returning to a page is instant instead of
@@ -30,6 +34,23 @@ Open it from **Apps → Browser** or **Start → Browser**.
 * Keep the page's shape: type scale, colours, boxes and rules, flex rows (cards
   and icon+label pairs side by side), and absolutely positioned or fixed
   layers painted over the text in `z-index` order.
+* Read the typography and box properties real sheets actually use: `font-size`,
+  `font-weight`, `font-style`, `line-height` (number, percentage or length),
+  `text-align`, `text-indent`, `text-transform`, `text-decoration`,
+  `white-space`, `color`, `background-color`, `background-image` gradients,
+  the `padding`/`margin` shorthands plus their per-side longhands, `border`
+  shorthands and their widths/colours, `border-radius`, `opacity`, and
+  `list-style-type` (`decimal`, letters, roman numerals, `disc`, `circle`,
+  `square`, `none`).
+* Approximate the properties a row grid cannot honour exactly, rather than drop
+  them: a gradient becomes the average of its stops, `opacity` is blended into
+  the colours that get painted, `border-radius` rounds the box (clamped to half
+  its shorter side), and `line-height` becomes extra row slots so paragraphs get
+  the leading the design asked for. `text-align: justify` is drawn
+  left-aligned, because justification needs per-word spacing control the row
+  grid does not have.
+* Keep the cookies a site hands out, for the rest of the session. See
+  [Cookies](#cookies).
 * Resolve the value layer most sites build their theme on: custom properties
   (`:root { --brand: #0af }`, `var(--brand, #fff)`), `!important`, and `calc()`
   over `px`, `em` and `rem`. A page whose palette lives in `--custom`
@@ -92,6 +113,28 @@ show their text promptly and draw any image that missed the budget as a plain
 placeholder. Laying out a very long article (1,500+ rows) takes a moment once,
 then scrolling reuses that layout.
 
+## Cookies
+
+A page load is several requests: the HTML, then its stylesheets, images and
+scripts. Many sites only work when those share one cookie store — a consent
+answer, an age gate, or a redirect that only sticks once the session cookie is
+sent back — so every browser request carries the same jar, and the redirect
+hops of one load see the cookies each earlier hop set.
+
+The jar is scoped the way a browser's is: a cookie belongs to the host that set
+it (including `Domain=` subdomains, the `Path=` prefix, `Secure` and expiry) and
+is never offered to a different site.
+
+It is **in memory only**. The reader cannot submit a form, so it cannot log in,
+and a cookie file on the card would outlive whatever it was for and become a
+privacy surface for no benefit. Cookies last as long as the app runs: a
+relaunch starts clean, and nothing is ever written to the SD card. Only the
+browser uses the jar — feeds, update checks and the podcast fetcher have their
+own clients, so a page's cookie cannot ride along on an unrelated request.
+
+A tracking pixel that the ad filter already drops is not fetched at all, cookie
+or not, so the count in the toolbar still reflects what was kept off the wire.
+
 ## Videos and yt-dlp playback
 
 A `<video>` element or a video-bearing embed (YouTube, Vimeo, Dailymotion,
@@ -113,11 +156,13 @@ nothing at all, and a structurally non-video iframe is skipped as before.
 
 | Input | Action |
 |-------|--------|
-| D-pad Up / Down | Scroll the page |
+| D-pad Up / Down | Scroll the page (link mode: nearest link on the row above/below) |
+| D-pad Left / Right | Walk the page's links in reading order |
+| Tab / L3 | Cycle scroll ⇄ link mode |
 | L1 / R1 | Scroll up / down by a page |
-| A / Enter | Edit the address bar |
+| A / Enter | Edit the address bar, or open the outlined link in link mode |
 | X / `x` / `l` | Open the link picker |
-| B / Esc | Go back to the previous screen |
+| B / Esc | Go back to the previous screen (link mode: back to scroll mode) |
 | **Filter** chip | Turn ad/tracker filtering off (or back on) for the current site |
 | Touch / mouse | Tap the address bar, **GO**, the filter counter, or a link row |
 
@@ -128,10 +173,17 @@ In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 This is a reading browser, not a full web engine. Its JavaScript support is a
 small embedded engine that only exists to splice `document.write` output into the
 page; it is not a full JS runtime, so a site whose content is built by a modern
-framework stays empty. It does not implement grid or float layouts, log in to
-sites, or submit forms. A `calc()` that mixes units the layout has not measured yet
+framework stays empty. It does not implement grid or float layouts, submit
+forms, or keep cookies across a relaunch. Cookies are held for the session (see
+[Cookies](#cookies)), which is enough for a consent gate or a session redirect
+but not for a login, because a login needs the form it cannot post. A `calc()` that mixes units the layout has not measured yet
 (`calc(100% - 20px)`) is left unresolved, and `vh`/`vw` say nothing about a
-reader with no window, so they are ignored rather than guessed. GitHub issue pages and
+reader with no window, so they are ignored rather than guessed. `float`,
+`grid` and `columns` still lay out as plain blocks: the reader stacks content
+one column deep, so a two-up card grid reads as a list. `letter-spacing` is
+ignored (the text is drawn as measured words, not per-glyph advances), and
+gradients are averaged, so a diagonal rainbow is one blended colour instead of
+a ramp. GitHub issue pages and
 release pages work; a site that renders its content only with JavaScript will
 show little or no text. The companion app is the way to send a link from a
 phone if typing on the handheld is awkward.

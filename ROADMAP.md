@@ -9,6 +9,18 @@ One lead per item (the maintainer by default). **The main risk is process
 outrunning contributors**, so nothing here grows a required check or an
 approval gate without a problem it solves — see [Appendix D](#appendix-d-keeping-it-small).
 
+**Scope, so this stays one list instead of two.** This file is about the
+*project*: GitHub mechanics, CI, release engineering, contributor experience.
+What the **app itself** still needs — renderer, scene layouts, reliability,
+device polish — is tracked and re-verified against the code in
+[player/MODERNIZATION.md](player/MODERNIZATION.md), and that file wins if the
+two ever disagree about a code item. The idea lists
+([docs/FEATURE-SLATE.md](docs/FEATURE-SLATE.md),
+[docs/FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md),
+[docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md)) are inputs, not plans: an idea
+becomes work when it is adopted into one of these two lists, with a
+definition of done and a status.
+
 ## Days 0–30 — contributor and CI scaffolding
 
 | # | Item | Status | Definition of done |
@@ -29,12 +41,12 @@ approval gate without a problem it solves — see [Appendix D](#appendix-d-keepi
 
 | # | Item | Status | Definition of done |
 |---|------|--------|--------------------|
-| 12 | Coverage reporting | 🟡 started | CI already publishes a coverage summary (total + 0 % functions) per run. **Finish:** comment the per-PR delta so regressions are visible per change |
+| 12 | Coverage reporting | 🟡 started | CI already publishes a coverage summary (total + 0 % functions) per run. **Finish:** comment the per-PR delta so regressions are visible per change. What the suite itself covers is verified in [player/MODERNIZATION.md](player/MODERNIZATION.md) (Phase 6), not here |
 | 13 | Non-blocking coverage threshold, raised gradually | ⬜ | A warning-only threshold (start at current −2 %) produces a warning, never a red ❌; raised only once the trend is stable |
 | 14 | ESLint + Prettier for the web builder | 🟡 mostly | `make check` already runs ESLint over builder and tests. **Finish:** adopt Prettier so format churn stops showing up in diffs |
 | 15 | Flaky-test quarantine | 🟡 in progress | QUICK_START.md documents the one known-flaky test. **Finish:** a `flaky` label plus quarantine list keeps repeat offenders out of required checks, and the CONTRIBUTING triage note says who unflags what |
 | 16 | docs/ARCHITECTURE.md | ✅ done | Exists, linked from QUICK_START + CONTRIBUTING |
-| 17 | docs/adr/ directory | ⬜ | `docs/adr/0000-record-architecture-decisions.md` exists, the two newest decisions have ADRs, CONTRIBUTING links the directory |
+| 17 | docs/adr/ directory | ✅ done | `docs/adr/0000-record-architecture-decisions.md` records the process and its trigger; `0001` (the physical → logical keymap) and `0002` (renderer-owned texture caches) cover the two newest decisions; CONTRIBUTING links the directory |
 | 18 | Release-note automation | ✅ done | `release.yml` uses `generate_release_notes`. **Later polish:** group notes by kind (features / fixes / install) |
 
 ## Days 60–90 — scale and polish
@@ -43,7 +55,7 @@ approval gate without a problem it solves — see [Appendix D](#appendix-d-keepi
 |---|------|--------|--------------------|
 | 19 | Beta / pre-release channel | ⬜ | Pre-release path documented in BUILDING.md; the self-updater offers dev/beta/stable behind a config switch; ≥1 beta shipped |
 | 20 | i18n scaffolding | ⬜ | A string-extraction boundary exists (no bare UI literals scattered), the translation workflow is documented, one full locale ships instead of none |
-| 21 | Accessibility audit | ⬜ | Keyboard navigation and focus states checked screen-by-screen on player + builder; findings filed with `area/a11y` so they are tickets, not a PDF |
+| 21 | Accessibility audit | 🟡 code side done | **Shipped:** text scaling, high-contrast and colour-blind palettes, reduced motion, the physical → logical keymap ([docs/adr/0001](docs/adr/0001-physical-logical-keymap.md)) and [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md); focus navigation is covered by tests. **Finish:** the screen-by-screen pass on player + builder with findings filed as `area/a11y` issues, so the gaps become tickets rather than a document |
 | 22 | Lightweight RFC process | ⬜ | RFC template (problem, options, DoD) in `docs/rfcs/`; the rule is written down: RFCs only for work touching more than three modules |
 | 23 | Contributor ladder | ⬜ | CONTRIBUTOR_LADDER.md defines contributor → reviewer → maintainer with objective gates (merged PRs, review quality); only needed once a second active maintainer exists |
 
@@ -67,7 +79,7 @@ with their trigger for starting, not a shopping list.
 | 33 | CHANGELOG distribution: signed artifacts + SBOM + sha256sums per release | ⬜ | Next time `release.yml` changes; smallest accepted slice first (checksums file), then cosign/SBOM if a consumer asks |
 | 34 | PRIVACY.md | ⬜ | Before any telemetry/collector feature ships (the player is offline-first, so this may stay unwritten until then) |
 | 35 | Homebrew/Scoop/AUR/docker distribution channels | ⬜ | Only after the Windows/Linux desktop builds have users asking; a channel nobody installs from is maintenance without payoff |
-| 36 | Structured logging + docs/LOGGING.md | ⬜ | When a log field needs to be greppable-out across a device session; do not replace log lines that already read well |
+| 36 | docs/LOGGING.md | 🟡 logging shipped | **Shipped:** `log/slog` with scene/operation fields (`LogScene`, `LogOp`), the in-app log viewer, rotation and the redacted diagnostics bundle; conventions are in [docs/STYLE.md](docs/STYLE.md) and CONTRIBUTING. **Finish:** the dedicated page (what to log, field names, levels) — write it when someone has to read a device log they did not write |
 | 37 | Self-updater resilience: transactional swap + recovery chord + boot guard | 🟡 core done | Verification (signature, size, free space, disk-full guard) and journal-driven rollback of the swap are in place. **Done this review:** recovery chord (L+R+Start restores the previous binary from the newest backup set, [player/safeboot.go](player/safeboot.go)) and the boot guard: a counter in the patch state directory counts three consecutive fast (≤90 s) failed boots within a 72 h update window and auto-rolls back, booting the restored build in safe mode; the counter resets on graceful exit, version change and long healthy runs. Tests cover counting, the clock-reset case and the counter reset at version change |
 | 38 | TUF-secured updater metadata (root/targets/snapshot/timestamp) | ⬜ triggering conditions agreed | Design note written: [docs/UPDATER_TUF.md](docs/UPDATER_TUF.md) records what TUF adds over the current Ed25519 package signatures, the three adopt triggers (external mirror, key-compromise exposure, second publisher) and the smallest slices; code starts only when one fires |
 
@@ -99,39 +111,51 @@ written so a newcomer needs no codebase history.
 
 ### 1. Make `errors.Is` work across the launch-error chain
 
-**File:** `player/launch_errors.go`, `player/launcher.go`
-A launch failure that goes through `[fmt.Errorf("...: %v", err)]` breaks
-callers that want to check the cause with `errors.Is` / `errors.As`. Convert
-those wraps to `%w`, then add a table test in `launch_handover_test.go`
-asserting that at least two known sentinel launch errors still satisfy
-`errors.Is` after wrapping.
+**Files:** the wraps are spread across the player; `player/launch_errors.go`
+consumes causes (it maps them to suggestions) but contains no `fmt.Errorf` of
+its own.
+A launch failure that goes through `fmt.Errorf("...: %v", err)` breaks callers
+that want to check the cause with `errors.Is` / `errors.As`. Convert those wraps
+to `%w`, then prove sentinel matching works end to end.
 
-**Done when:** `%w` is used for every `fmt.Errorf` in those two files, and a
-test proves sentinel matching works end to end.
+**Status: done.** Every `fmt.Errorf` that formats an error now uses `%w`
+(`netplay.go`, `tools.go`, `crypto.go`, `systemcontrol.go`,
+`windows_runtime_install.go`, `patch_resolve.go` and the rest), and the
+convention is enforced rather than documented:
+`player/errorwrap_audit_test.go` walks the player's source with `go/ast` and
+fails on a `%v`-formatted error argument. The launch path is covered
+behaviourally too: a launch failure that keeps `exec.ErrNotFound` gets the
+specific "launcher missing" suggestion from `launchFailureSuggestion` instead
+of the generic one.
 
 ### 2. Edge-case tests for `parsePosInt` / `StringOrInt`
 
-**File:** `player/tools.go` (helpers) + a new small test file
+**Files:** `player/core.go`, `player/config.go` + `player/config_numeric_dialect_test.go`
 Config values arrive as `30`, `"30"`, `"30px"`, `""`, huge numbers. The
-helpers are load-bearing for every element position on screen but have thin
+helpers are load-bearing for every element position on screen but had thin
 direct coverage: separate truth from accident for `30px`, negative values,
 overflowing integers, and whitespace.
 
-**Done when:** a test table documents each accepted/rejected form, and any
-surprising behaviour revealed is either fixed or documented in
-`docs/CONFIGURATION.md`.
+**Status: done.** The table tests pin the two readers: sizes are strict
+(`parsePosInt`: integer, non-negative, no unit suffix), while `x`/`y` go through
+the lenient `intOrString` (`"30px"`, padding, truncating floats). The one
+surprise they exposed was fixed: `parsePosInt` rejected padded values while
+`intOrString` trimmed, so a `" 30 "` width fell back to the element default;
+it now trims, and the `width`/`height` row in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md#elements) says what is accepted.
 
 ### 3. Check every relative link in docs/*.md and README.md
 
-**Files:** a new `docs/` link-check test (or a tiny workflow step)
+**Files:** `player/docs_links_test.go`
 Docs move around (`CONFIGURATION.md` was restructured this month), so relative
-links rot silently. Add a small Go test (or CI grep step) that walks
-`README.md`, `CONTRIBUTING.md`, `CHANGELOG.md` and every file in `docs/`,
-resolves each relative Markdown link target, and errors on missing paths
-(with URL fragments like `#L42` stripped before checking).
+links rot silently. The check walks every Markdown file in the checkout
+(vendored and generated trees excluded), resolves each relative link target and
+fails on missing paths, with URL fragments stripped before checking.
 
-**Done when:** the check runs in `make check` or CI, currently passes on the
-tree, and fixed any broken link it found on the way in.
+**Status: done.** It runs as part of `make test`/`make check`, and it found
+four broken links on the way in: three pointers to the Android-on-A133P study
+(now [docs/ANDROID-GAMMAOS.md](docs/ANDROID-GAMMAOS.md), restored) and a
+`player/README.md` link to a `player/SECURITY.md` that does not exist.
 
 ### 4. Visible focus states in the web builder
 

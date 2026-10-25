@@ -124,6 +124,15 @@ func parseKilobytes(s string) int64 {
 }
 
 func getCPUTempC() string {
+	if v, ok := cpuTempValueC(); ok {
+		return fmt.Sprintf("%.1f C", v)
+	}
+	return "N/A"
+}
+
+// cpuTempValueC is the same read without the display formatting, for callers
+// that map the value (the LED temperature policy) rather than print it.
+func cpuTempValueC() (float64, bool) {
 	candidates := []string{
 		"/sys/class/thermal/thermal_zone0/temp",
 		"/sys/class/thermal/thermal_zone1/temp",
@@ -131,11 +140,11 @@ func getCPUTempC() string {
 	for _, c := range candidates {
 		if data, err := os.ReadFile(c); err == nil {
 			if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && v > 0 {
-				return fmt.Sprintf("%.1f C", float64(v)/1000.0)
+				return float64(v) / 1000.0, true
 			}
 		}
 	}
-	return "N/A"
+	return 0, false
 }
 
 func getDiskInfo() (total, used int64, pct int) {
@@ -176,12 +185,34 @@ var (
 	diskPieMutex sync.Mutex
 )
 
+// sceneHasPieChart reports whether the scene that is up draws the disk pie
+// chart. The poller below and the scene-entry refresh both use it.
+func sceneHasPieChart(config *Config) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	for _, elem := range config.Scenes[currentSceneIndex].Elements {
+		if elem.Type == "piechart" {
+			return true
+		}
+	}
+	return false
+}
+
 func startDiskPieAutoRefresh() {
+	// One reading at startup so the first frame that needs the chart has data.
+	refreshDiskPie()
 	go func() {
-		refreshDiskPie()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for range ticker.C {
+			// A hidden screen does not poll. The pie lives on one scene, and
+			// statfs-ing the card every five seconds for a chart nobody is looking
+			// at keeps the CPU awake on a battery device for nothing; entering the
+			// scene takes a fresh reading instead (completeSceneTransition).
+			if !sceneHasPieChart(appConfig) {
+				continue
+			}
 			refreshDiskPie()
 		}
 	}()

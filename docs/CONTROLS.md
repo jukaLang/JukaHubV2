@@ -216,27 +216,45 @@ A text web browser for GitHub issues, release notes and documentation. See
 
 | Button | Action |
 |--------|--------|
-| Up / Down | Scroll the page; Up at the top and Down at the bottom hand the focus to the header and the button row |
+| Up / Down | In scroll mode, scroll the page; at the top/bottom the focus goes to the header and the button row. In link mode, move to the nearest link on the row above/below |
 | L1 / R1 | Scroll by a page |
-| Left / Right | Walk the links on the page, scrolling them into view |
+| Left / Right | Walk the links in reading order, scrolling them into view |
+| **Tab** (keyboard) or **L3** (left stick click) | Switch between scrolling the page and walking its links |
 | A | Open the highlighted link, or edit the address bar when no link is picked |
 | Y | Search the web (opens the keyboard); the **SEARCH** chip does the same |
 | X | Open the full link list for the page |
-| B | Leave the browser |
+| B | Leave the browser (in link mode, the first press returns to scroll mode) |
 
-Links are walked in reading order and outlined as they come into focus, so a
-link deep in an article can be followed without opening the picker. **Y** (or
-the **SEARCH** chip beside the address bar) opens the keyboard on an empty
-field: type a phrase to search, or a host to open it. The **Back**, **Forward**,
-**Reload**, **Links**, **Filter**, **Search**, **Home** and **Issues** chips at
-the bottom are ordinary scene buttons, reachable by pressing Down past the end
-of the page and Up to come back.
+Links are outlined as they come into focus, so a link deep in an article can be
+followed without opening the picker. Walking them needs the D-pad to do two
+jobs, so **Tab** on a keyboard, or a click on the left stick on a real gamepad,
+cycles scroll mode and link mode; the toast names the keys. In link mode
+Up/Down follow the page's rows and pick the nearest column, so a two-column
+layout does not throw the cursor across the screen, while Left/Right stay in
+plain reading order. **Y** (or the **SEARCH** chip beside the address bar) opens
+the keyboard on an empty field: type a phrase to search, or a host to open it.
+The **Back**, **Forward**, **Reload**, **Links**, **Filter**, **Search**,
+**Home** and **Issues** chips at the bottom are ordinary scene buttons,
+reachable by pressing Down past the end of the page and Up to come back.
 
 The chip at the right end of the address bar reports how many ad and tracker
 requests the page load skipped (`12 BLOCKED`, or `0 BLOCKED`). It turns amber as
 **FILTER OFF** when the site is excepted, and tapping it is the same as the
 **Filter** button: filtering is switched off for that host and the page reloads.
 Press **Filter** again to put the site back under the filter.
+
+## Recordings
+
+Captures an emulator wrote into the shared folder, opened from
+**Apps → Recordings**. See [docs/RECORDINGS.md](RECORDINGS.md) for how that
+folder is chosen and what recording itself looks like.
+
+| Button | Action |
+|--------|--------|
+| Up / Down | Walk the list, newest capture first |
+| A | Play the highlighted capture |
+| **Rescan** | Re-read the folder for a capture that just finished |
+| **Media**, B | Leave the screen |
 
 ## Video player
 
@@ -665,8 +683,9 @@ is masked, and **A** on the keyboard's key submits; closing the keyboard cancels
 ## Power tools
 
 Open **Tools → Power tools** for the developer and power-user panel. The
-landing page holds eight tools; **A** opens one, **B** goes back, and the list
-scrolls when the font is large.
+landing page holds seven tools; **A** opens the selected one, **B** closes the
+panel, and the list scrolls when the font is large. The footer names what the
+selected row does, so the rows themselves stay plain.
 
 | Input | Action |
 |-------|--------|

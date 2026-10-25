@@ -362,7 +362,9 @@ func fetchWebImageBytes(parent context.Context, pageURL, address string) []byte 
 		return nil
 	}
 	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
-	client := &http.Client{Timeout: webImageFetchTimeout}
+	// Images share the page's jar: a picture behind a session cookie (a
+	// private avatar, a captcha-free gallery) otherwise drew as a placeholder.
+	client := browserHTTPClient(webImageFetchTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil

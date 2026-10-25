@@ -30,6 +30,7 @@ const (
 	qsActionLowPower
 	qsActionReducedMotion
 	qsActionFullscreen
+	qsActionNetplay
 )
 
 type qsToggle struct {
@@ -57,7 +58,7 @@ type qsSlider struct {
 type qsCycle struct {
 	Label string
 	Icon  string
-	Value int // seconds
+	Value int // seconds (screensaver) or a power-mode index (Power Mode)
 }
 
 // qsLinkAction names a row that opens another panel instead of changing a
@@ -67,6 +68,7 @@ type qsLinkAction int
 const (
 	qsLinkNone qsLinkAction = iota
 	qsLinkWiFi
+	qsLinkControls
 )
 
 type qsLink struct {
@@ -83,7 +85,7 @@ type qsState struct {
 	toggles []qsToggle
 	sliders []qsSlider
 	links   []qsLink
-	cycle   qsCycle
+	cycles  []qsCycle
 	enter   uiEnter // rise + fade entrance
 
 	// lastVolume/lastBrightness remember what was already written to the host,
@@ -124,6 +126,10 @@ func qsInit() {
 				OnColor: sdl.Color{R: 200, G: 160, B: 80, A: 255}, OffColor: qsToggleOff},
 			{Label: "Fullscreen", Icon: "[F]", Action: qsActionFullscreen,
 				OnColor: sdl.Color{R: 180, G: 100, B: 255, A: 255}, OffColor: qsToggleOff},
+			// LAN play is a hub feature, not a radio: the toggle only decides
+			// whether the Game Library offers the panel.
+			{Label: "LAN Play", Icon: "[G]", Action: qsActionNetplay,
+				OnColor: sdl.Color{R: 80, G: 200, B: 170, A: 255}, OffColor: qsToggleOff},
 		},
 		sliders: []qsSlider{
 			{Label: "Volume", Icon: "[V]", Action: "volume", Value: 0.8, Min: 0, Max: 1},
@@ -132,10 +138,17 @@ func qsInit() {
 		},
 		links: []qsLink{
 			{Label: "Wi-Fi Networks", Icon: "[N]", Action: qsLinkWiFi},
+			// The controller legend's card needs nothing from the device, so
+			// its row is offered on every host (see qsLinkControls below).
+			{Label: "Controller Legend", Icon: "[?]", Action: qsLinkControls},
 		},
 		// The app's idle timer drives the screensaver overlay, not a display
 		// blank, so the row says what it actually controls.
-		cycle: qsCycle{Label: "Screensaver", Icon: "[T]", Value: 25},
+		cycles: []qsCycle{
+			{Label: "Screensaver", Icon: "[T]", Value: 25},
+			{Label: "Power Mode", Icon: "[P]", Value: qsPowerModeRowIndex()},
+			{Label: "LED Mode", Icon: "[R]", Value: ledPolicyIndex(ledPolicyFromConfig(nil))},
+		},
 		// -1 means "nothing written yet", so the first move always applies.
 		lastVolume:     -1,
 		lastBrightness: -1,
@@ -155,6 +168,7 @@ func qsRefreshAvailability() {
 		qsActionLowPower:      true,
 		qsActionReducedMotion: true,
 		qsActionFullscreen:    true,
+		qsActionNetplay:       true,
 	}
 	detail := map[qsAction]string{
 		qsActionWifi:      "no nmcli/rfkill",
@@ -175,6 +189,10 @@ func qsRefreshAvailability() {
 			// The row is 400 px wide; the full reason lives in the picker's
 			// header and in the toast, so the row only says there is no backend.
 			l.Detail = "N/A"
+		case qsLinkControls:
+			// The legend card runs local to the app, so this row is always
+			// offered, even on a host with no radios at all.
+			l.Available = true
 		}
 	}
 	volumeOK := volumeBackend() != ""
@@ -202,8 +220,9 @@ func qsLoadPersisted() {
 		}
 	}
 	if appConfig != nil && appConfig.Variables.ScreensaverTimeout > 0 {
-		qs.cycle.Value = appConfig.Variables.ScreensaverTimeout
+		qs.cycles[qsCycleScreensaverRow].Value = appConfig.Variables.ScreensaverTimeout
 	}
+	qs.cycles[qsCycleRowPowerMode].Value = qsPowerModeRowIndex()
 }
 
 // qsApplyPersistedSystemState pushes the saved volume and brightness to the
@@ -237,28 +256,51 @@ func clampQSPercent(v int) float64 {
 }
 
 // qsRowCount is the number of interactive rows: toggles, sliders, links, then
-// the timeout cycle.
-func qsRowCount() int { return len(qs.toggles) + len(qs.sliders) + len(qs.links) + 1 }
+// the timeout and power-mode cycles.
+func qsRowCount() int { return len(qs.toggles) + len(qs.sliders) + len(qs.links) + len(qs.cycles) }
+
+// The cycle rows, in row order. The screensaver row owns arrays and labels
+// via the shared helper sets; the Power Mode row is named so a future row
+// cannot silently become "the cycle row".
+const (
+	qsCycleScreensaverRow = 0
+	qsCycleRowPowerMode   = 1
+	qsCycleRowLED         = 2
+)
 
 // qsSyncFromConfig refreshes the rows whose truth lives in the config, then
-// asks the host for the radio and level state.
+// asks the host for the radio and level state. While a named Power Mode is
+// active, the two levers it manages show what actually happens (the mode's
+// verdict), not the saved toggle — the pill a user sees must match the
+// behaviour they get.
 func qsSyncFromConfig(config *Config) {
 	if config != nil {
+		managed := currentPowerMode(config) != PowerModeDefault
 		for i := range qs.toggles {
 			switch qs.toggles[i].Action {
 			case qsActionLowPower:
 				qs.toggles[i].Value = config.Variables.LowPower
+				if managed {
+					qs.toggles[i].Value = effectiveLowPower(config)
+				}
 			case qsActionReducedMotion:
 				qs.toggles[i].Value = config.Variables.ReducedMotion
+				if managed {
+					qs.toggles[i].Value = effectiveReducedMotion(config)
+				}
 			case qsActionFullscreen:
 				qs.toggles[i].Value = config.Variables.Fullscreen
 			case qsActionLedSync:
 				qs.toggles[i].Value = config.Variables.LEDSync
+			case qsActionNetplay:
+				qs.toggles[i].Value = netplayEnabled(config)
 			}
 		}
 		if config.Variables.ScreensaverTimeout > 0 {
-			qs.cycle.Value = config.Variables.ScreensaverTimeout
+			qs.cycles[qsCycleScreensaverRow].Value = config.Variables.ScreensaverTimeout
 		}
+		qs.cycles[qsCycleRowPowerMode].Value = qsPowerModeRowIndex()
+		qs.cycles[qsCycleRowLED].Value = ledPolicyIndex(ledPolicyFromConfig(config))
 	}
 	qsRefreshAvailability()
 	qsStartProbe()
@@ -402,7 +444,8 @@ func qsSelect() {
 		qsOpenLink(qs.links[idx])
 		return
 	}
-	qsCycleTimeout(1)
+	idx -= len(qs.links)
+	qsStepCycle(idx, 1)
 }
 
 // qsOpenLink opens the panel behind a link row. It is a no-op with a reason on
@@ -419,12 +462,17 @@ func qsOpenLink(l qsLink) {
 	switch l.Action {
 	case qsLinkWiFi:
 		openWiFiPanel()
+	case qsLinkControls:
+		// The legend is a modal of its own: the panel steps aside so two
+		// cards are never stacked.
+		qs.open = false
+		openControlsLegend()
 	}
 }
 
 // qsNavigateSlider handles the left/right input. On the sliders dr is the
-// percentage step (the controller sends ±5, the keyboard ±5); on the timeout
-// row it moves one step in that direction.
+// percentage step (the controller sends ±5, the keyboard ±5); on the cycles
+// it moves one step in that direction.
 func qsNavigateSlider(dr int) {
 	if dr == 0 {
 		return
@@ -434,13 +482,18 @@ func qsNavigateSlider(dr int) {
 		qsStepSlider(idx, dr)
 		return
 	}
-	if qs.cursor >= len(qs.toggles)+len(qs.sliders)+len(qs.links) {
-		if dr > 0 {
-			qsCycleTimeout(1)
-		} else {
-			qsCycleTimeout(-1)
-		}
+	idx -= len(qs.sliders)
+	if idx < 0 {
+		return
 	}
+	// Left/Right walk a cycle row one step at a time; dr carries the ±5 the
+	// sliders use, so only its sign matters here.
+	step := 1
+	if dr < 0 {
+		step = -1
+	}
+	idx -= len(qs.links)
+	qsStepCycle(idx, step)
 }
 
 // qsToggleRow flips one switch and reverts it when the host refuses.
@@ -452,6 +505,17 @@ func qsToggleRow(i int) {
 	if !t.Available {
 		ShowToast(t.Label+" is unavailable on this device ("+t.Detail+")", ToastKindInfo)
 		return
+	}
+	// A named Power Mode answers for the levers it manages: pressing the
+	// switch would either be undone on the next sync or fight the mode, so
+	// the row explains where the control lives instead of lying quietly.
+	if mode := currentPowerMode(appConfig); mode != PowerModeDefault {
+		switch t.Action {
+		case qsActionLowPower, qsActionReducedMotion:
+			ShowToast("Managed by Power Mode ("+powerModeLabel(mode)+
+				") — set it to Default to control this toggle.", ToastKindInfo)
+			return
+		}
 	}
 	want := !t.Value
 	if err := qsApplyToggle(t, want); err != nil {
@@ -527,6 +591,11 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 			syncVariableOverrides(appConfig)
 		}
 		return nil
+	case qsActionNetplay:
+		if appConfig != nil {
+			setNetplayEnabled(appConfig, want)
+		}
+		return nil
 	case qsActionFullscreen:
 		if appConfig != nil {
 			appConfig.Variables.Fullscreen = want
@@ -591,24 +660,59 @@ func qsStepSlider(idx, deltaPct int) {
 	}
 }
 
-// qsCycleTimeout moves the screen timeout to the next (or previous) step.
-func qsCycleTimeout(dir int) {
+// qsPowerModeRowIndex is where the config's Power Mode sits on the cycle.
+func qsPowerModeRowIndex() int { return powerModeIndex(currentPowerMode(appConfig)) }
+
+// qsStepCycle moves one cycle row. Row 0 is the screensaver timeout, row 1 is
+// the Power Mode selector; everything future lands in the row switch too.
+func qsStepCycle(row, dir int) {
+	if row < 0 || row >= len(qs.cycles) || dir == 0 {
+		return
+	}
+	switch row {
+	case qsCycleRowLED:
+		if appConfig == nil {
+			return
+		}
+		next := nextLEDPolicy(ledPolicyFromConfig(appConfig), dir)
+		if appConfig.Variables.Custom == nil {
+			appConfig.Variables.Custom = map[string]interface{}{}
+		}
+		appConfig.Variables.Custom[ledKeyPolicy] = next
+		qs.cycles[qsCycleRowLED].Value = ledPolicyIndex(next)
+		ShowToast("LED Mode: "+ledPolicyLabel(next), ToastKindInfo)
+		qsPersist(appConfig)
+		PlayNavSound()
+		return
+	case qsCycleRowPowerMode:
+		mode := nextPowerMode(currentPowerMode(appConfig), dir)
+		label := cyclePowerModeTo(appConfig, mode)
+		qs.cycles[qsCycleRowPowerMode].Value = qsPowerModeRowIndex()
+		ShowToast("Power Mode: "+label, ToastKindInfo)
+		if appConfig != nil {
+			qsPersist(appConfig)
+		}
+		PlayNavSound()
+		return
+	}
+	// The screensaver timeout: next (or previous) step.
 	var next int
+	current := qs.cycles[qsCycleScreensaverRow].Value
 	if dir >= 0 {
-		next = nextScreenTimeout(qs.cycle.Value)
+		next = nextScreenTimeout(current)
 	} else {
-		next = qs.cycle.Value
+		next = current
 		for i := len(screenTimeoutSteps) - 1; i >= 0; i-- {
-			if screenTimeoutSteps[i] < qs.cycle.Value {
+			if screenTimeoutSteps[i] < current {
 				next = screenTimeoutSteps[i]
 				break
 			}
 		}
-		if next == qs.cycle.Value {
+		if next == current {
 			next = screenTimeoutSteps[len(screenTimeoutSteps)-1]
 		}
 	}
-	qs.cycle.Value = next
+	qs.cycles[qsCycleScreensaverRow].Value = next
 	if appConfig != nil {
 		appConfig.Variables.ScreensaverTimeout = next
 		screensaverIdleTimeout = time.Duration(next) * time.Second
@@ -633,12 +737,15 @@ func qsPersist(config *Config) {
 		user.Variables.Brightness = int(math.Round(qs.sliders[1].Value * 100))
 		user.Variables.BrightnessSet = true
 	}
-	user.Variables.ScreensaverTimeout = qs.cycle.Value
+	user.Variables.ScreensaverTimeout = qs.cycles[qsCycleScreensaverRow].Value
 	if config != nil {
 		user.Variables.LedSync = config.Variables.LEDSync
+		on := config.Variables.NetPlayEnabled
+		user.Variables.NetPlayEnabled = &on
 		user.Variables.LowPower = config.Variables.LowPower
 		user.Variables.ReducedMotion = config.Variables.ReducedMotion
 		user.Variables.Fullscreen = config.Variables.Fullscreen
+		user.Variables.PowerMode = config.Variables.PowerMode
 		user.Variables.Custom = config.Variables.Custom
 	}
 	saveUserConfigDebounced(user)
@@ -733,8 +840,11 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 				qs.cursor == len(qs.toggles)+len(qs.sliders)+i)
 			y += itemH + qsItemGap
 		}
-		drawQSCycleRow(renderer, config, font, itemX, y, itemW, itemH,
-			qs.cursor == len(qs.toggles)+len(qs.sliders)+len(qs.links))
+		for i := range qs.cycles {
+			drawQSCycleRow(renderer, config, font, i, itemX, y, itemW, itemH,
+				qs.cursor == len(qs.toggles)+len(qs.sliders)+len(qs.links)+i)
+			y += itemH + qsItemGap
+		}
 
 		// System info at the bottom: battery on the left, connectivity right.
 		// Both lines are positioned from the font height rather than fixed
@@ -917,18 +1027,35 @@ func drawQSLinkRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y,
 		sdl.Color{R: 120, G: 132, B: 152, A: 190}, x+w-int32(rw)-12, y+10)
 }
 
-func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, focused bool) {
+// drawQSCycleRow renders a cycler row (timeout steps, Power Mode). Its label
+// gets the same measured treatment as the toggles: a translated label in a
+// localized UI would otherwise run under the right-aligned value.
+func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row int, x, y, w, h int32, focused bool) {
 	qsRowBackground(renderer, x, y, w, h, focused)
 
-	renderText(renderer, config, font, qs.cycle.Icon,
+	c := &qs.cycles[row]
+	renderText(renderer, config, font, c.Icon,
 		sdl.Color{R: 200, G: 210, B: 230, A: 220}, x+8, y+10)
-	renderText(renderer, config, font, qs.cycle.Label,
+
+	value := screenTimeoutLabel(c.Value)
+	valCol := sdl.Color{R: 140, G: 155, B: 180, A: 220}
+	if row == qsCycleRowLED {
+		value = ledPolicyLabel(ledPolicyOrder[c.Value].key)
+	}
+	if row == qsCycleRowPowerMode {
+		value = powerModeLabel(powerModeOrder[c.Value])
+		if c.Value != powerModeIndex(PowerModeDefault) {
+			// A named mode is live: tint the value with the accent so the
+			// override reads as "on", the way a coloured switch does.
+			valCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 240}
+		}
+	}
+	labeled := ellipsize(font, c.Label, qsLabelWidth(font, w, value))
+	renderText(renderer, config, font, labeled,
 		sdl.Color{R: 180, G: 190, B: 210, A: 220}, x+52, y+10)
 
-	value := screenTimeoutLabel(qs.cycle.Value)
 	vw, _, _ := font.SizeUTF8(value)
-	renderText(renderer, config, font, value,
-		sdl.Color{R: 140, G: 155, B: 180, A: 220}, x+w-int32(vw)-12, y+10)
+	renderText(renderer, config, font, value, valCol, x+w-int32(vw)-12, y+10)
 }
 
 func handleQSInput(e *sdl.KeyboardEvent, config *Config) {

@@ -83,12 +83,17 @@ func TestScreensaverChatFeed(t *testing.T) {
 // Settings row and the saved user config.
 func TestApplyScreensaverTimeout(t *testing.T) {
 	prevTimeout := screensaverIdleTimeout
-	prevCycle := qs.cycle.Value
+	// The panel may not have been initialized (qsInit runs at startup), so
+	// pad the cycles slice to the layout the production code writes into.
+	for len(qs.cycles) <= qsCycleScreensaverRow {
+		qs.cycles = append(qs.cycles, qsCycle{})
+	}
+	prevCycle := qs.cycles[qsCycleScreensaverRow].Value
 	prevWrites := userConfigWritesEnabled
 	userConfigWritesEnabled = false
 	t.Cleanup(func() {
 		screensaverIdleTimeout = prevTimeout
-		qs.cycle.Value = prevCycle
+		qs.cycles[qsCycleScreensaverRow].Value = prevCycle
 		userConfigWritesEnabled = prevWrites
 	})
 
@@ -103,8 +108,8 @@ func TestApplyScreensaverTimeout(t *testing.T) {
 	if config.Variables.ScreensaverTimeout != 25 {
 		t.Errorf("config timeout = %d", config.Variables.ScreensaverTimeout)
 	}
-	if qs.cycle.Value != 25 {
-		t.Errorf("quick settings value = %d", qs.cycle.Value)
+	if qs.cycles[qsCycleScreensaverRow].Value != 25 {
+		t.Errorf("quick settings value = %d", qs.cycles[qsCycleScreensaverRow].Value)
 	}
 	if got := config.Variables.Get("screensaverTimeoutLabel"); got != "25s" {
 		t.Errorf("label = %q, want 25s", got)

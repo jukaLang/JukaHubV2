@@ -1311,11 +1311,20 @@ func fetchBounded(ctx context.Context, client *http.Client, raw string, maxBytes
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "JukaHub-Patch/"+versionString(nil))
+	// A release manifest that has not changed answers 304, which keeps the
+	// update check cheap on the device's connection.
+	applyConditionalHeaders(req, raw)
 	resp, err := doWithRetry(ctx, client, req, defaultRetryPolicy())
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified {
+		if body, ok := conditionalBody(raw); ok {
+			return body, nil
+		}
+		return nil, fmt.Errorf("HTTP 304 from %s without a cached copy", raw)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, raw)
 	}
@@ -1327,6 +1336,7 @@ func fetchBounded(ctx context.Context, client *http.Client, raw string, maxBytes
 	if int64(len(data)) > maxBytes {
 		return nil, fmt.Errorf("response exceeds %d byte limit", maxBytes)
 	}
+	storeConditionalResponse(raw, resp, data)
 	return data, nil
 }
 
@@ -2267,6 +2277,10 @@ func DiagnosticsText(config *Config) string {
 	for _, b := range backups {
 		sb.WriteString("  - " + b + "\n")
 	}
+	// Component versions close the report: a maintainer can match the app,
+	// launcher, helper tools and installed packages against the published
+	// digests without asking the reporter to run anything.
+	sb.WriteString("\n" + componentVersionsText(config, true) + "\n")
 	sb.WriteString("\nNo credentials, tokens, config values or private paths are included.\n")
 	return sb.String()
 }

@@ -16,7 +16,9 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          # Every other workflow reads the version from player/go.mod; release
+          # packaging must not fall behind it.
+          go-version: "1.27"
           cache-dependency-path: player/go.sum
 
       - name: Install SDL2 development libraries

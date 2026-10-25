@@ -145,7 +145,7 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 		// Stale rects from a previous scene must not become phantom targets; the
 		// status bar and home header clear theirs when they are not drawn.
 		if tb.startRect.W > 0 {
-			addNode(ChromeStartIndex, tb.startRect, ChromeStartType, "Apps")
+			addNode(ChromeStartIndex, tb.startRect, ChromeStartType, "Menu")
 		}
 		if statusClockRect.W > 0 {
 			addNode(ChromeClockIndex, statusClockRect, ChromeClockType, "Clock")

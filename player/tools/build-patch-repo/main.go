@@ -183,7 +183,7 @@ func buildOnePackage(dir, out, name string) (repoEntry, error) {
 	for _, op := range man.Operations {
 		if op.Kind == "install" || op.Kind == "replace" {
 			if _, err := os.Stat(filepath.Join(dir, "payload", filepath.FromSlash(op.Src))); err != nil {
-				return e, fmt.Errorf("%s: payload file %q missing: %v", name, op.Src, err)
+				return e, fmt.Errorf("%s: payload file %q missing: %w", name, op.Src, err)
 			}
 		}
 	}

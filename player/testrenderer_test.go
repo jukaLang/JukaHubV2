@@ -22,5 +22,13 @@ func destroyTestRenderer(r *sdl.Renderer) {
 	// Avatar textures are cached by URL across frames; freeing them here keeps
 	// a later test from drawing one that this renderer already destroyed.
 	clearChatAvatarCache()
+	// The static-layer caches (on-screen keyboard, chat, video overlay) are
+	// renderer-owned textures too. They used to survive the renderer: a later
+	// probe rebuilt them against a dead renderer or freed the dangling pointer,
+	// which corrupted SDL's allocator and crashed an unrelated ReadPixels run
+	// further down the suite. Drop them while their renderer is still alive.
+	DestroyVKStaticCache()
+	DestroyVKChatCache()
+	DestroyVKVideoOverlayCache()
 	r.Destroy()
 }

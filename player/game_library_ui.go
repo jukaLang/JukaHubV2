@@ -937,9 +937,15 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	if artworkFetchRunning() {
 		artHint = FooterHint{"L1 / F", "Stop"}
 	}
-	hint := hintLine(FooterHint{"A", "Play"}, FooterHint{"R / R3", "Random"},
-		FooterHint{"Start / O", "Options"}, FooterHint{"S / R1", "Search"},
-		FooterHint{"X", "LAN Play"}, artHint, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
+	// X is only advertised while LAN Play is on: a footer that offers a
+	// switched-off feature teaches a button that answers with a toast.
+	hints := []FooterHint{{"A", "Play"}, {"R / R3", "Random"},
+		{"Start / O", "Options"}, {"S / R1", "Search"}}
+	if netplayEnabled(config) {
+		hints = append(hints, FooterHint{"X", "LAN Play"})
+	}
+	hints = append(hints, artHint, FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
+	hint := hintLine(hints...)
 	if gameLib.lib.Total == 0 {
 		hint = hintLine(FooterHint{"Y", "Rescan"}, FooterHint{"B", "Close"})
 	}

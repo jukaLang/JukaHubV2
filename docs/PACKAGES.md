@@ -177,6 +177,99 @@ The shipped example is
 
 ---
 
+## Curated packages
+
+The repository is the source of truth for what is curated: a package exists
+here only if its manifest and payload are checked in under
+[`player/patch-packages/`](../player/patch-packages), and the signed index is
+built from exactly those directories. There is no separate storefront and no
+second catalogue to drift out of sync. **Curation is currently thin** — the
+repository ships one package, and this section describes the bar a package has
+to clear rather than a catalogue of options.
+
+### What is in the repository today
+
+| Package | Category | Devices / OS | Risk | Installs |
+|---------|----------|--------------|------|----------|
+| [`jukahub-cache-clean`](../player/patch-packages/jukahub-cache-clean/manifest.json) | Utilities | `TG5040` / `trimui-stock` | `low` | `JukaHub/tools/jukahub-cache-clean.sh` (executable) and `JukaHub/tools/cache-clean-README.txt` |
+
+The bundled-assets starter package is provided by the app (Patch → **JukaHub
+bundled assets**) and is not built from this directory, so it is not part of
+this list.
+
+### Categories
+
+| Category | What belongs there | Shipped |
+|----------|--------------------|---------|
+| **Utilities** | Self-contained helper scripts and small tools that only touch their declared destinations. | `jukahub-cache-clean` |
+| **Themes** | A theme JSON plus any font or background it references, installed as a new file rather than replacing a user's current theme. | none |
+| **Overlays and hotkeys** | RetroArch overlay assets and a documented key block. Must not overwrite `retroarch.cfg` wholesale; a `patch` operation or a documented manual step is required. | none |
+| **Emulator companions** | Config fragments or launcher glue for an emulator the user already installed. | none |
+
+An empty category is empty, not promised. Do not read this table as a roadmap:
+the next package is added when someone writes, tests and submits one.
+
+### What makes a package curated
+
+- **The manifest is reviewable in one screen.** Declared operations only — no
+  lifecycle scripts, no `postinst`, no network calls at install time. The
+  manifest rules and the rejected operation kinds are enforced by the loader
+  (see [Package format](#package-format)), and review checks the *intent* the
+  format cannot: what the package is for, and whether a user can undo it.
+- **Destinations are justified.** JukaHub-owned paths need no explanation; any
+  other destination does. The protected folders (`Roms`, `BIOS`, `Saves`,
+  `States`, `Screenshots`, `Collections`, `.system`, `JukaHub/data`,
+  `jukauser.json`) are refused by the engine and a curated package never tries
+  to route around that.
+- **It is reproducible from the checked-in source.** The archive is built with
+  `tools/build-patch-repo`, the digest in the signed index must match the
+  archive, and the payload is the file that was reviewed — not a binary fetched
+  from somewhere else.
+- **The compatibility gate is honest.** `architecture`, `devices` and `os` must
+  describe where it was actually tried. A package tested only on a desktop
+  build declares no device; a package that works anywhere says `all`. There is
+  no `min_firmware` field in the package manifest today — the app *release*
+  manifest carries a per-device firmware floor, packages do not — so do not
+  invent one or rely on it.
+- **Dependencies are real.** `depends`, `conflicts` and `provides` are resolved
+  before anything is touched, so a package that needs an emulator or a tool has
+to name it rather than assume it is there.
+- **Restart is declared.** `restart` says whether the app or the device has to
+  restart for the change to take effect; `none` is the common case for a helper
+  tool.
+- **A device test is part of the submission.** The pull request says which
+  device and firmware the package was installed, verified and rolled back on.
+  "It built" is not a device test.
+
+### Submitting a package
+
+1. Add `player/patch-packages/<name>/manifest.json` and its `payload/` files.
+   The [shipped example](../player/patch-packages/jukahub-cache-clean) is the
+   template; the manifest fields and operation kinds are documented above.
+2. Build the repository locally to check the archive and see the digests:
+
+   ```bash
+   cd player
+   PATCH_SIGN_KEY=<hex private key> go run ./tools/build-patch-repo \
+     --src ./patch-packages --out ./patch-repo
+   ```
+
+   Without the signing key you can still confirm the manifest validates, but
+   the index cannot be signed for publishing.
+3. Open a pull request containing the manifest and payload only — not the built
+   archive or the signed index, which are produced by the maintainer's release
+   step. Include the tool's per-file hashes and the device test notes.
+4. Review covers scope, destinations, risk level, the compatibility gate and
+   whether the package can be removed cleanly. Low-risk, single-purpose
+   utilities are the intended shape; anything that changes emulator behaviour
+   needs its rollback path spelled out.
+
+A package that bypasses this process can still be installed from a local index
+(the user edits `packages.json` themselves), but it is not curated, is not
+signed, and nothing here vouches for it.
+
+---
+
 ## Signed repository (trust model)
 
 Packages come from a JukaHub-maintained repository whose index is **Ed25519

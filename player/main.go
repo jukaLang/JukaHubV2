@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// frameRateCtrl owns the adaptive render cadence. It is assigned in main()
+// and consulted from any file that needs the current frame budget (the Power
+// Mode selector retunes it from elsewhere).
+var frameRateCtrl *FrameRateController
+
 func main() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -454,6 +459,9 @@ func main() {
 	}
 
 	currentSceneIndex = 0
+	// The first scene skips the transition that normally lays a Tools menu out
+	// as tiles, so it is applied here before the focus graph is built.
+	menuTilesApply(config, currentSceneIndex)
 	selectedButtonIndex = findFirstSelectableElement(config.Scenes[currentSceneIndex])
 	focusEngine.SetGraph(config.Scenes[currentSceneIndex].Name, focusEngine.BuildGraph(config.Scenes[currentSceneIndex]))
 	focusEngine.SyncSelected()
@@ -491,8 +499,12 @@ func main() {
 	// press, so nothing about the volume itself changes.
 	startVolumeButtonWatcher()
 
-	// Adaptive frame rate and memory monitoring for TSP ARM64 devices
-	frameRateCtrl := NewFrameRateController()
+	// Adaptive frame rate and memory monitoring for TSP ARM64 devices.
+	// The controller is package-level so the Power Mode selector
+	// (powermode.go, quicksettings.go) can retune the same controller that
+	// this loop sleeps against, without threading it through every scene.
+	frameRateCtrl = NewFrameRateController()
+
 	memMonitor := NewMemoryMonitor()
 	defer memMonitor.Stop()
 	LogDeviceDiagnostics()
@@ -501,6 +513,12 @@ func main() {
 	// Cleanup hooks and the display teardown run. Registered last so it is the
 	// first deferred call to execute.
 	defer shutdownSceneWork()
+
+	// A config that had to be recovered from its backup is reported here, not
+	// during load: the toast needs the render loop's fonts and the audio device.
+	if notice := takeUserConfigRecoveryNotice(); notice != "" {
+		ShowToast(notice, ToastKindWarning)
+	}
 
 	running := true
 	startupReported := false
@@ -634,6 +652,12 @@ func main() {
 					}
 					if shortcutsOpen {
 						handleShortcutsInput(e)
+						continue
+					}
+					// The controller legend is modal too, and owns every key while
+					// it is up; F1 inside it hands over to the shortcuts overlay.
+					if controlsLegend.open {
+						handleControlsLegendKey(e)
 						continue
 					}
 					if clipSearchOpen {
@@ -2324,7 +2348,7 @@ func main() {
 		if hoveredButtonIndex >= 0 {
 			targetHover = 1.0
 		}
-		if config.Variables.ReducedMotion {
+		if effectiveReducedMotion(config) {
 			hoverAnimProgress = targetHover
 		} else {
 			hoverAnimProgress = lerp(hoverAnimProgress, targetHover, 0.2)
@@ -2335,7 +2359,7 @@ func main() {
 
 		// Clear press feedback after duration (instantly in reduced-motion mode).
 		if pressedButtonIndex >= 0 {
-			if config.Variables.ReducedMotion || sdl.GetTicks64()-pressStartTime > pressDuration {
+			if effectiveReducedMotion(config) || sdl.GetTicks64()-pressStartTime > pressDuration {
 				pressedButtonIndex = -1
 			}
 		}
@@ -2402,7 +2426,7 @@ func main() {
 
 		// Scene transition effects. Reduced motion and the transition config
 		// both snap the change instead of waiting out a fade.
-		if (config.Variables.ReducedMotion || motionInstant(config)) && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
+		if (effectiveReducedMotion(config) || motionInstant(config)) && (transitionPhase == "fade-out" || transitionPhase == "fade-in") {
 			if transitionPhase == "fade-out" {
 				completeSceneTransition(config)
 			} else {
@@ -2464,6 +2488,11 @@ func main() {
 			if dx, dy := vkControllerNavDirection(); dx != 0 || dy != 0 {
 				frameRateCtrl.NotifyInput()
 			}
+		}
+		// A held D-pad repeats in menus too (navrepeat.go). The keyboard owns the
+		// pad while it is up, so that path stays with vkTickNavRepeat above.
+		if padTickRepeat() && frameRateCtrl != nil {
+			frameRateCtrl.NotifyInput()
 		}
 		// SDL text input stays enabled for the whole session: the on-screen
 		// keyboard, the chat composer and the unit converter all depend on
@@ -2673,6 +2702,11 @@ func main() {
 		if shortcutsOpen {
 			renderShortcutsOverlay(renderer, config)
 		}
+		// The controller legend sits with the other help overlays, drawn last so
+		// it covers everything it opened over (including Quick Settings rows).
+		if controlsLegend.open {
+			renderControlsLegend(renderer, config)
+		}
 		if clipSearchOpen {
 			renderClipboardOverlay(renderer, config)
 		}
@@ -2727,7 +2761,7 @@ func main() {
 		// idle. LowPower picks the slowest cadence instead of forcing 60fps.
 		animating := transitionPhase != "none" || pressedButtonIndex >= 0 || hoverAnimProgress > 0 || uiAnimating()
 		frameRateCtrl.SetAnimationActive(animating)
-		frameRateCtrl.SetLowPower(config.Variables.LowPower)
+		applyPowerMode(config)
 		sdl.Delay(frameRateCtrl.Delay())
 
 		frameCount++

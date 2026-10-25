@@ -199,8 +199,8 @@ func TestA11yRowsReportCurrentSettings(t *testing.T) {
 
 	a11y = a11ySettings{fontScale: 1.3, highContrast: true, swapAB: true, colorblind: "tritanopia", oneHanded: true, chordButton: "r1", slowRepeat: true}
 	rows := a11yRows()
-	if len(rows) != 9 {
-		t.Fatalf("row count: got %d, want 9", len(rows))
+	if len(rows) != 11 {
+		t.Fatalf("row count: got %d, want 11", len(rows))
 	}
 	if rows[0].value != "130%" {
 		t.Fatalf("text size row: got %q", rows[0].value)
@@ -211,17 +211,23 @@ func TestA11yRowsReportCurrentSettings(t *testing.T) {
 	if rows[2].value != "Tritanopia" {
 		t.Fatalf("palette row: got %q", rows[2].value)
 	}
-	if rows[3].value != "Swapped" || rows[4].value != "Normal" {
-		t.Fatalf("swap rows: got %q / %q", rows[3].value, rows[4].value)
+	if rows[3].value != "Custom" {
+		t.Fatalf("layout preset row: got %q, want Custom with a single swap", rows[3].value)
 	}
-	if rows[5].value != "On" {
-		t.Fatalf("one-handed row: got %q", rows[5].value)
+	if rows[4].value != "Swapped" || rows[5].value != "Normal" {
+		t.Fatalf("swap rows: got %q / %q", rows[4].value, rows[5].value)
 	}
-	if rows[6].value != "R1" {
-		t.Fatalf("chord button row: got %q", rows[6].value)
+	if rows[6].value != "Default" {
+		t.Fatalf("select row: got %q", rows[6].value)
 	}
-	if rows[7].value != "Slow" {
-		t.Fatalf("key repeat row: got %q", rows[7].value)
+	if rows[7].value != "On" {
+		t.Fatalf("one-handed row: got %q", rows[7].value)
+	}
+	if rows[8].value != "R1" {
+		t.Fatalf("chord button row: got %q", rows[8].value)
+	}
+	if rows[9].value != "Slow" {
+		t.Fatalf("key repeat row: got %q", rows[9].value)
 	}
 }
 
@@ -414,12 +420,12 @@ func TestA11yOneHandedSettingsRoundTrip(t *testing.T) {
 func TestA11ySlowRepeatDoublesDelays(t *testing.T) {
 	defer resetA11yForTest()
 	a11y = a11ySettings{fontScale: 1.0}
-	if got := a11yRepeatMs(vkNavRepeatDelayMs); got != vkNavRepeatDelayMs {
-		t.Fatalf("normal repeat: got %d, want %d", got, vkNavRepeatDelayMs)
+	if got := a11yRepeatMs(navRepeatDelayMs); got != navRepeatDelayMs {
+		t.Fatalf("normal repeat: got %d, want %d", got, navRepeatDelayMs)
 	}
 	a11y.slowRepeat = true
-	if got := a11yRepeatMs(vkNavRepeatDelayMs); got != vkNavRepeatDelayMs*2 {
-		t.Fatalf("slow repeat: got %d, want %d", got, vkNavRepeatDelayMs*2)
+	if got := a11yRepeatMs(navRepeatDelayMs); got != navRepeatDelayMs*2 {
+		t.Fatalf("slow repeat: got %d, want %d", got, navRepeatDelayMs*2)
 	}
 }
 

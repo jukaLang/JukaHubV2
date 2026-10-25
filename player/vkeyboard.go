@@ -1407,42 +1407,11 @@ func vkClearPressFlash() {
 }
 
 // --- Hold-to-repeat ---------------------------------------------------------
+//
+// The tracker and its cadence are shared with menu navigation (navrepeat.go):
+// the keyboard moves its own highlight, while other screens re-queue a press.
 
-const (
-	// vkNavRepeatDelayMs is the pause before a held D-pad starts repeating; the
-	// press itself moves the highlight straight away, so this is only the wait
-	// for the second step.
-	vkNavRepeatDelayMs = 320
-	// vkNavRepeatIntervalMs is the cadence after that: fast enough to cross the
-	// keyboard in a couple of seconds, slow enough to stop on a key.
-	vkNavRepeatIntervalMs = 70
-)
-
-// vkRepeatTracker follows one held direction. A direction change restarts the
-// delay, so switching keys is a normal press and never inherits the old cadence.
-type vkRepeatTracker struct {
-	dx, dy int
-	next   uint64
-}
-
-// step advances the tracker for one frame and returns the move to apply, if any.
-func (t *vkRepeatTracker) step(now uint64, dx, dy int) (int, int) {
-	if dx == 0 && dy == 0 {
-		*t = vkRepeatTracker{}
-		return 0, 0
-	}
-	if dx != t.dx || dy != t.dy {
-		*t = vkRepeatTracker{dx: dx, dy: dy, next: now + uint64(a11yRepeatMs(vkNavRepeatDelayMs))}
-		return 0, 0
-	}
-	if now < t.next {
-		return 0, 0
-	}
-	t.next = now + uint64(a11yRepeatMs(vkNavRepeatIntervalMs))
-	return dx, dy
-}
-
-var vkNavRepeat vkRepeatTracker
+var vkNavRepeat navRepeatTracker
 
 // vkControllerNavDirection reads the D-pad that is held right now. Physical
 // arrow keys are left to SDL's own key repeat; polling them too would double
@@ -1471,7 +1440,7 @@ func vkControllerNavDirection() (int, int) {
 // input loop call it once per frame while the keyboard is open.
 func vkTickNavRepeat() {
 	if !virtualKeyboardActive {
-		vkNavRepeat = vkRepeatTracker{}
+		vkNavRepeat = navRepeatTracker{}
 		return
 	}
 	dx, dy := vkControllerNavDirection()
@@ -1483,7 +1452,7 @@ func vkTickNavRepeat() {
 // vkResetNavRepeat forgets the held direction, so a repeat does not survive the
 // keyboard being closed and reopened.
 func vkResetNavRepeat() {
-	vkNavRepeat = vkRepeatTracker{}
+	vkNavRepeat = navRepeatTracker{}
 }
 
 func initKeyboard() {
@@ -1536,6 +1505,7 @@ type vkStaticLayerState struct {
 
 var (
 	vkStaticTex    *sdl.Texture
+	vkStaticOwner  *sdl.Renderer
 	vkStaticState  vkStaticLayerState
 	vkStaticValid  bool
 	vkStaticBroken bool // renderer has no render-target support: draw live
@@ -1567,13 +1537,35 @@ func DestroyVKStaticCache() {
 		vkStaticTex.Destroy()
 		vkStaticTex = nil
 	}
+	vkStaticOwner = nil
 	vkStaticValid = false
 	vkStaticBroken = false
+}
+
+// vkForgetForeignTexture drops a cached texture that belongs to a different
+// renderer without destroying it.
+//
+// SDL frees every texture with the renderer that created it. Once that
+// renderer is gone the pointer is dangling: calling Destroy on it corrupts the
+// allocator, and drawing with it fails later inside an unrelated SDL call (the
+// intermittent SDL_RenderReadPixels crash the test suite kept hitting). A
+// rebuild is cheap by comparison, so a cache from another renderer is simply
+// forgotten.
+func vkForgetForeignTexture(renderer *sdl.Renderer, tex **sdl.Texture, owner **sdl.Renderer, valid *bool) {
+	if renderer == nil || tex == nil || *tex == nil || owner == nil || *owner == nil || *owner == renderer {
+		return
+	}
+	*tex = nil
+	*owner = nil
+	if valid != nil {
+		*valid = false
+	}
 }
 
 // Chat cache state and ensure function
 var (
 	vkChatStaticTex    *sdl.Texture
+	vkChatStaticOwner  *sdl.Renderer
 	vkChatStaticState  vkStaticLayerState
 	vkChatStaticValid  bool
 	vkChatStaticBroken bool // renderer has no render-target support: draw live
@@ -1585,6 +1577,7 @@ func DestroyVKChatCache() {
 		vkChatStaticTex.Destroy()
 		vkChatStaticTex = nil
 	}
+	vkChatStaticOwner = nil
 	vkChatStaticValid = false
 	vkChatStaticBroken = false
 }
@@ -1592,6 +1585,7 @@ func DestroyVKChatCache() {
 // Video overlay cache state and ensure function
 var (
 	vkVideoOverlayTex    *sdl.Texture
+	vkVideoOverlayOwner  *sdl.Renderer
 	vkVideoOverlayState  vkStaticLayerState
 	vkVideoOverlayValid  bool
 	vkVideoOverlayBroken bool // renderer has no render-target support: draw live
@@ -1605,6 +1599,7 @@ func DestroyVKVideoOverlayCache() {
 		vkVideoOverlayTex.Destroy()
 		vkVideoOverlayTex = nil
 	}
+	vkVideoOverlayOwner = nil
 	vkVideoOverlayValid = false
 	vkVideoOverlayBroken = false
 	vkVideoOverlayW, vkVideoOverlayH = 0, 0
@@ -1626,6 +1621,7 @@ func cachedVideoOverlayBytes() int64 {
 // drawn every frame by drawVideoOverlayLive on top of this layer, so the cache
 // must never bake them in.
 func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int32) *sdl.Texture {
+	vkForgetForeignTexture(renderer, &vkVideoOverlayTex, &vkVideoOverlayOwner, &vkVideoOverlayValid)
 	state := vkStaticLayerStateNow(sdl.Rect{X: 0, Y: 0, W: w, H: h})
 	if vkVideoOverlayValid && vkVideoOverlayTex != nil && vkVideoOverlayState == state {
 		return vkVideoOverlayTex
@@ -1671,6 +1667,7 @@ func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int3
 	_ = renderer.SetRenderTarget(prevTarget)
 	_ = renderer.SetDrawBlendMode(prevBlend)
 	vkVideoOverlayTex = tex
+	vkVideoOverlayOwner = renderer
 	vkVideoOverlayState = state
 	vkVideoOverlayW, vkVideoOverlayH = w, h
 	vkVideoOverlayValid = true
@@ -1683,6 +1680,7 @@ func vkEnsureVideoOverlayCache(renderer *sdl.Renderer, config *Config, w, h int3
 // or header/footer text changed. The cache is drawn once per frame and only the
 // message bubbles (which change with each message) are redrawn on top.
 func vkEnsureChatCache(renderer *sdl.Renderer, config *Config, listX, listY, listW, listH int32) *sdl.Texture {
+	vkForgetForeignTexture(renderer, &vkChatStaticTex, &vkChatStaticOwner, &vkChatStaticValid)
 	state := vkStaticLayerStateNow(sdl.Rect{X: listX, Y: listY, W: listW, H: listH})
 	if vkChatStaticValid && vkChatStaticTex != nil && vkChatStaticState == state {
 		return vkChatStaticTex
@@ -1761,12 +1759,14 @@ func vkEnsureChatCache(renderer *sdl.Renderer, config *Config, listX, listY, lis
 	_ = renderer.SetDrawBlendMode(prevBlend)
 	vkChatStaticState = state
 	vkChatStaticTex = tex
+	vkChatStaticOwner = renderer
 	vkChatStaticValid = true
 	vkChatStaticBuilds++
 	return tex
 }
 
 func vkEnsureStaticLayer(renderer *sdl.Renderer, config *Config, font, smallFont *ttf.Font) *sdl.Texture {
+	vkForgetForeignTexture(renderer, &vkStaticTex, &vkStaticOwner, &vkStaticValid)
 	state := vkStaticLayerStateNow(vkPanelRect)
 	if vkStaticValid && vkStaticTex != nil && vkStaticState == state {
 		return vkStaticTex
@@ -1816,6 +1816,7 @@ func vkEnsureStaticLayer(renderer *sdl.Renderer, config *Config, font, smallFont
 	_ = renderer.SetRenderTarget(prevTarget)
 	_ = renderer.SetDrawBlendMode(prevBlend)
 	vkStaticTex = tex
+	vkStaticOwner = renderer
 	vkStaticState = state
 	vkStaticValid = true
 	vkStaticBuilds++

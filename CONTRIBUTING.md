@@ -43,6 +43,23 @@ cd player
 JUKAHUB_BENCH_RUNS=3 JUKAHUB_BENCH_LIMIT_MS=5000 ./startup-bench.sh
 ```
 
+Coverage is advisory, not a gate. CI's player job writes a per-function
+coverage profile and puts the total plus the functions at 0% into the run's step
+summary; the same is one command locally:
+
+```bash
+make coverage      # total plus the worst-covered functions
+```
+
+Code conventions (naming, comments, config keys, rendering budget and the test
+shape a change is expected to have) are in [docs/STYLE.md](docs/STYLE.md).
+
+Decisions that other code has to live with — a new indirection everything goes
+through, an option being removed, a hardware budget being spent — are recorded
+in [docs/adr/](docs/adr/), starting from
+[0000-record-architecture-decisions.md](docs/adr/0000-record-architecture-decisions.md).
+Bug fixes and refactors that keep the existing decisions do not need a record.
+
 For a builder change, also run the web checks from the repository root:
 
 ```bash
@@ -57,13 +74,16 @@ same four checks plus `go vet`/`go test` for the player; a builder change is not
 finished until the Chromium smoke test passes, because it is the only check that
 drives the real drop handler, history buttons and import path.
 
-> **One known flaky test.** `TestVideoFullscreenHidesControlBar` crashes
-> intermittently in `SDL_RenderReadPixels` (a native SDL assertion while the
-> ffmpeg decoder thread holds the renderer). It reproduces in roughly 1 of 6
-> isolated runs and is unrelated to your change — re-run before digging.
-> `TestDecryptWithAuthRoundTrip` and `TestKeyboardCachedFrameIsCheaperThanFullRedraw`
-> have each been seen to fail once without a clear cause; re-run those too.
-> Fixing the flake is welcome.
+> **On flaky tests.** `TestVideoFullscreenHidesControlBar` used to crash
+> intermittently in `SDL_RenderReadPixels`. The cause was not the test: the
+> static-layer caches in `player/vkeyboard.go` (keyboard, chat and video
+> overlay) kept textures after their renderer was destroyed, so a later probe
+> drew or freed a dangling pointer. The caches now record their owning
+> renderer, drop a foreign texture instead of touching it, and
+> `destroyTestRenderer` releases them before destroying the renderer;
+> `player/renderer_cache_owner_test.go` pins the rule. `TestDecryptWithAuthRoundTrip`
+> and `TestKeyboardCachedFrameIsCheaperThanFullRedraw` have each been seen to
+> fail once without a clear cause; re-run those before digging.
 
 ## Error handling conventions
 
@@ -186,6 +206,8 @@ User-facing docs live in [`docs/`](docs) and are linked from the
 | Plugin manifest and execution contract | [docs/PLUGINS.md](docs/PLUGINS.md) |
 | Architecture, design system, key files | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) |
 | Component map of the three runtimes | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Code conventions and test expectations | [docs/STYLE.md](docs/STYLE.md) |
+| Checkpoints / quick-switch design (not implemented) | [docs/CHECKPOINTS.md](docs/CHECKPOINTS.md) |
 
 Two rules for documentation changes:
 

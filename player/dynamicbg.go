@@ -330,7 +330,7 @@ func loadWallpaper(renderer *sdl.Renderer, path string) bool {
 // particle is a blended texture copy, so this is the biggest per-frame cost a
 // user can switch on by hand.
 func dynamicBgLowPower() bool {
-	return appConfig != nil && appConfig.Variables.LowPower
+	return appConfig != nil && effectiveLowPower(appConfig)
 }
 
 var lastBgTime float64

@@ -280,7 +280,7 @@ func installWineRuntime(releaseURL string) error {
 		// A cross-device staging folder is possible on some data layouts; fall
 		// back to a copy so the install still completes.
 		if copyErr := copyTree(tree, payload); copyErr != nil {
-			return fmt.Errorf("install runtime: %v (copy fallback: %v)", err, copyErr)
+			return fmt.Errorf("install runtime: %w (copy fallback: %v)", err, copyErr)
 		}
 	}
 	rel, err := filepath.Rel(tree, binary)
@@ -805,7 +805,7 @@ func verifyWineRuntime(wrapper string) error {
 	select {
 	case err := <-done:
 		if err != nil {
-			return fmt.Errorf("%v: %s", err, strings.TrimSpace(string(output)))
+			return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 		}
 		return nil
 	case <-time.After(25 * time.Second):
@@ -891,7 +891,7 @@ func installWestonRuntime() error {
 	defer os.RemoveAll(staging)
 	cmd := exec.Command(unsquashfs, "-f", "-d", staging, archive)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("extract WestonPack: %v: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("extract WestonPack: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	wrapper, err := findWestonWrapper(staging)
 	if err != nil {

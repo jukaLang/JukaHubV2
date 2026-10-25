@@ -3,7 +3,8 @@
 JukaHub is a Go + SDL2 program, so every build needs CGO and SDL2 headers. The
 Windows wrapper installs both for you; on other hosts you install them yourself.
 
-Requirements are in [`player/go.mod`](../player/go.mod) (Go **1.26+**) and
+Requirements are in [`player/go.mod`](../player/go.mod) (Go **1.27+**, toolchain pinned
+to 1.27.3) and
 [`player/vendor/`](../player/vendor) — dependencies are vendored, so a build
 needs no network access and no `go mod download`.
 
@@ -42,7 +43,7 @@ cd player
 ./build.bat
 ```
 
-`build.bat` is self-contained: it looks for Go 1.26+ and GCC, installs a private
+`build.bat` is self-contained: it looks for Go 1.27+ and GCC, installs a private
 copy of either into `%LOCALAPPDATA%\JukaHub\tools` when missing, downloads the
 SDL2 / SDL2_image / SDL2_ttf MinGW development packages into
 `player/.sdl2/x86_64-w64-mingw32/`, builds `JukaHub.exe`, copies the three SDL
@@ -55,6 +56,12 @@ DLLs next to it, and then launches the app.
 | `build.bat nobuild` | set up the toolchain and SDL2, then stop |
 | `build.bat diag` | print the detected environment and paths |
 | `build.bat clean` | remove build outputs and the local `.sdl2/` copy |
+
+If `cmd` reports `The system cannot find the batch label specified - ensure_gcc`,
+the copy of `build.bat` lost its CRLF line endings: `cmd.exe` builds its label
+table from the first chunk of the file, so an LF-only script cannot reach labels
+further down. The repository pins `*.bat` to CRLF in `.gitattributes`, so
+restoring the file (`git checkout -- player/build.bat`) repairs a local copy.
 
 Pinned versions live at the top of the script (`SDL2_VER`, `IMG_VER`,
 `TTF_VER`, `GO_FALLBACK`, `W64DK_VER`). Set `SDL2_DIR` to use an SDL2

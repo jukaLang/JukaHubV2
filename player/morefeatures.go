@@ -46,15 +46,25 @@ func httpGetTextContext(ctx context.Context, url string, timeout time.Duration) 
 		return ""
 	}
 	req.Header.Set("User-Agent", "JukaHub/0.4")
+	// Podcast feeds and quote endpoints rarely change between screen visits,
+	// so revalidate instead of downloading them again.
+	applyConditionalHeaders(req, url)
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		return ""
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusNotModified {
+		if body, ok := conditionalBody(url); ok {
+			return string(body)
+		}
+		return ""
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return ""
 	}
+	storeConditionalResponse(url, resp, data)
 	return string(data)
 }
 
@@ -696,6 +706,14 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 		text = appLog.String()
 	} else {
 		text, _ = config.Variables.Custom[element.Variable].(string)
+	}
+	// An empty textlog otherwise renders as a bare panel: give the Hardware
+	// screen (and any other variable-backed textlog) a state card while its
+	// snapshot has not arrived yet.
+	if text == "" && element.Variable != "log_text" {
+		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
+			"·", "Reading hardware…", "Press Refresh to load a new snapshot.")
+		return
 	}
 	font, _ := getCachedFont(config, element.Font)
 	if font == nil {

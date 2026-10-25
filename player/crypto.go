@@ -246,7 +246,7 @@ func DecryptString(token string) (string, error) {
 
 	data, err := hex.DecodeString(cipherHex)
 	if err != nil {
-		return "", fmt.Errorf("invalid encrypted token format: %v", err)
+		return "", fmt.Errorf("invalid encrypted token format: %w", err)
 	}
 	plaintext, err := decryptData(data)
 	if err != nil {
@@ -254,9 +254,9 @@ func DecryptString(token string) (string, error) {
 			return "", fmt.Errorf("decryption failed: %s", hint)
 		}
 		if legacyFormat {
-			return "", fmt.Errorf("decryption failed (legacy format): %v", err)
+			return "", fmt.Errorf("decryption failed (legacy format): %w", err)
 		}
-		return "", fmt.Errorf("decryption failed: %v", err)
+		return "", fmt.Errorf("decryption failed: %w", err)
 	}
 	return string(plaintext), nil
 }
@@ -306,7 +306,7 @@ func decryptAESGCM(key, data []byte) ([]byte, error) {
 	nonce, ciphertext := data[:nonceSize], data[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return nil, fmt.Errorf("cipher: %v", err)
+		return nil, fmt.Errorf("cipher: %w", err)
 	}
 	return plaintext, nil
 }

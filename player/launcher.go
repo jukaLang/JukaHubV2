@@ -11,9 +11,26 @@ import (
 // up smoothly (~120-160ms) instead of snapping.
 var tileAnimMap = make(map[int]float64)
 
+// explicitTileIcon returns the glyph name an element asks for by name, or ""
+// when Icon is empty or a monogram letter. Elements that carry a glyph name
+// (the Tools tiles do) must get exactly that glyph: the substring mapping below
+// would otherwise pick a different family for, say, "Disk Space".
+func explicitTileIcon(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "play", "chat", "files", "tv", "box", "mic", "chart", "star", "cloud",
+		"gear", "chip", "terminal", "game", "resume",
+		"clock", "speed", "disk", "logs", "cache", "update", "network":
+		return strings.ToLower(strings.TrimSpace(name))
+	}
+	return ""
+}
+
 // tileIconKind maps a home-screen destination to a stable icon family so tiles
 // use consistent line icons instead of monogram letters.
 func tileIconKind(elem Element) string {
+	if kind := explicitTileIcon(elem.Icon); kind != "" {
+		return kind
+	}
 	key := strings.ToLower(elem.Text + " " + elem.Icon + " " + elem.Trigger)
 	switch {
 	case strings.Contains(key, "youtube"), strings.Contains(key, "media"), strings.Contains(key, "play"):
@@ -240,6 +257,57 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, fg, b
 		b := pt{cx - size/8, cy + size/6}
 		cc := pt{cx + size/5, cy}
 		fillTriangleFilled(renderer, a, b, cc, fg)
+	case "clock":
+		// Schedule: a ring with two hands.
+		strokeCircle(renderer, cx, cy, size*9/20, fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+		renderer.DrawLine(cx, cy, cx, cy-size*7/20)
+		renderer.DrawLine(cx, cy, cx+size*4/20, cy+size/20)
+	case "speed":
+		// Bandwidth: a gauge half-ring with a needle.
+		arc(renderer, cx, cy+size/6, size*9/20, 200, 140, fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+		renderer.DrawLine(cx, cy+size/6, cx+size/5, cy-size/8)
+		fillCircle(renderer, cx, cy+size/6, max32(2, size/20), fg)
+	case "disk":
+		// Storage: a drive body with a divider and an activity dot, so it reads
+		// as a disk and not as another list.
+		body := sdl.Rect{X: cx - size/2 + 3, Y: cy - size/2 + 3, W: size - 6, H: size - 6}
+		strokeRoundedRect(renderer, body.X, body.Y, body.W, body.H, 4, 2, fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+		renderer.DrawLine(body.X+2, cy-size/8, body.X+body.W-2, cy-size/8)
+		fillCircle(renderer, body.X+body.W/4, cy+size/8, max32(2, size/14), fg)
+	case "logs":
+		// Logs: a page with ruled lines.
+		strokeRoundedRect(renderer, cx-size/3, cy-size/2+2, size*2/3, size-4, 3, 2, fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+		for i := int32(0); i < 3; i++ {
+			y := cy - size/5 + i*size/5
+			renderer.DrawLine(cx-size/5, y, cx+size/5, y)
+		}
+	case "cache":
+		// Cache: an open bin with a lid, the shape people read as "empty it".
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+		renderer.DrawLine(cx-size/3, cy-size/4, cx+size/3, cy-size/4)
+		renderer.DrawLine(cx-size/8, cy-size/2+2, cx-size/8, cy-size/4)
+		renderer.DrawLine(cx+size/8, cy-size/2+2, cx+size/8, cy-size/4)
+		strokeRoundedRect(renderer, cx-size/4, cy-size/4, size/2, size*3/5, 3, 2, fg)
+	case "update":
+		// Update: an arrow dropping onto a shelf.
+		fillTriangleFilled(renderer,
+			pt{x: cx - size/5, y: cy - size/4},
+			pt{x: cx + size/5, y: cy - size/4},
+			pt{x: cx, y: cy + size/12}, fg)
+		fillRoundedRect(renderer, cx-2, cy-size/2+2, 4, size/4, 2, fg)
+		fillRoundedRect(renderer, cx-size/3, cy+size/3, size*2/3, max32(2, size/16), 1, fg)
+	case "network":
+		// Transfer: the device linked to two peers.
+		fillCircle(renderer, cx, cy, max32(3, size/8), fg)
+		fillCircle(renderer, cx-size/3, cy-size/4, max32(2, size/12), fg)
+		fillCircle(renderer, cx+size/3, cy+size/4, max32(2, size/12), fg)
+		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
+		renderer.DrawLine(cx-size/8, cy-size/12, cx-size/3+size/12, cy-size/4+size/12)
+		renderer.DrawLine(cx+size/8, cy+size/12, cx+size/3-size/12, cy+size/4-size/12)
 	default:
 		// app grid
 		gap := size / 4

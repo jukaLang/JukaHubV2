@@ -1,24 +1,72 @@
 name: Bug report
-description: Something in the app or the builder is broken or behaves unexpectedly
-title: "[bug] "
+description: Something in JukaHub misbehaves on the handheld, in a desktop build or during an update.
+title: "[Bug]: "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. Two minutes of detail here saves a round trip.
+        Before filing, please check:
 
-        Before filing: search the existing issues and skim the
-        [documentation](https://github.com/jukaLang/JukaHubV2/tree/main/docs) —
-        the answer may already be written down. Vulnerabilities belong in
-        [SECURITY.md](https://github.com/jukaLang/JukaHubV2/blob/main/SECURITY.md),
-        not in a public issue.
+        * the [documentation](https://github.com/jukaLang/JukaHubV2/tree/main/docs)
+          (controls, Wi-Fi, recovery, packages, compile errors and more),
+        * the [latest release notes](https://github.com/jukaLang/JukaHubV2/releases/latest)
+          — the problem may already be fixed,
+        * the [existing issues](https://github.com/jukaLang/JukaHubV2/issues) for a
+          duplicate.
+
+        If this is a security problem, **do not** open a public issue; follow
+        [SECURITY.md](https://github.com/jukaLang/JukaHubV2/blob/main/SECURITY.md).
+
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      description: Which machine shows the problem?
+      options:
+        - TrimUI Smart Pro
+        - TrimUI Smart Pro S
+        - TrimUI Brick
+        - TrimUI Brick Pro
+        - TrimUI Hammer
+        - Desktop build (Windows / Linux / macOS)
+        - Other (describe below)
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware or stock image
+      description: The stock OS version, or the custom image (CrossMix and friends) JukaHub runs on top of.
+      placeholder: "e.g. stock TrimUI 1.0.4, CrossMix 1.3"
+
+  - type: input
+    id: version
+    attributes:
+      label: JukaHub version
+      description: The version line from the About screen (or the home header), including the build date.
+      placeholder: "e.g. v0.4.0 · 2026-10-17"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it happen?
+      options:
+        - On the handheld
+        - In a desktop build
+        - Both
+        - Not sure
+    validations:
+      required: true
 
   - type: textarea
     id: what-happened
     attributes:
-      label: What happened
-      description: The behaviour you saw, in your own words.
+      label: What happens?
+      description: What you expected, and what happened instead. Name the screen or panel you were on.
     validations:
       required: true
 
@@ -26,86 +74,41 @@ body:
     id: steps
     attributes:
       label: Steps to reproduce
-      description: Include the exact buttons or keys, and the screen you were on.
+      description: The shortest sequence that reliably shows the problem, starting from a cold launch when possible.
       placeholder: |
-        1. Open Games → Library
-        2. Select a game and press A
+        1. Power on and open ...
+        2. Press ...
         3. ...
-    validations:
-      required: true
-
-  - type: textarea
-    id: expected
-    attributes:
-      label: What you expected instead
-    validations:
-      required: false
-
-  - type: input
-    id: version
-    attributes:
-      label: Version
-      description: "From the About screen: Version and Compiled."
-      placeholder: "Version 0.9.x, compiled 2026-10-01T12:00:00Z"
-    validations:
-      required: true
-
-  - type: dropdown
-    id: device
-    attributes:
-      label: Device
-      options:
-        - TrimUI Smart Pro
-        - TrimUI Smart Pro S
-        - TrimUI Brick
-        - TrimUI Brick Pro
-        - TrimUI Hammer
-        - Windows PC (source or release build)
-        - Linux PC (source or release build)
-        - Other / not a JukaHub device
-    validations:
-      required: true
-
-  - type: dropdown
-    id: build
-    attributes:
-      label: How it was installed
-      options:
-        - Release artifact from GitHub
-        - Built from source
-        - Installed from the SD-card package
-        - Updated through the app's updater
-        - Do not know
-    validations:
-      required: true
 
   - type: textarea
     id: diagnostics
     attributes:
-      label: Diagnostics
+      label: Diagnostics report
       description: |
-        Open **Community → Diagnostics QR → Export** (or **Patch → Export diagnostics**)
-        and attach the report, or paste the text here. The report is redacted: paths,
-        serial numbers and secrets are removed before it is written.
-    validations:
-      required: false
+        **Tools → Community & support → Report a bug** fills in a redacted
+        diagnostics block (version, device, platform, free storage, network and
+        pending update — no paths, filenames or settings). Paste it here, or
+        export it from the same screen and attach the file. If the app will not
+        start, skip this and attach `Apps/JukaHub/errors.txt` instead.
+      render: text
 
   - type: textarea
     id: logs
     attributes:
-      label: Relevant log lines
+      label: Logs (optional)
       description: |
-        `logs.txt` and `errors.txt` live next to the executable on the device.
-        Paste the lines around the failure, not the whole file.
-    validations:
-      required: false
+        Attach `Apps/JukaHub/errors.txt` (the launcher log) or the file written
+        by **Logs → Export** (`Apps/JukaHub/logs.txt`). Drag the file into this
+        box to attach it.
 
   - type: checkboxes
     id: checks
     attributes:
-      label: Before submitting
+      label: Checklist
       options:
-        - label: I searched existing issues for this problem.
+        - label: I checked the documentation and the latest release notes.
           required: true
-        - label: I removed API keys, tokens and personal paths from anything pasted above.
+        - label: I searched the existing issues for a duplicate.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md).
           required: true

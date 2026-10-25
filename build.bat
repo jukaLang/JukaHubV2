@@ -205,7 +205,7 @@ if /i not "%VCAN_HOST_ARCH%"=="amd64" exit /b 0
 if /i not "%VCAN_HOST_OS%"=="windows" exit /b 0
 
 REM Be forgiving about the exact version if it is already installed, but still
-REM prefer Go 1.25+ when we have a choice. The hard version gate lives in the
+REM prefer Go 1.26+ when we have a choice. The hard version gate lives in the
 REM real build script, which is the place that may install Go.
 echo Found Go at %CANDIDATE%
 echo   version : %VCAN_VERSION%

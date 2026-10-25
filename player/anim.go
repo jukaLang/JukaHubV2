@@ -120,13 +120,12 @@ func (e *uiEnter) progress(now uint64) float64 {
 }
 
 // uiMotionEnabled reports whether entrance/hover motion is allowed. Reduced
-// motion and the battery-saver (Low Power) mode both snap every state to its
-// final value: neither should pay for per-frame compositing.
+// motion and the battery-saver (Low Power) mode both snap every state to its//	final value and the power selector reports it for them (powermode.go).
 func uiMotionEnabled(config *Config) bool {
 	if config == nil {
 		return true
 	}
-	return !config.Variables.ReducedMotion && !config.Variables.LowPower
+	return !effectiveReducedMotion(config) && !effectiveLowPower(config)
 }
 
 // uiEaseOutCubic maps a linear progress onto a decelerating curve.
@@ -367,7 +366,7 @@ func uiPressDepth(elapsedMS, durationMS float64) float64 {
 // over a 90-150ms press is nearly free, and on the TrimUI (where LowPower is on
 // by default) it is the only motion the user sees on every button press.
 func uiPressProgress(config *Config, elapsedMS, durationMS float64) float64 {
-	if config != nil && config.Variables.ReducedMotion {
+	if config != nil && effectiveReducedMotion(config) {
 		return 1
 	}
 	return uiPressDepth(elapsedMS, durationMS)

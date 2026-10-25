@@ -165,6 +165,18 @@ runs at 25 fps without hammering sysfs. Stopping the sync, or quitting the app,
 blanks the LEDs instead of leaving the last frame lit. With no addressable LED
 the row is dimmed and the toggle refuses with the reason.
 
+The LED policy is the custom key `led_policy` — `audio` (the default),
+`battery`, `charging`, `temperature` or `custom` — cycled by **LED Mode** in
+Quick Settings. Battery runs red → green across 10–80%, charging breathes green
+and goes dark unplugged, and temperature runs green → red across 45–80 °C (read
+from the thermal zone, cached for two seconds). Custom uses `led_color`
+(`"#rrggbb"`) and an optional `led_effect` of `solid` (default) or `pulse`.
+
+LAN Play is `netPlayEnabled` (default true in the shipped config) with a
+user-level override in the custom key `netplay_enabled`, written by the **LAN
+Play** switch in Quick Settings. The override only exists once the switch is
+used, so an older `jukauser.json` never turns the feature off by omission.
+
 ### Substitution
 
 `$name` in any text, color or label is replaced with that variable's value:
@@ -205,7 +217,7 @@ config-customizable.
 | `type` | string | see the table below. An unknown type is logged and skipped |
 | `text` | string | label/caption/button text |
 | `x`, `y` | number or numeric string | accepts `30` and `"30"` (a `px` suffix is tolerated) |
-| `width`, `height` | string or int | accepts `"280"` and `280` |
+| `width`, `height` | string or int | accepts `"280"` and `280`; surrounding spaces are ignored, while a `px` suffix, a fraction or a negative size falls back to the element's default |
 | `color`, `bgColor` | string | hex, or `$variable` |
 | `font` | string | role name from `variables.fonts` / `fontSizes` |
 | `opacity` | 0–1 | absent means opaque; an explicit `0` is invisible |

@@ -418,11 +418,12 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		return
 	}
 	entries, ok := config.Variables.Custom[element.Variable].([]FileEntry)
-	if !ok {
-		font, _ := getCachedFont(config, "small")
-		if font != nil {
-			renderText(renderer, config, font, "No items.", ColorTextPrimary(), element.X, element.Y)
-		}
+	if !ok || len(entries) == 0 {
+		elemW := getElementWidth(element, 600)
+		elemH := getElementHeight(element, 500)
+		drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
+		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
+			"·", "No items", "This list is empty right now.")
 		return
 	}
 

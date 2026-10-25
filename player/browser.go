@@ -28,12 +28,10 @@ const (
 	browserSceneName       = "Browser"
 	browserContentVariable = "browser_content"
 	browserReposURL        = "https://github.com/jukaLang/JukaHubV2"
-	// The start page is the project repository. DuckDuckGo Lite draws its home
-	// screen with JavaScript, so it rendered as a nearly blank panel; the
-	// repository is server-rendered HTML and gives the browser a real page the
-	// moment the tile is opened. Search is still one key away (Y) and still
-	// goes through DuckDuckGo Lite.
-	browserHomeURL     = browserReposURL
+	// The start page is DuckDuckGo Lite so the tile opens where search happens.
+	// The repo page is retired: lite.duckduckgo.com is server-rendered and
+	// readable in the text browser, opening straight onto the search box.
+	browserHomeURL     = "https://lite.duckduckgo.com/lite/"
 	browserSearchURL   = "https://lite.duckduckgo.com/lite/?q="
 	browserIssuesURL   = "https://github.com/jukaLang/JukaHubV2/issues"
 	browserNewIssueURL = "https://github.com/jukaLang/JukaHubV2/issues/new"
@@ -412,6 +410,9 @@ func resetBrowserStateForTest() {
 	resetBrowserDocumentsForTest()
 	resetBrowserAdBlockViewsForTest()
 	resetBrowserAdBlockCount()
+	// Cookies outlive a page inside one run on purpose, so a test has to say
+	// when the session ends instead of inheriting the previous test's jar.
+	browserResetCookies()
 }
 
 // ── Link extraction ──────────────────────────────────────────────────────
@@ -947,6 +948,95 @@ func browserMovePageLink(config *Config, elem Element, delta int) bool {
 	return true
 }
 
+// browserLinkRowStep returns the index of the link on the next (dir > 0) or
+// previous (dir < 0) visual row that is nearest to the current column. Rows
+// wrap at the ends so the pad is never stuck on a page.
+//
+// Flat reading order is what Left/Right use, and it is wrong for Up/Down: on a
+// two-column page a flat step leaves the cursor at the far side of the same
+// row, which reads as the focus teleporting. This walks the geometry instead.
+func browserLinkRowStep(links []webLinkHit, from, dir int) int {
+	if len(links) == 0 {
+		return -1
+	}
+	if from < 0 || from >= len(links) {
+		if dir >= 0 {
+			return 0
+		}
+		return len(links) - 1
+	}
+	cur := links[from]
+
+	// The target row: the closest one in the requested direction, or the
+	// opposite end of the page when there is none.
+	var targetRow int
+	found := false
+	for _, l := range links {
+		if dir > 0 && l.Row > cur.Row {
+			if !found || l.Row < targetRow {
+				targetRow, found = l.Row, true
+			}
+		} else if dir < 0 && l.Row < cur.Row {
+			if !found || l.Row > targetRow {
+				targetRow, found = l.Row, true
+			}
+		}
+	}
+	if !found {
+		for _, l := range links {
+			if dir > 0 {
+				if !found || l.Row < targetRow {
+					targetRow, found = l.Row, true
+				}
+			} else if !found || l.Row > targetRow {
+				targetRow, found = l.Row, true
+			}
+		}
+	}
+	if !found || targetRow == cur.Row {
+		// A one-row page has nothing above or below it.
+		return -1
+	}
+
+	best := -1
+	bestDist := int64(0)
+	for i, l := range links {
+		if l.Row != targetRow {
+			continue
+		}
+		d := int64(l.X) - int64(cur.X)
+		if d < 0 {
+			d = -d
+		}
+		if best < 0 || d < bestDist {
+			best, bestDist = i, d
+		}
+	}
+	return best
+}
+
+// browserStepPageLinkRow is Up/Down in link mode: the nearest link on the
+// adjacent visual row, revealed and announced like any other step.
+func browserStepPageLinkRow(config *Config, elem Element, dir int) bool {
+	layout := browserPageLayout(config, elem)
+	if layout == nil {
+		return false
+	}
+	if len(layout.Links) == 0 {
+		showToast("No links on this page", ToastInfo())
+		return true
+	}
+	cursor := browserFocusedLink(elem, layout)
+	next := browserLinkRowStep(layout.Links, cursor, dir)
+	if next < 0 {
+		return true
+	}
+	browserLinkCursor.cursor = next
+	browserRevealLink(elem, layout, layout.Links[next])
+	PlayNavSound()
+	return true
+}
+
 // browserResolveLink turns a raw href into an absolute http(s) address. Only
 // http and https survive: the same allowlist the link picker uses, so a
 // javascript: or file: href in a page cannot be followed from the pad.
@@ -1028,10 +1118,10 @@ var browserNav = browserModeScroll
 func browserToggleNavMode() {
 	if browserNav == browserModeLinks {
 		browserNav = browserModeScroll
-		showToast("Scroll mode — D-Pad scrolls the page", ToastInfo())
+		showToast("Scroll mode — D-Pad scrolls (Tab / L3)", ToastInfo())
 	} else {
 		browserNav = browserModeLinks
-		showToast("Link mode — D-Pad steps through links", ToastInfo())
+		showToast("Link mode — D-Pad steps through links (Tab / L3)", ToastInfo())
 	}
 	PlayNavSound()
 }
@@ -1084,7 +1174,7 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		return true
 	case sdl.K_UP:
 		if browserNav == browserModeLinks {
-			return browserMovePageLink(config, elem, -1)
+			return browserStepPageLinkRow(config, elem, -1)
 		}
 		textBrowserScrollVelocity -= textBrowserScrollAccel
 		if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
@@ -1094,7 +1184,7 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		return true
 	case sdl.K_DOWN:
 		if browserNav == browserModeLinks {
-			return browserMovePageLink(config, elem, 1)
+			return browserStepPageLinkRow(config, elem, 1)
 		}
 		textBrowserScrollVelocity += textBrowserScrollAccel
 		if textBrowserScrollVelocity > textBrowserScrollMaxVel {
@@ -1266,14 +1356,19 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 		return browserMovePageLink(config, elem, 1)
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		if browserNav == browserModeLinks {
-			return browserMovePageLink(config, elem, -1)
+			return browserStepPageLinkRow(config, elem, -1)
 		}
 		return browserScrollButton(config, elem, -1)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		if browserNav == browserModeLinks {
-			return browserMovePageLink(config, elem, 1)
+			return browserStepPageLinkRow(config, elem, 1)
 		}
 		return browserScrollButton(config, elem, 1)
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
+		// Firmware that reports a real gamepad has no Tab key; the stick
+		// click is the same cycle, and the toast names both keys.
+		browserToggleNavMode()
+		return true
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 		browserScrollByPage(config, elem, -1)
 		return true

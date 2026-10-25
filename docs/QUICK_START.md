@@ -10,7 +10,7 @@ the toolchain itself.
 
 | You need | Where it comes from |
 |----------|---------------------|
-| Go 1.26+ | [go.dev/dl](https://go.dev/dl/) (Windows: installed automatically) |
+| Go 1.27+ | [go.dev/dl](https://go.dev/dl/) (Windows: installed automatically) |
 | A C compiler + SDL2 headers/libraries | Linux/macOS: `sudo apt install libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev && gcc`; Windows: downloaded automatically into `player/.sdl2/` |
 | Node.js 22+ | only for the web builder checks |
 

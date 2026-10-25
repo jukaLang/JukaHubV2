@@ -548,15 +548,15 @@ func toolsPanelMetrics(config *Config, rows []toolsRow) toolsGridMetrics {
 		m.infoH = m.infoLineH + 5
 	}
 
-	m.headerH = 18 + medH + 4 + smallH + 10
+	m.headerH = 18 + medH + 8 + smallH + 10
 	// Footer: value line, detail line, and the closing hint.
 	m.footH = 6 + medH + 2 + smallH + 6 + smallH + 6
 
-	m.sectionH = 24
+	m.sectionH = 28
 	if label := getFontSized(config, "small", 15); label != nil {
-		m.sectionH = int32(label.Height()) + 10
-		if m.sectionH < 22 {
-			m.sectionH = 22
+		m.sectionH = int32(label.Height()) + 14
+		if m.sectionH < 26 {
+			m.sectionH = 26
 		}
 	}
 
@@ -938,12 +938,27 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Tools", ColorTextPrimary(), panelX+padX, panelY+16)
+	// The header opens with the same glyph as the Home tile that opened the
+	// panel, then the title: the two screens share one visual language, and a
+	// glyph is faster to recognise than a word. The well is measured from the
+	// title font and the subtitle below keeps the panel's full width.
+	wellY := panelY + 12
+	titleY := wellY + 5
+	titleX := panelX + padX
+	if medH > 0 {
+		box := medH + 10
+		tint := appGridTileTint("Tools")
+		fillRoundedRect(renderer, titleX, wellY, box, box, 12, WithAlpha(tint, 46))
+		strokeRoundedRect(renderer, titleX, wellY, box, box, 12, 1, WithAlpha(tint, 150))
+		drawToolsIcon(renderer, insetRect(sdl.Rect{X: titleX, Y: wellY, W: box, H: box}, 5), toolsActionPowerTools, tint)
+		titleX += box + 14
+	}
+	renderText(renderer, config, medium, ellipsize(medium, "Tools", panelW-2*padX), ColorTextPrimary(), titleX, titleY)
 	sub := "FTP & IP transfers, network probes and device utilities"
 	if !IsOnline() {
 		sub = "Offline — connect WiFi to transfer files"
 	}
-	renderText(renderer, config, font, sub, ColorTextTertiary(), panelX+padX, panelY+16+medH+4)
+	renderText(renderer, config, font, sub, ColorTextTertiary(), panelX+padX, panelY+28+medH)
 
 	// The address every transfer tool below needs is readable from the header
 	// without hunting for it in the list.
@@ -984,7 +999,11 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 			}
 			if line.heading != "" {
 				hy := bodyTop + line.headingY - scrollY
-				if hy+sectionH(m) > bodyTop {
+				// A heading scrolling out under the top edge is normal, but one
+				// clipped by the footer left a slice of label floating above the
+				// footer band, so a heading that starts in view has to fit
+				// whole; only one already crossing the top edge may be cut.
+				if hy < bodyTop || hy+sectionH(m) <= bodyTop+bodyViewH {
 					drawToolsSectionLabel(r, config, line.heading, panelX+padX, hy, panelW-2*padX)
 				}
 			}
@@ -998,12 +1017,10 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 				if cell.Y+cell.H <= bodyTop || cell.Y >= bodyTop+bodyViewH {
 					continue
 				}
-				// Tiles are drawn whole: a card sliced by the clip edge reads
-				// as a rendering fault. The focused tile is the exception — on
-				// a panel too short for one row it still has to show.
-				if (cell.Y < bodyTop || cell.Y+cell.H > bodyTop+bodyViewH) && idx != toolsPanel.cursor {
-					continue
-				}
+				// A row that straddles an edge is drawn clipped, the same rule
+				// the Apps grid follows: hiding it left a blank band at the top
+				// of a scrolled panel, and a card cut by the panel edge reads as
+				// the edge itself.
 				drawToolsTile(r, config, cell, rows[idx], idx == toolsPanel.cursor, labelFont, medium)
 				toolsRowRects[idx] = cell
 			}
@@ -1085,20 +1102,49 @@ func sectionH(m toolsGridMetrics) int32 { return m.sectionH }
 
 func valueY(m toolsGridMetrics, footY int32) int32 { return footY + 6 }
 
-// drawToolsSectionLabel paints a group heading: small uppercase text with a
-// hairline running to the panel edge, so the grid reads in sections without
-// spending a filled tile on a divider.
+// toolsSectionGlyph picks the glyph that opens a group heading. Each group
+// gets a representative tool instead of a generic bullet, drawn with the same
+// shapes as the tiles underneath, so a section is recognisable before its
+// small-caps label is read. An unknown group falls back to the Tools glyph.
+func toolsSectionGlyph(title string) toolsAction {
+	switch strings.ToUpper(strings.TrimSpace(title)) {
+	case "FTP & IP":
+		return toolsActionFTP
+	case "WATCH TOGETHER":
+		return toolsActionParty
+	case "SYSTEM & UPDATES":
+		return toolsActionPatch
+	}
+	return toolsActionPowerTools
+}
+
+// drawToolsSectionLabel paints a group heading: a tinted chip with the
+// section's glyph, the small uppercase title, and a hairline running to the
+// panel edge, so the grid reads in sections without spending a filled tile on
+// a divider.
 func drawToolsSectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, w int32) {
 	font := getFontSized(config, "small", 15)
 	if font == nil {
 		return
 	}
 	label := strings.ToUpper(title)
-	tw, th, _ := font.SizeUTF8(label)
-	renderText(renderer, config, font, label, ColorTextTertiary(), x, y+4)
-	if lx := x + int32(tw) + 12; lx < x+w {
+	_, th, _ := font.SizeUTF8(label)
+	textY := y + 6
+	textX := x
+	if th > 0 {
+		chip := int32(th) + 12
+		chipY := y + (int32(th)+14-chip)/2
+		tint := appGridTileTint(label)
+		fillRoundedRect(renderer, x, chipY, chip, chip, chip/4, WithAlpha(tint, 38))
+		strokeRoundedRect(renderer, x, chipY, chip, chip, chip/4, 1, WithAlpha(tint, 130))
+		drawToolsIcon(renderer, insetRect(sdl.Rect{X: x, Y: chipY, W: chip, H: chip}, chip/6), toolsSectionGlyph(label), tint)
+		textX += chip + 10
+	}
+	tw, _, _ := font.SizeUTF8(label)
+	renderText(renderer, config, font, label, ColorTextTertiary(), textX, textY)
+	if lx := textX + int32(tw) + 12; lx < x+w {
 		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
-		renderer.FillRect(&sdl.Rect{X: lx, Y: y + 4 + int32(th)/2, W: x + w - lx, H: 1})
+		renderer.FillRect(&sdl.Rect{X: lx, Y: textY + int32(th)/2, W: x + w - lx, H: 1})
 	}
 }
 

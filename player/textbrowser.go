@@ -13,18 +13,20 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/grandcat/zeroconf"
-	"github.com/shirou/gopsutil/v3/cpu"
-	"github.com/shirou/gopsutil/v3/disk"
-	"github.com/shirou/gopsutil/v3/host"
-	"github.com/shirou/gopsutil/v3/mem"
-	gopsutilnet "github.com/shirou/gopsutil/v3/net"
-	"github.com/shirou/gopsutil/v3/process"
+	"github.com/shirou/gopsutil/v4/cpu"
+	"github.com/shirou/gopsutil/v4/disk"
+	"github.com/shirou/gopsutil/v4/host"
+	"github.com/shirou/gopsutil/v4/mem"
+	gopsutilnet "github.com/shirou/gopsutil/v4/net"
+	"github.com/shirou/gopsutil/v4/process"
 	"github.com/tidwall/gjson"
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -859,17 +861,18 @@ func browseWebPageResult(rawURL string) browserPage {
 		return browserPage{Text: "Browser error: " + err.Error()}
 	}
 	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
-	client := &http.Client{
-		Timeout: textBrowserFetchTimeout,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-				return fmt.Errorf("redirected to an unsupported URL scheme")
-			}
-			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
-			}
-			return nil
-		},
+	// The jar travels with the client, so a cookie a redirect sets is already
+	// in hand when the next hop — and the page's stylesheets and images — go
+	// out.
+	client := browserHTTPClient(textBrowserFetchTimeout)
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+			return fmt.Errorf("redirected to an unsupported URL scheme")
+		}
+		if len(via) >= 5 {
+			return fmt.Errorf("too many redirects")
+		}
+		return nil
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1658,6 +1661,11 @@ func getRunningServices() (result string) {
 }
 
 // getSystemTemperature returns a temperature summary.
+//
+// This used to call gopsutil's host.SensorsTemperatures, which the v4 release
+// removed (its Linux implementation needed cgo). It now reads the kernel's
+// thermal zones directly, which is what the handheld hardware panels already
+// do (see getCPUTempC in hardware.go).
 func getSystemTemperature() (result string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1667,13 +1675,24 @@ func getSystemTemperature() (result string) {
 	var sb strings.Builder
 	sb.WriteString("=== Temperatures ===\n")
 
-	temps, err := host.SensorsTemperatures()
-	if err == nil {
-		for _, t := range temps {
-			sb.WriteString(fmt.Sprintf("%s: %.1f C\n", t.SensorKey, float64(t.Temperature)))
-		}
-	} else {
+	if runtime.GOOS != "linux" {
 		sb.WriteString("No sensor data available.\n")
+		return sb.String()
+	}
+	zones, err := filepath.Glob("/sys/class/thermal/thermal_zone*")
+	if err != nil || len(zones) == 0 {
+		sb.WriteString("No sensor data available.\n")
+		return sb.String()
+	}
+	for _, zone := range zones {
+		name, _ := os.ReadFile(filepath.Join(zone, "type"))
+		data, err := os.ReadFile(filepath.Join(zone, "temp"))
+		if err != nil {
+			continue
+		}
+		if v, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && v > 0 {
+			sb.WriteString(fmt.Sprintf("%s: %.1f C\n", strings.TrimSpace(string(name)), float64(v)/1000.0))
+		}
 	}
 
 	return sb.String()

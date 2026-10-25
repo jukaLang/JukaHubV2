@@ -37,6 +37,7 @@ const (
 	a11yKeyOneHanded  = "a11y_one_handed"
 	a11yKeyChordBtn   = "a11y_chord_button"
 	a11yKeySlowRepeat = "a11y_slow_repeat"
+	a11yKeyKeymap     = "a11y_keymap"
 
 	a11yPanelTitle = "Accessibility"
 
@@ -81,6 +82,10 @@ type a11ySettings struct {
 	// slowRepeat doubles the on-screen keyboard's held-direction delay and
 	// interval, for hands that overshoot a key.
 	slowRepeat bool
+	// keys is the physical → logical keymap. The swap flags above are the two
+	// common presets; this map is the general layer, so a panel row can remap
+	// Select/Start (or swallow a button) without touching a single handler.
+	keys map[uint8]uint8
 }
 
 // a11yChordButtons are the physical buttons that can act as the chord
@@ -122,7 +127,7 @@ var a11yRowHits []struct {
 // a11yInit loads the saved settings and applies them before the first frame, so
 // a user who needs large text never sees a launch at the default size.
 func a11yInit(config *Config) {
-	a11y = a11ySettings{fontScale: 1.0}
+	a11y = a11ySettings{fontScale: 1.0, keys: map[uint8]uint8{}}
 	a11yLoad(config)
 	a11yRefreshFonts()
 }
@@ -152,6 +157,9 @@ func a11yLoad(config *Config) {
 		if a11yColorblindPreset(s) != "" {
 			a11y.colorblind = s
 		}
+	}
+	if s, ok := customString(config.Variables.Custom, a11yKeyKeymap); ok {
+		a11y.keys = a11yParseKeymap(s)
 	}
 }
 
@@ -185,6 +193,7 @@ func a11yStore(config *Config) {
 	config.Variables.Custom[a11yKeyOneHanded] = a11y.oneHanded
 	config.Variables.Custom[a11yKeyChordBtn] = a11y.chordButton
 	config.Variables.Custom[a11yKeySlowRepeat] = a11y.slowRepeat
+	config.Variables.Custom[a11yKeyKeymap] = a11yKeymapString(a11y.keys)
 }
 
 // a11ySave writes the settings back through the same user-config writer the
@@ -361,10 +370,118 @@ func a11yApplyPalette(config *Config) {
 
 // ── Controller remapping ──────────────────────────────────────────────────
 
-// a11yRemapButton translates a physical button into the logical one the rest of
-// the app expects. Only the four face buttons are remapped: the d-pad drives
-// focus everywhere and swapping it would make navigation unlearnable.
-func a11yRemapButton(b uint8) uint8 {
+// a11yDisabledButton marks a physical button the keymap swallows. SDL button
+// ids stay well below it, so it cannot collide with a real button.
+const a11yDisabledButton = uint8(255)
+
+// a11yButtonNames is the stable spelling used in the saved keymap. SDL ids are
+// saved by name rather than number so a hand-edited config stays readable and
+// cannot silently point at a different physical button.
+var a11yButtonNames = []struct {
+	key    string
+	label  string
+	button uint8
+}{
+	{"a", "A", sdl.CONTROLLER_BUTTON_A},
+	{"b", "B", sdl.CONTROLLER_BUTTON_B},
+	{"x", "X", sdl.CONTROLLER_BUTTON_X},
+	{"y", "Y", sdl.CONTROLLER_BUTTON_Y},
+	{"select", "Select", sdl.CONTROLLER_BUTTON_BACK},
+	{"start", "Start", sdl.CONTROLLER_BUTTON_START},
+	{"l1", "L1", sdl.CONTROLLER_BUTTON_LEFTSHOULDER},
+	{"r1", "R1", sdl.CONTROLLER_BUTTON_RIGHTSHOULDER},
+}
+
+func a11yButtonCode(name string) (uint8, bool) {
+	wanted := strings.ToLower(strings.TrimSpace(name))
+	for _, b := range a11yButtonNames {
+		if b.key == wanted {
+			return b.button, true
+		}
+	}
+	return 0, false
+}
+
+func a11yButtonKey(button uint8) string {
+	for _, b := range a11yButtonNames {
+		if b.button == button {
+			return b.key
+		}
+	}
+	return ""
+}
+
+// a11yParseKeymap reads "select:start,start:select" (or "select:none" for a
+// swallowed button). Unknown names are skipped so a typo costs that entry, not
+// the whole map.
+func a11yParseKeymap(raw string) map[uint8]uint8 {
+	out := map[uint8]uint8{}
+	for _, part := range strings.Split(raw, ",") {
+		kv := strings.SplitN(strings.TrimSpace(part), ":", 2)
+		if len(kv) != 2 {
+			continue
+		}
+		physical, ok := a11yButtonCode(kv[0])
+		if !ok {
+			continue
+		}
+		target := strings.ToLower(strings.TrimSpace(kv[1]))
+		if target == "none" {
+			out[physical] = a11yDisabledButton
+			continue
+		}
+		logical, ok := a11yButtonCode(target)
+		if !ok || logical == physical {
+			continue
+		}
+		out[physical] = logical
+	}
+	return out
+}
+
+func a11yKeymapString(keys map[uint8]uint8) string {
+	if len(keys) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(keys))
+	for _, b := range a11yButtonNames {
+		target, ok := keys[b.button]
+		if !ok {
+			continue
+		}
+		name := "none"
+		if target != a11yDisabledButton {
+			name = a11yButtonKey(target)
+			if name == "" {
+				continue
+			}
+		}
+		parts = append(parts, b.key+":"+name)
+	}
+	return strings.Join(parts, ",")
+}
+
+// a11yResolveButton applies the general keymap, then the two swap presets, and
+// reports whether the press must be swallowed entirely (a disabled button).
+//
+// This is the single place "physical button" becomes "logical button": every
+// handler, overlay and keyboard lookup sees the result, so a new remappable
+// button is a row here, not a change in scene code.
+func a11yResolveButton(b uint8) (uint8, bool) {
+	if target, ok := a11y.keys[b]; ok {
+		if target == a11yDisabledButton {
+			return b, true
+		}
+		b = target
+	}
+	if a11y.swapAB || a11y.swapXY {
+		return a11ySwapButton(b), false
+	}
+	return b, false
+}
+
+// a11ySwapButton is the preset half of the keymap: the two classic swaps.
+func a11ySwapButton(b uint8) uint8 {
 	if a11y.swapAB {
 		switch b {
 		case sdl.CONTROLLER_BUTTON_A:
@@ -382,6 +499,14 @@ func a11yRemapButton(b uint8) uint8 {
 		}
 	}
 	return b
+}
+
+// a11yRemapButton translates a physical button into the logical one the rest of
+// the app expects, ignoring the disabled state (callers that must honour it use
+// a11yResolveButton).
+func a11yRemapButton(b uint8) uint8 {
+	logical, _ := a11yResolveButton(b)
+	return logical
 }
 
 // ── One-handed chord ──────────────────────────────────────────────────────
@@ -494,8 +619,10 @@ func a11yRemapEvent(e *sdl.ControllerButtonEvent) bool {
 		}
 	}
 
-	if a11y.swapAB || a11y.swapXY {
-		e.Button = a11yRemapButton(e.Button)
+	if logical, dropped := a11yResolveButton(e.Button); dropped {
+		return true
+	} else if logical != e.Button {
+		e.Button = logical
 	}
 	return false
 }
@@ -518,8 +645,10 @@ const (
 	a11yRowTextSize a11yRowKind = iota
 	a11yRowContrast
 	a11yRowColorblind
+	a11yRowLayoutPreset
 	a11yRowSwapAB
 	a11yRowSwapXY
+	a11yRowSelectKey
 	a11yRowOneHanded
 	a11yRowChordButton
 	a11yRowSlowRepeat
@@ -558,12 +687,66 @@ func a11yRows() []a11yRow {
 		{label: "Text size", detail: "Scales every menu, overlay and keyboard label.", value: a11yScaleLabel(), kind: a11yRowTextSize},
 		{label: "High contrast", detail: "Stronger borders and brighter text on every screen.", value: contrast, kind: a11yRowContrast},
 		{label: "Colour-blind palette", detail: "Replaces the theme colours with a safer set.", value: a11yColorblindLabel(a11y.colorblind), kind: a11yRowColorblind},
+		{label: "Button layout", detail: "Nintendo order swaps A/B and X/Y together. The two rows below stay available for a single swap.", value: a11yLayoutPresetLabel(), kind: a11yRowLayoutPreset},
 		{label: "Swap A / B", detail: "For players used to the Japanese button order.", value: swapAB, kind: a11yRowSwapAB},
 		{label: "Swap X / Y", detail: "Moves the secondary and tertiary actions.", value: swapXY, kind: a11yRowSwapXY},
+		{label: "Select button", detail: "Moves the Select action to Start (both stay reachable), or disables Select entirely. Start keeps opening the menu.", value: a11ySelectKeyMode(), kind: a11yRowSelectKey},
 		{label: "One-handed mode", detail: "Tap the chord button, then a direction, to press A, B, X or Y with one thumb. Tap the chord button again to cancel.", value: oneHanded, kind: a11yRowOneHanded},
 		{label: "Chord button", detail: "The button that arms the one-handed chord. Pick one your other hand's index finger can reach.", value: a11yChordLabel(a11y.chordButton), kind: a11yRowChordButton},
 		{label: "Key repeat", detail: "How fast a held direction repeats on the on-screen keyboard. Slow is for hands that overshoot a key.", value: repeat, kind: a11yRowSlowRepeat},
 		{label: "Reset to defaults", detail: "Back to 100% text, default colours, standard buttons.", value: "", kind: a11yRowReset},
+	}
+}
+
+// a11yLayoutPresetLabel names the combined state of the two swap flags. Getting
+// a preset and the fine-grained rows to agree is the difference between a
+// settings panel and two panels stacked on each other.
+func a11yLayoutPresetLabel() string {
+	switch {
+	case a11y.swapAB && a11y.swapXY:
+		return "Nintendo"
+	case !a11y.swapAB && !a11y.swapXY:
+		return "Standard"
+	default:
+		return "Custom"
+	}
+}
+
+// The three states of the Select row. They are stored in the general keymap, so
+// the row is a view of the layer rather than a second mechanism.
+const (
+	a11ySelectDefault  = "Default"
+	a11ySelectSwapped  = "Swapped"
+	a11ySelectDisabled = "Disabled"
+)
+
+func a11ySelectKeyMode() string {
+	switch a11y.keys[sdl.CONTROLLER_BUTTON_BACK] {
+	case sdl.CONTROLLER_BUTTON_START:
+		return a11ySelectSwapped
+	case a11yDisabledButton:
+		return a11ySelectDisabled
+	}
+	return a11ySelectDefault
+}
+
+// a11ySetSelectKeyMode writes the pair so swapping keeps both buttons
+// reachable: Select sends Start and Start sends Select.
+func a11ySetSelectKeyMode(mode string) {
+	if a11y.keys == nil {
+		a11y.keys = map[uint8]uint8{}
+	}
+	back, start := uint8(sdl.CONTROLLER_BUTTON_BACK), uint8(sdl.CONTROLLER_BUTTON_START)
+	switch mode {
+	case a11ySelectSwapped:
+		a11y.keys[back] = start
+		a11y.keys[start] = back
+	case a11ySelectDisabled:
+		delete(a11y.keys, start)
+		a11y.keys[back] = a11yDisabledButton
+	default:
+		delete(a11y.keys, back)
+		delete(a11y.keys, start)
 	}
 }
 
@@ -675,8 +858,30 @@ func a11yAdjust(dir int, config *Config) {
 	case a11yRowSwapAB:
 		a11y.swapAB = !a11y.swapAB
 		changed = true
+	case a11yRowLayoutPreset:
+		nintendo := a11y.swapAB && a11y.swapXY
+		a11y.swapAB, a11y.swapXY = !nintendo, !nintendo
+		if !nintendo {
+			ShowToast("Button layout: Nintendo order", ToastKindInfo)
+		} else {
+			ShowToast("Button layout: standard order", ToastKindInfo)
+		}
+		changed = true
 	case a11yRowSwapXY:
 		a11y.swapXY = !a11y.swapXY
+		changed = true
+	case a11yRowSelectKey:
+		switch a11ySelectKeyMode() {
+		case a11ySelectDefault:
+			a11ySetSelectKeyMode(a11ySelectSwapped)
+			ShowToast("Select now sends Start", ToastKindInfo)
+		case a11ySelectSwapped:
+			a11ySetSelectKeyMode(a11ySelectDisabled)
+			ShowToast("Select disabled · Start still opens the menu", ToastKindInfo)
+		default:
+			a11ySetSelectKeyMode(a11ySelectDefault)
+			ShowToast("Select restored", ToastKindInfo)
+		}
 		changed = true
 	case a11yRowOneHanded:
 		a11y.oneHanded = !a11y.oneHanded
@@ -715,6 +920,7 @@ func a11yAdjust(dir int, config *Config) {
 		a11y.oneHanded = false
 		a11y.chordButton = "l1"
 		a11y.slowRepeat = false
+		a11y.keys = map[uint8]uint8{}
 		a11yChordReset()
 		a11yRefreshFonts()
 		a11yApplyPalette(config)

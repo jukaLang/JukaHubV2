@@ -294,7 +294,7 @@ func InstallPackage(ctx context.Context, p *PatchPackage, files []PackageFile) e
 		src := packageSource(p, &f)
 		if _, err := os.Stat(src); err != nil {
 			_ = journal.rollback()
-			return fmt.Errorf("install %s: source missing: %v", f.Src, err)
+			return fmt.Errorf("install %s: source missing: %w", f.Src, err)
 		}
 		if err := verifyPackageFile(src, f.SHA256); err != nil {
 			_ = journal.rollback()

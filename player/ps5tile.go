@@ -83,7 +83,9 @@ func renderPS5HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 	switch state {
 	case ps5TileBusy:
 		fill = sdl.Color{R: 38, G: 66, B: 102, A: 255}
-		caption = "N/A"
+		// "N/A" read as a broken value; the dash is the common dimmed-affordance
+		// shorthand and matches the dimmed fill.
+		caption = "·"
 	case ps5TileInstall:
 		caption = "PAIR"
 	}

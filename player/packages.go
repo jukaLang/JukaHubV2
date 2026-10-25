@@ -224,10 +224,8 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
 
 	if len(pkgs) == 0 {
-		font, _ := getCachedFont(config, "small")
-		if font != nil {
-			renderText(renderer, config, font, "No packages loaded. Press Refresh to fetch the registry.", ColorTextTertiary(), element.X+20, element.Y+20)
-		}
+		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
+			"·", "No packages installed", "Press Refresh to fetch the registry.")
 		return
 	}
 

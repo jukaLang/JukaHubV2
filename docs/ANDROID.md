@@ -59,8 +59,7 @@ profile runtime](GAME_PROFILES.md) is the hub's side of exactly this path:
   (`/proc/meminfo`) is checked against the staged bytes plus a runtime
   budget; a launch that would not leave the hub itself alive is refused with
   the numbers, and `JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB` (MiB, `0` disables)
-  opts out. See [ANDROID-GAMMAOS.md](ANDROID-GAMMAOS.md#4-a-memory-pre-flight-for-androidpak-launches-proposal) —
-  the item that came out of that study.
+  opts out. The pre-flight lives in [player/androidpak.go](../player/androidpak.go).
 * **Input.** The runtime hands games a real `AInputQueue` fed from the
   device's `/dev/input/event*` by the evdev reader; `ANDROIDPAK_INPUT=off`
   launches without it (the game keeps running, just blind), and a node set
@@ -86,7 +85,7 @@ and framework features stay out of scope by design.
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
 | **AndroidPak — NDK-only games via the bionic translation runtime** | **Shipped as a profile runtime.** The hub triages APKs, stages the native subset to tmpfs and launches the installed loader; the loader/shims themselves are a user install ([GAME_PROFILES.md](GAME_PROFILES.md)). |
 | **Sideloading APKs into the container** | Next slice. `waydroid app install <file>` is a container feature; the hub's job is validating the package and handing it over. |
-| **Full Android firmware (GammaOS Core/Nano)** | Real, community-maintained, and not an integration point: an Android 13/14 image flashed to the microSD — which is then the boot medium, so a JukaHub boot and a GammaOS boot are different cards. What the study of it changes here: [ANDROID-GAMMAOS.md](ANDROID-GAMMAOS.md). |
+| **Full Android firmware (GammaOS Core/Nano)** | Real, community-maintained, and not an integration point: an Android 13/14 image flashed to the microSD — which is then the boot medium, so a JukaHub boot and a GammaOS boot are different cards. It also says nothing about this engine's hard gate: stock firmware still exposes no binder device for a container. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |
 
 ## What ships now
@@ -149,7 +148,6 @@ and framework features stay out of scope by design.
 
 ## Related
 
-* [GammaOS study](ANDROID-GAMMAOS.md) — what Android-on-A133P firmware proves and retargets here.
 * [Windows apps](WINDOWS_APPS.md) — the same integration pattern for Wine.
 * [Game profiles](GAME_PROFILES.md) — the display and power model both reuse.
 * [PortMaster ports](PORTMASTER.md) — where WestonPack comes from.

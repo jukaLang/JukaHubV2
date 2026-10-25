@@ -51,6 +51,7 @@ var builtinApplets = []struct {
 	{"JukaLand", "JukaLand", ""},
 	{"Live TV", "LiveTV", ""},
 	{"Podcasts", "Podcasts", ""},
+	{"Recordings", "Recordings", ""},
 	{"Tickers", "Tickers", ""},
 	{"Weather", "Weather", ""},
 	{"Unit Converter", "UnitConverter", ""},

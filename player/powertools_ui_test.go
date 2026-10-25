@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+	"unsafe"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 func withPowerToolsState(t *testing.T, state powerToolsState) {
@@ -10,6 +13,44 @@ func withPowerToolsState(t *testing.T, state powerToolsState) {
 	prev := powerTools
 	powerTools = state
 	t.Cleanup(func() { powerTools = prev })
+}
+
+// renderPowerProbe draws the Power tools panel over a known background so the
+// list's visual rules can be checked on real pixels.
+func renderPowerProbe(t *testing.T, config *Config, page powerPage, cursor int) *probeFrame {
+	t.Helper()
+	f := newProbeFrame(t)
+	if font, _ := getCachedFont(config, "small"); font == nil {
+		t.Skip("no usable font in this environment")
+	}
+
+	prevW, prevH := screenWidth, screenHeight
+	prevOpen, prevPage, prevCursor := powerTools.open, powerTools.page, powerTools.cursor
+	screenWidth, screenHeight = probeW, probeH
+	powerTools.open = true
+	powerTools.page = page
+	powerTools.cursor = cursor
+	powerRefreshCaches()
+	t.Cleanup(func() {
+		screenWidth, screenHeight = prevW, prevH
+		powerTools.open, powerTools.page, powerTools.cursor = prevOpen, prevPage, prevCursor
+		powerRowRects = nil
+	})
+
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Skipf("software renderer unavailable: %v", err)
+	}
+	defer destroyTestRenderer(renderer)
+	ClearTextCache()
+
+	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
+	renderer.Clear()
+	renderPowerToolsPanel(renderer, config)
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+	}
+	return f
 }
 
 func TestPowerToolsMenuRows(t *testing.T) {
@@ -20,13 +61,13 @@ func TestPowerToolsMenuRows(t *testing.T) {
 		syncTarget: "nas:/backup",
 	})
 	rows := powerToolRows(&Config{})
-	if len(rows) != 8 {
-		t.Fatalf("menu rows = %d, want 7 tools + Close", len(rows))
+	if len(rows) != 7 {
+		t.Fatalf("menu rows = %d, want the seven tools and no Close row", len(rows))
 	}
 	want := []powerAction{
 		powerActionOpenFiles, powerActionOpenScripts,
 		powerActionOpenSync, powerActionOpenConfigs, powerActionOpenBench,
-		powerActionOpenMemory, powerActionOpenCtrlDiag, powerActionClose,
+		powerActionOpenMemory, powerActionOpenCtrlDiag,
 	}
 	for i, action := range want {
 		if rows[i].action != action {
@@ -54,8 +95,8 @@ func TestPowerToolsScriptRows(t *testing.T) {
 		scripts: []powerScript{{Name: "disk", Command: "df -h"}},
 	})
 	rows := powerToolRows(&Config{})
-	if len(rows) != 3 {
-		t.Fatalf("script rows = %d, want snippet, save and Back", len(rows))
+	if len(rows) != 2 {
+		t.Fatalf("script rows = %d, want the snippet and the save row", len(rows))
 	}
 	if rows[0].action != powerActionRunScript || rows[0].arg != "0" {
 		t.Fatalf("first row = %+v", rows[0])
@@ -63,8 +104,40 @@ func TestPowerToolsScriptRows(t *testing.T) {
 	if rows[1].action != powerActionSaveClipboardScript || !rows[1].enabled {
 		t.Fatalf("save row = %+v", rows[1])
 	}
-	if rows[2].action != powerActionBack {
-		t.Fatalf("last row = %+v", rows[2])
+}
+
+// The footer carries the focused row's action plus the page's own, so no row
+// repeats its action as a right-edge pill.
+func TestPowerFooterNamesTheFocusedRow(t *testing.T) {
+	withPowerToolsState(t, powerToolsState{page: powerPageMenu})
+	rows := powerToolRows(&Config{})
+	got := powerFooterFor(powerPageMenu, rows, 0)
+	if !strings.Contains(got, "A Open") || !strings.Contains(got, "B Close") {
+		t.Fatalf("menu footer = %q, want the focused row's action and the way out", got)
+	}
+
+	withPowerToolsState(t, powerToolsState{
+		page:    powerPageScripts,
+		scripts: []powerScript{{Name: "built-in", Command: "echo"}},
+	})
+	rows = powerToolRows(&Config{})
+	got = powerFooterFor(powerPageScripts, rows, 0)
+	if !strings.Contains(got, "A Run") || !strings.Contains(got, "Y Save to Clipboard") || !strings.Contains(got, "B Back") {
+		t.Fatalf("script footer = %q, want run, save and back", got)
+	}
+
+	// A row with no action (a benchmark result) leaves the page actions only.
+	withPowerToolsState(t, powerToolsState{
+		page:  powerPageBench,
+		bench: []powerBenchEntry{{Device: "fast", Write: 90, Read: 80, At: "now"}},
+	})
+	rows = powerToolRows(&Config{})
+	last := len(rows) - 1
+	if rows[last].hint != "" {
+		t.Fatalf("benchmark result row carries a hint: %+v", rows[last])
+	}
+	if got := powerFooterFor(powerPageBench, rows, last); got != "B Back" {
+		t.Fatalf("result footer = %q, want just the way back", got)
 	}
 }
 
@@ -98,13 +171,13 @@ func TestPowerToolsConfigAndBenchRows(t *testing.T) {
 		bench:     []powerBenchEntry{{Device: "fast", Write: 90, Read: 80, At: "now"}},
 	})
 	rows := powerToolRows(&Config{})
-	if len(rows) != 3 || rows[0].action != powerActionSnapshotNow || rows[1].action != powerActionDiffSnapshot {
+	if len(rows) != 2 || rows[0].action != powerActionSnapshotNow || rows[1].action != powerActionDiffSnapshot {
 		t.Fatalf("config rows = %+v", rows)
 	}
 	powerTools.page = powerPageBench
 	rows = powerToolRows(&Config{})
-	if len(rows) != 6 {
-		t.Fatalf("bench rows = %d, want actions + same-model summary + result + Back", len(rows))
+	if len(rows) != 5 {
+		t.Fatalf("bench rows = %d, want actions + same-model summary + result", len(rows))
 	}
 	if rows[0].action != powerActionRunBenchmark || rows[3].enabled || rows[4].enabled {
 		t.Fatalf("bench rows = %+v", rows)
@@ -159,5 +232,49 @@ func TestPowerToolsPanelSizing(t *testing.T) {
 	_, h = powerPageSize(powerPageOutput, 70)
 	if h != 640 {
 		t.Fatalf("output panel = %dpx, want 640", h)
+	}
+}
+
+// The panel is sized to the rows it can show: no dead band under the last row,
+// and never taller than the screen.
+func TestPowerPanelSizedToVisibleRows(t *testing.T) {
+	prevW, prevH := screenWidth, screenHeight
+	screenWidth, screenHeight = 1280, 720
+	t.Cleanup(func() { screenWidth, screenHeight = prevW, prevH })
+
+	withPowerToolsState(t, powerToolsState{page: powerPageMenu})
+	const rowH = int32(82)
+	_, h := powerPageSize(powerPageMenu, rowH)
+	if h > 720-24 {
+		t.Fatalf("panel = %dpx, taller than the 696px a 720px screen leaves", h)
+	}
+	if h+rowH <= 720-24 {
+		t.Fatalf("panel = %dpx leaves room for another %dpx row: dead space under the last one", h, rowH)
+	}
+}
+
+// The selected row reads at a glance: a filled row with an accent spine. The
+// rows themselves carry no action pill — the footer names what A does.
+func TestPowerToolsPanelMarksTheFocusedRow(t *testing.T) {
+	prevAccent := accentColor
+	accentColor = ColorAccent
+	t.Cleanup(func() { accentColor = prevAccent })
+
+	f := renderPowerProbe(t, &Config{}, powerPageMenu, 0)
+	if len(powerRowRects) < 2 {
+		t.Fatalf("rows drawn = %d, want at least two", len(powerRowRects))
+	}
+	focus, other := powerRowRects[0], powerRowRects[1]
+	if focus.W == 0 || other.W == 0 {
+		t.Fatalf("row rects = %+v / %+v", focus, other)
+	}
+
+	spine := f.at(focus.X+3, focus.Y+focus.H/2)
+	plain := f.at(other.X+3, other.Y+other.H/2)
+	if spine == plain {
+		t.Fatalf("focused row has no accent spine: both columns are %+v", spine)
+	}
+	if f.at(focus.X+60, focus.Y+8) == f.at(other.X+60, other.Y+8) {
+		t.Fatal("focused row is not filled; the list reads as one flat surface")
 	}
 }

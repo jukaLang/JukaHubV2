@@ -374,10 +374,10 @@ func drawWebFloats(r *sdl.Renderer, config *Config, doc *webDocument, layout *we
 				if thickness < 1 {
 					thickness = 1
 				}
-				strokeRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, 3, thickness, bg.Color)
+				strokeRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
 				continue
 			}
-			fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, 2, bg.Color)
+			fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
 		}
 		for _, row := range f.Rows {
 			y := top + row.Y

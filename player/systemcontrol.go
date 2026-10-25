@@ -239,7 +239,7 @@ func runAmixerSet(level string) error {
 		return nil
 	}
 	if _, err := systemCommandRunner("amixer", "-q", "sset", "PCM", level); err != nil {
-		return fmt.Errorf("amixer: %v", err)
+		return fmt.Errorf("amixer: %w", err)
 	}
 	return nil
 }
@@ -476,7 +476,7 @@ func setAirplaneMode(on bool) error {
 		verb = "block"
 	}
 	if _, err := systemCommandRunner("rfkill", verb, "all"); err != nil {
-		return fmt.Errorf("rfkill %s all: %v", verb, err)
+		return fmt.Errorf("rfkill %s all: %w", verb, err)
 	}
 	return nil
 }
@@ -488,7 +488,7 @@ func runRfkill(kind string, on bool) error {
 	}
 	// rfkill's argument is a block verb; "block" turns the radio off.
 	if _, err := systemCommandRunner("rfkill", verb, kind); err != nil {
-		return fmt.Errorf("rfkill %s %s: %v", verb, kind, err)
+		return fmt.Errorf("rfkill %s %s: %w", verb, kind, err)
 	}
 	return nil
 }

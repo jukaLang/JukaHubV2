@@ -355,8 +355,11 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 		return fmt.Errorf("launcher is missing: %s", filepath.Base(launcher))
 	}
 	// A RetroArch launcher gets the two cfg switches that make the next boot
-	// continue from the auto state. Standalone emulators are left alone.
+	// continue from the auto state, plus the folder its own record toggle
+	// writes captures to, so the Recordings screen can list them. Standalone
+	// emulators are left alone.
 	prepareSavestateResume(launcher)
+	prepareRecordings(launcher)
 	// Per-game options are read here, at launch time, so an edit made in the
 	// options sheet applies to the very next start without a rescan.
 	options := gameOptionsFor(game.Path)

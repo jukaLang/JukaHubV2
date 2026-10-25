@@ -284,7 +284,7 @@ func listAndroidApps(backend androidBackend, host androidHost) ([]androidApp, er
 	output, err := host.run(backend.Binary, "app", "list")
 	apps := parseAndroidApps(output)
 	if err != nil && len(apps) == 0 {
-		return nil, fmt.Errorf("list Android apps: %v", err)
+		return nil, fmt.Errorf("list Android apps: %w", err)
 	}
 	return apps, nil
 }

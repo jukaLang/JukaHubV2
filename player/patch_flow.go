@@ -210,18 +210,20 @@ func OpVerifyTools(ctx context.Context, config *Config) error {
 	return nil
 }
 
-// OpExportDiagnostics writes the diagnostics report.
+// OpExportDiagnostics writes the support bundle: the redacted report plus the
+// redacted tail of the in-memory log. The QR/bug-report flows keep the short
+// DiagnosticsText, which has to fit in a URL.
 func OpExportDiagnostics(ctx context.Context, config *Config) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	default:
 	}
-	path, err := ExportDiagnostics(config)
+	path, err := ExportDiagnosticsBundle(config)
 	if err != nil {
 		return err
 	}
-	patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "Diagnostics written to " + path})
+	patchEventSafe(PatchEvent{Kind: PatchEventToast, Text: "Diagnostics + log written to " + path})
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }

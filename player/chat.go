@@ -920,7 +920,7 @@ func discordTokenWorks(auth string) (bool, error) {
 	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("cannot reach Discord: %v", err)
+		return false, fmt.Errorf("cannot reach Discord: %w", err)
 	}
 	defer resp.Body.Close()
 	io.Copy(io.Discard, resp.Body)
@@ -1486,7 +1486,7 @@ func groqRequestModel(client *http.Client, key, model string, messages []map[str
 	req.Header.Set("Authorization", "Bearer "+key)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("Groq request failed: %v", err)
+		return "", fmt.Errorf("Groq request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -1501,7 +1501,7 @@ func groqRequestModel(client *http.Client, key, model string, messages []map[str
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
-		return "", fmt.Errorf("Groq returned an unreadable response: %v", err)
+		return "", fmt.Errorf("Groq returned an unreadable response: %w", err)
 	}
 	if len(result.Choices) == 0 {
 		return "", errors.New("Groq returned no response.")
@@ -1948,6 +1948,15 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 	chatUnread = total - chatSeenCount
 	chatClampSelection()
+
+	// An empty room draws just the rename pill over bare background, which
+	// read as a stray "You ✏" chip from the audit. Give the empty history the
+	// shared state card instead, so the pill sits next to a real explanation.
+	if len(messages) == 0 && replyH == 0 {
+		UIEmptyState(renderer, config, sdl.Rect{
+			X: listX + SpaceMD, Y: msgAreaTop, W: listW - 2*SpaceMD, H: msgAreaBottom - msgAreaTop,
+		}, "", "No messages yet", "Say hello below, or press Y / Ask AI for a solo chat.")
+	}
 
 	// Render messages from the bottom up so the latest message sits at the bottom.
 	startY := msgAreaBottom

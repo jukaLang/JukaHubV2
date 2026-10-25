@@ -1,61 +1,66 @@
 name: Feature request
-description: Suggest something the hub should do, or do better
-title: "[feature] "
+description: Suggest a capability JukaHub does not have yet.
+title: "[Feature]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Before writing: [docs/FEATURE-BACKLOG.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/FEATURE-BACKLOG.md)
-        and [docs/FEATURE-SLATE.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/FEATURE-SLATE.md)
-        record what is already built, what is planned, and what cannot work on this
-        hardware (no second display, no overlay over the emulator, no reading game RAM).
-        Checking there first keeps the list honest.
+        Please check [docs/FEATURE-BACKLOG.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/FEATURE-BACKLOG.md)
+        and [docs/IMPROVEMENTS.md](https://github.com/jukaLang/JukaHubV2/blob/main/docs/IMPROVEMENTS.md)
+        first: both list what is already shipped, what is planned, and what
+        deliberately cannot work on this hardware (an in-game OSD, a generic
+        Wi-Fi link cable for standalone emulators). A request against a
+        documented gap is still welcome — say which gap you are closing.
 
   - type: textarea
     id: problem
     attributes:
-      label: What problem does this solve
-      description: Describe the moment it goes wrong today, not the feature you have in mind.
-      placeholder: "I keep forgetting which game I was halfway through, because ..."
+      label: What problem does this solve?
+      description: Describe the situation where JukaHub gets in your way, not the solution yet.
+      placeholder: "When I ..., I have to ..., which means ..."
     validations:
       required: true
 
   - type: textarea
     id: proposal
     attributes:
-      label: What you would like to happen
+      label: What should happen instead?
+      description: The behaviour you would like. Buttons, screens and defaults are useful if you have them in mind.
     validations:
       required: true
 
   - type: dropdown
     id: area
     attributes:
-      label: Area
+      label: Which part of the app does it touch?
+      description: Pick the closest scene or subsystem.
       options:
-        - Home screen, theme or layout
-        - Games library or emulators
-        - Music, video or streaming
-        - Packages, Patch or the updater
-        - Smart home, network or tools
-        - Web builder
-        - Documentation
-        - Other
+        - Home / Continue / navigation
+        - Media (YouTube, Shorts, video player, music)
+        - Games (library, emulators, save manager, LAN play)
+        - Apps / Tools / power tools
+        - Settings / appearance / accessibility
+        - Packages / updates / plugins
+        - Network (Wi-Fi, FTP, SSH, companion, remote play)
+        - Web builder (generate.jukalang.com)
+        - Documentation or contributor tooling
+        - Somewhere else / not sure
     validations:
       required: true
 
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives you considered
-      description: Includes "I currently do this by hand / with another app".
-    validations:
-      required: false
+      label: Alternatives you have tried
+      description: Other apps, workarounds, or an existing setting that nearly does it.
 
   - type: checkboxes
     id: checks
     attributes:
-      label: Before submitting
+      label: Checklist
       options:
-        - label: I searched existing issues and the feature documents above.
+        - label: I checked the backlog and improvement docs for this item.
+          required: true
+        - label: I searched the existing issues for a duplicate.
           required: true

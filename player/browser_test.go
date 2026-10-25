@@ -955,3 +955,84 @@ func TestBrowserTapOnPageLinkOpensIt(t *testing.T) {
 		t.Fatal("tap far from the link was consumed")
 	}
 }
+
+// Up/Down in link mode must follow the page's rows, not flat reading order: on
+// a two-column page a flat step leaves the far side of the same row, which
+// looks like the cursor teleporting. The geometry walk picks the nearest
+// column on the adjacent row and wraps at the ends.
+func TestBrowserLinkRowStepWalksColumns(t *testing.T) {
+	links := []webLinkHit{
+		{Row: 10, X: 100}, {Row: 10, X: 600}, // left and right column
+		{Row: 20, X: 100}, {Row: 20, X: 600},
+		{Row: 30, X: 300},
+	}
+	cases := []struct {
+		name string
+		from int
+		dir  int
+		want int
+	}{
+		{"down keeps the left column", 0, 1, 2},
+		{"down keeps the right column", 1, 1, 3},
+		{"up keeps the left column", 2, -1, 0},
+		{"up picks the nearest column", 4, -1, 2},
+		{"down wraps to the nearest column", 4, 1, 0},
+		{"up from the first row wraps to the last", 0, -1, 4},
+		{"no cursor down starts at the first link", -1, 1, 0},
+		{"no cursor up starts at the last link", -1, -1, 4},
+	}
+	for _, tc := range cases {
+		if got := browserLinkRowStep(links, tc.from, tc.dir); got != tc.want {
+			t.Errorf("%s: browserLinkRowStep(from=%d, dir=%d) = %d, want %d",
+				tc.name, tc.from, tc.dir, got, tc.want)
+		}
+	}
+
+	// A page whose links all share one row has nothing above or below it.
+	single := []webLinkHit{{Row: 3, X: 10}, {Row: 3, X: 300}}
+	for _, dir := range []int{-1, 1} {
+		if got := browserLinkRowStep(single, 0, dir); got != -1 {
+			t.Errorf("single-row page stepped to %d for dir %d, want no move", got, dir)
+		}
+	}
+	if got := browserLinkRowStep(nil, 0, 1); got != -1 {
+		t.Errorf("empty page = %d, want -1", got)
+	}
+}
+
+// Firmware that reports a real gamepad has no Tab key, so the stick click
+// cycles the same scroll ⇄ link modes.
+func TestBrowserControllerTogglesNavMode(t *testing.T) {
+	config := layoutTestConfig(t)
+	variable := "browser_pad_mode"
+	doc := parseWebPage(`<body><p><a href="/one">one</a></p></body>`, "", "https://example.com/mode")
+	setBrowserDocument(variable, doc)
+	prevNav := browserNav
+	browserNav = browserModeScroll
+	t.Cleanup(func() {
+		browserNav = prevNav
+		setBrowserDocument(variable, nil)
+		resetBrowserCursorForTest()
+	})
+
+	elem := browserCursorTestElement(variable)
+	click := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_LEFTSTICK}
+	if !handleBrowserController(nil, click, config, elem) {
+		t.Fatal("L3 was not consumed by the browser")
+	}
+	if browserNav != browserModeLinks {
+		t.Fatalf("L3 left the mode at %v, want link mode", browserNav)
+	}
+	if !handleBrowserController(nil, click, config, elem) {
+		t.Fatal("a second L3 was not consumed")
+	}
+	if browserNav != browserModeScroll {
+		t.Fatalf("a second L3 left the mode at %v, want scroll mode", browserNav)
+	}
+
+	// Plain-text panels keep the key for the scene behind them.
+	plain := Element{Type: "textbrowser", Text: "system", Variable: variable}
+	if handleBrowserController(nil, click, config, plain) {
+		t.Fatal("the web controller handled a plain-text panel")
+	}
+}

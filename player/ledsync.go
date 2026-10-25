@@ -235,6 +235,164 @@ func ledColorFor(level, hz float64) (uint8, uint8, uint8) {
 	return hsvToRGB(hueForFrequency(hz), 1, 0.25+0.75*level)
 }
 
+// ── Policies ───────────────────────────────────────────────────────────────
+//
+// Audio sync is one policy, not the whole feature. The others are device
+// state the handheld already exposes: charge level, whether it is charging and
+// the SoC temperature. They share the same writer and the same loop, so a new
+// policy is a colour function, not a second LED stack.
+
+const (
+	ledPolicyAudio       = "audio"
+	ledPolicyBattery     = "battery"
+	ledPolicyCharging    = "charging"
+	ledPolicyTemperature = "temperature"
+	ledPolicyCustom      = "custom"
+)
+
+// The stored keys live in the config's Custom map, where the Quick Settings
+// row and a hand-edited config can both write them.
+const (
+	ledKeyPolicy = "led_policy"
+	ledKeyColor  = "led_color"
+	ledKeyEffect = "led_effect"
+)
+
+var ledPolicyOrder = []struct {
+	key   string
+	label string
+}{
+	{ledPolicyAudio, "Audio"},
+	{ledPolicyBattery, "Battery"},
+	{ledPolicyCharging, "Charging"},
+	{ledPolicyTemperature, "Temperature"},
+	{ledPolicyCustom, "Custom"},
+}
+
+// ledPolicyKey normalises a stored policy; an unknown value falls back to audio
+// rather than leaving the lights frozen.
+func ledPolicyKey(raw string) string {
+	wanted := strings.ToLower(strings.TrimSpace(raw))
+	for _, p := range ledPolicyOrder {
+		if p.key == wanted {
+			return p.key
+		}
+	}
+	return ledPolicyAudio
+}
+
+func ledPolicyLabel(key string) string {
+	wanted := ledPolicyKey(key)
+	for _, p := range ledPolicyOrder {
+		if p.key == wanted {
+			return p.label
+		}
+	}
+	return "Audio"
+}
+
+func ledPolicyIndex(key string) int {
+	wanted := ledPolicyKey(key)
+	for i, p := range ledPolicyOrder {
+		if p.key == wanted {
+			return i
+		}
+	}
+	return 0
+}
+
+func nextLEDPolicy(key string, dir int) string {
+	i := ledPolicyIndex(key)
+	if dir < 0 {
+		i = (i + len(ledPolicyOrder) - 1) % len(ledPolicyOrder)
+	} else {
+		i = (i + 1) % len(ledPolicyOrder)
+	}
+	return ledPolicyOrder[i].key
+}
+
+// ledPolicyFromConfig reads the stored policy. A nil config is the startup/test
+// case and gets the historical behaviour.
+func ledPolicyFromConfig(config *Config) string {
+	if config == nil {
+		return ledPolicyAudio
+	}
+	if raw, ok := customString(config.Variables.Custom, ledKeyPolicy); ok {
+		return ledPolicyKey(raw)
+	}
+	return ledPolicyAudio
+}
+
+// parseLEDHex accepts "#rrggbb" or "rrggbb"; anything else is rejected so a
+// typo leaves the default colour instead of a black LED.
+func parseLEDHex(raw string) (r, g, b uint8, ok bool) {
+	s := strings.TrimPrefix(strings.TrimSpace(strings.ToLower(raw)), "#")
+	if len(s) != 6 {
+		return 0, 0, 0, false
+	}
+	v, err := strconv.ParseUint(s, 16, 32)
+	if err != nil {
+		return 0, 0, 0, false
+	}
+	return uint8(v >> 16), uint8(v >> 8), uint8(v), true
+}
+
+// ledPulse is the shared breathing curve for charging and custom effects: a
+// two-second cycle between about 35% and full brightness. Pure.
+func ledPulse(now time.Time) float64 {
+	phase := math.Sin(float64(now.UnixMilli()) / 1000.0 * math.Pi)
+	return 0.35 + 0.65*(phase+1)/2
+}
+
+// ledHueLerp maps a value in [lo, hi] onto a hue in [from, to]. Values outside
+// the band clamp, so a 2% battery is as red as 0%. Pure.
+func ledHueLerp(value, lo, hi, from, to float64) float64 {
+	if hi == lo {
+		return to
+	}
+	t := (value - lo) / (hi - lo)
+	if t < 0 {
+		t = 0
+	}
+	if t > 1 {
+		t = 1
+	}
+	return from + (to-from)*t
+}
+
+// ledPolicyColor is the pure core of every non-audio policy. Battery runs
+// red → green across 10–80%, charging breathes, temperature runs green → red
+// across 45–80 °C, and custom uses the stored colour with an optional pulse.
+func ledPolicyColor(policy string, batteryPct int, charging bool, tempC float64, effect string, r, g, b uint8, now time.Time) (uint8, uint8, uint8) {
+	switch policy {
+	case ledPolicyBattery:
+		pct := float64(batteryPct)
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 100 {
+			pct = 100
+		}
+		hue := ledHueLerp(pct, 10, 80, 0, 0.33)
+		return hsvToRGB(hue, 1, 0.9)
+	case ledPolicyCharging:
+		if !charging {
+			return 0, 0, 0
+		}
+		return hsvToRGB(0.33, 1, 0.35+0.65*ledPulse(now))
+	case ledPolicyTemperature:
+		hue := ledHueLerp(tempC, 45, 80, 0.33, 0)
+		return hsvToRGB(hue, 1, 0.9)
+	case ledPolicyCustom:
+		level := 1.0
+		if strings.EqualFold(strings.TrimSpace(effect), "pulse") {
+			level = ledPulse(now)
+		}
+		return uint8(float64(r) * level), uint8(float64(g) * level), uint8(float64(b) * level)
+	}
+	return 0, 0, 0
+}
+
 // ── LED devices ────────────────────────────────────────────────────────────
 
 type ledMode int
@@ -441,6 +599,58 @@ func StartLEDSyncIfEnabled(config *Config) {
 	}
 }
 
+// ledTempCache keeps the thermal-zone read off the 25 fps path: temperature
+// moves slowly, and a sysfs read per frame on the handheld is pure waste.
+var ledTempState struct {
+	sync.Mutex
+	value float64
+	at    time.Time
+}
+
+func ledTemperatureC() float64 {
+	ledTempState.Lock()
+	defer ledTempState.Unlock()
+	if time.Since(ledTempState.at) < 2*time.Second {
+		return ledTempState.value
+	}
+	if v, ok := cpuTempValueC(); ok {
+		ledTempState.value = v
+	} else {
+		ledTempState.value = 0
+	}
+	ledTempState.at = time.Now()
+	return ledTempState.value
+}
+
+// ledFrameColor returns the colour for one loop tick under the configured
+// policy. Audio keeps its own analysis path; every other policy reads device
+// state. Extracted so the policy maths is testable without a loop or a device.
+func ledFrameColor(now time.Time) (uint8, uint8, uint8) {
+	policy := ledPolicyFromConfig(appConfig)
+	if policy == ledPolicyAudio {
+		s := currentAudioSample()
+		level := 0.0
+		if time.Since(s.At) <= ledSilenceAfter {
+			level = levelFromRMS(s.RMS)
+		}
+		return ledColorFor(level, s.Freq)
+	}
+	effect, customR, customG, customB := "solid", uint8(0), uint8(0), uint8(0)
+	if appConfig != nil {
+		effect, _ = customString(appConfig.Variables.Custom, ledKeyEffect)
+		if hex, ok := customString(appConfig.Variables.Custom, ledKeyColor); ok {
+			if r, g, b, ok := parseLEDHex(hex); ok {
+				customR, customG, customB = r, g, b
+			}
+		}
+	}
+	temp := 0.0
+	if policy == ledPolicyTemperature {
+		temp = ledTemperatureC()
+	}
+	return ledPolicyColor(policy, getBatteryPercent(), getBatteryCharging(), temp, effect, customR, customG, customB, now)
+}
+
 // runLEDLoop animates the lights until stop is closed, then blanks them so the
 // device does not sit frozen on the last colour.
 func runLEDLoop(stop <-chan struct{}, devs []ledDevice) {
@@ -456,12 +666,7 @@ func runLEDLoop(stop <-chan struct{}, devs []ledDevice) {
 			}
 			return
 		case <-ticker.C:
-			s := currentAudioSample()
-			level := 0.0
-			if time.Since(s.At) <= ledSilenceAfter {
-				level = levelFromRMS(s.RMS)
-			}
-			r, g, b := ledColorFor(level, s.Freq)
+			r, g, b := ledFrameColor(time.Now())
 			// Quantise to 32 steps per channel: visually identical, far fewer
 			// sysfs writes.
 			r, g, b = quantiseLEDChannel(r), quantiseLEDChannel(g), quantiseLEDChannel(b)

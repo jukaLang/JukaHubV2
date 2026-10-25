@@ -188,6 +188,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if weatherPopoverOpen {
 		return ctrlWeatherPopover(e)
 	}
+	// The controller legend is modal like the help overlays around it; F1's
+	// pad twin does not exist, so closing is the only way out of it.
+	if controlsLegend.open {
+		return ctrlControlsLegend(e)
+	}
 	if shortcutsOpen {
 		return ctrlShortcuts(e)
 	}

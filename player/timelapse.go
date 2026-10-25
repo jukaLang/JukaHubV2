@@ -234,7 +234,7 @@ func runQuietCommand(prog string, args []string, timeout time.Duration) error {
 			if len(detail) > 400 {
 				detail = detail[len(detail)-400:]
 			}
-			return fmt.Errorf("%v (%s)", err, detail)
+			return fmt.Errorf("%w (%s)", err, detail)
 		}
 		return err
 	}
