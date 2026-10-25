@@ -191,10 +191,6 @@
     if (pageBtn) pageBtn.disabled = !paired;
   }
 
-  function devicePageUrl() {
-    return state.url || '';
-  }
-
   function mixedContentBlocked() {
     return window.location.protocol === 'https:' && /^http:\/\//i.test(state.url);
   }

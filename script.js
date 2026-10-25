@@ -3994,7 +3994,6 @@ function validateProject(config) {
 }
 
 // --- Design check panel ------------------------------------------------------
-let validationResult = null;
 let validationTimer = null;
 let pendingExportKind = null;
 
@@ -4019,7 +4018,6 @@ function scheduleValidationRefresh() {
 }
 
 function renderValidationPanel(result, report) {
-  validationResult = result;
   const list = document.getElementById('validateList');
   const empty = document.getElementById('validateEmpty');
   const summary = document.getElementById('validateSummary');
@@ -4894,7 +4892,7 @@ function loadDefaultConfig(onFailure) {
       loadJukaApp(config);
     })
     .catch(error => {
-      console.log('No default config found:', error.message);
+      console.warn('Could not load player/jukaconfig.json, falling back to the autosave:', error.message);
       if (onFailure) onFailure();
     });
 }
@@ -5508,7 +5506,6 @@ function setupMobileDoubleTap() {
 
 function executeDynamicListCommand(el, command, variable) {
   // This would be implemented in the Juka runtime
-  console.log(`Executing command: ${command}, storing in: ${variable}`);
   // Simulate command execution
   const result = [{ name: "Item 1", value: "1" }, { name: "Item 2", value: "2" }];
   showDynamicListItems(el, result, variable);
@@ -5936,7 +5933,6 @@ const AI = (() => {
     if (!isChromePromptApiPresent()) return null;
     if (chromeSession) {
       try {
-        const info = chromeSession; // session object; we only reuse if still valid
         return chromeSession;
       } catch (e) {
         chromeSession = null;
@@ -6812,7 +6808,7 @@ const AI = (() => {
     if (!isSpeechAvailable()) return false;
     try {
       const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-      const r = new SR();
+      new SR(); // constructing it is the support check: some browsers throw here
       // Some environments throw on construction or on start without a user gesture.
       return true;
     } catch (e) {
@@ -6857,7 +6853,6 @@ const AI = (() => {
           }
         }
 
-        const display = finalTranscript || interimTranscript;
         if (promptEl) {
           if (finalTranscript) {
             promptEl.value = finalTranscript;
@@ -6992,22 +6987,6 @@ const AI = (() => {
         // No immediate action; next voice session will respect this setting.
         status(autoRunEl.checked ? 'Voice auto-run on.' : 'Voice auto-run off.', '');
       });
-    }
-  }
-
-  function ensureVoiceUI() {
-    ensureVoiceUIElements();
-    if (!voiceSupported) {
-      voiceSupported = detectVoiceSupport();
-    }
-    wireVoiceUI();
-
-    if (!voiceSupported) {
-      const micBtn = document.getElementById('aiMicBtn');
-      if (micBtn) {
-        micBtn.style.display = 'none';
-      }
-      status('Voice input is not available in this browser.', 'warning');
     }
   }
 

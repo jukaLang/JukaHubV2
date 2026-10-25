@@ -18,7 +18,7 @@ are signed because they run with the app's privileges.
 | Go toolchain | `GO_FALLBACK` / `GO_MIN_MINOR` at the top of [player/build.bat](../player/build.bat) | `build.bat` installs that toolchain into `%LOCALAPPDATA%\JukaHub\tools` when the machine has nothing newer |
 | w64devkit (GCC) | `W64DK_VER` in the same block | Needed for cgo; the 64-bit build is mandatory |
 | SDL2 / SDL2_image / SDL2_ttf | `SDL2_VER`, `IMG_VER`, `TTF_VER` in the same block | Extracted into `player/.sdl2/x86_64-w64-mingw32`, so a version bump is "change the constant, delete that directory, rebuild" |
-| Go modules | `player/go.mod` + `go.sum` (and the vendored tree) | Dependabot keeps these current; `go.sum` is the integrity check |
+| Go modules | `player/go.mod` + `go.sum` | Dependabot keeps these current; `go.sum` is the integrity check |
 | Linux libraries | the distribution packages listed in [BUILDING.md](BUILDING.md) | Not bundled on desktop |
 
 Bumping a pinned input is a normal PR: change the constant, delete the local

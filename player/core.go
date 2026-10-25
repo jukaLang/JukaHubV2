@@ -2449,13 +2449,14 @@ func beginMediaSearch(config *Config, resultVar string) uint64 {
 // finishMediaSearch releases the search and clears the spinner once none is
 // running any more.
 func finishMediaSearch(config *Config) {
+	// The spinner write stays inside the lock: the next search's begin and any
+	// reader that observed busy==0 under the lock must see it already cleared.
 	mediaSearchMu.Lock()
+	defer mediaSearchMu.Unlock()
 	if mediaSearchBusy > 0 {
 		mediaSearchBusy--
 	}
-	remaining := mediaSearchBusy
-	mediaSearchMu.Unlock()
-	if remaining == 0 && config != nil {
+	if mediaSearchBusy == 0 && config != nil {
 		config.Variables.LoadingSpinner = false
 	}
 }
