@@ -118,6 +118,11 @@ func main() {
 	// previous JukaHub binary back, so a bad update is reversible without a
 	// terminal or a card reader.
 	initSafeboot()
+	// The boot guard is the automatic half of the same protection: a recently
+	// applied update that dies on the first frames a few boots in a row is
+	// rolled back without anyone holding a chord. Runs second so an explicit
+	// safe-mode request (flag, env or chord) disables it for this launch.
+	initBootGuard()
 
 	// The alarm UI renders through the scene pipeline; register its scene at
 	// startup (in-memory, never written back) so the status-bar clock and the
@@ -337,6 +342,11 @@ func main() {
 		sdl.SetHint(sdl.HINT_RENDER_DRIVER, "opengles2")
 	}
 
+	// Touch maps to mouse exactly once (see disableSyntheticTouchMouse); the
+	// duplicate tap pipeline turned a single play-card tap into two yt-dlp
+	// resolves.
+	disableSyntheticTouchMouse()
+
 	renderer, err := sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
 	if err != nil {
 		// Fall back to a software renderer when the accelerated backend is
@@ -351,27 +361,9 @@ func main() {
 	// Log which renderer we actually ended up with. The GPU driver name
 	// decides where the per-frame cost lands (GPU passes vs CPU fills) and
 	// whether the cached texture paths stay cheap, so record driver, name
-	// and max texture size once at startup.
-	videoDriver := ""
-	if drv, err := sdl.GetCurrentVideoDriver(); err == nil {
-		videoDriver = drv
-	}
-	rendererName, rendererAccel, maxTexW, maxTexH := "unknown", "unknown", 0, 0
-	if info, giltErr := renderer.GetInfo(); giltErr == nil {
-		rendererName = info.Name
-		maxTexW, maxTexH = int(info.MaxTextureWidth), int(info.MaxTextureHeight)
-		if info.Flags&sdl.RENDERER_SOFTWARE != 0 {
-			rendererAccel = "software"
-		} else if info.Flags&sdl.RENDERER_ACCELERATED != 0 {
-			rendererAccel = "gpu"
-		}
-	}
-	Log().Info("render pipeline",
-		"video_driver", videoDriver,
-		"renderer", rendererName,
-		"acceleration", rendererAccel,
-		"max_texture", fmt.Sprintf("%dx%d", maxTexW, maxTexH),
-	)
+	// and max texture size once at startup (adaptive.go; verifiable in
+	// renderpipeline_test.go).
+	logRenderPipeline(renderer)
 
 	// Mouse and touch arrive in physical window pixels. The handheld canvases
 	// are scaled to their panel (notably 960x720 onto the Brick's 1024x768), so
@@ -516,6 +508,11 @@ func main() {
 	// rate and the darked ambient panel both run far below 60 fps, which would
 	// make a frame-counted check ring late.
 	lastAlarmCheck := time.Now()
+	// Set for the duration of one game handover, consumed on the first frame
+	// presented afterwards: that is where the "While you were playing" summary
+	// goes, because under the old behaviour every completion raced its own
+	// invisible toast and only the last one survived, unreadable.
+	whileAwayWasActive := false
 	for running {
 		// A game, emulator, port or Wine app owns the screen. JukaHub and the
 		// child share one framebuffer on handheld firmwares (see
@@ -527,6 +524,7 @@ func main() {
 		// suspend mid-game, and the battery saver via toastText), and let the
 		// child have the framebuffer to itself.
 		if gameScreenSuspended() {
+			whileAwayWasActive = true
 			for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 				if _, quit := event.(*sdl.QuitEvent); quit {
 					running = false
@@ -549,6 +547,12 @@ func main() {
 			sdl.Delay(100)
 			frameCount++
 			continue
+		}
+		// The game handed the screen back. One summary replaces the burst of
+		// toasts that piled up while no frame was being presented.
+		if whileAwayWasActive {
+			whileAwayWasActive = false
+			whileAwayNotify()
 		}
 		// Keep the home-header pairing QR live: start the companion when Wi-Fi
 		// appears and rebuild the code if DHCP moved the address. The first
@@ -2763,8 +2767,12 @@ func main() {
 	playtimeFlush(config)
 	partyHistoryFlush()
 	saveFavorites()
+	// A boot that reached the cleanup was healthy bootguard-wise: the crash-loop
+	// counter resets, so the next boot starts from zero.
+	clearBootGuard()
 	ClearTextCache()
 	ClearShapeCache()
+	ClearIconAtlas()
 	ClearBgGradientCache()
 	DestroyVKStaticCache()
 	clearThumbnailCache()

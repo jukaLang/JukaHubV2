@@ -400,3 +400,59 @@ func thumbnailPrefetchWorker() {
 		}
 	}
 }
+
+// ──────────────────────────────────────────────────────────────────────
+// Render-path decode budget — the checklist's "2 decodes per frame"
+// ──────────────────────────────────────────────────────────────────────
+
+// thumbnailDecodeBudgetFor is how many cold thumbnail loads one presented
+// frame may take from the render path. Each cold load is a JPEG/PNG decode
+// plus a texture upload, and a freshly scrolled grid calls loadThumbnail for
+// every row in one pass: before the budget, 24 rows stacked all of their
+// decode-upload cost onto the frame the user scrolled into, on a device whose
+// frame allowance is ~16 ms. A frame that spends its budget defers the surplus
+// through the prefetch queue, and each later frame drains two more — a
+// screenful fills in over staggered frames instead of one frame stalling.
+// Desktop keeps a larger budget because its frames and CPU are not the
+// constraint the item targets.
+func thumbnailDecodeBudgetFor(handheld bool) int {
+	if handheld {
+		return 2
+	}
+	return 8
+}
+
+// thumbnailDecodeBudgetPerFrame evaluates the budget for this device.
+func thumbnailDecodeBudgetPerFrame() int {
+	return thumbnailDecodeBudgetFor(IsTrimuiDevice() || P().IsHandheld())
+}
+
+// thumbnailDecodeGate is the tally the render path shares. All callers sit on
+// the render thread, so contention here is nil; the mutex just keeps it honest
+// about being read from any goroutine a future refactor might reach.
+type thumbnailDecodeGate struct {
+	mu        sync.Mutex
+	lastFrame uint64
+	used      int
+}
+
+var thumbnailDecodes thumbnailDecodeGate
+
+// allowThumbnailDecode spends one budget slot against frame and reports
+// whether the load may proceed. A frame number this process has not seen yet
+// opens a fresh tally, so the budget is genuinely per frame and not per
+// second. Callers that are declined queue the URL through PrefetchThumbnail
+// so the bytes keep warming while the frame keeps its code budget.
+func allowThumbnailDecode(frame uint64, budget int) bool {
+	thumbnailDecodes.mu.Lock()
+	defer thumbnailDecodes.mu.Unlock()
+	if frame != thumbnailDecodes.lastFrame {
+		thumbnailDecodes.lastFrame = frame
+		thumbnailDecodes.used = 0
+	}
+	if thumbnailDecodes.used >= budget {
+		return false
+	}
+	thumbnailDecodes.used++
+	return true
+}

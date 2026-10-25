@@ -5,13 +5,20 @@
 [![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go)](https://golang.org/dl/)
 [![SDL2](https://img.shields.io/badge/SDL2-2.0+-3A75C0?logo=sdl)](https://www.libsdl.org/)
 [![License](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)](LICENSE)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2/badge)](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/R9qgJjh5jG)
 
-<img width="1284" height="722" alt="Image" src="https://github.com/user-attachments/assets/c7c17162-7b10-4b12-8f9e-cc90fdc9edc1" />
+<img width="1284" height="722" alt="Image" src="https://github.com/user-attachments/assets/c7c17162-7b10-4b12-8f9e-cc90fdc9edc1" />A media hub for the **TrimUI Smart Pro** — and the whole TrimUI line — that
+does not ask you to replace anything. **The shell your handheld should have
+shipped with**: one app, installed by copying one folder onto the SD card.
+YouTube on the couch, your ROM library with box art and save-resume, PS4/PS5
+Remote Play on the train, LAN play in the same room, a phone as your keyboard —
+every screen driven by the D-pad you already have. The stock OS stays exactly
+where it is underneath, so installing JukaHub is always reversible.
 
-A media hub for the **TrimUI Smart Pro**: YouTube search and trending, Shorts,
-saved favourites, RetroAchievements progress, and a few handy tools, in one
-controller-friendly app.
+Updates are signed and roll themselves back if a new build misbehaves, and
+nothing is uploaded anywhere unless you switch it on. Ten minutes from download
+to all of that: the walkthrough is [docs/TOUR.md](docs/TOUR.md).
 
 [Download](https://github.com/jukaLang/JukaHubV2/releases/latest) ·
 [Web builder](https://generate.jukalang.com) ·
@@ -21,9 +28,12 @@ controller-friendly app.
 
 ---
 
-## What it can do
+## One app, the whole card
 
-JukaHub is one controller-first app for the whole card, not only a video player:
+JukaHub is one controller-first app for the whole card, running *on top of* the
+firmware — not instead of it. Install, uninstall, repeat: it is a folder on the
+SD card, and the stock launcher is one Select+Start hold away whenever you want
+it back.
 
 * **Watch** — YouTube search and trending, Shorts, saved favourites, podcasts,
   IPTV playlists, a local video player with subtitles, and a text web browser.
@@ -43,8 +53,8 @@ Most of these have a page in the [documentation table](#documentation) below.
 
 ## Install on a TrimUI Smart Pro
 
-Works on the stock OS and on CrossMix. You need the handheld, its SD card, and
-Wi-Fi.
+Five steps, no firmware swap, works on the stock OS and on CrossMix. You need
+the handheld, its SD card, and Wi-Fi.
 
 1. Download **`JukaHub-Trimui.zip`** from
    [Releases](https://github.com/jukaLang/JukaHubV2/releases/latest).
@@ -413,14 +423,18 @@ Small, well-scoped work is the best way in: issues labelled
 [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue)
 come straight from [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
 [FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md), and both list what is already
-shipped so you do not rebuild it. Setup, test commands and the commit rules are
+shipped so you do not rebuild it. The 30/60/90 plan for project health lives
+in [ROADMAP.md](ROADMAP.md); setup, test commands and the commit rules are
 in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
-[Discord](https://discord.gg/R9qgJjh5jG).
+[Discord](https://discord.gg/R9qgJjh5jG) and in
+[Discussions](https://github.com/jukaLang/JukaHubV2/discussions); support
+paths are listed in [SUPPORT.md](SUPPORT.md).
 
 ## Documentation
 
 | Page | Covers |
 |------|--------|
+| [The ten-minute tour](docs/TOUR.md) | what the app feels like, from a cold SD card to Continue, in one story |
 | [Quick start](docs/QUICK_START.md) | the five-minute path to a clone that builds, runs and checks |
 | [Controls](docs/CONTROLS.md) | every button and key, screen by screen |
 | [Configuration](docs/CONFIGURATION.md) | `jukaconfig.json`, variables, elements, all triggers |

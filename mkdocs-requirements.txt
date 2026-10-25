@@ -1,0 +1,3 @@
+# Dependencies for building the docs site (mkdocs.yml). Nothing else in this
+# repo needs Python.
+mkdocs-material==9.6.*

@@ -53,18 +53,21 @@ var gameProfileEnvKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]{0,63}$
 // GameProfile is one entry in the catalog. SchemaVersion is required in every
 // file so an older build refuses a newer profile instead of misreading it.
 type GameProfile struct {
-	SchemaVersion  int               `json:"schemaVersion"`
-	ID             string            `json:"id"`
-	Title          string            `json:"title"`
-	Runtime        string            `json:"runtime"`
-	Dir            string            `json:"dir"`
-	Executable     string            `json:"executable"`
-	Args           []string          `json:"args,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	Display        string            `json:"display,omitempty"`
-	Controller     string            `json:"controller,omitempty"`
-	TestedFirmware string            `json:"testedFirmware,omitempty"`
-	Notes          string            `json:"notes,omitempty"`
+	SchemaVersion int               `json:"schemaVersion"`
+	ID            string            `json:"id"`
+	Title         string            `json:"title"`
+	Runtime       string            `json:"runtime"`
+	Dir           string            `json:"dir"`
+	Executable    string            `json:"executable"`
+	Args          []string          `json:"args,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	// AndroidPak profiles: mainLib names the native entry .so by base name
+	// (see androidpak.go for the runtime contract).
+	MainLib        string `json:"mainLib,omitempty"`
+	Display        string `json:"display,omitempty"`
+	Controller     string `json:"controller,omitempty"`
+	TestedFirmware string `json:"testedFirmware,omitempty"`
+	Notes          string `json:"notes,omitempty"`
 }
 
 // gameProfileCatalogFile is the bundle form used by profiles.json and by
@@ -447,9 +450,9 @@ func validateGameProfile(p *GameProfile) error {
 	}
 	p.Runtime = strings.ToLower(strings.TrimSpace(p.Runtime))
 	switch p.Runtime {
-	case gameRuntimeNative, gameRuntimeBox64, gameRuntimeWine, gameRuntimeScript:
+	case gameRuntimeNative, gameRuntimeBox64, gameRuntimeWine, gameRuntimeScript, gameRuntimeAndroidPak:
 	default:
-		return fmt.Errorf("invalid runtime %q (use native, box64, wine or script)", p.Runtime)
+		return fmt.Errorf("invalid runtime %q (use native, box64, wine, script or androidpak)", p.Runtime)
 	}
 	if strings.ContainsAny(p.Dir, "\x00\r\n") {
 		return errors.New("dir contains a control character")
@@ -486,6 +489,10 @@ func validateGameProfile(p *GameProfile) error {
 	case gameRuntimeScript:
 		if ext != ".sh" {
 			return errors.New("script profiles must point at a .sh file")
+		}
+	case gameRuntimeAndroidPak:
+		if ext != ".apk" {
+			return errors.New("androidpak profiles must point at an .apk")
 		}
 	case gameRuntimeBox64:
 		switch ext {
@@ -528,6 +535,16 @@ func validateGameProfile(p *GameProfile) error {
 	if len(p.Notes) > 2000 {
 		return errors.New("notes are longer than 2000 characters")
 	}
+	if p.MainLib != "" {
+		main := strings.TrimSpace(p.MainLib)
+		if len(main) > 128 || strings.ContainsAny(main, `/\`) || strings.ContainsRune(main, '\x00') {
+			return fmt.Errorf("invalid mainLib %q (use the .so base name)", p.MainLib)
+		}
+		if !strings.HasSuffix(main, ".so") {
+			return fmt.Errorf("invalid mainLib %q (must be a .so base name)", p.MainLib)
+		}
+		p.MainLib = main
+	}
 	if len(p.TestedFirmware) > 120 {
 		return errors.New("testedFirmware is longer than 120 characters")
 	}
@@ -551,6 +568,14 @@ func resolveGameProfileEntry(p GameProfile, source string, roots []string) gameP
 	if _, _, err := planGameRuntime(p, exe, exec.LookPath); err != nil {
 		entry.Issue = err.Error()
 		return entry
+	}
+	// An AndroidPak profile additionally has to be a Tier-1 package: a real
+	// APK with an ABI this device runs. This names dead APKs up front.
+	if p.Runtime == gameRuntimeAndroidPak {
+		if _, err := inspectAndroidPak(exe, p.MainLib); err != nil {
+			entry.Issue = err.Error()
+			return entry
+		}
 	}
 	// A Wine profile is only launchable when the device also has a display
 	// backend. This keeps the panel from offering a profile that will fail
@@ -681,6 +706,16 @@ func planGameRuntime(p GameProfile, exe string, lookPath func(string) (string, e
 	switch p.Runtime {
 	case gameRuntimeNative:
 		return exe, args, nil
+	case gameRuntimeAndroidPak:
+		rt, err := resolveAndroidRuntime(lookPath)
+		if err != nil {
+			return "", nil, err
+		}
+		command, prefix, err := androidRuntimeCommand(rt, lookPath)
+		if err != nil {
+			return "", nil, err
+		}
+		return command, append(append(append([]string{}, prefix...), exe), args...), nil
 	case gameRuntimeScript:
 		sh, err := lookPath("sh")
 		if err != nil || sh == "" {
@@ -821,6 +856,33 @@ func launchGameProfile(entry gameProfileEntry) error {
 	}
 
 	env := cloneGameProfileEnv(entry.Profile.Env)
+	var buildErr error
+	// AndroidPak staging happens at launch: the APK is triaged again (the
+	// card may have changed), extracted to tmpfs, and the staged tree is
+	// handed to the runtime through ANDROIDPAK_* env variables.
+	var stageDir string
+	if entry.Profile.Runtime == gameRuntimeAndroidPak {
+		libs, triageErr := inspectAndroidPak(exe, entry.Profile.MainLib)
+		if triageErr != nil {
+			return triageErr
+		}
+		// Room check before anything lands in tmpfs: a launch that does not
+		// keep the hub itself alive should not start (androidpak.go's
+		// memory pre-flight; JUKAHUB_ANDROIDPAK_MEM_RESERVE_MB opts out).
+		if memErr := androidPakPreflight(exe, libs); memErr != nil {
+			return memErr
+		}
+		staged, _, stageErr := stageAndroidPak(id, exe, libs)
+		if stageErr != nil {
+			return stageErr
+		}
+		stageDir = staged
+		command, args, buildErr = buildAndroidPakCommand(entry.Profile, exe, stageDir, libs, env)
+		if buildErr != nil {
+			removeAndroidPakStage(stageDir)
+			return buildErr
+		}
+	}
 	if entry.Profile.Runtime == gameRuntimeWine {
 		if !hasEnvKey(env, "WINEPREFIX") {
 			prefix := filepath.Join(gameProfilesDir(), "wineprefix")
@@ -856,12 +918,22 @@ func launchGameProfile(entry gameProfileEntry) error {
 		}
 	}
 
-	return startGameProfileCommand(cmd, id, gameDir, logFile)
+	var afterExit func(error)
+	if entry.Profile.Runtime == gameRuntimeAndroidPak {
+		afterExit = func(err error) { androidPakFirstRunReport(id, err) }
+	}
+
+	return startGameProfileCommand(cmd, id, gameDir, logFile, func() {
+		if stageDir != "" {
+			androidPakStageCleanupGC(stageDir)
+		}
+	}, afterExit)
 }
 
 // startGameProfileCommand starts cmd, records its PID, and waits in the
-// background. logFile is closed after the child exits.
-func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File) error {
+// background. logFile is closed and cleanup runs after the child exits;
+// afterExit (optional, nil on ignore) runs once after it with the wait error.
+func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File, cleanup func(), afterExit func(error)) error {
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {
 			fmt.Fprintf(logFile, "start failed: %v\n", err)
@@ -891,6 +963,12 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 			log.Printf("[gameprofiles] %s exited: %v", id, err)
 		} else {
 			log.Printf("[gameprofiles] %s exited cleanly", id)
+		}
+		if cleanup != nil {
+			cleanup()
+		}
+		if afterExit != nil {
+			afterExit(err)
 		}
 	}()
 	return nil
@@ -1011,6 +1089,8 @@ func gameProfileRuntimeLabel(runtime string) string {
 		return "WINE"
 	case gameRuntimeBox64:
 		return "BOX64"
+	case gameRuntimeAndroidPak:
+		return "ANDROID"
 	case gameRuntimeScript:
 		return "SCRIPT"
 	default:

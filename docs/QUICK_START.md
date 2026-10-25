@@ -28,6 +28,10 @@ make dev          # build and launch the player
 - `make` on its own lists every target.
 - No make? `cd player && ../player/build.bat` on Windows, or
   `cd player && go build -o JukaHub .` elsewhere.
+- No setup at all? Open the repo in VS Code or GitHub Codespaces — the
+  [dev container](../.devcontainer/devcontainer.json) has Go, Node and the
+  SDL2 dev packages installed; [mise.toml](../mise.toml) holds the same pins
+  for people who use mise instead.
 
 Detailed, platform-specific instructions (ARM64 cross-builds, packaging, the
 release pipeline) live in [BUILDING.md](BUILDING.md).

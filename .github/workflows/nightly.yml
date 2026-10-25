@@ -1,0 +1,119 @@
+# Nightly platform coverage.
+#
+# PR CI (ci.yml) stays fast on Linux only. The release pipeline
+# (docker-image.yml) cross-compiles Windows and linux/arm64 but never *runs*
+# them. This workflow is the third leg: it builds and exercises the player on
+# the platforms people actually develop on, plus a fuzz smoke pass, and nobody
+# has to wait for it. A red nightly is real signal — it means main broke a
+# platform — so triage it like a failing merge check.
+name: Nightly
+
+on:
+  schedule:
+    - cron: "37 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  cross-platform:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: player
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: "macOS: native build + tests"
+            os: macos-latest
+          - label: "Windows: native build + tests"
+            os: windows-latest
+    env:
+      SDL_VIDEODRIVER: dummy
+      SDL_AUDIODRIVER: dummy
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+
+      - name: Install SDL2 and a C toolchain (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl2 sdl2_image sdl2_ttf
+
+      - name: Install SDL2 and a C toolchain (Windows)
+        # Same official MinGW-development tarballs the release pipeline uses,
+        # but native and with tests instead of a build-only compile.
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          choco install mingw -y --no-progress
+          mkdir -p /c/sdl2 && cd /c/sdl2
+          curl -fsSLO https://www.libsdl.org/release/SDL2-devel-2.30.11-mingw.tar.gz
+          curl -fsSLO https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.4/SDL2_image-devel-2.8.4-mingw.tar.gz
+          curl -fsSLO https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-devel-2.22.0-mingw.tar.gz
+          for f in *.tar.gz; do tar -xzf "$f"; done
+          rm -f *.tar.gz
+
+      - name: Point cgo at the SDL2 headers (Windows)
+        if: runner.os == 'Windows'
+        # Git Bash understands C:/... paths and forwards them to MinGW gcc,
+        # which is what cgo needs; no cygpath tricks required.
+        run: |
+          echo "CGO_CFLAGS=-I/c/sdl2/SDL2-2.30.11/x86_64-w64-mingw32/include -I/c/sdl2/SDL2-2.30.11/x86_64-w64-mingw32/include/SDL2 -I/c/sdl2/SDL2_image-2.8.4/x86_64-w64-mingw32/include -I/c/sdl2/SDL2_image-2.8.4/x86_64-w64-mingw32/include/SDL2 -I/c/sdl2/SDL2_ttf-2.22.0/x86_64-w64-mingw32/include -I/c/sdl2/SDL2_ttf-2.22.0/x86_64-w64-mingw32/include/SDL2" >> "$GITHUB_ENV"
+          echo "CGO_LDFLAGS=-L/c/sdl2/SDL2-2.30.11/x86_64-w64-mingw32/lib -L/c/sdl2/SDL2_image-2.8.4/x86_64-w64-mingw32/lib -L/c/sdl2/SDL2_ttf-2.22.0/x86_64-w64-mingw32/lib" >> "$GITHUB_ENV"
+          echo "CC=x86_64-w64-mingw32-gcc" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: go build -o /tmp/JukaHub-nightly .
+
+      - name: Native tests
+        # Full suite. The known-flaky native-renderer test (see
+        # docs/QUICK_START.md) may crash; the build result above is still
+        # reported, and nightly red gets an issue, not a merge block.
+        run: go test ./... -count=1 -timeout 25m
+
+  fuzz:
+    name: Fuzz smoke (30 s per target)
+    # Nightly only, so the fuzz corpus gets *some* continuous attention without
+    # slowing PR CI. Targets live where parsers do; add one per new parser.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: player
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: player/go.mod
+          cache-dependency-path: player/go.sum
+      - name: Mine the seed corpus
+        run: |
+          set +e
+          keys=$(go test ./internal/... -list 'Fuzz' 2>/dev/null | grep '^Fuzz' | sort -u)
+          if [ -z "$keys" ]; then
+            echo "No fuzz targets yet (see ROADMAP item on fuzzing parsers)." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "$keys" > fuzz_targets.txt
+      - name: Run each target briefly
+        if: hashFiles('player/fuzz_targets.txt') != ''
+        # -run '^$' skips ordinary tests so only the fuzz engines run; the seed
+        # corpus refines on every nightly, and a crash exits non-zero.
+        run: |
+          set -e
+          while IFS= read -r target; do
+            echo "=== $target ==="
+            go test ./internal/... -run '^$' -fuzz "^${target}\$" -fuzztime 30s
+          done < fuzz_targets.txt

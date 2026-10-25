@@ -997,6 +997,13 @@ func browserOpenFocusedPageLink(config *Config, elem Element) bool {
 		return true
 	}
 	browserLinkCursor = browserLinkCursorState{}
+	// A play card is activated, not navigated: the URL streams through
+	// yt-dlp inside the embedded player, exactly like a search result.
+	if layout.Links[cursor].Video {
+		PlayActivateSound()
+		playSmartURL(config, target)
+		return true
+	}
 	loadTextBrowserURL(config, elem, target)
 	return true
 }
@@ -1316,6 +1323,50 @@ func browserPageLinkRects(config *Config, elem Element, layout *webLayout) []sdl
 	return rects
 }
 
+// browserTapPageVideo leaves a tap on one of the page's play cards. It
+// fails when the tap is not on one, so the caller can keep the click for
+// links and the address bar. A video tap never navigates: the URL goes to
+// playSmartURL, which streams media files and hands the rest to yt-dlp.
+func browserTapPageVideo(config *Config, elem Element, mx, my int32) bool {
+	layout := browserPageLayout(config, elem)
+	if layout == nil || len(layout.Videos) == 0 || layout.RowH <= 0 {
+		return false
+	}
+	left, top, width, height := browserPageContentBox(elem)
+	if mx < left || mx >= left+width || my < top || my >= top+height {
+		return false
+	}
+	scroll := int(textBrowserScrollY)
+	if scroll > int(browserScrollMax(elem, layout)) {
+		scroll = int(browserScrollMax(elem, layout))
+	}
+	scrollPx := int32(scroll) * layout.RowH
+	doc := browserDocumentFor(elem.Variable)
+	for _, v := range layout.Videos {
+		x := left + v.Rect.X
+		y := top + v.Rect.Y - scrollPx
+		if y >= top+height || y+v.Rect.H <= top {
+			continue // off screen
+		}
+		if !pointInRect(mx, my, sdl.Rect{X: x, Y: y, W: v.Rect.W, H: v.Rect.H}) {
+			continue
+		}
+		base := textBrowserAddress(config)
+		if doc != nil && strings.TrimSpace(doc.URL) != "" {
+			base = doc.URL
+		}
+		target, ok := browserResolveLink(base, v.Src)
+		if !ok {
+			showToast("That video cannot be played here", ToastInfo())
+			return true
+		}
+		PlayActivateSound()
+		playSmartURL(config, target)
+		return true
+	}
+	return false
+}
+
 // browserTapPageLink leaves a tap inside the rendered page on one of its
 // links: it fails when the tap is not on one, so the caller can keep the
 // click for whatever else wants it.
@@ -1323,6 +1374,11 @@ func browserTapPageLink(config *Config, elem Element, mx, my int32) bool {
 	layout := browserPageLayout(config, elem)
 	if layout == nil || len(layout.Links) == 0 {
 		return false
+	}
+	// Play cards first: their boxes are drawn where the video sits and a
+	// tap cannot land on both.
+	if browserTapPageVideo(config, elem, mx, my) {
+		return true
 	}
 	left, top, width, height := browserPageContentBox(elem)
 	if mx < left || mx >= left+width || my < top || my >= top+height {

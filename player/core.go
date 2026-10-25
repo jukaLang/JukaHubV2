@@ -2314,9 +2314,13 @@ func loadThumbnail(renderer *sdl.Renderer, url string) *sdl.Texture {
 
 func loadThumbnailFromURLs(renderer *sdl.Renderer, urls []string) *sdl.Texture {
 	// Warm the disk cache for alternate URLs in the background so scrolling
-	// through a list never blocks on a cold network fetch.
-	for _, rawURL := range urls[1:] {
-		PrefetchThumbnail(rawURL)
+	// through a list never blocks on a cold network fetch. A caller may hand
+	// over an empty candidate list (a card with neither metadata nor artwork
+	// to derive), so guard the slice before the range.
+	if len(urls) > 1 {
+		for _, rawURL := range urls[1:] {
+			PrefetchThumbnail(rawURL)
+		}
 	}
 	for _, rawURL := range urls {
 		if rawURL == "" {
@@ -2327,26 +2331,34 @@ func loadThumbnailFromURLs(renderer *sdl.Renderer, urls []string) *sdl.Texture {
 			return tex
 		}
 
+		// Render-path decode budget: a frame may start only a couple of
+		// thumbnail decodes, so a cold grid cannot spend its whole frame
+		// allowance decoding rows the D-pad just scrolled in. A declined URL
+		// is queued through the prefetch workers and takes the next frame's
+		// slots, so the list fills progressively instead of stuttering once.
+		if !allowThumbnailDecode(frameCount, thumbnailDecodeBudgetPerFrame()) {
+			// Out of slots — the prefetch workers pick the URL up on a later
+			// frame. No log: a cold grid can defer dozens of rows per frame
+			// and those lines are per-frame spam, not diagnostics.
+			PrefetchThumbnail(url)
+			continue
+		}
+
 		// Bytes come from memory → disk → network (with retry), so a warm
 		// cache never touches the network and a cold one survives restarts.
 		data, err := fetchThumbnailBytes(url)
-		if err != nil {
-			log.Printf("[DEBUG] loadThumbnail: fetch failed for %s: %v", url, err)
-			continue
-		}
-		if len(data) == 0 {
-			log.Printf("[DEBUG] loadThumbnail: empty body for %s", url)
+		if err != nil || len(data) == 0 {
+			// Failing URLs are not cached, so this branch can re-enter every
+			// frame for a row that refuses to load; logging would spam.
 			continue
 		}
 		rwops, err := sdl.RWFromMem(data)
 		if err != nil {
-			log.Printf("[DEBUG] loadThumbnail: RWFromMem failed for %s: %v", url, err)
 			continue
 		}
 		tex, err := img.LoadTextureRW(renderer, rwops, false)
 		rwops.Close()
 		if err != nil {
-			log.Printf("[DEBUG] loadThumbnail: LoadTextureRW failed for %s: %v", url, err)
 			continue
 		}
 		var tw, th int32
@@ -2354,7 +2366,6 @@ func loadThumbnailFromURLs(renderer *sdl.Renderer, urls []string) *sdl.Texture {
 			tw, th = qw, qh
 		}
 		getThumbnailTextures().Put(url, tex, tw, th)
-		log.Printf("[DEBUG] loadThumbnail: loaded %s", url)
 		return tex
 	}
 	return nil
@@ -2556,22 +2567,45 @@ func runMediaSearchTrigger(config *Config, trigger, target, value string) bool {
 		playVideoURL(config, plan.playURL)
 		return true
 	}
-	go executeYouTubeSearch(config, plan.command, plan.resultVar, snapshotVars(config))
+	// The search belongs to the screen that asked for it: runSceneTask, not a
+	// bare goroutine, so leaving the results screen stops the run
+	// (executeYouTubeSearch spawns the scene task).
+	executeYouTubeSearch(config, plan.command, plan.resultVar, snapshotVars(config))
 	return true
 }
 
+// executeYouTubeSearch runs one yt-dlp search inside the scene's task scope:
+// the spawned worker joins enterSceneWork's generation, so a scene transition
+// cancels it, kills the extractor process and publishes nothing into the next
+// screen. It returns immediately — it never blocks the render loop.
 func executeYouTubeSearch(config *Config, command string, resultVar string, vars map[string]interface{}) {
-	executeYouTubeSearchMode(config, command, resultVar, vars, false)
+	runSceneTask(func(ctx context.Context) {
+		executeYouTubeSearchContext(ctx, config, command, resultVar, vars, false)
+	})
 }
 
 // executeYouTubeSearchPage runs a follow-up page fetch. In append mode the
 // result is merged into the list already on screen instead of replacing it, so
 // scrolling past the last card grows the grid rather than restarting it.
 func executeYouTubeSearchPage(config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool) {
-	executeYouTubeSearchMode(config, command, resultVar, vars, appendMode)
+	runSceneTask(func(ctx context.Context) {
+		executeYouTubeSearchContext(ctx, config, command, resultVar, vars, appendMode)
+	})
 }
 
-func executeYouTubeSearchMode(config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool) {
+// executeYouTubeSearchContext is the blocking body behind the spawned
+// wrappers. parent is the scene's context (sceneWorkContext), so the scene
+// scope and the newer-search cancellation both reach the child process.
+func executeYouTubeSearchContext(parent context.Context, config *Config, command string, resultVar string, vars map[string]interface{}, appendMode bool) {
+	// A dead scope starts nothing: no wipe of the previous screen's results,
+	// no error line, no spinner on the next screen.
+	if parent == nil {
+		parent = context.Background()
+	}
+	if parent.Err() != nil {
+		log.Printf("[STREAM] search for %s skipped: scene scope already cancelled", resultVar)
+		return
+	}
 	gen := beginMediaSearch(config, resultVar)
 	defer finishMediaSearch(config)
 	defer clearMediaSearchCancel(resultVar, gen)
@@ -2696,6 +2730,7 @@ func executeYouTubeSearchMode(config *Config, command string, resultVar string, 
 				return
 			}
 			showToast("yt-dlp installed — restart JukaHub to use it", ToastSuccess())
+			noteAwayToolInstalled("yt-dlp")
 			refreshToolHealth()
 		}()
 		log.Printf("[WARN] yt-dlp is not installed yet; install started")
@@ -2725,9 +2760,10 @@ func executeYouTubeSearchMode(config *Config, command string, resultVar string, 
 	// Run the tool directly (no shell) so special characters are not
 	// interpreted by cmd.exe / sh (e.g. "<" as input redirection). The
 	// context bounds the run: a stalled extractor is killed instead of leaving
-	// the spinner and an empty grid up until the app restarts, and a newer
-	// search for the same variable cancels this one through the same context.
-	ctx, cancel := context.WithTimeout(context.Background(), mediaSearchTimeout)
+	// the spinner and an empty grid up until the app restarts, a newer search
+	// for the same variable cancels this one, and — because the timeout is
+	// taken from the scene's context — leaving the scene kills the process too.
+	ctx, cancel := context.WithTimeout(parent, mediaSearchTimeout)
 	registerMediaSearchCancel(resultVar, cancel)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, fullToolPath, args...)
@@ -2823,6 +2859,13 @@ func executeYouTubeSearchMode(config *Config, command string, resultVar string, 
 	}
 	videos = unique
 	log.Printf("[DEBUG] Parsed %d unique videos (from %d total entries)", len(videos), len(unique))
+
+	if ctx.Err() != nil {
+		// The scene was left (or a newer search took the variable) while the
+		// output was being parsed: publish nothing into the next screen.
+		log.Printf("[STREAM] dropping parsed search results for %s: run cancelled", resultVar)
+		return
+	}
 
 	if len(videos) == 0 {
 		log.Printf("[ERROR] No videos could be parsed from yt-dlp output")
@@ -3009,11 +3052,11 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 		y := element.Y + int32(i)*(rowH+gap) - scrollY
 		if y+rowH < element.Y || y > element.Y+elemHeight {
 			if i < focusedResultIndex+3 {
-				PrefetchThumbnail(vid.Thumbnail)
+				prefetchCardThumbnail(vid)
 			}
 			continue
 		}
-		PrefetchThumbnail(vid.Thumbnail)
+		prefetchCardThumbnail(vid)
 	}
 
 	// The Audio / Video / Chat pills are recorded while drawing so a tap
@@ -3239,21 +3282,43 @@ func resultMetaLine(vid VideoInfo) string {
 	return meta
 }
 
+// realThumbnailCandidates lists a media card's artwork URLs in preference
+// order: the metadata's own fields first, then — when a YouTube entry ships no
+// artwork at all (yt-dlp's flat-playlist Shorts rows and some extractors omit
+// them on search results) — the real thumbnail derived from the video URL
+// alone. That is the same yt-dlp-free derivation the reader's play cards use
+// (webpage_video.go), so a Shorts or search-result card paints its actual
+// frame through the shared disk-backed cache and decode budget instead of a
+// generic tile.
+func realThumbnailCandidates(vid VideoInfo) []string {
+	urls := make([]string, 0, 2+len(vid.Thumbnails))
+	if vid.Thumbnail != "" {
+		urls = append(urls, vid.Thumbnail)
+	}
+	urls = append(urls, vid.Thumbnails...)
+	if u := webYouTubeThumbURL(strings.TrimSpace(vid.GetURL())); u != "" {
+		urls = append(urls, u)
+	}
+	return urls
+}
+
+// prefetchCardThumbnail warms the artwork URL the card will paint first.
+func prefetchCardThumbnail(vid VideoInfo) {
+	if urls := realThumbnailCandidates(vid); len(urls) > 0 {
+		PrefetchThumbnail(urls[0])
+	}
+}
+
 // drawThumbnail renders the cached thumbnail, a placeholder, or a dark tile so
-// a row never shows an empty hole.
+// a row never shows an empty hole. The artwork pass walks the card's candidate
+// URLs in order — metadata first, the URL-derived YouTube artwork last — so a
+// card misses out on real art only when both the extractor and the CDN come up
+// empty.
 func drawThumbnail(renderer *sdl.Renderer, config *Config, vid VideoInfo, x, y, w, h int32) {
 	loaded := false
-	if vid.Thumbnail != "" {
-		if tex := loadThumbnail(renderer, vid.Thumbnail); tex != nil {
-			renderer.Copy(tex, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
-			loaded = true
-		}
-	}
-	if !loaded && len(vid.Thumbnails) > 0 {
-		if tex := loadThumbnailFromURLs(renderer, vid.Thumbnails); tex != nil {
-			renderer.Copy(tex, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
-			loaded = true
-		}
+	if tex := loadThumbnailFromURLs(renderer, realThumbnailCandidates(vid)); tex != nil {
+		renderer.Copy(tex, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
+		loaded = true
 	}
 	if !loaded {
 		if placeholderTexture != nil {
@@ -3431,6 +3496,8 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	PlayActivateSound()
 	addRecentVideo(v)
 	currentPlaybackURL = url
+	// A quality pin belongs to one video; a different URL forgets it.
+	syncVideoQualitySource(url)
 
 	// The embedded player is the only playback backend: yt-dlp downloads the
 	// stream and ffmpeg decodes it into the scene's `video` element. The old
@@ -3504,6 +3571,13 @@ func videoFormatSelector(config *Config) string {
 	return fmt.Sprintf("best[height<=%d]/best", maxHeight)
 }
 
+// videoFormatSelectorFor is videoFormatSelector aware of one video: the
+// per-video ceiling (Quality row in the player settings) wins over the global
+// playbackResolution when it is pinned to this source.
+func videoFormatSelectorFor(config *Config, source string) string {
+	return fmt.Sprintf("best[height<=%d]/best", effectivePlaybackMaxHeight(config, source))
+}
+
 // playWithTempFile downloads the stream with yt-dlp and hands the file to the
 // embedded player. Downloading first (instead of piping) keeps seeking and
 // resume positions working and avoids holding two decoders in memory.
@@ -3543,7 +3617,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 		"--no-continue",
 		"--user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
 		"--extractor-args", "youtube:player_client=android,web;youtube:player_skip=webpage",
-		"-f", videoFormatSelector(config),
+		"-f", videoFormatSelectorFor(config, url),
 		url,
 	}
 	dlArgs = append(dlArgs, ytDlpExtraArgsSlice(config)...)
@@ -3917,6 +3991,21 @@ func pushTapClick(px, py int32) {
 	sdl.PushEvent(&sdl.MouseMotionEvent{Type: sdl.MOUSEMOTION, X: px, Y: py})
 	sdl.PushEvent(&sdl.MouseButtonEvent{Type: sdl.MOUSEBUTTONDOWN, Button: sdl.BUTTON_LEFT, State: sdl.PRESSED, Clicks: 1, X: px, Y: py})
 	sdl.PushEvent(&sdl.MouseButtonEvent{Type: sdl.MOUSEBUTTONUP, Button: sdl.BUTTON_LEFT, State: sdl.RELEASED, Clicks: 1, X: px, Y: py})
+}
+
+// disableSyntheticTouchMouse turns off SDL's built-in touch-to-mouse mapping
+// ("SDL_TOUCH_MOUSE_EVENTS"). SDL posts its own mouse press/release at
+// finger-down for every touch, on top of the app's own tap pipeline
+// (handleTouchGesture replays FINGERUP taps as clicks), so one tap dispatched
+// the page's action twice: opening a reader page's video card started two
+// yt-dlp resolves for one URL, and a virtual-keyboard tap inserted a
+// character twice. Real mice never send finger events, which is why the
+// doubling only shows up on touch devices. The app's replay keeps working,
+// and this is safe to call more than once.
+func disableSyntheticTouchMouse() {
+	if !sdl.SetHint("SDL_TOUCH_MOUSE_EVENTS", "0") {
+		log.Printf("[DEBUG] disableSyntheticTouchMouse: SDL_TOUCH_MOUSE_EVENTS hint was not set")
+	}
 }
 
 func handleTouchGesture(e *sdl.TouchFingerEvent, config *Config) {
@@ -5429,7 +5518,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	case "yt_search", "youtube_search", "youtube_smart":
 		runMediaSearchTrigger(config, element.Trigger, element.TriggerTarget, element.TriggerValue)
 	case "youtube_trending":
-		go fetchTrendingVideos(config, "search_results", snapshotVars(config))
+		fetchTrendingVideos(config, "search_results", snapshotVars(config))
 	case triggerShortsOpen:
 		// The Media screen's Shorts button: open the feed, start it and keep it
 		// running. Same path as the Y button and Ctrl+Shift+S.
@@ -6259,7 +6348,7 @@ func completeSceneTransition(config *Config) {
 		}
 		srElem, _ := sceneSearchResultsElement(config.Scenes[currentSceneIndex])
 		if _, ok := config.Variables.Custom[srElem.Variable]; !ok {
-			go fetchTrendingVideos(config, srElem.Variable, snapshotVars(config))
+			fetchTrendingVideos(config, srElem.Variable, snapshotVars(config))
 		}
 	}
 
@@ -6361,7 +6450,7 @@ func completeSceneTransition(config *Config) {
 		hasShorts := len(shortsList) > 0
 		shortsMutex.Unlock()
 		if !hasShorts {
-			go fetchYouTubeShorts(config, "shorts_list", snapshotVars(config))
+			fetchYouTubeShorts(config, "shorts_list", snapshotVars(config))
 		}
 	}
 	for _, e := range config.Scenes[currentSceneIndex].Elements {

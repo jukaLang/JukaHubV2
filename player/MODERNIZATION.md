@@ -239,8 +239,10 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [x] ✅ Thumbnail cache with entry limit — `thumbstore.go` memory + disk cache.
 - [x] ✅ Network response cache with TTL — bbolt `cache.go`.
 - [x] ✅ LRU eviction — text cache and thumbnail memory cache.
-- [ ] ⬜ Icon texture atlas — icons are drawn as glyphs/primitives, no atlas.
+- [x] ✅ Icon texture atlas — landed as the glyph-set atlas (`iconatlas.go`);
+      see the Phase 8b entry for the full description.
 
+#### 3.3 Rendering
 #### 3.3 Rendering
 
 - [x] ✅ Cached text textures — `globalTextCache`, pressure trimming.
@@ -468,9 +470,29 @@ Open:
       insets so cards and footer chips clear the panel's rounded corners, and a
       bigger Exit-chip hit area without changing its drawn size.
 - [ ] ⬜ Cached ambient glow instead of re-blending four blobs per frame.
-- [ ] ⬜ Icon atlas for the shared 32 px glyph set.
-- [ ] ⬜ Virtualize lists and grids by row instead of drawing the full list clipped.
-- [ ] ⬜ Keep thumbnail decoding out of the render path (decode budget of 2/frame).
+- [x] ✅ Icon atlas for the shared 32 px glyph set — landed in Phase 8b
+      (`iconatlas.go`), see that entry for the full description.
+- [x] ✅ Row-virtualize the launcher app grid: the render loop visits only
+      the row window the panel can show (`appGridVisibleRange` in
+      `appgrid.go` — fully visible rows plus one slack row), so a long
+      grid's per-frame tile cost is bound by the panel, not the list length;
+      off-screen rows are appended lazily as scrolling moves the window, and
+      a row straddling the bottom edge is drawn and clipped by the panel
+      clip instead of being skipped whole (the scrollbar already said "more
+      there"). Window bounds and the pixel consequences (virtualized row
+      flat, window row painted, partial row drawn clipped) are pinned by
+      `appgrid_window_test.go`.
+- [ ] ⬜ Row-virtualize the remaining scrolling lists (game library,
+      favorites, save manager, downloads) that still visit every row and
+      rely on clipping — the same window arithmetic applies, but each list
+      has its own row pitch and selection model, so they are separate edits.
+- [x] ✅ Keep thumbnail decoding out of the render path (decode budget of
+      2/frame, 8 desktop): `allowThumbnailDecode` (`thumbstore.go`) tokens
+      per frame number, so a cold scrolled grid starts at most two decodes–
+      uploads per presented frame and defers the surplus into the prefetch
+      queue, which re-fills it over the following frames (list fills
+      progressively instead of one frame stuttering; `core.go`
+      `loadThumbnailFromURLs`, `thumbdecode_test.go`).
 - [ ] ⬜ Scene-scoped texture release for scenes that are not open.
 - [ ] ⬜ Scene-scoped polling: stop weather/network refreshes for hidden scenes.
 - [ ] ⬜ Named power profiles (Battery Saver / Balanced / Performance) mapping to
@@ -536,20 +558,94 @@ Shipped with code evidence:
       (gpu/software) and `max_texture` — the first on-device run will make
       explicit whether the shell is actually running on the GE8300 or falling
       back to software.
+- [x] ✅ Diagnostics verifiable: `renderPipelineInfo`/`logRenderPipeline`
+      (`adaptive.go`) extract the four-field snapshot out of `main`, and
+      `renderpipeline_test.go` exercises it against a real SDL renderer so the
+      diagnostics ship correct by construction, not by hope.
 
 Open / next steps:
 
 - [ ] ⬜ Read the new "render pipeline" log line on the device; if it says
       software, file the exact SDL/EGL driver config against the device image
       (expected: PowerVR userspace + `libGLESv2` present but SDL picking the
-      dummy/software video backend).
-- [ ] ⬜ Icon atlas for the shared 32 px glyph set (removes hundreds of small
-      texture binds per frame on GLES).
-- [ ] ⬜ Virtualize lists and grids by row instead of drawing the full list
-      clipped — now the top remaining per-frame cost once shapes are cached.
-- [ ] ⬜ ffmpeg hardware decode/VPU offload investigation on the A133P
-      (cedar/sunxi path) — separate track from the UI thread, not attempted
-      here.
+      dummy/software video backend). The snapshot itself is now
+      construction-verified (`renderpipeline_test.go`); what remains is the
+      genuine on-device reading below.
+
+#### What the A133P reports — the render pipeline line
+
+The startup log (text handler on TrimUI; `JUKAHUB_LOG_LEVEL` raises/lowers it)
+carries one line from the captured snapshot (see `renderPipelineInfo` in
+`adaptive.go` — facts are read from SDL, never inferred):
+
+    level=INFO msg="render pipeline" video_driver=<backend>
+    renderer=<name> acceleration=<gpu|software> max_texture=<WxH>
+
+Field expectations for the TrimUI Smart Pro / Smart Pro S / Brick family
+(A133P SoC, PowerVR Rogue GE8300), with what each value means for the shell:
+
+- `video_driver` — TrimUI ships its own SDL2 build instead of a stock
+  distro SDL: community devices report X11/Wayland absent and set
+  `SDL_VIDEODRIVER=mali` (a vendor driver name — *not* a Mali GPU, the GPU is
+  PowerVR) in launchers for the `tg5040` family, e.g. the NextUI PPSSPP
+  launcher (https://github.com/ben16w/minui-psp, launch.sh). Expect either
+  `mali` (stock-adjacent SDL stack) or the generic host default from CI-built
+  binaries; this firmware's devices aren't covered by SDL's standard Linux
+  drivers list (https://wiki.libsdl.org/SDL2/FAQUsingSDL). Generic SDL
+  AppImages fail video init there rather than falling back to software.
+- `renderer` — `opengles2` when the PowerVR blob wins (the firmware notes
+  update the GLES/Vulkan blobs for exactly this;
+  https://github.com/trimui/firmware_smartpro, and runtime reports show
+  `OpenGL ES 3.2` / renderer string "PowerVR Rogue GE8300"
+  https://github.com/cizia64/CrossMix-OS/issues/8). Anything else should be
+  treated as the vendor stack being bypassed.
+- `acceleration` — the go/no-go bit: `gpu` means per-frame geometry/batching
+  lands on the GE8300 (what Phases 8/8b assume); `software` means every fill
+  and cache `Copy` is on the Cortex-A53 CPU and the device image needs the
+  EGL/driver fix before further GPU work claims validity.
+- `max_texture` — GE8300 builds commonly report `GL_MAX_TEXTURE_SIZE=4096`
+  (see https://github.com/google/filament/issues/9387 and
+  https://github.com/gpuweb/gpuweb/issues/3631 for the GPU-report corroboration;
+  Imagination does not publish a per-model texture cap on the
+  https://www.imaginationtech.com/product/ge8300/ page, so the on-device line
+  is the authoritative value here). Under the software renderer SDL reports
+  `0x0` (its "no limit" representation — construction-verified by
+  `TestRenderPipelineInfoUnderSoftwareFallback`, which pins that exact value
+  for the dummy-driver fallback). The Brick's kernel driver for this GPU is
+  `pvrsrvkm` (https://knulli.org/devices/trimui/brick/).
+- [x] ✅ Row-virtualize the launcher app grid — `appGridVisibleRange`
+      visits only the visible rows plus one slack row; see the Phase 8 entry
+      for the full description. The remaining lists listed there stay open.
+- [x] ✅ Icon atlas for the shared 32 px glyph set — `iconatlas.go` bakes each
+      (name, focused) glyph once, at the canonical 32px `DrawIconTile` size,
+      into one 1024×64 strip and every later occurrence is one Copy of its
+      sub-rect. `DrawHomeIcon` (home cards, icon tiles, tool/emulator tiles,
+      launcher empty states) used to build each glyph from filled primitives —
+      on the GLES2 renderer one cached-shape blit (bind + draw call) each, so a
+      card scene issued hundreds of small texture binds per frame just for
+      glyphs; it now issues one blit per icon instance from the same bound
+      strip. Fidelity is preserved, not approximated: the strip is painted by
+      the same `drawHomeIconShapes` primitives the direct path uses, keys are
+      renderer-local with `ClearIconAtlas()` riding along every `ClearShapeCache()`
+      call site (theme change, memory-pressure eviction, a11y font reload,
+      shutdown, test renderers), non-32px callers (46px empty-state, 36px bells,
+      list-row glyphs) keep native rendering instead of scaled blits, unknown
+      icon names bake the fallback ring, and Copy failures fall back to direct
+      paint. Verified in `iconatlas_render_test.go`: bake-once/blit-many with
+      the shape cache's per-primitive Copy stream measured at zero deltas on
+      warm frames, atlas-vs-direct interior pixels identical at 32px,
+      renderer-locality with fresh strips, off-size native rendering, unknown
+      names, and the clear/rebake lifecycle.
+- [ ] ⬜ ffmpeg hardware decode/VPU offload on the A133P — desk investigation
+      done, see docs/VIDEO_VPU_OFFLOAD.md: upstream ffmpeg has no Cedar backend
+      and mainline Cedrus does not cover the A133, so the only realistic path is
+      a small aarch64 helper dlopen-ing the firmware's CedarX libraries and
+      emitting the same yuv420p pipe contract ffmpegDecoderArgs produces, with
+      automatic ffmpeg fallback. Blocked on the five on-device probe questions
+      (/dev/cedar_dev + /dev/ion, shipped lib manifest, tplayerdemo, frame
+      layout, measured CPU headroom); do not ship against unproven vendor
+      libraries until those are measured on a TG5040/Brick image, and never
+      generalize to the A523-based Smart Pro S.
 - [ ] ⬜ OpenCL compute offload — parked until a verified runtime exists on a
       real device image (see finding 1 above); do not ship speculative code
       against unproven vendor libraries.

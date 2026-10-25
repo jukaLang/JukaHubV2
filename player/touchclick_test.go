@@ -62,6 +62,19 @@ func TestTouchSwipeIsNotAClick(t *testing.T) {
 	}
 }
 
+// TestSyntheticTouchMouseEventsDisabled pins the input-level fix for the
+// doubled video-card tap: SDL's built-in touch-to-mouse mapping must be off,
+// otherwise a finger tap fires SDL's own mouse press at finger-down plus the
+// app's replayed one at finger-up (two yt-dlp resolves for one card touch,
+// two characters per virtual-keyboard tap).
+func TestSyntheticTouchMouseEventsDisabled(t *testing.T) {
+	disableSyntheticTouchMouse()
+	if got := sdl.GetHint("SDL_TOUCH_MOUSE_EVENTS"); got != "0" {
+		t.Fatalf("SDL_TOUCH_MOUSE_EVENTS = %q, want \"0\" so a touch tap is not\n"+
+			"\talso handed to the mouse pipeline by SDL itself", got)
+	}
+}
+
 // TestTouchPixelCoordinatesAccepted covers backends that report touch in pixels
 // rather than SDL's normalized 0..1 range.
 func TestTouchPixelCoordinatesAccepted(t *testing.T) {

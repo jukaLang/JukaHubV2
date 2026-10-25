@@ -257,8 +257,13 @@ rewind, play/pause, fast-forward, speed, subtitles, settings and full screen, an
 
 The rewind and fast-forward buttons skip 10 seconds per press. With the settings
 sheet open, **Up / Down** move between its rows and **A** applies the row, so
-subtitles, full screen and speed are reachable without a touch screen. A tap on
-a control also moves the ring there, so touch and D-pad never disagree.
+subtitles, full screen, speed and quality are reachable without a touch screen.
+A tap on a control also moves the ring there, so touch and D-pad never disagree.
+
+The **Quality** row cycles Auto → 360p → 480p → 720p → 1080p for the video on
+screen only — Auto means the global *Playback resolution* setting. Picking a
+quality re-resolves the stream and resumes playback at the current position, and
+the pin is forgotten when another video starts.
 
 On a keyboard **N** and **P** move to the next and previous video of the list
 that launched the current one — in the Shorts feed that is the next short. In

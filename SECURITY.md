@@ -2,6 +2,19 @@
 
 This document describes the security features implemented in JukaHub, including encryption, key management, input validation, and best practices for deployment.
 
+## Reporting a vulnerability
+
+**Do not open a public issue for a security problem.** Use GitHub's private
+vulnerability reporting: open
+[Security → Report a vulnerability](https://github.com/jukaLang/JukaHubV2/security/advisories/new)
+on this repository. Include what you did, what happened, the version
+(`JukaHub -v` in the header, or the release tag), and — if possible — a minimal
+config or patch that reproduces it.
+
+You will get an acknowledgement and a triage decision (affected: yes/no, plan)
+before anything is fixed publicly, and credit in the release notes unless you
+prefer to stay anonymous.
+
 ## Overview
 
 JukaHub implements several security measures to protect sensitive credentials stored in configuration files and to harden runtime behavior:

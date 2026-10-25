@@ -20,6 +20,7 @@ var (
 	homePressedID   HomeFocusID
 	homePressedAt   uint64
 	homeTileByIndex = map[int]HomeFocusID{} // Main scene element index -> home item
+	homeTileMapSig  string                  // tile signature homeTileByIndex was built from
 
 	homeFontsOnce  sync.Once
 	homeFontsCache HomeFonts
@@ -48,30 +49,19 @@ func refreshHomeLayout(config *Config) {
 	} else if homeLayout.Width != screenWidth || homeLayout.Height != screenHeight {
 		homeLayout.Resize(screenWidth, screenHeight)
 	}
+	// Keep the cards following jukaconfig.json: position, size, title, subtitle
+	// and icon of every menu card are the Main scene's tiles (ApplyConfig),
+	// so a config edit (or hot reload) reaches the screen on the next frame.
+	homeLayout.ApplyConfig(scene.Elements)
 
 	// Map config tile elements to home items so activation reuses the triggers
 	// declared in jukaconfig.json ("Preserve the existing activation trigger").
-	if len(homeTileByIndex) == 0 {
-		for i, el := range scene.Elements {
-			if el.Type != "button" || el.Style != "tile" {
-				continue
-			}
-			title := strings.TrimSpace(el.Text)
-			for _, id := range homeLayout.Order {
-				if id == HomeFocusContinue {
-					continue
-				}
-				item, ok := homeLayout.Items[id]
-				if !ok {
-					continue
-				}
-				if strings.EqualFold(strings.TrimSpace(item.Title), title) ||
-					(id == HomeFocusTools && strings.Contains(strings.ToLower(title), "tools")) {
-					homeTileByIndex[i] = id
-					break
-				}
-			}
-		}
+	// The map is rebuilt whenever the scene's tile set changes: a hot reload that
+	// adds, removes or renames tiles must re-map or the legacy press/click path
+	// would resolve tiles against the previous config's geometry.
+	if sig := homeTileSignature(scene.Elements); len(homeTileByIndex) == 0 || sig != homeTileMapSig {
+		homeTileByIndex = buildHomeTileMap(scene.Elements, homeLayout)
+		homeTileMapSig = sig
 	}
 
 	// Clear the pressed feedback once the short visual window has elapsed.
@@ -96,6 +86,47 @@ func homeTileRect(elemIndex int) (sdl.Rect, bool) {
 		return sdl.Rect{}, false
 	}
 	return item.Rect, true
+}
+
+// homeTileSignature fingerprints the home scene's tile set: the index and text
+// of every tile button. A hot reload that adds, removes, moves or renames
+// tiles produces a different signature, so the index -> card mapping is
+// rebuilt instead of silently pointing at the previous config's cards.
+func homeTileSignature(elements []Element) string {
+	var sb strings.Builder
+	for i, el := range elements {
+		if el.Type != "button" || !strings.EqualFold(el.Style, "tile") {
+			continue
+		}
+		fmt.Fprintf(&sb, "%d:%s;", i, strings.TrimSpace(el.Text))
+	}
+	return sb.String()
+}
+
+// buildHomeTileMap maps Main-scene tile element indices to the home items they
+// belong to, using the same leniency as the triggers always have matched with:
+// an exact (case insensitive) title, or any text containing "tools" naming the
+// Tools card (the shipped configs may spell that row "Search / Tools").
+func buildHomeTileMap(elements []Element, h *HomeLayout) map[int]HomeFocusID {
+	out := map[int]HomeFocusID{}
+	for i, el := range elements {
+		if el.Type != "button" || !strings.EqualFold(el.Style, "tile") {
+			continue
+		}
+		title := strings.TrimSpace(el.Text)
+		for _, id := range h.Order {
+			item, ok := h.Items[id]
+			if !ok {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(item.Title), title) ||
+				(id == HomeFocusTools && strings.Contains(strings.ToLower(title), "tools")) {
+				out[i] = id
+				break
+			}
+		}
+	}
+	return out
 }
 
 // homeRecentRect returns the Continue card rect for the legacy recent panel.

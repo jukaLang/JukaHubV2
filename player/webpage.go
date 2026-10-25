@@ -251,6 +251,17 @@ type webBlock struct {
 	ImageSrc string
 	ImageW   float64
 	ImageH   float64
+	// Video marks a <video> element or a video-bearing <iframe> embed.
+	// VideoSrc is the resolved http(s) URL the playback path streams through
+	// yt-dlp; the layout reserves a 16:9 play card for it like an image and
+	// the browser lists it among the page's links so the D-pad reaches it.
+	// VideoThumb is the video's real thumbnail URL when it can be derived
+	// from the source alone (YouTube's image CDN serves one per video id);
+	// the image pass fetches it and the card paints it behind the glyph.
+	Video      bool
+	VideoSrc   string
+	VideoThumb string
+	VideoTitle string
 }
 
 // webDocument is one parsed page. It holds no raw HTML.
@@ -342,6 +353,9 @@ type webLayout struct {
 	// Images are the reader's <img> boxes, in layout-local coordinates like
 	// Rects. They draw after the icon rects and before the text rows.
 	Images []webImagePos
+	// Videos are the reader's <video>/embed play cards, in the same layout-
+	// local coordinates. They draw right after the images, before the text.
+	Videos []webVideoPos
 }
 
 // webLinkHit is one link on a laid-out page: the row it starts on and its
@@ -353,6 +367,9 @@ type webLinkHit struct {
 	W    int32
 	Href string
 	Text string
+	// Video marks a hit generated from a <video> play card rather than an
+	// anchor: activation must stream/play it instead of navigating to it.
+	Video bool
 }
 
 // webRule is one parsed CSS rule (one selector; groups are split apart).
@@ -2196,6 +2213,8 @@ func (p *webParser) walk(source string) {
 					p.css.WriteString(inner)
 					p.rules = parseWebCSS(p.css.String())
 				}
+			case "video", "iframe":
+				p.addVideoBlock(name, attrs, inner)
 			}
 			continue
 		}
@@ -2659,7 +2678,7 @@ func (p *webParser) flush() {
 			break
 		}
 	}
-	if !hasText && block.Bullet == "" && !block.Rule && !block.Image {
+	if !hasText && block.Bullet == "" && !block.Rule && !block.Image && !block.Video {
 		return
 	}
 	for i := range block.Runs {
@@ -2770,6 +2789,14 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	l.layoutFloats(floats, padX, contentW)
 	sort.SliceStable(layout.Rects, func(i, j int) bool { return layout.Rects[i].Z < layout.Rects[j].Z })
 	layout.Links = collectWebLinks(layout)
+	// Every play card is also a link the browser walks and activates; the
+	// merge keeps rows in reading order so the video sits where it drew.
+	if vids := collectWebVideoLinks(layout); len(vids) > 0 {
+		layout.Links = append(layout.Links, vids...)
+		sort.SliceStable(layout.Links, func(i, j int) bool {
+			return layout.Links[i].Row < layout.Links[j].Row
+		})
+	}
 	return layout
 }
 
@@ -2932,6 +2959,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		}
 		if block.Image {
 			l.layoutImage(block, padX, contentW)
+			continue
+		}
+		if block.Video {
+			l.layoutVideo(block, padX, contentW)
 			continue
 		}
 		startGrid := int32(len(layout.Rows))
@@ -3326,6 +3357,16 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				continue
 			}
 			drawWebImage(r, config, doc, im, rect.X+im.Rect.X, y)
+		}
+		// Video play cards come after the images on the same terms: they
+		// own their reserved rows and draw before the text rows.
+		for i := range layout.Videos {
+			v := layout.Videos[i]
+			y := rect.Y + v.Rect.Y - offset
+			if v.Rect.H <= 0 || y >= rect.Y+rect.H || y+v.Rect.H <= rect.Y {
+				continue
+			}
+			drawWebVideo(r, config, doc, v, rect.X+v.Rect.X, y)
 		}
 		for i := startRow; i < len(layout.Rows); i++ {
 			row := layout.Rows[i]

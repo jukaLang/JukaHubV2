@@ -1,0 +1,73 @@
+# JukaHub documentation site — `pip install -r mkdocs-requirements.txt && mkdocs serve`
+#
+# Renders docs/ as-is (nothing is copied: the pages on GitHub and the pages on
+# the site are the same files), with search, Material theme and Edit-this-page
+# links back to the source. Publishing is deliberately not CI-wired: when the
+# site is wanted, point Castanet/Netlify/Cloudflare Pages at this repo with
+# `mkdocs build` as the command — nothing here changes for GitHub rendering.
+#
+# Docs stay plain, portable Markdown files. Keep them that way: every feature
+# used by a page must render correctly on GitHub too.
+
+site_name: JukaHub
+site_description: >
+  A media hub and launcher for the TrimUI Smart Pro: video, games,
+  productivity and tools, in one controller-first app.
+repo_url: https://github.com/jukaLang/JukaHubV2
+repo_name: jukaLang/JukaHubV2
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  features:
+    - content.action.edit
+    - navigation.tracking
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Start here:
+      - Quick start (users): QUICK_START.md
+      - Controls: CONTROLS.md
+      - Recovery: RECOVERY.md
+  - Software:
+      - Video and music: MUSIC_PLAYER.md
+      - Browser: BROWSER.md
+      - Game library: GAME_LIBRARY.md
+      - Game profiles: GAME_PROFILES.md
+      - Save manager: SAVE_MANAGER.md
+      - Emulator compatibility: COMPATIBILITY.md
+      - PortMaster: PORTMASTER.md
+      - LAN play (Remote Play, watch party): REMOTE_PLAY.md
+      - Smart home: SMART_HOME.md
+      - Windows apps: WINDOWS_APPS.md
+      - Android (tsp) builds: ANDROID.md
+      - Game curation screens: CURATION.md
+  - Configure and extend:
+      - Configuration reference: CONFIGURATION.md
+      - Packages and the Patch manager: PACKAGES.md
+      - Plugins: PLUGINS.md
+      - Features: FEATURE-SLATE.md
+      - Feature backlog: FEATURE-BACKLOG.md
+      - Improvements: IMPROVEMENTS.md
+  - Build it:
+      - Architecture: ARCHITECTURE.md
+      - Development guide: DEVELOPMENT.md
+      - Building: BUILDING.md
+      - Device tuning: DEVICE_TUNING.md
+      - Controller testing: CONTROLLER_TEST.md
+      - Memory: MEMORY.md
+      - Accessibility: ACCESSIBILITY.md
+      - Ambient mode: AMBIENT.md
+      - Timelapse: TIMELAPSE.md

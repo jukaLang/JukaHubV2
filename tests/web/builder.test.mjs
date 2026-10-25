@@ -186,7 +186,9 @@ test('welcome cards use valid markup: no headings or paragraphs inside buttons',
   const bad = [...dom.window.document.querySelectorAll('button h1, button h2, button h3, button h4, button h5, button h6, button p, button div')]
     .map(el => el.outerHTML.slice(0, 60));
   assert.deepEqual(bad, []);
-  assert.equal(dom.window.document.querySelectorAll('.welcome-card .welcome-card-title').length, 3);
+  assert.equal(dom.window.document.querySelectorAll('.welcome-card .welcome-card-title').length, 4);
+  const demoCard = dom.window.document.querySelector('.welcome-card[data-start="demo"]');
+  assert.ok(demoCard, 'the 60-second demo card exists in the welcome dialog');
 });
 
 test('the AI key field asks browsers not to autofill or autocorrect it', () => {
@@ -330,4 +332,47 @@ test('importing an oversized file is refused before it is read', () => {
   }
   assert.equal(read, false, 'the oversized file must not be read');
   assert.ok(toasts().some(t => /too large/i.test(t)), 'user is told why: ' + toasts().join(' | '));
+});
+
+test('the 60-second demo loads a controller-navigable shell in preview', async () => {
+  const { window } = dom;
+  const doc = window.document;
+  // A visitor's first click: welcome card "60-second demo".
+  const card = doc.querySelector('.welcome-card[data-start="demo"]');
+  assert.ok(card, 'demo card exists');
+  card.click();
+  // The card enters preview on the next animation frame; give jsdom one.
+  await new Promise(r => setTimeout(r, 60));
+
+  // The demo config actually loaded onto the canvas.
+  const labels = [...doc.querySelectorAll('.element')].map(el => el.textContent);
+  assert.ok(labels.length >= 8, 'the demo home screen rendered multiple tiles, got ' + labels.length);
+  assert.ok(labels.some(t => /Media/.test(t)) && labels.some(t => /JukaHub/.test(t)), 'the demo is JukaHub-shaped, not a blank canvas');
+
+  // ...and the builder jumped straight into preview mode with the D-pad ring
+  // on the first button, i.e. the person sees a working shell immediately.
+  assert.equal(doc.body.classList.contains('preview-mode'), true, 'preview mode is on after the demo card');
+  const focused = doc.querySelector('.element.preview-focus');
+  assert.ok(focused, 'a D-pad focus ring is visible');
+  const hint = doc.getElementById('previewBar')?.querySelector('.preview-hint');
+  assert.ok(hint, 'the preview bar tells the arrows how to act');
+
+  // "A" (Enter) on a scene-linked tile navigates, like the real device.
+  const beforeScene = doc.getElementById('previewSceneLabel')?.textContent || '';
+  window.eval("previewFocusEl && previewFocusEl.click()");
+  const afterScene = doc.getElementById('previewSceneLabel')?.textContent || '';
+  assert.ok(/Home/.test(beforeScene), 'the demo starts on Home: ' + beforeScene);
+  assert.ok(/Media/.test(afterScene), 'A on Media moves to Media: ' + beforeScene + ' -> ' + afterScene);
+
+  // "B" (Backspace) goes back one scene.
+  window.eval("previewGoBack()");
+  const backScene = doc.getElementById('previewSceneLabel')?.textContent || '';
+  assert.ok(/Home/.test(backScene), 'B returns to Home: ' + backScene);
+
+  // Cleanup for later tests: exit preview the ordinary way.
+  window.eval("exitPreviewMode()");
+  assert.equal(doc.body.classList.contains('preview-mode'), false, 'preview exits');
+
+  // Leave the editor object overlay-free for subsequent tests.
+  window.eval("clearAll()");
 });

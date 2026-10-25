@@ -252,7 +252,7 @@ func TestStreamFailureCooldownExpires(t *testing.T) {
 		t.Fatal("cooldown never ends")
 	}
 	// A later success clears the cooldown so the prefetch resumes.
-	rememberDirectStream(url, "https://cdn.example/media")
+	rememberDirectStream(url, "https://cdn.example/media", 720)
 	if streamRecentlyFailed(url) {
 		t.Fatal("a successful resolution must clear the failure")
 	}
@@ -318,7 +318,7 @@ func TestPrefetchTargetsSkipsKnownWork(t *testing.T) {
 	ready := "https://www.youtube.com/watch?v=ready"
 	failed := "https://www.youtube.com/watch?v=failed"
 	cold := "https://www.youtube.com/watch?v=cold"
-	rememberDirectStream(ready, "https://cdn/ready.mp4")
+	rememberDirectStream(ready, "https://cdn/ready.mp4", 720)
 	rememberStreamFailure(failed)
 
 	got := prefetchTargets([]string{ready, failed, cold, cold, "  ", "https://cdn/direct.m3u8"})
@@ -364,7 +364,7 @@ func TestVideoStreamPreloadedReflectsResolution(t *testing.T) {
 	if videoStreamPreloaded(page) {
 		t.Fatal("an unresolved page URL reported as preloaded")
 	}
-	rememberDirectStream(page, "https://cdn.example/media.mp4?expire=1")
+	rememberDirectStream(page, "https://cdn.example/media.mp4?expire=1", 720)
 	if !videoStreamPreloaded(page) {
 		t.Fatal("a resolved stream must show as preloaded")
 	}
@@ -646,7 +646,7 @@ func TestSearchResultsMarkPreloadedCard(t *testing.T) {
 
 	ready := VideoInfo{Title: "Preloaded clip", URL: "https://www.youtube.com/watch?v=ready"}
 	cold := VideoInfo{Title: "Cold clip", URL: "https://www.youtube.com/watch?v=cold"}
-	rememberDirectStream(ready.URL, "https://cdn.example/ready.mp4")
+	rememberDirectStream(ready.URL, "https://cdn.example/ready.mp4", 720)
 
 	cfg := &Config{}
 	cfg.Variables.Custom = map[string]interface{}{"videos": []VideoInfo{ready, cold}}
@@ -725,5 +725,89 @@ func TestProbeCacheServesRemoteSourcesOnly(t *testing.T) {
 	rememberProbe("https://cdn.example/audio.m4a", probeFields{duration: 30})
 	if _, ok := cachedProbe("https://cdn.example/audio.m4a"); ok {
 		t.Fatal("cached a probe with no video dimensions")
+	}
+}
+
+// The Quality row in the player settings pins a yt-dlp ceiling to the video on
+// screen. The ceiling must win over the global playbackResolution for that
+// source only, and starting another video must forget the pin.
+func TestEffectivePlaybackMaxHeightPrefersPerVideoOverride(t *testing.T) {
+	config := &Config{}
+	// Tests leak global config across files; make the global ceiling explicit.
+	config.Variables.PlaybackResolution = ""
+	defer setVideoQualityOverride("", 0)
+
+	const video, other = "https://youtu.be/aaaaaaaaaaa", "https://youtu.be/bbbbbbbbbbb"
+	if got := effectivePlaybackMaxHeight(config, video); got != 720 {
+		t.Fatalf("Auto ceiling = %d, want 720", got)
+	}
+
+	setVideoQualityOverride(video, 360)
+	if got := effectivePlaybackMaxHeight(config, video); got != 360 {
+		t.Fatalf("pinned ceiling = %d, want 360", got)
+	}
+	if got := effectivePlaybackMaxHeight(config, other); got != 720 {
+		t.Fatalf("another video must stay on the global ceiling, got %d", got)
+	}
+
+	// Starting video B clears the pin A user set.
+	syncVideoQualitySource(other)
+	if h := videoQualityOverrideFor(video); h != 0 {
+		t.Fatalf("a pin survived a different playback start: %d", h)
+	}
+	// And the pin comes back only when the user pins it to the playing video.
+	setVideoQualityOverride(other, 1080)
+	syncVideoQualitySource(other)
+	if got := videoQualityOverrideFor(other); got != 1080 {
+		t.Fatalf("syncing the same source dropped an active pin: %d", got)
+	}
+}
+
+// A cached resolution belongs to the ceiling it was resolved at: switching the
+// Quality row must not reuse the old URL, and the height-agnostic lookup the
+// Play fast-start check uses must still see the entry.
+func TestStreamQualityCacheIsPerHeight(t *testing.T) {
+	resetStreamCache()
+	defer resetStreamCache()
+
+	const page = "https://youtu.be/ccccccccccc"
+	rememberDirectStream(page, "https://cdn.example/720.mp4", 720)
+
+	if got, ok := cachedDirectStreamFor(page, 720); !ok || got != "https://cdn.example/720.mp4" {
+		t.Fatalf("cachedDirectStreamFor(720) = %q, %v", got, ok)
+	}
+	if _, ok := cachedDirectStreamFor(page, 360); ok {
+		t.Fatal("a 360p lookup reused the 720p entry")
+	}
+	if _, ok := cachedDirectStream(page); !ok {
+		t.Fatal("the height-agnostic lookup lost the entry")
+	}
+}
+
+func TestNextVideoQualityHeightWrapsLadder(t *testing.T) {
+	want := map[int]int{0: 360, 360: 480, 480: 720, 720: 1080, 1080: 0}
+	for cur, next := range want {
+		if got := nextVideoQualityHeight(cur); got != next {
+			t.Fatalf("nextVideoQualityHeight(%d) = %d, want %d", cur, got, next)
+		}
+	}
+}
+
+func TestVideoQualityLabelNamesTheCeiling(t *testing.T) {
+	defer setVideoQualityOverride("", 0)
+	defer func(u string) { currentPlaybackURL = u }(currentPlaybackURL)
+
+	config := &Config{}
+	currentPlaybackURL = "https://youtu.be/eeeeeeeeeee"
+	if got := videoQualityLabel(config); got != "Auto (720p)" {
+		t.Fatalf("empty playbackResolution label = %q", got)
+	}
+	config.Variables.PlaybackResolution = "480"
+	if got := videoQualityLabel(config); got != "Auto (480p)" {
+		t.Fatalf("global ceiling label = %q", got)
+	}
+	setVideoQualityOverride(currentPlaybackURL, 360)
+	if got := videoQualityLabel(config); got != "360p (this video)" {
+		t.Fatalf("pinned label = %q", got)
 	}
 }

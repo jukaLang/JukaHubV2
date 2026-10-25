@@ -219,6 +219,7 @@ func playtimeCheckAchievements() {
 		}
 		playtime.data.Unlocked[a.ID] = time.Now().Format(time.RFC3339)
 		ShowToast("Achievement unlocked: "+a.Title, ToastKindSuccess)
+		noteAwayAchievement(a.Title)
 	}
 }
 

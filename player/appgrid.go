@@ -107,6 +107,38 @@ func appGridFirstRow(focus, rows, total, cols int) int {
 	return first
 }
 
+// appGridVisibleRange returns the [start, end) entry-index window covering
+// the rows the panel can show from firstRow: the fully visible rows plus one
+// row's worth of surface for a partially visible row that hangs past the
+// bottom edge. This is the row virtualization boundary — the render loop
+// visits only these indices, so an off-screen row costs its cell-rect math
+// nothing and is appended lazily as scrolling brings it into the window.
+// Callers still bounds-check per row: the trailing slack row is dropped by
+// the render loop's panel-overlap test on layouts where rows fit exactly.
+func appGridVisibleRange(total, cols, rows, firstRow int) (int, int) {
+	if cols < 1 {
+		cols = 1
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	if firstRow < 0 {
+		firstRow = 0
+	}
+	start := firstRow * cols
+	if start > total {
+		start = total
+	}
+	end := start + (rows+1)*cols
+	if end < start {
+		end = start
+	}
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
 // appGridCellRect is the tile rect for index inside the scrolled window.
 func appGridCellRect(layout appGridLayout, index, firstRow int) sdl.Rect {
 	col := int32(index % layout.cols)
@@ -517,13 +549,22 @@ func renderAppGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 
 	renderWithClip(renderer, element.X+2, element.Y+appGridHeadH-4, elemW-4, elemH-appGridHeadH, func(r *sdl.Renderer) {
-		for i, entry := range entries {
+		// Row virtualization: visit only the entry window the panel can show
+		// from `first`, so a long launcher costs the same per frame no matter
+		// how far it has scrolled. Rows outside are appended lazily as the
+		// window moves; the trailing slack row exists so a row straddling the
+		// bottom edge is still drawn, and the clip drops the pixels past it —
+		// a partial row reads as a card sliding out of the panel, not as a
+		// rendering fault, and the row above the cut stays whole.
+		panelTop := element.Y + appGridHeadH - 4
+		panelBottom := element.Y + elemH - 4
+		start, end := appGridVisibleRange(len(entries), layout.cols, rows, first)
+		for i := start; i < end; i++ {
+			entry := entries[i]
 			cell := appGridCellRect(layout, i, first)
-			// Rows are drawn whole: a card sliced by the panel edge reads as a
-			// rendering fault, and the scrollbar already says there is more.
-			// The focused tile is the exception: in a panel too short for one row
-			// it still has to be visible, so it is drawn and clipped.
-			if cell.Y < element.Y+appGridHeadH || (cell.Y+cell.H > element.Y+elemH-4 && i != focusedFileIndex) {
+			if cell.Y+cell.H <= panelTop || cell.Y >= panelBottom {
+				// Fully outside the panel — the exact-fit slack row, or window
+				// padding after a resize — is not appended this frame at all.
 				continue
 			}
 			drawAppTile(r, config, cell, entry, i == focusedFileIndex, i == hovered, labelFont, medium)

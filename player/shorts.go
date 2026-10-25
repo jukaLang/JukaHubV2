@@ -309,6 +309,12 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
+
+	// Warm the artwork like the results list does: the feed is small enough
+	// to prefetch whole, so entering the scene does not paint grey tiles.
+	for _, vid := range videos {
+		prefetchCardThumbnail(vid)
+	}
 	fontSmall, _ := getCachedFont(config, "small")
 	if fontSmall == nil {
 		fontSmall = font
@@ -331,24 +337,12 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 			fillRoundedRect(r, cellX, yPos, cellWidth, cellHeight, 12, ColorSurfaceAlt)
 			strokeRoundedRect(r, cellX, yPos, cellWidth, cellHeight, 12, 1, ColorBorder)
 
-			thumbLoaded := false
-			if vid.Thumbnail != "" {
-				tex := loadThumbnail(r, vid.Thumbnail)
-				if tex != nil {
-					r.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-					thumbLoaded = true
-				}
-			}
-			if !thumbLoaded && len(vid.Thumbnails) > 0 {
-				tex := loadThumbnailFromURLs(r, vid.Thumbnails)
-				if tex != nil {
-					r.Copy(tex, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-					thumbLoaded = true
-				}
-			}
-			if !thumbLoaded && placeholderTexture != nil {
-				r.Copy(placeholderTexture, nil, &sdl.Rect{X: xPos, Y: yPos, W: thumbWidth, H: thumbHeight})
-			}
+			// Real artwork through the shared card loader: the feed's own
+			// metadata first, then the URL-derived YouTube art — the same
+			// treatment the reader's play cards and the results list use —
+			// so a flat-playlist Shorts row without thumbnails still paints
+			// its actual frame, falling back to the shared placeholder.
+			drawThumbnail(r, config, vid, xPos, yPos, thumbWidth, thumbHeight)
 
 			drawDurationBadge(r, config, fontSmall, vid.Duration, xPos+thumbWidth-58, yPos+thumbHeight-23, 52, 18)
 			// Same preload marker as the results list: bolt plus yellow title

@@ -92,6 +92,23 @@ show their text promptly and draw any image that missed the budget as a plain
 placeholder. Laying out a very long article (1,500+ rows) takes a moment once,
 then scrolling reuses that layout.
 
+## Videos and yt-dlp playback
+
+A `<video>` element or a video-bearing embed (YouTube, Vimeo, Dailymotion,
+Twitch, or a direct `.mp4`/`.webm`/`.m3u8`/`.mkv`/`.mov` URL) stops being
+skipped markup: the reader reserves a 16:9 play card on the same row grid
+images use, with a play glyph and the video's title, and lists it among the
+page's links so the D-pad reaches it exactly like an anchor. YouTube embeds
+show the video's real thumbnail on the card — the video id maps to a URL on
+the image CDN, which the page's own image pass fetches under the same limits;
+anything else (and any failed fetch) falls back to the dark chrome card.
+
+Activating the card (tap or A) never navigates: the URL is handed to
+`playSmartURL`, which streams direct media files in the embedded player and
+sends everything else (YouTube, Twitter/X, TikTok, Instagram, Reddit, Vimeo, ...)
+through yt-dlp into the same player. An element with no resolvable source draws
+nothing at all, and a structurally non-video iframe is skipped as before.
+
 ## Controls
 
 | Input | Action |

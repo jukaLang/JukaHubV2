@@ -293,8 +293,14 @@ func refreshToolHealth() {
 			}
 			if len(installed) == 1 {
 				showToast(installed[0]+" installed — restart JukaHub to use it", ToastSuccess())
+				for _, t := range installed {
+					noteAwayToolInstalled(t)
+				}
 			} else if len(installed) > 1 {
 				showToast("Tools installed — restart JukaHub to use them", ToastSuccess())
+				for _, t := range installed {
+					noteAwayToolInstalled(t)
+				}
 			}
 			refreshToolHealth()
 		}(toFetch)

@@ -16,7 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
 )
@@ -1929,7 +1928,7 @@ func drawCCBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, siz
 // Layout of the settings sheet. The row metrics are shared by the renderer and
 // the click hit test, so a tap always lands on the row it is drawn over.
 const (
-	videoSettingsSheetRows = 4
+	videoSettingsSheetRows = 5
 	videoSettingsRowH      = int32(48)
 	videoSettingsTopPad    = int32(20)
 )
@@ -1976,6 +1975,7 @@ func drawVideoSettingsSheet(renderer *sdl.Renderer, config *Config, x, y, w, h i
 		"Subtitles: " + subState,
 		"Full screen: " + fullscreenState,
 		fmt.Sprintf("Speed: %.2gx", snapshotVideoState().speed),
+		"Quality: " + videoQualityLabel(appConfig),
 		"Close",
 	}
 	for i, label := range rows {
@@ -2198,6 +2198,8 @@ func videoSettingsActivate(idx int) {
 		}
 		SetPlaybackSpeed(next)
 	case 3:
+		cycleVideoQuality(appConfig)
+	case 4:
 		videoSettingsOpen = false
 	}
 }
@@ -2206,6 +2208,94 @@ func videoSettingsActivate(idx int) {
 // whether the key belonged to the player: a consumed key must not also scroll
 // the scene underneath the video, which is what made the grid move while a
 // video was on screen.
+// The per-video quality ladder the settings sheet cycles through. Auto defers
+// to the global playbackResolution setting; the rest pin a yt-dlp ceiling to
+// the video on screen.
+var videoQualityLadder = []int{0, 360, 480, 720, 1080}
+
+// nextVideoQualityHeight steps the quality ladder, wrapping back to Auto.
+func nextVideoQualityHeight(current int) int {
+	for i, h := range videoQualityLadder {
+		if h == current {
+			return videoQualityLadder[(i+1)%len(videoQualityLadder)]
+		}
+	}
+	return videoQualityLadder[0]
+}
+
+// videoQualityLabel is the text shown in the settings sheet's Quality row. An
+// active per-video pin names itself, otherwise the global playbackResolution
+// ceiling is reported as Auto.
+func videoQualityLabel(config *Config) string {
+	if h := videoQualityOverrideFor(currentPlaybackURL); h > 0 {
+		return fmt.Sprintf("%dp (this video)", h)
+	}
+	res := strings.TrimSpace(config.Variables.PlaybackResolution)
+	if res == "" || res == "best" {
+		return "Auto (720p)"
+	}
+	if h, err := strconv.Atoi(res); err == nil && h > 0 {
+		return fmt.Sprintf("Auto (%dp)", h)
+	}
+	return "Auto (720p)"
+}
+
+// cycleVideoQuality moves the Quality row through Auto → 360p → 480p → 720p →
+// 1080p. While a video is playing or being prepared the change replays from
+// the current position so the new ceiling is used immediately; with nothing
+// loaded it only updates the label (and a later video picks it fresh).
+func cycleVideoQuality(config *Config) {
+	url := currentPlaybackURL
+	if strings.TrimSpace(url) == "" {
+		showToast("Open a video to change quality", ToastInfo())
+		return
+	}
+	next := nextVideoQualityHeight(videoQualityOverrideFor(url))
+	setVideoQualityOverride(url, next)
+	showToast("Quality: "+videoQualityLabel(config), ToastInfo())
+	if state := snapshotVideoState(); state.phase != "idle" {
+		restartVideoAtQuality(config, url, state.progress*state.duration)
+	}
+}
+
+// restartVideoAtQuality re-resolves and replays the current page URL at its
+// position, the same prepare/stream/download flow playVideoInfo uses, but it
+// keeps the playback queue and does not record a second play event.
+func restartVideoAtQuality(config *Config, url string, pos float64) {
+	if config == nil || strings.TrimSpace(url) == "" {
+		return
+	}
+	go func() {
+		ytDlpPath, err := helperToolPath("yt-dlp", config)
+		if err != nil {
+			log.Printf("[ERROR] restartVideoAtQuality: yt-dlp unavailable: %v", err)
+			showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
+			return
+		}
+		if _, err := helperToolPath("ffmpeg", config); err != nil {
+			log.Printf("[ERROR] restartVideoAtQuality: ffmpeg unavailable: %v", err)
+			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
+			return
+		}
+		if _, err := helperToolPath("ffprobe", config); err != nil {
+			log.Printf("[DEBUG] restartVideoAtQuality: ffprobe unavailable, using defaults: %v", err)
+		}
+		// The loading card names the source the same way the top bar does.
+		prepareSeq, prepareCtx := beginVideoPrepare(sanitizeLogURL(url))
+		started, cancelled := tryStreamPlayback(prepareCtx, config, ytDlpPath, url, pos)
+		if cancelled {
+			finishVideoPrepare(prepareSeq)
+			log.Printf("[STREAM] quality restart cancelled for %s", sanitizeLogURL(url))
+			return
+		}
+		if started {
+			finishVideoPrepare(prepareSeq)
+			return
+		}
+		playWithTempFile(prepareCtx, config, ytDlpPath, url, pos, prepareSeq)
+	}()
+}
+
 func HandleVideoKeyInput(e *sdl.KeyboardEvent) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false

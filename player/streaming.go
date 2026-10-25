@@ -60,6 +60,10 @@ const streamUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/5
 type streamResolution struct {
 	direct string
 	at     time.Time
+	// height is the playback ceiling this URL was resolved at. A cached URL
+	// is only reused when the wanted ceiling matches, so switching the
+	// Quality row re-resolves instead of reusing the old resolution.
+	height int
 }
 
 var (
@@ -104,8 +108,16 @@ func streamResolutionKey(url string) string {
 	return strings.TrimSpace(url)
 }
 
-// cachedDirectStream returns a cached direct URL for a source, if still valid.
+// cachedDirectStream returns any cached direct URL for a source, if still
+// valid. Callers that only need to know "a stream URL exists" (the Play
+// fast-start check, the bolt on remote cards) use this height-agnostic form.
 func cachedDirectStream(url string) (string, bool) {
+	return cachedDirectStreamFor(url, 0)
+}
+
+// cachedDirectStreamFor returns a cached direct URL for a source when it was
+// resolved at exactly the wanted playback ceiling. height 0 accepts any entry.
+func cachedDirectStreamFor(url string, height int) (string, bool) {
 	key := streamResolutionKey(url)
 	if key == "" {
 		return "", false
@@ -120,17 +132,21 @@ func cachedDirectStream(url string) (string, bool) {
 		delete(resolvedStreams, key)
 		return "", false
 	}
+	if height > 0 && entry.height != height {
+		return "", false
+	}
 	return entry.direct, true
 }
 
-// rememberDirectStream caches a resolved URL.
-func rememberDirectStream(url, direct string) {
+// rememberDirectStream caches a resolved URL together with the playback
+// ceiling it was resolved at.
+func rememberDirectStream(url, direct string, height int) {
 	key := streamResolutionKey(url)
 	if key == "" || direct == "" {
 		return
 	}
 	resolvedStreamsMu.Lock()
-	resolvedStreams[key] = streamResolution{direct: direct, at: time.Now()}
+	resolvedStreams[key] = streamResolution{direct: direct, at: time.Now(), height: height}
 	resolvedStreamsMu.Unlock()
 	// A resolution means the video is playable again; drop any stale failure.
 	streamFailuresMu.Lock()
@@ -272,6 +288,56 @@ func playbackMaxHeight(config *Config) int {
 	return 720
 }
 
+// The per-video quality override (the Quality row in the player settings
+// sheet). It pins one yt-dlp format ceiling to the video being played while the
+// global playbackResolution keeps deciding the Auto step.
+var (
+	videoQualityMu     sync.Mutex
+	videoQualityHeight int    // yt-dlp ceiling override; 0 = follow the global setting
+	videoQualitySource string // page URL the override belongs to
+)
+
+// setVideoQualityOverride pins a ceiling to one video. The sheet edits the
+// video on screen, so an override for another source (or height 0 = Auto)
+// replaces whatever was stored.
+func setVideoQualityOverride(source string, height int) {
+	videoQualityMu.Lock()
+	videoQualitySource = source
+	videoQualityHeight = height
+	videoQualityMu.Unlock()
+}
+
+// videoQualityOverrideFor returns the pinned ceiling for this source, or 0.
+func videoQualityOverrideFor(source string) int {
+	videoQualityMu.Lock()
+	defer videoQualityMu.Unlock()
+	if videoQualityHeight > 0 && source != "" && videoQualitySource == source {
+		return videoQualityHeight
+	}
+	return 0
+}
+
+// syncVideoQualitySource forgets a previous video's override when playback of
+// a different source starts, so a pin never leaks into the next video.
+func syncVideoQualitySource(source string) {
+	videoQualityMu.Lock()
+	defer videoQualityMu.Unlock()
+	if videoQualitySource != source {
+		videoQualityHeight = 0
+		videoQualitySource = source
+	}
+}
+
+// effectivePlaybackMaxHeight picks the yt-dlp ceiling for one playback: the
+// current video's per-video override when it matches this source, otherwise
+// the global playbackResolution setting.
+func effectivePlaybackMaxHeight(config *Config, source string) int {
+	if h := videoQualityOverrideFor(source); h > 0 {
+		return h
+	}
+	return playbackMaxHeight(config)
+}
+
 // streamFailureReason picks the useful line out of yt-dlp's (noisy) stderr so a
 // failed attempt explains itself in the log instead of only "exit status 1".
 func streamFailureReason(stderr string) string {
@@ -354,11 +420,11 @@ type ytDlpURLRunner func(ctx context.Context, args []string) (string, error)
 
 // resolveDirectStream asks yt-dlp for a direct media URL, trying the client
 // strategies in order until one yields a single muxed stream.
-func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source string) (string, bool) {
+func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source string, maxHeight int) (string, bool) {
 	if ytDlpPath == "" || source == "" {
 		return "", false
 	}
-	direct, err := resolveWithRunner(ctx, source, playbackMaxHeight(config), ytDlpExtraArgsSlice(config),
+	direct, err := resolveWithRunner(ctx, source, maxHeight, ytDlpExtraArgsSlice(config),
 		func(ctx context.Context, args []string) (string, error) {
 			return ytDlpGetURL(ctx, ytDlpPath, args)
 		})
@@ -410,29 +476,28 @@ func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraA
 		lastErr = errors.New("extraction cancelled before it could run")
 	}
 	return "", lastErr
-}
-
-// streamableSource returns a URL ffmpeg can read directly, using the cache when
+} // streamableSource returns a URL ffmpeg can read directly, using the cache when
 // possible. Direct stream links (RTSP, HLS, progressive files) are used as-is.
 func streamableSource(ctx context.Context, config *Config, ytDlpPath, source string) (string, bool) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return "", false
 	}
-	if direct, ok := cachedDirectStream(source); ok {
+	height := effectivePlaybackMaxHeight(config, source)
+	if direct, ok := cachedDirectStreamFor(source, height); ok {
 		return direct, true
 	}
 	if isDirectStreamURL(source) {
-		rememberDirectStream(source, source)
+		rememberDirectStream(source, source, height)
 		return source, true
 	}
 	ctx, cancel := context.WithTimeout(ctx, streamResolveBudget)
 	defer cancel()
-	direct, ok := resolveDirectStream(ctx, config, ytDlpPath, source)
+	direct, ok := resolveDirectStream(ctx, config, ytDlpPath, source, height)
 	if !ok {
 		return "", false
 	}
-	rememberDirectStream(source, direct)
+	rememberDirectStream(source, direct, height)
 	return direct, true
 }
 
@@ -854,7 +919,7 @@ func prefetchTargets(urls []string) []string {
 			continue // a file on the card needs no resolution
 		}
 		if isDirectStreamURL(u) {
-			rememberDirectStream(u, u)
+			rememberDirectStream(u, u, 0)
 			continue
 		}
 		if _, ok := cachedDirectStream(u); ok {
@@ -1085,7 +1150,7 @@ func prefetchResolveOne(ctx context.Context, config *Config, ytDlpPath, ffprobeP
 	jobCtx, cancel := context.WithTimeout(ctx, prefetchJobBudget)
 	defer cancel()
 
-	direct, ok := resolveDirectStream(jobCtx, config, ytDlpPath, source)
+	direct, ok := resolveDirectStream(jobCtx, config, ytDlpPath, source, effectivePlaybackMaxHeight(config, source))
 	if ctx.Err() != nil {
 		return false // superseded or Play: leave the cache alone
 	}
@@ -1100,7 +1165,7 @@ func prefetchResolveOne(ctx context.Context, config *Config, ytDlpPath, ffprobeP
 			rememberStreamFailure(source)
 		}
 		return false
-	}
-	rememberDirectStream(source, direct)
+	} // Same ceiling the player will look this source up with.
+	rememberDirectStream(source, direct, effectivePlaybackMaxHeight(config, source))
 	return true
 }

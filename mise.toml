@@ -1,0 +1,7 @@
+# Toolchain pins for mise (https://mise.jdx.dev) — the same versions CI and the
+# dev container use. `mise install` in a fresh checkout is the only step needed
+# when you prefer mise over the dev container. The compiler must ALSO satisfy
+# the toolchain line in player/go.mod, which is the source of truth for builds.
+[tools]
+go = "1.26"
+node = "22"

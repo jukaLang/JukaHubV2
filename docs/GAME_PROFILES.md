@@ -93,9 +93,10 @@ load. A malformed single-profile file is skipped as a whole.
 | `schemaVersion` | yes | Must be `1` for this build. |
 | `id` | yes | Short lowercase identifier: letters, digits, `.`, `-`, `_`; max 64 characters. Also names the export and log files. |
 | `title` | no | Display name; defaults to `id`; max 120 characters. |
-| `runtime` | yes | `native`, `box64`, `wine`, or `script`. |
+| `runtime` | yes | `native`, `box64`, `wine`, `script`, or `androidpak`. |
 | `dir` | yes | Game folder. Relative paths are searched under the game roots. Absolute paths must already be inside a root. |
 | `executable` | yes | File inside `dir`; must stay inside it after symlinks are resolved. |
+| `mainLib` | no | `androidpak` only: the native entry `.so` by base name (for example `libgame.so`). Omit it to use the largest library of the best-supported ABI. |
 | `args` | no | Up to 128 arguments passed directly to the program (no shell parsing). |
 | `env` | no | Up to 64 environment variables for the game process. |
 | `display` | no | Wine display backend: `auto` (default), `x11`, `wayland`, `weston` or `headless`. |
@@ -111,6 +112,7 @@ load. A malformed single-profile file is skipped as a whole.
 | `script` | `sh <executable> <args…>` | Must be `.sh`. |
 | `box64` | `box64 <executable> <args…>` | `.sh`, `.bat`, `.cmd`, `.lnk` and `.url` are rejected. |
 | `wine` | `wine <executable> <args…>`, or `box64 wine …` when the Wine ELF is x86. | `.exe`, `.bat`, `.cmd` or `.com`. |
+| `androidpak` | The installed bionic translation runtime (`loader <apk> <args…>`, or its `launch.sh`), with the APK's native subset staged to tmpfs first. | Must be `.apk`, and the APK must ship an ABI this device runs — see [ANDROID.md](ANDROID.md). |
 
 If Wine is configured with `WINEPREFIX` in the profile's `env`, that prefix is
 used. Otherwise JukaHub creates and uses
@@ -127,6 +129,29 @@ Vulkan loader is present, JukaHub adds the DXVK DLL overrides automatically. A
 profile that already sets `WINEDLLOVERRIDES` keeps its own value. Direct3D games
 also need a Vulkan 1.3-capable driver; the setup page in Windows Apps reports
 what was detected.
+
+### AndroidPak runtime discovery
+
+`androidpak` profiles need the bionic translation runtime (bionic loader plus
+liblog/libandroid/OpenSLES shims), installed by the user or a community pack.
+JukaHub looks for it in this order:
+
+1. `JUKAHUB_ANDROIDRT` (a directory containing `loader` or `launch.sh`)
+2. `/mnt/SDCARD/Apps/AndroidRT` and `/mnt/SDCARD/Apps/androidrt`
+3. `/mnt/SDCARD/Apps/bionic-translation`
+4. `/mnt/SDCARD/PortMaster/AndroidRT`,
+   `/mnt/SDCARD/PortMaster/runtimes/androidrt`,
+   `/mnt/SDCARD/Emus/PortMaster/AndroidRT`
+5. `androidrt` on `PATH`
+
+The APK's native subset (`lib/<abi>`, `assets/`, `res/`, manifest,
+`resources.arsc`; never `classes.dex` or `META-INF`) is extracted into
+`$TMPDIR/jukahub-android/pak-<id>` before launch — bounded at 512 MiB — and
+the runtime receives `ANDROIDPAK_APK`, `ANDROIDPAK_STAGED`,
+`ANDROIDPAK_MAINLIB`, `ANDROIDPAK_ABIS` and `ANDROIDPAK_RT`. Set
+`JUKAHUB_ANDROID_STAGE` to relocate the staging area. A profile without the
+runtime stays listed as Unavailable with the exact reason, and the staged tree
+is deleted after the game exits.
 
 ### Game roots
 

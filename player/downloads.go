@@ -510,6 +510,7 @@ func downloadsWorker() {
 
 		if justSaved {
 			ShowToast("Saved "+title, ToastKindSuccess)
+			noteAwayDownloadSaved(title)
 		}
 	}
 }

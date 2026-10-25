@@ -1355,7 +1355,7 @@ func vkTriggerSceneSearch(config *Config) {
 	if q, _ := config.Variables.Custom["search_query"].(string); strings.TrimSpace(q) == "" {
 		return
 	}
-	go executeYouTubeSearch(config, ytSearchCmd(config), "search_results", snapshotVars(config))
+	executeYouTubeSearch(config, ytSearchCmd(config), "search_results", snapshotVars(config))
 }
 
 // toggleKeyboardCase flips letter case without losing the focused key.

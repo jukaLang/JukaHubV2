@@ -163,6 +163,10 @@
                 <div class="guide-body">
                     <h3 class="guide-section-title">Quick start</h3>
                     <div class="welcome-quick-starts">
+                        <button type="button" class="welcome-card welcome-card-demo" data-start="demo">
+                            <span class="welcome-card-title"><i class="fas fa-gamepad" aria-hidden="true"></i> 60-second demo</span>
+                            <span class="welcome-card-desc">See the shell running now — arrow keys act as the D-pad, no handheld needed.</span>
+                        </button>
                         <button type="button" class="welcome-card" data-start="blank">
                             <span class="welcome-card-title"><i class="fas fa-file" aria-hidden="true"></i> Start blank</span>
                             <span class="welcome-card-desc">Build a fresh interface from scratch on this device.</span>
@@ -914,6 +918,9 @@
     <div id="previewBar" class="preview-bar" role="toolbar" aria-label="Preview controls" hidden>
         <div class="preview-bar-info">
             <span class="preview-chip" id="previewDevice">1280 × 720</span>
+            <span class="preview-chip preview-hint" title="A · select · B · Backspace · Start/Select+Shift arrows: scene">
+                <i class="fas fa-gamepad" aria-hidden="true"></i> D-pad: arrows · A: Enter · B: Backspace
+            </span>
             <span id="previewSceneLabel" class="preview-scene-label" aria-live="polite">Scene 1</span>
             <span id="previewScale" class="preview-scale">100%</span>
         </div>

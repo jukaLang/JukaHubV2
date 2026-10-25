@@ -242,7 +242,7 @@ func loadMoreMediaResults(config *Config) bool {
 	next := state.page + 1
 	command := buildMediaPageCommand(state.command, state.pageSize, next)
 	markMediaPageRequested(element.Variable, next)
-	go executeYouTubeSearchPage(config, command, element.Variable, snapshotVars(config), true)
+	executeYouTubeSearchPage(config, command, element.Variable, snapshotVars(config), true)
 	return true
 }
 

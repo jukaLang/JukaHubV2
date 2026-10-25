@@ -890,6 +890,7 @@ func retryHelperToolInstall(tool string) {
 			return
 		}
 		ShowToast(tool+" installed — restart JukaHub to use it", ToastKindSuccess)
+		noteAwayToolInstalled(tool)
 		refreshToolHealth()
 	}()
 }

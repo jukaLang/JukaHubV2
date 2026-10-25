@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"log"
 	"os"
 	"runtime"
@@ -341,6 +342,7 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		ClearTextCache()
 		// Shape textures hold the palette in their pixels just like text does.
 		ClearShapeCache()
+		ClearIconAtlas()
 		// The gradient textures are the largest cached surfaces — free first.
 		ClearBgGradientCache()
 		clearHomeTextCache()
@@ -406,4 +408,53 @@ func LogDeviceDiagnostics() {
 	log.Printf("[tex] startup: total=%d MB (text=%d, labels=%d, thumbs=%d, video-overlay=%d, frame=%d, ui-layer=%d)",
 		s.Total()>>20, s.TextCache>>20, s.HomeText>>20, s.Thumbnails>>20, s.VideoOverlay>>20, s.VideoFrame>>20, s.UILayer>>20)
 	log.Printf("[tex] thumbnail texture budget: %d MB", thumbnailTextureBudgetBytes()>>20)
+}
+
+// renderPipeline is the one startup snapshot of what SDL actually handed us:
+// the video backend in use, the 2D renderer and where its cost lands, and the
+// largest texture the device accepts. On the A133P these four fields are the
+// whole story of whether the shell runs on the GE8300 or silently fell back
+// to software, which is why they are captured in one place and logged verbatim
+// rather than inferred elsewhere.
+type renderPipeline struct {
+	VideoDriver  string
+	Renderer     string
+	Acceleration string // "gpu" or "software"
+	MaxTexture   string // "WxH", or "unknown" when the query fails
+}
+
+// renderPipelineInfo reads the facts out of SDL. Extracted so the device
+// build's values (and the software fallback path) can be verified against a
+// real renderer in tests instead of only being eyeballed in a boot log.
+func renderPipelineInfo(renderer *sdl.Renderer) renderPipeline {
+	p := renderPipeline{Acceleration: "unknown", MaxTexture: "unknown"}
+	p.VideoDriver = "unknown"
+	if drv, err := sdl.GetCurrentVideoDriver(); err == nil {
+		p.VideoDriver = drv
+	}
+	if renderer == nil {
+		return p
+	}
+	if info, err := renderer.GetInfo(); err == nil {
+		p.Renderer = info.Name
+		p.MaxTexture = fmt.Sprintf("%dx%d", info.MaxTextureWidth, info.MaxTextureHeight)
+		if info.Flags&sdl.RENDERER_SOFTWARE != 0 {
+			p.Acceleration = "software"
+		} else if info.Flags&sdl.RENDERER_ACCELERATED != 0 {
+			p.Acceleration = "gpu"
+		}
+	}
+	return p
+}
+
+// logRenderPipeline fires the structured "render pipeline" log line from the
+// fact gathering above.
+func logRenderPipeline(renderer *sdl.Renderer) {
+	p := renderPipelineInfo(renderer)
+	Log().Info("render pipeline",
+		"video_driver", p.VideoDriver,
+		"renderer", p.Renderer,
+		"acceleration", p.Acceleration,
+		"max_texture", p.MaxTexture,
+	)
 }

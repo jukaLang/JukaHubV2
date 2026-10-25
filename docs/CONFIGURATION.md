@@ -182,6 +182,22 @@ literal `$name` so a typo is visible rather than silently empty.
 | `layout` | `"home"` switches to the tile home layout; empty is the standard panel layout |
 | `elements` | the widgets on the screen |
 
+### The home screen (`layout: "home"`)
+
+The `Main` scene's `style: "tile"` buttons **are** the home menu cards: each
+tile's `text`, `x`, `y`, `width`, `height`, `placeholder` (the card subtitle)
+and `icon` customize the card that carries the same name — Continue, Media,
+Files, Packages, Apps, Favorites, Browser, Chat, Tools, Emulator, Settings
+and Exit. Editing a tile (or hot-reloading the config) moves, resizes, renames
+and re-icons the card on the next frame; `trigger` keeps controlling what the
+card opens. Coordinates are declared on the 1280×720 design canvas and are
+scaled (including the 4:3 handheld profile) like every other scene's
+geometry. A tile that names no card is ignored, and geometry outside the
+canvas or without a positive size falls back to the built-in card instead of
+appearing broken. The header cluster (network, weather, clock, update,
+notifications) is system chrome re-measured every frame and is not
+config-customizable.
+
 ## `elements`
 
 | Field | Type | Notes |

@@ -43,10 +43,11 @@ import (
 // dominating; the total budget keeps a page of hero banners from doing it via
 // volume instead.
 const (
-	webMaxImagesPerPage  = 16
-	webMaxImageBytes     = 1 << 20 // 1 MiB per image
-	webMaxImagesBytes    = 4 << 20 // 4 MiB of images per page
-	webImageFetchTimeout = 8 * time.Second
+	webMaxImagesPerPage      = 16
+	webMaxImageBytes         = 1 << 20 // 1 MiB per image
+	webMaxImagesBytes        = 4 << 20 // 4 MiB of images per page
+	webMaxVideoThumbsPerPage = 8       // one page never fetches more video thumbnails
+	webImageFetchTimeout     = 8 * time.Second
 	// webImagePassTimeout bounds the whole image pass, not one image. The page
 	// text is published after this pass, so a page of slow hero banners must
 	// not keep the reader on the loading card for eight seconds each; anything
@@ -260,6 +261,22 @@ func fetchWebImages(doc *webDocument) {
 		seen[b.ImageSrc] = true
 		srcs = append(srcs, b.ImageSrc)
 	}
+	// Video play cards (YouTube embeds) carry a thumbnail URL on the block;
+	// the same pass fetches it so a card paints the video's real artwork with
+	// no extra round-trips beyond what <img> already paid.
+	thumbSrcs := make([]string, 0, webMaxVideoThumbsPerPage)
+	thumbSeen := make(map[string]bool)
+	for _, b := range doc.Blocks {
+		if !b.Video || b.VideoThumb == "" || thumbSeen[b.VideoThumb] {
+			continue
+		}
+		if len(thumbSrcs) >= webMaxVideoThumbsPerPage {
+			break
+		}
+		thumbSeen[b.VideoThumb] = true
+		thumbSrcs = append(thumbSrcs, b.VideoThumb)
+	}
+	srcs = append(srcs, thumbSrcs...)
 	if len(srcs) == 0 {
 		return
 	}
@@ -469,6 +486,29 @@ func drawWebImage(r *sdl.Renderer, config *Config, doc *webDocument, im webImage
 	if err := r.Copy(tex, nil, &rect); err != nil {
 		drawWebImagePlaceholder(r, config, rect)
 	}
+}
+
+// copyWebImageCover blits one texture across an image/video card, cropping
+// its center rectangle so a narrower source covers the target without
+// letterboxing.
+func copyWebImageCover(r *sdl.Renderer, tex *sdl.Texture, rect sdl.Rect) {
+	tw, th := int32(0), int32(0)
+	if _, _, qw, qh, qerr := tex.Query(); qerr == nil {
+		tw, th = qw, qh
+	}
+	var src *sdl.Rect
+	if tw > 0 && th > 0 {
+		targetAspect := float64(rect.W) / float64(rect.H)
+		srcAspect := float64(tw) / float64(th)
+		if srcAspect > targetAspect { // source too wide: crop its sides
+			sw := int32(float64(th)*targetAspect + 0.5)
+			src = &sdl.Rect{X: (tw - sw) / 2, Y: 0, W: sw, H: th}
+		} else if srcAspect < targetAspect { // source too tall: crop top/bottom
+			sh := int32(float64(tw)/targetAspect + 0.5)
+			src = &sdl.Rect{X: 0, Y: (th - sh) / 2, W: tw, H: sh}
+		}
+	}
+	_ = r.Copy(tex, src, &rect)
 }
 
 // drawWebImagePlaceholder fills a failed image's reserved box with quiet

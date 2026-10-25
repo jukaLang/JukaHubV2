@@ -241,6 +241,7 @@ func a11yRefreshFonts() {
 	resetButtonFitCache()
 	ClearTextCache()
 	ClearShapeCache()
+	ClearIconAtlas()
 	clearHomeTextCache()
 }
 

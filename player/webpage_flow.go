@@ -27,7 +27,7 @@ type flexCell struct {
 // wrapper element with no text of its own would otherwise claim a whole empty
 // column and squeeze the content next to it.
 func webItemVisible(b webBlock) bool {
-	if len(b.Runs) > 0 || b.Rule || b.Image {
+	if len(b.Runs) > 0 || b.Rule || b.Image || b.Video {
 		return true
 	}
 	return b.HasBg || b.BoxBorder || b.BorderLeft || b.BorderTop || b.BorderBottom

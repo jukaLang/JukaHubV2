@@ -1174,6 +1174,25 @@ body.preview-mode .element {
   box-shadow: none !important;
 }
 
+/* The D-pad focus ring. Deliberately loud: this is the one visual that says
+   "these arrows control the shell", the same colour the device uses for its
+   focused tile. */
+body.preview-mode .element.preview-focus {
+  outline: 4px solid var(--primary, #4f8cff) !important;
+  outline-offset: -4px;
+  box-shadow: 0 0 0 6px rgba(79, 140, 255, 0.25) !important;
+}
+
+.preview-hint {
+  color: var(--text-muted, #9aa5b5);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+
+.welcome-card-demo .welcome-card-title {
+  color: var(--primary, #4f8cff);
+}
+
 body.preview-mode .element:hover {
   box-shadow: none !important;
 }

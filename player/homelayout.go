@@ -209,6 +209,106 @@ func (h *HomeLayout) rebuildItems() {
 		sdl.Rect{X: 8, Y: 678, W: 116, H: 36})
 }
 
+// homeConfigOverlayables lists the HomeFocusID header chips whose drawn rect
+// is replaced with the measured status text every frame (drawHeader). A config
+// tile carrying one of their titles must not fight the live geometry, so they
+// are never overridable from jukaconfig.json.
+func homeConfigOverlayables() map[HomeFocusID]bool {
+	return map[HomeFocusID]bool{
+		// Header chips are drawn from the measured status cluster every frame
+		// and never from jukaconfig.json.
+		HomeFocusClock:      false,
+		HomeFocusWeather:    false,
+		HomeFocusUpdate:     false,
+		HomeFocusBell:       false,
+		HomeFocusNowPlaying: false,
+		HomeFocusWiFi:       false,
+		HomeFocusPS4:        false,
+		HomeFocusPS5:        false,
+		// The menu cards + the Exit chip are fully config-driven.
+		HomeFocusContinue:  true,
+		HomeFocusMedia:     true,
+		HomeFocusFiles:     true,
+		HomeFocusPackages:  true,
+		HomeFocusApps:      true,
+		HomeFocusFavorites: true,
+		HomeFocusBrowser:   true,
+		HomeFocusChat:      true,
+		HomeFocusTools:     true,
+		HomeFocusEmulator:  true,
+		HomeFocusSettings:  true,
+		HomeFocusExit:      true,
+	}
+}
+
+// ApplyConfig makes jukaconfig.json authoritative over the built-in home card
+// layout: every Main-scene element of type "button" whose text names one of
+// the home items is applied whole — position, size, title, and (when set)
+// subtitle (placeholder) and icon. This used to be the other way round: the
+// cards were hardcoded in rebuildItems and the config's Main tiles only chose
+// where each card navigated, so editing jukaconfig.json moved nothing on
+// screen and the shipped tile grid matched nothing anybody ever saw.
+//
+// The element coordinates are canvas-space, exactly like every other scene's
+// elements (the compact-device profile scales them at load); geometry outside
+// the canvas or with a zero/negative size is ignored and the built-in card
+// keeps its slot instead. Header chips are excluded (homeConfigOverlayable)
+// because their rects are re-measured underneath this call every frame.
+func (h *HomeLayout) ApplyConfig(elements []Element) {
+	if h == nil {
+		return
+	}
+	overlayable := homeConfigOverlayables()
+	for _, el := range elements {
+		title := strings.TrimSpace(el.Text)
+		if title == "" {
+			continue
+		}
+		id := h.configItemFor(title)
+		if id == "" || !overlayable[id] {
+			continue
+		}
+		item := h.Items[id]
+		w, hatW := parsePosInt(strings.TrimSpace(string(el.Width)))
+		hgt, hatH := parsePosInt(strings.TrimSpace(string(el.Height)))
+		if hatW && hatH && w > 0 && hgt > 0 {
+			rect := sdl.Rect{X: el.X, Y: el.Y, W: w, H: hgt}
+			if rect.X >= 0 && rect.Y >= 0 &&
+				rect.X+rect.W <= h.Width && rect.Y+rect.H <= h.Height {
+				item.Rect = rect
+			}
+		}
+		item.Title = title
+		if sub := strings.TrimSpace(el.Placeholder); sub != "" {
+			item.Subtitle = sub
+		}
+		if icon := strings.TrimSpace(el.Icon); icon != "" {
+			item.Icon = icon
+		}
+		h.Items[id] = item
+	}
+}
+
+// configItemFor maps a config tile's text to the home item it customizes, with
+// the same leniency tile triggers have always matched with: an exact (case
+// insensitive) title, or any title containing "tools" naming the Tools card —
+// the shipped config spells that row "Search / Tools".
+func (h *HomeLayout) configItemFor(title string) HomeFocusID {
+	for _, id := range h.Order {
+		item, ok := h.Items[id]
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(item.Title), title) {
+			return id
+		}
+	}
+	if strings.Contains(strings.ToLower(title), "tools") {
+		return HomeFocusTools
+	}
+	return ""
+}
+
 func (h *HomeLayout) CurrentItem() HomeItem {
 	if h == nil {
 		return HomeItem{}
@@ -878,7 +978,14 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 		labelColor = ColorAccent
 	}
 	labelY := rect.Y + scaleY(24, h.Height) + offsetY
-	drawText(renderer, fonts.Small, "CONTINUE", rect.X+pad, labelY, labelColor, textAlignLeft)
+	// The label and icon come from the card itself, which jukaconfig.json
+	// customizes (ApplyConfig): a config that rebrands the Continue card
+	// changes this label, not the hardcoded default.
+	label := strings.ToUpper(strings.TrimSpace(item.Title))
+	if label == "" {
+		label = "CONTINUE"
+	}
+	drawText(renderer, fonts.Small, label, rect.X+pad, labelY, labelColor, textAlignLeft)
 
 	// 64x64 icon tile at top-right.
 	iconSize := min32(scaleX(64, h.Width), scaleY(64, h.Height))
@@ -888,7 +995,7 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 		W: iconSize, H: iconSize,
 	}
 	glyph := DrawIconTile(renderer, iconTile, focused)
-	DrawHomeIcon(renderer, "continue", glyph, focused)
+	DrawHomeIcon(renderer, item.Icon, glyph, focused)
 
 	title := strings.TrimSpace(state.Title)
 	subtitle := strings.TrimSpace(state.Subtitle)
@@ -998,8 +1105,16 @@ func (h *HomeLayout) drawChipButton(renderer *sdl.Renderer, fonts HomeFonts, ite
 	iconRect := sdl.Rect{X: rect.X + 12, Y: rect.Y + (rect.H-glyph)/2, W: glyph, H: glyph}
 	DrawHomeIcon(renderer, item.Icon, iconRect, focused)
 
-	labelX := iconRect.X + iconRect.W + 8
-	drawText(renderer, fonts.Small, item.Title, labelX,
+	// The label is ellipsized to the space left of the glyph: a config can
+	// rename this chip (item.Title), and an unmetered label would overflow
+	// the pill it is drawn in.
+	labelX := iconRect.X + iconRect.W + scaleX(8, h.Width)
+	maxLabelW := rect.X + rect.W - scaleX(10, h.Width) - labelX
+	if maxLabelW < scaleY(12, h.Height) {
+		maxLabelW = scaleY(12, h.Height)
+	}
+	chipLabel := ellipsize(fonts.Small, item.Title, maxLabelW)
+	drawText(renderer, fonts.Small, chipLabel, labelX,
 		rect.Y+(rect.H-int32(fonts.Small.Height()))/2, fg, textAlignLeft)
 }
 
@@ -1323,11 +1438,30 @@ func DrawIconTile(renderer *sdl.Renderer, rect sdl.Rect, focused bool) sdl.Rect 
 // DrawHomeIcon renders one monochrome geometric glyph inside the given glyph
 // box (32x32 at native size). Every glyph is built from filled shapes and
 // 3px-equivalent strokes so the set reads with one consistent visual weight.
+//
+// The glyph is served from the icon atlas: each (name, focused) pair is drawn
+// once at the canonical 32px and later occurrences are Copy-blits of that
+// strip's sub-rect — one texture bind for the frame's icons instead of one
+// bind per primitive. Renderers without render targets, and degenerate boxes,
+// paint the primitives directly under the same painter.
 func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bool) {
 	// Icon keys may arrive from several sources; normalize so a card can
 	// never silently miss its glyph.
 	name = strings.ToLower(strings.TrimSpace(name))
 
+	if homeIconAtlas.blit(renderer, name, focused, rect) {
+		return
+	}
+	homeIconAtlas.directPaint()
+	drawHomeIconShapes(renderer, name, rect.X, rect.Y, rect.W, rect.H, focused)
+}
+
+// drawHomeIconShapes paints the named glyph directly with renderer primitives
+// at (x, y), inside a w×h box. DrawHomeIcon calls it as the atlas fallback, and
+// the atlas calls it to bake a glyph into the strip. The colour context is
+// theme state plus `focused`, so the strip's pixels are exactly what the direct
+// painter produced.
+func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, focused bool) {
 	color := ColorTextPrimary()
 	if focused {
 		color = ColorIconDark
@@ -1335,31 +1469,29 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	setDrawColor(renderer, color)
 
-	w := rect.W
-	h := rect.H
-	cx := rect.X + w/2
-	cy := rect.Y + h/2
+	cx := x + w/2
+	cy := y + h/2
 
 	switch name {
 	case "media", "continue":
 		// Play triangle inside a rounded frame.
-		strokeRoundedRect(renderer, rect.X, rect.Y, w, h, 7, 3, color)
+		strokeRoundedRect(renderer, x, y, w, h, 7, 3, color)
 		fillTriangleFilled(renderer,
 			pt{x: cx - w/5, y: cy - h/4},
 			pt{x: cx - w/5, y: cy + h/4},
 			pt{x: cx + w/4, y: cy}, color)
 	case "files":
 		// Filled folder: body + tab.
-		body := sdl.Rect{X: rect.X + w/8, Y: rect.Y + h/3, W: w - w/4, H: h / 2}
+		body := sdl.Rect{X: x + w/8, Y: y + h/3, W: w - w/4, H: h / 2}
 		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, 4, color)
-		tab := sdl.Rect{X: rect.X + w/8, Y: rect.Y + h/6, W: w/2 - w/8, H: h / 5}
+		tab := sdl.Rect{X: x + w/8, Y: y + h/6, W: w/2 - w/8, H: h / 5}
 		fillRoundedRect(renderer, tab.X, tab.Y, tab.W, tab.H, 2, color)
 	case "packages":
 		// Filled isometric cube: front, top, and right faces.
-		front := sdl.Rect{X: rect.X + w/6, Y: rect.Y + h/3, W: w - w/3, H: h / 2}
+		front := sdl.Rect{X: x + w/6, Y: y + h/3, W: w - w/3, H: h / 2}
 		fillRoundedRect(renderer, front.X, front.Y, front.W, front.H, 3, color)
-		topRight := pt{x: rect.X + rect.W - w/6, y: rect.Y + h/6}
-		topLeft := pt{x: rect.X + w/4, y: rect.Y + h/6}
+		topRight := pt{x: x + w - w/6, y: y + h/6}
+		topLeft := pt{x: x + w/4, y: y + h/6}
 		fillQuad(renderer,
 			pt{x: front.X, y: front.Y},
 			pt{x: front.X + front.W, y: front.Y},
@@ -1376,8 +1508,8 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 		cell := max32(6, w/3) // 10 at native size
 		gap := max32(5, w/8)  // 5 at native size
 		total := cell*2 + gap
-		startX := rect.X + (w-total)/2
-		startY := rect.Y + (h-total)/2
+		startX := x + (w-total)/2
+		startY := y + (h-total)/2
 		for row := int32(0); row < 2; row++ {
 			for col := int32(0); col < 2; col++ {
 				r := sdl.Rect{
@@ -1403,23 +1535,23 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 				t := float64(i)/float64(steps)*2 - 1
 				yy := int32(float64(r) * t)
 				wid := int32(math.Sqrt(float64(r*r - yy*yy)))
-				x := cx + dx*wid/r
-				renderer.DrawPoint(x, cy+yy)
+				px := cx + dx*wid/r
+				renderer.DrawPoint(px, cy+yy)
 			}
 		}
 	case "chat":
 		// Filled speech bubble with a tail.
-		bubble := sdl.Rect{X: rect.X + w/10, Y: rect.Y + h/8, W: w - w/5, H: h / 2}
+		bubble := sdl.Rect{X: x + w/10, Y: y + h/8, W: w - w/5, H: h / 2}
 		fillRoundedRect(renderer, bubble.X, bubble.Y, bubble.W, bubble.H, 7, color)
 		tailTop := bubble.Y + bubble.H - 3
 		fillTriangleFilled(renderer,
 			pt{x: cx - w/8, y: tailTop},
-			pt{x: cx - w/8 - w/6, y: rect.Y + h - h/8},
+			pt{x: cx - w/8 - w/6, y: y + h - h/8},
 			pt{x: cx + w/10, y: tailTop}, color)
 	case "tools":
 		// Three filled slider tracks with knobs.
 		trackW := w - w/4
-		trackX := rect.X + w/8
+		trackX := x + w/8
 		tracks := []int32{cy - h/4, cy, cy + h/4}
 		knobs := []int32{trackX + trackW*2/5, trackX + trackW*3/5, trackX + trackW/4}
 		for i, ty := range tracks {
@@ -1445,10 +1577,10 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 		// Gamepad: a rounded body with two grips, a d-pad and two buttons. At
 		// tile size the silhouette is what reads; the details are cut-outs in
 		// the tile's own surface colour.
-		body := sdl.Rect{X: rect.X + w/12, Y: rect.Y + h/3, W: w - w/6, H: h / 3}
+		body := sdl.Rect{X: x + w/12, Y: y + h/3, W: w - w/6, H: h / 3}
 		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, body.H/2, color)
-		fillCircle(renderer, rect.X+w/4, rect.Y+h*2/3, w/9, color)
-		fillCircle(renderer, rect.X+w-w/4, rect.Y+h*2/3, w/9, color)
+		fillCircle(renderer, x+w/4, y+h*2/3, w/9, color)
+		fillCircle(renderer, x+w-w/4, y+h*2/3, w/9, color)
 		cut := ColorIconSurface
 		if focused {
 			cut = ColorAccent
@@ -1465,11 +1597,11 @@ func DrawHomeIcon(renderer *sdl.Renderer, name string, rect sdl.Rect, focused bo
 		}
 		fillCircle(renderer, cx, cy, w/3, color)
 		fillCircle(renderer, cx, cy, w/6, tileBG)
-		fillRoundedRect(renderer, cx-2, rect.Y, 4, h/2, 2, color)
+		fillRoundedRect(renderer, cx-2, y, 4, h/2, 2, color)
 	case "back":
 		// Left-pointing arrow head.
 		fillTriangleFilled(renderer,
-			pt{x: rect.X + w/5, y: cy},
+			pt{x: x + w/5, y: cy},
 			pt{x: cx + w/8, y: cy - h/3},
 			pt{x: cx + w/8, y: cy + h/3}, color)
 	default:

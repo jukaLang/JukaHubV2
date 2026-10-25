@@ -237,6 +237,14 @@ runSceneTask(func(ctx context.Context) {
 })
 ```
 
+The yt-dlp media searches joined the same scope: `executeYouTubeSearch` and
+`executeYouTubeSearchPage` spawn their worker through `runSceneTask`
+(`executeYouTubeSearchContext`), so a search or a Shorts fetch belongs to the
+screen that shows its list. A scene transition cancels the run, kills the
+extractor process through `exec.CommandContext` and publishes nothing into the
+next screen — before this, leaving while a search loaded left yt-dlp running
+behind the home screen, with its results landing there afterwards.
+
 Rules that keep it honest:
 
 - pass `ctx` into the request (`httpGetTextContext`, `fetchURLContext`,

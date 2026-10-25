@@ -1,0 +1,28 @@
+# CODEOWNERS — who reviews what by default.
+#
+# PRs touching @jukaLang-owned paths auto-request a review so a new
+# contributor's change never lands silent. Keep the root rules broad: review
+# follows the default owner until a second active maintainer joins (roadmap
+# item 23, contributor ladder).
+#
+# Sorted so the *last* matching pattern wins — put broader rules above narrow ones.
+
+# Everything defaults to the repo owner.
+*                               @jukaLang
+
+# Release engineering gates the release scripts separately from player code.
+/release.sh                     @jukaLang
+/player/release.sh              @jukaLang
+/player/release_sign.go         @jukaLang
+/player/tools/                  @jukaLang
+
+# CI and templates change what every PR has to satisfy.
+/.github/                       @jukaLang
+
+# The shipped configs are the app's UI: a bad jukaconfig.json ships to every device.
+/player/jukaconfig.json         @jukaLang
+/player/trimui/                 @jukaLang
+
+# Vendored code stays untouched by bots: Dependabot is pinned to gomod only,
+# and any PR here needs the same review as player code.
+/player/vendor/                 @jukaLang

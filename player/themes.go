@@ -844,6 +844,7 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 	// ages them out.
 	ClearTextCache()
 	ClearShapeCache()
+	ClearIconAtlas()
 	clearHomeTextCache()
 	// The shared snapshot keeps Quick Settings levels and every other persisted
 	// field intact when the theme changes.

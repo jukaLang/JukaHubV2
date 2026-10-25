@@ -7,6 +7,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -304,5 +307,134 @@ func TestSceneExitStopsThePodcastFetch(t *testing.T) {
 	}
 	if got := served.Load(); got != 1 {
 		t.Fatalf("server saw %d requests, want only the cancelled first feed", got)
+	}
+}
+
+// The yt-dlp searches (results, Shorts, trending, paging) belong to the scene
+// their list is shown on. executeYouTubeSearchContext must refuse to start
+// work for a scope that is already dead: no wipe of the previous screen's
+// results, no error line, no spinner.
+func TestMediaSearchContextSkipsADeadSceneScope(t *testing.T) {
+	config := layoutTestConfig(t)
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		executeYouTubeSearchContext(parent, config,
+			`yt-dlp --flat-playlist --dump-single-json "ytsearch10:shorts"`,
+			"shorts_list", snapshotVars(config), false)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a dead scene scope must not start a search run (it must return, not wait out the tool path resolution)")
+	}
+	drainCustom(config)
+	if msg, ok := config.Variables.Custom["search_error"]; ok && msg != nil {
+		t.Errorf("dead scope published an error line: %v", msg)
+	}
+	if config.Variables.LoadingSpinner {
+		t.Error("dead scope left the loading spinner raised")
+	}
+}
+
+// TestYtDlpSceneHelperProcess is the fake yt-dlp the cancel test below runs:
+// a copy of the test binary parked on a marker-write plus a long sleep, so the
+// cancellation has a real child process to kill. The gate is in the env so a
+// normal test run only ever kills it, never lets it finish.
+func TestYtDlpSceneHelperProcess(t *testing.T) {
+	if os.Getenv("JUKAHUB_YTDLP_SCENE_HELPER") != "1" {
+		t.Skip("helper process for TestSceneLeaveCancelsRunningYtDlpSearch")
+	}
+	if marker := os.Getenv("JUKAHUB_YTDLP_SCENE_MARKER"); marker != "" {
+		_ = os.WriteFile(marker, []byte("started"), 0o644)
+	}
+	time.Sleep(60 * time.Second)
+}
+
+// The wiring end to end: a yt-dlp search in flight on the Shorts scene dies
+// when the scene is left — the child process is killed instead of the tool
+// finishing 60 s later behind the home screen, nothing is published into the
+// next screen, and the spinner is released.
+func TestSceneLeaveCancelsRunningYtDlpSearch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("spawns a helper process")
+	}
+	config, err := loadConfig("jukaconfig.json")
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+
+	// The fake yt-dlp is a copy of this test binary: helperExecutable resolves
+	// by Stat, so the copy is "installed", and exec runs it with the helper's
+	// env inheritance (helperToolEnv keeps os.Environ).
+	toolsDir := t.TempDir()
+	exe := "yt-dlp"
+	if runtime.GOOS == "windows" {
+		exe += ".exe"
+	}
+	fake := filepath.Join(toolsDir, exe)
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatalf("read test binary for the fake yt-dlp: %v", err)
+	}
+	if err := os.WriteFile(fake, self, 0o755); err != nil {
+		t.Fatalf("stage fake yt-dlp: %v", err)
+	}
+
+	marker := filepath.Join(t.TempDir(), "helper-started")
+	t.Setenv("JUKAHUB_YTDLP_SCENE_HELPER", "1")
+	t.Setenv("JUKAHUB_YTDLP_SCENE_MARKER", marker)
+	config.Variables.ToolsPath = toolsDir
+
+	sceneWork = sceneWorkManager{}
+	defer func() { sceneWork = sceneWorkManager{} }()
+	enterSceneWork("Shorts")
+
+	drainCustomForTest()
+	command := "yt-dlp -test.run=TestYtDlpSceneHelper"
+	vars := snapshotVars(config)
+	// The shipped config may carry a playback-resolution cap, which appends
+	// yt-dlp flags the helper does not know; the mechanism under test is
+	// scene membership, not option building.
+	vars["PlaybackResolution"] = ""
+	executeYouTubeSearch(config, command, "shorts_list", vars)
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the fake yt-dlp never started; the search was not visited as scene work")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	enterSceneWork("Home") // leave the scene: the in-flight search must die
+	diedBy := time.Now().Add(5 * time.Second)
+	for {
+		mediaSearchMu.Lock()
+		busy := mediaSearchBusy
+		mediaSearchMu.Unlock()
+		if busy == 0 {
+			break
+		}
+		if time.Now().After(diedBy) {
+			t.Fatal("the yt-dlp search kept running after the scene was left")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	drainCustom(config)
+	if config.Variables.LoadingSpinner {
+		t.Error("loading spinner left raised after the cancelled search")
+	}
+	if got, ok := config.Variables.Custom["shorts_list"]; ok {
+		if _, isVideos := got.([]VideoInfo); isVideos {
+			t.Errorf("a cancelled search published results into the next scene: %d entries", len(got.([]VideoInfo)))
+		}
 	}
 }

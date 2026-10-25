@@ -935,6 +935,100 @@ function previewStep(delta) {
   previewGoTo(names[next]);
 }
 
+// --- D-pad + controller emulation (preview only) -------------------------
+// The device shell: arrows move a focus ring, Enter tests “A”, Backspace plays
+// “B” (goes back one scene). No focusable elements or user just wants pages:
+// Shift+left/right left/right walk the scenes like the device menu did before.
+let previewFocusEl = null;
+const previewSceneHistory = [];
+
+function previewFocusableElements() {
+  return Array.from(canvas.querySelectorAll('.element')).filter(el => {
+    const trigger = (el.getAttribute('data-trigger') || '').trim();
+    const target = (el.getAttribute('data-scene-change') || '').trim();
+    return trigger !== '' || target !== '';
+  });
+}
+
+function previewCenter(el) {
+  const rect = el.getBoundingClientRect();
+  return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+}
+
+// Nearest focusable in the pressed direction, renderer-style: prefer a member
+// that has a clear screen-edge in the direction, tie breakers closest to center.
+function previewFocusNeighbour(dir) {
+  const candidates = previewFocusableElements().filter(el => el !== previewFocusEl);
+  if (candidates.length === 0) return null;
+  let best = null;
+  let bestScore = Infinity;
+  for (const el of candidates) {
+    const a = previewCenter(previewFocusEl || el);
+    const b = previewCenter(el);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const axis = dir === 'ArrowLeft' ? -dx : dir === 'ArrowRight' ? dx : dir === 'ArrowUp' ? -dy : dy;
+    const cross = dir === 'ArrowLeft' || dir === 'ArrowRight' ? Math.abs(dy) : Math.abs(dx);
+    if (axis <= 0) continue;
+    const score = cross * 1000 + axis;
+    if (score < bestScore) { bestScore = score; best = el; }
+  }
+  return best;
+}
+
+function previewFocusSet(el) {
+  if (previewFocusEl && previewFocusEl !== el) previewFocusEl.classList.remove('preview-focus');
+  previewFocusEl = el || null;
+  if (previewFocusEl) previewFocusEl.classList.add('preview-focus');
+}
+
+function previewFocusClear() {
+  if (previewFocusEl) previewFocusEl.classList.remove('preview-focus');
+  previewFocusEl = null;
+}
+
+function previewDpadMove(dir) {
+  if (!previewFocusEl) {
+    const first = previewFocusableElements()[0];
+    if (!first) return false;
+    previewFocusSet(first);
+    return true;
+  }
+  const next = previewFocusNeighbour(dir);
+  if (next) previewFocusSet(next);
+  return true;
+}
+
+// Re-focus after a scene loads. The first focusable is highlighted so there is
+// always something the room's visitor can press Enter on.
+function previewFocusReset() {
+  previewFocusClear();
+  const first = previewFocusableElements()[0];
+  if (first) previewFocusSet(first);
+}
+
+function previewGoBack() {
+  const from = currentScene;
+  while (previewSceneHistory.length > 0) {
+    const target = previewSceneHistory.pop();
+    if (target !== from && scenes[target]) {
+      previewGoTo(target);
+      return;
+    }
+  }
+  // Nothing behind us: B behaves like an at-home press and stays put.
+  showToast('No earlier scene to go back to', 'info');
+}
+
+// History bookkeeping + focus reset wrap the preview scene switch.
+const basePreviewGoToForController = previewGoTo;
+previewGoTo = function (sceneName) {
+  if (currentScene !== sceneName) previewSceneHistory.push(currentScene);
+  previewFocusClear();
+  basePreviewGoToForController(sceneName);
+  previewFocusReset();
+};
+
 function enterPreviewMode() {
   if (previewMode) return;
   // Snapshot the live DOM first: preview rewrites $variables in place and must
@@ -952,13 +1046,15 @@ function enterPreviewMode() {
   document.body.classList.remove('element-selected');
 
   applyPreviewVariables();
+  previewSceneHistory.length = 0;
   const bar = document.getElementById('previewBar');
   if (bar) bar.removeAttribute('hidden');
   const toggle = document.getElementById('previewToggle');
   if (toggle) toggle.setAttribute('tabindex', '-1');
   fitPreviewCanvas();
   updatePreviewBar();
-  requestAnimationFrame(fitPreviewCanvas);
+  previewFocusReset();
+  requestAnimationFrame(() => { fitPreviewCanvas(); previewFocusReset(); });
 
   // Preserve a lightweight before-preview snapshot for diagnostics and cleanup.
   // Save immediately on entering preview so the latest workspace survives a
@@ -987,6 +1083,8 @@ function onPreviewToggleButton() {
 function leavePreviewMode() {
   if (!previewMode) return;
   previewMode = false;
+  previewFocusClear();
+  previewSceneHistory.length = 0;
   document.body.classList.remove('preview-mode');
   setPreviewButtonLabel(false);
   const bar = document.getElementById('previewBar');
@@ -1075,6 +1173,7 @@ loadScene = function (sceneName) {
     applyPreviewVariables();
     updatePreviewBar();
     fitPreviewCanvas();
+    previewFocusReset();
   } else {
     // Edit mode repaints $colour references like the player draws them. Stored
     // clones carry the resolved inline styles, so restoring a scene keeps them.
@@ -1242,10 +1341,28 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Preview: left/right walk the scenes, like the device menu.
-    if (previewMode && !isInput && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    // Preview: the D-pad. Arrows move the focus ring when the scene has
+    // anything to focus; Shift+left/right still walks the scenes like the
+    // device menu (and clicks the scene bar when focus would not move).
+    if (previewMode && !isInput && e.key.startsWith('Arrow')) {
       e.preventDefault();
-      previewStep(e.key === 'ArrowRight' ? 1 : -1);
+      if (e.shiftKey) {
+        previewStep(e.key === 'ArrowRight' ? 1 : -1);
+      } else if (!previewDpadMove(e.key) && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        previewStep(e.key === 'ArrowRight' ? 1 : -1);
+      }
+      return;
+    }
+
+    // Preview: Enter/Space gen “A”, Backspace is “B” (scene back).
+    if (previewMode && !isInput && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      if (previewFocusEl) previewFocusEl.click();
+      return;
+    }
+    if (previewMode && !isInput && e.key === 'Backspace') {
+      e.preventDefault();
+      previewGoBack();
       return;
     }
 
@@ -6997,6 +7114,69 @@ if (typeof AI !== 'undefined' && typeof AI.init === 'function') {
     };
   }
 
+  // "60-second demo": a controller-navigable taste of the real shell, boxed to
+  // the leading-trust dark theme. It loads and jumps straight into preview with
+  // D-pad emulation, so a stranger sees the device work without owning one.
+  const demoTemplate = {
+    title: 'JukaHub demo',
+    author: 'JukaHub',
+    description: 'A controller-navigable demo of the real home screen. Try the arrow keys.',
+    variables: { fontSizes: { title: 48, big: 34, medium: 24, small: 18 } },
+    scenes: [
+      {
+        name: 'Home',
+        background: '#0f1115',
+        elements: [
+          { type: 'label', text: 'JukaHub', color: '#e8eefc', bgColor: '', font: 'title', x: 48, y: 40, width: 480, height: 64 },
+          { type: 'label', text: 'Continue · Retro Drive, 45 min', color: '#8FA0B8', bgColor: '', font: 'small', x: 48, y: 104, width: 560, height: 30 },
+          { type: 'button', text: 'Media', color: '#f0f2f5', bgColor: '#1E3A8A', font: 'big', x: 48, y: 160, width: 292, height: 200, sceneChange: 'Media', trigger: 'change_scene' },
+          { type: 'button', text: 'Files', color: '#f0f2f5', bgColor: '#0F766E', font: 'big', x: 356, y: 160, width: 292, height: 200 },
+          { type: 'button', text: 'Apps', color: '#f0f2f5', bgColor: '#7C3AED', font: 'big', x: 664, y: 160, width: 292, height: 200 },
+          { type: 'button', text: 'Favorites', color: '#f0f2f5', bgColor: '#9A3412', font: 'big', x: 972, y: 160, width: 292, height: 200 },
+          { type: 'button', text: 'YouTube', color: '#f0f2f5', bgColor: '#0E7490', font: 'big', x: 48, y: 384, width: 292, height: 200, trigger: 'youtube_search' },
+          { type: 'button', text: 'Browser', color: '#f0f2f5', bgColor: '#334155', font: 'big', x: 356, y: 384, width: 292, height: 200 },
+          { type: 'button', text: 'Settings', color: '#f0f2f5', bgColor: '#475569', font: 'big', x: 664, y: 384, width: 292, height: 200, sceneChange: 'Settings', trigger: 'change_scene' },
+          { type: 'label', text: 'A · select    B · back    Start · menu', color: '#77839A', bgColor: '', font: 'small', x: 48, y: 640, width: 560, height: 30 }
+        ]
+      },
+      {
+        name: 'Media',
+        background: '#0f1115',
+        elements: [
+          { type: 'label', text: 'Media', color: '#e8eefc', bgColor: '', font: 'title', x: 48, y: 40, width: 480, height: 64 },
+          { type: 'input', text: '', placeholder: 'Search or paste a link', color: '#e8eefc', bgColor: '#141a26', font: 'medium', x: 48, y: 128, width: 880, height: 64, variable: 'search_query' },
+          { type: 'button', text: 'Search', color: '#f0f2f5', bgColor: '#0E7490', font: 'medium', x: 952, y: 128, width: 280, height: 64, trigger: 'youtube_search' },
+          { type: 'button', text: 'Tube', color: '#f0f2f5', bgColor: '#9A3412', font: 'big', x: 48, y: 228, width: 292, height: 200, sceneChange: 'Tube', trigger: 'change_scene' },
+          { type: 'button', text: 'Shorts', color: '#f0f2f5', bgColor: '#7C3AED', font: 'big', x: 356, y: 228, width: 292, height: 200 },
+          { type: 'button', text: 'Music', color: '#f0f2f5', bgColor: '#0F766E', font: 'big', x: 664, y: 228, width: 292, height: 200 },
+          { type: 'button', text: 'Back', color: '#f0f2f5', bgColor: '#334155', font: 'medium', x: 48, y: 464, width: 220, height: 72, sceneChange: 'Home', trigger: 'change_scene' }
+        ]
+      },
+      {
+        name: 'Tube',
+        background: '#0f1115',
+        elements: [
+          { type: 'label', text: 'YouTube', color: '#e8eefc', bgColor: '', font: 'title', x: 48, y: 40, width: 480, height: 64 },
+          { type: 'label', text: 'Search results render here on the device', color: '#8FA0B8', bgColor: '', font: 'small', x: 48, y: 128, width: 900, height: 30 },
+          { type: 'button', text: 'lofi beats to install to — 3 h mix', color: '#f0f2f5', bgColor: '#1E3A8A', font: 'medium', x: 48, y: 180, width: 380, height: 200, trigger: 'play' },       { type: 'button', text: 'Speedrun — Retro Drive any% in 12:14', color: '#f0f2f5', bgColor: '#0F766E', font: 'medium', x: 444, y: 180, width: 380, height: 200, trigger: 'play' },
+          { type: 'button', text: 'Streaming on a $60 handheld', color: '#f0f2f5', bgColor: '#7C3AED', font: 'medium', x: 840, y: 180, width: 380, height: 200, trigger: 'play' },
+          { type: 'button', text: 'Back', color: '#f0f2f5', bgColor: '#334155', font: 'medium', x: 48, y: 464, width: 220, height: 72, sceneChange: 'Media', trigger: 'change_scene' }
+        ]
+      },
+      {
+        name: 'Settings',
+        background: '#0f1115',
+        elements: [
+          { type: 'label', text: 'Settings', color: '#e8eefc', bgColor: '', font: 'title', x: 48, y: 40, width: 480, height: 64 },
+          { type: 'button', text: 'Theme · Dark', color: '#f0f2f5', bgColor: '#475569', font: 'medium', x: 48, y: 140, width: 420, height: 84, trigger: 'cycle_theme' },
+          { type: 'button', text: 'Resolution · 720', color: '#f0f2f5', bgColor: '#475569', font: 'medium', x: 48, y: 240, width: 420, height: 84, trigger: 'cycle_resolution' },
+          { type: 'button', text: 'Update · v0.4.0 installed', color: '#e9fff1', bgColor: '#0e2418', font: 'medium', x: 48, y: 340, width: 420, height: 84, trigger: 'check_updates' },
+          { type: 'button', text: 'Back', color: '#f0f2f5', bgColor: '#334155', font: 'medium', x: 48, y: 464, width: 220, height: 72, sceneChange: 'Home', trigger: 'change_scene' }
+        ]
+      }
+    ]
+  };
+
   // "Start from template": a small two-scene project to remix.
   const starterTemplate = {
     title: 'My Juka App',
@@ -7041,6 +7221,12 @@ if (typeof AI !== 'undefined' && typeof AI.init === 'function') {
         showToast('Starter template loaded', 'success');
       } else if (action === 'blank') {
         clearAll();
+      } else if (action === 'demo') {
+        applyLoadedConfig(JSON.parse(JSON.stringify(demoTemplate)));
+        // The whole point: the visitor lands on a working, navigable shell.
+        requestAnimationFrame(() => {
+          enterPreviewMode();
+        });
       }
     });
   });

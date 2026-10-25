@@ -19,3 +19,7 @@ partyhistory.json
 # Remote Play helpers (built by native/build-helpers.sh)
 native/bin/
 native/libs/
+
+# AndroidRT host smoke output (tests/smoke/run-smoke.sh)
+androidrt/tests/smoke/tmp/
+androidrt/AndroidRT/

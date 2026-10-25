@@ -144,7 +144,7 @@ func resolveAndroidBackend(host androidHost) (androidBackend, error) {
 	}
 	backend = androidBackend{Kind: androidBackendWaydroid, Binary: binary}
 	if !androidBinderPresent(host) {
-		return backend, errors.New("the kernel exposes no binder device (/dev/binder): Waydroid needs the binder_linux module, which stock firmware does not ship")
+		return backend, errors.New("the kernel exposes no binder device (/dev/binder): Waydroid needs the binder_linux module, which stock firmware does not ship — full Android lives in community firmware such as GammaOS (see docs/ANDROID-GAMMAOS.md)")
 	}
 	if host.run != nil {
 		output, err := host.run(binary, "status")

@@ -264,6 +264,7 @@ func startPortMasterInstall() error {
 		installBarDone()
 		log.Printf("[portmaster] installed into %s", filepath.Join(portMasterSDRoot, "Apps", "PortMaster"))
 		ShowToast("PortMaster installed — open Ports to add games", ToastKindSuccess)
+		noteAwayToolInstalled("PortMaster")
 	}()
 	return nil
 }
