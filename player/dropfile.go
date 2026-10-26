@@ -65,7 +65,7 @@ func handleFileDrop(config *Config, path string) {
 	default:
 		// Anything else is not something the shell can open. Say so instead of
 		// silently doing nothing, which reads as "the drop was ignored".
-		showToast("JukaHub cannot open ." + strings.TrimPrefix(ext, ".") + " files", ToastInfo())
+		showToast("JukaHub cannot open ."+strings.TrimPrefix(ext, ".")+" files", ToastInfo())
 	}
 }
 
