@@ -1239,7 +1239,7 @@ body.preview-mode .element:hover {
   align-items: center;
   justify-content: center;
   min-width: 24px;
-  height: 22px;
+  height: 24px;
   padding: 0 4px;
   border: 0;
   border-radius: 6px;
@@ -1670,6 +1670,14 @@ textarea:focus {
   align-items: center;
   gap: var(--space-sm);
   cursor: pointer;
+}
+
+/* A blanket full-width input rule stretched this to 258px on phones. */
+.checkbox-label input[type="checkbox"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
 }
 
 /* Trigger options */
@@ -3680,6 +3688,12 @@ body:not(.element-selected) .element:focus {
   display: none;
 }
 
+/* Icon-only bar buttons (the label hides at narrow widths) were squeezing down
+   to the icon itself, 22px wide. */
+.app-bar-button {
+  min-width: 32px;
+}
+
 .device-content {
   width: min(560px, 94vw);
 }
@@ -3976,6 +3990,10 @@ body:not(.element-selected) .element:focus {
    hit reliably. Only touch screens get the larger hit area; mouse layouts keep
    their dense desktop sizing. */
 @media (pointer: coarse) {
+  .checkbox-label {
+    min-height: 40px;
+  }
+
   .app-bar-button,
   .panel-toggle,
   .action-button,
@@ -4005,4 +4023,13 @@ body:not(.element-selected) .element:focus {
   text-overflow: ellipsis;
   text-align: left;
   white-space: nowrap;
+}
+
+/* The footer links sit in a sentence, so they were only as tall as the text
+   (14px). Padding gives them a 24px target; the negative margin keeps the
+   footer's own height unchanged. */
+.app-footer a {
+  display: inline-block;
+  padding: 5px 2px;
+  margin: -5px 0;
 }
