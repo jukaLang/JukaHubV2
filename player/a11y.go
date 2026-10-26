@@ -646,8 +646,10 @@ const (
 	a11yRowContrast
 	a11yRowColorblind
 	a11yRowLayoutPreset
-	a11yRowSwapAB
-	a11yRowSwapXY
+	// a11yRowButton edits one physical → logical entry of the keymap. The list
+	// of rows is built from a11yPanelButtons, so a new remappable button is one
+	// entry there rather than another kind and another case.
+	a11yRowButton
 	a11yRowSelectKey
 	a11yRowOneHanded
 	a11yRowChordButton
@@ -660,20 +662,27 @@ type a11yRow struct {
 	detail string
 	value  string
 	kind   a11yRowKind
+	// button is the physical button a a11yRowButton row edits; unused by the
+	// other kinds.
+	button uint8
+}
+
+// a11yPanelButtons are the buttons with their own row. Select and Start keep
+// the dedicated row below, which moves or disables the pair together: two rows
+// free to fight over BACK/START can leave a player with no way into the menu.
+var a11yPanelButtons = []uint8{
+	sdl.CONTROLLER_BUTTON_A,
+	sdl.CONTROLLER_BUTTON_B,
+	sdl.CONTROLLER_BUTTON_X,
+	sdl.CONTROLLER_BUTTON_Y,
+	sdl.CONTROLLER_BUTTON_LEFTSHOULDER,
+	sdl.CONTROLLER_BUTTON_RIGHTSHOULDER,
 }
 
 func a11yRows() []a11yRow {
 	contrast := "Off"
 	if a11y.highContrast {
 		contrast = "On"
-	}
-	swapAB := "Normal"
-	if a11y.swapAB {
-		swapAB = "Swapped"
-	}
-	swapXY := "Normal"
-	if a11y.swapXY {
-		swapXY = "Swapped"
 	}
 	oneHanded := "Off"
 	if a11y.oneHanded {
@@ -683,25 +692,106 @@ func a11yRows() []a11yRow {
 	if a11y.slowRepeat {
 		repeat = "Slow"
 	}
-	return []a11yRow{
+	rows := []a11yRow{
 		{label: "Text size", detail: "Scales every menu, overlay and keyboard label.", value: a11yScaleLabel(), kind: a11yRowTextSize},
 		{label: "High contrast", detail: "Stronger borders and brighter text on every screen.", value: contrast, kind: a11yRowContrast},
 		{label: "Colour-blind palette", detail: "Replaces the theme colours with a safer set.", value: a11yColorblindLabel(a11y.colorblind), kind: a11yRowColorblind},
-		{label: "Button layout", detail: "Nintendo order swaps A/B and X/Y together. The two rows below stay available for a single swap.", value: a11yLayoutPresetLabel(), kind: a11yRowLayoutPreset},
-		{label: "Swap A / B", detail: "For players used to the Japanese button order.", value: swapAB, kind: a11yRowSwapAB},
-		{label: "Swap X / Y", detail: "Moves the secondary and tertiary actions.", value: swapXY, kind: a11yRowSwapXY},
-		{label: "Select button", detail: "Moves the Select action to Start (both stay reachable), or disables Select entirely. Start keeps opening the menu.", value: a11ySelectKeyMode(), kind: a11yRowSelectKey},
-		{label: "One-handed mode", detail: "Tap the chord button, then a direction, to press A, B, X or Y with one thumb. Tap the chord button again to cancel.", value: oneHanded, kind: a11yRowOneHanded},
-		{label: "Chord button", detail: "The button that arms the one-handed chord. Pick one your other hand's index finger can reach.", value: a11yChordLabel(a11y.chordButton), kind: a11yRowChordButton},
-		{label: "Key repeat", detail: "How fast a held direction repeats on the on-screen keyboard. Slow is for hands that overshoot a key.", value: repeat, kind: a11yRowSlowRepeat},
-		{label: "Reset to defaults", detail: "Back to 100% text, default colours, standard buttons.", value: "", kind: a11yRowReset},
+		{label: "Button layout", detail: "Nintendo order swaps A/B and X/Y together, for players used to the Japanese layout. Applying a preset clears the per-button remaps below.", value: a11yLayoutPresetLabel(), kind: a11yRowLayoutPreset},
+	}
+	for _, button := range a11yPanelButtons {
+		rows = append(rows, a11yRow{
+			label:  a11yButtonLabel(button),
+			detail: "Which action " + a11yButtonLabel(button) + " sends. Left and right walk the list of actions, and the last step disables the button.",
+			value:  a11yButtonTargetLabel(button),
+			kind:   a11yRowButton,
+			button: button,
+		})
+	}
+	return append(rows,
+		a11yRow{label: "Select button", detail: "Moves the Select action to Start (both stay reachable), or disables Select entirely. Start keeps opening the menu.", value: a11ySelectKeyMode(), kind: a11yRowSelectKey},
+		a11yRow{label: "One-handed mode", detail: "Tap the chord button, then a direction, to press A, B, X or Y with one thumb. Tap the chord button again to cancel.", value: oneHanded, kind: a11yRowOneHanded},
+		a11yRow{label: "Chord button", detail: "The button that arms the one-handed chord. Pick one your other hand's index finger can reach.", value: a11yChordLabel(a11y.chordButton), kind: a11yRowChordButton},
+		a11yRow{label: "Key repeat", detail: "How fast a held direction repeats on the on-screen keyboard. Slow is for hands that overshoot a key.", value: repeat, kind: a11yRowSlowRepeat},
+		a11yRow{label: "Reset to defaults", detail: "Back to 100% text, default colours, standard buttons.", value: "", kind: a11yRowReset},
+	)
+}
+
+// a11yButtonLabel names a physical button the way the panel, the toast and the
+// saved keymap all spell it, so "A" means the same thing everywhere.
+func a11yButtonLabel(button uint8) string {
+	for _, known := range a11yButtonNames {
+		if known.button == button {
+			return known.label
+		}
+	}
+	return "Button"
+}
+
+// a11yButtonTargetLabel names what a physical button currently sends, after the
+// keymap and the swap preset. The row must show the effective answer: an
+// explicit entry that a preset then rewrites would otherwise read as the wrong
+// button.
+func a11yButtonTargetLabel(button uint8) string {
+	logical, dropped := a11yResolveButton(button)
+	if dropped {
+		return "Disabled"
+	}
+	return a11yButtonLabel(logical)
+}
+
+// a11yCycleButtonTarget walks the target list for one physical button. The
+// order is the saved keymap's own spelling (A, B, X, Y, Select, Start, L1, R1)
+// with Disabled last, then back to the button itself — which drops the entry
+// instead of storing an identity mapping.
+func a11yCycleButtonTarget(button uint8, dir int) uint8 {
+	targets := make([]uint8, 0, len(a11yButtonNames)+1)
+	for _, known := range a11yButtonNames {
+		if known.button == button {
+			continue
+		}
+		targets = append(targets, known.button)
+	}
+	targets = append(targets, a11yDisabledButton)
+
+	current, _ := a11yResolveButton(button)
+	idx := -1
+	for i, target := range targets {
+		if target == current {
+			idx = i
+		}
+	}
+	// Position 0 is "sends itself", so a button with no entry starts there.
+	positions := len(targets) + 1
+	pos := 0
+	if idx >= 0 {
+		pos = idx + 1
+	}
+	pos = ((pos+dir)%positions + positions) % positions
+	if pos == 0 {
+		return button
+	}
+	return targets[pos-1]
+}
+
+// a11yClearSwapFor drops the preset swap that covers a button, so an explicit
+// remap is not rewritten a second time on the way out of a11yResolveButton.
+func a11yClearSwapFor(button uint8) {
+	switch button {
+	case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B:
+		a11y.swapAB = false
+	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_Y:
+		a11y.swapXY = false
 	}
 }
 
-// a11yLayoutPresetLabel names the combined state of the two swap flags. Getting
-// a preset and the fine-grained rows to agree is the difference between a
-// settings panel and two panels stacked on each other.
+// a11yLayoutPresetLabel names the combined state of the whole button layer. A
+// preset and a per-button remap are different ways to say the same thing, so
+// any explicit entry makes the answer Custom rather than a preset that would
+// stop describing the keys.
 func a11yLayoutPresetLabel() string {
+	if len(a11y.keys) > 0 {
+		return "Custom"
+	}
 	switch {
 	case a11y.swapAB && a11y.swapXY:
 		return "Nintendo"
@@ -855,20 +945,32 @@ func a11yAdjust(dir int, config *Config) {
 		a11y.colorblind = a11yColorblindModes[idx].key
 		a11yApplyPalette(config)
 		changed = true
-	case a11yRowSwapAB:
-		a11y.swapAB = !a11y.swapAB
+	case a11yRowButton:
+		if a11y.keys == nil {
+			a11y.keys = map[uint8]uint8{}
+		}
+		button := rows[a11y.cursor].button
+		next := a11yCycleButtonTarget(button, dir)
+		if next == button {
+			delete(a11y.keys, button)
+		} else {
+			a11y.keys[button] = next
+		}
+		// The row the user just moved wins over the preset that covered it.
+		a11yClearSwapFor(button)
+		ShowToast(a11yButtonLabel(button)+" sends "+a11yButtonTargetLabel(button), ToastKindInfo)
 		changed = true
 	case a11yRowLayoutPreset:
-		nintendo := a11y.swapAB && a11y.swapXY
+		// A preset is a whole state, not a delta: it clears the per-button
+		// entries so the two ways of describing the layout cannot disagree.
+		nintendo := a11y.swapAB && a11y.swapXY && len(a11y.keys) == 0
 		a11y.swapAB, a11y.swapXY = !nintendo, !nintendo
+		a11y.keys = map[uint8]uint8{}
 		if !nintendo {
-			ShowToast("Button layout: Nintendo order", ToastKindInfo)
+			ShowToast("Button layout: Nintendo order · remaps cleared", ToastKindInfo)
 		} else {
 			ShowToast("Button layout: standard order", ToastKindInfo)
 		}
-		changed = true
-	case a11yRowSwapXY:
-		a11y.swapXY = !a11y.swapXY
 		changed = true
 	case a11yRowSelectKey:
 		switch a11ySelectKeyMode() {

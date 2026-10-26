@@ -97,19 +97,26 @@ type webStyle struct {
 	HasColor   bool
 	Background sdl.Color
 	HasBg      bool
-	FontPx     float64
-	Bold       bool
-	Italic     bool
-	Underline  bool
-	Strike     bool
-	Link       bool
-	Align      int
-	Pre        bool
-	Hidden     bool
-	Indent     float64
-	TextIndent float64
-	MarginTop  float64
-	MarginBot  float64
+	// Gradient is the ramp a background-image gradient resolved to. HasBg is
+	// still set (to the ramp's average) so contrast, fade and inheritance keep
+	// working with one colour; the ramp wins where the reader paints. It is a
+	// pointer only so a style stays comparable (runs merge on style equality)
+	// and so a hundred runs can share one parsed ramp.
+	Gradient    *webGradient
+	HasGradient bool
+	FontPx      float64
+	Bold        bool
+	Italic      bool
+	Underline   bool
+	Strike      bool
+	Link        bool
+	Align       int
+	Pre         bool
+	Hidden      bool
+	Indent      float64
+	TextIndent  float64
+	MarginTop   float64
+	MarginBot   float64
 	// Transform is the author's text-transform (0 none, 1 uppercase,
 	// 2 lowercase, 3 capitalise). It is applied when a word is measured so
 	// the wrapped width matches the glyphs that get drawn.
@@ -117,12 +124,18 @@ type webStyle struct {
 	// Borders are reported separately: a rule under a heading and a card's
 	// full outline are drawn differently from a quote's left bar.
 	BorderLeft     bool
+	BorderRight    bool
 	BoxBorder      bool
 	BorderTop      bool
 	BorderBottom   bool
 	BorderColor    sdl.Color
 	HasBorderColor bool
-	ListNone       bool
+	// BorderWidth is the widest declared border in CSS px; 0 keeps the
+	// reader's own default (3 for a side bar, 2 for a rule or an outline).
+	// A card written as `border: 3px` used to draw 2px, which reads as a
+	// different design rather than as a smaller border.
+	BorderWidth float64
+	ListNone    bool
 	// ListStyle is the marker the author asked for (0 = the reader default).
 	// It inherits like a real browser's, so `ul { list-style: none }` reaches
 	// the items, which is how nav menus hide their bullets.
@@ -223,12 +236,16 @@ type webBlock struct {
 	Pre            bool
 	HasBg          bool
 	Background     sdl.Color
+	Gradient       webGradient
+	HasGradient    bool
 	BorderLeft     bool
+	BorderRight    bool
 	BoxBorder      bool
 	BorderTop      bool
 	BorderBottom   bool
 	BorderColor    sdl.Color
 	HasBorderColor bool
+	BorderWidth    float64
 	Rule           bool
 	// FlexGroup/FlexItem tie a block to its flex container and direct child.
 	// Zero means "not in a flex container". The container's own row settings
@@ -283,13 +300,19 @@ type webBlock struct {
 	VideoTitle string
 }
 
-// webDocument is one parsed page. It holds no raw HTML.
+// webDocument is one parsed page. It holds no raw HTML — the parser keeps the
+// styled blocks and the layout builds from those — plus the paper and text
+// colours the page asked for.
 type webDocument struct {
 	URL    string
 	Title  string
 	Blocks []webBlock
 	Paper  sdl.Color
-	Text   sdl.Color
+	// PaperGradient is a body/html background ramp: the page under the text is
+	// the one gradient that covers the whole panel, so it is painted too.
+	PaperGradient    webGradient
+	HasPaperGradient bool
+	Text             sdl.Color
 
 	// Images holds the fetched bytes of every <img> in the document, keyed by
 	// resolved URL or data URI; ImageMeta records the natural pixel sizes the
@@ -340,6 +363,10 @@ type webRect struct {
 	Color     sdl.Color
 	Stroke    bool
 	Thickness int32
+	// Gradient paints this rect as a ramp instead of a flat fill; Color is then
+	// the average, used for the corner rounding and as the fallback.
+	Gradient    webGradient
+	HasGradient bool
 	// Radius is the author's border-radius in design pixels, clamped to half
 	// the shorter side when drawn. 0 keeps the reader's crisp corner.
 	Radius int32
@@ -485,9 +512,53 @@ func resetBrowserDocumentsForTest() {
 
 // --- CSS parsing ----------------------------------------------------------
 
-// parseWebCSS turns a stylesheet into rules. At-rules with a block are skipped
-// (with the rules inside @media kept, since the handheld screen is the one
-// media that matters).
+// webMediaBlockApplies decides whether the rules inside an at-rule block belong
+// on the reader's screen.
+//
+// The reader has exactly one medium: a handheld screen. So a width, orientation
+// or feature query keeps its rules — the reader is the media that matters — but
+// a block that only targets `print` or `speech` must not. A print sheet strips
+// the page's navigation with display:none and re-colours it for paper; applying
+// that on the screen is how a page arrives with its header and menu missing.
+func webMediaBlockApplies(query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	query = strings.TrimSpace(strings.TrimPrefix(query, "@media"))
+	for _, part := range strings.Split(query, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		negated := strings.HasPrefix(part, "not ")
+		applies := true
+		for _, field := range strings.Fields(part) {
+			switch field {
+			case "and", "not", "only", "or":
+				continue
+			}
+			if strings.HasPrefix(field, "(") {
+				// A feature query with no media type is the screen's.
+				break
+			}
+			switch strings.Trim(field, ",") {
+			case "print", "speech":
+				applies = false
+			}
+			break
+		}
+		if negated {
+			applies = !applies
+		}
+		if applies {
+			return true
+		}
+	}
+	return false
+}
+
+// parseWebCSS turns a stylesheet into rules. An at-rule block is skipped unless
+// it describes this screen: @media (except print/speech), @supports (a modern
+// reader supports what it implements) and @layer (the cascade order is
+// approximated, but the rules are the site's real styling).
 func parseWebCSS(src string) []webRule {
 	src = stripWebCSSComments(src)
 	rules := make([]webRule, 0, 32)
@@ -509,7 +580,14 @@ func parseWebCSS(src string) []webRule {
 			continue
 		}
 		if strings.HasPrefix(selectorText, "@") {
-			if strings.HasPrefix(strings.ToLower(selectorText), "@media") {
+			lower := strings.ToLower(selectorText)
+			keep := strings.HasPrefix(lower, "@supports") || strings.HasPrefix(lower, "@layer")
+			if strings.HasPrefix(lower, "@media") {
+				keep = webMediaBlockApplies(selectorText)
+			}
+			// A conditional group rule nests: `@media` inside `@layer` still
+			// has to be judged on its own query.
+			if keep {
 				for _, inner := range parseWebCSS(body) {
 					inner.order = order
 					order++
@@ -1463,6 +1541,145 @@ func webTransformWord(word string, mode int) string {
 	return word
 }
 
+// webFontShorthand reads the font shorthand's `[style] [variant] [weight]
+// [stretch] size[/line-height] family` form. Only what the reader draws is
+// applied: the family is ignored because the app ships one face, and a system
+// font keyword (caption, menu, ...) carries no explicit size to read.
+func webFontShorthand(st *webStyle, value string) {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if v == "" || v == "inherit" || v == "initial" || v == "unset" {
+		return
+	}
+	switch v {
+	case "caption", "icon", "menu", "message-box", "small-caption", "status-bar":
+		return
+	}
+	fields := strings.Fields(v)
+	size := 0.0
+	lineHeight := 0.0
+	found := false
+	for _, field := range fields {
+		if found {
+			break
+		}
+		sizeToken, lineToken := field, ""
+		if i := strings.IndexByte(field, '/'); i >= 0 {
+			sizeToken, lineToken = field[:i], field[i+1:]
+		}
+		if !webIsFontSizeToken(sizeToken) {
+			continue
+		}
+		px, ok := webFontSizePx(sizeToken, st.FontPx)
+		if !ok {
+			continue
+		}
+		found = true
+		size = px
+		if lineToken != "" {
+			if lh, ok := webLineHeightPx(lineToken, px); ok {
+				lineHeight = lh
+			}
+		}
+	}
+	if !found {
+		// No size means this is not a font shorthand the reader understands;
+		// guessing one would resize the whole page from a stray keyword.
+		return
+	}
+	if size < 8 {
+		size = 8
+	}
+	if size > 64 {
+		size = 64
+	}
+	st.FontPx = size
+	if lineHeight > 0 {
+		st.LineHeight = lineHeight
+	}
+	for _, field := range fields {
+		switch {
+		case field == "italic", field == "oblique":
+			st.Italic = true
+		case field == "bold", field == "bolder":
+			st.Bold = true
+		case field == "lighter", field == "normal":
+			// `normal` is the shorthand's reset for style and weight alike.
+			if field == "lighter" {
+				st.Bold = false
+			}
+		case len(field) == 3 && webAllDigits(field):
+			if n, err := strconv.Atoi(field); err == nil {
+				st.Bold = n >= 600
+			}
+		}
+	}
+}
+
+// webIsFontSizeToken reports whether a token can be the size in a font
+// shorthand. A bare number is a weight (`font: 700 16px Arial`), so it must not
+// be read as a size.
+func webIsFontSizeToken(token string) bool {
+	t := strings.ToLower(strings.TrimSpace(token))
+	if t == "" {
+		return false
+	}
+	switch t {
+	case "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large",
+		"smaller", "larger", "small-caps":
+		return true
+	}
+	for _, unit := range []string{"px", "em", "rem", "pt", "%", "ex", "ch", "vw", "vh"} {
+		if strings.HasSuffix(t, unit) {
+			return true
+		}
+	}
+	return false
+}
+
+// webAllDigits reports whether every byte is an ASCII digit.
+func webAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// webBorderWidthInValue reads the width token of a border shorthand: the first
+// length in `1px solid #f00`, `solid 3px`, or a keyword. It returns 0 when the
+// shorthand names no width at all (the caller keeps the reader's default).
+func webBorderWidthInValue(value string, fontPx float64) float64 {
+	for _, token := range strings.Fields(strings.ToLower(value)) {
+		switch token {
+		case "thin":
+			return 1
+		case "medium":
+			return 3
+		case "thick":
+			return 5
+		}
+		// A colour and a border style are not lengths; webLength returns 0 for
+		// both, so only a real measurement can win here.
+		if px := webLength(token, fontPx); px > 0 {
+			return px
+		}
+	}
+	return 0
+}
+
+// webMaxAbs keeps the larger magnitude, so a later `border-left: 1px` does not
+// shrink a card whose other edges were drawn 3px.
+func webMaxAbs(a, b float64) float64 {
+	if b > a {
+		return b
+	}
+	return a
+}
+
 // webBorderVisible reports whether a border shorthand actually paints. Many
 // sheets reset borders with `border: none` or `border-top: 0`, which must not
 // grow a rule of its own.
@@ -1582,7 +1799,16 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if len(decls) == 0 {
 		return
 	}
-	// font-size first: em-based lengths below resolve against it.
+	// The `font` shorthand comes before the longhands, so a sheet that sets
+	// both ends up with the longhand, the way a later declaration wins in a
+	// browser. It carries the size (and therefore every em length below), the
+	// weight, the style and the line-height; a reset written as
+	// `font: 16px/1.6 system-ui` used to leave the whole page at the reader's
+	// default size.
+	if v, ok := decls["font"]; ok {
+		webFontShorthand(st, v)
+	}
+	// font-size next: em-based lengths below resolve against it.
 	if v, ok := decls["font-size"]; ok {
 		if px, valid := webFontSizePx(v, st.FontPx); valid {
 			if px < 8 {
@@ -1607,16 +1833,26 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			}
 		}
 	}
-	// A gradient is drawn as the average of its stops: the reader paints one
-	// fill, not one pixel at a time, and a blue header stays blue instead of
-	// losing its colour entirely. An explicit background-color still wins.
+	// A linear gradient becomes a ramp the reader paints band by band, so the
+	// header keeps its light and dark ends instead of one flat colour. The
+	// average is still stored as the background: contrast and fade decisions
+	// need a single colour, and a radial or conic gradient — not a ramp — stays
+	// a flat averaged fill. An explicit background-color still wins.
 	if !st.HasBg {
 		for _, key := range []string{"background-image", "background"} {
-			if v, ok := decls[key]; ok {
-				if c, valid := webGradientColor(v); valid {
-					st.Background, st.HasBg = c, true
-					break
-				}
+			v, ok := decls[key]
+			if !ok {
+				continue
+			}
+			if g, valid := webParseGradient(v); valid {
+				ramp := g
+				st.Gradient, st.HasGradient = &ramp, true
+				st.Background, st.HasBg = webGradientAverage(g), true
+				break
+			}
+			if c, valid := webGradientColor(v); valid {
+				st.Background, st.HasBg = c, true
+				break
 			}
 		}
 	}
@@ -1679,6 +1915,52 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 	if v, ok := decls["padding-left"]; ok {
 		st.Indent += webLength(v, st.FontPx)
 	}
+	// A block's own top and bottom padding is breathing room, exactly like a
+	// margin: without it a card written as `padding-top: 24px` sat flush
+	// against the paragraph above it.
+	if v, ok := decls["padding-top"]; ok {
+		st.MarginTop += webLength(v, st.FontPx)
+	}
+	if v, ok := decls["padding-bottom"]; ok {
+		st.MarginBot += webLength(v, st.FontPx)
+	}
+	// The logical shorthands every modern sheet uses. The reader is a
+	// left-to-right column, so inline = left/right and block = top/bottom;
+	// supporting them keeps a spacing writer's intent instead of dropping it.
+	if v, ok := decls["margin-block"]; ok {
+		if top, _, bottom, _, valid := webBoxShorthand(v, st.FontPx); valid {
+			st.MarginTop += top
+			st.MarginBot += bottom
+		}
+	}
+	if v, ok := decls["padding-block"]; ok {
+		if top, _, bottom, _, valid := webBoxShorthand(v, st.FontPx); valid {
+			st.MarginTop += top
+			st.MarginBot += bottom
+		}
+	}
+	for _, key := range []string{"margin-inline", "padding-inline"} {
+		if v, ok := decls[key]; ok {
+			if _, right, _, left, valid := webBoxShorthand(v, st.FontPx); valid {
+				st.Indent += left
+				st.IndentRight += right
+			}
+		}
+	}
+	for key, target := range map[string]*float64{
+		"margin-inline-start":  &st.Indent,
+		"padding-inline-start": &st.Indent,
+		"margin-inline-end":    &st.IndentRight,
+		"padding-inline-end":   &st.IndentRight,
+		"margin-block-start":   &st.MarginTop,
+		"padding-block-start":  &st.MarginTop,
+		"margin-block-end":     &st.MarginBot,
+		"padding-block-end":    &st.MarginBot,
+	} {
+		if v, ok := decls[key]; ok {
+			*target += webLength(v, st.FontPx)
+		}
+	}
 	if v, ok := decls["padding"]; ok {
 		if top, right, bottom, left, valid := webBoxShorthand(v, st.FontPx); valid {
 			st.Indent += left
@@ -1738,36 +2020,46 @@ func applyWebDecls(st *webStyle, decls map[string]string) {
 			}
 		}
 	}
+	// Each edge maps to its own side: `border-right` used to set the left
+	// flag, so a sidebar divider drew on the wrong edge of the box.
 	if v, ok := decls["border-left"]; ok && webBorderVisible(v) {
 		st.BorderLeft = true
+		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 	}
 	if v, ok := decls["border-right"]; ok && webBorderVisible(v) {
-		st.BorderLeft = true
-	}
-	if v, ok := decls["border-left-width"]; ok {
-		if webLength(v, st.FontPx) > 0 {
-			st.BorderLeft = true
-		}
+		st.BorderRight = true
+		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 	}
 	if v, ok := decls["border-top"]; ok && webBorderVisible(v) {
 		st.BorderTop = true
+		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 	}
 	if v, ok := decls["border-bottom"]; ok && webBorderVisible(v) {
 		st.BorderBottom = true
+		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 	}
 	for key, target := range map[string]*bool{
+		"border-left-width":   &st.BorderLeft,
+		"border-right-width":  &st.BorderRight,
 		"border-top-width":    &st.BorderTop,
 		"border-bottom-width": &st.BorderBottom,
 	} {
-		if v, ok := decls[key]; ok && webLength(v, st.FontPx) > 0 {
-			*target = true
+		if v, ok := decls[key]; ok {
+			if px := webLength(v, st.FontPx); px > 0 {
+				*target = true
+				st.BorderWidth = webMaxAbs(st.BorderWidth, px)
+			}
 		}
 	}
 	if v, ok := decls["border"]; ok && webBorderVisible(v) {
 		st.BoxBorder = true
+		st.BorderWidth = webMaxAbs(st.BorderWidth, webBorderWidthInValue(v, st.FontPx))
 	}
-	if v, ok := decls["border-width"]; ok && webLength(v, st.FontPx) > 0 {
-		st.BoxBorder = true
+	if v, ok := decls["border-width"]; ok {
+		if px := webLength(v, st.FontPx); px > 0 {
+			st.BoxBorder = true
+			st.BorderWidth = webMaxAbs(st.BorderWidth, px)
+		}
 	}
 	for _, key := range []string{"list-style-type", "list-style"} {
 		if v, ok := decls[key]; ok {
@@ -2319,6 +2611,10 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 	if name == "body" || name == "html" {
 		if style.HasBg {
 			p.doc.Paper = style.Background
+			p.doc.HasPaperGradient = style.HasGradient && style.Gradient != nil
+			if p.doc.HasPaperGradient {
+				p.doc.PaperGradient = *style.Gradient
+			}
 		}
 		if style.HasColor {
 			p.doc.Text = style.Color
@@ -2335,10 +2631,19 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		return
 	case "hr":
 		p.flush()
+		// The rule keeps its authored colour and weight: `hr { border: 3px
+		// solid #c00 }` used to paint the reader's grey hairline as if the
+		// sheet had said nothing, which is the one thing it did say.
 		p.blocks = append(p.blocks, webBlock{
-			Rule:      true,
-			MarginTop: style.MarginTop,
-			MarginBot: style.MarginBot,
+			Rule:           true,
+			MarginTop:      style.MarginTop,
+			MarginBot:      style.MarginBot,
+			BorderColor:    style.BorderColor,
+			HasBorderColor: style.HasBorderColor,
+			BorderWidth:    style.BorderWidth,
+			HasBg:          style.HasBg,
+			Background:     style.Background,
+			Indent:         style.Indent,
 		})
 		return
 	case "img":
@@ -2483,8 +2788,10 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	st := p.topStyle()
 	// Non-inherited properties start clean for every element.
 	st.HasBg, st.Background = false, sdl.Color{}
+	st.HasGradient, st.Gradient = false, nil
 	st.Indent, st.TextIndent, st.MarginTop, st.MarginBot = 0, 0, 0, 0
-	st.BorderLeft, st.ListNone = false, false
+	st.BorderLeft, st.BorderRight, st.ListNone = false, false, false
+	st.BorderWidth = 0
 	// A radius and a right gutter belong to the element that declared them;
 	// line-height, the list marker and the opacity group are inherited above.
 	st.Radius, st.IndentRight = 0, 0
@@ -2615,9 +2922,11 @@ func (p *webParser) ensureBlock() *webBlock {
 		HasBg:          st.HasBg,
 		Background:     st.Background,
 		BorderLeft:     st.BorderLeft,
+		BorderRight:    st.BorderRight,
 		BoxBorder:      st.BoxBorder,
 		BorderTop:      st.BorderTop,
 		BorderBottom:   st.BorderBottom,
+		BorderWidth:    st.BorderWidth,
 		BorderColor:    st.BorderColor,
 		HasBorderColor: st.HasBorderColor,
 		Bullet:         p.pendingB,
@@ -2638,6 +2947,12 @@ func (p *webParser) ensureBlock() *webBlock {
 		HasRight:       st.HasRight,
 		HasBottom:      st.HasBottom,
 		HasLeft:        st.HasLeft,
+	}
+	// The ramp is copied by value onto the block: a background belongs to the
+	// element that declared it, unlike the shared pointer the style carries for
+	// comparison.
+	if st.HasGradient && st.Gradient != nil {
+		block.Gradient, block.HasGradient = *st.Gradient, true
 	}
 	// The innermost open flex container owns this block. A container's own
 	// leading text gets item 1, the same slot the first child would take; a
@@ -2787,11 +3102,29 @@ func webBaseFontSize(config *Config, fontName string) float64 {
 
 // layoutFor returns the measured page, reusing the previous layout while the
 // width, font and page colours are unchanged.
+// webGradientStamp fingerprints a ramp for the layout cache. A page whose paper
+// changed from one gradient to another keeps the same average colour, so the
+// colours alone would let a stale layout through with the old ramp baked into
+// its rects.
+func webGradientStamp(g webGradient, has bool) string {
+	if !has || len(g.Stops) == 0 {
+		return "-"
+	}
+	first, last := g.Stops[0].Color, g.Stops[len(g.Stops)-1].Color
+	axis := "h"
+	if g.Vertical {
+		axis = "v"
+	}
+	return fmt.Sprintf("%s%d:%02x%02x%02x-%02x%02x%02x", axis, len(g.Stops),
+		first.R, first.G, first.B, last.R, last.G, last.B)
+}
+
 func (d *webDocument) layoutFor(config *Config, elem Element, width int32) *webLayout {
-	stamp := fmt.Sprintf("%d|%s|%d|%d,%d,%d|%d,%d,%d",
+	stamp := fmt.Sprintf("%d|%s|%d|%d,%d,%d|%d,%d,%d|%s",
 		width, elem.Font, a11yScaleFontSize(16),
 		d.Paper.R, d.Paper.G, d.Paper.B,
-		d.Text.R, d.Text.G, d.Text.B)
+		d.Text.R, d.Text.G, d.Text.B,
+		webGradientStamp(d.PaperGradient, d.HasPaperGradient))
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.layout != nil && d.stamp == stamp {
@@ -3033,9 +3366,29 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		previousMarginBot = block.MarginBot
 		if block.Rule {
 			y := nextY() + rowH/2
+			color := sdl.Color{R: 200, G: 206, B: 216, A: 255}
+			switch {
+			case block.HasBorderColor:
+				color = block.BorderColor
+			case block.HasBg:
+				// `hr { background: #eee }` is the other common spelling of a
+				// rule, and browsers paint it the same way.
+				color = block.Background
+			}
+			barW := int32(math.Round(block.BorderWidth))
+			if barW <= 0 {
+				barW = 2
+			}
+			if barW > 12 {
+				barW = 12
+			}
+			indent := int32(block.Indent * baseSize / 16)
+			if indent < 0 || indent > contentW/2 {
+				indent = 0
+			}
 			layout.Rects = append(layout.Rects, webRect{
-				Rect:  sdl.Rect{X: padX, Y: y, W: contentW, H: 2},
-				Color: sdl.Color{R: 200, G: 206, B: 216, A: 255},
+				Rect:  sdl.Rect{X: padX + indent, Y: y, W: contentW - indent, H: barW},
+				Color: webFadeColor(color, d.Paper, block.Style),
 			})
 			skipRows(1)
 			continue
@@ -3247,27 +3600,58 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		endGrid := int32(len(layout.Rows))
 		height := (endGrid - startGrid) * rowH
 		if block.HasBg && height > 0 {
-			layout.Rects = append(layout.Rects, webRect{
+			rect := webRect{
 				Rect:   sdl.Rect{X: padX - 4, Y: startGrid * rowH, W: contentW + 8, H: height},
 				Color:  webFadeColor(block.Background, d.Paper, block.Style),
 				Z:      block.ZIndex,
 				Radius: radius,
-			})
+			}
+			if block.HasGradient {
+				rect.Gradient = webFadeGradient(block.Gradient, d.Paper, block.Style)
+				rect.HasGradient = true
+			}
+			layout.Rects = append(layout.Rects, rect)
 		}
-		if block.BorderLeft && height > 0 {
-			layout.Rects = append(layout.Rects, webRect{
-				Rect:  sdl.Rect{X: padX + indent - 8, Y: startGrid * rowH, W: 3, H: height},
-				Color: webFadeColor(sdl.Color{R: 170, G: 178, B: 192, A: 255}, d.Paper, block.Style),
-				Z:     block.ZIndex,
-			})
-		}
-		if height > 0 && (block.BoxBorder || block.BorderTop || block.BorderBottom) {
-			color := sdl.Color{R: 200, G: 206, B: 216, A: 255}
+		if height > 0 && (block.BorderLeft || block.BorderRight || block.BoxBorder || block.BorderTop || block.BorderBottom) {
+			// One colour for every edge the block draws: an uncoloured border is
+			// the reader's light hairline, a coloured one is what the sheet
+			// asked for — a `border-left: 4px solid #c00` quote used to render a
+			// grey bar, which is the one thing the author definitely decided.
+			color := sdl.Color{R: 170, G: 178, B: 192, A: 255}
 			if block.HasBorderColor {
 				color = block.BorderColor
 			}
 			color = webFadeColor(color, d.Paper, block.Style)
+			// A side bar defaults wider than a horizontal rule, because it is
+			// the quote/sidebar idiom rather than a divider.
+			barW := int32(math.Round(block.BorderWidth))
+			if barW <= 0 {
+				barW = 3
+			}
+			if barW > 12 {
+				barW = 12
+			}
+			ruleH := barW
+			if block.BorderWidth <= 0 {
+				ruleH = 2
+			}
 			top := startGrid * rowH
+			if block.BorderLeft {
+				layout.Rects = append(layout.Rects, webRect{
+					Rect:  sdl.Rect{X: padX + indent - 8, Y: top, W: barW, H: height},
+					Color: color,
+					Z:     block.ZIndex,
+				})
+			}
+			if block.BorderRight {
+				// Mirrors the left bar into the same gutter on the other side.
+				x := padX + contentW - int32(block.Style.IndentRight) + 5
+				layout.Rects = append(layout.Rects, webRect{
+					Rect:  sdl.Rect{X: x, Y: top, W: barW, H: height},
+					Color: color,
+					Z:     block.ZIndex,
+				})
+			}
 			if block.BoxBorder {
 				x := padX + indent - 6
 				w := contentW - indent + 12
@@ -3279,21 +3663,21 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					Rect:      sdl.Rect{X: x, Y: top, W: w, H: height},
 					Color:     color,
 					Stroke:    true,
-					Thickness: 2,
+					Thickness: ruleH,
 					Z:         block.ZIndex,
 					Radius:    radius,
 				})
 			} else {
 				if block.BorderTop {
 					layout.Rects = append(layout.Rects, webRect{
-						Rect:  sdl.Rect{X: padX, Y: top, W: contentW, H: 2},
+						Rect:  sdl.Rect{X: padX, Y: top, W: contentW, H: ruleH},
 						Color: color,
 						Z:     block.ZIndex,
 					})
 				}
 				if block.BorderBottom {
 					layout.Rects = append(layout.Rects, webRect{
-						Rect:  sdl.Rect{X: padX, Y: top + height - 2, W: contentW, H: 2},
+						Rect:  sdl.Rect{X: padX, Y: top + height - ruleH, W: contentW, H: ruleH},
 						Color: color,
 						Z:     block.ZIndex,
 					})
@@ -3452,6 +3836,93 @@ func webRectCorner(bg webRect, fallback int32) int32 {
 	return radius
 }
 
+// webGradientCornerInset is how far a rounded corner cuts into the row at dy,
+// the same circle approximation gradientRoundedRect uses for the app's own
+// surfaces.
+func webGradientCornerInset(radius, height, dy int32) int32 {
+	if radius <= 0 || dy < 0 || dy >= height {
+		return 0
+	}
+	if dy < radius {
+		return radius - int32(math.Sqrt(float64(2*radius*dy-dy*dy)))
+	}
+	if d := dy - (height - radius); d > 0 {
+		return radius - int32(math.Sqrt(float64(2*radius*d-d*d)))
+	}
+	return 0
+}
+
+// drawWebGradient paints a ramp inside rect, band by band. The band count is
+// capped so a tall hero card costs a bounded number of fills per frame while a
+// small header still gets one band per row: at 96 bands a 40-px header is
+// per-pixel, and a 600-px hero is a 6-px staircase nobody can see.
+func drawWebGradient(renderer *sdl.Renderer, rect sdl.Rect, radius int32, g webGradient) {
+	if renderer == nil || rect.W <= 0 || rect.H <= 0 || len(g.Stops) == 0 {
+		return
+	}
+	const maxBands = 96
+	if g.Vertical {
+		bands := rect.H
+		if bands > maxBands {
+			bands = maxBands
+		}
+		if bands < 1 {
+			bands = 1
+		}
+		for i := int32(0); i < bands; i++ {
+			y0 := rect.Y + i*rect.H/bands
+			y1 := rect.Y + (i+1)*rect.H/bands
+			if y1 <= y0 {
+				continue
+			}
+			// The colour is sampled at the band's middle, so a coarse band does
+			// not look like the old flat fill with a seam in it.
+			color := g.At((float64(i) + 0.5) / float64(bands))
+			x0, w := rect.X, rect.W
+			if radius > 0 {
+				// The inset is sampled at the band's middle, so a rounded corner
+				// steps once per band instead of once per scanline.
+				inset := webGradientCornerInset(radius, rect.H, (y0+y1)/2-rect.Y)
+				x0 += inset
+				w -= inset * 2
+			}
+			if w <= 0 {
+				continue
+			}
+			renderer.SetDrawColor(color.R, color.G, color.B, color.A)
+			renderer.FillRect(&sdl.Rect{X: x0, Y: y0, W: w, H: y1 - y0})
+		}
+		return
+	}
+
+	bands := rect.W
+	if bands > maxBands {
+		bands = maxBands
+	}
+	if bands < 1 {
+		bands = 1
+	}
+	for i := int32(0); i < bands; i++ {
+		x0 := rect.X + i*rect.W/bands
+		x1 := rect.X + (i+1)*rect.W/bands
+		if x1 <= x0 {
+			continue
+		}
+		color := g.At((float64(i) + 0.5) / float64(bands))
+		y0, h := rect.Y, rect.H
+		if radius > 0 {
+			inset := webGradientCornerInset(radius, rect.W, (x0+x1)/2-rect.X)
+			y0 += inset
+			h -= inset * 2
+		}
+		if h <= 0 {
+			continue
+		}
+		renderer.SetDrawColor(color.R, color.G, color.B, color.A)
+		renderer.FillRect(&sdl.Rect{X: x0, Y: y0, W: x1 - x0, H: h})
+	}
+}
+
 // drawWebDocument paints the styled page inside rect starting at startRow.
 func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, layout *webLayout, rect sdl.Rect, startRow int) {
 	if doc == nil || layout == nil || layout.RowH <= 0 || rect.W <= 0 || rect.H <= 0 {
@@ -3464,8 +3935,14 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 		startRow = 0
 	}
 	renderWithClip(renderer, rect.X, rect.Y, rect.W, rect.H, func(r *sdl.Renderer) {
-		r.SetDrawColor(doc.Paper.R, doc.Paper.G, doc.Paper.B, 255)
-		r.FillRect(&sdl.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: rect.H})
+		if doc.HasPaperGradient {
+			// The page background is a ramp too, not the average of one: a
+			// body gradient is most of what a landing page looks like.
+			drawWebGradient(r, rect, 0, doc.PaperGradient)
+		} else {
+			r.SetDrawColor(doc.Paper.R, doc.Paper.G, doc.Paper.B, 255)
+			r.FillRect(&sdl.Rect{X: rect.X, Y: rect.Y, W: rect.W, H: rect.H})
+		}
 
 		offset := int32(startRow) * layout.RowH
 		if len(layout.Floats) > 0 {
@@ -3482,6 +3959,10 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 					thickness = 1
 				}
 				strokeRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
+				continue
+			}
+			if bg.HasGradient {
+				drawWebGradient(r, sdl.Rect{X: rect.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, webRectCorner(bg, 2), bg.Gradient)
 				continue
 			}
 			fillRoundedRect(r, rect.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)

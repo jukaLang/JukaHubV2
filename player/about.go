@@ -43,27 +43,25 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	const margin = int32(24)
 	top := HomeTopBarH + 8
 	bottom := screenHeight - bottomBarHeight("About") - 16
-	cx := screenWidth / 2
 
-	// Brand block: the wordmark is drawn like the header brand, with no plate
-	// behind it, so the screen matches every other one.
-	if bigFont != nil {
-		logo := "JukaHub"
-		lw, _, _ := bigFont.SizeUTF8(logo)
-		renderText(renderer, config, bigFont, logo, ColorTextPrimary(), cx-int32(lw)/2, top+2)
-	}
-	ver := versionDisplayString(config)
-	vw, _, _ := medFont.SizeUTF8(ver)
-	renderText(renderer, config, medFont, ver, ColorTextSecondary(), cx-int32(vw)/2, top+52)
-	tag := "Your device. Your way."
-	tw, _, _ := font.SizeUTF8(tag)
-	renderText(renderer, config, font, tag, ColorTextTertiary(), cx-int32(tw)/2, top+84)
+	// Brand block: the shared page header in its centred form. The wordmark, the
+	// version and the tagline are the three lines every header can carry, and
+	// the cards start where this one says the band ends.
+	headerBottom := UIPageHeaderDraw(renderer, config, UIPageHeader{
+		X: margin, Y: top, W: screenWidth - 2*margin,
+		Title:        "JukaHub",
+		TitleRole:    "big",
+		Subtitle:     versionDisplayString(config),
+		SubtitleRole: "medium",
+		Status:       "Your device. Your way.",
+		Centered:     true,
+	})
 
 	// Two columns of cards, then a full-width card for the licences. Heights
 	// come from the panel, so adding a credit line cannot push text into the
 	// footer band again.
 	gap := int32(24)
-	cardY := top + 112
+	cardY := headerBottom + 20
 	cardW := (screenWidth - margin*2 - gap) / 2
 	rowH := int32(224)
 	buildRect := sdl.Rect{X: margin, Y: cardY, W: cardW, H: rowH}

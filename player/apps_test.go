@@ -178,6 +178,34 @@ func TestBuiltinAppletScenesExist(t *testing.T) {
 	}
 }
 
+// TestDeviceConfigShipsEveryBuiltinApplet is the regression guard for the
+// stale make-config.ps1 whitelist. That list dropped nine scenes (JukaLand,
+// Live TV, Podcasts, Tickers, Weather, Unit Converter, Canvas Sandbox, IP
+// Stream and the Audio Player), and builtinAppEntries silently hides a row
+// whose scene the config does not ship — so the handheld lost nine working
+// apps with no error anywhere. Every applet the Apps launcher offers must be
+// openable on the handheld build too.
+func TestDeviceConfigShipsEveryBuiltinApplet(t *testing.T) {
+	data, err := os.ReadFile("trimui/jukaconfig.device.json")
+	if err != nil {
+		t.Fatalf("read trimui/jukaconfig.device.json: %v", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatalf("parse trimui/jukaconfig.device.json: %v", err)
+	}
+	// The Browser scene is injected at startup, not stored in the config.
+	ensureBrowserScene(&cfg)
+	for _, a := range builtinApplets {
+		if a.Action != "" {
+			continue // panel-backed applets have no config scene
+		}
+		if sceneIndexExact(&cfg, a.Scene) < 0 {
+			t.Errorf("the handheld config does not ship the %q applet's scene %q", a.Name, a.Scene)
+		}
+	}
+}
+
 // TestAppsSceneConfig checks the Apps scene in jukaconfig.json is wired to the
 // app launcher: a dynamiclist on app_entries plus the launcher action buttons.
 func TestAppsSceneConfig(t *testing.T) {

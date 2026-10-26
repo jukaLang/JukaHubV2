@@ -40,6 +40,8 @@ const (
 	powerPageSync
 	powerPageConfigs
 	powerPageBench
+	powerPageToolbox
+	powerPageSecurity
 	powerPageOutput
 )
 
@@ -67,6 +69,10 @@ const (
 	powerActionRunBenchmark
 	powerActionRefreshBenchmark
 	powerActionExportBenchmark
+	powerActionToolboxInstall
+	powerActionToolboxRun
+	powerActionToolboxArgs
+	powerActionToolboxCopy
 	powerActionBack
 	powerActionClose
 )
@@ -104,6 +110,10 @@ type powerToolsState struct {
 
 	confirmKey string
 	confirmAt  time.Time
+	// authorizeKey/authorizeAt arm the one-time authorized-use acknowledgement
+	// for a network-scanning toolbox tool (toolboxAuthorizedUseGate).
+	authorizeKey string
+	authorizeAt  time.Time
 
 	wrapKey   string
 	wrapText  string
@@ -274,6 +284,53 @@ func powerToolRows(config *Config) []powerToolRow {
 			rows = append(rows, powerToolRow{label: "No snapshots yet", value: "Saves create them automatically", detail: "Install this build and change a setting once", enabled: false})
 		}
 		return rows
+	case powerPageToolbox:
+		// One row per catalog tool. A installs the first time and runs after
+		// that, so the same key does the obvious thing without a mode switch.
+		tools := toolboxCatalog()
+		rows := make([]powerToolRow, 0, len(tools))
+		for _, t := range tools {
+			value, installed := toolboxRowValue(t)
+			if !installed {
+				rows = append(rows, powerToolRow{
+					label:   t.Name,
+					value:   value,
+					detail:  toolboxRowDetail(t),
+					hint:    hintLine(FooterHint{"A", "Install"}),
+					action:  powerActionToolboxInstall,
+					arg:     t.ID,
+					enabled: true,
+				})
+				continue
+			}
+			rows = append(rows, powerToolRow{
+				label:   t.Name,
+				value:   value,
+				detail:  toolboxRowDetail(t) + " · " + t.Licence,
+				hint:    hintLine(FooterHint{"A", "Run"}, FooterHint{"X", "Arguments"}, FooterHint{"Y", "Copy Path"}),
+				action:  powerActionToolboxRun,
+				arg:     t.ID,
+				enabled: true,
+			})
+		}
+		return rows
+	case powerPageSecurity:
+		// Read-only posture lines: the mechanism is the row, and SECURITY.md is
+		// the long form. Nothing here needs a button, so none is offered.
+		posture := securityPostureRows(config)
+		rows := make([]powerToolRow, 0, len(posture))
+		for _, s := range posture {
+			value := s.Value
+			if s.Warn {
+				value += " ·"
+			}
+			rows = append(rows, powerToolRow{
+				label:  s.Label,
+				value:  value,
+				detail: s.Detail,
+			})
+		}
+		return rows
 	case powerPageBench:
 		url := powerBenchRemoteURL()
 		online := "Set powerBenchURL"
@@ -368,6 +425,14 @@ func powerSetPage(page powerPage) {
 }
 
 func powerBack() {
+	if powerTools.returnToTools && (powerTools.page == powerPageToolbox || powerTools.page == powerPageSecurity) {
+		// These pages are opened from the Tools panel, so Back returns there
+		// instead of to a Power tools menu the user never saw.
+		powerTools.returnToTools = false
+		powerTools.open = false
+		openToolsPanel()
+		return
+	}
 	if powerTools.page == powerPageOutput {
 		if powerTools.returnToTools {
 			// The probe was started in Tools → FTP & IP, so Back returns there
@@ -466,6 +531,35 @@ func powerRunFromTools(config *Config, title, working string, fn func() powerAsy
 	openPowerTools(config)
 	powerTools.returnToTools = true
 	powerStartAsync(title, working, fn)
+}
+
+// powerRunToolFromArgs runs a toolbox tool after its argument line was edited in
+// the keyboard. The toolbox page is left behind the output viewer so Back lands
+// on the row the user came from.
+func powerRunToolFromArgs(id string) {
+	t, ok := toolboxFind(id)
+	if !ok {
+		return
+	}
+	if toolboxInstalled(t) == "" {
+		ShowToast(t.Name+" is not installed", ToastKindWarning)
+		return
+	}
+	if !toolboxAuthorizedUseGate(t, appConfig) {
+		return
+	}
+	if !powerTools.open {
+		openPowerTools(appConfig)
+		powerTools.returnToTools = true
+	}
+	powerSetPage(powerPageToolbox)
+	args := toolboxArgsFor(id)
+	line, _ := toolboxCommandLine(t, args)
+	powerStartAsync(t.Name+" · "+line, "Running "+t.Binary+"…", func() powerAsyncResult {
+		out, err := toolboxRun(id, args, powerTimeoutScript)
+		return powerAsyncResult{text: out, raw: []byte(out), mode: "text", err: err}
+	})
+	PlayActivateSound()
 }
 
 func powerProbeGatewayScan(config *Config) {
@@ -578,6 +672,53 @@ func powerConfirm(key string) bool {
 	return false
 }
 
+// toolboxAuthorizedUseKey is the acknowledgement stored in jukauser.json after
+// the first press on a network-scanning tool.
+const toolboxAuthorizedUseKey = "networkScanAuthorized"
+
+// toolboxAuthorizedUseAccepted reports whether the user has already answered
+// the scanning question on this card.
+func toolboxAuthorizedUseAccepted(config *Config) bool {
+	if config == nil {
+		return false
+	}
+	v, ok := customValue(config.Variables.Custom, toolboxAuthorizedUseKey)
+	return ok && coerceBool(v)
+}
+
+// toolboxAcceptAuthorizedUse records the answer once, so the prompt never comes
+// back for any scanning tool.
+func toolboxAcceptAuthorizedUse(config *Config) {
+	if config == nil {
+		return
+	}
+	config.Variables.Custom[toolboxAuthorizedUseKey] = true
+	saveUserConfigDebounced(userConfigFromVariables(config))
+}
+
+// toolboxAuthorizedUseGate decides whether a run may start. A scanning tool
+// asks once: the first press says what the tool does to other hosts, and a
+// second press inside five seconds records the acknowledgement and runs — the
+// same two-press rule the Forget chip and the Wi-Fi picker use for anything
+// that cannot be casually undone. After that the answer is on the card, so
+// every later run of every scanning tool goes straight through. Tools that
+// only touch this device are never gated.
+func toolboxAuthorizedUseGate(t toolboxTool, config *Config) bool {
+	if !t.NetworkScan || toolboxAuthorizedUseAccepted(config) {
+		return true
+	}
+	now := time.Now()
+	if powerTools.authorizeKey == t.ID && now.Sub(powerTools.authorizeAt) < 5*time.Second {
+		powerTools.authorizeKey = ""
+		toolboxAcceptAuthorizedUse(config)
+		return true
+	}
+	powerTools.authorizeKey = t.ID
+	powerTools.authorizeAt = now
+	ShowToast("Only scan networks you own or may test — press again to accept", ToastKindWarning)
+	return false
+}
+
 func powerClipboardText() (string, error) {
 	text, err := sdl.GetClipboardText()
 	if err != nil {
@@ -617,6 +758,60 @@ func powerActivate(config *Config) {
 		openMemPanel()
 	case powerActionOpenCtrlDiag:
 		openCtrldiag()
+	case powerActionToolboxInstall:
+		t, ok := toolboxFind(row.arg)
+		if !ok {
+			return
+		}
+		id := t.ID
+		powerStartAsync(t.Name, "Downloading "+t.Name+"…", func() powerAsyncResult {
+			if err := toolboxInstall(id, config); err != nil {
+				return powerAsyncResult{err: err}
+			}
+			path := toolboxPath(t)
+			return powerAsyncResult{text: t.Name + " installed to " + path + "\n\nPress A to run it, X to type arguments, or use Power tools → Script snippets with " + t.Binary + " on PATH."}
+		})
+		PlayActivateSound()
+	case powerActionToolboxRun:
+		t, ok := toolboxFind(row.arg)
+		if !ok {
+			return
+		}
+		if toolboxInstalled(t) == "" {
+			ShowToast(t.Name+" is not installed", ToastKindWarning)
+			return
+		}
+		if !toolboxAuthorizedUseGate(t, config) {
+			return
+		}
+		id := t.ID
+		args := toolboxArgsFor(id)
+		line, _ := toolboxCommandLine(t, args)
+		powerStartAsync(t.Name+" · "+line, "Running "+t.Binary+"…", func() powerAsyncResult {
+			out, err := toolboxRun(id, args, powerTimeoutScript)
+			return powerAsyncResult{text: out, raw: []byte(out), mode: "text", err: err}
+		})
+		PlayActivateSound()
+	case powerActionToolboxArgs:
+		if _, ok := toolboxFind(row.arg); !ok {
+			return
+		}
+		vkOpenToolArgs(row.arg)
+	case powerActionToolboxCopy:
+		t, ok := toolboxFind(row.arg)
+		if !ok {
+			return
+		}
+		path := toolboxInstalled(t)
+		if path == "" {
+			ShowToast(t.Name+" is not installed", ToastKindWarning)
+			return
+		}
+		if err := sdl.SetClipboardText(path); err != nil {
+			ShowToast("Clipboard unavailable: "+err.Error(), ToastKindError)
+			return
+		}
+		ShowToast(path+" copied", ToastKindSuccess)
 	case powerActionInspectFile:
 		path := row.arg
 		powerStartAsync(filepath.Base(path), "Reading "+filepath.Base(path)+"…", func() powerAsyncResult {
@@ -1064,6 +1259,10 @@ func powerPageTitle(page powerPage) (string, string) {
 		return "Config history", "A snapshot is kept before each jukauser.json save"
 	case powerPageBench:
 		return "Benchmark board", "Read/write MB/s for this device"
+	case powerPageToolbox:
+		return "Toolbox", "Popular CLI tools · installed from curated GitHub releases"
+	case powerPageSecurity:
+		return "Security & trust", "What this build protects · the long form is SECURITY.md"
 	case powerPageOutput:
 		name, _, mode, _ := powerOutputSnapshot()
 		if name == "" {

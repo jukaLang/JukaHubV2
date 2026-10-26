@@ -377,6 +377,10 @@ func drawWebFloats(r *sdl.Renderer, config *Config, doc *webDocument, layout *we
 				strokeRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 3), thickness, bg.Color)
 				continue
 			}
+			if bg.HasGradient {
+				drawWebGradient(r, sdl.Rect{X: rect.X + f.X + bg.Rect.X, Y: y, W: bg.Rect.W, H: bg.Rect.H}, webRectCorner(bg, 2), bg.Gradient)
+				continue
+			}
 			fillRoundedRect(r, rect.X+f.X+bg.Rect.X, y, bg.Rect.W, bg.Rect.H, webRectCorner(bg, 2), bg.Color)
 		}
 		for _, row := range f.Rows {

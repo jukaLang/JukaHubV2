@@ -402,6 +402,98 @@ func wifiSignalBars(rssi int) int {
 	}
 }
 
+// wifiRowBars is the bar count for one picker row. The connected row is the one
+// link the app can measure directly, so it takes the status meter's reading
+// through the same seam the meter uses — /proc/net/wireless, then
+// `wpa_cli signal_poll` — instead of the scan's level for our own AP, which can
+// be absent, stale, or a driver's 0. That is what makes a /proc-less image show
+// real bars on its own network in the picker, not just in the corner meter.
+// Every other row keeps the scan's RSSI, and a meter that reports "unknown" or
+// "no link" leaves the scan value alone rather than drawing a state the row has
+// no room to explain.
+func wifiRowBars(n wifiNetwork, meterLevel func() int) int {
+	if n.Active && meterLevel != nil {
+		if level := meterLevel(); level >= 1 && level <= 4 {
+			return level
+		}
+	}
+	return wifiSignalBars(n.Signal)
+}
+
+// wifiSignalSample is what `wpa_cli signal_poll` says about the associated
+// link. It is the supplicant's own view, so it stays available on images whose
+// kernel was built without wireless extensions and therefore has no
+// /proc/net/wireless at all.
+type wifiSignalSample struct {
+	// RSSI is the signal level in dBm: always negative, -50 is strong and
+	// below -85 is barely usable.
+	RSSI int
+	// LinkKbps is the negotiated link rate in kbit/s, 0 when not reported.
+	LinkKbps int
+	// Noise is the noise floor in dBm when the driver reports it.
+	Noise int
+	// FreqMHz is the channel centre frequency in MHz.
+	FreqMHz int
+}
+
+// wifiSignalPoll asks wpa_supplicant for the current signal strength. It errors
+// with the reason a caller can show (no interface, no wpa_cli, FAIL, or a
+// report without a usable RSSI).
+func wifiSignalPoll() (wifiSignalSample, error) {
+	out, err := wifiWPA("signal_poll")
+	if err != nil {
+		return wifiSignalSample{}, err
+	}
+	if wifiCommandFailed(out) {
+		return wifiSignalSample{}, errors.New(wifiFailureMessage(out))
+	}
+	return parseWPASignalPoll(out)
+}
+
+// parseWPASignalPoll reads `wpa_cli signal_poll` output. The report is
+// key=value lines (some builds prefix a "Selected interface 'wlan0'" line), and
+// a non-negative RSSI is not a measurement: the supplicant prints 0 or -1 when
+// it has no number, and drawing bars from that is the lie this parser exists to
+// avoid.
+func parseWPASignalPoll(out string) (wifiSignalSample, error) {
+	var sample wifiSignalSample
+	sawRSSI := false
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		switch strings.TrimSpace(key) {
+		case "RSSI":
+			if n, err := strconv.Atoi(value); err == nil {
+				sample.RSSI = n
+				sawRSSI = true
+			}
+		case "LINKSPEED":
+			if n, err := strconv.Atoi(value); err == nil {
+				sample.LinkKbps = n
+			}
+		case "NOISE":
+			if n, err := strconv.Atoi(value); err == nil {
+				sample.Noise = n
+			}
+		case "FREQUENCY":
+			if n, err := strconv.Atoi(value); err == nil {
+				sample.FreqMHz = n
+			}
+		}
+	}
+	if !sawRSSI || sample.RSSI >= 0 || sample.RSSI < -110 {
+		return sample, errors.New("signal_poll reported no usable RSSI")
+	}
+	return sample, nil
+}
+
 // sameWiFiScan reports whether two scans saw the same access points with the
 // same strengths. It is how the scan wait tells a fresh result from the stale
 // list that is still on the supplicant.

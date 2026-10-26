@@ -165,6 +165,162 @@ func TestUIEmptyStateDrawsText(t *testing.T) {
 	}
 }
 
+// The header's contract is its return value: a caller lays content out at the y
+// it gets back, so nothing may be painted below that line and the title must be
+// inside the band.
+func TestPageHeaderMeasuresWhatItDraws(t *testing.T) {
+	config := &Config{}
+	// The fonts have to exist before metrics mean anything: the band is
+	// measured from them, so this initialises SDL_ttf first.
+	newProbeFrame(t)
+	glyph := func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+		fillRoundedRect(r, box.X, box.Y, box.W, box.H, 4, sdl.Color{R: 240, G: 240, B: 240, A: 255})
+	}
+	bands := []UIPageHeader{
+		{X: 60, Y: 40, W: 620, Title: "Tools", Subtitle: "Diagnostics and transfers", Status: "Offline"},
+		{X: 60, Y: 40, W: 620, Title: "Tools", Subtitle: "Diagnostics and transfers", Status: "Offline", Glyph: glyph},
+		{X: 60, Y: 40, W: 620, Title: "JukaHub", TitleRole: "big", Subtitle: "v0.4.0", Status: "Your device. Your way.", Centered: true},
+	}
+
+	for i := range bands {
+		h := bands[i]
+		m := uiPageHeaderMetricsFor(config, h)
+		if m.Height <= 0 {
+			t.Fatalf("case %d: header height = %d", i, m.Height)
+		}
+		if h.Glyph != nil && m.WellBox <= m.TitleH {
+			t.Fatalf("case %d: well %d is not taller than the title %d", i, m.WellBox, m.TitleH)
+		}
+
+		f := componentFrame(t, func(r *sdl.Renderer) {
+			if got := UIPageHeaderDraw(r, config, h); got != h.Y+m.Height {
+				t.Errorf("case %d: draw returned %d, metrics say %d", i, got, h.Y+m.Height)
+			}
+		})
+
+		ink := 0
+		for y := h.Y; y < h.Y+m.Height; y++ {
+			for x := h.X; x < h.X+h.W; x++ {
+				if !f.isBG(x, y) {
+					ink++
+				}
+			}
+		}
+		if ink < 20 {
+			t.Fatalf("case %d: the band drew only %d pixels", i, ink)
+		}
+
+		// Nothing may spill into the row the content is about to occupy. Two
+		// pixels of slack cover anti-aliasing on the last text row.
+		for y := h.Y + m.Height + 2; y < h.Y+m.Height+8; y++ {
+			for x := h.X; x < h.X+h.W; x++ {
+				if !f.isBG(x, y) {
+					t.Fatalf("case %d: header ink at (%d,%d), below the height it reports", i, x, y)
+				}
+			}
+		}
+	}
+}
+
+// A tile's label lives inside the tile, and the focused tile is visibly
+// different from a resting one. The heading and the overlay both draw through
+// this, so the check is on the recipe itself.
+func TestCategoryTileDrawsInsideItsRect(t *testing.T) {
+	config := &Config{}
+	rect := sdl.Rect{X: 100, Y: 100, W: 200, H: 120}
+	glyph := func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+		fillCircle(r, box.X+box.W/2, box.Y+box.H/2, box.W/3, tint)
+	}
+	rest := componentFrame(t, func(r *sdl.Renderer) {
+		UICategoryTileDraw(r, config, UICategoryTile{Rect: rect, Label: "Terminal", Glyph: glyph})
+	})
+	focused := componentFrame(t, func(r *sdl.Renderer) {
+		UICategoryTileDraw(r, config, UICategoryTile{Rect: rect, Label: "Terminal", Glyph: glyph, Focused: true})
+	})
+
+	// The label is drawn under the well, inside the card.
+	ink := 0
+	for y := rect.Y + rect.H/2; y < rect.Y+rect.H-4; y++ {
+		for x := rect.X + 4; x < rect.X+rect.W-4; x++ {
+			if !rest.isBG(x, y) {
+				ink++
+			}
+		}
+	}
+	if ink < 20 {
+		t.Fatalf("tile drew only %d label pixels", ink)
+	}
+	if focused.at(rect.X+4, rect.Y+rect.H/2) == rest.at(rect.X+4, rect.Y+rect.H/2) {
+		t.Error("focused tile looks identical to a resting one")
+	}
+	// The focus ring sits outside the card, which is where the grid's gaps are.
+	if focused.at(rect.X-FocusRing, rect.Y+rect.H/2) == focused.bg {
+		t.Error("focused tile did not draw its outer ring")
+	}
+	// A status dot has to be visible on the corner it claims.
+	dotted := componentFrame(t, func(r *sdl.Renderer) {
+		UICategoryTileDraw(r, config, UICategoryTile{
+			Rect: rect, Label: "Terminal", Glyph: glyph,
+			Status: sdl.Color{R: 240, G: 60, B: 60, A: 255},
+		})
+	})
+	if got := dotted.at(rect.X+rect.W-13, rect.Y+13); got.R < 200 || got.G > 90 {
+		t.Errorf("status dot pixel = %+v, want the dot colour", got)
+	}
+}
+
+// The page header is one recipe now, so the two Tools screens and About must
+// report the same band for the same title: a difference here is the drift the
+// component exists to prevent.
+func TestPageHeaderIsSharedAcrossScreens(t *testing.T) {
+	config := &Config{}
+	newProbeFrame(t)
+	scene := SceneConfig{Name: "Tools"}
+	overlay := toolsHeader(config, 24, 40, 800)
+	page := menuTilesHeader(config, scene, 24, 40, 800)
+	if overlay.Title != page.Title {
+		t.Fatalf("overlay title %q, page title %q", overlay.Title, page.Title)
+	}
+	if overlay.Glyph == nil || page.Glyph == nil {
+		t.Fatal("a header is missing its glyph well")
+	}
+	om, pm := uiPageHeaderMetricsFor(config, overlay), uiPageHeaderMetricsFor(config, page)
+	if om.Height != pm.Height || om.WellBox != pm.WellBox {
+		t.Fatalf("the two Tools headers measure differently: %+v vs %+v", om, pm)
+	}
+
+	// About uses the same component in its centred form: every line has to be
+	// centred in the band it was given. The whole band is scanned, because the
+	// status line is the widest of the three.
+	centred := UIPageHeader{
+		X: 100, Y: 40, W: 600, Title: "JukaHub", TitleRole: "big",
+		Subtitle: "v0.4.0", SubtitleRole: "medium", Status: "Your device. Your way.", Centered: true,
+	}
+	cm := uiPageHeaderMetricsFor(config, centred)
+	f := componentFrame(t, func(r *sdl.Renderer) {
+		UIPageHeaderDraw(r, config, centred)
+	})
+	left, right := int32(-1), int32(-1)
+	for x := int32(100); x < 700; x++ {
+		for y := centred.Y; y < centred.Y+cm.Height; y++ {
+			if !f.isBG(x, y) {
+				if left < 0 {
+					left = x
+				}
+				right = x
+				break
+			}
+		}
+	}
+	if left < 0 {
+		t.Fatal("the centred header drew nothing")
+	}
+	centre := (left + right) / 2
+	if centre < 385 || centre > 415 {
+		t.Fatalf("centred header ink spans %d..%d (centre %d), want it around 400", left, right, centre)
+	}
+}
+
 func TestUILoadingSkeletonPulses(t *testing.T) {
 	first := componentFrame(t, func(r *sdl.Renderer) {
 		UILoadingSkeleton(r, sdl.Rect{X: 100, Y: 100, W: 300, H: 24}, 0)

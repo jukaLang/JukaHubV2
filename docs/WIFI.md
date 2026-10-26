@@ -19,6 +19,57 @@ The meter's tap target is deliberately larger than the bars it draws (it spans
 the height of the top bar and extends into the empty space to its left), because
 the icon itself is smaller than a fingertip.
 
+## What the meter means
+
+The corner shows three states, and only one of them is a signal strength:
+
+| Corner | State |
+|--------|-------|
+| Four solid bars, green to red | a measured strength: the kernel's link quality from `/proc/net/wireless`, or the supplicant's RSSI from `wpa_cli signal_poll` when that table is missing |
+| Four hollow bars outlined in the accent | the interface is up and neither source reports a number; connected, strength unknown |
+| Hollow bars with a slash | no wireless link at all |
+
+The slash is deliberate. An empty four-bar meter reads as *weak signal*, which is
+the opposite of the truth when the radio is not associated, so the no-link state
+is drawn as a crossed-out meter instead. Its ink is the warning colour when
+nothing else is keeping the device online, and a muted grey when it is (an
+Ethernet link, for instance): the mark is about Wi-Fi, and the text beside it
+(`! Offline`) is about the internet.
+
+The meter never invents a level. When no quality is readable it says *unknown*
+rather than filling half the bars, so a strong link and an unmeasurable one do
+not look the same.
+
+### Where the number comes from
+
+Two sources, in this order, because stock images differ:
+
+1. **`/proc/net/wireless`** — the kernel's link quality on a 0..70 scale. Present
+   on the stock Smart Pro and Brick kernels, and the fastest read (a file, no
+   process).
+2. **`wpa_cli -i <iface> signal_poll`** — the supplicant's own `RSSI` in dBm,
+   mapped onto the same four bars. Images built without wireless extensions have
+   no `/proc/net/wireless` at all, and some drivers list an interface with
+   quality `0` while associated; both cases used to leave the meter *unknown*
+   forever, and now show a real level.
+
+The poll runs on a worker, never on the render loop: a supplicant that stops
+answering would otherwise freeze the UI for the command timeout. The last answer
+is cached for the same four seconds as the kernel read, so the first frames after
+boot read *unknown* and become bars one refresh later. A non-negative `RSSI` (the
+`0` a disconnected supplicant prints) is not treated as a measurement, and a
+failed poll clears the cached level rather than leaving a stale one on screen.
+
+The picker reuses this chain rather than reading the scan table for its own
+network: the **CONNECTED** row draws its bars from the same meter reading, so an
+image with no `/proc/net/wireless` shows a real level there too instead of the
+single bar a driver's `0` used to produce. The other rows keep the RSSI from
+`wpa_cli scan_results` — they are not the link the device is on, and the meter
+does not measure them.
+
+A read-only probe is one row away: **Tools → Wi-Fi signal** prints the same
+numbers and names the source it used.
+
 The Wi-Fi radio itself is still switched on and off in Quick Settings (**Wi-Fi**
 row). The picker can also turn it on: with an empty list, pressing **A** switches
 the radio on and scans.
@@ -140,6 +191,13 @@ forget path, the panel layout at 720p and 480p, and the end-to-end UI flow from
 opening the picker to a connected status. It stubs `wpa_cli` completely: no test
 touches a radio, and one test asserts that the passphrase never appears in any
 argument.
+
+The status meter has its own coverage in `statusbar_status_test.go`: the
+`/proc/net/wireless` parser and its bar thresholds, the `signal_poll` parser
+(including `FAIL`, a missing `RSSI` and the `0` placeholder), the source chain in
+`wifiMeterLevelFrom`, and the supplicant cache — an unanswered poll stays
+*unknown*, a failed poll clears the previous reading, and the caller never waits
+for the command.
 
 ```sh
 cd player

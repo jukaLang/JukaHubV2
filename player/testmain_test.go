@@ -21,9 +21,19 @@ func TestMain(m *testing.M) {
 		browserAdBlockSitesPath = func() string { return filepath.Join(dir, "browser-block.json") }
 		resetBrowserAdBlockSitesForTest()
 	}
+	// Same reason for the cookie jar: it is written to the data directory now,
+	// and a page load in the suite must not touch the real card.
+	cookieDir, cookieErr := os.MkdirTemp("", "jukahub-browser-cookies")
+	if cookieErr == nil {
+		browserCookiesPath = func() string { return filepath.Join(cookieDir, "browser-cookies.json") }
+		browserResetCookies()
+	}
 	code := m.Run()
 	if err == nil {
 		os.RemoveAll(dir)
+	}
+	if cookieErr == nil {
+		os.RemoveAll(cookieDir)
 	}
 	os.Exit(code)
 }

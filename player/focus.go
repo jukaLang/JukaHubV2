@@ -532,15 +532,26 @@ func buildSpatialEdges(nodes []FocusNode) map[int][]int {
 		ci, di := center(i)
 		for _, j := range edges[i] {
 			cj, dj := center(j)
-			switch {
-			case dj-di < -2:
-				hasDir[0] = true
-			case dj-di > 2:
-				hasDir[1] = true
-			case cj-ci < -2:
-				hasDir[2] = true
-			case cj-ci > 2:
-				hasDir[3] = true
+			dx := cj - ci
+			dy := dj - di
+			// Classify by the axis this edge was built along, not by the sign
+			// of the raw offset. An edge whose dominant axis is horizontal can
+			// still carry a small vertical offset; counting that as "up" used
+			// to suppress the fallback below, leaving a node with no real
+			// neighbour in that direction — a control off to the side then
+			// answered Up from a control that had something directly above it.
+			if absI32(dx) >= absI32(dy) {
+				if dx < 0 {
+					hasDir[2] = true
+				} else {
+					hasDir[3] = true
+				}
+			} else {
+				if dy < 0 {
+					hasDir[0] = true
+				} else {
+					hasDir[1] = true
+				}
 			}
 		}
 		for _, d := range dirs {

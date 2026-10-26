@@ -80,7 +80,8 @@ func TestMenuTilesSceneEligibility(t *testing.T) {
 			buttons[0], buttons[1], buttons[2],
 		}}, false},
 		{"tile home layout", SceneConfig{Name: "Misc", Layout: "home", Elements: buttons}, false},
-		{"another menu", SceneConfig{Name: "Settings", Elements: buttons}, false},
+		{"settings menu", SceneConfig{Name: "Settings", Elements: buttons}, true},
+		{"another menu", SceneConfig{Name: "FanControl", Elements: buttons}, false},
 		{"button with no trigger", SceneConfig{Name: "Misc", Elements: []Element{
 			buttons[0], buttons[1], buttons[2], {Type: "button", Text: "Dead"},
 		}}, false},
@@ -113,10 +114,10 @@ func TestMenuTilesGroupsAndIcons(t *testing.T) {
 		{Element{Text: "Fan Control", Trigger: "change_scene:Fan"}, menuTilesMore, ""},
 	}
 	for _, tc := range cases {
-		if got := menuTilesGroup(tc.elem); got != tc.group {
+		if got := toolsMenuGroup(tc.elem); got != tc.group {
 			t.Errorf("%q: group = %q, want %q", tc.elem.Text, got, tc.group)
 		}
-		if got := menuTilesIcon(tc.elem); got != tc.icon {
+		if got := toolsMenuIcon(tc.elem); got != tc.icon {
 			t.Errorf("%q: icon = %q, want %q", tc.elem.Text, got, tc.icon)
 		}
 	}
@@ -467,5 +468,209 @@ func TestMenuTilesRenderProbe(t *testing.T) {
 		return int(c.R)+int(c.G)+int(c.B) > int(f.bg.R)+int(f.bg.G)+int(f.bg.B)+60
 	}); n < 40 {
 		t.Errorf("the section heading band has almost no ink (%d pixels)", n)
+	}
+}
+
+// settingsSceneIndex finds the Settings menu in a loaded config.
+func settingsSceneIndex(t *testing.T, config *Config) int {
+	t.Helper()
+	for i, scene := range config.Scenes {
+		if strings.EqualFold(scene.Name, "Settings") {
+			return i
+		}
+	}
+	t.Fatal("the config has no Settings scene")
+	return -1
+}
+
+// TestSettingsMenuGroupsAndIcons pins the Settings page's own grouping: the
+// rows are categories of settings, not tools, so the Tools grouping would file
+// every one of them under MORE.
+func TestSettingsMenuGroupsAndIcons(t *testing.T) {
+	cases := []struct {
+		elem  Element
+		group string
+		icon  string
+	}{
+		{Element{Text: "General", Trigger: "change_scene:SettingsGeneral"}, menuSettingsSystem, "gear"},
+		{Element{Text: "Appearance", Trigger: "change_scene:SettingsAppearance"}, menuSettingsAppearance, "palette"},
+		{Element{Text: "Theme Presets", Trigger: "change_scene:ThemePresets"}, menuSettingsAppearance, "star"},
+		{Element{Text: "Plugins", Trigger: "change_scene:Plugins"}, menuSettingsSystem, "box"},
+		// Categories the config does not carry yet still land in a section and
+		// still get a glyph, so growing the menu needs no code change here.
+		{Element{Text: "Wi-Fi", Trigger: "change_scene:Wifi"}, menuSettingsNetwork, "network"},
+		{Element{Text: "Bluetooth", Trigger: "change_scene:Bluetooth"}, menuSettingsNetwork, "network"},
+		{Element{Text: "Sound & Vibration", Trigger: "change_scene:Sound"}, menuSettingsSound, "mic"},
+		{Element{Text: "Fan Curve", Trigger: "change_scene:Fan"}, menuSettingsSystem, "gear"},
+	}
+	for _, tc := range cases {
+		if got := settingsMenuGroup(tc.elem); got != tc.group {
+			t.Errorf("%q: group = %q, want %q", tc.elem.Text, got, tc.group)
+		}
+		if got := settingsMenuIcon(tc.elem); got != tc.icon {
+			t.Errorf("%q: icon = %q, want %q", tc.elem.Text, got, tc.icon)
+		}
+	}
+
+	// Every section heading carries a glyph of its own.
+	seen := map[string]bool{}
+	for _, title := range menuSettingsSectionOrder {
+		if glyph := settingsSectionGlyph(title); glyph == "" || seen[glyph] {
+			t.Errorf("section %q has a missing or duplicated glyph %q", title, glyph)
+		}
+		seen[settingsSectionGlyph(title)] = true
+	}
+}
+
+// TestSettingsMenuPageHeader checks the Settings page opens with the shared
+// page header: its own title, glyph and subtitle, and no network read-out (that
+// belongs to the Tools page, where it is the page's subject).
+func TestSettingsMenuPageHeader(t *testing.T) {
+	config := layoutTestConfig(t)
+	scene := config.Scenes[settingsSceneIndex(t, config)]
+	profile, ok := menuPageProfileFor(scene)
+	if !ok {
+		t.Fatal("the Settings scene is not drawn as a page")
+	}
+	if profile.status != nil {
+		t.Error("the Settings page asks for a network status read-out")
+	}
+
+	h := menuTilesHeader(config, scene, 0, 0, 1000)
+	if strings.TrimSpace(h.Title) == "" {
+		t.Error("the Settings header has no title")
+	}
+	if h.Glyph == nil {
+		t.Error("the Settings header has no glyph")
+	}
+	if h.Status != "" {
+		t.Errorf("the Settings header carries the status %q", h.Status)
+	}
+	if h.Subtitle != profile.subtitle {
+		t.Errorf("subtitle = %q, want the profile's %q", h.Subtitle, profile.subtitle)
+	}
+	if h.TitleSize != menuTitleSize {
+		t.Errorf("title size = %d, want the shared %d", h.TitleSize, menuTitleSize)
+	}
+}
+
+// TestSettingsMenuLaysOutAsAPage runs the real Settings scene through the same
+// layout the Tools page uses: two sections (appearance, then system), every row
+// placed exactly once, and every tile given a glyph.
+func TestSettingsMenuLaysOutAsAPage(t *testing.T) {
+	config := layoutTestConfig(t)
+	idx := settingsSceneIndex(t, config)
+	t.Cleanup(func() { menuTilesSnapshot.valid = false })
+
+	menuTilesApply(config, idx)
+	scene := config.Scenes[idx]
+	layout, ok := menuTilesLayoutFor(config, scene, scene.Elements)
+	if !ok {
+		t.Fatal("the real Settings menu did not lay out")
+	}
+	if len(layout.rects) != len(scene.Elements) {
+		t.Fatalf("placed %d of %d rows", len(layout.rects), len(scene.Elements))
+	}
+	if len(layout.sections) != 2 {
+		t.Fatalf("expected two sections, got %d: %+v", len(layout.sections), layout.sections)
+	}
+	if layout.sections[0].title != menuSettingsAppearance {
+		t.Errorf("first section is %q, want %q", layout.sections[0].title, menuSettingsAppearance)
+	}
+	for _, elem := range scene.Elements {
+		if elem.Style != menuTilesStyle {
+			t.Errorf("%q was not drawn as a tile", elem.Text)
+		}
+		if elem.Icon == "" {
+			t.Errorf("%q has no glyph", elem.Text)
+		}
+	}
+	// Nothing may run over the footer, at any supported size.
+	for _, size := range [][2]int32{{1280, 720}, {1024, 768}} {
+		withScreen(t, size[0], size[1])
+		layout, ok := menuTilesLayoutFor(config, scene, scene.Elements)
+		if !ok {
+			t.Errorf("%dx%d: the Settings page did not lay out", size[0], size[1])
+			continue
+		}
+		for i, rect := range layout.rects {
+			if rect.Y < layout.bodyTop || rect.Y+rect.H > layout.panel.Y+layout.panel.H {
+				t.Errorf("%dx%d: tile %d is outside the panel: %+v", size[0], size[1], i, rect)
+			}
+		}
+	}
+}
+
+// TestSettingsPageRendersAsAPage draws the page and reads the pixels back: the
+// header's glyph well is painted, the tiles are cards, and the section headings
+// carry ink, exactly like the Tools page.
+func TestSettingsPageRendersAsAPage(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	config := layoutTestConfig(t)
+	idx := settingsSceneIndex(t, config)
+	t.Cleanup(func() { menuTilesSnapshot.valid = false })
+	t.Cleanup(ClearTextCache)
+
+	prevAccent := accentColor
+	accentColor = ColorAccent
+	t.Cleanup(func() { accentColor = prevAccent })
+
+	menuTilesApply(config, idx)
+	scene := config.Scenes[idx]
+	layout, ok := menuTilesLayoutFor(config, scene, scene.Elements)
+	if !ok {
+		t.Fatal("no layout for the render probe")
+	}
+
+	f := newProbeFrame(t)
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Skipf("software renderer unavailable: %v", err)
+	}
+	defer destroyTestRenderer(renderer)
+
+	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
+	renderer.Clear()
+	renderMenuTilesDecor(renderer, config, scene)
+	for i, elem := range scene.Elements {
+		renderButtonElement(renderer, config, elem, i, i == 0, false, 0, false)
+	}
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("ReadPixels unavailable: %v", err)
+	}
+
+	// The header: glyph ink inside the well, title text to its right.
+	h := menuTilesHeader(config, scene, layout.panel.X+SpaceXL, layout.titleY, layout.panel.W-2*SpaceXL)
+	m := uiPageHeaderMetricsFor(config, h)
+	well := sdl.Rect{X: h.X, Y: h.Y, W: m.WellBox, H: m.WellBox}
+	if n := countPixelsMatching(f, insetRect(well, 5), func(c sdl.Color) bool {
+		return !(c.R == f.bg.R && c.G == f.bg.G && c.B == f.bg.B)
+	}); n < 20 {
+		t.Errorf("the header glyph well has %d painted pixels, want the Settings glyph", n)
+	}
+
+	// The tiles are cards, and the first section heading sits above them.
+	for i, rect := range layout.rects {
+		inner := insetRect(rect, 8)
+		painted := countPixelsMatching(f, inner, func(c sdl.Color) bool {
+			return !(c.R == f.bg.R && c.G == f.bg.G && c.B == f.bg.B)
+		})
+		if painted < int(inner.W*inner.H)/2 {
+			t.Errorf("tile %d is mostly unpainted (%d of %d pixels)", i, painted, inner.W*inner.H)
+		}
+	}
+	sec := layout.sections[0]
+	band := sdl.Rect{X: layout.panel.X, Y: sec.y, W: layout.panel.W, H: 24}
+	if n := countPixelsMatching(f, band, func(c sdl.Color) bool {
+		return int(c.R)+int(c.G)+int(c.B) > int(f.bg.R)+int(f.bg.G)+int(f.bg.B)+60
+	}); n < 40 {
+		t.Errorf("the section heading band has almost no ink (%d pixels)", n)
+	}
+	for i, rect := range layout.rects {
+		if rect.Y < sec.y {
+			t.Errorf("tile %d is above its section heading", i)
+		}
 	}
 }

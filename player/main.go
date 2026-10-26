@@ -757,6 +757,10 @@ func main() {
 					if browserLinkPanel.open && handleBrowserLinksKey(e, config) {
 						continue
 					}
+					// As is the site picker that forgets one jar's worth of cookies.
+					if browserCookiePanel.open && handleBrowserCookiesKey(e, config) {
+						continue
+					}
 					// The stick calibration wizard is modal while it runs.
 					if calibrationPanel.open && handleStickCalibrationKey(e, config) {
 						continue
@@ -1436,6 +1440,11 @@ func main() {
 							handleBrowserLinksMouse(mx, my, config)
 							break
 						}
+						// The site picker floats above it the same way.
+						if browserCookiePanel.open {
+							handleBrowserCookiesMouse(mx, my, config)
+							break
+						}
 						// The calibration wizard is modal the same way.
 						if calibrationPanel.open {
 							handleStickCalibrationMouse(mx, my, config)
@@ -1837,14 +1846,20 @@ func main() {
 										addressRect, goRect := textBrowserToolbarRects(elem)
 										searchRect := textBrowserSearchRect(elem)
 										filterRect := textBrowserFilterRect(elem)
+										modeRect := textBrowserModeRect(elem)
 										if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
 											handleTextBrowserAddressInput(renderer, config, elem)
 										} else if searchRect.W > 0 && mx >= searchRect.X && mx <= searchRect.X+searchRect.W && my >= searchRect.Y && my <= searchRect.Y+searchRect.H {
 											openBrowserSearch(renderer, config, elem)
 										} else if filterRect.W > 0 && mx >= filterRect.X && mx <= filterRect.X+filterRect.W && my >= filterRect.Y && my <= filterRect.Y+filterRect.H {
 											browserToggleAdFilter(config)
+										} else if modeRect.W > 0 && mx >= modeRect.X && mx <= modeRect.X+modeRect.W && my >= modeRect.Y && my <= modeRect.Y+modeRect.H {
+											browserToggleNavMode()
 										} else if mx >= goRect.X && mx <= goRect.X+goRect.W && my >= goRect.Y && my <= goRect.Y+goRect.H {
 											loadTextBrowserURL(config, elem, textBrowserAddress(config))
+										} else if browserCookieStripTap(mx, my, config) {
+											// The strip names the hosts; tapping it is how a touch
+											// user picks one to sign out.
 										} else {
 											// Tapped a link inside the rendered page (a no-op when the tap
 											// landed on none).
@@ -2656,6 +2671,11 @@ func main() {
 		// Browser link picker (anchors extracted from the current page).
 		if browserLinkPanel.open {
 			renderBrowserLinkPanel(renderer, config)
+		}
+
+		// Saved-cookie picker (forget one site instead of the whole jar).
+		if browserCookiePanel.open {
+			renderBrowserCookiePanel(renderer, config)
 		}
 
 		// RetroAchievements overlay (recent unlocks + game progress).

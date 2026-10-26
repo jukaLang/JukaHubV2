@@ -234,8 +234,11 @@ layout does not throw the cursor across the screen, while Left/Right stay in
 plain reading order. **Y** (or the **SEARCH** chip beside the address bar) opens
 the keyboard on an empty field: type a phrase to search, or a host to open it.
 The **Back**, **Forward**, **Reload**, **Links**, **Filter**, **Search**,
-**Home** and **Issues** chips at the bottom are ordinary scene buttons,
-reachable by pressing Down past the end of the page and Up to come back.
+**Home**, **Issues** and **Forget** chips at the bottom are ordinary scene
+buttons, reachable by pressing Down past the end of the page and Up to come
+back. **Forget** drops the cookies the browser saved on the card, so a page it is
+signed in to starts signed out; it asks twice, and the first press says how many
+would go (see [docs/BROWSER.md](BROWSER.md#forgetting-them)).
 
 The chip at the right end of the address bar reports how many ad and tracker
 requests the page load skipped (`12 BLOCKED`, or `0 BLOCKED`). It turns amber as
@@ -700,8 +703,10 @@ selected row does, so the rows themselves stay plain.
 host copied to the clipboard (**Scan clipboard host**), ping
 `1.1.1.1` (the platform's ICMP ping, falling back to a TCP connect when no
 ping binary exists), run the installed `traceroute`/`tracert`, resolve two host
-names and read the Wi-Fi link quality from `/proc/net/wireless` (or `netsh` on
-Windows).
+names and read the Wi-Fi signal from `/proc/net/wireless`, falling back to
+`wpa_cli signal_poll` when that table is missing or lists no interface (or
+`netsh` on Windows). The report names the source it used, so it matches the
+status meter.
 
 **File inspector** only opens a fixed list: `jukauser.json`, `jukaconfig.json`,
 `power-scripts.json`, `power-bench.json`, `logs.txt`, `errors.txt` and

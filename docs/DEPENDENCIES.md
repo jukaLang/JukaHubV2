@@ -39,6 +39,7 @@ update. These deliberately track upstream:
 | Standalone emulator updates | an allowlist of emulator repositories (`player/emulatorupdates.go`) | next to the emulator install |
 | Windows runtime (Wine/Hangover, DXVK) | `AndreRH/hangover`, `doitsujin/dxvk` latest release | the Windows-apps runtime directory |
 | PortMaster | `PortsMaster/PortMaster-GUI` release asset | the ports directory |
+| Toolbox tools (`rclone`, `jq`, `ripgrep`, `fd`, `pandoc`, `age`, `naabu`, `httpx`, `dnsx`) | each project's latest release, from `player/toolbox.go` | the app's tools directory, only when the user installs one; the three scanners also need a one-time acknowledgement before their first run |
 
 Two guardrails apply to all of them:
 
@@ -48,7 +49,10 @@ Two guardrails apply to all of them:
    metadata and a future code path might over-trust the returned URL.
 2. **Asset-name matching, pinned by tests.** A release asset is chosen by name
    (`yt_dlp_asset_test.go`, `install_tools_test.go`), so an upstream rename
-   fails a unit test instead of producing a download error on a device.
+   fails a unit test instead of producing a download error on a device. The
+   toolbox matches on the stable parts of the name rather than a full file name
+   (versions change every release), skips checksum/signature side-cars, and is
+   pinned the same way (`toolbox_test.go`).
 
 There is **no published-digest check** on these downloads today. Integrity rests
 on HTTPS to github.com plus the allowlist, and the *result* is recorded: the
@@ -95,6 +99,9 @@ transactions, and helpers are re-downloaded or replaced with a system build.
   Actions, not the GitHub-release assets above. A helper that breaks is noticed
   by users or by the test that pins its asset name.
 - **No offline mirror.** Every download is from github.com at install time; a
-  device that has never been online cannot install helpers.
+  device that has never been online cannot install helpers or toolbox tools.
+- **No upstream hash check on helper or toolbox downloads** (see above);
+  [TOOLBOX.md](TOOLBOX.md#what-it-verifies-and-what-it-does-not) states the gap
+  next to the feature it affects.
 - **TUF metadata** is designed but not implemented — see
   [UPDATER_TUF.md](UPDATER_TUF.md) for the triggers that would start it.

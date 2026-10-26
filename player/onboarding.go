@@ -69,6 +69,16 @@ var onboardingSteps = []onboardingStep{
 		body:  "Use the D-pad or arrow keys to move, A or Enter to select, and B or Escape to go back. Home, Start and Tools make the main features easy to find.",
 		hint:  "The on-screen footer shows the controls for each screen.",
 	},
+	{
+		// The last step names the two Tools pages nobody guesses: the Toolbox
+		// installs standalone helpers, and Security & trust answers "how is this
+		// device doing?" without a PC. Both are reachable only from Tools, so
+		// the tour is the one place they cost nothing to point at.
+		title: "Toolbox and trust",
+		body:  "Two pages under Tools do what usually needs a computer. Toolbox installs standalone helpers — rclone, jq, ripgrep, fd, pandoc, age — from verified releases and runs them. Security & trust lists what this build protects.",
+		hint:  "Neither page changes anything until you install or start something.",
+		kind:  "tools",
+	},
 }
 
 var onboarding = struct {
@@ -254,6 +264,8 @@ func onboardingActionLabel(kind string) string {
 		return "Scan ROM folders"
 	case "artwork":
 		return "Fetch game artwork"
+	case "tools":
+		return "Open Tools"
 	default:
 		return ""
 	}
@@ -277,6 +289,15 @@ func onboardingStatus(config *Config, kind string) string {
 		return fmt.Sprintf("Found %d ROM(s) across %d system(s).", len(onboarding.roms.Games), len(onboarding.roms.Counts))
 	case "artwork":
 		return artworkFetchSummary()
+	case "tools":
+		// Both pages are read-only, so the step reports their live state instead
+		// of describing it: the install count comes off the card and the posture
+		// summary is the same read the Tools row shows.
+		if config == nil {
+			return "Toolbox: " + toolboxSummaryValue()
+		}
+		posture, _ := securityPostureValue(config)
+		return "Toolbox: " + toolboxSummaryValue() + " · Security: " + posture
 	default:
 		return ""
 	}
@@ -368,6 +389,15 @@ func onboardingPerformAction(config *Config) {
 		} else {
 			onboarding.info = "An artwork fetch is already running."
 		}
+	case "tools":
+		// The Tools panel is a modal, so the tour steps aside while it is open
+		// (onboardingCoveredByOverlay) and comes back to this step when the
+		// panel closes — the same handoff the "Get set up" checklist uses.
+		// openToolsPanel plays its own activate sound, so this case returns
+		// instead of falling through to the shared one.
+		openToolsPanel()
+		onboarding.info = "Tools is open: Toolbox and Security & trust are under SYSTEM & UPDATES."
+		return
 	}
 	PlayActivateSound()
 }
@@ -790,12 +820,17 @@ func ensureOnboardingEntry(config *Config) {
 			return
 		}
 	}
+	// 340,520 is the screensaver row — this button used to land exactly on top
+	// of it, so which of the two answered a tap depended on element order. It
+	// now sits in the page's top-right slot, on the row the Fullscreen and
+	// Weather toggles already share; the band above Save belongs to the cookie
+	// rows.
 	scene.Elements = append(scene.Elements, Element{
 		Type:    "button",
 		Text:    onboardingEntryLabel,
-		X:       340,
-		Y:       520,
-		Width:   "280",
+		X:       1040,
+		Y:       96,
+		Width:   "216",
 		Height:  "48",
 		Trigger: "onboarding_replay",
 		Color:   "$labelColor",

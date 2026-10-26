@@ -4512,6 +4512,13 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		renderAppearancePreview(renderer, config)
 	}
 
+	// Settings → General's Video snaps row reports how many of the card's games
+	// have a clip. The scan runs on the scene's own goroutine; this only writes
+	// the finished count into the row.
+	if scene.Name == "SettingsGeneral" {
+		snapPreviewSyncRow(config)
+	}
+
 	// Single global header: brand + version + active scene, the Apps pill and
 	// the right-side system cluster (network, weather, clock, battery, bell).
 	renderStatusBar(renderer, config)
@@ -5938,6 +5945,34 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		// Settings → General and Quick Settings share this step list.
 		next := applyScreensaverTimeout(config, nextScreenTimeout(config.Variables.ScreensaverTimeout))
 		showToast("Screensaver after "+screenTimeoutLabel(next), ToastInfo())
+	case "cycle_cookie_retention":
+		// Choosing a window also drops what is already older than it, so the
+		// count on the Browser's Forget chip never promises something the
+		// setting is not keeping.
+		days := nextCookieRetentionDays(cookieRetentionDays(config))
+		pruned := applyCookieRetention(config, days)
+		msg := "Saved cookies are kept until you forget them"
+		if days > 0 {
+			msg = "Saved cookies drop after " + cookieRetentionLabel(days)
+		}
+		if pruned > 0 {
+			msg += " · " + strconv.Itoa(pruned) + " removed"
+		}
+		showToast(msg, ToastInfo())
+	case "forget_saved_cookies":
+		// Beside the retention row: the age policy says how long a session is
+		// kept, and this drops the one on the card now. Same two-press rule as
+		// the Browser's chip, because it discards the same thing.
+		forgetSavedCookiesFromSettings(config)
+	case "toggle_game_snaps":
+		// The Settings row is the one place the library preview can be switched
+		// off without hand-editing jukauser.json. A preview already on screen
+		// stops on the next frame: snapPreviewSync asks the same setting.
+		state := "off"
+		if toggleSnapPreview(config) {
+			state = "on"
+		}
+		showToast("Video snaps "+state, ToastInfo())
 	case "theme_preset":
 		if element.TriggerTarget != "" {
 			ApplyThemePreset(config, element.TriggerTarget)
@@ -5979,6 +6014,15 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		// Per-site ad/tracker exception: off for the page that broke, on again
 		// for the next visit to it.
 		browserToggleAdFilter(config)
+	case "browser_cookie_sites":
+		// The picker: one row per host the jar holds, so a single site can be
+		// signed out without dropping every other login. The strip under the
+		// page opens the same panel when tapped.
+		openBrowserCookiePanel(config)
+	case "browser_forget_cookies":
+		// The saved session lives on the card now, so the chip that drops it
+		// is a trigger like any other; it asks twice before it forgets.
+		browserForgetCookiesAction(config)
 	case "browser_search":
 		// The Search chip and the Y button both open the query keyboard.
 		if elem, ok := findBrowserElement(config); ok {
@@ -6374,6 +6418,17 @@ func completeSceneTransition(config *Config) {
 	// scene was last up.
 	if sceneHasPieChart(config) {
 		refreshDiskPie()
+	}
+	// Settings → General's Video snaps row reports how many of the card's games
+	// have a clip. The library scan is started here, on the scene's goroutine,
+	// so the row can show a count without the page ever walking the card.
+	if scene.Name == "SettingsGeneral" {
+		snapClipCountRefresh(snapPreviewRoot(config))
+		// The cookie row carries the day the saved session began, which only
+		// changes between visits (a sign-in in the Browser, a Forget). Re-seed it
+		// on the way in — a jar lock and a read of its stamps, no card I/O — so
+		// the date is on the first frame rather than after the next relaunch.
+		refreshCookieRetentionRow(config)
 	}
 
 	if sceneHasSearchResults(config.Scenes[currentSceneIndex]) {

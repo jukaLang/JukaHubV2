@@ -574,6 +574,10 @@ func applyScreensaverTimeout(config *Config, seconds int) int {
 	if config != nil {
 		config.Variables.ScreensaverTimeout = seconds
 		config.Variables.Custom["screensaverTimeout"] = strconv.Itoa(seconds)
+		// The Settings row shows $screensaverTimeoutLabel, and substitution
+		// reads only the custom block: keep the derived text in step with the
+		// value everywhere the timeout is changed (Settings and Quick Settings).
+		config.Variables.Custom["screensaverTimeoutLabel"] = screenTimeoutLabel(seconds)
 		saveUserConfigDebounced(userConfigFromVariables(config))
 	}
 	return seconds

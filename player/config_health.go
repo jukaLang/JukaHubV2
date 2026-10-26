@@ -147,9 +147,15 @@ func (cv *ConfigValidator) SecurityCheck(config *Config) []string {
 // isPlaceholderSecret checks if a string looks like a placeholder or example
 // rather than a real secret.
 func isPlaceholderSecret(s string) bool {
+	// An empty value is a placeholder in the obvious sense, and it must be
+	// handled before the substring loop: `strings.Contains(s, "")` is true for
+	// every string, so keeping "" in the list made every value look like a
+	// placeholder and silenced the plaintext-secret warning completely.
+	if strings.TrimSpace(s) == "" {
+		return true
+	}
 	lower := strings.ToLower(s)
 	placeholders := []string{
-		"",
 		"your-api-key",
 		"your_api_key",
 		"api-key-here",

@@ -147,6 +147,15 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			log.Printf("[textbrowser] recovered panic in render: %v", r)
 		}
 	}()
+	// The Forget chip carries the saved-session count, so the toolbar answers
+	// "am I still signed in somewhere?" without a press. The count only changes
+	// when a page stores a cookie or Forget drops them, so syncing it once per
+	// frame here (the web panel is the Browser scene) keeps it honest for every
+	// route that can change it — link click, address bar, reload, auto-refresh.
+	if textBrowserElementSource(element) == textBrowserSourceWeb {
+		browserSyncForgetChip(config)
+	}
+
 	elemW := getElementWidth(element, 1100)
 	elemH := getElementHeight(element, 480)
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(235), accentColor)
@@ -174,6 +183,9 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	if font == nil {
 		return
 	}
+	// Cleared per frame so a panel that is not the web one (or a web panel with
+	// no room for the strip) cannot leave a stale tap target behind.
+	browserCookieStripHit = sdl.Rect{}
 
 	headerH := int32(28)
 	headerY := element.Y + 4
@@ -197,9 +209,18 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	// device. Styled pages come from webpage.go; everything else keeps using
 	// the plain-text reader.
 	lineH := int32(22)
+	// The strip under the page names the sites the saved cookies belong to, so
+	// the count on the Forget chip has a host attached. Its height is reserved
+	// for the whole session rather than only while cookies exist, so the page
+	// does not reflow the moment a login cookie arrives.
+	cookieStripH := int32(0)
+	cookieFont, _ := getCachedFont(config, "small")
+	if source == textBrowserSourceWeb && cookieFont != nil {
+		cookieStripH = int32(cookieFont.Height()) + 8
+	}
 	contentH := elemH - headerH - 8
 	if source == textBrowserSourceWeb {
-		contentH = elemH - headerH - textBrowserURLBarHeight - 12
+		contentH = elemH - headerH - textBrowserURLBarHeight - 12 - cookieStripH
 	}
 	maxLines := int((contentH) / lineH)
 	var lines []string
@@ -308,7 +329,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 
 	contentTop := element.Y + 8 + headerH
 	if source == textBrowserSourceWeb {
-		addressRect, searchRect, goRect, filterRect := textBrowserToolbarLayout(element)
+		addressRect, modeRect, searchRect, goRect, filterRect := textBrowserToolbarLayout(element)
 		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
 		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, 1, sdl.Color{R: 93, G: 110, B: 138, A: 210})
 		address := textBrowserAddress(config)
@@ -355,6 +376,25 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				fw, fh, _ := labelFont.SizeUTF8(label)
 				renderText(renderer, config, labelFont, label, ink,
 					filterRect.X+(filterRect.W-int32(fw))/2, filterRect.Y+(filterRect.H-int32(fh))/2)
+			}
+			if modeRect.W > 0 {
+				// The chip is the D-pad's current job, so switching modes is
+				// visible without waiting for a toast: accent means the pad walks
+				// links, a quiet chip means it scrolls.
+				label := textBrowserModeChipLabel()
+				fill := sdl.Color{R: 36, G: 45, B: 63, A: 255}
+				ink := sdl.Color{R: 155, G: 170, B: 195, A: 255}
+				border := sdl.Color{R: 93, G: 110, B: 138, A: 170}
+				if browserNav == browserModeLinks {
+					fill = accentColor
+					ink = contrastText(fill)
+					border = WithAlpha(accentColor, 220)
+				}
+				fillRoundedRect(renderer, modeRect.X, modeRect.Y, modeRect.W, modeRect.H, 6, fill)
+				strokeRoundedRect(renderer, modeRect.X, modeRect.Y, modeRect.W, modeRect.H, 6, 1, border)
+				mw, mh, _ := labelFont.SizeUTF8(label)
+				renderText(renderer, config, labelFont, label, ink,
+					modeRect.X+(modeRect.W-int32(mw))/2, modeRect.Y+(modeRect.H-int32(mh))/2)
 			}
 		}
 		contentTop += textBrowserURLBarHeight + 4
@@ -410,6 +450,42 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				renderText(renderer, config, font, ln, ColorTextPrimary(), element.X+10, y)
 			}
 			y += lineH
+		}
+	}
+
+	// The cookie strip: a hairline and one quiet line, the same chrome language
+	// as the toolbar above the page. It names hosts, not addresses — a host is
+	// what the jar keys a session on, and it is what the user recognises.
+	if cookieStripH > 0 && cookieFont != nil {
+		sites := browserCookieSites()
+		stripY := contentTop + contentH
+		renderer.SetDrawColor(255, 255, 255, 14)
+		renderer.FillRect(&sdl.Rect{X: element.X + 12, Y: stripY, W: elemW - 24, H: 1})
+		ink := ColorTextTertiary()
+		if len(sites) > 0 {
+			ink = ColorTextSecondary()
+		}
+		line := ellipsize(cookieFont, browserCookieSitesLine(sites), elemW-24)
+		renderText(renderer, config, cookieFont, line, ink, element.X+12, stripY+4)
+		// Tapping the line opens the site picker, so the line that names the
+		// hosts is also the way to act on one. The rect is the strip's own band,
+		// not the text's, so a tap on empty space beside a short line still lands
+		// (the line is the only thing there). It is clamped to the panel: a styled
+		// page rounds the content height down to whole rows, which can leave the
+		// band hanging a pixel or two past the panel's edge, and a tap target that
+		// reaches outside the panel would swallow a tap on the chip row under it.
+		hitTop := stripY - 1
+		hitH := cookieStripH + 2
+		if bottom := element.Y + elemH; hitTop+hitH > bottom {
+			hitH = bottom - hitTop
+		}
+		if hitH > 0 {
+			browserCookieStripHit = sdl.Rect{
+				X: element.X + 8,
+				Y: hitTop,
+				W: elemW - 16,
+				H: hitH,
+			}
 		}
 	}
 
@@ -572,8 +648,22 @@ func textBrowserAddress(config *Config) string {
 const (
 	textBrowserGoWidth     = int32(64)
 	textBrowserSearchWidth = int32(84)
-	textBrowserBarGap      = int32(8)
+	// textBrowserModeWidth fits the widest chip label ("SCROLL") at the small
+	// font: the chip names the D-pad's job rather than showing an icon, because
+	// the three words it can say are all shorter than a legend.
+	textBrowserModeWidth = int32(80)
+	textBrowserBarGap    = int32(8)
 )
+
+// textBrowserModeChipLabel is the D-pad mode in one word: the toolbar chip and
+// the toast that announces the switch have to agree, or the chip becomes a
+// second, contradicting source of truth.
+func textBrowserModeChipLabel() string {
+	if browserNav == browserModeLinks {
+		return "LINKS"
+	}
+	return "SCROLL"
+}
 
 // textBrowserFilterWidth is the filter chip's share of the toolbar. It is
 // derived from the panel width rather than fixed, because the type scales with
@@ -591,17 +681,21 @@ func textBrowserFilterWidth(width int32) int32 {
 }
 
 // textBrowserToolbarRects lays out the web toolbar: the address field and Go.
-// The Search chip exists so the controller has a visible target for Y instead
-// of a hidden shortcut, and the filter chip reports the page's blocked count.
 func textBrowserToolbarRects(element Element) (address, goButton sdl.Rect) {
-	address, _, goButton, _ = textBrowserToolbarLayout(element)
+	address, _, _, goButton, _ = textBrowserToolbarLayout(element)
 	return
 }
 
 // textBrowserFilterRect is the ad-filter chip's hit area.
 func textBrowserFilterRect(element Element) sdl.Rect {
-	_, _, _, filter := textBrowserToolbarLayout(element)
+	_, _, _, _, filter := textBrowserToolbarLayout(element)
 	return filter
+}
+
+// textBrowserModeRect is the D-pad mode chip's hit area.
+func textBrowserModeRect(element Element) sdl.Rect {
+	_, mode, _, _, _ := textBrowserToolbarLayout(element)
+	return mode
 }
 
 // textBrowserScrollLimit is the last scroll row for an element, measured the
@@ -627,22 +721,29 @@ func textBrowserScrollLimit(config *Config, element Element) int32 {
 	return 0
 }
 
-func textBrowserToolbarLayout(element Element) (address, search, goButton, filter sdl.Rect) {
+func textBrowserToolbarLayout(element Element) (address, mode, search, goButton, filter sdl.Rect) {
 	width := getElementWidth(element, 1100)
 	y := element.Y + 36
 	h := textBrowserURLBarHeight - 4
-	// Full row: address, Search, Go, filter. A narrow panel drops Search
-	// first (the Y button still opens it) and only then the filter, which is
-	// the one control that can rescue a page filtering broke.
+	// Full row: address, Search, Go, filter, mode. A narrow panel gives up
+	// controls in order of what has another way in: Search first (Y opens it,
+	// and the address bar still takes typed queries), then the filter chip,
+	// then the mode chip — which is last because it is the only control that
+	// explains what the D-pad will do.
 	filterW := textBrowserFilterWidth(width)
-	addressW := width - textBrowserGoWidth - textBrowserSearchWidth - filterW - textBrowserBarGap*3 - 16
-	showSearch, showFilter := true, true
+	modeW := textBrowserModeWidth
+	addressW := width - textBrowserGoWidth - textBrowserSearchWidth - filterW - modeW - textBrowserBarGap*4 - 16
+	showSearch, showFilter, showMode := true, true, true
 	if addressW < 160 {
 		showSearch = false
-		addressW = width - textBrowserGoWidth - filterW - textBrowserBarGap*2 - 16
+		addressW = width - textBrowserGoWidth - filterW - modeW - textBrowserBarGap*3 - 16
 	}
 	if addressW < 160 {
 		showFilter = false
+		addressW = width - textBrowserGoWidth - modeW - textBrowserBarGap*2 - 16
+	}
+	if addressW < 160 {
+		showMode = false
 		addressW = width - textBrowserGoWidth - textBrowserBarGap - 16
 	}
 	if addressW < 80 {
@@ -659,13 +760,17 @@ func textBrowserToolbarLayout(element Element) (address, search, goButton, filte
 	cursor = goButton.X + goButton.W + textBrowserBarGap
 	if showFilter {
 		filter = sdl.Rect{X: cursor, Y: y, W: filterW, H: h}
+		cursor = filter.X + filter.W + textBrowserBarGap
+	}
+	if showMode {
+		mode = sdl.Rect{X: cursor, Y: y, W: modeW, H: h}
 	}
 	return
 }
 
 // textBrowserSearchRect is the Search chip's hit area.
 func textBrowserSearchRect(element Element) sdl.Rect {
-	_, search, _, _ := textBrowserToolbarLayout(element)
+	_, _, search, _, _ := textBrowserToolbarLayout(element)
 	return search
 }
 

@@ -57,6 +57,7 @@ const (
 	vkTargetGameSearch // game library search
 	vkTargetDownloads  // Downloads panel: a link to save for offline use
 	vkTargetGameArgs   // game library: extra launch arguments for one game
+	vkTargetToolArgs   // toolbox: arguments for the highlighted tool
 )
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
@@ -307,6 +308,8 @@ func vkEnsureLayout() {
 		target = 9
 	case vkTargetGameArgs:
 		target = 10
+	case vkTargetToolArgs:
+		target = 11
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -552,6 +555,8 @@ func vkCurrentText() string {
 		return downloadLinkInput
 	case vkTargetGameArgs:
 		return gameArgsBuffer
+	case vkTargetToolArgs:
+		return toolArgsBuffer
 	}
 	return inputTextBuffer
 }
@@ -599,6 +604,10 @@ func vkSetText(text string, config *Config) {
 	case vkTargetGameArgs:
 		// Edited in its own buffer; the game's options change only on submit.
 		gameArgsBuffer = text
+	case vkTargetToolArgs:
+		// Same rule for the toolbox: the saved argument line changes on submit,
+		// so a half-typed `--delete` can never reach the tool.
+		toolArgsBuffer = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -689,6 +698,11 @@ func vkTitle() string {
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
 		return "LAUNCH ARGUMENTS"
+	case vkTargetToolArgs:
+		if t, ok := toolboxFind(toolArgsToolID); ok {
+			return strings.ToUpper(t.Binary) + " ARGUMENTS"
+		}
+		return "TOOL ARGUMENTS"
 	case vkTargetNetplay:
 		return "HOST ADDRESS"
 	case vkTargetPSRemote:
@@ -750,6 +764,11 @@ func vkPlaceholder() string {
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
 		return "--profile \"My Game\""
+	case vkTargetToolArgs:
+		if t, ok := toolboxFind(toolArgsToolID); ok && len(t.Example) > 0 {
+			return strings.Join(t.Example, " ")
+		}
+		return "--version"
 	case vkTargetNetplay:
 		return "192.168.1.5"
 	case vkTargetPSRemote:
@@ -799,6 +818,8 @@ func vkHints() string {
 		return hintLine(FooterHint{Label: "Live Filter"}, FooterHint{"A / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
 	case vkTargetGameArgs:
 		return hintLine(FooterHint{Label: "Quotes Group Words"}, FooterHint{"A / Enter", "Save"}, FooterHint{"B / Esc", "Close"})
+	case vkTargetToolArgs:
+		return hintLine(FooterHint{Label: "Quotes Group Words"}, FooterHint{"A / Enter", "Run"}, FooterHint{"B / Esc", "Cancel"})
 	}
 	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
@@ -974,6 +995,35 @@ func vkOpenGameSearch() {
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// toolArgsBuffer and toolArgsToolID carry the toolbox argument editor: the
+// keyboard writes into the buffer and the submit handler applies it to the tool
+// it was opened for. Both are touched on the UI thread only.
+var (
+	toolArgsBuffer string
+	toolArgsToolID string
+)
+
+// vkOpenToolArgs opens the keyboard for the arguments of one toolbox tool. The
+// remembered line (or the catalog example) seeds the field so a repeat run is a
+// correction instead of a retype.
+func vkOpenToolArgs(id string) {
+	if _, ok := toolboxFind(id); !ok {
+		return
+	}
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetToolArgs
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	toolArgsToolID = id
+	toolArgsBuffer = toolboxArgsFor(id)
 	virtualKeyboardActive = true
 	vkAnimStart = sdl.GetTicks64()
 	sdl.StartTextInput()
@@ -1301,6 +1351,13 @@ func vkSubmit(config *Config, askAI bool) {
 		// row and the game's record; the next launch picks it up.
 		vkCloseKeyboard()
 		applyGameArgs()
+	case vkTargetToolArgs:
+		// Save first: the toolbox page reads the remembered line, and the run
+		// itself happens on the page so its output lands in the viewer.
+		toolboxSetArgs(toolArgsToolID, text)
+		id := toolArgsToolID
+		vkCloseKeyboard()
+		powerRunToolFromArgs(id)
 	case vkTargetMemory:
 		// The buffer is committed before closing, and an empty field clears the
 		// value so the panel shows "not set" instead of holding a stale number.

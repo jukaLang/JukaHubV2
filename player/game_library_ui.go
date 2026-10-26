@@ -13,6 +13,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/veandco/go-sdl2/img"
 	"github.com/veandco/go-sdl2/sdl"
@@ -223,6 +224,9 @@ func closeGameLibraryPanel() {
 // closeGameLibraryArt frees the preview textures. They belong to the current
 // renderer, so keeping them across a renderer recreation would dangle.
 func closeGameLibraryArt() {
+	// A preview belongs to the panel and to the focused game: closing the panel
+	// (or losing the art cache to a finished fetch) ends the decoder.
+	snapPreviewStop()
 	for path, tex := range gameLib.artCache {
 		if tex != nil {
 			tex.Destroy()
@@ -573,6 +577,15 @@ func drawLibraryArt(renderer *sdl.Renderer, config *Config, rect sdl.Rect, game 
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 14, WithAlpha(ColorSurfaceRow, 160))
 	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 14, 1, ColorBorderDefault)
 
+	// A video snap for this game wins over its cover while it plays: the box
+	// holds one picture, and the clip is the more useful one. Until the first
+	// frame arrives the cover stays, so entering the library never flashes a
+	// grey box.
+	if snap := snapPreviewTexture(renderer, game.Path); snap != nil {
+		drawSnapFrame(renderer, config, rect, snap)
+		return
+	}
+
 	tex := artTexture(renderer, game.Art)
 	if tex != nil {
 		_, _, tw, th, err := tex.Query()
@@ -911,7 +924,11 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// ── Box art preview ─────────────────────────────────────────────────
+	// ── Box art / video snap preview ────────────────────────────────
+	// One call per frame decides whether the focused game's snap should run,
+	// so every way the focus can move (pad, mouse, search, rescan) is covered by
+	// the same rule instead of each path remembering to arm it.
+	snapPreviewSync(time.Now())
 	if artW > 0 {
 		preview := libraryGame{}
 		if hasSystem && len(system.Games) > 0 {

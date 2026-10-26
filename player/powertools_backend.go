@@ -467,27 +467,49 @@ func powerWiFiSummary() string {
 		}
 		return strings.Join(keep, "\n")
 	}
-	data, err := os.ReadFile("/proc/net/wireless")
-	if err != nil {
-		return "No /proc/net/wireless on this device."
+	// The kernel's table first, then the supplicant: the same order and the same
+	// reasons as the status meter (see wifiMeterLevelFrom). An image without
+	// wireless extensions has no /proc/net/wireless even while associated.
+	link, level, ok := "", "", false
+	if data, err := os.ReadFile("/proc/net/wireless"); err == nil {
+		link, level, ok = parsePowerWireless(string(data))
 	}
-	link, level, ok := parsePowerWireless(string(data))
-	if !ok {
-		return "No associated Wi-Fi interface."
-	}
-	summary := fmt.Sprintf("Link quality: %s/70\nSignal: %s dBm", link, level)
-	if n, err := strconv.ParseFloat(level, 64); err == nil {
-		if n >= -50 {
-			summary += " (excellent)"
-		} else if n >= -60 {
-			summary += " (good)"
-		} else if n >= -70 {
-			summary += " (fair)"
-		} else {
-			summary += " (weak)"
+	if ok {
+		summary := fmt.Sprintf("Source: /proc/net/wireless\nLink quality: %s/70\nSignal: %s dBm", link, level)
+		if n, err := strconv.ParseFloat(level, 64); err == nil {
+			summary += " " + wifiSignalVerdict(n)
 		}
+		return summary
+	}
+	sample, pollErr := wifiSignalPoll()
+	if pollErr != nil {
+		return "No signal report: /proc/net/wireless is missing or lists no interface, and " + pollErr.Error() + "."
+	}
+	summary := fmt.Sprintf("Source: wpa_cli signal_poll\nSignal: %d dBm %s", sample.RSSI, wifiSignalVerdict(float64(sample.RSSI)))
+	if sample.LinkKbps > 0 {
+		summary += fmt.Sprintf("\nLink speed: %d Mbit/s", sample.LinkKbps/1000)
+	}
+	if sample.FreqMHz > 0 {
+		summary += fmt.Sprintf("\nFrequency: %d MHz", sample.FreqMHz)
+	}
+	if sample.Noise < 0 {
+		summary += fmt.Sprintf("\nNoise floor: %d dBm", sample.Noise)
 	}
 	return summary
+}
+
+// wifiSignalVerdict turns a dBm reading into the word the probe shows, so the
+// /proc path and the signal_poll path cannot describe the same value two ways.
+func wifiSignalVerdict(dbm float64) string {
+	switch {
+	case dbm >= -50:
+		return "(excellent)"
+	case dbm >= -60:
+		return "(good)"
+	case dbm >= -70:
+		return "(fair)"
+	}
+	return "(weak)"
 }
 
 // ── File inspection ────────────────────────────────────────────────────────

@@ -46,8 +46,8 @@ func TestControlsLegendMirrorsSceneHints(t *testing.T) {
 	controlsLegend.scene = config.Scenes[tube]
 
 	sections := controlsLegendSections(config)
-	if len(sections) != 2 {
-		t.Fatalf("legend has %d sections, want 2 (this screen + every screen)", len(sections))
+	if len(sections) != 3 {
+		t.Fatalf("legend has %d sections, want 3 (this screen + every screen + Tools pages)", len(sections))
 	}
 	want := footerHints(config, config.Scenes[tube])
 	if len(sections[0].Rows) != len(want) {
@@ -66,6 +66,26 @@ func TestControlsLegendMirrorsSceneHints(t *testing.T) {
 	}
 	if label, ok := hintLabel(sections[1].Rows, "F1"); !ok || label != "Keyboard shortcuts" {
 		t.Errorf("global F1 row = %q (found %v), want \"Keyboard shortcuts\"", label, ok)
+	}
+
+	// The last section is discovery, not bindings: it names the two Tools pages
+	// a new user would otherwise only read about in the docs, under a heading
+	// that says where they live.
+	if got := sections[2].Title; got != "Find it in Tools" {
+		t.Errorf("tools section title = %q, want \"Find it in Tools\"", got)
+	}
+	for _, want := range []struct{ button, label string }{
+		{"Toolbox", "Install and run CLI tools"},
+		{"Security & trust", "What this build protects"},
+	} {
+		label, ok := hintLabel(sections[2].Rows, want.button)
+		if !ok {
+			t.Errorf("the legend does not name %q", want.button)
+			continue
+		}
+		if label != want.label {
+			t.Errorf("row %q = %q, want %q", want.button, label, want.label)
+		}
 	}
 }
 
@@ -229,4 +249,46 @@ func TestControlsLegendRendersLikeQuickSettings(t *testing.T) {
 	}
 
 	renderControlsLegend(renderer, config)
+
+	// 480p is where the third section could overflow the card; drawing it there
+	// must stay inside and must not panic.
+	withScreen(t, 800, 480)
+	renderControlsLegend(renderer, config)
+}
+
+// TestControlsLegendFitsShortCard pins the fit rule the third section relies
+// on: a card that already fits keeps its natural pitch, and a clamped card
+// compresses the rows instead of drawing them over the footer hint.
+func TestControlsLegendFitsShortCard(t *testing.T) {
+	const (
+		headerH  int32 = 64
+		footerH  int32 = 36
+		fontH    int32 = 16
+		sections       = 3
+		rows           = 12
+	)
+	natural := fontH + 12
+	sectionH := natural + 8
+
+	tall := headerH + int32(sections)*sectionH + int32(rows)*natural + footerH
+	if got := legendRowPitch(tall, headerH, footerH, sectionH, sections, rows, natural, fontH); got != natural {
+		t.Fatalf("a card that already fits got pitch %d, want the natural %d", got, natural)
+	}
+
+	short := int32(480 - 40)
+	pitch := legendRowPitch(short, headerH, footerH, sectionH, sections, rows, natural, fontH)
+	if pitch >= natural {
+		t.Fatalf("480p pitch = %d, want it compressed below the natural %d", pitch, natural)
+	}
+	if pitch < fontH-2 {
+		t.Fatalf("480p pitch = %d, smaller than the font itself", pitch)
+	}
+	if used := headerH + int32(sections)*sectionH + int32(rows)*pitch + footerH; used > short {
+		t.Fatalf("rows need %dpx in a %dpx card", used, short)
+	}
+
+	// No rows means nothing to fit.
+	if got := legendRowPitch(short, headerH, footerH, sectionH, sections, 0, natural, fontH); got != natural {
+		t.Fatalf("empty card pitch = %d, want the natural %d", got, natural)
+	}
 }

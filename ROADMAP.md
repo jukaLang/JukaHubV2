@@ -18,8 +18,9 @@ two ever disagree about a code item. The idea lists
 ([docs/FEATURE-SLATE.md](docs/FEATURE-SLATE.md),
 [docs/FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md),
 [docs/IMPROVEMENTS.md](docs/IMPROVEMENTS.md)) are inputs, not plans: an idea
-becomes work when it is adopted into one of these two lists, with a
-definition of done and a status.
+becomes work when it is adopted into one of these two lists, with a definition of
+done and a status — and it then leaves the idea list, so no idea is tracked in
+two places. The idea lists hold only what has not been adopted.
 
 ## Days 0–30 — contributor and CI scaffolding
 
@@ -33,7 +34,7 @@ definition of done and a status.
 | 6 | CODEOWNERS | ✅ done | `.github/CODEOWNERS` assigns default review ownership; PRs auto-request review |
 | 7 | SECURITY.md with vulnerability reporting | ✅ done | SECURITY.md has a "Reporting a vulnerability" section pointing at GitHub's private security advisories; the issue-template config links it |
 | 8 | SUPPORT.md | ✅ done | Root SUPPORT.md names the help channels (docs, Discussions, Discord), has a before-you-file checklist and response-time expectations |
-| 9 | 5 well-scoped good first issues | ⬜ paste from [Appendix A](#appendix-a-starter-issues-ready-to-paste) | Five `good first issue` issues exist on GitHub, each scoped to one file, with the verification the PR must add |
+| 9 | Good first issues open | ⬜ two left to paste: [Appendix A](#appendix-a-starter-issues-ready-to-paste) #4 and #5 (its first three are done and kept as the bar for a starter task) | Five `good first issue` issues exist or have shipped, each scoped to one file, with the verification the PR must add |
 | 10 | docs/QUICK_START.md — one copy-paste path to build, test, run | ✅ done | `make dev` + `make check` cover it; deeper docs are linked per topic |
 | 11 | Label set: `area/*`, `priority/*`, `good first issue`, `help wanted`, `flaky`, `needs reproduction` | ⬜ one command: Appendix C | Labels exist and the templates above default to them |
 
@@ -105,9 +106,10 @@ README links to Discussions, not when the toggle is flipped.
 
 ## Appendix A: Starter issues (ready to paste)
 
-Five small, real, verifiable tasks. Paste each with
-`gh issue create --title ... --body-file body.md --label "good first issue"`; bodies are
-written so a newcomer needs no codebase history.
+Five small, real, verifiable tasks, written so a newcomer needs no codebase
+history. Three have shipped and stay here as the bar a starter task has to clear;
+the last two are open and ready to paste with
+`gh issue create --title ... --body-file body.md --label "good first issue"`.
 
 ### 1. Make `errors.Is` work across the launch-error chain
 
@@ -202,6 +204,9 @@ In the web UI:
 
 - **Settings → General → Discussions** → enable → create Q&A, Ideas,
   Show and tell, Development → pin the welcome post (link SUPPORT.md + docs).
+- **Settings → General → Features → Issues** → enable. The three templates in
+  `.github/ISSUE_TEMPLATE/` only appear on *New issue* once the tracker is on,
+  and both the README and the templates assume it is.
 - **Settings → Security → Private vulnerability reporting** → enable; this is
   the channel SECURITY.md's reporting section links to.
 - **Settings → Branches / Actions** — required checks stay the small set CI

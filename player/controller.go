@@ -63,6 +63,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if browserLinkPanel.open {
 		return ctrlBrowserLinks(e, config)
 	}
+	// As is the picker that forgets one site's cookies.
+	if browserCookiePanel.open {
+		return ctrlBrowserCookies(e, config)
+	}
 	// The Phone Companion QR card is modal, and B is how a phone closes it
 	// after pairing: the phone's remote pushes a real B event.
 	if companion.open {

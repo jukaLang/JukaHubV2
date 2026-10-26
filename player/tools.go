@@ -30,20 +30,65 @@ var allowedToolRepos = map[string]bool{
 	"btbn/ffmpeg-builds": true,
 	"yt-dlp/yt-dlp":      true,
 	"jukalang/jukahubv2": true,
+	// Toolbox entries (toolbox.go). Each one ships signed or unsigned release
+	// archives that are downloaded without a hash from GitHub over TLS; the
+	// trust boundary is this list, which is why it is short and code-reviewed.
+	"jqlang/jq":          true,
+	"rclone/rclone":      true,
+	"burntsushi/ripgrep": true,
+	"sharkdp/fd":         true,
+	"jgm/pandoc":         true,
+	"filosottile/age":    true,
+	// Network scanners (Toolbox → naabu, httpx, dnsx). Same trust rule as the
+	// rest: the releases are read from GitHub over TLS without a hash, so this
+	// list is the boundary. Their runs also sit behind the one-time
+	// authorized-use acknowledgement in toolboxAuthorizedUseGate.
+	"projectdiscovery/naabu": true,
+	"projectdiscovery/httpx": true,
+	"projectdiscovery/dnsx":  true,
 }
 
 func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
-	if !allowedToolRepos[strings.ToLower(repo)] {
-		return "", fmt.Errorf("tool repo %q is not in the approved download list", repo)
-	}
 	if len(wants) == 0 {
 		return "", fmt.Errorf("resolveToolURL called without any wanted asset names")
+	}
+	assets, err := latestReleaseAssets(repo, apiToken)
+	if err != nil {
+		return "", err
+	}
+	for _, a := range assets {
+		for _, w := range wants {
+			if strings.EqualFold(a.Name, w) {
+				return a.URL, nil
+			}
+		}
+	}
+	names := make([]string, 0, len(wants))
+	for _, w := range wants {
+		names = append(names, fmt.Sprintf("%q", w))
+	}
+	return "", fmt.Errorf("no matching asset found in %s latest release (wanted %s)", repo, strings.Join(names, ", "))
+}
+
+// releaseAsset is one file attached to a GitHub release.
+type releaseAsset struct {
+	Name string
+	URL  string
+	Size int64
+}
+
+// latestReleaseAssets lists a trusted repo's latest release assets. The repo
+// must be in allowedToolRepos: this is the only place a download URL comes
+// from, so the list is the trust boundary rather than a convenience.
+func latestReleaseAssets(repo, apiToken string) ([]releaseAsset, error) {
+	if !allowedToolRepos[strings.ToLower(repo)] {
+		return nil, fmt.Errorf("tool repo %q is not in the approved download list", repo)
 	}
 	client := &http.Client{Timeout: 60 * time.Second}
 	apiURL := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", repo)
 	req, err := http.NewRequest("GET", apiURL, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if apiToken != "" {
 		req.Header.Set("Authorization", "Bearer "+apiToken)
@@ -53,41 +98,104 @@ func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", fmt.Errorf("github api rate limit exceeded (retry after %s)", resp.Header.Get("Retry-After"))
+		return nil, fmt.Errorf("github api rate limit exceeded (retry after %s)", resp.Header.Get("Retry-After"))
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github api %s: unexpected status %d", apiURL, resp.StatusCode)
+		return nil, fmt.Errorf("github api %s: unexpected status %d", apiURL, resp.StatusCode)
 	}
 
 	var rel struct {
 		Assets []struct {
 			Name               string `json:"name"`
 			BrowserDownloadURL string `json:"browser_download_url"`
+			Size               int64  `json:"size"`
 		} `json:"assets"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
-		return "", err
+		return nil, err
 	}
 	if len(rel.Assets) == 0 {
-		return "", fmt.Errorf("no assets in %s latest release", repo)
+		return nil, fmt.Errorf("no assets in %s latest release", repo)
 	}
+	out := make([]releaseAsset, 0, len(rel.Assets))
 	for _, a := range rel.Assets {
-		for _, w := range wants {
-			if strings.EqualFold(a.Name, w) {
-				return a.BrowserDownloadURL, nil
+		out = append(out, releaseAsset{Name: a.Name, URL: a.BrowserDownloadURL, Size: a.Size})
+	}
+	return out, nil
+}
+
+// resolveToolURLMatching returns the first asset whose name contains every
+// token of one of the wanted groups, trying the groups in order. Release asset
+// names embed the version (`rclone-v1.68.1-linux-arm64.zip`), so an exact-name
+// lookup would break on every upstream release; matching on the stable parts of
+// the name does not. The repo must still be on the approved list.
+func resolveToolURLMatching(repo, apiToken string, wanted ...[]string) (releaseAsset, error) {
+	if len(wanted) == 0 {
+		return releaseAsset{}, fmt.Errorf("resolveToolURLMatching called without any wanted asset patterns")
+	}
+	assets, err := latestReleaseAssets(repo, apiToken)
+	if err != nil {
+		return releaseAsset{}, err
+	}
+	if a, ok := pickToolAsset(assets, wanted); ok {
+		return a, nil
+	}
+	groups := make([]string, 0, len(wanted))
+	for _, tokens := range wanted {
+		groups = append(groups, strings.Join(tokens, "+"))
+	}
+	return releaseAsset{}, fmt.Errorf("no asset in %s matched %s", repo, strings.Join(groups, ", "))
+}
+
+// pickToolAsset returns the first asset that matches one of the token groups,
+// trying the groups in order. Checksum, signature and text side-cars are never
+// picked: their names contain the archive name, so a token match alone would
+// hand the downloader a `.sha256` file.
+func pickToolAsset(assets []releaseAsset, wanted [][]string) (releaseAsset, bool) {
+	for _, tokens := range wanted {
+		if len(tokens) == 0 {
+			continue
+		}
+		for _, a := range assets {
+			if isToolAssetSidecar(a.Name) {
+				continue
+			}
+			if assetNameMatches(a.Name, tokens) {
+				return a, true
 			}
 		}
 	}
-	names := make([]string, 0, len(wants))
-	for _, w := range wants {
-		names = append(names, fmt.Sprintf("%q", w))
+	return releaseAsset{}, false
+}
+
+// isToolAssetSidecar reports whether an asset name is a checksum, signature or
+// release-notes file rather than a runnable archive or binary.
+func isToolAssetSidecar(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, suffix := range []string{".sha256", ".sha512", ".sha1", ".md5", ".sig", ".asc", ".txt", ".json", ".pem"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
 	}
-	return "", fmt.Errorf("no matching asset found in %s latest release (wanted %s)", repo, strings.Join(names, ", "))
+	return false
+}
+
+// assetNameMatches reports whether every token appears in the asset name,
+// case-insensitively. Tokens are the stable parts of an upstream file name
+// (platform, architecture, archive extension), never a version.
+func assetNameMatches(name string, tokens []string) bool {
+	lower := strings.ToLower(name)
+	for _, t := range tokens {
+		if t == "" || !strings.Contains(lower, strings.ToLower(t)) {
+			return false
+		}
+	}
+	return true
 }
 
 // downloadFile downloads url to dest.

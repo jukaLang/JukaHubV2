@@ -11,8 +11,353 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Fixed
+
+- **Buttons now measure the label they draw, so a row's derived value is
+  neither clipped nor printed raw.** `UIButton` ellipsized the label template
+  (`Screensaver · $screensaverTimeoutLabel`) and then drew the *substituted*
+  text: a value longer than its template overran the button, and a template
+  longer than the value was cut mid-placeholder, so the literal `$screens…`
+  reached the screen. Every Settings row that shows a live value was affected —
+  **Screensaver**, **Saved cookies** and **Video snaps**. The substitution now
+  happens once, before the fit, so the measurement and the drawing agree
+  ([player/components.go](player/components.go)).
+- **A video snap ffmpeg cannot decode is now remembered, instead of being
+  restarted on the next frame.** The session memo was written under the clip's
+  path and read under the game's ROM path, so the two never matched: a broken
+  clip was marked, the mark was then looked up under a name nothing wrote, and
+  the library panel spawned a new ffmpeg for it again immediately — the process
+  storm the memo exists to prevent, on the one device with a single core to
+  spare. Both reads now use the clip path the decoder was handed, and the
+  `TestSnapPreviewBrokenClipIsNotRetried` test asserts the armed state rather
+  than counting goroutines, which is what made it flaky in both directions
+  ([player/snappreview.go](player/snappreview.go), `player/snappreview_test.go`).
+
 ### Added
 
+- **The Settings cookie row says when the saved session was first stored.**
+  `Saved cookies · 30 days` answered "30 days from when?" with nothing to point
+  at. The row now carries the reference point — `Cookies · 30d · since Oct 12` —
+  the oldest first-seen stamp still on the card, re-read when Settings → General
+  is entered and after a prune that drops it, and cleared with the session by
+  **Forget now**. The window is shortened to `30d` because the date and the full
+  `30 days` cannot both fit the row's cell on the 800px panel
+  ([player/browsercookies_retention.go](player/browsercookies_retention.go),
+  [player/widgets.go](player/widgets.go), `player/browsercookies_age_test.go`).
+- **The Video snaps row says how many games on the card actually have a clip.**
+  The switch could read **On** on a card holding no clips at all, which is a
+  setting that changes nothing and no way to find out without opening the
+  library. The row's value now carries the count — `Video snaps · On · 12` — and
+  a card with none reads `On · none`. It counts the same `gameSnapPath` the
+  preview plays, so a clip left behind for a ROM that is gone is not counted,
+  and the row's state stays first because the count describes what the switch
+  has to work with, not whether it is on. The scan runs off the render thread
+  when **Settings → General** opens — one library walk, reused for 30 seconds —
+  so the page never blocks on the card and the figure lands on the row as soon
+  as it is known ([player/snappreview.go](player/snappreview.go),
+  [player/snappreview_count.go](player/snappreview_count.go),
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#video-snaps),
+  `player/snappreview_count_test.go`).
+- **The Browser can forget one site's cookies instead of the whole jar.**
+  Signing one site out meant dropping every other login with it and retyping
+  them on a D-pad. The toolbar gains **Sites** — also the controller route into
+  the picker — and the strip under the page opens the same panel when tapped,
+  since that line is already the one naming the hosts. The panel lists each host
+  with its cookie count plus a **Forget all** row; a row asks twice, the first
+  press naming what would go in the header line, and a confirmed press drops that
+  site's records, rewrites `data/browser-cookies.json` with what is left (or
+  deletes it when that was the last site) and reloads the page. The jar is
+  rebuilt from the remaining records, because the standard jar has no way to
+  delete a single cookie: dropping the record alone would leave the jar still
+  sending it. An arm belongs to one row, and **Forget all** shares the chip's
+  confirm window ([player/browsercookies.go](player/browsercookies.go),
+  [player/browsercookies_picker.go](player/browsercookies_picker.go),
+  [docs/BROWSER.md](docs/BROWSER.md#forgetting-one-site),
+  `player/browsercookies_site_test.go`).
+- **The Package Manager list marks what is already on the card.** Installed state
+  lived only in the details pane's button, so finding out what was still missing
+  meant stepping the cursor down every row and reading it. A row whose package
+  directory exists now carries the app's check glyph in a measured left gutter,
+  in the success colour — the same ✓ the install bar ends on — and names line up
+  whether or not a package is installed. The flags come from one in-memory set
+  refreshed with a single directory scan when the screen loads, rather than a
+  stat per row per frame, and the install path, the installed check and the mark
+  now share one name sanitiser so they can never disagree about which directory
+  a package means ([player/packages.go](player/packages.go),
+  [docs/CONFIGURATION.md](docs/CONFIGURATION.md), `player/packages_test.go`).
+
+- **Clearing the saved browser session is one press from Settings.** The
+  retention row explained how long a cookie is kept but the only way to drop one
+  now was to open the Browser, find the toolbar chip and confirm a reload.
+  **Settings → General** now pairs it with **Forget now**, in the bottom-right
+  cluster above **Save**: the same two-press drop, the same toast, the same
+  deletion of `data/browser-cookies.json`, and the same shared arm, so a press in
+  either place can be finished in the other. The two cannot share one row — at
+  this font `Saved cookies · 30 days` is 275px and `Forget now` 127px, so
+  splitting the 360px band would ellipsize both ([player/widgets.go](player/widgets.go),
+  [player/browsercookies_retention.go](player/browsercookies_retention.go),
+  [docs/BROWSER.md](docs/BROWSER.md#forgetting-them),
+  `player/browsercookies_forgetrow_test.go`).
+- **Every page resolves D-pad direction the way its arrows were drawn.** The
+  focus graph's fallback — the pass that guarantees each control has at least
+  one neighbour per direction — classified an edge by the *sign* of its offset
+  rather than by the axis it was built along. A control off to the side and
+  slightly higher therefore counted as the neighbour above, and the control that
+  really was directly above became unreachable: on Settings → General, the
+  "Replay tour" button in the top-right corner stole `Up` from the Groq API key
+  field, stranding **Weather** behind it. Edges are now classified by their
+  dominant axis, which is the same rule that decided they existed
+  ([player/focus.go](player/focus.go), `player/dpad_audit_test.go`).
+
+### Changed
+
+- **The Browser's saved-cookie count now says which sites it belongs to.**
+  **Forget 3** on the toolbar told the user that a session was remembered but
+  not where, and the hosts only appeared in a toast after pressing. The strip
+  under the page panel names them — **Saved cookie: youtube.com**, **Saved
+  cookies: youtube.com, github.com**, with **+N more** after the first three —
+  built from the same jar records the count is, sorted by cookie count with ties
+  by name. A cookie scoped to a domain is named by that domain (a `.google.com`
+  cookie reads `google.com`) and a `www.` prefix is dropped. An empty jar says
+  **No saved cookies** instead of leaving the strip blank, and the strip's height
+  is reserved for the session so a page does not reflow when a login arrives
+  ([player/browsercookies.go](player/browsercookies.go),
+  [player/browser.go](player/browser.go),
+  [player/textbrowser.go](player/textbrowser.go),
+  [docs/BROWSER.md](docs/BROWSER.md#forgetting-them),
+  `player/browser_cookie_sites_test.go`).
+- **The Package Manager's rows are half their old height.** Each row drew the
+  name on one line and version · author on a second one beneath it, which
+  doubled the pitch and still left the right half of the row empty. A row is now
+  one measured line — name on the left, version · author right-aligned and
+  capped at two fifths of the row so a long author cannot squeeze the name out —
+  so the 516px pane holds roughly twice as many packages (13 instead of 7 with
+  the default metrics) and no longer wastes a row's worth of width. The pitch
+  still comes off the loaded fonts and the click handler shares it, so a tap
+  cannot land on a differently paced row ([player/packages.go](player/packages.go),
+  `player/packages_test.go`).
+- **The Wi-Fi picker's connected row now reads the same signal chain as the
+  corner meter.** Every row used to draw from the scan table's RSSI, which for
+  the network the device is actually on can be missing, stale, or a driver's
+  `0` — one thinly-filled bar on an image without `/proc/net/wireless`, while
+  the meter beside it showed a real level. The **CONNECTED** row now draws the
+  meter's reading (the `/proc/net/wireless` → `wpa_cli signal_poll` chain, via
+  the same `statusWiFiSignal` seam), and the other rows keep their own scan
+  values, because they are not the link the device is on. A meter that reports
+  "unknown" or "no link" leaves the scan value in place rather than drawing a
+  state the row has no room to explain ([player/wifi.go](player/wifi.go),
+  [player/wifi_ui.go](player/wifi_ui.go),
+  [docs/WIFI.md](docs/WIFI.md#where-the-number-comes-from),
+  `player/wifi_row_bars_test.go`).
+
+### Added
+
+- **Video snaps can be switched off from Settings.** The library's preview box
+  was gated by the `gameSnaps` key in `jukauser.json` and nothing wrote it, so
+  the only way to stop the preview moving was to hand-edit the file. Settings →
+  General now carries **Video snaps · On/Off** beside the Swap A/B toggle: a
+  press flips the key, saves it through the usual debounced writer and stops a
+  preview that is already playing on the next frame. The row is a button rather
+  than a toggle element because the feature is on by default — a toggle would
+  have shown "off" for an unset key while previews were playing. An explicit
+  `"false"` string (what a hand-edited file or a toggle element writes) is now
+  read as off instead of being ignored, and the newly injected row also moved
+  **Replay tour**, which sat exactly on top of the screensaver row
+  ([player/snappreview.go](player/snappreview.go), [player/core.go](player/core.go),
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#video-snaps),
+  `player/snappreview_setting_test.go`).
+- **The first-run tour and the controller legend now point at the Toolbox and
+  Security & trust pages.** Both live behind Tools, which is fine once you know
+  that and invisible if you do not. The tour gains a last step that says what
+  each page is for, reports the live install count and posture summary beside
+  it, and whose button opens the Tools panel — the tour steps aside while the
+  panel is up and returns to the same step when it closes. The controller legend
+  (shown once when the tour finishes, and any time from Quick Settings → **?**)
+  gains a **Find it in Tools** section with the same two pages, because neither
+  has a key of its own to list as a binding ([player/onboarding.go](player/onboarding.go),
+  [player/controlslegend.go](player/controlslegend.go),
+  [docs/TOUR.md](docs/TOUR.md), `player/onboarding_test.go`,
+  `player/controlslegend_test.go`).
+- **Three network scanners in the Toolbox, behind a one-time prompt.**
+  `naabu` (open TCP ports), `httpx` (which hosts answer HTTP, with status,
+  title and server) and `dnsx` (DNS records) install and run like the rest of
+  the catalog — official releases, allowlisted repo, typed arguments, no shell —
+  and are the only entries whose job is to send traffic to other machines. The
+  first run of any of them does not start: a toast says to scan only networks
+  you own or may test, and a second press records `networkScanAuthorized` in
+  `jukauser.json` and runs it. After that every scanning tool runs immediately,
+  and deleting the key brings the prompt back. Their rows always carry the
+  warning, and their default run is `-version` because `httpx` and `dnsx` read
+  stdin when given no arguments. Installing is not gated — only running
+  ([player/toolbox.go](player/toolbox.go),
+  [player/powertools.go](player/powertools.go),
+  [docs/TOOLBOX.md](docs/TOOLBOX.md#network-scanning),
+  `player/toolbox_scan_gate_test.go`).
+- **Saved browser cookies can expire on their own.** Keeping the session is the
+  point of `data/browser-cookies.json` — the launcher restarts every time the
+  handheld sleeps — but keeping it forever also keeps a consent gate you cleared
+  once for a page you will never open again. Settings → General → **Saved
+  cookies** now cycles **Keep** (the default), 7, 14, 30 and 90 days, and a
+  cookie first stored longer ago than the window is not restored. Choosing a
+  window prunes what it already makes stale straight away, so the count on the
+  Browser's Forget chip never promises more than the setting keeps, and the
+  press reports what it removed. Age is measured from a per-cookie `firstSeen`,
+  not from the last refresh, so a site that re-issues its token every visit does
+  not look new forever; a file written before that field existed keeps
+  everything on the first launch and starts its clock there. The row lives on
+  the Settings page in memory only, like the screensaver row beside it, so no
+  shipped config is rewritten ([player/browsercookies_retention.go](player/browsercookies_retention.go),
+  [player/widgets.go](player/widgets.go),
+  [docs/BROWSER.md](docs/BROWSER.md#dropping-them-after-a-while),
+  `player/browsercookies_retention_test.go`).
+- The Settings row for the screensaver timeout now renders its value. Its label
+  was `$screensaverTimeoutLabel`, but substitutions only read the custom
+  variable block, so the page showed the placeholder itself; the derived label
+  is now seeded there at injection and refreshed by every change
+  ([player/widgets.go](player/widgets.go), [player/screensaver.go](player/screensaver.go)).
+- **The Browser toolbar now says how many saved cookies are on the card.**
+  The count only appeared in the toast after pressing **Forget**, so the one
+  fact that answers "am I still signed in somewhere?" was hidden behind the
+  action that discards it. The chip reads **Forget 3** while three cookies are
+  saved (capped at **Forget 99+** so the label always fits its share of the
+  row), falls back to plain **Forget** when the jar is empty, and is refreshed
+  as the page is drawn — so a login that just set a cookie shows up without
+  leaving the screen. Nothing new is read from the card: it is the same jar the
+  browser already holds ([player/browser.go](player/browser.go),
+  [player/textbrowser.go](player/textbrowser.go),
+  [docs/BROWSER.md](docs/BROWSER.md#forgetting-them),
+  `player/browserforgetchip_test.go`).
+- **The Games Library can play a video snap for the focused game.** Box art
+  tells you what a game is; a few seconds of motion tells you whether you want
+  it. Drop clips in `data/game-snaps/<System>/<rom name>.mp4` (or `.webm`) —
+  the same tree shape as `data/game-art/`, so an existing collection copies
+  straight across — and the preview box plays one while the highlight rests on
+  that game. Nothing is downloaded and no scraper account is involved. The
+  delay (about a third of a second) is the feature: holding **Down** through a
+  long list must not start a decoder per row. The decode is its own ffmpeg
+  process at 320×180 and 10fps, muted and looped, so it never touches the video
+  player's session, the queue or the now-playing dock; closing the panel,
+  moving the focus or opening the player stops it. The clip replaces the cover
+  in the same box and carries a **SNAP** chip so it is not mistaken for
+  animated art, and the cover comes back when there is no frame yet or the clip
+  belongs to another game. A clip that produces no frames is remembered for the
+  session and never retried. `gameSnaps: false` turns it off and
+  `gameSnapsDir` points at a collection stored elsewhere
+  ([player/snappreview.go](player/snappreview.go),
+  [docs/GAME_LIBRARY.md](docs/GAME_LIBRARY.md#video-snaps),
+  `player/snappreview_test.go`, `player/snappreview_render_test.go`).
+- **The Browser keeps a session across a relaunch**, and there is one press to
+  drop it. A page that handed out a cookie — a consent gate, an age gate, a
+  redirect that only sticks once the session is sent back — used to start signed
+  out every time the launcher restarted, which on this device is every sleep.
+  The jar is now written to `data/browser-cookies.json` (`0600`, one
+  `schemaVersion`, one `savedAt`): per cookie only the host, optional `Domain`,
+  path, name, value, the `Secure`/`HttpOnly` flags and the expiry — no
+  addresses, no titles, no visit times. Session cookies are saved on purpose,
+  because that is the thing being fixed; expired cookies are never written and
+  are dropped on load; a page's own sign-out removes it from the file; the list
+  is capped at 256 records, sorted so the truncation is deterministic; and a
+  corrupt file costs the session and nothing else. The new **Forget** chip in
+  the Browser answers "how do I get rid of this": first press arms it and a
+  toast names the count, a second press within five seconds empties the jar,
+  deletes the file and reloads the page, and an empty jar deletes the file
+  instead of leaving it. Clearing the page cache still leaves cookies alone
+  ([player/browsercookies.go](player/browsercookies.go),
+  `player/browsercookies_persist_test.go`).
+- The **Wi-Fi meter in the status corner now tells the truth about a missing
+  link**. Four hollow bars were the "no Wi-Fi" state, and hollow bars read as a
+  *weak signal* — the opposite of what they meant. The meter has three states
+  now: solid bars for a measured link quality, hollow bars outlined in the accent
+  for a link whose strength the kernel does not report (connected, unknown), and
+  hollow bars with a slash through them when there is no wireless link at all.
+  The slash is warning-coloured when nothing else is keeping the device online
+  and muted when something is, because the mark is about Wi-Fi while the `!
+  Offline` text beside it is about the internet. The reader also stopped
+  inventing a level: an interface that is up without a readable quality used to
+  report two bars on every link nobody could measure, and now reports *unknown*
+  ([player/statusbar_status.go](player/statusbar_status.go),
+  `player/statusbar_status_test.go`).
+- The Browser reads more of the CSS real sheets are written in, and draws the
+  parts it read correctly. **Borders now belong to the edge the sheet named**:
+  `border-right` used to set the *left* flag, so a sidebar divider appeared on
+  the wrong side, and `border-left` painted a fixed grey 3px bar regardless of
+  `border-left: 4px solid #c00`. Each edge now keeps its own colour (including
+  the colour carried by a shorthand), its declared weight (`1px` stays a
+  hairline, `4px` stays heavy, `border-width` and the per-edge widths count), and
+  `border-right` has a bar of its own. An `<hr>` keeps its styling instead of
+  always drawing the reader's grey rule. The **`font` shorthand** is read
+  (`font: italic 700 18px/1.8 Georgia, serif` sets the size, weight, style and
+  leading at once; a bare number is a weight, never a size), **vertical and
+  logical spacing** reaches the layout (`padding-top`/`padding-bottom`,
+  `margin-inline`, `padding-block`, `margin-inline-start`, ... — `padding-top:
+  24px` used to do nothing at all), and **stylesheets are applied for the right
+  medium**: a width or feature `@media` block still applies, a block that only
+  targets `print` or `speech` no longer does (a print sheet hides navigation
+  with `display: none`, so the page arrived with its header missing), and
+  `@supports`/`@layer` blocks now count, because this reader implements the
+  properties they gate ([player/webpage.go](player/webpage.go),
+  `player/webpage_css_test.go`).
+- The **Settings** menu is a launcher page, the same treatment the Tools menu
+  got. It was the last screen still drawn as the fixed grid it was authored in —
+  four wide buttons with no icons, no title and no grouping — next to a Home
+  grid, an Apps grid and a Tools page that all read as one shell. It now opens
+  with the shared page header (Settings glyph, title, subtitle) and groups its
+  rows by what they change: APPEARANCE, SOUND, CONNECTIVITY, SYSTEM, each with
+  its own glyph chip. Rather than a second copy of the layout, a
+  `menuPageProfile` now describes a menu — its sections, how a row is sorted
+  into one, the glyph each row and heading gets, the subtitle and the header's
+  status read-out — so Tools and Settings are two profiles over one layout, and
+  the next menu is a profile too. Two measuring fixes came with it: columns are
+  capped at the widest section (a sparse page no longer spreads two tiles across
+  four columns with half of every row empty), and the exact section and gap
+  height is counted instead of approximated, which is what lets a short page be
+  centred in its panel rather than heaped at the top while a tall one still
+  cannot run over the footer
+  ([player/menutiles.go](player/menutiles.go), `player/menutiles_test.go`,
+  `player/launcher.go`).
+- Two shared components, and the three screens that were drawing them by hand
+  moved onto them. `UIPageHeader` is the page bar — optional glyph well, title,
+  subtitle and a right-aligned status read-out, with a centred form for the
+  About brand block — and `uiPageHeaderMetricsFor` is the one place that says
+  how tall the band is, so a layout reserving room for the header and the draw
+  filling it cannot disagree. The Tools overlay, the Tools page and About each
+  had their own copy with their own offsets, which is why the two Tools titles
+  differed by 4 px. `UICategoryTile` is the tile recipe (card, tinted icon well,
+  two-line fitted label, status dot, hover and focus ring, press dip) and has a
+  raised-surface variant for tiles standing on a panel; the Tools overlay and
+  the Tools page both use it. The section heading the two Tools screens
+  duplicated is now `UISectionLabel`
+  ([player/components.go](player/components.go), `components_test.go`).
+- CSS gradients in the text-browser are painted as real multi-stop ramps. Every
+  gradient used to collapse to the average of its stops, which turned a header's
+  light-to-dark sweep into one flat band and made a body gradient invisible.
+  `linear-gradient()` is now parsed into positioned stops — `#1e3a8a 0%,
+  #3b82f6 100%`, evenly spaced three-stop lists, `to top`/`to left` mirroring,
+  and `deg`/`turn`/`grad` angles — and drawn band by band (one band per row on a
+  small box, at most 96 on a tall one) for block backgrounds, absolutely
+  positioned cards and the page's own paper. A radial or conic gradient is not a
+  ramp and keeps the averaged fill, the average is still stored for text
+  contrast and opacity, and inline run backgrounds stay flat
+  ([player/webpage_css.go](player/webpage_css.go), `player/webpage.go`).
+- A **SCROLL** / **LINKS** chip in the web browser's toolbar. Switching the D-pad
+  between scrolling and walking links only told you about it in a toast, so once
+  that faded the page gave no sign of which mode the D-pad was in. The chip reads
+  the live mode, turns accent-coloured while links are the target, and is a tap
+  target of its own for touch. On a narrow panel it is the last control to be
+  dropped, after Search and the filter counter, because it is the only one that
+  explains the D-pad
+  ([player/textbrowser.go](player/textbrowser.go), `player/browser_test.go`).
+- Per-button remapping in the Accessibility panel. The physical → logical keymap
+  has been applied before dispatch for a while, but only the layout preset and
+  the Select row could reach it: remapping L1, R1 or a face button meant editing
+  `a11y_keymap` by hand on the card. A, B, X, Y, L1 and R1 now each have a row
+  that shows the action the button currently sends — preset included — and walks
+  the list left and right, ending at **Disabled**, which swallows the press. The
+  last thing touched wins: changing a face button folds the Nintendo preset into
+  an explicit entry so one rule describes it, and applying a preset clears the
+  individual rows. Select and Start keep their single paired row on purpose, so
+  they cannot be stranded
+  ([player/a11y.go](player/a11y.go), `player/a11y_keymap_test.go`).
 - Hold-to-repeat on the D-pad outside the on-screen keyboard. The keyboard had
   polled the pad for a while, but every other screen needed one press per row,
   so walking a long library was one tap per game. `navrepeat.go` now watches the
@@ -372,8 +717,80 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   prefetches artwork like the results list so entering the feed does not paint
   grey tiles.
 
+### Added
+
+- **Tools → Toolbox: install popular command-line tools on demand, and run them
+  from the app.** `rclone` (cloud/SSH sync), `jq` (JSON), `ripgrep` and `fd`
+  (search), `pandoc` (document conversion) and `age` (encryption) are fetched
+  from each project's own GitHub releases into `required/`, then run with
+  visible output: **A** installs the first time and runs afterwards, **X** opens
+  the on-screen keyboard for arguments (quotes group words; there is no shell,
+  so `;`, `|`, `*` and `$()` are literal), **Y** copies the installed path.
+  Installed tools are also on `PATH` for Power tools → Script snippets, so any
+  of them can become a button. A download can only come from a repo listed in
+  `allowedToolRepos`, assets are matched on stable name parts (never a version)
+  and checksum/signature side-cars are skipped, so a token match cannot fetch a
+  `.sha256` by mistake
+  ([player/toolbox.go](player/toolbox.go),
+  [player/tools.go](player/tools.go)).
+- **Tools → Security & trust** reports the device's posture without a PC:
+  plaintext secrets, the storage key in use, package count, listening FTP/SFTP
+  servers, the browser session on the card and telemetry state — each row naming
+  the mechanism behind it, with [SECURITY.md](SECURITY.md) as the long form. The
+  Tools row carries an amber dot while something is worth reviewing
+  ([player/toolbox.go](player/toolbox.go)).
+
 ### Fixed
 
+- **The Package Manager shows which package is selected.** The cursor was a
+  50-alpha accent wash plus a 3px spine, and the list's pane border was drawn in
+  that same accent — so on a dim panel the screen read as "one card is slightly
+  lighter" with an accent frame around everything. The focused row now carries
+  the same focus ring the rest of the app's overlay panels draw, in the colour
+  that survives a theme whose accent sits close to the row surface, with its
+  version/author line stepped up a tone; the two panes take the neutral border
+  every other panel uses, so the ring is the only accent outline on the screen.
+  Rows are also clipped to the list column, and the shared row renderer
+  ([player/components.go](player/components.go)) gained the ring for every list
+  that uses it ([player/packages.go](player/packages.go),
+  `player/packages_test.go`).
+- **The Wi-Fi meter shows a real level on images without `/proc/net/wireless`.**
+  A stock kernel built without wireless extensions — or a driver that lists an
+  interface with quality `0` while associated — left the corner meter stuck on
+  *unknown* for the whole session. It now falls back to the supplicant's own
+  `wpa_cli signal_poll` RSSI and maps it onto the same four bars
+  ([player/wifi.go](player/wifi.go),
+  [player/statusbar_status.go](player/statusbar_status.go)). The poll runs off
+  the render thread and caches its answer for the same four seconds as the
+  kernel read, so a hung supplicant can never freeze the UI; a non-negative
+  `RSSI` (the `0` a disconnected supplicant prints) is not treated as a
+  measurement, and a failed poll clears the cached level instead of leaving a
+  stale one on screen. **Tools → Wi-Fi signal** reports through the same chain
+  and names the source it used.
+- **The plaintext-secret warning never fired.** `isPlaceholderSecret` kept an
+  empty string in its placeholder list, and `strings.Contains(s, "")` is true
+  for every string — so every API key looked like a placeholder and
+  `ConfigValidator.SecurityCheck` reported no plaintext secret at all. The
+  posture page surfaced it; the empty value is now handled before the substring
+  loop, and `TestPlaceholderSecretKeepsTheWarningAlive` pins both directions.
+- **The handheld build no longer loses apps to a stale scene list.**
+  `trimui/make-config.ps1` carried a hand-maintained whitelist of "scenes that
+  stay on the handheld build". It had gone bad in both directions: it named
+  `Emulator`, which no longer exists, so the script threw before writing
+  anything; and it omitted `JukaLand`, `LiveTV`, `Podcasts`, `Tickers`,
+  `Weather`, `UnitConverter`, `CanvasSandbox`, `IPStream` and `MusicPlayer`. The
+  committed device config was also a hand edit, not the script's output: its
+  Main carried the old six tiles *and* the eight new ones stacked on each other,
+  and it kept a Settings row the script was supposed to remove. Those nine
+  scenes are rows in the Apps launcher (`builtinApplets`), and
+  `builtinAppEntries` hides a row whose scene the config does not ship — so the
+  handheld silently lost nine working apps with no error anywhere. The script
+  now keeps every scene verbatim and applies only the device defaults; trimming
+  is an explicit `-Drop` list that refuses to remove a scene a kept scene still
+  opens, the whole run fails if any `change_scene:` target is missing, and
+  `TestDeviceConfigShipsEveryBuiltinApplet` guards the committed file
+  ([player/trimui/make-config.ps1](player/trimui/make-config.ps1),
+  [player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json)).
 - Config writes are crash-safe now. `AtomicWrite` previously renamed the live
   file to `.bak` *before* writing the replacement and never fsynced, so a power
   cut (the normal way a handheld stops) between those steps could leave the

@@ -152,10 +152,11 @@ func TestToolsRowsPatchAndCalculator(t *testing.T) {
 	}
 }
 
-// Seventeen tiles in three sections (the ten FTP & IP tiles, party, Updates,
-// power tools, disc helpers, Calculator, Community, Classic Tools) plus the
-// SFTP credentials line must render on a 720p panel: the tile grid scrolls
-// instead of shrinking rows, and the credentials line survives both.
+// Nineteen tiles in three sections (the ten FTP & IP tiles, party, Updates,
+// power tools, toolbox, security, disc helpers, Calculator, Community, Classic
+// Tools) plus the SFTP credentials line must render on a 720p panel: the tile
+// grid scrolls instead of shrinking rows, and the credentials line survives
+// both.
 func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
 	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
@@ -171,8 +172,8 @@ func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
 	}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 17 {
-		t.Fatalf("tile rects = %d, want 17 with Patch and Calculator", len(rects))
+	if len(rects) != 19 {
+		t.Fatalf("tile rects = %d, want 19 with Patch and Calculator", len(rects))
 	}
 	layout := toolsPanelMetrics(config, toolsRows(config))
 	if panel.H > probeH-40 {

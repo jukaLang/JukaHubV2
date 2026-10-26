@@ -30,6 +30,8 @@ const (
 	toolsActionCalculator
 	toolsActionCommunity
 	toolsActionPowerTools
+	toolsActionToolbox
+	toolsActionSecurity
 	toolsActionDiscHelpers
 	toolsActionCopyIP
 	toolsActionUtilities
@@ -388,6 +390,36 @@ func toolsRows(config *Config) []toolsRow {
 		enabled: true,
 	})
 
+	// The toolbox downloads popular command-line tools on demand and runs them
+	// with visible output; the security row summarises the posture the rest of
+	// this build already maintains (encryption, signatures, downloads, servers).
+	toolboxRow := toolsRow{
+		label:   "Toolbox",
+		value:   toolboxSummaryValue(),
+		detail:  "rclone, jq, ripgrep, fd, pandoc and age — install and run",
+		hint:    hintLine(FooterHint{"A", "Open"}),
+		action:  toolsActionToolbox,
+		enabled: true,
+	}
+	if toolboxInstalledCount() > 0 {
+		toolboxRow.status = toolsStatusGood
+	}
+	system = append(system, toolboxRow)
+
+	securityValue, securityWarn := securityPostureValue(config)
+	securityRow := toolsRow{
+		label:   "Security & trust",
+		value:   securityValue,
+		detail:  "Secrets, storage keys, downloads and open servers",
+		hint:    hintLine(FooterHint{"A", "Open"}),
+		action:  toolsActionSecurity,
+		enabled: true,
+	}
+	if securityWarn {
+		securityRow.status = toolsStatusWarn
+	}
+	system = append(system, securityRow)
+
 	// Disc-based systems need files the ripper often leaves out: a cue sheet
 	// for a bare .bin, and a playlist so a multi-disc set switches discs. Both
 	// are additive, so the row is safe to press on any card.
@@ -548,7 +580,10 @@ func toolsPanelMetrics(config *Config, rows []toolsRow) toolsGridMetrics {
 		m.infoH = m.infoLineH + 5
 	}
 
-	m.headerH = 18 + medH + 8 + smallH + 10
+	// The header is the shared page bar: its height comes from the component
+	// that draws it, so the panel and the bar cannot disagree about the band.
+	headerBand := uiPageHeaderMetricsFor(config, toolsHeader(config, 0, 0, 0))
+	m.headerH = 12 + headerBand.Height + 12
 	// Footer: value line, detail line, and the closing hint.
 	m.footH = 6 + medH + 2 + smallH + 6 + smallH + 6
 
@@ -716,6 +751,16 @@ func toolsPanelActivate(config *Config) {
 		PlayActivateSound()
 	case toolsActionPowerTools:
 		openPowerTools(config)
+	case toolsActionToolbox:
+		openPowerTools(config)
+		powerTools.returnToTools = true
+		powerSetPage(powerPageToolbox)
+		PlayActivateSound()
+	case toolsActionSecurity:
+		openPowerTools(config)
+		powerTools.returnToTools = true
+		powerSetPage(powerPageSecurity)
+		PlayActivateSound()
 	case toolsActionDiscHelpers:
 		report := generateDiscHelpers(romLibraryRoots())
 		if report.Created() == 0 {
@@ -895,10 +940,6 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	if medium == nil {
 		medium = font
 	}
-	labelFont := getFontSized(config, "small", 22)
-	if labelFont == nil {
-		labelFont = font
-	}
 
 	// Sizes come from the fonts, not from constants: a config that does not
 	// override "small"/"medium" gets 24px for both, and fixed offsets used to
@@ -938,38 +979,10 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	// The header opens with the same glyph as the Home tile that opened the
-	// panel, then the title: the two screens share one visual language, and a
-	// glyph is faster to recognise than a word. The well is measured from the
-	// title font and the subtitle below keeps the panel's full width.
-	wellY := panelY + 12
-	titleY := wellY + 5
-	titleX := panelX + padX
-	if medH > 0 {
-		box := medH + 10
-		tint := appGridTileTint("Tools")
-		fillRoundedRect(renderer, titleX, wellY, box, box, 12, WithAlpha(tint, 46))
-		strokeRoundedRect(renderer, titleX, wellY, box, box, 12, 1, WithAlpha(tint, 150))
-		drawToolsIcon(renderer, insetRect(sdl.Rect{X: titleX, Y: wellY, W: box, H: box}, 5), toolsActionPowerTools, tint)
-		titleX += box + 14
-	}
-	renderText(renderer, config, medium, ellipsize(medium, "Tools", panelW-2*padX), ColorTextPrimary(), titleX, titleY)
-	sub := "FTP & IP transfers, network probes and device utilities"
-	if !IsOnline() {
-		sub = "Offline — connect WiFi to transfer files"
-	}
-	renderText(renderer, config, font, sub, ColorTextTertiary(), panelX+padX, panelY+28+medH)
-
-	// The address every transfer tool below needs is readable from the header
-	// without hunting for it in the list.
-	statusText, statusCol := "Offline", ColorToastWarn
-	if ip := toolsIPAddress(); ip != "" {
-		statusText, statusCol = "WiFi · "+ip, ColorTextTertiary()
-	}
-	if sw, _, err := font.SizeUTF8(statusText); err == nil {
-		renderText(renderer, config, font, statusText, statusCol,
-			panelX+panelW-padX-int32(sw), panelY+16+(medH-smallH)/2)
-	}
+	// The header is the shared page bar, the same one the Tools page and About
+	// use: title well, subtitle, and the status read-out every transfer tool
+	// below needs.
+	UIPageHeaderDraw(renderer, config, toolsHeader(config, panelX+padX, panelY+12, panelW-2*padX))
 
 	bodyTop := panelY + m.headerH
 	bodyViewH := panelH - m.headerH - m.footH - m.infoH
@@ -1021,7 +1034,7 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 				// the Apps grid follows: hiding it left a blank band at the top
 				// of a scrolled panel, and a card cut by the panel edge reads as
 				// the edge itself.
-				drawToolsTile(r, config, cell, rows[idx], idx == toolsPanel.cursor, labelFont, medium)
+				drawToolsTile(r, config, cell, rows[idx], idx == toolsPanel.cursor)
 				toolsRowRects[idx] = cell
 			}
 		}
@@ -1118,34 +1131,14 @@ func toolsSectionGlyph(title string) toolsAction {
 	return toolsActionPowerTools
 }
 
-// drawToolsSectionLabel paints a group heading: a tinted chip with the
-// section's glyph, the small uppercase title, and a hairline running to the
-// panel edge, so the grid reads in sections without spending a filled tile on
-// a divider.
+// drawToolsSectionLabel paints a group heading through the shared section
+// component: the section's own glyph makes it recognisable before the small
+// uppercase label is read.
 func drawToolsSectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, w int32) {
-	font := getFontSized(config, "small", 15)
-	if font == nil {
-		return
-	}
-	label := strings.ToUpper(title)
-	_, th, _ := font.SizeUTF8(label)
-	textY := y + 6
-	textX := x
-	if th > 0 {
-		chip := int32(th) + 12
-		chipY := y + (int32(th)+14-chip)/2
-		tint := appGridTileTint(label)
-		fillRoundedRect(renderer, x, chipY, chip, chip, chip/4, WithAlpha(tint, 38))
-		strokeRoundedRect(renderer, x, chipY, chip, chip, chip/4, 1, WithAlpha(tint, 130))
-		drawToolsIcon(renderer, insetRect(sdl.Rect{X: x, Y: chipY, W: chip, H: chip}, chip/6), toolsSectionGlyph(label), tint)
-		textX += chip + 10
-	}
-	tw, _, _ := font.SizeUTF8(label)
-	renderText(renderer, config, font, label, ColorTextTertiary(), textX, textY)
-	if lx := textX + int32(tw) + 12; lx < x+w {
-		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
-		renderer.FillRect(&sdl.Rect{X: lx, Y: textY + int32(th)/2, W: x + w - lx, H: 1})
-	}
+	glyph := toolsSectionGlyph(title)
+	UISectionLabel(renderer, config, title, x, y, w, func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+		drawToolsIcon(r, box, glyph, tint)
+	})
 }
 
 // drawToolsHintChip paints the row's action ("A Start", "A Copy") as a pill on
@@ -1185,60 +1178,53 @@ func toolsStatusColor(status toolsStatus) sdl.Color {
 	return WithAlpha(ColorTextTertiary(), 120)
 }
 
-// drawToolsTile renders one Tools tile: the icon in a tinted well, the tool's
-// name underneath, the status dot on the corner, and the same focus treatment
-// the Apps grid uses (raised surface, accent border, accent spine).
-func drawToolsTile(r *sdl.Renderer, config *Config, cell sdl.Rect, row toolsRow, focused bool, labelFont, medium *ttf.Font) {
-	drawCard(r, cell.X, cell.Y, cell.W, cell.H, 12)
-	if focused {
-		// Focus reads at a glance: a raised surface, an accent border and an
-		// accent spine, not just a tint that darker themes hide.
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, ColorSurfaceRaised)
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 70))
-		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 2, WithAlpha(accentColor, 235))
-		fillRoundedRect(r, cell.X+2, cell.Y+12, 3, cell.H-24, 2, accentColor)
+// toolsHeader builds the panel's page bar: the same glyph as the Home tile that
+// opened the panel, the title, and the address every transfer tool below needs.
+// The metrics pass calls it with a zero rect, because only the fonts matter to
+// the height.
+func toolsHeader(config *Config, x, y, w int32) UIPageHeader {
+	sub := "FTP & IP transfers, network probes and device utilities"
+	if !IsOnline() {
+		sub = "Offline — connect WiFi to transfer files"
 	}
+	status, statusCol := "Offline", ColorToastWarn
+	if ip := toolsIPAddress(); ip != "" {
+		status, statusCol = "WiFi · "+ip, ColorTextTertiary()
+	}
+	return UIPageHeader{
+		X: x, Y: y, W: w,
+		Title:       "Tools",
+		Subtitle:    sub,
+		Status:      status,
+		StatusColor: statusCol,
+		// The same title size the Tools page uses: the two headers are one
+		// recipe, and a 4px difference would show up the moment both are on
+		// screen in a bug report.
+		TitleSize: menuTitleSize,
+		Glyph: func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+			drawToolsIcon(r, box, toolsActionPowerTools, tint)
+		},
+	}
+}
 
-	// A status dot on the corner: running / available / needs attention. It is
-	// cheaper to scan than any text and gives the grid a rhythm.
+// drawToolsTile renders one Tools tile through the shared category-tile
+// component, so the overlay and the Tools page draw the same card.
+func drawToolsTile(r *sdl.Renderer, config *Config, cell sdl.Rect, row toolsRow, focused bool) {
+	tile := UICategoryTile{
+		Rect:     cell,
+		Label:    row.label,
+		Surface:  UITileRaised,
+		Focused:  focused,
+		Disabled: !row.enabled,
+	}
 	if row.status != toolsStatusNeutral {
-		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 4, toolsStatusColor(row.status))
+		tile.Status = toolsStatusColor(row.status)
 	}
-
-	box := int32(52)
-	x := cell.X + (cell.W-box)/2
-	y := cell.Y + 8
-	tint := appGridTileTint(row.label)
-	wellAlpha := uint8(42)
-	if focused {
-		wellAlpha = 62
+	action := row.action
+	tile.Glyph = func(renderer *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+		drawToolsIcon(renderer, box, action, tint)
 	}
-	fillRoundedRect(r, x, y, box, box, 14, WithAlpha(tint, wellAlpha))
-	strokeRoundedRect(r, x, y, box, box, 14, 1, WithAlpha(tint, 140))
-	drawToolsIcon(r, insetRect(sdl.Rect{X: x, Y: y, W: box, H: box}, 8), row.action, tint)
-
-	if labelFont == nil {
-		return
-	}
-	// Names wrap under the icon, at the same offset on every tile so the grid
-	// keeps one baseline; a tile fits two lines before it clips.
-	lineH := int32(labelFont.Height() + 1)
-	textTop := y + box + 6
-	maxLines := int((cell.Y + cell.H - 6 - textTop) / lineH)
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	if maxLines > 2 {
-		maxLines = 2
-	}
-	color := ColorTextPrimary()
-	if !row.enabled {
-		color = ColorTextTertiary()
-	}
-	for li, line := range appTileLabelLines(labelFont, row.label, cell.W-16, maxLines) {
-		lw, _, _ := labelFont.SizeUTF8(line)
-		renderText(r, config, labelFont, line, color, cell.X+(cell.W-int32(lw))/2, textTop+int32(li)*lineH)
-	}
+	UICategoryTileDraw(r, config, tile)
 }
 
 // drawToolsIcon paints the tile's glyph for one tool, built from the same

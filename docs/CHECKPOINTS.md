@@ -5,8 +5,10 @@ resume behaviour is RetroArch's auto state, described below; named checkpoints
 and a game switcher are not in the app.
 
 This page exists because "checkpoints / quick switch" is the largest item on the
-[feature backlog](FEATURE-BACKLOG.md#5-game-switcher-with-quick-resume-first-half-shipped)
-and the two obvious designs have very different costs on this hardware. It
+[feature backlog](FEATURE-BACKLOG.md#4-checkpoints--quick-switch), it is
+tracked as adopted work in the
+[modernization plan](../player/MODERNIZATION.md#56-adopted-not-started), and the
+two obvious designs have very different costs on this hardware. It
 records what the code already does, what each design would actually require, and
 which parts cannot work — so the next person starts from measurements instead of
 a sketch.

@@ -5,12 +5,13 @@ package main
 //
 // The styled reader draws with its own row grid, not a box model, so some
 // properties cannot be honoured exactly. Each helper here turns one of them
-// into something the grid can do, and says so in a comment: a gradient becomes
-// the average of its stops, opacity is blended into the colours that get
-// painted, a line-height becomes extra row slots. The result is "looks like the
-// site", never "pixel-identical to Chrome", and the approximations are chosen
-// so a page never looks broken — an average of #1e3a8a and #3b82f6 is a blue
-// header, not a grey one.
+// into something the grid can do, and says so in a comment: a linear gradient
+// becomes a real multi-stop ramp along one axis (see webGradient), opacity is
+// blended into the colours that get painted, a line-height becomes extra row
+// slots. The result is "looks like the site", never "pixel-identical to
+// Chrome", and the approximations are chosen so a page never looks broken — a
+// two-stop blue header is a blue ramp, and a radial gradient falls back to the
+// average of its stops so it is still blue rather than grey.
 
 import (
 	"math"
@@ -135,9 +136,313 @@ func webFirstLength(value string, rel float64) float64 {
 	return webLength(value, rel)
 }
 
-// webGradientColor turns a gradient into the average of its colour stops.
-// The reader has no per-pixel painting, but the average keeps the header,
-// button or hero card the colour the author intended instead of uncoloured.
+// ── Gradients ────────────────────────────────────────────────────────────
+
+// webGradientStop is one colour and where it sits along the ramp: 0 at the
+// start, 1 at the end.
+type webGradientStop struct {
+	Pos   float64
+	Color sdl.Color
+}
+
+// webGradient is a linear CSS gradient resolved to stops the reader can paint.
+//
+// The reader draws rows rather than a raster, so a diagonal gradient is drawn
+// on its dominant axis, and anything that is not a linear gradient — radial,
+// conic, url() — is not a ramp at all and keeps the averaged fill.
+type webGradient struct {
+	Stops    []webGradientStop
+	Vertical bool
+}
+
+// webGradientAt samples the ramp at t. Positions are non-decreasing and
+// clamped to 0..1, so both tails are flat: that is what `red, blue 60%` looks
+// like in a browser, where the first stop owns everything before it.
+func (g webGradient) At(t float64) sdl.Color {
+	if len(g.Stops) == 0 {
+		return sdl.Color{}
+	}
+	if t <= g.Stops[0].Pos {
+		return g.Stops[0].Color
+	}
+	last := len(g.Stops) - 1
+	if t >= g.Stops[last].Pos {
+		return g.Stops[last].Color
+	}
+	for i := 1; i <= last; i++ {
+		next := g.Stops[i]
+		if t > next.Pos {
+			continue
+		}
+		prev := g.Stops[i-1]
+		span := next.Pos - prev.Pos
+		if span <= 0 {
+			return next.Color
+		}
+		return lerpColor(prev.Color, next.Color, float32((t-prev.Pos)/span))
+	}
+	return g.Stops[last].Color
+}
+
+// webGradientAverage is the single fill a gradient still falls back to: text
+// contrast decisions, and gradients the reader cannot draw as a ramp.
+func webGradientAverage(g webGradient) sdl.Color {
+	if len(g.Stops) == 0 {
+		return sdl.Color{}
+	}
+	var r, gr, b, a float64
+	for _, stop := range g.Stops {
+		r += float64(stop.Color.R)
+		gr += float64(stop.Color.G)
+		b += float64(stop.Color.B)
+		a += float64(stop.Color.A)
+	}
+	n := float64(len(g.Stops))
+	return sdl.Color{
+		R: uint8(math.Round(r / n)),
+		G: uint8(math.Round(gr / n)),
+		B: uint8(math.Round(b / n)),
+		A: uint8(math.Round(a / n)),
+	}
+}
+
+// webFadeGradient applies the element's opacity to every stop, so a faded card
+// fades its whole ramp instead of only its average colour.
+func webFadeGradient(g webGradient, behind sdl.Color, style webStyle) webGradient {
+	if !style.HasOpacity || style.Opacity >= 0.999 {
+		return g
+	}
+	out := webGradient{Vertical: g.Vertical, Stops: make([]webGradientStop, len(g.Stops))}
+	for i, stop := range g.Stops {
+		out.Stops[i] = webGradientStop{Pos: stop.Pos, Color: webFadeColor(stop.Color, behind, style)}
+	}
+	return out
+}
+
+// webParseGradient resolves linear-gradient() into a ramp the reader can
+// paint. It reports false for anything that is not a linear gradient with at
+// least two colour stops, so the caller can fall back to webGradientColor.
+//
+// repeating-linear-gradient() contains this name and is drawn as one pass:
+// a row grid has no way to tile a ramp vertically and honestly.
+func webParseGradient(value string) (webGradient, bool) {
+	lower := strings.ToLower(value)
+	idx := strings.Index(lower, "linear-gradient(")
+	if idx < 0 {
+		return webGradient{}, false
+	}
+	open := idx + len("linear-gradient")
+	end := webCSSParenEnd(value, open)
+	if end <= open {
+		return webGradient{}, false
+	}
+	parts := webSplitTopLevel(value[open+1:end], ',')
+	if len(parts) < 2 {
+		return webGradient{}, false
+	}
+
+	vertical, reversed, hasDirection := webGradientDirection(parts[0])
+	if !hasDirection {
+		// No direction means "to bottom", the CSS default.
+		vertical, reversed = true, false
+	}
+	start := 0
+	if hasDirection {
+		start = 1
+	}
+
+	type rawStop struct {
+		color  sdl.Color
+		pos    float64
+		hasPos bool
+	}
+	raw := make([]rawStop, 0, len(parts)-start)
+	for _, part := range parts[start:] {
+		color, ok := webColorInValue(part)
+		if !ok {
+			continue
+		}
+		pos, hasPos := webGradientStopPercent(part)
+		raw = append(raw, rawStop{color: color, pos: pos, hasPos: hasPos})
+	}
+	if len(raw) < 2 {
+		return webGradient{}, false
+	}
+
+	// CSS leaves the ends implicit and spreads an unpositioned middle stop
+	// evenly between its neighbours: `red, green, blue` is thirds.
+	if !raw[0].hasPos {
+		raw[0].pos, raw[0].hasPos = 0, true
+	}
+	if last := len(raw) - 1; !raw[last].hasPos {
+		raw[last].pos, raw[last].hasPos = 1, true
+	}
+	for i := 0; i < len(raw); i++ {
+		if raw[i].hasPos {
+			continue
+		}
+		next := i + 1
+		for next < len(raw) && !raw[next].hasPos {
+			next++
+		}
+		right := 1.0
+		if next < len(raw) {
+			right = raw[next].pos
+		}
+		left := raw[i-1].pos
+		span := float64(next - i + 1)
+		for k := i; k < next; k++ {
+			raw[k].pos = left + (right-left)*float64(k-i+1)/span
+			raw[k].hasPos = true
+		}
+		i = next - 1
+	}
+
+	stops := make([]webGradientStop, 0, len(raw))
+	prev := 0.0
+	for _, stop := range raw {
+		pos := stop.pos
+		if pos < 0 {
+			pos = 0
+		}
+		if pos > 1 {
+			pos = 1
+		}
+		if pos < prev {
+			pos = prev
+		}
+		prev = pos
+		stops = append(stops, webGradientStop{Pos: pos, Color: stop.color})
+	}
+	if reversed {
+		// Mirroring the ramp is one reverse plus 1-p on every stop; the
+		// positions stay ascending because both operations flip order.
+		for i, j := 0, len(stops)-1; i < j; i, j = i+1, j-1 {
+			stops[i], stops[j] = stops[j], stops[i]
+		}
+		for i := range stops {
+			stops[i].Pos = 1 - stops[i].Pos
+		}
+	}
+	return webGradient{Stops: stops, Vertical: vertical}, true
+}
+
+// webGradientDirection reads the first argument of linear-gradient(). ok is
+// false when that argument is a colour, which means the direction was left out.
+func webGradientDirection(arg string) (vertical, reversed, ok bool) {
+	d := strings.ToLower(strings.TrimSpace(arg))
+	if d == "" {
+		return true, false, false
+	}
+	if _, isColor := webColorInValue(d); isColor {
+		return true, false, false
+	}
+	if angle, isAngle := webGradientAngle(d); isAngle {
+		// CSS angles start at "to top" and run clockwise, the opposite of the
+		// maths convention: 0deg points up, 90deg right, 180deg down, 270deg
+		// left. The reader picks the axis the line points most along.
+		switch {
+		case angle >= 45 && angle < 135:
+			return false, false, true // pointing right
+		case angle >= 135 && angle < 225:
+			return true, false, true // pointing down
+		case angle >= 225 && angle < 315:
+			return false, true, true // pointing left
+		default:
+			return true, true, true // pointing up
+		}
+	}
+	// A corner direction keeps the vertical axis: the reader has rows, and a
+	// ramp on the axis that moves the most is the honest reduction.
+	switch {
+	case strings.Contains(d, "top"):
+		return true, true, true
+	case strings.Contains(d, "bottom"):
+		return true, false, true
+	case strings.Contains(d, "right"):
+		return false, false, true
+	case strings.Contains(d, "left"):
+		return false, true, true
+	}
+	return true, false, false
+}
+
+// webGradientAngle parses an angle keyword into degrees in 0..360. Only the
+// units a page actually uses are supported; a bare number is not an angle.
+func webGradientAngle(value string) (float64, bool) {
+	v := strings.TrimSpace(value)
+	if i := strings.IndexAny(v, " \t"); i > 0 {
+		v = v[:i]
+	}
+	units := []struct {
+		suffix string
+		factor float64
+	}{{"deg", 1}, {"turn", 360}, {"grad", 0.9}}
+	for _, unit := range units {
+		if !strings.HasSuffix(v, unit.suffix) {
+			continue
+		}
+		n, err := strconv.ParseFloat(strings.TrimSuffix(v, unit.suffix), 64)
+		if err != nil || math.IsNaN(n) {
+			return 0, false
+		}
+		a := math.Mod(n*unit.factor, 360)
+		if a < 0 {
+			a += 360
+		}
+		return a, true
+	}
+	return 0, false
+}
+
+// webGradientStopPercent reads the trailing percentage of a colour stop. The
+// colour function is stripped first, because rgb(100%, 0%, 0%) carries its own
+// percents and they are not positions.
+func webGradientStopPercent(part string) (float64, bool) {
+	var b strings.Builder
+	depth := 0
+	for i := 0; i < len(part); i++ {
+		switch part[i] {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		default:
+			if depth == 0 {
+				b.WriteByte(part[i])
+			}
+		}
+	}
+	scan := b.String()
+	i := strings.IndexByte(scan, '%')
+	if i <= 0 {
+		return 0, false
+	}
+	j := i
+	for j > 0 {
+		c := scan[j-1]
+		if (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '+' {
+			j--
+			continue
+		}
+		break
+	}
+	if j == i {
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(scan[j:i], 64)
+	if err != nil || math.IsNaN(value) {
+		return 0, false
+	}
+	return value / 100, true
+}
+
+// webGradientColor turns a gradient into the average of its colour stops: the
+// fallback for gradients that are not a linear ramp (radial, conic) and the
+// colour text contrast is judged against. A ramp itself is painted by
+// drawWebGradient from webParseGradient's stops.
 func webGradientColor(value string) (sdl.Color, bool) {
 	lower := strings.ToLower(value)
 	if !strings.Contains(lower, "gradient(") {

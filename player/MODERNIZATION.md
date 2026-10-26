@@ -21,9 +21,11 @@ ladders, coverage gating — is [../ROADMAP.md](../ROADMAP.md), because those ar
 facts about the repository rather than the app. The idea lists under `docs/`
 ([FEATURE-SLATE](../docs/FEATURE-SLATE.md),
 [FEATURE-BACKLOG](../docs/FEATURE-BACKLOG.md),
-[IMPROVEMENTS](../docs/IMPROVEMENTS.md)) are inputs: an idea becomes work when it
-is adopted here with a status and a piece of code evidence, or into the roadmap
-as a process item.
+[IMPROVEMENTS](../docs/IMPROVEMENTS.md)) hold **only unadopted ideas**. An idea
+becomes work when it is adopted here with a status and a piece of code evidence,
+or into the roadmap as a process item — and it then leaves the idea list, so no
+idea is tracked in two places. What already shipped out of those lists is
+inventoried in [5.5](#55-shipped-feature-surface-verified-2026-10-25).
 
 ## Executive Summary
 
@@ -33,14 +35,20 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 
 | Phase | Done | Partial | Not started |
 |-------|------|---------|-------------|
-| 2. Architecture | 27 | 5 | 2 |
-| 3. Async & performance | 12 | 3 | 6 |
-| 4. Reliability | 25 | 1 | 0 |
-| 5. Features | 10 | 4 | 2 |
-| 6. Testing | 11 | 1 | 0 |
-| 7. Web builder | 5 | 2 | 5 |
-| 8. Handheld polish | 24 | 0 | 10 |
-| 9. Browser & handheld input | 10 | 0 | 2 |
+| 1. UI/UX fixes | 7 | 0 | 0 |
+| 2. Architecture | 30 | 2 | 0 |
+| 3. Async & performance | 15 | 2 | 5 |
+| 4. Reliability | 24 | 1 | 0 |
+| 5. Features | 11 | 3 | 4 |
+| 6. Testing | 12 | 1 | 0 |
+| 7. Web builder | 6 | 2 | 9 |
+| 8. Handheld polish | 13 | 1 | 6 |
+| 8b. GPU offload | 6 | 0 | 3 |
+| 9. Browser & handheld input | 11 | 0 | 1 |
+
+Rows count checkbox items only. The shipped-feature inventory in
+[5.5](#55-shipped-feature-surface-verified-2026-10-25) is a record of what
+already exists, not a task list, so it is not counted here.
 
 ## Current State Audit
 
@@ -140,7 +148,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [x] ✅ Format all Go files
 
 ### Phase 2: Architecture Refactoring
-**Status**: 🟡 Mostly complete (27 shipped, 5 partial, 2 not started)
+**Status**: 🟡 Mostly complete (30 shipped, 2 partial, 0 not started)
 
 #### 2.1 Design System
 
@@ -177,19 +185,23 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 - [x] ✅ `EmptyState` / `ErrorState` — `UIEmptyState` / `UIErrorState`
       (`uiStateBlock`).
 - [x] ✅ `LoadingSkeleton` — `UILoadingSkeleton` with pulse phase.
-- [ ] 🟡 `CategoryTile` — the home renderer has a card recipe, but it is not a
-      reusable component. The Tools page (`menutiles.go`) now draws its
-      shortcut tiles from the same recipe, so the next step is one shared
-      `UICategoryTile` (icon well + wrapped label + status dot) that the home
-      grid and the page both call, instead of two copies of the drawing code.
+- [x] ✅ `CategoryTile` — `UICategoryTileDraw` in `components.go`: card, tinted
+      icon well, two-line label fitted to the space left, status dot, hover and
+      focus ring, and the eased press dip. The Tools page (`menutiles.go`) and
+      the Tools overlay (`toolsui.go`) both draw through it; the overlay uses
+      the `UITileRaised` surface because its tiles stand on a raised panel where
+      the page's card colour would disappear. The home/Apps grid still has its
+      own renderer with the same colours — it also handles badges and per-tile
+      geometry the component does not own yet.
 - [ ] 🟡 `IconButton` — icon geometry helpers exist (`launcher.go`), but buttons are
       still drawn inline per scene.
-- [ ] ⬜ Create `AppBar` component — screen headers are drawn inline by scenes;
-      the verified audit above never counted this as started. It is now three
-      inline copies: the Tools overlay (`toolsui.go`), the Tools page
-      (`menutiles.go`) and About all draw a glyph well + title + subtitle band
-      by hand, so the component has a real shape to extract and three callers
-      to prove it against.
+- [x] ✅ `AppBar` — `UIPageHeader` / `UIPageHeaderDraw` in `components.go`:
+      optional glyph well, title, subtitle and a right-aligned status read-out,
+      plus a centred form for a brand block. The Tools overlay, the Tools page
+      and About all build one, and `uiPageHeaderMetricsFor` is the single place
+      that says how tall the band is, so a layout and its draw cannot disagree.
+      The section heading the two Tools screens also duplicated is
+      `UISectionLabel`.
 
 #### 2.3 Focus System
 
@@ -198,13 +210,18 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       `core.go` scene changes.
 - [x] ✅ Deterministic directional navigation — `focus.go` geometry-based movement;
       `navselection_test.go`, `chrome_nav_test.go`, `homefocus_nav_test.go`.
+- [x] ✅ Every control reachable on every config-driven scene — the graph's
+      per-direction fallback classifies an edge by its dominant axis, so a
+      side control with a small vertical offset no longer counts as the one
+      above it; `dpad_audit_test.go` walks both shipped configs.
 - [x] ✅ Focus animation — hover/focus lift (100–140 ms), reduced-motion aware.
 - [x] ✅ Reduced-motion mode — config flag, animation gates, battery-saver test.
 - [x] ✅ Controller test screen — `ctrldiag.go`, opened from Power tools; see
       [../docs/CONTROLLER_TEST.md](../docs/CONTROLLER_TEST.md).
 - [ ] 🟡 `Focusable` interface — behavior is centralized in `FocusEngine`, but
       there is no Go interface implemented by element types.
-- [ ] ⬜ Input remapping screen.
+- [x] ✅ Input remapping screen — the Accessibility panel's per-button rows
+      (`a11yRows`, `player/a11y.go`).
 
 #### 2.4 Platform Abstraction
 
@@ -218,7 +235,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       the executable (`patch_repo.go`, `apps.go`, `packages.go`).
 
 ### Phase 3: Async Work & Performance
-**Status**: 🟡 In progress (12 shipped, 3 partial, 6 not started)
+**Status**: 🟡 In progress (15 shipped, 2 partial, 5 not started)
 
 #### 3.1 Concurrency Model
 
@@ -261,13 +278,18 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       see the Phase 8b entry for the full description.
 
 #### 3.3 Rendering
-#### 3.3 Rendering
 
 - [x] ✅ Cached text textures — `globalTextCache`, pressure trimming.
 - [x] ✅ Clipping for lists/grids — `renderWithClip`.
 - [x] ✅ Idle render mode — `FrameRateController` drops cadence when nothing animates.
 - [x] ✅ Frame time budget — adaptive delay + low-power cadence (`adaptive.go`,
       `adaptive_test.go`).
+- [x] ✅ Worker-thread texture audit — every `CreateTexture` call site is on a
+      render path: the thumbnail workers fetch bytes only, and
+      `loadThumbnailFromURLs` creates and uploads the texture while drawing. So
+      there was no `LockOSThread` change to make, and the black-texture/SDL
+      crash that looked like a worker-thread bug was the renderer-owned cache
+      reuse recorded in Phase 6 (`renderer_cache_owner_test.go`).
 - [ ] 🟡 Object reuse for cards/labels/images — card surfaces are stateless helpers;
       per-frame text layout still allocates.
 - [ ] ⬜ Icon atlas as above.
@@ -288,7 +310,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       the whole process lifetime).
 
 ### Phase 4: Reliability & Configuration
-**Status**: 🟡 Mostly complete (25 shipped, 1 partial, 0 not started)
+**Status**: 🟡 Mostly complete (24 shipped, 1 partial, 0 not started)
 
 #### 4.1 Configuration
 
@@ -370,7 +392,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       uncacheable-304 contract, eviction, oversize skip, concurrent use).
 
 ### Phase 5: Features
-**Status**: 🟡 Partially complete (10 shipped, 4 partial, 2 not started)
+**Status**: 🟡 Partially complete (11 shipped, 3 partial, 4 not started)
 
 #### 5.1 Media
 
@@ -397,8 +419,10 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 
 #### 5.4 Settings
 
-- [ ] 🟡 Controller remapping — A/B and X/Y swaps plus the one-handed chord
-      button exist in the Accessibility panel; a full per-button map does not.
+- [x] ✅ Controller remapping — every face and shoulder button has its own row
+      in the Accessibility panel, cycling through the actions and ending at
+      **Disabled**; the layout preset is a whole-state shortcut and the Select
+      row still moves or disables the BACK/START pair together.
 - [x] ✅ Accessibility settings — reduced motion, low power, font sizes, theme
       contrast tokens.
 - [ ] 🟡 Power profile selection (single LowPower toggle; no named profiles).
@@ -407,8 +431,67 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
       toggle rows themselves into the Accessibility panel.
 - [x] ✅ Theme preview — scrollable theme gallery with live apply.
 
+#### 5.5 Shipped feature surface (verified 2026-10-25)
+
+Everything below was the subject of an idea in
+[FEATURE-SLATE](../docs/FEATURE-SLATE.md),
+[FEATURE-BACKLOG](../docs/FEATURE-BACKLOG.md) or
+[IMPROVEMENTS](../docs/IMPROVEMENTS.md), or was requested outright, and is
+implemented in this tree. It is recorded once, here, so those pages can stay
+forward-looking instead of carrying a shipped register each. Each row names the
+code and the test that pins it.
+
+| Feature | Where it lives | Pinned by |
+|---|---|---|
+| Continue card merging game and media recents | `recent.go` (`getRecentItems`) | `continue_games_test.go` |
+| Offline weather from the last good forecast | `weather_cache.go` | `weather_cache_test.go` |
+| LAN Play panel: RetroArch netplay host/join | `netplay.go`, `netplay_ui.go` | `netplay_test.go`, `netplay_ui_test.go` |
+| `NetPlayEnabled` gate with a Quick Settings switch | `netplay_ui.go` | `netplay_gate_test.go` |
+| Save-state resume (RetroArch auto save/load) | `savestate_resume.go` | `savestate_resume_test.go` |
+| Box-art fetch for missing covers, with a 30-day not-found cache | `game_library.go`, `game-art/.missing-art.json` | `artwork_fetch_test.go` |
+| Library completeness ring and resumable fill-the-gaps | `game_library_ui.go` | `game_library_test.go` |
+| Saved browser cookies expire on a chosen window (Keep/7/14/30/90 days in Settings → General); per-cookie first-seen age, prune on load and on change; the row also carries when the session was first stored (`Cookies · 30d · since Oct 12`, the oldest stamp on the card) as the window's reference point; the **Forget now** press beside the row that drops the session from Settings with the Browser chip's shared two-press arm | `browsercookies_retention.go`, `widgets.go`, `core.go`, [BROWSER](../docs/BROWSER.md#dropping-them-after-a-while) | `browsercookies_retention_test.go`, `browsercookies_forgetrow_test.go`, `browsercookies_age_test.go` |
+| Saved browser cookie jar on the card (mode 0600, restored on first use), the two-press **Forget** chip carrying the count, and the strip under the page naming the hosts those cookies belong to | `browsercookies.go`, `browser.go`, `textbrowser.go`, [BROWSER](../docs/BROWSER.md#forgetting-them) | `browsercookies_persist_test.go`, `browserforgetchip_test.go`, `browser_cookie_sites_test.go` |
+| Video snaps in the library: a card-local clip plays in the preview box after a short focus dwell (320×180, 10fps, muted, looped; `gameSnaps` / `gameSnapsDir`), letterboxed with a SNAP chip and the cover as the fallback, switched from Settings → General → **Video snaps** so no JSON edit is needed, and that row reports how many of the library's games have a clip (`On · 12`, `On · none`) from a library scan taken off the render thread when the page opens | `snappreview.go`, `snappreview_count.go`, `game_library_ui.go`, [GAME_LIBRARY](../docs/GAME_LIBRARY.md#video-snaps) | `snappreview_test.go`, `snappreview_render_test.go`, `snappreview_setting_test.go`, `snappreview_count_test.go` |
+| Recordings screen over RetroArch's recording folder | `recordings.go`, [RECORDINGS](../docs/RECORDINGS.md) | `recordings_test.go` |
+| LAN watch party and PIN/QR phone companion | `partynet.go`, `companion.go` | `party_test.go`, `companion_test.go` |
+| RetroAchievements (softcore; hardcore deliberately off) | `retroachievements.go` | `retroachievements_test.go` |
+| Per-ROM box art from libretro-thumbnails during ROM setup | `romsetup.go` | `romsetup_test.go` |
+| Screenshot of the hub's own frame | `screenshot.go` | `imageviewer_test.go` |
+| LED sync and LED policies (audio, battery, charging, temperature, custom colour/pulse) | `ledsync.go` | `ledpolicy_test.go`, `ledsync_test.go` |
+| Component-versions report (app, launcher, config, bundled tools, packages; SHA-256) with **A** to copy and the same section in the diagnostics export | Patch → **Component versions**, `componentreport.go` | `componentreport_test.go` |
+| Controller legend card, first run and from Quick Settings; its **Find it in Tools** section names the Toolbox and Security & trust pages, which the tour's last step also covers | `controlslegend.go`, `onboarding.go` | `controlslegend_test.go`, `onboarding_test.go` |
+| User theme store: `themes/*.json` into the gallery, invalid files skipped | `themeloader.go` | `themeloader_test.go` |
+| Auto time-lapse of a playthrough (`/dev/fb0` frames, ffmpeg mp4 on exit) | `timelapse.go`, [TIMELAPSE](../docs/TIMELAPSE.md) | `timelapse_test.go` |
+| Clock with calendar/alarm popover, and the weather popover | `clock.go`, `weather_popover.go` | `calendar_popover_test.go`, `weather_popover_test.go` |
+| Now-playing dock and the ambient photo slideshow | `ambient.go` | `ambient_test.go` |
+| Home Assistant entities, MQTT mirror, Pi-hole/router/Tailscale/WireGuard state | `smart_home.go` | `smart_home_test.go` |
+| Disk and battery readings in Hardware and the status cluster | `hardware.go` | `hardware_poll_test.go` |
+| Built-in minigames (Snake, Tetris, 2048, Pong, Minesweeper, Flappy) | Games scene, `games.go` | `funpack_test.go` |
+| Phone keyboard bridge (text and key events) | `companion.go` | `companion_test.go` |
+| Syncthing save-sync export (folder list + resume zip) | `savemanager.go` | `savemanager_test.go` |
+| Animated backgrounds and the boot animation | `dynamicbg.go`, `backgroundfx.go`, `splash.go` | `anim_test.go`, `motion_test.go` |
+| Seasonal theming — **partial**: time-of-day switching ships, date-keyed packs do not | `themes.go` | `themes_test.go` |
+| Toolbox: nine curated CLI tools (rclone, jq, ripgrep, fd, pandoc, age plus the network scanners naabu, httpx, dnsx) installed on demand from allowlisted releases, run with typed arguments and visible output; scanner runs sit behind a one-time authorized-use acknowledgement stored in the config | `toolbox.go`, `powertools.go`, `vkeyboard.go`, [TOOLBOX](../docs/TOOLBOX.md#network-scanning), [SECURITY.md](../SECURITY.md#toolbox-and-helper-tool-downloads) | `toolbox_test.go`, `toolbox_scan_gate_test.go` |
+| Security & trust page: plaintext secrets, storage key, package count, LAN listeners, browser session and telemetry state, read-only | `toolbox.go` (`securityPostureRows`), `toolsui.go` | `toolbox_test.go` |
+
+#### 5.6 Adopted, not started
+
+Ideas that have been accepted into this plan and do not have code yet. Being
+here is a decision, not a schedule.
+
+- [ ] ⬜ **Playtime Wrapped / insights** — adopted as the next feature build: a
+      90-day heatmap from `playtimeData.Days`, top systems from `Scenes`, the
+      current streak, and a PNG the phone companion can show. No new tracking;
+      the data is already collected.
+- [ ] ⬜ **Checkpoints / quick switch** — the largest item ever put on the
+      backlog, designed in [CHECKPOINTS.md](../docs/CHECKPOINTS.md) and
+      explicitly unimplemented. Named per-game save slots need core-specific
+      state handling, and a real switcher needs two suspended emulator processes
+      on a 1 GB device.
+
 ### Phase 6: Testing
-**Status**: 🟡 Partially complete (11 shipped, 1 partial) — bounds, cache, retry,
+**Status**: 🟡 Partially complete (12 shipped, 1 partial) — bounds, cache, retry,
 persistence and harness gaps closed
 
 - [x] ✅ Config validation tests — `config_schema_test.go`, `config_persist_test.go`.
@@ -447,12 +530,18 @@ persistence and harness gaps closed
       instead of the whole shared 1280×720 window, which used to overflow the
       capture buffer through cgo and crash the suite intermittently when a
       probe rendered a smaller frame.
+- [x] ✅ Renderer-owned texture caches — the keyboard, chat and video-overlay
+      caches record their owning renderer, drop a foreign texture without
+      touching it, and release their textures before teardown. The intermittent
+      `SDL_RenderReadPixels` crash was this reuse and not the thumbnail path, so
+      the flaky test was fixed at its cause rather than quarantined
+      (`renderer_cache_owner_test.go`).
 - [ ] 🟡 Platform path selection tests — path guards exist, platform-specific
       selection is only indirectly covered.
 
 ### Phase 7: Web Builder
-**Status**: 🟡 Mostly complete (5 shipped, 2 partial, 5 not started) — snapping
-and guides still missing
+**Status**: 🟡 Mostly complete (6 shipped, 2 partial, 9 not started) — snapping,
+guides, a module split and the CSP are still missing
 
 - [x] ✅ Semantic design tokens — `style.css` (`--canvas-*`, surfaces, spacing).
 - [x] ✅ State previews — preview mode (`script.js`, Ctrl+P).
@@ -463,6 +552,17 @@ and guides still missing
       assembled per type.
 - [ ] 🟡 Trimui performance linting — font-size/asset checks partly covered by
       the loader warnings.
+- [x] ✅ Stylesheet repair and end-to-end coverage — `style.css` parses at brace
+      depth 0 with no orphan declarations, the AI panel and four destroyed hover
+      rules are back, and the Playwright suite (drop-at-scale, zoom round-trip,
+      AI panel visible) guards them.
+- [ ] ⬜ Split `script.js` into modules — the largest single-file risk in the
+      repository.
+- [ ] ⬜ Content-Security-Policy, once the allow-list exists for inline styles and
+      the LAN device pushes over `http:`.
+- [ ] ⬜ Self-hosted fonts instead of the CDN.
+- [ ] ⬜ PWA / service worker — only with a stale-cache recovery story, and the
+      favicon is currently below the installable minimum.
 - [ ] ⬜ Snap-to-grid.
 - [ ] ⬜ Alignment guides.
 - [ ] ⬜ Safe-area overlay (1280×720 device frame).
@@ -470,7 +570,7 @@ and guides still missing
 - [ ] ⬜ Schema validation in the builder (no `schemaVersion` emitted).
 
 ### Phase 8: TrimUI handheld polish
-**Status**: 🟡 Started (24 shipped, 10 not started) — interaction feedback,
+**Status**: 🟡 Started (13 shipped, 1 partial, 6 not started) — interaction feedback,
 card rendering, the Tools page and a repeating D-pad landed; the rest is queued
 
 This phase collects the work that specifically targets the TrimUI Smart Pro
@@ -558,11 +658,19 @@ Open:
       save, and a panel too short for the page keeps the authored buttons
       (`menutiles_test.go`). This is also the shape a reusable `CategoryTile`
       component should take — see the Phase 2 note.
-- [ ] ⬜ The Settings menu as a page — Settings is the same kind of screen the
-      Tools menu was (buttons on a fixed grid). The layout pass in
-      `menutiles.go` is deliberately restricted to `Misc`/`Tools`; Settings
-      mixes toggles and sliders in with its buttons, so it needs its own
-      section model before it can adopt the tiles.
+- [x] ✅ The Settings menu as a page — Settings was the same kind of screen the
+      Tools menu was (buttons on a fixed grid), and it now draws through the same
+      layout with a profile of its own: a page header (Settings glyph, title,
+      subtitle), section headings (APPEARANCE, SOUND, CONNECTIVITY, SYSTEM) and
+      icon tiles, grouped by what each category changes (`menutiles.go`,
+      `settingsMenuPage`). A menu is a `menuPageProfile` — sections, grouping
+      rule, row and heading glyphs, subtitle, header status — so Tools and
+      Settings share one layout and the next menu is data, not code. Sections
+      whose rows would be all toggles or sliders never appear: the profile only
+      keeps sections that have at least one button, so a Settings scene that
+      gains a toggle element keeps the generic renderer and its authored
+      geometry. Not done: nothing forces Settings to stay a page if a config
+      author adds a non-button element to it (`menutiles_test.go`).
 - [ ] ⬜ Scene-scoped texture release for scenes that are not open.
 - [ ] 🟡 Scene-scoped polling — started with the disk pie: `startDiskPieAutoRefresh`
       used to statfs the card every five seconds for the whole session, so a
@@ -576,6 +684,24 @@ Open:
 - [ ] ⬜ On-device measurement of cold start (<1.5 s interactive), transition
       frame time and idle RSS (<5% CPU at the capped cadence) — all numbers so
       far are desktop proxies.
+
+**Needs a hardware session** (no code change can settle these):
+
+- [ ] ⬜ Wi-Fi picker verified on both stock images (Smart Pro and Brick):
+      interface name, `wpa_cli` path and DHCP client confirmed on the device. The
+      picker already polls `status` for the requested SSID instead of trusting
+      `select_network`, asks for a lease and re-reads the address, and reports a
+      failed `save_config` as session-only — none of that replaces one session on
+      each image. The status meter no longer depends on the proc table either:
+      it falls back to `wpa_cli signal_poll` off-thread when
+      `/proc/net/wireless` is missing or reports no measurement, and the
+      picker's CONNECTED row now reads through that same chain instead of the
+      scan table, so the session is confirming a path rather than discovering
+      one (`wifi_test.go`, `statusbar_status_test.go`,
+      `wifi_row_bars_test.go`).
+- [ ] ⬜ LAN Play verified end to end between two machines on one network. The
+      command builder, address parsing, core mapping and both preflights are
+      unit-tested; the handshake is not.
 
 ### Phase 8b: GPU offload on the A133P / PowerVR GE8300
 **Status**: 🟡 First steps shipped (renderer selection + per-frame geometry
@@ -727,7 +853,7 @@ Field expectations for the TrimUI Smart Pro / Smart Pro S / Brick family
       against unproven vendor libraries.
 
 ### Phase 9: Browser & handheld input
-**Status**: ✅ Landed this revision (10 shipped, 2 not started) — remaining
+**Status**: ✅ Landed this revision (11 shipped, 1 not started) — remaining
 follow-ups queued
 
 The modern reader (styled web pages behind the `textbrowser` element) is now
@@ -787,9 +913,13 @@ Open:
       (two-column walk, nearest-column pick, both wraps, one-row no-op), while
       the existing controller/keyboard walk tests still pass through the new
       row step.
-- [ ] ⬜ Mode discoverability — the toggle toast now names the keys and
-      [../docs/CONTROLS.md](../docs/CONTROLS.md)/[../docs/BROWSER.md](../docs/BROWSER.md)
-      document the model, but the page itself still shows no mode chip.
+- [x] ✅ Mode discoverability — the web toolbar shows a **SCROLL** / **LINKS**
+      chip (`textBrowserModeRect`, `player/textbrowser.go`) that reads the live
+      `browserNav` state, turns accent-coloured while the D-pad walks links, and
+      is a tap target of its own, so the mode is visible without waiting for the
+      toggle toast. Verified by the layout tests (including which chip a narrow
+      panel drops) and `TestBrowserModeChipIsDrawn`, which diffs two rendered
+      frames inside the chip's own rect.
 - [ ] ⬜ On-device pass — the browser model is verified with the SDL dummy
       renderer; touch hit accuracy, Tab/anchor ergonomics and the link panel
       on real TrimUI hardware still need a hardware run.
@@ -868,10 +998,10 @@ self-contained and user-visible. Evidence:
   cluster), which is now written down instead of implied.
 - **Tools menu became a launcher page** (`menutiles.go`, see Phase 8): the
   clearest remaining design mismatch after the Apps grid was restyled.
-- **Gaps the plan did not name**, now on the list: a shared `AppBar` has three
-  inline copies to consolidate (Tools overlay, Tools page, About); the Settings
-  menu is the same fixed-grid shape the Tools menu was; `CategoryTile` has two
-  copies of the tile drawing to merge into `UICategoryTile`.
+- **Gaps the plan did not name**, now closed: the shared `AppBar` consolidated
+  its three inline copies (Tools overlay, Tools page, About), the two tile
+  drawings merged into `UICategoryTile`, and the Settings menu moved onto the
+  same page layout as Tools through a `menuPageProfile`.
 - Checks after the changes: `gofmt -l` clean on the touched files,
   `go vet ./...` exit 0, `go test -count=1 ./...` green, including the new
   `navrepeat_test.go` and `hardware_poll_test.go`.
@@ -964,32 +1094,26 @@ Evidence collected while re-checking every item against this tree:
 
 The phases above are now mostly implemented. The highest-value remaining work:
 
-1. **Controller remapping screen** — the general physical → logical keymap
-   (`a11y_keymap`, [../docs/adr/0001-physical-logical-keymap.md](../docs/adr/0001-physical-logical-keymap.md))
-   and the Select/layout rows exist, but there is still no screen that maps every
-   button one by one.
+1. **Playtime Wrapped** — adopted next (Phase 5.6): the data is already there, so
+   this is a page, a heatmap, a streak and a PNG export.
 2. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
    work with immediate design-time payoff.
-3. **Browser mode chip** — the last Phase 9 item: the page itself should name the
-   current mode (scroll / links) and the keys that switch it, instead of relying
-   on the toggle toast and the docs.
-4. **Debounced search input** — first name the path it is for: the Tube field
+3. **Debounced search input** — first name the path it is for: the Tube field
    only submits on Enter/its button, and the global search filters in memory, so
    this item is worth doing only where a keystroke really starts work.
-5. **Phase 8 handheld polish** — touch-target audit, safe-area insets, cached
+4. **Phase 8 handheld polish** — touch-target audit, safe-area insets, cached
    ambient glow, list virtualization, and on-device measurement of
    cold start, transition frame time, idle RSS and the GC/decode tuning above
    (all numbers so far are desktop proxies).
-6. **Convert remaining fixed-offset panel layouts to font metrics** — the
+5. **Convert remaining fixed-offset panel layouts to font metrics** — the
    Downloads panel's SD card now derives its rows from `font.Height()`
    (`downloadStorageCardHeight`); panels that still hard-code text offsets
    (Start menu, Quick Settings, the browser chrome) can adopt the same
    pattern so taller accessibility scales never overlap there either.
-7. **`UICategoryTile` + `AppBar`** — the tile drawing now exists twice (home
-   grid, Tools page) and the page header three times (Tools overlay, Tools page,
-   About). Extracting both is mechanical, removes the drift risk between the
-   copies, and gives every future page one place to start from.
-8. **Measure the hold-to-repeat cadence on the device** — 320 ms / 70 ms is the
+6. **Move more screens onto `UIPageHeader` / `UICategoryTile`** — the Settings
+   menu is the next fixed grid, and the Downloads and Power tools panels still
+   draw their own header band.
+7. **Measure the hold-to-repeat cadence on the device** — 320 ms / 70 ms is the
    keyboard's long-standing value and feels right on a list, but a 1 GB ARM64
    device under a slow SD card may want a shorter delay. It is one constant in
    `navrepeat.go`; a hardware pass should confirm it before it is treated as

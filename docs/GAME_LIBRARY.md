@@ -317,6 +317,63 @@ that has disappeared from the card since the last scan is reported instead of
 moving the highlight somewhere unrelated, and **R** in an empty library explains
 that there are no games yet rather than opening an empty sheet.
 
+## Video snaps
+
+A short clip of the focused game can play in the preview box, the way Knulli
+and the Batocera family do it. Nothing is downloaded: the clips are files you
+put on the card, mirroring the box-art tree.
+
+```
+<SD>/data/game-snaps/Nintendo_Entertainment_System/Super Mario Bros.mp4
+<SD>/data/game-snaps/Arcade/1943.webm
+```
+
+- The folder is the console name with spaces turned into underscores, and the
+  file is the ROM's name without its extension — exactly the layout of
+  `data/game-art/`, so an existing collection can be copied across.
+- There is no snap for a whole set, and **no scraper**: no account, no key, no
+  network request. The library checks for a file and plays it.
+- `.mp4` and `.webm` are tried in that order. Other containers are ignored on
+  purpose — the bundled ffmpeg could decode them, but a menu preview is not
+  worth a container matrix.
+- Moving the collection elsewhere is a config key: `variables.Custom.gameSnapsDir`
+  points at a different tree, and `gameSnaps: false` switches the feature off.
+  It is on by default, and a card with no clips costs nothing.
+- Switching it off does not need the file: **Settings → General → Video snaps**
+  shows `On` or `Off` and flips on a press, writing `gameSnaps` in
+  `jukauser.json`. A preview already playing stops on the next frame, and no
+  clip is started again until the row is switched back on — the decoder asks
+  the same setting the row writes, so the two cannot disagree.
+- The row also reports what the switch has to work with: `Video snaps · On · 12`
+  counts the library's games that have a clip, and a card with none reads
+  `On · none` — the one case where the switch is on but nothing can play. The
+  count is the same `gameSnapPath` the preview uses, so it never claims a clip
+  the panel would not play, and a clip left behind for a ROM that is gone does
+  not count. It is a library scan, taken when the page opens on the scene's own
+  goroutine and reused for 30 seconds, so opening Settings never walks the card
+  twice or blocks a frame.
+
+How it behaves while you browse:
+
+- The clip starts only after the focus has rested on one game for about a third
+  of a second, so holding **Down** through 200 titles does not start 200
+  decoders. Scrolling past it is free.
+- While it plays, the clip replaces the cover in the same box and carries a
+  small **SNAP** chip, so a moving picture is never mistaken for a very
+  animated box art. Until the first frame arrives — and whenever a frame is
+  not available — the cover stays, so opening the library never flashes an
+  empty box.
+- The decoder is a separate ffmpeg process at 320×180, 10fps, muted and looped.
+  It is not the video player's session: playback, the queue and the now-playing
+  dock are untouched, and closing the panel, moving the focus or entering the
+  video player stops it immediately.
+- A clip that produces no frames is remembered for the rest of the session and
+  never retried, so one bad file cannot stutter the list.
+
+This is a browse-time aid, not a scraper. Covers, manuals and metadata still
+come from the libretro thumbnail set ([Completeness](#completeness)); snaps are
+whatever you put on the card.
+
 ## Notes and limits
 
 - The scan only reads filenames; it never moves, renames or edits a game.
@@ -327,6 +384,9 @@ that there are no games yet rather than opening an empty sheet.
 - Artwork is never uploaded. The fetch only reads the public libretro
   thumbnail set; local PNGs in `data/game-art/` are used as-is and never
   replaced.
+- A video snap is decoration: it is decoded on the A133P's CPU, so a card full
+  of 1080p clips will cost more than one of 480p clips. The 320×180 decode size
+  is chosen to keep that cost small.
 - Resume is the emulator's auto state, not a JukaHub snapshot. Quitting the
   emulator in a way that skips its shutdown hook (a hard power-off, for example)
   can lose the most recent state.

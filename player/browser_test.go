@@ -581,13 +581,13 @@ func TestBrowserResolveLink(t *testing.T) {
 	}
 }
 
-// The toolbar reserves a Search chip and the filter chip beside Go, and the
-// four controls never overlap or leave the element.
+// The toolbar reserves a Search chip, the filter chip and the D-pad mode chip
+// beside Go, and no control ever overlaps another or leaves the element.
 func TestBrowserToolbarHasSearchChip(t *testing.T) {
 	elem := browserCursorTestElement(browserContentVariable)
-	address, search, goBtn, filter := textBrowserToolbarLayout(elem)
+	address, mode, search, goBtn, filter := textBrowserToolbarLayout(elem)
 	width := getElementWidth(elem, 1100)
-	for _, r := range []sdl.Rect{address, search, goBtn, filter} {
+	for _, r := range []sdl.Rect{address, mode, search, goBtn, filter} {
 		if r.W <= 0 || r.H <= 0 {
 			t.Fatalf("empty toolbar control: %+v", r)
 		}
@@ -595,8 +595,11 @@ func TestBrowserToolbarHasSearchChip(t *testing.T) {
 			t.Fatalf("toolbar control %+v escapes the panel", r)
 		}
 	}
-	if address.X+address.W > search.X || search.X+search.W > goBtn.X || goBtn.X+goBtn.W > filter.X {
-		t.Fatalf("toolbar controls overlap: address %+v search %+v go %+v filter %+v", address, search, goBtn, filter)
+	order := []sdl.Rect{address, search, goBtn, filter, mode}
+	for i := 1; i < len(order); i++ {
+		if order[i-1].X+order[i-1].W > order[i].X {
+			t.Fatalf("toolbar controls overlap: %+v then %+v", order[i-1], order[i])
+		}
 	}
 	if got := textBrowserSearchRect(elem); got != search {
 		t.Fatalf("search hit area = %+v, want %+v", got, search)
@@ -604,29 +607,67 @@ func TestBrowserToolbarHasSearchChip(t *testing.T) {
 	if got := textBrowserFilterRect(elem); got != filter {
 		t.Fatalf("filter hit area = %+v, want %+v", got, filter)
 	}
+	if got := textBrowserModeRect(elem); got != mode {
+		t.Fatalf("mode hit area = %+v, want %+v", got, mode)
+	}
 	legacyAddress, legacyGo := textBrowserToolbarRects(elem)
 	if legacyAddress != address || legacyGo != goBtn {
-		t.Fatal("the two-rect accessor disagrees with the four-rect layout")
+		t.Fatal("the two-rect accessor disagrees with the full layout")
 	}
 
-	// A narrow panel drops Search first, then the filter chip, and never lets
-	// one control overlap the next or leave the panel.
-	for _, w := range []int32{440, 380, 320} {
-		narrow := Element{Type: "textbrowser", Text: "web", Width: StringOrInt(strconv.Itoa(int(w))), Height: "480"}
-		a, s, g, f := textBrowserToolbarLayout(narrow)
+	// A narrow panel drops Search first, then the filter chip, and the mode
+	// chip last — it is the only control that explains the D-pad. Nothing may
+	// overlap the next control or leave the panel at any of the three widths.
+	for _, tc := range []struct {
+		width      int32
+		wantFilter bool
+		wantMode   bool
+	}{
+		{440, true, true},
+		{380, false, true},
+		{320, false, false},
+	} {
+		narrow := Element{Type: "textbrowser", Text: "web", Width: StringOrInt(strconv.Itoa(int(tc.width))), Height: "480"}
+		a, m, s, g, f := textBrowserToolbarLayout(narrow)
 		if a.W <= 0 || g.W <= 0 {
-			t.Fatalf("%dpx: address %+v go %+v", w, a, g)
+			t.Fatalf("%dpx: address %+v go %+v", tc.width, a, g)
 		}
-		if a.X+a.W > g.X || (s.W > 0 && (a.X+a.W > s.X || s.X+s.W > g.X)) || (f.W > 0 && g.X+g.W > f.X) {
-			t.Fatalf("%dpx: toolbar controls overlap: %+v %+v %+v %+v", w, a, s, g, f)
+		if (f.W > 0) != tc.wantFilter {
+			t.Fatalf("%dpx: filter chip %+v, want shown=%v", tc.width, f, tc.wantFilter)
 		}
-		last := g
-		if f.W > 0 {
-			last = f
+		if (m.W > 0) != tc.wantMode {
+			t.Fatalf("%dpx: mode chip %+v, want shown=%v", tc.width, m, tc.wantMode)
 		}
-		if last.X+last.W > w {
-			t.Fatalf("%dpx: toolbar ends at %d, past the panel", w, last.X+last.W)
+		row := []sdl.Rect{a, s, g, f, m}
+		var last sdl.Rect
+		for _, r := range row {
+			if r.W <= 0 {
+				continue
+			}
+			if last.W > 0 && last.X+last.W > r.X {
+				t.Fatalf("%dpx: toolbar controls overlap: %+v then %+v", tc.width, last, r)
+			}
+			last = r
 		}
+		if last.X+last.W > tc.width {
+			t.Fatalf("%dpx: toolbar ends at %d, past the panel", tc.width, last.X+last.W)
+		}
+	}
+}
+
+// The chip's word is the D-pad state, not a fixed label: the whole point is
+// that a player can tell what Up and Down will do without pressing anything.
+func TestBrowserModeChipNamesTheCurrentMode(t *testing.T) {
+	prev := browserNav
+	t.Cleanup(func() { browserNav = prev })
+
+	browserNav = browserModeScroll
+	if got := textBrowserModeChipLabel(); got != "SCROLL" {
+		t.Fatalf("scroll mode chip = %q", got)
+	}
+	browserNav = browserModeLinks
+	if got := textBrowserModeChipLabel(); got != "LINKS" {
+		t.Fatalf("link mode chip = %q", got)
 	}
 }
 
@@ -770,6 +811,75 @@ func TestBrowserLinkFocusIsDrawn(t *testing.T) {
 	}
 	if diff < 200 {
 		t.Fatalf("the focused link changed only %d bytes of the frame", diff)
+	}
+}
+
+// The chip is a status read-out, so it has to be painted where the layout says
+// it is: a mode that only exists in a variable is exactly the problem the chip
+// was added to fix.
+func TestBrowserModeChipIsDrawn(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	prev := browserNav
+	t.Cleanup(func() { browserNav = prev })
+
+	config := layoutTestConfig(t)
+	variable := "browser_mode_chip"
+	doc := parseWebPage(`<body><p>a page with nothing on it</p></body>`, "", "https://example.com/page")
+	setBrowserDocument(variable, doc)
+	t.Cleanup(func() { setBrowserDocument(variable, nil) })
+	elem := browserCursorTestElement(variable)
+
+	newProbeFrame(t)
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Skipf("software renderer unavailable: %v", err)
+	}
+	defer destroyTestRenderer(renderer)
+
+	capture := func() []byte {
+		renderer.SetDrawColor(0, 0, 0, 255)
+		renderer.Clear()
+		renderTextBrowser(renderer, config, elem)
+		buf := make([]byte, probeW*probeH*4)
+		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
+			t.Skipf("ReadPixels unavailable: %v", err)
+		}
+		return buf
+	}
+
+	browserNav = browserModeScroll
+	scroll := capture()
+	browserNav = browserModeLinks
+	links := capture()
+	diff := 0
+	for i := range scroll {
+		if scroll[i] != links[i] {
+			diff++
+		}
+	}
+	if diff < 100 {
+		t.Fatalf("the mode chip changed only %d bytes of the frame", diff)
+	}
+
+	// And it lives inside the chip's own rect, not somewhere else on the page.
+	mode := textBrowserModeRect(elem)
+	if mode.W <= 0 || mode.H <= 0 {
+		t.Fatalf("mode chip rect = %+v", mode)
+	}
+	changedInChip := 0
+	w, h := int(probeW), int(probeH)
+	for y := int(mode.Y); y < int(mode.Y+mode.H) && y < h; y++ {
+		for x := int(mode.X); x < int(mode.X+mode.W) && x < w; x++ {
+			off := (y*w + x) * 4
+			if scroll[off] != links[off] || scroll[off+1] != links[off+1] || scroll[off+2] != links[off+2] {
+				changedInChip++
+			}
+		}
+	}
+	if changedInChip < 20 {
+		t.Fatalf("only %d pixels changed inside the chip rect", changedInChip)
 	}
 }
 

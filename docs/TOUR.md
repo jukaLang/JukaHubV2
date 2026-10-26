@@ -66,7 +66,17 @@ resolution** drops stutter on bad nights; battery saver throttles itself below
 Everything from the first five minutes is one app on a card you can edit from
 your PC: **Tools → FTP** opens the SD card over Wi-Fi, **Remote Cast** puts the
 device's screen in your browser, and **Tools → Community & support** opens a
-prefilled, redacted bug report if anything misbehaves. Updates arrive as an
+prefilled, redacted bug report if anything misbehaves.
+
+Two more Tools rows are worth knowing on day one. **Tools → Toolbox** installs
+standalone helpers — rclone, jq, ripgrep, fd, pandoc, age — from their official
+releases and runs them with visible output, so a card-level job never waits for
+a PC; the checksum-backed download and the per-tool arguments are described in
+[TOOLBOX.md](TOOLBOX.md). **Tools → Security & trust** is a read-only page saying
+what this build protects — encrypted secrets, the storage key in use, package
+state, open LAN servers, the browser session — with [SECURITY.md](../SECURITY.md)
+as the long form. The tour names both on its last step, and the controller
+legend (Quick Settings → **?**) repeats them under **Find it in Tools**. Updates arrive as an
 icon in the header, install with one press, and — if a build ever misbehaves at
 startup — roll back to the previous one by themselves, so the card that worked
 yesterday always comes back up.

@@ -7,6 +7,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 func onboardingTestConfig() *Config {
@@ -54,12 +56,103 @@ func TestOnboardingStatusLines(t *testing.T) {
 }
 
 func TestOnboardingActionLabels(t *testing.T) {
-	for _, kind := range []string{"wifi", "timezone", "theme", "roms", "artwork"} {
+	for _, kind := range []string{"wifi", "timezone", "theme", "roms", "artwork", "tools"} {
 		if got := onboardingActionLabel(kind); strings.TrimSpace(got) == "" {
 			t.Errorf("step %q has no action label", kind)
 		}
 	}
 	if got := onboardingActionLabel(""); got != "" {
 		t.Errorf("plain step action label = %q, want none", got)
+	}
+}
+
+// TestTourToolsStepRenders draws the last step on both the panel and a 480p
+// handheld. The step's body is the longest in the tour, so a card that cannot
+// take it would show up here rather than on a device.
+func TestTourToolsStepRenders(t *testing.T) {
+	prevW, prevH := screenWidth, screenHeight
+	prevOnboarding := onboarding
+	prevTools, prevQS := toolsPanel, qs
+	t.Cleanup(func() {
+		screenWidth, screenHeight = prevW, prevH
+		onboarding = prevOnboarding
+		toolsPanel, qs = prevTools, prevQS
+	})
+	toolsPanel.open = false
+	onboardingStart()
+	onboarding.step = len(onboardingSteps) - 1
+	cfg := onboardingTestConfig()
+
+	for _, size := range []struct{ w, h int32 }{{probeW, probeH}, {800, 480}} {
+		screenWidth, screenHeight = size.w, size.h
+		renderFunProbe(t, func(r *sdl.Renderer) { renderOnboarding(r, cfg) })
+		if onboarding.next.W == 0 {
+			t.Fatalf("%dx%d: the step recorded no Next button", size.w, size.h)
+		}
+		if onboarding.action.W == 0 {
+			t.Fatalf("%dx%d: the tools step lost its action button", size.w, size.h)
+		}
+	}
+}
+
+// TestTourPointsAtToolsPages: the tour ends on the two Tools pages a new user
+// cannot guess. The step names both, reports their live state (so the panel's
+// install count and posture are visible before it is opened), and its action
+// opens the Tools panel instead of describing it.
+func TestTourPointsAtToolsPages(t *testing.T) {
+	prevOnboarding := onboarding
+	prevTools := toolsPanel
+	prevQS := qs
+	t.Cleanup(func() {
+		onboarding = prevOnboarding
+		toolsPanel = prevTools
+		qs = prevQS
+	})
+
+	step := -1
+	for i, s := range onboardingSteps {
+		if s.kind == "tools" {
+			step = i
+		}
+	}
+	if step < 0 {
+		t.Fatal("the tour has no step naming the Toolbox and Security & trust")
+	}
+	if step != len(onboardingSteps)-1 {
+		t.Errorf("the tools step is %d of %d, want the last step", step+1, len(onboardingSteps))
+	}
+	for _, word := range []string{"Toolbox", "Security & trust"} {
+		if !strings.Contains(onboardingSteps[step].body, word) {
+			t.Errorf("the step's body does not mention %q", word)
+		}
+	}
+
+	// Recorded rather than assumed: the package's other probes may leave a
+	// modal open, and this test only owns the one it opens itself.
+	coveredBefore := onboardingCoveredByOverlay()
+
+	cfg := onboardingTestConfig()
+	status := onboardingStatus(cfg, "tools")
+	if !strings.Contains(status, "Toolbox: ") || !strings.Contains(status, "Security: ") {
+		t.Errorf("tools status = %q, want both pages", status)
+	}
+
+	onboardingStart()
+	onboarding.step = step
+	onboardingPerformAction(cfg)
+	if !toolsPanel.open {
+		t.Fatal("the tools step's action did not open the Tools panel")
+	}
+	// The panel is a modal, so the tour must step aside while it is open and
+	// come back to the same step afterwards.
+	if !onboardingCoveredByOverlay() {
+		t.Fatal("an open Tools panel did not cover the tour")
+	}
+	toolsPanel.open = false
+	if got := onboardingCoveredByOverlay(); got != coveredBefore {
+		t.Fatal("the tour is still covered after the Tools panel closed")
+	}
+	if onboarding.step != step || !onboarding.active {
+		t.Fatal("closing Tools did not leave the tour on its tools step")
 	}
 }

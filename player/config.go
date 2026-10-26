@@ -338,6 +338,10 @@ func (v *Variables) Get(name string) string {
 		return strconv.Itoa(v.ScreensaverTimeout)
 	case "screensaverTimeoutLabel":
 		return screenTimeoutLabel(v.ScreensaverTimeout)
+	case "cookieRetentionDays":
+		return strconv.Itoa(cookieRetentionDaysFromCustom(v.Custom))
+	case "cookieRetentionLabel":
+		return cookieRetentionLabel(cookieRetentionDaysFromCustom(v.Custom))
 	case "launcherEnabled":
 		return boolString(v.LauncherEnabled)
 	case "externalAppEnabled":

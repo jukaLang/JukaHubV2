@@ -49,8 +49,10 @@ var statusWiFiRect sdl.Rect
 // machine's battery (the real reader returns -1 when there is none).
 var statusBatteryPercent = getBatteryPercent
 
-// statusWiFiSignal returns the live 0..4 signal level, 0 when there is no link.
-// A variable for the same reason: tests pin the meter instead of the kernel.
+// statusWiFiSignal returns the live meter state: 1..4 measured bars,
+// statusWiFiUnknown (a link whose strength is not reported) or statusWiFiNoLink
+// (no wireless link at all). A variable for the same reason as the battery: the
+// tests pin the meter instead of depending on the host's kernel.
 var statusWiFiSignal = readWiFiSignalLevel
 
 // statusBatteryColor is the gauge colour: green with charge to spare, yellow
@@ -227,17 +229,29 @@ func statusBatteryNubWidth(iconH int32) int32 {
 	return w
 }
 
-// drawStatusSignalBars draws four ascending bars filled to level (0..4), all
-// hollow when level is 0 — the "no Wi-Fi" state.
-func drawStatusSignalBars(renderer *sdl.Renderer, x, y, w, h int32, level int) {
+// The two states a signal meter can be in without a strength to show. They are
+// sentinels rather than "0 bars", because four hollow bars read as a weak
+// signal: "no Wi-Fi at all" and "connected, strength not reported" are
+// different facts and the meter has to say which one it is.
+const (
+	statusWiFiNoLink  = 0  // no wireless link
+	statusWiFiUnknown = -1 // link up, the kernel reports no strength
+)
+
+// drawStatusSignalBars draws four ascending bars for a meter state: 1..4 solid
+// bars for a measured strength, hollow bars outlined in the accent for a live
+// link whose strength is unknown, and hollow bars with a slash through them when
+// there is no link at all — the slash is what stops the empty meter reading as a
+// weak signal. noLinkInk colours that slash.
+func drawStatusSignalBars(renderer *sdl.Renderer, x, y, w, h int32, level int, noLinkInk sdl.Color) {
 	if renderer == nil || w <= 0 || h <= 0 {
 		return
 	}
-	if level < 0 {
-		level = 0
-	}
 	if level > 4 {
 		level = 4
+	}
+	if level < statusWiFiUnknown {
+		level = statusWiFiUnknown
 	}
 	gap := w / 10
 	if gap < 1 {
@@ -250,16 +264,38 @@ func drawStatusSignalBars(renderer *sdl.Renderer, x, y, w, h int32, level int) {
 	col := wifiSignalColor(level)
 	empty := sdl.Color{R: 78, G: 86, B: 104, A: 165}
 	baseY := y + h
+	unknown := level == statusWiFiUnknown
+	if unknown {
+		col = WithAlpha(accentColor, 210)
+	}
 	for i := int32(0); i < 4; i++ {
 		bh := h * (i + 1) / 4
 		if bh < 2 {
 			bh = 2
 		}
+		bx := x + i*(barW+gap)
+		by := baseY - bh
 		c := col
-		if level == 0 || int(i) >= level {
+		if level == statusWiFiNoLink || level == statusWiFiUnknown || int(i) >= level {
 			c = empty
 		}
-		fillRoundedRect(renderer, x+i*(barW+gap), baseY-bh, barW, bh, 1, c)
+		fillRoundedRect(renderer, bx, by, barW, bh, 1, c)
+		if unknown && int(i) < 4 {
+			// Outline instead of fill: the glyph says "connected" without
+			// claiming a strength nobody measured.
+			strokeRoundedRect(renderer, bx, by, barW, bh, 1, 1, WithAlpha(accentColor, 200))
+		}
+	}
+	if level == statusWiFiNoLink {
+		// A diagonal slash over the hollow bars. Two parallel 1px lines keep it
+		// visible on a 480p panel without swallowing the bars.
+		ink := noLinkInk
+		if ink.A == 0 {
+			ink = sdl.Color{R: 78, G: 86, B: 104, A: 220}
+		}
+		renderer.SetDrawColor(ink.R, ink.G, ink.B, ink.A)
+		renderer.DrawLine(x+1, baseY-2, x+w-2, y+2)
+		renderer.DrawLine(x+2, baseY-1, x+w-1, y+3)
 	}
 }
 
@@ -294,8 +330,9 @@ func drawStatusBatteryGauge(renderer *sdl.Renderer, x, y, iconH int32, pct int, 
 	return w + nub + 1
 }
 
-// drawStatusWiFiChip paints the network slot: signal bars, plus the offline
-// warning text when there is no link. It returns the width it used.
+// drawStatusWiFiChip paints the network slot: the meter for the radio's real
+// state, plus the offline warning text when the internet is unreachable. It
+// returns the width it used.
 func drawStatusWiFiChip(renderer *sdl.Renderer, font *ttf.Font, part string, x, textTop int32, draw statusTextDrawer) int32 {
 	iconH := statusIconHeight(font)
 	iconW := statusWiFiIconWidth(iconH)
@@ -304,12 +341,23 @@ func drawStatusWiFiChip(renderer *sdl.Renderer, font *ttf.Font, part string, x, 
 		textH = int32(font.Height())
 	}
 	iconY := textTop + (textH-iconH)/2
-	level := 0
+	// The meter's state is the Wi-Fi link's, not the internet's: a device on
+	// Ethernet is online with no wireless link, and the corner must not claim
+	// bars for a radio that is not associated. Warning ink says "no Wi-Fi and
+	// nothing else is keeping you online"; the muted ink says "no Wi-Fi, but
+	// you are still connected".
 	offline := part != statusWiFiMarker
-	if !offline {
-		level = statusWiFiSignal()
+	// The meter reports the radio, and the text beside it reports the
+	// internet: an associated network with no route shows real bars next to
+	// "! Offline", which is the honest pair of facts. Only the mark's ink
+	// follows the part, so "no Wi-Fi" is a warning when nothing else is online
+	// and a quiet note when something is.
+	level := statusWiFiSignal()
+	ink := sdl.Color{R: 120, G: 132, B: 154, A: 220}
+	if offline {
+		ink = ColorWarning
 	}
-	drawStatusSignalBars(renderer, x, iconY, iconW, iconH, level)
+	drawStatusSignalBars(renderer, x, iconY, iconW, iconH, level, ink)
 	if offline && draw != nil {
 		draw(part, ColorWarning, x+iconW+statusChipTextGap, textTop)
 	}
@@ -367,32 +415,127 @@ var (
 	statusWiFiCache   int
 )
 
-// readWiFiSignalLevel reads the Wi-Fi link quality from the kernel and maps it
-// onto four bars. A short cache keeps a 60 fps render loop from opening the
-// proc file every frame while still reacting within a few seconds to a dropped
-// or regained link. TrimUI devices run a plain Linux kernel that exposes
-// /proc/net/wireless through wpa_supplicant, the same source the picker's own
-// signal values come from.
+// readWiFiSignalLevel reads the Wi-Fi signal strength and maps it onto the
+// meter's states: 1..4 measured bars, statusWiFiUnknown when nothing reports a
+// strength, or statusWiFiNoLink when there is no wireless link. A short cache
+// keeps a 60 fps render loop from opening the proc file every frame while still
+// reacting within a few seconds to a dropped or regained link.
+//
+// Two sources, in order: /proc/net/wireless (the kernel's link quality, present
+// on the stock TrimUI kernels) and `wpa_cli signal_poll` (the supplicant's own
+// RSSI, present even on images built without wireless extensions). The second
+// one runs off-thread — see wifiSignalPollBars — because the render loop must
+// never wait on a command.
 func readWiFiSignalLevel() int {
 	statusWiFiCacheMu.Lock()
 	defer statusWiFiCacheMu.Unlock()
 	if !statusWiFiCacheAt.IsZero() && time.Since(statusWiFiCacheAt) < statusWiFiRefresh {
 		return statusWiFiCache
 	}
-	level := 0
+	quality := -1
 	if data, err := os.ReadFile("/proc/net/wireless"); err == nil {
-		level = wifiBarsForQuality(parseWirelessLinkQuality(string(data)))
+		quality = parseWirelessLinkQuality(string(data))
 	}
-	if level == 0 && wifiLinkIsUp() {
-		// Some handheld kernels build without wireless extensions, so the proc
-		// table is missing even while the device is associated. An interface
-		// the kernel reports as running is a live link; the strength is simply
-		// unknown, so the meter fills halfway instead of lying with "no link".
-		level = 2
-	}
+	level := wifiMeterLevelFrom(quality, wifiSignalPollBars, wifiLinkIsUp)
 	statusWiFiCacheAt = time.Now()
 	statusWiFiCache = level
 	return level
+}
+
+// wifiMeterLevelFrom is the meter's source chain in one testable place: a
+// readable kernel quality wins, then the supplicant's RSSI, then the honest
+// "up but unmeasured" and "no link" states. An idle radio is dormant or down,
+// never up, so the last step does not light the meter for a chip that is merely
+// present — and a link nobody can measure says exactly that instead of a made-up
+// "two bars".
+func wifiMeterLevelFrom(quality int, poll func() (int, bool), linkUp func() bool) int {
+	// A positive quality is a measurement. Zero is not: the kernel prints 0 for
+	// an idle interface and for a driver that has no wireless extensions, and
+	// the second case is exactly the image this fallback exists for — so 0 falls
+	// through to the supplicant rather than ending as "no link".
+	if quality > 0 {
+		return wifiBarsForQuality(quality)
+	}
+	if bars, ok := poll(); ok {
+		return bars
+	}
+	return wifiMeterLevel(quality, linkUp())
+}
+
+// ── supplicant signal cache ─────────────────────────────────────────────────
+
+var (
+	wifiPollMu   sync.Mutex
+	wifiPollBars = statusWiFiUnknown
+	// wifiPollKnocked is when the last poll was *started*, so a supplicant that
+	// never answers is retried on the same cadence instead of every frame.
+	wifiPollKnocked time.Time
+	wifiPollBusy    bool
+)
+
+// wifiSignalPollBars returns the last `signal_poll` reading and refreshes it in
+// the background. It never runs the command on the caller's thread: the meter is
+// drawn on the render loop, and a supplicant that stops answering would freeze
+// the UI for the command timeout. The first frames after a /proc-less boot read
+// "unknown" and become real bars one refresh later.
+func wifiSignalPollBars() (int, bool) {
+	wifiPollMu.Lock()
+	due := wifiPollKnocked.IsZero() || time.Since(wifiPollKnocked) >= statusWiFiRefresh
+	if due && !wifiPollBusy && wifiControlAvailable() {
+		wifiPollBusy = true
+		wifiPollKnocked = time.Now()
+		go func() {
+			bars := refreshWiFiSignalPoll()
+			wifiPollMu.Lock()
+			wifiPollBusy = false
+			wifiPollBars = bars
+			wifiPollMu.Unlock()
+		}()
+	}
+	bars := wifiPollBars
+	wifiPollMu.Unlock()
+	return wifiPollBarState(bars)
+}
+
+// refreshWiFiSignalPoll runs one poll and turns it into meter bars. It is the
+// body of the background refresh, split out so a test can run it synchronously.
+func refreshWiFiSignalPoll() int {
+	sample, err := wifiSignalPoll()
+	if err != nil {
+		return statusWiFiUnknown
+	}
+	return wifiMeterBarsForRSSI(sample.RSSI)
+}
+
+// wifiPollBarState reports whether a cached value is a real measurement. The
+// meter's sentinels are 0 (no link) and -1 (unknown), so anything outside 1..4
+// is not a bar count.
+func wifiPollBarState(bars int) (int, bool) {
+	if bars < 1 || bars > 4 {
+		return statusWiFiUnknown, false
+	}
+	return bars, true
+}
+
+// wifiMeterBarsForRSSI maps a supplicant RSSI onto the meter. wifiSignalBars
+// deliberately shows one bar for a missing reading in the picker's list; the
+// status meter has a dedicated "unmeasured" state, so a non-measurement stays
+// unmeasured instead of becoming a weak-looking link.
+func wifiMeterBarsForRSSI(rssi int) int {
+	if rssi >= 0 || rssi < -110 {
+		return statusWiFiUnknown
+	}
+	return wifiSignalBars(rssi)
+}
+
+// resetWiFiSignalPollForTest clears the supplicant cache. Tests call it so one
+// case's answer cannot leak into the next.
+func resetWiFiSignalPollForTest() {
+	wifiPollMu.Lock()
+	defer wifiPollMu.Unlock()
+	wifiPollBars = statusWiFiUnknown
+	wifiPollKnocked = time.Time{}
+	wifiPollBusy = false
 }
 
 // wifiLinkIsUp reports whether a wireless interface is up, which is how the
@@ -449,6 +592,19 @@ func parseWirelessLinkQuality(out string) int {
 		}
 	}
 	return best
+}
+
+// wifiMeterLevel turns what the kernel reported into the meter's state. A
+// readable quality is a measurement (0..4 bars); without one, a live interface
+// is statusWiFiUnknown and an idle or absent radio is statusWiFiNoLink.
+func wifiMeterLevel(quality int, linkUp bool) int {
+	if quality >= 0 {
+		return wifiBarsForQuality(quality)
+	}
+	if linkUp {
+		return statusWiFiUnknown
+	}
+	return statusWiFiNoLink
 }
 
 // wifiBarsForQuality maps a 0..70 kernel link quality onto four bars.

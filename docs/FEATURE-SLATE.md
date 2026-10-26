@@ -2,9 +2,16 @@
 
 Two slates are ranked here. The first (time machine, ghost runs, Library Royale,
 AI hints) is the 36-idea list; the second, further down, is the dashboard /
-platform / ecosystem list (widgets, Wrapped, radio, sync, AI configuration).
+platform / ecosystem list (widgets, radio, sync, AI configuration).
 Every entry was checked against the code first: what already exists decides the
 cost far more than how cool the idea is.
+
+**This page holds unadopted ideas only.** An idea that ships, or that is accepted
+into [player/MODERNIZATION.md](../player/MODERNIZATION.md) or
+[ROADMAP.md](../ROADMAP.md), leaves this page — what already shipped out of these
+slates is inventoried once in
+[MODERNIZATION §5.5](../player/MODERNIZATION.md#55-shipped-feature-surface-verified-2026-10-25),
+with the code and the test that pins it, so no idea needs two registers.
 
 ## How this was ranked
 
@@ -24,8 +31,9 @@ cost far more than how cool the idea is.
   2. **The handheld has no camera and no second display.** QR ideas have to be
      mediated by the Phone Companion ([companion.go](../player/companion.go)),
      not by pointing the device at something.
-- Anything already shipped is not repeated; [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md)
-  is the record of that pass.
+- Anything already shipped is not repeated: the shipped register is
+  [MODERNIZATION §5.5](../player/MODERNIZATION.md#55-shipped-feature-surface-verified-2026-10-25),
+  and [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) holds the designed gaps.
 
 ## Tier 1 — build next
 
@@ -42,25 +50,14 @@ save root into a timestamped folder with a manifest and restores them;
 auto-save/auto-load states.
 
 First slice: snapshot the save roots every N minutes *while a game runs* (the
-recorder below already knows when a launch starts and ends), plus a timeline
-list in Save Manager with "restore this moment". No new format, no emulator
-cooperation.
+shipped time-lapse recorder in [timelapse.go](../player/timelapse.go) already
+knows when a launch starts and ends), plus a timeline list in Save Manager with
+"restore this moment". No new format, no emulator cooperation.
 
 Proof needed: a real RetroArch session on the card, and that a snapshot taken
 during play is restorable after the emulator exits.
 
-### 2. Auto time-lapse of a playthrough (M — shipped, see [TIMELAPSE.md](TIMELAPSE.md))
-
-One framebuffer frame every N seconds while a game runs, assembled by the
-bundled ffmpeg into a short mp4 on exit. Uses `/dev/fb0` capture on the
-handheld; on desktop the recorder reports unavailability and launches
-untouched. Shares the launch hook and the ffmpeg pipe with #1.
-
-Proof needed: that `ffmpeg -f fbdev -i /dev/fb0` can read the panel while
-RetroArch owns it. If it cannot, the fallback is RetroArch's own recording
-directory and a post-run speed-up pass — bigger files, same output.
-
-### 3. OS achievements + daily quests (S)
+### 2. OS achievements + daily quests (S)
 
 [playtime.go](../player/playtime.go) already counts per-scene and per-day time
 and unlocks badges; `funpack_test.go` pins the behaviour. Add an unlock tree
@@ -68,7 +65,7 @@ over the things the hub knows (emulators used, systems played, themes tried,
 packages installed) and derive three daily quests from the same data. Cosmetics
 as rewards: themes and boot sounds already exist.
 
-### 4. Library Royale (M)
+### 3. Library Royale (M)
 
 A meta-game over the collection: random game, random challenge, permadeath
 across games. Pure metadata plus timers — no emulator introspection needed if
@@ -76,7 +73,7 @@ the game's outcome is the player's word plus the clock, which is enough for a
 bar game. Cheapest genuinely original idea on the slate; [playtime.go](../player/playtime.go)
 and the recents list supply the history it needs.
 
-### 5. QR/companion sharing of the things the hub owns (S–M)
+### 4. QR/companion sharing of the things the hub owns (S–M)
 
 Profiles, themes, save snapshots, high scores and configs can be exported today
 as files ([savemanager_ui.go](../player/savemanager_ui.go) already zips a
@@ -109,7 +106,7 @@ Not "bump two handhelds together" — no camera — but the same social result.
 | LAN arcade leaderboard | S–M | `partynet.go` HTTP rooms | Only JukaHub's own arcade games expose scores; emulator scores need maps. Start with the arcade. |
 | Async board games over QR | M | QR generation, companion | Needs a board-game engine; QR size limits mean file/mailbox transfer, not one code per move. |
 | Museum | M | Scenes, cards, gallery | Content-heavy; no emulator demo ROMs may ship. |
-| OS-level quests beyond #3 | S | playtime, recents | Merge into #3 rather than a second system. |
+| OS-level quests beyond #2 | S | playtime, recents | Merge into #2 rather than a second system. |
 
 ## Tier 3 — expensive, niche, or needs a partner
 
@@ -121,7 +118,7 @@ Not "bump two handhelds together" — no camera — but the same social result.
 | Receipt-printer trophies | M | USB thermal printer support, ESC/POS, hardware to test. Fantastic demo, hardware-bound. |
 | 3D-printable trophies | S | STL generation is trivial; payoff is off-device. |
 | Campfire / presence | M | LAN presence exists, but chat and avatars are a social product, not a feature. |
-| Personal streaming server | XL | Streaming *JukaHub* is shipped (cast); streaming an emulator would need framebuffer capture plus input injection. Treat as #2's capture stack plus a long road. |
+| Personal streaming server | XL | Streaming *JukaHub* is shipped (cast); streaming an emulator would need framebuffer capture plus input injection. The shipped time-lapse recorder (`timelapse.go`) already captures the panel, so treat this as that stack plus a long road. |
 | Link-cable / hardware bridge | XL | Needs physical adapters and per-system protocols. |
 | AI dungeon master | M | Text-only; needs an API key path. Fine, but not device-specific. |
 | Digital game lending | L | Legally awkward (copying ROMs), and time-limited tokens are DRM we would have to own. Lend saves/profiles instead. |
@@ -146,18 +143,21 @@ Not "bump two handhelds together" — no camera — but the same social result.
 ## Cheap wins, under a day each
 
 Secret modes (Konami on the pad), daily quests, time capsules, "playable
-credits", JukaHub Radio from the local library, a reactive visualiser, and the
-first half of save forensics (list + diff two snapshots).
+credits", JukaHub Radio from the local library, a reactive visualiser (the player
+already draws synthetic sine bars — this would be the real FFT), and the first
+half of save forensics (list + diff two snapshots).
 
-## If only four ship
+## If only three shipped next
+
+The old "if only four" list named auto time-lapse, which has since shipped
+(MODERNIZATION §5.5). What is left of it:
 
 1. **Save timeline** — solves the loss that actually happens, reuses snapshots.
-2. **Auto time-lapse** — shareable output, no emulator internals.
-3. **OS achievements + quests** — cheap retention over data already collected.
-4. **Library Royale** — turns the collection into a new game.
+2. **OS achievements + quests** — cheap retention over data already collected.
+3. **Library Royale** — turns the collection into a new game.
 
 Ghost runs and AI hints are the exciting ones; both are capped by the emulator
-being a black box, so they belong after the four above, not before.
+being a black box, so they belong after the three above, not before.
 
 ---
 
@@ -179,31 +179,18 @@ feature itself, not guesses:
 | AI configuration | No LLM client anywhere. The builder and [config_schema.go](../player/config_schema.go) can validate a config, which is the half that matters. |
 | Behavioural events | No webhook/IFTTT emitter; no Discord RPC client. |
 
-## Already shipped (the list assumed these were missing)
+## Already shipped
 
-| Idea | What exists |
-|---|---|
-| Continue Playing carousel | The Continue row on Home merges game recents and media ([recent.go](../player/recent.go)). |
-| Clock/weather widget | Status-bar clock plus the weather popover ([weather_popover.go](../player/weather_popover.go)). |
-| Now playing | The ambient dock shows the current track ([ambient.go](../player/ambient.go)); the music player owns transport. |
-| Photo-frame widget | `ambientPhotos` points the dock slideshow at a folder. |
-| Home Assistant entities | [smart_home.go](../player/smart_home.go) already controls HA entities, mirrors MQTT toggles, and reads Pi-hole, router, Tailscale and WireGuard state. |
-| Disk/battery widgets | Battery and network live in the status cluster; disk and storage are in Hardware/Diagnostics ([hardware.go](../player/hardware.go)). |
-| Tiny built-in minigames | The **Games** scene ships Snake, Tetris, 2048, Pong, Minesweeper and Flappy — they are already the plugin reference implementations. |
-| Phone keyboard bridge | The companion sends text and key events ([companion.go](../player/companion.go)), which is how any field is typed from a phone today. |
-| Screenshot (local half) | [screenshot.go](../player/screenshot.go) saves the SDL frame; the companion and FTP already move files off the card. |
-| Syncthing save sync (export half) | Save Manager produces the folder list and resume zip; the agent is the user's own Syncthing. |
-| Layout/UI presets | Curation profiles carry theme and text scale ([curation.go](../player/curation.go)); a full layout preset is not there. |
-| Animated backgrounds | [dynamicbg.go](../player/dynamicbg.go) and [backgroundfx.go](../player/backgroundfx.go) already draw gradient and animated backdrops. |
-| Boot animation | [splash.go](../player/splash.go). |
-| Seasonal theming (partial) | Time-of-day theme switching exists; date-keyed seasonal packs do not. |
+The fourteen-row table that used to sit here listed ideas that were already in
+the tree. Naming them again here would be a second register, so they are
+inventoried once, with code evidence, in
+[MODERNIZATION §5.5](../player/MODERNIZATION.md#55-shipped-feature-surface-verified-2026-10-25)
+instead of being tracked here as well.
 
 ## The genuinely new work
 
 | Idea | Cost | Note |
 |---|---|---|
-| **Playtime Wrapped / insights** | M | Data is ready: `playtimeData` already has `Total`, `Scenes`, `Days` and `Unlocked`. This is a page, a heatmap, a streak count and a PNG export. |
-| ~~User theme store~~ (shipped) | — | `themes/*.json` loads into the gallery through [themeloader.go](../player/themeloader.go): colours are validated, invalid files are reported and skipped, and a built-in id wins on a collision. |
 | **Theme-from-image** | M on top of the shipped store | Needs median-cut/quantisation to the 16 roles and the picker; purely local, no key. |
 | **Save-sync conflict UI** | M (agent L) | Snapshots + Syncthing export exist; add a merged save index and a keep-device / keep-cloud / keep-both card. A real WebDAV agent is a second project. |
 | Internet radio | L | ffmpeg reads URLs, so playback is the easy half; a station directory, buffering state and metadata are the work. |
@@ -257,26 +244,26 @@ feature itself, not guesses:
   code has to be a sandboxed descriptor interpreter; anything else hands the
   render loop and the secret store to a package.
 
-## Revised five, in build order
+## Revised four, in build order
 
-1. **Playtime Wrapped / insights (M)** — zero new tracking, high shareability,
-   and it gives the Playtime scene a reason to exist. First slice: a 90-day
-   heatmap from `Days`, top systems from `Scenes`, current streak, a generated
-   PNG, and the same page on the companion.
-2. **Theme-from-image (M)** — the user theme store already ships
+Playtime Wrapped was the first pick on this list; it has since been adopted into
+the plan ([MODERNIZATION §5.6](../player/MODERNIZATION.md#56-adopted-not-started)),
+so it is not repeated here. What is left, in order:
+
+1. **Theme-from-image (M)** — the user theme store already ships
    (`themes/*.json`), so this is palette extraction against the 16 roles plus
    the picker that applies the result.
-3. **Save-sync conflict UI (M)** — the export half is shipped; the conflict card
+2. **Save-sync conflict UI (M)** — the export half is shipped; the conflict card
    is what makes people trust it. Syncthing is the target to test against.
-4. **Radio + podcasts (L)** — the daily-use expansion, and the only one of the
-   five that needs new content plumbing as well as UI.
-5. **Widget foundation (M first slice)** — persisted layout, built-in widgets
+3. **Radio + podcasts (L)** — the daily-use expansion, and the only one of the
+   four that needs new content plumbing as well as UI.
+4. **Widget foundation (M first slice)** — persisted layout, built-in widgets
    (Now Playing, Continue, clock/weather, battery/disk). No community runtime
    until a descriptor contract is written and reviewed.
 
-Cheap wins to slot between them: random game picker and daily challenge (S),
-webhook event bus (S), seasonal theme by date (S), screenshot gallery (S), Kodi
-remote (S).
+Cheap wins to slot between them: daily challenge mode (S) — the random game
+picker itself already ships in `game_random.go` — webhook event bus (S), seasonal
+theme by date (S), screenshot gallery (S), Kodi remote (S).
 
-Wrapped is the chosen next build; it was not implemented in the pass that wrote
-this ranking.
+The ranking above is idea-only now: Wrapped is in the plan, and the slates above
+hold what has not been adopted.

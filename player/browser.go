@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -119,6 +120,14 @@ func ensureBrowserScene(config *Config) {
 		{"Search", "browser_search"},
 		{"Home", "browser_home"},
 		{"Issues", "browser_issues"},
+		// Sites lists the hosts the jar holds, one row each, so one site can be
+		// signed out without losing every other login. It is also the controller
+		// route into the picker a tap on the cookie strip opens.
+		{"Sites", "browser_cookie_sites"},
+		// The saved session lives on the card, so forgetting it needs a
+		// controller path on this screen rather than a delete-a-file note in
+		// the docs. The chip asks twice before it drops anything.
+		{"Forget", "browser_forget_cookies"},
 	}
 	// The chips share the content width, computed from how many there are so
 	// an added action never runs off the 1232px design column at 800x480.
@@ -320,6 +329,134 @@ func browserToggleAdFilter(config *Config) bool {
 	return true
 }
 
+// browserForgetConfirm arms the Forget chip for one press. Dropping a session
+// on a handheld means retyping a login on a D-pad, so the chip asks first and
+// forgets on the second press inside browserForgetConfirmWindow — the same
+// two-press rule the Wi-Fi picker uses before it forgets a saved network.
+var browserForgetConfirm = struct {
+	armedAt time.Time
+}{}
+
+// browserForgetCookiesAction is the Forget chip. The page is reloaded after the
+// drop so what is on screen stops being the signed-in copy: the reload fetches
+// the URL again, now without the session cookie.
+func browserForgetCookiesAction(config *Config) bool {
+	stored := browserCookiesCount()
+	if stored == 0 {
+		browserForgetConfirm.armedAt = time.Time{}
+		ShowToast("No cookies are stored", ToastKindInfo)
+		return false
+	}
+	if browserForgetConfirm.armedAt.IsZero() || time.Since(browserForgetConfirm.armedAt) > browserForgetConfirmWindow {
+		browserForgetConfirm.armedAt = time.Now()
+		PlayNavSound()
+		ShowToast("Press Forget again to drop "+browserCookieCountLabel(stored), ToastKindWarning)
+		return false
+	}
+	browserForgetConfirm.armedAt = time.Time{}
+	dropped, err := browserForgetCookies()
+	if err != nil {
+		ShowToast("Cannot forget cookies: "+err.Error(), ToastKindError)
+		return false
+	}
+	PlayActivateSound()
+	ShowToast("Forgot "+browserCookieCountLabel(dropped)+" — reloading", ToastKindInfo)
+	browserReloadIfOpen(config)
+	return true
+}
+
+// browserReloadIfOpen reloads the page that is on screen, if there is one. A
+// session that was just dropped is only visibly gone once the page is fetched
+// again, but with an empty address the browser would fall back to its start page
+// and fetch for nothing.
+func browserReloadIfOpen(config *Config) {
+	if config == nil {
+		return
+	}
+	if address, _ := config.Variables.Custom[textBrowserURLVariable].(string); strings.TrimSpace(address) != "" {
+		browserReload(config)
+	}
+}
+
+// browserCookieCountLabel keeps the count readable in a toast: "1 cookie", not
+// "1 cookie(s)".
+func browserCookieCountLabel(n int) string {
+	if n == 1 {
+		return "1 cookie"
+	}
+	return strconv.Itoa(n) + " cookies"
+}
+
+// browserForgetChipLabel is the Forget chip's text: the saved session is worth
+// seeing before you press anything, so the chip carries the count. Zero keeps
+// the plain word, which reads as "nothing to drop" next to the press-time
+// toast, and the count is capped so the widest label still fits the chip at the
+// small font.
+func browserForgetChipLabel(n int) string {
+	switch {
+	case n <= 0:
+		return "Forget"
+	case n > 99:
+		return "Forget 99+"
+	default:
+		return "Forget " + strconv.Itoa(n)
+	}
+}
+
+// browserCookieSitesShown is how many hosts the strip under the page names
+// before it counts the rest. Three fits the panel at the small font on the
+// 800px handheld, and the "+N more" tail keeps a busy jar from turning the
+// line into a wall of domains.
+const browserCookieSitesShown = 3
+
+// browserCookieSitesLine is the line under the page: which sites the saved
+// cookies belong to, so the count on the Forget chip is attached to a host
+// instead of being a bare number. An empty jar says so rather than leaving the
+// strip blank, which also tells the user the chip's plain "Forget" has nothing
+// behind it.
+func browserCookieSitesLine(sites []browserCookieSite) string {
+	if len(sites) == 0 {
+		return "No saved cookies"
+	}
+	names := make([]string, 0, browserCookieSitesShown+1)
+	for i, site := range sites {
+		if i == browserCookieSitesShown {
+			names = append(names, "+"+strconv.Itoa(len(sites)-browserCookieSitesShown)+" more")
+			break
+		}
+		names = append(names, site.Domain)
+	}
+	prefix := "Saved cookies: "
+	if len(sites) == 1 {
+		prefix = "Saved cookie: "
+	}
+	return prefix + strings.Join(names, ", ")
+}
+
+// browserSyncForgetChip rewrites the Forget chip with the live count. It runs
+// once per frame while the Browser is on screen and writes the element only
+// when the text differs, so an unchanged count costs one string compare. The
+// rewrite is what makes the count visible to every route that can change it,
+// rather than only to the press that acts on it.
+func browserSyncForgetChip(config *Config) {
+	if config == nil {
+		return
+	}
+	label := browserForgetChipLabel(browserCookiesCount())
+	for s := range config.Scenes {
+		if config.Scenes[s].Name != browserSceneName {
+			continue
+		}
+		for i := range config.Scenes[s].Elements {
+			elem := &config.Scenes[s].Elements[i]
+			if elem.Trigger == "browser_forget_cookies" && elem.Text != label {
+				elem.Text = label
+			}
+		}
+		return
+	}
+}
+
 func browserReload(config *Config) {
 	elem, ok := findBrowserElement(config)
 	if !ok {
@@ -405,6 +542,8 @@ func resetBrowserStateForTest() {
 	browserClearPageCache()
 	browserHomeLoaded = false
 	browserLinkPanel = browserLinkPanelState{}
+	browserCookiePanel = browserCookiePanelState{}
+	browserCookieStripHit = sdl.Rect{}
 	browserLinkCursor = browserLinkCursorState{}
 	browserNav = browserModeScroll
 	resetBrowserDocumentsForTest()

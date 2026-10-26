@@ -2,15 +2,16 @@ package main
 
 // controlslegend.go — the controller legend.
 //
-// The "Controller legend on first launch" item in docs/FEATURE-BACKLOG.md:
-// a first-run card built from the footerHints registry instead of a second
-// hardcoded list, and the same card reachable any time as the "?" row in
-// Quick Settings (qsLinkControls in quicksettings.go).
+// The "controller legend on first launch" idea, shipped (inventoried in
+// MODERNIZATION.md §5.5): a first-run card built from the footerHints registry
+// instead of a second hardcoded list, and the same card reachable any time as
+// the "?" row in Quick Settings (qsLinkControls in quicksettings.go).
 //
 // Content: the bindings of the scene it opened over — footerHints already
 // mirrors what each scene's input handlers really do, so the legend and the
 // footer can never disagree — plus the three pad bindings that hold on every
-// screen. It opens once right after the first-run tour is completed
+// screen, and the two Tools pages a new user would otherwise only find in the
+// docs. It opens once right after the first-run tour is completed
 // (onboardingFinish), and B closes it.
 
 import (
@@ -55,6 +56,20 @@ func controlsLegendSections(config *Config) []legendCardSection {
 	return []legendCardSection{
 		{Title: sceneDisplayName(controlsLegend.scene.Name), Rows: footerHints(config, controlsLegend.scene)},
 		{Title: "Every screen", Rows: systemLegendRows()},
+		{Title: "Find it in Tools", Rows: toolsLegendRows()},
+	}
+}
+
+// toolsLegendRows names the two Tools pages a new user cannot guess: what the
+// Toolbox is for, and what the Security & trust page answers. They are rows on
+// this card rather than a binding because neither has a key — both open from
+// the Tools panel — and the legend is where someone reads when the footer did
+// not answer the question. The section title carries the "where", so the rows
+// stay short enough to survive the card's 420px width.
+func toolsLegendRows() []FooterHint {
+	return []FooterHint{
+		{Button: "Toolbox", Label: "Install and run CLI tools"},
+		{Button: "Security & trust", Label: "What this build protects"},
 	}
 }
 
@@ -108,6 +123,28 @@ func ctrlControlsLegend(e *sdl.ControllerButtonEvent) bool {
 	return true
 }
 
+// legendRowPitch fits every binding row inside a card of the given height.
+// Headings keep their natural height, so only the rows compress, and the floor
+// stops a very short screen from collapsing the text onto itself — the card is
+// clipped rather than unreadable. Pure so the fit can be tested off-screen.
+func legendRowPitch(cardH, headerH, footerH, sectionH int32, sections, rows int, natural, fontH int32) int32 {
+	if rows <= 0 {
+		return natural
+	}
+	fit := (cardH - headerH - footerH - int32(sections)*sectionH) / int32(rows)
+	if fit >= natural {
+		return natural
+	}
+	floor := fontH - 2
+	if floor < 14 {
+		floor = 14
+	}
+	if fit < floor {
+		return floor
+	}
+	return fit
+}
+
 // renderControlsLegend draws the card in the Quick Settings modal style
 // (scrim, UICard, centered title, one row per binding) so the two help
 // surfaces read as siblings.
@@ -144,6 +181,9 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 	if maxH := screenHeight - 40; cardH > maxH {
 		cardH = maxH
 	}
+	// A card clamped to a short screen still has to fit every row: shrink the
+	// row pitch before a row can spill over the footer hint.
+	rowH = legendRowPitch(cardH, headerH, footerH, sectionH, len(sections), bindingCount, rowH, fontH)
 	cardX := (screenWidth - cardW) / 2
 	cardY := (screenHeight - cardH) / 2
 

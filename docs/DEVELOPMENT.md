@@ -32,8 +32,9 @@ targets a 1280×720 logical canvas.
 | [ANDROID.md](ANDROID.md) | the Android container engine: binder gate, package list, launch and display bridge |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
 | [SECURITY.md](../SECURITY.md) | secret storage, crypto, threat notes |
-| [IMPROVEMENTS.md](IMPROVEMENTS.md) | what we learned from BrickOS, the backlog it implies, and where we are ahead |
-| [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | netplay, OSD/recording, simple mode, box art, game switcher: what exists and what cannot work |
+| [IMPROVEMENTS.md](IMPROVEMENTS.md) | what we learned from BrickOS, where we are ahead, and the one idea from it still open |
+| [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | the open gaps — in-game overlay, simple mode, box-art matching, checkpoints, per-emulator rumble, a curated storefront — and what cannot work |
+| [TOOLBOX.md](TOOLBOX.md) | the curated tool catalog: install, run, the download allowlist and its gaps |
 | [trimui/README.md](../player/trimui/README.md) | device package and launcher details |
 
 ## Repository layout
@@ -510,12 +511,16 @@ Open work, documented here so it is not rediscovered:
 
 - A plugin install/uninstall screen (the API exists, the UI does not).
 - Drawing callbacks for plugins (`PluginContext` is declared but never passed).
-- Fixing the intermittent native crash in the fullscreen video test — see the
-  note in [CONTRIBUTING.md](../CONTRIBUTING.md).
+- Nothing on the video/player test front: the intermittent native crash in the
+  fullscreen video test was fixed at its cause (renderer-owned textures reused
+  after their renderer), recorded in the
+  [modernization plan](../player/MODERNIZATION.md) Phase 6.
 - The shortcuts overlay lists `F5` (refresh), which is not wired to anything
   yet. `Ctrl+L` is: it opens the LogExporter scene everywhere except the
   terminal, which keeps Ctrl+L to clear its output.
 
-[IMPROVEMENTS.md](IMPROVEMENTS.md) holds the comparison-driven backlog: update
-UX, button remapping, component versions, and the BrickOS failure modes worth
-copying. Add to that list instead of starting a second one.
+[IMPROVEMENTS.md](IMPROVEMENTS.md) holds what the BrickOS comparison left open
+(boot visuals today) and the failure modes worth copying. Component versions,
+the keymap and the rest of that pass are in the
+[modernization plan](../player/MODERNIZATION.md); adopt an idea there or into the
+[roadmap](../ROADMAP.md) instead of starting another list.

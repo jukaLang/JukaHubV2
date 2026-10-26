@@ -55,15 +55,39 @@ var (
 
 func init() {
 	// Scan existing installed packages on startup.
-	dir := packageInstallDir()
-	entries, err := os.ReadDir(dir)
-	if err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				installedPackages[e.Name()] = true
-			}
+	refreshInstalledPackages()
+}
+
+// refreshInstalledPackages rescans the install directory into the in-memory set.
+// The set is what the list rows read, so a directory copied onto the card behind
+// the app's back is picked up when the Packages screen loads instead of costing a
+// stat call per row on every frame — 13 rows at 60fps is 780 lookups a second on
+// an SD card to answer a question whose answer does not change between frames.
+func refreshInstalledPackages() {
+	entries, err := os.ReadDir(packageInstallDir())
+	if err != nil {
+		return
+	}
+	installedPackagesMu.Lock()
+	defer installedPackagesMu.Unlock()
+	for _, e := range entries {
+		if e.IsDir() {
+			installedPackages[e.Name()] = true
 		}
 	}
+}
+
+// packageDirName is the directory a package installs into. The sanitising lives
+// in one place so the install path, the installed check and the list row's mark
+// can never disagree about which directory a package means.
+func packageDirName(name string) string {
+	safeName := strings.ReplaceAll(name, " ", "_")
+	return strings.Map(func(r rune) rune {
+		if r == '/' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
+			return '_'
+		}
+		return r
+	}, safeName)
 }
 
 // downloadAndInstallPackage downloads a package zip and extracts it.
@@ -78,13 +102,7 @@ func downloadAndInstallPackage(config *Config, p Package) {
 	}
 
 	// Create a directory for this package.
-	safeName := strings.ReplaceAll(p.Name, " ", "_")
-	safeName = strings.Map(func(r rune) rune {
-		if r == '/' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
-			return '_'
-		}
-		return r
-	}, safeName)
+	safeName := packageDirName(p.Name)
 	pkgDir := filepath.Join(packageInstallDir(), safeName)
 	os.MkdirAll(pkgDir, 0755)
 
@@ -137,21 +155,35 @@ func unzipToDir(zipPath, destDir string) error {
 
 // isPackageInstalled returns true if the package directory exists.
 func isPackageInstalled(p Package) bool {
-	safeName := strings.ReplaceAll(p.Name, " ", "_")
-	safeName = strings.Map(func(r rune) rune {
-		if r == '/' || r == ':' || r == '*' || r == '?' || r == '"' || r == '<' || r == '>' || r == '|' {
-			return '_'
-		}
-		return r
-	}, safeName)
+	safeName := packageDirName(p.Name)
 	installedPackagesMu.Lock()
 	defer installedPackagesMu.Unlock()
 	if installedPackages[safeName] {
 		return true
 	}
-	// Check filesystem too.
-	_, err := os.Stat(filepath.Join(packageInstallDir(), safeName))
-	return err == nil
+	// Check filesystem too, and remember the answer: this runs for the focused
+	// package on every frame, and the list rows answer from the same set, so a
+	// directory added between scans must not make the details pane say
+	// "Installed" about a row that shows no mark.
+	if _, err := os.Stat(filepath.Join(packageInstallDir(), safeName)); err == nil {
+		installedPackages[safeName] = true
+		return true
+	}
+	return false
+}
+
+// packageInstalledFlags answers "is this package on the card" for a whole list in
+// one lock, which is what the list rows need. It reads the in-memory set only:
+// callers draw this every frame, and refreshInstalledPackages keeps the set
+// current when the screen loads.
+func packageInstalledFlags(pkgs []Package) []bool {
+	flags := make([]bool, len(pkgs))
+	installedPackagesMu.Lock()
+	defer installedPackagesMu.Unlock()
+	for i, p := range pkgs {
+		flags[i] = installedPackages[packageDirName(p.Name)]
+	}
+	return flags
 }
 
 // fetchPackagesContext downloads and parses the package registry, then
@@ -195,6 +227,11 @@ func fetchPackagesContext(ctx context.Context, config *Config) {
 		return
 	}
 
+	// The rows mark what is already on the card, and this is the moment the
+	// card is read: one directory scan per screen load rather than one stat per
+	// row per frame.
+	refreshInstalledPackages()
+
 	packagesMutex.Lock()
 	packagesList = pkgs
 	if packagesFocusIndex >= len(packagesList) {
@@ -221,7 +258,10 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	elemW := getElementWidth(element, 1160)
 	elemH := getElementHeight(element, 500)
 
-	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
+	// The pane frames take the plain border every other panel uses. They were
+	// drawn in the accent, which put an accent outline around the whole screen
+	// and left the focused row's accent ring competing with it.
+	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), ColorBorderDefault)
 
 	if len(pkgs) == 0 {
 		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
@@ -251,10 +291,24 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	// --- List column ---
 	// The row pitch comes from the fonts actually loaded, not a constant: a
 	// device theme can load glyphs taller than their point size, and a fixed
-	// 52px pitch used to draw the name over the next row's author line.
-	// Meta (version · author) sits under the name with the same measured gap;
-	// renderPackageList uses the whole triple.
-	lineH, nameH, _, rowPadY, lineGap := packageRowMetrics(listFont, smallFont)
+	// pitch used to draw the name over the next row's text. The row is one line
+	// high — name on the left, version · author on the right — which is what
+	// lets a 500px pane show twice as many packages.
+	lineH, nameH, metaH := packageRowMetrics(listFont, smallFont)
+
+	// The installed mark gets a fixed gutter at the left of every row, so names
+	// line up whether or not a package is on the card. It is measured rather
+	// than assumed: a device theme can load a glyph wider than its point size.
+	var checkW, checkH int32
+	checkGutter := int32(0)
+	if smallFont != nil {
+		if w, h, err := smallFont.SizeUTF8(packageInstalledMark); err == nil && w > 0 && h > 0 {
+			checkW, checkH = int32(w), int32(h)
+			checkGutter = checkW + 10
+		}
+	}
+	installed := packageInstalledFlags(pkgs)
+
 	maxVisible := int((elemH - 20) / lineH)
 	if maxVisible < 1 {
 		maxVisible = 1
@@ -268,39 +322,67 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 		end = len(pkgs)
 	}
 
-	for i := start; i < end; i++ {
-		p := pkgs[i]
-		iy := element.Y + 10 + int32(i-start)*lineH
-		rowX := element.X + 8
-		rowY := iy + 2
-		rowW := listW - 16
-		rowH := lineH - 4
-		drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == packagesFocusIndex, false)
+	// The rows are clipped to the list column rather than to the whole screen:
+	// the pitch is measured from the loaded fonts, so a device theme can make a
+	// row taller than the space left in the panel, and an unclipped row would
+	// paint over the panel's edge and the details column beside it.
+	renderWithClip(renderer, element.X, element.Y, listW, elemH, func(_ *sdl.Renderer) {
+		for i := start; i < end; i++ {
+			p := pkgs[i]
+			focused := i == packagesFocusIndex
+			iy := element.Y + 10 + int32(i-start)*lineH
+			rowX := element.X + 8
+			rowY := iy + 2
+			rowW := listW - 16
+			rowH := lineH - 4
+			drawRow(renderer, rowX, rowY, rowW, rowH, 8, focused, false)
 
-		if listFont != nil {
-			name := ellipsize(listFont, p.Name, rowW-24)
-			renderText(renderer, config, listFont, name, ColorTextPrimary(), rowX+12, rowY+rowPadY)
-
-			meta := ""
-			if p.Version != "" {
-				meta += "v" + p.Version
+			// A package that is already on the card is marked here rather than
+			// only in the details pane: on a long list the question "which of
+			// these do I still need to install" was answered by moving the cursor
+			// down every row and reading the button. The mark is the app's own
+			// check glyph (the one the install bar ends on) in the success
+			// colour, so it reads the same as every other "this is done" state.
+			if installed[i] && smallFont != nil && checkW > 0 {
+				renderText(renderer, config, smallFont, packageInstalledMark, ColorSuccess,
+					rowX+12, rowY+(rowH-checkH)/2)
 			}
-			if p.Author != "" {
-				if meta != "" {
-					meta += "  ·  "
+
+			// Name on the left, version · author against the right edge that the
+			// two-line row left empty. The meta column is capped at two fifths of
+			// the row, and the name is measured against what is actually left of
+			// it, so a long author can never squeeze the name out.
+			nameX := rowX + 12 + checkGutter
+			nameW := rowX + rowW - 12 - nameX
+			if smallFont != nil {
+				if meta := packageRowMeta(p); meta != "" {
+					metaMaxW := (rowW - 24) * 2 / 5
+					meta = ellipsize(smallFont, meta, metaMaxW)
+					mw, _, _ := smallFont.SizeUTF8(meta)
+					// The selected row's meta steps up a tone: on a long list the
+					// focused name and its neighbour's look alike, and the brighter
+					// second column is what makes the selected row read as one block.
+					metaColor := ColorTextTertiary()
+					if focused {
+						metaColor = ColorTextSecondary()
+					}
+					metaX := rowX + rowW - 12 - int32(mw)
+					renderText(renderer, config, smallFont, meta, metaColor,
+						metaX, rowY+(rowH-metaH)/2)
+					nameW = metaX - nameX - 12
 				}
-				meta += p.Author
 			}
-			if smallFont != nil && meta != "" {
-				meta = ellipsize(smallFont, meta, rowW-24)
-				renderText(renderer, config, smallFont, meta, ColorTextTertiary(), rowX+12, rowY+rowPadY+nameH+lineGap)
+			if listFont != nil && nameW > 0 {
+				name := ellipsize(listFont, p.Name, nameW)
+				renderText(renderer, config, listFont, name, ColorTextPrimary(),
+					nameX, rowY+(rowH-nameH)/2)
 			}
 		}
-	}
+	})
 
 	// --- Details column ---
 	p := pkgs[packagesFocusIndex]
-	drawPanel(renderer, detailX, element.Y+8, detailW, elemH-16, PanelFill(190), accentColor)
+	drawPanel(renderer, detailX, element.Y+8, detailW, elemH-16, PanelFill(190), ColorBorderDefault)
 
 	titleFont, _ := getCachedFont(config, "medium")
 	if titleFont == nil {
@@ -405,11 +487,22 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 }
 
+// packageRowPadY is the breathing room above and below a row's single line.
+const packageRowPadY = int32(6)
+
+// packageInstalledMark is the glyph on a row whose package is already on the
+// card. It is the check the install bar ends on, and the font fallback turns it
+// into a '+' if the themed font lacks it — a mark that is still a mark.
+const packageInstalledMark = "✓"
+
 // packageRowMetrics is the measured pitch of one package row, shared by the
 // renderer and the click handler so a click can never land on a differently
-// paced row. Handheld fonts can be taller than their point size, so the values
-// come off the loaded fonts instead of constants.
-func packageRowMetrics(listFont, smallFont *ttf.Font) (lineH, nameH, metaH, rowPadY, lineGap int32) {
+// paced row. A row is one line of text — the name, plus the right-aligned
+// version and author — because the two-line row this replaced doubled every
+// row's height on a 500px pane and still left the right half of each row empty.
+// Handheld fonts can be taller than their point size, so the values come off
+// the loaded fonts instead of constants.
+func packageRowMetrics(listFont, smallFont *ttf.Font) (pitch, nameH, metaH int32) {
 	nameH, metaH = 24, 16
 	if listFont != nil {
 		nameH = int32(listFont.Height())
@@ -417,9 +510,24 @@ func packageRowMetrics(listFont, smallFont *ttf.Font) (lineH, nameH, metaH, rowP
 	if smallFont != nil {
 		metaH = int32(smallFont.Height())
 	}
-	rowPadY, lineGap = 10, 5
-	lineH = rowPadY + nameH + lineGap + metaH + rowPadY
-	return lineH, nameH, metaH, rowPadY, lineGap
+	line := nameH
+	if metaH > line {
+		line = metaH
+	}
+	return 2*packageRowPadY + line, nameH, metaH
+}
+
+// packageRowMeta is the right-aligned column on a package row: the version and
+// the author, whichever of the two the registry supplied.
+func packageRowMeta(p Package) string {
+	parts := make([]string, 0, 2)
+	if p.Version != "" {
+		parts = append(parts, "v"+p.Version)
+	}
+	if p.Author != "" {
+		parts = append(parts, p.Author)
+	}
+	return strings.Join(parts, "  ·  ")
 }
 
 // wrapPackageText breaks text into lines that fit within maxWidth pixels using
@@ -521,7 +629,7 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 		if listFont == nil {
 			listFont = smallFont
 		}
-		lineH, _, _, _, _ := packageRowMetrics(listFont, smallFont)
+		lineH, _, _ := packageRowMetrics(listFont, smallFont)
 		maxVisible := int((elemH - 20) / lineH)
 		if maxVisible < 1 {
 			maxVisible = 1

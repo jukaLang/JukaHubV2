@@ -106,8 +106,195 @@ func TestWebLineHeightSpacesTheRows(t *testing.T) {
 	}
 }
 
-// A gradient becomes the average of its stops: a black-to-white one is mid
-// grey, and the block carries it as its background.
+// A linear gradient is a ramp, not a colour: the stops come back in paint
+// order along the axis the reader can draw, and sampling the middle is the mix
+// the author asked for.
+func TestWebGradientParsesStopsAndAxis(t *testing.T) {
+	// 90deg points to the right, so the ramp runs on the horizontal axis.
+	g, ok := webParseGradient("linear-gradient(90deg, #000 0%, #fff 100%)")
+	if !ok {
+		t.Fatal("a two-stop angle gradient was not parsed")
+	}
+	if g.Vertical {
+		t.Fatal("90deg was treated as a vertical ramp")
+	}
+	if len(g.Stops) != 2 || g.Stops[0].Pos != 0 || g.Stops[1].Pos != 1 {
+		t.Fatalf("stops = %+v, want 0 and 1", g.Stops)
+	}
+	if mid := g.At(0.5); mid.R < 120 || mid.R > 136 {
+		t.Fatalf("middle of black→white = %v, want ~128", mid)
+	}
+
+	// No direction means "to bottom".
+	g, ok = webParseGradient("linear-gradient(red, green, blue)")
+	if !ok || !g.Vertical {
+		t.Fatalf("default direction: vertical=%v ok=%v", g.Vertical, ok)
+	}
+	if len(g.Stops) != 3 {
+		t.Fatalf("three colour stops gave %d stops", len(g.Stops))
+	}
+	if g.Stops[1].Pos < 0.49 || g.Stops[1].Pos > 0.51 {
+		t.Fatalf("an unpositioned middle stop sat at %v, want ~0.5", g.Stops[1].Pos)
+	}
+	// The tails are flat, which is what a browser does with a single stop at
+	// the end: nothing interpolates past it. (The named colours are the
+	// reader's own palette, so compare against the stops rather than literals.)
+	if got, want := g.At(0), g.Stops[0].Color; got != want {
+		t.Fatalf("the ramp did not start at its first stop: %v vs %v", got, want)
+	}
+	if got, want := g.At(1), g.Stops[len(g.Stops)-1].Color; got != want {
+		t.Fatalf("the ramp did not end at its last stop: %v vs %v", got, want)
+	}
+
+	// "to top" mirrors the ramp: blue sits at the bottom, red at the top.
+	g, ok = webParseGradient("linear-gradient(to top, blue, red)")
+	if !ok || !g.Vertical {
+		t.Fatalf("to top: vertical=%v ok=%v", g.Vertical, ok)
+	}
+	if c := g.At(0); c.R <= c.B {
+		t.Fatalf("to top starts at %v, want the red end", c)
+	}
+
+	// Explicit positions survive, and the parts before them stay flat.
+	g, ok = webParseGradient("linear-gradient(to right, red 20%, blue 80%)")
+	if !ok || g.Vertical {
+		t.Fatalf("to right: vertical=%v ok=%v", g.Vertical, ok)
+	}
+	if g.Stops[0].Pos != 0.2 || g.Stops[1].Pos != 0.8 {
+		t.Fatalf("positions = %v / %v, want 0.2 / 0.8", g.Stops[0].Pos, g.Stops[1].Pos)
+	}
+	if c := g.At(0); c != g.Stops[0].Color || c.R <= c.B {
+		t.Fatalf("before the first stop = %v, want the red stop", c)
+	}
+
+	// Angles pick the axis they point most along, and mirror the ramp when they
+	// point up or left. 0deg is up, 180deg down, 135deg is a diagonal that still
+	// runs downwards.
+	for _, tc := range []struct {
+		angle    string
+		vertical bool
+		atStart  bool // the author's first stop lands at the top/left end
+	}{
+		{"0deg", true, false},     // up: the first stop belongs at the bottom
+		{"180deg", true, true},    // down
+		{"135deg", true, true},    // down-right, vertical component wins
+		{"90deg", false, true},    // right
+		{"270deg", false, false},  // left
+		{"0.25turn", false, true}, // a quarter turn is 90deg
+	} {
+		g, ok := webParseGradient("linear-gradient(" + tc.angle + ", #ff0000, #0000ff)")
+		if !ok {
+			t.Fatalf("%s: not parsed", tc.angle)
+		}
+		if g.Vertical != tc.vertical {
+			t.Fatalf("%s: vertical=%v, want %v", tc.angle, g.Vertical, tc.vertical)
+		}
+		red := g.Stops[0].Color.R > g.Stops[0].Color.B
+		if red != tc.atStart {
+			t.Fatalf("%s: first stop is red=%v, want %v", tc.angle, red, tc.atStart)
+		}
+	}
+
+	// A radial gradient is not a ramp: the reader has no circles to paint, so
+	// it keeps the averaged fill.
+	if _, ok := webParseGradient("radial-gradient(circle, #fff, #000)"); ok {
+		t.Fatal("a radial gradient was treated as a ramp")
+	}
+	if _, ok := webParseGradient("url(bg.png)"); ok {
+		t.Fatal("an image url was treated as a ramp")
+	}
+}
+
+// The ramp reaches the rect the reader draws, with both stops intact, and the
+// average colour is still stored for contrast decisions.
+func TestWebGradientReachesTheDrawnRect(t *testing.T) {
+	config := layoutTestConfig(t)
+	doc := parseWebPage(
+		`<div style="background-image: linear-gradient(#102040, #eef2ff)">`+wordSoup(40)+`</div>`,
+		"", webCSSTestURL())
+	layout := doc.layoutFor(config, Element{Type: "textbrowser", Font: "small"}, 600)
+	if layout == nil {
+		t.Fatal("no layout")
+	}
+	var graded *webRect
+	for i := range layout.Rects {
+		if layout.Rects[i].HasGradient {
+			graded = &layout.Rects[i]
+		}
+	}
+	if graded == nil {
+		t.Fatal("the gradient block produced no ramp rect")
+	}
+	if len(graded.Gradient.Stops) != 2 || !graded.Gradient.Vertical {
+		t.Fatalf("ramp = %+v, want two vertical stops", graded.Gradient)
+	}
+	if graded.Gradient.Stops[0].Color.R > 40 || graded.Gradient.Stops[1].Color.R < 200 {
+		t.Fatalf("stops = %v / %v, want the dark and light ends", graded.Gradient.Stops[0].Color, graded.Gradient.Stops[1].Color)
+	}
+	// The contrast/fade colour is the average, as before.
+	if graded.Color.R > 160 {
+		t.Fatalf("average colour = %v, want a mid tone", graded.Color)
+	}
+}
+
+// The paint path draws a ramp rather than one averaged fill: the top and the
+// bottom of the block have to end up different colours on screen.
+func TestWebGradientPaintsARamp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	config := layoutTestConfig(t)
+	doc := parseWebPage(
+		`<body style="background: #ffffff"><div style="background-image: linear-gradient(#000000, #ffffff)">`+wordSoup(120)+`</div></body>`,
+		"", webCSSTestURL())
+	layout := doc.layoutFor(config, Element{Type: "textbrowser", Font: "small"}, 600)
+	if layout == nil {
+		t.Fatal("no layout")
+	}
+	var box webRect
+	found := false
+	for _, rect := range layout.Rects {
+		if rect.HasGradient && rect.Rect.H > 60 {
+			box, found = rect, true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("no tall gradient rect to sample")
+	}
+
+	frame := newProbeFrame(t)
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Skipf("software renderer unavailable: %v", err)
+	}
+	defer destroyTestRenderer(renderer)
+	renderer.SetDrawColor(255, 0, 255, 255)
+	renderer.Clear()
+	drawWebDocument(renderer, config, doc, layout, sdl.Rect{X: 0, Y: 0, W: probeW, H: probeH}, 0)
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("ReadPixels unavailable: %v", err)
+	}
+
+	// Sample down the right edge of the block, past the wrapped text, so a
+	// glyph cannot be mistaken for the ramp.
+	x := box.Rect.X + box.Rect.W - 3
+	top := frame.at(x, box.Rect.Y+2)
+	bottom := frame.at(x, box.Rect.Y+box.Rect.H-3)
+	if top.R > 60 || top.G > 60 || top.B > 60 {
+		t.Fatalf("top of the ramp = %v, want near-black", top)
+	}
+	if bottom.R < 190 || bottom.G < 190 || bottom.B < 190 {
+		t.Fatalf("bottom of the ramp = %v, want near-white", bottom)
+	}
+	mid := frame.at(x, box.Rect.Y+box.Rect.H/2)
+	if mid.R < top.R+40 || mid.R > bottom.R-40 {
+		t.Fatalf("middle of the ramp = %v, want a value between %v and %v", mid, top, bottom)
+	}
+}
+
+// A gradient still reports its average colour, which is what text contrast and
+// opacity use; a radial or unparseable value keeps that as its whole fill.
 func TestWebGradientBackgroundIsAveraged(t *testing.T) {
 	c, ok := webGradientColor("linear-gradient(90deg, rgb(0, 0, 0) 0%, rgb(255, 255, 255) 100%)")
 	if !ok {
@@ -342,6 +529,286 @@ func TestDrawWebDocumentRoundsAndFillsACard(t *testing.T) {
 	r, g, b = pixel(rect.X+card.Rect.X+card.Rect.W/2, rect.Y+card.Rect.Y+1)
 	if r < 200 || g > 60 || b > 60 {
 		t.Errorf("card fill = %d,%d,%d, want the red the stops average to", r, g, b)
+	}
+}
+
+// An <hr> is a rule the sheet styles: its colour and weight come from the
+// border or background it declares, and only an unstyled one is the reader's
+// grey hairline.
+func TestWebHorizontalRuleKeepsItsStyling(t *testing.T) {
+	config := layoutTestConfig(t)
+	layoutFor := func(html string) *webLayout {
+		t.Helper()
+		doc := parseWebPage(html, "", webCSSTestURL())
+		layout := doc.layoutFor(config, Element{Type: "textbrowser", Font: "small"}, 600)
+		if layout == nil {
+			t.Fatal("no layout")
+		}
+		return layout
+	}
+
+	layout := layoutFor(`<p>above</p><hr style="border: 4px solid #cc0000"><p>below</p>`)
+	var rule *webRect
+	for i := range layout.Rects {
+		if r := layout.Rects[i]; !r.Stroke && r.Rect.W > 200 && r.Rect.H <= 12 {
+			rule = &layout.Rects[i]
+		}
+	}
+	if rule == nil {
+		t.Fatalf("the styled rule produced no rect: %+v", layout.Rects)
+	}
+	if rule.Rect.H != 4 {
+		t.Errorf("rule height = %d, want the authored 4px", rule.Rect.H)
+	}
+	if rule.Color.R < 150 || rule.Color.G > 90 {
+		t.Errorf("rule colour = %v, want the authored red", rule.Color)
+	}
+
+	// A background-coloured rule is painted with that background.
+	layout = layoutFor(`<p>above</p><hr style="background: #0000cc"><p>below</p>`)
+	var blue *webRect
+	for i := range layout.Rects {
+		if r := layout.Rects[i]; !r.Stroke && r.Rect.W > 200 && r.Rect.H <= 12 {
+			blue = &layout.Rects[i]
+		}
+	}
+	if blue == nil || blue.Color.B < 150 || blue.Color.R > 90 {
+		t.Fatalf("background rule = %+v, want the authored blue", blue)
+	}
+
+	// An unstyled rule is still the reader's own hairline.
+	layout = layoutFor(`<p>above</p><hr><p>below</p>`)
+	var plain *webRect
+	for i := range layout.Rects {
+		if r := layout.Rects[i]; !r.Stroke && r.Rect.W > 200 && r.Rect.H <= 12 {
+			plain = &layout.Rects[i]
+		}
+	}
+	if plain == nil || plain.Rect.H != 2 {
+		t.Fatalf("unstyled rule = %+v, want the 2px hairline", plain)
+	}
+}
+
+// The font shorthand is how a lot of sheets (and nearly every reset) set the
+// page's type: `font: 700 18px/1.8 Georgia, serif` has to set the size, the
+// weight and the leading at once. Its family is the one part the reader drops,
+// because the app ships a single face.
+func TestWebFontShorthandSetsSizeWeightAndLeading(t *testing.T) {
+	doc := parseWebPage(`<p style="font: italic 700 18px/1.8 Georgia, serif">text</p>`, "", webCSSTestURL())
+	if len(doc.Blocks) == 0 || len(doc.Blocks[0].Runs) == 0 {
+		t.Fatal("the paragraph produced no runs")
+	}
+	st := doc.Blocks[0].Runs[0].Style
+	if st.FontPx < 17.5 || st.FontPx > 18.5 {
+		t.Errorf("font shorthand size = %v, want 18", st.FontPx)
+	}
+	if !st.Bold || !st.Italic {
+		t.Errorf("font shorthand weight/style = bold:%v italic:%v, want both", st.Bold, st.Italic)
+	}
+	if st.LineHeight < 32 || st.LineHeight > 33 {
+		t.Errorf("font shorthand line-height = %v, want 32.4", st.LineHeight)
+	}
+
+	// A bare number in the shorthand is a weight, never a size: 700 must not
+	// become a 700px font.
+	doc = parseWebPage(`<p style="font: 700 16px Arial">text</p>`, "", webCSSTestURL())
+	st = doc.Blocks[0].Runs[0].Style
+	if st.FontPx < 15.5 || st.FontPx > 16.5 {
+		t.Errorf("font: 700 16px gave size %v, want 16", st.FontPx)
+	}
+	if !st.Bold {
+		t.Error("font: 700 16px did not read the weight")
+	}
+
+	// 100..500 is not bold, and a normal reset clears it.
+	doc = parseWebPage(`<p style="font: 400 14px Arial">text</p>`, "", webCSSTestURL())
+	if doc.Blocks[0].Runs[0].Style.Bold {
+		t.Error("font: 400 was treated as bold")
+	}
+
+	// Without a size the shorthand is not guessed at: a system-font keyword
+	// must leave the paragraph exactly as an unstyled one.
+	plain := parseWebPage(`<p>text</p>`, "", webCSSTestURL())
+	doc = parseWebPage(`<p style="font: menu">text</p>`, "", webCSSTestURL())
+	got := doc.Blocks[0].Runs[0].Style
+	if want := plain.Blocks[0].Runs[0].Style.FontPx; got.FontPx != want {
+		t.Errorf("font: menu set size %v, want the default %v", got.FontPx, want)
+	}
+}
+
+// The reader is a screen, so a stylesheet's screen rules apply and its print
+// rules do not. Print sheets hide the navigation with display:none and repaint
+// the page for paper, which on screen reads as a page with its menu missing.
+// @supports and @layer are this reader's modern CSS, so their rules count.
+func TestWebStylesheetHonoursTheScreenMedium(t *testing.T) {
+	cases := []struct {
+		name     string
+		css      string
+		wantRed  bool
+		wantGone bool
+	}{
+		{"print colour", `@media print { p { color: #ff0000 } }`, false, false},
+		{"print width", `@media print and (min-width: 100px) { p { color: #ff0000 } }`, false, false},
+		{"print hides nav", `@media print { p { display: none } }`, false, true},
+		{"print and screen", `@media screen, print { p { color: #ff0000 } }`, true, false},
+		{"screen width", `@media screen and (max-width: 600px) { p { color: #ff0000 } }`, true, false},
+		{"feature query", `@media (prefers-color-scheme: dark) { p { color: #ff0000 } }`, true, false},
+		{"not print", `@media not print { p { color: #ff0000 } }`, true, false},
+		{"supports", `@supports (display: flex) { p { color: #ff0000 } }`, true, false},
+		{"layer", `@layer base { p { color: #ff0000 } }`, true, false},
+		{"media in layer", `@layer base { @media print { p { color: #ff0000 } } }`, false, false},
+	}
+	for _, tc := range cases {
+		doc := parseWebPage(`<p>plain paragraph</p>`, tc.css, webCSSTestURL())
+		if doc == nil {
+			t.Fatalf("%s: no document", tc.name)
+		}
+		var run *webRun
+		for i := range doc.Blocks {
+			for j := range doc.Blocks[i].Runs {
+				if strings.TrimSpace(doc.Blocks[i].Runs[j].Text) == "" {
+					continue
+				}
+				run = &doc.Blocks[i].Runs[j]
+			}
+		}
+		if run == nil {
+			if tc.wantGone {
+				continue
+			}
+			t.Fatalf("%s: the paragraph produced no text", tc.name)
+		}
+		red := run.Style.HasColor && run.Style.Color.R > 180 && run.Style.Color.G < 90 && run.Style.Color.B < 90
+		if red != tc.wantRed {
+			t.Errorf("%s: coloured = %v, want %v (%+v)", tc.name, red, tc.wantRed, run.Style.Color)
+		}
+	}
+}
+
+// Every border edge paints where the author put it, in the author's colour and
+// at the author's width. A quote's rule used to be a fixed grey 3px bar (so a
+// `border-left: 5px solid #c00` lost both its colour and its weight), and
+// `border-right` set the left flag — the divider ended up on the wrong edge.
+func TestWebBorderEdgesPaintTheirOwnSideColourAndWidth(t *testing.T) {
+	config := layoutTestConfig(t)
+	layoutFor := func(html string) *webLayout {
+		t.Helper()
+		doc := parseWebPage(html, "", webCSSTestURL())
+		layout := doc.layoutFor(config, Element{Type: "textbrowser", Font: "small"}, 600)
+		if layout == nil {
+			t.Fatalf("no layout for %s", html)
+		}
+		return layout
+	}
+
+	// A quote's left bar: 5px wide, at the left edge, in the author's red.
+	layout := layoutFor(`<blockquote style="border-left: 5px solid #cc0000">` + wordSoup(30) + `</blockquote>`)
+	var left *webRect
+	for i := range layout.Rects {
+		if r := layout.Rects[i]; !r.Stroke && r.Rect.W == 5 && r.Rect.X < 40 {
+			left = &layout.Rects[i]
+		}
+	}
+	if left == nil {
+		t.Fatalf("no 5px left bar in %+v", layout.Rects)
+	}
+	if left.Color.R < 150 || left.Color.G > 90 || left.Color.B > 90 {
+		t.Fatalf("left bar colour = %v, want the author's red", left.Color)
+	}
+
+	// border-right draws on the right edge, not the left one.
+	layout = layoutFor(`<div style="border-right: 4px solid #0000cc">` + wordSoup(30) + `</div>`)
+	var right *webRect
+	leftBars := 0
+	for i := range layout.Rects {
+		r := layout.Rects[i]
+		if r.Stroke {
+			continue
+		}
+		if r.Rect.W == 4 && r.Rect.X > 400 {
+			right = &layout.Rects[i]
+		}
+		if r.Rect.W == 4 && r.Rect.X < 40 {
+			leftBars++
+		}
+	}
+	if right == nil {
+		t.Fatalf("border-right produced no right-hand rule in %+v", layout.Rects)
+	}
+	if leftBars != 0 {
+		t.Errorf("border-right also drew %d left bar(s)", leftBars)
+	}
+	if right.Color.B < 150 || right.Color.R > 90 {
+		t.Errorf("right rule colour = %v, want the author's blue", right.Color)
+	}
+
+	// A full outline keeps the declared thickness rather than a fixed 2px.
+	layout = layoutFor(`<div style="border: 4px solid #008800">` + wordSoup(30) + `</div>`)
+	var box *webRect
+	for i := range layout.Rects {
+		if layout.Rects[i].Stroke {
+			box = &layout.Rects[i]
+		}
+	}
+	if box == nil || box.Thickness != 4 {
+		t.Fatalf("outline = %+v, want a 4px stroke", box)
+	}
+
+	// A nav underline is a 3px band on the bottom edge.
+	layout = layoutFor(`<nav style="border-bottom: 3px solid #aa00aa">` + wordSoup(30) + `</nav>`)
+	var underline *webRect
+	for i := range layout.Rects {
+		if r := layout.Rects[i]; !r.Stroke && r.Rect.H == 3 && r.Rect.W > 200 {
+			underline = &layout.Rects[i]
+		}
+	}
+	if underline == nil {
+		t.Fatalf("no 3px underline in %+v", layout.Rects)
+	}
+	if underline.Color.R < 120 || underline.Color.B < 120 {
+		t.Errorf("underline colour = %v, want the author's magenta", underline.Color)
+	}
+
+	// A width given in a longhand is honoured too, and an uncoloured border
+	// still falls back to the reader's hairline rather than disappearing.
+	layout = layoutFor(`<div style="border-top-width: 6px; border-top-style: solid">x</div>`)
+	var ruled *webRect
+	for i := range layout.Rects {
+		if r := layout.Rects[i]; !r.Stroke && r.Rect.H == 6 {
+			ruled = &layout.Rects[i]
+		}
+	}
+	if ruled == nil {
+		t.Errorf("border-top-width: 6px produced no 6px rule in %+v", layout.Rects)
+	}
+}
+
+// Vertical padding and the logical shorthands are spacing too: a card's
+// `padding-top`, and the `margin-inline` / `padding-block` forms modern sheets
+// are written in, must reach the same fields the layout reads.
+func TestWebBlockAndLogicalSpacingReachTheLayout(t *testing.T) {
+	doc := parseWebPage(`<div style="padding-top: 24px; padding-bottom: 18px; margin-inline: 10px 20px">x</div>`, "", webCSSTestURL())
+	if len(doc.Blocks) == 0 {
+		t.Fatal("no block")
+	}
+	b := doc.Blocks[0]
+	if b.MarginTop < 24 || b.MarginBot < 18 {
+		t.Errorf("vertical padding = %v/%v, want at least 24/18", b.MarginTop, b.MarginBot)
+	}
+	if b.Indent < 10 || b.Style.IndentRight < 20 {
+		t.Errorf("margin-inline = %v/%v, want 10/20", b.Indent, b.Style.IndentRight)
+	}
+
+	doc = parseWebPage(`<div style="padding-block: 12px; margin-inline-start: 14px; margin-inline-end: 7px; padding-block-end: 9px">x</div>`, "", webCSSTestURL())
+	b = doc.Blocks[0]
+	if b.MarginTop < 12 || b.MarginBot < 12 {
+		t.Errorf("padding-block = %v/%v, want 12/12", b.MarginTop, b.MarginBot)
+	}
+	if b.MarginBot < 12+9 {
+		t.Errorf("padding-block-end added nothing: bottom = %v", b.MarginBot)
+	}
+	if b.Indent < 14 || b.Style.IndentRight < 7 {
+		t.Errorf("logical longhands = %v/%v, want 14/7", b.Indent, b.Style.IndentRight)
 	}
 }
 

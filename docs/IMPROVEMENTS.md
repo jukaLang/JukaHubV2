@@ -6,9 +6,11 @@ codebase. BrickOS is a firmware-level frontend on the same class of hardware, so
 its list is a good stress test of the parts we share: an updater, text input, a
 controller-driven UI, SDL rendering and a Wi-Fi stack.
 
-This page records what was fixed right away, what is worth doing next and where
-JukaHub is already ahead, so the comparison stays useful instead of being a
-one-off reading.
+This page records what the comparison found, where JukaHub is already ahead, and
+the ideas from it that have **not** been adopted. Adopted work leaves this page:
+shipped items are inventoried in
+[MODERNIZATION §5.5](../player/MODERNIZATION.md#55-shipped-feature-surface-verified-2026-10-25)
+and the plan's own phases, and project-side items are in [ROADMAP.md](../ROADMAP.md).
 
 ## Fixed in this pass
 
@@ -25,41 +27,23 @@ Run the checks with the usual command list in [CONTRIBUTING.md](../CONTRIBUTING.
 `JUKA_PREVIEW=1 go test -run 'TestUpdatePromptPreview|TestPatchModalRendersLongBody' ./`
 writes `tmp/update-prompt.png` and `tmp/patch-confirm.png` for review.
 
-## Next, in the order I would take them
+## Still open from this comparison
 
-1. **A component-versions view.** We already store per-file sha256 digests in
-   patch manifests and a release stamp in `release-info.json`, but the UI only
-   shows one version string. A Diagnostics card listing app, launcher, bundled
-   tools and their hashes would make bug reports checkable — BrickOS exposes
-   ten components plus build IDs and hashes.
-2. **Real button remapping.** [a11y.go](../player/a11y.go) can only swap A/B and
-   X/Y; every handler reads physical SDL codes. A keymap layer
-   (physical → logical) applied once before dispatch would give Nintendo/Xbox
-   presets, remapped Select/Start and a "disabled" state, and would let the
-   accessibility panel grow without touching scene code.
-3. **Audit texture creation threads.** [thumbstore.go](../player/thumbstore.go)
-   and the video path decode off the render thread. SDL textures belong to the
-   renderer that made them; creating one on a worker is exactly what BrickOS
-   lists as "downloaded covers could appear black after texture creation in the
-   worker thread failed". Worth a `runtime.LockOSThread` audit plus a test that
-   hammers the thumbnail queue.
-4. **Wi-Fi: verify on hardware.** The picker in [wifi.go](../player/wifi.go) now
-   follows the pattern BrickOS's three Wi-Fi bugs point at: it polls `status`
-   for the requested SSID rather than trusting `select_network`, asks for a DHCP
-   lease and re-reads the address, and reports a failed `save_config` as
-   session-only instead of success. It still needs a session on both stock
-   images (Smart Pro and Brick) to confirm the interface name, `wpa_cli`
-   location and DHCP client the firmware actually ships.
-5. **LED policies.** [ledsync.go](../player/ledsync.go) only mirrors audio.
-   Battery/charging/temperature presets plus a custom effect and colour are a
-   small, self-contained addition with real device value.
-6. **Boot visuals.** [splash.go](../player/splash.go) and
+Seven items were ranked here. Six of them are settled, so the list is short:
+
+1. **Boot visuals.** [splash.go](../player/splash.go) and
    [wallpaper.go](../player/wallpaper.go) each pick one image. BrickOS browses
    presets with previews, marks the applied one and offers independent Random
    modes — the same shape we already use for wallpapers.
-7. **Checkpoints / quick switch.** We have Continue, play time, save manager and
-   power profiles, but nothing that snapshots a running emulator. This is the
-   largest item on the list; treat it as a milestone, not a task.
+
+The rest left for the plan, where each is tracked once: component versions and
+LED policies in
+[MODERNIZATION §5.5](../player/MODERNIZATION.md#55-shipped-feature-surface-verified-2026-10-25),
+the physical → logical keymap in §5.4 with
+[ADR 0001](adr/0001-physical-logical-keymap.md), the texture-thread audit as a
+finding in Phase 3 (there was no worker-thread texture to move), Wi-Fi
+verification on both stock images and end-to-end LAN play in Phase 8, and the
+checkpoint milestone in [CHECKPOINTS.md](CHECKPOINTS.md).
 
 ## Where JukaHub is ahead
 
@@ -175,9 +159,9 @@ the `== false` comparisons.
 
 ### Next
 
-Phase 2 of the brief, in order: split `script.js` into modules (the largest
-single-file risk in the repository), then the CSP that the inline-style and
-device-push allow-list blocks, then self-hosted fonts and the PWA.
+Those four are now Phase 7 items in the
+[modernization plan](../player/MODERNIZATION.md#phase-7-web-builder): the
+`script.js` module split, the CSP, self-hosted fonts and the PWA.
 
 ## Builder design pass (October 2026)
 
@@ -327,16 +311,14 @@ warm bench (JUKAHUB_BENCH_WARM=1)         370–408 ms, splash=0 ms
 
 ## Technical pass (October 2026)
 
-This pass took the four technical items the backlog ranked highest, the flaky
-test, and the documentation gaps around them.
-
-| Item | What shipped | Pinned by |
-|---|---|---|
-| Component versions | Patch → **Component versions** lists app, launcher, design config, `yt-dlp`/`ffmpeg`/`ffprobe` and installed packages with SHA-256 digests; **A** copies the full report, and the exported diagnostics carries the same section. The card is path-free. | `player/componentreport_test.go` |
-| Button remapping | A general physical → logical keymap (`a11y_keymap`) applied once before dispatch, with a **Button layout** preset (Nintendo = both swaps) and a **Select button** row: Default / Swapped / Disabled. Disabled swallows the press; Start still opens the menu. | `player/a11y_keymap_test.go` |
-| LED policies | **LED Mode** in Quick Settings: Audio / Battery / Charging / Temperature / Custom. Battery red→green 10–80 %, charging breathes and is dark unplugged, temperature green→red 45–80 °C, custom colour plus optional pulse. | `player/ledpolicy_test.go` |
-| `NetPlayEnabled` | A **LAN Play** switch in Quick Settings writes the previously dead flag, the Game Library explains where to turn it on, and an upgrade without the switch keeps the shipped default (on). | `player/netplay_gate_test.go` |
-| Flaky video test | Root cause fixed: static-layer caches (keyboard, chat, video overlay) kept renderer-owned textures past their renderer, so a later probe reused or freed a dangling pointer and SDL crashed in `ReadPixels`. Caches now record their owner, drop a foreign texture instead of touching it, and test renderers release them before destroying the renderer. | `player/renderer_cache_owner_test.go` |
+This pass took five of the items this page ranked, plus the documentation gaps
+around them. They are recorded where the plan tracks them, not here: component
+versions and LED policies in
+[MODERNIZATION §5.5](../player/MODERNIZATION.md#55-shipped-feature-surface-verified-2026-10-25),
+the keymap in §5.4 (with [ADR 0001](adr/0001-physical-logical-keymap.md)), the
+`NetPlayEnabled` switch in §5.5, and the flaky-test root cause in Phase 6 — the
+crash was renderer-owned textures reused after their renderer, not the thumbnail
+workers.
 
 Documentation in the same pass: [STYLE.md](STYLE.md) (the conventions a review
 checks, not a new standard), [CHECKPOINTS.md](CHECKPOINTS.md) (the milestone
@@ -346,14 +328,6 @@ design, explicitly unimplemented), a curated-package section in
 already publishes the coverage total and the 0 % functions to the step summary;
 it is advisory, not a gate).
 
-Deliberately not in this pass:
-
-- **Hardware verification** (Wi-Fi on both stock images, LED behaviour on the
-  device) still needs a device session; nothing here claims it.
-- **Texture creation on worker threads.** An audit of every `CreateTexture`
-  call site found them all on a render path: the thumbnail workers fetch bytes
-  only, and `loadThumbnailFromURLs` creates and uploads the texture while
-  drawing. So there was no `LockOSThread` change to make; the crash that was
-  blamed on that path was the cache ownership bug above.
-- **GitHub Issues being enabled** is a repository setting, not a code change;
-  the templates are in place for when it is on.
+What that pass left open is now tracked in the plan rather than in this list: the
+two hardware verifications in MODERNIZATION Phase 8, and enabling GitHub Issues in
+the [roadmap's maintainer checklist](../ROADMAP.md#appendix-c-maintainer-setup-checklist).

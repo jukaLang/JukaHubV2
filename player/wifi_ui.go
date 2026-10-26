@@ -816,7 +816,9 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 				textColor = ColorTextPrimary()
 			}
 			cy := rect.Y + rect.H/2
-			drawWiFiBars(renderer, rect.X+12, cy, wifiSignalBars(n.Signal))
+			// statusWiFiSignal is the meter's own source chain, so the connected
+			// row cannot disagree with the corner it was opened from.
+			drawWiFiBars(renderer, rect.X+12, cy, wifiRowBars(n, statusWiFiSignal))
 			ssidX := rect.X + 52
 			tagW := int32(0)
 			tags := make([]wifiRowTag, 0, 3)

@@ -18,7 +18,7 @@ var tileAnimMap = make(map[int]float64)
 func explicitTileIcon(name string) string {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "play", "chat", "files", "tv", "box", "mic", "chart", "star", "cloud",
-		"gear", "chip", "terminal", "game", "resume",
+		"gear", "palette", "chip", "terminal", "game", "resume",
 		"clock", "speed", "disk", "logs", "cache", "update", "network":
 		return strings.ToLower(strings.TrimSpace(name))
 	}
@@ -195,6 +195,16 @@ func drawTileIcon(renderer *sdl.Renderer, cx, cy, size int32, kind string, fg, b
 		fillCircle(renderer, cx+size/8, cy-size/6, size/6, bg)
 		renderer.SetDrawColor(fg.R, fg.G, fg.B, fg.A)
 		strokeCircle(renderer, cx, cy, size/3, fg)
+	case "palette":
+		// Appearance: two overlapping swatch cards, so it reads as "colours"
+		// rather than as another gear or another picture frame.
+		cw := size * 2 / 3
+		ch := size * 2 / 3
+		fillRoundedRect(renderer, cx-size/2+2, cy-size/3, cw, ch, 4, bg)
+		strokeRoundedRect(renderer, cx-size/2+2, cy-size/3, cw, ch, 4, 2, fg)
+		fillRoundedRect(renderer, cx-cw/2+size/6, cy-ch/2+size/6, cw, ch, 4, bg)
+		strokeRoundedRect(renderer, cx-cw/2+size/6, cy-ch/2+size/6, cw, ch, 4, 2, fg)
+		fillCircle(renderer, cx+cw/2-size/6, cy-ch/2+size/4, max32(2, size/12), fg)
 	case "gear":
 		// gear: circle + spokes (no fill background)
 		// inner circle cutout

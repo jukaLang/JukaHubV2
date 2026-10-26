@@ -10,7 +10,7 @@ Apps/JukaHub/
 ├── icon.png             ← icon in the Apps menu
 ├── launch.sh            ← what the launcher runs to start JukaHub
 ├── JukaHub              ← ARM64 binary (built on CI)
-├── jukaconfig.json      ← layout config (trimmed build: YouTube)
+├── jukaconfig.json      ← layout config (generated: full scene list, device defaults)
 ├── Inter-Regular.ttf    ← font
 ├── background.jpg
 ├── VERSION.txt
@@ -158,15 +158,24 @@ Send those files along with a bug report; no SSH needed.
   binary `yt-dlp_linux_aarch64`.
 * **ffmpeg** is used as the static ARM64 build from BtbN
   (ffmpeg/ffprobe/ffplay).
-* **Trimmed config:** `player/trimui/make-config.ps1` generates
-  `player/trimui/jukaconfig.device.json` from the full config — keeping only
-  the scenes the Home cards and Settings open: Main, Tube, Shorts, Apps,
-  Favorites, Chat, Tools (Misc), Emulator, Settings with its sub-pages, Themes,
-  Logs and Exit.
-  It is deliberately **not** named `jukaconfig.json`, because `player/.gitignore`
-  excludes that file (it may contain a user's API key) — with the same name the
-  device config would not be committed and the CI build would fail.
-  Re-run the script whenever the full config changes:
+* **Device config:** `player/trimui/make-config.ps1` generates
+  `player/trimui/jukaconfig.device.json` from the full config. It keeps **every
+  scene** and only applies the handheld defaults (fullscreen, 1280×720, the
+  720p playback cap, no weather, reduced motion, low power). There is no
+  hand-maintained scene list any more: one went stale, named a scene that no
+  longer existed (so the script threw), and omitted nine scenes the Apps
+  launcher opens — and because the launcher hides a row whose scene the config
+  does not ship, the handheld quietly lost JukaLand, Live TV, Podcasts, Tickers,
+  Weather, Unit Converter, Canvas Sandbox, IP Stream and the Audio Player.
+  Trimming is still possible with `-Drop Name1,Name2`, and the script refuses a
+  drop that a kept scene still navigates to. It also fails the whole run when
+  any `change_scene:` target is missing, so a dead button cannot be generated.
+  `TestDeviceConfigShipsEveryBuiltinApplet` fails if the committed file ever
+  stops shipping an applet's scene.
+  The file is deliberately **not** named `jukaconfig.json`, because
+  `player/.gitignore` excludes that file (it may contain a user's API key) —
+  with the same name the device config would not be committed and the CI build
+  would fail. Re-run the script whenever the full config changes:
 
   ```powershell
   cd player/trimui

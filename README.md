@@ -1,5 +1,6 @@
 # JukaHub
 
+[![CI](https://github.com/jukaLang/JukaHubV2/actions/workflows/ci.yml/badge.svg)](https://github.com/jukaLang/JukaHubV2/actions/workflows/ci.yml)
 [![Netlify Status](https://api.netlify.com/api/v1/badges/dea0cf4b-3799-41d9-8f2a-b4fd2a270b15/deploy-status)](https://generate.jukalang.com)
 [![Latest release](https://img.shields.io/github/v/release/jukaLang/JukaHubV2?sort=semver)](https://github.com/jukaLang/JukaHubV2/releases/latest)
 [![Go Version](https://img.shields.io/Go-1.27+-00ADD8?logo=go)](https://golang.org/dl/)
@@ -8,13 +9,17 @@
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2/badge)](https://api.scorecard.dev/projects/github.com/jukaLang/JukaHubV2)
 [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/R9qgJjh5jG)
 
-<img width="1284" height="722" alt="Image" src="https://github.com/user-attachments/assets/c7c17162-7b10-4b12-8f9e-cc90fdc9edc1" />A media hub for the **TrimUI Smart Pro** — and the whole TrimUI line — that
-does not ask you to replace anything. **The shell your handheld should have
-shipped with**: one app, installed by copying one folder onto the SD card.
-YouTube on the couch, your ROM library with box art and save-resume, PS4/PS5
-Remote Play on the train, LAN play in the same room, a phone as your keyboard —
-every screen driven by the D-pad you already have. The stock OS stays exactly
-where it is underneath, so installing JukaHub is always reversible.
+<img width="1284" height="722" alt="Image" src="https://github.com/user-attachments/assets/c7c17162-7b10-4b12-8f9e-cc90fdc9edc1" />
+
+**Your TrimUI handheld as a complete media and gaming console: one folder on
+the SD card, the stock OS untouched underneath.**
+
+A media hub for the **TrimUI Smart Pro** — and the whole TrimUI line — with no
+firmware swap and nothing to replace. **The shell your handheld should have
+shipped with**: YouTube on the couch, your ROM library with box art and
+save-resume, PS4/PS5 Remote Play on the train, LAN play in the same room, a
+phone as your keyboard — every screen driven by the D-pad you already have.
+It is one folder on the card, so installing it is always reversible.
 
 Updates are signed and roll themselves back if a new build misbehaves, and
 nothing is uploaded anywhere unless you switch it on. Ten minutes from download
@@ -26,6 +31,27 @@ to all of that: the walkthrough is [docs/TOUR.md](docs/TOUR.md).
 [Controls](docs/CONTROLS.md) ·
 [Developer guide](docs/DEVELOPMENT.md) ·
 [Dependencies](docs/DEPENDENCIES.md)
+
+## Contents
+
+**What it is** — [What it does](#one-app-the-whole-card) ·
+[JukaHub and Juka](#jukahub-and-juka) · [Why JukaHub](#why-jukahub)
+
+**Install and set up** — [Install](#install-on-a-trimui-smart-pro) ·
+[First run](#first-run) · [Controls](#controls) ·
+[Copy files from your PC](#copy-files-from-your-pc) ·
+[SFTP](#browse-files-over-sftp) ·
+[Phone as a keyboard](#use-your-phone-as-a-keyboard) ·
+[Cast the screen](#cast-the-screen-to-a-browser) · [Updating](#updating) ·
+[Privacy](#privacy)
+
+**When something goes wrong** — [Something is wrong?](#something-is-wrong) ·
+[Other devices](#other-devices)
+
+**Reference and contributing** — [Security](#security) · [Toolbox](#toolbox) ·
+[Web builder](#build-a-screen-in-the-web-builder) ·
+[Share and remix a design](#share-and-remix-a-design) ·
+[Contributing](#contributing) · [Documentation](#documentation)
 
 ---
 
@@ -51,6 +77,22 @@ it back.
 * **Extend** — signed packages from a repository with rollback, and plugins.
 
 Most of these have a page in the [documentation table](#documentation) below.
+
+## JukaHub and Juka
+
+The name is deliberate, and the relationship is easy to misread: **JukaHub is not
+a Juka program, and the device needs no Juka runtime to run it.** The launcher is
+Go + SDL2 — the one runtime the firmware already ships — because that is what a
+handheld with no Python, no build tools and 1 GB of RAM can actually run well.
+
+What it shares with the ecosystem is the data layer: every screen is a
+`jukaconfig.json`, authored in the [web builder](https://generate.jukalang.com)
+and loaded by the player, so a design moves between the browser and the card
+without a rebuild or a recompile. The language itself, its packages and the rest
+of the family live at [jukalang.com](https://jukalang.com) and
+[github.com/jukaLang](https://github.com/jukaLang); this repository is the
+handheld end of it, and the format both halves agree on is documented in
+[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 
 ## Why JukaHub
 
@@ -114,6 +156,11 @@ That's the whole installation. There is nothing else to set up:
 If JukaHub does not appear in **Apps**, reboot the device — the stock launcher
 only scans `Apps/` at boot. Also check that the folder is exactly
 `Apps/JukaHub` and that `launch.sh` is inside it.
+
+> **Here to build it, not just use it?** Clone to a running build in about five
+> minutes with [docs/QUICK_START.md](docs/QUICK_START.md), pick up work labelled
+> [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue),
+> and read [Contributing](#contributing) for the rules that keep the suite green.
 
 ## First run
 
@@ -186,7 +233,9 @@ clock and the notification bell are in the bar itself.
   for the runtime setup.
 * **Games Library** — **Emulators → Games Library** browses `Roms/<system>/`
   console by console, shows the box art downloaded for each title, and launches
-  the game with the emulator that owns its system. Every launch is recorded, so
+  the game with the emulator that owns its system. Drop a short clip in
+  `data/game-snaps/` and the preview box plays it while the focus rests on that
+  game. Every launch is recorded, so
   the **Continue** row at the top resumes the last game in one press. **X** on a
   game opens **LAN Play**: host it, or join another device over Wi-Fi, so link
   cable titles like Mario Kart and Four Swords play without a cable. **Tools →
@@ -444,13 +493,58 @@ on the Smart Pro and Smart Pro S, and a compact 960×720 canvas scaled to the
 1024×768 4:3 Brick, Brick Pro and Hammer screens. Windows builds are for trying
 JukaHub on a PC.
 
+## Security
+
+The short version — [SECURITY.md](SECURITY.md) has the threat model, the key
+management and the honest limits, and **Tools → Security & trust** shows the live
+state on the device without a PC.
+
+- **Secrets are encrypted, not hidden in a shell variable.** API keys and tokens
+  in `jukaconfig.json` are AES-256-GCM with per-value nonces; set your own key
+  with `JUKAHUB_CRYPTO_KEY`, and the posture view tells you when the built-in
+  default is still in use. `./JukaHub -set-secret <field>` reads the value from
+  stdin so it never lands in shell history.
+- **Updates and packages are signed.** The Patch repository index is
+  Ed25519-signed with the public key compiled into the binary, and every archive
+  is SHA-256-checked against that index before it is installed — a rollback copy
+  is kept. HTTPS alone is never treated as authenticity.
+- **Downloads come from a curated allowlist.** Helper tools and the
+  [Toolbox](#toolbox) resolve only from repos listed in code, match release
+  assets on stable name parts, skip checksum side-cars, and stream through the
+  same size-capped downloader. Running one is a direct exec, never a shell.
+- **The LAN servers are opt-in and visible.** FTP/SFTP start only when you press
+  the row, SFTP generates its own password and prints a host-key fingerprint, and
+  the posture view names whatever is listening.
+- **No telemetry unless you ask.** One boot/crash ping, off by default, and the
+  payload is limited to build and device facts.
+
+## Toolbox
+
+**Tools → Toolbox** installs popular command-line tools on demand and runs them
+with visible output: `rclone` (cloud/SSH sync), `jq` (JSON), `ripgrep` and `fd`
+(search), `pandoc` (document conversion) and `age` (encryption). **A** installs
+the first time and runs afterwards, **X** opens the on-screen keyboard for
+arguments, **Y** copies the installed path. Installed tools also work from
+Power tools → Script snippets, so one press can turn a tool into a button.
+
+Three network scanners sit at the end of the catalog — `naabu` (open ports),
+`httpx` (which hosts answer HTTP) and `dnsx` (DNS records) — for looking at your
+own LAN. They are the only entries that send traffic to another machine, so the
+first run of any of them asks once, and the answer is remembered. See
+[Toolbox → Network scanning](docs/TOOLBOX.md#network-scanning).
+
+Installers are fetched from each project's own GitHub releases; nothing is
+bundled and nothing is uploaded. What the toolbox does and does not verify is in
+[SECURITY.md](SECURITY.md#toolbox-and-helper-tool-downloads).
+
 ## Contributing
 
 Small, well-scoped work is the best way in: issues labelled
 [`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue)
-come straight from [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
-[FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md), and both list what is already
-shipped so you do not rebuild it. Two plans cover the rest and do not overlap:
+come from the open gaps in [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
+[FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md); what is already shipped is
+inventoried in the modernization plan, so you do not rebuild it. Two plans cover
+the rest and do not overlap:
 [ROADMAP.md](ROADMAP.md) is the 30/60/90 plan for the *project* (GitHub setup,
 CI, releases, contributor path), and
 [player/MODERNIZATION.md](player/MODERNIZATION.md) is the *app's* engineering
@@ -485,8 +579,9 @@ paths are listed in [SUPPORT.md](SUPPORT.md).
 | [Curation Hub](docs/CURATION.md) | essentials checklist, UI/theme profiles, compatibility votes, the optional community feed |
 | [Dock & ambient](docs/AMBIENT.md) | the charging/idle clock, weather, now-playing and photo display, sleep timer, screen-off audio |
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
+| [Toolbox](docs/TOOLBOX.md) | installing rclone, jq, ripgrep, fd, pandoc and age plus the naabu/httpx/dnsx scanners, running them with arguments, the one-time authorization prompt, what is and is not verified |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
-| [Feature slate](docs/FEATURE-SLATE.md) | the 36-idea slate ranked by cost, fit and device risk, with the next four |
+| [Feature slate](docs/FEATURE-SLATE.md) | the 36-idea slate ranked by cost, fit and device risk — unadopted ideas only |
 | [Roadmap](ROADMAP.md) | the 30/60/90 project plan: GitHub mechanics, CI, releases, contributor path |
 | [Modernization plan](player/MODERNIZATION.md) | the player's engineering status by phase, verified against the code on every pass |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
@@ -495,7 +590,7 @@ paths are listed in [SUPPORT.md](SUPPORT.md).
 | [Code style](docs/STYLE.md) | naming, comments, config keys, the device budget, test expectations |
 | [Checkpoints design](docs/CHECKPOINTS.md) | the quick-switch/save-slot milestone: options, constraints, phases (not implemented) |
 | [TrimUI packaging](player/trimui/README.md) | device package, install and troubleshooting notes |
-| [Security](SECURITY.md) | secret storage and the security model |
+| [Security](SECURITY.md) | threat model, secret storage, signed updates, tool downloads, the in-app posture view |
 
 ## License and thanks
 

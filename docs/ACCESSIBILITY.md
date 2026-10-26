@@ -61,23 +61,27 @@ the other to see it.
 
 A physical → logical keymap, applied once per controller event before any
 overlay or scene sees it, so the whole app agrees on what "select" means. The
-panel edits it through four rows:
+panel edits it two ways, and the last one you touch wins:
 
-* **Button layout** — the preset: **Standard** or **Nintendo** (A/B and X/Y both
-  swapped). A single swap reads **Custom**, so the preset never lies about the
-  fine-grained rows below it.
-* **Swap A / B** — the Japanese button order, and the usual fix for a player who
-  keeps pressing the wrong button out of muscle memory.
-* **Swap X / Y** — moves the secondary and tertiary actions.
+* **Button layout** — a whole-state preset: **Standard** or **Nintendo** (A/B
+  and X/Y both swapped). Applying one clears the per-button rows below, so a
+  preset is never half-true; any individual remap makes the row read **Custom**.
+* **A**, **B**, **X**, **Y**, **L1**, **R1** — one row per button, showing the
+  action it currently sends (a preset already applied is included in that
+  answer). Left and right walk the list of actions: the button itself, then the
+  others, then **Disabled** last, and back. Choosing an action for A or B folds
+  the Nintendo preset back into a plain remap rather than leaving two rules for
+  the same button.
 * **Select button** — **Default**, **Swapped** (Select sends Start and Start
   sends Select, so both stay reachable) or **Disabled** (Select is swallowed;
-  Start still opens the menu).
+  Start still opens the menu). Select and Start share one row on purpose: two
+  rows free to fight over them could leave no way into the menu.
 
 The rows write the stored keymap (`a11y_keymap` in `jukauser.json`, e.g.
-`select:start,start:select` or `select:none`), and the same layer is what a new
-remappable button would use: no scene or overlay needs to change. The d-pad is
-deliberately never remapped — it drives focus everywhere, and swapping it would
-make navigation impossible to learn.
+`a:b,select:none`), and the same layer is what a new remappable button would
+use: no scene or overlay needs to change. The d-pad is deliberately never
+remapped — it drives focus everywhere, and swapping it would make navigation
+impossible to learn.
 
 ## One-handed mode
 
@@ -96,8 +100,8 @@ chord button** (L1 by default) and the next d-pad press becomes a face button:
   that press the d-pad is a d-pad again.
 * Tap it a second time to cancel. Holding it works the same as tapping once and
   never leaves the latched state behind.
-* The chord output still goes through Swap A/B and Swap X/Y, so the two settings
-  compose.
+* The chord output still goes through the button remaps, so one-handed mode,
+  the layout presets and the per-button rows compose.
 * **Chord button** chooses which shoulder or Back acts as the modifier, so it can
   be the one your other hand reaches. The chosen button stops doing its own
   action while the mode is on (L1 normally pages a list, for example).

@@ -366,6 +366,8 @@ func ensureSettingsWidgets(config *Config) {
 	ensureSmartSettingsScene(config)
 	ensureSmartSettingsEntry(config)
 	ensureScreensaverTimeoutSetting(config)
+	ensureCookieRetentionSetting(config)
+	ensureSnapPreviewSetting(config)
 }
 
 // ensureScreensaverTimeoutSetting puts the screensaver timeout in Settings →
@@ -377,6 +379,10 @@ func ensureScreensaverTimeoutSetting(config *Config) {
 	if scene == nil {
 		return
 	}
+	// The row's label is a $ replacement, and substitution only reads the
+	// custom block, so the derived text has to be seeded there. Without this
+	// the row rendered the placeholder itself.
+	config.Variables.Custom["screensaverTimeoutLabel"] = screenTimeoutLabel(config.Variables.ScreensaverTimeout)
 	for _, el := range scene.Elements {
 		if strings.EqualFold(strings.TrimSpace(el.Trigger), "cycle_screensaver_timeout") {
 			return
@@ -403,6 +409,89 @@ func ensureScreensaverTimeoutSetting(config *Config) {
 			Color: "$theme_text_secondary",
 		},
 	)
+}
+
+// ensureCookieRetentionSetting puts the saved-session age policy in Settings →
+// General, beside the screensaver row, together with the press that drops the
+// session already on the card. Like the rest of this file it edits the
+// in-memory config, so no shipped JSON is rewritten, and it seeds the labels the
+// row substitutes ($cookieRetentionLabel for the toast wording, $cookieRowLabel
+// for the row itself) from the value already merged in from jukauser.json.
+func ensureCookieRetentionSetting(config *Config) {
+	scene := settingsGeneralScene(config)
+	if scene == nil {
+		return
+	}
+	days := cookieRetentionDays(config)
+	config.Variables.Custom["cookieRetentionLabel"] = cookieRetentionLabel(days)
+	// The row also says when the session it measures began, which is the
+	// reference point "30 days" is missing on its own.
+	refreshCookieRetentionRow(config)
+	// Every slot on this page is taken: Smart Widgets at 40,520, Screensaver at
+	// 340,520, the Vibration toggle (when a motor exists) at 40,592, and Save at
+	// 1040,592. The retention row's band is the right column under the Audio
+	// Backend read-out: 556..604 clears that label by a few pixels and stays
+	// above the footer.
+	//
+	// "Forget now" goes one row up against the right edge, above Save. It cannot
+	// share the retention row's 360px: at this font the row's own label runs
+	// 319–332px and "Forget now" 127px, so splitting the band would ellipsize
+	// both.
+	// The slot above Save is free ("Replay tour" moved to the page's top-right
+	// corner) and keeps the two cookie controls in one cluster.
+	//
+	// The row's own label is "Cookies · 30d · since Oct 12". The session date is
+	// the reference point the window needs, and fitting both into the cell means
+	// shortening both: "Saved cookies · 30 days · since Oct 12" is 436px against
+	// 352px of inner width, while the shipped form fits — widest with "Keep"
+	// ("Cookies · Keep · since Oct 12", 332px). The row still cycles the policy,
+	// so the window stays first.
+	// Coordinates are scaled to the compact canvas the same way the rest of the
+	// runtime scales authored geometry.
+	width, height := screenWidth, screenHeight
+	if width <= 0 {
+		width = 1280
+	}
+	if height <= 0 {
+		height = 720
+	}
+	hasCycle, hasForget := false, false
+	for _, el := range scene.Elements {
+		switch strings.ToLower(strings.TrimSpace(el.Trigger)) {
+		case "cycle_cookie_retention":
+			hasCycle = true
+		case "forget_saved_cookies":
+			hasForget = true
+		}
+	}
+	if !hasCycle {
+		scene.Elements = append(scene.Elements, Element{
+			Type:    "button",
+			Text:    "Cookies · $cookieRowLabel",
+			X:       scaleX(660, width),
+			Y:       scaleY(556, height),
+			Width:   StringOrInt(strconv.Itoa(int(scaleX(360, width)))),
+			Height:  StringOrInt(strconv.Itoa(int(scaleY(48, height)))),
+			Trigger: "cycle_cookie_retention",
+			Color:   "$labelColor",
+			BgColor: "$buttonColor",
+			Font:    "small",
+		})
+	}
+	if !hasForget {
+		scene.Elements = append(scene.Elements, Element{
+			Type:    "button",
+			Text:    "Forget now",
+			X:       scaleX(1040, width),
+			Y:       scaleY(520, height),
+			Width:   StringOrInt(strconv.Itoa(int(scaleX(216, width)))),
+			Height:  StringOrInt(strconv.Itoa(int(scaleY(48, height)))),
+			Trigger: "forget_saved_cookies",
+			Color:   "$labelColor",
+			BgColor: "$buttonColor",
+			Font:    "small",
+		})
+	}
 }
 
 // ensureSmartSettingsScene creates the page unless the config already has it

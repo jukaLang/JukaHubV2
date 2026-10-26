@@ -150,6 +150,33 @@ between the ambient idle screen and the starfield screensaver, `ambientWeather`
 (default true) shows the dock forecast, and `ambientPhotos` points the slideshow
 at a folder.
 
+Video snaps in the Games Library are two custom keys too, documented in
+[Games Library → Video snaps](GAME_LIBRARY.md#video-snaps): `gameSnaps` (bool,
+default true) switches the preview on or off, and `gameSnapsDir` (string) points
+it at a clip collection outside `data/game-snaps/`. `gameSnaps` is written by
+Settings → General → **Video snaps**, whose row shows `On`/`Off` from this key
+plus how many of the library's games have a clip (`On · 12`, or `On · none` on a
+card with no clips); `gameSnapsDir` has no row, so it is edited in
+`jukauser.json` or set by the builder.
+
+`networkScanAuthorized` (bool) records the one-time answer to the scanning
+prompt on the three network tools (`naabu`, `httpx`, `dnsx`). Absent or `false`
+means the first run of any of them asks again; see
+[Toolbox → Network scanning](TOOLBOX.md#network-scanning).
+
+`cookieRetentionDays` (int, 0–3650) is how long a saved browser cookie is kept,
+written by Settings → General → **Cookies**. 0 — the shipped value — keeps
+the session until the Browser's Forget chip drops it; 7, 14, 30 and 90 are the
+steps the row offers, and any other number is honoured as written. The policy is
+applied when the session is restored at launch and again whenever the setting
+changes; see [Browser → Dropping them after a while](BROWSER.md#dropping-them-after-a-while).
+`cookieRetentionLabel` is the same value as display text and is rewritten with
+it; `cookieRowLabel` is the row's whole value (`30d · since Oct 12`), derived
+from the jar's oldest first-seen stamp and re-seeded on every launch and page
+entry, so editing it by hand changes nothing. The row's neighbour, **Forget
+now**, writes nothing: it drops the saved
+session and the file immediately, exactly as the Browser's Forget chip does.
+
 Time-lapse recording is two custom keys, documented in
 [Time-lapse](TIMELAPSE.md): `timelapse` (bool, default true) films every game
 launch, and `timelapse_interval` is the seconds between stills (default 20,
@@ -257,7 +284,7 @@ config-customizable.
 | `chat` | JukaLand chat |
 | `shortslist` | YouTube Shorts grid |
 | `canvas` | canvas sandbox |
-| `packagelist` | Patch package list |
+| `packagelist` | Package Manager list: registry packages on the left, the focused one's details on the right, and a ✓ on the rows already on the card |
 | `recent` | recently played |
 | `image`, `video` | image and video elements |
 | `themegallery` | theme preset picker |
@@ -288,7 +315,7 @@ config-customizable.
 | `log_export`, `log_clear` | export or clear the app log |
 | `cache_clear` | clear the on-disk cache |
 | `plugin_action`, `plugin_refresh` | run a plugin action, rescan the plugins directory — see [Plugin API](PLUGINS.md) |
-| `packages_refresh` | refresh the Patch package index |
+| `packages_refresh` | re-fetch the Package Manager's registry |
 | `textbrowser_refresh` | reload the textbrowser from its source |
 | `textbrowser_system`, `_zeroconf`, `_json`, `_processes`, `_network`, `_temps`, `_services`, `_files`, `_copy`, `_clear` | textbrowser data sources and clipboard |
 | `tools_open`, `processes_open`, `wifi_open`, `ip_open`, `ip_add`, `ip_fetch` | the built-in tool panels (including the [Wi-Fi picker](WIFI.md)) |

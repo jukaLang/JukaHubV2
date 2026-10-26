@@ -146,6 +146,11 @@ func TestSettingsOffersScreensaverTimeout(t *testing.T) {
 		if got := config.Variables.Get("screensaverTimeoutLabel"); got != "25s" {
 			t.Errorf("resolved label = %q, want 25s", got)
 		}
+		// The replacement reads the custom block, not the typed field, so the
+		// row must render the value rather than the placeholder itself.
+		if got := substituteVars(el.Text, config.Variables.Custom); got != "Screensaver · 25s" {
+			t.Errorf("row renders %q, want \"Screensaver · 25s\"", got)
+		}
 		return
 	}
 	t.Fatal("Settings → General has no screensaver timeout row")

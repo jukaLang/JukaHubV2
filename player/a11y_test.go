@@ -197,37 +197,54 @@ func TestA11yLoadFromConfig(t *testing.T) {
 func TestA11yRowsReportCurrentSettings(t *testing.T) {
 	defer resetA11yForTest()
 
-	a11y = a11ySettings{fontScale: 1.3, highContrast: true, swapAB: true, colorblind: "tritanopia", oneHanded: true, chordButton: "r1", slowRepeat: true}
+	a11y = a11ySettings{fontScale: 1.3, highContrast: true, swapAB: true, colorblind: "tritanopia", oneHanded: true, chordButton: "r1", slowRepeat: true, keys: map[uint8]uint8{}}
 	rows := a11yRows()
-	if len(rows) != 11 {
-		t.Fatalf("row count: got %d, want 11", len(rows))
+
+	byKind := map[a11yRowKind]a11yRow{}
+	byButton := map[uint8]a11yRow{}
+	for _, row := range rows {
+		byKind[row.kind] = row
+		if row.kind == a11yRowButton {
+			byButton[row.button] = row
+		}
 	}
-	if rows[0].value != "130%" {
-		t.Fatalf("text size row: got %q", rows[0].value)
+	if len(rows) != 4+len(a11yPanelButtons)+5 {
+		t.Fatalf("row count: got %d", len(rows))
 	}
-	if rows[1].value != "On" {
-		t.Fatalf("contrast row: got %q", rows[1].value)
+	if got := byKind[a11yRowTextSize].value; got != "130%" {
+		t.Fatalf("text size row: got %q", got)
 	}
-	if rows[2].value != "Tritanopia" {
-		t.Fatalf("palette row: got %q", rows[2].value)
+	if got := byKind[a11yRowContrast].value; got != "On" {
+		t.Fatalf("contrast row: got %q", got)
 	}
-	if rows[3].value != "Custom" {
-		t.Fatalf("layout preset row: got %q, want Custom with a single swap", rows[3].value)
+	if got := byKind[a11yRowColorblind].value; got != "Tritanopia" {
+		t.Fatalf("palette row: got %q", got)
 	}
-	if rows[4].value != "Swapped" || rows[5].value != "Normal" {
-		t.Fatalf("swap rows: got %q / %q", rows[4].value, rows[5].value)
+	if got := byKind[a11yRowLayoutPreset].value; got != "Custom" {
+		t.Fatalf("layout preset row: got %q, want Custom with a single swap", got)
 	}
-	if rows[6].value != "Default" {
-		t.Fatalf("select row: got %q", rows[6].value)
+	// A per-button row reports what the button actually sends, which is the
+	// swap preset applied: A is B and B is A under the half-applied layout.
+	if got := byButton[sdl.CONTROLLER_BUTTON_A].value; got != "B" {
+		t.Fatalf("A row under a swap: got %q, want B", got)
 	}
-	if rows[7].value != "On" {
-		t.Fatalf("one-handed row: got %q", rows[7].value)
+	if got := byButton[sdl.CONTROLLER_BUTTON_B].value; got != "A" {
+		t.Fatalf("B row under a swap: got %q, want A", got)
 	}
-	if rows[8].value != "R1" {
-		t.Fatalf("chord button row: got %q", rows[8].value)
+	if got := byButton[sdl.CONTROLLER_BUTTON_LEFTSHOULDER].value; got != "L1" {
+		t.Fatalf("L1 row: got %q", got)
 	}
-	if rows[9].value != "Slow" {
-		t.Fatalf("key repeat row: got %q", rows[9].value)
+	if got := byKind[a11yRowSelectKey].value; got != "Default" {
+		t.Fatalf("select row: got %q", got)
+	}
+	if got := byKind[a11yRowOneHanded].value; got != "On" {
+		t.Fatalf("one-handed row: got %q", got)
+	}
+	if got := byKind[a11yRowChordButton].value; got != "R1" {
+		t.Fatalf("chord button row: got %q", got)
+	}
+	if got := byKind[a11yRowSlowRepeat].value; got != "Slow" {
+		t.Fatalf("key repeat row: got %q", got)
 	}
 }
 
