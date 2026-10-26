@@ -291,3 +291,66 @@ test("resizing an element cannot stretch it past the canvas", async ({ page }) =
   expect(size.y + size.h).toBeLessThanOrEqual(720);
   expect(size).toMatchObject({ w: 280, h: 120 });
 });
+
+// Every element used to add its own mousemove/mouseup/touchmove/touchend
+// listeners to the document and never remove them, so each scene switch leaked
+// the elements it replaced and every mouse move ran one handler per element
+// ever loaded. The listeners are now shared: loading many elements and dragging
+// several of them must register at most one of each.
+test("dragging shares one set of document listeners however many elements load", async ({ page }) => {
+  const added = await page.evaluate(() => {
+    const counts = (window.__docListeners = {});
+    const original = document.addEventListener.bind(document);
+    document.addEventListener = (type, ...rest) => {
+      counts[type] = (counts[type] || 0) + 1;
+      return original(type, ...rest);
+    };
+    const elements = Array.from({ length: 30 }, (_, i) => ({
+      type: "button", text: "B" + i, x: (i % 6) * 150, y: Math.floor(i / 6) * 90, width: 120, height: 60,
+    }));
+    for (let round = 0; round < 3; round++) {
+      loadJukaApp({ Width: 1280, Height: 720, scenes: [{ name: "A", elements }, { name: "B", elements }] });
+    }
+    return counts;
+  });
+  expect(added.mousemove || 0).toBe(0);
+  expect(added.mouseup || 0).toBe(0);
+
+  const nodes = page.locator("#canvas .element");
+  for (const index of [0, 7, 21]) {
+    const box = await nodes.nth(index).boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 30, box.y + box.height / 2 + 20, { steps: 3 });
+    await page.mouse.up();
+  }
+  const after = await page.evaluate(() => window.__docListeners);
+  expect(after.mousemove).toBe(1);
+  expect(after.mouseup).toBe(1);
+});
+
+test("a mouse drag moves the element by the pointer delta and undo puts it back", async ({ page }) => {
+  await page.evaluate(() => {
+    loadJukaApp({ Width: 1280, Height: 720, scenes: [{ name: "T", elements: [{ type: "button", text: "Drag", x: 100, y: 100, width: 120, height: 60 }] }] });
+  });
+  const el = page.locator("#canvas .element").first();
+  const scale = await page.evaluate(() => canvasScale);
+  const box = await el.boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60 * scale, box.y + box.height / 2 + 40 * scale, { steps: 4 });
+  await page.mouse.up();
+  const moved = await page.evaluate(() => {
+    const e = document.querySelector("#canvas .element");
+    return [Number(e.dataset.x), Number(e.dataset.y)];
+  });
+  expect(moved[0]).toBeGreaterThan(100);
+  expect(moved[1]).toBeGreaterThan(100);
+
+  await page.keyboard.press("Control+z");
+  const restored = await page.evaluate(() => {
+    const e = document.querySelector("#canvas .element");
+    return [Number(e.dataset.x), Number(e.dataset.y)];
+  });
+  expect(restored).toEqual([100, 100]);
+});
