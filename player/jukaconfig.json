@@ -1346,7 +1346,7 @@
         },
         {
           "type": "label",
-          "text": "RetroArch writes captures into this folder. Press A to play one; start a capture from RetroArch's Quick Menu, then come back here.",
+          "text": "Captures from RetroArch's Quick Menu appear here. Press A to play one.",
           "color": "$labelColor",
           "x": 330,
           "y": 88,
