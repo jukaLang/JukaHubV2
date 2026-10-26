@@ -14,3 +14,13 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Permissions-Policy: camera=(), geolocation=(), microphone=(self)
+
+# Images that never change under the same name can be reused for a day without
+# asking the server; script.js and style.css are unhashed, so they keep
+# Netlify's default revalidation and a deploy shows up immediately.
+/background.jpg
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/favicon.png
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800
+/screenshots/*
+  Cache-Control: public, max-age=86400, stale-while-revalidate=604800

@@ -5216,9 +5216,13 @@ if (document.readyState === 'loading') {
   setupSettingsControlListeners();
 }
 
+// One measuring context for the page: creating a canvas per call is a real cost
+// when a 130-element config loads.
+let textMeasureContext = null;
+
 function calculateTextDimensions(text, fontSize, fontFamily = 'Inter, sans-serif', fontWeight = '900') {
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
+  if (!textMeasureContext) textMeasureContext = document.createElement('canvas').getContext('2d');
+  const context = textMeasureContext;
   context.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   const metrics = context.measureText(text);
   return {

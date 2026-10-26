@@ -12,6 +12,10 @@
     <meta property="og:image" content="https://generate.jukalang.com/background.jpg">
     <meta name="twitter:card" content="summary_large_image">
     <link data-rh="true" rel="icon" href="/favicon.png">
+    <!-- The default config is fetched as soon as the scripts run; starting it here
+         lets it download alongside script.js instead of after it. -->
+    <link rel="preload" href="player/jukaconfig.json" as="fetch" crossorigin="anonymous">
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
