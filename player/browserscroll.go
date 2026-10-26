@@ -33,7 +33,7 @@ const browserScrollMemoryMax = 40
 // browserScrollMemory holds the last reading row per address, with a FIFO of
 // keys for bounded eviction. Only the render/event thread reads or writes it.
 var browserScrollMemory = struct {
-	rows map[string]int32
+	rows  map[string]int32
 	order []string
 }{rows: map[string]int32{}}
 

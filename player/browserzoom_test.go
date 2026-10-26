@@ -39,8 +39,11 @@ func TestBrowserZoomScaleStepsAndClamps(t *testing.T) {
 	if got := browserZoomLabel(); got != "115%" {
 		t.Fatalf("one step in = %q, want 115%%", got)
 	}
-	if !browserZoomStep(config, elem, -1) || !browserZoomStep(config, elem, -1) {
-		t.Fatal("zoom-out was not handled")
+	// Two separate calls: joining them with || would stop after the first.
+	for i := 0; i < 2; i++ {
+		if !browserZoomStep(config, elem, -1) {
+			t.Fatalf("zoom-out step %d was not handled", i+1)
+		}
 	}
 	if got := browserZoomLabel(); got != "85%" {
 		t.Fatalf("two steps out = %q, want 85%%", got)
