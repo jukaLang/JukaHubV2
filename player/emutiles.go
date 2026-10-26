@@ -493,9 +493,9 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 		count = itoa(emuPanel.cursor+1) + " / " + itoa(len(entries))
 	}
 	UIPageHeaderDraw(renderer, config, UIPageHeader{
-		X: layout.page.X + emuPagePad,
-		Y: layout.page.Y + 16,
-		W: layout.page.W - 2*emuPagePad,
+		X:           layout.page.X + emuPagePad,
+		Y:           layout.page.Y + 16,
+		W:           layout.page.W - 2*emuPagePad,
 		Title:       "Emulators",
 		Subtitle:    emuSummary(entries),
 		Status:      count,

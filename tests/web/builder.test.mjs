@@ -376,3 +376,17 @@ test('the 60-second demo loads a controller-navigable shell in preview', async (
   // Leave the editor object overlay-free for subsequent tests.
   window.eval("clearAll()");
 });
+
+// The builder stamps every export with the config schema version the player
+// checks on load. The two constants live in different languages, so this is the
+// only thing that stops them drifting apart.
+test('the exported schemaVersion matches the player ConfigSchemaVersion', () => {
+  const go = fs.readFileSync(path.join(root, 'player/config_schema.go'), 'utf8');
+  const playerVersion = Number(/const ConfigSchemaVersion\s*=\s*(\d+)/.exec(go)?.[1]);
+  assert.ok(playerVersion >= 1, 'could not read ConfigSchemaVersion from player/config_schema.go');
+
+  const { window } = dom;
+  window.eval("clearAll()");
+  const exported = window.eval("buildEditorConfig()");
+  assert.equal(exported.schemaVersion, playerVersion, 'builder export carries the player schema version');
+});

@@ -14,12 +14,12 @@ package main
 // case takes one.
 
 import (
+	"bytes"
 	"context"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
-	"bytes"
 	"sync"
 )
 
