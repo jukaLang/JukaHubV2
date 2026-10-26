@@ -247,9 +247,6 @@ func TestBrowserSubmitOnEmptyFormOpensTheField(t *testing.T) {
 	sdl.PushEvent(&queuedKeyboard{KeyboardEvent: sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_ESCAPE}}})
 	browserActivatePageControl(renderer, config, elem, submit)
 
-	if got := browserFormQueryOf; got == nil {
-		t.Fatal("unreachable")
-	}
 	if seen := fetches(); len(seen) != 0 {
 		t.Fatalf("an empty form was submitted: %v", seen)
 	}
