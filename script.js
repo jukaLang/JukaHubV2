@@ -479,8 +479,19 @@ function persistAutoSave() {
   };
   try {
     localStorage.setItem('jukahub-autosave', JSON.stringify(data));
-  } catch (e) { /* quota exceeded */ }
+    autoSaveFailureShown = false;
+  } catch (e) {
+    // Storage is full or blocked (private window, site data disabled). Say so
+    // once: silently dropping the save means a reload loses the design.
+    if (!autoSaveFailureShown) {
+      autoSaveFailureShown = true;
+      showToast('Your browser is not letting this page save, so edits will not survive a reload. Use Export to keep your design.', 'warning');
+    }
+  }
 }
+
+// One warning per run of failures; a later successful save re-arms it.
+let autoSaveFailureShown = false;
 
 function scheduleAutoSave() {
   if (autoSaveTimer) clearTimeout(autoSaveTimer);

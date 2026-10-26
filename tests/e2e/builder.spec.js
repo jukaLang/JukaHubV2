@@ -354,3 +354,16 @@ test("a mouse drag moves the element by the pointer delta and undo puts it back"
   });
   expect(restored).toEqual([100, 100]);
 });
+
+// A full or blocked browser store used to swallow the autosave error, so a
+// reload silently lost the design. It must be said out loud, once.
+test("a failing autosave warns once instead of failing silently", async ({ page }) => {
+  await page.evaluate(() => {
+    Storage.prototype.setItem = function () { throw new DOMException("full", "QuotaExceededError"); };
+    scheduleAutoSave();
+  });
+  await expect(page.locator(".toast", { hasText: "not letting this page save" })).toHaveCount(1);
+
+  await page.evaluate(() => { persistAutoSave(); persistAutoSave(); });
+  await expect(page.locator(".toast", { hasText: "not letting this page save" })).toHaveCount(1);
+});
