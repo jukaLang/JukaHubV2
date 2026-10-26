@@ -2199,14 +2199,74 @@ function addElement(type, x, y, recordHistory = true) {
   return el;
 }
 
-function setupElementEvents(el) {
-  let isDragging = false;
+// Dragging. The pointer-move and pointer-up listeners live on the document, so
+// they are installed once and drive whichever element is being dragged. They
+// used to be added four at a time for every element: each scene switch then
+// leaked the elements it replaced, and every mouse move ran one handler per
+// element ever loaded.
+let activeDrag = null;
+let dragListenersInstalled = false;
+
+function beginElementDrag(el, clientX, clientY) {
+  // A pointer-up that never arrived (released outside the window) must not
+  // leave the previous drag hanging.
+  if (activeDrag) endElementDrag();
   // Pointer start plus the element's canvas offset at that moment. Dividing the
   // pointer delta by canvasScale keeps 1:1 tracking when the device is zoomed.
-  let dragStartX = 0, dragStartY = 0;
-  let dragStartLeft = 0, dragStartTop = 0;
-  let dragUndoBase = null;
+  activeDrag = {
+    el,
+    startX: clientX,
+    startY: clientY,
+    startLeft: el.offsetLeft,
+    startTop: el.offsetTop,
+    undoBase: captureWorkspace('move'),
+  };
+  el.style.cursor = 'grabbing';
+  installDragListeners();
+}
 
+function moveElementDrag(clientX, clientY) {
+  const drag = activeDrag;
+  if (!drag) return;
+  const el = drag.el;
+  let newX = drag.startLeft + (clientX - drag.startX) / canvasScale;
+  let newY = drag.startTop + (clientY - drag.startY) / canvasScale;
+
+  newX = Math.round(Math.max(0, Math.min(newX, canvasWidth - el.offsetWidth)));
+  newY = Math.round(Math.max(0, Math.min(newY, canvasHeight - el.offsetHeight)));
+
+  // Remove any transition effects
+  el.style.transition = 'none';
+  el.style.left = `${newX}px`;
+  el.style.top = `${newY}px`;
+  el.setAttribute('data-x', newX);
+  el.setAttribute('data-y', newY);
+}
+
+function endElementDrag() {
+  const drag = activeDrag;
+  if (!drag) return;
+  activeDrag = null;
+  drag.el.style.cursor = 'grab';
+  commitUndoSnapshot(drag.undoBase);
+  scheduleAutoSave();
+}
+
+function installDragListeners() {
+  if (dragListenersInstalled) return;
+  dragListenersInstalled = true;
+  document.addEventListener('touchmove', (event) => {
+    if (!activeDrag) return;
+    event.preventDefault();
+    const touch = event.touches[0];
+    if (touch) moveElementDrag(touch.clientX, touch.clientY);
+  }, { passive: false });
+  document.addEventListener('touchend', endElementDrag, { passive: false });
+  document.addEventListener('mousemove', (event) => moveElementDrag(event.clientX, event.clientY));
+  document.addEventListener('mouseup', endElementDrag);
+}
+
+function setupElementEvents(el) {
   // Canvas elements are part of the keyboard editing surface: Tab reaches them,
   // Enter selects, and arrow keys nudge (handled globally in the shortcuts).
   if (el.getAttribute('data-type') !== 'menu') {
@@ -2216,52 +2276,16 @@ function setupElementEvents(el) {
     el.setAttribute('aria-label', `${el.getAttribute('data-type') || 'element'}: ${label}`);
   }
 
-  // Touch events for mobile
+  // Touch events for mobile. Only the start is per element; moving and ending
+  // are shared (see beginElementDrag).
   el.addEventListener('touchstart', (event) => {
     if (previewMode) return;
     if (event.touches.length === 1) {
       event.preventDefault();
       const touch = event.touches[0];
-      dragStartX = touch.clientX;
-      dragStartY = touch.clientY;
-      dragStartLeft = el.offsetLeft;
-      dragStartTop = el.offsetTop;
-      isDragging = true;
-      dragUndoBase = captureWorkspace('move');
-      el.style.cursor = 'grabbing';
-
+      beginElementDrag(el, touch.clientX, touch.clientY);
     }
   }, { passive: false });
-
-
-  document.addEventListener('touchmove', (event) => {
-    if (!isDragging) return;
-    event.preventDefault();
-
-    const touch = event.touches[0];
-    let newX = dragStartLeft + (touch.clientX - dragStartX) / canvasScale;
-    let newY = dragStartTop + (touch.clientY - dragStartY) / canvasScale;
-
-    newX = Math.round(Math.max(0, Math.min(newX, canvasWidth - el.offsetWidth)));
-    newY = Math.round(Math.max(0, Math.min(newY, canvasHeight - el.offsetHeight)));
-
-    el.style.transition = 'none';
-    el.style.left = `${newX}px`;
-    el.style.top = `${newY}px`;
-    el.setAttribute('data-x', newX);
-    el.setAttribute('data-y', newY);
-  }, { passive: false });
-
-  document.addEventListener('touchend', () => {
-    if (isDragging) {
-      isDragging = false;
-      el.style.cursor = 'grab';
-      commitUndoSnapshot(dragUndoBase);
-      dragUndoBase = null;
-      scheduleAutoSave();
-    }
-  }, { passive: false });
-
 
   // Mouse events for dragging and resizing
   el.addEventListener('mousedown', (event) => {
@@ -2274,46 +2298,10 @@ function setupElementEvents(el) {
         return;
       }
 
-      isDragging = true;
-      dragStartX = event.clientX;
-      dragStartY = event.clientY;
-      dragStartLeft = el.offsetLeft;
-      dragStartTop = el.offsetTop;
-      dragUndoBase = captureWorkspace('move');
-      el.style.cursor = 'grabbing';
+      beginElementDrag(el, event.clientX, event.clientY);
 
       // Prevent text selection during drag
       event.preventDefault();
-    }
-  });
-
-  // Mouse move for dragging
-  document.addEventListener('mousemove', (event) => {
-    if (!isDragging) return;
-
-    let newX = dragStartLeft + (event.clientX - dragStartX) / canvasScale;
-    let newY = dragStartTop + (event.clientY - dragStartY) / canvasScale;
-
-    newX = Math.round(Math.max(0, Math.min(newX, canvasWidth - el.offsetWidth)));
-    newY = Math.round(Math.max(0, Math.min(newY, canvasHeight - el.offsetHeight)));
-
-    // Remove any transition effects
-    el.style.transition = 'none';
-
-    el.style.left = `${newX}px`;
-    el.style.top = `${newY}px`;
-    el.setAttribute('data-x', newX);
-    el.setAttribute('data-y', newY);
-  });
-
-  // Mouse up to stop dragging
-  document.addEventListener('mouseup', () => {
-    if (isDragging) {
-      isDragging = false;
-      el.style.cursor = 'grab';
-      commitUndoSnapshot(dragUndoBase);
-      dragUndoBase = null;
-      scheduleAutoSave();
     }
   });
 
