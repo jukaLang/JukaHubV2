@@ -156,22 +156,203 @@ func TestSettingsOffersScreensaverTimeout(t *testing.T) {
 	t.Fatal("Settings → General has no screensaver timeout row")
 }
 
+// pinIdleGateForTest saves and clears every input screensaverAutoTick reads
+// that is not one of its arguments: the panels behind ambientEntryBlocked, the
+// dock screen, the embedded player, the install bar, the patch label and the
+// music state. The auto-tick tests run mid-suite, so an earlier test that
+// leaves one of these raised holds the saver off silently and the tick test
+// fails for a reason it never touched — that dependency on predecessor state
+// is exactly what made the pair flaky. The install bar is reset rather than
+// restored: zeroed is the baseline every install test establishes for itself.
+// One input cannot be pinned: retroArchRunning scans /proc on Linux; it reads
+// false on the Windows suite and finds no retroarch in CI.
+func pinIdleGateForTest(t *testing.T) {
+	t.Helper()
+
+	prevOnboarding := onboarding.active
+	prevQS := qs.open
+	prevUpdate := updatePrompt.open
+	prevCompanion := companion.open
+	prevShortcuts := shortcutsOpen
+	prevClip := clipSearchOpen
+	prevGlobalSearch := globalSearchOpen
+	prevVK := virtualKeyboardActive
+	prevToolsPanel := toolsPanel.open
+	prevViewerPath := imageViewerPath
+	prevModal := patchModal
+	prevTransition := transitionPhase
+	prevFullscreen := videoFullscreen
+	prevNC := nc.open
+	prevStartOpen := tb.startOpen
+	prevProcess := processPanel.open
+	prevWifi := wifiPanel.open
+	prevIP := ipPanelOpen
+	prevEmu := emuPanel.open
+	prevGameLib := gameLib.open
+	prevGP := gpPanel.open
+	prevWinApps := winAppsPanel.open
+	prevPorts := portsPanel.open
+	prevSave := savePanel.open
+	prevCuration := curationPanel.open
+	prevChiaki := chiakiPanel.open
+	prevRA := raPanel.open
+	prevA11y := a11y.open
+	prevWP := wpOpen
+	prevSocial := socialNotifOpen
+	prevSmart := smartHomePanel.open
+	prevMem := memPanel.open
+	prevCtrlDiag := ctrldiag.open
+	prevPatchLabel := patchBusyLabel
+	embeddedPlayer.mu.Lock()
+	prevPlayerPhase := embeddedPlayer.phase
+	embeddedPlayer.mu.Unlock()
+	ambient.mu.Lock()
+	prevAmbientActive := ambient.active
+	ambient.mu.Unlock()
+	music.mu.Lock()
+	prevPlaying, prevPaused := music.playing, music.paused
+	music.mu.Unlock()
+
+	t.Cleanup(func() {
+		onboarding.active = prevOnboarding
+		qs.open = prevQS
+		updatePrompt.open = prevUpdate
+		companion.open = prevCompanion
+		shortcutsOpen = prevShortcuts
+		clipSearchOpen = prevClip
+		globalSearchOpen = prevGlobalSearch
+		virtualKeyboardActive = prevVK
+		toolsPanel.open = prevToolsPanel
+		imageViewerPath = prevViewerPath
+		patchModal = prevModal
+		transitionPhase = prevTransition
+		videoFullscreen = prevFullscreen
+		nc.open = prevNC
+		tb.startOpen = prevStartOpen
+		processPanel.open = prevProcess
+		wifiPanel.open = prevWifi
+		ipPanelOpen = prevIP
+		emuPanel.open = prevEmu
+		gameLib.open = prevGameLib
+		gpPanel.open = prevGP
+		winAppsPanel.open = prevWinApps
+		portsPanel.open = prevPorts
+		savePanel.open = prevSave
+		curationPanel.open = prevCuration
+		chiakiPanel.open = prevChiaki
+		raPanel.open = prevRA
+		a11y.open = prevA11y
+		wpOpen = prevWP
+		socialNotifOpen = prevSocial
+		smartHomePanel.open = prevSmart
+		memPanel.open = prevMem
+		ctrldiag.open = prevCtrlDiag
+		patchBusyLabel = prevPatchLabel
+		embeddedPlayer.mu.Lock()
+		embeddedPlayer.phase = prevPlayerPhase
+		embeddedPlayer.mu.Unlock()
+		ambient.mu.Lock()
+		ambient.active = prevAmbientActive
+		ambient.mu.Unlock()
+		music.mu.Lock()
+		music.playing, music.paused = prevPlaying, prevPaused
+		music.mu.Unlock()
+	})
+
+	// A scene fade left half-done by an earlier test is an on-screen event and
+	// holds the saver off, so the gate has to start from a quiet panel.
+	onboarding.active = false
+	qs.open = false
+	updatePrompt.open = false
+	companion.open = false
+	shortcutsOpen = false
+	clipSearchOpen = false
+	globalSearchOpen = false
+	virtualKeyboardActive = false
+	toolsPanel.open = false
+	imageViewerPath = ""
+	patchModal = nil
+	transitionPhase = "none"
+	videoFullscreen = false
+	nc.open = false
+	tb.startOpen = false
+	processPanel.open = false
+	wifiPanel.open = false
+	ipPanelOpen = false
+	emuPanel.open = false
+	gameLib.open = false
+	gpPanel.open = false
+	winAppsPanel.open = false
+	portsPanel.open = false
+	savePanel.open = false
+	curationPanel.open = false
+	chiakiPanel.open = false
+	raPanel.open = false
+	a11y.open = false
+	wpOpen = false
+	socialNotifOpen = false
+	smartHomePanel.open = false
+	memPanel.open = false
+	ctrldiag.open = false
+	patchBusyLabel = ""
+	embeddedPlayer.mu.Lock()
+	embeddedPlayer.phase = "idle"
+	embeddedPlayer.mu.Unlock()
+	ambient.mu.Lock()
+	ambient.active = false
+	ambient.mu.Unlock()
+	music.mu.Lock()
+	music.playing, music.paused = false, false
+	music.mu.Unlock()
+	resetInstallBar()
+}
+
+// screensaverGateBlocked names what keeps the saver from starting, so a
+// failure reports the blocking input instead of a bare "did not start". After
+// pinIdleGateForTest every line here should read clear; anything it names is
+// state that changed while the test was running, which is the diagnosis.
+func screensaverGateBlocked(config *Config) string {
+	var why []string
+	if ambientModeEnabled(config) {
+		why = append(why, "ambient mode is enabled")
+	}
+	if ambientIsActive() {
+		why = append(why, "the dock screen is active")
+	}
+	if ambientEntryBlocked(config) {
+		if retroArchRunning() {
+			why = append(why, "a retroarch process is running")
+		} else {
+			why = append(why, "a panel opened mid-test")
+		}
+	}
+	if _, _, _, playing, paused := ambientNowPlaying(); playing || paused {
+		why = append(why, "music was left playing")
+	}
+	if installInProgress() {
+		why = append(why, "an install is running")
+	}
+	if patchInstallBusy() {
+		why = append(why, "a patch install is running")
+	}
+	if len(why) == 0 {
+		return "nothing — the idle clock itself is too young"
+	}
+	return strings.Join(why, "; ")
+}
+
 // The idle check must start the saver once the configured timeout has passed,
 // and not a moment before.
 func TestScreensaverAutoTickStartsAtConfiguredTimeout(t *testing.T) {
 	withScreen(t, 1280, 720)
+	pinIdleGateForTest(t)
 	prevActive, prevFade, prevFading, prevTimeout, prevCheck := ss.active, ss.fadeAlpha, ss.fadingIn, screensaverIdleTimeout, screensaverLastCheck
-	prevTransition := transitionPhase
 	t.Cleanup(func() {
 		ss.active, ss.fadeAlpha, ss.fadingIn = prevActive, prevFade, prevFading
 		screensaverIdleTimeout, screensaverLastCheck = prevTimeout, prevCheck
-		transitionPhase = prevTransition
 	})
 	ss.active, ss.fadingIn, ss.fadeAlpha = false, false, 255
 	screensaverIdleTimeout = 25 * time.Second
-	// An earlier test may leave a scene fade half-done; a transition is an
-	// on-screen event, and it holds the saver off.
-	transitionPhase = "none"
 	config := &Config{}
 	config.Variables.Custom = map[string]interface{}{"ambientMode": false}
 
@@ -187,29 +368,22 @@ func TestScreensaverAutoTickStartsAtConfiguredTimeout(t *testing.T) {
 	noteUserInputTime(now.Add(-26 * time.Second))
 	screensaverAutoTick(config, now)
 	if !ss.active {
-		t.Fatal("screensaver did not start after the 25s timeout")
+		t.Fatalf("screensaver did not start after the 25s timeout (blocked by %s; input age %s)",
+			screensaverGateBlocked(config), userInputAge(now))
 	}
 }
 
 // Playback and background downloads are use without input: the saver waits.
 func TestScreensaverAutoTickHeldOffByActivity(t *testing.T) {
 	withScreen(t, 1280, 720)
+	pinIdleGateForTest(t)
 	prevActive, prevFade, prevFading, prevTimeout, prevCheck := ss.active, ss.fadeAlpha, ss.fadingIn, screensaverIdleTimeout, screensaverLastCheck
-	music.mu.Lock()
-	prevPlaying, prevPaused := music.playing, music.paused
-	music.mu.Unlock()
-	prevTransition := transitionPhase
 	t.Cleanup(func() {
 		ss.active, ss.fadeAlpha, ss.fadingIn = prevActive, prevFade, prevFading
 		screensaverIdleTimeout, screensaverLastCheck = prevTimeout, prevCheck
-		transitionPhase = prevTransition
-		music.mu.Lock()
-		music.playing, music.paused = prevPlaying, prevPaused
-		music.mu.Unlock()
 	})
 	ss.active, ss.fadingIn, ss.fadeAlpha = false, false, 255
 	screensaverIdleTimeout = 25 * time.Second
-	transitionPhase = "none"
 	config := &Config{}
 	config.Variables.Custom = map[string]interface{}{"ambientMode": false}
 
@@ -222,7 +396,8 @@ func TestScreensaverAutoTickHeldOffByActivity(t *testing.T) {
 	noteUserInputTime(now.Add(-5 * time.Minute))
 	screensaverAutoTick(config, now)
 	if ss.active {
-		t.Fatal("screensaver covered the panel while music was playing")
+		t.Fatalf("screensaver covered the panel while music was playing (blocked by %s)",
+			screensaverGateBlocked(config))
 	}
 }
 

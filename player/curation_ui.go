@@ -798,7 +798,20 @@ func renderCurationPanel(renderer *sdl.Renderer, config *Config) {
 
 	const padX = int32(24)
 	rowH := 8 + medH + 4 + smallH + 8
-	headerH := 18 + medH + 4 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	title := curationPanelTtl
+	switch curationPanel.page {
+	case curationPageEssentials:
+		title = "Curation Hub · Essentials"
+	case curationPageProfiles:
+		title = "Curation Hub · Profiles"
+	case curationPageVotes:
+		title = "Curation Hub · Votes"
+	}
+	header := UIPanelHeader(title, curationPageSubtitle(&curationPanel), "packages")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 
 	panelW := int32(880)
@@ -840,18 +853,10 @@ func renderCurationPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	title := curationPanelTtl
-	switch curationPanel.page {
-	case curationPageEssentials:
-		title = "Curation Hub · Essentials"
-	case curationPageProfiles:
-		title = "Curation Hub · Profiles"
-	case curationPageVotes:
-		title = "Curation Hub · Votes"
-	}
-	renderText(renderer, config, medium, title, ColorTextPrimary(), panelX+padX, panelY+18)
-	sub := curationPageSubtitle(&curationPanel)
-	renderText(renderer, config, font, ellipsize(font, sub, panelW-2*padX), ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
 	rowW := panelW - 2*padX

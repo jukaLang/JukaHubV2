@@ -183,7 +183,9 @@ func parseRSSFeed(url string) []FileEntry {
 // parseRSSFeedContext reads one feed under the caller's context, so leaving
 // the podcasts screen stops the remaining feeds instead of finishing all four.
 func parseRSSFeedContext(ctx context.Context, url string) []FileEntry {
-	data := httpGetTextContext(ctx, url, 12*time.Second)
+	// Falls back to the last-known-good copy when the network is unreachable,
+	// so an offline boot still lists the feed instead of an empty screen.
+	data := httpGetTextFallbackContext(ctx, url, 12*time.Second)
 	if data == "" {
 		return nil
 	}
@@ -690,6 +692,32 @@ func tailLines(lines []string, max int) []string {
 	return lines[len(lines)-max:]
 }
 
+// textlogEmptyState is the state card an empty variable-backed textlog draws.
+// Each variable that can reach renderTextLog has its own line so a panel never
+// claims to be loading something it is not: the Weather screen used to read
+// "Reading hardware…" because that sentence was hardcoded for all of them.
+// Variables without a specific line fall back to a neutral message.
+func textlogEmptyState(variable string) (title, body string) {
+	switch variable {
+	case "hw_text":
+		return "Reading hardware…", "Press Refresh to load a new snapshot."
+	case "weather_screen_text":
+		return "Loading forecast…", "Press Refresh to fetch the weather again."
+	case "netspeed_text":
+		return "Measuring speed…", "Press Refresh to run a new sample."
+	case "benchmark_text":
+		return "Running benchmark…", "Press Refresh to start it again."
+	case "cron_text", "startup_text":
+		return "Nothing scheduled.", "Press Refresh to rescan the crontab."
+	case "plugin_list":
+		return "No plugins installed.", "Install a package to add plugins."
+	case "terminal_text":
+		return "No output yet.", "Run a command to see its output here."
+	default:
+		return "Nothing to show yet.", "Press Refresh to load this panel."
+	}
+}
+
 func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	elemW := getElementWidth(element, 1100)
 	elemH := getElementHeight(element, 480)
@@ -707,12 +735,14 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	} else {
 		text, _ = config.Variables.Custom[element.Variable].(string)
 	}
-	// An empty textlog otherwise renders as a bare panel: give the Hardware
-	// screen (and any other variable-backed textlog) a state card while its
-	// snapshot has not arrived yet.
+	// An empty textlog otherwise renders as a bare panel: give it a state card
+	// while its value has not arrived. The copy used to be hardcoded to
+	// "Reading hardware…", which is what put that line on the Weather screen —
+	// nine different variables share this path, so each gets its own words.
 	if text == "" && element.Variable != "log_text" {
+		title, body := textlogEmptyState(element.Variable)
 		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
-			"·", "Reading hardware…", "Press Refresh to load a new snapshot.")
+			"·", title, body)
 		return
 	}
 	font, _ := getCachedFont(config, element.Font)

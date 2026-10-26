@@ -359,7 +359,6 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	medH := int32(medium.Height())
 	const padX = int32(24)
 
 	stickSize := int32(150)
@@ -371,7 +370,14 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	chipRows := int32((len(diagButtons) + 3) / 4)
 	labelH := smallH + 6
 
-	headerH := 18 + medH + 4 + smallH + 10
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height. A drifting
+	// stick or a dead button inks the subtitle in the warning colour.
+	header := UIPanelHeader("Controller test", ctrldiagSummary(), "gamepad")
+	if len(ctrldiagProblems()) > 0 {
+		header.SubtitleColor = ColorToastWarn
+	}
+	headerH := UIPanelHeaderBand(config, header, 10)
 	bodyH := stickSize + labelH + 14 + // sticks
 		(chipH + 6) + 10 + // trigger bars
 		chipRows*(chipH+chipGap) + 10
@@ -397,13 +403,10 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Controller test", ColorTextPrimary(), panelX+padX, panelY+18)
-	subColor := ColorTextTertiary()
-	if len(ctrldiagProblems()) > 0 {
-		subColor = ColorToastWarn
-	}
-	renderText(renderer, config, font, ellipsize(font, ctrldiagSummary(), panelW-2*padX),
-		subColor, panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	bodyY := panelY + headerH
 	// Sticks side by side, centred in the panel.

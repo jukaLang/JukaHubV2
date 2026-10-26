@@ -97,7 +97,8 @@ will not load (a stale association, or a router that rebooted while the handheld
 slept): the link is dropped and re-joined with the stored key.
 
 Choosing a network the device has joined before reconnects it with the stored
-key: no password prompt. A new secured network opens the on-screen keyboard,
+key: no password prompt — unless that key is rejected, which opens the same
+keyboard to retype it. A new secured network opens the on-screen keyboard,
 where the password is masked and is not trimmed (a leading or trailing space is
 part of the key). Open networks join immediately.
 
@@ -113,6 +114,11 @@ The backend is `wpa_supplicant`, driven through `wpa_cli`:
   `/sys/class/net` that contains a `wireless` directory. Images whose radio has
   an unusual name can set `JUKAHUB_WIFI_IFACE` (letters, digits, `.`, `_`, `-`
   only; the override is never used as a command).
+* **Tool lookup.** `wpa_cli` and the DHCP clients are resolved on `PATH` first
+  and then in the standard system directories (`/sbin`, `/usr/sbin`,
+  `/usr/local/sbin`, `/bin`, `/usr/bin`), because a launcher's inherited `PATH`
+  can miss the sbin folders where firmware images keep them — a tool that is
+  on the card must not read as "not installed".
 * **Scan.** `wpa_cli scan` is followed by polling `scan_results` until the list
   changes, so a cached scan is never presented as fresh. One row is shown per
   SSID: the strongest BSSID wins, and hidden networks (empty SSID) are omitted
@@ -123,7 +129,7 @@ The backend is `wpa_supplicant`, driven through `wpa_cli`:
   leaves the previous network `COMPLETED`, which naive code reads as success.
 * **Address.** The supplicant's `ip_address` is used when present. Otherwise
   JukaHub asks the firmware's DHCP client for a lease (`udhcpc` first, then
-  `dhcpcd`) and re-reads the status.
+  `dhcpcd`, then `dhclient`) and re-reads the status.
 * **Saved networks.** Reconnecting uses `select_network <id>` with the key the
   supplicant already holds; the password is never asked for again. An explicit
   reconnect issues `disconnect` first, because `select_network` is a no-op while
@@ -133,6 +139,13 @@ The backend is `wpa_supplicant`, driven through `wpa_cli`:
   current one, it is disconnected too, because its key is gone.
 * **Failed joins** remove the half-created entry, so repeated attempts do not
   fill the supplicant's list with duplicates.
+* **WPA3 and a changed router password.** A secured join offers `WPA-PSK SAE`
+  alongside the default WPA-PSK key management (and optional management-frame
+  protection), so transition and WPA3-only networks both join; a supplicant
+  built without SAE answers FAIL and simply keeps its defaults. If the
+  supplicant already holds the same SSID with a key the router rejects, the
+  keyboard opens to retype it, and the new entry replaces the old one only
+  after the new join works.
 
 Everything that forks a process runs on a worker goroutine. The render loop
 drains one result slot per frame, which is also why a slow scan or a wedged
@@ -173,6 +186,7 @@ supplicant cannot freeze the UI.
 | Message | Meaning |
 |---------|---------|
 | `Wi-Fi control needs wpa_cli, which is not installed` | the image lacks `wpa_cli`; use the stock Wi-Fi screen or add the tool |
+| `Wi-Fi is turned off` | the radio is soft-blocked (airplane mode or the Quick Settings switch); press **A** on the empty list, or flip **Wi-Fi** in Quick Settings |
 | `No wireless network interface on this device` | no radio is exposed to Linux, or the radio is powered off |
 | `could not join <name>: the password was rejected` | the key is wrong (the supplicant reached the 4-way handshake and failed) |
 | `could not join <name> (disconnected)` | out of range or the access point refused the association |
@@ -198,6 +212,11 @@ The status meter has its own coverage in `statusbar_status_test.go`: the
 `wifiMeterLevelFrom`, and the supplicant cache — an unanswered poll stays
 *unknown*, a failed poll clears the previous reading, and the caller never waits
 for the command.
+
+`wifi_resilience_test.go` covers the sbin `PATH` fallback, the radio-off scan
+message, the WPA3 offer and its fallback, the superseded-entry replacement,
+the `dhclient` lease path and the rejected-password marker — all against the
+same stubbed runner.
 
 ```sh
 cd player

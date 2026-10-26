@@ -1283,7 +1283,15 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, ellipsize(font, status, textW), ColorTextSecondary(), textX, statusY)
 
 	// Progress bar with a thumb and times on either side.
-	seekY := cardY + 138
+	//
+	// The bar follows the status line instead of sitting at a fixed offset from
+	// the card. statusY is computed from the fonts actually loaded, and the
+	// real display font (63px) pushes that line down to cardY+137 — straight
+	// through the old hardcoded bar at cardY+138, so "1x · Repeat off" painted
+	// over the track and its thumb. Deriving the bar from the line above, and
+	// the rows below from the bar, keeps all of them apart at any font size.
+	fontH := int32(font.Height())
+	seekY := statusY + fontH + 13
 	seekX := textX
 	seekW := textW
 	fillRoundedRect(renderer, seekX, seekY, seekW, 8, 4, ColorTrack)
@@ -1309,13 +1317,23 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	if duration > 0 {
 		totalText = formatTime(duration)
 	}
-	renderText(renderer, config, font, elapsedText, ColorTextSecondary(), seekX, seekY+18)
+	timeY := seekY + 16
+	renderText(renderer, config, font, elapsedText, ColorTextSecondary(), seekX, timeY)
 	tw, _, _ := font.SizeUTF8(totalText)
-	renderText(renderer, config, font, totalText, ColorTextSecondary(), seekX+seekW-int32(tw), seekY+18)
+	renderText(renderer, config, font, totalText, ColorTextSecondary(), seekX+seekW-int32(tw), timeY)
 
-	// Transport row.
-	btnY := seekY + 62
+	// Transport row, below the times. It is sized to the space the card
+	// actually has left so a large device theme font can push it down without
+	// spilling past the card's bottom edge.
+	btnY := timeY + fontH + 6
 	btnH := int32(54)
+	if overflow := btnY + btnH - (cardY + cardH - 10); overflow > 0 {
+		if btnH-overflow < 36 {
+			btnH = 36
+		} else {
+			btnH -= overflow
+		}
+	}
 	iconFont := medFont
 	playIcon := ">"
 	if playing && !paused {

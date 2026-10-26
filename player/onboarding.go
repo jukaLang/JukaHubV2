@@ -88,8 +88,16 @@ var onboarding = struct {
 	next   sdl.Rect
 	skip   sdl.Rect
 	action sdl.Rect
-	info   string
-	roms   *romScanReport
+	// card and footer are what the last frame settled on: the card's rect and
+	// the controls-hint rect, recorded so the layout test can pin the relation
+	// a Brick screenshot caught broken (the hint used to be drawn across the
+	// card's bottom border). bodyLines is the wrapped step body for the same
+	// reason: the wrap must land on word boundaries.
+	card      sdl.Rect
+	footer    sdl.Rect
+	bodyLines []string
+	info      string
+	roms      *romScanReport
 	// The "Get set up" step's live checklist: the rows, the row the D-pad is
 	// on, their hit rects and when they were last rebuilt from the device.
 	setupCursor int
@@ -125,6 +133,9 @@ func onboardingStart() {
 	onboarding.next = sdl.Rect{}
 	onboarding.skip = sdl.Rect{}
 	onboarding.action = sdl.Rect{}
+	onboarding.card = sdl.Rect{}
+	onboarding.footer = sdl.Rect{}
+	onboarding.bodyLines = nil
 	onboarding.info = ""
 	onboarding.roms = nil
 	onboarding.setupCursor = 0
@@ -583,6 +594,9 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	rise := int32((1 - progress) * 18)
 	cy += rise
 
+	// What the frame is built on, recorded for the layout test.
+	onboarding.card = sdl.Rect{X: cx, Y: cy, W: cardW, H: cardH}
+
 	// Soft shadow and card.
 	fillRoundedRect(renderer, cx+2, cy+6, cardW, cardH, 22, sdl.Color{R: 0, G: 0, B: 0, A: 90})
 	fillRoundedRect(renderer, cx, cy, cardW, cardH, 22, ColorSurfacePanel)
@@ -620,13 +634,15 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, titleY)
 
 	bodyY := titleY + int32(titleFont.Height()) + 18
+	// Two lines — the same budget the card has always had — but word-wrapped:
+	// the rune cut that was here split a word across the break ("th" over
+	// "n shows" on the Brick) and appended "…" even when nothing was cut.
+	onboarding.bodyLines = nil
 	if step.kind == "setup" {
 		onboardingRenderSetup(renderer, config, cy, cx, cardW, cardH, textX, textW, bodyY, bodyFont, smallFont, accent)
 	} else {
-		lines := wrapMeasured([]rune(step.body), textW, func(s string) int32 {
-			w, _, _ := bodyFont.SizeUTF8(s)
-			return int32(w)
-		})
+		lines := wrapTextLines(bodyFont, step.body, textW, 2)
+		onboarding.bodyLines = lines
 		lineH := int32(bodyFont.Height()) + 6
 		for i, line := range lines {
 			renderText(renderer, config, bodyFont, line, ColorTextSecondary(), textX, bodyY+int32(i)*lineH)
@@ -706,18 +722,25 @@ func renderOnboarding(renderer *sdl.Renderer, config *Config) {
 	}, UIButtonState{})
 
 	// Footer hint. Use words, not key glyphs, so it survives any controller
-	// mapping.
+	// mapping. It sits just below the card: the band between the buttons and
+	// the card's edge is 28px while the line is 22px tall on the compact canvas
+	// (30px at 1280), so anchoring it at cy+cardH-18 drew it across the card's
+	// bottom border and against the Next button. Below the card is the dimmed
+	// band — centred, and with nothing left to collide with.
 	footer := hintLine(FooterHint{"Left / Right", "Move"}, FooterHint{"A / Enter", "Next"},
 		FooterHint{"F / X", "Action"}, FooterHint{"B", "Skip"})
-	footerY := cy + cardH - 18
 	if step.kind == "setup" {
 		footer = hintLine(FooterHint{"Up / Down", "Choose"}, FooterHint{"A / Enter", "Open"},
 			FooterHint{"B", "Done"})
-		footerY = cy + cardH - 26
 	}
-	fw, _, _ := smallFont.SizeUTF8(footer)
+	fw, fh, _ := smallFont.SizeUTF8(footer)
+	footerY := cy + cardH + 10
+	if max := screenHeight - 6 - int32(fh); footerY > max {
+		footerY = max
+	}
+	onboarding.footer = sdl.Rect{X: cx + (cardW-int32(fw))/2, Y: footerY, W: int32(fw), H: int32(fh)}
 	renderText(renderer, config, smallFont, footer, WithAlpha(ColorTextTertiary(), 170),
-		cx+(cardW-int32(fw))/2, footerY)
+		onboarding.footer.X, footerY)
 }
 
 // onboardingRenderSetup draws the "Get set up" checklist: one row per optional

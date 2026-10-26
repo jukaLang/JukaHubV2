@@ -287,7 +287,11 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 
 	const padX = int32(24)
 	rowH := 8 + medH + 4 + smallH + 8
-	headerH := 18 + medH + 4 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	header := UIPanelHeader("Game Profiles", gameProfileSummary(entries, issues), "settings")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 
 	panelW := int32(880)
@@ -341,8 +345,10 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Game Profiles", ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, gameProfileSummary(entries, issues), ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	if len(entries) == 0 {
 		gameProfileRowHits = nil

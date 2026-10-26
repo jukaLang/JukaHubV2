@@ -352,6 +352,11 @@ put on the card, mirroring the box-art tree.
   not count. It is a library scan, taken when the page opens on the scene's own
   goroutine and reused for 30 seconds, so opening Settings never walks the card
   twice or blocks a frame.
+- The same figure rides on the Games Library's own header: the status line
+  under the title carries `· 12 clip(s)` (or `· no clips` on a card with none,
+  and nothing at all before the first count lands), read from that same census
+  when the panel opens — so the number is visible exactly where the previews
+  play, and the two screens can never disagree.
 
 How it behaves while you browse:
 

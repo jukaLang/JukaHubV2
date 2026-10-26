@@ -284,7 +284,7 @@ config-customizable.
 | `chat` | JukaLand chat |
 | `shortslist` | YouTube Shorts grid |
 | `canvas` | canvas sandbox |
-| `packagelist` | Package Manager list: registry packages on the left, the focused one's details on the right, and a ✓ on the rows already on the card |
+| `packagelist` | Package Manager list: registry packages on the left, the focused one's details on the right, and a ✓ on the rows already on the card; pressing an installed row offers Reinstall / Remove / Cancel |
 | `recent` | recently played |
 | `image`, `video` | image and video elements |
 | `themegallery` | theme preset picker |

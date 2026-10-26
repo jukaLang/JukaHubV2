@@ -91,10 +91,29 @@ func convertUnit(value float64, from, to, category string) (float64, bool) {
 	return result, true
 }
 
+// unitCategoryOrder is the display order of each category's units. It is a
+// slice, not a map iteration, because the order is user-visible twice: the
+// renderer picks the first and last entry as the default from/to units when a
+// category is selected, and the Left/Right keys walk the list. Go randomizes
+// map iteration order per run, so deriving this from unitConversionTable made
+// the default pair arbitrary and Left/Right jump unpredictably.
+var unitCategoryOrder = map[string][]string{
+	"length":      {"mm", "cm", "m", "km", "inch", "foot", "yard", "mile"},
+	"weight":      {"mg", "g", "kg", "lb", "oz"},
+	"temperature": {"C", "F", "K"},
+	"volume":      {"ml", "L", "gallon", "quart", "pint", "cup", "floz"},
+	"speed":       {"m/s", "km/h", "mph", "knot"},
+	"time":        {"ms", "s", "min", "hour", "day", "week", "month", "year"},
+	"data":        {"bit", "byte", "KB", "MB", "GB", "TB"},
+	"area":        {"mm2", "cm2", "m2", "km2", "inch2", "foot2", "acre", "hectare"},
+}
+
 func getUnitsForCategory(category string) []string {
-	if category == "temperature" {
-		return []string{"C", "F", "K"}
+	if order, ok := unitCategoryOrder[category]; ok {
+		return order
 	}
+	// Unknown category: fall back to the table's members so the converter still
+	// shows something rather than nothing.
 	table, ok := unitConversionTable[category]
 	if !ok {
 		return []string{}

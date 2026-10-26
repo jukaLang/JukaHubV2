@@ -169,9 +169,7 @@ func mediaPageSize(element Element, elemHeight int32) int {
 	if cols > 1 {
 		return int(cols) * int(rows)
 	}
-	rowH := int32(100)
-	gap := int32(14)
-	visible := int((elemHeight + gap) / (rowH + gap))
+	visible := int((elemHeight + searchResultRowGap) / (searchResultRowH + searchResultRowGap))
 	if visible < 1 {
 		visible = 1
 	}

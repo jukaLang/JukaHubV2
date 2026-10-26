@@ -1226,8 +1226,6 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 	if med == nil {
 		med = font
 	}
-	smallH := int32(font.Height())
-	medH := int32(med.Height())
 
 	panelW := int32(1120)
 	if panelW > screenWidth-32 {
@@ -1250,8 +1248,6 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
 	renderer.FillRect(&sdl.Rect{X: panelX + 20, Y: panelY + 1, W: panelW - 40, H: 2})
-
-	renderText(renderer, config, med, "RetroAchievements", ColorTextPrimary(), panelX+28, panelY+18)
 
 	// Header buttons are touch targets too.
 	closeW := int32(84)
@@ -1302,10 +1298,18 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 		subtitle = creds.Username + " · switching account"
 	}
 	subtitle += " · " + status
-	maxSubtitleW := raRefreshRect.X - (panelX + 28) - 16
-	renderText(renderer, config, font, ellipsize(font, subtitle, maxSubtitleW), statusCol, panelX+28, panelY+18+medH+4)
+	// The title band is the shared page header. Its width stops short of the
+	// button cluster, so the status line cannot run under Refresh/Close — the
+	// same margin this panel has always ellipsised by.
+	header := UIPanelHeader("RetroAchievements", subtitle, "favorites")
+	header.SubtitleColor = statusCol
+	headerH := UIPanelHeaderBand(config, header, 15)
+	header.X = panelX + 28
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = raRefreshRect.X - (panelX + 28) - 16
+	UIPageHeaderDraw(renderer, config, header)
 
-	contentY := panelY + 18 + medH + smallH + 22
+	contentY := panelY + headerH
 	footerY := panelY + panelH - 30
 	if raPanel.settings {
 		raRenderSettings(renderer, config, font, med, panelX+120, contentY, panelW-240, footerY-contentY-10, creds)

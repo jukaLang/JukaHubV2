@@ -460,7 +460,6 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	medH := int32(medium.Height())
 
 	panelW := int32(1040)
 	if panelW > screenWidth-48 {
@@ -475,7 +474,13 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 	compatPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
 	const padX = int32(24)
-	headerH := 18 + medH + 6 + smallH + 10
+
+	// The title band is the shared page header, measured before the body is
+	// placed so the list starts under the bar rather than under an assumption
+	// about it. The tab strip sits on the subtitle's line, so it takes its y
+	// from the same measurement.
+	header := UIPanelHeader(compatPanelTitle(), compatPanelSubtitle(games, scanning), "tools")
+	headerH := UIPanelHeaderBand(config, header, 10)
 	footerH := 18 + smallH
 	bodyY := panelY + headerH
 	bodyH := panelH - headerH - footerH
@@ -492,12 +497,14 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, compatPanelTitle(), ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, compatPanelSubtitle(games, scanning), ColorTextTertiary(), panelX+padX, panelY+18+medH+6)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	// Tab strip: two text buttons, with the active one underlined.
 	compatTabHits = nil
-	tabY := panelY + 18 + medH + 6
+	tabY := header.Y + uiPageHeaderMetricsFor(config, header).SubtitleY
 	tabX := panelX + padX + 420
 	for _, item := range []struct {
 		tab   int

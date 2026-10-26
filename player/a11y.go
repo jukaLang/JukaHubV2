@@ -654,6 +654,11 @@ const (
 	a11yRowOneHanded
 	a11yRowChordButton
 	a11yRowSlowRepeat
+	// a11yRowPowerMode steps the named Power Mode (Battery Saver / Balanced /
+	// Performance / Default). It answers for Low Power and Reduced Motion from
+	// one value, so a player picks a battery trade-off without learning two
+	// toggles; the Quick Settings row drives the same helper.
+	a11yRowPowerMode
 	a11yRowReset
 )
 
@@ -712,6 +717,7 @@ func a11yRows() []a11yRow {
 		a11yRow{label: "One-handed mode", detail: "Tap the chord button, then a direction, to press A, B, X or Y with one thumb. Tap the chord button again to cancel.", value: oneHanded, kind: a11yRowOneHanded},
 		a11yRow{label: "Chord button", detail: "The button that arms the one-handed chord. Pick one your other hand's index finger can reach.", value: a11yChordLabel(a11y.chordButton), kind: a11yRowChordButton},
 		a11yRow{label: "Key repeat", detail: "How fast a held direction repeats on the on-screen keyboard. Slow is for hands that overshoot a key.", value: repeat, kind: a11yRowSlowRepeat},
+		a11yRow{label: "Power mode", detail: "One setting for battery vs speed: Battery Saver slows the frame and cuts motion, Performance keeps both full, Default lets the Low Power and Reduced Motion toggles decide.", value: powerModeLabel(currentPowerMode(appConfig)), kind: a11yRowPowerMode},
 		a11yRow{label: "Reset to defaults", detail: "Back to 100% text, default colours, standard buttons.", value: "", kind: a11yRowReset},
 	)
 }
@@ -1013,6 +1019,16 @@ func a11yAdjust(dir int, config *Config) {
 	case a11yRowSlowRepeat:
 		a11y.slowRepeat = !a11y.slowRepeat
 		changed = true
+	case a11yRowPowerMode:
+		// Stepping the named mode reuses the Quick Settings helper, so there is
+		// still exactly one place where a mode becomes live state.
+		cur := currentPowerMode(config)
+		if config == nil {
+			config = appConfig
+		}
+		label := cyclePowerModeTo(config, nextPowerMode(cur, dir))
+		ShowToast("Power mode: "+label, ToastKindInfo)
+		changed = true
 	case a11yRowReset:
 		a11y.fontScale = 1.0
 		a11y.highContrast = false
@@ -1119,7 +1135,12 @@ func renderAccessibilityPanel(renderer *sdl.Renderer, config *Config) {
 	// third of a 720p screen and left the last settings unreachable at 130%
 	// text; this way every row fits at every scale.
 	rowH := 10 + medH + 10
-	headerH := 18 + medH + 4 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	header := UIPanelHeader(a11yPanelTitle,
+		"Applies to every screen · saved automatically", "settings")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	detailH := 10 + smallH + 10
 	footerH := 20 + smallH
 
@@ -1162,8 +1183,10 @@ func renderAccessibilityPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, a11yPanelTitle, ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, "Applies to every screen · saved automatically", ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
 	rowW := panelW - 2*padX

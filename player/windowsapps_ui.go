@@ -603,7 +603,20 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 
 	const padX = int32(24)
 	rowH := 8 + medH + 4 + smallH + 8
-	headerH := 18 + medH + 4 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height. The Setup pill
+	// sits on the title line opposite it, so the subtitle no longer has to reserve
+	// room for the pill by hand.
+	title := "Windows Apps"
+	if winAppsPanel.help {
+		title = "Windows Apps · Setup"
+	}
+	header := UIPanelHeader(title, windowsAppsSummary(entries, runtime), "apps")
+	if !runtime.ready() {
+		header.SubtitleColor = ColorWarning
+	}
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 
 	panelW := int32(900)
@@ -668,23 +681,10 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	title := "Windows Apps"
-	if winAppsPanel.help {
-		title = "Windows Apps · Setup"
-	}
-	renderText(renderer, config, medium, title, ColorTextPrimary(), panelX+padX, panelY+18)
-	summary := windowsAppsSummary(entries, runtime)
-	summaryColor := ColorTextTertiary()
-	if !runtime.ready() {
-		summaryColor = ColorWarning
-	}
-	summaryMax := panelW - 2*padX
-	if !winAppsPanel.help {
-		// Leave room for the header Setup pill.
-		summaryMax -= 90
-	}
-	renderText(renderer, config, font, ellipsize(font, summary, summaryMax),
-		summaryColor, panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	if winAppsPanel.help {
 		windowsAppRowHits = nil

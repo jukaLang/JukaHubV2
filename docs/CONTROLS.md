@@ -112,7 +112,7 @@ behaves the same in a menu as it does in a media grid.
 |--------|---------|---------|
 | Media results, Shorts grid, Apps grid | One screenful | Previous / next results page (R2 fetches it) |
 | Favourites, packages, channel / file lists | One window of rows | First / last row |
-| Text browser | Scroll a page | Top / bottom |
+| Text browser | Scroll a page | Zoom the page text out / in |
 | Wallpaper picker | Five wallpapers | First / last wallpaper |
 | Image viewer | Previous / next image | Jump ten images back / forward |
 | Notification centre, clipboard history, global search, social notifications | One window of rows | First / last row |
@@ -218,6 +218,7 @@ A text web browser for GitHub issues, release notes and documentation. See
 |--------|--------|
 | Up / Down | In scroll mode, scroll the page; at the top/bottom the focus goes to the header and the button row. In link mode, move to the nearest link on the row above/below |
 | L1 / R1 | Scroll by a page |
+| L2 / R2 (or the toolbar **zoom** chip) | Zoom the page text out / in (75%–160%); the chip shows the scale, lights up off 100%, and steps up on a tap |
 | Left / Right | Walk the links in reading order, scrolling them into view |
 | **Tab** (keyboard) or **L3** (left stick click) | Switch between scrolling the page and walking its links |
 | A | Open the highlighted link, or edit the address bar when no link is picked |

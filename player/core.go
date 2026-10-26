@@ -2947,6 +2947,11 @@ func formatUploadDate(s string) string {
 
 // --- Rendering for search results (2 columns Ã— 6 rows) ---
 func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element) {
+	// The Audio / Video / Chat pill rects are rebuilt by the list renderer
+	// every frame; clearing them here means a grid (which draws no pills), an
+	// error card or an empty state cannot answer a tap with a pill a previous
+	// frame recorded.
+	resultActionHits = resultActionHits[:0]
 	// Error state: user-facing message, never a permanent black box.
 	if errMsg, ok := config.Variables.Custom["search_error"]; ok && errMsg != nil {
 		elemWidth := getElementWidth(element, 1232)
@@ -3008,14 +3013,73 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 	renderMediaNextPageButton(renderer, config, element, videos, elemWidth, elemHeight)
 }
 
+const (
+	// searchResultRowH and searchResultRowGap are the list layout's card
+	// height and the gap under it. The renderer, the click path and the page
+	// size all measure from them, so a tap can never address a different row
+	// than the one under the finger.
+	searchResultRowH   = int32(100)
+	searchResultRowGap = int32(14)
+)
+
+// searchResultListRowRect is where the list layout draws row index at the
+// current smooth-scroll offset. Rows outside the viewport are returned too —
+// the clip hides them, and searchResultIndexAt hit-tests the one it needs.
+func searchResultListRowRect(element Element, index int) sdl.Rect {
+	return sdl.Rect{
+		X: element.X,
+		Y: element.Y + int32(index)*(searchResultRowH+searchResultRowGap) - scrollY,
+		W: getElementWidth(element, 1232),
+		H: searchResultRowH,
+	}
+}
+
+// searchResultIndexAt maps a click to the result card under it, in whichever
+// layout the element draws: the single-column list (searchResultListRowRect)
+// or the multi-column grid (the same cell math renderSearchResultsGrid uses).
+// It walks the whole loaded list — paging appends results — and returns -1
+// when the click landed on no card.
+func searchResultIndexAt(element Element, videos []VideoInfo, mx, my int32) int {
+	// The viewport owns the tap: a row scrolled under the top edge (or half
+	// under the bottom) still has geometry there that the clip hides, and a
+	// press in the control band above the results must not play it.
+	if mx < element.X || mx > element.X+getElementWidth(element, 1232) ||
+		my < element.Y || my > element.Y+getElementHeight(element, 456) {
+		return -1
+	}
+	cols, rows := gridColsRows(element)
+	if cols <= 1 {
+		for idx := range videos {
+			row := searchResultListRowRect(element, idx)
+			if mx >= row.X && mx <= row.X+row.W && my >= row.Y && my <= row.Y+row.H {
+				return idx
+			}
+		}
+		return -1
+	}
+	elemWidth := getElementWidth(element, 1232)
+	elemHeight := getElementHeight(element, 456)
+	cellWidth := (elemWidth - 30) / cols
+	cellHeight := (elemHeight - 30) / rows
+	for idx := range videos {
+		col := int32(idx) % cols
+		row := int32(idx) / cols
+		xPos := element.X + col*(cellWidth+10)
+		yPos := element.Y + row*(cellHeight+10) - scrollY
+		if mx >= xPos && mx <= xPos+cellWidth && my >= yPos && my <= yPos+cellHeight {
+			return idx
+		}
+	}
+	return -1
+}
+
 // renderSearchResultsList renders results as one readable vertical list:
 // ~100px rows with 16:9 thumbnails, one measured title line and one measured
 // metadata line (both ellipsized), and the duration badge inside the
 // thumbnail. The viewport is SDL-clipped so rows can never escape the content
 // area, and the focused row keeps its own bright cyan ring.
 func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Element, videos []VideoInfo, elemWidth, elemHeight int32) {
-	rowH := int32(100)
-	gap := int32(14)
+	rowH, gap := searchResultRowH, searchResultRowGap
 
 	maxVisibleRows := (elemHeight + gap) / (rowH + gap)
 	if maxVisibleRows < 1 {
@@ -3059,7 +3123,9 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 	// Lookahead prefetch: warm the disk cache for the next few rows so
 	// scrolling never blocks on a cold network fetch (TSP WiFi is slow).
 	for i, vid := range videos {
-		y := element.Y + int32(i)*(rowH+gap) - scrollY
+		// The same rect the click path tests, so prefetch, draw and tap
+		// can never disagree about where a row is.
+		y := searchResultListRowRect(element, i).Y
 		if y+rowH < element.Y || y > element.Y+elemHeight {
 			if i < focusedResultIndex+3 {
 				prefetchCardThumbnail(vid)
@@ -3071,11 +3137,10 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 
 	// The Audio / Video / Chat pills are recorded while drawing so a tap
 	// addresses the pill it landed on; the list is the only layout that owns
-	// Left/Right.
-	resultActionHits = resultActionHits[:0]
+	// Left/Right. Last frame's rects were cleared in renderSearchResults.
 	renderWithClip(renderer, element.X, element.Y, elemWidth, elemHeight, func(r *sdl.Renderer) {
 		for i, vid := range videos {
-			y := element.Y + int32(i)*(rowH+gap) - scrollY
+			y := searchResultListRowRect(element, i).Y
 			if y+rowH < element.Y || y > element.Y+elemHeight {
 				continue
 			}
@@ -3955,8 +4020,15 @@ func updateInputVariable(config *Config) {
 		variable := elem.Variable
 		if textBrowserSearchEditing {
 			variable = browserSearchVariable
+		} else if textBrowserFindEditing {
+			variable = browserFindVariable
 		} else if textBrowserAddressEditing {
 			variable = textBrowserURLVariable
+		} else if browserFormEditing {
+			// A field on the page. Without this the typed text went to the
+			// element's own variable — the browser's page content — so filling a
+			// search box replaced the page behind the keyboard.
+			variable = browserFormVariable
 		}
 		if variable != "" {
 			config.Variables.Custom[variable] = inputTextBuffer
@@ -6023,6 +6095,19 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		// The saved session lives on the card now, so the chip that drops it
 		// is a trigger like any other; it asks twice before it forgets.
 		browserForgetCookiesAction(config)
+	case "browser_bookmark_save":
+		// Save puts the page on screen on the saved list, so a link sent in a
+		// chat message can be reached again without retyping it.
+		browserBookmarkSaveAction(config)
+	case "browser_bookmarks":
+		// The saved-page picker: one row per page, A opens it and X removes it.
+		openBrowserBookmarkPanel(config)
+	case "browser_find":
+		// Find-on-this-page: its own keyboard, so the address bar and the
+		// web search are both left alone.
+		if elem, ok := findBrowserElement(config); ok {
+			openBrowserFind(renderer, config, elem)
+		}
 	case "browser_search":
 		// The Search chip and the Y button both open the query keyboard.
 		if elem, ok := findBrowserElement(config); ok {
@@ -6391,6 +6476,8 @@ func completeSceneTransition(config *Config) {
 
 	focusedResultIndex = -1
 	resetResultActions()
+	// A Package Manager row menu belongs to the scene it was opened on.
+	closePackageActions()
 	focusedFileIndex = 0
 	scrollY = 0
 	textBrowserScrollY = 0

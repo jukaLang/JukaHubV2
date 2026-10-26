@@ -75,4 +75,27 @@ func TestAboutSceneDrawsTheSharedChrome(t *testing.T) {
 	if n := brightPixelsInRect(f, 0, probeH-HomeFooterH-16, probeW, probeH-HomeFooterH); n > 0 {
 		t.Errorf("%d bright pixels in the gap above the footer: content overflows the panel", n)
 	}
+
+	// The guard above only counts near-white pixels, so it cannot see the
+	// licence list: that text is tertiary (dim) colour. The Open Source card
+	// used to stack eight licences in one column — 54px of title plus 8×20px of
+	// lines is 214px inside a 196px card — and the last two bled over the card's
+	// own bottom border into that gap, straight past this test. renderAbout now
+	// measures what it painted, so the overflow is caught directly: no line may
+	// reach past the card that contains it.
+	if aboutCardBottom == 0 || aboutContentBottom == 0 {
+		t.Fatalf("About reported no measurements (card=%d content=%d): the scene did not render",
+			aboutCardBottom, aboutContentBottom)
+	}
+	if aboutContentBottom > aboutCardBottom {
+		t.Errorf("About content reaches y=%d but its card ends at y=%d: %dpx of text overflows the card",
+			aboutContentBottom, aboutCardBottom, aboutContentBottom-aboutCardBottom)
+	}
+
+	// And the licences themselves must be where the two-column layout puts them:
+	// inside the card, never in the footer gap.
+	if aboutContentBottom > probeH-HomeFooterH {
+		t.Errorf("About content reaches y=%d, past the footer boundary at y=%d",
+			aboutContentBottom, probeH-HomeFooterH)
+	}
 }

@@ -491,6 +491,10 @@ type UIPageHeader struct {
 	// centred header it becomes a third stacked line.
 	Status      string
 	StatusColor sdl.Color
+	// SubtitleColor inks the subtitle line; the zero value means the dimmed
+	// tertiary ink every page uses, so a panel that used to warn in amber keeps
+	// warning in amber.
+	SubtitleColor sdl.Color
 	// TitleRole picks the title's font role ("big", "medium" or "small"; the
 	// zero value means medium); TitleSize overrides its pixel size.
 	TitleRole    string
@@ -600,6 +604,48 @@ func uiPageHeaderMetricsFor(config *Config, h UIPageHeader) UIPageHeaderMetrics 
 	return m
 }
 
+// UIPanelHeaderInset is how far a full-screen panel's shared header starts
+// below its top edge. A panel that laid its title out by hand put it 18px down
+// and the component puts its own title 5px inside the band, so a band drawn at
+// 13 lands the title exactly where it used to be.
+const UIPanelHeaderInset int32 = 13
+
+// UIPanelHeaderBand is a panel's whole header band: the inset, the measured
+// height of the bar that UIPanelHeaderInset positions, and the trailing gap
+// before the body starts. The hand-rolled band was "18 + medH + 4 + smallH +
+// trailing"; this is the same number expressed through the component, so a
+// panel sizes itself from the same geometry that draws it.
+func UIPanelHeaderBand(config *Config, h UIPageHeader, trailing int32) int32 {
+	return UIPanelHeaderInset + uiPageHeaderMetricsFor(config, h).Height + trailing
+}
+
+// UIPanelHeader is the header a full-screen panel opens with: the same bar a
+// page opens with — a tinted glyph well, the title, the subtitle and (via its
+// Status field) any read-out opposite — built once so the band a panel
+// reserves and the bar it draws are one measurement.
+//
+// Save Manager, the Games library, Curation, Downloads and the rest each used
+// to lay this band out by hand, with their own offsets and their own idea of
+// where the subtitle goes. They build one of these now and hand it to
+// UIPanelHeaderBand and UIPageHeaderDraw, which are the only code that
+// measures and paints it.
+func UIPanelHeader(title, subtitle, glyph string) UIPageHeader {
+	h := UIPageHeader{
+		Title:    title,
+		Subtitle: subtitle,
+		// The title size every page header uses, so a panel and a page agree on
+		// what a title looks like when a bug report shows both.
+		TitleSize: menuTitleSize,
+	}
+	if glyph != "" {
+		name := glyph
+		h.Glyph = func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+			DrawHomeIcon(r, name, box, false)
+		}
+	}
+	return h
+}
+
 // UIPageHeaderDraw paints the band and returns the y where the page's content
 // starts, so a caller never has to re-derive the header's height.
 func UIPageHeaderDraw(renderer *sdl.Renderer, config *Config, h UIPageHeader) int32 {
@@ -645,7 +691,11 @@ func UIPageHeaderDraw(renderer *sdl.Renderer, config *Config, h UIPageHeader) in
 		renderText(renderer, config, title, ellipsize(title, h.Title, avail), ColorTextPrimary(), textX, h.Y+m.TitleY)
 	}
 	if sub != nil && strings.TrimSpace(h.Subtitle) != "" {
-		renderText(renderer, config, sub, ellipsize(sub, h.Subtitle, h.W), ColorTextTertiary(), h.X, h.Y+m.SubtitleY)
+		color := h.SubtitleColor
+		if color.A == 0 {
+			color = ColorTextTertiary()
+		}
+		renderText(renderer, config, sub, ellipsize(sub, h.Subtitle, h.W), color, h.X, h.Y+m.SubtitleY)
 	}
 	if status != nil && strings.TrimSpace(h.Status) != "" {
 		color := h.StatusColor

@@ -180,3 +180,55 @@ func TestExportDiagnosticsBundleWritesIntoReports(t *testing.T) {
 		}
 	}
 }
+
+// TestDiagnosticsBundleCarriesTheCookieSession pins the two cookie facts a bug
+// report needs: when the session on the card began — the oldest stamp still
+// there, with the year and its age in days so a retention contradiction is
+// visible at a glance — and the window that prunes it. Both are the figures
+// Settings → General shows, so the reporter recognises what they saw, and the
+// section sits with the report, before the log a maintainer scrolls to.
+func TestDiagnosticsBundleCarriesTheCookieSession(t *testing.T) {
+	withTempPatchState(t)
+	path := useTempBrowserCookiePath(t)
+	prevConfig := appConfig
+	appConfig = retentionConfig(0) // keep everything while the file loads
+	t.Cleanup(func() { appConfig = prevConfig })
+
+	writeCookieFile(t, path, []browserCookieRecord{
+		{Host: "example.com", Path: "/", Name: "session", Value: "a", FirstSeen: ageInDays(40)},
+	})
+	simulateBrowserRelaunch()
+	since, ok := browserSessionSince()
+	if !ok {
+		t.Fatal("the jar holds a stamped cookie but reports no session start")
+	}
+
+	bundle := DiagnosticsBundleText(retentionConfig(30))
+	want := "Session start: " + since.Local().Format("Jan 2 2006") + " (40 days ago)"
+	if !strings.Contains(bundle, want) {
+		t.Errorf("bundle lacks %q:\n%s", want, bundle)
+	}
+	if !strings.Contains(bundle, "Retention    : 30 days") {
+		t.Errorf("bundle lacks the retention window:\n%s", bundle)
+	}
+	if i, j := strings.Index(bundle, "Saved cookies"), strings.Index(bundle, "Recent log"); i < 0 || j < 0 || i > j {
+		t.Errorf("the cookie section is not between the report and the log (i=%d, j=%d)", i, j)
+	}
+}
+
+// TestDiagnosticsBundleReportsNoSessionHonestly: a card with no cookies says
+// so instead of quoting a zero date, and the shipped window spells itself the
+// way Settings spells it, so the report cannot be read as a policy that was
+// never chosen.
+func TestDiagnosticsBundleReportsNoSessionHonestly(t *testing.T) {
+	withTempPatchState(t)
+	useTempBrowserCookiePath(t)
+
+	bundle := DiagnosticsBundleText(nil)
+	if !strings.Contains(bundle, "Session start: none stored") {
+		t.Errorf("the empty jar's bundle lacks its line:\n%s", bundle)
+	}
+	if !strings.Contains(bundle, "Retention    : Keep") {
+		t.Errorf("bundle does not spell the shipped window as Keep:\n%s", bundle)
+	}
+}

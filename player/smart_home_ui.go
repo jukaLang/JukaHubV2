@@ -424,7 +424,11 @@ func renderSmartHomePanel(renderer *sdl.Renderer, config *Config) {
 
 	const padX = int32(24)
 	rowH := smartHomePanelRowHeight(medH)
-	headerH := 18 + medH + 4 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	header := UIPanelHeader("Smart Home", smartHomePanelSubtitle(config, snap), "apps")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	detailH := 10 + smallH + 10
 	footerH := 20 + smallH
 
@@ -467,9 +471,10 @@ func renderSmartHomePanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Smart Home", ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, ellipsize(font, smartHomePanelSubtitle(config, snap), panelW-2*padX),
-		ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
 	rowW := panelW - 2*padX

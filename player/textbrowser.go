@@ -140,6 +140,11 @@ var textBrowserAddressSubmitted bool
 var textBrowserSearchEditing bool
 var textBrowserSearchSubmitted bool
 
+// Find-in-page uses its own buffer and flags for the same reason: a search
+// *within* the page on screen must never touch the address bar or navigate.
+var textBrowserFindEditing bool
+var textBrowserFindSubmitted bool
+
 // renderTextBrowser renders a scrollable text panel, including readable web pages.
 func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) {
 	defer func() {
@@ -154,6 +159,9 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	// route that can change it — link click, address bar, reload, auto-refresh.
 	if textBrowserElementSource(element) == textBrowserSourceWeb {
 		browserSyncForgetChip(config)
+		// Save and Marks carry live state the same way: whether the page on
+		// screen is already saved, and how many pages the list holds.
+		browserSyncBookmarkChips(config)
 	}
 
 	elemW := getElementWidth(element, 1100)
@@ -282,6 +290,9 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			renderText(renderer, config, labelFont, ts, sdl.Color{R: 255, G: 255, B: 255, A: 180}, tsX, textY)
 			rightEdge = tsX - 12
 		}
+		// A zoomed page names its scale on the toolbar chip (see the zoom
+		// chip below), which is the one place the reader both reads and
+		// changes it. The header stays free for the page's own status.
 		if text != "" && totalLines > 0 && !loading {
 			lineInfo := ""
 			if totalLines > maxLines {
@@ -329,7 +340,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 
 	contentTop := element.Y + 8 + headerH
 	if source == textBrowserSourceWeb {
-		addressRect, modeRect, searchRect, goRect, filterRect := textBrowserToolbarLayout(element)
+		addressRect, modeRect, searchRect, goRect, filterRect, zoomRect := textBrowserToolbarLayout(config, element)
 		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
 		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, 1, sdl.Color{R: 93, G: 110, B: 138, A: 210})
 		address := textBrowserAddress(config)
@@ -396,6 +407,25 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				renderText(renderer, config, labelFont, label, ink,
 					modeRect.X+(modeRect.W-int32(mw))/2, modeRect.Y+(modeRect.H-int32(mh))/2)
 			}
+			if zoomRect.W > 0 {
+				// The zoom chip names the reader's text scale and steps it on a
+				// tap. Accent when it is off 100% (so a scaled page is visibly
+				// a setting, not the site), quiet at normal size.
+				label := browserZoomLabel()
+				fill := sdl.Color{R: 36, G: 45, B: 63, A: 255}
+				ink := sdl.Color{R: 155, G: 170, B: 195, A: 255}
+				border := sdl.Color{R: 93, G: 110, B: 138, A: 170}
+				if browserZoomScale() != 1.0 {
+					fill = sdl.Color{R: 24, G: 58, B: 66, A: 255}
+					ink = WithAlpha(accentColor, 240)
+					border = WithAlpha(accentColor, 170)
+				}
+				fillRoundedRect(renderer, zoomRect.X, zoomRect.Y, zoomRect.W, zoomRect.H, 6, fill)
+				strokeRoundedRect(renderer, zoomRect.X, zoomRect.Y, zoomRect.W, zoomRect.H, 6, 1, border)
+				zw, zh, _ := labelFont.SizeUTF8(label)
+				renderText(renderer, config, labelFont, label, ink,
+					zoomRect.X+(zoomRect.W-int32(zw))/2, zoomRect.Y+(zoomRect.H-int32(zh))/2)
+			}
 		}
 		contentTop += textBrowserURLBarHeight + 4
 	}
@@ -410,6 +440,14 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 	if textBrowserScrollY > scrollMax {
 		textBrowserScrollY = scrollMax
+	}
+	// A Back/Forward/Reload restore fires here: on the first frame the styled
+	// page (and with it a real scrollMax) is actually drawn, the reader is put
+	// back where they left that page. While the page is still on the wire
+	// styledLayout is nil and the scroll stays at the top, which is correct —
+	// there is nothing to place yet.
+	if styledLayout != nil {
+		browserScrollPendingApply(textBrowserAddress(config), scrollMax)
 	}
 
 	startIdx := int(textBrowserScrollY)
@@ -431,6 +469,9 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		}, int(textBrowserScrollY))
 		// Above the page, below the toolbar: the D-pad's current link.
 		browserDrawPageLinkFocus(renderer, element, styledLayout, int(textBrowserScrollY), contentTop+4, contentH)
+		// Then the in-page search's own marks, so the current match is never
+		// covered by a link outline drawn over it.
+		browserDrawPageFind(renderer, element, styledLayout, int(textBrowserScrollY), contentTop+4, contentH)
 	} else if loading {
 		drawTextBrowserLoading(renderer, config, element, contentTop, contentH, accentColor)
 	} else {
@@ -513,6 +554,48 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			renderer.FillRect(&sdl.Rect{X: barX + 1, Y: thumbY + 2, W: 2, H: thumbH - 4})
 		}
 	}
+
+	// A running find names itself in the top-right of the page, so the reader
+	// can see which match they are on without leaving the text. It is drawn
+	// last: a pill over the page is chrome, and the page's own highlights must
+	// not paint over it.
+	if textBrowserElementSource(element) == textBrowserSourceWeb && browserFind.active {
+		browserDrawFindStatus(renderer, config, element)
+	}
+}
+
+// browserDrawFindStatus paints the in-page search's status pill: the query and
+// how many times it matches, with the reader's place in that count. It sits at
+// the top-right of the page area, which is the corner the reader's eye already
+// uses for the line counter in the header. The pill is clamped to the panel so
+// a long query cannot run off the edge of the screen.
+func browserDrawFindStatus(renderer *sdl.Renderer, config *Config, element Element) {
+	label := browserFindChipLabel()
+	if label == "" {
+		return
+	}
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	elemW := getElementWidth(element, 1100)
+	padX := int32(10)
+	tw, th, err := font.SizeUTF8(label)
+	if err != nil || tw <= 0 {
+		return
+	}
+	pillW := int32(tw) + padX*2
+	pillH := int32(th) + 8
+	// Top-right of the content area, just under the toolbar.
+	pillX := element.X + elemW - 8 - pillW
+	if limit := element.X + elemW - 8; pillX+pillW > limit {
+		pillX = limit - pillW
+	}
+	pillY := element.Y + 8 + 28 + textBrowserURLBarHeight + 6
+
+	fillRoundedRect(renderer, pillX, pillY, pillW, pillH, 6, WithAlpha(ColorPanelRaised, 235))
+	strokeRoundedRect(renderer, pillX, pillY, pillW, pillH, 6, 1, WithAlpha(ColorWarning, 200))
+	renderText(renderer, config, font, label, ColorTextPrimary(), pillX+padX, pillY+4)
 }
 
 // drawTextBrowserLoading paints the placeholder shown while a page is still on
@@ -646,13 +729,17 @@ func textBrowserAddress(config *Config) string {
 }
 
 const (
+	// The three widths below are fallbacks for the one moment no font exists
+	// yet (a layout before the first frame); every real frame sizes the chips
+	// from the labels they draw — see textBrowserToolbarLayout.
 	textBrowserGoWidth     = int32(64)
 	textBrowserSearchWidth = int32(84)
-	// textBrowserModeWidth fits the widest chip label ("SCROLL") at the small
-	// font: the chip names the D-pad's job rather than showing an icon, because
-	// the three words it can say are all shorter than a legend.
-	textBrowserModeWidth = int32(80)
-	textBrowserBarGap    = int32(8)
+	textBrowserModeWidth   = int32(80)
+	textBrowserZoomWidth   = int32(56)
+	textBrowserBarGap      = int32(8)
+	// textBrowserChipPad is the breathing room either side of a chip's label
+	// when the width is measured rather than guessed.
+	textBrowserChipPad = int32(8)
 )
 
 // textBrowserModeChipLabel is the D-pad mode in one word: the toolbar chip and
@@ -681,21 +768,27 @@ func textBrowserFilterWidth(width int32) int32 {
 }
 
 // textBrowserToolbarRects lays out the web toolbar: the address field and Go.
-func textBrowserToolbarRects(element Element) (address, goButton sdl.Rect) {
-	address, _, _, goButton, _ = textBrowserToolbarLayout(element)
+func textBrowserToolbarRects(config *Config, element Element) (address, goButton sdl.Rect) {
+	address, _, _, goButton, _, _ = textBrowserToolbarLayout(config, element)
 	return
 }
 
 // textBrowserFilterRect is the ad-filter chip's hit area.
-func textBrowserFilterRect(element Element) sdl.Rect {
-	_, _, _, _, filter := textBrowserToolbarLayout(element)
+func textBrowserFilterRect(config *Config, element Element) sdl.Rect {
+	_, _, _, _, filter, _ := textBrowserToolbarLayout(config, element)
 	return filter
 }
 
 // textBrowserModeRect is the D-pad mode chip's hit area.
-func textBrowserModeRect(element Element) sdl.Rect {
-	_, mode, _, _, _ := textBrowserToolbarLayout(element)
+func textBrowserModeRect(config *Config, element Element) sdl.Rect {
+	_, mode, _, _, _, _ := textBrowserToolbarLayout(config, element)
 	return mode
+}
+
+// textBrowserZoomRect is the text-zoom chip's hit area.
+func textBrowserZoomRect(config *Config, element Element) sdl.Rect {
+	_, _, _, _, _, zoom := textBrowserToolbarLayout(config, element)
+	return zoom
 }
 
 // textBrowserScrollLimit is the last scroll row for an element, measured the
@@ -721,30 +814,63 @@ func textBrowserScrollLimit(config *Config, element Element) int32 {
 	return 0
 }
 
-func textBrowserToolbarLayout(element Element) (address, mode, search, goButton, filter sdl.Rect) {
+func textBrowserToolbarLayout(config *Config, element Element) (address, mode, search, goButton, filter, zoom sdl.Rect) {
 	width := getElementWidth(element, 1100)
 	y := element.Y + 36
 	h := textBrowserURLBarHeight - 4
-	// Full row: address, Search, Go, filter, mode. A narrow panel gives up
-	// controls in order of what has another way in: Search first (Y opens it,
-	// and the address bar still takes typed queries), then the filter chip,
-	// then the mode chip — which is last because it is the only control that
-	// explains what the D-pad will do.
+	// Chips are sized from the labels they will draw, measured in the same
+	// "small" font the renderer draws them with — not from fixed pixels. The
+	// old constants were narrower than their own labels ("SEARCH" is 97px and
+	// "SCROLL" 94px at the 1280 type scale, against 84/80px chips), so both
+	// words spilled past the chip's border and read as broken chrome; and
+	// fixed pixels do not follow the canvas, so on the 960 panel they ate a
+	// disproportionate share of the row and truncated URLs the Smart Pro shows
+	// in full. A measured chip keeps its padding at every canvas and at every
+	// accessibility text-size step, and it shrinks on compact panels in step
+	// with the labels, which scale with the panel. The mode chip is sized for
+	// "SCROLL", the widest of its three words, so switching modes does not
+	// resize the row under the user's finger.
+	labelFont, _ := getCachedFont(config, "small")
+	chipWidth := func(label string, fallback int32) int32 {
+		if labelFont == nil {
+			return fallback
+		}
+		if tw, _, err := labelFont.SizeUTF8(label); err == nil && tw > 0 {
+			return int32(tw) + 2*textBrowserChipPad
+		}
+		return fallback
+	}
+	goW := chipWidth("GO", textBrowserGoWidth)
+	searchW := chipWidth("SEARCH", textBrowserSearchWidth)
+	modeW := chipWidth("SCROLL", textBrowserModeWidth)
+	// The zoom chip is sized for its widest word ("160%") so cycling steps
+	// does not resize the row under the user's finger.
+	zoomW := chipWidth("160%", textBrowserZoomWidth)
+	// Full row: address, Search, Go, filter, mode, zoom. A narrow panel gives
+	// up controls in order of what has another way in: the zoom chip first
+	// (the keyboard's -/+ and the L2/R2 triggers already step it, and the
+	// header names the scale), then Search (Y opens it, and the address bar
+	// still takes typed queries), then the filter chip, then the mode chip —
+	// which is last because it is the only control that explains what the
+	// D-pad will do.
 	filterW := textBrowserFilterWidth(width)
-	modeW := textBrowserModeWidth
-	addressW := width - textBrowserGoWidth - textBrowserSearchWidth - filterW - modeW - textBrowserBarGap*4 - 16
-	showSearch, showFilter, showMode := true, true, true
+	addressW := width - goW - searchW - filterW - modeW - zoomW - textBrowserBarGap*5 - 16
+	showZoom, showSearch, showFilter, showMode := true, true, true, true
+	if addressW < 160 {
+		showZoom = false
+		addressW = width - goW - searchW - filterW - modeW - textBrowserBarGap*4 - 16
+	}
 	if addressW < 160 {
 		showSearch = false
-		addressW = width - textBrowserGoWidth - filterW - modeW - textBrowserBarGap*3 - 16
+		addressW = width - goW - filterW - modeW - textBrowserBarGap*3 - 16
 	}
 	if addressW < 160 {
 		showFilter = false
-		addressW = width - textBrowserGoWidth - modeW - textBrowserBarGap*2 - 16
+		addressW = width - goW - modeW - textBrowserBarGap*2 - 16
 	}
 	if addressW < 160 {
 		showMode = false
-		addressW = width - textBrowserGoWidth - textBrowserBarGap - 16
+		addressW = width - goW - textBrowserBarGap - 16
 	}
 	if addressW < 80 {
 		addressW = 80
@@ -753,10 +879,10 @@ func textBrowserToolbarLayout(element Element) (address, mode, search, goButton,
 	address = sdl.Rect{X: element.X + 8, Y: y, W: addressW, H: h}
 	cursor := address.X + address.W + textBrowserBarGap
 	if showSearch {
-		search = sdl.Rect{X: cursor, Y: y, W: textBrowserSearchWidth, H: h}
+		search = sdl.Rect{X: cursor, Y: y, W: searchW, H: h}
 		cursor = search.X + search.W + textBrowserBarGap
 	}
-	goButton = sdl.Rect{X: cursor, Y: y, W: textBrowserGoWidth, H: h}
+	goButton = sdl.Rect{X: cursor, Y: y, W: goW, H: h}
 	cursor = goButton.X + goButton.W + textBrowserBarGap
 	if showFilter {
 		filter = sdl.Rect{X: cursor, Y: y, W: filterW, H: h}
@@ -764,14 +890,52 @@ func textBrowserToolbarLayout(element Element) (address, mode, search, goButton,
 	}
 	if showMode {
 		mode = sdl.Rect{X: cursor, Y: y, W: modeW, H: h}
+		cursor = mode.X + mode.W + textBrowserBarGap
+	}
+	if showZoom {
+		zoom = sdl.Rect{X: cursor, Y: y, W: zoomW, H: h}
 	}
 	return
 }
 
 // textBrowserSearchRect is the Search chip's hit area.
-func textBrowserSearchRect(element Element) sdl.Rect {
-	_, _, search, _, _ := textBrowserToolbarLayout(element)
+func textBrowserSearchRect(config *Config, element Element) sdl.Rect {
+	_, _, search, _, _, _ := textBrowserToolbarLayout(config, element)
 	return search
+}
+
+const (
+	// textBrowserTouchMin is the smallest area the browser's own chrome offers
+	// a finger, from the touch-target audit in MODERNIZATION.md (Phase 8). The
+	// drawn chips are 32px tall and the cookie strip is a font height — fine
+	// for a D-pad, short for a fingertip on the Brick's panel — so every tap
+	// test grows its rect to this height while the drawn size stays put.
+	textBrowserTouchMin = int32(44)
+)
+
+// textBrowserTouchTarget grows a drawn chrome rect to the touch minimum,
+// centred vertically. Only hit-testing uses it: the layout stays the single
+// source of the drawn geometry, and the growth never touches X or W, so the
+// 8px gaps that keep neighbours apart still do their job.
+func textBrowserTouchTarget(r sdl.Rect) sdl.Rect {
+	if r.W <= 0 || r.H <= 0 || r.H >= textBrowserTouchMin {
+		return r
+	}
+	grow := (textBrowserTouchMin - r.H + 1) / 2
+	r.Y -= grow
+	r.H += grow * 2
+	return r
+}
+
+// textBrowserToolbarTapRects is the toolbar's hit areas: the layout's drawn
+// rects, each grown to a finger's reach (textBrowserTouchTarget). The click
+// path in main.go uses these; the renderer uses the layout directly, so a
+// chip can be easy to hit without looking like a different chip.
+func textBrowserToolbarTapRects(config *Config, element Element) (address, search, filter, mode, zoom, goButton sdl.Rect) {
+	address, mode, search, goButton, filter, zoom = textBrowserToolbarLayout(config, element)
+	return textBrowserTouchTarget(address), textBrowserTouchTarget(search),
+		textBrowserTouchTarget(filter), textBrowserTouchTarget(mode), textBrowserTouchTarget(zoom),
+		textBrowserTouchTarget(goButton)
 }
 
 // loadTextBrowserURL is the address-bar entry point: it records the page in
@@ -809,9 +973,25 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		showToast("Enter a valid http:// or https:// address.", ToastError())
 		return
 	}
+	// Remember where the reader was on the page being left, so Back can
+	// return them there. This reads the address before it is overwritten, so
+	// "from" is the page still on screen.
+	browserScrollMemorySave(textBrowserAddress(config), textBrowserScrollY)
 	config.Variables.Custom[textBrowserURLVariable] = address
 	textBrowserScrollY = 0
 	textBrowserScrollVelocity = 0
+	// An in-page search belongs to the page it was run against. Navigating
+	// leaves the old match list pointing at rows that no longer exist, so the
+	// search ends with the page.
+	browserFindReset()
+	// Back, Forward and Reload return to a page the reader was already on, so
+	// arm a restore to where they left it. A fresh navigation (a typed
+	// address, a link, Home) is a new place and starts at the top.
+	if recordHistory {
+		browserScrollPendingClear()
+	} else {
+		browserScrollPendingSet(address)
+	}
 	// The toolbar's filter chip belongs to the address being opened, not to the
 	// page still on screen: a reload after turning filtering off shows the new
 	// state immediately.

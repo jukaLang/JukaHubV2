@@ -304,7 +304,6 @@ func renderProcessPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	medH := int32(medium.Height())
 	const padX = int32(24)
 	lineH := smallH + 8
 	visible := 12
@@ -318,7 +317,14 @@ func renderProcessPanel(renderer *sdl.Renderer, config *Config) {
 		visible = 1
 	}
 
-	headerH := 18 + medH + 4 + smallH + 10
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	sub := fmt.Sprintf("%d running · busiest first", len(processPanel.rows))
+	if processPanel.err != "" {
+		sub = "Process list unavailable: " + firstLine(processPanel.err)
+	}
+	header := UIPanelHeader("Processes", sub, "apps")
+	headerH := UIPanelHeaderBand(config, header, 10)
 	tableHeadH := smallH + 8
 	footerH := 20 + smallH
 	panelW := int32(760)
@@ -342,12 +348,10 @@ func renderProcessPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Processes", ColorTextPrimary(), panelX+padX, panelY+18)
-	sub := fmt.Sprintf("%d running · busiest first", len(processPanel.rows))
-	if processPanel.err != "" {
-		sub = "Process list unavailable: " + firstLine(processPanel.err)
-	}
-	renderText(renderer, config, font, sub, ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	colPID := panelX + padX
 	colCPU := colPID + 90

@@ -681,7 +681,11 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 	// The focused row's stroke and the detail line's descenders both need room;
 	// a tighter row clipped "Ready to stream" at the bottom edge.
 	rowH := 10 + medH + 4 + smallH + 10
-	headerH := 18 + medH + 4 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	header := UIPanelHeader("PS Remote Play", psPanelSubtitle(), "gamepad")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 
 	panelW := int32(820)
@@ -723,9 +727,10 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "PS Remote Play", ColorTextPrimary(), panelX+padX, panelY+18)
-	subtitle := psPanelSubtitle()
-	renderText(renderer, config, font, subtitle, ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
 	rowW := panelW - 2*padX

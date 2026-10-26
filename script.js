@@ -3475,6 +3475,12 @@ function applyElementConfigAttributes(el, data) {
 // The single source of truth for both exporters, so the JSON and XML exports can
 // never drift apart again. The config the browser serialises is the same shape
 // the player's loaders accept, including the metadata fields they both read.
+// CONFIG_SCHEMA_VERSION is the config format the player checks on load
+// (player/config_schema.go ConfigSchemaVersion, currently 1). The builder stamps
+// every export with it so the player can tell how old a file is and migrate
+// forward; a file from the future is refused rather than half-read.
+const CONFIG_SCHEMA_VERSION = 1;
+
 function buildEditorConfig() {
   // Export must reflect the live canvas: scenes[] only holds snapshots taken by
   // undo/autosave/scene operations, so sync before serialising.
@@ -3487,6 +3493,13 @@ function buildEditorConfig() {
   if (Object.keys(fontSizes).length > 0) exportedVariables.fontSizes = fontSizes;
 
   return Object.assign({}, importedConfig.top, {
+    // Stamp the config schema version the player checks on load. Without this a
+    // builder export carried no version, so the player could not tell how old
+    // the file was and the migration path had nothing to key off. 1 is the
+    // current format (player/config_schema.go ConfigSchemaVersion); it is copied
+    // from an imported file when one already carries a version so re-exporting
+    // an older design does not silently downgrade its stamp.
+    schemaVersion: importedConfig.top && importedConfig.top.schemaVersion || CONFIG_SCHEMA_VERSION,
     // The player reads Width/Height for its logical canvas. The builder's size
     // controls therefore have to be written here, not only applied to the CSS
     // canvas, or a design authored at 1024x768 still loaded as 1280x720.

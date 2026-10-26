@@ -149,11 +149,12 @@ func biosDoctorSummary(report biosDoctorReport) string {
 }
 
 func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf.Font,
-	panelX, panelY, panelW, panelH, padX int32, report biosDoctorReport) {
+	panelX, panelY, panelW, panelH, padX, headerH int32, report biosDoctorReport) {
 	contentX := panelX + padX
 	contentW := panelW - 2*padX
 	lineH := int32(font.Height()) + 7
-	y := panelY + 96
+	// Under the shared page header's measured band, not a number guessed here.
+	y := panelY + headerH + 16
 	lines := []string{fmt.Sprintf("Checked %d location(s) · hashed %d file(s)", len(report.Roots), len(report.Files)), "SHA-256 fingerprints · filenames indicate presence, not authenticity", ""}
 	for _, system := range report.Systems {
 		if system.Ready {

@@ -27,9 +27,13 @@ Open it from **Apps → Browser** or **Start → Browser**.
   12 MB of text and images), so returning to a page is instant instead of
   re-downloading it. **Reload** always asks the server again and replaces that
   cached copy.
-* Open on the project repository, with quick links for the issue list and a
-  new issue form for `jukaLang/JukaHubV2`. The start page is a real page the
-  reader can draw; **Search** (Y) opens a DuckDuckGo Lite search instead.
+* Open on DuckDuckGo Lite (`lite.duckduckgo.com/lite/`), which is
+  server-rendered and so readable in the text browser, with the search box the
+  first thing on screen. The first open in a run always goes there: a page the
+  last run left behind in the saved config is not something this session chose.
+  **Home** returns to the start page at any time, **Search** (Y) opens a
+  DuckDuckGo Lite query, and **Issues** jumps to `jukaLang/JukaHubV2`'s issue
+  list.
 * Draw the first part of a big page instead of refusing it: a page larger than
   8 MiB is cut at the cap and the top of the page says so.
 * Read GitHub issues, release notes, README files, documentation sites and
@@ -196,6 +200,12 @@ cookies it just removed — choosing 7 days prunes the 10-day-old ones
 immediately, rather than waiting for the next launch, so the count on the
 Browser's Forget chip never promises more than the setting keeps.
 
+Both numbers — when the session began and the window it is kept under — are
+written into the diagnostics bundle (**Patch → Export diagnostics**) as a
+`Saved cookies` section, so a bug report about being signed out arrives with
+the date (with its age in days) and the policy that pruned it instead of a
+description of them.
+
 Age is measured from when a cookie was **first** stored, not from its last
 refresh: a site that re-issues its token on every visit must not look new
 forever. A file written before this field existed has no per-cookie stamp, so
@@ -250,10 +260,16 @@ travel to undo a login from a menu that already offers to expire it.
 A whole-jar Forget is the wrong size for the common case — signing one site out,
 or resetting one consent gate, otherwise costs every other login on the card.
 **Sites** in the toolbar opens a picker listing the hosts the jar holds, one row
-each with its count, plus **Forget all N cookies** at the bottom. The same panel
-opens when the strip under the page is tapped, because the strip is already the
-line that names those hosts: on the Smart Pro's touchscreen the label and the
-way to act on it are the same tap.
+each with its count and its own session start — `2 cookies · since Oct 12`, the
+oldest first-seen stamp among that host's cookies alone — so the age of one
+site's login is visible before the press that forgets it. (The Settings row
+quotes the same kind of stamp for the jar as a whole; this is that date per
+host.) A host with no stamp shows its count alone rather than a date it does
+not know. **Forget all N cookies** sits at the bottom, without a date: it is
+not a site, and the whole jar's start is the Settings row's to quote. The same
+panel opens when the strip under the page is tapped, because the strip is
+already the line that names those hosts: on the Smart Pro's touchscreen the
+label and the way to act on it are the same tap.
 
 A row asks twice, exactly like the chip: the first press arms it and the header
 line says what would go (**Press A again to drop the cookies from
@@ -295,6 +311,45 @@ sends everything else (YouTube, Twitter/X, TikTok, Instagram, Reddit, Vimeo, ...
 through yt-dlp into the same player. An element with no resolvable source draws
 nothing at all, and a structurally non-video iframe is skipped as before.
 
+## Forms
+
+The reader used to drop every `<input>` as a void tag, so a search page came out
+with no box to type into — the one thing a reader needs from DuckDuckGo Lite.
+A form is now content: each control is drawn where it sits in the page, listed
+among the page's links so the D-pad and the link picker reach it, and it does
+what its kind says when it is activated.
+
+| Control | Drawn as | A / tap does |
+|---------|----------|--------------|
+| `<input type=text>` and the text-ish types (search, email, url, tel, number) | a filled field chip showing its value, else its placeholder dimmed toward the page, else **Tap to type** | opens the keyboard on that field and submits what is typed |
+| `<input type=password>` | the same chip, with the value drawn as dots (it is still what gets sent) | the same |
+| `<textarea>` | a field chip with the text between its tags | same, and the value it sends is the field's own text |
+| `<select>` | one chip showing the chosen option's label, with ▼ | steps to the next option in place (wrapping), so the list needs no keyboard and no dropdown |
+| `<input type=checkbox>` / `radio` | a drawn box, □ or ■ (○ or ●), beside the label the page already had | toggles in place; a radio clears the rest of its group |
+| `<input type=submit>` / `button` | its label, as a button chip | sends the form; on an empty form it opens the first field instead of sending an empty search |
+| `<input type=hidden>` | nothing — but it is still submitted | — |
+| `<input type=file>`, colour, range | nothing | — |
+
+The symbols are the ones the bundled face actually has: the ballot box and the
+circled dot (U+2610, U+25C9) are not in Inter, and the reader's font sanitiser
+would replace each with an ellipsis — a tick box would have drawn "…".
+
+What a form sends is every named control in it — including its hidden inputs
+(the `ie=utf-8`, site-key and locale constants a search handler expects) — plus
+the button's own name when the button has one. Two forms on one page stay two
+forms even when they point at the same action. The reader cannot POST, so a
+submission is a **GET** to the form's action with those fields as the query —
+which is the shape a search box accepts (DuckDuckGo Lite, a site's own search, a
+wiki search) and what a handheld actually needs. A page that only answers a POST
+(a login form) still receives a GET and will usually reject it; that limit has
+not changed.
+
+A field opens holding whatever the page prefilled, **selected** the way the
+address bar is: the first character typed replaces it, so correcting a prefilled
+search is one press rather than a hold-to-delete. Typing goes into its own
+buffer (`browser_form_value`), so filling a field cannot overwrite the page
+behind the keyboard — which is exactly what it used to do.
+
 ## Controls
 
 | Input | Action |
@@ -303,13 +358,15 @@ nothing at all, and a structurally non-video iframe is skipped as before.
 | D-pad Left / Right | Walk the page's links in reading order |
 | Tab / L3 | Cycle scroll ⇄ link mode (**SCROLL** / **LINKS** chip shows which) |
 | L1 / R1 | Scroll up / down by a page |
-| A / Enter | Edit the address bar, or open the outlined link in link mode |
+| L2 / R2 · `-` / `+` · zoom chip | Zoom the page text out / in (75%–160%). The toolbar chip is the one place the scale is shown and changed: it names the current scale, is highlighted when off 100%, and steps up on a tap (wrapping). Remembered across pages and relaunches. |
+| A / Enter | Edit the address bar, open the outlined link in link mode, or work the focused form control |
 | X / `x` / `l` | Open the link picker |
 | B / Esc | Go back to the previous screen (link mode: back to scroll mode) |
+| Back / Forward / Reload | Return to a page — and to the paragraph you were on — instead of the top (session-only; a fresh link or typed address starts at the top) |
 | **Filter** chip | Turn ad/tracker filtering off (or back on) for the current site |
 | **Forget** chip | Saved-cookie count in its label (capped at 99+); drop every saved cookie and the file on the card (press twice) |
 | Cookie strip | Under the page: the hosts the saved cookies belong to, or **No saved cookies** |
-| Touch / mouse | Tap the address bar, **GO**, the filter counter, the mode chip, or a link row |
+| Touch / mouse | Tap the address bar, **GO**, the filter counter, the mode chip, the zoom chip, or a link row |
 
 In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 
@@ -318,11 +375,13 @@ In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 This is a reading browser, not a full web engine. Its JavaScript support is a
 small embedded engine that only exists to splice `document.write` output into the
 page; it is not a full JS runtime, so a site whose content is built by a modern
-framework stays empty. It does not implement grid or float layouts or submit
-forms. Cookies now survive a relaunch (see [Cookies](#cookies)), which is enough
-for a consent gate, an age gate or a session redirect — but not for a site whose
-login is a form, because posting that form is the part the reader cannot do. A
-session is only ever saved if the site handed one out itself. A `calc()` that mixes units the layout has not measured yet
+framework stays empty. It does not implement grid or float layouts, and while it
+can fill in and send a form it cannot **post** one: a submission is sent as a
+GET (see [Forms](#forms)), which a search box accepts and a login form usually
+does not.
+Cookies now survive a relaunch (see [Cookies](#cookies)), which is enough for a
+consent gate, an age gate or a session redirect — but not for a site whose login
+is a POST form. A session is only ever saved if the site handed one out itself. A `calc()` that mixes units the layout has not measured yet
 (`calc(100% - 20px)`) is left unresolved, and `vh`/`vw` say nothing about a
 reader with no window, so they are ignored rather than guessed. `float`,
 `grid` and `columns` still lay out as plain blocks: the reader stacks content

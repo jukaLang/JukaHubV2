@@ -208,7 +208,10 @@ func TestA11yRowsReportCurrentSettings(t *testing.T) {
 			byButton[row.button] = row
 		}
 	}
-	if len(rows) != 4+len(a11yPanelButtons)+5 {
+	// 4 fixed top rows (text size, contrast, palette, layout) + one row per
+	// remappable button + the 6 trailing rows (select, one-handed, chord, key
+	// repeat, power mode, reset).
+	if len(rows) != 4+len(a11yPanelButtons)+6 {
 		t.Fatalf("row count: got %d", len(rows))
 	}
 	if got := byKind[a11yRowTextSize].value; got != "130%" {

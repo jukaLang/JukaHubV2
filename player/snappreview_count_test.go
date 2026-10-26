@@ -8,6 +8,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -299,5 +300,79 @@ func TestSnapCountUsesTheSameClipPathAsThePreview(t *testing.T) {
 	}
 	if !artworkCoverPresent(gameSnapPath(game, root)) {
 		t.Fatal("the counted game has no clip at the preview's own path")
+	}
+}
+
+// TestSnapCountShowsInTheLibraryHeader is the request: the figure Settings
+// reports is on the Games Library's own header line, where the previews
+// actually play — same census, same number — and nothing is on the line until
+// the first scan lands, exactly the row's rule.
+func TestSnapCountShowsInTheLibraryHeader(t *testing.T) {
+	snapCountReset(t, nil)
+	prevPanel := gameLib
+	t.Cleanup(func() { gameLib = prevPanel })
+	gameLib = gameLibraryPanel{
+		open: true,
+		lib: gameLibraryReport{
+			Systems: gameSearchFixture()[1:],
+			Total:   90,
+			WithArt: 60,
+		},
+	}
+	config := snapCountConfig()
+
+	if status := gameLibraryStatus(); strings.Contains(status, "clip") {
+		t.Fatalf("before the first count the header says %q", status)
+	}
+
+	snapCountPublish(5, 90)
+	snapPreviewSyncRow(config)
+	status := gameLibraryStatus()
+	if !strings.Contains(status, " · 5 clip(s)") {
+		t.Fatalf("header = %q, want the 5 clip(s) figure", status)
+	}
+	if got := snapCountRowText(t, config); !strings.HasSuffix(got, "· 5") {
+		t.Fatalf("row reads %q; the header and the row must report the same figure", got)
+	}
+
+	// A card with none says so in words, like the row's "none".
+	snapCountPublish(0, 90)
+	snapPreviewSyncRow(config)
+	if status := gameLibraryStatus(); !strings.Contains(status, " · no clips") {
+		t.Fatalf("empty card header = %q, want the no-clips line", status)
+	}
+}
+
+// TestOpenGameLibraryPanelAsksForTheClipCount: the header's figure comes from
+// somewhere, and opening the library is that moment — the ask returns at once
+// and the census fills in when the scene-work scan finishes.
+func TestOpenGameLibraryPanelAsksForTheClipCount(t *testing.T) {
+	scans := 0
+	snapCountReset(t, func(root string) (int, int) {
+		scans++
+		return 6, 30
+	})
+	prevPanel := gameLib
+	prevQS, prevEmu, prevTools := qs.open, emuPanel.open, toolsPanel.open
+	t.Cleanup(func() {
+		gameLib = prevPanel
+		qs.open, emuPanel.open, toolsPanel.open = prevQS, prevEmu, prevTools
+		closeGameLibraryArt()
+	})
+	// The open path closes the art cache; keep it from touching textures a
+	// render probe may already have handed back.
+	gameLib.artCache = nil
+
+	openGameLibraryPanel()
+	waitForSceneWork()
+	if scans != 1 {
+		t.Fatalf("opening the library ran %d clip scans, want 1", scans)
+	}
+	withClip, _, known := snapClipCount()
+	if !known || withClip != 6 {
+		t.Fatalf("census = (%d, known=%v), want the scan's 6 once known", withClip, known)
+	}
+	if !gameLib.open {
+		t.Fatal("the panel did not open")
 	}
 }

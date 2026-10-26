@@ -84,12 +84,50 @@ func diagnosticLogTail(text string) string {
 	return redactDiagnosticText(tail)
 }
 
-// DiagnosticsBundleText is the support file: the redacted report followed by
-// the redacted log tail. A bundle with no usable log still says so instead of
-// ending silently, because "the log was empty" is itself a support fact.
+// cookieSessionFacts is the saved session's two support facts: when the
+// session on the card began, and how long the retention policy keeps it. They
+// are the numbers a cookie bug report turns on — "I was signed out after two
+// weeks" is one date and one window away — and they are the same figures
+// Settings → General shows, so the reporter recognises what they saw. The date
+// carries the year and its age in days (the row on screen has no room for
+// either, but a report read weeks later needs both), so a retention
+// contradiction — a 30-day window on a 40-day session — is visible without a
+// round trip. An empty jar reports no session rather than a zero date, and a
+// stamp ahead of the device's clock says so instead of quoting an age that
+// cannot be right: handhelds with a reset clock are a real support case.
+func cookieSessionFacts(config *Config) string {
+	var sb strings.Builder
+	sb.WriteString("Saved cookies\n")
+	sb.WriteString("-------------\n")
+	if since, ok := browserSessionSince(); ok {
+		line := "Session start: " + since.Local().Format("Jan 2 2006")
+		// The labels are padded to the report's own 13-column field, the
+		// width "Config health: " uses.
+		age := time.Since(since)
+		if age < 0 {
+			line += " (stamped in the future — check the clock)"
+		} else {
+			line += fmt.Sprintf(" (%d days ago)", int(age.Hours()/24))
+		}
+		sb.WriteString(line + "\n")
+	} else {
+		sb.WriteString("Session start: none stored\n")
+	}
+	sb.WriteString("Retention    : " + cookieRetentionLabel(cookieRetentionDays(config)) + "\n")
+	return sb.String()
+}
+
+// DiagnosticsBundleText is the support file: the redacted report, the cookie
+// session's date and window, and the redacted log tail. A bundle with no
+// usable log still says so instead of ending silently, because "the log was
+// empty" is itself a support fact.
 func DiagnosticsBundleText(config *Config) string {
 	var sb strings.Builder
 	sb.WriteString(DiagnosticsText(config))
+	// The cookie facts join the bundle only: the short report has to fit a
+	// bug-report URL, and these are the two numbers a login report needs
+	// without another round trip.
+	sb.WriteString("\n" + cookieSessionFacts(config))
 	sb.WriteString("\nRecent log\n----------\n")
 	tail := diagnosticLogTail(appLog.String())
 	if strings.TrimSpace(tail) == "" {

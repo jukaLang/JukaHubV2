@@ -46,8 +46,15 @@ func TestBrowserCookieSitesGroupByHost(t *testing.T) {
 		t.Fatalf("sites = %+v, want %+v", sites, want)
 	}
 	for i := range want {
-		if sites[i] != want[i] {
-			t.Fatalf("site %d = %+v, want %+v (all: %+v)", i, sites[i], want[i], sites)
+		// Domain and counts are what this test pins; whole-struct equality
+		// would also compare Since, a timestamp the jar stamped when the
+		// cookie was set and the test cannot predict. It is checked for
+		// being there instead — a live jar's site has an age to show.
+		if sites[i].Domain != want[i].Domain || sites[i].Count != want[i].Count {
+			t.Fatalf("site %d = %+v, want domain/count %+v (all: %+v)", i, sites[i], want[i], sites)
+		}
+		if sites[i].Since.IsZero() {
+			t.Fatalf("site %d (%s) carries no session start", i, sites[i].Domain)
 		}
 	}
 

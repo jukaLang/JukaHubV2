@@ -559,7 +559,19 @@ func renderSaveManagerPanel(renderer *sdl.Renderer, config *Config) {
 
 	const padX = int32(24)
 	rowH := 8 + medH + 4 + smallH + 8
-	headerH := 18 + medH + 4 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized
+	// so the panel and the bar that fills it measure the same height.
+	title := "Save Manager"
+	if savePanel.mode == saveModeSnapshots {
+		title = "Save Manager · Snapshots"
+	}
+	sub := saveManagerSummary(savePanel.roots, savePanel.snapshots)
+	if savePanel.mode == saveModeSnapshots {
+		sub = "Newest first · A restores · X deletes"
+	}
+	header := UIPanelHeader(title, sub, "files")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 
 	panelW := int32(860)
@@ -601,16 +613,10 @@ func renderSaveManagerPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	title := "Save Manager"
-	if savePanel.mode == saveModeSnapshots {
-		title = "Save Manager · Snapshots"
-	}
-	renderText(renderer, config, medium, title, ColorTextPrimary(), panelX+padX, panelY+18)
-	sub := saveManagerSummary(savePanel.roots, savePanel.snapshots)
-	if savePanel.mode == saveModeSnapshots {
-		sub = "Newest first · A restores · X deletes"
-	}
-	renderText(renderer, config, font, ellipsize(font, sub, panelW-2*padX), ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
 	rowW := panelW - 2*padX

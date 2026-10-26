@@ -179,6 +179,9 @@ func main() {
 	// Accessibility settings load before the first frame so a saved text size is
 	// already in effect on the splash screen, not applied later.
 	a11yInit(config)
+	// The reader's text zoom is a saved preference too, loaded before the first
+	// browser frame so a page opens at the size the reader left it.
+	browserZoomLoad(config)
 	// Push the saved mixer/backlight levels once the panel state exists, so the
 	// device comes up where Quick Settings left it. Only values the user has
 	// actually set are written, and it runs off the startup path because the
@@ -601,6 +604,10 @@ func main() {
 			switch e := event.(type) {
 			case *sdl.QuitEvent:
 				running = false
+			case *sdl.DropEvent:
+				// A file dragged onto the window (desktop build). The handheld has
+				// no pointer, so this never fires there.
+				pollDropEvent(config, e)
 			case *sdl.WindowEvent:
 				if e.Event == sdl.WINDOWEVENT_SIZE_CHANGED {
 					w, h := mainWindow.GetSize()
@@ -759,6 +766,10 @@ func main() {
 					}
 					// As is the site picker that forgets one jar's worth of cookies.
 					if browserCookiePanel.open && handleBrowserCookiesKey(e, config) {
+						continue
+					}
+					// And the saved-page picker, where A opens and X removes.
+					if browserBookmarkPanel.open && handleBrowserBookmarksKey(e, config) {
 						continue
 					}
 					// The stick calibration wizard is modal while it runs.
@@ -1445,6 +1456,11 @@ func main() {
 							handleBrowserCookiesMouse(mx, my, config)
 							break
 						}
+						// And the saved-page picker.
+						if browserBookmarkPanel.open {
+							handleBrowserBookmarksMouse(mx, my, config)
+							break
+						}
 						// The calibration wizard is modal the same way.
 						if calibrationPanel.open {
 							handleStickCalibrationMouse(mx, my, config)
@@ -1742,6 +1758,14 @@ func main() {
 									if !ok {
 										continue
 									}
+									// The results box owns the tap: rows scrolled under an
+									// edge keep hit rects the clip hides, and those must
+									// not catch a press aimed at the controls above or
+									// the footer below.
+									if mx < elem.X || mx > elem.X+getElementWidth(elem, 1232) ||
+										my < elem.Y || my > elem.Y+getElementHeight(elem, 456) {
+										continue
+									}
 									// The Next chip floats over the results: a click there loads
 									// the next page instead of playing the card behind it.
 									if mediaNextPageHit(config, elem, videos, mx, my) {
@@ -1758,29 +1782,18 @@ func main() {
 										performResultAction(action, idx, videos)
 										continue
 									}
-									// Grid hit detection (account for smooth scroll offset)
-									cols, rows := gridColsRows(elem)
-									elemWidth := getElementWidth(elem, 1080)
-									elemHeight := getElementHeight(elem, 500)
-									cellWidth := (elemWidth - 30) / cols
-									cellHeight := (elemHeight - 30) / rows
-									for idx := range videos {
-										if idx >= int(cols*rows) {
-											break
-										}
-										col := int32(idx) % cols
-										row := int32(idx) / cols
-										xPos := elem.X + col*(cellWidth+10)
-										yPos := elem.Y + row*(cellHeight+10) - scrollY
-										if mx >= xPos && mx <= xPos+cellWidth && my >= yPos && my <= yPos+cellHeight {
-											selectedButtonIndex = i
-											focusEngine.SetByElementIndex(i)
-											focusedResultIndex = idx
-											if idx < len(videos) {
-												playVideoInfo(config, videos[idx])
-											}
-											break
-										}
+									// Row hit detection, mirroring what the renderer drew:
+									// the list layout draws 100px rows at a 114px pitch, the
+									// grid draws cells, and both follow the smooth-scroll
+									// offset. The old path always used the grid's math and
+									// stopped at the first screenful, so on the shipped list
+									// layout a tap landed a row short of the card it showed
+									// and every row after the sixth was untappable.
+									if idx := searchResultIndexAt(elem, videos, mx, my); idx >= 0 {
+										selectedButtonIndex = i
+										focusEngine.SetByElementIndex(i)
+										focusedResultIndex = idx
+										playVideoInfo(config, videos[idx])
 									}
 								} else if elem.Type == "dynamiclist" && elem.Variable == appsEntriesVar {
 									// Apps launcher: hit-test the tile grid, not list rows.
@@ -1843,10 +1856,7 @@ func main() {
 									selectedButtonIndex = i
 									focusEngine.SetByElementIndex(i)
 									if textBrowserElementSource(elem) == textBrowserSourceWeb {
-										addressRect, goRect := textBrowserToolbarRects(elem)
-										searchRect := textBrowserSearchRect(elem)
-										filterRect := textBrowserFilterRect(elem)
-										modeRect := textBrowserModeRect(elem)
+										addressRect, searchRect, filterRect, modeRect, zoomRect, goRect := textBrowserToolbarTapRects(config, elem)
 										if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
 											handleTextBrowserAddressInput(renderer, config, elem)
 										} else if searchRect.W > 0 && mx >= searchRect.X && mx <= searchRect.X+searchRect.W && my >= searchRect.Y && my <= searchRect.Y+searchRect.H {
@@ -1855,6 +1865,10 @@ func main() {
 											browserToggleAdFilter(config)
 										} else if modeRect.W > 0 && mx >= modeRect.X && mx <= modeRect.X+modeRect.W && my >= modeRect.Y && my <= modeRect.Y+modeRect.H {
 											browserToggleNavMode()
+										} else if zoomRect.W > 0 && mx >= zoomRect.X && mx <= zoomRect.X+zoomRect.W && my >= zoomRect.Y && my <= zoomRect.Y+zoomRect.H {
+											// The chip steps the reader's text scale, wrapping so a
+											// tap always does something.
+											browserZoomCycle(config, elem)
 										} else if mx >= goRect.X && mx <= goRect.X+goRect.W && my >= goRect.Y && my <= goRect.Y+goRect.H {
 											loadTextBrowserURL(config, elem, textBrowserAddress(config))
 										} else if browserCookieStripTap(mx, my, config) {
@@ -1863,7 +1877,7 @@ func main() {
 										} else {
 											// Tapped a link inside the rendered page (a no-op when the tap
 											// landed on none).
-											browserTapPageLink(config, elem, mx, my)
+											browserTapPageLink(renderer, config, elem, mx, my)
 										}
 									}
 								}
@@ -2170,29 +2184,26 @@ func main() {
 								goBackScene(config)
 							}
 						} else if curElem.Type == "packagelist" {
-							switch e.Button {
-							case sdl.CONTROLLER_BUTTON_DPAD_UP:
-								if packagesFocusIndex > 0 {
-									packagesFocusIndex--
-								}
-							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-								packagesMutex.Lock()
-								pCount := len(packagesList)
-								packagesMutex.Unlock()
-								if packagesFocusIndex < pCount-1 {
-									packagesFocusIndex++
-								}
-							case sdl.CONTROLLER_BUTTON_A:
-								packagesMutex.Lock()
-								if packagesFocusIndex >= 0 && packagesFocusIndex < len(packagesList) {
-									pkg := packagesList[packagesFocusIndex]
+							if packageActionsController(e, config) {
+								// The open row menu consumed the press.
+							} else {
+								switch e.Button {
+								case sdl.CONTROLLER_BUTTON_DPAD_UP:
+									if packagesFocusIndex > 0 {
+										packagesFocusIndex--
+									}
+								case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+									packagesMutex.Lock()
+									pCount := len(packagesList)
 									packagesMutex.Unlock()
-									go downloadAndInstallPackage(config, pkg)
-								} else {
-									packagesMutex.Unlock()
+									if packagesFocusIndex < pCount-1 {
+										packagesFocusIndex++
+									}
+								case sdl.CONTROLLER_BUTTON_A:
+									packagePress(config)
+								case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+									goBackScene(config)
 								}
-							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-								goBackScene(config)
 							}
 						} else if curElem.Type == "chat" {
 							switch e.Button {
@@ -2676,6 +2687,11 @@ func main() {
 		// Saved-cookie picker (forget one site instead of the whole jar).
 		if browserCookiePanel.open {
 			renderBrowserCookiePanel(renderer, config)
+		}
+
+		// Saved-page picker (open a bookmark, or remove one with X).
+		if browserBookmarkPanel.open {
+			renderBrowserBookmarkPanel(renderer, config)
 		}
 
 		// RetroAchievements overlay (recent unlocks + game progress).

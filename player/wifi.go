@@ -9,8 +9,8 @@ package main
 //
 // The same rules as systemcontrol.go apply:
 //
-//   - every binary comes from a fixed set (wpa_cli, udhcpc, dhcpcd) and no
-//     config value is ever used as a command name or a path;
+//   - every binary comes from a fixed set (wpa_cli, udhcpc, dhcpcd, dhclient)
+//     and no config value is ever used as a command name or a path;
 //   - every call is bounded, and a failure is returned to the caller instead of
 //     being swallowed;
 //   - the passphrase is never an argument. wpa_cli re-parses the whole command
@@ -42,10 +42,8 @@ const (
 	// wifiCommandTimeout bounds one wpa_cli call. A call that has not answered
 	// by then is a stuck supplicant, not a slow network.
 	wifiCommandTimeout = 5 * time.Second
-	// wifiAssociateTimeout is how long association may take before the join is
-	// reported as failed. WPA2 on a weak handheld radio is slow, not broken.
-	wifiAssociateTimeout = 15 * time.Second
-	wifiAssociatePoll    = 400 * time.Millisecond
+	// wifiAssociatePoll is the interval between association checks.
+	wifiAssociatePoll = 400 * time.Millisecond
 	// wifiScanWaitTimeout is how long the picker waits for scan_results after
 	// requesting a scan. A scan that returns nothing by then gets a message.
 	wifiScanWaitTimeout  = 8 * time.Second
@@ -55,6 +53,12 @@ const (
 	wifiMinPassphraseLen = 8
 	wifiMaxPassphraseLen = 63
 )
+
+// wifiAssociateTimeout is how long association may take before the join is
+// reported as failed. WPA2 on a weak handheld radio is slow, not broken. It is
+// a variable only so a test can prove the failure paths (rejected password,
+// stuck supplicant) without waiting out the real seconds.
+var wifiAssociateTimeout = 15 * time.Second
 
 // wifiNetwork is one visible access point after merging the scan with the
 // saved-network list and the current status.
@@ -110,9 +114,53 @@ var wifiRunner = func(timeout time.Duration, stdin, name string, args ...string)
 	return string(out), err
 }
 
-// wifiToolExists is commandExists behind a variable so tests can pretend the
-// firmware tools are present (or absent) deterministically.
-var wifiToolExists = commandExists
+// wifiToolDirs are the standard binary locations a launcher's inherited PATH
+// can miss. Firmware images keep wpa_cli, udhcpc and rfkill in sbin directories
+// that a minimal PATH may not include, and the result would be "wpa_cli is not
+// installed" for a tool that is on the card.
+var wifiToolDirs = []string{"/sbin", "/usr/sbin", "/usr/local/sbin", "/bin", "/usr/bin"}
+
+// wifiToolCommand is the argv0 a Wi-Fi tool runs from: the bare allowlisted
+// name when PATH has it, the absolute path when PATH misses it but a system
+// directory has it, and the bare name when it exists nowhere (the caller's
+// existence check decides that; the runner's own error stays the truth for
+// stubbed tests).
+func wifiToolCommand(name string) string {
+	if _, err := exec.LookPath(name); err == nil {
+		return name
+	}
+	if name == "" || strings.ContainsAny(name, `/\\`) {
+		return name
+	}
+	for _, dir := range wifiToolDirs {
+		cand := filepath.Join(dir, name)
+		if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+			return cand
+		}
+	}
+	return name
+}
+
+// wifiToolAvailable reports whether a firmware tool exists on this device,
+// whether or not the process PATH lists the directory it lives in.
+func wifiToolAvailable(name string) bool {
+	if name == "" {
+		return false
+	}
+	if _, err := exec.LookPath(name); err == nil {
+		return true
+	}
+	return wifiToolCommand(name) != name
+}
+
+// wifiToolExists is the presence probe behind a variable so tests can pretend
+// the firmware tools are present (or absent) deterministically.
+var wifiToolExists = wifiToolAvailable
+
+// wifiRadioState reads the radio through systemcontrol behind a variable: the
+// scan uses it to explain a soft-blocked adapter instead of surfacing wpa_cli's
+// bare FAIL, and tests can set the state without rfkill hardware.
+var wifiRadioState = wifiEnabled
 
 // findWirelessInterface picks the wireless netdev under root. Entries are
 // sorted so a device exposing two radios always resolves to the same one.
@@ -221,7 +269,7 @@ func wifiWPA(args ...string) (string, error) {
 		return "", errors.New(wifiUnavailableReason())
 	}
 	full := append([]string{"-i", iface}, args...)
-	return wifiRunner(wifiCommandTimeout, "", "wpa_cli", full...)
+	return wifiRunner(wifiCommandTimeout, "", wifiToolCommand("wpa_cli"), full...)
 }
 
 // wifiWPAChecked is wifiWPA that also treats a printed FAIL as an error.
@@ -614,6 +662,11 @@ func wifiReadScanResults() ([]wifiNetwork, error) {
 func wifiScanNetworks() ([]wifiNetwork, error) {
 	before, _ := wifiReadScanResults()
 	if _, err := wifiWPAChecked("scan"); err != nil {
+		// A soft-blocked radio is the common "Wi-Fi stopped working" state
+		// and wpa_cli's only answer is FAIL — name it instead.
+		if radioOn, radioOK := wifiRadioState(); radioOK && !radioOn {
+			return nil, errors.New("Wi-Fi is turned off")
+		}
 		return nil, err
 	}
 	deadline := time.Now().Add(wifiScanWaitTimeout)
@@ -655,7 +708,7 @@ func wifiReadSnapshot() (wifiSnapshot, error) {
 		Saved:    saved,
 		Networks: mergeWiFiNetworks(scanned, saved, st),
 	}
-	snap.RadioOn, snap.RadioOK = wifiEnabled()
+	snap.RadioOn, snap.RadioOK = wifiRadioState()
 	return snap, nil
 }
 
@@ -694,7 +747,7 @@ func wifiSetPassphrase(id int, pass string) (string, error) {
 		return "", errors.New(wifiUnavailableReason())
 	}
 	script := fmt.Sprintf("set_network %d psk %s\n", id, wpaQuote(pass))
-	out, err := wifiRunner(wifiCommandTimeout, script, "wpa_cli", "-i", iface)
+	out, err := wifiRunner(wifiCommandTimeout, script, wifiToolCommand("wpa_cli"), "-i", iface)
 	if err != nil {
 		return out, err
 	}
@@ -750,15 +803,20 @@ func wifiObtainAddress(iface string) (string, error) {
 		name string
 		args []string
 	}
-	attempts := make([]dhcpClient, 0, 2)
+	attempts := make([]dhcpClient, 0, 3)
 	if wifiToolExists("udhcpc") {
 		attempts = append(attempts, dhcpClient{"udhcpc", []string{"-i", iface, "-n", "-q", "-t", "5"}})
 	}
 	if wifiToolExists("dhcpcd") {
 		attempts = append(attempts, dhcpClient{"dhcpcd", []string{"-n", "-t", "8", iface}})
 	}
+	// dhclient is the lease-seeker of standard distributions; an image that
+	// ships only it used to end in "no IP address was assigned".
+	if wifiToolExists("dhclient") {
+		attempts = append(attempts, dhcpClient{"dhclient", []string{"-1", iface}})
+	}
 	for _, c := range attempts {
-		if _, err := wifiRunner(wifiDHCPTimeout, "", c.name, c.args...); err != nil {
+		if _, err := wifiRunner(wifiDHCPTimeout, "", wifiToolCommand(c.name), c.args...); err != nil {
 			continue
 		}
 		if st, err := wifiReadStatus(); err == nil && st.IP != "" {
@@ -784,6 +842,12 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 	if !wifiControlAvailable() {
 		return res, errors.New(wifiUnavailableReason())
 	}
+	// The supplicant may already hold an entry for this SSID with a password
+	// the router no longer accepts. Joining must not leave both: the stale
+	// entry would win every later lookup. It is remembered here and removed
+	// only after the new join works, so a failed attempt keeps the old key.
+	preSaved, _ := wifiReadSavedNetworks()
+	prevID, hadPrev := wifiSavedID(ssid, preSaved)
 
 	addOut, err := wifiWPAChecked("add_network")
 	if err != nil {
@@ -800,6 +864,15 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 		if _, err := wifiSetPassphrase(id, passphrase); err != nil {
 			return res, err
 		}
+		// WPA3-personal routers will not join with the default WPA-PSK-only
+		// key management, and a router that requires protected management
+		// frames will not join without them. Offering SAE alongside WPA-PSK
+		// covers transition and WPA3-only networks; optional PMF keeps every
+		// WPA2 network working. A supplicant built without either answers
+		// FAIL — that is not an error here: the default configuration stays,
+		// which is exactly what shipped before.
+		_, _ = wifiWPAChecked("set_network", strconv.Itoa(id), "key_mgmt", "WPA-PSK SAE")
+		_, _ = wifiWPAChecked("set_network", strconv.Itoa(id), "ieee80211w", "1")
 	} else if _, err := wifiWPAChecked("set_network", strconv.Itoa(id), "key_mgmt", "NONE"); err != nil {
 		return res, err
 	}
@@ -836,6 +909,13 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 		res.IP = st.IP
 	} else {
 		warnings = append(warnings, "no IP address was assigned; check DHCP on this network")
+	}
+	// The entry this join replaced goes now that the new one works: removing
+	// it earlier would trade a working (if stale) key for a failed attempt.
+	if hadPrev && prevID != id {
+		if _, err := wifiWPA("remove_network", strconv.Itoa(prevID)); err == nil && saved {
+			_, _ = wifiWPA("save_config")
+		}
 	}
 	res.Warn = strings.Join(warnings, "; ")
 	return res, nil

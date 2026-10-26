@@ -359,6 +359,56 @@ func TestEmuTileStatusChipIsDrawn(t *testing.T) {
 	}
 }
 
+// TestEmuPageDrawsTheSharedHeader pins the consistency fix: the Emulators page
+// opens with the same shared page header every other page uses (a glyph well,
+// the title, a summary and the count), not a bespoke hand-drawn title. The band
+// at the top of the page must carry the title's bright pixels.
+func TestEmuPageDrawsTheSharedHeader(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	config := layoutTestConfig(t)
+	renderer := probeRenderer(t)
+
+	prevOpen, prevCursor := emuPanel.open, emuPanel.cursor
+	emuPanel.open = true
+	emuPanel.cursor = 0
+	t.Cleanup(func() {
+		emuPanel.open, emuPanel.cursor = prevOpen, prevCursor
+		emuPanelRect = sdl.Rect{}
+		emuRowHits = nil
+	})
+
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.Clear()
+	renderEmuPanel(renderer, config)
+
+	page := emuPanelRect
+	if page.W <= 0 || page.H <= 0 {
+		t.Fatalf("the Emulators page did not lay out a panel: %+v", page)
+	}
+	buf := make([]byte, probeW*probeH*4)
+	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
+		t.Skipf("ReadPixels unavailable: %v", err)
+	}
+	// The header band is the reserved strip at the top of the page; the title
+	// is drawn in the primary text colour, so it must contain bright pixels.
+	bright := 0
+	x0, y0 := int(page.X), int(page.Y+16)
+	x1, y1 := int(page.X+page.W), int(page.Y+emuPageHeaderH)
+	for y := y0; y < y1 && y < int(probeH); y++ {
+		for x := x0; x < x1 && x < int(probeW); x++ {
+			i := (y*int(probeW) + x) * 4
+			if int(buf[i])+int(buf[i+1])+int(buf[i+2]) > 420 {
+				bright++
+			}
+		}
+	}
+	if bright < 100 {
+		t.Errorf("the Emulators header band drew only %d bright pixels: the shared header is missing", bright)
+	}
+}
+
 // TestEmuTileDimsUnavailablePicture is the at-a-glance half of the redesign:
 // the picture of an emulator you cannot start is veiled, so the grid separates
 // usable from unusable before any label is read.

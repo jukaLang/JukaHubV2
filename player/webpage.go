@@ -193,6 +193,11 @@ type webStyle struct {
 	// label still knows where it points and the browser can walk links with
 	// the D-pad.
 	Href string
+	// Control is set on the text a form control renders as (a field's
+	// placeholder, a button's label), so a tap or A on it opens the keyboard
+	// instead of following anything. Deliberately not inherited from a parent:
+	// a control is one run, not a subtree.
+	Control *webControl
 	// Vars is the custom-property scope in force for this element. Every
 	// var() is already resolved by the time a style reaches a block, so this
 	// only carries inheritance down the parse; it stays a pointer so a
@@ -320,6 +325,11 @@ type webDocument struct {
 	Images    map[string][]byte
 	ImageMeta map[string]webImageMeta
 
+	// FormHidden holds each form's hidden inputs by form ID. They are
+	// submitted with the form but never drawn, so they live beside the blocks
+	// rather than inside a run.
+	FormHidden map[int][]webHiddenField
+
 	mu     sync.Mutex
 	stamp  string
 	layout *webLayout
@@ -347,6 +357,8 @@ type webRunPos struct {
 	// block-level background is painted once for the whole block instead.
 	HasBg bool
 	Bg    sdl.Color
+	// Control carries the form control this run draws, if any.
+	Control *webControl
 }
 
 // webRow is one line slot in the uniform layout grid. Tall lines (headings)
@@ -419,6 +431,132 @@ type webLinkHit struct {
 	// Video marks a hit generated from a <video> play card rather than an
 	// anchor: activation must stream/play it instead of navigating to it.
 	Video bool
+	// Control marks a hit generated from a form control: activation opens the
+	// keyboard and submits what is typed, rather than following a link.
+	Control *webControl
+}
+
+// webForm is the <form> a control belongs to: where a submitted value goes,
+// and the field name it submits under. Field is the first text input the form
+// declared, so a submit button knows which name to fill when nothing else does.
+//
+// ID tells two forms apart. A page can carry two search boxes with the same
+// action (or none at all, which resolves to the page's own address), and
+// matching on the action alone sent both forms' fields on one press.
+type webForm struct {
+	ID     int
+	Action string
+	Field  string
+}
+
+// webHiddenField is a control the page submits but does not draw: a hidden
+// input. Search pages lean on them (`ie=utf-8`, a site key, a locale), and a
+// submission that dropped them was rejected by the page's own handler.
+type webHiddenField struct {
+	Name  string
+	Value string
+}
+
+// webControl is one form control the reader found in the page. The reader has
+// no DOM: a control is a run of text with one of these attached, and the
+// browser finds it exactly the way it finds a link.
+//
+// Its state (Value, Checked, Choice) lives here rather than in the run's text,
+// because a field that has been typed into, a box that has been ticked or a
+// list that has been stepped must read back the new state from the same place
+// the page was parsed into. Display turns that state into the text the reader
+// paints, so a re-layout is all it takes to show the change.
+type webControl struct {
+	Kind        string // "text", "textarea", "select", "check", "radio" or "submit"
+	Name        string // the field's name, used in the submitted query
+	Placeholder string
+	Value       string
+	// Options and Choice are a <select>'s items and the one showing. A select
+	// is stepped in place: it has no keyboard, and a handheld cannot open the
+	// author's dropdown.
+	Options []string
+	// OptionValues is what each option submits, which is not always its label
+	// ("English" shown, "en" sent). Empty entries fall back to the label.
+	OptionValues []string
+	Choice       int
+	// Checked is a checkbox or radio button's state. It starts at the markup's
+	// own checked attribute, so a page that ships a preselected option keeps it.
+	Checked bool
+	// Secret marks a password field. Its value is typed as usual but drawn as
+	// dots: the reader paints on a shared screen, and a prefilled password
+	// rendered in the clear is one glance away from being read off it.
+	Secret bool
+	Form   webForm
+}
+
+// PlaceholderShown reports that a field is drawing its prompt rather than a
+// value, which is what the reader dims. It is read at layout time, so a field
+// that has just been filled in stops looking empty on the same frame.
+func (c *webControl) PlaceholderShown() bool {
+	if c == nil {
+		return false
+	}
+	if c.Kind != "text" && c.Kind != "textarea" {
+		return false
+	}
+	return strings.TrimSpace(c.Value) == ""
+}
+
+// Display is the text a control paints. A field shows what has been filled in,
+// then the page's own placeholder, then a plain prompt; a select shows its
+// chosen item; a box shows a drawn tick; a button shows its label.
+func (c *webControl) Display() string {
+	if c == nil {
+		return ""
+	}
+	switch c.Kind {
+	case "text", "textarea":
+		if c.Secret && strings.TrimSpace(c.Value) != "" {
+			return " " + strings.Repeat("•", 8) + " "
+		}
+		if v := strings.TrimSpace(c.Value); v != "" {
+			// A textarea's value can be several lines; the box is one line, so
+			// the first line is what it shows.
+			if i := strings.IndexByte(v, '\n'); i >= 0 {
+				v = strings.TrimSpace(v[:i])
+			}
+			if v != "" {
+				return " " + v + " "
+			}
+		}
+		if ph := strings.TrimSpace(c.Placeholder); ph != "" {
+			return " " + ph + " "
+		}
+		return " Tap to type "
+	case "select":
+		if c.Choice >= 0 && c.Choice < len(c.Options) {
+			if label := strings.TrimSpace(c.Options[c.Choice]); label != "" {
+				return " " + label + " ▼ "
+			}
+		}
+		return " Choose ▼ "
+	case "check":
+		// The box glyphs are the ones Inter actually carries: the ballot box
+		// (U+2610) and the circled dot (U+25C9) are not in the font, and the
+		// sanitiser would replace each with an ellipsis, so a tick box would
+		// have drawn "…" instead of a box.
+		if c.Checked {
+			return " ■ "
+		}
+		return " □ "
+	case "radio":
+		if c.Checked {
+			return " ● "
+		}
+		return " ○ "
+	case "submit":
+		label := strings.TrimSpace(c.Value)
+		if label == "" {
+			label = "Submit"
+		}
+		return " " + label + " "
+	}
+	return " " + strings.TrimSpace(c.Value) + " "
 }
 
 // webRule is one parsed CSS rule (one selector; groups are split apart).
@@ -2293,6 +2431,25 @@ type webParser struct {
 	mainDepth int
 	flexSeq   int
 	flexStack []webFlexFrame
+	// form is the <form> the parser is inside, so a control knows where its
+	// value goes. Nested forms are invalid HTML, so one is enough. formSeq
+	// numbers them, so a later <form> never inherits an earlier one's ID.
+	form    webForm
+	formSeq int
+	// formHidden collects each form's hidden inputs, by form ID: they are
+	// submitted without being drawn, so they belong to the form rather than to
+	// any run.
+	formHidden map[int][]webHiddenField
+	// textarea collects a <textarea>'s shipped value between its tags, and the
+	// select_ fields collect a <select>'s options. Both defer their run until
+	// the closing tag, when the control's state is known; addText stays silent
+	// while either is open, or the field's own text would draw twice.
+	textarea             *webControl
+	textareaText         strings.Builder
+	selectCtrl           *webControl
+	selectOption         string
+	selectOptionText     strings.Builder
+	selectOptionSelected bool
 }
 
 // parseWebPage parses HTML plus any already-fetched CSS into a document.
@@ -2309,6 +2466,7 @@ func parseWebPage(source, extraCSS, baseURL string) *webDocument {
 	}
 	p.walk(source)
 	p.flush()
+	doc.FormHidden = p.formHidden
 	doc.Blocks = filterWebMainContent(p.blocks)
 	if p.trunc {
 		// The note goes in after the <main> filter, and at the top. Tagging it
@@ -2625,6 +2783,28 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		p.mainDepth++
 	}
 
+	// A control whose closing tag never arrived ends at the next element that
+	// starts a new context, so one malformed field cannot eat the whole page.
+	// Its own children are not that context: an <option> belongs to the open
+	// <select>, and closing there would lose every option on the page.
+	if p.textarea != nil && name != "textarea" && webControlBoundary(name) {
+		p.endTextarea()
+	}
+	if p.selectCtrl != nil && name != "option" && name != "select" && webControlBoundary(name) {
+		p.endSelect()
+	}
+
+	if name == "form" {
+		// A form is where a filled control goes. A missing action means "this
+		// page", the same convention a browser uses. The ID is what keeps two
+		// forms with the same action from sharing a submit.
+		p.formSeq++
+		p.form = webForm{
+			ID:     p.formSeq,
+			Action: strings.TrimSpace(htmlTagAttribute(attrs, "action")),
+		}
+	}
+
 	switch name {
 	case "br":
 		p.addBreak()
@@ -2673,6 +2853,23 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		if p.current != nil && len(p.current.Runs) > 0 {
 			p.addText("   ")
 		}
+	case "input":
+		// A form field is content, not a void tag to skip: the reader used to
+		// drop it entirely, which left a search page with no search box at all.
+		if p.inHead {
+			return
+		}
+		p.addControlFromInput(attrs, style)
+		return
+	case "textarea":
+		p.startTextarea(attrs)
+		return
+	case "select":
+		p.startSelect(attrs)
+		return
+	case "option":
+		p.startOption(attrs)
+		return
 	}
 	if webVoidElement(name) {
 		return
@@ -2704,6 +2901,26 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 }
 
 func (p *webParser) endTag(name string) {
+	// The controls whose content is collected rather than drawn are closed
+	// before the stack walk: they were never pushed, since their run only
+	// exists once the closing tag has arrived.
+	switch name {
+	case "textarea":
+		if p.textarea != nil {
+			p.endTextarea()
+			return
+		}
+	case "select":
+		if p.selectCtrl != nil {
+			p.endSelect()
+			return
+		}
+	case "option":
+		if p.selectCtrl != nil {
+			p.endOption()
+			return
+		}
+	}
 	for i := len(p.stack) - 1; i >= 0; i-- {
 		if p.stack[i].el.tag != name {
 			continue
@@ -2724,6 +2941,9 @@ func (p *webParser) endTag(name string) {
 		}
 		if name == "li" {
 			p.pendingB = ""
+		}
+		if name == "form" {
+			p.form = webForm{}
 		}
 		// Closing an element also closes every flex container it opened, even
 		// when its own end tag was missing (real pages are full of those).
@@ -2983,8 +3203,272 @@ func (p *webParser) addBreak() {
 	p.space = false
 }
 
+// addControlFromInput turns an <input> into a run the reader draws and the
+// browser can fill. A text-ish field shows its value, or its placeholder as a
+// prompt, inside a field box; a tick box shows a drawn box; a submit shows its
+// label as the button it is. Hidden inputs and the types the reader cannot do
+// anything with (file pickers, colour wells, sliders) are still skipped, the
+// way every <input> was when they were all void tags.
+func (p *webParser) addControlFromInput(attrs string, style webStyle) {
+	kind := strings.ToLower(strings.TrimSpace(htmlTagAttribute(attrs, "type")))
+	if kind == "" {
+		kind = "text"
+	}
+	name := strings.TrimSpace(htmlTagAttribute(attrs, "name"))
+	value := strings.TrimSpace(htmlTagAttribute(attrs, "value"))
+	placeholder := strings.TrimSpace(htmlTagAttribute(attrs, "placeholder"))
+	checked := htmlTagAttributeHas(attrs, "checked")
+
+	switch kind {
+	case "submit", "button":
+		ctrl := &webControl{Kind: "submit", Name: name, Value: value, Form: p.form}
+		p.emitControl(ctrl, style, true)
+		return
+	case "hidden":
+		// Not drawn, but not dropped: a search page that requires `ie=utf-8`
+		// or a site key answers a query without it with an error page.
+		if name != "" {
+			if p.formHidden == nil {
+				p.formHidden = map[int][]webHiddenField{}
+			}
+			p.formHidden[p.form.ID] = append(p.formHidden[p.form.ID], webHiddenField{Name: name, Value: value})
+		}
+		return
+	case "checkbox", "radio":
+		// The box is its own run; the label is the text beside it in the
+		// markup, which keeps drawing as normal body text.
+		ctrlKind := "check"
+		if kind == "radio" {
+			ctrlKind = "radio"
+		}
+		ctrl := &webControl{Kind: ctrlKind, Name: name, Value: value, Checked: checked, Form: p.form}
+		p.emitControl(ctrl, style, false)
+		return
+	case "text", "search", "email", "url", "tel", "number", "password":
+		if name != "" && p.form.Field == "" {
+			p.form.Field = name
+		}
+		ctrl := &webControl{
+			Kind:        "text",
+			Name:        name,
+			Placeholder: placeholder,
+			Value:       value,
+			Secret:      kind == "password",
+			Form:        p.form,
+		}
+		p.emitControl(ctrl, style, true)
+		return
+	}
+}
+
+// emitControl draws one control as a run and files it where the browser looks
+// for it. boxed fills a field background behind the text: a field and a button
+// read as a control, while a tick box is just the box glyph.
+func (p *webParser) emitControl(ctrl *webControl, style webStyle, boxed bool) {
+	st := style
+	st.Control = ctrl
+	if boxed {
+		// The same filled chip an inline <code> gets, sized by the text it
+		// shows, so a field cannot be mistaken for body copy.
+		st.HasBg = true
+		st.Background = sdl.Color{R: 232, G: 237, B: 244, A: 255}
+	}
+	// The italic that marks an empty field's prompt is decided at layout time
+	// instead (webControl.PlaceholderShown): fixing it here left the prompt
+	// looking italic after the field had been filled in.
+	p.appendRun(ctrl.Display(), st)
+	p.space = true
+}
+
+// webControlBoundary reports an element that starts a new context: a form
+// control whose closing tag never came must end there, or the rest of the page
+// is swallowed as the field's value (and drawn as one long field).
+func webControlBoundary(name string) bool {
+	switch name {
+	case "form", "div", "p", "table", "tr", "td", "ul", "ol", "li",
+		"button", "input", "textarea", "select", "option", "h1", "h2", "h3",
+		"h4", "h5", "h6", "br", "hr", "body", "html", "main", "article",
+		"section", "nav", "aside", "header", "footer":
+		return true
+	}
+	return false
+}
+
+// htmlTagAttributeHas reports whether a boolean attribute is present. checked
+// and selected carry their meaning in their presence, so htmlTagAttribute's
+// "value, or the empty string" answer cannot tell "checked" from "absent" —
+// and a page that ships a preselected option would always read as unselected.
+func htmlTagAttributeHas(attrs, want string) bool {
+	want = strings.ToLower(want)
+	i := 0
+	for i < len(attrs) {
+		for i < len(attrs) && (attrs[i] == ' ' || attrs[i] == '\t' || attrs[i] == '\r' || attrs[i] == '\n' || attrs[i] == '/') {
+			i++
+		}
+		start := i
+		for i < len(attrs) && attrs[i] != '=' && attrs[i] != ' ' && attrs[i] != '\t' && attrs[i] != '\r' && attrs[i] != '\n' && attrs[i] != '>' {
+			i++
+		}
+		name := strings.ToLower(attrs[start:i])
+		if name == want {
+			return true
+		}
+		// Step over a value, quoted or not, so a space inside one cannot be read
+		// as the start of the next attribute.
+		for i < len(attrs) && (attrs[i] == ' ' || attrs[i] == '\t' || attrs[i] == '\r' || attrs[i] == '\n') {
+			i++
+		}
+		if i < len(attrs) && attrs[i] == '=' {
+			i++
+			for i < len(attrs) && (attrs[i] == ' ' || attrs[i] == '\t' || attrs[i] == '\r' || attrs[i] == '\n') {
+				i++
+			}
+			if i < len(attrs) && (attrs[i] == '"' || attrs[i] == '\'') {
+				quote := attrs[i]
+				i++
+				for i < len(attrs) && attrs[i] != quote {
+					i++
+				}
+				if i < len(attrs) {
+					i++
+				}
+				continue
+			}
+			for i < len(attrs) && attrs[i] != ' ' && attrs[i] != '\t' && attrs[i] != '\r' && attrs[i] != '\n' && attrs[i] != '>' {
+				i++
+			}
+		}
+	}
+	return false
+}
+
+// startTextarea opens a <textarea>. Its shipped value is the text between the
+// tags, so the control is drawn by endTextarea once that is known.
+func (p *webParser) startTextarea(attrs string) {
+	if p.inHead {
+		return
+	}
+	if p.textarea != nil {
+		// A nested textarea is invalid markup; close the first rather than
+		// losing both fields.
+		p.endTextarea()
+	}
+	p.textarea = &webControl{
+		Kind:        "textarea",
+		Name:        strings.TrimSpace(htmlTagAttribute(attrs, "name")),
+		Placeholder: strings.TrimSpace(htmlTagAttribute(attrs, "placeholder")),
+		Form:        p.form,
+	}
+	p.textareaText.Reset()
+}
+
+// endTextarea draws the field the open <textarea> declared.
+func (p *webParser) endTextarea() {
+	ctrl := p.textarea
+	if ctrl == nil {
+		return
+	}
+	value := strings.TrimSpace(p.textareaText.String())
+	p.textarea = nil
+	p.textareaText.Reset()
+	if value != "" {
+		ctrl.Value = value
+	}
+	if ctrl.Name != "" && p.form.Field == "" {
+		p.form.Field = ctrl.Name
+	}
+	ctrl.Form = p.form
+	p.emitControl(ctrl, p.topStyle(), true)
+}
+
+// startSelect opens a <select>: its options are collected and drawn as one
+// stepping control by endSelect.
+func (p *webParser) startSelect(attrs string) {
+	if p.inHead {
+		return
+	}
+	if p.selectCtrl != nil {
+		p.endSelect()
+	}
+	p.selectCtrl = &webControl{
+		Kind: "select",
+		Name: strings.TrimSpace(htmlTagAttribute(attrs, "name")),
+		Form: p.form,
+	}
+}
+
+// startOption adds one entry to the open <select>, remembering which entry the
+// markup marked as selected.
+func (p *webParser) startOption(attrs string) {
+	if p.selectCtrl == nil {
+		p.addText(" ")
+		return
+	}
+	p.selectOption = strings.TrimSpace(htmlTagAttribute(attrs, "value"))
+	p.selectOptionText.Reset()
+	if htmlTagAttributeHas(attrs, "selected") && len(p.selectCtrl.Options) > 0 {
+		p.selectCtrl.Choice = len(p.selectCtrl.Options)
+	}
+	p.selectOptionSelected = htmlTagAttributeHas(attrs, "selected")
+}
+
+// endOption files the option's label, which is what the reader shows. The
+// value attribute is what the form submits, so it is kept separately on the
+// control that endSelect builds.
+func (p *webParser) endOption() {
+	if p.selectCtrl == nil {
+		return
+	}
+	label := strings.TrimSpace(p.selectOptionText.String())
+	if label == "" {
+		label = p.selectOption
+	}
+	p.selectCtrl.Options = append(p.selectCtrl.Options, label)
+	p.selectCtrl.OptionValues = append(p.selectCtrl.OptionValues, p.selectOption)
+	if p.selectOptionSelected {
+		p.selectCtrl.Choice = len(p.selectCtrl.Options) - 1
+	}
+	p.selectOption = ""
+	p.selectOptionSelected = false
+	p.selectOptionText.Reset()
+}
+
+// endSelect draws the finished control.
+func (p *webParser) endSelect() {
+	ctrl := p.selectCtrl
+	if ctrl == nil {
+		return
+	}
+	if p.selectOption != "" || p.selectOptionText.Len() > 0 {
+		p.endOption()
+	}
+	p.selectCtrl = nil
+	if len(ctrl.Options) == 0 {
+		return
+	}
+	if ctrl.Choice < 0 || ctrl.Choice >= len(ctrl.Options) {
+		ctrl.Choice = 0
+	}
+	if ctrl.Name != "" && p.form.Field == "" {
+		p.form.Field = ctrl.Name
+	}
+	ctrl.Form = p.form
+	p.emitControl(ctrl, p.topStyle(), true)
+}
+
 func (p *webParser) addText(raw string) {
 	if p.inHead || raw == "" {
+		return
+	}
+	// A field's own text belongs to the field, not to the page: a textarea's
+	// shipped value and an option's label are collected here and drawn once, by
+	// the closing tag, as the control's run.
+	if p.textarea != nil {
+		p.textareaText.WriteString(htmlstd.UnescapeString(raw))
+		return
+	}
+	if p.selectCtrl != nil {
+		p.selectOptionText.WriteString(htmlstd.UnescapeString(raw))
 		return
 	}
 	style := p.topStyle()
@@ -3120,11 +3604,11 @@ func webGradientStamp(g webGradient, has bool) string {
 }
 
 func (d *webDocument) layoutFor(config *Config, elem Element, width int32) *webLayout {
-	stamp := fmt.Sprintf("%d|%s|%d|%d,%d,%d|%d,%d,%d|%s",
+	stamp := fmt.Sprintf("%d|%s|%d|%d,%d,%d|%d,%d,%d|%s|%.3f",
 		width, elem.Font, a11yScaleFontSize(16),
 		d.Paper.R, d.Paper.G, d.Paper.B,
 		d.Text.R, d.Text.G, d.Text.B,
-		webGradientStamp(d.PaperGradient, d.HasPaperGradient))
+		webGradientStamp(d.PaperGradient, d.HasPaperGradient), browserZoomScale())
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.layout != nil && d.stamp == stamp {
@@ -3135,11 +3619,28 @@ func (d *webDocument) layoutFor(config *Config, elem Element, width int32) *webL
 	return d.layout
 }
 
+// invalidateFormState drops the cached layout so the next frame measures the
+// page again. A form control's drawn text comes from its own state (the value
+// typed into a field, the item a select was stepped to, a tick box's tick), so
+// one of those changing is the one case where the page's text changes without
+// the document being replaced.
+func (d *webDocument) invalidateFormState() {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.stamp = ""
+	d.mu.Unlock()
+}
+
 func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *webLayout {
 	if width < 80 {
 		return nil
 	}
-	baseSize := webBaseFontSize(config, elem.Font)
+	// The reader's zoom scales the body size the whole page is measured from,
+	// so the wrap, row height and headings all move together. The default step
+	// is 1.0, leaving every other web view untouched until a reader zooms.
+	baseSize := webBaseFontSize(config, elem.Font) * browserZoomScale()
 	baseFont := getFontSized(config, elem.Font, int(baseSize))
 	if baseFont == nil {
 		return nil
@@ -3205,10 +3706,13 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	l.layoutFloats(floats, padX, contentW)
 	sort.SliceStable(layout.Rects, func(i, j int) bool { return layout.Rects[i].Z < layout.Rects[j].Z })
 	layout.Links = collectWebLinks(layout)
-	// Every play card is also a link the browser walks and activates; the
-	// merge keeps rows in reading order so the video sits where it drew.
-	if vids := collectWebVideoLinks(layout); len(vids) > 0 {
-		layout.Links = append(layout.Links, vids...)
+	// Play cards and form controls are cursor stops too: the same hit shape as
+	// a link, with the video or the control attached instead of a destination.
+	// One merge keeps every kind in reading order, so a field sits where it
+	// drew and the D-pad walks the page top to bottom.
+	layout.Links = append(layout.Links, collectWebVideoLinks(layout)...)
+	layout.Links = append(layout.Links, collectWebControls(layout)...)
+	if len(layout.Links) > 0 {
 		sort.SliceStable(layout.Links, func(i, j int) bool {
 			return layout.Links[i].Row < layout.Links[j].Row
 		})
@@ -3518,7 +4022,15 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 		}
 
 		for _, run := range block.Runs {
-			segments := strings.Split(run.Text, "\n")
+			// A form control paints its current state, not the text it was
+			// parsed with: a filled field, a stepped select and a ticked box all
+			// read back from the control, so changing one is a re-layout rather
+			// than a second copy of the run to keep in sync.
+			runText := run.Text
+			if run.Style.Control != nil {
+				runText = run.Style.Control.Display()
+			}
+			segments := strings.Split(runText, "\n")
 			for si, segment := range segments {
 				if si > 0 {
 					if len(line) == 0 {
@@ -3536,6 +4048,13 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 					// Keep code lines as one measured run; a long one is
 					// clipped to the page width instead of re-flowed.
 					words = []string{strings.TrimRight(segment, " ")}
+				}
+				if run.Style.Control != nil && len(words) > 0 {
+					// A control is one box. Splitting its label at the spaces would
+					// draw a field's frame as two chips and let the cursor stop on
+					// each half, so the whole label is one word, ellipsized when the
+					// page is too narrow to hold it.
+					words = []string{strings.Join(words, " ")}
 				}
 				// A run only gets a space before it when the source had one.
 				// Inserting one at every style boundary pushed punctuation
@@ -3573,17 +4092,31 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							wordW = int32(w2)
 						}
 					}
+					color := webResolveColor(run.Style, d)
+					if run.Style.Control != nil && run.Style.Control.PlaceholderShown() {
+						// The reader has one face, so an italic prompt is not something it
+						// can draw (webStyle.Italic is parsed but never painted). Dimming
+						// toward the paper is the cue that actually renders: an empty
+						// field reads as a prompt, and stops the moment a value is typed.
+						color = sdl.Color{
+							R: uint8((int(color.R) + 2*int(d.Paper.R)) / 3),
+							G: uint8((int(color.G) + 2*int(d.Paper.G)) / 3),
+							B: uint8((int(color.B) + 2*int(d.Paper.B)) / 3),
+							A: color.A,
+						}
+					}
 					line = append(line, webRunPos{
 						Text:      text,
 						X:         x,
 						Font:      font,
-						Color:     webResolveColor(run.Style, d),
+						Color:     color,
 						Bold:      run.Style.Bold,
 						Underline: run.Style.Underline,
 						Strike:    run.Style.Strike,
 						Href:      run.Style.Href,
 						HasBg:     run.Style.HasBg && !block.HasBg,
 						Bg:        run.Style.Background,
+						Control:   run.Style.Control,
 					})
 					x += wordW
 					if x > lineMax {
@@ -3710,6 +4243,54 @@ func webHrefFollowable(href string) bool {
 // A link that wraps across rows, or a nav entry repeated in the header and the
 // footer, appears once; walking it with the D-pad would otherwise stop twice
 // on the same place. In-page anchors have nothing to fetch and are skipped.
+// collectWebControls finds the form controls a page drew. A control is one run
+// or a few adjacent runs sharing the same *webControl, so it is grouped exactly
+// the way a link's runs are, and it becomes the same kind of hit: the browser
+// outlines it, walks it with the D-pad and activates it.
+func collectWebControls(layout *webLayout) []webLinkHit {
+	var hits []webLinkHit
+	for rowIdx := 0; rowIdx < len(layout.Rows); rowIdx++ {
+		row := layout.Rows[rowIdx]
+		for i := 0; i < len(row.Runs); {
+			ctrl := row.Runs[i].Control
+			if ctrl == nil || row.Runs[i].Font == nil {
+				i++
+				continue
+			}
+			startX := row.Runs[i].X
+			endX := startX
+			label := ""
+			j := i
+			for ; j < len(row.Runs); j++ {
+				cur := row.Runs[j]
+				if cur.Control != ctrl || cur.Font == nil {
+					break
+				}
+				w, _, err := cur.Font.SizeUTF8(cur.Text)
+				if err != nil {
+					break
+				}
+				label += cur.Text
+				if end := cur.X + int32(w); end > endX {
+					endX = end
+				}
+			}
+			if j == i {
+				j = i + 1
+			}
+			hits = append(hits, webLinkHit{
+				Row:     rowIdx,
+				X:       startX,
+				W:       endX - startX,
+				Text:    strings.TrimSpace(label),
+				Control: ctrl,
+			})
+			i = j
+		}
+	}
+	return hits
+}
+
 func collectWebLinks(layout *webLayout) []webLinkHit {
 	if layout == nil {
 		return nil

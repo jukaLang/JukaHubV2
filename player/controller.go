@@ -67,6 +67,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if browserCookiePanel.open {
 		return ctrlBrowserCookies(e, config)
 	}
+	// And the saved-page picker, where A opens and X removes.
+	if browserBookmarkPanel.open {
+		return ctrlBrowserBookmarks(e, config)
+	}
 	// The Phone Companion QR card is modal, and B is how a phone closes it
 	// after pairing: the phone's remote pushes a real B event.
 	if companion.open {

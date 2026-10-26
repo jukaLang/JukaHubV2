@@ -11,8 +11,245 @@ For anything older, the git log and the
 
 ## [Unreleased]
 
+### Added
+
+- **The browser can fill in and send a form.** The reader dropped every
+  `<input>` as a void tag, so a search page arrived with no box to type into and
+  the one thing the browser is most often opened for was impossible. A form is
+  now content: a text field draws as a filled chip showing its value, its
+  placeholder or **Tap to type**, and A (or a tap) opens the keyboard on it; a
+  `<textarea>`
+  does the same with the text between its tags; a `<select>` steps through its
+  options in place, wrapping, since a handheld has no dropdown and needs none; a
+  checkbox or radio draws its box and toggles in place, a radio clearing the rest
+  of its group; a submit button sends the form. Every control is a cursor stop
+  among the page's links, so the D-pad and the link picker reach it. A submission
+  posts nothing — the reader cannot POST — so the form's fields go out as a GET
+  to its own action, which is the shape a search box accepts; a form is sent
+  with every named control it holds, not just the one that was typed into, so a
+  text box plus a filter select produces one working address. A submit on an empty
+  form opens the first field instead of sending a blank search. A field opens
+  holding the page's own value selected, the way the address bar does, so
+  correcting a prefilled search is one press rather than a hold-to-delete. A
+  submission also carries the form's hidden inputs (the `ie=utf-8`, site-key and
+  locale constants a search handler expects), and two forms that share one action
+  stay separate, so one press cannot send the other form's fields.
+  ([player/webpage.go](player/webpage.go), [player/browser.go](player/browser.go),
+  [player/vkeyboard.go](player/vkeyboard.go), [docs/BROWSER.md](docs/BROWSER.md);
+  tests in [player/browserforms_test.go](player/browserforms_test.go)).
+
+- **One page header across every screen.** The Emulators page drew its own title,
+  summary and count by hand, so it read as a bespoke panel next to Tools and
+  About; it now opens with the same `UIPageHeader` those pages build — a tinted
+  glyph well, the title, a summary under it and a read-out opposite. The
+  full-screen panels that still laid the band out by hand (Games, Save Manager,
+  Downloads, Curation, Community and its What's new / BIOS Doctor / Diagnostics
+  sub-pages, Compatibility, Windows Apps, IP streams, Game profiles, Power Tools,
+  RetroAchievements, Game options, Random game, LAN Play, and the browser's
+  Links / Saved pages / Saved cookies overlays) go through it too, via
+  `UIPanelHeader`/`UIPanelHeaderBand`, so the band a panel reserves and the bar
+  that fills it are one measurement rather than two that can drift apart. A
+  sub-page that started its body at a guessed offset now starts under the
+  measured band, and the Power Tools output viewer and its scroll counter moved
+  with it — the count sits beside the footer rather than over the subtitle.
+  A subtitle colour was added to the component so a panel that warned in amber
+  keeps warning in amber.
+  ([player/emutiles.go](player/emutiles.go),
+  [player/components.go](player/components.go); tests in
+  [player/emulators_test.go](player/emulators_test.go) and
+  [player/page_header_consistency_test.go](player/page_header_consistency_test.go)).
+- **The browser remembers where you were reading.** Following a link and
+  pressing Back (or Forward, or Reload) returns you to the paragraph you were
+  on instead of the top of the page. Positions are kept per address for the
+  session, bounded so a long browse cannot grow them without limit; a fresh
+  navigation — a typed address, a link, Home — still starts at the top, because
+  that is a new place, not a return. The restore is applied on the render thread
+  once the page is laid out and clamped to its length, so a page that changed
+  since it was last read is never scrolled out of range.
+  ([player/browserscroll.go](player/browserscroll.go); tests in
+  [player/browserscroll_test.go](player/browserscroll_test.go)).
+- **Text zoom in the browser.** The reader's page can be scaled 75%–160% with
+  L2/R2 on a pad or `-`/`+` on a keyboard, independent of the global
+  accessibility text size. The whole styled page is re-measured from the new
+  body size, so the wrap, row height and headings scale together; the toolbar
+  chip names the scale whenever it is off 100%, and the choice is remembered across
+  pages and relaunches. On a 5-inch panel the size of the words is a first-order
+  control, so the web page's L2/R2 moved from jump-to-top/bottom (still one held
+  D-pad away) to zoom.
+  ([player/browserzoom.go](player/browserzoom.go); test in
+  [player/browserzoom_test.go](player/browserzoom_test.go)).
+- **A zoom chip on the browser toolbar.** The reader's text scale now has a
+  home in the UI, not just the keyboard's `-`/`+` and the L2/R2 triggers: a
+  measured chip beside the mode chip shows the current scale, lights up when it
+  is off 100%, and steps up one notch on a tap — wrapping, so a tap always does
+  something. On a gamepad-only handheld this is the discoverable way to reach
+  the zoom. It gives up its spot first on a narrow panel, before Search.
+  ([player/textbrowser.go](player/textbrowser.go)).
+- **The named Power Mode is now in the Accessibility panel.** Battery Saver /
+  Balanced / Performance / Default was only reachable from Quick Settings; it
+  now has its own Accessibility row that steps through the same helper, so a
+  player picks a battery-vs-speed trade-off without learning two separate
+  toggles. ([player/a11y.go](player/a11y.go);
+  test in [player/a11y_powermode_test.go](player/a11y_powermode_test.go)).
+- **Dropping a file on the window plays it (desktop).** A video or audio file
+  dragged onto JukaHub plays through the embedded player, an image opens in the
+  viewer, a folder points at Files, and an unknown extension says so instead of
+  silently ignoring the drop; a path that does not exist is refused up front.
+  The handheld has no pointer, so this never fires there.
+  ([player/dropfile.go](player/dropfile.go); test in
+  [player/dropfile_test.go](player/dropfile_test.go)).
+- **Podcast feeds survive an offline boot.** The last-known-good copy of each
+  feed is kept on the card (30-day window, 1 MiB cap) and served only when the
+  network fetch fails outright — a live response, a 304 or an HTTP error status
+  all win first, so a feed that is genuinely gone is never replayed as if it
+  were live. ([player/feedcache.go](player/feedcache.go); tests in
+  [player/feedcache_test.go](player/feedcache_test.go)).
+- **A bounded image-decode pool and a general semaphore.** Image decoding runs
+  under a shared cap (2 jobs on the handheld, 4 on desktop) so a fan-out of
+  decodes cannot open one RGBA buffer per item on a 1 GB device, and a weighted
+  context-aware semaphore (`Acquire`/`TryAcquire`/`Release`) is available for
+  every other concurrency path.
+  ([player/bounded.go](player/bounded.go); tests in
+  [player/bounded_test.go](player/bounded_test.go)).
+- **A finger-sized hit area for compact controls.** `growTouchTarget` grows a
+  drawn control's tap area to a 44px minimum, centred on what is drawn, so the
+  36px Exit pill absorbs a near-miss press without its drawn geometry moving.
+  ([player/touchtarget.go](player/touchtarget.go); tests in
+  [player/touchtarget_test.go](player/touchtarget_test.go)).
+- **The web builder stamps `schemaVersion`.** A config the builder exports now
+  carries the format version the player checks on load instead of none, keeping
+  an imported design's own version when it has one.
+  ([script.js](script.js); the 17 web-builder tests still pass).
+
 ### Fixed
 
+- **The reader's form controls draw glyphs the bundled font has.** The first cut
+  of the form work drew the tick box with U+2610/U+2611, the radio with U+25C9
+  and the select arrow with U+25BE — none of which Inter carries, so the font
+  sanitiser replaced each with an ellipsis and a checkbox read as "…". They draw
+  with □ ■ ○ ● ▼ now, and a test walks every control's drawn text past
+  `fontCoversRune` so a symbol that is not in the face cannot come back.
+- **An unclosed form control no longer swallows the rest of the page.** A
+  `<textarea>` or `<select>` whose closing tag never arrived collected every
+  following block as its own value, so the page below it vanished into one field.
+  It now ends at the next element that starts a new context (a paragraph, a
+  table, the next field), while its own `<option>`s still belong to it.
+- **An empty field's prompt reads as a prompt.** The reader has one face and
+  never painted `webStyle.Italic`, so a placeholder looked exactly like a value;
+  it is now dimmed toward the paper, and stops being dimmed the moment the field
+  holds something.
+- **Typing into a page's field no longer overwrites the page.** The keyboard's
+  text went to the browser element's own variable, so filling a form control put
+  the half-typed query in place of the page behind the keyboard; it now goes to
+  the field's own buffer and the page stays on screen
+  ([player/core.go](player/core.go)).
+- **The browser opens on its start page, not on whatever the last run was
+  reading.** The content and the address are saved with the rest of the config,
+  and the first-open check read a filled content variable as a page this run had
+  opened — so every launch came back to yesterday's page (a news home page in the
+  report that prompted this) behind a stale address bar, with no request going
+  out at all. The first open now always loads DuckDuckGo Lite; returning to a
+  browser already used in the same run still keeps the page on screen, and a
+  link from chat or the Home card still claims the session first.
+  ([player/browser.go](player/browser.go); test in
+  [player/browser_test.go](player/browser_test.go)).
+- **The browser's bottom chips fit their labels again.** Thirteen actions now
+  share the row, and equal shares sized it by the count alone, so the widest
+  label ("Forward") overflowed its chip on every panel and "Search" did the same
+  at 960×544 and below — a control whose word is clipped is one the user has to
+  guess at. A chip is now as wide as its own word needs to be at that panel's
+  size, and the column's surplus is shared out pro rata, which fits with room to
+  spare at 1280×720, 960×544 and 800×480.
+  ([player/browser.go](player/browser.go); guard in
+  [player/browsercookies_site_test.go](player/browsercookies_site_test.go)).
+- **Five ways a "Wi-Fi stopped working" report turned out to be code.** A
+  launcher's PATH can miss the sbin folders where firmware images keep
+  `wpa_cli` and the DHCP clients, so the picker claimed they were not
+  installed — tools are now resolved on PATH and then in the standard system
+  directories. A soft-blocked radio surfaced as wpa_cli's bare `FAIL`; the
+  scan now says "Wi-Fi is turned off". WPA3-personal routers could not be
+  joined at all (the default key management is WPA-PSK-only) — secured joins
+  offer `WPA-PSK SAE` and optional management-frame protection, falling back
+  to the old defaults when the supplicant rejects either. A stored password
+  the router no longer accepted was unfixable from the panel (the row retried
+  the same key forever) — it now opens the passphrase keyboard, and the new
+  key replaces the stale supplicant entry only after it joins. An image whose
+  only DHCP client is `dhclient` never got a lease attempt.
+  ([player/wifi.go](player/wifi.go), [player/wifi_ui.go](player/wifi_ui.go);
+  tests in [player/wifi_resilience_test.go](player/wifi_resilience_test.go),
+  docs in [docs/WIFI.md](docs/WIFI.md)).
+- **A tap in the Media gallery plays the row it lands on.** The list layout
+  draws 100px rows at a 114px pitch, but the click path always used the
+  grid's cell math — 81px cells against the shipped six-row list — so a tap
+  on a visible row addressed the wrong result, and both layouts stopped
+  hit-testing at the first screenful (`cols*rows`), which made every row
+  after the sixth untappable once paging had grown the list. The renderer
+  and the pointer now share one row measure (`searchResultIndexAt`), a grid
+  or empty frame clears the list's Audio/Video/Chat pill rects instead of
+  leaving them to answer taps aimed at nothing, and the results box rejects
+  presses aimed at the controls above it
+  ([player/core.go](player/core.go), [player/main.go](player/main.go),
+  [player/media_paging.go](player/media_paging.go); tests in
+  [player/searchresults_click_test.go](player/searchresults_click_test.go)).
+- **The browser's toolbar and cookie strip are full-size tap targets.** The
+  drawn chips are 32px tall and the cookie strip is a font height — fine for
+  a D-pad, short for a fingertip on the Brick's panel. The click path now
+  grows every chrome hit area to the 44px handheld touch minimum, centred on
+  the drawn rect and with its horizontal geometry untouched, so neighbours'
+  gaps still guard against fat-finger overlaps while the drawn chrome looks
+  exactly as before. This is the browser's slice of the touch-target audit in
+  the modernization plan
+  ([player/textbrowser.go](player/textbrowser.go),
+  [player/main.go](player/main.go),
+  [player/browsercookies_picker.go](player/browsercookies_picker.go)).
+- **The Internet Browser's toolbar chips fit their labels on both panels.**
+  SEARCH and SCROLL drew 97px and 94px of text inside fixed 84px and 80px
+  chips at the Smart Pro's 1280 canvas — the words ran past the chip's
+  border — and on the Brick those fixed widths left the address field short
+  enough to truncate a URL that fits on the Smart Pro. Every chip now sizes
+  itself from the same `small` font the frame draws with (label + padding,
+  re-clamped so the row always fits the panel), the ad-filter chip takes
+  what is left rather than a fraction of the panel, and the address field
+  gets the remainder. The chips' click rects come from that same layout, and
+  a two-canvas render test now fails if any chip's label is wider than the
+  chip
+  ([player/textbrowser.go](player/textbrowser.go),
+  [player/browser_devices_render_test.go](player/browser_devices_render_test.go)).
+- **The screensaver's hint line no longer runs under the Cookies row in
+  Settings → General.** The injected helper ("Idle time before the screensaver
+  starts. Tap to change.") draws 620px wide; at y=576 its tail ran beneath the
+  retention row's band (556..604) in the right column and was cut mid-word by
+  the button. It now sits at y=612 — under its own button, 8px below the row
+  and above the panel's bottom edge — and a geometry assertion in the row's
+  render test keeps the two boxes apart on every canvas
+  ([player/widgets.go](player/widgets.go)).
+- **The toolbox scan-gate test no longer races the tool it launches.** The
+  second press on a scanner row runs the tool on a goroutine that resolves the
+  install through the tools-dir override, while the test's cleanup restored
+  that override the moment the assertions passed — under `-race` the detector
+  saw the cleanup write against the runner's read, and outside it the runner's
+  view of the fake install was a coin flip. The test now waits the async
+  runner out before any cleanup can land on it
+  (`player/toolbox_scan_gate_test.go`, `player/powertools_ui_test.go`).
+- **The screensaver auto-tick tests no longer depend on what earlier tests
+  left behind.** `screensaverAutoTick` reads the panels behind
+  `ambientEntryBlocked`, the dock screen, the embedded player, the install
+  bar, the patch label and the music state — none of which the tick tests
+  owned, so a predecessor that left one of them raised held the saver off
+  silently and the test failed for a reason it never touched. Both tests now
+  pin that whole gate (save → clear → restore), and a failure names the
+  blocking input instead of reporting a bare "did not start"
+  (`player/screensaver_test.go`).
+- **The first-run tour's controls hint no longer runs across the card.** The
+  line was anchored 18px above the card's bottom edge, but the band under the
+  buttons is only 28px deep and the line is 22px tall on the Brick's compact
+  canvas (30px at 1280): a first-run photo showed it drawn through the card's
+  bottom border and against the Next button. It now sits centred in the dimmed
+  band below the card, clamped to stay on screen on short panels. The step
+  body was also cut by pixel count rather than at word boundaries — "then"
+  broke as "th" / "n shows" on the Brick, and a "…" was appended even when
+  nothing was cut; it is word-wrapped to the same two lines
+  ([player/onboarding.go](player/onboarding.go), `player/onboarding_render_test.go`).
 - **Buttons now measure the label they draw, so a row's derived value is
   neither clipped nor printed raw.** `UIButton` ellipsized the label template
   (`Screensaver · $screensaverTimeoutLabel`) and then drew the *substituted*
@@ -35,6 +272,50 @@ For anything older, the git log and the
 
 ### Added
 
+- **The diagnostics bundle carries the cookie session's date and retention
+  window.** A bug report about being signed out arrived without the two
+  numbers that decide it. The bundle now has a `Saved cookies` section between
+  the report and the log — `Session start: Oct 12 2026 (40 days ago)` from the
+  oldest first-seen stamp still on the card, and `Retention    : 30 days` (or
+  `Keep`) from the setting — so a retention contradiction ("30-day window,
+  40-day session") is visible at a glance. A jar with no cookies says
+  `none stored` instead of a zero date, and a stamp ahead of the device's
+  clock says so — handhelds with a reset clock are a real support case
+  ([player/diagnostics_bundle.go](player/diagnostics_bundle.go),
+  `player/diagnostics_bundle_test.go`).
+- **Each site's row in the saved-cookie picker carries its own session start.**
+  The Forget chip's count said how much would go, but two sites signed in on
+  different days looked the same age — the one date on the Settings row is the
+  whole jar's oldest stamp. A picker row now reads `2 cookies · since Oct 12`,
+  the oldest first-seen stamp among that host's cookies alone, so the age of
+  one site's login is visible before the second press that drops it. The site
+  name's budget shrinks by the label's real width so the two right-aligned
+  strings can never be drawn through each other, a host with no stamp shows
+  its count alone, and the forget-all row keeps no date because it is not a
+  site
+  ([player/browsercookies.go](player/browsercookies.go),
+  [player/browsercookies_picker.go](player/browsercookies_picker.go),
+  `player/browsercookies_picker_age_test.go`).
+- **The Games Library header carries the clip count, the same figure Settings
+  reports.** The Video snaps row could say `On · 12`, but the screen where the
+  previews actually play said only how many games and covers it held. The
+  status line under the title now appends `· 12 clip(s)` — or `· no clips` on
+  a card with none, and nothing at all until the first count lands, exactly
+  the row's own rule — read from the same census over `gameSnapPath`, so the
+  two can never disagree. Opening the library panel is what asks for the
+  count: one scene-work scan, reused for 30 seconds
+  ([player/game_library_ui.go](player/game_library_ui.go),
+  `player/snappreview_count_test.go`).
+- **Pressing an installed package row offers Remove or Reinstall instead of
+  running Install again.** A press always started a fresh download, even on a
+  row already marked ✓ on the card. A press on an installed row now opens a
+  menu over the details pane — **Reinstall** (wipe the old copy, then fetch a
+  fresh one; the row's mark goes with the wipe so a failed download cannot
+  leave a tick on an empty directory), **Remove** (take the directory off the
+  card and unmark the row), **Cancel** — on the pad, the keyboard, and by
+  tapping the focused row, which is how a touch user presses a row at all.
+  Uninstalled rows still install in one press
+  ([player/packages.go](player/packages.go), `player/packages_test.go`).
 - **The Settings cookie row says when the saved session was first stored.**
   `Saved cookies · 30 days` answered "30 days from when?" with nothing to point
   at. The row now carries the reference point — `Cookies · 30d · since Oct 12` —

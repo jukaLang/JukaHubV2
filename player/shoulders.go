@@ -438,6 +438,11 @@ func dynamicListShoulder(s padShoulder, config *Config, scene SceneConfig, eleme
 }
 
 func packageListShoulder(s padShoulder) bool {
+	// While a row's action menu is open the pad belongs to it: paging the
+	// list would move the rows away from the package the menu is acting on.
+	if packageActionsOpen {
+		return true
+	}
 	packagesMutex.Lock()
 	count := len(packagesList)
 	packagesMutex.Unlock()
@@ -535,22 +540,17 @@ func textBrowserShoulder(s padShoulder, element Element) bool {
 	if textBrowserElementSource(element) == textBrowserSourceWeb {
 		// A web page scrolls by styled layout rows, and its L1/R1 are handled
 		// in browser.go; applying the plain-text page jump here as well
-		// scrolled twice per press. The triggers keep their jump-to-end
-		// meaning, measured with the same rows the renderer draws.
+		// scrolled twice per press. The triggers instead scale the reader
+		// text — on a 5-inch panel the size of the words is a first-order
+		// control, while jump-to-top/bottom is still one held D-pad away.
 		switch s {
 		case padL2:
-			textBrowserScrollY = 0
+			return browserZoomStep(appConfig, element, -1)
 		case padR2:
-			if layout := browserPageLayout(appConfig, element); layout != nil {
-				textBrowserScrollY = browserScrollMax(element, layout)
-			}
+			return browserZoomStep(appConfig, element, 1)
 		default:
 			return false
 		}
-		textBrowserScrollVelocity = 0
-		textBrowserScrollCooldown = 0
-		PlayNavSound()
-		return true
 	}
 	page := int32(20)
 	switch s {

@@ -205,6 +205,12 @@ func openGameLibraryPanel() {
 	gameLib.gameHits = nil
 	gameLib.recents = recentGames()
 	gameLib.lib = scanGameLibrary()
+	// The header carries the clip count — the same figure Settings → General
+	// reports — so opening the library is when the ask starts. The scan runs
+	// as scene work off this goroutine and the header reads the finished
+	// figure when it lands; the census is reused for 30 seconds, so flapping
+	// the panel open does not re-walk the card.
+	snapClipCountRefresh(snapPreviewRoot(appConfig))
 	PlayActivateSound()
 }
 
@@ -276,6 +282,18 @@ func gameLibraryStatus() string {
 	}
 	status := itoa(gameLib.lib.Total) + " game(s) in " + itoa(len(gameLib.lib.Systems)) + " console(s)"
 	status += " · " + itoa(gameLib.lib.WithArt) + " cover(s) (" + itoa(coverPercent(gameLib.lib.WithArt, gameLib.lib.Total)) + "%)"
+	// The clip count, from the same census the Settings row reads — the figure
+	// that matters most on this screen, because this is where the previews
+	// play. It stays off the line until the first scan lands, the way the row
+	// stays plain, and a card with none says so in words rather than as a
+	// zero that reads like a broken figure.
+	if withClip, _, known := snapClipCount(); known {
+		if withClip == 0 {
+			status += " · no clips"
+		} else {
+			status += " · " + itoa(withClip) + " clip(s)"
+		}
+	}
 	if len(gameLib.recents) > 0 {
 		status += " · " + itoa(len(gameLib.recents)) + " recent"
 	}
@@ -721,8 +739,11 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	medH := int32(medium.Height())
 
 	const pad = int32(24)
-	// Same header metrics as every other panel: title, subtitle line, divider.
-	headerH := int32(18) + medH + int32(4) + smallH + int32(14)
+	// Same header as every other panel: the shared page header, measured before
+	// the columns are placed so the list starts under the bar rather than under
+	// an assumption about it.
+	header := UIPanelHeader("Games", gameLibraryStatus(), "gamepad")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := int32(16) + smallH
 	panelW := int32(1120)
 	if panelW > screenWidth-48 {
@@ -744,24 +765,29 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Games", ColorTextPrimary(), panelX+pad, panelY+18)
+	header.X = panelX + pad
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*pad
+	band := uiPageHeaderMetricsFor(config, header)
+	UIPageHeaderDraw(renderer, config, header)
+
 	// The active search sits on the title line so it is visible at a glance
-	// instead of being hidden in the subdued status line underneath.
+	// instead of being hidden in the subdued status line underneath. The line is
+	// measured from the band, so the label stays centred on the title at any
+	// accessibility size.
 	if query := gameLib.query; query != "" {
 		label := ellipsize(font, "Search: "+query, panelW/2)
 		w, _, _ := font.SizeUTF8(label)
 		const ringReserve = int32(96)
 		renderText(renderer, config, font, label, accentColor,
-			panelX+panelW-pad-ringReserve-int32(w), panelY+18+(medH-smallH)/2)
+			panelX+panelW-pad-ringReserve-int32(w), header.Y+(band.WellBox-smallH)/2)
 	}
-	renderText(renderer, config, font, gameLibraryStatus(), ColorTextTertiary(),
-		panelX+pad, panelY+18+medH+4)
 
 	// Cover completeness at a glance: a ring that fills as the library gains
 	// art, with the percentage inside it.
 	if gameLib.lib.Total > 0 {
 		drawCoverCompletenessRing(renderer, config,
-			panelX+panelW-pad-26, panelY+18+medH/2, 26,
+			panelX+panelW-pad-26, header.Y+band.WellBox/2, 26,
 			coverPercent(gameLib.lib.WithArt, gameLib.lib.Total))
 	}
 

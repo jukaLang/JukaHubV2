@@ -310,8 +310,14 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	// the rounded border at both the 34px and the scaled-up medium font.
 	rowH := int32(76)
 	rowGap := int32(10)
-	// Same header metrics as every other panel: title, subtitle line, divider.
-	headerH := int32(18) + medH + int32(4) + smallH + int32(14)
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar drawn into it measure the same height.
+	subtitle := netplayPanel.game.Title
+	if system := strings.TrimSpace(netplayPanel.game.System); system != "" {
+		subtitle += " · " + system
+	}
+	header := UIPanelHeader("LAN Play", subtitle, "tools")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	// Address line, readiness line and the same-core/ROM reminder.
 	infoH := int32(18) + medH + int32(8) + 2*smallH + int32(26)
 	footerH := int32(14) + smallH
@@ -336,13 +342,10 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "LAN Play", ColorTextPrimary(), panelX+pad, panelY+18)
-	subtitle := netplayPanel.game.Title
-	if system := strings.TrimSpace(netplayPanel.game.System); system != "" {
-		subtitle += " · " + system
-	}
-	renderText(renderer, config, font, ellipsize(font, subtitle, panelW-2*pad),
-		ColorTextTertiary(), panelX+pad, panelY+18+medH+4)
+	header.X = panelX + pad
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*pad
+	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
 	rowY := panelY + headerH

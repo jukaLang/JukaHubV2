@@ -241,6 +241,9 @@ func fetchPackagesContext(ctx context.Context, config *Config) {
 		packagesFocusIndex = 0
 	}
 	packagesMutex.Unlock()
+	// A fresh list invalidates an open row menu: it was acting on the list
+	// that just went away.
+	closePackageActions()
 
 	publishCustom("packages_list", pkgs)
 	publishCustom("packages_error", nil)
@@ -266,6 +269,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	if len(pkgs) == 0 {
 		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
 			"·", "No packages installed", "Press Refresh to fetch the registry.")
+		renderPackageActions(renderer, config, element)
 		return
 	}
 
@@ -485,6 +489,10 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 			renderText(renderer, config, smallFont, url, sdl.Color{R: 110, G: 200, B: 255, A: 255}, detailX+14, urlY)
 		}
 	}
+
+	// The row menu floats over the details pane, last, so nothing in either
+	// pane paints over it.
+	renderPackageActions(renderer, config, element)
 }
 
 // packageRowPadY is the breathing room above and below a row's single line.
@@ -566,6 +574,24 @@ func wrapPackageText(text string, font *ttf.Font, maxWidth int32) []string {
 
 // handlePackageInput handles keyboard navigation for a packagelist element.
 func handlePackageInput(e *sdl.KeyboardEvent, config *Config) {
+	// While a row's action menu is open it owns the keys: the list behind it
+	// must not scroll away from the package the menu is acting on, and Escape
+	// closes the menu instead of leaving the scene.
+	if packageActionsOpen {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			packageMenuMove(-1)
+		case sdl.K_DOWN:
+			packageMenuMove(1)
+		case sdl.K_RETURN, sdl.K_SPACE:
+			activatePackageAction(config)
+		case sdl.K_BACKSPACE, sdl.K_ESCAPE:
+			closePackageActions()
+			PlayBackSound()
+		}
+		return
+	}
+
 	packagesMutex.Lock()
 	n := len(packagesList)
 	packagesMutex.Unlock()
@@ -590,12 +616,9 @@ func handlePackageInput(e *sdl.KeyboardEvent, config *Config) {
 			packagesFocusIndex = n - 1
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
-		if packagesFocusIndex >= 0 && packagesFocusIndex < n {
-			packagesMutex.Lock()
-			p := packagesList[packagesFocusIndex]
-			packagesMutex.Unlock()
-			go downloadAndInstallPackage(config, p)
-		}
+		// One press, three meanings: run the open menu's item, offer the menu
+		// on a row already on the card, install a row that is not.
+		packagePress(config)
 	case sdl.K_BACKSPACE, sdl.K_ESCAPE:
 		for _, scene := range config.Scenes {
 			if scene.Name == "Main" {
@@ -620,6 +643,18 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 		}
 		elemW := getElementWidth(e, 1160)
 		elemH := getElementHeight(e, 500)
+		// The open row menu floats over the details pane, outside the list
+		// bounds checked below, so it is hit first: a tap picks an item, and a
+		// tap anywhere else closes it.
+		if packageActionsOpen {
+			if idx, ok := packageActionsHit(mx, my, config, e); ok {
+				packageActionsFocus = idx
+				activatePackageAction(config)
+			} else {
+				closePackageActions()
+			}
+			return
+		}
 		listW := elemW*3/5 - 16
 		if mx < e.X || mx > e.X+listW || my < e.Y || my > e.Y+elemH {
 			return
@@ -641,10 +676,280 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 		for i := start; i < start+maxVisible && i < n; i++ {
 			iy := e.Y + 10 + int32(i-start)*lineH
 			if my >= iy && my <= iy+lineH {
-				packagesFocusIndex = i
+				if i == packagesFocusIndex {
+					// The tap on the focused row is the press — a touch user's
+					// A button. It installs an uninstalled row and opens the
+					// Remove/Reinstall menu on an installed one.
+					packagePress(config)
+				} else {
+					packagesFocusIndex = i
+				}
 				return
 			}
 		}
 		return
+	}
+}
+
+// --- Row actions: what a press on an installed package does ---
+
+// packageActionItems is the menu a press on a row that is already on the card
+// opens. Such a row has no "Install" left to run — the press used to run one
+// anyway — so the two things an installed package can become are offered
+// directly: Reinstall (wipe the old copy, fetch a fresh one) and Remove.
+// Cancel sits last so the default focus is the replacement, not the
+// destructive choice.
+var packageActionItems = []string{"Reinstall", "Remove", "Cancel"}
+
+var (
+	// packageActionsOpen is the state of that menu. It belongs to one row:
+	// the package it acts on is stored, not re-read from the list, so rows
+	// moving behind it cannot retarget it.
+	packageActionsOpen  bool
+	packageActionsFocus int
+	packageActionsPkg   Package
+)
+
+// packageInstallHook is the install a press starts. Production falls through
+// to the real download; a test swaps it to record the call instead of
+// touching the network.
+var packageInstallHook func(config *Config, p Package)
+
+// startPackageInstall runs the install for a press.
+func startPackageInstall(config *Config, p Package) {
+	if packageInstallHook != nil {
+		packageInstallHook(config, p)
+		return
+	}
+	go downloadAndInstallPackage(config, p)
+}
+
+// openPackageActions raises the menu on a package, on its first item.
+func openPackageActions(p Package) {
+	packageActionsOpen = true
+	packageActionsFocus = 0
+	packageActionsPkg = p
+}
+
+// closePackageActions takes the menu down without acting on it.
+func closePackageActions() {
+	packageActionsOpen = false
+}
+
+// packagePress is one press on the packagelist, from any device: it runs the
+// open menu's focused item, offers the menu on an installed row, and installs
+// an uninstalled one — the path the press has always taken, and still takes
+// when there is nothing on the card.
+func packagePress(config *Config) {
+	if packageActionsOpen {
+		activatePackageAction(config)
+		return
+	}
+	packagesMutex.Lock()
+	ok := packagesFocusIndex >= 0 && packagesFocusIndex < len(packagesList)
+	var p Package
+	if ok {
+		p = packagesList[packagesFocusIndex]
+	}
+	packagesMutex.Unlock()
+	if !ok {
+		return
+	}
+	if isPackageInstalled(p) {
+		openPackageActions(p)
+		return
+	}
+	startPackageInstall(config, p)
+}
+
+// removePackageFiles takes the package's directory off the card and out of
+// the installed set. The directory name comes from packageDirName, which maps
+// every path separator away, so the path is always directly inside the
+// install dir and cannot climb out of it.
+func removePackageFiles(p Package) error {
+	safeName := packageDirName(p.Name)
+	if err := os.RemoveAll(filepath.Join(packageInstallDir(), safeName)); err != nil {
+		return err
+	}
+	installedPackagesMu.Lock()
+	delete(installedPackages, safeName)
+	installedPackagesMu.Unlock()
+	return nil
+}
+
+// removeInstalledPackage is the menu's Remove, with a toast either way.
+func removeInstalledPackage(p Package) {
+	if err := removePackageFiles(p); err != nil {
+		showToast("Remove failed: "+err.Error(), ToastError())
+		return
+	}
+	showToast("Removed "+p.Name, ToastSuccess())
+}
+
+// activatePackageAction runs the menu's focused item. The menu closes first,
+// so a second press on a still-open menu cannot run the action twice.
+func activatePackageAction(config *Config) {
+	if !packageActionsOpen {
+		return
+	}
+	item := ""
+	if packageActionsFocus >= 0 && packageActionsFocus < len(packageActionItems) {
+		item = packageActionItems[packageActionsFocus]
+	}
+	p := packageActionsPkg
+	closePackageActions()
+	switch item {
+	case "Reinstall":
+		// Wipe first so the fresh download cannot mix with the old copy's
+		// leftovers, and let the mark go with it: a failed download must not
+		// leave a tick on a row with no files behind it.
+		if err := removePackageFiles(p); err != nil {
+			log.Printf("packages: wipe for reinstall of %s: %v", p.Name, err)
+		}
+		startPackageInstall(config, p)
+	case "Remove":
+		removeInstalledPackage(p)
+	case "Cancel":
+		// Nothing to do: the menu is already closed above.
+	}
+}
+
+// packageMenuMove walks the menu with wrap-around, the way the media grid's
+// action chips do: the key that walked down to Cancel walks back up.
+func packageMenuMove(delta int) {
+	n := len(packageActionItems)
+	if n == 0 {
+		return
+	}
+	next := packageActionsFocus + delta
+	if next < 0 {
+		next = n - 1
+	}
+	if next >= n {
+		next = 0
+	}
+	if next != packageActionsFocus {
+		packageActionsFocus = next
+		PlayNavSound()
+	}
+}
+
+// packageActionsController routes the pad while the menu is open and reports
+// whether it consumed the event: D-pad and B belong to the menu while it is
+// up, so the list behind it cannot move and the scene cannot be left under it.
+func packageActionsController(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if !packageActionsOpen {
+		return false
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		packageMenuMove(-1)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		packageMenuMove(1)
+	case sdl.CONTROLLER_BUTTON_A:
+		activatePackageAction(config)
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		closePackageActions()
+		PlayBackSound()
+	}
+	return true
+}
+
+// packageActionsLayout is the menu's geometry in one place: a box centred
+// over the details pane — never over the list, so the rows the menu acts on
+// stay visible beside it — with a header for the package's name and one
+// measured row per item at the pitch the list itself uses. The renderer, the
+// hit tester and the tests all ask here, so a tap can never land on a menu
+// drawn somewhere else.
+func packageActionsLayout(config *Config, element Element) (box sdl.Rect, header, lineH, nameH int32) {
+	elemW := getElementWidth(element, 1160)
+	elemH := getElementHeight(element, 500)
+	listW := elemW*3/5 - 16
+	detailX := element.X + listW + 16
+	detailW := elemW - listW - 16
+
+	listFont, _ := getCachedFont(config, element.Font)
+	smallFont, _ := getCachedFont(config, "small")
+	if listFont == nil {
+		listFont = smallFont
+	}
+	lineH, nameH, _ = packageRowMetrics(listFont, smallFont)
+
+	w := detailW - 24
+	if w > 280 {
+		w = 280
+	}
+	if w < 120 {
+		w = detailW
+	}
+	header = nameH + 14
+	h := header + int32(len(packageActionItems))*lineH + 10
+	return sdl.Rect{
+		X: detailX + (detailW-w)/2,
+		Y: element.Y + (elemH-h)/2,
+		W: w,
+		H: h,
+	}, header, lineH, nameH
+}
+
+// packageActionItemRect is item i's tap cell inside the box: the full pitch,
+// so the padding between rows belongs to one item or the next and no tap
+// falls through the seam.
+func packageActionItemRect(box sdl.Rect, lineH, header int32, i int) sdl.Rect {
+	return sdl.Rect{
+		X: box.X + 8,
+		Y: box.Y + header + int32(i)*lineH,
+		W: box.W - 16,
+		H: lineH,
+	}
+}
+
+// packageActionsHit finds the item under a tap. The title strip is not an
+// item: it reports no hit, and the caller reads that as "outside" — a tap on
+// the menu's own title closes it, like a tap anywhere else around it.
+func packageActionsHit(mx, my int32, config *Config, element Element) (int, bool) {
+	box, header, lineH, _ := packageActionsLayout(config, element)
+	if mx < box.X || mx >= box.X+box.W || my < box.Y || my >= box.Y+box.H {
+		return 0, false
+	}
+	for i := range packageActionItems {
+		cell := packageActionItemRect(box, lineH, header, i)
+		if mx >= cell.X && mx < cell.X+cell.W && my >= cell.Y && my < cell.Y+cell.H {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// renderPackageActions draws the open row menu over the details pane. The
+// title is the package itself: a menu of Reinstall/Remove must never float
+// free of the row it belongs to.
+func renderPackageActions(renderer *sdl.Renderer, config *Config, element Element) {
+	if !packageActionsOpen {
+		return
+	}
+	listFont, _ := getCachedFont(config, element.Font)
+	smallFont, _ := getCachedFont(config, "small")
+	if listFont == nil {
+		listFont = smallFont
+	}
+	if listFont == nil {
+		return
+	}
+	box, header, lineH, nameH := packageActionsLayout(config, element)
+	drawPanel(renderer, box.X, box.Y, box.W, box.H, PanelFill(242), ColorBorderDefault)
+	renderText(renderer, config, listFont,
+		ellipsize(listFont, packageActionsPkg.Name, box.W-24),
+		accentColor, box.X+12, box.Y+10)
+	for i, item := range packageActionItems {
+		cell := packageActionItemRect(box, lineH, header, i)
+		focused := i == packageActionsFocus
+		drawRow(renderer, cell.X, cell.Y+2, cell.W, cell.H-4, 8, focused, false)
+		color := ColorTextSecondary()
+		if focused {
+			color = ColorTextPrimary()
+		}
+		renderText(renderer, config, listFont, item, color,
+			cell.X+12, cell.Y+2+(cell.H-4-nameH)/2)
 	}
 }

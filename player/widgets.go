@@ -401,11 +401,15 @@ func ensureScreensaverTimeoutSetting(config *Config) {
 			BgColor: "$buttonColor",
 		},
 		Element{
-			Type:  "label",
-			Text:  "Idle time before the screensaver starts. Tap to change.",
-			Font:  "small",
-			X:     340,
-			Y:     576,
+			Type: "label",
+			Text: "Idle time before the screensaver starts. Tap to change.",
+			Font: "small",
+			X:    340,
+			// Below the retention row's band (556..604), not at 576: the line
+			// is ~616px wide, so at 576 its tail ran under the cookie row in
+			// the right column and was cut mid-word. 612 clears the row by 8px
+			// and still ends above the panel's bottom edge.
+			Y:     612,
 			Color: "$theme_text_secondary",
 		},
 	)

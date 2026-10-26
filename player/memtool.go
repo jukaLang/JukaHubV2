@@ -745,12 +745,14 @@ func renderMemPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	medH := int32(medium.Height())
 	const padX = int32(24)
 	lineH := smallH + 8
 	visible := memPanelVisible()
 
-	headerH := 18 + medH + 4 + smallH + 10
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	header := UIPanelHeader(memTitle(), memSubtitle(), "tools")
+	headerH := UIPanelHeaderBand(config, header, 10)
 	footerH := 20 + smallH
 
 	var bodyH int32
@@ -801,8 +803,10 @@ func renderMemPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, memTitle(), ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, ellipsize(font, memSubtitle(), panelW-2*padX), ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	bodyY := panelY + headerH
 	switch memPanel.phase {

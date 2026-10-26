@@ -128,29 +128,82 @@ func ensureBrowserScene(config *Config) {
 		// controller path on this screen rather than a delete-a-file note in
 		// the docs. The chip asks twice before it drops anything.
 		{"Forget", "browser_forget_cookies"},
+		// Save puts the page on screen on the saved list. A page sent in a
+		// chat message, or a release-notes link, otherwise costs a full
+		// retyping session on a D-pad to reach a second time.
+		{"Save", "browser_bookmark_save"},
+		// Marks opens that list. The chip carries the count, so a page saved
+		// from a link is visible on the chip that opens it.
+		{"Marks", "browser_bookmarks"},
+		// Find searches the page already on screen. A long issue or release
+		// page is otherwise a minute of D-pad paging to reach one paragraph.
+		{"Find", "browser_find"},
 	}
-	// The chips share the content width, computed from how many there are so
-	// an added action never runs off the 1232px design column at 800x480.
+	// The chips share the content width, but not equally: each one is as wide
+	// as its own word needs to be at this panel's size — measured with the font
+	// the row is drawn in, then expressed in the 1232px design column the scene
+	// is written in — and the column's surplus is shared out pro rata on top.
+	// Equal shares sized the row by the number of actions alone, so once the row
+	// grew past nine the widest label ("Forward") no longer fit its chip on any
+	// panel, and a chip whose label is clipped is a control the user has to guess
+	// at.
 	const (
 		chipRowX = int32(24)
 		chipRowW = int32(1232)
 		chipGap  = int32(5)
 	)
-	chipW := (chipRowW - chipGap*int32(len(buttons)-1)) / int32(len(buttons))
+	chipCount := int32(len(buttons))
+	chipAvail := chipRowW - chipGap*(chipCount-1)
+	chipFont, _ := getCachedFont(config, "small")
+	chipWidths := make([]int32, chipCount)
+	var chipDemand int32
+	if chipFont == nil {
+		// Nothing to measure with (a headless start): equal shares, which is what
+		// the row used before it was sized by label.
+		for i := range chipWidths {
+			chipWidths[i] = chipAvail / chipCount
+		}
+	} else {
+		for i, b := range buttons {
+			labelW, _, err := chipFont.SizeUTF8(b.label)
+			if err == nil {
+				// Ceil, so the width this is expressed at never rounds the label
+				// down below what the row gives it.
+				need := (int32(labelW) + 2*SpaceXS) * HomeBaseWidth
+				chipWidths[i] = (need + width - 1) / width
+			}
+			chipDemand += chipWidths[i]
+		}
+		switch {
+		case chipDemand > 0 && chipDemand < chipAvail:
+			extra := chipAvail - chipDemand
+			for i := range chipWidths {
+				chipWidths[i] += extra * chipWidths[i] / chipDemand
+			}
+		case chipDemand > chipAvail:
+			// A theme or an accessibility size so large the row cannot hold its own
+			// labels: shrink in proportion rather than run off the design column.
+			for i := range chipWidths {
+				chipWidths[i] = chipWidths[i] * chipAvail / chipDemand
+			}
+		}
+	}
 	elements := []Element{textBrowser}
+	chipX := chipRowX
 	for i, b := range buttons {
 		elements = append(elements, Element{
 			Type:    "button",
 			Text:    b.label,
 			Color:   "$labelColor",
 			BgColor: "$buttonColor",
-			X:       scaleX(chipRowX+int32(i)*(chipW+chipGap), width),
+			X:       scaleX(chipX, width),
 			Y:       scaleY(584, height),
-			Width:   StringOrInt(strconv.Itoa(int(scaleX(chipW, width)))),
+			Width:   StringOrInt(strconv.Itoa(int(scaleX(chipWidths[i], width)))),
 			Height:  StringOrInt(strconv.Itoa(int(scaleY(44, height)))),
 			Trigger: b.trigger,
 			Font:    "small",
 		})
+		chipX += chipWidths[i] + chipGap
 	}
 	config.Scenes = append(config.Scenes, SceneConfig{
 		Name:        browserSceneName,
@@ -457,6 +510,103 @@ func browserSyncForgetChip(config *Config) {
 	}
 }
 
+// browserBookmarkTitle is the label a saved page gets: the styled document's
+// own <title> when the page had one, otherwise the host. A bookmark whose
+// label is a bare URL is one nobody can pick out of a list.
+func browserBookmarkTitle(config *Config, elem Element) string {
+	if doc := browserDocumentFor(elem.Variable); doc != nil {
+		if title := strings.TrimSpace(doc.Title); title != "" {
+			return title
+		}
+	}
+	return browserLinkHost(textBrowserAddress(config))
+}
+
+// browserBookmarkSaveAction is the Save chip: it puts the page on screen on
+// the saved list. Saving a page that is already saved is not an error the user
+// has to undo — it refreshes the title and says so, so pressing Save twice on
+// something you mean to keep is harmless.
+func browserBookmarkSaveAction(config *Config) bool {
+	elem, ok := findBrowserElement(config)
+	if !ok {
+		showToast("Browser is not available on this screen", ToastError())
+		return false
+	}
+	address := textBrowserAddress(config)
+	if browserAdBlockSiteKey(address) == "" ||
+		strings.TrimSpace(address) == "" ||
+		strings.HasPrefix(strings.TrimSpace(address), "Enter a website") {
+		showToast("Open a page before saving it", ToastInfo())
+		return false
+	}
+	if browserBookmarkHas(address) {
+		// Already saved: move it back to the top and confirm, rather than
+		// silently duplicating it or refusing the press.
+		browserBookmarkAdd(address, browserBookmarkTitle(config, elem))
+		PlayActivateSound()
+		ShowToast("Already in Saved pages — moved to the top", ToastKindInfo)
+		return true
+	}
+	if !browserBookmarkAdd(address, browserBookmarkTitle(config, elem)) {
+		showToast("Could not save this page", ToastError())
+		return false
+	}
+	PlayActivateSound()
+	ShowToast("Saved “"+browserBookmarkTitle(config, elem)+"”", ToastKindInfo)
+	return true
+}
+
+// browserSyncBookmarkChips rewrites the Save and Marks chips with live state,
+// the same way the Forget chip carries the cookie count. Save reads "Saved"
+// when the page on screen is already on the list, so the chip answers "is this
+// kept?" without a press; Marks carries the list's length, so a page saved
+// from a link is visible on the chip that opens it. Both write only when the
+// text differs, so an unchanged frame costs two string compares.
+func browserSyncBookmarkChips(config *Config) {
+	if config == nil {
+		return
+	}
+	saveLabel := "Save"
+	if _, ok := findBrowserElement(config); ok && browserBookmarkHas(textBrowserAddress(config)) {
+		saveLabel = "Saved"
+	}
+	marksLabel := browserMarksChipLabel(browserBookmarksCount())
+	for s := range config.Scenes {
+		if config.Scenes[s].Name != browserSceneName {
+			continue
+		}
+		for i := range config.Scenes[s].Elements {
+			elem := &config.Scenes[s].Elements[i]
+			switch elem.Trigger {
+			case "browser_bookmark_save":
+				if elem.Text != saveLabel {
+					elem.Text = saveLabel
+				}
+			case "browser_bookmarks":
+				if elem.Text != marksLabel {
+					elem.Text = marksLabel
+				}
+			}
+		}
+		return
+	}
+}
+
+// browserMarksChipLabel is the Marks chip's text: the saved-page count, so the
+// list's size is visible before it is opened. Zero keeps the plain word, which
+// reads as "nothing saved yet" next to the panel's own empty-state toast, and
+// the count is capped so the widest label still fits its chip.
+func browserMarksChipLabel(n int) string {
+	switch {
+	case n <= 0:
+		return "Marks"
+	case n > 99:
+		return "Marks 99+"
+	default:
+		return "Marks " + strconv.Itoa(n)
+	}
+}
+
 func browserReload(config *Config) {
 	elem, ok := findBrowserElement(config)
 	if !ok {
@@ -476,17 +626,21 @@ func browserReload(config *Config) {
 
 // browserEnsureHome loads the start page the first time the Browser scene is
 // opened. Returning to an already-used browser keeps the current page.
+//
+// It used to skip the load when the content variable already held something,
+// on the theory that a filled page was one this run had opened. It never was:
+// the content and the address are saved with the rest of the config, so the
+// check meant every launch came back to whatever the last run was reading — a
+// news home page, in the report that prompted this — with a stale address bar
+// and no request going out. The saved page is not a decision this session made.
+// An explicit request still wins, because openBrowserAtURL and openBrowserHome
+// claim the flag before the scene is shown.
 func browserEnsureHome(config *Config) {
 	if config == nil || browserHomeLoaded {
 		return
 	}
 	elem, ok := findBrowserElement(config)
 	if !ok {
-		return
-	}
-	content, _ := config.Variables.Custom[elem.Variable].(string)
-	if strings.TrimSpace(content) != "" {
-		browserHomeLoaded = true
 		return
 	}
 	browserHomeLoaded = true
@@ -543,9 +697,20 @@ func resetBrowserStateForTest() {
 	browserHomeLoaded = false
 	browserLinkPanel = browserLinkPanelState{}
 	browserCookiePanel = browserCookiePanelState{}
+	browserBookmarkPanel = browserBookmarkPanelState{}
+	browserBookmarkRowHits = nil
+	browserBookmarkPanelRect = sdl.Rect{}
 	browserCookieStripHit = sdl.Rect{}
 	browserLinkCursor = browserLinkCursorState{}
 	browserNav = browserModeScroll
+	// Zoom is a reader preference, but a test that changes it must not size
+	// the next test's layout differently.
+	browserZoomReset()
+	// An in-page search belongs to the page it was run against, so a new
+	// browser session starts with no match list.
+	browserFindReset()
+	// Reading positions are per session; a fresh browser starts at the top.
+	browserScrollReset()
 	resetBrowserDocumentsForTest()
 	resetBrowserAdBlockViewsForTest()
 	resetBrowserAdBlockCount()
@@ -865,17 +1030,18 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	font, _ := getCachedFont(config, "small")
-	medium, _ := getCachedFont(config, "medium")
 	if font == nil {
 		return
 	}
-	if medium == nil {
-		medium = font
-	}
 	smallH := int32(font.Height())
-	medH := int32(medium.Height())
 	rowH := smallH*2 + 12
-	headerH := 18 + medH + 4 + smallH + 12
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar drawn into it measure the same height. Trailing 9
+	// gives back the exact band this panel has always reserved.
+	header := UIPanelHeader("Links on this page",
+		fmt.Sprintf("%d link(s) · A opens · B closes", len(links)), "browser")
+	header.SubtitleColor = ColorTextSecondary()
+	headerH := UIPanelHeaderBand(config, header, 9)
 	footerH := 12 + smallH
 
 	panelW := int32(940)
@@ -913,9 +1079,10 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, ColorPanelRaised)
 	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, 1, ColorBorderDefault)
 
-	renderText(renderer, config, medium, "Links on this page", ColorTextPrimary(), panelX+22, panelY+16)
-	renderText(renderer, config, font, fmt.Sprintf("%d link(s) · A opens · B closes", len(links)),
-		ColorTextSecondary(), panelX+22, panelY+16+medH+2)
+	header.X = panelX + 22
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 44
+	UIPageHeaderDraw(renderer, config, header)
 
 	browserLinkRowHits = browserLinkRowHits[:0]
 	y := panelY + headerH
@@ -965,6 +1132,20 @@ const (
 	// address bar, and the page on screen, untouched.
 	browserSearchVariable = "browser_search_query"
 	browserSearchPrompt   = "Search the web"
+
+	// browserFormVariable holds the value typed into a form control on the
+	// page. Its own buffer is what keeps the address bar and the web search
+	// untouched while the keyboard is open for the page itself.
+	browserFormVariable = "browser_form_value"
+)
+
+var (
+	// browserFormEditing says the open keyboard belongs to a control on the
+	// page rather than the address bar, the web search or a find field; its
+	// text lands in browserFormVariable. browserFormSubmitted is set by the
+	// keyboard when it is confirmed, so the field can send the form.
+	browserFormEditing   bool
+	browserFormSubmitted bool
 )
 
 type browserLinkCursorState struct {
@@ -1285,15 +1466,310 @@ func browserEnsureLinkFocus(config *Config, elem Element) bool {
 // browserActivateFocusedLink is what A/Enter do: in link mode it always
 // follows a link (focusing the first if none is set), in scroll mode it
 // keeps the old behaviour of opening the address bar when nothing is on.
-func browserActivateFocusedLink(config *Config, elem Element) bool {
+func browserActivateFocusedLink(renderer *sdl.Renderer, config *Config, elem Element) bool {
 	if browserNav == browserModeLinks && browserEnsureLinkFocus(config, elem) {
-		browserOpenFocusedPageLink(config, elem)
+		return browserActivatePageLink(renderer, config, elem)
+	}
+	return browserActivatePageLink(renderer, config, elem)
+}
+
+// browserActivatePageLink opens whatever the cursor is on: a form control does
+// what its own kind says, a link navigates. It reports false when the cursor is
+// on nothing, so A still falls through to the address bar.
+func browserActivatePageLink(renderer *sdl.Renderer, config *Config, elem Element) bool {
+	if ctrl, ok := browserFocusedPageControl(config, elem); ok {
+		browserActivatePageControl(renderer, config, elem, ctrl)
 		return true
 	}
-	if browserOpenFocusedPageLink(config, elem) {
-		return true
+	return browserOpenFocusedPageLink(config, elem)
+}
+
+// browserActivatePageControl is what pressing A on a control does, and it
+// depends on what the control is:
+//
+//   - a text field or a textarea asks for a value and sends the form
+//   - a select steps to its next item in place (a handheld cannot open the
+//     author's dropdown, and a stepping control needs no keyboard)
+//   - a tick box toggles in place
+//   - a submit button sends the form with whatever its fields hold, and when
+//     they hold nothing it opens the first field instead of sending an empty
+//     search
+func browserActivatePageControl(renderer *sdl.Renderer, config *Config, elem Element, ctrl *webControl) {
+	if config == nil || ctrl == nil {
+		return
 	}
-	return false
+	switch ctrl.Kind {
+	case "select":
+		if n := len(ctrl.Options); n > 1 {
+			ctrl.Choice = (ctrl.Choice + 1) % n
+		} else if n == 0 {
+			showToast("This list has no choices", ToastInfo())
+			return
+		}
+		browserRefreshFormState(elem)
+		PlayActivateSound()
+		return
+	case "check", "radio":
+		ctrl.Checked = !ctrl.Checked
+		if ctrl.Kind == "radio" && ctrl.Checked {
+			// A radio group keeps one choice, so picking this one clears the
+			// rest of the group the way the page's own script would.
+			for _, other := range browserFormControls(elem) {
+				if other != ctrl && other.Kind == "radio" &&
+					other.Form.ID == ctrl.Form.ID &&
+					other.Name != "" && other.Name == ctrl.Name {
+					other.Checked = false
+				}
+			}
+		}
+		browserRefreshFormState(elem)
+		PlayActivateSound()
+		return
+	case "submit":
+		if browserSubmitFormValues(config, elem, ctrl, "", true) {
+			return
+		}
+		// Nothing filled in yet: the useful press is on the field itself.
+		if field := browserFormFirstField(elem, ctrl.Form); field != nil {
+			browserFillPageControl(renderer, config, elem, field)
+			return
+		}
+		showToast("Fill in a field first", ToastInfo())
+		return
+	}
+	browserFillPageControl(renderer, config, elem, ctrl)
+}
+
+// browserRefreshFormState re-measures the page after a control changed in
+// place, so the field, list or box draws its new state on the next frame.
+func browserRefreshFormState(elem Element) {
+	if doc := browserDocumentFor(elem.Variable); doc != nil {
+		doc.invalidateFormState()
+	}
+}
+
+// browserFormControls walks the page for every form control it drew. The reader
+// has no DOM, so the document's runs are the index: each control's state lives
+// on the control itself, which is what makes a submit able to collect fields it
+// never touched.
+func browserFormControls(elem Element) []*webControl {
+	doc := browserDocumentFor(elem.Variable)
+	if doc == nil {
+		return nil
+	}
+	var out []*webControl
+	seen := map[*webControl]bool{}
+	for _, block := range doc.Blocks {
+		for _, run := range block.Runs {
+			ctrl := run.Style.Control
+			if ctrl == nil || seen[ctrl] {
+				continue
+			}
+			seen[ctrl] = true
+			out = append(out, ctrl)
+		}
+	}
+	return out
+}
+
+// browserFormFirstField is the field a submit button should open when the form
+// is empty: the first text control in the same form, which is the one a user
+// would have typed into.
+func browserFormFirstField(elem Element, form webForm) *webControl {
+	for _, ctrl := range browserFormControls(elem) {
+		if ctrl.Kind != "text" && ctrl.Kind != "textarea" {
+			continue
+		}
+		if ctrl.Form.ID == form.ID {
+			return ctrl
+		}
+	}
+	return nil
+}
+
+// browserFocusedPageControl returns the form control under the cursor, if the
+// cursor is on one rather than on a link.
+func browserFocusedPageControl(config *Config, elem Element) (*webControl, bool) {
+	layout := browserPageLayout(config, elem)
+	if layout == nil || layout.RowH <= 0 || len(layout.Links) == 0 {
+		return nil, false
+	}
+	cursor := browserFocusedLink(elem, layout)
+	if cursor < 0 || cursor >= len(layout.Links) {
+		return nil, false
+	}
+	if ctrl := layout.Links[cursor].Control; ctrl != nil {
+		return ctrl, true
+	}
+	return nil, false
+}
+
+// browserFillPageControl opens the keyboard for a page control and submits what
+// was typed. The field opens holding the value the page shipped, so editing a
+// prefilled box keeps what is already there.
+func browserFillPageControl(renderer *sdl.Renderer, config *Config, elem Element, ctrl *webControl) {
+	if config == nil || ctrl == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	index := -1
+	for i, e := range config.Scenes[currentSceneIndex].Elements {
+		if e.Type == "textbrowser" && e.Variable == elem.Variable {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	config.Variables.Custom[browserFormVariable] = ctrl.Value
+	browserFormEditing = true
+	browserFormSubmitted = false
+	vkOpenSceneInput(config, currentSceneIndex, index)
+	if strings.TrimSpace(ctrl.Value) != "" {
+		// A field that opened holding the page's value starts selected, the way
+		// the address bar does: the first character typed replaces it, so
+		// correcting a prefilled search box is one press, not a delete-and-hold.
+		vkTextSelected = true
+	}
+	runInputModal(renderer, config)
+	browserFormEditing = false
+	activeSceneIndex = -1
+	activeElementIndex = -1
+	if browserFormSubmitted {
+		value, _ := config.Variables.Custom[browserFormVariable].(string)
+		browserSubmitPageControl(config, elem, ctrl, value)
+	}
+	browserFormSubmitted = false
+}
+
+// browserSubmitPageControl is the text path: the field that was just filled is
+// the one being submitted.
+func browserSubmitPageControl(config *Config, elem Element, ctrl *webControl, value string) {
+	if strings.TrimSpace(value) == "" {
+		showToast("Nothing typed", ToastInfo())
+		return
+	}
+	browserSubmitFormValues(config, elem, ctrl, value, false)
+}
+
+// browserSubmitFormValues turns a form into a page load. The reader cannot
+// POST, so a form is submitted as a GET: the action plus every field the page
+// put in that form. That is the shape a search box accepts (DuckDuckGo Lite,
+// site search, wiki search), which is what a handheld actually needs from a
+// form, and collecting the whole form rather than one field is what makes a
+// page with a text box plus a <select> filter work off one press.
+//
+// typed is the value the keyboard just produced for the focused control, when
+// there is one; it is written back onto the control so the field keeps showing
+// it. button marks a submit-button press: the button's own name and value go
+// along the way a browser sends them.
+func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typed string, button bool) bool {
+	if config == nil || ctrl == nil {
+		return false
+	}
+	if typed = strings.TrimSpace(typed); typed != "" {
+		ctrl.Value = typed
+	}
+	form := ctrl.Form
+	values := url.Values{}
+	// The page's own hidden inputs go first: they are the constants the site's
+	// handler expects (`ie=utf-8`, a site key, a locale). A visible field with
+	// the same name overwrites one below, because what the user typed is what
+	// they meant.
+	if doc := browserDocumentFor(elem.Variable); doc != nil {
+		for _, hidden := range doc.FormHidden[form.ID] {
+			if hidden.Name != "" {
+				values.Add(hidden.Name, hidden.Value)
+			}
+		}
+	}
+	for _, other := range browserFormControls(elem) {
+		// The form's own ID, not its action: a page with two search boxes
+		// (site search and web search, say) can point both at one address, and
+		// an action comparison sent the other box's fields along with this one.
+		if other.Form.ID != form.ID {
+			continue
+		}
+		name := strings.TrimSpace(other.Name)
+		if name == "" {
+			continue
+		}
+		switch other.Kind {
+		case "text", "textarea":
+			if v := strings.TrimSpace(other.Value); v != "" {
+				values.Set(name, v)
+			}
+		case "select":
+			values.Set(name, other.submitValue())
+		case "check", "radio":
+			if other.Checked {
+				v := strings.TrimSpace(other.Value)
+				if v == "" {
+					v = "on"
+				}
+				values.Set(name, v)
+			}
+		}
+	}
+	if button {
+		if name := strings.TrimSpace(ctrl.Name); name != "" {
+			values.Add(name, strings.TrimSpace(ctrl.Value))
+		}
+	} else if values.Get(strings.TrimSpace(ctrl.Name)) == "" && typed != "" {
+		// A field with no name of its own still has to send something: the form
+		// named its first field, and that is the box the page expects.
+		name := strings.TrimSpace(ctrl.Name)
+		if name == "" {
+			name = strings.TrimSpace(form.Field)
+		}
+		if name == "" {
+			name = "q"
+		}
+		values.Set(name, typed)
+	}
+	if len(values) == 0 {
+		return false
+	}
+
+	base := textBrowserAddress(config)
+	if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
+		base = doc.URL
+	}
+	address := base
+	if action := strings.TrimSpace(form.Action); action != "" {
+		if resolved, ok := browserResolveLink(base, action); ok {
+			address = resolved
+		} else if parsed, err := url.Parse(action); err == nil && parsed.IsAbs() {
+			address = action
+		}
+	}
+	// The action may already carry a query (site search URLs often do), so the
+	// fields are appended rather than replacing it.
+	sep := "?"
+	if strings.Contains(address, "?") {
+		sep = "&"
+	}
+	address += sep + values.Encode()
+	PlayActivateSound()
+	loadTextBrowserURL(config, elem, address)
+	return true
+}
+
+// submitValue is the value a select sends: the chosen option's own value when
+// the markup gave one, otherwise its label.
+func (c *webControl) submitValue() string {
+	if c == nil || c.Choice < 0 || c.Choice >= len(c.Options) {
+		return ""
+	}
+	if c.Choice < len(c.OptionValues) {
+		if v := strings.TrimSpace(c.OptionValues[c.Choice]); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(c.Options[c.Choice])
 }
 
 // handleBrowserKey mirrors handleBrowserController for the keyboard — which
@@ -1336,7 +1812,7 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 	case sdl.K_RIGHT:
 		return browserMovePageLink(config, elem, 1)
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
-		if browserActivateFocusedLink(config, elem) {
+		if browserActivateFocusedLink(renderer, config, elem) {
 			return true
 		}
 		if e.Keysym.Sym != sdl.K_RETURN {
@@ -1347,6 +1823,24 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 	case sdl.K_l, sdl.K_x:
 		openBrowserLinkPanel(config, elem)
 		return true
+	case sdl.K_f:
+		// Find on this page: its own keyboard, so the address bar and the
+		// web search are both left alone.
+		openBrowserFind(renderer, config, elem)
+		return true
+	case sdl.K_n:
+		// N steps to the next match; with no search running the key belongs
+		// to nothing, so it falls through instead of swallowing a press.
+		return browserFindStep(config, elem, 1)
+	case sdl.K_p:
+		return browserFindStep(config, elem, -1)
+	case sdl.K_MINUS, sdl.K_UNDERSCORE:
+		// Zoom the reader text out. A page-scoped size, kept out of the
+		// global a11y setting so the rest of the launcher is untouched.
+		return browserZoomStep(config, elem, -1)
+	case sdl.K_EQUALS, sdl.K_PLUS:
+		// '+' is Shift+= on most layouts, so both spellings zoom in.
+		return browserZoomStep(config, elem, 1)
 	case sdl.K_PAGEUP:
 		browserScrollByPage(config, elem, -1)
 		return true
@@ -1365,6 +1859,12 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		textBrowserScrollCooldown = 0
 		return true
 	case sdl.K_ESCAPE, sdl.K_b:
+		// A running find owns Escape first: leaving the search is what the
+		// reader is asking for, and going back a scene is the press after.
+		if browserFind.active {
+			browserFindClear()
+			return true
+		}
 		if browserNav == browserModeLinks {
 			browserNav = browserModeScroll
 			showToast("Scroll mode — D-Pad scrolls the page", ToastInfo())
@@ -1484,7 +1984,7 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 		openBrowserSearch(renderer, config, elem)
 		return true
 	case sdl.CONTROLLER_BUTTON_A:
-		if browserActivateFocusedLink(config, elem) {
+		if browserActivateFocusedLink(renderer, config, elem) {
 			return true
 		}
 		handleTextBrowserAddressInput(renderer, config, elem)
@@ -1604,7 +2104,7 @@ func browserTapPageVideo(config *Config, elem Element, mx, my int32) bool {
 // browserTapPageLink leaves a tap inside the rendered page on one of its
 // links: it fails when the tap is not on one, so the caller can keep the
 // click for whatever else wants it.
-func browserTapPageLink(config *Config, elem Element, mx, my int32) bool {
+func browserTapPageLink(renderer *sdl.Renderer, config *Config, elem Element, mx, my int32) bool {
 	layout := browserPageLayout(config, elem)
 	if layout == nil || len(layout.Links) == 0 {
 		return false
@@ -1624,6 +2124,13 @@ func browserTapPageLink(config *Config, elem Element, mx, my int32) bool {
 			continue // off screen; the outline cannot be there either
 		}
 		if rect.W > 0 && pointInRect(mx, my, rect) {
+			// A form control is a tap target like a link, and a tap does what its
+			// kind says: a field opens the keyboard, a select steps, a box ticks.
+			if ctrl := layout.Links[i].Control; ctrl != nil {
+				PlayActivateSound()
+				browserActivatePageControl(renderer, config, elem, ctrl)
+				return true
+			}
 			base := textBrowserAddress(config)
 			if doc := browserDocumentFor(elem.Variable); doc != nil && strings.TrimSpace(doc.URL) != "" {
 				base = doc.URL

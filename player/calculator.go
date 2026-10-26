@@ -150,28 +150,12 @@ func calcEvaluate() {
 	if expr == "" {
 		return
 	}
-	// Expand special symbols.
+	// Expand the named constants only. sqrt, ^ and the trig functions are
+	// left untouched: calcEvalExpr parses them natively, and rewriting them
+	// here (sqrt → math.Sqrt, ^2 → *1) turned valid input into errors or
+	// wrong answers — sqrt(9) showed "Error" and (5)^2 showed 5.
 	expr = strings.ReplaceAll(expr, "pi", fmt.Sprintf("%f", math.Pi))
 	expr = strings.ReplaceAll(expr, "e", fmt.Sprintf("%f", math.E))
-	expr = strings.ReplaceAll(expr, "sqrt", "math.Sqrt")
-	expr = strings.ReplaceAll(expr, "^2", "*1") // handled below
-
-	// Handle ^N exponents.
-	if idx := strings.Index(expr, "^"); idx >= 0 {
-		parts := strings.SplitN(expr[idx+1:], " ", 2)
-		if len(parts) > 0 {
-			base := expr[:idx]
-			exp := 0
-			fmt.Sscanf(parts[0], "%d", &exp)
-			val := 1.0
-			fmt.Sscanf(base, "%f", &val)
-			result := 1.0
-			for i := 0; i < exp; i++ {
-				result *= val
-			}
-			expr = fmt.Sprintf("%f", result)
-		}
-	}
 
 	val, err := calcEvalExpr(expr)
 	if err != nil {
@@ -226,19 +210,6 @@ func calcEvalExpr(expr string) (float64, error) {
 		}
 	}
 
-	// Handle ^ (power).
-	if idx := strings.LastIndex(expr, "^"); idx > 0 {
-		left, err := calcEvalExpr(expr[:idx])
-		if err != nil {
-			return 0, err
-		}
-		right, err := calcEvalExpr(expr[idx+1:])
-		if err != nil {
-			return 0, err
-		}
-		return math.Pow(left, right), nil
-	}
-
 	// Handle + and - (left-to-right, lowest precedence).
 	depth := 0
 	for i := len(expr) - 1; i > 0; i-- {
@@ -290,6 +261,32 @@ func calcEvalExpr(expr string) (float64, error) {
 					return 0, fmt.Errorf("division by zero")
 				}
 				return left / right, nil
+			}
+		}
+	}
+
+	// Handle ^ (power). Checked after +,-,*,/ so the lowest-precedence
+	// operator splits first, and depth-aware so a ^ inside parentheses is left
+	// to the parentheses handler instead of splitting the group apart
+	// (which used to make (3^4) a parse error).
+	depth = 0
+	for i := len(expr) - 1; i > 0; i-- {
+		switch expr[i] {
+		case ')':
+			depth++
+		case '(':
+			depth--
+		case '^':
+			if depth == 0 {
+				left, err := calcEvalExpr(expr[:i])
+				if err != nil {
+					return 0, err
+				}
+				right, err := calcEvalExpr(expr[i+1:])
+				if err != nil {
+					return 0, err
+				}
+				return math.Pow(left, right), nil
 			}
 		}
 	}

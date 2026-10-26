@@ -1310,12 +1310,14 @@ func powerFooterFor(page powerPage, rows []powerToolRow, cursor int) string {
 	return strings.Join(parts, "   ")
 }
 
-func powerPageSize(page powerPage, rowH int32) (int32, int32) {
+// powerPageSize is the card's size. headerH is the measured title band (the
+// shared page header plus the gap under it) rather than a number this function
+// guesses, so the card and the bar drawn into it cannot disagree.
+func powerPageSize(page powerPage, rowH, headerH int32) (int32, int32) {
 	panelW := int32(860)
 	if panelW > screenWidth-40 {
 		panelW = screenWidth - 40
 	}
-	header := int32(96)
 	footer := int32(36)
 	var panelH int32
 	if page == powerPageOutput {
@@ -1328,13 +1330,13 @@ func powerPageSize(page powerPage, rowH int32) (int32, int32) {
 		// Fit the panel to the rows it can actually show: capping the height
 		// afterwards left dead space under the last row, because the renderer
 		// had already decided on fewer rows than the size asked for.
-		if fit := int((screenHeight - 24 - header - footer - 16) / rowH); fit < n {
+		if fit := int((screenHeight - 24 - headerH - footer - 16) / rowH); fit < n {
 			n = fit
 		}
 		if n < 1 {
 			n = 1
 		}
-		panelH = header + footer + int32(n)*rowH + 16
+		panelH = headerH + footer + int32(n)*rowH + 16
 	}
 	if panelH > screenHeight-24 {
 		panelH = screenHeight - 24
@@ -1418,7 +1420,15 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 	// The old menu inverted that — a small name above a large description —
 	// which read as a stack of labels rather than a list of tools.
 	rowH := 2*rowPad + medH + 2 + smallH
-	panelW, panelH := powerPageSize(powerTools.page, rowH)
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar drawn into it measure the same height.
+	title, sub := powerPageTitle(powerTools.page)
+	if powerTools.page == powerPageOutput && powerOutputIsBusy() {
+		sub = "working…"
+	}
+	header := UIPanelHeader(title, sub, "tools")
+	headerH := UIPanelHeaderBand(config, header, 14)
+	panelW, panelH := powerPageSize(powerTools.page, rowH, headerH)
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
 	powerPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
@@ -1432,15 +1442,13 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	title, sub := powerPageTitle(powerTools.page)
-	if powerTools.page == powerPageOutput && powerOutputIsBusy() {
-		sub = "working…"
-	}
-	renderText(renderer, config, medium, ellipsize(medium, title, panelW-2*padX), ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, ellipsize(font, sub, panelW-2*padX), ColorTextTertiary(), panelX+padX, panelY+20+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	if powerTools.page == powerPageOutput {
-		powerRenderOutput(renderer, config, font, panelX, panelY, panelW, panelH, padX, smallH)
+		powerRenderOutput(renderer, config, font, panelX, panelY, panelW, panelH, padX, smallH, headerH)
 		return
 	}
 
@@ -1454,7 +1462,6 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 	if powerTools.cursor < 0 {
 		powerTools.cursor = 0
 	}
-	headerH := int32(96)
 	footerH := int32(36)
 	limit := int((panelH - headerH - footerH - 8) / rowH)
 	if limit > powerVisibleRowLimit() {
@@ -1561,7 +1568,7 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)
 }
 
-func powerRenderOutput(renderer *sdl.Renderer, config *Config, font *ttf.Font, panelX, panelY, panelW, panelH, padX, lineH int32) {
+func powerRenderOutput(renderer *sdl.Renderer, config *Config, font *ttf.Font, panelX, panelY, panelW, panelH, padX, lineH, headerH int32) {
 	if font == nil {
 		return
 	}
@@ -1570,9 +1577,9 @@ func powerRenderOutput(renderer *sdl.Renderer, config *Config, font *ttf.Font, p
 		text += "\n\nWorking…"
 	}
 	areaX := panelX + padX
-	areaY := panelY + 78
+	areaY := panelY + headerH + 6
 	areaW := panelW - 2*padX
-	areaH := panelH - 78 - 42
+	areaH := panelH - headerH - 6 - 42
 	powerOutputRect = sdl.Rect{X: areaX, Y: areaY, W: areaW, H: areaH}
 	fillRoundedRect(renderer, areaX-8, areaY-8, areaW+16, areaH+16, 12, WithAlpha(ColorSurfaceRow, 170))
 	lines := powerWrapOutput(font, text, areaW-12)
@@ -1614,7 +1621,9 @@ func powerRenderOutput(renderer *sdl.Renderer, config *Config, font *ttf.Font, p
 	if maxScroll > 0 {
 		label := fmt.Sprintf("%d/%d", powerTools.scroll+1, maxScroll+1)
 		lw, _, _ := font.SizeUTF8(label)
-		renderText(renderer, config, font, label, ColorTextTertiary(), panelX+panelW-padX-int32(lw), panelY+48)
+		// Bottom right, beside the footer: the top band is the shared header now,
+		// and a count over the subtitle would sit on it.
+		renderText(renderer, config, font, label, ColorTextTertiary(), panelX+panelW-padX-int32(lw), panelY+panelH-30)
 	}
 	footer := powerFooter(powerTools.page)
 	fw, _, _ := font.SizeUTF8(footer)

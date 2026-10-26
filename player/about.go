@@ -17,6 +17,15 @@ import (
 // measured from the content panel so every card fits.
 // ──────────────────────────────────────────────────────────────────────
 
+// aboutCardBottom and aboutContentBottom are the last frame's measurements:
+// the lowest card edge and the lowest painted text baseline drawn by
+// renderAbout. The render test reads them to prove no card's content reaches
+// past its own border into the footer gap (the bug the licence column had).
+var (
+	aboutCardBottom    int32
+	aboutContentBottom int32
+)
+
 func renderAbout(renderer *sdl.Renderer, config *Config) {
 	ensureBackgroundTexture(renderer, config)
 	if bgTexture != nil {
@@ -68,10 +77,30 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	creditsRect := sdl.Rect{X: margin + cardW + gap, Y: cardY, W: cardW, H: rowH}
 	srcRect := sdl.Rect{X: margin, Y: cardY + rowH + 16, W: screenWidth - margin*2, H: bottom - (cardY + rowH + 16)}
 
+	// Measured this frame so the render test can prove nothing painted past a
+	// card: the licence list used to be a single 8-line column, which needs
+	// 54 + 8*20 = 214px inside a card that is only ~196px tall on a 720p panel,
+	// so the last two licences bled over the card's bottom border and into the
+	// 16px gap above the footer. The bright-only guard never saw them because
+	// licence text is tertiary (dim) colour.
+	aboutCardBottom = 0
+	aboutContentBottom = 0
+
 	cardTitle := func(rect sdl.Rect, title string) int32 {
 		drawCard(renderer, rect.X, rect.Y, rect.W, rect.H, 16)
 		renderText(renderer, config, medFont, title, ColorTextPrimary(), rect.X+24, rect.Y+18)
+		if rect.Y+rect.H > aboutCardBottom {
+			aboutCardBottom = rect.Y + rect.H
+		}
 		return rect.Y + 54
+	}
+
+	// note writes a painted line's bottom edge into aboutContentBottom.
+	note := func(y, lineH int32) int32 {
+		if y+lineH > aboutContentBottom {
+			aboutContentBottom = y + lineH
+		}
+		return y + lineH
 	}
 
 	// Build info.
@@ -104,7 +133,7 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 	for _, line := range info {
 		renderText(renderer, config, font, line.label, ColorTextTertiary(), buildRect.X+24, y)
 		renderText(renderer, config, font, line.value, ColorTextSecondary(), buildRect.X+24+labelW+18, y)
-		y += 21
+		y = note(y, 21)
 	}
 
 	// Credits.
@@ -119,10 +148,13 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, font, c.name, WithAlpha(ColorAccent, 230), creditsRect.X+24, y)
 		nameW, _, _ := font.SizeUTF8(c.name)
 		renderText(renderer, config, font, " - "+c.role, ColorTextSecondary(), creditsRect.X+24+int32(nameW), y)
-		y += 22
+		y = note(y, 22)
 	}
 
-	// Open source licences.
+	// Open source licences. Two columns: the card is full width, so eight
+	// licences stack four deep and clear the card's bottom edge with room to
+	// spare. renderWithClip is the hard guarantee — a future ninth licence can
+	// lose a line inside the card but can never paint over the border again.
 	y = cardTitle(srcRect, "Open Source")
 	licenses := []string{
 		"Go - BSD License",
@@ -134,10 +166,25 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		"gopsutil - BSD License",
 		"gjson - MIT License",
 	}
-	for _, lic := range licenses {
-		renderText(renderer, config, font, lic, ColorTextTertiary(), srcRect.X+24, y)
-		y += 20
-	}
+	colH := int32(20)
+	colGap := int32(28)
+	colW := (srcRect.W - 48 - colGap) / 2
+	half := (len(licenses) + 1) / 2
+	renderWithClip(renderer, srcRect.X+1, srcRect.Y+1, srcRect.W-2, srcRect.H-2, func(_ *sdl.Renderer) {
+		for i, lic := range licenses {
+			col := i / half
+			row := i % half
+			lx := srcRect.X + 24 + int32(col)*(colW+colGap)
+			ly := y + int32(row)*colH
+			renderText(renderer, config, font, ellipsize(font, lic, colW), ColorTextTertiary(), lx, ly)
+		}
+		// Account for every row the loop would have drawn, clipped or not.
+		note(y+int32(half-1)*colH, colH)
+	})
+
+	// The clip is reset below; record the card's own edge as the content bound
+	// so a card that grows past the footer is caught even if its text fits.
+	_ = y
 
 	// The shared bars: About had none, which made it the only screen without
 	// the header status cluster or the footer button badges.

@@ -2,7 +2,9 @@ package main
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -13,6 +15,24 @@ func withPowerToolsState(t *testing.T, state powerToolsState) {
 	prev := powerTools
 	powerTools = state
 	t.Cleanup(func() { powerTools = prev })
+}
+
+// waitForPowerAsync blocks until the runner powerStartAsync started has
+// finished. That goroutine reads package state — the toolbox directory
+// override, the config — for as long as it runs, so a test that triggered one
+// must not let its cleanups rewrite that state until it is done. The scan-row
+// test used to restore its tools-dir override while the tool it had just
+// launched was still resolving its path through it: a data race under -race,
+// and outside it a coin flip over which install the runner would see.
+func waitForPowerAsync(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for atomic.LoadInt32(&powerTools.busy) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the async power runner was still busy 5s after it started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // renderPowerProbe draws the Power tools panel over a known background so the
@@ -219,17 +239,20 @@ func TestPowerToolsPanelSizing(t *testing.T) {
 	t.Cleanup(func() { screenWidth, screenHeight = prevW, prevH })
 
 	withPowerToolsState(t, powerToolsState{page: powerPageMenu})
-	w, h := powerPageSize(powerPageMenu, 70)
+	// The header band the renderer measures for a medium/small pair on this
+	// canvas; the sizing contract is about the rows below it.
+	const headerH = int32(96)
+	w, h := powerPageSize(powerPageMenu, 70, headerH)
 	if w != 860 || h > 696 {
 		t.Fatalf("menu panel = %dx%d, want 860 wide and at most 696 tall", w, h)
 	}
 	powerTools.page = powerPageFiles
 	powerTools.files = make([]powerFileInfo, 12)
-	_, h = powerPageSize(powerPageFiles, 100)
+	_, h = powerPageSize(powerPageFiles, 100, headerH)
 	if h > 696 {
 		t.Fatalf("long file list panel = %dpx, want at most 696", h)
 	}
-	_, h = powerPageSize(powerPageOutput, 70)
+	_, h = powerPageSize(powerPageOutput, 70, headerH)
 	if h != 640 {
 		t.Fatalf("output panel = %dpx, want 640", h)
 	}
@@ -244,7 +267,7 @@ func TestPowerPanelSizedToVisibleRows(t *testing.T) {
 
 	withPowerToolsState(t, powerToolsState{page: powerPageMenu})
 	const rowH = int32(82)
-	_, h := powerPageSize(powerPageMenu, rowH)
+	_, h := powerPageSize(powerPageMenu, rowH, 96)
 	if h > 720-24 {
 		t.Fatalf("panel = %dpx, taller than the 696px a 720px screen leaves", h)
 	}

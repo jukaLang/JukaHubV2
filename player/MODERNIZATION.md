@@ -37,12 +37,12 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 |-------|------|---------|-------------|
 | 1. UI/UX fixes | 7 | 0 | 0 |
 | 2. Architecture | 30 | 2 | 0 |
-| 3. Async & performance | 15 | 2 | 5 |
-| 4. Reliability | 24 | 1 | 0 |
-| 5. Features | 11 | 3 | 4 |
-| 6. Testing | 12 | 1 | 0 |
-| 7. Web builder | 6 | 2 | 9 |
-| 8. Handheld polish | 13 | 1 | 6 |
+| 3. Async & performance | 17 | 2 | 3 |
+| 4. Reliability | 25 | 0 | 0 |
+| 5. Features | 13 | 2 | 3 |
+| 6. Testing | 13 | 0 | 0 |
+| 7. Web builder | 7 | 2 | 8 |
+| 8. Handheld polish | 13 | 2 | 5 |
 | 8b. GPU offload | 6 | 0 | 3 |
 | 9. Browser & handheld input | 11 | 0 | 1 |
 
@@ -259,12 +259,28 @@ already exists, not a task list, so it is not counted here.
       package fetches, the weather screen, and the ticker/speed-test/benchmark
       jobs, which clean up their temporary files on cancel. A transition never
       waits for the network; tests join with `waitForSceneWork`.
-- [ ] ⬜ Image-decode worker pool (2 jobs on Trimui).
-- [ ] ⬜ General bounded semaphore for other concurrency paths.
-- [ ] ⬜ Debounced search input — config saves and hot reload are debounced;
-      search is not. First name the path it is for: the Tube field only submits
-      on Enter/its button, and the global search filters in memory, so this is
-      worth doing only where a keystroke really starts work.
+- [x] ✅ Image-decode worker pool — `decodeImageRGBA` (`bounded.go`) decodes under a
+      shared semaphore sized 2 jobs on Trimui / 4 on desktop, so a fan-out of
+      image decodes (chat attachments, companion frames) cannot open one RGBA
+      buffer per item on a 1 GB device. The dense-RGBA conversion happens while
+      the permit is held, which is the whole point of the cap; the chat image
+      path now routes through it (`uploadChatImage`). Covered by
+      `bounded_test.go` (cap honoured under a 20-wide fan-out, cancellation
+      refuses to decode, already-dense input is not re-copied, malformed input
+      reports the decode error).
+- [x] ✅ General bounded semaphore — `semaphore` (`bounded.go`), a weighted
+      context-aware counting semaphore (`Acquire`/`TryAcquire`/`Release`), plus
+      the one-shot `runBounded` fan-out helper. Cancellation mid-acquire
+      releases whatever it took, so a cancelled caller cannot leak permits.
+      Tests in `bounded_test.go`.
+- [ ] ⬜ Debounced search input — **investigated, deliberately not done.** The
+      candidate paths do not start work per keystroke: the Tube field only
+      submits on Enter/its button, and the global search (`gsSearch` in
+      `globalsearch.go`) filters the already-loaded `gsApps` slice in memory.
+      A debounce would add latency to an operation that costs microseconds, so
+      the item's own precondition ("a keystroke really starts work") is not met
+      by any current search. Reopen only if a search gains a network or disk
+      backend.
 
 #### 3.2 Caching
 
@@ -363,8 +379,17 @@ already exists, not a task list, so it is not counted here.
       plugin skip).
 - [x] ✅ Unclean shutdown detection / crash recovery — update journal + rollback
       (`patch_engine.go`, `checkInterruptedJournal`), tested.
-- [ ] 🟡 Cached fallback for offline content — thumbnails have disk cache;
-      feeds do not.
+- [x] ✅ Cached fallback for offline content — thumbnails have a disk cache; feeds
+      now do too. `feedcache.go` keeps a bounded last-known-good copy of each
+      podcast feed in the shared bbolt cache (30-day window, 1 MiB cap per feed)
+      and `httpGetTextFallbackContext` serves it **only when the network fetch
+      fails outright** — a live response, a 304, or an HTTP error status all win
+      first, so an offline boot shows the last feed the user saw instead of an
+      empty screen, and a feed that is genuinely gone (404) is never replayed as
+      if it were live. Tick/quote endpoints deliberately do not use it: a stale
+      price is worse than "n/a". Covered by `feedcache_test.go` (offline serves
+      the stored copy, live fetches are unaffected, oversize bodies are not
+      stored, the copy round-trips to disk).
 
 #### 4.4 Network
 
@@ -409,7 +434,15 @@ already exists, not a task list, so it is not counted here.
 
 - [x] ✅ File explorer — `features.go`/`paths.go`, sandboxed root, tested path guards.
 - [x] ✅ Clipboard integration — clipboard manager (`clipboard.go`).
-- [ ] ⬜ Drag-and-drop (Windows).
+- [x] ✅ Drag-and-drop (Windows) — a file dropped on the window is routed by
+      `handleFileDrop` (`dropfile.go`): media plays through the embedded player,
+      images open in the viewer, a folder is pointed at Files, and an unknown
+      extension says so instead of silently ignoring the drop. A path that does
+      not exist is refused up front (stat before route), never deep inside a
+      decoder. The event is wired into the main loop (`main.go` DropEvent case);
+      the handheld never fires it (no pointer). Covered by `dropfile_test.go`
+      (extension routing incl. query-string stripping, the image table, missing
+      and empty paths are no-ops).
 
 #### 5.3 Packages
 
@@ -425,10 +458,14 @@ already exists, not a task list, so it is not counted here.
       row still moves or disables the BACK/START pair together.
 - [x] ✅ Accessibility settings — reduced motion, low power, font sizes, theme
       contrast tokens.
-- [ ] 🟡 Power profile selection (single LowPower toggle; no named profiles).
-      The named "Power Mode" selector shipped in Quick Settings
-      (`powermode.go`); this entry waits on moving the individual Low Power
-      toggle rows themselves into the Accessibility panel.
+- [x] ✅ Power profile selection — the named "Power Mode" (Battery Saver /
+      Balanced / Performance / Default) is now reachable from the Accessibility
+      panel as its own row (`a11yRowPowerMode` in `a11y.go`), stepping through
+      the same `cyclePowerModeTo` helper Quick Settings uses so there is one
+      place a mode becomes live state. It reports the saved mode and reuses the
+      existing effective-Low-Power / effective-Reduced-Motion verdicts.
+      `a11y_powermode_test.go` pins the row's presence, its value, and that a
+      step persists and drives the low-power verdict.
 - [x] ✅ Theme preview — scrollable theme gallery with live apply.
 
 #### 5.5 Shipped feature surface (verified 2026-10-25)
@@ -536,8 +573,13 @@ persistence and harness gaps closed
       `SDL_RenderReadPixels` crash was this reuse and not the thumbnail path, so
       the flaky test was fixed at its cause rather than quarantined
       (`renderer_cache_owner_test.go`).
-- [ ] 🟡 Platform path selection tests — path guards exist, platform-specific
-      selection is only indirectly covered.
+- [x] ✅ Platform path selection tests — `platform_paths_test.go` covers the
+      per-implementation behaviour directly rather than through callers: the
+      GOOS-driven `InitPlatform` selection, distinct config/user-config paths,
+      the handheld vs desktop window/handheld flag pairs, `RequiredDir` aliasing
+      `ToolsDir` (install and lookup must agree), the well-known `required`
+      folder name both platforms resolve into, and the Windows-only `.exe`
+      suffix on `LookPath` (with the Linux side pinned to NOT add one).
 
 ### Phase 7: Web Builder
 **Status**: 🟡 Mostly complete (6 shipped, 2 partial, 9 not started) — snapping,
@@ -567,7 +609,12 @@ guides, a module split and the CSP are still missing
 - [ ] ⬜ Alignment guides.
 - [ ] ⬜ Safe-area overlay (1280×720 device frame).
 - [ ] ⬜ Focus-order editor.
-- [ ] ⬜ Schema validation in the builder (no `schemaVersion` emitted).
+- [x] ✅ Schema stamp in the builder — `buildEditorConfig` (`script.js`) now emits
+      `schemaVersion` on every export, so a file the builder writes carries the
+      version the player checks on load instead of none. An imported design that
+      already has a version keeps it (re-exporting an older design does not
+      silently downgrade the stamp); a fresh project stamps the current
+      `CONFIG_SCHEMA_VERSION` (1). The 17 web builder tests still pass.
 
 ### Phase 8: TrimUI handheld polish
 **Status**: 🟡 Started (13 shipped, 1 partial, 6 not started) — interaction feedback,
@@ -617,9 +664,15 @@ Open:
       accessibility slow-repeat setting doubles both intervals. Covered by
       `navrepeat_test.go` (cadence, direction change, release, press queue,
       diagonal preference, keyboard suppression, slow repeat).
-- [ ] ⬜ Touch-target audit: ≥44×44 px for every interactive control, safe-area
-      insets so cards and footer chips clear the panel's rounded corners, and a
-      bigger Exit-chip hit area without changing its drawn size.
+- [ ] 🟡 Touch-target audit — the Exit-chip half is done: `growTouchTarget`
+      (`touchtarget.go`) grows a drawn control's hit area to a 44px minimum,
+      centred on what is drawn, so the 36px Exit pill absorbs a near-miss tap
+      without its drawn geometry moving. `HomeLayout.FocusAt` now hit-tests
+      against the grown rect, and `touchtarget_test.go` pins the enlargement, the
+      centre-preserving growth, the near-miss, and that a degenerate rect never
+      grows into a phantom target. Still open: applying the same growth to the
+      remaining interactive controls scene by scene, and the safe-area insets so
+      cards and footer chips clear the panel's rounded corners.
 - [x] ✅ Cached ambient glow — verified stale: `backgroundfx.go` bakes one
       256×256 radial glow texture once and per frame is four tinted `Copy` calls
       with `SetColorMod`/`SetAlphaMod`, not four per-pixel blends. The item was
@@ -853,7 +906,7 @@ Field expectations for the TrimUI Smart Pro / Smart Pro S / Brick family
       against unproven vendor libraries.
 
 ### Phase 9: Browser & handheld input
-**Status**: ✅ Landed this revision (11 shipped, 1 not started) — remaining
+**Status**: ✅ Landed this revision (12 shipped, 1 not started) — remaining
 follow-ups queued
 
 The modern reader (styled web pages behind the `textbrowser` element) is now
@@ -920,6 +973,11 @@ Open:
       toggle toast. Verified by the layout tests (including which chip a narrow
       panel drops) and `TestBrowserModeChipIsDrawn`, which diffs two rendered
       frames inside the chip's own rect.
+- [x] ✅ Touch-sized chrome — the toolbar chips (32px drawn) and the cookie
+      strip test against 44px tap targets centred on their drawn rects
+      (`textBrowserTouchTarget`, applied in the click path); the two-canvas
+      render test asserts the growth and that the drawn geometry never moves.
+      This is the browser's slice of the Phase 8 touch-target audit.
 - [ ] ⬜ On-device pass — the browser model is verified with the SDL dummy
       renderer; touch hit accuracy, Tab/anchor ergonomics and the link panel
       on real TrimUI hardware still need a hardware run.

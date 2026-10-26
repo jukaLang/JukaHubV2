@@ -308,7 +308,14 @@ func renderGameRandomPicker(renderer *sdl.Renderer, config *Config) {
 
 	const pad = int32(22)
 	rowH := int32(66)
-	headerH := int32(18) + medH + int32(4) + smallH + int32(14)
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar drawn into it measure the same height.
+	subtitle := "Where should the pick come from?"
+	if gameLib.query != "" {
+		subtitle = "Picking from the current search"
+	}
+	header := UIPanelHeader("Random game", subtitle, "gamepad")
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := int32(14) + smallH
 	panelW := int32(640)
 	if panelW > screenWidth-64 {
@@ -331,13 +338,10 @@ func renderGameRandomPicker(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 16, Y: panelY + 1, W: panelW - 32, H: 2})
 
-	renderText(renderer, config, medium, "Random game", ColorTextPrimary(), panelX+pad, panelY+18)
-	subtitle := "Where should the pick come from?"
-	if gameLib.query != "" {
-		subtitle = "Picking from the current search"
-	}
-	renderText(renderer, config, font, ellipsize(font, subtitle, panelW-2*pad), ColorTextTertiary(),
-		panelX+pad, panelY+18+medH+4)
+	header.X = panelX + pad
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*pad
+	UIPageHeaderDraw(renderer, config, header)
 
 	bodyY := panelY + headerH
 	innerW := panelW - 2*pad

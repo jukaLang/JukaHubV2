@@ -463,26 +463,27 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
 	const padX = int32(28)
-	smallH := int32(small.Height())
-	medH := int32(medium.Height())
 	textW := panelW - 2*padX
 	// A short window keeps the list usable by dropping the header's aside and
 	// the card's legend before it lets the rows shrink.
 	compact := panelH < 520
 
-	renderText(renderer, config, medium, "Downloads", ColorTextPrimary(), panelX+padX, panelY+16)
-	if aside := "Saved audio and video play offline"; !compact {
-		if sw, _, err := small.SizeUTF8(aside); err == nil {
-			renderText(renderer, config, small, aside, ColorTextTertiary(),
-				panelX+panelW-padX-int32(sw), panelY+18+(medH-smallH)/2)
-		}
+	// The title band is the shared page header: the aside that only fits a full
+	// window becomes the status read-out opposite the title, so it moves up and
+	// down with the same geometry every other page uses.
+	header := UIPanelHeader("Downloads", downloadPanelStatus(), "media")
+	header.SubtitleColor = ColorTextSecondary()
+	if !compact {
+		header.Status = "Saved audio and video play offline"
+		header.StatusColor = ColorTextTertiary()
 	}
-	status := downloadPanelStatus()
-	renderText(renderer, config, small, ellipsize(small, status, textW), ColorTextSecondary(),
-		panelX+padX, panelY+16+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = textW
+	UIPageHeaderDraw(renderer, config, header)
 
 	cardH := downloadStorageCardHeight(small, !compact)
-	cardY := panelY + 16 + medH + 4 + smallH + 14
+	cardY := panelY + UIPanelHeaderBand(config, header, 14)
 	drawDownloadStorageCard(renderer, config, small, sdl.Rect{X: panelX + padX, Y: cardY, W: textW, H: cardH}, !compact)
 
 	tabY := cardY + cardH + 12

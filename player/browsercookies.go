@@ -259,11 +259,16 @@ func (j *browserCookieJar) count() int {
 	return len(j.recs)
 }
 
-// browserCookieSite is one host the jar holds cookies for, and how many of
-// them.
+// browserCookieSite is one host the jar holds cookies for, how many of them,
+// and when that site's own session began: the oldest first-seen stamp among
+// its cookies, which is the age the picker puts on the row so one site's
+// login can be judged before it is forgotten. Since is zero when none of the
+// host's cookies carry a stamp (a file written before stamps existed and not
+// yet re-loaded): unknown, rather than old.
 type browserCookieSite struct {
 	Domain string
 	Count  int
+	Since  time.Time
 }
 
 // sites reports the hosts the jar holds cookies for: the busiest first, ties
@@ -276,16 +281,26 @@ func (j *browserCookieJar) sites() []browserCookieSite {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	counts := map[string]int{}
+	// The oldest stamp per host is that site's own session start. It is
+	// gathered in the same pass as the counts, so listing sites still costs
+	// one lock and one walk of the records however many fields the caller
+	// ends up reading.
+	seen := map[string]time.Time{}
 	for _, rec := range j.snapshotLocked() {
 		host := browserCookieSiteName(rec)
 		if host == "" {
 			continue
 		}
 		counts[host]++
+		if stamp, ok := cookieFirstSeen(rec); ok {
+			if prev, has := seen[host]; !has || stamp.Before(prev) {
+				seen[host] = stamp
+			}
+		}
 	}
 	out := make([]browserCookieSite, 0, len(counts))
 	for host, n := range counts {
-		out = append(out, browserCookieSite{Domain: host, Count: n})
+		out = append(out, browserCookieSite{Domain: host, Count: n, Since: seen[host]})
 	}
 	sort.Slice(out, func(a, b int) bool {
 		if out[a].Count != out[b].Count {

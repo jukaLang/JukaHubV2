@@ -166,6 +166,12 @@ func TestToolboxScanRowAsksBeforeItRuns(t *testing.T) {
 	if !toolboxAuthorizedUseAccepted(config) {
 		t.Fatal("the second press did not record the acknowledgement")
 	}
+
+	// That press launched the tool on a goroutine which resolves the fake
+	// install through the tools-dir override this test's cleanup is about to
+	// restore — and through powerTools itself, which withPowerToolsState also
+	// swaps back. Wait the runner out before any cleanup can land on it.
+	waitForPowerAsync(t)
 }
 
 // The catalog says which entries are scanners, and every scanner says so on its

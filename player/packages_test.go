@@ -11,6 +11,9 @@ package main
 
 import (
 	"math"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -377,4 +380,298 @@ func focusRingBounds(f *probeFrame, rect sdl.Rect, match func(sdl.Color) bool) (
 		return box, false
 	}
 	return sdl.Rect{X: x0, Y: y0, W: x1 - x0 + 1, H: y1 - y0 + 1}, true
+}
+
+// withPackagesForTest points the list at pkgs with the given focus and takes
+// any open row menu down afterwards.
+func withPackagesForTest(t *testing.T, pkgs []Package, focus int) {
+	t.Helper()
+	packagesMutex.Lock()
+	prevList, prevFocus := packagesList, packagesFocusIndex
+	packagesList = pkgs
+	packagesFocusIndex = focus
+	packagesMutex.Unlock()
+	t.Cleanup(func() {
+		packagesMutex.Lock()
+		packagesList = prevList
+		packagesFocusIndex = prevFocus
+		packagesMutex.Unlock()
+		closePackageActions()
+	})
+}
+
+// recordPackageInstalls swaps the press's install for a recorder, so a test
+// can see what a press would download without touching the network.
+func recordPackageInstalls(t *testing.T) *[]Package {
+	t.Helper()
+	var got []Package
+	packageInstallHook = func(_ *Config, p Package) { got = append(got, p) }
+	t.Cleanup(func() { packageInstallHook = nil })
+	return &got
+}
+
+// packageDirProbe gives the package a seeded directory on the card — a real
+// directory under the real install dir, which under `go test` is a temp build
+// dir — so Remove and Reinstall are exercised against the filesystem they
+// actually use. The directory goes away with the test.
+func packageDirProbe(t *testing.T, name string) string {
+	t.Helper()
+	dir := filepath.Join(packageInstallDir(), packageDirName(name))
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatalf("clearing %s: %v", dir, err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("creating %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "stale.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatalf("seeding %s: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// pressPackageKey feeds one key through the packagelist's keyboard handler —
+// the path a USB keyboard and the on-screen bindings take.
+func pressPackageKey(config *Config, sym sdl.Keycode) {
+	handlePackageInput(&sdl.KeyboardEvent{Keysym: sdl.Keysym{Sym: sym}}, config)
+}
+
+// TestPressOnInstalledRowOpensRemoveOrReinstall is the request end to end: a
+// press on a row that is already on the card does not run Install again — it
+// opens Remove or Reinstall, and the choice actually does what it says.
+func TestPressOnInstalledRowOpensRemoveOrReinstall(t *testing.T) {
+	pkgs := probePackages(4)
+	p := pkgs[2]
+	withPackagesForTest(t, pkgs, 2)
+	markPackagesInstalled(t, p.Name)
+	dir := packageDirProbe(t, p.Name)
+	install := recordPackageInstalls(t)
+	config := &Config{}
+
+	pressPackageKey(config, sdl.K_RETURN)
+	if !packageActionsOpen {
+		t.Fatal("pressing an installed row did not open its action menu")
+	}
+	if got := strings.Join(packageActionItems, ","); got != "Reinstall,Remove,Cancel" {
+		t.Errorf("menu items = %q, want Reinstall, Remove, Cancel", got)
+	}
+	if packageActionsFocus != 0 {
+		t.Errorf("menu starts on %v, want Reinstall first", packageActionItems[packageActionsFocus])
+	}
+	if len(*install) != 0 {
+		t.Fatal("opening the menu already started a download")
+	}
+
+	// Down to Remove: the next press runs it — the directory leaves the card
+	// and the row's mark goes with it.
+	pressPackageKey(config, sdl.K_DOWN)
+	pressPackageKey(config, sdl.K_RETURN)
+	if packageActionsOpen {
+		t.Fatal("choosing Remove left the menu open")
+	}
+	if _, err := os.Stat(dir); err == nil {
+		t.Fatal("Remove left the package's directory on the card")
+	}
+	if packageInstalledFlags([]Package{p})[0] {
+		t.Fatal("Remove left the row marked as installed")
+	}
+	if len(*install) != 0 {
+		t.Fatal("Remove started a download")
+	}
+
+	// Back on the card: Escape closes the menu without touching anything.
+	markPackagesInstalled(t, p.Name)
+	dir = packageDirProbe(t, p.Name)
+	pressPackageKey(config, sdl.K_RETURN)
+	if !packageActionsOpen {
+		t.Fatal("the menu did not reopen on the reinstalled package")
+	}
+	pressPackageKey(config, sdl.K_ESCAPE)
+	if packageActionsOpen {
+		t.Fatal("Escape did not close the menu")
+	}
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("closing the menu took the directory with it: %v", err)
+	}
+	if len(*install) != 0 {
+		t.Fatal("closing the menu started a download")
+	}
+}
+
+// TestPressOnUninstalledRowStillInstalls pins the other half: the one-press
+// install that a row without a ✓ has always had is untouched.
+func TestPressOnUninstalledRowStillInstalls(t *testing.T) {
+	pkgs := probePackages(3)
+	p := pkgs[1]
+	withPackagesForTest(t, pkgs, 1)
+	safeName := packageDirName(p.Name)
+	installedPackagesMu.Lock()
+	delete(installedPackages, safeName)
+	installedPackagesMu.Unlock()
+	if err := os.RemoveAll(filepath.Join(packageInstallDir(), safeName)); err != nil {
+		t.Fatal(err)
+	}
+	install := recordPackageInstalls(t)
+
+	packagePress(&Config{})
+	if packageActionsOpen {
+		t.Fatal("pressing an uninstalled row opened the action menu")
+	}
+	if len(*install) != 1 || (*install)[0].Name != p.Name {
+		t.Fatalf("press started %d installs (%v), want exactly the one for %q",
+			len(*install), *install, p.Name)
+	}
+}
+
+// TestReinstallWipesTheOldCopyFirst: Reinstall means fresh files, not an
+// overlay on top of the old ones — and the row's mark goes away with the
+// wipe, so a failed download cannot leave a tick on an empty directory.
+func TestReinstallWipesTheOldCopyFirst(t *testing.T) {
+	pkgs := probePackages(2)
+	p := pkgs[0]
+	withPackagesForTest(t, pkgs, 0)
+	markPackagesInstalled(t, p.Name)
+	dir := packageDirProbe(t, p.Name)
+	install := recordPackageInstalls(t)
+	config := &Config{}
+
+	packagePress(config) // installed → the menu, not a download
+	if !packageActionsOpen {
+		t.Fatal("press did not open the menu")
+	}
+	if packageActionsFocus != 0 || packageActionItems[0] != "Reinstall" {
+		t.Fatalf("the menu does not open on Reinstall (focus %d, items %v)",
+			packageActionsFocus, packageActionItems)
+	}
+	activatePackageAction(config)
+	if packageActionsOpen {
+		t.Fatal("Reinstall left the menu open")
+	}
+	if len(*install) != 1 || (*install)[0].Name != p.Name {
+		t.Fatalf("Reinstall started %d installs (%v), want the fresh download", len(*install), *install)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "stale.txt")); err == nil {
+		t.Fatal("Reinstall left the old copy's files on the card")
+	}
+	if packageInstalledFlags([]Package{p})[0] {
+		t.Fatal("the row still marks a package that is mid-reinstall")
+	}
+}
+
+// TestPackageActionsMenuRendersOverTheDetailsPane checks the menu on pixels:
+// it is drawn over the details pane (the list it acts on stays visible), and
+// its focused item carries the same ring the list's cursor does — exactly one
+// ring, on the focused item.
+func TestPackageActionsMenuRendersOverTheDetailsPane(t *testing.T) {
+	pkgs := probePackages(7)
+	p := pkgs[1]
+	markPackagesInstalled(t, p.Name)
+	openPackageActions(p)
+	packageActionsFocus = 1 // Remove carries the ring
+	t.Cleanup(closePackageActions)
+
+	f, elem := packageListProbe(t, pkgs, 0)
+	listW := getElementWidth(elem, 1160)*3/5 - 16
+	box, header, lineH, _ := packageActionsLayout(&Config{}, elem)
+	if box.X < elem.X+listW+16 {
+		t.Fatalf("the menu box starts at x=%d, over the list column (ends at %d): the rows it acts on would be covered",
+			box.X, elem.X+listW+16)
+	}
+	if box.X+box.W > elem.X+getElementWidth(elem, 1160) {
+		t.Fatalf("the menu overruns the element: %+v", box)
+	}
+
+	// The items region only: the menu's own title is drawn in the accent and
+	// would otherwise count as ring pixels.
+	items := sdl.Rect{X: box.X, Y: box.Y + header, W: box.W, H: box.H - header}
+	ring := installHighlight()
+	isRing := func(c sdl.Color) bool { return c.R == ring.R && c.G == ring.G && c.B == ring.B }
+	ringPixels := countPixelsMatching(f, items, isRing)
+	if ringPixels == 0 {
+		t.Fatal("the menu's focused item has no focus ring")
+	}
+	ibox, found := focusRingBounds(f, items, isRing)
+	if !found {
+		t.Fatal("no ring pixels in the menu's items")
+	}
+	if perimeter := 2 * 2 * (ibox.W + ibox.H); int32(ringPixels) > perimeter*3/2 {
+		t.Fatalf("%d ring pixels outline more than the focused item's row", ringPixels)
+	}
+	cell := packageActionItemRect(box, lineH, header, 1)
+	if ibox.Y < cell.Y-6 || ibox.Y > cell.Y+6 {
+		t.Fatalf("the ring sits at y=%d, want on item 1 at y≈%d", ibox.Y, cell.Y)
+	}
+}
+
+// TestPackageRowTapActivatesTheFocusedRow is the touch path: a tap on a
+// neighbour only selects it, the tap on the focused row is the press (the
+// touch user's A button), and a tap on the open menu either picks an item or
+// — outside it — closes it.
+func TestPackageRowTapActivatesTheFocusedRow(t *testing.T) {
+	pkgs := probePackages(4)
+	p := pkgs[1]
+	withPackagesForTest(t, pkgs, 1)
+	markPackagesInstalled(t, p.Name)
+	install := recordPackageInstalls(t)
+
+	elem := Element{Type: "packagelist", X: 60, Y: 110, Width: "1160", Height: "500"}
+	config := &Config{Scenes: []SceneConfig{{Name: "Packages", Elements: []Element{elem}}}}
+	prevScene := currentSceneIndex
+	currentSceneIndex = 0
+	t.Cleanup(func() { currentSceneIndex = prevScene })
+
+	tapRow := func(row int) {
+		t.Helper()
+		r := packageRowRect(t, elem, row)
+		handlePackageMouseClick(r.X+r.W/2, r.Y+r.H/2, config)
+	}
+
+	// A tap on a neighbour only selects it.
+	tapRow(0)
+	if packageActionsOpen {
+		t.Fatal("tapping a neighbour row opened the menu")
+	}
+	if packagesFocusIndex != 0 {
+		t.Fatalf("focus = %d, want the tapped row", packagesFocusIndex)
+	}
+
+	// Tap back onto the installed row to select it, then tap it again: that
+	// is the press, and it opens the menu.
+	tapRow(1)
+	if packagesFocusIndex != 1 || packageActionsOpen {
+		t.Fatalf("tap on the installed row: focus %d, menu open %v (want 1, false)",
+			packagesFocusIndex, packageActionsOpen)
+	}
+	tapRow(1)
+	if !packageActionsOpen {
+		t.Fatal("the second tap on the focused row did not press it")
+	}
+
+	// Tap Cancel: the menu closes and nothing runs.
+	box, header, lineH, _ := packageActionsLayout(config, elem)
+	cancel := packageActionItemRect(box, lineH, header, 2)
+	handlePackageMouseClick(cancel.X+cancel.W/2, cancel.Y+cancel.H/2, config)
+	if packageActionsOpen {
+		t.Fatal("tapping Cancel left the menu open")
+	}
+	if len(*install) != 0 {
+		t.Fatal("tapping Cancel started a download")
+	}
+
+	// Reopen, then a tap outside the menu closes it without selecting
+	// anything behind it.
+	tapRow(1)
+	if !packageActionsOpen {
+		t.Fatal("the menu did not reopen")
+	}
+	tapRow(0)
+	if packageActionsOpen {
+		t.Fatal("a tap outside the menu did not close it")
+	}
+	if packagesFocusIndex != 1 {
+		t.Fatalf("a tap outside the menu moved the list (focus %d): it only closes", packagesFocusIndex)
+	}
+	if len(*install) != 0 {
+		t.Fatal("closing the menu started a download")
+	}
 }

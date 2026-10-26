@@ -98,6 +98,9 @@ type wifiUpdate struct {
 	snap *wifiSnapshot
 	err  string
 	msg  string
+	// prompt names the SSID whose stored password turned out to be wrong;
+	// the drain opens the passphrase keyboard for it after showing the error.
+	prompt string
 }
 
 var (
@@ -156,6 +159,12 @@ func wifiDrainUpdates() {
 				if u.kind == wifiUpdateJoin {
 					ShowToast(u.err, ToastKindError)
 				}
+			}
+			if u.prompt != "" && !virtualKeyboardActive {
+				// The stored password was rejected: retyping it is the only
+				// fix, and the error above says why. Runs on the render
+				// thread, where opening the keyboard belongs.
+				wifiPromptPassphrase(u.prompt)
 			}
 			if u.msg != "" {
 				kind := ToastKindSuccess
@@ -416,7 +425,11 @@ func wifiSelectSavedAsync(id int) {
 	wifiStartWork("Reconnecting…", func() wifiUpdate {
 		res, err := wifiSelectSaved(id)
 		if err != nil {
-			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
+			u := wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
+			if wifiPasswordRejected(err) {
+				u.prompt = res.SSID
+			}
+			return u
 		}
 		u := wifiUpdate{kind: wifiUpdateJoin, msg: wifiJoinMessage(res)}
 		if snap, snapErr := wifiReadSnapshot(); snapErr == nil {
@@ -424,6 +437,14 @@ func wifiSelectSavedAsync(id int) {
 		}
 		return u
 	})
+}
+
+// wifiPasswordRejected marks the one join failure the user can fix by
+// retyping: a stored password the router no longer accepts. Without this the
+// panel only toasted the error forever, and selecting the row again retried
+// the same rejected key with no way to enter a new one.
+func wifiPasswordRejected(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "password was rejected")
 }
 
 // wifiJoinMessage is the one-line confirmation after a successful join.
@@ -458,7 +479,11 @@ func wifiReconnectAsync(ssid string) {
 	wifiStartWork("Reconnecting to "+ssid+"…", func() wifiUpdate {
 		res, err := wifiReconnect()
 		if err != nil {
-			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
+			u := wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
+			if wifiPasswordRejected(err) {
+				u.prompt = res.SSID
+			}
+			return u
 		}
 		u := wifiUpdate{kind: wifiUpdateJoin, msg: wifiJoinMessage(res)}
 		if snap, snapErr := wifiReadSnapshot(); snapErr == nil {
@@ -723,11 +748,17 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	medH := int32(medium.Height())
 	const padX = int32(24)
 
 	rowH := smallH + 22
-	headerH := 18 + medH + 6 + smallH + 14
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height. The status line
+	// keeps its own ink: a dead radio still warns in amber under the title.
+	line, lineColor := wifiStatusLine()
+	header := UIPanelHeader("Wi-Fi", line, "settings")
+	header.SubtitleColor = lineColor
+	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 	// Touch users need visible buttons for rescan/reconnect/disconnect/forget;
 	// the hint line below stays for the pad. No backend means nothing to do, so
@@ -772,10 +803,10 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "Wi-Fi", ColorTextPrimary(), panelX+padX, panelY+18)
-	line, lineColor := wifiStatusLine()
-	renderText(renderer, config, font, ellipsize(font, line, panelW-2*padX),
-		lineColor, panelX+padX, panelY+18+medH+6)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	// List window: keep the cursor in view without moving a short list.
 	first := 0

@@ -496,7 +496,10 @@ func handleCommunityWheel(y int32) bool {
 
 // ── Render ─────────────────────────────────────────────────────────────────
 
-func communityPanelSize(page communityPage, rowH int32) (int32, int32) {
+// communityPanelSize is the card's size. headerH is the measured title band
+// (the shared page header plus the gap under it) rather than a number this
+// function guesses, so the card and the bar drawn into it cannot disagree.
+func communityPanelSize(page communityPage, rowH, headerH int32) (int32, int32) {
 	panelW := int32(760)
 	if panelW > screenWidth-40 {
 		panelW = screenWidth - 40
@@ -508,7 +511,7 @@ func communityPanelSize(page communityPage, rowH int32) (int32, int32) {
 			panelH = screenHeight - 40
 		}
 	} else {
-		panelH = 86 + int32(len(communityRows(appConfig)))*rowH + 34 + 34
+		panelH = headerH + int32(len(communityRows(appConfig)))*rowH + 34 + 34
 		if panelH > screenHeight-20 {
 			panelH = screenHeight - 20
 		}
@@ -535,7 +538,25 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	// taller than 18px, which made every detail line overlap the next label.
 	const rowPad = int32(10)
 	rowH := 2*rowPad + smallH + 2 + medH + 2 + smallH
-	panelW, panelH := communityPanelSize(communityPanel.page, rowH)
+
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	title := "Community & support"
+	sub := "Updates, feedback and privacy"
+	if communityPanel.page == communityPageChangelog {
+		title = "What's new"
+		sub = changelogSubtitle(config)
+	} else if communityPanel.page == communityPageBIOSDoctor {
+		title = "BIOS Doctor"
+		sub = "Firmware presence and SHA-256 fingerprints"
+	} else if communityPanel.page == communityPageDiagnosticsQR {
+		title = "Diagnostics export"
+		sub = "A time-limited QR link to the redacted support report"
+	}
+	header := UIPanelHeader(title, sub, "chat")
+	headerH := UIPanelHeaderBand(config, header, 9)
+
+	panelW, panelH := communityPanelSize(communityPanel.page, rowH, headerH)
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
 	communityPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
@@ -549,23 +570,13 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	title := "Community & support"
-	sub := "Updates, feedback and privacy"
-	if communityPanel.page == communityPageChangelog {
-		title = "What's new"
-		sub = changelogSubtitle(config)
-	} else if communityPanel.page == communityPageBIOSDoctor {
-		title = "BIOS Doctor"
-		sub = "Firmware presence and SHA-256 fingerprints"
-	} else if communityPanel.page == communityPageDiagnosticsQR {
-		title = "Diagnostics export"
-		sub = "A time-limited QR link to the redacted support report"
-	}
-	renderText(renderer, config, medium, title, ColorTextPrimary(), panelX+padX, panelY+18)
-	renderText(renderer, config, font, ellipsize(font, sub, panelW-2*padX), ColorTextTertiary(), panelX+padX, panelY+20+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	if communityPanel.page == communityPageChangelog {
-		renderCommunityChangelog(renderer, config, font, panelX, panelY, panelW, panelH, padX, smallH)
+		renderCommunityChangelog(renderer, config, font, panelX, panelY, panelW, panelH, padX, smallH, headerH)
 		return
 	}
 	if communityPanel.page == communityPageBIOSDoctor {
@@ -573,11 +584,11 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 			report := scanBIOSRoots(biosDoctorRoots())
 			communityBIOSReport = &report
 		}
-		renderCommunityBIOSDoctor(renderer, config, font, panelX, panelY, panelW, panelH, padX, *communityBIOSReport)
+		renderCommunityBIOSDoctor(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH, *communityBIOSReport)
 		return
 	}
 	if communityPanel.page == communityPageDiagnosticsQR {
-		renderCommunityDiagnosticsQR(renderer, config, font, medium, panelX, panelY, panelW, panelH, padX)
+		renderCommunityDiagnosticsQR(renderer, config, font, medium, panelX, panelY, panelW, panelH, padX, headerH)
 		return
 	}
 
@@ -589,7 +600,6 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	if communityPanel.cursor < 0 {
 		communityPanel.cursor = 0
 	}
-	headerH := int32(86)
 	rowW := panelW - 2*padX
 	communityRowRects = make([]sdl.Rect, len(rows))
 	for i, row := range rows {
@@ -642,12 +652,13 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 }
 
 func renderCommunityDiagnosticsQR(renderer *sdl.Renderer, config *Config, font, medium *ttf.Font,
-	panelX, panelY, panelW, panelH, padX int32) {
+	panelX, panelY, panelW, panelH, padX, headerH int32) {
 	qrSize := int32(248)
 	if qrSize > panelW-64 {
 		qrSize = panelW - 64
 	}
-	qrRect := sdl.Rect{X: panelX + (panelW-qrSize)/2, Y: panelY + 104, W: qrSize, H: qrSize}
+	// Under the shared page header's measured band, with the air a QR wants.
+	qrRect := sdl.Rect{X: panelX + (panelW-qrSize)/2, Y: panelY + headerH + 24, W: qrSize, H: qrSize}
 	fillRoundedRect(renderer, qrRect.X, qrRect.Y, qrRect.W, qrRect.H, 10, sdl.Color{R: 255, G: 255, B: 255, A: 255})
 	labelY := qrRect.Y + qrRect.H + 18
 	if len(communityDiagnosticQR.qr) > 0 {

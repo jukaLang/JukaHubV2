@@ -115,7 +115,7 @@ func TestInjectedBrowserSceneRenders(t *testing.T) {
 	if !ok {
 		t.Fatal("no web element in the injected scene")
 	}
-	if addr, goBtn := textBrowserToolbarRects(elem); addr.W <= 0 || goBtn.W <= 0 {
+	if addr, goBtn := textBrowserToolbarRects(config, elem); addr.W <= 0 || goBtn.W <= 0 {
 		t.Fatalf("toolbar not laid out: address %+v go %+v", addr, goBtn)
 	}
 }
@@ -424,6 +424,44 @@ func TestOpenBrowserHomeLoadsAndDrawsTheStartPage(t *testing.T) {
 	}
 }
 
+// The content and address are saved with the rest of the config, so the first
+// open in a run meets a page the *last* run was reading. That is not a page
+// this session opened, and treating it as one meant every launch came back to
+// yesterday's home page with a stale address bar and no request going out.
+// The first open must go to the start page; a second one keeps what is on
+// screen.
+func TestBrowserFirstOpenLoadsTheStartPageNotTheSavedPage(t *testing.T) {
+	config, _, _ := browserCacheFixture(t, func(rawURL string) browserPage {
+		return browserPage{
+			Text:     "Title: Start page\nURL: " + rawURL + "\n\nthe start page loaded",
+			FinalURL: rawURL,
+			Doc:      parseWebPage("<h1>Start page</h1><p>the start page loaded</p>", "", rawURL),
+		}
+	})
+	ensureBrowserScene(config)
+
+	// What a previous run left behind in jukauser.json.
+	config.Variables.Custom[browserContentVariable] =
+		"Title: A news home page\nURL: https://news.example/\n\nstale body from last run"
+	config.Variables.Custom[textBrowserURLVariable] = "https://news.example/"
+	// Fresh session: nothing has opened the browser yet.
+	resetBrowserStateForTest()
+
+	browserEnsureHome(config)
+
+	waitBrowserText(t, config, func(s string) bool { return strings.Contains(s, "the start page loaded") })
+	if address := textBrowserAddress(config); address != browserHomeURL {
+		t.Fatalf("first open address = %q, want %q", address, browserHomeURL)
+	}
+
+	// Re-entering the scene in the same run keeps the page on screen.
+	config.Variables.Custom[browserContentVariable] = "the page I am reading"
+	browserEnsureHome(config)
+	if got, _ := config.Variables.Custom[browserContentVariable].(string); got != "the page I am reading" {
+		t.Fatalf("a second open replaced the page with %q", got)
+	}
+}
+
 func TestBrowserLinkPanelRendersSelectableRows(t *testing.T) {
 	if testing.Short() {
 		t.Skip("render probe skipped in -short mode")
@@ -583,11 +621,40 @@ func TestBrowserResolveLink(t *testing.T) {
 
 // The toolbar reserves a Search chip, the filter chip and the D-pad mode chip
 // beside Go, and no control ever overlaps another or leaves the element.
+// TestTextBrowserTouchTargetGrowsCentred pins the touch-audit helper: the
+// drawn chip and its tap target are different rectangles, and only the target
+// grows — centred, and horizontally identical so the gap between neighbours
+// still guards against fat-finger overlaps.
+func TestTextBrowserTouchTargetGrowsCentred(t *testing.T) {
+	drawn := sdl.Rect{X: 100, Y: 200, W: 52, H: 32}
+	got := textBrowserTouchTarget(drawn)
+	if got.Y != 194 || got.H != 44 {
+		t.Fatalf("32px chip -> %+v, want a 44px target centred at y=194", got)
+	}
+	if got.X != drawn.X || got.W != drawn.W {
+		t.Fatalf("the tap target changed horizontal geometry: %+v vs %+v", got, drawn)
+	}
+	if already := (sdl.Rect{X: 1, Y: 2, W: 3, H: 44}); textBrowserTouchTarget(already) != already {
+		t.Fatalf("an already-minimum rect was changed: %+v", textBrowserTouchTarget(already))
+	}
+	if absent := (sdl.Rect{}); textBrowserTouchTarget(absent) != (sdl.Rect{}) {
+		t.Fatalf("an absent rect became a target: %+v", textBrowserTouchTarget(absent))
+	}
+}
+
 func TestBrowserToolbarHasSearchChip(t *testing.T) {
+	// Chips measure themselves against the "small" font, so the screen (and
+	// with it the font) has to be up first: these are the widths every frame
+	// ships with on the Smart Pro's canvas.
+	withScreen(t, 1280, 720)
+	config := &Config{}
+	if font, _ := getCachedFont(config, "small"); font == nil {
+		t.Fatal("no small font — the toolbar would fall back to guessed widths")
+	}
 	elem := browserCursorTestElement(browserContentVariable)
-	address, mode, search, goBtn, filter := textBrowserToolbarLayout(elem)
+	address, mode, search, goBtn, filter, zoom := textBrowserToolbarLayout(config, elem)
 	width := getElementWidth(elem, 1100)
-	for _, r := range []sdl.Rect{address, mode, search, goBtn, filter} {
+	for _, r := range []sdl.Rect{address, mode, search, goBtn, filter, zoom} {
 		if r.W <= 0 || r.H <= 0 {
 			t.Fatalf("empty toolbar control: %+v", r)
 		}
@@ -595,42 +662,53 @@ func TestBrowserToolbarHasSearchChip(t *testing.T) {
 			t.Fatalf("toolbar control %+v escapes the panel", r)
 		}
 	}
-	order := []sdl.Rect{address, search, goBtn, filter, mode}
+	order := []sdl.Rect{address, search, goBtn, filter, mode, zoom}
 	for i := 1; i < len(order); i++ {
 		if order[i-1].X+order[i-1].W > order[i].X {
 			t.Fatalf("toolbar controls overlap: %+v then %+v", order[i-1], order[i])
 		}
 	}
-	if got := textBrowserSearchRect(elem); got != search {
+	if got := textBrowserSearchRect(config, elem); got != search {
 		t.Fatalf("search hit area = %+v, want %+v", got, search)
 	}
-	if got := textBrowserFilterRect(elem); got != filter {
+	if got := textBrowserFilterRect(config, elem); got != filter {
 		t.Fatalf("filter hit area = %+v, want %+v", got, filter)
 	}
-	if got := textBrowserModeRect(elem); got != mode {
+	if got := textBrowserModeRect(config, elem); got != mode {
 		t.Fatalf("mode hit area = %+v, want %+v", got, mode)
 	}
-	legacyAddress, legacyGo := textBrowserToolbarRects(elem)
+	if got := textBrowserZoomRect(config, elem); got != zoom {
+		t.Fatalf("zoom hit area = %+v, want %+v", got, zoom)
+	}
+	legacyAddress, legacyGo := textBrowserToolbarRects(config, elem)
 	if legacyAddress != address || legacyGo != goBtn {
 		t.Fatal("the two-rect accessor disagrees with the full layout")
 	}
 
-	// A narrow panel drops Search first, then the filter chip, and the mode
-	// chip last — it is the only control that explains the D-pad. Nothing may
-	// overlap the next control or leave the panel at any of the three widths.
+	// A narrow panel gives up the zoom chip first (it has keyboard/trigger
+	// redundancy), then Search, then the filter chip, and the mode chip last —
+	// it is the only control that explains the D-pad. Nothing may overlap the
+	// next control or leave the panel at any of the three widths.
 	for _, tc := range []struct {
 		width      int32
+		wantZoom   bool
 		wantFilter bool
 		wantMode   bool
 	}{
-		{440, true, true},
-		{380, false, true},
-		{320, false, false},
+		// Measured chips (GO 52, SEARCH 113, mode 110 at the 1280 font), so
+		// the filter's tier starts at 460 rather than the guessed 440. The
+		// zoom chip is gone at every one of these narrow widths.
+		{460, false, true, true},
+		{380, false, false, true},
+		{320, false, false, false},
 	} {
 		narrow := Element{Type: "textbrowser", Text: "web", Width: StringOrInt(strconv.Itoa(int(tc.width))), Height: "480"}
-		a, m, s, g, f := textBrowserToolbarLayout(narrow)
+		a, m, s, g, f, z := textBrowserToolbarLayout(config, narrow)
 		if a.W <= 0 || g.W <= 0 {
 			t.Fatalf("%dpx: address %+v go %+v", tc.width, a, g)
+		}
+		if (z.W > 0) != tc.wantZoom {
+			t.Fatalf("%dpx: zoom chip %+v, want shown=%v", tc.width, z, tc.wantZoom)
 		}
 		if (f.W > 0) != tc.wantFilter {
 			t.Fatalf("%dpx: filter chip %+v, want shown=%v", tc.width, f, tc.wantFilter)
@@ -638,7 +716,7 @@ func TestBrowserToolbarHasSearchChip(t *testing.T) {
 		if (m.W > 0) != tc.wantMode {
 			t.Fatalf("%dpx: mode chip %+v, want shown=%v", tc.width, m, tc.wantMode)
 		}
-		row := []sdl.Rect{a, s, g, f, m}
+		row := []sdl.Rect{a, s, g, f, m, z}
 		var last sdl.Rect
 		for _, r := range row {
 			if r.W <= 0 {
@@ -864,7 +942,7 @@ func TestBrowserModeChipIsDrawn(t *testing.T) {
 	}
 
 	// And it lives inside the chip's own rect, not somewhere else on the page.
-	mode := textBrowserModeRect(elem)
+	mode := textBrowserModeRect(config, elem)
 	if mode.W <= 0 || mode.H <= 0 {
 		t.Fatalf("mode chip rect = %+v", mode)
 	}
@@ -1053,7 +1131,7 @@ func TestBrowserTapOnPageLinkOpensIt(t *testing.T) {
 	if rect.W <= 0 || rect.H <= 0 {
 		t.Fatalf("link rect = %+v", rect)
 	}
-	if !browserTapPageLink(config, elem, rect.X+2, rect.Y+2) {
+	if !browserTapPageLink(nil, config, elem, rect.X+2, rect.Y+2) {
 		t.Fatal("tap on the link rect was not consumed")
 	}
 	waitBrowserVariable(t, config, variable, func(s string) bool {
@@ -1061,7 +1139,7 @@ func TestBrowserTapOnPageLinkOpensIt(t *testing.T) {
 	})
 
 	// A tap away from a link stays with the caller.
-	if browserTapPageLink(config, elem, rect.X+rect.W/2, rect.Y+rect.H/2+120) {
+	if browserTapPageLink(nil, config, elem, rect.X+rect.W/2, rect.Y+rect.H/2+120) {
 		t.Fatal("tap far from the link was consumed")
 	}
 }

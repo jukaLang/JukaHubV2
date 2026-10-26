@@ -468,7 +468,6 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	medH := int32(medium.Height())
 	const padX = int32(24)
 	lineH := smallH + 10
 	visible := 10
@@ -482,7 +481,14 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 		visible = 1
 	}
 
-	headerH := 18 + medH + 4 + smallH + 8
+	// The title band is the shared page header, built before the card is sized so
+	// the panel and the bar that fills it measure the same height.
+	sub := fmt.Sprintf("%d saved streams", len(list))
+	if ipPanelStatus != "" {
+		sub = ipPanelStatus
+	}
+	header := UIPanelHeader("IPStream Library", sub, "media")
+	headerH := UIPanelHeaderBand(config, header, 8)
 	footerH := 20 + smallH
 	panelW := int32(760)
 	if panelW > screenWidth-48 {
@@ -504,12 +510,10 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
 
-	renderText(renderer, config, medium, "IPStream Library", ColorTextPrimary(), panelX+padX, panelY+18)
-	sub := fmt.Sprintf("%d saved streams", len(list))
-	if ipPanelStatus != "" {
-		sub = ipPanelStatus
-	}
-	renderText(renderer, config, font, sub, ColorTextTertiary(), panelX+padX, panelY+18+medH+4)
+	header.X = panelX + padX
+	header.Y = panelY + UIPanelHeaderInset
+	header.W = panelW - 2*padX
+	UIPageHeaderDraw(renderer, config, header)
 
 	rowW := panelW - 2*padX
 	focusColor := installHighlight()

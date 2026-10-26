@@ -460,20 +460,11 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	if font == nil {
 		return
 	}
-	medium, _ := getCachedFont(config, "medium")
-	if medium == nil {
-		medium = font
-	}
-	titleFont, _ := getCachedFont(config, "large")
-	if titleFont == nil {
-		titleFont = medium
-	}
 	labelFont := appTileLabelFont(config)
 	if labelFont == nil {
 		labelFont = font
 	}
 	smallH := int32(font.Height())
-	titleH := int32(titleFont.Height())
 
 	layout := emuGridView()
 	emuPanelRect = layout.page
@@ -489,13 +480,10 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
 	renderer.FillRect(&sdl.Rect{X: layout.page.X + 20, Y: layout.page.Y + 1, W: layout.page.W - 40, H: 2})
 
-	renderText(renderer, config, titleFont, "Emulators", ColorTextPrimary(),
-		layout.page.X+emuPagePad, layout.page.Y+20)
-	renderText(renderer, config, font, emuSummary(entries), ColorTextTertiary(),
-		layout.page.X+emuPagePad, layout.page.Y+20+titleH+6)
-
-	// The count sits opposite the title, where a page usually carries its
-	// total, and doubles as the scroll position when the grid is taller.
+	// The page opens with the shared header every other page uses — a tinted
+	// glyph well, the title, a one-line summary under it and the count
+	// opposite — so the Emulators screen reads as the same kind of surface as
+	// Tools and About instead of a bespoke panel.
 	count := itoa(len(entries)) + " emulators"
 	if len(entries) == 1 {
 		count = "1 emulator"
@@ -504,9 +492,21 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	if totalRows > layout.rows {
 		count = itoa(emuPanel.cursor+1) + " / " + itoa(len(entries))
 	}
-	cw, _, _ := font.SizeUTF8(count)
-	renderText(renderer, config, font, count, ColorTextSecondary(),
-		layout.page.X+layout.page.W-emuPagePad-int32(cw), layout.page.Y+20+titleH/2-smallH/2)
+	UIPageHeaderDraw(renderer, config, UIPageHeader{
+		X: layout.page.X + emuPagePad,
+		Y: layout.page.Y + 16,
+		W: layout.page.W - 2*emuPagePad,
+		Title:       "Emulators",
+		Subtitle:    emuSummary(entries),
+		Status:      count,
+		StatusColor: ColorTextSecondary(),
+		// The same title size the Tools page and the Settings tiles use: one
+		// recipe, so every page header measures and draws the same.
+		TitleSize: menuTitleSize,
+		Glyph: func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+			DrawHomeIcon(r, "gamepad", box, false)
+		},
+	})
 
 	// ── Tiles ───────────────────────────────────────────────────────────
 	hovered := -1

@@ -944,10 +944,13 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	switch scene.Name {
 	case "Browser":
 		// The browser has its own D-pad model: links on the page, the address
-		// bar on A, the search keyboard on Y and the full link list on X.
+		// bar on A, the search keyboard on Y and the full link list on X. The
+		// triggers zoom the reader text — the same action the toolbar chip
+		// steps — so both ways in are named here.
 		hints[1] = FooterHint{Button: "A", Label: "Link / URL"}
 		hints = append(hints,
 			FooterHint{Button: "L1/R1", Label: "Scroll"},
+			FooterHint{Button: "L2/R2", Label: "Zoom"},
 			FooterHint{Button: "Y", Label: "Search"},
 			FooterHint{Button: "X", Label: "Links"},
 		)
@@ -971,6 +974,13 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 	case "Apps":
 		// The launcher is a tile grid: A starts the focused app.
 		hints[1] = FooterHint{Button: "A", Label: "Launch"}
+	case "Packages":
+		// A row's action menu takes A (choose) and B (close) while it is
+		// open; the footer follows it instead of advertising Open/Back.
+		if packageActionsOpen {
+			hints[1] = FooterHint{Button: "A", Label: "Select"}
+			hints[2] = FooterHint{Button: "B", Label: "Close"}
+		}
 	case "Patch":
 		// Patch is modal-aware and lists the keys the open dialog takes.
 		if patchHints, ok := patchFooterHints(); ok {

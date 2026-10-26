@@ -285,9 +285,10 @@ func communityChangelogLines(font *ttf.Font, width int32) []string {
 // renderCommunityChangelog draws the wrapped notes and a scrollbar. The panel
 // chrome and title are drawn by renderCommunityPanel.
 func renderCommunityChangelog(renderer *sdl.Renderer, config *Config, font *ttf.Font,
-	panelX, panelY, panelW, panelH, padX, smallH int32) {
+	panelX, panelY, panelW, panelH, padX, smallH, headerH int32) {
 	contentX := panelX + padX
-	contentY := panelY + 86
+	// Under the shared page header's measured band, not a number guessed here.
+	contentY := panelY + headerH + 8
 	contentW := panelW - 2*padX - 12
 	contentBottom := panelY + panelH - 38
 	lineH := smallH + 3

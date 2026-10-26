@@ -339,7 +339,12 @@ func (h *HomeLayout) FocusAt(x, y int32) bool {
 			continue
 		}
 		item := h.Items[id]
-		if x >= item.Rect.X && x < item.Rect.X+item.Rect.W && y >= item.Rect.Y && y < item.Rect.Y+item.Rect.H {
+		// Hit-test against the grown tap area, not the drawn rect: a compact
+		// 36px Exit pill or a header chip looks right but is smaller than a
+		// fingertip, and a press a few pixels off does nothing. The drawn
+		// geometry never moves — only the invisible target grows.
+		r := growTouchTarget(item.Rect)
+		if x >= r.X && x < r.X+r.W && y >= r.Y && y < r.Y+r.H {
 			return h.Focus.Set(id)
 		}
 	}

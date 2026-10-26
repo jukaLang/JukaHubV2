@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -181,20 +182,18 @@ func fetchChatImage(url string) {
 }
 
 func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Texture {
-	img, _, err := image.Decode(bytes.NewReader(data))
+	// Decode through the shared bounded decoder: it turns the bytes into a
+	// dense RGBA and takes a permit, so a fan-out of decodes elsewhere cannot
+	// run unbounded. This call is on the render thread, where nothing else
+	// holds a permit, so the Acquire never blocks here.
+	rgba, err := decodeImageRGBA(context.Background(), data)
 	if err != nil {
 		return nil
 	}
-	bounds := img.Bounds()
+	bounds := rgba.Bounds()
 	w, h := bounds.Max.X, bounds.Max.Y
 	if w <= 0 || h <= 0 {
 		return nil
-	}
-	rgba := image.NewRGBA(bounds)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			rgba.Set(x, y, img.At(x, y))
-		}
 	}
 	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STATIC, int32(w), int32(h))
 	if err != nil {

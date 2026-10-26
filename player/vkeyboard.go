@@ -721,6 +721,9 @@ func vkTitle() string {
 	if textBrowserSearchEditing {
 		return "SEARCH WEB"
 	}
+	if textBrowserFindEditing {
+		return "FIND ON PAGE"
+	}
 	if textBrowserAddressEditing {
 		return "ADDRESS"
 	}
@@ -786,6 +789,9 @@ func vkPlaceholder() string {
 	}
 	if textBrowserSearchEditing {
 		return browserSearchPrompt
+	}
+	if textBrowserFindEditing {
+		return browserFindPrompt
 	}
 	if textBrowserAddressEditing {
 		return "https://example.com"
@@ -1084,8 +1090,14 @@ func vkOpenSceneInput(config *Config, sceneIdx, elemIdx int) {
 	variable := config.Scenes[sceneIdx].Elements[elemIdx].Variable
 	if textBrowserSearchEditing {
 		variable = browserSearchVariable
+	} else if textBrowserFindEditing {
+		variable = browserFindVariable
 	} else if textBrowserAddressEditing {
 		variable = textBrowserURLVariable
+	} else if browserFormEditing {
+		// A field on the page: its own buffer, so the address bar and the web
+		// search keep what they were holding.
+		variable = browserFormVariable
 	}
 	if variable != "" {
 		inputTextBuffer = inputVariableValue(config, variable)
@@ -1383,6 +1395,12 @@ func vkSubmit(config *Config, askAI bool) {
 		}
 		if textBrowserSearchEditing {
 			textBrowserSearchSubmitted = true
+		}
+		if textBrowserFindEditing {
+			textBrowserFindSubmitted = true
+		}
+		if browserFormEditing {
+			browserFormSubmitted = true
 		}
 		vkSetText(text, config)
 		vkCloseKeyboard()
