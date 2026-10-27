@@ -39,10 +39,14 @@ theme:
 nav:
   - Start here:
       - Quick start (users): QUICK_START.md
+      - The ten-minute tour: TOUR.md
       - Controls: CONTROLS.md
       - Recovery: RECOVERY.md
   - Software:
+      - Toolbox: TOOLBOX.md
       - Video and music: MUSIC_PLAYER.md
+      - Recordings: RECORDINGS.md
+      - Wi-Fi network picker: WIFI.md
       - Browser: BROWSER.md
       - Game library: GAME_LIBRARY.md
       - Game profiles: GAME_PROFILES.md
@@ -53,6 +57,7 @@ nav:
       - Smart home: SMART_HOME.md
       - Windows apps: WINDOWS_APPS.md
       - Android (tsp) builds: ANDROID.md
+      - Android on GammaOS (findings): ANDROID-GAMMAOS.md
       - Game curation screens: CURATION.md
   - Configure and extend:
       - Configuration reference: CONFIGURATION.md
@@ -65,9 +70,18 @@ nav:
       - Architecture: ARCHITECTURE.md
       - Development guide: DEVELOPMENT.md
       - Building: BUILDING.md
+      - Code style: STYLE.md
+      - External dependencies: DEPENDENCIES.md
       - Device tuning: DEVICE_TUNING.md
       - Controller testing: CONTROLLER_TEST.md
       - Memory: MEMORY.md
       - Accessibility: ACCESSIBILITY.md
       - Ambient mode: AMBIENT.md
       - Timelapse: TIMELAPSE.md
+      - Checkpoints and quick switch: CHECKPOINTS.md
+      - Video hardware decode (VPU): VIDEO_VPU_OFFLOAD.md
+      - Updater and TUF (design note): UPDATER_TUF.md
+  - Decisions (ADRs):
+      - Record architecture decisions: adr/0000-record-architecture-decisions.md
+      - Physical to logical keymap: adr/0001-physical-logical-keymap.md
+      - Renderer-owned caches: adr/0002-renderer-owned-caches.md
