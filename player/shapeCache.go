@@ -220,7 +220,23 @@ func shapeIsCacheable(w, h int32) bool {
 func debugShapeErrors() bool { return os.Getenv("JUKAHUB_SHAPE_DEBUG") != "" }
 
 func drawShapeCached(renderer *sdl.Renderer, kind int32, x, y, w, h, r, thickness int32, c sdl.Color, paint shapeDrawFn) {
-	if renderer == nil || !shapeIsCacheable(w, h) {
+	drawShapeCachedAt(renderer, kind, w, h, sdl.Rect{X: x, Y: y, W: w, H: h}, r, thickness, c, paint)
+}
+
+// drawShapeCachedAt caches the primitive at baseW×baseH and blits it into dst,
+// which may be a few pixels larger or smaller than that base. It exists for
+// shapes that animate: the home card's hover lift grows it by up to three
+// pixels, and keyed by the grown size every step of that ease minted a fresh
+// card surface and focus ring — half a megabyte each at 720p — which then sat in
+// a 12 MB cache the handheld budgets for the whole screen, pushing out every
+// other shape. One texture per card now serves the whole animation, scaled in
+// the blit, so the motion stays smooth without new uploads.
+func drawShapeCachedAt(renderer *sdl.Renderer, kind int32, baseW, baseH int32, dst sdl.Rect, r, thickness int32, c sdl.Color, paint shapeDrawFn) {
+	x, y, w, h := dst.X, dst.Y, dst.W, dst.H
+	if baseW <= 0 || baseH <= 0 {
+		baseW, baseH = w, h
+	}
+	if renderer == nil || !shapeIsCacheable(baseW, baseH) {
 		if renderer != nil {
 			paint(renderer, x, y, w, h)
 		}
@@ -239,8 +255,8 @@ func drawShapeCached(renderer *sdl.Renderer, kind int32, x, y, w, h, r, thicknes
 		kind:      kind,
 		renderer:  renderer,
 		color:     sdl.Color{R: c.R, G: c.G, B: c.B, A: 255},
-		w:         w,
-		h:         h,
+		w:         baseW,
+		h:         baseH,
 		r:         r,
 		thickness: thickness,
 	}
@@ -257,8 +273,9 @@ func drawShapeCached(renderer *sdl.Renderer, kind int32, x, y, w, h, r, thicknes
 		// Copy failed; fall through and paint directly this frame.
 	}
 
-	// Render the shape once, opaque, into a target texture at (0, 0).
-	tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA8888), sdl.TEXTUREACCESS_TARGET, w, h)
+	// Render the shape once, opaque, into a target texture at (0, 0), at the
+	// base size the key names; the blit below scales it onto dst.
+	tex, err := renderer.CreateTexture(uint32(sdl.PIXELFORMAT_RGBA8888), sdl.TEXTUREACCESS_TARGET, baseW, baseH)
 	if err == nil {
 		_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
 
@@ -275,7 +292,7 @@ func drawShapeCached(renderer *sdl.Renderer, kind int32, x, y, w, h, r, thicknes
 			_ = renderer.SetDrawColor(0, 0, 0, 0)
 			_ = renderer.Clear()
 			_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-			paint(renderer, 0, 0, w, h)
+			paint(renderer, 0, 0, baseW, baseH)
 			// On the default backbuffer GetRenderTarget() returns nil; a nil
 			// restore still returns off the target, so always restore.
 			_ = renderer.SetRenderTarget(oldTarget)
@@ -299,7 +316,7 @@ func drawShapeCached(renderer *sdl.Renderer, kind int32, x, y, w, h, r, thicknes
 		return
 	}
 
-	shapeTextures.Put(key, tex, w, h)
+	shapeTextures.Put(key, tex, baseW, baseH)
 	_ = tex.SetAlphaMod(c.A)
 	dest := sdl.Rect{X: x, Y: y, W: w, H: h}
 	if err := renderer.Copy(tex, nil, &dest); err != nil {

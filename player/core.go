@@ -1429,6 +1429,16 @@ func roundedRowInset(r, h, dy int32) int32 {
 // rendering. The radius is clamped to half the width/height and every pixel
 // stays inside the supplied rectangle.
 func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
+	rc := sdl.Rect{X: x, Y: y, W: w, H: h}
+	fillRoundedRectAt(renderer, rc, rc, r, c)
+}
+
+// fillRoundedRectAt fills the rounded rect at dst while taking its shape from
+// base's size, so an animated rect (the home card's hover lift) reuses one
+// cached texture for every step instead of rasterising a new one per pixel it
+// grows. When base is dst the two are the same and nothing is scaled.
+func fillRoundedRectAt(renderer *sdl.Renderer, base, dst sdl.Rect, r int32, c sdl.Color) {
+	x, y, w, h := dst.X, dst.Y, dst.W, dst.H
 	if w <= 0 || h <= 0 || renderer == nil {
 		return
 	}
@@ -1447,7 +1457,7 @@ func fillRoundedRect(renderer *sdl.Renderer, x, y, w, h, r int32, c sdl.Color) {
 	// A card/dial/ring geometry repeats every frame; round-tripping it through
 	// the shape cache costs one blended Copy instead of dozens of fill passes
 	// (each a separate draw call on the GLES2 renderer). See shapeCache.go.
-	drawShapeCached(renderer, shapeKindFillRound, x, y, w, h, r, 0, c, func(rr *sdl.Renderer, ox, oy, ww, wh int32) {
+	drawShapeCachedAt(renderer, shapeKindFillRound, base.W, base.H, dst, r, 0, c, func(rr *sdl.Renderer, ox, oy, ww, wh int32) {
 		drawRoundedFillRows(rr, ox, oy, ww, wh, r, shapeOpaque(c))
 	})
 }
@@ -1508,6 +1518,15 @@ func renderWithClip(renderer *sdl.Renderer, x, y, w, h int32, fn func(*sdl.Rende
 // It uses the same symmetric per-scanline inset math as fillRoundedRect so the
 // outline is complete, inside the rectangle, and never grows feet or spikes.
 func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c sdl.Color) {
+	rc := sdl.Rect{X: x, Y: y, W: w, H: h}
+	strokeRoundedRectAt(renderer, rc, rc, r, thickness, c)
+}
+
+// strokeRoundedRectAt strokes the ring at dst, taking its shape from base's
+// size: the same trick fillRoundedRectAt uses, so a focus ring that follows a
+// lifting card keeps one cached texture for the whole animation.
+func strokeRoundedRectAt(renderer *sdl.Renderer, base, dst sdl.Rect, r, thickness int32, c sdl.Color) {
+	w, h := dst.W, dst.H
 	if w <= 0 || h <= 0 || thickness < 1 || renderer == nil {
 		return
 	}
@@ -1521,6 +1540,18 @@ func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c
 	if thickness > r {
 		thickness = r
 	}
+	// A focus ring is redrawn every frame while nothing about it moves; run it
+	// through the shape cache like fills: one Copy per frame instead of
+	// per-scanline fill passes (shapeCache.go).
+	drawShapeCachedAt(renderer, shapeKindStrokeRound, base.W, base.H, dst, r, thickness, c, func(rr *sdl.Renderer, ox, oy, ww, wh int32) {
+		drawRoundedStrokeRows(rr, ox, oy, ww, wh, r, thickness, shapeOpaque(c))
+	})
+}
+
+// drawRoundedStrokeRows paints the ring of a w×h rounded rect with its top-left
+// at (ox, oy). It is the one painter for both the cached texture and the
+// uncached fallback.
+func drawRoundedStrokeRows(renderer *sdl.Renderer, ox, oy, w, h, r, thickness int32, c sdl.Color) {
 	innerR := r - thickness
 	if innerR < 0 {
 		innerR = 0
@@ -1535,7 +1566,7 @@ func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c
 	}
 	rowAt := func(dy int32) ringRow {
 		oInset := roundedRowInset(r, h, dy)
-		row := ringRow{left: x + oInset, right: x + w - oInset}
+		row := ringRow{left: ox + oInset, right: ox + w - oInset}
 		if dy >= thickness && dy < h-thickness && ih > 0 {
 			// Punch the inner hole so only the ring remains.
 			id := dy - thickness
@@ -1545,55 +1576,38 @@ func strokeRoundedRect(renderer *sdl.Renderer, x, y, w, h, r, thickness int32, c
 			} else if id >= ih-innerR {
 				iInset = roundedCornerInset(innerR, ih-1-id)
 			}
-			row.innerLeft = x + thickness + iInset
-			row.innerRight = x + w - thickness - iInset
+			row.innerLeft = ox + thickness + iInset
+			row.innerRight = ox + w - thickness - iInset
 			row.hole = true
 		}
 		return row
 	}
-	// A focus ring is redrawn every frame while nothing about it moves; run it
-	// through the shape cache like fills: one Copy per frame instead of
-	// per-scanline fill passes (shapeCache.go).
-	drawShapeCached(renderer, shapeKindStrokeRound, x, y, w, h, r, thickness, c, func(rr *sdl.Renderer, ox, oy, ww, wh int32) {
-		// rowAt yields absolute screen coordinates; shift them into the paint
-		// box so the cached texture and the direct fallback paint identically.
-		shift := ox - x
-		dyShift := oy - y
-		rowsAt := func(dy int32) ringRow {
-			row := rowAt(dy)
-			row.left += shift
-			row.right += shift
-			row.innerLeft += shift
-			row.innerRight += shift
-			return row
+	setDrawColor(renderer, c)
+	// Rows with the same geometry merge into one rectangle: the ring's straight
+	// sides are two tall bars rather than two 1px fills per row.
+	for dy := int32(0); dy < h; {
+		row := rowAt(dy)
+		run := dy + 1
+		for run < h && rowAt(run) == row {
+			run++
 		}
-		setDrawColor(rr, shapeOpaque(c))
-		// Rows with the same geometry merge into one rectangle: the ring's
-		// straight sides are two tall bars rather than two 1px fills per row.
-		for dy := int32(0); dy < wh; {
-			row := rowsAt(dy)
-			run := dy + 1
-			for run < h && rowsAt(run) == row {
-				run++
-			}
-			height := run - dy
-			if row.right > row.left {
-				switch {
-				case !row.hole:
-					// Top/bottom bands of the ring are solid.
-					rr.FillRect(&sdl.Rect{X: row.left, Y: y + dy + dyShift, W: row.right - row.left, H: height})
-				default:
-					if row.innerLeft > row.left {
-						rr.FillRect(&sdl.Rect{X: row.left, Y: y + dy + dyShift, W: row.innerLeft - row.left, H: height})
-					}
-					if row.right > row.innerRight {
-						rr.FillRect(&sdl.Rect{X: row.innerRight, Y: y + dy + dyShift, W: row.right - row.innerRight, H: height})
-					}
+		height := run - dy
+		if row.right > row.left {
+			switch {
+			case !row.hole:
+				// Top/bottom bands of the ring are solid.
+				renderer.FillRect(&sdl.Rect{X: row.left, Y: oy + dy, W: row.right - row.left, H: height})
+			default:
+				if row.innerLeft > row.left {
+					renderer.FillRect(&sdl.Rect{X: row.left, Y: oy + dy, W: row.innerLeft - row.left, H: height})
+				}
+				if row.right > row.innerRight {
+					renderer.FillRect(&sdl.Rect{X: row.innerRight, Y: oy + dy, W: row.right - row.innerRight, H: height})
 				}
 			}
-			dy = run
 		}
-	})
+		dy = run
+	}
 }
 
 // gradientRoundedRect draws a smooth vertical gradient inside a rounded rect.
@@ -4446,6 +4460,33 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		return
 	}
 
+	refreshHomeLayout(config)
+
+	// The home scene renders through the dedicated modern renderer so it can
+	// use its own header, Continue card, focus treatment, and footer hints.
+	// Generic config-driven element rendering stays for every other scene.
+	//
+	// It runs before the background below on purpose: the layout fills the
+	// screen with the theme colour itself, so painting the backdrop image or
+	// gradient here first was a full-screen blit and a blended full-screen fill
+	// that the next call covered — a second copy of that dead work, on top of
+	// the one renderHomeModern used to do.
+	if homeLayoutActive {
+		// Home draws its own header (with the same status cluster and the
+		// notification bell) and its own footer, so the shared bars must not
+		// leave stale hit areas behind for this frame.
+		sceneTitleBackRect = sdl.Rect{}
+		statusClockRect = sdl.Rect{}
+		tb.startRect = sdl.Rect{}
+		renderHomeModern(renderer, config)
+		renderWeatherPopover(renderer, config)
+		renderNotifDropdown(renderer, config)
+		renderer.SetDrawColor(0, 0, 0, 255)
+		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		renderer.SetClipRect(nil)
+		return
+	}
+
 	ensureBackgroundTexture(renderer, config)
 
 	if bgTexture != nil {
@@ -4461,26 +4502,6 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 			renderer.SetDrawColor(bg.R, bg.G, bg.B, 255)
 			renderer.Clear()
 		}
-	}
-	refreshHomeLayout(config)
-
-	// The home scene renders through the dedicated modern renderer so it can
-	// use its own header, Continue card, focus treatment, and footer hints.
-	// Generic config-driven element rendering stays for every other scene.
-	if homeLayoutActive {
-		// Home draws its own header (with the same status cluster and the
-		// notification bell) and its own footer, so the shared bars must not
-		// leave stale hit areas behind for this frame.
-		sceneTitleBackRect = sdl.Rect{}
-		statusClockRect = sdl.Rect{}
-		tb.startRect = sdl.Rect{}
-		renderHomeModern(renderer, config)
-		renderWeatherPopover(renderer, config)
-		renderNotifDropdown(renderer, config)
-		renderer.SetDrawColor(0, 0, 0, 255)
-		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-		renderer.SetClipRect(nil)
-		return
 	}
 
 	// Content panel behind the scene elements to frame the form/list area.

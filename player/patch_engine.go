@@ -490,6 +490,10 @@ type PatchState struct {
 	InstalledReleaseTag   string `json:"installed_release_tag,omitempty"`
 	InstalledReleaseAt    string `json:"installed_release_at,omitempty"`
 	AutoUpdateCheckedAt   string `json:"auto_update_checked_at,omitempty"`
+	// CoreUpdateCheckedAt is the last automatic emulator-core update pass that
+	// read the build index. A pass that failed to reach it does not stamp, so
+	// an offline boot retries on the next launch instead of waiting a day.
+	CoreUpdateCheckedAt string `json:"core_update_checked_at,omitempty"`
 	// A newer release that was detected but deliberately not downloaded or
 	// staged: installing waits for the user to confirm in the Patch scene.
 	AvailableUpdateTag   string `json:"available_update_tag,omitempty"`
@@ -2316,6 +2320,12 @@ func DiagnosticsText(config *Config) string {
 		if loadErrs > 0 || saveErrs > 0 {
 			sb.WriteString(fmt.Sprintf("Config health: %d load error(s), %d save error(s)\n", loadErrs, saveErrs))
 		}
+	}
+	// Frame cost as the device measured it. The desktop benchmarks answer "is
+	// this slower than before"; only this line answers "does it hold 60 fps on
+	// the hardware", which is what a stutter report is really about.
+	for _, line := range frameStats.snapshot().diagnosticsLines() {
+		sb.WriteString(line + "\n")
 	}
 	if safeModeActive() {
 		sb.WriteString("Safe mode    : on\n")

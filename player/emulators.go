@@ -684,6 +684,8 @@ func handleEmuKey(e *sdl.KeyboardEvent, config *Config) bool {
 		if retroAchievementsSupported() {
 			openRetroAchievementsPanelFromEmu()
 		}
+	case sdl.K_k:
+		openCoreBuildsPanel(true)
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		closeEmulatorPanel()
 	}

@@ -315,6 +315,7 @@ func resetInstallBar() {
 	installBar.mu.Lock()
 	installBar.visible = false
 	installBar.tool = ""
+	installBar.label = ""
 	installBar.phase = ""
 	installBar.done = 0
 	installBar.total = 0

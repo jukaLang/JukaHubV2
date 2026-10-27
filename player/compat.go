@@ -1211,6 +1211,11 @@ func installCoreFile(source, target string) (string, error) {
 		_ = os.Remove(tmp)
 		return backup, fmt.Errorf("activate core build: %w", err)
 	}
+	// The replacement succeeded, so the older backups beside this core are now
+	// one deeper in the pile. Keeping the newest five is what bounds the card:
+	// the newest is the rollback the Emulators page offers, and the rest are
+	// history nobody can pick between.
+	pruneCoreBackups(target, maxCoreBackups)
 	return backup, nil
 }
 

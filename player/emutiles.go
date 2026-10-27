@@ -608,6 +608,11 @@ func emuFooterHints(e emuEntry, achievements bool) []FooterHint {
 	if len(emuInstalledCoreSet()) > 0 {
 		hints = append(hints, FooterHint{Button: "L1", Label: "Update all"})
 	}
+	// R2 opens the full list of kept builds. It only appears when there is
+	// something to review, so no hint promises an empty page.
+	if label := emuKeptBuildsHint(); label != "" {
+		hints = append(hints, FooterHint{Button: "R2", Label: label})
+	}
 	if achievements {
 		hints = append(hints, FooterHint{Button: "Y", Label: "Achievements"})
 	}

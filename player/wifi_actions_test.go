@@ -209,3 +209,76 @@ func TestStatusWiFiTapTargetIsFingerSized(t *testing.T) {
 	}
 	wifiPanel.open = false
 }
+
+// TestWiFiStatusLineNamesTheScanProblem: a scan the supplicant refuses must say
+// why in the header. The panel used to put Go's "exit status 255" there with an
+// empty list under it, which told a person neither what broke nor what to do.
+func TestWiFiStatusLineNamesTheScanProblem(t *testing.T) {
+	prev := wifiPanel
+	t.Cleanup(func() { wifiPanel = prev })
+
+	wifiPanel = wifiPanelState{
+		open:      true,
+		available: true,
+		radioOn:   true,
+		radioOK:   true,
+		scanErr:   "Wi-Fi control is unreachable — wpa_supplicant is not answering",
+	}
+	line, _ := wifiStatusLine()
+	if !strings.Contains(line, "unreachable") {
+		t.Fatalf("header = %q, want the scan's reason", line)
+	}
+	if !strings.Contains(line, "Y") {
+		t.Fatalf("header = %q, want the retry hint", line)
+	}
+
+	// Connected: the connection is the more useful line, and the scan problem
+	// must not hide it.
+	wifiPanel.status = wifiStatus{State: "COMPLETED", SSID: "HomeNet", IP: "10.0.0.7", Connected: true}
+	wifiPanel.networks = []wifiNetwork{{SSID: "HomeNet", Active: true}}
+	line, _ = wifiStatusLine()
+	if !strings.Contains(line, "Connected to HomeNet") {
+		t.Fatalf("header = %q, want the connection", line)
+	}
+}
+
+// TestWiFiScanProblemSurvivesAStatusRefresh: the reason a scan did not run must
+// stay in the header until a scan works. The auto-refresh re-reads the status
+// every 15 seconds and does not scan, and it used to be enough to wipe the
+// explanation and fall back to "press Y to scan" — which is what the user had
+// already pressed.
+func TestWiFiScanProblemSurvivesAStatusRefresh(t *testing.T) {
+	prev := wifiPanel
+	t.Cleanup(func() {
+		wifiPanel = prev
+		wifiGeneration++
+		wifiDrainDiscarded()
+		wifiWorkPending = false
+	})
+	wifiPanel = wifiPanelState{open: true, available: true}
+	wifiGeneration++
+
+	snap := wifiSnapshot{Status: wifiStatus{State: "COMPLETED", SSID: "HomeNet", Connected: true}}
+	wifiUpdates <- wifiUpdate{
+		kind:    wifiUpdateState,
+		gen:     wifiGeneration,
+		snap:    &snap,
+		scanErr: "Wi-Fi control is unreachable — wpa_supplicant is not answering",
+		scanned: true,
+	}
+	wifiDrainUpdates()
+
+	// The plain status refresh that follows carries no scan information.
+	wifiUpdates <- wifiUpdate{kind: wifiUpdateState, gen: wifiGeneration, snap: &snap}
+	wifiDrainUpdates()
+	if !strings.Contains(wifiPanel.scanErr, "unreachable") {
+		t.Fatalf("scanErr = %q, want the reason kept across a status refresh", wifiPanel.scanErr)
+	}
+
+	// A scan that works clears it.
+	wifiUpdates <- wifiUpdate{kind: wifiUpdateState, gen: wifiGeneration, snap: &snap, scanned: true}
+	wifiDrainUpdates()
+	if wifiPanel.scanErr != "" {
+		t.Fatalf("scanErr = %q, want it cleared by a successful scan", wifiPanel.scanErr)
+	}
+}

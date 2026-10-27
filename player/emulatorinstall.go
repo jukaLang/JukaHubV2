@@ -184,6 +184,10 @@ type emuInstallReport struct {
 	Current   int
 	Skipped   int
 	Errors    []string
+	// Checked reports that the build index was read. An automatic pass uses it
+	// to tell "nothing to update" from "could not ask", so an offline boot does
+	// not stand down for the whole cooldown.
+	Checked bool
 }
 
 // summary is the one-line result shown in the toast.
@@ -282,6 +286,58 @@ func startEmulatorInstall(e emuEntry) {
 	}()
 }
 
+// runInstalledCoreUpdates brings every installed core whose bytes differ from
+// the build index forward to the index's build: download, verify the CRC32 the
+// index states, then activate it (which keeps the replaced binary as a .bak and
+// prunes the pile to maxCoreBackups). Cores the index does not carry, and cores
+// that are already that build, are left alone.
+//
+// progress may be nil. It exists so both callers — the page's Update action and
+// the automatic pass — report through the install bar with one implementation
+// rather than two that can drift.
+func runInstalledCoreUpdates(ctx context.Context, client *http.Client, progress func(phase, detail string)) emuInstallReport {
+	var report emuInstallReport
+	notify := func(phase, detail string) {
+		if progress != nil {
+			progress(phase, detail)
+		}
+	}
+	notify(installPhaseResolving, "")
+	index, err := fetchCoreIndex(ctx, client)
+	if err != nil {
+		report.Errors = append(report.Errors, "core index: "+err.Error())
+		return report
+	}
+	report.Checked = true
+	inv := scanCoreInventory()
+	// One update per core: several tiles can name the same emulator (a ROM
+	// folder and the core that runs it), and the binary is the same file.
+	updates := planCoreUpdates(index, inv.Active)
+	pool := compatCorePoolDir()
+	for i, upd := range updates {
+		if err := ctx.Err(); err != nil {
+			report.Errors = append(report.Errors, err.Error())
+			break
+		}
+		notify(installPhaseDownload, fmt.Sprintf("%s (%d/%d)", coreConfigDisplayName(upd.Core), i+1, len(updates)))
+		build, err := fetchCoreUpdate(ctx, client, upd, pool)
+		if err != nil {
+			report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
+			continue
+		}
+		if _, _, err := activateCoreBuild(build); err != nil {
+			report.Errors = append(report.Errors, coreConfigDisplayName(upd.Core)+": "+err.Error())
+			continue
+		}
+		report.Updated = append(report.Updated, coreConfigDisplayName(upd.Core))
+	}
+	report.Current = len(inv.Active) - len(updates)
+	if report.Current < 0 {
+		report.Current = 0
+	}
+	return report
+}
+
 // startEmulatorUpdateInstalled updates every installed core the index has a
 // newer build of, so a card full of emulators is brought forward in one press
 // instead of one tile at a time. Cores that are not installed are left alone:
@@ -295,61 +351,13 @@ func startEmulatorUpdateInstalled() {
 		ShowToast("An update is already running", ToastKindInfo)
 		return
 	}
-	installBarBegin("Emulator updates")
-	installBarPhase(installPhaseResolving)
+	installBarBeginLabelled("Emulator cores", "Updating emulator cores")
 	ShowToast("Checking installed emulators…", ToastKindInfo)
 	go func() {
 		defer endPatchOp()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 		defer cancel()
-		client := newEmulatorUpdateClient()
-
-		var report emuInstallReport
-		index, err := fetchCoreIndex(ctx, client)
-		if err != nil {
-			installBarPhase(installPhaseDone)
-			installBarDone()
-			ShowToast("Core index: "+err.Error(), ToastKindError)
-			return
-		}
-		inv := scanCoreInventory()
-		pool := compatCorePoolDir()
-		// One plan per core: several tiles can name the same emulator (a ROM
-		// folder and the core that runs it), and the binary is the same file.
-		plans := make([]emuInstallPlan, 0, len(inv.Active))
-		seen := map[string]bool{}
-		for _, e := range emulatorEntries() {
-			core := emuCoreForEntry(e)
-			if core == "" || seen[core] {
-				continue
-			}
-			seen[core] = true
-			if _, installed := inv.Active[core]; !installed {
-				report.Skipped++
-				continue
-			}
-			plan := planEmuInstall(e, inv, index)
-			if plan.Action == emuInstallCurrent {
-				report.Current++
-				continue
-			}
-			if plan.Action == emuInstallUpdate {
-				plans = append(plans, plan)
-			}
-		}
-		for i, plan := range plans {
-			if err := ctx.Err(); err != nil {
-				report.Errors = append(report.Errors, err.Error())
-				break
-			}
-			installBarPhase(installPhaseDownload)
-			installBarDetail(fmt.Sprintf("%s (%d/%d)", coreConfigDisplayName(plan.Core), i+1, len(plans)))
-			if _, _, err := applyEmuInstallPlan(ctx, client, plan, pool); err != nil {
-				report.Errors = append(report.Errors, coreConfigDisplayName(plan.Core)+": "+err.Error())
-				continue
-			}
-			report.Updated = append(report.Updated, coreConfigDisplayName(plan.Core))
-		}
+		report := runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
 		installBarPhase(installPhaseDone)
 		installBarDone()
 		if len(report.Updated) > 0 {
@@ -497,6 +505,48 @@ func coreBackupsIn(dir, core string) []coreBackup {
 	return out
 }
 
+// maxCoreBackups is how many replaced builds stay on the card. Every install
+// keeps the binary it replaced so a nightly build that turns out worse can be
+// undone from the Emulators page; with the handheld updating its cores by
+// itself, an unbounded pile of them would be the largest thing JukaHub owns on
+// a 1 GB card, one per update per core, forever.
+const maxCoreBackups = 5
+
+// pruneCoreBackups keeps the newest keep backups beside one core and deletes
+// the rest, returning what it removed. It is called by installCoreFile after a
+// replacement, so every path that changes a core binary — the Emulators page,
+// the compatibility panel, a rollback, the automatic update — lands on the same
+// limit instead of each remembering it.
+func pruneCoreBackups(target string, keep int) []string {
+	if strings.TrimSpace(target) == "" {
+		return nil
+	}
+	if keep < 0 {
+		keep = 0
+	}
+	dir := filepath.Dir(target)
+	core, _ := parseCoreFile(filepath.Base(target))
+	if core == "" {
+		return nil
+	}
+	backups := coreBackupsIn(dir, core)
+	if len(backups) <= keep {
+		return nil
+	}
+	removed := make([]string, 0, len(backups)-keep)
+	for _, backup := range backups[keep:] {
+		if err := os.Remove(backup.Path); err != nil {
+			log.Printf("[emulators] could not prune backup %q: %v", backup.Path, err)
+			continue
+		}
+		removed = append(removed, backup.Path)
+	}
+	if len(removed) > 0 {
+		log.Printf("[emulators] pruned %d old backup(s) beside %s (keeping %d)", len(removed), filepath.Base(target), keep)
+	}
+	return removed
+}
+
 // coreBackups lists a core's backups across every RetroArch cores folder the
 // card has, newest first. A backup is restored into the folder it came from, so
 // the folder is part of the entry rather than looked up again at rollback time.
@@ -525,10 +575,12 @@ func newestCoreBackup(core string) (coreBackup, bool) {
 	return backups[0], true
 }
 
-// newestCoreBackups maps every core with a backup to its newest one. The footer
-// asks per frame, so this is built once per invalidation, never per draw.
-func newestCoreBackups() map[string]coreBackup {
-	found := map[string]coreBackup{}
+// scanCoreBackups reads every kept build beside every active core the card
+// holds, newest first. The footer and the Emulators page want the newest one per
+// core; the kept-builds panel wants all of them. Both read this walk, so they
+// cannot disagree about which files count as a build.
+func scanCoreBackups() []coreBackup {
+	var out []coreBackup
 	for _, dir := range retroArchCoreDirs() {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -542,23 +594,69 @@ func newestCoreBackups() map[string]coreBackup {
 			if !ok {
 				continue
 			}
-			if have, exists := found[core]; exists && !stamp.After(have.Stamp) {
-				continue
-			}
 			info, err := entry.Info()
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			found[core] = coreBackup{
+			out = append(out, coreBackup{
 				Core:   core,
 				Path:   filepath.Join(dir, entry.Name()),
 				Target: filepath.Join(dir, targetName),
 				Stamp:  stamp,
 				Size:   info.Size(),
-			}
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].Stamp.Equal(out[j].Stamp) {
+			return out[i].Stamp.After(out[j].Stamp)
+		}
+		return out[i].Path > out[j].Path
+	})
+	return out
+}
+
+// newestCoreBackups maps every core with a backup to its newest one. The footer
+// asks per frame, so this is built once per invalidation, never per draw.
+func newestCoreBackups() map[string]coreBackup {
+	found := map[string]coreBackup{}
+	for _, backup := range scanCoreBackups() {
+		if _, exists := found[backup.Core]; !exists {
+			found[backup.Core] = backup
 		}
 	}
 	return found
+}
+
+// deleteCoreBackup removes one kept build from the card. It is the only place a
+// kept build is thrown away by hand, so the guards are the rollback's: the file
+// must still be a regular file inside one of RetroArch's cores folders, which is
+// where installCoreFile put it.
+func deleteCoreBackup(b coreBackup) error {
+	if strings.TrimSpace(b.Path) == "" {
+		return errors.New("that build has no file")
+	}
+	if !isRetroArchCoreDir(filepath.Dir(b.Path)) {
+		return errors.New("that build is not in RetroArch's cores folder")
+	}
+	if _, err := existingRegularFile(b.Path); err != nil {
+		return err
+	}
+	if err := os.Remove(b.Path); err != nil {
+		return fmt.Errorf("delete %s: %w", filepath.Base(b.Path), err)
+	}
+	log.Printf("[emulators] deleted kept build %s (%d bytes freed)", b.Path, b.Size)
+	return nil
+}
+
+// coreBackupsTotal sums the kept builds' sizes: the figure the panel's subtitle
+// and the Emulators row quote, so the cost of the safety net is visible.
+func coreBackupsTotal(rows []coreBackup) int64 {
+	var total int64
+	for _, b := range rows {
+		total += b.Size
+	}
+	return total
 }
 
 // isRetroArchCoreDir reports whether dir is one of the cores folders this

@@ -1940,7 +1940,10 @@ const (
 // videoSettingsSheetRect places the sheet in the bottom-right corner of the
 // video element, leaving room for the control bar underneath.
 func videoSettingsSheetRect(x, y, w, h int32) sdl.Rect {
-	sheetW := int32(360)
+	// Wide enough for the longest Quality row: a pinned ceiling and the
+	// resolution that stream actually got, side by side. At 360 the two do not
+	// fit, and the delivered figure's only option would be an ellipsis.
+	sheetW := int32(480)
 	// Top padding, the rows, then a caption line and bottom padding.
 	sheetH := int32(videoSettingsSheetRows)*videoSettingsRowH + 68
 	if sheetW > w-32 {
@@ -1979,7 +1982,7 @@ func drawVideoSettingsSheet(renderer *sdl.Renderer, config *Config, x, y, w, h i
 		"Subtitles: " + subState,
 		"Full screen: " + fullscreenState,
 		fmt.Sprintf("Speed: %.2gx", snapshotVideoState().speed),
-		"Quality: " + videoQualityLabel(appConfig),
+		"Quality: " + videoQualityRowLabel(appConfig),
 		"Close",
 	}
 	for i, label := range rows {
@@ -1987,6 +1990,11 @@ func drawVideoSettingsSheet(renderer *sdl.Renderer, config *Config, x, y, w, h i
 		row := sdl.Rect{X: sheet.X + 10, Y: rowY, W: sheet.W - 20, H: videoSettingsRowH - 6}
 		if i == videoSettingsItem {
 			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 8, WithAlpha(accentColor, 60))
+		}
+		// The sheet is wide enough for every row as written; this is the guard
+		// for a canvas narrower than the design, not the normal path.
+		if tw, _, err := font.SizeUTF8(label); err == nil && int32(tw) > row.W-28 {
+			label = ellipsize(font, label, row.W-28)
 		}
 		renderText(renderer, config, font, label, ColorTextPrimary(), row.X+14, row.Y+(row.H-int32(font.Height()))/2)
 	}
@@ -2225,6 +2233,52 @@ func nextVideoQualityHeight(current int) int {
 		}
 	}
 	return videoQualityLadder[0]
+}
+
+// videoQualityCeilingHeight is the ceiling the Quality row names: the per-video
+// pin when there is one, otherwise the global playbackResolution (which treats
+// "best" and an empty value as 720p).
+func videoQualityCeilingHeight(config *Config) int {
+	if h := videoQualityOverrideFor(currentPlaybackURL); h > 0 {
+		return h
+	}
+	return playbackMaxHeight(config)
+}
+
+// deliveredVideoHeight is the height of the stream the player is actually
+// decoding. It is the probed size of what yt-dlp handed over, before the decode
+// cap, so it answers "what did we really get" rather than "what did we ask
+// for": a 720p ceiling that only had a 480p rendition behind it reads 480.
+//
+// 0 means the player cannot answer: nothing is loaded, the probe has not
+// finished, or playback stopped.
+func deliveredVideoHeight() int {
+	embeddedPlayer.mu.Lock()
+	defer embeddedPlayer.mu.Unlock()
+	switch embeddedPlayer.phase {
+	case "playing", "paused":
+		return int(embeddedPlayer.sourceHeight)
+	}
+	return 0
+}
+
+// videoQualityRowLabel is the Quality row's text: the ceiling it names, plus the
+// resolution the stream on screen actually got when the two differ. A ceiling is
+// a request — the rendition behind it can be smaller — so "Auto (720p)" over a
+// 480p stream was describing a picture that was never delivered.
+//
+// The delivered half is left out when it matches the ceiling (repeating the same
+// number is noise) and when the player has nothing to report, so the row never
+// claims a stream that is not on screen. The toast that announces a switch keeps
+// using videoQualityLabel: at that moment the new ceiling is set but the new
+// stream has not started, so the delivered figure would still be the old one's.
+func videoQualityRowLabel(config *Config) string {
+	label := videoQualityLabel(config)
+	got := deliveredVideoHeight()
+	if got <= 0 || got == videoQualityCeilingHeight(config) {
+		return label
+	}
+	return fmt.Sprintf("%s · got %dp", label, got)
 }
 
 // videoQualityLabel is the text shown in the settings sheet's Quality row. An

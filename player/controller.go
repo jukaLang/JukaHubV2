@@ -108,6 +108,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if cpPanel.open {
 		return ctrlCompatPanel(e)
 	}
+	// Kept core builds is modal and sits above the Emulators page it opens
+	// from, so its X cannot install anything behind it.
+	if kbPanel.open {
+		return ctrlCoreBuildsPanel(e)
+	}
 	// Windows Apps is modal in the same way.
 	if winAppsPanel.open {
 		return ctrlWindowsApps(e, config)

@@ -81,6 +81,13 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	if handleChromeShoulder(s, config) {
 		return true
 	}
+	// The Emulators page gives R2 to the kept-builds list: its own grid is
+	// walked with the d-pad, so the trigger is free there, and a page that
+	// lists builds to restore should be able to list the rest of them.
+	if emuPanel.open && s == padR2 && emuKeptBuildsHint() != "" {
+		openCoreBuildsPanel(true)
+		return true
+	}
 	// Panels that draw their own modal list own the pad; a trigger must not
 	// page the scene behind them.
 	if modalPanelBlocksShoulders() {
@@ -177,7 +184,7 @@ func modalPanelBlocksShoulders() bool {
 		castPanel.open || musicSettings.open || a11y.open || smartHomePanel.open ||
 		calibrationPanel.open || chiakiPanel.open || savePanel.open || curationPanel.open ||
 		portsPanel.open || toolsPanel.open || netplayPanel.open || gameLib.open || emuPanel.open ||
-		dlPanel.open ||
+		kbPanel.open || dlPanel.open ||
 		weatherPopoverOpen || socialNotifOpen || imageViewerPath != "" || virtualKeyboardActive ||
 		memPanel.open || ctrldiag.open
 }

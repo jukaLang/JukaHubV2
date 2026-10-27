@@ -668,21 +668,14 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Background: reuse the shared backdrop image/gradient path.
+	// The layout owns the background: its backdrop fills the screen with the
+	// theme colour, opaquely, before the ambient blobs go on top. Copying a
+	// background image or the gradient here first painted a 1280x720 texture and
+	// a blended full-screen fill that the very next call covered, every frame —
+	// on the Smart Pro that was 7.4 MB of bandwidth per frame for pixels nobody
+	// ever saw. The texture is still refreshed here so a changed BackgroundImage
+	// setting does not leave the previous image resident.
 	ensureBackgroundTexture(renderer, config)
-	if bgTexture != nil {
-		_ = renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-		setDrawColor(renderer, overlayColor)
-		_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	} else {
-		ensureGradientTexture(renderer, config, ColorBackground)
-		if gradientTexture != nil {
-			_ = renderer.Copy(gradientTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-		} else {
-			setDrawColor(renderer, ColorBackground)
-			_ = renderer.Clear()
-		}
-	}
 
 	// Easter egg fireworks: play explosive particle animation if active.
 	if fw.active {

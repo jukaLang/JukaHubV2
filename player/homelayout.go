@@ -800,7 +800,7 @@ func (h *HomeLayout) drawActionCard(renderer *sdl.Renderer, fonts HomeFonts, ite
 		return
 	}
 	rect := scaleHomeCard(item.Rect, lift)
-	DrawHomeCardSurface(renderer, rect, focused, pressed)
+	DrawHomeCardSurfaceAt(renderer, item.Rect, rect, focused, pressed)
 	offsetY := homePressOffset(pressDepth, h.Height)
 
 	// One icon tile per card, drawn exactly once. Narrow cards (Files and
@@ -953,7 +953,7 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 		return
 	}
 	rect := scaleHomeCard(item.Rect, lift)
-	DrawHomeCardSurface(renderer, rect, focused, pressed)
+	DrawHomeCardSurfaceAt(renderer, item.Rect, rect, focused, pressed)
 	offsetY := homePressOffset(pressDepth, h.Height)
 
 	pad := scaleX(28, h.Width)
@@ -1414,6 +1414,15 @@ func max32(a, b int32) int32 {
 }
 
 func DrawHomeCardSurface(renderer *sdl.Renderer, rect sdl.Rect, focused, pressed bool) {
+	DrawHomeCardSurfaceAt(renderer, rect, rect, focused, pressed)
+}
+
+// DrawHomeCardSurfaceAt draws the card's surface and border at rect, taking
+// their shape from base's size. The focus lift grows the card by up to three
+// pixels; shaping it from the settled rect means the whole lift animation is
+// one cached texture per card instead of one per pixel it grows, on the screen
+// whose cards are the largest textures in the shell.
+func DrawHomeCardSurfaceAt(renderer *sdl.Renderer, base, rect sdl.Rect, focused, pressed bool) {
 	background := ColorCard
 	if focused {
 		background = ColorCardFocused
@@ -1423,13 +1432,13 @@ func DrawHomeCardSurface(renderer *sdl.Renderer, rect sdl.Rect, focused, pressed
 	}
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, HomeCardRadius, background)
+	fillRoundedRectAt(renderer, base, rect, HomeCardRadius, background)
 	if focused {
 		// 3px cyan border drawn completely inside the card rect so it can
 		// never be clipped; the card itself does not resize on focus.
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, HomeCardRadius, 3, ColorAccent)
+		strokeRoundedRectAt(renderer, base, rect, HomeCardRadius, 3, ColorAccent)
 	} else {
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, HomeCardRadius, 1, ColorBorder)
+		strokeRoundedRectAt(renderer, base, rect, HomeCardRadius, 1, ColorBorder)
 	}
 }
 

@@ -557,9 +557,9 @@ persistence and harness gaps closed
       renderer):
 
       ```
-      BenchmarkHomeFrame720p          90–125 µs/frame  4.9 KB   223 allocs
-      BenchmarkHomeFrame720pColdText  ~10 ms/frame     80 KB    439 allocs
-      BenchmarkMenuPageFrame720p      ~86 µs/frame     4.6 KB   202 allocs
+      BenchmarkHomeFrame720p          46–53 µs/frame  3.5 KB   150 allocs
+      BenchmarkHomeFrame720pColdText  ~10–18 ms/frame 78 KB    331 allocs
+      BenchmarkMenuPageFrame720p      ~84 µs/frame     4.1 KB   183 allocs
       BenchmarkHomeNavigation720p     ~120–190 ns/step 0 B      0 allocs
       ```
 
@@ -584,6 +584,24 @@ persistence and harness gaps closed
       The remaining frame time is SDL blits (`SDL_RenderCopy` for each cached
       text texture and shape), which is the part a desktop profile cannot
       reduce: it is real pixel work on the device's software renderer.
+
+      Two things that were *not* blits made up most of what was left. The home
+      path painted the backdrop image or theme gradient and then a full-screen
+      blended overlay, and the layout's own backdrop filled the screen opaquely
+      on top of it — and `renderScene` ran the same block before calling the
+      home renderer, so a home frame painted its background three times and
+      showed the last. Only the config-driven scenes take that backdrop now.
+      The other was texture churn rather than bandwidth: the focus lift grows a
+      card by a pixel at a time and the shape cache keyed textures by size, so
+      every step of the ease created a new card surface and focus ring (485 KB
+      each at 720p) inside a cache budgeted at 12 MB for the whole screen. The
+      cache now takes a base geometry (`fillRoundedRectAt`,
+      `strokeRoundedRectAt`, `DrawHomeCardSurfaceAt`) and blits into the grown
+      rect, so one texture per card serves the whole animation. A resting home
+      frame draws its 55 cached blits and creates nothing; a full lift of the
+      480×258 Continue card went from 2,972 KB of new shape textures to under
+      64 KB (`shape_cache_animation_test.go`). Warm frame: 110–124 µs →
+      46–53 µs on the same desktop proxy.
 - [x] ✅ Test harness renders at varied resolutions — `probeW`/`probeH` are
       package vars and every offscreen probe reads pixels from a region limited
       to the probe rectangle (`ReadPixels(&Rect{0, 0, probeW, probeH})`)
@@ -1560,6 +1578,67 @@ is released once, each cache's budget wiring, the launcher's byte accounting
 through a real decode, a 24 MB chat store keeping two of three 10 MB images, the
 thumbnail payload cache evicting through its own API, the feed cache evicting by
 bytes, and the pressure sweep clearing all five.
+
+## Audit log — 2026-10-27 (automatic core updates)
+
+**What was wrong.** Keeping the emulator cores current needed a person: open
+Emulators, find the tile, press Update, or press L1 for every installed core.
+The update pass existed (`startEmulatorUpdateInstalled`) but nothing ran it, so
+a card could sit on a nightly from months ago — the games run worse, and there
+is nothing on screen that says why. Two further problems came with making it
+automatic: every install kept the binary it replaced forever (one `.bak` per
+core per update, unbounded on a 1 GB card), and a background download had no
+visible progress of its own.
+
+**What changed.** `runInstalledCoreUpdates` is now the one implementation of
+"bring the installed cores forward": read the index, plan the cores whose
+CRC32 differs from the build it lists (`planCoreUpdates`), download into the
+pool, activate
+(the replaced binary kept as a `.bak`), report through the install bar. The
+page's L1 action calls it with a toast summary; `startCoreAutoUpdate` calls it
+on the handheld once per `coreAutoUpdateInterval` (24 h), after the boot has
+settled and behind the release check's window, and only when
+`emuCoreInstallSupported`, `IsTrimuiDevice` and `IsOnline` all hold. It takes
+the one patch slot, so it can never overlap a manual install, and it is disabled
+by `JUKAHUB_NO_CORE_AUTOUPDATE`. A pass that could not read the index returns
+`Checked: false` and does not stamp `patchState.CoreUpdateCheckedAt`, so an
+offline boot retries next launch instead of standing down for a day. The stamp
+uses the same sane-clock rule as the release check, because the handheld has no
+RTC battery.
+
+**Backups.** `installCoreFile` now prunes after a successful replacement: the
+newest `maxCoreBackups` (5) `.jukahub-<stamp>.bak` files beside that core stay,
+the rest are deleted. It is the single path every core write goes through —
+tile install, compatibility activation, rollback, automatic update — so no path
+can drift from the limit, and the pruning reuses `coreBackupsIn`, the same
+parser the rollback listing uses, so a `.bak` from another tool is never a
+candidate.
+
+**The pool.** A `.bak` is only half of what an update leaves behind: every
+fetch also writes `data/performance/cores/<core>/<date>/`, and a card that
+updates itself would gain one dated folder per core per day. `fetchCoreUpdate`
+now calls `pruneCorePool` after writing, keeping the newest `maxCorePoolBuilds`
+(5) for that core and never deleting the build just fetched, even when the index
+publishes it under an older date than what the pool already holds. The pool is
+still what the compatibility panel lists, so an older nightly stays activatable
+for a few days after it stops being the newest.
+
+**The bar.** The install card gained an optional title (`installBarBeginLabelled`),
+so an update run reads "Updating emulator cores" instead of "Installing
+Emulator cores". It is drawn by the main loop after the toast, so a download
+started by the automatic pass is visible on whatever screen the user is on; its
+phase and detail come from `installBarProgressHook`.
+
+**Checks:** `go vet ./` exit 0, `go test ./` green on the whole package,
+`gofmt -l` clean over every touched file. New tests pin the due rule (fresh,
+stale, garbled, future and pre-2020 stamps), the device policy (desktop,
+offline, environment opt-out), an automatic update of an installed core with
+the replaced build kept and the bar driven, an up-to-date card left untouched,
+an unreachable index reporting `Checked: false` without touching the active
+core, seven updates leaving exactly five backups and five pool builds, the two
+pruning rules (sparing another core's build, a foreign `.bak`, and the build
+just fetched), and the bar's update title. The backup test fails without the
+prune (`kept 7 backups`), which is the guard this pass needed.
 
 ## Notes
 

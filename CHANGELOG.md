@@ -13,6 +13,42 @@ For anything older, the git log and the
 
 ### Added
 
+- **Frame cost is now measured on the device instead of inferred from a desktop.**
+  The main loop times each iteration from the top of the loop to just after
+  `Present` — input, scene logic, drawing and the flip, not the idle delay — and
+  keeps a histogram in buckets that follow the hardware's budgets (≤8 ms is half
+  a 60 Hz frame, ≤17 ms a whole one, ≤33 ms 30 fps, ≤50 ms a hitch, ≤100 ms a
+  stall, then overflow). One line a minute goes to the log, and therefore into
+  the redacted log tail of a diagnostics bundle:
+  `[frame] last 1m: 3595 frames (59.9 fps), avg 7.8ms, p50 ≤8ms, p99 ≤8ms, max 42ms, over 17ms 0.1%`.
+  `Diagnostics` gains a `Frame time` line with the session average and percentiles
+  plus a `Frame share` table, so a stutter report carries the device's own
+  numbers. The line describes the window that just ended (a slow boot does not
+  colour the rest of the session); `JUKAHUB_FRAMESTATS=1` shortens the window to
+  five seconds for a focused measurement. Frames are not recorded while a game
+  owns the screen — those iterations present nothing. Percentiles are reported
+  as bucket edges (`p50 ≤8ms`), which is honest about the resolution of a
+  histogram and still tells which side of a vsync a frame landed on.
+  ([player/framestats.go](player/framestats.go),
+  [player/main.go](player/main.go), [player/patch_engine.go](player/patch_engine.go),
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
+
+- **The Quality row now says what the stream actually got.** It used to name only
+  the ceiling — `Auto (720p)`, or a pin for this video — which is a request, not
+  a fact: YouTube hands over a 480p rendition whenever no 720p one exists, and
+  the row then described a picture that was never on screen. The row now carries
+  the resolution the player is really decoding, read from the probe the decoder
+  already does (`embeddedPlayer.sourceHeight`), so a capped stream reads
+  `Auto (720p) · got 480p`. The second half is omitted when it matches the
+  ceiling (repeating the same number is noise) and when nothing is playing, so
+  the row never claims a stream that is not there; a cancelled quality switch
+  still reverts the ceiling as before. The settings sheet is wider to hold the
+  longest row (`Quality: 1080p (this video) · got 720p`), and the toast that
+  announces a switch still names only the new ceiling, because at that instant
+  the delivered figure is still the previous stream's.
+  ([player/videoplayer.go](player/videoplayer.go),
+  [player/videoquality_delivered_test.go](player/videoquality_delivered_test.go)).
+
 - **A long chat and browser session is now measured, not assumed.** The texture
   budgets were sized from reasoning about a 1 GB device; the new long-session
   probe spends a session in the two panels that fill them — 300 messages with
@@ -257,6 +293,25 @@ For anything older, the git log and the
   [player/calendar_popover_test.go](player/calendar_popover_test.go)).
 ### Fixed
 
+- **Opening the Wi-Fi picker no longer answers `exit status 255`.** On an image
+  whose supplicant keeps its control socket somewhere `wpa_cli` does not look by
+  default, every call failed with `Failed to connect to non-global ctrl_ifname`
+  and a non-zero exit — and the panel showed Go's error text instead of the
+  tool's, with an empty list under it. Three things changed. The control
+  directory is now resolved once (`ctrl_interface=DIR=…` from the supplicant's
+  own config first, then the conventional directories, verified by finding the
+  interface's socket) and passed as `-p` to every call, so the tool reaches the
+  supplicant wherever the image put it. A failed call reports what `wpa_cli`
+  printed — `FAIL` as-is, an unreachable socket as *Wi-Fi control is
+  unreachable — wpa_supplicant is not answering*, a permission error as *Wi-Fi is
+  not permitted for this app* — instead of a number that names no cause and no
+  fix. And `FAIL-BUSY` (the supplicant is already scanning, which the stock
+  firmware causes routinely) is no longer a failure at all: the arriving results
+  are used, and a scan that really fails now costs the list rather than the
+  panel, which keeps showing the connected network and the saved entries with
+  the reason in its header. ([player/wifi.go](player/wifi.go),
+  [player/wifi_ui.go](player/wifi_ui.go), [docs/WIFI.md](docs/WIFI.md)).
+
 - **A cancelled quality switch puts the Quality row back on the stream that is
   actually playing.** The switch pins its new ceiling before the re-resolve
   starts, because the yt-dlp format selector reads it at that moment; B cancels
@@ -493,6 +548,53 @@ For anything older, the git log and the
 
 ### Changed
 
+- **The handheld keeps its emulator cores current by itself, and stops piling
+  up the builds it replaces.** Updating every installed core meant opening
+  Emulators and pressing Update (or L1), so a card could sit on a nightly from
+  months ago with no sign on screen that anything was stale. `startCoreAutoUpdate`
+  now runs the same pass once a day on the Trimui — after boot, only where
+  cores are installable, only online, and taking the one patch slot so it can
+  never overlap a manual install — with `JUKAHUB_NO_CORE_AUTOUPDATE` as the
+  opt-out. The download is visible while it runs: the install card grew an
+  optional title, so it reads "Updating emulator cores" and draws over whatever
+  screen is up, with the core's name and the count of cores in its detail line.
+  A pass that could not read the index does not record a check, so an offline
+  boot tries again next launch instead of waiting a day. Each replacement now
+  keeps at most five `<core>.jukahub-<stamp>.bak` builds and deletes the older
+  ones: every install, activation, rollback and automatic update goes through
+  `installCoreFile`, so the limit lives in one place, and pruning reuses the
+  parser that lists backups for the rollback action, so a `.bak` from another
+  tool is never touched. The downloaded builds behind them are bounded the same
+  way, at five dated folders per core, because a self-updating card would
+  otherwise collect one per core per day; the build just fetched is never a
+  pruning candidate. Rollback is unchanged — the newest build is always the one
+  it offers
+  ([player/emulatorautoupdate.go](player/emulatorautoupdate.go),
+  [player/emulatorinstall.go](player/emulatorinstall.go),
+  [player/installbar.go](player/installbar.go),
+  [player/compat.go](player/compat.go); tests in
+  [player/emulatorautoupdate_test.go](player/emulatorautoupdate_test.go)).
+- **A home frame no longer pays for work it covers up, and the focus lift no
+  longer mints half a megabyte of texture per step.** Profiling the 720p home
+  frame turned up two costs that were not the drawing anyone sees. The home path
+  painted the backdrop image or theme gradient and then a full-screen blended
+  overlay, and the layout's own backdrop filled the screen opaquely on top, so
+  those pixels were never shown — and `renderScene` ran the same block again
+  before calling the home renderer, which made three passes and one visible. The
+  backdrop is now drawn only for the config-driven scenes. The second was
+  texture churn: the focused card's hover ease grows it a pixel at a time and
+  the shape cache keys textures by size, so each step created a fresh card
+  surface and focus ring (485 KB each at 720p) and pushed them into a 12 MB
+  cache the handheld budgets for the whole screen — every D-pad move evicted the
+  rest of the screen's chrome. The cache now takes a base geometry
+  (`fillRoundedRectAt`, `strokeRoundedRectAt`, `DrawHomeCardSurfaceAt`) and
+  blits into the grown rect, so one texture per card serves the whole animation.
+  Measured on the desktop proxy: a warm home frame 110–124 µs → 46–53 µs, a
+  resting frame creating zero new shape textures, and one full lift of the
+  480×258 Continue card 2,972 KB → under 64 KB of shape memory
+  ([player/shapeCache.go](player/shapeCache.go), [player/core.go](player/core.go),
+  [player/homelayout.go](player/homelayout.go), [player/home.go](player/home.go),
+  [player/shape_cache_animation_test.go](player/shape_cache_animation_test.go)).
 - **The scene-navigation memory harness measures the box-art ceiling that
   actually ships.** Its library phase sizes its synthetic card from the art
   budget, but it read whichever branch the host takes, so a desktop run measured

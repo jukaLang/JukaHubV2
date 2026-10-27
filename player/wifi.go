@@ -207,6 +207,27 @@ var (
 		"/tmp/wpa_supplicant",
 		"/tmp/run/wpa_supplicant",
 	}
+	// wpa_supplicant's config, which is the authoritative answer to where its
+	// control socket lives: ctrl_interface=DIR=... can name a directory none of
+	// the guesses above cover. wpa_cli defaults to /var/run/wpa_supplicant, so on
+	// an image that points the socket somewhere else every call fails with
+	// "Failed to connect to non-global ctrl_ifname" and exit status 255.
+	wifiSupplicantConfigs = []string{
+		"/etc/wpa_supplicant.conf",
+		"/etc/wpa_supplicant/wpa_supplicant.conf",
+		"/etc/wifi/wpa_supplicant.conf",
+		"/tmp/wpa_supplicant.conf",
+	}
+)
+
+// The resolved control directory, cached like the interface itself: it is read
+// on the path that opens the picker and from the status bar's signal poll, and
+// it must not cost a stat of every candidate on a per-frame read.
+var (
+	wifiCtrlDirMu    sync.Mutex
+	wifiCtrlDirName  string
+	wifiCtrlDirAt    time.Time
+	wifiCtrlDirKnown bool
 )
 
 // sysfsNetdevs lists the entry names under a sysfs net root, sorted so a device
@@ -405,6 +426,81 @@ func wpaCliDrivenInterface() string {
 	return ""
 }
 
+// parseSupplicantCtrlDir reads ctrl_interface out of wpa_supplicant's config and
+// returns the directory its control sockets live in. The value is either
+// "DIR=/run/wpa_supplicant GROUP=netdev" or, on older builds, a bare path.
+func parseSupplicantCtrlDir(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(strings.TrimRight(line, "\r"))
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || strings.TrimSpace(key) != "ctrl_interface" {
+			continue
+		}
+		value = strings.Trim(strings.TrimSpace(value), `"`)
+		for _, field := range strings.Fields(value) {
+			if dir, ok := strings.CutPrefix(field, "DIR="); ok {
+				return strings.Trim(dir, `"`)
+			}
+		}
+		if strings.HasPrefix(value, "/") {
+			return value
+		}
+	}
+	return ""
+}
+
+// supplicantCtrlDir finds the directory holding the control socket for one
+// interface: the supplicant's own config first, then the conventional places.
+// It returns "" when nothing was found, and the caller then leaves wpa_cli on its
+// default rather than guessing a -p that could be wrong.
+func supplicantCtrlDir(iface string) string {
+	dirs := append([]string(nil), wifiSupplicantDirs...)
+	for _, path := range wifiSupplicantConfigs {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		if dir := parseSupplicantCtrlDir(string(data)); dir != "" {
+			// The config's own answer wins over the conventions.
+			dirs = append([]string{dir}, dirs...)
+		}
+	}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		if dir == "" || seen[dir] {
+			continue
+		}
+		seen[dir] = true
+		if iface == "" {
+			if len(supplicantInterfaceNames([]string{dir})) > 0 {
+				return dir
+			}
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(dir, iface)); err == nil && !info.IsDir() {
+			return dir
+		}
+	}
+	return ""
+}
+
+// wifiCtrlDirCached is supplicantCtrlDir behind the same TTL as the interface
+// answer, and reset with it: a hot-plugged adapter invalidates both.
+func wifiCtrlDirCached(iface string) string {
+	wifiCtrlDirMu.Lock()
+	defer wifiCtrlDirMu.Unlock()
+	if wifiCtrlDirKnown && wifiDrivenNow().Sub(wifiCtrlDirAt) < wifiDrivenTTL {
+		return wifiCtrlDirName
+	}
+	wifiCtrlDirName = supplicantCtrlDir(iface)
+	wifiCtrlDirAt = wifiDrivenNow()
+	wifiCtrlDirKnown = true
+	return wifiCtrlDirName
+}
+
 // supplicantDrivenInterfaceCached is wpaCliDrivenInterface behind a TTL cache.
 // Discovery is read while the status bar draws, so an uncached probe would fork
 // wpa_cli on every frame — and a negative answer has to be remembered too, or a
@@ -426,10 +522,17 @@ func supplicantDrivenInterfaceCached() string {
 // person would have plugged an adapter in; tests call it to keep fixtures apart.
 func resetSupplicantInterfaceCache() {
 	wifiDrivenMu.Lock()
-	defer wifiDrivenMu.Unlock()
 	wifiDrivenName = ""
 	wifiDrivenAt = time.Time{}
 	wifiDrivenKnown = false
+	wifiDrivenMu.Unlock()
+
+	// The control directory is resolved from the same moment's facts.
+	wifiCtrlDirMu.Lock()
+	wifiCtrlDirName = ""
+	wifiCtrlDirAt = time.Time{}
+	wifiCtrlDirKnown = false
+	wifiCtrlDirMu.Unlock()
 }
 
 // looksLikeWirelessName is the last resort: no marker, no proc entry, no
@@ -554,8 +657,30 @@ func wifiCommandFailed(out string) bool {
 	return false
 }
 
+// wifiScanBusy reports whether wpa_cli refused a scan because one is already
+// running. The supplicant scans on its own schedule and the picker asks as soon
+// as it opens, so this is an ordinary answer on a handheld — the results
+// already on their way are what the caller wanted. Some builds exit non-zero for
+// it, which used to reach the panel as a bare "exit status 255".
+func wifiScanBusy(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == "FAIL-BUSY" {
+			return true
+		}
+	}
+	return false
+}
+
 // wifiWPA runs one wpa_cli command against the detected interface.
 func wifiWPA(args ...string) (string, error) {
+	return wifiWPAInput("", args...)
+}
+
+// wifiWPAInput is wifiWPA with a command script on stdin. argv is built here so
+// every call reaches the same control socket: `-p <dir>` is passed only when the
+// socket for this interface was actually found, because a wrong -p fails where
+// the default would have worked.
+func wifiWPAInput(stdin string, args ...string) (string, error) {
 	iface := wifiInterface()
 	if iface == "" {
 		return "", errors.New(wifiUnavailableReason())
@@ -563,20 +688,70 @@ func wifiWPA(args ...string) (string, error) {
 	if !wifiToolExists("wpa_cli") {
 		return "", errors.New(wifiUnavailableReason())
 	}
-	full := append([]string{"-i", iface}, args...)
-	return wifiRunner(wifiCommandTimeout, "", wifiToolCommand("wpa_cli"), full...)
+	full := make([]string, 0, len(args)+4)
+	if dir := wifiCtrlDirCached(iface); dir != "" {
+		full = append(full, "-p", dir)
+	}
+	full = append(full, "-i", iface)
+	full = append(full, args...)
+	return wifiRunner(wifiCommandTimeout, stdin, wifiToolCommand("wpa_cli"), full...)
 }
 
-// wifiWPAChecked is wifiWPA that also treats a printed FAIL as an error.
+// wifiWPAChecked is wifiWPA that also treats a printed FAIL as an error, and
+// that turns a non-zero exit into the reason wpa_cli printed rather than Go's
+// own "exit status 255".
 func wifiWPAChecked(args ...string) (string, error) {
 	out, err := wifiWPA(args...)
-	if err != nil {
-		return out, err
+	if err == nil && !wifiCommandFailed(out) {
+		return out, nil
 	}
+	return out, wifiCommandError(out, err)
+}
+
+// wifiCommandError is the reason the panel shows for a failed call. wpa_cli
+// exits non-zero *and* prints why — a bare "exit status 255" was the whole
+// message a person got on a device whose supplicant lives somewhere wpa_cli's
+// default does not look, which names nothing and suggests nothing.
+func wifiCommandError(out string, err error) error {
+	// A FAIL is a failure whether or not the CLI also exited non-zero: some
+	// builds exit 0 for a refused command, and the output is the only signal
+	// that is the same everywhere.
 	if wifiCommandFailed(out) {
-		return out, errors.New(wifiFailureMessage(out))
+		return errors.New(wifiFailureMessage(out))
 	}
-	return out, nil
+	if err == nil {
+		return nil
+	}
+	if line := wifiFirstOutputLine(out); line != "" {
+		return errors.New(wifiExplainWPAOutput(line))
+	}
+	return fmt.Errorf("wpa_cli did not answer (%w)", err)
+}
+
+// wifiExplainWPAOutput turns wpa_cli's own prose into a sentence the picker can
+// show. Unrecognised output is passed through: it is already the tool's words,
+// and inventing a friendlier paraphrase would drop the detail a bug report
+// needs.
+func wifiExplainWPAOutput(line string) string {
+	low := strings.ToLower(line)
+	switch {
+	case strings.Contains(low, "permission denied"):
+		return "Wi-Fi is not permitted for this app (" + line + ")"
+	case strings.Contains(low, "failed to connect") || strings.Contains(low, "ctrl_ifname") || strings.Contains(low, "ctrl_iface"):
+		return "Wi-Fi control is unreachable — wpa_supplicant is not answering"
+	}
+	return line
+}
+
+// wifiFirstOutputLine is the first non-empty line of a command's output, which
+// is where wpa_cli puts the reason it gives for a failure.
+func wifiFirstOutputLine(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if t := strings.TrimSpace(line); t != "" {
+			return t
+		}
+	}
+	return ""
 }
 
 // ── Parsing ────────────────────────────────────────────────────────────────
@@ -784,11 +959,8 @@ type wifiSignalSample struct {
 // report without a usable RSSI).
 func wifiSignalPoll() (wifiSignalSample, error) {
 	out, err := wifiWPA("signal_poll")
-	if err != nil {
+	if err := wifiCommandError(out, err); err != nil {
 		return wifiSignalSample{}, err
-	}
-	if wifiCommandFailed(out) {
-		return wifiSignalSample{}, errors.New(wifiFailureMessage(out))
 	}
 	return parseWPASignalPoll(out)
 }
@@ -927,7 +1099,7 @@ func wpaQuote(s string) string {
 // wifiReadStatus returns the current association state.
 func wifiReadStatus() (wifiStatus, error) {
 	out, err := wifiWPA("status")
-	if err != nil {
+	if err := wifiCommandError(out, err); err != nil {
 		return wifiStatus{}, err
 	}
 	return parseWPAStatus(out), nil
@@ -936,7 +1108,7 @@ func wifiReadStatus() (wifiStatus, error) {
 // wifiReadSavedNetworks returns the networks wpa_supplicant remembers.
 func wifiReadSavedNetworks() ([]savedNetwork, error) {
 	out, err := wifiWPA("list_networks")
-	if err != nil {
+	if err := wifiCommandError(out, err); err != nil {
 		return nil, err
 	}
 	return parseWPANetworks(out), nil
@@ -945,7 +1117,7 @@ func wifiReadSavedNetworks() ([]savedNetwork, error) {
 // wifiReadScanResults returns the last scan without starting a new one.
 func wifiReadScanResults() ([]wifiNetwork, error) {
 	out, err := wifiWPA("scan_results")
-	if err != nil {
+	if err := wifiCommandError(out, err); err != nil {
 		return nil, err
 	}
 	return parseWPAScanResults(out), nil
@@ -956,7 +1128,7 @@ func wifiReadScanResults() ([]wifiNetwork, error) {
 // common enough that returning the old list silently would be misleading.
 func wifiScanNetworks() ([]wifiNetwork, error) {
 	before, _ := wifiReadScanResults()
-	if _, err := wifiWPAChecked("scan"); err != nil {
+	if out, err := wifiWPAChecked("scan"); err != nil && !wifiScanBusy(out) {
 		// A soft-blocked radio is the common "Wi-Fi stopped working" state
 		// and wpa_cli's only answer is FAIL — name it instead.
 		if radioOn, radioOK := wifiRadioState(); radioOK && !radioOn {
@@ -1037,19 +1209,9 @@ func wifiNextNetworkID(addOutput string) (int, error) {
 // wifiSetPassphrase sends the PSK on stdin. This is the one call that must not
 // put the secret in argv: `ps` lists every argument of every process.
 func wifiSetPassphrase(id int, pass string) (string, error) {
-	iface := wifiInterface()
-	if iface == "" {
-		return "", errors.New(wifiUnavailableReason())
-	}
 	script := fmt.Sprintf("set_network %d psk %s\n", id, wpaQuote(pass))
-	out, err := wifiRunner(wifiCommandTimeout, script, wifiToolCommand("wpa_cli"), "-i", iface)
-	if err != nil {
-		return out, err
-	}
-	if wifiCommandFailed(out) {
-		return out, errors.New(wifiFailureMessage(out))
-	}
-	return out, nil
+	out, err := wifiWPAInput(script)
+	return out, wifiCommandError(out, err)
 }
 
 // wifiWaitForAssociation polls until the supplicant reports COMPLETED on the

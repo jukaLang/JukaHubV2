@@ -152,15 +152,34 @@ The backend is `wpa_supplicant`, driven through `wpa_cli`:
   Images whose radio has an unusual name can set `JUKAHUB_WIFI_IFACE` (letters,
   digits, `.`, `_`, `-` only; the override is never used as a command) and skip
   discovery entirely.
+* **Control directory.** `wpa_cli` defaults to `/var/run/wpa_supplicant`, and an
+  image that points `ctrl_interface` somewhere else answers *every* call with
+  `Failed to connect to non-global ctrl_ifname` and exit status 255 — which the
+  picker used to show verbatim. The directory is now resolved once (config
+  `ctrl_interface=DIR=...` first, then the conventional directories, looking for
+  the socket of the interface being driven) and passed as `-p <dir>` to every
+  call. It is only passed when that socket was actually found, because a wrong
+  `-p` fails where the default would have worked.
+* **Error text.** A failed call reports what `wpa_cli` printed, not Go's
+  `exit status 255`: a `FAIL` token as-is, `Failed to connect…` as *Wi-Fi control
+  is unreachable — wpa_supplicant is not answering*, `Permission denied` as
+  *Wi-Fi is not permitted for this app*, and anything else in the tool's own
+  words. A silent non-zero exit says *wpa_cli did not answer* and keeps the
+  exit status in parentheses.
 * **Tool lookup.** `wpa_cli` and the DHCP clients are resolved on `PATH` first
   and then in the standard system directories (`/sbin`, `/usr/sbin`,
   `/usr/local/sbin`, `/bin`, `/usr/bin`), because a launcher's inherited `PATH`
   can miss the sbin folders where firmware images keep them — a tool that is
   on the card must not read as "not installed".
 * **Scan.** `wpa_cli scan` is followed by polling `scan_results` until the list
-  changes, so a cached scan is never presented as fresh. One row is shown per
-  SSID: the strongest BSSID wins, and hidden networks (empty SSID) are omitted
-  because two unnamed rows cannot be told apart.
+  changes, so a cached scan is never presented as fresh. `FAIL-BUSY` — the
+  supplicant is already scanning, which is ordinary on a device whose firmware
+  scans on its own schedule — is not treated as a failure: the results already
+  on their way are the answer. One row is shown per SSID: the strongest BSSID
+  wins, and hidden networks (empty SSID) are omitted because two unnamed rows
+  cannot be told apart. A scan that *does* fail costs the list, not the panel:
+  the connected network and the saved entries still render, and the header says
+  why the scan did not run.
 * **Join.** A network entry is created, its SSID and key are written, it is
   selected, and `save_config` persists it. JukaHub then polls `status` until the
   requested SSID reports `COMPLETED`. Matching the name matters: a failed join
@@ -230,6 +249,9 @@ supplicant cannot freeze the UI.
 | `could not join <name> (disconnected)` | out of range or the access point refused the association |
 | `no IP address was assigned; check DHCP on this network` | associated, but no lease: the network's DHCP server or the firmware's client is the problem |
 | `this network could not be saved for the next boot` | `save_config` failed (`update_config=0`); the connection works until reboot |
+| `Wi-Fi control is unreachable — wpa_supplicant is not answering` | `wpa_cli` could not open the supplicant's control socket. Either `wpa_supplicant` is not running on this image, or it lives in a directory not covered by the config/known list — report the image with the output of `wpa_cli -i <iface> status` |
+| `Wi-Fi is not permitted for this app (… Permission denied)` | the control socket exists but this process may not open it: probably launched as a user that is not in the socket's group. Launch JukaHub the way the firmware's own launcher does |
+| `wpa_cli did not answer (exit status 255)` | the tool exited non-zero and printed nothing at all; check that the `wpa_cli` on the card matches the supplicant's version |
 
 The panel's status line is the source of truth. A toast reports the result of an
 action, and the list is refreshed from the supplicant afterwards, so the row's
@@ -260,7 +282,11 @@ run the probe once — and once more only after its TTL has passed.
 `wifi_resilience_test.go` covers the sbin `PATH` fallback, the radio-off scan
 message, the WPA3 offer and its fallback, the superseded-entry replacement,
 the `dhclient` lease path and the rejected-password marker — all against the
-same stubbed runner.
+same stubbed runner. It also pins the control-directory resolution (a socket
+found in a conventional directory, and one named only by the supplicant's own
+config), that a failed call reports the tool's reason instead of `exit status
+255`, and that `FAIL-BUSY` still yields the arriving scan. `wifi_actions_test.go`
+keeps the panel's header honest about a refused scan.
 
 ```sh
 cd player

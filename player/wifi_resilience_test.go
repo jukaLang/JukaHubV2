@@ -12,6 +12,7 @@ package main
 // Every test runs against the stubbed runner; no radio is touched.
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,6 +55,157 @@ func TestWifiToolFallsBackToSystemDirs(t *testing.T) {
 		if got := wifiToolCommand("sh"); got != "sh" {
 			t.Fatalf("PATH-hit tool resolved to %q, want the bare name", got)
 		}
+	}
+}
+
+// TestWiFiCtrlDirComesFromTheSupplicantSocket: wpa_cli defaults to
+// /var/run/wpa_supplicant, and an image that puts the socket elsewhere answers
+// every call with "Failed to connect to non-global ctrl_ifname" and exit 255. A
+// socket found for the interface must reach the command line as `-p <dir>`.
+func TestWiFiCtrlDirComesFromTheSupplicantSocket(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "wlan0"), nil, 0o600); err != nil {
+		t.Fatalf("plant the control socket: %v", err)
+	}
+	prevDirs, prevConfigs := wifiSupplicantDirs, wifiSupplicantConfigs
+	wifiSupplicantDirs = []string{dir}
+	wifiSupplicantConfigs = nil
+	resetSupplicantInterfaceCache()
+	t.Cleanup(func() {
+		wifiSupplicantDirs, wifiSupplicantConfigs = prevDirs, prevConfigs
+		resetSupplicantInterfaceCache()
+	})
+
+	calls := stubWiFi(t, func(stdin, name string, args []string) (string, error) {
+		return "wpa_state=COMPLETED\nssid=HomeNet\n", nil
+	})
+	if _, err := wifiReadStatus(); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+
+	args := (*calls)[len(*calls)-1].args
+	pAt := -1
+	for i, a := range args {
+		if a == "-p" {
+			pAt = i
+		}
+	}
+	if pAt < 0 || pAt+1 >= len(args) || args[pAt+1] != dir {
+		t.Fatalf("wpa_cli argv = %v, want -p %s", args, dir)
+	}
+}
+
+// TestWiFiCtrlDirComesFromTheSupplicantConfig covers the case where the socket
+// is not in any conventional directory but the supplicant's own config says
+// where it is. Reading the config is the only source that cannot be wrong.
+func TestWiFiCtrlDirComesFromTheSupplicantConfig(t *testing.T) {
+	ctrl := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ctrl, "wlan0"), nil, 0o600); err != nil {
+		t.Fatalf("plant the control socket: %v", err)
+	}
+	conf := filepath.Join(t.TempDir(), "wpa_supplicant.conf")
+	body := "# firmware config\nctrl_interface=DIR=" + ctrl + " GROUP=netdev\nupdate_config=1\n"
+	if err := os.WriteFile(conf, []byte(body), 0o644); err != nil {
+		t.Fatalf("write the config: %v", err)
+	}
+	prevDirs, prevConfigs := wifiSupplicantDirs, wifiSupplicantConfigs
+	wifiSupplicantDirs = nil
+	wifiSupplicantConfigs = []string{conf}
+	resetSupplicantInterfaceCache()
+	t.Cleanup(func() {
+		wifiSupplicantDirs, wifiSupplicantConfigs = prevDirs, prevConfigs
+		resetSupplicantInterfaceCache()
+	})
+
+	if got := supplicantCtrlDir("wlan0"); got != ctrl {
+		t.Fatalf("supplicantCtrlDir = %q, want the config's %q", got, ctrl)
+	}
+	// Both shapes the field takes on real images.
+	cases := map[string]string{
+		"ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\n": "/run/wpa_supplicant",
+		"ctrl_interface=/var/run/wpa_supplicant\n":              "/var/run/wpa_supplicant",
+		"ctrl_interface=\"DIR=/tmp/wpa_supplicant\"\n":          "/tmp/wpa_supplicant",
+		"#ctrl_interface=DIR=/commented\n":                      "",
+	}
+	for text, want := range cases {
+		if got := parseSupplicantCtrlDir(text); got != want {
+			t.Errorf("parseSupplicantCtrlDir(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
+// TestWiFiFailureNamesTheReasonNotTheExitCode: a refused call used to reach the
+// picker as Go's "exit status 255" — the number alone names neither the cause
+// nor a fix. wpa_cli prints why, so that is what the panel has to say.
+func TestWiFiFailureNamesTheReasonNotTheExitCode(t *testing.T) {
+	var output string
+	_ = stubWiFi(t, func(stdin, name string, args []string) (string, error) {
+		return output, errors.New("exit status 255")
+	})
+
+	output = "Failed to connect to non-global ctrl_ifname: wlan0  error: No such file or directory\n"
+	_, err := wifiReadStatus()
+	if err == nil {
+		t.Fatal("an unreachable supplicant read as success")
+	}
+	if strings.Contains(err.Error(), "exit status") {
+		t.Errorf("error = %q, want the tool's reason instead of the exit code", err)
+	}
+	if !strings.Contains(err.Error(), "wpa_supplicant") {
+		t.Errorf("error = %q, want it to name the supplicant", err)
+	}
+
+	output = "Failed to connect to non-global ctrl_ifname: wlan0  error: Permission denied\n"
+	_, err = wifiReadStatus()
+	if err == nil || !strings.Contains(err.Error(), "not permitted") {
+		t.Errorf("permission failure = %v, want it named", err)
+	}
+
+	output = ""
+	_, err = wifiReadStatus()
+	if err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Errorf("silent failure = %v, want it named", err)
+	}
+
+	// A FAIL token still wins: it is the supplicant's own verdict.
+	output = "FAIL\n"
+	_, err = wifiReadStatus()
+	if err == nil || !strings.Contains(err.Error(), "FAIL") {
+		t.Errorf("FAIL output = %v, want the token", err)
+	}
+}
+
+// TestWifiScanToleratesBusySupplicant: the supplicant scans on its own
+// schedule, so a scan the app asks for is often refused with FAIL-BUSY. That is
+// not a failure — the results already on their way are the answer — and on
+// builds that exit non-zero for it, treating it as one is what produced the
+// "exit status 255" report on every visit to the picker.
+func TestWifiScanToleratesBusySupplicant(t *testing.T) {
+	results := 0
+	_ = stubWiFi(t, func(stdin, name string, args []string) (string, error) {
+		switch wifiStubCommand(args) {
+		case "scan":
+			return "FAIL-BUSY\n", errors.New("exit status 255")
+		case "scan_results":
+			results++
+			if results == 1 {
+				return "bssid\tfrequency\tsignal\tflags\tssid\n", nil
+			}
+			return "bssid\tfrequency\tsignal\tflags\tssid\n" +
+				"aa:bb:cc:dd:ee:ff\t2412\t-52\t[WPA2-PSK-CCMP][ESS]\tHomeNet\n", nil
+		}
+		return "OK\n", nil
+	})
+	prevRadio := wifiRadioState
+	wifiRadioState = func() (bool, bool) { return true, true }
+	t.Cleanup(func() { wifiRadioState = prevRadio })
+
+	nets, err := wifiScanNetworks()
+	if err != nil {
+		t.Fatalf("a busy supplicant is not a scan failure: %v", err)
+	}
+	if len(nets) != 1 || nets[0].SSID != "HomeNet" {
+		t.Fatalf("scan returned %+v, want the arriving result", nets)
 	}
 }
 

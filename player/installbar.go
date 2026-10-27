@@ -35,6 +35,10 @@ type installBarState struct {
 	mu      sync.Mutex
 	visible bool
 	tool    string
+	// label replaces the default "Installing <tool>" title when the operation
+	// is not an install of one named thing. A core update run, or the automatic
+	// one that starts on its own, says what it is doing instead.
+	label   string
 	phase   string
 	done    int64
 	total   int64
@@ -53,11 +57,18 @@ var installBar installBarState
 
 // installBarBegin shows the card for a tool install.
 func installBarBegin(tool string) {
+	installBarBeginLabelled(tool, "")
+}
+
+// installBarBeginLabelled is installBarBegin with an explicit title. An empty
+// label keeps the default wording, so every existing caller is unchanged.
+func installBarBeginLabelled(tool, label string) {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
 	now := time.Now()
 	installBar.visible = true
 	installBar.tool = tool
+	installBar.label = label
 	installBar.phase = installPhaseResolving
 	installBar.done = 0
 	installBar.total = 0
@@ -103,6 +114,30 @@ func installBarProgress(done, total int64) {
 	installBar.total = total
 }
 
+// installBarTitle is the custom title of the running operation, or "" when the
+// card should use its default wording. Read separately from the snapshot so the
+// ten existing call sites of that keep their shape.
+func installBarTitle() string {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	return installBar.label
+}
+
+// installBarProgressHook reports a multi-step operation's phase and detail
+// through the card. It is what the core update passes (the page's and the
+// automatic one) hand their runner, so a download started in the background
+// still owns the visible progress bar on whatever screen is up.
+func installBarProgressHook() func(phase, detail string) {
+	return func(phase, detail string) {
+		if phase != "" {
+			installBarPhase(phase)
+		}
+		if detail != "" {
+			installBarDetail(detail)
+		}
+	}
+}
+
 // installBarDetail replaces the detail line (used for errors and notes).
 func installBarDetail(msg string) {
 	installBar.mu.Lock()
@@ -132,6 +167,7 @@ func installBarAbort() {
 	// unlock a different one.
 	installBar.visible = false
 	installBar.tool = ""
+	installBar.label = ""
 	installBar.phase = ""
 	installBar.done = 0
 	installBar.total = 0
@@ -286,6 +322,7 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	visible, tool, phase, detail, done, total, speed, age, _ := installBarSnapshot()
+	label := installBarTitle()
 	if !visible {
 		return
 	}
@@ -376,14 +413,20 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 			tx+(tile-int32(gw))/2, ty+(tile-int32(gh))/2)
 	}
 
-	// Title row: "Installing ffplay" + phase/target on the right.
+	// Title row: "Installing ffplay" + phase/target on the right. A labelled
+	// card (a core update run) names the operation instead; its outcome is the
+	// glyph and the phase tint, which is the same reading an install gets.
 	textX := tx + tile + gap
 	title := "Installing " + tool
-	switch phase {
-	case installPhaseDone:
-		title = tool + " installed"
-	case installPhaseError:
-		title = "Could not install " + tool
+	if label != "" {
+		title = label
+	} else {
+		switch phase {
+		case installPhaseDone:
+			title = tool + " installed"
+		case installPhaseError:
+			title = "Could not install " + tool
+		}
 	}
 	renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, y+padY)
 

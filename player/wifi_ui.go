@@ -42,7 +42,10 @@ type wifiPanelState struct {
 	available bool
 	detail    string
 	err       string
-	loadedAt  time.Time
+	// scanErr is why the last scan did not run, kept apart from err so a
+	// refused scan still leaves the connection and the saved list on screen.
+	scanErr  string
+	loadedAt time.Time
 
 	busy      bool
 	busyLabel string
@@ -97,7 +100,12 @@ type wifiUpdate struct {
 	gen  uint64
 	snap *wifiSnapshot
 	err  string
-	msg  string
+	// scanErr reports a scan that failed while the rest of the refresh worked.
+	scanErr string
+	// scanned marks an update that carried scan information, so a plain
+	// status refresh cannot silently forget the reason a scan did not run.
+	scanned bool
+	msg     string
 	// prompt names the SSID whose stored password turned out to be wrong;
 	// the drain opens the passphrase keyboard for it after showing the error.
 	prompt string
@@ -150,6 +158,14 @@ func wifiDrainUpdates() {
 			wifiPanel.busyLabel = ""
 			if u.snap != nil {
 				wifiApplySnapshot(*u.snap)
+			}
+			switch {
+			case u.scanned:
+				wifiPanel.scanErr = u.scanErr
+			case u.msg != "" && u.err == "":
+				// A completed action proves the backend answers again, so a
+				// remembered scan problem is no longer the truth.
+				wifiPanel.scanErr = ""
 			}
 			if u.err != "" {
 				wifiPanel.err = u.err
@@ -289,16 +305,23 @@ func wifiRefreshAsync(scan bool) {
 		label = "Scanning for networks…"
 	}
 	wifiStartWork(label, func() wifiUpdate {
+		scanErr := ""
 		if scan {
 			if _, err := wifiScanNetworks(); err != nil {
-				return wifiUpdate{err: firstLine(err.Error())}
+				scanErr = firstLine(err.Error())
 			}
 		}
 		snap, err := wifiReadSnapshot()
 		if err != nil {
+			if scanErr != "" {
+				// Both halves failed: the scan's reason is the more specific one.
+				return wifiUpdate{err: scanErr}
+			}
 			return wifiUpdate{err: firstLine(err.Error())}
 		}
-		return wifiUpdate{kind: wifiUpdateState, snap: &snap}
+		// A refused scan costs the list, not the panel: the connected network
+		// and the saved entries are still the truth about this device.
+		return wifiUpdate{kind: wifiUpdateState, snap: &snap, scanErr: scanErr, scanned: true}
 	})
 }
 
@@ -394,14 +417,18 @@ func wifiEnableRadioAsync() {
 		}
 		// Give the interface a moment to come up before scanning.
 		time.Sleep(600 * time.Millisecond)
+		scanErr := ""
 		if _, err := wifiScanNetworks(); err != nil {
-			return wifiUpdate{kind: wifiUpdateState, err: firstLine(err.Error())}
+			scanErr = firstLine(err.Error())
 		}
 		snap, err := wifiReadSnapshot()
 		if err != nil {
+			if scanErr != "" {
+				return wifiUpdate{kind: wifiUpdateState, err: scanErr}
+			}
 			return wifiUpdate{err: firstLine(err.Error())}
 		}
-		return wifiUpdate{kind: wifiUpdateState, snap: &snap, msg: "Wi-Fi on"}
+		return wifiUpdate{kind: wifiUpdateState, snap: &snap, scanErr: scanErr, scanned: true, msg: "Wi-Fi on"}
 	})
 }
 
@@ -681,6 +708,10 @@ func wifiStatusLine() (string, sdl.Color) {
 			line += " · " + wifiPanel.status.IP
 		}
 		return line, ColorTextSecondary()
+	case wifiPanel.scanErr != "":
+		// Nothing to list and the scan is why: say so instead of the generic
+		// "press Y" hint, which reads like the button was never pressed.
+		return wifiPanel.scanErr + " — press Y to retry", ColorToastWarn
 	case len(wifiPanel.networks) == 0:
 		return "No networks yet — press Y to scan", ColorTextTertiary()
 	}

@@ -188,9 +188,20 @@ func stubWiFi(t *testing.T, respond func(stdin, name string, args []string) (str
 	return calls
 }
 
+// wifiStubCommand is the verb of a stubbed call. Flags are skipped with their
+// value (-i <iface>, and -p <dir> once the control directory is resolved), so a
+// test keeps naming the command rather than an argument's position.
 func wifiStubCommand(args []string) string {
-	if len(args) >= 3 {
-		return args[2]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-i", "-p":
+			i++
+			continue
+		}
+		if strings.HasPrefix(args[i], "-") {
+			continue
+		}
+		return args[i]
 	}
 	return ""
 }

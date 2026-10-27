@@ -243,6 +243,14 @@ func main() {
 	if safeModeAllows(SafeFeatureUpdates) {
 		deferStartupTask("update-check", func() { startAutoUpdateCheck(config) })
 	}
+	// Automatic emulator-core updates: on the handheld the cores are the
+	// packages that matter, and waiting for someone to open the Emulators page
+	// and press Update is how a card ends up running a nightly from months ago.
+	// It downloads and activates in the background and reports through the same
+	// install bar, so the progress is visible from any screen.
+	if safeModeAllows(SafeFeatureUpdates) {
+		deferStartupTask("core-update", func() { startCoreAutoUpdate(config) })
+	}
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
@@ -535,6 +543,11 @@ func main() {
 	// invisible toast and only the last one survived, unreadable.
 	whileAwayWasActive := false
 	for running {
+		// The frame clock starts here, before this iteration's input and scene
+		// work: what the frame-time histogram measures is everything a frame
+		// costs up to Present, not just the draw calls. Iterations that park
+		// (a game owns the screen) present nothing and record nothing.
+		frameStart := time.Now()
 		// A game, emulator, port or Wine app owns the screen. JukaHub and the
 		// child share one framebuffer on handheld firmwares (see
 		// launch_handover_test.go for the same fight after a self-update), so
@@ -729,6 +742,10 @@ func main() {
 					// Smart Pro Compatibility keeps the ROM walk off the render
 					// thread and owns every key while open.
 					if cpPanel.open && handleCompatKey(e) {
+						continue
+					}
+					// Kept core builds is modal in the same way.
+					if kbPanel.open && handleCoreBuildsKey(e) {
 						continue
 					}
 					// Save Manager is modal and owns every key while open.
@@ -1404,6 +1421,11 @@ func main() {
 						// Smart Pro Compatibility is modal the same way.
 						if cpPanel.open {
 							handleCompatMouse(mx, my)
+							break
+						}
+						// Kept core builds is modal the same way.
+						if kbPanel.open {
+							handleCoreBuildsMouse(mx, my)
 							break
 						}
 						// Windows Apps is modal the same way.
@@ -2644,6 +2666,11 @@ func main() {
 			renderCompatibilityPanel(renderer, config)
 		}
 
+		// Kept core builds overlay: every retained build, with its date.
+		if kbPanel.open {
+			renderCoreBuildsPanel(renderer, config)
+		}
+
 		// Windows Apps overlay (Wine + WestonPack launcher).
 		if winAppsPanel.open {
 			renderWindowsAppsPanel(renderer, config)
@@ -2780,6 +2807,9 @@ func main() {
 		capturePendingScreenshot(renderer)
 
 		renderer.Present()
+		// Measured after Present, so the idle delay at the end of the loop is
+		// not counted as frame cost.
+		frameStatsRecord(time.Since(frameStart))
 		if !startupReported {
 			startupReported = true
 			startupMarkNow("first-frame")

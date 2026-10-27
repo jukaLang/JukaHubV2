@@ -4,13 +4,14 @@ package main
 //
 // Two different things live here, because the hardware forces the distinction:
 //
-//   - libretro cores. The buildbot publishes an aarch64 index and one zip per
-//     core. JukaHub compares the CRC32 the index states with the CRC32 of the
-//     installed binary and, when they differ, installs the newer build into the
-//     existing core pool (data/performance/cores/<core>/<date>/). The active
-//     core in RetroArch's cores folder is never touched: activating a pool
-//     build stays the deliberate one-press action it already was, and that
-//     path already keeps a .bak of whatever it replaced.
+//   - libretro cores. The buildbot publishes a an aarch64 index and one zip
+//     per core. JukaHub compares the CRC32 the index states with the CRC32 of
+//     the installed binary and, when they differ, installs the newer build into
+//     the existing core pool (data/performance/cores/<core>/<date>/). This pass
+//     only fills the pool; runInstalledCoreUpdates is what makes a build active,
+//     and it keeps the binary it replaces as a .bak (pruned to maxCoreBackups).
+//     The Emulators page does that on a press, and startCoreAutoUpdate does it
+//     by itself once a day on the handheld — see emulatorautoupdate.go.
 //   - standalone emulators (PPSSPP, mGBA, Flycast). Their upstream releases are
 //     built for desktop Linux, not for this firmware's userspace and launcher
 //     scripts, so they are fetched to data/emulator-updates/<app>/<tag>/ and
@@ -18,8 +19,9 @@ package main
 //     break a working install in the background.
 //
 // The index is a plain listing, not a signed document: its CRC is a corruption
-// check, not proof of authorship. That is why a fetched core lands in the pool
-// and waits for the user instead of replacing what is running.
+// check, not proof of authorship. An activation — on a press or automatic — is
+// therefore always reversible: the replaced binary is kept beside the core and
+// the Emulators page restores it in one press.
 
 import (
 	"archive/zip"
@@ -32,6 +34,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -220,8 +223,8 @@ func fetchCoreIndex(ctx context.Context, client *http.Client) ([]coreIndexEntry,
 }
 
 // fetchCoreUpdate downloads one core zip, checks the CRC32 the index promised
-// and writes the binary into the pool. A pool build is inert until the user
-// activates it in the compatibility panel.
+// and writes the binary into the pool. A pool build is inert until something
+// activates it: the Emulators page does, and so does the automatic pass.
 func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, poolRoot string) (coreBuild, error) {
 	data, err := fetchUpdateBytes(ctx, client, upd.URL, coreUpdateMaxDownload)
 	if err != nil {
@@ -290,6 +293,10 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 	if encoded, err := json.MarshalIndent(meta, "", "  "); err == nil {
 		_ = os.WriteFile(filepath.Join(dir, "source.json"), append(encoded, '\n'), 0o644)
 	}
+	// The pool is a build cache, not an archive: with the handheld updating its
+	// cores by itself a new dated folder per core per day would be the fastest
+	// growing thing on the card. The build just written is never a candidate.
+	pruneCorePool(poolRoot, upd.Core, upd.Date, maxCorePoolBuilds)
 	return coreBuild{
 		Core:    upd.Core,
 		Version: upd.Date,
@@ -298,6 +305,54 @@ func fetchCoreUpdate(ctx context.Context, client *http.Client, upd coreUpdate, p
 		Pool:    true,
 		Size:    int64(len(payload)),
 	}, nil
+}
+
+// maxCorePoolBuilds is how many fetched builds of one core stay in the pool.
+// Five is enough to activate an older nightly from the compatibility panel after
+// a bad one lands, and small enough that a core's cache cannot become the
+// biggest thing on a 1 GB card.
+const maxCorePoolBuilds = 5
+
+// pruneCorePool keeps the newest keep date folders for one core under the pool
+// and deletes the rest, returning what it removed. newest names the build that
+// was just fetched, which is never removed even if the sort would place it late
+// (a clock that jumped, or a build published with an older date).
+func pruneCorePool(poolRoot, core, newest string, keep int) []string {
+	if strings.TrimSpace(poolRoot) == "" || strings.TrimSpace(core) == "" {
+		return nil
+	}
+	if keep < 1 {
+		keep = 1
+	}
+	coreDir := filepath.Join(poolRoot, core)
+	entries, err := os.ReadDir(coreDir)
+	if err != nil {
+		return nil
+	}
+	dates := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			dates = append(dates, entry.Name())
+		}
+	}
+	// Date folders are YYYY-MM-DD, so a plain descending sort is newest first.
+	sort.Sort(sort.Reverse(sort.StringSlice(dates)))
+	var removed []string
+	for i, date := range dates {
+		if date == newest || i < keep {
+			continue
+		}
+		path := filepath.Join(coreDir, date)
+		if err := os.RemoveAll(path); err != nil {
+			log.Printf("[emulators] could not prune pool build %q: %v", path, err)
+			continue
+		}
+		removed = append(removed, path)
+	}
+	if len(removed) > 0 {
+		log.Printf("[emulators] pruned %d old pool build(s) of %s (keeping %d)", len(removed), core, keep)
+	}
+	return removed
 }
 
 // standaloneEmulatorRepos is the allowlist of upstream projects worth checking.

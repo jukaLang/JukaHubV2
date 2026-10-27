@@ -472,6 +472,35 @@ The absolute values are a desktop software-renderer proxy (see the recorded
 numbers in [MODERNIZATION.md](../player/MODERNIZATION.md), Phase 6);
 their job is to catch a regression, not to predict the device.
 
+### Frame time on the device
+
+Nothing above can answer "does this build hold 60 fps on a Smart Pro", because
+the desktop is not the device. The main loop therefore measures itself:
+`frameStatsRecord` in [framestats.go](../player/framestats.go) times each
+iteration from the top of the loop to just after `Present` (input, scene logic,
+drawing and the flip — not the idle delay that follows), and keeps a histogram.
+
+The buckets are the hardware's own budgets rather than even steps — ≤8 ms (half a
+60 Hz frame), ≤17 ms (one), ≤33 ms (30 fps), ≤50 ms (a hitch you feel), ≤100 ms
+(a stall) and the overflow — so a percentile is reported as a bucket edge
+(`p50 ≤8ms`) and a frame is never one `time.Now` of noise away from the wrong
+side of a vsync.
+
+One line a minute goes to the log, and therefore into the log tail of a
+diagnostics bundle:
+
+```
+[frame] last 1m: 3595 frames (59.9 fps), avg 7.8ms, p50 ≤8ms, p99 ≤8ms, max 42ms, over 17ms 0.1%
+```
+
+The line describes the window that just ended, so a slow boot does not colour an
+hour of report; the lifetime histogram is what `Diagnostics → Frame time` shows,
+next to a share table (`≤8ms 99.9%, ≤17ms 99.9%, ≤33ms 100.0%, >33ms 0.0%`).
+`JUKAHUB_FRAMESTATS=1` shortens the window to five seconds for a focused
+measurement. Frames are not recorded while a game owns the screen — those
+iterations present nothing, and counting them would report the child's cost as
+the app's.
+
 ## Design system
 
 Controller-first, dark, optimised for a 1280×720 canvas read at arm's length.
