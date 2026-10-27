@@ -4006,3 +4006,17 @@ body:not(.element-selected) .element:focus {
   text-align: left;
   white-space: nowrap;
 }
+
+/* Shown only when JavaScript is off: the editor is entirely script-driven. */
+.noscript-note {
+  margin: 0;
+  padding: 16px;
+  background: var(--surface-secondary, #1b2536);
+  color: var(--text-main, #f8fafc);
+  font-size: var(--text-sm, 0.9rem);
+  text-align: center;
+}
+
+.noscript-note a {
+  color: var(--accent, #a78bfa);
+}
