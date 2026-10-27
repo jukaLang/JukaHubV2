@@ -449,6 +449,47 @@ function duplicateElement(el) {
   showToast('Element duplicated', 'success');
 }
 
+// Copy and paste for canvas elements. The clipboard lives in memory (an element
+// is config, not text), so it survives a scene switch: copy a tile, open another
+// scene, paste it there.
+let elementClipboard = null;
+let pasteCount = 0;
+
+function copyElementToClipboard(el) {
+  if (!el || el.classList.contains('menu')) return false;
+  elementClipboard = JSON.parse(JSON.stringify(elementToConfig(el)));
+  pasteCount = 0;
+  showToast('Element copied', 'success');
+  return true;
+}
+
+function pasteElementFromClipboard() {
+  if (!elementClipboard) return null;
+  const data = normalizeElement(JSON.parse(JSON.stringify(elementClipboard)));
+  if (!data) return null;
+  // Each paste steps further from the original so copies do not stack, and the
+  // result is kept on the device.
+  pasteCount += 1;
+  const shift = 20 * pasteCount;
+  const room = (size, fallback) => Math.max(0, size - (parseInt(fallback, 10) || 20));
+  data.x = Math.min(data.x + shift, room(canvasWidth, data.width));
+  data.y = Math.min(data.y + shift, room(canvasHeight, data.height));
+
+  pushUndo('paste');
+  const el = createElementFromData(data);
+  if (!el) return null;
+  canvas.appendChild(el);
+  if (!scenes[currentScene]) scenes[currentScene] = [];
+  scenes[currentScene].push(el);
+  setupElementEvents(el);
+  const textSpan = el.querySelector('.text-content');
+  if (textSpan) processTextForVariables(textSpan);
+  el.click(); // select it the way a click does
+  scheduleAutoSave();
+  showToast('Element pasted', 'success');
+  return el;
+}
+
 // ---
 
 let autoSaveTimer = null;
@@ -1334,6 +1375,23 @@ function setupKeyboardShortcuts() {
       if (currentElement && !currentElement.classList.contains('menu')) {
         pushUndo('duplicate');
         duplicateElement(currentElement);
+      }
+      return;
+    }
+
+    // Ctrl/Cmd + C / V = copy and paste the selected element. A text selection
+    // or a focused field keeps the browser's own copy and paste.
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'c') {
+      if (isInput || previewMode) return;
+      if (window.getSelection && String(window.getSelection()).length > 0) return;
+      if (currentElement && copyElementToClipboard(currentElement)) e.preventDefault();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'v') {
+      if (isInput || previewMode) return;
+      if (elementClipboard) {
+        e.preventDefault();
+        pasteElementFromClipboard();
       }
       return;
     }

@@ -367,3 +367,63 @@ test("a failing autosave warns once instead of failing silently", async ({ page 
   await page.evaluate(() => { persistAutoSave(); persistAutoSave(); });
   await expect(page.locator(".toast", { hasText: "not letting this page save" })).toHaveCount(1);
 });
+
+test("Ctrl+C / Ctrl+V copies an element, even into another scene, and undo removes the paste", async ({ page }) => {
+  await page.evaluate(() => {
+    loadJukaApp({
+      Width: 1280,
+      Height: 720,
+      scenes: [
+        { name: "A", elements: [{ type: "button", text: "Copy me", x: 100, y: 100, width: 120, height: 60, trigger: "change_scene", triggerTarget: "B" }] },
+        { name: "B", elements: [{ type: "label", text: "Other", x: 500, y: 400 }] },
+      ],
+    });
+  });
+  await page.locator("#canvas .element").first().click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+c");
+
+  await page.evaluate(() => {
+    const s = document.getElementById("sceneSelector");
+    s.value = "B";
+    s.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await expect(page.locator("#canvas .element")).toHaveCount(1);
+
+  await page.keyboard.press("Control+v");
+  await expect(page.locator("#canvas .element")).toHaveCount(2);
+  const pasted = await page.evaluate(() => {
+    const el = [...document.querySelectorAll("#canvas .element")].find((e) => e.dataset.type === "button");
+    return { x: Number(el.dataset.x), y: Number(el.dataset.y), text: el.textContent.replace("✕", "").trim(), selected: el.classList.contains("selected") };
+  });
+  expect(pasted).toMatchObject({ x: 120, y: 120, text: "Copy me", selected: true });
+
+  // A second paste steps further so copies never stack exactly.
+  await page.keyboard.press("Control+v");
+  await expect(page.locator("#canvas .element")).toHaveCount(3);
+
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("#canvas .element")).toHaveCount(2);
+  await page.keyboard.press("Control+z");
+  await expect(page.locator("#canvas .element")).toHaveCount(1);
+
+  // The original in scene A is untouched.
+  const original = await page.evaluate(() => {
+    const s = document.getElementById("sceneSelector");
+    s.value = "A";
+    s.dispatchEvent(new Event("change", { bubbles: true }));
+    return document.querySelectorAll("#canvas .element").length;
+  });
+  expect(original).toBe(1);
+});
+
+test("paste does nothing while typing in a field", async ({ page }) => {
+  await page.evaluate(() => {
+    loadJukaApp({ Width: 1280, Height: 720, scenes: [{ name: "A", elements: [{ type: "button", text: "X", x: 10, y: 10, width: 100, height: 50 }] }] });
+  });
+  await page.locator("#canvas .element").first().click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press("Control+c");
+  await page.locator("#componentSearch").focus();
+  await expect(page.locator("#componentSearch")).toBeFocused();
+  await page.keyboard.press("Control+v");
+  await expect(page.locator("#canvas .element")).toHaveCount(1);
+});
