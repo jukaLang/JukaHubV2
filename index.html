@@ -3,14 +3,20 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>JukaHub</title>
+    <title>JukaHub Generator: GUI builder for handhelds</title>
+    <link rel="canonical" href="https://generate.jukalang.com/">
     <meta name="description" content="Design a controller-first GUI for your TrimUI handheld in the browser, then run it with the JukaHub player. No recompiling: export jukaconfig.json and go.">
     <meta name="theme-color" content="#090E19">
     <meta property="og:type" content="website">
+    <meta property="og:site_name" content="JukaHub Generator">
+    <meta property="og:url" content="https://generate.jukalang.com/">
     <meta property="og:title" content="JukaHub Generator: drag-and-drop GUI builder for handhelds">
     <meta property="og:description" content="Design your handheld interface visually, push it to the device over Wi-Fi, and share it as a link.">
     <meta property="og:image" content="https://generate.jukalang.com/background.jpg">
     <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="JukaHub Generator: drag-and-drop GUI builder for handhelds">
+    <meta name="twitter:description" content="Design your handheld interface visually, push it to the device over Wi-Fi, and share it as a link.">
+    <meta name="twitter:image" content="https://generate.jukalang.com/background.jpg">
     <link data-rh="true" rel="icon" href="/favicon.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -19,6 +25,9 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body class="theme-dark">
+    <noscript>
+        <p class="noscript-note">JukaHub Generator is a visual editor and needs JavaScript. Turn it on for this site to design a layout, or edit <code>jukaconfig.json</code> by hand: see the <a href="https://github.com/jukaLang/JukaHubV2/wiki">wiki</a>.</p>
+    </noscript>
     <a class="skip-link" href="#workspace">Skip to canvas</a>
     <div id="toastContainer" class="toast-container" role="status" aria-live="polite" aria-atomic="true"></div>
     <div id="a11yStatus" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
