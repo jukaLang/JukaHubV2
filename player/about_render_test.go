@@ -28,7 +28,7 @@ func brightPixelsInRect(f *probeFrame, x0, y0, x1, y1 int32) int {
 
 func TestAboutSceneDrawsTheSharedChrome(t *testing.T) {
 	if _, err := os.Stat("jukaconfig.json"); err != nil {
-		t.Skipf("config is not next to the test: %v", err)
+		t.Fatalf("jukaconfig.json ships next to the tests: %v", err)
 	}
 	config, _, err := LoadXMLConfigWithFallback("jukaconfig.json")
 	cancelPendingUserConfigSave(t)
@@ -51,7 +51,7 @@ func TestAboutSceneDrawsTheSharedChrome(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -59,7 +59,7 @@ func TestAboutSceneDrawsTheSharedChrome(t *testing.T) {
 	renderer.Clear()
 	renderScene(renderer, config, config.Scenes[idx])
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	// The status bar (brand, scene title, clock, bell) and the footer badges

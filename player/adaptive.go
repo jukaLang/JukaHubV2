@@ -353,7 +353,7 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 	switch level {
 	case MemCritical:
 		logTextureMemoryStats("critical-evict")
-		log.Printf("[mem] Critical: clearing text and thumbnail texture caches")
+		log.Printf("[mem] Critical: clearing every texture and byte cache")
 		ClearTextCache()
 		// Shape textures hold the palette in their pixels just like text does.
 		ClearShapeCache()
@@ -362,6 +362,18 @@ func EvictCachesForPressure(mm *MemoryMonitor) bool {
 		ClearBgGradientCache()
 		clearHomeTextCache()
 		clearThumbnailCache()
+		// Launcher icons, chat images and avatars are textures too. Each was
+		// bounded by a count alone until the cache-budget pass, so a launcher of
+		// large icons or a chat of photos could hold megabytes under a cap that
+		// only counted entries.
+		clearAppIconCache()
+		clearChatImageCache()
+		clearChatAvatarCache()
+		// The bytes side: downloaded thumbnail payloads waiting for the renderer,
+		// and the validated feed bodies kept for conditional requests. Both are
+		// refetchable, so dropping them costs a round trip, not state.
+		clearThumbnailDataCache()
+		conditionalCache.clear()
 		// The page cache holds whole articles and their images. Dropping it
 		// costs the user one refetch on Back, which beats being killed for RAM.
 		browserClearPageCache()

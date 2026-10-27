@@ -385,6 +385,87 @@ func TestBrowserCookieFileKeepsSitesApart(t *testing.T) {
 	}
 }
 
+// Forgetting one site keeps the other sessions but must take the backup with
+// it: the .bak still holds the forgotten site's cookies, and a damaged read
+// would hand them back.
+func TestBrowserForgettingOneSiteDropsTheBackup(t *testing.T) {
+	path := useTempBrowserCookiePath(t)
+	jar := browserCookies()
+	jar.SetCookies(mustURL(t, "https://a.example/"), []*http.Cookie{{Name: "sid", Value: "a", Path: "/"}})
+	jar.SetCookies(mustURL(t, "https://b.example/"), []*http.Cookie{{Name: "sid", Value: "b", Path: "/"}})
+	if _, err := os.Stat(path + ".bak"); err != nil {
+		t.Fatalf("no backup was written to delete: %v", err)
+	}
+
+	dropped, err := browserForgetSiteCookies("a.example")
+	if err != nil || dropped == 0 {
+		t.Fatalf("forget site: dropped=%d err=%v", dropped, err)
+	}
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Errorf("the backup survived a per-site forget (err=%v)", err)
+	}
+	if got := browserCookies().Cookies(mustURL(t, "https://a.example/")); len(got) != 0 {
+		t.Errorf("the forgotten site still has cookies: %v", got)
+	}
+	if got := browserCookies().Cookies(mustURL(t, "https://b.example/")); len(got) != 1 {
+		t.Errorf("the other site lost its session: %v", got)
+	}
+}
+
+// A truncated file costs the newest cookie, not the session. The durable save
+// keeps the previous version as .bak, so a card pulled mid-write — or a bad
+// edit — comes back to the last good jar instead of signing the user out of
+// every site. This pins both halves: that it recovers, and that it is the
+// previous version that comes back rather than the half-written one.
+func TestBrowserCookieSessionComesBackFromTheBackup(t *testing.T) {
+	path := useTempBrowserCookiePath(t)
+	jar := browserCookies()
+	jar.SetCookies(mustURL(t, "https://example.com/"), []*http.Cookie{{Name: "keep", Value: "one", Path: "/"}})
+	// The second save makes the first version the backup.
+	jar.SetCookies(mustURL(t, "https://example.com/"), []*http.Cookie{{Name: "newer", Value: "two", Path: "/"}})
+	if _, err := os.Stat(path + ".bak"); err != nil {
+		t.Fatalf("the second save left no backup: %v", err)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"cookies":[{"host":"exa`), 0o600); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	simulateBrowserRelaunch()
+	revived := browserCookies()
+	names := map[string]bool{}
+	for _, c := range revived.Cookies(mustURL(t, "https://example.com/")) {
+		names[c.Name] = true
+	}
+	if !names["keep"] {
+		t.Fatalf("the backup's cookie did not come back: %v", names)
+	}
+	if names["newer"] {
+		t.Errorf("the half-written version was restored: %v", names)
+	}
+}
+
+// Forget is a promise about the card, not just about memory: the backup the
+// durable save leaves beside the file has to go too, or the session it holds is
+// still on the disk the user was told was cleared.
+func TestBrowserForgetTakesTheBackupWithIt(t *testing.T) {
+	path := useTempBrowserCookiePath(t)
+	jar := browserCookies()
+	jar.SetCookies(mustURL(t, "https://example.com/"), []*http.Cookie{{Name: "a", Value: "1", Path: "/"}})
+	jar.SetCookies(mustURL(t, "https://example.com/"), []*http.Cookie{{Name: "b", Value: "2", Path: "/"}})
+	if _, err := os.Stat(path + ".bak"); err != nil {
+		t.Fatalf("no backup was written to delete: %v", err)
+	}
+
+	if _, err := browserForgetCookies(); err != nil {
+		t.Fatalf("forget: %v", err)
+	}
+	for _, p := range []string{path, path + ".bak"} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Errorf("%s survived a Forget (err=%v)", p, err)
+		}
+	}
+}
+
 // The record's path attribute follows RFC 6265: an invalid or missing Path
 // falls back to the request's directory, so a restored cookie still matches the
 // same URLs it did before.

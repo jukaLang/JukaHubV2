@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -240,34 +241,30 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 
 	doc := pdf.doc
 
-	// Header bar.
-	barH := int32(44)
-	renderer.SetDrawColor(14, 18, 28, 240)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: barH})
-	renderer.SetDrawColor(40, 50, 65, 120)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
-
-	// Title.
-	title := doc.Title
-	if len(title) > 40 {
-		title = title[:40] + "..."
-	}
-	if medFont != nil {
-		renderText(renderer, config, medFont, title,
-			sdl.Color{R: 220, G: 230, B: 245, A: 240}, 16, 10)
-	}
-
-	// Page indicator.
-	if doc.Loaded && doc.NumPages > 0 {
-		pageStr := fmt.Sprintf("Page %d / %d", pdf.page, doc.NumPages)
-		pw, _, _ := font.SizeUTF8(pageStr)
-		renderText(renderer, config, font, pageStr,
-			sdl.Color{R: 160, G: 175, B: 200, A: 200},
-			screenWidth-int32(pw)-16, 14)
-	}
-
-	// Content area.
+	// The app's one bar owns the top of the screen. The document's own title
+	// sits under it as a quiet line, with the page count at its right edge: the
+	// bar's caption already names the screen, so the file being read gets its
+	// own read-out instead of a second header.
+	barH := headerBarHeight()
 	contentY := barH + 8
+	if titleFont := headerCaptionFont(config); titleFont != nil {
+		if title := pdfDocumentTitle(doc); title != "" {
+			label := fitTextWidth(renderer, config, titleFont, title, screenWidth-32-180)
+			renderText(renderer, config, titleFont, label, ColorTextSecondary(), 16, contentY)
+		}
+		if doc.Loaded && doc.NumPages > 0 {
+			pageStr := fmt.Sprintf("Page %d / %d", pdf.page, doc.NumPages)
+			pw, _ := measureText(titleFont, pageStr)
+			renderText(renderer, config, titleFont, pageStr, ColorTextTertiary(),
+				screenWidth-pw-16, contentY)
+		}
+		contentY += int32(titleFont.Height()) + 10
+	}
+
+	// The page buttons sit just above the shared footer rather than on top of
+	// it, so both stay readable.
+	navH := int32(32)
+	navY := screenHeight - footerBarHeight() - navH - 10
 
 	if !doc.Loaded {
 		// No document loaded.
@@ -297,9 +294,14 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 		if pageIdx >= 0 && pageIdx < len(doc.Pages) {
 			page := doc.Pages[pageIdx]
 
-			// Page card (simulated paper).
+			// Page card (simulated paper). Its height is whatever is left between
+			// the title line and the page buttons, so the sheet always fits on
+			// screen instead of running under the footer.
 			pageW := int32(520)
-			pageH := int32(640)
+			pageH := navY - contentY - 8
+			if pageH < 240 {
+				pageH = 240
+			}
 			pageX := (screenWidth - pageW) / 2
 			pageY := contentY
 
@@ -319,11 +321,17 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 					text = "(Page content could not be extracted)"
 				}
 
-				// Word wrap and render.
+				// Word wrap and render. One line box per line and a line count
+				// taken from the clipped inner height: at a fixed 18px spacing the
+				// 30px text ran through itself and the last line was cut in half
+				// against the paper's bottom edge.
 				lines := pdfWordWrap(textFont, text, pageW-48)
-				lineH := int32(18)
+				lineH := int32(textFont.Height())
+				if lineH < 18 {
+					lineH = 18
+				}
 				startLine := int(pdf.scrollY / float64(lineH))
-				maxLines := int(pageH / lineH)
+				maxLines := int((pageH - 48) / lineH)
 
 				renderWithClip(renderer, pageX+24, pageY+24, pageW-48, pageH-48,
 					func(r *sdl.Renderer) {
@@ -343,25 +351,19 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 					})
 			}
 
-			// Scroll indicator.
-			if len(page.Text) > 500 {
-				scrollStr := "Scroll: PgUp/PgDn"
-				sw, _, _ := font.SizeUTF8(scrollStr)
-				renderText(renderer, config, font, scrollStr,
-					sdl.Color{R: 100, G: 110, B: 130, A: 140},
-					(screenWidth-int32(sw))/2, pageY+pageH+8)
-			}
 		}
 	}
 
 	// Navigation controls at bottom.
-	ctrlY := screenHeight - 48
+	ctrlY := navY
 	if doc.Loaded && doc.NumPages > 1 {
-		ctrlW := int32(300)
+		// Wide enough for the whole label: an 80px pill ellipsised "< Prev"
+		// and "Next >" down to "< Pr..." and "Nex...".
+		ctrlW := int32(360)
 		ctrlX := (screenWidth - ctrlW) / 2
 
 		// Prev button.
-		prevW := int32(80)
+		prevW := int32(120)
 		prevH := int32(32)
 		prevX := ctrlX
 		prevFill := sdl.Color{R: 30, G: 36, B: 50, A: 200}
@@ -388,7 +390,7 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 			ctrlX+(ctrlW-int32(nw))/2, ctrlY+8)
 
 		// Next button.
-		nextW := int32(80)
+		nextW := int32(120)
 		nextX := ctrlX + ctrlW - nextW
 		nextFill := sdl.Color{R: 30, G: 36, B: 50, A: 200}
 		if pdf.page >= doc.NumPages {
@@ -405,19 +407,24 @@ func renderPDFReader(renderer *sdl.Renderer, config *Config) {
 			Radius:     RadiusSM,
 			NoShadow:   true,
 		}, UIButtonState{Disabled: pdf.page >= doc.NumPages})
-
-		tb.startRect = sdl.Rect{} // Avoid conflict
 	}
 
-	// Controls hint.
-	if font != nil {
-		controls := hintLine(FooterHint{"←", "Prev Page"}, FooterHint{"→", "Next Page"},
-			FooterHint{"PgUp / PgDn", "Scroll"}, FooterHint{"B", "Back"})
-		cw, _, _ := font.SizeUTF8(controls)
-		renderText(renderer, config, font, controls,
-			sdl.Color{R: 80, G: 90, B: 110, A: 100},
-			(screenWidth-int32(cw))/2, screenHeight-22)
+	// The shared bars last, exactly as every other screen draws them.
+	renderStatusBar(renderer, config)
+	renderFooter(renderer, config)
+}
+
+// pdfDocumentTitle is the title line under the bar: the document's own title
+// when the extractor found one, otherwise the file's name so an untitled PDF
+// still says what is open.
+func pdfDocumentTitle(doc pdfDoc) string {
+	if title := strings.TrimSpace(doc.Title); title != "" {
+		return title
 	}
+	if path := strings.TrimSpace(doc.Path); path != "" {
+		return filepath.Base(path)
+	}
+	return ""
 }
 
 func pdfWordWrap(font *ttf.Font, text string, maxWidth int32) []string {

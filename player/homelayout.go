@@ -464,19 +464,22 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	ps5TileRect = sdl.Rect{}
 	ps4TileRect = sdl.Rect{}
 	homeUpdateRect = sdl.Rect{}
-	header := ScaleHomeRect(sdl.Rect{X: 0, Y: 0, W: 1280, H: 56}, h.Width, h.Height)
+	// The bar's height, wordmark and caption come from header.go — the same code
+	// the scene bar draws with — so Home and a scene can no longer differ by two
+	// pixels of bar height and ten of caption size, which is what made the header
+	// look like two designs.
+	barH := headerBarHeight()
+	header := sdl.Rect{X: 0, Y: 0, W: h.Width, H: barH}
 	setDrawColor(renderer, ColorSurface)
 	_ = renderer.FillRect(&header)
 	setDrawColor(renderer, ColorBorder)
 	_ = renderer.DrawLine(0, header.Y+header.H-1, h.Width, header.Y+header.H-1)
 
-	brandX := scaleX(32, h.Width)
-	brandY := scaleY(15, h.Height)
-	drawText(renderer, fonts.Brand, "JukaHub", brandX, brandY, ColorTextPrimary(), textAlignLeft)
-	if v := strings.TrimSpace(data.Version); v != "" && fonts.Brand != nil && fonts.Small != nil {
-		bw, _, _ := fonts.Brand.SizeUTF8("JukaHub")
-		drawText(renderer, fonts.Small, " - "+v, brandX+int32(bw)+scaleX(6, h.Width), scaleY(19, h.Height), ColorTextMuted(), textAlignLeft)
+	headerConfig := appConfig
+	if headerConfig == nil {
+		headerConfig = &Config{}
 	}
+	drawHeaderBrand(renderer, headerConfig, barH, headerCaptionText(data.Version, ""))
 
 	// The right-side cluster comes from the shared headerStatusParts helper
 	// (network, weather, time, battery) so it is identical on every screen.
@@ -493,21 +496,13 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		return
 	}
 	sep := "   "
-	sepWi, _, _ := fonts.Small.SizeUTF8(sep)
-	sepW := int32(sepWi)
+	sepW, _ := measureText(fonts.Small, sep)
 	total := int32(0)
 	for i, part := range data.StatusParts {
 		w := statusClusterPartWidth(fonts.Small, part)
 		total += w
 		if i > 0 {
 			total += sepW
-		}
-	}
-	weatherIdx := -1
-	for i, part := range data.StatusParts {
-		if isWeatherStatusPart(part) {
-			weatherIdx = i
-			break
 		}
 	}
 	bellFont := data.BellFont
@@ -522,7 +517,7 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		}
 		bellW = bellH + 14
 	}
-	bellRight := h.Width - scaleX(32, h.Width)
+	bellRight := h.Width - StatusBarMargin
 	bellX := bellRight - bellW
 	bellY := (header.H - bellH) / 2
 	renderHomeBell(renderer, bellFont, bellX, bellY, bellW, bellH)
@@ -535,23 +530,26 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	}
 	h.Focus.SetEnabled(HomeFocusBell, nc.bellRect.W > 0)
 
-	// The chip's width is part of the cluster so it shifts the text left instead
-	// of landing on top of it. It is dropped when it would push the cluster into
-	// the greeting column: on such a screen the scene headers and the prompt
-	// still reach the release.
-	updateChipW, updateChipH := int32(0), int32(0)
+	// The release offer is the same pill in the same corner as on every scene
+	// header: immediately left of the bell. It is dropped when it would push the
+	// cluster into the greeting column; on such a screen the modal prompt and
+	// the scene headers still reach the release.
+	updatePill := sdl.Rect{}
 	if updateAvailable() {
-		chipW, chipH := homeUpdateChipSize(fonts.Small)
-		chipW += scaleX(8, h.Width)
-		if bellX-scaleX(12, h.Width)-total-chipW >= scaleX(480, h.Width) {
-			updateChipW, updateChipH = chipW, chipH
-			total += chipW
+		chipW, _ := homeUpdateChipSize(headerCaptionFont(headerConfig))
+		if bellX-headerCornerGap-total-headerCornerGap-chipW >= scaleX(480, h.Width) {
+			updatePill = drawHeaderUpdatePill(renderer, headerConfig, bellX-headerCornerGap, barH,
+				h.Focus.Current() == HomeFocusUpdate)
+			if updatePill.W > 0 {
+				homeUpdateRect = updatePill
+				item := h.Items[HomeFocusUpdate]
+				item.Rect = updatePill
+				h.Items[HomeFocusUpdate] = item
+				total += updatePill.W + headerCornerGap
+			}
 		}
 	}
-	// The home header offers a pending release itself, as the download chip in
-	// the status cluster below; the scene-header "Update" pill is not drawn here
-	// so the header never shows two offers for the same release.
-	x := bellX - scaleX(12, h.Width) - total
+	x := bellX - headerCornerGap - total
 
 	// Phone Companion QR: a scan-and-connect tile sits left of the network,
 	// weather and clock cluster, in the empty band above the action cards. It
@@ -604,32 +602,16 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// wide the status cluster turned out to be.
 	h.Focus.SetTileLink(h.CardUnderTile(ps5TileRect))
 
-	y := scaleY(19, h.Height)
-	updateChipDrawn := false
-	drawUpdateChip := func(atX int32) {
-		chip := sdl.Rect{X: atX, Y: y - scaleY(3, h.Height), W: updateChipW, H: updateChipH}
-		renderHomeUpdateChip(renderer, fonts, chip, h.Focus.Current() == HomeFocusUpdate)
-		if homeUpdateRect.W > 0 {
-			item := h.Items[HomeFocusUpdate]
-			item.Rect = homeUpdateRect
-			h.Items[HomeFocusUpdate] = item
-		}
-		updateChipDrawn = true
-	}
 	// The network slot and the battery are the two gauged parts — signal bars
 	// and a colour-coded cell — shared with every scene's status bar so the
-	// system corner looks the same on Home as it does in a menu.
+	// system corner looks the same on Home as it does in a menu. The cluster's
+	// baseline is the bar's centre, the same as a scene's.
+	y := (barH - int32(fonts.Small.Height())) / 2
 	drawStatusText := func(text string, color sdl.Color, x, y int32) {
 		drawText(renderer, fonts.Small, text, x, y, color, textAlignLeft)
 	}
-	for i, part := range data.StatusParts {
+	for _, part := range data.StatusParts {
 		w := statusClusterPartWidth(fonts.Small, part)
-		// The chip belongs immediately left of the weather text; with no
-		// weather part it leads the cluster instead of disappearing.
-		if updateChipW > 0 && !updateChipDrawn && ((weatherIdx < 0 && i == 0) || i == weatherIdx) {
-			drawUpdateChip(x)
-			x += updateChipW + scaleX(8, h.Width)
-		}
 		r := sdl.Rect{
 			X: x - scaleX(8, h.Width),
 			Y: y - scaleY(6, h.Height),
@@ -662,9 +644,6 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		}
 		drawStatusClusterPart(renderer, fonts.Small, part, x, y, drawStatusText)
 		x += w + sepW
-	}
-	if updateChipW > 0 && !updateChipDrawn {
-		drawUpdateChip(x)
 	}
 	// The network meter is a tap target as well as a reading, so grow its hit
 	// area to finger size once the cluster is placed, stopping short of the
@@ -800,7 +779,9 @@ func fitHomeTitle(fonts HomeFonts, text string, maxW int32) (*ttf.Font, string) 
 		if font == nil {
 			continue
 		}
-		if w, _, _ := font.SizeUTF8(text); int32(w) <= maxW {
+		// Cached: ten cards are sized every frame and each one otherwise
+		// walked the candidate fonts with its own SizeUTF8 calls.
+		if w, _ := measureText(font, text); w <= maxW {
 			return font, text
 		}
 	}
@@ -1058,8 +1039,8 @@ func (h *HomeLayout) drawContinueCard(renderer *sdl.Renderer, fonts HomeFonts, i
 	}
 
 	// Compact, measured action chip at bottom-left (clean pill).
-	bw, _, _ := fonts.Small.SizeUTF8(action)
-	chipW := int32(bw) + scaleX(36, h.Width)
+	bw, _ := measureText(fonts.Small, action)
+	chipW := bw + scaleX(36, h.Width)
 	if chipW < scaleX(120, h.Width) {
 		chipW = scaleX(120, h.Width)
 	}
@@ -1163,10 +1144,13 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	groups := make([]group, 0, len(hints))
 	total := int32(0)
 	for _, g := range hints {
-		bw, _, _ := fonts.Small.SizeUTF8(g.button)
-		lw, _, _ := fonts.Small.SizeUTF8(g.label)
-		badgeW := int32(bw) + badgePad*2
-		w := badgeW + badgeGap + int32(lw)
+		// Measured from cache: the footer is the same four hints on every
+		// frame, and it was the single largest consumer of FreeType measuring
+		// time in the home frame.
+		bw, _ := measureText(fonts.Small, g.button)
+		lw, _ := measureText(fonts.Small, g.label)
+		badgeW := bw + badgePad*2
+		w := badgeW + badgeGap + lw
 		groups = append(groups, group{badgeW: badgeW, w: w})
 		total += w
 	}
@@ -1226,6 +1210,10 @@ type homeTextCacheEntry struct {
 	key     homeTextKey
 	elem    *list.Element
 	bytes   int64
+	// w and h are the texture's size. drawText used to ask the texture on
+	// every frame (texture.Query), which is a cgo round trip that allocates
+	// its result and its error value for a number this cache already knows.
+	w, h int32
 }
 
 type homeTextCacheStore struct {
@@ -1243,22 +1231,34 @@ var homeTextCache = homeTextCacheStore{
 	maxItems: homeTextCacheMaxItems(),
 }
 
-// homeTextCacheBudgetBytes is the memory budget for drawText labels. They are
-// small (a title is ~10-40 KB), so a few MB holds thousands of strings.
+// The home label ceilings. Labels are small (a title is ~10-40 KB), so a few MB
+// holds thousands of strings; the handheld gets the tighter pair because its
+// 1 GB is shared with the game it launches.
+const (
+	homeTextBudgetHandheldBytes = int64(8 << 20)
+	homeTextBudgetDesktopBytes  = int64(48 << 20)
+	homeTextHandheldItems       = 512
+	homeTextDesktopItems        = 2048
+)
+
+// homeTextCacheBudgetBytes is the memory budget for drawText labels.
 func homeTextCacheBudgetBytes() int64 {
-	if IsTrimuiDevice() || P().IsHandheld() {
-		return 8 << 20
-	}
-	return 48 << 20
+	return sceneBudgetByDevice(homeTextBudgetHandheldBytes, homeTextBudgetDesktopBytes)
 }
 
 // homeTextCacheMaxItems bounds the entry count as well as the bytes: many
 // tiny strings would otherwise never hit the byte budget.
 func homeTextCacheMaxItems() int {
-	if IsTrimuiDevice() || P().IsHandheld() {
-		return 512
-	}
-	return 2048
+	return int(sceneBudgetByDevice(homeTextHandheldItems, homeTextDesktopItems))
+}
+
+// homeTextCacheApplyBudget retunes the live label cache from the device branch.
+// The store is a package variable built at init, so pinning the branch after the
+// fact — the scene-navigation harness does exactly that — has to move the
+// operator's ceilings too, the way TextCache.SetBudget does for rendered text.
+func homeTextCacheApplyBudget() {
+	homeTextCache.maxBytes = homeTextCacheBudgetBytes()
+	homeTextCache.maxItems = homeTextCacheMaxItems()
 }
 
 // homeTextCacheBytes reports the cache's memory for the texture accounting log.
@@ -1291,7 +1291,7 @@ func (c *homeTextCacheStore) put(key homeTextKey, texture *sdl.Texture, w, h int
 		}
 		delete(c.entries, key)
 	}
-	entry := &homeTextCacheEntry{texture: texture, key: key, bytes: bytes}
+	entry := &homeTextCacheEntry{texture: texture, key: key, bytes: bytes, w: w, h: h}
 	entry.elem = c.lru.PushFront(key)
 	c.entries[key] = entry
 	c.bytes += bytes
@@ -1317,8 +1317,9 @@ func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, c
 		return
 	}
 	// Substitute characters this font cannot draw so list rows never show
-	// .notdef boxes (see fonts.go). Supported text is returned unchanged.
-	text = sanitizeForFont(font, text)
+	// .notdef boxes (see fonts.go). Supported text is returned unchanged;
+	// the answer is cached because this runs for every label on every frame.
+	text = sanitizeCached(font, text)
 
 	key := homeTextKey{
 		font:  font,
@@ -1330,7 +1331,7 @@ func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, c
 	if cached, ok := homeTextCache.entries[key]; ok && cached.texture != nil {
 		homeTextCache.lru.MoveToFront(cached.elem)
 		texture = cached.texture
-		_, _, tw, th, _ = texture.Query()
+		tw, th = cached.w, cached.h
 	} else {
 		surface, err := font.RenderUTF8Blended(text, color)
 		if err != nil || surface == nil {
@@ -1345,6 +1346,13 @@ func drawText(renderer *sdl.Renderer, font *ttf.Font, text string, x, y int32, c
 		homeTextCache.put(key, texture, tw, th)
 	}
 
+	// A zero-area destination is not a no-op to SDL: RenderCopy rejects it and
+	// builds an error value (a C string copy plus errors.New) that nobody
+	// reads. Space-only labels reach this path, so the guard is what keeps a
+	// steady frame from allocating two objects per blank label.
+	if tw <= 0 || th <= 0 {
+		return
+	}
 	dstX := x
 	switch alignment {
 	case textAlignCenter:
@@ -1486,13 +1494,18 @@ func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, f
 			pt{x: cx - w/5, y: cy + h/4},
 			pt{x: cx + w/4, y: cy}, color)
 	case "files":
-		// Filled folder: body + tab.
-		body := sdl.Rect{X: x + w/8, Y: y + h/3, W: w - w/4, H: h / 2}
+		// Filled folder: body + tab. The tab used to run into the body (it
+		// ended at h/3+1, exactly where the body starts), so at empty-state size
+		// the two merged into one white lozenge with no folder silhouette.
+		body := sdl.Rect{X: x + w/8, Y: y + h*5/12, W: w - w/4, H: h * 5 / 12}
 		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, 4, color)
-		tab := sdl.Rect{X: x + w/8, Y: y + h/6, W: w/2 - w/8, H: h / 5}
+		tab := sdl.Rect{X: x + w/8, Y: y + h/6, W: w/2 - w/8, H: h / 6}
 		fillRoundedRect(renderer, tab.X, tab.Y, tab.W, tab.H, 2, color)
 	case "packages":
-		// Filled isometric cube: front, top, and right faces.
+		// Filled isometric cube: front, top, and right faces. The top face used
+		// to be lightened, which on a white glyph is still white: all three
+		// faces merged into one block. Shading each face away from the base
+		// keeps the box readable in both the white and the accent tint.
 		front := sdl.Rect{X: x + w/6, Y: y + h/3, W: w - w/3, H: h / 2}
 		fillRoundedRect(renderer, front.X, front.Y, front.W, front.H, 3, color)
 		topRight := pt{x: x + w - w/6, y: y + h/6}
@@ -1500,7 +1513,7 @@ func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, f
 		fillQuad(renderer,
 			pt{x: front.X, y: front.Y},
 			pt{x: front.X + front.W, y: front.Y},
-			topRight, topLeft, lighten(color, 28))
+			topRight, topLeft, darken(color, 16))
 		fillQuad(renderer,
 			pt{x: front.X + front.W, y: front.Y},
 			topRight,
@@ -1660,7 +1673,9 @@ func ellipsize(font *ttf.Font, text string, maxW int32) string {
 	if font == nil || maxW <= 0 {
 		return text
 	}
-	return fitTextToWidth(font, text, maxW)
+	// Cached: the measurement is several FreeType calls through cgo, and the
+	// UI re-clips the same unchanged labels on every frame. See textcache.go.
+	return fitTextCached(font, text, maxW)
 }
 
 func insetRect(rect sdl.Rect, inset int32) sdl.Rect {

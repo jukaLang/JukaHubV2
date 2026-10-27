@@ -71,6 +71,7 @@ var (
 		"famicom":                       "NES",
 		"nintendo entertainment system": "NES",
 		"snes":                          "SNES",
+		"sfc":                           "SNES",
 		"super nintendo":                "SNES",
 		"super famicom":                 "SNES",
 		"gb":                            "Game Boy",
@@ -85,6 +86,7 @@ var (
 		"md":                            "Mega Drive",
 		"ps1":                           "PlayStation",
 		"psx":                           "PlayStation",
+		"ps":                            "PlayStation",
 		"playstation":                   "PlayStation",
 		"n64":                           "Nintendo 64",
 		"nintendo 64":                   "Nintendo 64",
@@ -1171,24 +1173,62 @@ func activateCoreBuild(build coreBuild) (string, string, error) {
 		}
 	}
 	target := filepath.Join(destDir, targetName)
+	backup, err := installCoreFile(source, target)
+	if err != nil {
+		return "", backup, err
+	}
+	log.Printf("[compat] activated core %s %s from %s (backup %s)", build.Core, build.Version, source, backup)
+	return target, backup, nil
+}
+
+// installCoreFile puts source in place of target, keeping the file it replaces
+// as a timestamped .bak beside it. It is the one path that changes a core
+// binary — pool activation and the Emulators page's rollback both use it — so
+// the staging rule and the backup naming cannot drift apart.
+//
+// The write goes source → .jukahub.tmp → rename, so a card pulled mid-copy
+// leaves the old core in place instead of a half-written one. The previous
+// binary is copied before anything is removed, and a second replacement in the
+// same second gets its own name rather than overwriting the first build.
+func installCoreFile(source, target string) (string, error) {
 	backup := ""
 	if regularFile(target) {
-		backup = target + ".jukahub-" + time.Now().Format("20060102-150405") + ".bak"
+		backup = nextCoreBackupPath(target)
 		if err := copyCompatFile(target, backup); err != nil {
-			return "", "", fmt.Errorf("backup current core: %w", err)
+			return "", fmt.Errorf("backup current core: %w", err)
 		}
 	}
 	tmp := target + ".jukahub.tmp"
 	if err := copyCompatFile(source, tmp); err != nil {
-		return "", "", fmt.Errorf("stage core build: %w", err)
+		_ = os.Remove(tmp)
+		return backup, fmt.Errorf("stage core build: %w", err)
 	}
-	_ = os.Remove(target)
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		_ = os.Remove(tmp)
+		return backup, fmt.Errorf("replace core binary: %w", err)
+	}
 	if err := os.Rename(tmp, target); err != nil {
 		_ = os.Remove(tmp)
-		return "", backup, fmt.Errorf("activate core build: %w", err)
+		return backup, fmt.Errorf("activate core build: %w", err)
 	}
-	log.Printf("[compat] activated core %s %s from %s (backup %s)", build.Core, build.Version, source, backup)
-	return target, backup, nil
+	return backup, nil
+}
+
+// nextCoreBackupPath is a free `.jukahub-<stamp>.bak` name beside target. The
+// collision counter matters: a rollback and a re-update inside the same second
+// would otherwise overwrite the only copy of the previous build.
+func nextCoreBackupPath(target string) string {
+	base := target + ".jukahub-" + time.Now().Format("20060102-150405")
+	for i := 2; i < 100; i++ {
+		candidate := base + ".bak"
+		if i > 2 {
+			candidate = base + "-" + strconv.Itoa(i) + ".bak"
+		}
+		if !regularFile(candidate) {
+			return candidate
+		}
+	}
+	return base + "-" + strconv.Itoa(time.Now().Nanosecond()) + ".bak"
 }
 
 func copyCompatFile(src, dst string) error {

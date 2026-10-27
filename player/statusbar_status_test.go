@@ -131,7 +131,7 @@ func TestDrawStatusClusterPartMatchesMeasure(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	pinStatusValues(t, 87, 3)
@@ -152,7 +152,7 @@ func TestDrawStatusSignalBarsEmptyWithoutLink(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -163,7 +163,7 @@ func TestDrawStatusSignalBarsEmptyWithoutLink(t *testing.T) {
 		drawStatusSignalBars(renderer, 40, 40, 21, 14, level, warning)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 			unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		return f
 	}
@@ -224,7 +224,7 @@ func TestWiFiChipInksTheNoLinkMark(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	noop := func(string, sdl.Color, int32, int32) {}
@@ -236,7 +236,7 @@ func TestWiFiChipInksTheNoLinkMark(t *testing.T) {
 		drawStatusClusterPart(renderer, nil, part, 10, 10, noop)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 			unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		return f
 	}
@@ -498,7 +498,7 @@ func statusBarProbe(t *testing.T, config *Config) *probeFrame {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
@@ -520,7 +520,7 @@ func statusBarProbe(t *testing.T, config *Config) *probeFrame {
 	renderStatusBar(renderer, config)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 		unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }
@@ -608,7 +608,7 @@ func TestHomeHeaderDrawsSystemGauges(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	pinStatusValues(t, 12, 3)
@@ -631,7 +631,7 @@ func TestHomeHeaderDrawsSystemGauges(t *testing.T) {
 	}
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 		unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	if statusWiFiRect.W <= 0 {

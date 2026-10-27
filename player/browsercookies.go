@@ -392,7 +392,9 @@ func browserForgetSiteCookies(site string) (int, error) {
 	if dropped == 0 {
 		return 0, nil
 	}
-	jar.save()
+	// The other sites' session stays, but this site's cookies must not survive
+	// in the backup the save leaves behind.
+	jar.saveDropBackup()
 	return dropped, nil
 }
 
@@ -477,10 +479,10 @@ func (j *browserCookieJar) restoreLocked(records []browserCookieRecord) int {
 // path, and a Forget could interleave with a save and lose the delete.
 var browserCookieSaveMu sync.Mutex
 
-// save writes the records through a temporary file, so a power loss mid-write
-// cannot leave half a JSON document behind. The forgotten flag is checked under
-// the same mutex that Forget takes, so a jar retired mid-response writes
-// nothing.
+// save writes the records through the durable path — temp file, fsync, rename,
+// and the previous session kept as .bak — so a power loss mid-write cannot
+// leave half a JSON document behind. The forgotten flag is checked under the
+// same mutex that Forget takes, so a jar retired mid-response writes nothing.
 func (j *browserCookieJar) save() {
 	if j == nil || strings.TrimSpace(j.path) == "" {
 		return
@@ -497,12 +499,52 @@ func (j *browserCookieJar) save() {
 	if len(records) == 0 {
 		// Nothing to remember: leaving an empty file behind would only be a
 		// second place to look after a Forget.
-		if err := os.Remove(j.path); err != nil && !os.IsNotExist(err) {
+		if err := removeBrowserCookieFile(j.path); err != nil {
 			log.Printf("[browser] cannot remove %s: %v", j.path, err)
 		}
 		return
 	}
 	writeBrowserCookies(j.path, records)
+}
+
+// saveDropBackup writes the jar and then removes the previous version. Use it
+// whenever the new list is shorter because something was deliberately dropped:
+// the .bak would otherwise restore exactly the cookies the user — or the
+// retention policy — just got rid of.
+func (j *browserCookieJar) saveDropBackup() {
+	if j == nil {
+		return
+	}
+	j.save()
+	removeBrowserCookieBackup(j.path)
+}
+
+// removeBrowserCookieBackup deletes only the .bak beside a saved session. A
+// path with no backup is not an error: the first save never writes one.
+func removeBrowserCookieBackup(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	browserCookieSaveMu.Lock()
+	defer browserCookieSaveMu.Unlock()
+	if err := os.Remove(path + ".bak"); err != nil && !os.IsNotExist(err) {
+		log.Printf("[browser] cannot remove %s: %v", path+".bak", err)
+	}
+}
+
+// removeBrowserCookieFile deletes the saved session and the backup the durable
+// save keeps beside it. A Forget that left the .bak behind would leave the
+// session sitting on the card — the exact opposite of what the chip says it
+// did — and the next damaged read would restore it. The caller holds
+// browserCookieSaveMu.
+func removeBrowserCookieFile(path string) error {
+	var first error
+	for _, p := range []string{path, path + ".bak"} {
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) && first == nil {
+			first = err
+		}
+	}
+	return first
 }
 
 // writeBrowserCookies writes the document. The caller holds
@@ -521,34 +563,27 @@ func writeBrowserCookies(path string, records []browserCookieRecord) {
 		log.Printf("[browser] cannot create %s: %v", filepath.Dir(path), err)
 		return
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), browserCookieFileMode); err != nil {
-		log.Printf("[browser] cannot write %s: %v", tmp, err)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		log.Printf("[browser] cannot replace %s: %v", path, err)
+	// Same crash-safe path as the config: temp file, fsync, rename, and the
+	// previous session kept as .bak. A truncated jar used to read as "signed
+	// out of every site" with no way back.
+	if err := AtomicWrite(path, append(data, '\n'), browserCookieFileMode); err != nil {
+		log.Printf("[browser] cannot write %s: %v", path, err)
 	}
 }
 
 // loadBrowserCookies reads the saved jar. A missing file is the normal first
-// run; a broken one is logged and ignored, so a bad edit costs the session and
-// nothing else.
+// run; a broken one falls back to the .bak the durable save leaves beside it, so
+// a bad edit or a pulled card costs the newest cookie rather than the session.
 func loadBrowserCookies(path string) []browserCookieRecord {
 	path = strings.TrimSpace(path)
 	if path == "" {
 		return nil
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			log.Printf("[browser] cannot read %s: %v", path, err)
-		}
-		return nil
-	}
 	var file browserCookieFile
-	if err := json.Unmarshal(raw, &file); err != nil {
-		log.Printf("[browser] ignoring %s: %v", path, err)
+	if _, err := readJSONWithBackup(path, &file); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[browser] ignoring %s: %v", path, err)
+		}
 		return nil
 	}
 	if file.SchemaVersion > browserCookieSchemaVersion {
@@ -612,7 +647,14 @@ func browserCookies() http.CookieJar {
 			log.Printf("[browser] retention %s dropped %d saved cookie(s)", cookieRetentionLabel(cookieRetentionDays(appConfig)), dropped)
 		}
 		if stamped || dropped > 0 {
-			jar.save()
+			if dropped > 0 {
+				// The pruned list is the retention policy's output; the backup holds
+				// the pre-prune session, and a damaged read must not undo the drop
+				// the user asked for.
+				jar.saveDropBackup()
+			} else {
+				jar.save()
+			}
 		}
 	}
 	return jar
@@ -688,7 +730,9 @@ func browserForgetCookies() (int, error) {
 	}
 	browserCookieSaveMu.Lock()
 	defer browserCookieSaveMu.Unlock()
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	// The backup goes with the live file: a forgotten session must not survive
+	// on the card just because the durable save kept a copy of it.
+	if err := removeBrowserCookieFile(path); err != nil {
 		return dropped, fmt.Errorf("cannot delete %s: %w", path, err)
 	}
 	return dropped, nil

@@ -148,7 +148,7 @@ func TestCalibrationPanelRenders(t *testing.T) {
 	f := newProbeFrame(t)
 	cfg := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
 	if font, _ := getCachedFont(cfg, "small"); font == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 
 	prevW, prevH := screenWidth, screenHeight
@@ -169,7 +169,7 @@ func TestCalibrationPanelRenders(t *testing.T) {
 
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -184,7 +184,7 @@ func TestCalibrationPanelRenders(t *testing.T) {
 		t.Fatalf("card rect = %+v does not fit %dx%d", card, probeW, probeH)
 	}
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	mid := sdl.Rect{X: card.X + card.W/4, Y: card.Y + card.H/2, W: card.W / 2, H: card.H / 6}
 	if bandLuma(f, mid) == 0 {

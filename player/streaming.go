@@ -338,6 +338,69 @@ func effectivePlaybackMaxHeight(config *Config, source string) int {
 	return playbackMaxHeight(config)
 }
 
+// The ceiling the stream on screen was actually started with. The Quality row
+// writes its new ceiling before the re-resolve begins (the format selector reads
+// it), so a switch that never reaches playback — cancelled with B, or failed
+// while resolving — has to put this value back: otherwise the row keeps naming a
+// ceiling the picture on screen is not using.
+//
+// It is committed by startEmbeddedPlayback, the one place every load ends up
+// (Play, the quality switch, the temp-file fallback and a Watch Party stream),
+// so it always describes a stream that really started.
+var (
+	videoPlayingQualitySource string
+	videoPlayingQualityHeight int
+	videoPlayingQualityKnown  bool
+)
+
+// commitVideoQualityPlayback records the ceiling a stream just started at.
+func commitVideoQualityPlayback(source string, height int) {
+	if strings.TrimSpace(source) == "" {
+		return
+	}
+	videoQualityMu.Lock()
+	videoPlayingQualitySource = source
+	videoPlayingQualityHeight = height
+	videoPlayingQualityKnown = true
+	videoQualityMu.Unlock()
+}
+
+// playingVideoQuality reports the ceiling the streaming video was started at.
+func playingVideoQuality(source string) (int, bool) {
+	videoQualityMu.Lock()
+	defer videoQualityMu.Unlock()
+	if !videoPlayingQualityKnown || strings.TrimSpace(source) == "" || videoPlayingQualitySource != source {
+		return 0, false
+	}
+	return videoPlayingQualityHeight, true
+}
+
+// revertVideoQualitySwitch puts the playing stream's ceiling back after a switch
+// that did not end in playback. It leaves the override alone when a newer load
+// has started since (that load owns the row now) or when the player has moved to
+// a different source, so a late finish can never rewrite another video's row.
+//
+// fallback is the ceiling the switch replaced; it is used only when nothing is
+// known about the playing stream (playback that started outside the player's
+// own load path), which keeps the row at its last real value instead of guessing.
+func revertVideoQualitySwitch(prepareSeq uint64, source string, fallback int) bool {
+	source = strings.TrimSpace(source)
+	if source == "" || strings.TrimSpace(currentPlaybackURL) != source {
+		return false
+	}
+	if !videoPrepareIsCurrent(prepareSeq) {
+		return false
+	}
+	restore := fallback
+	if h, ok := playingVideoQuality(source); ok {
+		restore = h
+	}
+	setVideoQualityOverride(source, restore)
+	log.Printf("[STREAM] quality switch did not start playback; ceiling restored to %d for %s",
+		restore, sanitizeLogURL(source))
+	return true
+}
+
 // streamFailureReason picks the useful line out of yt-dlp's (noisy) stderr so a
 // failed attempt explains itself in the log instead of only "exit status 1".
 func streamFailureReason(stderr string) string {
@@ -719,6 +782,16 @@ func finishVideoPrepare(seq uint64) {
 	videoPrepareMu.Unlock()
 }
 
+// videoPrepareIsCurrent reports whether seq is still the newest prepare, i.e.
+// no other load has started since it did. A cancelled prepare keeps its
+// sequence, so the attempt that cancelled it is still the current one; a newer
+// play or quality switch bumps it and inherits everything the row shows.
+func videoPrepareIsCurrent(seq uint64) bool {
+	videoPrepareMu.Lock()
+	defer videoPrepareMu.Unlock()
+	return videoPrepare.seq == seq
+}
+
 // videoPrepareActive reports whether a video is being resolved.
 func videoPrepareActive() bool {
 	videoPrepareMu.Lock()
@@ -746,6 +819,85 @@ func cancelVideoPrepare() bool {
 	}
 	videoPrepare = videoPrepareState{seq: videoPrepare.seq}
 	return true
+}
+
+// resolvePlaybackTools resolves the helper tools one load needs: yt-dlp to
+// extract the stream, ffmpeg to decode it, and ffprobe for the duration/fps it
+// can supply. Missing tools are downloaded here, which on a cold card is the
+// slowest part of a first play — so the resolve honours ctx and stops when the
+// user cancels, and it names the tool that was missing so the caller can say
+// which one in its message.
+func resolvePlaybackTools(ctx context.Context, config *Config) (ytDlpPath, missing string, err error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ytDlpPath, err = helperToolPathCtx(ctx, "yt-dlp", config)
+	if err != nil {
+		return "", "yt-dlp", err
+	}
+	if _, err := helperToolPathCtx(ctx, "ffmpeg", config); err != nil {
+		return "", "ffmpeg", err
+	}
+	// ffprobe only supplies duration/fps; probeVideoInfo falls back to safe
+	// defaults, so a missing ffprobe must not block playback.
+	if _, err := helperToolPathCtx(ctx, "ffprobe", config); err != nil {
+		log.Printf("[DEBUG] playback: ffprobe unavailable, using defaults: %v", err)
+	}
+	return ytDlpPath, "", nil
+}
+
+// resolveAndStartPlayback is the work behind a load: resolve the tools under the
+// caller's prepare context, stream the source where ffmpeg can read it directly,
+// and fall back to downloading the file. It always clears the loading state it
+// was handed — by sequence, so a slow older attempt cannot clear a newer one —
+// and reports whether anything actually played.
+//
+// Callers begin the modal state before calling this and before resolving any
+// tool, so the whole wait, tool download included, is modal from the press and B
+// cancels all of it. Two callers exist and they must stay in step: Play
+// (playVideoInfo) and the quality switch, which re-resolves the same stream at a
+// new ceiling.
+func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, config *Config, url string, startSec float64, logLabel string) bool {
+	ytDlpPath, missing, err := resolvePlaybackTools(prepareCtx, config)
+	if err != nil {
+		finishVideoPrepare(prepareSeq)
+		if prepareCtx.Err() != nil {
+			log.Printf("[STREAM] %s: load cancelled while resolving %s", logLabel, missing)
+			return false
+		}
+		log.Printf("[ERROR] %s: %s unavailable: %v", logLabel, missing, err)
+		showToast(toolUnavailableMessage(missing, err), ToastError())
+		return false
+	}
+	if prepareCtx.Err() != nil {
+		finishVideoPrepare(prepareSeq)
+		log.Printf("[STREAM] %s: load cancelled for %s", logLabel, sanitizeLogURL(url))
+		return false
+	}
+
+	log.Printf("[DEBUG] %s: url=%q yt-dlp=%q", logLabel, sanitizeLogURL(url), ytDlpPath)
+	// Stream straight from the CDN when possible: ffmpeg reads the media URL
+	// directly, so the first frame arrives without waiting for a full download.
+	// Anything ffmpeg cannot open falls back to the download path.
+	started, cancelled := tryStreamPlayback(prepareCtx, config, ytDlpPath, url, startSec)
+	if cancelled {
+		finishVideoPrepare(prepareSeq)
+		log.Printf("[STREAM] %s: preparation cancelled for %s", logLabel, sanitizeLogURL(url))
+		return false
+	}
+	if started {
+		finishVideoPrepare(prepareSeq)
+		return true
+	}
+	// Every streaming strategy failed: this is the slow path, and it is worth
+	// saying so in the log next to the reasons logged above.
+	log.Printf("[STREAM] %s: no direct stream for %s; downloading the file instead", logLabel, sanitizeLogURL(url))
+	// The card stays up for the download and is cleared by playWithTempFile once
+	// the player overlay can report progress. The download honours prepareCtx, so
+	// B does not leave a download running invisibly behind a screen the user
+	// already left.
+	playWithTempFile(prepareCtx, config, ytDlpPath, url, startSec, prepareSeq)
+	return prepareCtx.Err() == nil
 }
 
 // toolPathRunnable reports whether a resolved tool path is a real executable.

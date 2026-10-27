@@ -19,7 +19,7 @@ func TestPatchModalRendersLongBody(t *testing.T) {
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
 	if font == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	if medium == nil {
 		medium = font
@@ -46,7 +46,7 @@ func TestPatchModalRendersLongBody(t *testing.T) {
 
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -55,7 +55,7 @@ func TestPatchModalRendersLongBody(t *testing.T) {
 	renderer.Clear()
 	renderPatchModal(renderer, config, font, medium)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	// Ask the layout the renderer used: every wrapped line has to be on the

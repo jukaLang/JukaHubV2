@@ -730,7 +730,10 @@ func writeCurationProfile(profile curationProfile, dir string) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(dir, profile.ID+".json")
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	// A profile the user built in the hub is theirs to keep: write it through
+	// the same temp+fsync+rename path as the config, keeping the previous
+	// version as a .bak, instead of truncating it in place.
+	if err := AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -751,7 +754,16 @@ func deleteCurationProfile(profile curationProfile) error {
 	if !isPathWithin(path, curationProfilesDir()) {
 		return errors.New("profile path is outside the hub")
 	}
-	return os.Remove(path)
+	if err := os.Remove(path); err != nil {
+		return err
+	}
+	// The atomic write keeps the previous version as .bak. A profile the user
+	// deleted must not come back the first time a read has to fall back, so the
+	// backup goes with it.
+	if err := os.Remove(path + ".bak"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // applyCurationProfile writes the theme and text scale through the same paths
@@ -808,12 +820,12 @@ type curationTarget struct {
 
 func loadCurationVotes() curationVotesFile {
 	store := curationVotesFile{SchemaVersion: curationVoteVer}
-	data, err := os.ReadFile(curationVotesPath())
-	if err != nil {
-		return store
-	}
-	if err := json.Unmarshal(data, &store); err != nil {
-		log.Printf("[curation] votes.json: %v", err)
+	// A damaged votes file comes back from its .bak rather than reading as "no
+	// votes yet", which looked to the user like the app had forgotten them.
+	if _, err := readJSONWithBackup(curationVotesPath(), &store); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[curation] votes.json: %v", err)
+		}
 		return curationVotesFile{SchemaVersion: curationVoteVer}
 	}
 	if store.SchemaVersion <= 0 {
@@ -832,7 +844,9 @@ func saveCurationVotes(store curationVotesFile) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(curationVotesPath(), append(data, '\n'), 0o644)
+	// Votes are user input and cannot be regenerated: same crash-safe write as
+	// the config, so a power cut cannot truncate the file mid-save.
+	return AtomicWrite(curationVotesPath(), append(data, '\n'), 0o644)
 }
 
 func curationVoteIndex(store curationVotesFile) map[string]bool {

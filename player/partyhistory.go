@@ -15,7 +15,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -110,12 +109,10 @@ func partyHistoryLoadLocked() {
 	partyHistoryStore.loaded = true
 	partyHistoryStore.data = newPartyHistoryData()
 
-	raw, err := os.ReadFile(partyHistoryPath())
-	if err != nil {
-		return
-	}
 	var stored partyHistoryData
-	if json.Unmarshal(raw, &stored) != nil {
+	// The archive is the only record of cumulative watch time; a damaged file
+	// comes back from the .bak rather than resetting every member to zero.
+	if _, err := readJSONWithBackup(partyHistoryPath(), &stored); err != nil {
 		return
 	}
 	if stored.Version == 0 {
@@ -129,18 +126,14 @@ func partyHistoryLoadLocked() {
 
 func partyHistorySaveLocked() error {
 	path := partyHistoryPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(partyHistoryStore.data, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
+	// The same crash-safe write as the rest of the user's stores: the archive
+	// is rewritten on a timer, and a card pulled mid-write must not take the
+	// whole season's watch time with it.
+	if err := AtomicWrite(path, data, 0o644); err != nil {
 		return err
 	}
 	partyHistoryStore.lastSave = time.Now()

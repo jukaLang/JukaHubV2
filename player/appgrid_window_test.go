@@ -112,18 +112,27 @@ func regionVariation(f *probeFrame, rect sdl.Rect) int {
 
 func TestAppGridPaintsOnlyTheVisibleRowWindow(t *testing.T) {
 	// A launcher long enough that totalRows exceeds the visible window by
-	// several rows, focused deep on the last row.
-	entries := make([]FileEntry, 0, 300)
-	for i := 0; i < 300; i++ {
-		entries = append(entries, FileEntry{Name: "VirtualApp" + itoaGrid(i), Path: "/apps/app.exe"})
-	}
-	f, layout := appGridProbeFrame(t, entries, 299)
+	// several rows, focused deep on the last row. The count is derived from
+	// the layout rather than fixed at 300: a fixed number can fit the probe
+	// screen after a tile-size change, and then the test would skip itself
+	// instead of checking that off-window rows are not painted.
 	elem := virtualGridElement()
 	elemH := getElementHeight(elem, 500)
-	rows := appGridRows(elem, elemH, layout)
-	first := appGridFirstRow(299, rows, len(entries), layout.cols)
+	measure := newAppGridLayout(elem, appGridElementWidth(elem))
+	rows := appGridRows(elem, elemH, measure)
+	if measure.cols < 1 || rows < 1 {
+		t.Fatalf("probe layout is degenerate: %d columns, %d rows", measure.cols, rows)
+	}
+	count := (rows + 3) * measure.cols
+	entries := make([]FileEntry, 0, count)
+	for i := 0; i < count; i++ {
+		entries = append(entries, FileEntry{Name: "VirtualApp" + itoaGrid(i), Path: "/apps/app.exe"})
+	}
+	focus := count - 1
+	f, layout := appGridProbeFrame(t, entries, focus)
+	first := appGridFirstRow(focus, rows, len(entries), layout.cols)
 	if first == 0 {
-		t.Skip("layout fits all rows on the probe screen; nothing to virtualize")
+		t.Fatalf("a %d-entry launcher (%d rows) did not scroll the %d-row window", count, (count+layout.cols-1)/layout.cols, rows)
 	}
 
 	// The row above the window must read flat — panel fill only: an
@@ -141,17 +150,25 @@ func TestAppGridPaintsOnlyTheVisibleRowWindow(t *testing.T) {
 }
 
 func TestAppGridClipsThePartialRowAtThePanelEdge(t *testing.T) {
-	entries := make([]FileEntry, 0, 40)
-	for i := 0; i < 40; i++ {
+	// Two rows past the window guarantees a row straddles the bottom edge,
+	// however tall the tiles are. A fixed 40 entries can fit the panel and
+	// then the clip this test exists for would never be exercised.
+	elem := virtualGridElement()
+	elemH := getElementHeight(elem, 500)
+	measure := newAppGridLayout(elem, appGridElementWidth(elem))
+	rows := appGridRows(elem, elemH, measure)
+	if measure.cols < 1 || rows < 1 {
+		t.Fatalf("probe layout is degenerate: %d columns, %d rows", measure.cols, rows)
+	}
+	count := (rows + 2) * measure.cols
+	entries := make([]FileEntry, 0, count)
+	for i := 0; i < count; i++ {
 		entries = append(entries, FileEntry{Name: "EdgeApp" + itoaGrid(i), Path: "/apps/app.exe"})
 	}
 	f, layout := appGridProbeFrame(t, entries, 0)
-	elem := virtualGridElement()
-	elemH := getElementHeight(elem, 500)
-	rows := appGridRows(elem, elemH, layout)
 	totalRows := (len(entries) + layout.cols - 1) / layout.cols
 	if totalRows <= rows {
-		t.Skip("grid fits the panel exactly; no partial row to exercise")
+		t.Fatalf("a %d-entry grid is only %d rows for a %d-row panel", len(entries), totalRows, rows)
 	}
 	// The row straddling the bottom edge, opened from first=0.
 	straddle := appGridCellRect(layout, rows*layout.cols, 0)
@@ -164,7 +181,11 @@ func TestAppGridClipsThePartialRowAtThePanelEdge(t *testing.T) {
 		}
 	}
 	if visible <= 0 || visible >= straddle.H {
-		t.Skipf("no partial row in this geometry (%d of %d px visible); the checked layout does not straddle", visible, straddle.H)
+		// The fixture now guarantees a row exists past the panel, so the only
+		// reason there is no *partially* visible one is that the cut lands
+		// exactly on a row boundary. That means the layout changed and this
+		// test needs re-pointing, not that it should quietly not run.
+		t.Fatalf("the panel cut leaves no partial row (%d of %d px visible); the clip is unverified", visible, straddle.H)
 	}
 	// Sample the tile's visible band only, up to the cut — pixels past the
 	// panel bottom are page background and would fake the spread.

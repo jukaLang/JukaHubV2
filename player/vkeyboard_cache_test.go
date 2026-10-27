@@ -16,7 +16,7 @@ func newKeyboardTestRenderer(t *testing.T) *sdl.Renderer {
 	_ = newProbeFrame(t) // ensures SDL video + TTF and the hidden test window
 	r, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	// Text and keyboard textures belong to this renderer: drop them while the
 	// renderer is still alive so later tests do not draw with stale pointers.
@@ -97,7 +97,7 @@ func TestKeyboardCachedLayerKeepsPanelChrome(t *testing.T) {
 		renderKeyboard(renderer, cfg)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 			unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 	}
 	// Ink differs from the panel surface, whether the theme is light or dark.
@@ -125,10 +125,16 @@ func TestKeyboardCachedLayerKeepsPanelChrome(t *testing.T) {
 	}
 
 	// During the slide-in the whole cached layer moves, not just the keys.
+	// Zero is the "no animation" sentinel in vkAnimOffset, and a test that
+	// starts within the first millisecond of SDL's clock reads exactly 0 —
+	// which used to make this check skip instead of testing the slide.
 	vkAnimStart = sdl.GetTicks64()
+	if vkAnimStart == 0 {
+		vkAnimStart = 1
+	}
 	off := vkAnimOffset()
 	if off <= 0 {
-		t.Skip("animation frame already finished")
+		t.Fatalf("vkAnimOffset is %d right after starting the open animation; the slide has no frame to draw", off)
 	}
 	draw()
 	if got := frame.at(vkPanelRect.X+8, vkPanelRect.Y+8+off); !closeColor(got, ColorSurfacePanel, 16) {
@@ -161,7 +167,7 @@ func TestKeyboardCachedLayerMatchesLiveRender(t *testing.T) {
 		renderKeyboard(renderer, cfg)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 			unsafe.Pointer(&dst[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 	}
 
@@ -229,7 +235,7 @@ func TestKeyboardFocusDrawsOverCachedLayer(t *testing.T) {
 		renderKeyboard(renderer, cfg)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 			unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 	}
 

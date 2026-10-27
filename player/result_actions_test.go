@@ -212,7 +212,7 @@ func TestResultActionPillsLayout(t *testing.T) {
 	ClearTextCache()
 	font, _ := getCachedFont(&Config{}, "small")
 	if font == nil {
-		t.Skip("no font available")
+		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 
 	for _, cardW := range []int32{1232, 600, 430} {
@@ -249,7 +249,7 @@ func TestSearchResultsListDrawsActionPills(t *testing.T) {
 	withScreen(t, probeW, probeH)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	ClearTextCache()
 	prevAccent := accentColor
@@ -284,7 +284,7 @@ func TestSearchResultsListDrawsActionPills(t *testing.T) {
 	// measured: the hit rects alone would pass even if nothing was drawn.
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 		unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	audioRect := resultActionHits[0].rect
 	if px := f.at(audioRect.X+6, audioRect.Y+audioRect.H/2); !nearColor(px, ColorAccent, 12) {

@@ -168,24 +168,33 @@ func HTTPStatusCode(err error) int {
 func thumbnailDataGet(url string) []byte {
 	thumbnailCacheMutex.Lock()
 	defer thumbnailCacheMutex.Unlock()
-	return thumbnailDataCache[url]
+	data, _ := thumbnailDataCache.get(url)
+	return data
 }
 
-// thumbnailDataSet stores bytes in the memory cache, evicting the oldest
-// entries (first-inserted) once the cap is exceeded. The map is used as an
-// insertion-ordered cache: re-inserting an existing key refreshes it.
+// thumbnailDataSet stores bytes in the memory cache. The store evicts the
+// oldest entries until both the entry cap and the byte budget hold, so a batch
+// of large payloads cannot sit under a count that only ever counted them.
 func thumbnailDataSet(url string, data []byte) {
 	thumbnailCacheMutex.Lock()
 	defer thumbnailCacheMutex.Unlock()
-	if _, ok := thumbnailDataCache[url]; !ok && len(thumbnailDataCache) >= thumbnailMemMaxEntries {
-		// Evict the oldest entry (Go map iteration order is random, so we
-		// track insertion order via a parallel slice).
-		for k := range thumbnailDataCache {
-			delete(thumbnailDataCache, k)
-			break
-		}
-	}
-	thumbnailDataCache[url] = data
+	thumbnailDataCache.put(url, data)
+}
+
+// thumbnailDataStats reports the payloads and bytes held.
+func thumbnailDataStats() (entries int, bytes int64) {
+	thumbnailCacheMutex.Lock()
+	defer thumbnailCacheMutex.Unlock()
+	return thumbnailDataCache.stats()
+}
+
+// clearThumbnailDataCache drops every downloaded payload (memory pressure and
+// shutdown). The renderer re-fetches what it needs; the disk cache still holds
+// the pixels it already decoded once.
+func clearThumbnailDataCache() {
+	thumbnailCacheMutex.Lock()
+	defer thumbnailCacheMutex.Unlock()
+	thumbnailDataCache.clear()
 }
 
 // PrefetchThumbnail enqueues a URL for background download so the disk cache
@@ -228,17 +237,21 @@ func thumbnailWorkerCount() int {
 // Bounded thumbnail texture cache
 // ──────────────────────────────────────────────────────────────────────
 
-// thumbnailTextureBudgetBytes caps the SDL textures decoded from thumbnails.
-// The old cache was an unbounded map: a long YouTube session kept every image
-// ever scrolled past, and on a 1 GB device that is what pushed the renderer
-// into evicting and re-uploading textures mid-transition. 64 MB holds roughly
-// 250 320×180 thumbnails, far more than a screenful, while leaving RAM for
-// video; desktops get a larger budget.
+// The thumbnail texture ceilings. The old cache was an unbounded map: a long
+// YouTube session kept every image ever scrolled past, and on a 1 GB device that
+// is what pushed the renderer into evicting and re-uploading textures
+// mid-transition. 64 MB holds roughly 250 320×180 thumbnails, far more than a
+// screenful, while leaving RAM for video; desktops get a larger budget.
+const (
+	thumbnailTextureHandheldBudget = int64(64 << 20)
+	thumbnailTextureDesktopBudget  = int64(192 << 20)
+)
+
 func thumbnailTextureBudgetBytes() int64 {
 	if IsTrimuiDevice() || P().IsHandheld() {
-		return 64 << 20
+		return thumbnailTextureHandheldBudget
 	}
-	return 192 << 20
+	return thumbnailTextureDesktopBudget
 }
 
 // thumbnailTextureEntry is one cached texture with its approximate footprint.
@@ -341,6 +354,33 @@ func (c *thumbnailTextureCache) Put(key string, texture *sdl.Texture, w, h int32
 	}
 }
 
+// setBudget moves the byte ceiling and evicts down to it, keeping the newest
+// texture: destroying the one a caller is still drawing would hand it back a
+// dangling pointer. The device budget is read once at construction, so the
+// session-memory harness — which measures the handheld ceiling on a desktop —
+// needs this to reach the live cache.
+func (c *thumbnailTextureCache) setBudget(maxBytes int64) {
+	if maxBytes <= 0 {
+		maxBytes = thumbnailTextureHandheldBudget
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.maxBytes = maxBytes
+	for c.bytes > c.maxBytes && c.lru.Len() > 1 {
+		back := c.lru.Back()
+		if back == nil {
+			break
+		}
+		key := back.Value.(string)
+		if evicted, ok := c.entries[key]; ok {
+			c.bytes -= evicted.bytes
+			c.destroy(evicted.texture)
+			delete(c.entries, key)
+		}
+		c.lru.Remove(back)
+	}
+}
+
 // Clear destroys every cached texture. Runs on the render thread / shutdown.
 func (c *thumbnailTextureCache) Clear() {
 	c.mu.Lock()
@@ -369,6 +409,14 @@ func (c *thumbnailTextureCache) Len() int {
 }
 
 // Bytes returns the approximated texture memory held by the cache.
+// budget reports the byte ceiling in force, for the diagnostics line and the
+// session probe that pins it.
+func (c *thumbnailTextureCache) budget() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.maxBytes
+}
+
 func (c *thumbnailTextureCache) Bytes() int64 {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -381,7 +429,7 @@ func thumbnailPrefetchWorker() {
 			continue
 		}
 		thumbnailCacheMutex.Lock()
-		_, memHit := thumbnailDataCache[url]
+		memHit := thumbnailDataCache.has(url)
 		thumbnailCacheMutex.Unlock()
 		if memHit {
 			continue

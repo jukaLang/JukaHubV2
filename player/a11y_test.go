@@ -488,7 +488,7 @@ func TestFontScalingReachesRealFonts(t *testing.T) {
 	a11y.fontScale = 1.0
 	base, baseSize := getCachedFont(config, "small")
 	if base == nil {
-		t.Skip("no font available in this checkout")
+		t.Fatalf("no font available in this checkout: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	a11y.fontScale = 1.3
 	scaled, scaledSize := getCachedFont(config, "small")
@@ -620,14 +620,14 @@ func TestRenderAccessibilityPanelFitsScreen(t *testing.T) {
 
 			renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 			if err != nil {
-				t.Skipf("software renderer unavailable: %v", err)
+				t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 			}
 			renderer.SetDrawColor(frame.bg.R, frame.bg.G, frame.bg.B, 255)
 			renderer.Clear()
 			renderAccessibilityPanel(renderer, &Config{})
 			if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
 				destroyTestRenderer(renderer)
-				t.Skipf("renderer.ReadPixels unavailable: %v", err)
+				t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 			}
 
 			r := a11yPanelRect

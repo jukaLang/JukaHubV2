@@ -224,18 +224,18 @@ func normaliseGameOptions(o gameOptions) gameOptions {
 
 // loadGameOptionsFile reads the overrides. A missing file is empty; a broken
 // one is logged and ignored so a bad edit cannot stop the library from opening.
+// The atomic save leaves a .bak, so one damaged file costs the last change
+// rather than every per-game setting on the card.
 func loadGameOptionsFile(path string) map[string]gameOptions {
 	out := map[string]gameOptions{}
 	if strings.TrimSpace(path) == "" {
 		return out
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return out
-	}
 	var file gameOptionsFile
-	if err := json.Unmarshal(raw, &file); err != nil {
-		log.Printf("[library] ignoring %s: %v", path, err)
+	if _, err := readJSONWithBackup(path, &file); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[library] ignoring %s: %v", path, err)
+		}
 		return out
 	}
 	for path, opts := range file.Games {
@@ -249,14 +249,13 @@ func loadGameOptionsFile(path string) map[string]gameOptions {
 	return out
 }
 
-// saveGameOptionsFile writes through a temporary file so a power loss cannot
-// leave half a JSON document behind.
+// saveGameOptionsFile writes through AtomicWrite: temp file, fsync, rename and
+// a .bak of the previous list. A power loss cannot leave half a document
+// behind, and one damaged file costs the last change rather than every per-game
+// setting on the card.
 func saveGameOptionsFile(path string, games map[string]gameOptions) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
 	}
 	file := gameOptionsFile{SchemaVersion: gameOptionsSchemaVersion, Games: games}
 	if file.Games == nil {
@@ -266,11 +265,10 @@ func saveGameOptionsFile(path string, games map[string]gameOptions) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+	if err := AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return nil
 }
 
 // ensureGameOptionsLocked loads the overrides once per process. The caller

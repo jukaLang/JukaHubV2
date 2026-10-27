@@ -280,7 +280,7 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 		}
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 			unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("renderer.ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 
 		// The band the shared header owns: where the component starts the bar,

@@ -128,7 +128,7 @@ func TestHomeHeaderDrawsPS5TileBesideQR(t *testing.T) {
 
 	frame := renderHomeFrame(t, false)
 	if companionHeaderRect.W == 0 {
-		t.Skip("header QR was not drawn at this viewport")
+		t.Fatal("the header QR was not drawn at this viewport; the launcher it pairs with cannot be checked")
 	}
 	if ps5TileRect.W == 0 {
 		t.Fatalf("PS5 launcher was not drawn (QR %+v)", companionHeaderRect)
@@ -162,7 +162,7 @@ func TestPS5TileAppearsInCompactLayout(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -178,7 +178,7 @@ func TestPS5TileAppearsInCompactLayout(t *testing.T) {
 	renderHomeModern(renderer, &Config{Scenes: []SceneConfig{{Name: "Main", Layout: "home"}}})
 
 	if companionHeaderRect.W == 0 {
-		t.Skip("header QR was not drawn at 960x720")
+		t.Fatal("the header QR was not drawn at 960x720; the compact header lost its pairing code")
 	}
 	if ps5TileRect.W == 0 {
 		t.Fatalf("PS5 launcher missing on the compact layout (QR %+v)", companionHeaderRect)
@@ -233,7 +233,7 @@ func TestHomePS5LauncherLinksTheCardBeneathItOnWideHeader(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -256,7 +256,7 @@ func TestHomePS5LauncherLinksTheCardBeneathItOnWideHeader(t *testing.T) {
 		t.Fatalf("render: %v", err)
 	}
 	if ps5TileRect.W == 0 {
-		t.Skip("launcher was not drawn with this header")
+		t.Fatal("the PS5 launcher was not drawn beside the header; the home layout lost the tile")
 	}
 
 	under := layout.CardUnderTile(ps5TileRect)
@@ -322,7 +322,7 @@ func TestHomePS5TileIsTheDpadTargetAboveItsCard(t *testing.T) {
 
 	renderHomeFrame(t, false)
 	if ps5TileRect.W == 0 || homeLayout == nil {
-		t.Skip("launcher was not drawn at this viewport")
+		t.Fatal("the PS5 launcher was not drawn at this viewport")
 	}
 	if !homeLayout.Focus.IsEnabled(HomeFocusPS5) {
 		t.Fatal("the focused launcher is on screen but its focus entry is disabled")

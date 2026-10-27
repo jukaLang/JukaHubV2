@@ -517,6 +517,8 @@ func sceneDisplayName(name string) string {
 		return "Calculator"
 	case "Playtime":
 		return "Playtime"
+	case "PDFReader":
+		return "PDF Reader"
 	default:
 		return name
 	}
@@ -568,10 +570,7 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	statusWiFiRect = sdl.Rect{}
 	weatherStatusRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
-	barH := HomeTopBarH
-	if screenHeight < 600 {
-		barH = HomeTopBarHSmall
-	}
+	barH := headerBarHeight()
 	// Opaque top bar surface.
 	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, ColorTopBar)
 	// Subtle bottom border.
@@ -583,134 +582,85 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if font == nil {
 		return
 	}
-	white := ColorTextPrimary()
-	secondary := ColorTextSecondary()
-
-	titleFont, _ := getCachedFont(config, "medium")
-	if titleFont == nil {
-		titleFont = font
-	}
 
 	scene := SceneConfig{}
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
 		scene = config.Scenes[currentSceneIndex]
 	}
-
-	// Left cluster: brand (primary) + " - vX.Y.Z" and " - Scene" (muted),
-	// all on one line inside the single 56px header.
-	titleStr := "JukaHub"
-	titleW, _, _ := titleFont.SizeUTF8(titleStr)
-	titleX := StatusBarMargin
-	titleY := barH/2 - TitleCenterOffset
-	renderText(renderer, config, titleFont, titleStr, white, titleX, titleY)
-
-	restStr := " - " + versionDisplayString(config)
+	sceneName := ""
 	if scene.Layout != "home" && scene.Name != "" {
-		restStr += " - " + sceneDisplayName(scene.Name)
+		sceneName = sceneDisplayName(scene.Name)
 	}
-	restW, _, _ := font.SizeUTF8(restStr)
-	restX := titleX + int32(titleW) + 8
-	renderText(renderer, config, font, restStr, secondary, restX, titleY+3)
 
-	headerTextW := int32(titleW) + 8 + int32(restW)
+	// One brand block, one caption type and one button height on every screen:
+	// the bar decides those in header.go, so Home and a scene cannot drift into
+	// two different headers again.
+	headerTextW := drawHeaderBrand(renderer, config, barH,
+		headerCaptionText(versionDisplayString(config), sceneName))
+	nextX := headerTextW + SpaceMD
 
-	// Compact back pill for mouse users, right after the header text on every
-	// non-home scene. Controller/keyboard use B/Escape; the footer says so.
+	// The Back control is the bar's loudest button: larger than the rest, in
+	// the accent colour, which it swaps for a solid fill (and dark type) while
+	// the D-pad holds it. Home is the root and has nowhere to go back to, and
+	// JukaLand's B is a game action, so neither draws one.
 	if scene.Layout != "home" && scene.Name != "" && scene.Name != "JukaLand" {
-		small, _ := getCachedFont(config, "small")
-		if small != nil {
-			label := "<"
-			bw, _, _ := small.SizeUTF8(label)
-			pad := int32(8)
-			bh := int32(22)
-			w := int32(bw) + pad*2
-			x := restX + int32(restW) + SpaceMD
-			y := (barH - bh) / 2
-			sceneTitleBackRect = sdl.Rect{X: x, Y: y, W: w, H: bh}
-			fillRoundedRect(renderer, x, y, w, bh, bh/2, ColorIconSurface)
-			renderText(renderer, config, small, label, secondary, x+pad, y+(bh-int32(small.Height()))/2)
-			// Focus ring when the D-pad/arrows hold the pill.
-			if focusEngine.ElementIndex() == ChromeBackIndex {
-				renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-				renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: w + 6, H: bh + 6})
-			}
-			headerTextW += SpaceMD + w
+		sceneTitleBackRect = drawHeaderBack(renderer, config, nextX, barH,
+			focusEngine.ElementIndex() == ChromeBackIndex)
+		if sceneTitleBackRect.W > 0 {
+			nextX = sceneTitleBackRect.X + sceneTitleBackRect.W + SpaceSM
 		}
 	}
 
-	// Apps pill (the old taskbar Start button): opens the app menu. The
-	// rect is measured here so the focus graph, keyboard activation and
-	// mouse hit-testing all agree on where it is.
-	if font != nil {
-		// The old taskbar Start button opened an app menu, so it read "Apps" —
-		// which collided with the scene title on the Apps screen itself. "Menu"
-		// says what it opens and can never duplicate the title.
-		label := "Menu"
-		aw, _, _ := font.SizeUTF8(label)
-		pad := int32(10)
-		ah := int32(22)
-		w := int32(aw) + pad*2
-		x := restX + int32(restW) + SpaceMD
-		if sceneTitleBackRect.W > 0 {
-			x = sceneTitleBackRect.X + sceneTitleBackRect.W + SpaceSM
-		}
-		y := (barH - ah) / 2
-		tb.startRect = sdl.Rect{X: x, Y: y, W: w, H: ah}
-		fill := ColorIconSurface
-		if tb.startOpen {
-			fill = WithAlpha(accentColor, 70)
-		}
-		fillRoundedRect(renderer, x, y, w, ah, ah/2, fill)
-		strokeRoundedRect(renderer, x, y, w, ah, ah/2, 1, ColorBorder)
-		renderText(renderer, config, font, label, ColorTextSecondary(), x+pad, y+(ah-int32(font.Height()))/2)
-		if focusEngine.ElementIndex() == ChromeStartIndex {
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-			renderer.DrawRect(&sdl.Rect{X: x - 3, Y: y - 3, W: w + 6, H: ah + 6})
-		}
-		headerTextW += SpaceSM + w
+	// App menu (the old taskbar Start button). Its rect is measured here so the
+	// focus graph, keyboard activation and mouse hit-testing all agree on where
+	// it is.
+	{
+		tb.startRect = drawHeaderMenu(renderer, config, nextX, barH, tb.startOpen,
+			focusEngine.ElementIndex() == ChromeStartIndex)
+		headerTextW = tb.startRect.X + tb.startRect.W - StatusBarMargin
 	}
 
 	// Watch Party chip: a live room is a session-level state, so it belongs in
 	// the same place as the safe-mode chip. The count is the number of devices
 	// currently present, which makes "did my friend join?" visible at a glance.
-	if partyActive() && font != nil {
+	if chipFont := headerCaptionFont(config); partyActive() && chipFont != nil {
 		snap, _, _, _ := partyState()
 		label := "PARTY"
 		if n := len(snap.Members); n > 1 {
 			label = fmt.Sprintf("PARTY %d", n)
 		}
-		pw, _, _ := font.SizeUTF8(label)
+		pw, _ := measureText(chipFont, label)
 		pad := int32(10)
-		sh := int32(22)
-		w := int32(pw) + pad*2
+		sh := headerPillHeight()
+		w := pw + pad*2
 		x := tb.startRect.X + tb.startRect.W + SpaceSM
 		if safeModeActive() {
 			// The safe chip is drawn next; keep this one to its left by
 			// shifting right after it instead of overlapping.
-			sw, _, _ := font.SizeUTF8("SAFE")
-			x += int32(sw) + pad*2 + SpaceSM
+			sw, _ := measureText(chipFont, "SAFE")
+			x += sw + pad*2 + SpaceSM
 		}
 		y := (barH - sh) / 2
 		fillRoundedRect(renderer, x, y, w, sh, sh/2, WithAlpha(accentColor, 45))
 		strokeRoundedRect(renderer, x, y, w, sh, sh/2, 1, WithAlpha(accentColor, 210))
-		renderText(renderer, config, font, label, accentColor, x+pad, y+(sh-int32(font.Height()))/2)
+		renderText(renderer, config, chipFont, label, accentColor, x+pad, y+(sh-int32(chipFont.Height()))/2)
 		headerTextW += SpaceSM + w
 	}
 
 	// Safe-mode chip: a persistent reminder that background network, plugin
 	// and updater work is suppressed for this launch.
-	if safeModeActive() && font != nil {
+	if chipFont := headerCaptionFont(config); safeModeActive() && chipFont != nil {
 		label := "SAFE"
-		sw, _, _ := font.SizeUTF8(label)
+		sw, _ := measureText(chipFont, label)
 		pad := int32(10)
-		sh := int32(22)
-		w := int32(sw) + pad*2
+		sh := headerPillHeight()
+		w := sw + pad*2
 		x := tb.startRect.X + tb.startRect.W + SpaceSM
 		y := (barH - sh) / 2
 		warn := sdl.Color{R: 235, G: 170, B: 60, A: 255}
 		fillRoundedRect(renderer, x, y, w, sh, sh/2, WithAlpha(warn, 40))
 		strokeRoundedRect(renderer, x, y, w, sh, sh/2, 1, WithAlpha(warn, 210))
-		renderText(renderer, config, font, label, warn, x+pad, y+(sh-int32(font.Height()))/2)
+		renderText(renderer, config, chipFont, label, warn, x+pad, y+(sh-int32(chipFont.Height()))/2)
 		headerTextW += SpaceSM + w
 	}
 
@@ -726,19 +676,26 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	bellW, bellH := notifBellSize(config)
 	rightX := screenWidth - StatusBarMargin
 	if bellW > 0 {
-		rightX -= bellW + SpaceLG
+		// The offer is placed against the bell the same way Home places it:
+		// one corner gap, not the wider spacing the cluster parts use, so the
+		// pill sits against the bell on both headers instead of 6px apart on
+		// Home and 16px apart in a scene.
+		rightX -= bellW + headerCornerGap
 	}
-	// Download badge (only while a release is advertised) sits between the
-	// clock and the bell and shifts the status cluster left by its width.
-	if advance := drawUpdateBadge(renderer, config, rightX, (barH-bellH)/2, bellH); advance > 0 {
-		rightX -= advance
+	// The release offer (only while an update is advertised) is the same pill
+	// in the same corner as on Home: immediately left of the bell, inside the
+	// system corner rather than floating in the status cluster.
+	if pill := drawHeaderUpdatePill(renderer, config, rightX, barH,
+		focusEngine.ElementIndex() == ChromeUpdateIndex); pill.W > 0 {
+		updatePrompt.badge = pill
+		rightX = pill.X - headerCornerGap
 	}
 	gap := StatusPartGap
 
 	// Measure total width and drop least-important items if they don't fit
 	// next to the brand/version/scene/back cluster. Battery and clock are what
 	// the user needs at a glance, so the network name goes first.
-	maxW := screenWidth - StatusBarMargin - titleX - headerTextW - Space2XL
+	maxW := screenWidth - StatusBarMargin - StatusBarMargin - headerTextW - Space2XL
 	if maxW < 120 {
 		maxW = 120
 	}
@@ -986,8 +943,70 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		if patchHints, ok := patchFooterHints(); ok {
 			hints = patchHints
 		}
+	case "Notes":
+		// The list takes the four action keys the handler really has; while a
+		// note is open, typing owns the pad and only B does anything.
+		if notes.tab == 0 {
+			hints[1] = FooterHint{Button: "A", Label: "Edit"}
+			hints = append(hints,
+				FooterHint{Button: "Y", Label: "New"},
+				FooterHint{Button: "X", Label: "Delete"},
+				FooterHint{Button: "L1/R1", Label: "Folder"},
+			)
+		} else if notes.tab == 3 {
+			// Search is a draft, not an edit: B leaves the field.
+			hints = []FooterHint{{Button: "B", Label: "Done"}}
+		} else {
+			hints = []FooterHint{{Button: "B", Label: "Save & Back"}}
+		}
+	case "Calculator":
+		// The pad walks the key grid; the shoulders are Clear and Backspace.
+		hints[1] = FooterHint{Button: "A", Label: "Select"}
+		hints = append(hints,
+			FooterHint{Button: "L1", Label: "Clear"},
+			FooterHint{Button: "R1", Label: "Delete"},
+		)
+	case "PDFReader":
+		// Page turns are the shoulders (or left/right); the pad scrolls the
+		// page and nothing opens.
+		hints = []FooterHint{
+			{Button: "D-Pad", Label: "Scroll"},
+			{Button: "L1/R1", Label: "Page"},
+			{Button: "B", Label: "Back"},
+		}
+	case "Alarm":
+		// The list and the editor take different keys, so the footer follows the
+		// open tab instead of advertising "Open" while a time is being set.
+		if alarmUI.tab == 0 {
+			hints[1] = FooterHint{Button: "A", Label: "Edit"}
+			hints = append(hints,
+				FooterHint{Button: "X", Label: "Toggle"},
+				FooterHint{Button: "Y", Label: "Add"},
+				FooterHint{Button: "L1", Label: "Delete"},
+			)
+		} else {
+			hints = []FooterHint{{"D-Pad", "Change"}, {"A", "Next"}, {"B", "Back"}}
+		}
+	case "Pomodoro":
+		// A starts and pauses, X skips the phase, Y resets the cycle.
+		hints[1] = FooterHint{Button: "A", Label: "Start / Pause"}
+		hints = append(hints,
+			FooterHint{Button: "X", Label: "Skip"},
+			FooterHint{Button: "Y", Label: "Reset"},
+		)
 	}
 	return hints
+}
+
+// footerBarHeight is the shared footer's height. Every screen that draws its
+// own body reserves this band at the bottom for the same reason it reserves
+// headerBarHeight() at the top: the bar is chrome, not something a body draws
+// over.
+func footerBarHeight() int32 {
+	if screenHeight > 0 && screenHeight < 600 {
+		return 42
+	}
+	return HomeFooterH
 }
 
 // hintLine formats the controller hints drawn inside overlay panels. One style
@@ -1027,10 +1046,7 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	barH := HomeFooterH
-	if screenHeight < 600 {
-		barH = 42
-	}
+	barH := footerBarHeight()
 	y := screenHeight - barH
 
 	// Opaque footer surface on the shared dark surface, accent divider on top.
@@ -1139,10 +1155,10 @@ func planFooterHints(config *Config, hints []FooterHint, avail int32) footerPlan
 	plan.badgeW = make([]int32, len(plan.hints))
 	plan.labelW = make([]int32, len(plan.hints))
 	for i, g := range plan.hints {
-		bw, _, _ := plan.font.SizeUTF8(g.Button)
-		lw, _, _ := plan.font.SizeUTF8(g.Label)
-		plan.badgeW[i] = int32(bw) + plan.badgePad*2
-		plan.labelW[i] = int32(lw)
+		bw, _ := measureText(plan.font, g.Button)
+		lw, _ := measureText(plan.font, g.Label)
+		plan.badgeW[i] = bw + plan.badgePad*2
+		plan.labelW[i] = lw
 	}
 	plan.width = footerHintsWidth(plan.font, plan.hints, plan.groupGap, plan.badgePad, plan.badgeGap)
 	return plan
@@ -1156,9 +1172,11 @@ func footerHintsWidth(font *ttf.Font, hints []FooterHint, groupGap, badgePad, ba
 	}
 	total := int32(0)
 	for _, g := range hints {
-		bw, _, _ := font.SizeUTF8(g.Button)
-		lw, _, _ := font.SizeUTF8(g.Label)
-		total += int32(bw) + badgePad*2 + badgeGap + int32(lw)
+		// Cached widths: this runs several times per frame (once per type size
+		// the planner tries), and the hints are the same strings every time.
+		bw, _ := measureText(font, g.Button)
+		lw, _ := measureText(font, g.Label)
+		total += bw + badgePad*2 + badgeGap + lw
 	}
 	if len(hints) > 1 {
 		total += groupGap * int32(len(hints)-1)

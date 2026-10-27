@@ -409,6 +409,32 @@ func dynamicListRowAt(element Element, start, end int, my int32) int {
 	return -1
 }
 
+// renderFileExplorerPathBar draws the current path above the File Explorer's
+// list. It sits in the band the scene's panel leaves free, so the two share the
+// page instead of the toolbar being drawn over the list.
+func renderFileExplorerPathBar(renderer *sdl.Renderer, config *Config, element Element, elemW int32, font *ttf.Font) {
+	toolbar := sdl.Rect{X: element.X, Y: element.Y - 52, W: elemW, H: 44}
+	fillRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, ColorCard)
+	strokeRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, 1, ColorBorder)
+	pathText := feDisplayPath(config)
+	// With no folder set the path is just ".", which says nothing about where
+	// the list is browsing. Naming the working directory is what a file browser
+	// is expected to show. feDisplayPath caches the resolved path, so the cwd
+	// lookup only runs on the frames that actually print it.
+	if pathText == "" || pathText == "." {
+		if wd, err := os.Getwd(); err == nil {
+			pathText = wd
+		} else {
+			pathText = "No folder selected"
+		}
+	}
+	textY := toolbar.Y + (toolbar.H-int32(font.Height()))/2
+	renderWithClip(renderer, toolbar.X+12, toolbar.Y+4, toolbar.W-24, toolbar.H-8, func(ren *sdl.Renderer) {
+		drawText(ren, font, ellipsize(font, pathText, toolbar.W-30), toolbar.X+12, textY,
+			ColorTextSecondary(), textAlignLeft)
+	})
+}
+
 // renderDynamicList draws a vertical, scrollable list of file entries.
 func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) {
 	// The Apps scene is a program launcher, not a file browser: it draws as a
@@ -417,16 +443,6 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		renderAppGrid(renderer, config, element)
 		return
 	}
-	entries, ok := config.Variables.Custom[element.Variable].([]FileEntry)
-	if !ok || len(entries) == 0 {
-		elemW := getElementWidth(element, 600)
-		elemH := getElementHeight(element, 500)
-		drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
-		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
-			"·", "No items", "This list is empty right now.")
-		return
-	}
-
 	font, _ := getCachedFont(config, element.Font)
 	if font == nil {
 		font, _ = getCachedFont(config, "small")
@@ -442,17 +458,29 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 	// File Explorer gets a compact path toolbar above the list: one dark flat
 	// field holding the current path (measured ellipsis, clipped). Other
 	// dynamic lists (Live TV, Podcasts) have no path concept and draw nothing.
+	//
+	// It is drawn before the empty check so an empty folder still says where it
+	// is: the toolbar used to be skipped with the rows, which left the band it
+	// occupies blank — an empty card floating above the list panel — on every
+	// folder with nothing in it.
 	isFileExplorer := currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
 		config.Scenes[currentSceneIndex].Name == "FileExplorer"
 	if isFileExplorer {
-		toolbar := sdl.Rect{X: element.X, Y: element.Y - 52, W: elemW, H: 44}
-		fillRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, ColorCard)
-		strokeRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, 1, ColorBorder)
-		pathText := feDisplayPath(config)
-		renderWithClip(renderer, toolbar.X+12, toolbar.Y+4, toolbar.W-24, toolbar.H-8, func(ren *sdl.Renderer) {
-			drawText(ren, font, ellipsize(font, pathText, toolbar.W-30), toolbar.X+12, toolbar.Y+(toolbar.H-int32(font.Height()))/2,
-				ColorTextSecondary(), textAlignLeft)
-		})
+		renderFileExplorerPathBar(renderer, config, element, elemW, font)
+	}
+
+	entries, ok := config.Variables.Custom[element.Variable].([]FileEntry)
+	if !ok || len(entries) == 0 {
+		// A folder glyph, not the media play badge: this list is a directory.
+		title, body := "No items", "This list is empty right now."
+		glyph := "@media"
+		if isFileExplorer {
+			glyph = "@files"
+			title, body = "This folder is empty", "Pick another folder with Up, or refresh the list."
+		}
+		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
+			glyph, title, body)
+		return
 	}
 
 	// Live TV adds a category/search bar inside the panel. It is drawn before

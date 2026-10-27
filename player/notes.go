@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -55,15 +54,15 @@ func notesInit() {
 }
 
 func notesLoad() {
-	data, err := os.ReadFile(notes.storePath)
-	if err != nil {
+	var store noteStore
+	// A damaged notes.json now falls back to the .bak the atomic save leaves
+	// behind instead of silently starting empty, which is how a reader used to
+	// conclude their notes had been deleted.
+	if _, err := readJSONWithBackup(notes.storePath, &store); err != nil {
 		notes.store = noteStore{NextID: 1}
 		return
 	}
-	var store noteStore
-	if json.Unmarshal(data, &store) == nil {
-		notes.store = store
-	}
+	notes.store = store
 }
 
 func notesSave() {
@@ -71,7 +70,12 @@ func notesSave() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(notes.storePath, data, 0644)
+	// Notes are the one thing in the app nobody can regenerate, so the write
+	// goes through the same temp+fsync+rename path as the config: a power cut
+	// on a handheld must not leave a half-written notes.json behind.
+	if err := AtomicWrite(notes.storePath, data, 0644); err != nil {
+		Log().Warn("notes could not be saved", "path", notes.storePath, "err", err)
+	}
 }
 
 func notesNewNote() {
@@ -152,26 +156,8 @@ func renderNotes(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Header.
-	barH := int32(44)
-	renderer.SetDrawColor(14, 18, 28, 240)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: barH})
-	renderer.SetDrawColor(40, 50, 65, 120)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
-
-	if medFont != nil {
-		title := "Notes"
-		renderText(renderer, config, medFont, title,
-			sdl.Color{R: 220, G: 230, B: 245, A: 240}, 16, 10)
-	}
-
-	// Note count.
-	count := len(notesFiltered())
-	countStr := fmt.Sprintf("%d notes", count)
-	cw, _, _ := font.SizeUTF8(countStr)
-	renderText(renderer, config, font, countStr,
-		sdl.Color{R: 140, G: 155, B: 180, A: 200},
-		screenWidth-int32(cw)-16, 14)
+	// The app's one bar owns the top of the screen; the body starts under it.
+	barH := headerBarHeight()
 
 	if notes.tab == 0 {
 		notesRenderList(renderer, config, font, medFont, barH)
@@ -179,22 +165,25 @@ func renderNotes(renderer *sdl.Renderer, config *Config) {
 		notesRenderEditor(renderer, config, font, medFont, barH)
 	}
 
-	// Controls.
-	if font != nil {
-		controls := ""
-		switch notes.tab {
-		case 0:
-			controls = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Edit"},
-				FooterHint{"Y", "New"}, FooterHint{"X", "Delete"}, FooterHint{"S", "Search"},
-				FooterHint{"B", "Back"})
-		case 1, 2:
-			controls = hintLine(FooterHint{Label: "Type to Edit"}, FooterHint{"A", "Save & Back"}, FooterHint{"B", "Cancel"})
+	// Note count. It used to sit in the bespoke header; the shared bar's
+	// caption already names the scene, so the count rides the search row it
+	// describes instead of competing with the wordmark.
+	if notes.tab == 0 {
+		count := len(notesFiltered())
+		countStr := fmt.Sprintf("%d notes", count)
+		if count == 1 {
+			countStr = "1 note"
 		}
-		cw2, _, _ := font.SizeUTF8(controls)
-		renderText(renderer, config, font, controls,
-			sdl.Color{R: 80, G: 90, B: 110, A: 120},
-			(screenWidth-int32(cw2))/2, screenHeight-24)
+		cw, _, _ := font.SizeUTF8(countStr)
+		renderText(renderer, config, font, countStr,
+			sdl.Color{R: 140, G: 155, B: 180, A: 200},
+			screenWidth-int32(cw)-16, barH+16)
 	}
+
+	// The shared bars last: the header, its Back pill and the footer badges are
+	// the same chrome every other screen draws.
+	renderStatusBar(renderer, config)
+	renderFooter(renderer, config)
 }
 
 func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.Font, barH int32) {
@@ -209,14 +198,18 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 	searchIcon := "[S]"
 	renderText(renderer, config, font, searchIcon,
 		sdl.Color{R: 100, G: 115, B: 140, A: 180}, searchX+8, searchY+6)
+	// The text starts past the icon's real advance; a fixed +30 ran
+	// "Search notes..." through the "[S]" badge.
+	iconW, _ := measureText(font, searchIcon)
+	textX := searchX + 8 + iconW + 8
 	searchText := notes.search
 	if searchText == "" {
 		searchText = "Search notes..."
 		renderText(renderer, config, font, searchText,
-			sdl.Color{R: 80, G: 90, B: 110, A: 150}, searchX+30, searchY+6)
+			sdl.Color{R: 80, G: 90, B: 110, A: 150}, textX, searchY+6)
 	} else {
 		renderText(renderer, config, font, searchText,
-			sdl.Color{R: 200, G: 210, B: 230, A: 220}, searchX+30, searchY+6)
+			sdl.Color{R: 200, G: 210, B: 230, A: 220}, textX, searchY+6)
 	}
 
 	// Folder tabs.
@@ -240,9 +233,9 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 		folderX += int32(fw) + 8
 	}
 
-	// Note list.
+	// Note list. It stops at the shared footer, which is drawn over this band.
 	listY := barH + 50
-	listH := screenHeight - listY - 50
+	listH := screenHeight - listY - footerBarHeight() - 4
 	listX := int32(16)
 	listW := screenWidth - 32
 
@@ -265,7 +258,15 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 		return
 	}
 
-	lineH := int32(64)
+	// The row stacks three lines. "small" and "medium" are both 24px here
+	// (30px line box), so the preview and the metadata use a 16px face: three
+	// 30px lines would need a 96px row. At 80 the title clears the preview and
+	// the metadata instead of printing through them, as the old 64px row did.
+	lineH := int32(80)
+	subFont := getFontSized(config, "small", 16)
+	if subFont == nil {
+		subFont = font
+	}
 	maxVisible := int((listH - 16) / lineH)
 	start := 0
 	if notes.cursor >= maxVisible {
@@ -291,19 +292,19 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 		// Title.
 		title := truncateRunesSuffix(n.Title, 45, "...")
 		renderText(renderer, config, medFont, title,
-			sdl.Color{R: 220, G: 230, B: 245, A: 240}, listX+16, ry+8)
+			sdl.Color{R: 220, G: 230, B: 245, A: 240}, listX+16, ry+2)
 
 		// Preview.
 		preview := truncateRunesSuffix(strings.ReplaceAll(n.Content, "\n", " "), 60, "...")
-		renderText(renderer, config, font, preview,
-			sdl.Color{R: 120, G: 135, B: 160, A: 180}, listX+16, ry+28)
+		renderText(renderer, config, subFont, preview,
+			sdl.Color{R: 120, G: 135, B: 160, A: 180}, listX+16, ry+36)
 
 		// Metadata.
 		folderStr := n.Folder
 		timeStr := n.UpdatedAt.Format("Jan 2 15:04")
 		meta := fmt.Sprintf("%s  •  %s", folderStr, timeStr)
-		renderText(renderer, config, font, meta,
-			sdl.Color{R: 80, G: 95, B: 120, A: 140}, listX+16, ry+46)
+		renderText(renderer, config, subFont, meta,
+			sdl.Color{R: 80, G: 95, B: 120, A: 140}, listX+16, ry+58)
 	}
 
 	// Scrollbar.
@@ -383,7 +384,9 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 			sdl.Color{R: 80, G: 90, B: 110, A: 150}, contentX+16, contentY+16)
 	} else {
 		lines := strings.Split(content, "\n")
-		lineH := int32(20)
+		// 30px, not 20: the body font's line box is 30px on this canvas, so
+		// 20px spacing printed every line through the one below it.
+		lineH := int32(30)
 		startLine := notes.scrollY / int(lineH)
 		maxLines := int(contentH / lineH)
 
@@ -422,7 +425,7 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 	if notes.tab == 2 {
 		cursorY := contentY + 16
 		cursorLines := strings.Split(notes.editContent[:min(len(notes.editContent), len(notes.editContent))], "\n")
-		cursorY += int32(len(cursorLines)-1) * 20
+		cursorY += int32(len(cursorLines)-1) * 30
 		if time.Now().UnixMilli()%1000 < 500 {
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 200)
 			renderer.FillRect(&sdl.Rect{X: contentX + 16, Y: cursorY, W: 2, H: 18})
@@ -504,6 +507,10 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 			notes.tab = 2
 			PlayActivateSound()
 		case sdl.K_ESCAPE:
+			// The footer promises "Save & Back" in both edit tabs; leaving the
+			// title unsaved because Escape was pressed here contradicted it. B is
+			// deliberately not a shortcut in this tab: it is a letter here.
+			notesSaveCurrentEdit()
 			notes.tab = 0
 			PlayBackSound()
 		case sdl.K_BACKSPACE:
@@ -511,7 +518,7 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 		}
 	case 2: // Edit content
 		switch e.Keysym.Sym {
-		case sdl.K_ESCAPE, sdl.K_b:
+		case sdl.K_ESCAPE:
 			notesSaveCurrentEdit()
 			notes.tab = 0
 			PlayBackSound()
@@ -563,7 +570,17 @@ func handleNotesTextInput(e *sdl.TextInputEvent) {
 
 func ctrlNotes(e *sdl.ControllerButtonEvent) bool {
 	if notes.tab != 0 {
-		// In edit mode — let keyboard handler manage text input
+		// In edit mode the pad only owns Back: B saves what was typed and
+		// returns to the list instead of falling through to the scene's own
+		// back and leaving Notes with the edit unsaved.
+		if e.Button == sdl.CONTROLLER_BUTTON_B || e.Button == sdl.CONTROLLER_BUTTON_BACK {
+			if notes.tab == 1 || notes.tab == 2 {
+				notesSaveCurrentEdit()
+			}
+			notes.tab = 0
+			PlayBackSound()
+			return true
+		}
 		return false
 	}
 	switch e.Button {
@@ -599,10 +616,10 @@ func ctrlNotes(e *sdl.ControllerButtonEvent) bool {
 		// silently staying on the list (the old handler looked like a no-op).
 		goBackScene(appConfig)
 	case sdl.CONTROLLER_BUTTON_Y:
-		notes.tab = 3
-		notes.editTitle = ""
-		notes.editContent = ""
-		notes.editID = -1
+		// Y is the footer's "New": the same fresh note N makes from a keyboard.
+		// It used to drop into the search tab with an empty buffer, which looked
+		// like a new note that could never be saved.
+		notesNewNote()
 		PlayActivateSound()
 	case sdl.CONTROLLER_BUTTON_X:
 		filtered := notesFiltered()

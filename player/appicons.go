@@ -28,12 +28,41 @@ import (
 // most recently drawn ones instead of growing with the list.
 const appIconMaxTextures = 64
 
-type appIconTextureCache struct {
-	order []string
-	tex   map[string]*sdl.Texture
+// appIconTexture is one cached icon with the footprint it occupies. The size is
+// recorded at creation because SDL cannot report it without a round trip.
+type cachedAppIcon struct {
+	texture *sdl.Texture
+	bytes   int64
 }
 
-var appIconTextures = appIconTextureCache{tex: map[string]*sdl.Texture{}}
+// appIconTextureCache is insertion-ordered and bounded twice: 64 icons, and
+// appIconTextureBudgetBytes. The count alone was a byte ceiling only for icons
+// of one size; a launcher mixing 64px applet icons with 256px extracted ones
+// could hold sixteen megabytes under it.
+type appIconTextureCache struct {
+	textures *byteOrderedStore[string, cachedAppIcon]
+}
+
+func newAppIconTextureCache() *appIconTextureCache {
+	return &appIconTextureCache{textures: newByteOrderedStore[string, cachedAppIcon](
+		appIconMaxTextures,
+		appIconTextureBudgetBytes(),
+		func(t cachedAppIcon) int64 { return t.bytes },
+		func(t cachedAppIcon) {
+			if t.texture != nil {
+				t.texture.Destroy()
+			}
+		},
+	)}
+}
+
+var appIconTextures = newAppIconTextureCache()
+
+// appIconTextureStats reports the icons and bytes held, for the texture
+// accounting log and the tests.
+func appIconTextureStats() (entries int, bytes int64) {
+	return appIconTextures.textures.stats()
+}
 
 // appEntryIconPath returns the image file to draw for a launcher row, or "".
 // A scanned sidecar/folder icon wins; otherwise the extracted-icon cache is
@@ -90,43 +119,36 @@ func appIconTexture(renderer *sdl.Renderer, path string) *sdl.Texture {
 	if renderer == nil || path == "" {
 		return nil
 	}
-	if tex, ok := appIconTextures.tex[path]; ok {
-		return tex
+	if entry, ok := appIconTextures.textures.get(path); ok {
+		return entry.texture
 	}
 	surface, err := img.Load(path)
 	if err != nil || surface == nil {
-		appIconTextures.tex[path] = nil
+		// Remember the miss through the same bound as a hit. Storing it
+		// straight into the map left failed icons outside the eviction order,
+		// so a launcher full of broken icons grew the map without limit while
+		// the count cap only ever accounted for the ones that loaded.
+		appIconTextures.remember(path, cachedAppIcon{})
 		return nil
 	}
 	tex, _ := renderer.CreateTextureFromSurface(surface)
+	size := int64(surface.W) * int64(surface.H) * 4
 	surface.Free()
-	appIconTextures.remember(path, tex)
+	appIconTextures.remember(path, cachedAppIcon{texture: tex, bytes: size})
 	return tex
 }
 
-func (c *appIconTextureCache) remember(path string, tex *sdl.Texture) {
-	c.tex[path] = tex
-	c.order = append(c.order, path)
-	for len(c.order) > appIconMaxTextures {
-		oldest := c.order[0]
-		c.order = c.order[1:]
-		if old, ok := c.tex[oldest]; ok && old != nil {
-			old.Destroy()
-		}
-		delete(c.tex, oldest)
-	}
+// remember stores an icon (a zero value for a failed decode) and lets the store
+// evict the oldest entries past the count or byte ceiling. A key already
+// tracked is refreshed in place, so the order holds one entry per cached path.
+func (c *appIconTextureCache) remember(path string, icon cachedAppIcon) {
+	c.textures.put(path, icon)
 }
 
 // clearAppIconCache releases every cached icon texture. Textures belong to the
 // renderer that created them, so this runs whenever that renderer goes away.
 func clearAppIconCache() {
-	for _, tex := range appIconTextures.tex {
-		if tex != nil {
-			tex.Destroy()
-		}
-	}
-	appIconTextures.tex = map[string]*sdl.Texture{}
-	appIconTextures.order = nil
+	appIconTextures.textures.clear()
 }
 
 // appProgramPaths lists the external programs in a launcher list. Only those

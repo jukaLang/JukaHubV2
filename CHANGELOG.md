@@ -13,6 +13,117 @@ For anything older, the git log and the
 
 ### Added
 
+- **A long chat and browser session is now measured, not assumed.** The texture
+  budgets were sized from reasoning about a 1 GB device; the new long-session
+  probe spends a session in the two panels that fill them — 300 messages with
+  14 pictures and 24 senders, then 24 illustrated articles read page by page —
+  through the real decode-and-cache paths, with every ceiling pinned to the
+  handheld branch, and prints the device's own `[tex]` line beside each cap. On
+  a desktop at the card's ceilings the session holds 24,576 KB of chat pictures
+  (full: it is a sliding window), 256 KB of avatars, 140 KB of cached pages,
+  57,600 KB of page images of 64 MB, 8,240 KB of text of 24 MB, no home labels
+  (chat and reader draw through `renderText`), 11,684 KB of shapes of 12 MB, and
+  88 MB in total. The figures are in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
+  with the read of them: page images are the largest item and the shape cache
+  the tightest fit. The probe fails if the session caches nothing, if the
+  picture set never crosses its budget, or if any cache ends above its ceiling;
+  it also caught a fixture defect worth knowing about — a browser element with
+  no source renders the plain-text reader and silently draws no images at all.
+  ([player/session_memory_test.go](player/session_memory_test.go),
+  [player/thumbstore.go](player/thumbstore.go),
+  [player/cachebudget.go](player/cachebudget.go),
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)).
+
+- **The scene-navigation memory harness now measures the shipping ceilings for
+  every cache it prints, not just box art.** Rendered text, home labels and
+  shapes each pick a handheld or a desktop budget, and the harness left three of
+  them to the host: a desktop run reported 64/48/48 MB for those columns while
+  the card ships 24/8/12 MB, so the table looked like the device's numbers with
+  most of it describing the machine it ran on. One seam (`sceneBudgetForce`)
+  now pins all three, the live singletons are retuned to match (`TextCache.
+  SetBudget`, `homeTextCacheApplyBudget`, and a shape budget read at eviction
+  time rather than captured at construction), and the harness fails if any pin
+  did not take. The shape cache's branch also stops being "Windows or not",
+  which gave a Linux desktop the handheld ceiling and CI a different number from
+  the machine the work was done on. `TestSceneBudgetBranches` pins both sides
+  and the derivation, the way the box-art budgets already were.
+  ([player/cachebudget.go](player/cachebudget.go),
+  [player/textcache.go](player/textcache.go),
+  [player/shapeCache.go](player/shapeCache.go),
+  [player/homelayout.go](player/homelayout.go); tests in
+  [player/memory_growth_test.go](player/memory_growth_test.go),
+  [player/cachebudget_test.go](player/cachebudget_test.go)).
+
+- **An emulator update can be rolled back from the Emulators page.** Every
+  update already kept the binary it replaced as `<core>_libretro.so.jukahub-
+  <stamp>.bak`, but there was no way to put it back without pulling the card and
+  a file manager, which is exactly what the backup was for when a nightly build
+  runs worse. **R1** on a tile whose core has a kept build restores the newest
+  one; **R** does the same from a keyboard. The press is itself reversible: the
+  build it replaces is kept as its own backup, so a second R1 goes forward
+  again, and the restored file is deleted only after the new core has landed, so
+  a failed rollback leaves the card untouched. The footer names the date of the
+  kept build (`GBA · Available · backup 2026-10-20`) and the R1 hint appears
+  only when one exists, so the key never offers a restore that would do nothing.
+  Only this build's own `<core>_libretro.<ext>.jukahub-<stamp>.bak` names parse
+  — `.part` downloads, `.jukahub.tmp` staging files and other tools' `.bak`
+  files are ignored — and the target is re-checked against RetroArch's cores
+  folders at the point that writes, because the path comes from a scan. The
+  action is a local file copy, so unlike an install it is offered on the Windows
+  build too.
+  ([player/emulatorinstall.go](player/emulatorinstall.go),
+  [player/emulators.go](player/emulators.go),
+  [player/emutiles.go](player/emutiles.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md),
+  [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md); tests in
+  [player/emulatorinstall_test.go](player/emulatorinstall_test.go)).
+
+- **Every texture and byte cache is now bounded in bytes, not just entries.**
+  An entry cap is a byte cap only when every entry is the same size, and the
+  launcher's icon cache (64 icons of up to 256×256), the chat image cache (16
+  decoded photos, 48 MB each as RGBA), the avatar cache, the downloaded
+  thumbnail payloads (512 entries of whatever the URL served) and the feed
+  bodies kept for conditional requests (64 × 1 MiB) were all bounded by count
+  alone. Each now carries a byte budget beside its count, checked in the same
+  insertion-order eviction, and a replaced or evicted texture is destroyed
+  exactly once. The three texture caches are reported by
+  `JUKAHUB_TEXSTATS`, and a critical-memory sweep clears all five together with
+  the caches it already cleared, so nothing grows straight back to its ceiling
+  after RAM is freed. The budgets are 8/32 MB for launcher icons, 24/64 MB for
+  chat images, 4 MB for avatars, 16/48 MB for thumbnail payloads and 8/16 MB
+  for feed bodies (handheld/desktop).
+  ([player/cachebudget.go](player/cachebudget.go),
+  [player/appicons.go](player/appicons.go), [player/chat.go](player/chat.go),
+  [player/thumbstore.go](player/thumbstore.go),
+  [player/httpcache.go](player/httpcache.go),
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); tests in
+  [player/cachebudget_test.go](player/cachebudget_test.go)).
+
+- **The Emulators page installs emulators, not just lists them.** A `Roms/`
+  folder with no emulator was a dead end: the tile read "no emulator found" and
+  the only fix was copying a folder onto the card by hand. The buildbot channel
+  the update checker already reads publishes one aarch64 archive per libretro
+  core for this device, so a missing emulator is now an offer: **A** on a
+  missing or unusable tile installs the core that runs its system, **X**
+  does the same for any tile while also checking an installed core for a newer
+  build, and **L1** brings every installed core forward in one pass. A download
+  is checked against the CRC32 the index states before anything is written, the
+  build lands in the core pool with the URL it came from, and the binary it
+  replaces stays beside it as `<core>_libretro.so.jukahub-<date>.bak` — an
+  update is undone by renaming one file. Nothing is written outside RetroArch's
+  cores folder: `Emus/<system>/` launcher scripts belong to the firmware, and
+  the standalone emulators upstream publishes are desktop builds that cannot
+  start there. Once a core is on the card, the `Roms/` folder it covers is no
+  longer reported as unplayable — the core's own tile is the row from then on —
+  and the page's A/X/L1 hints follow what the highlighted tile can really do, on
+  both the Smart Pro and the Brick. The Windows build does not offer the two
+  core actions: a Linux shared object is not a file a desktop RetroArch loads.
+  ([player/emulatorinstall.go](player/emulatorinstall.go),
+  [player/emulators.go](player/emulators.go),
+  [player/emutiles.go](player/emutiles.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md); tests in
+  [player/emulatorinstall_test.go](player/emulatorinstall_test.go)).
+
 - **The browser can fill in and send a form.** The reader dropped every
   `<input>` as a void tag, so a search page arrived with no box to type into and
   the one thing the browser is most often opened for was impossible. A form is
@@ -121,8 +232,118 @@ For anything older, the git log and the
   an imported design's own version when it has one.
   ([script.js](script.js); the 17 web-builder tests still pass).
 
+- **Every tool screen draws the app's top bar.** Notes and the PDF reader
+  painted a 44px strip with a title of their own, the alarm clock drew a
+  bespoke "< Back" pill at 24,24, the Pomodoro timer drew no chrome at all and
+  the calculator had no header — five screens, four different ideas of a
+  header. All five
+  now draw `renderStatusBar`/`renderFooter` like every other module scene, with
+  their own read-outs moved under the bar (the note count on the search row, a
+  PDF's title and page number on one quiet line, the alarm's clock and
+  calendar) and their bodies laid out between `headerBarHeight()` and
+  `footerBarHeight()`. The calculator's key grid and history column are centred
+  in that band, which also keeps the history column on the Brick's 960px canvas
+  instead of past its right edge, and the alarm's calendar does the same. The
+  footer now describes each screen's real bindings. Two overlap defects the work
+  exposed went with it: the notes list printed its title, preview and metadata
+  through each other (three 30px lines in a 64px row; the preview and metadata
+  now use a 16px face in an 80px row), and the PDF reader scrolled its text at a
+  fixed 18px under a 30px font, with a line count taken from the card height
+  rather than the clipped one.
+  ([player/notes.go](player/notes.go), [player/calculator.go](player/calculator.go),
+  [player/pdfreader.go](player/pdfreader.go), [player/alarm.go](player/alarm.go),
+  [player/pomodoro.go](player/pomodoro.go), [player/extras.go](player/extras.go);
+  tests in [player/header_test.go](player/header_test.go) and
+  [player/calendar_popover_test.go](player/calendar_popover_test.go)).
 ### Fixed
 
+- **A cancelled quality switch puts the Quality row back on the stream that is
+  actually playing.** The switch pins its new ceiling before the re-resolve
+  starts, because the yt-dlp format selector reads it at that moment; B cancels
+  that resolve on purpose so the video already on screen keeps playing, but the
+  row kept the cancelled ceiling — it named 1080p while 360p was on screen. The
+  ceiling a stream is started at is now recorded as playback begins (by
+  `startEmbeddedPlayback`, the one path every load reaches), and a switch that
+  never gets there — cancelled, or failed while resolving — restores it, falling
+  back to the value the press replaced when the stream was started outside the
+  player's own load path. A late finish cannot rewrite the row once a newer play
+  or switch has started, or once playback has moved to another video.
+  ([player/streaming.go](player/streaming.go),
+  [player/videoplayer.go](player/videoplayer.go); tests in
+  [player/videoquality_revert_test.go](player/videoquality_revert_test.go)).
+- **Discovery asks the supplicant which interface it drives when nothing on the
+  card names it.** Some images expose the radio in neither `/sys/class/net` (no
+  `wireless`/`phy80211` marker), nor `/proc/net/wireless`, nor any of the known
+  control directories, and their netdev name is not one the naming convention
+  knows — there discovery gave up and the picker said there was no radio. A
+  fifth source now asks `wpa_cli interface` which netdev it is driving, falling
+  back to `wpa_cli -i <netdev> status` over at most four candidates when the
+  listing is empty or unusable. It is the
+  last source before the name convention, and its answer is cached for a minute
+  — including “nothing found” — because discovery is read while the status bar
+  draws and an uncached probe would fork a process per frame. A probe never runs
+  when an earlier source answered, and the cache is reset when a caller knows the
+  hardware changed. ([player/wifi.go](player/wifi.go), [docs/WIFI.md](docs/WIFI.md);
+  tests in [player/wifi_interface_test.go](player/wifi_interface_test.go)).
+- **Play is modal from the press, and B cancels all of it.** Pressing Play on a
+  cold card spends the first seconds downloading yt-dlp/ffmpeg, and the loading
+  state only began after those tools were resolved — so the install card was up
+  while the results grid stayed live underneath it: the D-pad kept scrolling and
+  the wait could not be dismissed. The prepare state now begins on the press,
+  before any tool resolution, so the grid is frozen for the whole wait; the
+  download honours that state's context, so a cancel stops the transfer and
+  removes the partial file, and the install card is hidden rather than left
+  showing a paused progress bar. The card also draws its way out as a control:
+  a **B** badge and its **Cancel** label in the bottom band, in place of the
+  grey "B / Esc cancels" line. The Quality row goes through the same load path,
+  so re-resolving a stream at a new ceiling is a modal wait too, and cancelling
+  it leaves the video that was already playing untouched. ([player/core.go](player/core.go),
+  [player/streaming.go](player/streaming.go),
+  [player/videoplayer.go](player/videoplayer.go),
+  [player/patch_engine.go](player/patch_engine.go), [player/tools.go](player/tools.go),
+  [player/installbar.go](player/installbar.go),
+  [player/loadingcard.go](player/loadingcard.go); tests in
+  [player/playprepare_cancel_test.go](player/playprepare_cancel_test.go)).
+- **The Wi-Fi picker finds the radio on a device that is online.** It reported `No wireless network interface on this device` while the handheld was connected. Interface discovery listed `/sys/class/net` and kept only entries that `DirEntry.IsDir` called a directory — but every entry there is a symlink into the device tree, so the link itself is never a directory and every real radio was filtered out. The probe now resolves the entry before testing it, accepts both the old `wireless` marker and the cfg80211 `phy80211` one, and falls back to `/proc/net/wireless`, to the supplicant's control sockets, and finally to a Wi-Fi interface name when a vendor driver exposes none of those. The status meter's "interface is up" check reads the same list, so a cfg80211 image no longer shows the no-link icon while connected. ([player/wifi.go](player/wifi.go), [player/statusbar_status.go](player/statusbar_status.go); tests in [player/wifi_interface_test.go](player/wifi_interface_test.go)).
+- **Every JSON store that holds your work now survives a power cut and a damaged file.** Notes, alarms and the IPTV list got this first; an audit of the rest found the same two defects in sixteen more stores (fourteen on both halves, two only when reading). Each was written with a temp file + rename (atomic, but with no fsync and no backup), so a card pulled at the wrong moment could still leave a zero-length file, and each loader returned an empty store on a parse error with at most one log line — a favourites list, a set of per-game overrides, a saved browser session or a PS4 pairing all read as "never existed". They now go through `AtomicWrite` (temp file, fsync, rename, previous version kept as `.bak`) and `readJSONWithBackup`, which recovers the backup and says so in the log. `favorites.json` was worse still: it was truncated by a bare `os.WriteFile` on every save. The stores are `favorites.json`, `game-options.json`, `game-recents.json`, `musicfavorites.json`, `audioresume.json`, `ipstreams.json`, `tvfavorites.json`, `browser-cookies.json`, `browser-bookmarks.json`, `browser-block.json`, `partyfriends.json`, `partyhistory.json`, `psremote.json`, `startup-state.json`, `save-sync/folders.json`, the curation profiles and the Toolbox's `power-scripts.json`; the `secret` command writes `jukauser.json` the same way now instead of skipping the backup. A store the user deletes — a cleared bookmark list, the browser's Forget (whole jar, one site, or an expiry prune) and a deleted curation profile — deletes its `.bak` in the same step, because data the user removed must not survive on the card. Caches (weather, RetroAchievements, artwork misses, the patch database) are deliberately left regenerable, and a file the app only reads (`game-launchers.json`) still falls back to its built-in default with a log rather than looking for a backup that could never exist. ([player/config_health.go](player/config_health.go), [player/browsercookies.go](player/browsercookies.go), [docs/CONFIGURATION.md](docs/CONFIGURATION.md); tests in [player/store_durability_test.go](player/store_durability_test.go), [player/store_durability_library_test.go](player/store_durability_library_test.go), [player/store_durability_media_test.go](player/store_durability_media_test.go) and [player/store_durability_social_test.go](player/store_durability_social_test.go)).
+- **The game library releases box art it is done with.** The preview loads one
+  cover per focused row, and the texture cache behind it was an unbounded map:
+  scrolling through a few hundred games kept every cover for the life of the
+  process — a 200×270 cover is ~216 KB, so a large collection pinned tens of
+  megabytes of texture memory on a 1 GB card, exactly what the video decoder
+  and the rest of the UI need. The cache is now bounded by bytes (32 MB on the
+  handheld, 96 MB on desktop) and by count (256 entries, which also covers
+  covers that are missing and cached as a miss), evicting the oldest first; the
+  cover on screen is always the newest entry, so it is never the one evicted.
+  ([player/game_library_ui.go](player/game_library_ui.go); tests in
+  [player/game_library_test.go](player/game_library_test.go)).
+- **The rendered-text texture cache has a byte budget.** It was bounded only by
+  entry count (512), but that cache is where a wrapped web-page paragraph, a PDF
+  line, a terminal row and a chat bubble land — a single one of those can be a
+  megabyte, so the count alone was a multi-hundred-megabyte worst case. It now
+  also honours 24 MB on the handheld and 64 MB on desktop, evicting least
+  recently used entries and always keeping the label being drawn; the texture
+  accounting line (`JUKAHUB_TEXSTATS=1`) prints usage against the budget.
+  ([player/textcache.go](player/textcache.go), [player/perf.go](player/perf.go);
+  tests in [player/textcache_test.go](player/textcache_test.go)).
+- **A launcher full of broken icons no longer grows the icon cache.** An icon
+  that fails to decode is cached as a miss so the file is not re-read every
+  frame, but the miss skipped the eviction order: the count cap only ever
+  counted icons that loaded, while the map grew with every missing image. Misses
+  now go through the same bound. ([player/appicons.go](player/appicons.go); test
+  in [player/appicons_test.go](player/appicons_test.go)).
+- **Notes, alarms and the IPTV list survive a power cut.** All three stores were
+  written with a bare `os.WriteFile`, which truncates the file before writing the
+  new bytes: pulling the power, or filling the card mid-save, left a half-written
+  document, and the loaders then started empty without a word — a reader's notes
+  simply disappeared. They now save through the same temp+fsync+rename path as
+  the config, keep a `.bak` of the previous version, and a store that cannot be
+  parsed comes back from that backup with a line in the log instead of reading as
+  deleted. The IPTV save had even documented itself as atomic.
+  ([player/notes.go](player/notes.go), [player/alarm.go](player/alarm.go),
+  [player/ipstreams.go](player/ipstreams.go),
+  [player/config_health.go](player/config_health.go); tests in
+  [player/store_durability_test.go](player/store_durability_test.go)).
 - **The reader's form controls draw glyphs the bundled font has.** The first cut
   of the form work drew the tick box with U+2610/U+2611, the radio with U+25C9
   and the select arrow with U+25BE — none of which Inter carries, so the font
@@ -270,7 +491,72 @@ For anything older, the git log and the
   than counting goroutines, which is what made it flaky in both directions
   ([player/snappreview.go](player/snappreview.go), `player/snappreview_test.go`).
 
+### Changed
+
+- **The scene-navigation memory harness measures the box-art ceiling that
+  actually ships.** Its library phase sizes its synthetic card from the art
+  budget, but it read whichever branch the host takes, so a desktop run measured
+  the 96 MB ceiling while the Linux CI runner and the device measured 32 MB: the
+  budget on the card went unverified on the machine the work was done on. The
+  harness now pins the handheld branch (`libraryArtBudgetForce`, an atomic seam
+  so the eviction path can read it from the render loop), asserts the pinned
+  budget is the 32 MB one, and therefore walks the handheld fixture — 26 covers
+  against 32 MB, settling at 17 — under the `-race` CI job as well as locally.
+  `TestLibraryArtBudgetBranches` pins both ceilings and the derivation, so
+  forcing one branch does not leave the other untested
+  ([player/game_library_ui.go](player/game_library_ui.go),
+  [player/memory_growth_test.go](player/memory_growth_test.go),
+  [player/game_library_test.go](player/game_library_test.go)).
+- **One top bar on every screen, and a Back button you can find at arm's
+  length.** Home and every scene already drew the same band, but the music
+  player and the terminal still drew their own strips: the player had the words
+  "Audio Player" and a `B Back` hint where the bar should be, and the terminal a
+  `< BACK` text pill, so two of the app's screens had a header the rest did not.
+  Both now draw the shared bar — wordmark and version, the scene in the caption,
+  the same Back and Menu pills, the release offer and the system cluster — with
+  the player's StockOS layout tag moved into its now-playing strip and the
+  terminal's Keyboard chip and working directory kept beside the app menu. The
+  Back pill is a step taller than the bar's other buttons and is drawn in a 20px
+  face twice, one pixel apart (the bundled Inter has no bold face, and on a
+  5-inch panel weight is what makes it read as the primary control); its chevron
+  points the way the control moves instead of the opposite way, and its colour
+  changes with focus: accent-tinted with accent type while idle, solid accent
+  with dark type while the D-pad holds it, and a ring around it in that state.
+  The release offer now keeps the same corner gap to the bell on every screen,
+  so the pill no longer sits 16px from the bell in a scene and 10px on Home.
+  `TestEveryScreenDrawsTheSharedBar` renders every scene in the shipped config
+  and fails if one of them is missing the bar, the Back pill, the offer or the
+  bell ([player/header.go](player/header.go),
+  [player/musicplayer.go](player/musicplayer.go),
+  [player/musicskins.go](player/musicskins.go),
+  [player/terminal.go](player/terminal.go), [player/extras.go](player/extras.go);
+  tests in [player/header_test.go](player/header_test.go)).
+
+- **Text is measured once instead of on every frame, which is what the handheld
+  was spending its frame on.** Profiling a warm home frame put ~40% of it inside
+  `ellipsize` and another ~20% in the font-coverage walk, because every card,
+  chip, footer hint and status-bar label re-measured the same unchanged string
+  every frame — and each measurement is a `TTF_SizeUTF8` call through cgo into
+  FreeType, which on the Smart Pro's CPU costs several times what it does on a
+  desktop. Three bounded caches now sit on those paths: the fitted label, the
+  plain width and the character substitution, all keyed by face + string and
+  cleared by the `ClearTextCache` hook every theme and font-size change already
+  calls. On the desktop proxy the home frame went from ~342 µs to ~90–125 µs and
+  a launcher page from ~300 µs to ~86 µs, with ~40 fewer allocations per frame;
+  the clipped, measured and substituted text is identical — each cache is
+  pinned to the uncached function by `textcache_fit_test.go`
+  ([player/textcache.go](player/textcache.go), [player/homelayout.go](player/homelayout.go),
+  [player/extras.go](player/extras.go), [player/statusbar_status.go](player/statusbar_status.go),
+  [player/ps4tile.go](player/ps4tile.go), [player/ps5tile.go](player/ps5tile.go)).
+
 ### Added
+
+- **`render_bench_test.go` also benches a config-driven page.** The existing
+  benchmarks measured the home screen alone, but most of a session is spent on
+  launcher and list pages, which build their header, section labels, tiles and
+  footer through a different path. `BenchmarkMenuPageFrame720p` renders the
+  Settings launcher page as the user opens it, so a change to a shared
+  component shows up in the frame that actually draws it.
 
 - **The diagnostics bundle carries the cookie session's date and retention
   window.** A bug report about being signed out arrived without the two

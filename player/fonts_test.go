@@ -19,7 +19,7 @@ func testInterFont(t *testing.T, size int) *ttf.Font {
 	}
 	f, err := ttf.OpenFont(resolvePath("Inter-Regular.ttf"), size)
 	if err != nil {
-		t.Skipf("Inter-Regular.ttf unavailable: %v", err)
+		t.Fatalf("the repository ships Inter-Regular.ttf but it would not open: %v", err)
 	}
 	t.Cleanup(f.Close)
 	registerFontPath(f, "Inter-Regular.ttf")

@@ -207,7 +207,10 @@ func TestBrowserScriptFetchesUseTheJar(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if hits == 0 {
-		t.Skip("the reader did not fetch the script in this build")
+		// The page serves a <script src>; if the reader never requests it, the
+		// cookie-on-subresource behaviour below cannot happen and this test
+		// would pass without checking it.
+		t.Fatal("the reader did not request the page's <script src>")
 	}
 	if !sawCookie {
 		t.Error("the script request went out without the session cookie")

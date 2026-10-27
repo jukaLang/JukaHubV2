@@ -642,7 +642,7 @@ func TestDrawWebDocumentPaintsStyledPage(t *testing.T) {
 	frame := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -658,7 +658,7 @@ func TestDrawWebDocumentPaintsStyledPage(t *testing.T) {
 	rect := sdl.Rect{X: 10, Y: 10, W: width, H: 500}
 	drawWebDocument(renderer, config, doc, layout, rect, 0)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	paper, textPixels, outside := 0, 0, 0
@@ -708,7 +708,7 @@ func TestRenderTextBrowserUsesStyledDocument(t *testing.T) {
 	frame := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -720,7 +720,7 @@ func TestRenderTextBrowserUsesStyledDocument(t *testing.T) {
 	renderer.Clear()
 	renderTextBrowser(renderer, config, elem)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	paper := 0
@@ -749,7 +749,7 @@ func TestDrawWebDocumentScrollsByRow(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -759,7 +759,7 @@ func TestDrawWebDocumentScrollsByRow(t *testing.T) {
 		drawWebDocument(renderer, config, doc, layout, sdl.Rect{X: 10, Y: 10, W: 900, H: 300}, start)
 		buf := make([]byte, probeW*probeH*4)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		return buf
 	}

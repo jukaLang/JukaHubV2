@@ -38,7 +38,9 @@ func loadingCardSize() (w, h int32) {
 	if w < 280 {
 		w = 280
 	}
-	h = 196 + int32(loadingSloganMaxLines)*loadingSloganLineH
+	// 208 rather than 196 leaves the bottom band deep enough for the Cancel
+	// button that a video prepare draws under the slogan block.
+	h = 208 + int32(loadingSloganMaxLines)*loadingSloganLineH
 	if h > screenHeight-32 {
 		h = screenHeight - 32
 	}
@@ -100,6 +102,56 @@ func wrapLoadingText(font *ttf.Font, text string, maxW int32, maxLines int) []st
 	return all
 }
 
+// loadingCancelPillH is the Cancel button's height: a 26px pill reads as a
+// button at arm's length without eating the slogan's band.
+const loadingCancelPillH = 26
+
+// loadingCancelLayout returns the Cancel button's pill and the label's
+// top-left corner, centred in the card's bottom band. It is split from the
+// render so the geometry can be checked without a renderer.
+func loadingCancelLayout(font *ttf.Font, cardX, cardW, y int32) (pill sdl.Rect, labelX, labelY int32) {
+	const (
+		gap   = int32(10)
+		padX  = int32(10)
+		label = "Cancel"
+	)
+	bw, bh, _ := font.SizeUTF8(loadingCancelButton)
+	lw, _, _ := font.SizeUTF8(label)
+	pillW := int32(bw) + padX*2
+	total := pillW + gap + int32(lw)
+	x := cardX + (cardW-total)/2
+	textY := y + (loadingCancelPillH-int32(bh))/2
+	return sdl.Rect{X: x, Y: y, W: pillW, H: loadingCancelPillH},
+		x + pillW + gap, textY
+}
+
+// loadingCancelButton is the one button the card accepts while it is up.
+const loadingCancelButton = "B"
+
+// loadingCancelLabel is the word next to that badge.
+const loadingCancelLabel = "Cancel"
+
+// renderLoadingCancelButton draws the "B" badge and its Cancel label centred
+// in the card's bottom band, the same pill-plus-label pairing the scene footers
+// use for controller hints.
+func renderLoadingCancelButton(renderer *sdl.Renderer, config *Config, cardX, cardW, y int32, fallback *ttf.Font) {
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		font = fallback
+	}
+	if font == nil {
+		return
+	}
+	pill, labelX, labelY := loadingCancelLayout(font, cardX, cardW, y)
+	fillRoundedRect(renderer, pill.X, pill.Y, pill.W, pill.H, pill.H/2, ColorIconSurface)
+	// The badge letter is the button's own name, so it is centred in its pill
+	// rather than padded to the left like a footer badge.
+	bw, bh, _ := font.SizeUTF8(loadingCancelButton)
+	renderText(renderer, config, font, loadingCancelButton, ColorTextPrimary(),
+		pill.X+(pill.W-int32(bw))/2, pill.Y+(pill.H-int32(bh))/2)
+	renderText(renderer, config, font, loadingCancelLabel, ColorTextSecondary(), labelX, labelY)
+}
+
 // renderLoadingCard draws the modal loading overlay: spinner, status line and a
 // wrapped slogan, all inside a card that fits the screen.
 func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
@@ -152,16 +204,11 @@ func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, statusFont, status, sdl.Color{R: 226, G: 234, B: 246, A: 255},
 		cardX+(cardW-int32(sw))/2, cardY+116)
 	if preparing {
-		// The spinner blocks navigation; say how to back out of it. The hint
-		// sits below the slogan block so it cannot collide with it.
-		hintFont, _ := getCachedFont(config, "small")
-		if hintFont == nil {
-			hintFont = statusFont
-		}
-		hint := "B / Esc cancels"
-		hw, _, _ := hintFont.SizeUTF8(hint)
-		renderText(renderer, config, hintFont, hint, sdl.Color{R: 150, G: 162, B: 184, A: 255},
-			cardX+(cardW-int32(hw))/2, cardY+cardH-30)
+		// The card blocks navigation, so the way out has to look like a
+		// control: a B button badge and its label, drawn the way the scene
+		// footers draw their button hints, instead of a line of grey text.
+		// It sits in the band under the slogan block so it cannot collide.
+		renderLoadingCancelButton(renderer, config, cardX, cardW, cardY+cardH-36, statusFont)
 	}
 
 	sloganFont, _ := getCachedFont(config, "small")

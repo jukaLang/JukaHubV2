@@ -346,6 +346,50 @@ Snippets run through `sh -c` (or `cmd /c` on Windows) with a 30-second
 timeout and the app's permissions. rsync is invoked directly with `-az
 --itemize-changes`, never through a shell, and never with `--delete`.
 
+## Other JSON stores
+
+The config is not the only file the player writes. Everything below holds work
+the user did in the app, so every one of them is written through `AtomicWrite`
+(temp file, `fsync`, rename) and read through `readJSONWithBackup`, which falls
+back to the `.bak` the writer leaves beside it. A store that is damaged *and*
+backupless is logged as such — none of these start empty without a line in the
+log.
+
+| File | Holds |
+|------|-------|
+| `favorites.json` | favourites from before they moved into `jukauser.json` (older cards) |
+| `game-options.json` | per-game overrides: CPU ceiling, core, launch flags |
+| `game-recents.json` | the Continue row |
+| `musicfavorites.json` | starred tracks |
+| `audioresume.json` | audiobook/podcast positions and playback speed |
+| `ipstreams.json` | the IPTV library you added |
+| `tvfavorites.json` | starred channels |
+| `browser-cookies.json` | saved sessions (mode 0600). **A deliberate drop deletes the `.bak` too** — a whole Forget, one site's Forget, or a retention prune; a forgotten session must not survive on the card |
+| `browser-bookmarks.json` | bookmarks. Clearing the last one removes the file and its backup |
+| `browser-block.json` | sites where ad-blocking is switched off |
+| `partyfriends.json` | LAN party friends |
+| `partyhistory.json` | watch-time baselines per room |
+| `psremote.json` | PS4/5 host list and pairing keys (mode 0600) |
+| `startup-state.json` | startup-app bookkeeping |
+| `save-sync/folders.json` | the Syncthing folder manifest |
+| `curation/profiles/*.json` | profiles built in the Curation hub |
+| `power-scripts.json` | Toolbox snippets (mode 0600) |
+| `terminal_history` | terminal history (a text file, one command per line) |
+| `notes.json`, `jukaalarm.json` | notes and alarms |
+
+Three files are read but never written by the player, so there is no backup to
+fall back to and the loaders say so instead: `game-launchers.json` (per-console
+launch paths, written by you or a patch — a broken one falls back to the
+built-in catalog), `game-profiles/` catalogs and community imports (a damaged
+file is reported as an issue in the panel), and the `port.json`/`plugin.json`/
+app `config.json` manifests owned by other software.
+
+Caches are deliberately **not** backed up: `weather_cache`, the
+RetroAchievements cache, the artwork-miss store, the patch `db.json` and the
+emulator-update `source.json` are rebuilt from their source, so a reset costs a
+refetch, not a user's work. They are still written atomically where the writer
+already did so.
+
 ## Privacy and diagnostics
 
 Anonymous diagnostics are controlled by `variables.Custom.telemetryOptIn` in

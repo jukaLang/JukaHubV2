@@ -15,52 +15,86 @@ import (
 // on the Trimui Smart Pro. Blob orbits are minutes long and amplitudes are
 // small, so the motion reads as a gentle ambient pulse rather than motion
 // sickness-inducing animation.
-var (
-	ambientGlowOnce sync.Once
-	ambientGlow     *sdl.Texture
-)
+// The glow texture belongs to the renderer that created it. It used to be
+// built once per process behind a sync.Once, which is the same thing as
+// assuming the renderer never changes: after a renderer was recreated (a
+// window resize on desktop, a display change, or the test harness's fresh
+// renderer per case) every SetColorMod/SetAlphaMod/Copy against the dead
+// texture failed — four blobs' worth of silently missing background, each
+// failure building an SDL error value nobody reads. Owning it per renderer is
+// the contract shapeCache and the icon atlas already follow.
+var ambientGlowCache struct {
+	mu       sync.Mutex
+	renderer *sdl.Renderer
+	texture  *sdl.Texture
+}
 
-// ensureAmbientGlow builds the soft radial glow texture once per process.
-func ensureAmbientGlow(renderer *sdl.Renderer) {
-	ambientGlowOnce.Do(func() {
-		const size = 256
-		surface, err := sdl.CreateRGBSurfaceWithFormat(0, size, size, 32, sdl.PIXELFORMAT_ABGR8888)
-		if err != nil {
-			return
-		}
-		defer surface.Free()
-		if err := surface.Lock(); err != nil {
-			return
-		}
-		pitch := int(surface.Pitch)
-		pixels := surface.Pixels()
-		center := float64(size) / 2
-		for y := 0; y < size; y++ {
-			for x := 0; x < size; x++ {
-				dx := float64(x) - center
-				dy := float64(y) - center
-				d := math.Sqrt(dx*dx + dy*dy)
-				t := 1 - d/center
-				if t < 0 {
-					t = 0
-				}
-				a := uint8(math.Round(255 * t * t))
-				off := y*pitch + x*4
-				// ABGR8888 on little-endian stores bytes R,G,B,A in memory.
-				pixels[off+0] = 255
-				pixels[off+1] = 255
-				pixels[off+2] = 255
-				pixels[off+3] = a
+// ambientGlowFor returns the soft radial glow texture for this renderer,
+// building it on first use and after any renderer change. nil means the
+// renderer cannot make textures; the caller draws no glow.
+func ambientGlowFor(renderer *sdl.Renderer) *sdl.Texture {
+	if renderer == nil {
+		return nil
+	}
+	ambientGlowCache.mu.Lock()
+	defer ambientGlowCache.mu.Unlock()
+	if ambientGlowCache.renderer == renderer && ambientGlowCache.texture != nil {
+		return ambientGlowCache.texture
+	}
+	// Do not Destroy the previous strip: its own renderer freed it.
+	ambientGlowCache.renderer = renderer
+	ambientGlowCache.texture = nil
+
+	const size = 256
+	surface, err := sdl.CreateRGBSurfaceWithFormat(0, size, size, 32, sdl.PIXELFORMAT_ABGR8888)
+	if err != nil {
+		return nil
+	}
+	defer surface.Free()
+	if err := surface.Lock(); err != nil {
+		return nil
+	}
+	pitch := int(surface.Pitch)
+	pixels := surface.Pixels()
+	center := float64(size) / 2
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			dx := float64(x) - center
+			dy := float64(y) - center
+			d := math.Sqrt(dx*dx + dy*dy)
+			t := 1 - d/center
+			if t < 0 {
+				t = 0
 			}
+			a := uint8(math.Round(255 * t * t))
+			off := y*pitch + x*4
+			// ABGR8888 on little-endian stores bytes R,G,B,A in memory.
+			pixels[off+0] = 255
+			pixels[off+1] = 255
+			pixels[off+2] = 255
+			pixels[off+3] = a
 		}
-		surface.Unlock()
-		tex, err := renderer.CreateTextureFromSurface(surface)
-		if err != nil {
-			return
-		}
-		_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
-		ambientGlow = tex
-	})
+	}
+	surface.Unlock()
+	tex, err := renderer.CreateTextureFromSurface(surface)
+	if err != nil {
+		return nil
+	}
+	_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
+	ambientGlowCache.texture = tex
+	return tex
+}
+
+// DropAmbientGlowForRenderer forgets a glow texture owned by a renderer that
+// is about to be destroyed, without destroying it itself (its renderer frees
+// it). Mirrors DropShapeCacheForRenderer and DropIconAtlasForRenderer.
+func DropAmbientGlowForRenderer(r *sdl.Renderer) {
+	ambientGlowCache.mu.Lock()
+	defer ambientGlowCache.mu.Unlock()
+	if ambientGlowCache.renderer == r {
+		ambientGlowCache.renderer = nil
+		ambientGlowCache.texture = nil
+	}
 }
 
 // renderAmbientBackground draws the slowly drifting color blobs. It is called
@@ -71,7 +105,7 @@ func renderAmbientBackground(renderer *sdl.Renderer) {
 	if renderer == nil {
 		return
 	}
-	ensureAmbientGlow(renderer)
+	ambientGlow := ambientGlowFor(renderer)
 	if ambientGlow == nil {
 		return
 	}

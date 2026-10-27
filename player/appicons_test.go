@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -176,5 +177,35 @@ func TestAppGridTileTintIsStable(t *testing.T) {
 	}
 	if len(seen) < 3 {
 		t.Errorf("six apps share %d tints: the launcher looks flat", len(seen))
+	}
+}
+
+// A launcher can list hundreds of programs on a card people fill and empty.
+// Every icon that fails to decode is remembered as nil so the file is not
+// re-read each frame — but those misses used to skip the eviction order, so the
+// map grew with every missing image while the count cap only counted the ones
+// that loaded. The bound has to cover both.
+func TestAppIconCacheBoundsFailedDecodes(t *testing.T) {
+	withScreen(t, probeW, probeH)
+	renderer := newKeyboardTestRenderer(t)
+	clearAppIconCache()
+	t.Cleanup(clearAppIconCache)
+
+	dir := t.TempDir()
+	for i := 0; i < appIconMaxTextures*3; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("missing-%d.png", i))
+		if tex := appIconTexture(renderer, path); tex != nil {
+			t.Fatalf("%s decoded to a texture", path)
+		}
+		if got, _ := appIconTextureStats(); got > appIconMaxTextures {
+			t.Fatalf("icon cache holds %d entries after a failed decode, cap is %d",
+				got, appIconMaxTextures)
+		}
+	}
+
+	// The misses are still remembered: the newest path must not be re-read.
+	last := filepath.Join(dir, fmt.Sprintf("missing-%d.png", appIconMaxTextures*3-1))
+	if !appIconTextures.textures.has(last) {
+		t.Error("the most recent failed decode was not remembered")
 	}
 }

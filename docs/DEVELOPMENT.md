@@ -289,6 +289,28 @@ downgraded and later overwritten. Unknown element types are logged and skipped;
 unrecognised triggers are inert. Both alone mean a config from a newer builder
 degrades instead of crashing.
 
+### Durable stores
+
+A JSON file the app writes is a store, and a store holds work the user cannot
+get back. Both halves of the rule are in `config_health.go`:
+
+- **Write with `AtomicWrite`.** It writes a temp file in the same directory,
+  `fsync`s it, renames it into place and keeps the previous content as
+  `<file>.bak`. A `os.WriteFile` of a document truncates first, so a card pulled
+  mid-save leaves half a file — and a temp-then-rename without the `fsync` can
+  leave a zero-length file after a power cut even though the rename landed.
+- **Read with `readJSONWithBackup`.** It tries the live file, then the `.bak`,
+  logs the recovery, and logs the unrecoverable case instead of returning an
+  empty store silently. A *missing* file stays a first run (`os.IsNotExist`),
+  never a reason to resurrect an old backup.
+
+If a store can be deleted by the user (a Forget chip, a cleared list), delete
+its `.bak` in the same step: otherwise the deleted data is still on the card and
+the next damaged read restores it. Caches are the exception — they may be plain
+writes if a reset only costs a refetch — but the read should still not pretend
+the cache was simply empty. `store_durability_test.go` and the `store_durability_*`
+files pin the pattern per store.
+
 ### Menu audit
 
 `player/menu_audit_test.go` walks both shipped configs (`jukaconfig.json` and
@@ -344,6 +366,89 @@ allocation, and a memory-pressure monitor evicts caches on the handheld when
 free RAM drops. Caches (textures, text, thumbnails, chat images) are bounded
 and invalidated when their inputs change — follow that pattern rather than
 adding an unbounded map.
+
+**A count is not a byte ceiling.** An entry cap is a byte cap only when every
+entry is the same size, and almost none are: an icon can be 64px or 256px, a
+chat photo can be 48 MB decoded, a feed body can be 1 MiB. Every texture and
+byte cache in the player therefore carries a **byte budget** as well as its
+count, and the two are checked on insert in the same eviction loop. The new
+caches use `byteOrderedStore` ([cachebudget.go](../player/cachebudget.go)),
+which owns the two bounds and the release callback; the older ones implement
+the same rule in place.
+
+| Cache | Bounds | Handheld / desktop budget |
+|-------|--------|---------------------------|
+| `TextCache` (`textcache.go`) | entries + bytes | 24 / 64 MB |
+| `homeTextCache` (`homelayout.go`) | entries + bytes | 8 / 48 MB |
+| `shapeTextures` (`shapeCache.go`) | entries + bytes | 12 / 48 MB |
+| `thumbnailTextures` (`thumbstore.go`) | bytes | 64 / 192 MB |
+| library box art (`game_library_ui.go`) | bytes | 32 / 96 MB |
+| `appIconTextures` (`appicons.go`) | entries + bytes | 8 / 32 MB |
+| `chatImages` (`chat.go`) | entries + bytes | 24 / 64 MB |
+| `chatAvatars` (`chat.go`) | entries + bytes | 4 MB |
+| `thumbnailDataCache` (`thumbstore.go`) | entries + bytes | 16 / 48 MB |
+| `conditionalCache` bodies (`httpcache.go`) | entries + bytes | 8 / 16 MB |
+| `iconAtlas` (`iconatlas.go`) | one fixed strip | 256 KB |
+| `ambientGlowCache` (`backgroundfx.go`) | one fixed texture | 256 KB |
+| video overlay / UI layer (`vkeyboard.go`) | one layer per canvas | freed with the renderer |
+| `textBrowserWrapCache`, `lyricCache` | exactly one entry | no growth |
+
+The remaining count-bounded maps hold short strings with a hard length limit
+(text measurement, sanitize and fit caches at `maxTextFitLen` = 240 bytes, the
+app-label cache, the resolved-icon path cache); their combined worst case is a
+few hundred kilobytes, which is why they are listed rather than instrumented.
+`JUKAHUB_TEXSTATS=1` logs the texture caches, including the launcher icons and
+chat images, with their budgets, so a regression is visible in a log line
+instead of guessed at.
+
+### What a long session holds
+
+A budget is a ceiling, not a prediction: whether the ceilings are anywhere near
+what the device must survive was guessed at until it was measured.
+`TestLongSessionTextureMemory` ([session_memory_test.go](../player/session_memory_test.go))
+spends a session in the two panels that fill these caches — 300 chat messages
+with 14 pictures and 24 senders, then 24 articles with three pictures each,
+scrolled the way a reader scrolls — through the real decode-and-cache paths,
+with every ceiling pinned to the handheld branch. It prints the device's own
+`[tex]` line and then each cache against its cap:
+
+```
+cd player
+go test -run TestLongSessionTextureMemory -v
+```
+
+On a desktop, at the card's ceilings:
+
+| Cache | Session held | Ceiling |
+|-------|--------------|---------|
+| chat pictures | 24,576 KB (8 of 14) | 24 MB |
+| chat avatars | 256 KB (16) | 4 MB |
+| browser page cache | 140 KB (8 pages) | 12 MB |
+| page images (`thumbnailTextures`) | 57,600 KB | 64 MB |
+| rendered text | 8,240 KB | 24 MB |
+| home labels | 0 KB | 8 MB |
+| shapes | 11,684 KB | 12 MB |
+| **total `[tex]` line** | **88 MB** | — |
+
+Three things the numbers say. **The chat picture cache is full by design**: it is
+a sliding window of the newest pictures, so it sits on its 24 MB cap for the
+whole session while older ones are evicted — a session is never *over* its
+budget, but it is never under it either. **Page images are the largest single
+item**, at 56 MB of their 64 MB ceiling, so an hour of picture-heavy reading
+leaves the least headroom of anything measured; if the card ever needs room,
+that is the budget to revisit first. **The shape cache is the tightest fit** at
+11.7 MB of 12 MB, and what fills it is the chrome — panel corners, bubbles, the
+browser's own toolbar — not the page content. Text stays at a third of its cap,
+and home labels read 0 because the chat and the reader draw through `renderText`
+rather than `drawText`.
+
+The probe fails if the session caches nothing (so it cannot pass vacuously), if
+the picture set never crosses its budget (eviction unmeasured), or if any cache
+ends above its ceiling.
+
+A critical-memory sweep clears every one of these: `EvictCachesForPressure` in
+`adaptive.go` and the shutdown path in `main.go` both list them, so a cache that
+grows back to its budget straight after a sweep cannot happen by omission.
 
 Per-frame paths must not allocate. Text goes through `substituteVars` and
 the texture cache for every label on every frame, so both have zero-allocation

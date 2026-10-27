@@ -129,20 +129,20 @@ func renderPS5HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 		labelFont = fonts.Small
 	}
 	label := "PS5"
-	labelW, labelH, err := labelFont.SizeUTF8(label)
-	if err != nil || int32(labelW) > rect.W-16 {
+	labelW, labelH := measureText(labelFont, label)
+	if labelFont == nil || labelW > rect.W-16 {
 		// Fall back to the small face rather than clipping the wordmark.
 		labelFont = fonts.Small
-		labelW, labelH, _ = labelFont.SizeUTF8(label)
+		labelW, labelH = measureText(labelFont, label)
 	}
 	captionH := companionFontLine(fonts.Small) + 2
-	blockH := int32(labelH) + 2 + captionH
+	blockH := labelH + 2 + captionH
 	top := rect.Y + (rect.H-blockH)/2
 	if top < rect.Y+4 {
 		top = rect.Y + 4
 	}
 	drawText(renderer, labelFont, label,
-		rect.X+(rect.W-int32(labelW))/2, top, sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
+		rect.X+(rect.W-labelW)/2, top, sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
 	if v.Focused {
 		// Selected: name the button that presses it. The handheld has no
 		// touchscreen, so the caption doubles as the affordance.

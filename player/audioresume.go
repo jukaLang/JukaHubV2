@@ -9,7 +9,6 @@ package main
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -86,12 +85,11 @@ func audioPrefsLoadLocked() {
 	audioPrefs.speed = 1
 	audioPrefs.entries = make(map[string]audioResumeEntry)
 
-	data, err := os.ReadFile(audioResumeFilePath())
-	if err != nil {
-		return
-	}
+	// The atomic save leaves the previous version beside the live file, so a
+	// truncated store resumes from the saved positions instead of silently
+	// starting every book over.
 	var stored audioPrefsData
-	if err := json.Unmarshal(data, &stored); err != nil {
+	if _, err := readJSONWithBackup(audioResumeFilePath(), &stored); err != nil {
 		return
 	}
 	if stored.Speed >= 0.5 && stored.Speed <= 2 {
@@ -105,13 +103,11 @@ func audioPrefsLoadLocked() {
 	}
 }
 
-// audioPrefsSaveLocked writes the store. A rename keeps a crash mid-write from
-// truncating the file.
+// audioPrefsSaveLocked writes the store through the same temp+fsync+rename path
+// as the config. A rename alone kept a crash mid-write from truncating the
+// file but left nothing to recover from when the card itself dropped a write;
+// the previous version is now kept as .bak and the loader falls back to it.
 func audioPrefsSaveLocked() error {
-	path := audioResumeFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(audioPrefsData{
 		Speed:   audioPrefs.speed,
 		Entries: audioPrefs.entries,
@@ -119,11 +115,10 @@ func audioPrefsSaveLocked() error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := AtomicWrite(audioResumeFilePath(), data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	return nil
 }
 
 // audioStartPosition decides where playback starts for a saved position.

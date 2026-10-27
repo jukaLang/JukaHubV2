@@ -42,12 +42,12 @@ func benchmarkHomeScreen(b *testing.B) (*sdl.Renderer, *Config) {
 	}
 	win, err := sdl.CreateWindow("render-bench", 0, 0, benchScreenW, benchScreenH, sdl.WINDOW_HIDDEN)
 	if err != nil {
-		b.Skipf("hidden window unavailable: %v", err)
+		b.Fatalf("could not create the hidden benchmark window: %v", err)
 	}
 	renderer, err := sdl.CreateRenderer(win, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
 		win.Destroy()
-		b.Skipf("software renderer unavailable: %v", err)
+		b.Fatalf("could not create the offscreen software renderer: %v", err)
 	}
 
 	prevIndex, prevLayout, prevActive := currentSceneIndex, homeLayout, homeLayoutActive
@@ -101,13 +101,47 @@ func BenchmarkHomeFrame720pColdText(b *testing.B) {
 	}
 }
 
+// BenchmarkMenuPageFrame720p is a config-driven page rather than the home
+// screen: the Settings launcher page as the user opens it (page header, section
+// headings, icon tiles, footer). Every menu page shares this render path, so it
+// is the frame to watch when a text or tile change is made.
+func BenchmarkMenuPageFrame720p(b *testing.B) {
+	configs := loadAuditConfigs(b)
+	config := configs["trimui/jukaconfig.device.json"]
+	if config == nil {
+		b.Fatal("the handheld config ships in player/trimui; it could not be loaded")
+	}
+	idx := findSceneIndex(config, "Settings")
+	if idx < 0 {
+		b.Fatal("the shipped config has a Settings scene; it went missing")
+	}
+	renderer, _ := benchmarkHomeScreen(b)
+	prevIndex, prevActive := currentSceneIndex, homeLayoutActive
+	b.Cleanup(func() { currentSceneIndex, homeLayoutActive = prevIndex, prevActive })
+
+	// A launcher page, not the home layout: home renders through its own path.
+	homeLayoutActive = false
+	currentSceneIndex = idx
+	menuTilesApply(config, idx)
+	scene := config.Scenes[idx]
+	renderScene(renderer, config, scene) // warm every cache
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = renderer.SetDrawColor(9, 14, 25, 255)
+		_ = renderer.Clear()
+		renderScene(renderer, config, scene)
+	}
+}
+
 // BenchmarkHomeNavigation720p is one D-pad step on the home grid: the focus
 // move, its animation start and the pressed-state bookkeeping. A held direction
 // repeats this every ~120 ms, so it must stay far below a frame.
 func BenchmarkHomeNavigation720p(b *testing.B) {
 	_, config := benchmarkHomeScreen(b)
 	if !homeLayout.Focus.Set(HomeFocusMedia) {
-		b.Skip("the 720p layout has no Media card")
+		b.Fatal("the 720p home layout has no Media card to start from")
 	}
 	right := &sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_RIGHT}}
 	left := &sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_LEFT}}
@@ -116,7 +150,7 @@ func BenchmarkHomeNavigation720p(b *testing.B) {
 	// really moves focus before the timer starts.
 	start := homeLayout.Focus.Current()
 	if !handleHomeKey(right, config) || homeLayout.Focus.Current() == start {
-		b.Skipf("the 720p layout does not move focus from %q", start)
+		b.Fatalf("the 720p layout does not move focus from %q; the benchmark would time an empty call", start)
 	}
 
 	b.ReportAllocs()

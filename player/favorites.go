@@ -187,13 +187,20 @@ func loadFavorites() {
 func loadFavoritesFrom(path string) {
 	favoritesMutex.Lock()
 	defer favoritesMutex.Unlock()
-	data, err := os.ReadFile(path)
-	if err != nil {
+	// A damaged favorites.json used to unmarshal straight into the live store:
+	// a half document left half a list, and the next save wrote that over the
+	// real one. The save now leaves a .bak, and the load reads it into a local
+	// value so nothing is replaced unless a whole list came back.
+	var loaded FavoritesStore
+	if _, err := readJSONWithBackup(path, &loaded); err != nil {
+		// An absent file is a first run; anything else that got this far also
+		// failed the backup, so the list really is gone and the log says why.
+		if !os.IsNotExist(err) {
+			log.Printf("loadFavorites: %v", err)
+		}
 		return
 	}
-	if err := json.Unmarshal(data, &favoritesStore); err != nil {
-		log.Printf("loadFavorites: parse error: %v", err)
-	}
+	favoritesStore = loaded
 	if favoritesStore.Videos == nil {
 		favoritesStore.Videos = []FavoriteItem{}
 	}
@@ -230,7 +237,10 @@ func saveFavoritesTo(path string) {
 		log.Printf("saveFavorites: marshal error: %v", err)
 		return
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	// Same crash-safe path as the notes and the config: the legacy favorites
+	// file is still read by older cards, so it must not be truncated by a
+	// power cut either.
+	if err := AtomicWrite(path, data, 0644); err != nil {
 		log.Printf("saveFavorites: write error: %v", err)
 	}
 }

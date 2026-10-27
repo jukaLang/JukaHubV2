@@ -381,12 +381,11 @@ func writeConfigDocument(path string, doc map[string]interface{}, perm os.FileMo
 	return writeConfigBytes(path, data, perm)
 }
 
-// writeConfigBytes replaces path atomically so an interrupted write cannot
-// leave a truncated config behind.
+// writeConfigBytes replaces path through the same durable path the player uses
+// (temp file, fsync, rename, previous version as .bak). This command edits
+// jukauser.json — the file holding the user's settings and secrets — so a card
+// pulled mid-write must cost the last edit, not the document, and the .bak is
+// the undo that a one-line CLI change otherwise lacks.
 func writeConfigBytes(path string, data []byte, perm os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return AtomicWrite(path, data, perm)
 }

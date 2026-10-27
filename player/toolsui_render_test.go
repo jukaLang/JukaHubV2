@@ -18,7 +18,7 @@ func renderToolsProbe(t *testing.T, config *Config, cursor int) (*probeFrame, *s
 	t.Helper()
 	f := newProbeFrame(t)
 	if font, _ := getCachedFont(config, "small"); font == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 
 	prevW, prevH := screenWidth, screenHeight
@@ -34,7 +34,7 @@ func renderToolsProbe(t *testing.T, config *Config, cursor int) (*probeFrame, *s
 
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	// Cached text textures belong to the renderer that created them; each probe
@@ -45,7 +45,7 @@ func renderToolsProbe(t *testing.T, config *Config, cursor int) (*probeFrame, *s
 	renderer.Clear()
 	renderToolsPanel(renderer, config)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	panel := toolsPanelRect
@@ -132,14 +132,16 @@ func TestToolsPanelScrollsToTheCursor(t *testing.T) {
 	config := &Config{}
 	rows := toolsRows(config)
 	if len(rows) < 2 {
-		t.Skip("not enough rows to scroll")
+		// The scroll behaviour is the subject; a one-row Tools list cannot
+		// exercise it, and a skip would hide that the list stopped growing.
+		t.Fatalf("the Tools list has %d row(s); the scroll test needs at least two", len(rows))
 	}
 	prevCursor, prevScroll := toolsPanel.cursor, toolsPanel.scroll
 	t.Cleanup(func() { toolsPanel.cursor, toolsPanel.scroll = prevCursor, prevScroll })
 	m := toolsPanelMetrics(config, rows)
 	g := toolsGridBuild(rows, m)
 	if g.bodyH <= m.tileH {
-		t.Skip("grid fits the body; nothing to scroll")
+		t.Fatalf("the Tools grid is %dpx tall in a %dpx body; there is nothing to scroll", g.bodyH, m.tileH)
 	}
 	// One lane in view is the tightest scroll a small panel can give.
 	viewH := m.tileH
@@ -337,7 +339,7 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 		t.Fatalf("tile rects = %d, want 17 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
-		t.Skip("no usable font")
+		t.Fatalf("no usable font: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	layout := toolsPanelMetrics(config, toolsRows(config))
 	if panel.H > probeH-40 {
@@ -379,8 +381,20 @@ func TestPublishSSHStateOmitsPassword(t *testing.T) {
 }
 
 func TestToolsRowsOfflineHint(t *testing.T) {
+	// Force the monitor offline rather than hanging the check off whatever the
+	// host's connection happens to be: the CI runner is always online, so the
+	// skip this replaced meant the offline hint was never tested there at all.
+	netMon.mu.Lock()
+	prevOnline, prevChecked, prevReason := netMon.online, netMon.checked, netMon.reason
+	netMon.online, netMon.checked, netMon.reason = false, true, "test"
+	netMon.mu.Unlock()
+	t.Cleanup(func() {
+		netMon.mu.Lock()
+		netMon.online, netMon.checked, netMon.reason = prevOnline, prevChecked, prevReason
+		netMon.mu.Unlock()
+	})
 	if IsOnline() {
-		t.Skip("environment reports network access")
+		t.Fatal("the offline condition could not be forced; the row check would assert nothing")
 	}
 	rows := toolsRows(&Config{})
 	ip := toolsRowByAction(rows, toolsActionCopyIP)
@@ -432,7 +446,7 @@ func TestToolsPanelDrawsHeaderAndSectionGlyphs(t *testing.T) {
 	config := &Config{}
 	medium, _ := getCachedFont(config, "medium")
 	if medium == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	f, panel, _ := renderToolsProbe(t, config, 0)
 	box := int32(medium.Height()) + 10

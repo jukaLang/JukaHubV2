@@ -12,7 +12,6 @@ package main
 import (
 	"encoding/json"
 	"math/rand"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -214,12 +213,11 @@ func musicFavoritesLoadLocked() {
 	musicFavData.loaded = true
 	musicFavData.paths = make(map[string]bool)
 
-	data, err := os.ReadFile(musicFavoritesFilePath())
-	if err != nil {
-		return
-	}
+	// The atomic save keeps the previous list beside the live file, so a store
+	// truncated by a power cut reads as the favorites the user had rather than
+	// as "nothing was ever marked" — which is how a lost list looked.
 	var stored musicFavoritesData
-	if err := json.Unmarshal(data, &stored); err != nil {
+	if _, err := readJSONWithBackup(musicFavoritesFilePath(), &stored); err != nil {
 		return
 	}
 	for _, p := range stored.Tracks {
@@ -245,15 +243,13 @@ func musicFavoritesSaveLocked() error {
 	if err != nil {
 		return err
 	}
-	path := musicFavoritesFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	// Same crash-safe path as the config: a power cut mid-save must not leave
+	// half a list behind, and the previous version stays as .bak so the loader
+	// has something to fall back to.
+	if err := AtomicWrite(musicFavoritesFilePath(), append(data, '\n'), 0o600); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return nil
 }
 
 // musicIsFavorite reports whether a track is marked.

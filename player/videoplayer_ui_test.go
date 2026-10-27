@@ -210,18 +210,21 @@ func renderingFullscreenProbe(t *testing.T, chrome bool) *probeFrame {
 	// mid-render and turned the probe frame black depending on scheduling.
 	// Drain the decoder goroutines before setting up this frame's state.
 	if !waitForVideoDecoders(5 * time.Second) {
-		t.Skip("a video decoder did not exit before the probe")
+		// A decoder that outlives its test resets the player to idle mid-render,
+		// which is what made this probe draw a black frame. Failing here names
+		// the leak instead of skipping the assertions below.
+		t.Fatal("a video decoder from an earlier test did not exit within 5s")
 	}
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
 
 	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_RGB24, sdl.TEXTUREACCESS_STATIC, 4, 4)
 	if err != nil {
-		t.Skipf("texture unavailable: %v", err)
+		t.Fatalf("could not create the probe texture: %v (the software renderer supports textures, so this is a defect)", err)
 	}
 	defer tex.Destroy()
 	green := make([]byte, 4*4*3)
@@ -229,7 +232,7 @@ func renderingFullscreenProbe(t *testing.T, chrome bool) *probeFrame {
 		green[i+1] = 255
 	}
 	if err := tex.Update(nil, unsafe.Pointer(&green[0]), 4*3); err != nil {
-		t.Skipf("texture update unavailable: %v", err)
+		t.Fatalf("could not update the probe texture: %v (the software renderer supports texture uploads, so this is a defect)", err)
 	}
 
 	embeddedPlayer.mu.Lock()
@@ -282,7 +285,7 @@ func renderingFullscreenProbe(t *testing.T, chrome bool) *probeFrame {
 	renderer.Clear()
 	renderVideoFullscreen(renderer, &Config{})
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }

@@ -178,7 +178,7 @@ func TestChatNameClickOpensProfile(t *testing.T) {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	if findSceneIndex(config, "Chat") < 0 {
-		t.Skip("Chat scene missing")
+		t.Fatalf("the shipped config has a Chat scene; it went missing")
 	}
 	renderer := probeRenderer(t)
 

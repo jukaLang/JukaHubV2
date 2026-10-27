@@ -27,7 +27,7 @@ func homeUpdateProbe(t *testing.T) *HomeLayout {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -52,7 +52,11 @@ func homeUpdateProbe(t *testing.T) *HomeLayout {
 	return layout
 }
 
-func TestHomeUpdateChipSitsBesideWeather(t *testing.T) {
+// The offer lives in the header's system corner on every screen: immediately
+// left of the notification bell. Home used to put it inside the status cluster
+// (left of the weather text) while every scene put it beside the bell, so the
+// same control appeared in two places, at two sizes.
+func TestHomeUpdateChipSitsLeftOfTheBell(t *testing.T) {
 	snapshotHomeGlobals(t)
 	prevChip := homeUpdateRect
 	t.Cleanup(func() { homeUpdateRect = prevChip })
@@ -62,15 +66,18 @@ func TestHomeUpdateChipSitsBesideWeather(t *testing.T) {
 	if homeUpdateRect.W == 0 {
 		t.Fatal("no download chip was drawn while a release is offered")
 	}
-	weather := layout.Items[HomeFocusWeather].Rect
-	if weather.W == 0 {
-		t.Fatal("probe header has no weather chip")
+	bell := nc.bellRect
+	if bell.W == 0 {
+		t.Fatal("probe header has no notification bell")
 	}
-	if gap := weather.X - (homeUpdateRect.X + homeUpdateRect.W); gap < 0 || gap > 12 {
-		t.Fatalf("chip %+v is not immediately left of the weather text %+v (gap %d)", homeUpdateRect, weather, gap)
+	if gap := bell.X - (homeUpdateRect.X + homeUpdateRect.W); gap < 0 || gap > 12 {
+		t.Fatalf("chip %+v is not immediately left of the bell %+v (gap %d)", homeUpdateRect, bell, gap)
 	}
-	if homeUpdateRect.Y < 0 || homeUpdateRect.Y+homeUpdateRect.H > scaleY(56, layout.Height) {
+	if homeUpdateRect.Y < 0 || homeUpdateRect.Y+homeUpdateRect.H > headerBarHeight() {
 		t.Fatalf("chip %+v escapes the header band", homeUpdateRect)
+	}
+	if homeUpdateRect.H != headerPillHeight() {
+		t.Fatalf("chip height %d is not the header's button height %d", homeUpdateRect.H, headerPillHeight())
 	}
 	if !layout.Focus.IsEnabled(HomeFocusUpdate) {
 		t.Fatal("the chip is drawn but its focus entry is disabled")
@@ -121,7 +128,7 @@ func TestHomeUpdateChipStaysInsideANarrowHeader(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -257,7 +264,7 @@ func homeUpdateShot(t *testing.T, focused bool) *probeFrame {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -277,7 +284,7 @@ func homeUpdateShot(t *testing.T, focused bool) *probeFrame {
 
 	f := &probeFrame{buf: make([]byte, probeW*probeH*4), bg: sdl.Color{R: 9, G: 14, B: 25, A: 255}}
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }
@@ -315,7 +322,7 @@ func TestHomeUpdateChipProbeRender(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	layout := NewHomeLayout(probeW, probeH)
@@ -330,7 +337,7 @@ func TestHomeUpdateChipProbeRender(t *testing.T) {
 	}
 	f := &probeFrame{buf: make([]byte, probeW*probeH*4), bg: sdl.Color{R: 9, G: 14, B: 25, A: 255}}
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	writeProbePNG(t, "home_update_weather.png", f)
 }

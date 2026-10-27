@@ -548,7 +548,7 @@ func TestShippedConfigHardwareGetsWiFiEntry(t *testing.T) {
 	}
 	idx := sceneIndexExact(cfg, "Hardware")
 	if idx < 0 {
-		t.Skip("this config has no Hardware scene")
+		t.Fatalf("the shipped config has a Hardware scene; it went missing")
 	}
 	count := 0
 	for _, e := range cfg.Scenes[idx].Elements {
@@ -567,7 +567,7 @@ func TestWiFiPanelRenders(t *testing.T) {
 	_ = newProbeFrame(t)
 	r, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(r)
 

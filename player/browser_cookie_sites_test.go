@@ -120,7 +120,7 @@ func TestBrowserPageNamesTheCookieSites(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -131,7 +131,7 @@ func TestBrowserPageNamesTheCookieSites(t *testing.T) {
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
-		t.Skip("no font available for the text cache probe")
+		t.Fatalf("no font available for the text cache probe: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	want := "Saved cookies: youtube.com, github.com"
 	if GetTextCache().Get(font, want, ColorTextSecondary()) == nil {
@@ -177,7 +177,7 @@ func TestBrowserCookieStripFitsTheSmallPanel(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -193,7 +193,7 @@ func TestBrowserCookieStripFitsTheSmallPanel(t *testing.T) {
 	// panel's width once ellipsized, which is what keeps it off the chips.
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
-		t.Skip("no font available")
+		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	line := ellipsize(font, browserCookieSitesLine(browserCookieSites()), getElementWidth(elem, 0)-24)
 	if w, _, _ := font.SizeUTF8(line); int32(w) > getElementWidth(elem, 0)-24 {

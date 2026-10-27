@@ -346,7 +346,7 @@ func TestToolPathRunnableRejectsPlaceholderNames(t *testing.T) {
 	}
 	exe, err := os.Executable()
 	if err != nil {
-		t.Skipf("cannot locate the test binary: %v", err)
+		t.Fatalf("cannot locate the test binary: %v", err)
 	}
 	if !toolPathRunnable(exe) {
 		t.Errorf("the running binary at %s reported as not runnable", exe)
@@ -638,7 +638,7 @@ func TestSearchResultsMarkPreloadedCard(t *testing.T) {
 	f := newProbeFrame(t)
 	r, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(r)
 	resetStreamCache()
@@ -656,7 +656,7 @@ func TestSearchResultsMarkPreloadedCard(t *testing.T) {
 	r.Clear()
 	renderSearchResults(r, cfg, el)
 	if err := r.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	// Rows are 100px tall with a 14px gap, so row 0 is y 0..100 and row 1 is
@@ -677,7 +677,7 @@ func TestLoadingCardShowsPreparingVideo(t *testing.T) {
 	f := newProbeFrame(t)
 	r, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(r)
 
@@ -688,7 +688,7 @@ func TestLoadingCardShowsPreparingVideo(t *testing.T) {
 	r.Clear()
 	renderLoadingCard(r, &Config{})
 	if err := r.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	// The status line and the cancel hint are the bright grey text tones; the
@@ -697,9 +697,11 @@ func TestLoadingCardShowsPreparingVideo(t *testing.T) {
 	if got := f.countColor(statusText, 0, 0, probeW-1, probeH-1); got < 20 {
 		t.Errorf("status line painted %d pixels, want the video's title", got)
 	}
-	hintText := sdl.Color{R: 150, G: 162, B: 184}
-	if got := f.countColor(hintText, 0, 0, probeW-1, probeH-1); got < 20 {
-		t.Errorf("cancel hint painted %d pixels, want a visible B / Esc hint", got)
+	// The way out is a B button badge and its label, drawn in the secondary
+	// text tone: a line of grey copy read as a note, not as a control.
+	cancelText := ColorTextSecondary()
+	if got := f.countColor(cancelText, 0, 0, probeW-1, probeH-1); got < 20 {
+		t.Errorf("cancel button painted %d pixels, want a visible B and Cancel label", got)
 	}
 }
 

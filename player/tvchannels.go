@@ -569,12 +569,10 @@ func tvLoadFavoritesLocked() {
 	}
 	tvLib.favsRead = true
 	tvLib.favs = make(map[string]TVFavorite)
-	data, err := os.ReadFile(tvFavoritesFilePath())
-	if err != nil {
-		return
-	}
+	// The atomic save keeps the previous star list as .bak, so a corrupt file
+	// comes back as the channels the user starred instead of an empty list.
 	var list []TVFavorite
-	if err := json.Unmarshal(data, &list); err != nil {
+	if _, err := readJSONWithBackup(tvFavoritesFilePath(), &list); err != nil {
 		return
 	}
 	for _, f := range list {
@@ -594,8 +592,9 @@ func tvLoadFavoritesLocked() {
 	}
 }
 
-// saveTVFavorites writes the star list atomically-next-door (temp file then
-// rename) so a power loss cannot truncate it.
+// saveTVFavorites writes the star list through the config's crash-safe path:
+// temp file, fsync, rename, with the previous list kept as .bak so a card that
+// loses the write still leaves the stars recoverable.
 func saveTVFavorites() error {
 	tvLib.mu.Lock()
 	list := make([]TVFavorite, 0, len(tvLib.favs))
@@ -610,15 +609,10 @@ func saveTVFavorites() error {
 	if err != nil {
 		return err
 	}
-	path := tvFavoritesFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := AtomicWrite(tvFavoritesFilePath(), data, 0o644); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return nil
 }
 
 // tvToggleFavoriteFocused stars/unstars the highlighted channel. It reports the

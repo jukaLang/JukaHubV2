@@ -101,16 +101,19 @@ func TestResolveButtonDimensionsBounds(t *testing.T) {
 	}
 }
 
+// The field starts at element.X+480 and keeps a 20 px right margin, so its
+// width is the panel width less 500 — not less 260, which let it draw 240 px
+// past the panel and off the compact canvas.
 func TestUnitConverterInputWidthBounds(t *testing.T) {
 	tests := []struct {
 		input int
 		want  int32
 	}{
 		{-1, 0},
-		{260, 0},
-		{261, 1},
-		{4259, 3999},
-		{4260, 4000},
+		{500, 0},
+		{501, 1},
+		{4499, 3999},
+		{4500, 4000},
 		{int(^uint(0) >> 1), 4000},
 	}
 	for _, tt := range tests {

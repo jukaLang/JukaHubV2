@@ -19,6 +19,8 @@ package main
 
 import (
 	"container/list"
+	"log"
+	"os"
 	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -44,6 +46,19 @@ const (
 	shapeBudgetDesktopBytes  = int64(48 << 20)
 )
 
+// shapeCacheBudgetBytes is the budget in force for this process, or for the
+// branch a test pinned. It is a function rather than a field captured at
+// construction: the harness pins the handheld branch after the cache already
+// exists, and a cache that kept the budget it was born with would go on
+// measuring the host.
+//
+// The branch is the device's, not the platform's. It used to be "Windows or
+// not", which gave a Linux desktop the handheld ceiling and, more to the point,
+// gave CI a different number from the machine the work was done on.
+func shapeCacheBudgetBytes() int64 {
+	return sceneBudgetByDevice(shapeBudgetHandheldBytes, shapeBudgetDesktopBytes)
+}
+
 type shapeCacheKey struct {
 	kind      int32
 	renderer  *sdl.Renderer
@@ -64,7 +79,6 @@ type shapeCache struct {
 	entries       map[shapeCacheKey]*shapeCacheEntry
 	order         *list.List
 	current       *sdl.Renderer // entries belong to this renderer
-	budgetBytes   int64
 	maxEntries    int
 	totalBytes    int64
 	textureDraws  int64
@@ -74,23 +88,15 @@ type shapeCache struct {
 var shapeTextures = newShapeCache()
 
 func newShapeCache() *shapeCache {
-	budget := shapeBudgetDesktopBytes
-	if !IsWindows() {
-		budget = shapeBudgetHandheldBytes
-	}
 	return &shapeCache{
-		entries:     make(map[shapeCacheKey]*shapeCacheEntry),
-		order:       list.New(),
-		budgetBytes: budget,
-		maxEntries:  512,
+		entries:    make(map[shapeCacheKey]*shapeCacheEntry),
+		order:      list.New(),
+		maxEntries: 512,
 	}
 }
 
 func (sc *shapeCache) budget() int64 {
-	if IsTrimuiDevice() {
-		return shapeBudgetHandheldBytes
-	}
-	return sc.budgetBytes
+	return shapeCacheBudgetBytes()
 }
 
 // dropForRenderer forgets every entry owned by r without Destroy: when the
@@ -211,6 +217,8 @@ func shapeIsCacheable(w, h int32) bool {
 // falls back to painting it with paint. paint must draw the shape at (0, 0)
 // inside a w×h surface and use the exact RGB in c with full alpha, so the
 // stored texture can be alpha-modulated per draw.
+func debugShapeErrors() bool { return os.Getenv("JUKAHUB_SHAPE_DEBUG") != "" }
+
 func drawShapeCached(renderer *sdl.Renderer, kind int32, x, y, w, h, r, thickness int32, c sdl.Color, paint shapeDrawFn) {
 	if renderer == nil || !shapeIsCacheable(w, h) {
 		if renderer != nil {
@@ -237,10 +245,14 @@ func drawShapeCached(renderer *sdl.Renderer, kind int32, x, y, w, h, r, thicknes
 		thickness: thickness,
 	}
 	if tex := shapeTextures.Get(key); tex != nil {
-		_ = tex.SetAlphaMod(c.A)
+		if err := tex.SetAlphaMod(c.A); err != nil && debugShapeErrors() {
+			log.Printf("[shape] SetAlphaMod(%d) failed: %v", c.A, err)
+		}
 		dest := sdl.Rect{X: x, Y: y, W: w, H: h}
 		if err := renderer.Copy(tex, nil, &dest); err == nil {
 			return
+		} else if debugShapeErrors() {
+			log.Printf("[shape] copy kind=%d %dx%d failed: %v", kind, w, h, err)
 		}
 		// Copy failed; fall through and paint directly this frame.
 	}

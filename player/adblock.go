@@ -196,20 +196,18 @@ func ensureBrowserAdBlockSitesLocked() {
 }
 
 // loadBrowserAdBlockSites reads the file. A missing file means filtering is on
-// everywhere; a broken one is logged and ignored so a bad edit cannot make the
-// browser unusable.
+// everywhere; a damaged one comes back from the .bak the atomic save leaves
+// beside it, so the sites the user chose to unblock are not forgotten.
 func loadBrowserAdBlockSites(path string) map[string]bool {
 	disabled := map[string]bool{}
 	if strings.TrimSpace(path) == "" {
 		return disabled
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return disabled
-	}
 	var file browserAdBlockSitesFile
-	if err := json.Unmarshal(raw, &file); err != nil {
-		log.Printf("[browser] ignoring %s: %v", path, err)
+	if _, err := readJSONWithBackup(path, &file); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[browser] ignoring %s: %v", path, err)
+		}
 		return disabled
 	}
 	for _, site := range file.DisabledSites {
@@ -220,14 +218,11 @@ func loadBrowserAdBlockSites(path string) map[string]bool {
 	return disabled
 }
 
-// saveBrowserAdBlockSites writes through a temporary file so a power loss
-// cannot leave half a JSON document behind.
+// saveBrowserAdBlockSites writes through the same temp+fsync+rename path as the
+// rest of the user's data, keeping the previous list as .bak.
 func saveBrowserAdBlockSites(path string, disabled map[string]bool) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
 	}
 	sites := make([]string, 0, len(disabled))
 	for site := range disabled {
@@ -241,11 +236,7 @@ func saveBrowserAdBlockSites(path string, disabled map[string]bool) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return AtomicWrite(path, append(data, '\n'), 0o644)
 }
 
 // browserAdBlockOff reports whether filtering is disabled for the site a URL

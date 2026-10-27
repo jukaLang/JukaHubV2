@@ -660,7 +660,10 @@ func prepareSaveSync(roots []saveRoot) (saveSyncManifest, error) {
 	if err != nil {
 		return saveSyncManifest{}, err
 	}
-	if err := os.WriteFile(filepath.Join(saveManagerSyncDir(), "folders.json"), data, 0o600); err != nil {
+	// Atomic, with a .bak: this is the list of folders the user shared with
+	// their other devices, and a card pulled mid-write used to leave a file
+	// that read as "save sync was never set up".
+	if err := AtomicWrite(filepath.Join(saveManagerSyncDir(), "folders.json"), data, 0o600); err != nil {
 		return saveSyncManifest{}, err
 	}
 	var readme strings.Builder
@@ -681,12 +684,11 @@ func prepareSaveSync(roots []saveRoot) (saveSyncManifest, error) {
 }
 
 func saveSyncStatus() (saveSyncManifest, bool) {
-	data, err := os.ReadFile(filepath.Join(saveManagerSyncDir(), "folders.json"))
-	if err != nil {
+	var manifest saveSyncManifest
+	if _, err := readJSONWithBackup(filepath.Join(saveManagerSyncDir(), "folders.json"), &manifest); err != nil {
 		return saveSyncManifest{}, false
 	}
-	var manifest saveSyncManifest
-	if err := json.Unmarshal(data, &manifest); err != nil || len(manifest.Folders) == 0 {
+	if len(manifest.Folders) == 0 {
 		return saveSyncManifest{}, false
 	}
 	return manifest, true

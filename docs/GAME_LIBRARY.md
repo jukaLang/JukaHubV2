@@ -246,8 +246,8 @@ What it refuses, and why it says so on the panel instead of launching:
 
 - **No RetroArch, or no core for that console.** The stock `Emus/<system>/launch.sh`
   scripts do not reliably forward extra arguments, so the hub starts RetroArch
-  itself. Install it (or its core) from **Emulators**, or point
-  `JUKAHUB_RETROARCH` at a different build.
+  itself. Install the core from **Emulators** — **A** on the system's tile, or
+  **X** on any tile — or point `JUKAHUB_RETROARCH` at a different build.
 - **No Wi-Fi address.** Hosting needs a LAN address; connect to a network first.
 - **Port already in use, or nothing answering at the address.** Both are probed
   before RetroArch starts, so a typo or a second session is a one-line message,

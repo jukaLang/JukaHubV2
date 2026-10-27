@@ -319,25 +319,32 @@ func browserOpenURL(config *Config, rawURL string) bool {
 }
 
 func browserBack(config *Config) {
+	// Look for the page to load into before stepping the history: the step
+	// commits the cursor, so doing it first meant a press with no browser on
+	// screen consumed an entry and the next press skipped a page.
+	elem, found := findBrowserElement(config)
+	if !found {
+		return
+	}
 	address, ok := browserHistoryStep(-1)
 	if !ok {
 		showToast("No previous page", ToastInfo())
 		return
 	}
-	if elem, found := findBrowserElement(config); found {
-		loadTextBrowserURLAt(config, elem, address, false)
-	}
+	loadTextBrowserURLAt(config, elem, address, false)
 }
 
 func browserForward(config *Config) {
+	elem, found := findBrowserElement(config)
+	if !found {
+		return
+	}
 	address, ok := browserHistoryStep(1)
 	if !ok {
 		showToast("No next page", ToastInfo())
 		return
 	}
-	if elem, found := findBrowserElement(config); found {
-		loadTextBrowserURLAt(config, elem, address, false)
-	}
+	loadTextBrowserURLAt(config, elem, address, false)
 }
 
 // browserHome loads the browser's start page, the same way a browser's home

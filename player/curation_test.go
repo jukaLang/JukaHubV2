@@ -476,7 +476,7 @@ func TestRenderCurationPanelPages(t *testing.T) {
 	setCurationTestDirs(t)
 	config, err := loadConfig("jukaconfig.json")
 	if err != nil {
-		t.Skipf("config unavailable: %v", err)
+		t.Fatalf("jukaconfig.json ships next to the tests: %v", err)
 	}
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = map[string]interface{}{}
@@ -484,7 +484,7 @@ func TestRenderCurationPanelPages(t *testing.T) {
 	frame := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)

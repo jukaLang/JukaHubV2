@@ -121,24 +121,24 @@ func renderPS4HeaderTile(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect,
 		labelFont = fonts.Small
 	}
 	label := "PS4"
-	labelW, labelH, err := labelFont.SizeUTF8(label)
-	if err != nil || int32(labelW) > rect.W-16 {
+	labelW, labelH := measureText(labelFont, label)
+	if labelFont == nil || labelW > rect.W-16 {
 		labelFont = fonts.Small
-		labelW, labelH, _ = labelFont.SizeUTF8(label)
+		labelW, labelH = measureText(labelFont, label)
 	}
 	captionH := companionFontLine(fonts.Small) + 2
-	blockH := int32(labelH) + 2 + captionH
+	blockH := labelH + 2 + captionH
 	top := rect.Y + (rect.H-blockH)/2
 	if top < rect.Y+4 {
 		top = rect.Y + 4
 	}
 	drawText(renderer, labelFont, label,
-		rect.X+(rect.W-int32(labelW))/2, top, sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
+		rect.X+(rect.W-labelW)/2, top, sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
 	if v.Focused {
 		caption = "A " + caption
 	}
 	drawText(renderer, fonts.Small, caption,
-		rect.X+rect.W/2, top+int32(labelH)+2, sdl.Color{R: 226, G: 240, B: 255, A: 255}, textAlignCenter)
+		rect.X+rect.W/2, top+labelH+2, sdl.Color{R: 226, G: 240, B: 255, A: 255}, textAlignCenter)
 
 	ps4TileRect = hit
 	return hit

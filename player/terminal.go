@@ -463,15 +463,6 @@ func handleTermWheel(dy int32) bool {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
-// termHeaderHeight matches the app's top bar so the terminal reads as a screen,
-// not as a stray console window.
-func termHeaderHeight() int32 {
-	if screenHeight < 600 {
-		return HomeTopBarHSmall
-	}
-	return HomeTopBarH
-}
-
 func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(5, 7, 12, 255)
 	renderer.Clear()
@@ -485,69 +476,57 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 
-	barH := termHeaderHeight()
+	barH := headerBarHeight()
 	padX := int32(28)
-	primary := ColorTextPrimary()
 	secondary := ColorTextSecondary()
 
 	// ── Header ──────────────────────────────────────────────────────────
-	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, ColorTopBar)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 60)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
-
-	// Live dot + title, then the working directory.
-	dotCol := sdl.Color{R: 110, G: 220, B: 150, A: 255}
-	fillCircle(renderer, padX+3, barH/2, 4, dotCol)
-	titleX := padX + 16
-	_, th, _ := medium.SizeUTF8("Terminal")
-	titleY := barH/2 - int32(th)/2
-	renderText(renderer, config, medium, "Terminal", primary, titleX, titleY)
-	titleW, _, _ := medium.SizeUTF8("Terminal")
-
+	// The app's one bar, exactly as Home and every scene draw it: wordmark,
+	// "Terminal" in the caption, the shared Back and Menu pills, the update
+	// offer and the system cluster. The terminal used to draw its own dark
+	// strip with a "< BACK" text pill, which left it as the only screen whose
+	// Back was not the app's Back.
+	renderStatusBar(renderer, config)
+	// The working directory is the terminal's own read-out, so it sits under
+	// the bar as a quiet line rather than taking the title slot.
 	cwd, _ := os.Getwd()
+	cwdLineH := int32(0)
 	if cwd != "" {
-		restX := titleX + int32(titleW) + 12
-		// Leave room for the two pills on the right.
-		avail := screenWidth - restX - 320
-		label := fitTextWidth(renderer, config, font, cwd, avail)
-		renderText(renderer, config, font, label, secondary, restX, titleY+4)
+		cwdFont := headerCaptionFont(config)
+		if cwdFont == nil {
+			cwdFont = font
+		}
+		if cwdFont != nil {
+			label := fitTextWidth(renderer, config, cwdFont, cwd, screenWidth-padX*2)
+			renderText(renderer, config, cwdFont, label, secondary, padX, barH+6)
+			cwdLineH = int32(cwdFont.Height()) + 6
+		}
 	}
 
-	// Right cluster: [KEYBOARD] [BACK]. Both are clickable; the controller and
-	// keyboard hints are in the footer.
-	pillH := int32(28)
-	pillY := (barH - pillH) / 2
-	pillPad := int32(14)
-	gap := int32(10)
+	// The keyboard chip is the terminal's own chrome beside the app menu, so it
+	// keeps the bar's pill height and type instead of inventing a third size.
+	termKeyboardRect = sdl.Rect{}
+	if chipFont := headerCaptionFont(config); chipFont != nil && tb.startRect.W > 0 {
+		label := "Keyboard"
+		chipW, _, _ := chipFont.SizeUTF8(label)
+		chipH := headerPillHeight()
+		pad := int32(12)
+		keyX := tb.startRect.X + tb.startRect.W + SpaceSM
+		keyY := (barH - chipH) / 2
+		accent := headerAccent()
+		termKeyboardRect = sdl.Rect{X: keyX, Y: keyY, W: int32(chipW) + pad*2, H: chipH}
+		fillRoundedRect(renderer, keyX, keyY, termKeyboardRect.W, chipH, chipH/2, WithAlpha(accent, 40))
+		strokeRoundedRect(renderer, keyX, keyY, termKeyboardRect.W, chipH, chipH/2, 1, WithAlpha(accent, 150))
+		renderText(renderer, config, chipFont, label, accent,
+			keyX+pad, keyY+(chipH-int32(chipFont.Height()))/2)
+	}
 
-	keyLabel := "KEYBOARD"
-	kw, _, _ := font.SizeUTF8(keyLabel)
-	kRectW := int32(kw) + pillPad*2
-	backLabel := "< BACK"
-	bw, _, _ := font.SizeUTF8(backLabel)
-	bRectW := int32(bw) + pillPad*2
-
-	backX := screenWidth - padX - bRectW
-	keyX := backX - gap - kRectW
-
-	termKeyboardRect = sdl.Rect{X: keyX, Y: pillY, W: kRectW, H: pillH}
-	fillRoundedRect(renderer, keyX, pillY, kRectW, pillH, pillH/2, WithAlpha(accentColor, 40))
-	strokeRoundedRect(renderer, keyX, pillY, kRectW, pillH, pillH/2, 1, WithAlpha(accentColor, 150))
-	renderText(renderer, config, font, keyLabel, accentColor,
-		keyX+pillPad, pillY+(pillH-int32(font.Height()))/2)
-
-	termBackRect = sdl.Rect{X: backX, Y: pillY, W: bRectW, H: pillH}
-	fillRoundedRect(renderer, backX, pillY, bRectW, pillH, pillH/2, ColorIconSurface)
-	renderText(renderer, config, font, backLabel, secondary,
-		backX+pillPad, pillY+(pillH-int32(font.Height()))/2)
-
-	// The generic scene-title back handler uses this rect; pointing it at our
-	// Back pill gives the terminal the same mouse behaviour as every other
-	// scene without a special case.
-	sceneTitleBackRect = termBackRect
+	// The generic chrome-bar click and focus paths own the Back pill now; the
+	// terminal only has to remember where it was drawn.
+	termBackRect = sceneTitleBackRect
 
 	// ── Output ──────────────────────────────────────────────────────────
-	outputTop := barH + 14
+	outputTop := barH + 14 + cwdLineH
 	inputY := screenHeight - 84
 	contentW := screenWidth - padX*2
 	maxLines := int((inputY - 18 - outputTop) / termLineH)

@@ -18,8 +18,6 @@ const (
 	pomodoroLongBreakMin       = 15
 	pomodoroSessionsBeforeLong = 4
 	pomodoroArcRadius          = 140
-	pomodoroCenterX            = 640
-	pomodoroCenterY            = 380
 )
 
 type pomodoroPhase int
@@ -132,8 +130,10 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(8, 10, 18, 255)
 	renderer.Clear()
 
-	cx := int32(pomodoroCenterX)
-	cy := int32(pomodoroCenterY)
+	// Centred in the body, between the shared header and the shared footer,
+	// rather than at a fixed 640×380 that ignored both bars.
+	cx := screenWidth / 2
+	cy := (headerBarHeight() + screenHeight - footerBarHeight()) / 2
 	r := int32(pomodoroArcRadius)
 
 	// Outer ring (track).
@@ -237,17 +237,6 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// Controls hint at bottom.
-	hintFont, _ := getCachedFont(config, "small")
-	if hintFont != nil {
-		controls := hintLine(FooterHint{"A", "Start / Pause"}, FooterHint{"B", "Skip"}, FooterHint{"Y", "Reset"})
-		chw, _, _ := hintFont.SizeUTF8(controls)
-		chx := (screenWidth - int32(chw)) / 2
-		chy := screenHeight - 60
-		renderText(renderer, config, hintFont, controls,
-			sdl.Color{R: 100, G: 115, B: 140, A: 150}, chx, chy)
-	}
-
 	// Progress dots (4 dots for 4 sessions before long break).
 	dotR := int32(8)
 	dotGap := int32(28)
@@ -267,6 +256,11 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 			})
 		}
 	}
+
+	// The shared bars, so the timer is a screen of this app rather than a
+	// separate one: the same header, Back pill and footer badges.
+	renderStatusBar(renderer, config)
+	renderFooter(renderer, config)
 }
 
 // handlePomodoroInput processes controller/keyboard input in the Pomodoro scene.

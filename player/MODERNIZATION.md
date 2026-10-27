@@ -1,7 +1,7 @@
 # JukaHubV2 Modernization Plan
 
 Status of every item below, checked against the code in this tree on
-**2026-10-25** (go1.27.2 windows/amd64, SDL2 from `player/.sdl2`):
+**2026-10-26** (go1.27.3 windows/amd64, SDL2 from `player/.sdl2`):
 
 ```
 go vet ./...      # exit 0
@@ -36,15 +36,15 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 | Phase | Done | Partial | Not started |
 |-------|------|---------|-------------|
 | 1. UI/UX fixes | 7 | 0 | 0 |
-| 2. Architecture | 30 | 2 | 0 |
-| 3. Async & performance | 17 | 2 | 3 |
+| 2. Architecture | 31 | 2 | 0 |
+| 3. Async & performance | 17 | 2 | 2 |
 | 4. Reliability | 25 | 0 | 0 |
 | 5. Features | 13 | 2 | 3 |
 | 6. Testing | 13 | 0 | 0 |
 | 7. Web builder | 7 | 2 | 8 |
 | 8. Handheld polish | 13 | 2 | 5 |
 | 8b. GPU offload | 6 | 0 | 3 |
-| 9. Browser & handheld input | 11 | 0 | 1 |
+| 9. Browser & handheld input | 12 | 0 | 1 |
 
 Rows count checkbox items only. The shipped-feature inventory in
 [5.5](#55-shipped-feature-surface-verified-2026-10-25) is a record of what
@@ -148,7 +148,7 @@ already exists, not a task list, so it is not counted here.
 - [x] ✅ Format all Go files
 
 ### Phase 2: Architecture Refactoring
-**Status**: 🟡 Mostly complete (30 shipped, 2 partial, 0 not started)
+**Status**: 🟡 Mostly complete (31 shipped, 2 partial, 0 not started)
 
 #### 2.1 Design System
 
@@ -235,7 +235,7 @@ already exists, not a task list, so it is not counted here.
       the executable (`patch_repo.go`, `apps.go`, `packages.go`).
 
 ### Phase 3: Async Work & Performance
-**Status**: 🟡 In progress (15 shipped, 2 partial, 5 not started)
+**Status**: 🟡 In progress (17 shipped, 2 partial, 2 not started)
 
 #### 3.1 Concurrency Model
 
@@ -308,7 +308,6 @@ already exists, not a task list, so it is not counted here.
       reuse recorded in Phase 6 (`renderer_cache_owner_test.go`).
 - [ ] 🟡 Object reuse for cards/labels/images — card surfaces are stateless helpers;
       per-frame text layout still allocates.
-- [ ] ⬜ Icon atlas as above.
 
 #### 3.4 Power Management
 
@@ -326,7 +325,7 @@ already exists, not a task list, so it is not counted here.
       the whole process lifetime).
 
 ### Phase 4: Reliability & Configuration
-**Status**: 🟡 Mostly complete (24 shipped, 1 partial, 0 not started)
+**Status**: ✅ Done (25 shipped, 0 partial, 0 not started)
 
 #### 4.1 Configuration
 
@@ -417,7 +416,7 @@ already exists, not a task list, so it is not counted here.
       uncacheable-304 contract, eviction, oversize skip, concurrent use).
 
 ### Phase 5: Features
-**Status**: 🟡 Partially complete (11 shipped, 3 partial, 4 not started)
+**Status**: 🟡 Partially complete (13 shipped, 2 partial, 3 not started)
 
 #### 5.1 Media
 
@@ -528,7 +527,7 @@ here is a decision, not a schedule.
       on a 1 GB device.
 
 ### Phase 6: Testing
-**Status**: 🟡 Partially complete (12 shipped, 1 partial) — bounds, cache, retry,
+**Status**: ✅ Done (13 shipped, 0 partial) — bounds, cache, retry,
 persistence and harness gaps closed
 
 - [x] ✅ Config validation tests — `config_schema_test.go`, `config_persist_test.go`.
@@ -553,14 +552,38 @@ persistence and harness gaps closed
 - [x] ✅ Benchmarks for render, cache, navigation — `hotpath_bench_test.go` covers
       the text hot path and `cache_bench_test.go` the caches. `render_bench_test.go`
       adds the 720p frame budget: a warm home frame, a cold-text home frame
-      (theme switch) and one D-pad step. Measured on the desktop proxy
-      (i7-1165G7, SDL dummy driver, software renderer):
+      (theme switch), a config-driven launcher page and one D-pad step.
+      Measured on the desktop proxy (i7-1165G7, SDL dummy driver, software
+      renderer):
 
       ```
-      BenchmarkHomeFrame720p          699 µs/frame   24 KB   1588 allocs
-      BenchmarkHomeFrame720pColdText  4.62 ms/frame  31 KB   1752 allocs
-      BenchmarkHomeNavigation720p     130 ns/step     0 B        0 allocs
+      BenchmarkHomeFrame720p          90–125 µs/frame  4.9 KB   223 allocs
+      BenchmarkHomeFrame720pColdText  ~10 ms/frame     80 KB    439 allocs
+      BenchmarkMenuPageFrame720p      ~86 µs/frame     4.6 KB   202 allocs
+      BenchmarkHomeNavigation720p     ~120–190 ns/step 0 B      0 allocs
       ```
+
+      The cold-text frame is the deliberate worst case: it clears every cache
+      per iteration, so it must not move, and it is what the splash covers.
+
+      The frame budget used to be dominated by text measurement, not by
+      drawing. Profiling a warm home frame put ~40% of it inside `ellipsize`
+      and another ~20% in `sanitizeForFont`, because every card, chip, footer
+      hint and status-bar label re-measured the same unchanged string on every
+      frame — each measurement being a `TTF_SizeUTF8` call through cgo into
+      FreeType. Three bounded caches in `textcache.go` now sit on those paths:
+      the fitted label (`fitTextCached`, 512 entries), the plain width
+      (`measureText`, 1024 entries) and the character substitution
+      (`sanitizeCached`, 512 entries). They are cleared by `ClearTextCache`,
+      which every font or theme change already calls, and each is pinned to its
+      uncached function by `textcache_fit_test.go`. The home frame went from
+      ~342 µs to ~70–100 µs and a launcher page from ~300 µs to ~87 µs on the
+      same machine; the handheld gains more, because a cgo FreeType call costs
+      several times what it does on the desktop.
+
+      The remaining frame time is SDL blits (`SDL_RenderCopy` for each cached
+      text texture and shape), which is the part a desktop profile cannot
+      reduce: it is real pixel work on the device's software renderer.
 - [x] ✅ Test harness renders at varied resolutions — `probeW`/`probeH` are
       package vars and every offscreen probe reads pixels from a region limited
       to the probe rectangle (`ReadPixels(&Rect{0, 0, probeW, probeH})`)
@@ -582,7 +605,7 @@ persistence and harness gaps closed
       suffix on `LookPath` (with the Linux side pinned to NOT add one).
 
 ### Phase 7: Web Builder
-**Status**: 🟡 Mostly complete (6 shipped, 2 partial, 9 not started) — snapping,
+**Status**: 🟡 Mostly complete (7 shipped, 2 partial, 8 not started) — snapping,
 guides, a module split and the CSP are still missing
 
 - [x] ✅ Semantic design tokens — `style.css` (`--canvas-*`, surfaces, spacing).
@@ -614,10 +637,12 @@ guides, a module split and the CSP are still missing
       version the player checks on load instead of none. An imported design that
       already has a version keeps it (re-exporting an older design does not
       silently downgrade the stamp); a fresh project stamps the current
-      `CONFIG_SCHEMA_VERSION` (1). The 17 web builder tests still pass.
+      `CONFIG_SCHEMA_VERSION` (1) — the JavaScript twin of the player's
+      `ConfigSchemaVersion`, and the web suite asserts the two agree. The 18 web
+      builder tests still pass.
 
 ### Phase 8: TrimUI handheld polish
-**Status**: 🟡 Started (13 shipped, 1 partial, 6 not started) — interaction feedback,
+**Status**: 🟡 Started (13 shipped, 2 partial, 5 not started) — interaction feedback,
 card rendering, the Tools page and a repeating D-pad landed; the rest is queued
 
 This phase collects the work that specifically targets the TrimUI Smart Pro
@@ -1148,6 +1173,56 @@ Evidence collected while re-checking every item against this tree:
   1280×720 (1.0× and 1.3× text scale) and 800×480 (1.0× and 1.15×) with real
   storage values, then deleting the temporary probe.
 
+## Audit log — 2026-10-26 (verification pass)
+
+Everything the document cites was re-checked against this tree, mechanically
+rather than by eye:
+
+- **Every code reference resolves.** A script extracted all 182 distinct Go
+  files and 15 test functions named in this document; every file exists and
+  every named test is defined. (The 15 symbols that did not resolve are the
+  component-catalogue names — `Card`, `Badge`, `ListRow` … — which map onto
+  `UICard`, `UIBadge`, `UIListRow`, and the two items explicitly parked as
+  not-built, `Focusable` and `IconButton`.)
+- **Every named test runs and passes.** The browser suite
+  (`TestBrowserKeyCyclesScrollAndLinkModes`, `TestBrowserControllerWalksLinks`,
+  `TestBrowserLinkCursorWalksThePage`, `TestBrowserLinkFocusIsDrawn`,
+  `TestBrowserTapOnPageLinkOpensIt`, `TestBrowserLinkPanelRendersSelectableRows`,
+  `TestBrowserControllerTogglesNavMode`, `TestBrowserLinkRowStepWalksColumns`,
+  `TestBrowserModeChipIsDrawn`), the focus audit
+  (`TestEveryGenericSceneIsDpadReachable`,
+  `TestEveryGenericSceneIsReachableViaTheRealKeyPath`,
+  `TestEveryFocusableTypeIsInTheGraph`, `TestTheReachabilityAuditHasTeeth`,
+  `TestFocusGraphEdgesAreBidirectional`), the concurrency and atomic-write
+  tests, and the document-link test all execute (no skips) and pass.
+- **The bookkeeping was wrong and is fixed.** Seven phase status lines
+  disagreed with their own item lists (phases 2, 3, 4, 5, 6, 7, 8) and two rows
+  of the at-a-glance table were stale (phase 2, phase 9). Phases 4 and 6 are in
+  fact complete — 25/0/0 and 13/0/0 — so they read ✅ now. One item was also
+  tracked twice: `3.3` still listed the icon atlas as ⬜ not started while `3.2`
+  and Phase 8b both record it shipped; the duplicate is gone. Every number in
+  the table and in the status lines now equals what the items below say.
+- **A render test that had never run, and the defect it was hiding.**
+  `TestLibraryArtFallsBackToTheCover` skipped itself on its second frame:
+  `renderLibraryArt` deferred its renderer's destruction to the end of the
+  test, so the next frame's `SDL_CreateRenderer` failed with "Surface already
+  associated with window" and the whole probe skipped — three assertions that
+  had never executed. Destroying the renderer when the helper returns fixed
+  the skip, which immediately exposed a second defect behind it: the cover-art
+  cache (`gameLib.artCache`) is renderer-owned but `destroyTestRenderer` did
+  not drop it, so the next renderer was handed a dead texture, `Query` failed
+  and the art box silently fell through to its initials placeholder instead of
+  the cover. Both are fixed; the test now runs all three cases (another game's
+  frame, no frame, a truncated frame) and passes.
+- **Checks after the changes:** `gofmt -l` clean, `go vet ./...` exit 0,
+  `go test -count=1 ./...` green across every package, `go test -race ./...`
+  exit 0.
+- **Not verifiable here:** the web builder's 18 JavaScript tests and the
+  Playwright e2e specs, because `node` is not installed on this machine. Their
+  claims (including the exported `schemaVersion` matching the player's
+  `ConfigSchemaVersion`) are guarded by tests in `tests/web/builder.test.mjs`,
+  but this pass did not execute them.
+
 ## Next Steps
 
 The phases above are now mostly implemented. The highest-value remaining work:
@@ -1176,6 +1251,315 @@ The phases above are now mostly implemented. The highest-value remaining work:
    device under a slow SD card may want a shorter delay. It is one constant in
    `navrepeat.go`; a hardware pass should confirm it before it is treated as
    settled.
+
+## Audit log — 2026-10-26 (memory pass)
+
+Framerate was the previous pass; this one asked the same question about memory
+and answered it with numbers rather than by eye. The measurement is kept, not
+throwaway: `TestSceneNavigationMemory` paints every scene of the shipped
+handheld config four times on one renderer and samples `collectTextureMemoryStats`,
+`ShapeCacheStats`, `IconAtlasStats`, the label/fit/measure/substitution caches,
+the live Go heap and the process working set after each pass.
+
+- **Measured baseline.** After all 36 scenes: Go heap 7 MB, home-label cache
+  0.7 MB, shape cache at its 48 MB *desktop* budget, rendered-text cache 309
+  entries / 7.4 MB (≈24 KB per label on average). So the Go side was never the
+  problem; the SDL textures are, and they live outside the Go heap.
+- **Repeated navigation does not leak, and the numbers now say so.** Passes 2–4
+  are byte-identical to pass 1 in every cache, down to the byte (textures
+  63,974 KB, of which shapes 47,968 KB at the desktop budget, text 15,323 KB /
+  558 entries and the library's box art 97,500 KB / 52 covers — that walk ran on
+  the desktop 96 MB budget, before the harness pinned the handheld ceiling; see
+  the box-art bullet below for the figures it reports now), the fit/measure
+  caches stay at 326/71 entries, and the working set has no trend. The scene
+  pass alone accounts for 56,491 KB of that; the library phase adds the rest and
+  is described below. The first pass is the only one that grows,
+  which is what warm-up looks like; the test asserts zero growth from the
+  second pass on, with slack only for collector noise (4 MB heap) and page
+  cache (16 MB RSS).
+- **Surfaces are measured where they are visible.** `runtime.MemStats` cannot
+  see cgo allocations, so a leaked SDL surface would be invisible to a heap
+  check; that is why the harness also samples the process's resident set
+  (`VmRSS` on Linux, `GetProcessMemoryInfo` on Windows, test-only helpers) and
+  fails on growth there. `TestSceneNavigationSamplerSeesGrowth` is the
+  instrument checking itself: it puts known bytes into the text cache and
+  requires the sampler to report them, so the guard cannot pass vacuously.
+- **What this harness does not cover.** Thumbnails and decoded video frames are
+  not allocated by scene painting on an empty card (they read 0 KB in the
+  table), so their bounds are guarded by their own unit tests instead. Still no
+  on-device RSS reading. The library's box art was on this list and is not any
+  more — see the box-art bullet below.
+
+Scene navigation being clean leaves the caches that grow with *use* rather than
+with a paint — the ones a long session fills. Those were audited by reading
+their lifetimes, and three were not bounded at all:
+
+- **The unbounded one was the game library's box art.**
+  `gameLib.artCache` was a plain map filled one cover per focused row and never
+  emptied until the panel closed. A 200×270 cover is ~216 KB, so a 500-game
+  collection reached ~100 MB of card RAM — on the device that is shared with
+  ffmpeg and the frame pools. It is now byte-bounded (32 MB handheld / 96 MB
+  desktop) and count-bounded (256, which also bounds cached *misses*), oldest
+  first, with the cover currently drawn always the newest entry.
+  (`TestLibraryArtCacheStaysWithinItsBudget`,
+  `TestLibraryArtCacheBoundsMisses`.)
+  The scene harness now drives it too, because a bound proven by calling
+  `rememberArt` directly says nothing about a real walk: each pass opens the
+  library on a synthetic card with a cover file for every game — sized from the
+  art budget so the whole set is larger than the cache can hold — and presses
+  Down through the list with a frame per press.
+  The harness pins the **handheld** ceiling (`libraryArtBudgetForce`), so the
+  budget that ships is the one measured on every host, including CI's `-race`
+  job, instead of whichever branch the machine happens to take: before this the
+  same test measured 96 MB on a Windows desktop and 32 MB on the Linux runner,
+  and the 32 MB path went unverified on the machine the work was done on. On the
+  desktop budget the last walk settled at 52 covers / 97,500 KB with 62 walked;
+  with the handheld ceiling pinned it settles at 17 covers / 31,875 KB with 26
+  walked, so the walk still crosses the budget and eviction is what keeps it
+  there, and the figure is identical on every later pass. The guard fails if a
+  pass loads no cover, if the walk never reaches the budget (so it cannot pass
+  on a library too small to stress it), or if the cache ends a pass above its
+  byte or entry bound. The desktop ceiling and the derivation are pinned separately by
+  `TestLibraryArtBudgetBranches`, so forcing one branch here does not leave the
+  other untested. Some of the working-set figure is that fixture being
+  resident, not a regression: the covers are real textures the panel would hold
+  on a card that size.
+  The same pin now covers the other three columns. Rendered text, home labels
+  and shapes each branch on the device too — 24, 8 and 12 MB handheld against
+  64, 48 and 48 MB desktop — and the harness was leaving those to the host, so a
+  desktop run printed 64/48/48 MB under a heading that read like the card's
+  numbers. `forceHandheldCeilings` moves the live singletons onto the handheld
+  branch (`TextCache.SetBudget` for rendered text, `homeTextCacheApplyBudget` for
+  labels, and `shapeCacheBudgetBytes()` read at eviction time for shapes), fails
+  if any of them did not take, and restores the derived branch afterwards.
+  `TestSceneBudgetBranches` pins both sides plus the derivation, so the pin
+  cannot go stale in one direction. With all four pinned the walk reads text
+  10.5 MB / 417 entries (24 MB cap), labels 663 KB (8 MB), shapes 9.7 MB (12 MB)
+  and box art 31.9 MB / 17 covers (32 MB); the shape column used to sit at
+  47 MB against the desktop 48 MB, which is the ceiling a card never has.
+  Shapes and text are still flat across passes at the tighter budgets, so
+  eviction is doing the work the desktop numbers were hiding.
+- **The rendered-text cache had no byte budget.** Every other texture cache
+  here (shapes, home labels, thumbnails, chat images, app icons) was already
+  bounded by bytes; this one was bounded only by 512 entries, and it is exactly
+  where a wrapped web paragraph, a PDF line or a chat bubble — each easily a
+  megabyte — lands. Now 24 MB handheld / 64 MB desktop, LRU, never evicting the
+  label being drawn, and the `JUKAHUB_TEXSTATS=1` accounting line prints usage
+  against the cap so a bug report can tell "at budget" from "leaking".
+  (`TestTextCacheEvictsByByteBudget`, `TestTextCacheKeepsOneOversizedLabel`,
+  `TestAppTextCacheHasABudget`.)
+- **Two caches let their misses out of the bound.** A failed icon decode was
+  written straight into the map, bypassing the eviction order the successful
+  ones go through, so a launcher full of broken icons grew the map without
+  limit; the library's art misses had the same shape until the bound above was
+  added. (`TestAppIconCacheBoundsFailedDecodes`.)
+- **In memory, the budgets now add up.** Handheld ceilings: shapes 12 MB, text
+  24 MB, home labels 8 MB, thumbnails and web images 64 MB, library art 32 MB,
+  chat images 16 × 256 KB, plus the fixed allocations (video frame and UI layer
+  ~3.7 MB each, icon atlas 256 KB).
+- **Checks after the changes:** `go vet ./` exit 0; the text, icon, library,
+  snap-preview and artwork suites pass; `gofmt` clean.
+
+## Audit log — 2026-10-26 (skip audit)
+
+A skip reports green while asserting nothing, so every skip that is not a real
+environment limitation is a hole in the regression net. The suite had 390 skip
+sites across 132 test files and only 11 of them fire on this machine; the other
+379 were latent, and a defect could move a test from "passes" to "skips"
+without anything turning red. (That is not hypothetical: the previous pass
+found `TestLibraryArtFallsBackToTheCover` skipping itself on its second frame
+because its renderer could not be created, so three assertions had never run.)
+
+The rule now applied: a test may skip only when the *machine* cannot run it.
+
+- **What is still allowed** — SDL video/ttf/image unavailable; `-short`
+  (a developer opt-out, never used by CI); symlink privilege, POSIX `sh`,
+  executable-bit and `.bat` differences on Windows; `JUKAHUB_ANDROIDRT`, the
+  TrimUI-native client, a mounted handheld card, a device that manages its own
+  startup apps; no listener, no LAN address, no resolver, a port already bound;
+  no `ffmpeg`/`tar` to shell out to; the `JUKA_PREVIEW` / `JUKAHUB_TEST_UPDATE`
+  opt-ins; secrets that are not shipped; and the helper-process re-exec pattern.
+- **290 sites converted to failures**, because the only way they could fire is a
+  defect or a broken fixture: 124 `sdl.CreateRenderer` skips (SDL video is
+  already up, and the dummy driver supports the software renderer), 88
+  `ReadPixels` skips (a rendering test that cannot read its frame has no
+  assertions left), 47 font skips (`player/Inter-Regular.ttf` is committed), 4
+  probe-texture skips, 15 missing-config/scene skips, 5 cross-test leaks
+  (another UI surface open, a child still registered, a video decoder that did
+  not exit, playback not idle) and the assert-shaped ones: "the header QR was
+  not drawn" → skip, "launcher was not drawn" → skip, plus tool-grid/unit-
+  converter/app-grid fixtures that skipped when their own premise failed.
+- **The one genuinely inert guard** was `TestToolsRowsOfflineHint`: it skipped
+  whenever the host had network access, which is always on CI, so the offline
+  hint was never checked there. It now forces the monitor offline (restoring it
+  afterwards) and asserts the row.
+- **Fixtures fixed rather than silenced**: the app-grid virtualization and
+  clip tests now size their entry list from the measured layout (they used a
+  fixed 300/40 entries that could fit the probe screen and skip), and the
+  virtual-keyboard slide test no longer treats SDL's `0` tick as "no
+  animation" — it starts the clock at 1 and fails if the offset is zero.
+- **The rule is enforced, not documented.** `TestSkipsAreEnvironmentGated`
+  scans every `t.Skip`/`b.Skip` site, requires a literal reason, and requires
+  it to match the capability list in `player/skipaudit_test.go`; a new skip with
+  any other reason fails with file, line and reason. `TestSkipAuditHasTeeth`
+  pins the matcher both ways, and the audit was verified end to end against a
+  deliberately unlisted skip (it failed, naming the line). 88 sites remain, 36 of
+  them the `-short` opt-out.
+- **Checks after the changes:** `go vet ./` exit 0, `gofmt -l` clean,
+  `go test -count=1 ./` green on two consecutive runs (41 s), and `-race` green
+  on the tests this pass changed (audit, offline hint, memory harness, the
+  converted render probes). `CONTRIBUTING.md` states the rule next to the render
+  test guidance.
+
+## Audit log — 2026-10-26 (store durability pass)
+
+The memory pass bounded the caches that grow with a paint; this one asked the
+same question about the files the player writes on the user's behalf. Every JSON
+store was read for two defects: a write that is not crash-safe, and a load that
+turns damage into an empty store without telling anyone.
+
+**The rule is one pair of helpers**, both in `config_health.go`: `AtomicWrite`
+(temp file in the same directory, fsync, rename, previous content kept as
+`.bak`) and `readJSONWithBackup` (live file, then `.bak`, logs the recovery, and
+now also logs the case where neither parses — a store must not disappear
+silently even when there is nothing left to recover). A missing file stays a
+first run: the backup is never consulted for an absent store.
+
+**What the audit found.**
+
+- One store was truncated on every save: `favorites.json` used a bare
+  `os.WriteFile`, and its loader unmarshalled into the live store, so a half
+  document left half a list that the next save wrote over the good file.
+- Sixteen others had the "atomic but unbacked" shape — temp file plus rename,
+  with no fsync and no `.bak`, paired with a loader that returned empty on any
+  parse error: per-game options, recents, music favourites, audio resume
+  positions, TV favourites, the IPTV library, browser cookies, bookmarks and the
+  per-site ad-block list, party friends and history, PS Remote hosts (pairing
+  keys), startup state, the save-sync folder manifest, curation profiles and the
+  Toolbox snippets. Fourteen had both halves; two — the IPTV library and the
+  Toolbox snippets — already wrote atomically and only needed the read side.
+  Several logged nothing at all on the way to an empty list.
+- `secret` wrote `jukauser.json` through its own tmp+rename, bypassing the
+  durability the player uses for the same file.
+
+**What was left alone, and why.** Caches are regenerable, so a reset costs a
+refetch: the weather cache, the RetroAchievements progress cache, the
+artwork-miss store, the patch `db.json` and the emulator-update `source.json`.
+`game-launchers.json` is written by the user or a patch and never by the player,
+so no `.bak` could ever exist; its loader logs and falls back to the built-in
+catalog. The game-profile catalogs and community imports report a damaged file
+as an issue in the panel instead of resetting, and `port.json`/`plugin.json`/app
+`config.json` belong to other software.
+
+**Deleted means deleted.** A cleared bookmark list, a cookie Forget (whole jar,
+one site, or the retention prune) and a deleted curation profile now remove
+`<file>.bak` together with the live file. Otherwise the "forgotten"
+session or list would still sit on the card, and the next damaged read would
+restore it — the one privacy regression a backup can introduce.
+
+**Checks:** `gofmt -l` clean over every touched file, `go vet ./` exit 0,
+`go test -count=1 ./` green on the whole package, and `-race` green over the
+converted stores plus the cookie suite. Each converted store has a test that
+saves twice through its real code path, requires the `.bak` to hold the previous
+version, corrupts the live file and requires the data back, and requires an
+absent file to read as empty. `TestBrowserForgetTakesTheBackupWithIt` pins the
+deletion, and the store inventory lives in `docs/CONFIGURATION.md` so the next
+new store has a place to be listed.
+
+## Audit log — 2026-10-26 (emulator install pass)
+
+**What was wrong.** The Emulators page was a report, not a tool. It listed
+every `Emus/` folder, every installed core and every `Roms/` system with no
+emulator, and the last group was the one that mattered: a system with games and
+no emulator said "no emulator found" when opened, and the only way to fix it
+was to copy a folder onto the card from a computer. The update checker could
+already fetch a fresh aarch64 core into the pool, but nothing on the Emulators
+page could install one, and an installed core could only be replaced by walking
+into the compatibility panel and activating a pool build by hand.
+
+**What changed.** `emulatorinstall.go` owns the missing half: a tile resolves
+to the core that provides its system (`Core` on a core row, otherwise
+`defaultCoreForSystem` on the system name), the index's CRC32 is compared with
+the bytes of the binary on the card, and the result is Install (no binary),
+Update (different bytes) or Up to date. An install reuses the update path's
+download and `activateCoreBuild`, so the build keeps its pool copy and its
+`source.json` provenance, and a replaced binary keeps a timestamped `.bak`
+beside it. On the page, **A** on a missing or unusable tile starts an install,
+**X** starts one for any tile with a core, and **L1** plans every installed core
+once and applies the stale ones. `deviceEmulatorEntries` no longer reports a
+`Roms/` system as unplayable when an installed core covers it — installing
+therefore changes the page instead of leaving the same row behind. The footer
+hints are computed per tile (A Install / Launch / Open, X Update only where a
+core exists, L1 Update all only where one is installed) and the hint line is
+ellipsized to the page body, because the Brick's canvas is narrower. The
+canonical system map gained the two TrimUI folder names it was missing, `PS`
+and `SFC`, so those systems resolve like every other one.
+
+**What is deliberately not offered.** No `Emus/<system>/` folder is written and
+no launcher script is generated: the upstream standalone builds are desktop
+Linux artifacts that cannot run on this firmware, and the stock launcher
+scripts are the firmware's. On Windows the core actions are refused, because
+the buildbot serves aarch64 shared objects and a desktop RetroArch loads
+`.dll` files; the platform rule is a variable (`emuCoreInstallPlatform`) so the
+panel's handheld path is still tested on a desktop run.
+
+**Checks:** `go vet ./` exit 0, `go test ./` green on the whole package
+(46.8 s), `gofmt -l` clean over every touched file. New tests pin the system
+resolution table, plan-vs-inventory decisions (install / update / current /
+not published), a first install writing the core and its provenance, an update
+keeping the replaced binary's bytes in the `.bak`, a checksum mismatch leaving
+the active core and the folder untouched, a current build never being
+downloaded again, the `Roms/` folder going quiet once a core covers it, and the
+footer hints matching what each press does.
+
+## Audit log — 2026-10-26 (cache budget pass)
+
+**What the audit found.** The player bounded most caches by entry count, and a
+count reads like a memory ceiling while being nothing of the kind. Five were
+bounded by count alone: the launcher's icon textures (64 icons of anything up
+to 256×256×4, so 16 MB by accident), the chat image textures (16 decoded photos,
+each up to 48 MB of RGBA), the chat avatars (48 fixed 64×64 textures), the
+downloaded thumbnail payloads (512 entries of whatever the URL served), and the
+validated bodies in the conditional-request cache (64 entries × the 1 MiB body
+limit). The other caches were already byte-bounded: `TextCache`, `homeTextCache`,
+`shapeTextures`, `thumbnailTextures` and the library's box-art cache. The fixed
+ones — icon atlas, ambient glow, the video overlay and UI layers — are single
+textures, and the cap-1 caches (text-browser wrap, lyrics) cannot grow.
+
+**What changed.** `cachebudget.go` adds `byteOrderedStore`: an
+insertion-ordered map bounded by entries and by bytes, with a release callback
+so an evicted or replaced texture is destroyed exactly once, and one eviction
+rule every cache now shares. The newest entry is never dropped — the caller
+that just stored it is drawing with it — which is the rule the thumbnail cache
+already followed. All five count-only caches were converted to it: app icons
+(8/32 MB handheld/desktop), chat images (24/64 MB), avatars (4 MB), thumbnail
+payloads (16/48 MB) and feed bodies (8/16 MB). The thumbnail payload cache also
+lost its random eviction: it now drops the oldest insertion, and accounts the
+bytes, so a batch of large images cannot sit under the 512-entry cap.
+
+**Where it shows up.** `textureMemoryStats` gained `AppIcons`, `ChatImages` and
+`ChatAvatars`, so the `JUKAHUB_TEXSTATS` line reports them (in KB, because the
+avatar cache would otherwise read as 0 MB). `EvictCachesForPressure` and the
+shutdown path both clear all five, so a critical sweep is not followed by three
+caches refilling to their ceilings. `docs/DEVELOPMENT.md` now carries the whole
+inventory as a table with the budget for each cache, and the rule that a new
+cache needs both bounds.
+
+**What was left alone.** The count-bounded string caches (text measurement,
+sanitize, fit, app label, resolved-icon path) hold short strings with a hard
+length limit; their combined worst case is a few hundred kilobytes, so they are
+listed in the inventory rather than instrumented. The chat download staging map
+(`chatImageDownloads`) is a hand-off to the render thread, not a cache: entries
+are deleted as soon as the texture is uploaded, on the frame that draws chat.
+
+**Checks:** `go vet ./` exit 0, `go test ./` green on the whole package
+(49.3 s), `-race` green over the new budget tests plus the thumbnail flood
+test, `gofmt -l` clean over every touched file. New tests pin the store's two
+bounds, that the newest entry always survives, that a replaced or evicted value
+is released once, each cache's budget wiring, the launcher's byte accounting
+through a real decode, a 24 MB chat store keeping two of three 10 MB images, the
+thumbnail payload cache evicting through its own API, the feed cache evicting by
+bytes, and the pressure sweep clearing all five.
 
 ## Notes
 

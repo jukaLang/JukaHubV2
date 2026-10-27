@@ -197,12 +197,12 @@ func TestChatLinksRenderAsClickableCards(t *testing.T) {
 		t.Fatalf("loadConfig: %v", err)
 	}
 	if findSceneIndex(config, "Chat") < 0 {
-		t.Skip("Chat scene missing")
+		t.Fatalf("the shipped config has a Chat scene; it went missing")
 	}
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)

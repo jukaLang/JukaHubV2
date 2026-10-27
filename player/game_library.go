@@ -417,18 +417,17 @@ func defaultGameRecentsFile() string {
 }
 
 // loadGameRecentsFile reads the recents list. A missing file is an empty list;
-// an unreadable one is logged and replaced on the next launch.
+// an unreadable one is logged and replaced on the next launch. The atomic save
+// leaves a .bak, so a damaged list comes back from it instead of starting over.
 func loadGameRecentsFile(path string) []recentGame {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
 	var items []recentGame
-	if err := json.Unmarshal(raw, &items); err != nil {
-		log.Printf("[library] ignoring %s: %v", path, err)
+	if _, err := readJSONWithBackup(path, &items); err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[library] ignoring %s: %v", path, err)
+		}
 		return nil
 	}
 	clean := items[:0]
@@ -441,24 +440,18 @@ func loadGameRecentsFile(path string) []recentGame {
 	return clean
 }
 
-// saveGameRecentsFile writes through a temporary file so a power loss cannot
-// leave half a JSON document behind.
+// saveGameRecentsFile writes through AtomicWrite: temp file, fsync, rename and
+// a .bak of the previous list, so a power loss leaves the previous recents
+// rather than half a document.
 func saveGameRecentsFile(path string, items []recentGame) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
 	}
 	data, err := json.MarshalIndent(items, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return AtomicWrite(path, append(data, '\n'), 0o644)
 }
 
 // recentGames returns the recents list, loading it once.

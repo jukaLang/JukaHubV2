@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -96,6 +97,98 @@ func TestTextCacheClampsZeroCapacity(t *testing.T) {
 		if tc.Len() > 1 {
 			t.Errorf("Len = %d with capacity %d, want at most 1", tc.Len(), size)
 		}
+	}
+}
+
+// The byte budget is the cap that actually matters for text: a wrapped web
+// paragraph or a chat bubble is far larger than an ordinary label, so a cache
+// bounded only by entry count can hold tens of megabytes.
+func TestTextCacheEvictsByByteBudget(t *testing.T) {
+	const entryPx = 20 // 20x20 RGBA = 1600 bytes per entry
+	budget := int64(10 * entryPx * entryPx * 4)
+	tc := NewTextCacheWithBudget(500, budget)
+
+	first := "label-0"
+	newest := first
+	for i := 0; i < 40; i++ {
+		newest = fmt.Sprintf("label-%d", i)
+		tc.Put(nil, newest, textCacheTestColor, nil, entryPx, entryPx)
+		if got := tc.Bytes(); got > budget {
+			t.Fatalf("after %d puts Bytes = %d, budget is %d", i+1, got, budget)
+		}
+	}
+	wantEntries := int(budget / (entryPx * entryPx * 4))
+	if tc.Len() != wantEntries {
+		t.Fatalf("Len = %d, want %d entries for the budget", tc.Len(), wantEntries)
+	}
+	// The eviction is LRU: the newest label survives, the first one is gone.
+	if !hasText(tc, newest) {
+		t.Errorf("newest label %q was evicted", newest)
+	}
+	if hasText(tc, first) {
+		t.Error("the first label should have aged out of the byte budget")
+	}
+}
+
+// A label bigger than the whole budget is still cached: it is the string being
+// drawn this frame, and refusing to cache it would re-rasterise it every frame.
+func TestTextCacheKeepsOneOversizedLabel(t *testing.T) {
+	tc := NewTextCacheWithBudget(8, 1024)
+	tc.Put(nil, "wide", textCacheTestColor, nil, 100, 100) // 40000 bytes
+	if !hasText(tc, "wide") {
+		t.Fatal("an oversized label was not cached")
+	}
+	if tc.Len() != 1 {
+		t.Fatalf("Len = %d, want just the oversized label", tc.Len())
+	}
+}
+
+// The live cache used by every drawn string must carry a real budget: an
+// unbounded one is the regression this guards.
+func TestAppTextCacheHasABudget(t *testing.T) {
+	cache := GetTextCache()
+	if cache == nil {
+		t.Fatal("GetTextCache returned nil")
+	}
+	want := textCacheBudgetBytes()
+	if got := cache.Limit(); got != want || got <= 0 {
+		t.Fatalf("text cache budget = %d, want %d", got, want)
+	}
+	if want > 128<<20 {
+		t.Fatalf("budget %d MB is larger than the handheld could ever afford", want>>20)
+	}
+}
+
+// SetBudget is how the memory harness puts the live singleton on the handheld
+// ceiling: the cache already exists and was built with the host's number, so the
+// seam in front of textCacheBudgetBytes cannot reach it. Lowering the ceiling
+// evicts immediately rather than on the next Put — a harness that measured a
+// half-tightened cache would report a limit it is not enforcing — and raising it
+// afterwards never brings an evicted label back.
+func TestTextCacheSetBudgetEvictsDownToTheNewCeiling(t *testing.T) {
+	tc := NewTextCacheWithBudget(64, 1<<20)
+	for i := 0; i < 32; i++ {
+		tc.Put(nil, fmt.Sprintf("label-%d", i), textCacheTestColor, nil, 100, 100) // 40 KB each
+	}
+	if tc.Bytes() == 0 {
+		t.Fatal("the fixture cached nothing")
+	}
+
+	tc.SetBudget(80 << 10) // two labels
+	if got := tc.Limit(); got != 80<<10 {
+		t.Fatalf("Limit = %d, want the 80 KB it was set to", got)
+	}
+	if got := tc.Bytes(); got > 80<<10 {
+		t.Fatalf("the cache holds %d bytes after the budget was lowered to %d", got, 80<<10)
+	}
+	if got := tc.Len(); got > 2 {
+		t.Fatalf("%d entries survived an 80 KB budget of 40 KB labels", got)
+	}
+	kept := tc.Len()
+
+	tc.SetBudget(1 << 20)
+	if tc.Len() != kept {
+		t.Fatalf("raising the budget changed the entry count %d→%d: evicted labels came back", kept, tc.Len())
 	}
 }
 

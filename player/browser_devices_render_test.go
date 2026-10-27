@@ -77,7 +77,7 @@ func TestBrowserSceneRendersOnBothDevices(t *testing.T) {
 		renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 		if err != nil {
 			currentSceneIndex, appConfig = prevScene, prevConfig
-			t.Skipf("software renderer unavailable: %v", err)
+			t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 		}
 
 		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
@@ -86,7 +86,7 @@ func TestBrowserSceneRendersOnBothDevices(t *testing.T) {
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
 			destroyTestRenderer(renderer)
 			currentSceneIndex, appConfig = prevScene, prevConfig
-			t.Skipf("ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 
 		elem, ok := findBrowserElement(config)

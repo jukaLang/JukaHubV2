@@ -168,13 +168,15 @@ func statusIconHeight(font *ttf.Font) int32 {
 	return h
 }
 
-// statusWidth is the text half's width, zero without a font.
+// statusWidth is the text half's width, zero without a font. It is measured
+// through the shared cache: the bar recomputes the clock, battery and media
+// labels on every frame to place its chips.
 func statusWidth(font *ttf.Font, text string) int32 {
 	if font == nil || text == "" {
 		return 0
 	}
-	w, _, _ := font.SizeUTF8(text)
-	return int32(w)
+	w, _ := measureText(font, text)
+	return w
 }
 
 // statusWiFiIconWidth is the meter's width for a given icon height.
@@ -542,20 +544,15 @@ func resetWiFiSignalPollForTest() {
 // meter stays honest on kernels without /proc/net/wireless. An idle radio is
 // dormant or down, never up, so this does not light the meter for a Wi-Fi chip
 // that is simply present.
+//
+// The interface list comes from wirelessInterfaceNames, not a local scan of
+// /sys/class/net: a local scan has to test entries that are symlinks (see
+// isWirelessNetdev) and it only ever looked for the "wireless" marker, so a
+// cfg80211 image — where the marker is "phy80211" — read as "no link" even with
+// the interface up.
 func wifiLinkIsUp() bool {
-	entries, err := os.ReadDir("/sys/class/net")
-	if err != nil {
-		return false
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		base := filepath.Join("/sys/class/net", entry.Name())
-		if _, err := os.Stat(filepath.Join(base, "wireless")); err != nil {
-			continue
-		}
-		state, err := os.ReadFile(filepath.Join(base, "operstate"))
+	for _, name := range wirelessInterfaceNames() {
+		state, err := os.ReadFile(filepath.Join(wifiSysfsNetRoot, name, "operstate"))
 		if err == nil && strings.TrimSpace(string(state)) == "up" {
 			return true
 		}

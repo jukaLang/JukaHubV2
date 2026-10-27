@@ -48,7 +48,7 @@ func renderDownloadsProbe(t *testing.T, config *Config) (*probeFrame, sdl.Rect, 
 	t.Helper()
 	f := newProbeFrame(t)
 	if font, _ := getCachedFont(config, "small"); font == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	prevW, prevH := screenWidth, screenHeight
 	prevAccent := accentColor
@@ -61,7 +61,7 @@ func renderDownloadsProbe(t *testing.T, config *Config) (*probeFrame, sdl.Rect, 
 
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -70,7 +70,7 @@ func renderDownloadsProbe(t *testing.T, config *Config) (*probeFrame, sdl.Rect, 
 	renderer.Clear()
 	renderDownloadsPanel(renderer, config)
 	if err := renderer.ReadPixels(&sdl.Rect{X: 0, Y: 0, W: probeW, H: probeH}, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	hits := make([]sdl.Rect, 0, len(dlPanel.hits))
 	for _, hit := range dlPanel.hits {

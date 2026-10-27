@@ -179,7 +179,7 @@ func TestDrawWebDocumentPaintsOverlayLayers(t *testing.T) {
 	frame := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -192,7 +192,7 @@ func TestDrawWebDocumentPaintsOverlayLayers(t *testing.T) {
 	rect := sdl.Rect{X: 10, Y: 10, W: 700, H: 480}
 	drawWebDocument(renderer, config, doc, layout, rect, 0)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	red, outside := 0, 0

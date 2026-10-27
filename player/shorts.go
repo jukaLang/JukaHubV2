@@ -310,6 +310,14 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, PanelFill(220), accentColor)
 
+	// An empty feed used to paint the bare panel: the page looked broken rather
+	// than empty, with no hint that a search has to run first.
+	if len(videos) == 0 {
+		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
+			"@media", "No shorts yet", "Run a Media search, then open Shorts to see the vertical picks.")
+		return
+	}
+
 	// Warm the artwork like the results list does: the feed is small enough
 	// to prefetch whole, so entering the scene does not paint grey tiles.
 	for _, vid := range videos {

@@ -26,12 +26,12 @@ func cacheProbeRenderer(t *testing.T, name string) *sdl.Renderer {
 	}
 	win, err := sdl.CreateWindow(name, 0, 0, probeW, probeH, sdl.WINDOW_HIDDEN)
 	if err != nil {
-		t.Skipf("window unavailable: %v", err)
+		t.Fatalf("could not create a probe window after SDL video came up: %v (another test may have leaked a window or renderer)", err)
 	}
 	renderer, err := sdl.CreateRenderer(win, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
 		win.Destroy()
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	t.Cleanup(func() {
 		destroyTestRenderer(renderer)
@@ -46,13 +46,13 @@ func TestVideoOverlayCacheIsNotSharedAcrossRenderers(t *testing.T) {
 
 	texA := vkEnsureVideoOverlayCache(a, &Config{}, 320, 180)
 	if texA == nil {
-		t.Skip("this renderer has no render-target support")
+		t.Fatal("the software renderer could not make a render-target texture; SDL reports targets as supported here")
 	}
 	buildsA := vkVideoOverlayBuilds
 
 	texB := vkEnsureVideoOverlayCache(b, &Config{}, 320, 180)
 	if texB == nil {
-		t.Skip("second renderer has no render-target support")
+		t.Fatal("the second software renderer could not make a render-target texture")
 	}
 	if texB == texA {
 		t.Fatal("second renderer reused a texture owned by the first")
@@ -77,7 +77,7 @@ func TestKeyboardAndChatCachesAreNotSharedAcrossRenderers(t *testing.T) {
 	font, _ := getCachedFont(&Config{}, "small")
 	medium, _ := getCachedFont(&Config{}, "medium")
 	if font == nil || medium == nil {
-		t.Skip("no font available")
+		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 
 	keyA := vkEnsureStaticLayer(a, &Config{}, medium, font)

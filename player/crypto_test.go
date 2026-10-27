@@ -127,7 +127,7 @@ func TestShippedConfigSecretsDecrypt(t *testing.T) {
 	requireBuiltInKey(t)
 	cfg, err := loadConfig("jukaconfig.json")
 	if err != nil {
-		t.Skipf("no config in the test working directory: %v", err)
+		t.Fatalf("jukaconfig.json ships next to the tests: %v", err)
 	}
 	tok := strings.TrimSpace(cfg.ChannelProfile.Token)
 	if tok == "" {

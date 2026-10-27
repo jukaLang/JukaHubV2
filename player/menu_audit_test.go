@@ -35,7 +35,7 @@ var auditConfigNames = []string{"jukaconfig.json", "trimui/jukaconfig.device.jso
 // cancelPendingUserConfigSave drops the debounced jukauser.json write a config
 // load schedules. The audit loads the shipped configs from the checkout, so
 // without this a test run would rewrite the tracked user files a second later.
-func cancelPendingUserConfigSave(t *testing.T) {
+func cancelPendingUserConfigSave(t testing.TB) {
 	t.Helper()
 	userConfigSaveMutex.Lock()
 	if userConfigSaveTimer != nil {
@@ -46,14 +46,16 @@ func cancelPendingUserConfigSave(t *testing.T) {
 	userConfigSaveMutex.Unlock()
 }
 
-// loadAuditConfigs loads each shipped config, skipping when the test is not run
-// from the player directory (the same guard the widget tests use).
-func loadAuditConfigs(t *testing.T) map[string]*Config {
+// loadAuditConfigs loads each shipped config. The configs are committed next to
+// the tests and Go runs a package's tests from its directory, so a missing file
+// means the checkout or the working directory is broken — failing here is the
+// point: the whole menu audit would otherwise evaporate without a word.
+func loadAuditConfigs(t testing.TB) map[string]*Config {
 	t.Helper()
 	out := map[string]*Config{}
 	for _, name := range auditConfigNames {
 		if _, err := os.Stat(name); err != nil {
-			t.Skipf("config %s is not next to the test: %v", name, err)
+			t.Fatalf("config %s is not next to the test: %v", name, err)
 		}
 		config, _, err := LoadXMLConfigWithFallback(name)
 		cancelPendingUserConfigSave(t)
@@ -348,7 +350,7 @@ func TestContentStaysInsidePanel(t *testing.T) {
 func TestSharedScenesMatchAcrossConfigs(t *testing.T) {
 	configs := loadAuditConfigs(t)
 	if len(configs) < 2 {
-		t.Skip("needs both shipped configs")
+		t.Fatalf("both shipped configs exist (player/jukaconfig.json and player/trimui/jukaconfig.device.json); they could not be loaded")
 	}
 	desktop, device := configs["jukaconfig.json"], configs["trimui/jukaconfig.device.json"]
 	if desktop == nil || device == nil {
@@ -558,7 +560,7 @@ func countSceneTextPixels(t *testing.T, configName string, config *Config, idx i
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -570,7 +572,7 @@ func countSceneTextPixels(t *testing.T, configName string, config *Config, idx i
 	renderer.Clear()
 	renderScene(renderer, config, config.Scenes[idx])
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	// JUKAHUB_SCENE_DUMP_DIR=<dir> writes every scene to <dir>/<config>_<scene>.png
 	// so a layout review can look at the real pixels instead of the config.

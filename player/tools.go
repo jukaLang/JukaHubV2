@@ -209,8 +209,22 @@ func downloadFile(url, dest string) error {
 // send a Content-Length. The request timeout is generous because helper-tool
 // bundles (ffmpeg) are large; the size cap still applies.
 func downloadFileWithProgress(url, dest string, progress func(done, total int64)) error {
+	return downloadFileWithProgressCtx(context.Background(), url, dest, progress)
+}
+
+// downloadFileWithProgressCtx is downloadFileWithProgress bounded by ctx: a
+// cancelled download stops at the next read instead of running to completion
+// behind a screen the user has already dismissed.
+func downloadFileWithProgressCtx(ctx context.Context, url, dest string, progress func(done, total int64)) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	client := &http.Client{Timeout: 15 * time.Minute}
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

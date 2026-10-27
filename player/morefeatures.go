@@ -742,7 +742,7 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	if text == "" && element.Variable != "log_text" {
 		title, body := textlogEmptyState(element.Variable)
 		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
-			"·", title, body)
+			"@apps", title, body)
 		return
 	}
 	font, _ := getCachedFont(config, element.Font)

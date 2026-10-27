@@ -582,9 +582,11 @@ func renderAmbientDynamicBg(renderer *sdl.Renderer, t float64) {
 	renderer.SetDrawColor(pal.top.R, pal.top.G, pal.top.B, 255)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
 
-	// Enhanced ambient glow — more colors and bigger blobs than original
-	ensureAmbientGlow(renderer)
-	if ambientGlow == nil {
+	// Enhanced ambient glow — more colors and bigger blobs than original.
+	// The glow texture is renderer-owned (see backgroundfx.go), so ask for
+	// this renderer's copy rather than holding a package-level handle.
+	glow := ambientGlowFor(renderer)
+	if glow == nil {
 		return
 	}
 
@@ -625,16 +627,16 @@ func renderAmbientDynamicBg(renderer *sdl.Renderer, t float64) {
 		}
 		cx = clampF64(cx, 0, float64(screenWidth))
 		cy = clampF64(cy, 0, float64(screenHeight))
-		_ = ambientGlow.SetColorMod(b.color.R, b.color.G, b.color.B)
-		_ = ambientGlow.SetAlphaMod(b.alpha)
-		_ = renderer.Copy(ambientGlow, nil, &sdl.Rect{
+		_ = glow.SetColorMod(b.color.R, b.color.G, b.color.B)
+		_ = glow.SetAlphaMod(b.alpha)
+		_ = renderer.Copy(glow, nil, &sdl.Rect{
 			X: int32(cx) - d/2, Y: int32(cy) - d/2, W: d, H: d,
 		})
 	}
 
 	// Restore texture state
-	_ = ambientGlow.SetColorMod(255, 255, 255)
-	_ = ambientGlow.SetAlphaMod(255)
+	_ = glow.SetColorMod(255, 255, 255)
+	_ = glow.SetAlphaMod(255)
 
 	// Render floating particles
 	renderBgParticles(renderer, t, pal)

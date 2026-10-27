@@ -27,7 +27,7 @@ func widgetRenderConfig(t *testing.T) *Config {
 	t.Helper()
 	config, _, err := LoadXMLConfigWithFallback("jukaconfig.json")
 	if err != nil {
-		t.Skipf("no usable jukaconfig.json next to the test: %v", err)
+		t.Fatalf("no usable jukaconfig.json next to the test: %v", err)
 	}
 	ensureSettingsWidgets(config)
 	return config
@@ -48,7 +48,7 @@ func renderNamedScene(t *testing.T, config *Config, name string) (*probeFrame, *
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -56,7 +56,7 @@ func renderNamedScene(t *testing.T, config *Config, name string) (*probeFrame, *
 	renderer.Clear()
 	renderScene(renderer, config, config.Scenes[idx])
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	if dir := os.Getenv("JUKAHUB_WIDGET_DUMP_DIR"); dir != "" {
 		if err := writeFramePNG(filepath.Join(dir, name+".png"), f.buf); err != nil {

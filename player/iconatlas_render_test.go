@@ -20,7 +20,7 @@ func iconProbe(t *testing.T) (*sdl.Renderer, *probeFrame) {
 	_ = newProbeFrame(t) // SDL video init + the hidden window
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	f := &probeFrame{buf: make([]byte, probeW*probeH*4), bg: sdl.Color{R: 9, G: 14, B: 25, A: 255}}
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
@@ -33,7 +33,7 @@ func iconCapture(t *testing.T, renderer *sdl.Renderer, f *probeFrame) *probeFram
 	t.Helper()
 	captured := &probeFrame{buf: make([]byte, probeW*probeH*4), bg: f.bg}
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&captured.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return captured
 }

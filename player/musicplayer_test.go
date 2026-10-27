@@ -228,7 +228,7 @@ func TestMusicTransportHitboxesAreSeparate(t *testing.T) {
 	newProbeFrame(t) // initialises SDL and renderWin
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	renderMusicPlayer(renderer, &Config{})
@@ -274,7 +274,7 @@ func TestMusicPlaylistClickPlaysVisibleRow(t *testing.T) {
 	newProbeFrame(t) // initialises SDL and renderWin
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	renderMusicPlayer(renderer, &Config{})
@@ -363,7 +363,7 @@ func renderMusicForTest(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	renderMusicPlayer(renderer, &Config{})
@@ -375,7 +375,7 @@ func renderMusicFrame(t *testing.T) *probeFrame {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -386,7 +386,7 @@ func renderMusicFrame(t *testing.T) *probeFrame {
 	renderer.Clear()
 	renderMusicPlayer(renderer, &Config{})
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }
@@ -539,7 +539,7 @@ func settingsScenes(t *testing.T, path string) []SceneConfig {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Skipf("%s not available: %v", path, err)
+		t.Fatalf("%s ships next to the tests: %v", path, err)
 	}
 	var cfg struct {
 		Scenes []SceneConfig `json:"scenes"`

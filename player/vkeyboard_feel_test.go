@@ -220,7 +220,7 @@ func keyboardFrame(t *testing.T, renderer *sdl.Renderer, cfg *Config) *probeFram
 	renderer.Clear()
 	renderKeyboard(renderer, cfg)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return frame
 }

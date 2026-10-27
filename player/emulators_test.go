@@ -296,7 +296,7 @@ func TestEmuStatusChipFitsEveryTile(t *testing.T) {
 	probeRenderer(t) // initialises SDL_ttf so the chip font can be opened
 	font := emuStatusChipFont(&Config{})
 	if font == nil {
-		t.Skip("no font available in this build")
+		t.Fatalf("no font available in this build: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	cell := sdl.Rect{X: 100, Y: 100, W: emuTileMinW, H: emuTileH}
 	for _, status := range []emuStatus{emuAvailable, emuBroken, emuMissing} {
@@ -332,7 +332,7 @@ func TestEmuTileStatusChipIsDrawn(t *testing.T) {
 
 	buf := make([]byte, probeW*probeH*4)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	green := 0
 	for y := chip.Y + 2; y < chip.Y+chip.H-2; y++ {
@@ -389,7 +389,7 @@ func TestEmuPageDrawsTheSharedHeader(t *testing.T) {
 	}
 	buf := make([]byte, probeW*probeH*4)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	// The header band is the reserved strip at the top of the page; the title
 	// is drawn in the primary text colour, so it must contain bright pixels.
@@ -424,7 +424,7 @@ func TestEmuTileDimsUnavailablePicture(t *testing.T) {
 		drawEmuTile(renderer, &Config{}, cell, emuEntry{Name: "GBA", Status: status, Glyph: "gamepad"}, false, false, nil)
 		buf := make([]byte, probeW*probeH*4)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("renderer.ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		var sum int
 		for y := boxY; y < boxY+emuIconBox; y++ {
@@ -458,7 +458,7 @@ func TestEmuTileIconShrinksForLargeText(t *testing.T) {
 	large := getFontSized(&Config{}, "small", 32)
 	chipH := emuStatusChipHeight(emuStatusChipFont(&Config{}))
 	if small == nil || large == nil {
-		t.Skip("no font available in this build")
+		t.Fatalf("no font available in this build: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	if got := emuTileIconSize(cell, small, chipH); got != emuIconBox {
 		t.Errorf("default text shrank the icon to %d, want %d", got, emuIconBox)
@@ -488,7 +488,7 @@ func TestEmuTileDrawsTheEmulatorsPicture(t *testing.T) {
 
 	buf := make([]byte, probeW*probeH*4)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	boxX := cell.X + (cell.W-emuIconBox)/2
 	boxY := cell.Y + 12

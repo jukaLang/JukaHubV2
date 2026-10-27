@@ -617,8 +617,21 @@ var errToolsOffline = errors.New("offline: connect to WiFi to install helper too
 const minHelperToolBytes = 256 << 10
 
 func ensureHelperTool(tool string, config *Config) error {
+	return ensureHelperToolCtx(context.Background(), tool, config)
+}
+
+// ensureHelperToolCtx is ensureHelperTool that can be cancelled. A cancelled
+// install hides its progress card instead of leaving it on screen paused at the
+// byte it had reached.
+func ensureHelperToolCtx(ctx context.Context, tool string, config *Config) error {
 	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" && tool != "ffprobe" {
 		return fmt.Errorf("unsupported helper tool %q (supported: ffplay, ffmpeg, ffprobe, yt-dlp)", tool)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	helperInstallMu.Lock()
 	defer helperInstallMu.Unlock()
@@ -661,10 +674,19 @@ func ensureHelperTool(tool string, config *Config) error {
 		installBarFailRetry(tool, "No internet — connect WiFi, then press A")
 		return errToolsOffline
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	logPatch("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
 	installBarBegin(tool)
-	if err := downloadHelperTool(tool, target, config); err != nil {
+	if err := downloadHelperToolCtx(ctx, tool, target, config); err != nil {
 		logPatch("[TOOLS] %s install failed: %v", tool, err)
+		if ctx.Err() != nil {
+			// Cancelled from the loading card: this is not an install failure,
+			// so the card is hidden rather than left showing an error.
+			installBarAbort()
+			return ctx.Err()
+		}
 		installBarFailRetry(tool, toolInstallFailureReason(err))
 		return err
 	}
@@ -910,13 +932,18 @@ func firstLine(s string) string {
 }
 
 func downloadHelperTool(tool, target string, config *Config) error {
+	return downloadHelperToolCtx(context.Background(), tool, target, config)
+}
+
+// downloadHelperToolCtx is downloadHelperTool that honours cancellation.
+func downloadHelperToolCtx(ctx context.Context, tool, target string, config *Config) error {
 	// ffplay/ffmpeg/ffprobe ship together in one FFmpeg bundle, so a single
 	// download installs the whole family.
 	if tool == "ffmpeg" || tool == "ffplay" || tool == "ffprobe" {
-		return downloadFFmpegBundle(target, config)
+		return downloadFFmpegBundleCtx(ctx, target, config)
 	}
 	if tool == "yt-dlp" {
-		return downloadYtDlp(target, config)
+		return downloadYtDlpCtx(ctx, target, config)
 	}
 	return fmt.Errorf("no downloader implemented for %q", tool)
 }
@@ -962,6 +989,13 @@ func ffmpegArchiveExt(url string) string {
 // installs ffplay, ffmpeg and ffprobe into the tools directory. The archive
 // nests the binaries a few folders deep, so extraction is by base name.
 func downloadFFmpegBundle(target string, config *Config) error {
+	return downloadFFmpegBundleCtx(context.Background(), target, config)
+}
+
+// downloadFFmpegBundleCtx is downloadFFmpegBundle that stops when ctx is
+// cancelled: a Play the user backed out of must not keep the bundle download
+// running behind the scene they went back to.
+func downloadFFmpegBundleCtx(ctx context.Context, target string, config *Config) error {
 	assets, err := ffmpegAssetNames(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
@@ -987,7 +1021,7 @@ func downloadFFmpegBundle(target string, config *Config) error {
 	defer tmp.Close()
 	logPatch("[TOOLS] downloading ffmpeg from %s", url)
 	installBarPhase(installPhaseDownload)
-	if err := downloadFileWithProgress(url, tmp.Name(), installBarProgress); err != nil {
+	if err := downloadFileWithProgressCtx(ctx, url, tmp.Name(), installBarProgress); err != nil {
 		return fmt.Errorf("download ffmpeg from %s: %w", url, err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -1153,6 +1187,11 @@ func executableHeaderOK(header []byte) bool {
 // link). That left yt-dlp downloaded but never installed, while the ffmpeg
 // bundle (which is copied, not renamed) worked.
 func downloadYtDlp(target string, config *Config) error {
+	return downloadYtDlpCtx(context.Background(), target, config)
+}
+
+// downloadYtDlpCtx is downloadYtDlp bounded by ctx (see downloadFileWithProgressCtx).
+func downloadYtDlpCtx(ctx context.Context, target string, config *Config) error {
 	asset, err := ytDlpAssetName(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
@@ -1175,7 +1214,7 @@ func downloadYtDlp(target string, config *Config) error {
 	defer tmp.Close()
 	logPatch("[TOOLS] downloading %s from %s", asset, url)
 	installBarPhase(installPhaseDownload)
-	if err := downloadFileWithProgress(url, tmpPath, installBarProgress); err != nil {
+	if err := downloadFileWithProgressCtx(ctx, url, tmpPath, installBarProgress); err != nil {
 		return fmt.Errorf("download yt-dlp from %s: %w", url, err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -1206,8 +1245,20 @@ func downloadYtDlp(target string, config *Config) error {
 // when missing. It is intentionally tolerant of transient network failures so the app
 // can still launch in offline environments and retry later.
 func helperToolPath(tool string, config *Config) (string, error) {
+	return helperToolPathCtx(context.Background(), tool, config)
+}
+
+// helperToolPathCtx is helperToolPath that abandons the auto-download when ctx
+// is cancelled, so pressing B during a cold start stops the transfer instead of
+// letting it finish behind the press.
+func helperToolPathCtx(ctx context.Context, tool string, config *Config) (string, error) {
 	if tool == "" {
 		return "", fmt.Errorf("empty tool name")
+	}
+	if ctx != nil {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 	}
 	toolPath := getToolPath(tool, config)
 	if toolPath == "" {
@@ -1226,7 +1277,7 @@ func helperToolPath(tool string, config *Config) (string, error) {
 		return "", fmt.Errorf("tools path %s exists but is not accessible: %w", toolPath, statErr)
 	}
 	logPatch("[TOOLS] %s missing at %q; attempting download", tool, toolPath)
-	if err := ensureHelperTool(tool, config); err != nil {
+	if err := ensureHelperToolCtx(ctx, tool, config); err != nil {
 		logPatch("[TOOLS] auto-download of %s failed: %v", tool, err)
 		return "", fmt.Errorf("missing %s and auto-download failed: %w", tool, err)
 	}

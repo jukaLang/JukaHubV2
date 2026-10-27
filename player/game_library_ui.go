@@ -13,6 +13,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/img"
@@ -36,6 +37,13 @@ type gameLibraryPanel struct {
 	// file name matches. Empty is the normal console-by-console browser.
 	query    string
 	artCache map[string]*sdl.Texture
+	// artOrder/artSize/artBytes bound that cache: a library of hundreds of
+	// games loaded one cover per focused row and never released one, which is
+	// tens of megabytes of textures on a card with a large collection. Order is
+	// oldest first; size is each entry's RGBA bytes (0 for a cached miss).
+	artOrder []string
+	artSize  map[string]int64
+	artBytes int64
 	// artSeen is the artwork-fetch generation whose images are in artCache. A
 	// newer generation means the cache holds "missing" entries that now exist.
 	artSeen uint64
@@ -239,6 +247,9 @@ func closeGameLibraryArt() {
 		}
 		delete(gameLib.artCache, path)
 	}
+	gameLib.artOrder = nil
+	gameLib.artSize = nil
+	gameLib.artBytes = 0
 	gameLib.artRect = sdl.Rect{}
 }
 
@@ -566,6 +577,90 @@ func handleGameLibraryMouse(mx, my int32, config *Config) bool {
 	return true
 }
 
+// The two box-art ceilings. One cover is a few hundred KB at the size the
+// preview draws it, so the handheld budget holds well over a screen's worth of
+// scrolling history while a large collection cannot pin a hundred megabytes of
+// card RAM.
+const (
+	libraryArtHandheldBudget = int64(32 << 20)
+	libraryArtDesktopBudget  = int64(96 << 20)
+)
+
+// libraryArtBudgetForce pins the handheld/desktop branch: 0 derives it from the
+// device, 1 forces the handheld ceiling, -1 the desktop one. It exists so the
+// scene-navigation memory harness can verify the 32 MB path on any host (and in
+// CI's -race job) instead of measuring whichever branch the machine happens to
+// take. It is atomic because the eviction path reads it from the render loop
+// while a test may still be painting the panel.
+var libraryArtBudgetForce atomic.Int32
+
+// libraryArtOnHandheld reports which ceiling applies on this device.
+func libraryArtOnHandheld() bool {
+	switch libraryArtBudgetForce.Load() {
+	case 1:
+		return true
+	case -1:
+		return false
+	}
+	return IsTrimuiDevice() || P().IsHandheld()
+}
+
+// libraryArtBudgetBytes caps the box-art textures held by the panel, using the
+// handheld ceiling on a handheld and the desktop one elsewhere.
+func libraryArtBudgetBytes() int64 {
+	if libraryArtOnHandheld() {
+		return libraryArtHandheldBudget
+	}
+	return libraryArtDesktopBudget
+}
+
+// libraryArtMaxTextures also bounds the count, so a library whose covers are
+// all missing (cached as nil, a few bytes each) cannot grow the map either.
+const libraryArtMaxTextures = 256
+
+// resetArtCache starts the art cache empty. Called on first use and wherever
+// the cache is dropped wholesale (a finished artwork fetch).
+func (p *gameLibraryPanel) resetArtCache() {
+	p.artCache = map[string]*sdl.Texture{}
+	p.artSize = map[string]int64{}
+	p.artOrder = nil
+	p.artBytes = 0
+}
+
+// rememberArt stores a cover texture (nil for a failed load, so a missing file
+// is not re-read every frame) and evicts the oldest entries past the budget.
+func (p *gameLibraryPanel) rememberArt(path string, tex *sdl.Texture, w, h int32) {
+	// The three maps have to exist together. A caller (or a test) that dropped
+	// only artCache still leaves the accounting usable instead of panicking on
+	// a nil map write.
+	if p.artCache == nil {
+		p.artCache = map[string]*sdl.Texture{}
+	}
+	if p.artSize == nil {
+		p.artSize = map[string]int64{}
+	}
+	bytes := int64(w) * int64(h) * 4
+	p.artCache[path] = tex
+	p.artSize[path] = bytes
+	p.artOrder = append(p.artOrder, path)
+	p.artBytes += bytes
+
+	budget := libraryArtBudgetBytes()
+	for len(p.artOrder) > 1 &&
+		(len(p.artOrder) > libraryArtMaxTextures || p.artBytes > budget) {
+		oldest := p.artOrder[0]
+		p.artOrder = p.artOrder[1:]
+		if old, ok := p.artCache[oldest]; ok {
+			if old != nil {
+				old.Destroy()
+			}
+			delete(p.artCache, oldest)
+		}
+		p.artBytes -= p.artSize[oldest]
+		delete(p.artSize, oldest)
+	}
+}
+
 // artTexture loads and caches a box-art texture. A failed load is cached as a
 // nil so a missing file does not hit the disk on every frame.
 func artTexture(renderer *sdl.Renderer, path string) *sdl.Texture {
@@ -575,17 +670,20 @@ func artTexture(renderer *sdl.Renderer, path string) *sdl.Texture {
 	if tex, ok := gameLib.artCache[path]; ok {
 		return tex
 	}
-	if gameLib.artCache == nil {
-		gameLib.artCache = map[string]*sdl.Texture{}
-	}
 	surface, err := img.Load(path)
 	if err != nil {
-		gameLib.artCache[path] = nil
+		gameLib.rememberArt(path, nil, 0, 0)
 		return nil
 	}
 	tex, _ := renderer.CreateTextureFromSurface(surface)
 	surface.Free()
-	gameLib.artCache[path] = tex
+	var w, h int32
+	if tex != nil {
+		if _, _, tw, th, qerr := tex.Query(); qerr == nil {
+			w, h = tw, th
+		}
+	}
+	gameLib.rememberArt(path, tex, w, h)
 	return tex
 }
 
@@ -724,7 +822,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 		ShowToast(artworkFetchSummary(), ToastKindInfo)
 	}
 	if gameLib.artCache == nil {
-		gameLib.artCache = map[string]*sdl.Texture{}
+		gameLib.resetArtCache()
 	}
 
 	font, _ := getCachedFont(config, "small")

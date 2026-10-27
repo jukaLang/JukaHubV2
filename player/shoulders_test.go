@@ -171,7 +171,10 @@ func TestSkipPlaybackStopsAtTheEnds(t *testing.T) {
 		index:  0,
 	}
 	if playerPhase() != "idle" {
-		t.Skip("a video is playing in this environment")
+		// Playback state is global; a non-idle phase here means an earlier test
+		// left the embedded player running, which is the leak to report rather
+		// than a reason to skip the queue-boundary check.
+		t.Fatalf("the embedded player is %q before this test started; an earlier test left it running", playerPhase())
 	}
 	if !skipPlayback(&Config{}, -1) {
 		t.Fatal("skip before the first video was not handled")

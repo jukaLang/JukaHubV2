@@ -99,7 +99,7 @@ func TestCookieRowRendersInEveryState(t *testing.T) {
 	}
 	font, _ := getCachedFont(config, helper.Font)
 	if font == nil {
-		t.Skip("no font available for the helper line's geometry")
+		t.Fatalf("no font available for the helper line's geometry: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	textW, _, _ := font.SizeUTF8(substituteVars(helper.Text, config.Variables.Custom))
 	rowW, rowH := resolveElementDimensions(*row, 320, 48)

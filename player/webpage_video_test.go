@@ -367,7 +367,7 @@ func TestSearchResultCardLoadsDerivedThumbnail(t *testing.T) {
 	// drop the key, so a hit proves the derived URL is still reachable.
 	getThumbnailTextures().Clear()
 	thumbnailCacheMutex.Lock()
-	delete(thumbnailDataCache, url)
+	thumbnailDataCache.drop(url)
 	thumbnailCacheMutex.Unlock()
 	if db, err := openSharedCache("jukahub.cache"); err == nil {
 		_ = cacheDelete(db, thumbnailDiskPrefix+url)
@@ -377,7 +377,7 @@ func TestSearchResultCardLoadsDerivedThumbnail(t *testing.T) {
 	withScreen(t, probeW, probeH)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -421,7 +421,7 @@ func TestShortsGridDrawsWithoutArtworkMetadata(t *testing.T) {
 
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()

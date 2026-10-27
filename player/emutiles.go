@@ -547,10 +547,21 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, nameLine, ColorTextPrimary(),
 		layout.body.X, footerY+12)
 	nameW, _, _ := font.SizeUTF8(nameLine)
+	statusEnd := layout.body.X + int32(nameW)
 	renderText(renderer, config, font, " · "+statusLabel, statusColor,
-		layout.body.X+int32(nameW), footerY+12)
+		statusEnd, footerY+12)
 	statusW, _, _ := font.SizeUTF8(" · " + statusLabel)
-	detailX := layout.body.X + int32(nameW) + int32(statusW) + 12
+	statusEnd += int32(statusW)
+	// A kept build is worth naming: it is the reference point R1 restores, and
+	// a date here says which build that is without opening anything.
+	if backup, ok := emuEntryBackup(selected); ok {
+		backupLabel := " · backup " + backup.Stamp.Format("2006-01-02")
+		renderText(renderer, config, font, backupLabel, ColorTextTertiary(),
+			statusEnd, footerY+12)
+		bw, _, _ := font.SizeUTF8(backupLabel)
+		statusEnd += int32(bw)
+	}
+	detailX := statusEnd + 12
 	if selected.Detail != "" {
 		rest := layout.body.W - (detailX - layout.body.X)
 		if rest > 40 {
@@ -559,11 +570,46 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	hints := []FooterHint{{Button: "D-Pad", Label: "Navigate"}, {Button: "A", Label: "Launch"}}
-	if retroAchievementsSupported() {
-		hints = append(hints, FooterHint{"Y", "Achievements"})
+	hints := emuFooterHints(selected, retroAchievementsSupported())
+	// The line is measured against the body instead of hoping it fits: the
+	// Brick's canvas is narrower than the Smart Pro's, and a hint that runs
+	// under the page border is unreadable.
+	renderText(renderer, config, font, ellipsize(font, hintLine(hints...), layout.body.W),
+		ColorTextSecondary(), layout.body.X, footerY+12+smallH+8)
+}
+
+// emuEntryBackup is the newest kept build for a tile's core, if any. It goes
+// through the same per-frame cache the hints use, so drawing never stats a
+// folder.
+func emuEntryBackup(e emuEntry) (coreBackup, bool) {
+	core := emuCoreForEntry(e)
+	if core == "" {
+		return coreBackup{}, false
 	}
-	hints = append(hints, FooterHint{"B", "Back"})
-	renderText(renderer, config, font, hintLine(hints...), ColorTextSecondary(),
-		layout.body.X, footerY+12+smallH+8)
+	return emuNewestCoreBackup(core)
+}
+
+// emuFooterHints is the control line the page draws. The A label follows what a
+// press really does on the highlighted tile — the page installs an emulator
+// where it used to print "no emulator found" — and X only appears when there is
+// a core on the card to update, so no hint promises a file that is not there.
+// R1 appears only when there is a kept build to restore.
+func emuFooterHints(e emuEntry, achievements bool) []FooterHint {
+	hints := []FooterHint{{Button: "D-Pad", Label: "Navigate"}}
+	if label := emuInstallHintLabel(e); label != "" {
+		hints = append(hints, FooterHint{Button: "A", Label: label})
+	}
+	if label := emuUpdateHintLabel(e); label != "" {
+		hints = append(hints, FooterHint{Button: "X", Label: label})
+	}
+	if label := emuRollbackHintLabel(e); label != "" {
+		hints = append(hints, FooterHint{Button: "R1", Label: label})
+	}
+	if len(emuInstalledCoreSet()) > 0 {
+		hints = append(hints, FooterHint{Button: "L1", Label: "Update all"})
+	}
+	if achievements {
+		hints = append(hints, FooterHint{Button: "Y", Label: "Achievements"})
+	}
+	return append(hints, FooterHint{Button: "B", Label: "Back"})
 }

@@ -294,6 +294,44 @@ behind it is the `browser_forget_cookies` trigger, which any button can carry.
 A tracking pixel that the ad filter already drops is not fetched at all, cookie
 or not, so the count in the toolbar still reflects what was kept off the wire.
 
+## Saved pages
+
+A page you were sent back to — a support link in an issue, a release-notes page, a
+doc someone pasted in chat — is otherwise a full retyping session on a D-pad to
+reach a second time. **Save** puts the page on screen on the saved list, named
+from the page's own title (or its host when the page had none). When the page is
+already on the list, the chip reads **Saved** instead, and pressing it again
+refreshes the title and moves the entry back to the top rather than adding a
+second copy of it.
+
+**Marks** opens that list and carries its size in the label (`Marks 3`), so a
+page saved from a link is visible on the chip that opens it. In the panel the
+D-pad chooses, **A** opens, **X** removes one entry, and **B** closes it. Saved
+pages are the user's own data, so nothing ages them out or prunes them behind
+your back; the only thing that removes one is a press.
+
+The list lives in `data/browser-bookmarks.json`, written through the durable
+path (temp file, fsync, rename) with the previous version kept as `.bak`, so a
+power cut mid-write cannot leave half a document and a damaged file comes back
+as the last good list. Clearing the last bookmark deletes the backup with it. It
+is capped at 64 entries, newest first, so a runaway save cannot grow the file
+without bound.
+
+## Finding text on a page
+
+On a five-inch screen a long issue or release page is a minute of paging to
+reach one paragraph. **Find** (or `f` on a keyboard) opens the keyboard on its
+own buffer — the address bar and the web search are left alone — and jumps the
+page to the first line that contains what you typed. `n` and `p` step to the
+next and previous match, wrapping at both ends; **Esc** clears the search before
+it means "go back", so the press that dismisses the highlight does not also
+leave the browser.
+
+Matching is per **rendered line**, because that is what the reader holds: the
+text is already wrapped, so a phrase that spans a line break is not found. A
+query that matches nothing says so instead of silently doing nothing, and an
+empty query clears the search.
+
 ## Videos and yt-dlp playback
 
 A `<video>` element or a video-bearing embed (YouTube, Vimeo, Dailymotion,
@@ -360,13 +398,16 @@ behind the keyboard — which is exactly what it used to do.
 | L1 / R1 | Scroll up / down by a page |
 | L2 / R2 · `-` / `+` · zoom chip | Zoom the page text out / in (75%–160%). The toolbar chip is the one place the scale is shown and changed: it names the current scale, is highlighted when off 100%, and steps up on a tap (wrapping). Remembered across pages and relaunches. |
 | A / Enter | Edit the address bar, open the outlined link in link mode, or work the focused form control |
+| `f` · **Find** chip | Find on the page; `n` / `p` step to the next / previous match, **Esc** clears the search |
+| **Save** chip | Save the page on screen (**Saved** when it is already on the list) |
+| **Marks** chip | Open the saved-page list, with its count in the label |
 | X / `x` / `l` | Open the link picker |
 | B / Esc | Go back to the previous screen (link mode: back to scroll mode) |
 | Back / Forward / Reload | Return to a page — and to the paragraph you were on — instead of the top (session-only; a fresh link or typed address starts at the top) |
 | **Filter** chip | Turn ad/tracker filtering off (or back on) for the current site |
 | **Forget** chip | Saved-cookie count in its label (capped at 99+); drop every saved cookie and the file on the card (press twice) |
 | Cookie strip | Under the page: the hosts the saved cookies belong to, or **No saved cookies** |
-| Touch / mouse | Tap the address bar, **GO**, the filter counter, the mode chip, the zoom chip, or a link row |
+| Touch / mouse | Tap the address bar, **GO**, the filter counter, the mode chip, the zoom chip, a link row, or a form control |
 
 In the link picker: D-pad chooses, **A** or Enter opens, **B** or Esc closes.
 

@@ -26,7 +26,7 @@ func TestStatusBarOwnsSystemCorner(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
@@ -55,7 +55,7 @@ func TestStatusBarOwnsSystemCorner(t *testing.T) {
 	renderer.Clear()
 	renderStatusBar(renderer, config)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	// The Apps pill opens the app menu and lives in the left half of the bar.
@@ -122,7 +122,7 @@ func TestBottomBarIsFooterButtons(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -134,7 +134,7 @@ func TestBottomBarIsFooterButtons(t *testing.T) {
 	renderer.Clear()
 	renderFooter(renderer, config)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	top := screenHeight - HomeFooterH
 	if px := f.at(4, top+8); px == f.bg {
@@ -170,7 +170,7 @@ func TestThemeGalleryRendersWithoutOverflow(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
@@ -187,7 +187,7 @@ func TestThemeGalleryRendersWithoutOverflow(t *testing.T) {
 	renderer.Clear()
 	renderThemeGallery(renderer, config, element)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	cols, cardW, visibleRows := themeGalleryMetrics(element)

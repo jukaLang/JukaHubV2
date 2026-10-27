@@ -151,6 +151,21 @@ pattern, and
 config-injection tests. Tests must not write into the project directory; use
 `t.TempDir()` and `t.Chdir()` for anything that saves a config.
 
+### A test may only skip for the machine, never for itself
+
+`t.Skip` means "this machine cannot run the check" — no SDL video, no POSIX
+`sh`, no symlink privilege, no listener, no bundled `ffmpeg`, an opt-in preview
+switch, or the helper-process re-exec pattern. It never means "the fixture did
+not set up" or "the thing I measure was not drawn": those are failures, because
+a skipped test reports green while asserting nothing, so the regression it was
+supposed to catch goes unnoticed. Fix the test or fail it.
+
+`TestSkipsAreEnvironmentGated` (`player/skipaudit_test.go`) enforces this: every
+skip must carry a literal reason, and the reason must match one of the
+capability gates listed in that file. A new skip with any other reason fails
+the suite with the file, line and reason; if the machine genuinely cannot run
+the check, add the capability there and say why.
+
 ## Repository layout
 
 ```text

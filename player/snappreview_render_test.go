@@ -42,16 +42,20 @@ func renderLibraryArt(t *testing.T, rect sdl.Rect, game libraryGame) *probeFrame
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
-	t.Cleanup(func() { destroyTestRenderer(renderer) })
+	// Release the renderer before this helper returns, not at test end. The
+	// fallback test draws three frames, and a second SDL_CreateRenderer on a
+	// window that still owns a live renderer fails with "Surface already
+	// associated with window" — which silently skipped the whole test.
+	defer destroyTestRenderer(renderer)
 
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	renderer.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	renderer.Clear()
 	drawLibraryArt(renderer, &Config{}, rect, game)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }

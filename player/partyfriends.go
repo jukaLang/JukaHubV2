@@ -9,7 +9,6 @@ package main
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -48,12 +47,11 @@ func partyFriendsLoadLocked() {
 		return
 	}
 	partyFriendsStore.loaded = true
-	data, err := os.ReadFile(partyFriendsPath())
-	if err != nil {
-		return
-	}
 	var stored []partyFriend
-	if json.Unmarshal(data, &stored) != nil {
+	// A damaged list comes back from the .bak the atomic save leaves beside
+	// it: the hosts a user re-joined are not regenerable, so reading them as
+	// "no friends yet" would quietly empty the list.
+	if _, err := readJSONWithBackup(partyFriendsPath(), &stored); err != nil {
 		return
 	}
 	for _, f := range stored {
@@ -66,18 +64,13 @@ func partyFriendsLoadLocked() {
 
 func partyFriendsSaveLocked() error {
 	path := partyFriendsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(partyFriendsStore.items, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// Temp+fsync+rename, with the previous list kept as .bak: a power cut while
+	// the new list lands must not cost every host on it.
+	return AtomicWrite(path, data, 0o644)
 }
 
 // partyFriendAdd remembers a host. The invite line is the identity: rejoining

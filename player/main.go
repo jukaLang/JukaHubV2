@@ -1642,7 +1642,12 @@ func main() {
 							vkOpenChat()
 							break
 						}
-						// Unit converter input area.
+						// Unit converter input area. The category chips and both swap
+						// controls are hit-tested first: they sit above the field and
+						// are drawn like buttons, so a tap has to reach them.
+						if handleUnitConverterMouse(mx, my, config) {
+							break
+						}
 						if unitInputRect.W > 0 && mx >= unitInputRect.X && mx <= unitInputRect.X+unitInputRect.W &&
 							my >= unitInputRect.Y && my <= unitInputRect.Y+unitInputRect.H {
 							vkOpenUnit()
@@ -2851,6 +2856,13 @@ func main() {
 	DestroyVKVideoOverlayCache()
 	DestroyVKChatCache()
 	clearHomeTextCache()
+	// The remaining texture and byte caches, so a shutdown leaves no texture
+	// alive past its renderer.
+	clearAppIconCache()
+	clearChatImageCache()
+	clearChatAvatarCache()
+	clearThumbnailDataCache()
+	conditionalCache.clear()
 	for _, font := range fontCache {
 		font.Close()
 	}

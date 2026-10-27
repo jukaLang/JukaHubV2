@@ -24,6 +24,12 @@ func destroyTestRenderer(r *sdl.Renderer) {
 	clearChatAvatarCache()
 	// The library's video-snap preview texture is renderer-owned the same way.
 	snapPreviewDropTexture()
+	// The library's cover-art cache is renderer-owned too, and it outlived the
+	// renderer here: a later probe got the dead handle back from the cache,
+	// Query failed and the art box drew its initials placeholder instead of the
+	// cover. That is what made the snap-preview fallback assertions fail (and,
+	// before the skip above was fixed, never run at all).
+	closeGameLibraryArt()
 	// The static-layer caches (on-screen keyboard, chat, video overlay) are
 	// renderer-owned textures too. They used to survive the renderer: a later
 	// probe rebuilt them against a dead renderer or freed the dangling pointer,

@@ -1106,6 +1106,10 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		// the room had switched streams.
 		currentPlaybackURL = pageURL
 	}
+	// A stream is starting, so this ceiling is now the one on screen. The
+	// Quality row reads it back if a later switch is cancelled before it plays,
+	// which is what keeps the row describing the picture rather than the press.
+	commitVideoQualityPlayback(pageURL, effectivePlaybackMaxHeight(config, pageURL))
 	// A new session owns the picture again: the floating window must not keep
 	// showing the previous video's scene.
 	videoMiniClear()
@@ -2250,49 +2254,49 @@ func cycleVideoQuality(config *Config) {
 		showToast("Open a video to change quality", ToastInfo())
 		return
 	}
-	next := nextVideoQualityHeight(videoQualityOverrideFor(url))
+	previous := videoQualityOverrideFor(url)
+	next := nextVideoQualityHeight(previous)
 	setVideoQualityOverride(url, next)
 	showToast("Quality: "+videoQualityLabel(config), ToastInfo())
 	if state := snapshotVideoState(); state.phase != "idle" {
-		restartVideoAtQuality(config, url, state.progress*state.duration)
+		restartVideoAtQuality(config, url, state.progress*state.duration, previous)
 	}
 }
 
+// resolveQualityStream is the resolve behind a quality switch. It is a variable
+// so the switch — including what it does when the resolve does not reach the
+// player — can be exercised without a network or the helper tools.
+var resolveQualityStream = resolveAndStartPlayback
+
 // restartVideoAtQuality re-resolves and replays the current page URL at its
-// position, the same prepare/stream/download flow playVideoInfo uses, but it
-// keeps the playback queue and does not record a second play event.
-func restartVideoAtQuality(config *Config, url string, pos float64) {
+// position, through the same load path playVideoInfo uses, but it keeps the
+// playback queue and does not record a second play event.
+//
+// The loading state begins on the press, before the tools are resolved, exactly
+// as it does for Play: re-resolving a stream is a wait like any other, so it
+// must not leave the grid or the settings sheet live behind a spinner. B
+// cancels it, and because the resolve stops before the player is touched, the
+// video that was already playing carries on.
+//
+// previous is the ceiling the switch replaced. If the switch never reaches the
+// player, the row goes back to the ceiling the picture was started with (or to
+// previous when that is not known), so it never names a stream that is not on
+// screen.
+func restartVideoAtQuality(config *Config, url string, pos float64, previous int) {
 	if config == nil || strings.TrimSpace(url) == "" {
 		return
 	}
+	// The loading card names the source the same way the top bar does.
+	prepareSeq, prepareCtx := beginVideoPrepare(sanitizeLogURL(url))
 	go func() {
-		ytDlpPath, err := helperToolPath("yt-dlp", config)
-		if err != nil {
-			log.Printf("[ERROR] restartVideoAtQuality: yt-dlp unavailable: %v", err)
-			showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
+		if resolveQualityStream(prepareSeq, prepareCtx, config, url, pos, "restartVideoAtQuality") {
 			return
 		}
-		if _, err := helperToolPath("ffmpeg", config); err != nil {
-			log.Printf("[ERROR] restartVideoAtQuality: ffmpeg unavailable: %v", err)
-			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
-			return
-		}
-		if _, err := helperToolPath("ffprobe", config); err != nil {
-			log.Printf("[DEBUG] restartVideoAtQuality: ffprobe unavailable, using defaults: %v", err)
-		}
-		// The loading card names the source the same way the top bar does.
-		prepareSeq, prepareCtx := beginVideoPrepare(sanitizeLogURL(url))
-		started, cancelled := tryStreamPlayback(prepareCtx, config, ytDlpPath, url, pos)
-		if cancelled {
-			finishVideoPrepare(prepareSeq)
-			log.Printf("[STREAM] quality restart cancelled for %s", sanitizeLogURL(url))
-			return
-		}
-		if started {
-			finishVideoPrepare(prepareSeq)
-			return
-		}
-		playWithTempFile(prepareCtx, config, ytDlpPath, url, pos, prepareSeq)
+		// The switch never reached the player: B cancelled it, or the resolve
+		// failed before the stream opened. The Quality row was already moved to
+		// the new ceiling on the press, so put back the ceiling the picture on
+		// screen was started with; the row and the stream then agree again.
+		revertVideoQualitySwitch(prepareSeq, url, previous)
 	}()
 }
 

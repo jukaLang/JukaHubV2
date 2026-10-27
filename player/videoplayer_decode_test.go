@@ -118,7 +118,7 @@ func TestEmbeddedPlayerDecodesFrames(t *testing.T) {
 	// The first decoded frame must reach the renderer as a texture.
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -140,7 +140,7 @@ func TestEmbeddedPlayerDecodesFrames(t *testing.T) {
 	renderer.Clear()
 	renderer.Copy(tex, nil, &sdl.Rect{X: 0, Y: 0, W: probeW, H: probeH})
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	changed := 0
 	for y := int32(100); y < 300; y += 4 {

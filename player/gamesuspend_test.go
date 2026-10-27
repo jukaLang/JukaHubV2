@@ -128,7 +128,7 @@ func TestStopScreenChildrenStopsAndUnregisters(t *testing.T) {
 // home screen must be immediate.
 func TestStopScreenChildrenWithoutChildrenIsFree(t *testing.T) {
 	if len(liveScreenChildren()) != 0 {
-		t.Skip("another test left a child registered")
+		t.Fatalf("an earlier test left a child process registered")
 	}
 	started := time.Now()
 	if stopped := stopScreenChildren(2 * time.Second); stopped != 0 {

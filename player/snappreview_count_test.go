@@ -248,7 +248,7 @@ func TestSnapRowWithTheCountFitsTheSlot(t *testing.T) {
 			// with an ellipsis is a count the user cannot read.
 			base, _ := getCachedFont(config, row.Font)
 			if base == nil {
-				t.Skip("no font available")
+				t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 			}
 			font := buttonLabelFont(config, row.Font, row.Text, getElementWidth(*row, 0))
 			inner := getElementWidth(*row, 0) - 2*SpaceXS

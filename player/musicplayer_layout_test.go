@@ -29,7 +29,7 @@ func TestMusicStatusLineClearsSeekBar(t *testing.T) {
 	config := &Config{}
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
-		t.Skip("small font unavailable")
+		t.Fatalf("small font unavailable: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	fontH := int32(font.Height())
 

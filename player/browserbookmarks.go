@@ -254,9 +254,9 @@ func browserBookmarkLabel(title, address string) string {
 }
 
 // browserBookmarksLoadLocked reads the saved list on first use. The caller
-// holds browserBookmarks.mu. A missing file is the normal first run; a broken
-// one is logged and ignored, so a bad edit costs the bookmarks and nothing
-// else — the next save overwrites it.
+// holds browserBookmarks.mu. A missing file is the normal first run; a damaged
+// one comes back from the .bak the atomic save leaves beside it instead of
+// reading as "no bookmarks".
 func browserBookmarksLoadLocked() {
 	if browserBookmarks.loaded {
 		return
@@ -266,16 +266,11 @@ func browserBookmarksLoadLocked() {
 	if strings.TrimSpace(path) == "" {
 		return
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
+	var file browserBookmarkFile
+	if _, err := readJSONWithBackup(path, &file); err != nil {
 		if !os.IsNotExist(err) {
 			log.Printf("[browser] cannot read %s: %v", path, err)
 		}
-		return
-	}
-	var file browserBookmarkFile
-	if err := json.Unmarshal(raw, &file); err != nil {
-		log.Printf("[browser] ignoring %s: %v", path, err)
 		return
 	}
 	if file.SchemaVersion > browserBookmarkSchemaVersion {
@@ -337,14 +332,11 @@ func browserBookmarksSaveLocked() {
 		log.Printf("[browser] cannot create %s: %v", filepath.Dir(path), err)
 		return
 	}
-	tmp := path + ".tmp"
 	// 0644 on purpose: a bookmark is the user's own list, not a session token.
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		log.Printf("[browser] cannot write %s: %v", tmp, err)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		log.Printf("[browser] cannot replace %s: %v", path, err)
+	// The atomic write keeps the previous list as .bak, so a card pulled while
+	// the new one lands costs the edit, not the bookmarks.
+	if err := AtomicWrite(path, append(data, '\n'), 0o644); err != nil {
+		log.Printf("[browser] cannot write %s: %v", path, err)
 	}
 }
 
@@ -355,6 +347,11 @@ func browserBookmarksRemoveFile(path string) {
 	defer browserBookmarksSaveMu.Unlock()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		log.Printf("[browser] cannot remove %s: %v", path, err)
+	}
+	// The .bak is a copy of the list the user just cleared. Leaving it behind
+	// would bring every bookmark back the first time a read had to fall back.
+	if err := os.Remove(path + ".bak"); err != nil && !os.IsNotExist(err) {
+		log.Printf("[browser] cannot remove %s: %v", path+".bak", err)
 	}
 }
 

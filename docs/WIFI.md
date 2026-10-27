@@ -110,10 +110,48 @@ layer, and closing it returns to the picker.
 
 The backend is `wpa_supplicant`, driven through `wpa_cli`:
 
-* **Interface discovery.** The wireless netdev is the first entry under
-  `/sys/class/net` that contains a `wireless` directory. Images whose radio has
-  an unusual name can set `JUKAHUB_WIFI_IFACE` (letters, digits, `.`, `_`, `-`
-  only; the override is never used as a command).
+* **Interface discovery.** Five sources, strongest evidence first, and the
+  first that answers wins:
+
+  1. an entry under `/sys/class/net` that holds a `wireless` or `phy80211`
+     attribute (old vendor drivers create the first, cfg80211 drivers the
+     second);
+  2. the interface names in `/proc/net/wireless`, which the kernel fills in
+     even when the driver creates neither attribute;
+  3. a control socket in the supplicant's control directory —
+     `/run/wpa_supplicant`, `/var/run/wpa_supplicant` or a `/tmp` variant, which
+     is where images with a read-only root often put it — naming a radio the
+     supplicant is already driving;
+  4. the supplicant itself: when none of the three above named a radio, `wpa_cli
+     interface` is asked which netdev it is driving (falling back to `wpa_cli -i
+     <netdev> status` for each candidate, at most four, when the listing is
+     empty or unusable). This is the
+     only source that is ground truth rather than evidence on the card, and it
+     is the one that answers an image whose `ctrl_interface` lives somewhere
+     none of the known directories cover;
+  5. a netdev named the way a Wi-Fi interface is (`wlan*`, `wlp*`, `wlx*`,
+     `ra0`/`rai*`, `ath*`, `p2p*`).
+
+  Source 4 runs a process, so its answer is cached for a minute — including the
+  answer “none”. Discovery is read while the status bar draws, and an uncached
+  probe would fork `wpa_cli` once per frame on a device with no radio. Opening
+  the picker clears the cache, so plugging an adapter in and reopening the panel
+  is enough. A probe never starts when an earlier source answered, so the common
+  handheld image (marker in sysfs) pays nothing for it. The call that fills the
+  cache does run on the caller's thread, so it is bounded: two seconds per
+  `wpa_cli` call, three seconds for the whole probe, and at most four netdevs in
+  the sweep.
+
+  The entries under `/sys/class/net` are symlinks into the device tree, so the
+  probe resolves them with `os.Stat` before asking whether the target is a
+  directory. Testing the link itself called every real radio a non-directory,
+  which is why the picker could report `No wireless network interface` on a
+  handheld that was online. The status meter's "interface is up" check reads
+  the same list, so it sees a `phy80211` radio too.
+
+  Images whose radio has an unusual name can set `JUKAHUB_WIFI_IFACE` (letters,
+  digits, `.`, `_`, `-` only; the override is never used as a command) and skip
+  discovery entirely.
 * **Tool lookup.** `wpa_cli` and the DHCP clients are resolved on `PATH` first
   and then in the standard system directories (`/sbin`, `/usr/sbin`,
   `/usr/local/sbin`, `/bin`, `/usr/bin`), because a launcher's inherited `PATH`
@@ -187,7 +225,7 @@ supplicant cannot freeze the UI.
 |---------|---------|
 | `Wi-Fi control needs wpa_cli, which is not installed` | the image lacks `wpa_cli`; use the stock Wi-Fi screen or add the tool |
 | `Wi-Fi is turned off` | the radio is soft-blocked (airplane mode or the Quick Settings switch); press **A** on the empty list, or flip **Wi-Fi** in Quick Settings |
-| `No wireless network interface on this device` | no radio is exposed to Linux, or the radio is powered off |
+| `No wireless network interface on this device` | no radio is exposed to Linux, or the radio is powered off. If the device is online, name the interface explicitly with `JUKAHUB_WIFI_IFACE` (e.g. `wlan0`) and report the image: discovery checks sysfs, `/proc/net/wireless`, the supplicant's control sockets, the supplicant's own answer through `wpa_cli` and the interface name |
 | `could not join <name>: the password was rejected` | the key is wrong (the supplicant reached the 4-way handshake and failed) |
 | `could not join <name> (disconnected)` | out of range or the access point refused the association |
 | `no IP address was assigned; check DHCP on this network` | associated, but no lease: the network's DHCP server or the firmware's client is the problem |
@@ -212,6 +250,12 @@ The status meter has its own coverage in `statusbar_status_test.go`: the
 `wifiMeterLevelFrom`, and the supplicant cache — an unanswered poll stays
 *unknown*, a failed poll clears the previous reading, and the caller never waits
 for the command.
+
+`wifi_interface_test.go` covers how the radio is *found*: the sysfs symlink the
+handheld presents, `/proc/net/wireless`, a supplicant control socket, the
+`wpa_cli` probe (both the `IFNAME=` listing and the bounded status sweep), that a
+radio sysfs already names costs no probe at all, and that 120 frames of discovery
+run the probe once — and once more only after its TTL has passed.
 
 `wifi_resilience_test.go` covers the sbin `PATH` fallback, the radio-off scan
 message, the WPA3 offer and its fallback, the superseded-entry replacement,

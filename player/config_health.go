@@ -265,6 +265,41 @@ func AtomicWrite(filename string, data []byte, perm os.FileMode) error {
 	return nil
 }
 
+// readJSONWithBackup parses a JSON store and, when the live file cannot be read
+// or parsed, falls back to the .bak that AtomicWrite leaves beside it. It
+// reports whether the backup was the one that answered, so the caller can log a
+// recovery instead of pretending nothing was lost.
+//
+// The primary file is tried first and only a real parse failure walks to the
+// backup: a store that is simply absent is a first run, not damage, and must not
+// resurrect a stale backup from some earlier card.
+func readJSONWithBackup(path string, v any) (recovered bool, err error) {
+	failure := error(nil)
+	if data, readErr := os.ReadFile(path); readErr != nil {
+		// Absent is a first run on a fresh card, not damage: walking to the
+		// .bak there would resurrect a list the user started over from.
+		if os.IsNotExist(readErr) {
+			return false, readErr
+		}
+		failure = readErr
+	} else if jsonErr := json.Unmarshal(data, v); jsonErr != nil {
+		failure = fmt.Errorf("parse %s: %w", path, jsonErr)
+	} else {
+		return false, nil
+	}
+	if backup, backupErr := os.ReadFile(path + ".bak"); backupErr == nil {
+		if jsonErr := json.Unmarshal(backup, v); jsonErr == nil {
+			Log().Warn("store is damaged; recovered the last backup", "path", path, "err", failure)
+			return true, nil
+		}
+	}
+	// Neither copy parses, so the caller is about to start from nothing. Say so
+	// here, once, for every store: a silent reset is how a reader concludes the
+	// app deleted their list.
+	Log().Warn("store is unreadable and has no usable backup; starting empty", "path", path, "err", failure)
+	return false, failure
+}
+
 // writeFileSynced writes a file and fsyncs it before closing. Without the
 // fsync, a rename can land while the data blocks are still in the page cache;
 // a power cut then leaves the destination present but empty.

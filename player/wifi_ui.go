@@ -224,6 +224,10 @@ func openWiFiPanel() {
 	// Anything still in flight belongs to the previous visit.
 	wifiGeneration++
 	wifiWorkPending = false
+	// Opening the panel is the moment a person would have plugged an adapter
+	// in, so the supplicant is asked again instead of trusting a cached answer
+	// for the rest of its minute.
+	resetSupplicantInterfaceCache()
 
 	_, detail := wifiSupport()
 	wifiPanel.available = detail == ""

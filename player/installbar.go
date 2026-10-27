@@ -121,6 +121,28 @@ func installBarDone() {
 	installBar.retryable = false
 }
 
+// installBarAbort hides the card at once. It is for a user cancel, not a
+// failure: there is nothing to retry and nothing to report, and leaving the
+// bar up would keep a cancelled download looking like work in progress.
+func installBarAbort() {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	// The fields are cleared one by one: replacing the whole struct would copy
+	// the mutex this function is holding, and the deferred Unlock would then
+	// unlock a different one.
+	installBar.visible = false
+	installBar.tool = ""
+	installBar.phase = ""
+	installBar.done = 0
+	installBar.total = 0
+	installBar.speed = 0
+	installBar.lastAt = time.Time{}
+	installBar.lastLen = 0
+	installBar.message = ""
+	installBar.endedAt = time.Time{}
+	installBar.retryable = false
+}
+
 // installBarFail marks the install failed; the card shows the reason briefly.
 func installBarFail(reason string) {
 	installBar.mu.Lock()

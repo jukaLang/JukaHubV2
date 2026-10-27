@@ -266,14 +266,14 @@ func TestWebGradientPaintsARamp(t *testing.T) {
 	frame := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	renderer.SetDrawColor(255, 0, 255, 255)
 	renderer.Clear()
 	drawWebDocument(renderer, config, doc, layout, sdl.Rect{X: 0, Y: 0, W: probeW, H: probeH}, 0)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	// Sample down the right edge of the block, past the wrapped text, so a
@@ -489,7 +489,7 @@ func TestDrawWebDocumentRoundsAndFillsACard(t *testing.T) {
 	frame := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -513,7 +513,7 @@ func TestDrawWebDocumentRoundsAndFillsACard(t *testing.T) {
 	rect := sdl.Rect{X: 0, Y: 0, W: 620, H: 400}
 	drawWebDocument(renderer, config, doc, layout, rect, 0)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	pixel := func(x, y int32) (r, g, b uint8) {
 		i := (int(y)*int(probeW) + int(x)) * 4

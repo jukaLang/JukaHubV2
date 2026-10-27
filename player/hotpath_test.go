@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
-
-	"github.com/veandco/go-sdl2/sdl"
 )
 
 // The File Explorer toolbar redraws every frame; its path must come from the
@@ -60,37 +58,36 @@ func samePath(a, b string) bool {
 }
 
 // Chat images used to accumulate one texture and one downloaded buffer per
-// image, for the life of the process.
+// image, for the life of the process. The cache is bounded by count and, since
+// the cache-budget pass, by bytes: sixteen textures is not a ceiling when one
+// photo can be 48 MB of decoded RGBA.
 func TestChatImageCacheIsBounded(t *testing.T) {
 	chatImageMutex.Lock()
-	prevImages, prevOrder := chatImages, chatImageOrder
-	chatImages = make(map[string]*sdl.Texture)
-	chatImageOrder = nil
+	prevImages := chatImages
+	chatImages = newByteOrderedStore[string, chatImageTexture](
+		chatImageCacheMax, 0,
+		func(t chatImageTexture) int64 { return t.bytes },
+		nil,
+	)
 	chatImageMutex.Unlock()
 	t.Cleanup(func() {
 		chatImageMutex.Lock()
-		chatImages, chatImageOrder = prevImages, prevOrder
+		chatImages = prevImages
 		chatImageMutex.Unlock()
 	})
 
 	chatImageMutex.Lock()
 	for i := 0; i < chatImageCacheMax+12; i++ {
 		url := "http://example.com/" + strconv.Itoa(i) + ".png"
-		chatImages[url] = nil
-		chatImageOrder = append(chatImageOrder, url)
-		evictChatImagesLocked(url)
+		chatImages.put(url, chatImageTexture{})
 	}
-	size := len(chatImages)
-	order := len(chatImageOrder)
-	_, oldestKept := chatImages["http://example.com/0.png"]
-	_, newestKept := chatImages["http://example.com/"+strconv.Itoa(chatImageCacheMax+11)+".png"]
+	size, _ := chatImages.stats()
+	_, oldestKept := chatImages.get("http://example.com/0.png")
+	_, newestKept := chatImages.get("http://example.com/" + strconv.Itoa(chatImageCacheMax+11) + ".png")
 	chatImageMutex.Unlock()
 
 	if size > chatImageCacheMax {
 		t.Fatalf("chat image cache holds %d textures, want at most %d", size, chatImageCacheMax)
-	}
-	if order > chatImageCacheMax {
-		t.Fatalf("chat image order holds %d entries, want at most %d", order, chatImageCacheMax)
 	}
 	if oldestKept {
 		t.Fatal("the oldest chat image was not evicted")

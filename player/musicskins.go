@@ -200,16 +200,10 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	}
 	artAlpha := musicArtAlphaNow(config)
 
-	const headerH = int32(56)
-	renderer.SetDrawColor(17, 23, 37, 255)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: headerH})
-	renderer.SetDrawColor(255, 255, 255, 18)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: headerH - 1, W: screenWidth, H: 1})
-	renderText(renderer, config, medFont, "Audio Player", ColorTextPrimary(), 24, (headerH-int32(medFont.Height()))/2)
-	renderText(renderer, config, font, "StockOS layout", ColorTextTertiary(), 190, (headerH-int32(font.Height()))/2)
-	back := hintLine(FooterHint{"B", "Back"})
-	bw, _, _ := font.SizeUTF8(back)
-	renderText(renderer, config, font, back, ColorTextTertiary(), screenWidth-int32(bw)-24, (headerH-int32(font.Height()))/2)
+	// Same shared bar as the Auralis layout and every other scene; the layout's
+	// own name is a chip inside the now-playing strip instead of a second title
+	// in the header.
+	headerH := headerBarHeight()
 
 	music.mu.Lock()
 	tracks := append([]musicTrack(nil), music.tracks...)
@@ -281,6 +275,12 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	}
 	renderText(renderer, config, bigFont, ellipsize(bigFont, title, textW), ColorTextPrimary(), textX, stripY+22)
 	renderText(renderer, config, font, ellipsize(font, meta, textW), ColorTextTertiary(), textX, stripY+22+int32(bigFont.Height())+6)
+	// The layout tag the header used to carry: a muted chip at the strip's top
+	// right, clear of the title and the transport row.
+	tag := "StockOS layout"
+	tagW, _, _ := font.SizeUTF8(tag)
+	tagX := stripX + stripW - 16 - int32(tagW)
+	renderText(renderer, config, font, tag, ColorTextTertiary(), tagX, stripY+12)
 
 	// Flat progress line, stock style: a thin track with the elapsed time under
 	// the left end and the total under the right.
@@ -407,6 +407,8 @@ func renderMusicStockOS(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, hint, sdl.Color{R: 110, G: 125, B: 150, A: 170},
 		(screenWidth-int32(hw))/2, screenHeight-34)
 
+	// Header last, so the list and its hints cannot paint over the bar.
+	renderStatusBar(renderer, config)
 	renderMusicSearchOverlay(renderer, config)
 	renderMusicPEQPanel(renderer, config)
 }

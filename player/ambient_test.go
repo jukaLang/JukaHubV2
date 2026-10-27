@@ -87,7 +87,7 @@ func TestAmbientAutoTickEntersWhenIdle(t *testing.T) {
 	})
 	config := &Config{}
 	if ambientEntryBlocked(config) {
-		t.Skip("another UI surface is open in this test binary")
+		t.Fatalf("an earlier test left a UI surface open; the ambient gate sees it")
 	}
 
 	// Recently used: no dock screen yet.
@@ -119,7 +119,7 @@ func TestAmbientAutoTickRespectsSetting(t *testing.T) {
 	config := &Config{}
 	config.Variables.Custom = map[string]interface{}{"ambientMode": false}
 	if ambientEntryBlocked(config) {
-		t.Skip("another UI surface is open in this test binary")
+		t.Fatalf("an earlier test left a UI surface open; the ambient gate sees it")
 	}
 	noteUserInputTime(time.Now().Add(-90 * time.Second))
 	ambientAutoTick(config, time.Now())
@@ -394,7 +394,7 @@ func renderAmbientProbe(t *testing.T, config *Config) *probeFrame {
 	}
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	// A previous test's scene renderer has been destroyed, so the shared
 	// gradient/scrim cache may hold handles SDL has already freed. Drop the
@@ -434,7 +434,7 @@ func renderAmbientProbe(t *testing.T, config *Config) *probeFrame {
 	renderAmbient(renderer, config)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 		unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }
@@ -448,7 +448,7 @@ func TestRenderAmbientFrame(t *testing.T) {
 	// returns nil otherwise, which would look like a missing font file.
 	newProbeFrame(t)
 	if font, _ := getCachedFont(&Config{}, "big"); font == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 
 	dir := t.TempDir()

@@ -22,7 +22,7 @@ func TestCompactCanvasRendersEveryScene(t *testing.T) {
 	configs := loadAuditConfigs(t)
 	config := configs["trimui/jukaconfig.device.json"]
 	if config == nil {
-		t.Skip("no handheld config next to the test")
+		t.Fatalf("the handheld config ships in player/trimui; it could not be loaded")
 	}
 	// The device config is authored at 1280x720; the Brick profile squeezes the
 	// geometry into 960x720 exactly as startup does.
@@ -45,12 +45,19 @@ func TestCompactCanvasRendersEveryScene(t *testing.T) {
 	for i := range config.Scenes {
 		scene := config.Scenes[i]
 		currentSceneIndex = i
+		// Entering a scene restyles a Tools/Settings menu into its launcher
+		// page (main.go and core.go do exactly this). Without it the dump and
+		// the paint check saw the authored button geometry instead of the page
+		// the user actually gets, so a defect in the rendered page could not
+		// show up here.
+		menuTilesApply(config, i)
+		scene = config.Scenes[i]
 
 		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
 		renderer.Clear()
 		renderScene(renderer, config, scene)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 
 		// Every scene paints something: the content panel, the header and the

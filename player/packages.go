@@ -268,7 +268,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 
 	if len(pkgs) == 0 {
 		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
-			"·", "No packages installed", "Press Refresh to fetch the registry.")
+			"@packages", "No packages installed", "Press Refresh to fetch the registry.")
 		renderPackageActions(renderer, config, element)
 		return
 	}

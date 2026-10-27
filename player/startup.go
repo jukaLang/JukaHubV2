@@ -204,12 +204,11 @@ func loadStartupState(path string) (startupState, bool) {
 	if strings.TrimSpace(path) == "" {
 		return startupState{}, false
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return startupState{}, false
-	}
 	var state startupState
-	if err := json.Unmarshal(raw, &state); err != nil || state.Version != startupStateVersion {
+	// A damaged file comes back from the .bak the atomic save leaves beside it;
+	// a file from another version is still refused, so the fallback cannot
+	// resurrect a layout this build cannot read.
+	if _, err := readJSONWithBackup(path, &state); err != nil || state.Version != startupStateVersion {
 		return startupState{}, false
 	}
 	return state, true
@@ -219,18 +218,14 @@ func saveStartupState(path string, state startupState) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	payload, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// The launch timings are what make a warm start warm; losing them is not
+	// fatal, but the write still goes through the same crash-safe path as the
+	// stores a user cannot regenerate.
+	return AtomicWrite(path, payload, 0o644)
 }
 
 // warmStartWithin reports whether lastLaunch is recent enough to call this

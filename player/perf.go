@@ -179,13 +179,17 @@ type textureMemoryStats struct {
 	TextCache    int64 // renderText texture cache
 	HomeText     int64 // drawText label cache
 	Thumbnails   int64 // thumbnail textures
+	AppIcons     int64 // launcher icon textures
+	ChatImages   int64 // decoded chat images
+	ChatAvatars  int64 // chat avatar textures
 	VideoOverlay int64 // cached static video overlay layer
 	VideoFrame   int64 // current decoded RGBA frame buffer
 	UILayer      int64 // offscreen compositing layer
 }
 
 func (s textureMemoryStats) Total() int64 {
-	return s.TextCache + s.HomeText + s.Thumbnails + s.VideoOverlay + s.VideoFrame + s.UILayer
+	return s.TextCache + s.HomeText + s.Thumbnails + s.AppIcons + s.ChatImages + s.ChatAvatars +
+		s.VideoOverlay + s.VideoFrame + s.UILayer
 }
 
 // collectTextureMemoryStats reads the live caches. Safe to call from the main
@@ -197,6 +201,9 @@ func collectTextureMemoryStats() textureMemoryStats {
 	}
 	stats.HomeText = homeTextCacheBytes()
 	stats.Thumbnails = getThumbnailTextures().Bytes()
+	_, stats.AppIcons = appIconTextureStats()
+	_, stats.ChatImages = chatImageCacheStats()
+	_, stats.ChatAvatars = chatAvatarCacheStats()
 
 	embeddedPlayer.mu.Lock()
 	stats.VideoFrame = int64(len(embeddedPlayer.currentRaw))
@@ -221,7 +228,17 @@ const textureStatsInterval = 150
 // formatting is cheap and only happens when explicitly enabled.
 func logTextureMemoryStats(reason string) {
 	s := collectTextureMemoryStats()
-	log.Printf("[tex] %s: total=%d MB (text=%d, labels=%d, thumbs=%d, video-overlay=%d, frame=%d, ui-layer=%d)",
-		reason, s.Total()>>20, s.TextCache>>20, s.HomeText>>20, s.Thumbnails>>20,
+	// The text cache is the one cache whose ceiling is a byte budget rather
+	// than a fixed allocation, so print the budget beside its usage: a report
+	// that reads "text=23/24 MB" says the cache is at its cap, not leaking.
+	textCap := int64(0)
+	if globalTextCache != nil {
+		textCap = globalTextCache.Limit()
+	}
+	// The three small caches are printed in KB: an avatar cache of 768 KB would
+	// read as "0 MB" and look like it was not being accounted for at all.
+	log.Printf("[tex] %s: total=%d MB (text=%d/%d, labels=%d, thumbs=%d, icons=%dK, chat=%dK, avatars=%dK, video-overlay=%d, frame=%d, ui-layer=%d)",
+		reason, s.Total()>>20, s.TextCache>>20, textCap>>20, s.HomeText>>20, s.Thumbnails>>20,
+		s.AppIcons>>10, s.ChatImages>>10, s.ChatAvatars>>10,
 		s.VideoOverlay>>20, s.VideoFrame>>20, s.UILayer>>20)
 }

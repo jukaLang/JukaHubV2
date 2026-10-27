@@ -134,14 +134,17 @@ func TestThumbnailFloodLeavesTheByteCacheBounded(t *testing.T) {
 	close(thumbnailDownloadCh)
 	wg.Wait()
 
-	thumbnailCacheMutex.Lock()
-	cached := len(thumbnailDataCache)
-	thumbnailCacheMutex.Unlock()
+	cached, heldBytes := thumbnailDataStats()
 	if cached > thumbnailMemMaxEntries {
 		t.Errorf("byte cache holds %d entries after %d downloads, cap is %d", cached, total, thumbnailMemMaxEntries)
 	}
 	if cached == 0 {
 		t.Error("the flood left the byte cache empty; workers did not consume the queue")
+	}
+	// The byte side is the bound that matters for this cache: 512 entries of an
+	// arbitrarily large payload is not a memory ceiling.
+	if limit := thumbnailDataBudgetBytes(); heldBytes > limit {
+		t.Errorf("byte cache holds %d bytes after %d downloads, budget is %d", heldBytes, total, limit)
 	}
 	newest := fmt.Sprintf("%s/flood-%d.jpg", srv.URL, total-1)
 	if got := thumbnailDataGet(newest); len(got) != len(payload) {

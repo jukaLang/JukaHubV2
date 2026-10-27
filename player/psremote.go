@@ -141,13 +141,11 @@ func loadPSHosts() psHostsFile {
 	state := psHostsFile{Version: psRemoteFileVer}
 	state.Settings.Quality = 0
 	state.Settings.Volume = 80
-	raw, err := os.ReadFile(psHostsPath())
-	if err != nil {
-		return state
-	}
 	var parsed psHostsFile
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		log.Printf("[psremote] ignoring %s: %v", psHostsPath(), err)
+	// The pairing keys are not regenerable without the console in hand, so a
+	// damaged psremote.json comes back from the .bak the atomic save leaves
+	// beside it rather than reading as "no consoles paired".
+	if _, err := readJSONWithBackup(psHostsPath(), &parsed); err != nil {
 		return state
 	}
 	state = parsed
@@ -178,9 +176,6 @@ func loadPSHosts() psHostsFile {
 
 func savePSHosts(state psHostsFile) error {
 	path := psHostsPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	state.Version = psRemoteFileVer
 	if len(state.Hosts) > psRemoteMaxHosts {
 		state.Hosts = state.Hosts[len(state.Hosts)-psRemoteMaxHosts:]
@@ -192,15 +187,9 @@ func savePSHosts(state psHostsFile) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return os.Rename(tmp, path)
+	// 0600: this file holds the console's registration key. The atomic write
+	// applies the mode itself and keeps the previous pairing as .bak.
+	return AtomicWrite(path, append(data, '\n'), 0o600)
 }
 
 // upsertPSConsole merges a discovered or freshly paired console into the file.

@@ -342,7 +342,7 @@ func TestMusicStockOSLayoutRenders(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -350,7 +350,7 @@ func TestMusicStockOSLayoutRenders(t *testing.T) {
 	renderer.Clear()
 	renderMusicPlayer(renderer, config)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	if musicRects.playPause.W == 0 || musicRects.seek.W == 0 {
@@ -377,7 +377,7 @@ func TestMusicPanelsRender(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -453,7 +453,7 @@ func TestMusicLayoutPreviews(t *testing.T) {
 		f := newProbeFrame(t)
 		renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 		if err != nil {
-			t.Skipf("software renderer unavailable: %v", err)
+			t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 		}
 		defer destroyTestRenderer(renderer)
 		ClearTextCache()
@@ -461,7 +461,7 @@ func TestMusicLayoutPreviews(t *testing.T) {
 		renderer.Clear()
 		renderMusicPlayer(renderer, config)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("renderer.ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		return f
 	}

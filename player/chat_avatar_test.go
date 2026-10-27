@@ -241,14 +241,14 @@ func renderChatWithAvatar(t *testing.T, avatarURL string, pngBytes []byte) int {
 	})
 
 	if err := renderer.SetDrawColor(0, 0, 0, 255); err != nil {
-		t.Skipf("renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen renderer: %v (SDL video is already up, so this is a defect, not an environment gate)", err)
 	}
 	renderer.Clear()
 	renderChat(renderer, &Config{}, Element{Type: "chat", X: 0, Y: 0, Width: "1280", Height: "720"})
 
 	buf := make([]byte, probeW*probeH*4)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return countAvatarColor(buf, chatAvatarTestColor)
 }

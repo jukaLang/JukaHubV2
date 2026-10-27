@@ -365,7 +365,7 @@ func TestStartMenuRailClickSelectsGroup(t *testing.T) {
 	withScreen(t, probeW, probeH)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	mouseX, mouseY = -100, -100
@@ -482,7 +482,7 @@ func TestStartMenuScreenshotActionCapturesNextFrame(t *testing.T) {
 	withScreen(t, probeW, probeH)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	renderer.SetDrawColor(10, 20, 30, 255)

@@ -32,7 +32,7 @@ func probeRenderer(t *testing.T) *sdl.Renderer {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	prevW, prevH := screenWidth, screenHeight
 	screenWidth, screenHeight = probeW, probeH
@@ -53,7 +53,7 @@ func TestRenderCalendarPopoverDrawsAlarmButton(t *testing.T) {
 
 	buf := make([]byte, probeW*probeH*4)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	if n := litPixels(buf, calendarAlarmButtonRect(), probeW); n == 0 {
 		t.Fatal("the Set alarm button drew nothing inside its hit rect")
@@ -61,21 +61,31 @@ func TestRenderCalendarPopoverDrawsAlarmButton(t *testing.T) {
 }
 
 // The alarm screen is reachable from the calendar, so it must not be a black
-// page and must offer a visible Back control for touch users.
+// page and must offer a visible Back control for touch users. That control is
+// the shared header's Back pill now, not a bespoke text pill of its own.
 func TestAlarmSceneRendersBackdropAndBackPill(t *testing.T) {
 	renderer := probeRenderer(t)
-	config := &Config{}
+	config := &Config{Scenes: []SceneConfig{{Name: "Alarm"}}}
+	prevScene := currentSceneIndex
+	currentSceneIndex = 0
+	t.Cleanup(func() { currentSceneIndex = prevScene })
 	alarmUI.tab = 0
 	renderAlarmClock(renderer, config)
 
-	if alarmBackRect.W <= 0 || alarmBackRect.H <= 0 {
-		t.Fatalf("alarm Back pill rect is empty: %+v", alarmBackRect)
+	if sceneTitleBackRect.W <= 0 || sceneTitleBackRect.H <= 0 {
+		t.Fatalf("the shared header drew no Back pill for the alarm scene: %+v", sceneTitleBackRect)
+	}
+	if sceneTitleBackRect.Y < 0 || sceneTitleBackRect.Y+sceneTitleBackRect.H > headerBarHeight() {
+		t.Fatalf("the Back pill %+v escapes the %dpx bar", sceneTitleBackRect, headerBarHeight())
+	}
+	if alarmBackRect != sceneTitleBackRect {
+		t.Fatalf("the alarm's touch target %+v is not the bar's Back pill %+v", alarmBackRect, sceneTitleBackRect)
 	}
 	buf := make([]byte, probeW*probeH*4)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
-	if n := litPixels(buf, alarmBackRect, probeW); n == 0 {
+	if n := litPixels(buf, sceneTitleBackRect, probeW); n == 0 {
 		t.Fatal("the alarm Back pill drew nothing")
 	}
 	black := 0
@@ -153,7 +163,7 @@ func TestNotifMessageWrapsToCardWidth(t *testing.T) {
 	newProbeFrame(t) // initialises SDL_ttf for the font cache
 	font, _ := getCachedFont(&Config{}, "small")
 	if font == nil {
-		t.Skip("no font available")
+		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	long := "A very long notification message that would run far past the right edge of the panel if it were not clipped"
 	lines := notifWrapLines(font, long, maxW, notifMsgLines)
@@ -178,7 +188,7 @@ func TestNotifDropdownFitsBelowBell(t *testing.T) {
 	newProbeFrame(t) // initialises SDL_ttf for the font cache
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
-		t.Skip("no font available")
+		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	history := make([]notification, 50)
 	for i := range history {

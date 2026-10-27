@@ -155,6 +155,12 @@ binary to `<name>.jukahub-<timestamp>.bak` beside it and installs the selected
 build as `<core>_libretro.so` (or `.dll` on Windows). The previous core is never
 deleted.
 
+Those `.bak` files are the undo, and the **Emulators** page turns them into a
+key: **R1** on a tile whose core has one puts the newest build back, keeping the
+build it replaced so the press is reversible. It is the same operation as
+activating a pool build, so it works on a card with no pool and on the Windows
+build, and it never fetches anything. See [CONTROLS.md](CONTROLS.md#emulators).
+
 Each game's detail pane names the core its report was written for and whether
 that core is **active**, **outdated**, only in the **pool**, or **missing**. A
 recommendation therefore never points at a core the user does not have.

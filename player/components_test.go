@@ -18,7 +18,7 @@ func componentFrame(t *testing.T, draw func(*sdl.Renderer)) *probeFrame {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
@@ -27,7 +27,7 @@ func componentFrame(t *testing.T, draw func(*sdl.Renderer)) *probeFrame {
 	renderer.Clear()
 	draw(renderer)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }
@@ -74,7 +74,7 @@ func TestUIButtonDrawsSharedStates(t *testing.T) {
 	config := &Config{}
 	font := FontForRole(config, TypeBody)
 	if font == nil {
-		t.Skip("body font unavailable")
+		t.Fatalf("body font unavailable: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	rect := sdl.Rect{X: 100, Y: 100, W: 200, H: 60}
 	fill := sdl.Color{R: 20, G: 120, B: 220, A: 255}

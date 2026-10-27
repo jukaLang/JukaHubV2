@@ -137,7 +137,15 @@ var (
 
 	// Async thumbnail download queue
 	thumbnailDownloadCh chan string
-	thumbnailDataCache  = make(map[string][]byte)
+	// Downloaded thumbnail payloads, bounded by entries and by bytes (see
+	// thumbnailDataBudgetBytes in cachebudget.go). A count alone let a session
+	// of large images sit under the 512-entry cap.
+	thumbnailDataCache = newByteOrderedStore[string, []byte](
+		thumbnailMemMaxEntries,
+		thumbnailDataBudgetBytes(),
+		func(b []byte) int64 { return int64(len(b)) },
+		nil,
+	)
 
 	// Focus for search result items (grid index)
 	focusedResultIndex int = -1
@@ -945,7 +953,9 @@ func renderText(renderer *sdl.Renderer, config *Config, font *ttf.Font, text str
 	if processed == "" || font == nil {
 		return 0, 0
 	}
-	return drawTextRun(renderer, config, font, sanitizeForFont(font, processed), color, x, y)
+	// Cached substitution: a UI full of static labels otherwise walked every
+	// rune against the font's cmap on every frame.
+	return drawTextRun(renderer, config, font, sanitizeCached(font, processed), color, x, y)
 }
 
 // drawTextRun renders one font/text pair through the shared texture cache.
@@ -957,7 +967,12 @@ func drawTextRun(renderer *sdl.Renderer, config *Config, font *ttf.Font, process
 	// Try the text cache first (major perf win on TSP ARM64)
 	cache := GetTextCache()
 	if entry := cache.Get(font, processed, color); entry != nil {
-		renderer.Copy(entry.texture, nil, &sdl.Rect{X: x, Y: y, W: entry.width, H: entry.height})
+		// SDL rejects a zero-area destination and builds an error value for
+		// it; a blank or space-only label would otherwise allocate one of
+		// those on every frame it is drawn.
+		if entry.width > 0 && entry.height > 0 {
+			renderer.Copy(entry.texture, nil, &sdl.Rect{X: x, Y: y, W: entry.width, H: entry.height})
+		}
 		return entry.width, entry.height
 	}
 
@@ -972,7 +987,9 @@ func drawTextRun(renderer *sdl.Renderer, config *Config, font *ttf.Font, process
 		return 0, 0
 	}
 	_, _, w, h, _ := texture.Query()
-	renderer.Copy(texture, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
+	if w > 0 && h > 0 {
+		renderer.Copy(texture, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
+	}
 	cache.Put(font, processed, color, texture, w, h)
 	return w, h
 }
@@ -1261,9 +1278,10 @@ func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element)
 	}
 
 	if total == 0 {
-		if font != nil {
-			renderText(renderer, config, font, "N/A", ColorTextTertiary(), cx-20, cy-10)
-		}
+		// A bare "N/A" floating in an empty card read like a broken chart.
+		// The shared state card names what is happening instead.
+		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
+			"@tools", "Reading storage", "Disk figures appear once the card answers.")
 		return
 	}
 
@@ -3574,59 +3592,24 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	// A quality pin belongs to one video; a different URL forgets it.
 	syncVideoQualitySource(url)
 
+	// The loading state begins here, on the press, and not after the helper
+	// tools are resolved. On a cold card that window is spent downloading
+	// yt-dlp with the install card up, and it used to leave the results grid
+	// live underneath it: the d-pad scrolled behind a spinner the user could
+	// not dismiss. The card is modal from this line on.
+	prepareSeq, prepareCtx := beginVideoPrepare(v.Title)
+
 	// The embedded player is the only playback backend: yt-dlp downloads the
 	// stream and ffmpeg decodes it into the scene's `video` element. The old
 	// ffplay pipe is gone because the bundled ffplay is linked against X11 and
 	// aborts on the handheld ("libX11.so.6: cannot open shared object file"),
 	// which left every video stuck on a black screen.
 	go func() {
-		// Missing helper tools are downloaded on demand (the install card
-		// shows progress) before playback starts.
-		ytDlpPath, err := helperToolPath("yt-dlp", config)
-		if err != nil {
-			log.Printf("[ERROR] playVideoInfo: yt-dlp unavailable: %v", err)
-			showToast(toolUnavailableMessage("yt-dlp", err), ToastError())
-			return
-		}
-		if _, err := helperToolPath("ffmpeg", config); err != nil {
-			log.Printf("[ERROR] playVideoInfo: ffmpeg unavailable: %v", err)
-			showToast(toolUnavailableMessage("ffmpeg", err), ToastError())
-			return
-		}
-		// ffprobe only supplies duration/fps; probeVideoInfo falls back to safe
-		// defaults, so a missing ffprobe must not block playback.
-		if _, err := helperToolPath("ffprobe", config); err != nil {
-			log.Printf("[DEBUG] playVideoInfo: ffprobe unavailable, using defaults: %v", err)
-		}
-
-		log.Printf("[DEBUG] playVideoInfo: url=%q yt-dlp=%q", sanitizeLogURL(url), ytDlpPath)
-		// While yt-dlp resolves, the media screens show a modal spinner and
-		// ignore navigation: the grid used to keep scrolling behind a player
-		// that had not started yet, so a second push looked like a dead press.
-		prepareSeq, prepareCtx := beginVideoPrepare(v.Title)
-		// Stream straight from the CDN when possible: ffmpeg reads the media
-		// URL directly, so the first frame arrives without waiting for a full
-		// download. Anything ffmpeg cannot open falls back to the download path.
-		started, cancelled := tryStreamPlayback(prepareCtx, config, ytDlpPath, url, v.Position)
-		if cancelled {
-			finishVideoPrepare(prepareSeq)
-			log.Printf("[STREAM] preparation cancelled for %s", sanitizeLogURL(url))
-			return
-		}
-		if started {
-			finishVideoPrepare(prepareSeq)
+		// A cancelled load played nothing, so it must not count as a play in the
+		// recently-played list or the playtime figures.
+		if resolveAndStartPlayback(prepareSeq, prepareCtx, config, url, v.Position, "playVideoInfo") {
 			recordPlayed(config, url)
-			return
 		}
-		// Every streaming strategy failed: this is the slow path, and it is
-		// worth saying so in the log next to the reasons logged above.
-		log.Printf("[STREAM] no direct stream for %s; downloading the file instead", sanitizeLogURL(url))
-		// The spinner stays up for the download and is cleared by
-		// playWithTempFile once the player overlay can report progress. The
-		// download honours prepareCtx, so B does not leave a download running
-		// invisibly behind a screen the user already left.
-		playWithTempFile(prepareCtx, config, ytDlpPath, url, v.Position, prepareSeq)
-		recordPlayed(config, url)
 	}()
 }
 

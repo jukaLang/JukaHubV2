@@ -169,7 +169,7 @@ func TestCoverCompletenessRingDrawsItsArc(t *testing.T) {
 		drawCoverCompletenessRing(renderer, &Config{}, cx, cy, radius, percent)
 		buf := make([]byte, probeW*probeH*4)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("renderer.ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		return buf
 	}
@@ -415,7 +415,7 @@ func TestGameLibraryPanelRendersAndNavigates(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	withScreen(t, probeW, probeH)
 	ClearTextCache()
@@ -528,5 +528,93 @@ func TestLibrarySystemsForUILeadsWithContinue(t *testing.T) {
 	}
 	if got[0].Games[0].Title != "Zelda" {
 		t.Errorf("Continue game = %q, want Zelda", got[0].Games[0].Title)
+	}
+}
+
+// TestLibraryArtBudgetBranches pins the two ceilings and the seam the memory
+// harness uses to exercise the handheld one on any host. The handheld budget is
+// what ships on the card, so it must stay the smaller of the two and the harness
+// must be able to select it regardless of the machine running the test.
+func TestLibraryArtBudgetBranches(t *testing.T) {
+	prev := libraryArtBudgetForce.Swap(0)
+	t.Cleanup(func() { libraryArtBudgetForce.Store(prev) })
+
+	if libraryArtHandheldBudget != 32<<20 {
+		t.Fatalf("handheld ceiling = %d, want the documented 32 MB", libraryArtHandheldBudget)
+	}
+	if libraryArtDesktopBudget != 96<<20 {
+		t.Fatalf("desktop ceiling = %d, want the documented 96 MB", libraryArtDesktopBudget)
+	}
+	if libraryArtHandheldBudget >= libraryArtDesktopBudget {
+		t.Fatalf("handheld ceiling %d is not below the desktop %d", libraryArtHandheldBudget, libraryArtDesktopBudget)
+	}
+
+	// With no force the branch has to follow the device, not a stale value.
+	want := libraryArtDesktopBudget
+	if IsTrimuiDevice() || P().IsHandheld() {
+		want = libraryArtHandheldBudget
+	}
+	if got := libraryArtBudgetBytes(); got != want {
+		t.Fatalf("derived budget = %d, want %d for this device", got, want)
+	}
+
+	libraryArtBudgetForce.Store(1)
+	if got := libraryArtBudgetBytes(); got != libraryArtHandheldBudget {
+		t.Fatalf("forced handheld budget = %d, want %d", got, libraryArtHandheldBudget)
+	}
+	libraryArtBudgetForce.Store(-1)
+	if got := libraryArtBudgetBytes(); got != libraryArtDesktopBudget {
+		t.Fatalf("forced desktop budget = %d, want %d", got, libraryArtDesktopBudget)
+	}
+}
+
+// The preview loads one cover per focused row. The cache used to keep every
+// one of them for the life of the process: browsing a few hundred games pinned
+// tens of megabytes of textures on a 1 GB handheld. Walking a library far
+// larger than the budget must not push it past the cap.
+func TestLibraryArtCacheStaysWithinItsBudget(t *testing.T) {
+	prev := gameLib
+	t.Cleanup(func() { gameLib = prev })
+	gameLib.resetArtCache()
+
+	// The size the preview draws a cover at, so the numbers are realistic.
+	const w, h = int32(200), int32(270)
+	budget := libraryArtBudgetBytes()
+	covers := int(budget/(int64(w)*int64(h)*4)) + 40
+
+	for i := 0; i < covers; i++ {
+		// nil texture: this checks the accounting and eviction, not SDL.
+		gameLib.rememberArt(fmt.Sprintf("cover-%d.png", i), nil, w, h)
+		if gameLib.artBytes > budget {
+			t.Fatalf("after %d covers the cache holds %d bytes, budget is %d",
+				i+1, gameLib.artBytes, budget)
+		}
+		if len(gameLib.artCache) > libraryArtMaxTextures {
+			t.Fatalf("after %d covers the cache holds %d entries, cap is %d",
+				i+1, len(gameLib.artCache), libraryArtMaxTextures)
+		}
+	}
+	// The newest cover is what the panel is drawing; it must survive.
+	newest := fmt.Sprintf("cover-%d.png", covers-1)
+	if _, ok := gameLib.artCache[newest]; !ok {
+		t.Errorf("the newest cover %q was evicted", newest)
+	}
+	if _, ok := gameLib.artCache["cover-0.png"]; ok {
+		t.Error("the first cover should have aged out of the cache")
+	}
+}
+
+// A library whose artwork is missing caches a nil per game instead; the count
+// cap has to hold for those too, or the map grows with the collection.
+func TestLibraryArtCacheBoundsMisses(t *testing.T) {
+	prev := gameLib
+	t.Cleanup(func() { gameLib = prev })
+	gameLib.resetArtCache()
+
+	for i := 0; i < libraryArtMaxTextures*2; i++ {
+		gameLib.rememberArt(fmt.Sprintf("missing-%d.png", i), nil, 0, 0)
+	}
+	if len(gameLib.artCache) > libraryArtMaxTextures {
+		t.Fatalf("cache holds %d misses, cap is %d", len(gameLib.artCache), libraryArtMaxTextures)
 	}
 }

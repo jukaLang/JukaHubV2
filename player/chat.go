@@ -66,33 +66,44 @@ type LinkPreview struct {
 	ThumbTex *sdl.Texture
 }
 
-// ChatAttachments stores images for rendering
-var chatImages = make(map[string]*sdl.Texture)
-var chatImageMutex sync.Mutex
+// chatImageTexture is one decoded chat image with the footprint it occupies.
+type chatImageTexture struct {
+	texture *sdl.Texture
+	bytes   int64
+}
 
-// chatImageOrder is the insertion order of chatImages, oldest first. The
-// texture cache is bounded: a long chat with image replies used to pin every
-// decoded image in GPU memory for the life of the process.
-var chatImageOrder []string
+// ChatAttachments stores images for rendering. The cache is bounded twice:
+// chatImageCacheMax entries, and chatImageTextureBudgetBytes. The count was the
+// only bound for a long time, and a count is not a byte ceiling when one photo
+// can be 48 MB of RGBA — sixteen of those is more than the handheld has.
+var chatImages = newByteOrderedStore[string, chatImageTexture](
+	chatImageCacheMax,
+	chatImageTextureBudgetBytes(),
+	func(t chatImageTexture) int64 { return t.bytes },
+	func(t chatImageTexture) {
+		if t.texture != nil {
+			t.texture.Destroy()
+		}
+	},
+)
+var chatImageMutex sync.Mutex
 
 const chatImageCacheMax = 16
 
-// evictChatImagesLocked destroys the oldest textures past the limit. The
-// caller holds chatImageMutex.
-func evictChatImagesLocked(keep string) {
-	for len(chatImageOrder) > chatImageCacheMax {
-		oldest := chatImageOrder[0]
-		chatImageOrder = chatImageOrder[1:]
-		if oldest == keep {
-			continue
-		}
-		if tex, ok := chatImages[oldest]; ok {
-			if tex != nil {
-				tex.Destroy()
-			}
-			delete(chatImages, oldest)
-		}
-	}
+// chatImageCacheStats reports the images and bytes held, for the texture
+// accounting log and the tests.
+func chatImageCacheStats() (entries int, bytes int64) {
+	chatImageMutex.Lock()
+	defer chatImageMutex.Unlock()
+	return chatImages.stats()
+}
+
+// clearChatImageCache releases every decoded chat image. Used by the memory
+// pressure eviction path and by shutdown.
+func clearChatImageCache() {
+	chatImageMutex.Lock()
+	defer chatImageMutex.Unlock()
+	chatImages.clear()
 }
 
 var chatImageDownloads = make(map[string][]byte)
@@ -104,9 +115,9 @@ var imageURLRegex = regexp.MustCompile(`\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$`)
 
 func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 	chatImageMutex.Lock()
-	if tex, ok := chatImages[url]; ok {
+	if cached, ok := chatImages.get(url); ok {
 		chatImageMutex.Unlock()
-		return tex
+		return cached.texture
 	}
 	chatImageMutex.Unlock()
 
@@ -201,17 +212,9 @@ func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Textu
 	}
 	tex.Update(nil, unsafe.Pointer(&rgba.Pix[0]), rgba.Stride)
 	chatImageMutex.Lock()
-	if old, ok := chatImages[url]; ok {
-		// Two fetch paths can race for one URL; keep one texture and one
-		// order entry so eviction never frees the live copy.
-		if old != nil {
-			old.Destroy()
-		}
-	} else {
-		chatImageOrder = append(chatImageOrder, url)
-	}
-	chatImages[url] = tex
-	evictChatImagesLocked(url)
+	// Two fetch paths can race for one URL: put replaces the value in place and
+	// releases the old texture, so eviction never frees the live copy.
+	chatImages.put(url, chatImageTexture{texture: tex, bytes: int64(w) * int64(h) * 4})
 	chatImageMutex.Unlock()
 	return tex
 }
@@ -247,10 +250,29 @@ func processChatImageDownloads(renderer *sdl.Renderer) {
 // cropped and masked into a circle once, then cached by URL. The download is a
 // plain goroutine that only stores bytes; decoding and texture creation happen
 // on the render thread, because SDL textures belong to it.
+// chatAvatarTexture is one cached avatar with the footprint it occupies. The
+// size is fixed today, and recording it keeps the accounting honest if the
+// decode size ever changes.
+type chatAvatarTexture struct {
+	texture *sdl.Texture
+	bytes   int64
+}
+
 var (
-	chatAvatarMutex   sync.Mutex
-	chatAvatars       = map[string]*sdl.Texture{}
-	chatAvatarOrder   []string
+	chatAvatarMutex sync.Mutex
+	// Bounded by count and by bytes, like the message images: 48 fixed 64×64
+	// avatars are 768 KB, which is a real byte ceiling rather than one that
+	// depends on what the speakers happen to use.
+	chatAvatars = newByteOrderedStore[string, chatAvatarTexture](
+		chatAvatarCacheMax,
+		chatAvatarTextureBudgetBytes(),
+		func(t chatAvatarTexture) int64 { return t.bytes },
+		func(t chatAvatarTexture) {
+			if t.texture != nil {
+				t.texture.Destroy()
+			}
+		},
+	)
 	chatAvatarDLMutex sync.Mutex
 	chatAvatarData    = map[string][]byte{}
 	chatAvatarPending = map[string]bool{}
@@ -276,9 +298,9 @@ func getChatAvatarTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 		return nil
 	}
 	chatAvatarMutex.Lock()
-	if tex, ok := chatAvatars[url]; ok {
+	if cached, ok := chatAvatars.get(url); ok {
 		chatAvatarMutex.Unlock()
-		return tex
+		return cached.texture
 	}
 	chatAvatarMutex.Unlock()
 
@@ -366,37 +388,20 @@ func uploadChatAvatar(renderer *sdl.Renderer, url string, data []byte) *sdl.Text
 		return nil
 	}
 	tex.SetBlendMode(sdl.BLENDMODE_BLEND)
-
 	chatAvatarMutex.Lock()
-	if old, ok := chatAvatars[url]; ok {
-		if old != nil {
-			old.Destroy()
-		}
-	} else {
-		chatAvatarOrder = append(chatAvatarOrder, url)
-	}
-	chatAvatars[url] = tex
-	evictChatAvatarsLocked(url)
+	chatAvatars.put(url, chatAvatarTexture{
+		texture: tex,
+		bytes:   int64(chatAvatarPixels) * int64(chatAvatarPixels) * 4,
+	})
 	chatAvatarMutex.Unlock()
 	return tex
 }
 
-// evictChatAvatarsLocked destroys the oldest avatar textures past the limit.
-// The caller holds chatAvatarMutex.
-func evictChatAvatarsLocked(keep string) {
-	for len(chatAvatarOrder) > chatAvatarCacheMax {
-		oldest := chatAvatarOrder[0]
-		chatAvatarOrder = chatAvatarOrder[1:]
-		if oldest == keep {
-			continue
-		}
-		if tex, ok := chatAvatars[oldest]; ok {
-			if tex != nil {
-				tex.Destroy()
-			}
-			delete(chatAvatars, oldest)
-		}
-	}
+// chatAvatarCacheStats reports the avatars and bytes held.
+func chatAvatarCacheStats() (entries int, bytes int64) {
+	chatAvatarMutex.Lock()
+	defer chatAvatarMutex.Unlock()
+	return chatAvatars.stats()
 }
 
 // circularAvatarPixels centre-crops img to a square, scales it to size and
@@ -445,17 +450,12 @@ func circularAvatarPixels(img image.Image, size int) []byte {
 	return pixels
 }
 
-// clearChatAvatarCache drops every cached avatar texture. The textures belong
-// to one renderer, so they must go before it is destroyed.
+// clearChatAvatarState drops the avatar textures and the download bookkeeping
+// that belongs to them. The textures belong to one renderer, so this runs
+// before that renderer is destroyed.
 func clearChatAvatarCache() {
 	chatAvatarMutex.Lock()
-	for _, tex := range chatAvatars {
-		if tex != nil {
-			tex.Destroy()
-		}
-	}
-	chatAvatars = map[string]*sdl.Texture{}
-	chatAvatarOrder = nil
+	chatAvatars.clear()
 	chatAvatarMutex.Unlock()
 
 	chatAvatarDLMutex.Lock()

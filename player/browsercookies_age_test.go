@@ -141,7 +141,7 @@ func TestCookieRowWithTheSessionDateFitsTheSlot(t *testing.T) {
 			text := substituteVars(row.Text, config.Variables.Custom)
 			base, _ := getCachedFont(config, row.Font)
 			if base == nil {
-				t.Skip("no font available")
+				t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 			}
 			// The draw path's own font choice and budget: the fitted font is
 			// picked from the template, then the substituted value is what has

@@ -250,7 +250,7 @@ func TestCommunityPanelRender(t *testing.T) {
 		communityRowRects = nil
 	})
 	if font, _ := getCachedFont(&Config{}, "small"); font == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	renderer := probeRenderer(t)
 	ClearTextCache()

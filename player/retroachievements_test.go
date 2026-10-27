@@ -35,12 +35,12 @@ func renderRATestProbe(t *testing.T, screen func(*sdl.Renderer)) *probeFrame {
 	if raTestRenderer == nil {
 		win, err := sdl.CreateWindow("retroachievements-probe", 0, 0, probeW, probeH, sdl.WINDOW_HIDDEN)
 		if err != nil {
-			t.Skipf("software window unavailable: %v", err)
+			t.Fatalf("could not create the probe window after SDL video came up: %v (another test may have leaked a window)", err)
 		}
 		r, err := sdl.CreateRenderer(win, -1, sdl.RENDERER_SOFTWARE)
 		if err != nil {
 			win.Destroy()
-			t.Skipf("software renderer unavailable: %v", err)
+			t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 		}
 		raTestWindow, raTestRenderer = win, r
 	}
@@ -48,7 +48,7 @@ func renderRATestProbe(t *testing.T, screen func(*sdl.Renderer)) *probeFrame {
 	raTestRenderer.Clear()
 	screen(raTestRenderer)
 	if err := raTestRenderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }

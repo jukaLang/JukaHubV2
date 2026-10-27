@@ -35,25 +35,42 @@ type httpCacheEntry struct {
 	body         []byte
 }
 
+// httpResponseCache keeps validated bodies. It is bounded twice: by entry count
+// and by bytes. The count alone was a byte ceiling only if every body were the
+// same size, and a feed and a release manifest are not — 64 entries at the 1 MiB
+// body limit was 64 MB of RAM by accident.
+//
+// The store owns the map and the order; mu serialises access, because scene work
+// goroutines store and read from several screens.
 type httpResponseCache struct {
 	mu      sync.Mutex
-	max     int
-	order   []string
-	entries map[string]httpCacheEntry
+	entries *byteOrderedStore[string, httpCacheEntry]
 }
 
+// newHTTPResponseCache builds a count-bounded cache with no byte budget, which
+// is what the unit tests of the entry rule want.
 func newHTTPResponseCache(max int) *httpResponseCache {
+	return newHTTPResponseCacheWithBudget(max, 0)
+}
+
+// newHTTPResponseCacheWithBudget is the app's constructor: entries and bytes.
+func newHTTPResponseCacheWithBudget(max int, maxBytes int64) *httpResponseCache {
 	if max < 1 {
 		max = 1
 	}
-	return &httpResponseCache{max: max, entries: map[string]httpCacheEntry{}}
+	return &httpResponseCache{entries: newByteOrderedStore[string, httpCacheEntry](
+		max,
+		maxBytes,
+		func(e httpCacheEntry) int64 { return int64(len(e.body)) },
+		nil,
+	)}
 }
 
 // validators returns the stored ETag and Last-Modified for a URL.
 func (c *httpResponseCache) validators(url string) (etag, lastModified string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[url]
+	e, ok := c.entries.get(url)
 	if !ok {
 		return "", ""
 	}
@@ -64,7 +81,7 @@ func (c *httpResponseCache) validators(url string) (etag, lastModified string) {
 func (c *httpResponseCache) body(url string) ([]byte, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	e, ok := c.entries[url]
+	e, ok := c.entries.get(url)
 	if !ok || len(e.body) == 0 {
 		return nil, false
 	}
@@ -82,49 +99,46 @@ func (c *httpResponseCache) store(url, etag, lastModified string, body []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if etag == "" && lastModified == "" || len(body) == 0 || len(body) > httpCacheMaxBody {
-		delete(c.entries, url)
-		c.dropOrderLocked(url)
+		// A body without a validator cannot be revalidated, and an oversized
+		// one is streamed rather than cached: either way the old copy belongs
+		// to a version that is gone.
+		c.entries.drop(url)
 		return
-	}
-	if _, exists := c.entries[url]; !exists {
-		c.order = append(c.order, url)
-		for len(c.order) > c.max {
-			oldest := c.order[0]
-			c.order = c.order[1:]
-			delete(c.entries, oldest)
-		}
 	}
 	copied := make([]byte, len(body))
 	copy(copied, body)
-	c.entries[url] = httpCacheEntry{etag: etag, lastModified: lastModified, body: copied}
-}
-
-func (c *httpResponseCache) dropOrderLocked(url string) {
-	for i, u := range c.order {
-		if u == url {
-			c.order = append(c.order[:i], c.order[i+1:]...)
-			return
-		}
-	}
+	c.entries.put(url, httpCacheEntry{etag: etag, lastModified: lastModified, body: copied})
 }
 
 // reset drops everything. Tests use it between cases; the app never needs it.
 func (c *httpResponseCache) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.order = nil
-	c.entries = map[string]httpCacheEntry{}
+	c.entries.clear()
 }
 
 func (c *httpResponseCache) size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return len(c.entries)
+	entries, _ := c.entries.stats()
+	return entries
 }
+
+// bytesHeld is the body memory the cache is accounted for.
+func (c *httpResponseCache) bytesHeld() int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, bytes := c.entries.stats()
+	return bytes
+}
+
+// clear drops every body. The memory pressure path calls it: a refetch costs
+// one round trip, which beats holding 8 MB of feeds the screen is not showing.
+func (c *httpResponseCache) clear() { c.reset() }
 
 // conditionalCache holds the validators for every URL fetched through the
 // shared helpers below.
-var conditionalCache = newHTTPResponseCache(httpCacheMaxEntries)
+var conditionalCache = newHTTPResponseCacheWithBudget(httpCacheMaxEntries, httpCacheBudgetBytes())
 
 // applyConditionalHeaders turns req into a conditional request when this
 // process already holds a validated copy of the same URL.

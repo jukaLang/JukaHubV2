@@ -136,7 +136,7 @@ func TestBellIconDrawsSilhouette(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 
@@ -146,7 +146,7 @@ func TestBellIconDrawsSilhouette(t *testing.T) {
 	icon := sdl.Color{R: 245, G: 248, B: 255, A: 255}
 	drawBellIcon(renderer, cx, cy, size, icon)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	painted := f.countColor(icon, cx-size/2-4, cy-size/2-4, cx+size/2+4, cy+size/2+4)
@@ -209,7 +209,7 @@ func TestNotifLongMessageKeepsTwoLines(t *testing.T) {
 	newProbeFrame(t) // initialises SDL_ttf for the font cache
 	font, _ := getCachedFont(&Config{}, "small")
 	if font == nil {
-		t.Skip("no font available")
+		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	long := "/storage/roms/psp/Games/Castlevania - The Dracula X Chronicles.iso could not be opened: permission denied"
 	rows := notifMeasureRows(font, []notification{{Message: long, Priority: notifError}}, notifMessageWidth(notifDropWidth()), 1)
@@ -252,7 +252,7 @@ func TestNotifWrapSplitsLongPath(t *testing.T) {
 	newProbeFrame(t)
 	font, _ := getCachedFont(&Config{}, "small")
 	if font == nil {
-		t.Skip("no font available")
+		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	maxW := notifMessageWidth(notifDropWidth())
 	long := "/storage/roms/psp/Games/Castlevania.iso could not be opened: permission denied"

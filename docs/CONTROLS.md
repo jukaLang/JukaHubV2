@@ -52,6 +52,15 @@ length is still being probed simply gets no hairline rather than a made-up
 position. An idle output name has no playback state, so it never shows the pause
 bars or the hairline.
 
+Every screen opens with the same bar, and the same Back control: the wordmark and
+version, the screen's own name in the caption, then **Back** and **Menu**. **Back**
+is the largest and heaviest control in that row — a step taller than the other
+pills, in the accent colour — and it changes colour as soon as the D-pad reaches
+it: tinted with accent type while idle, filled solid with dark type while it is
+focused, with a ring around it. **A** (or a tap) on it leaves the screen, exactly
+like **B**. The release offer, when a new version is advertised, is the pill
+immediately left of the notification bell, in the same place on every screen.
+
 The header chips are buttons on every screen: the weather chip
 (`21C / 12C`, or `69F / 53F` in the US) opens **Local weather**, a seven-day
 forecast for the detected location; the time opens the calendar. The chip uses
@@ -221,10 +230,12 @@ A text web browser for GitHub issues, release notes and documentation. See
 | L2 / R2 (or the toolbar **zoom** chip) | Zoom the page text out / in (75%–160%); the chip shows the scale, lights up off 100%, and steps up on a tap |
 | Left / Right | Walk the links in reading order, scrolling them into view |
 | **Tab** (keyboard) or **L3** (left stick click) | Switch between scrolling the page and walking its links |
-| A | Open the highlighted link, or edit the address bar when no link is picked |
+| A | Open the highlighted link, work the highlighted form control (type into a field, step a list, tick a box, send a form), or edit the address bar when nothing is picked |
 | Y | Search the web (opens the keyboard); the **SEARCH** chip does the same |
 | X | Open the full link list for the page |
 | B | Leave the browser (in link mode, the first press returns to scroll mode) |
+| `f` · **Find** chip | Find on the page; `n` / `p` step to the next / previous match, **Esc** clears the search |
+| **Save** / **Marks** chips | Save the page on screen / open the saved-page list, whose chip carries its count |
 
 Links are outlined as they come into focus, so a link deep in an article can be
 followed without opening the picker. Walking them needs the D-pad to do two
@@ -235,11 +246,15 @@ layout does not throw the cursor across the screen, while Left/Right stay in
 plain reading order. **Y** (or the **SEARCH** chip beside the address bar) opens
 the keyboard on an empty field: type a phrase to search, or a host to open it.
 The **Back**, **Forward**, **Reload**, **Links**, **Filter**, **Search**,
-**Home**, **Issues** and **Forget** chips at the bottom are ordinary scene
-buttons, reachable by pressing Down past the end of the page and Up to come
-back. **Forget** drops the cookies the browser saved on the card, so a page it is
-signed in to starts signed out; it asks twice, and the first press says how many
-would go (see [docs/BROWSER.md](BROWSER.md#forgetting-them)).
+**Home**, **Issues**, **Sites**, **Forget**, **Save**, **Marks** and **Find**
+chips at the bottom are ordinary scene buttons, reachable by pressing Down past
+the end of the page and Up to come back. **Sites** lists the hosts whose cookies
+are on the card so one can be signed out on its own, and **Forget** drops them
+all, so a page it is signed in to starts signed out; it asks twice, and the first
+press says how many would go (see
+[docs/BROWSER.md](BROWSER.md#forgetting-them)). **Save** keeps the page on
+screen for later and **Marks** opens that list (see
+[docs/BROWSER.md](BROWSER.md#saved-pages)).
 
 The chip at the right end of the address bar reports how many ad and tracker
 requests the page load skipped (`12 BLOCKED`, or `0 BLOCKED`). It turns amber as
@@ -285,7 +300,10 @@ A tap on a control also moves the ring there, so touch and D-pad never disagree.
 The **Quality** row cycles Auto → 360p → 480p → 720p → 1080p for the video on
 screen only — Auto means the global *Playback resolution* setting. Picking a
 quality re-resolves the stream and resumes playback at the current position, and
-the pin is forgotten when another video starts.
+the pin is forgotten when another video starts. The re-resolve is a modal wait
+like starting a video: the loading card names the source, the scene underneath
+stops taking input, and **B** aborts it — the video that was already playing
+keeps playing, because nothing is torn down until the new stream is ready.
 
 On a keyboard **N** and **P** move to the next and previous video of the list
 that launched the current one — in the Shorts feed that is the next short. In
@@ -387,7 +405,10 @@ entry and its path.
 | Input | Action |
 |-------|--------|
 | D-pad | Move between tiles; Up/Down move a whole row |
-| **A** | Open the highlighted tool, or launch the emulator |
+| **A** | Open the highlighted tool, launch the emulator, or install the emulator a system is missing |
+| **X** | Install the highlighted system's emulator, or check its installed core and update it |
+| **L1** | Update every installed emulator the buildbot has a newer build of |
+| **R1** | Put back the build the last update replaced (only offered when one is kept) |
 | **Y** | RetroAchievements |
 | **B** / Esc | Back |
 | Touch / mouse | Tap a tile to select and open it |
@@ -397,8 +418,32 @@ RetroAchievements, Windows Apps, PortMaster) keep their place above the
 emulators; they are doors rather than emulators, so a working pinned row shows
 no pill. Emulator tiles below them are sorted by availability — usable first,
 then installed-but-unusable, then absent — and alphabetically inside each
-group. Rows with no emulator explain themselves when opened instead of
-disappearing.
+group. Rows with no emulator are no longer a dead end: **A** on one installs the
+libretro core that runs that system, and **X** does the same for any tile while
+also checking an installed core for a newer build. **L1** brings every installed
+emulator forward in one pass. Only files in RetroArch's cores folder are
+written: the download is checked against the CRC32 the buildbot index states,
+the build is kept in the core pool with the URL it came from, and a binary that
+is replaced stays beside the new one as
+`<core>_libretro.so.jukahub-<date>.bak`.
+
+That kept file is what **R1** restores. A nightly build that runs worse is one
+press to undo: R1 installs the newest `.bak` over the active core, keeps the
+build it just replaced as its own backup, and shows the rest of the work as a
+toast. The footer names the date of the kept build next to the tile's status
+(`GBA · Available · backup 2026-10-20`), so the key's presence is explained
+before it is pressed. A second R1 press therefore goes forward again, and the
+removed file is deleted only after the restore has landed, so a failed rollback
+leaves the card exactly as it was. R1 is offered wherever a backup exists,
+including Windows: the install policy is about what the buildbot serves, not
+about restoring a file the card already holds.
+
+No `Emus/<system>/` folder is ever written — those launcher scripts belong to
+the firmware, and the standalone emulators upstream publishes are desktop
+builds that would install a launcher that cannot start. On the Windows build the
+install and update keys are not offered at all: the buildbot's aarch64 shared
+object is not something a desktop RetroArch loads. R1 is the exception, because
+it only ever restores a file the card already has.
 
 ## Game profiles
 

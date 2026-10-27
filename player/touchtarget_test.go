@@ -67,7 +67,11 @@ func TestHomeExitChipHasFingerSizedTarget(t *testing.T) {
 	}
 	exit := h.Items[HomeFocusExit].Rect
 	if exit.H >= minTouchTarget {
-		t.Skipf("Exit pill is now %dpx tall; no enlargement needed", exit.H)
+		// The premise is that the drawn pill is smaller than a finger target,
+		// so the grown tap area is what makes the near-miss land. If the pill
+		// grew to 44px the test has lost its subject; re-point it at a compact
+		// control rather than reporting green without checking anything.
+		t.Fatalf("the Exit pill is drawn %dpx tall, at or above the %dpx touch target; the near-miss probe needs a smaller control", exit.H, minTouchTarget)
 	}
 	grown := growTouchTarget(exit)
 	// A tap 2px below the drawn bottom edge lands focus on Exit.

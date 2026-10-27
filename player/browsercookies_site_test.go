@@ -262,7 +262,7 @@ func TestCookieStripTapOpensThePicker(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	elem := browserCursorTestElement("browser_cookie_strip_tap")
@@ -305,7 +305,7 @@ func TestCookiePickerRenders(t *testing.T) {
 	newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	ClearTextCache()
@@ -320,7 +320,7 @@ func TestCookiePickerRenders(t *testing.T) {
 	}
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
-		t.Skip("no font available for the text cache probe")
+		t.Fatalf("no font available for the text cache probe: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	if GetTextCache().Get(font, "youtube.com", ColorTextPrimary()) == nil {
 		t.Fatal("the picker did not draw the first site's name")
@@ -346,7 +346,7 @@ func TestSitesChipFitsTheChipRow(t *testing.T) {
 		// size: a chip label that fits at 1280 can overflow at 800.
 		font, _ := getCachedFont(&Config{}, "small")
 		if font == nil {
-			t.Skip("no font available")
+			t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 		}
 		config := &Config{}
 		ensureBrowserScene(config)

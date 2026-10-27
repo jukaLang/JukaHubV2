@@ -50,7 +50,7 @@ func videoOverlayProbe(t *testing.T, forceNoCache, frame bool) *probeFrame {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	// Text textures are bound to the renderer that created them; each probe
@@ -63,7 +63,7 @@ func videoOverlayProbe(t *testing.T, forceNoCache, frame bool) *probeFrame {
 		// confused with the backdrop.
 		tex, err = renderer.CreateTexture(sdl.PIXELFORMAT_RGB24, sdl.TEXTUREACCESS_STATIC, 4, 4)
 		if err != nil {
-			t.Skipf("texture unavailable: %v", err)
+			t.Fatalf("could not create the probe texture: %v (the software renderer supports textures, so this is a defect)", err)
 		}
 		defer tex.Destroy()
 		green := make([]byte, 4*4*3)
@@ -71,7 +71,7 @@ func videoOverlayProbe(t *testing.T, forceNoCache, frame bool) *probeFrame {
 			green[i+1] = 255
 		}
 		if err := tex.Update(nil, unsafe.Pointer(&green[0]), 4*3); err != nil {
-			t.Skipf("texture update unavailable: %v", err)
+			t.Fatalf("could not update the probe texture: %v (the software renderer supports texture uploads, so this is a defect)", err)
 		}
 	}
 
@@ -130,7 +130,7 @@ func videoOverlayProbe(t *testing.T, forceNoCache, frame bool) *probeFrame {
 	renderer.Clear()
 	RenderVideoOverlay(renderer, &Config{}, elem)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("renderer.ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	return f
 }

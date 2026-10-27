@@ -146,18 +146,26 @@ func startHeaderUpdate() bool {
 const updatePillLabel = "Update"
 
 // updatePillSize is the shared footprint of the release pill: the label plus
-// room for the arrow, at the same height as the notification bell (font height
-// + 10, at least 24).
+// room for the arrow, at the header's button height so it lines up with Back and
+// Menu. Every caller gets the same numbers, on Home and in every scene.
 func updatePillSize(font *ttf.Font) (int32, int32) {
 	if font == nil {
 		return 0, 0
 	}
-	h := int32(font.Height()) + 10
-	if h < 24 {
-		h = 24
-	}
 	tw, _, _ := font.SizeUTF8(updatePillLabel)
-	return int32(tw) + 46, h
+	return int32(tw) + 46, headerPillHeight()
+}
+
+// drawHeaderUpdatePill draws the release offer in the header's system corner:
+// the same pill, at the same button height, immediately left of the bell, on
+// Home and in every scene. It records nothing — the caller owns the hit rect
+// for its own screen (homeUpdateRect or updatePrompt.badge).
+func drawHeaderUpdatePill(renderer *sdl.Renderer, config *Config, rightX, barH int32, focused bool) sdl.Rect {
+	font := headerCaptionFont(config)
+	w, _ := updatePillSize(font)
+	h := headerPillHeight()
+	rect := sdl.Rect{X: rightX - w, Y: (barH - h) / 2, W: w, H: h}
+	return drawUpdatePill(renderer, config, font, rect, focused)
 }
 
 // drawUpdatePill draws the "a release is available" pill inside rect: warning
@@ -192,31 +200,6 @@ func drawUpdatePill(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect
 	return rect
 }
 
-func drawUpdateBadge(renderer *sdl.Renderer, config *Config, rightX, y, h int32) int32 {
-	updatePrompt.badge = sdl.Rect{}
-	if renderer == nil || !updateAvailable() {
-		return 0
-	}
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
-		return 0
-	}
-	// h is the bell height, and the bell uses the same metric the pill does, so
-	// the two controls line up on the bar without a special case.
-	pillW, pillH := updatePillSize(font)
-	if h > pillH {
-		pillH = h
-	}
-	rect := drawUpdatePill(renderer, config, font,
-		sdl.Rect{X: rightX - pillW, Y: y, W: pillW, H: pillH},
-		focusEngine.ElementIndex() == ChromeUpdateIndex)
-	if rect.W == 0 {
-		return 0
-	}
-	updatePrompt.badge = rect
-	return pillW + SpaceSM
-}
-
 // homeUpdateRect is the header download chip's rect for this frame, or an empty
 // rect when no release is offered (or the screen is too small for the chip).
 // Hit-testing and the focus entry are driven from it.
@@ -227,25 +210,6 @@ var homeUpdateRect sdl.Rect
 // keeps one size and one label across the app.
 func homeUpdateChipSize(font *ttf.Font) (int32, int32) {
 	return updatePillSize(font)
-}
-
-// renderHomeUpdateChip draws the release offer in the home header with the same
-// pill the scene headers use. Focused, it takes the shared focus ring, so the
-// D-pad position is obvious on a handheld screen without a pointer.
-func renderHomeUpdateChip(renderer *sdl.Renderer, fonts HomeFonts, rect sdl.Rect, focused bool) sdl.Rect {
-	homeUpdateRect = sdl.Rect{}
-	// The home layout is rendered in tests (and on the splash path) before the
-	// app config exists; renderText only needs a config for variable lookup.
-	config := appConfig
-	if config == nil {
-		config = &Config{}
-	}
-	drawn := drawUpdatePill(renderer, config, fonts.Small, rect, focused)
-	if drawn.W == 0 {
-		return sdl.Rect{}
-	}
-	homeUpdateRect = drawn
-	return drawn
 }
 
 func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {

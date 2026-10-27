@@ -32,6 +32,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -52,6 +53,21 @@ const (
 	wifiMaxSSIDBytes     = 32
 	wifiMinPassphraseLen = 8
 	wifiMaxPassphraseLen = 63
+
+	// wifiProbeTimeout bounds one discovery call. Discovery is read while the
+	// status bar draws, so the supplicant probe must fail fast rather than hold
+	// a frame for the five seconds a join is allowed.
+	wifiProbeTimeout = 2 * time.Second
+	// wifiProbeBudget bounds the whole probe, listing and sweep together: the
+	// answer is cached, but the one call that fills the cache still happens on
+	// the caller's thread.
+	wifiProbeBudget = 3 * time.Second
+	// wifiProbeMaxCandidates bounds the netdev sweep the probe falls back to.
+	wifiProbeMaxCandidates = 4
+	// wifiDrivenTTL is how long the supplicant's answer is trusted. It has to be
+	// long enough that the status bar never forks a process per frame and short
+	// enough that a hot-plugged adapter is noticed without a restart.
+	wifiDrivenTTL = time.Minute
 )
 
 // wifiAssociateTimeout is how long association may take before the join is
@@ -59,6 +75,19 @@ const (
 // a variable only so a test can prove the failure paths (rejected password,
 // stuck supplicant) without waiting out the real seconds.
 var wifiAssociateTimeout = 15 * time.Second
+
+// The supplicant probe's cached answer. Discovery runs on the render thread (the
+// status bar asks for the interface), so the probe behind it is remembered: a
+// per-frame caller must never fork wpa_cli once a frame.
+var (
+	wifiDrivenMu    sync.Mutex
+	wifiDrivenName  string
+	wifiDrivenAt    time.Time
+	wifiDrivenKnown bool
+	// wifiDrivenNow is the cache clock, swappable so a test can age the answer
+	// without sleeping a minute.
+	wifiDrivenNow = time.Now
+)
 
 // wifiNetwork is one visible access point after merging the scan with the
 // saved-network list and the current status.
@@ -162,30 +191,296 @@ var wifiToolExists = wifiToolAvailable
 // bare FAIL, and tests can set the state without rfkill hardware.
 var wifiRadioState = wifiEnabled
 
-// findWirelessInterface picks the wireless netdev under root. Entries are
-// sorted so a device exposing two radios always resolves to the same one.
-func findWirelessInterface(root string) (string, error) {
+// wifiSysfsNetRoot, wifiProcWirelessPath and wifiSupplicantDirs are the three
+// places an interface can be named. They are variables so a test can point the
+// probe at a fixture tree: /sys and /proc are not writable, and a desktop has
+// neither a radio nor a supplicant.
+var (
+	wifiSysfsNetRoot     = "/sys/class/net"
+	wifiProcWirelessPath = "/proc/net/wireless"
+	// wpa_supplicant's control directory, wherever a firmware build put it.
+	// Embedded images with a read-only root often point ctrl_interface at /tmp,
+	// and an older image uses /var/run directly.
+	wifiSupplicantDirs = []string{
+		"/run/wpa_supplicant",
+		"/var/run/wpa_supplicant",
+		"/tmp/wpa_supplicant",
+		"/tmp/run/wpa_supplicant",
+	}
+)
+
+// sysfsNetdevs lists the entry names under a sysfs net root, sorted so a device
+// exposing two radios always resolves to the same one.
+func sysfsNetdevs(root string) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
-		}
+		names = append(names, e.Name())
 	}
 	sort.Strings(names)
+	return names, nil
+}
+
+// isWirelessNetdev reports whether one entry under a sysfs net root is a
+// wireless device.
+//
+// The directory test goes through os.Stat on purpose: /sys/class/net/<name> is a
+// symlink into the device tree on every kernel that exposes netdevs the normal
+// way, and DirEntry.IsDir reports the *link*, not its target. Testing the entry
+// itself therefore called every real radio a non-directory, which is why the
+// picker answered "No wireless network interface on this device" on a handheld
+// that was online.
+//
+// "wireless" is the wireless-extensions marker an older or vendor driver
+// creates; "phy80211" is the cfg80211 one. Accepting both keeps the probe
+// honest across firmware generations.
+func isWirelessNetdev(root, name string) bool {
+	base := filepath.Join(root, name)
+	info, err := os.Stat(base)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	for _, marker := range []string{"wireless", "phy80211"} {
+		if _, err := os.Stat(filepath.Join(base, marker)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// findWirelessInterface picks the wireless netdev under root. Entries are
+// sorted so a device exposing two radios always resolves to the same one.
+func findWirelessInterface(root string) (string, error) {
+	names, err := sysfsNetdevs(root)
+	if err != nil {
+		return "", err
+	}
 	for _, name := range names {
-		// Old kernels expose "wireless"; newer ones also have "phy80211".
-		// Accepting both keeps the probe honest across firmware generations.
-		for _, marker := range []string{"wireless", "phy80211"} {
-			if _, err := os.Stat(filepath.Join(root, name, marker)); err == nil {
-				return name, nil
-			}
+		if isWirelessNetdev(root, name) {
+			return name, nil
 		}
 	}
 	return "", fmt.Errorf("no wireless interface under %s", root)
+}
+
+// parseWirelessProcIfaces returns the interface names listed in
+// /proc/net/wireless. That file is the kernel's own list of interfaces with
+// wireless extensions, so it names the radio even when the driver creates
+// neither a "wireless" nor a "phy80211" attribute — the case a vendor SDIO
+// driver built without cfg80211 produces. The header lines carry no colon, so
+// only data lines are read.
+func parseWirelessProcIfaces(out string) []string {
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		colon := strings.Index(line, ":")
+		if colon <= 0 {
+			continue
+		}
+		name := strings.TrimSpace(line[:colon])
+		if !validIfaceName(name) {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// supplicantInterfaceNames reads the interfaces wpa_supplicant is managing. The
+// control directory holds one socket per interface; it names a radio the
+// supplicant can actually drive, whatever sysfs says about the driver.
+// wpa_supplicant's own config file is a directory entry too, and validIfaceName
+// filters it out (its name is longer than an interface name can be).
+func supplicantInterfaceNames(dirs []string) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if !validIfaceName(name) || seen[name] {
+				continue
+			}
+			info, err := os.Stat(filepath.Join(dir, name))
+			if err != nil || info.IsDir() {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// parseWpaCliInterfaceList reads the interfaces wpa_cli reports. The
+// supplicant answers the global INTERFACE command with one "IFNAME=<name>" line
+// per interface; wpa_cli's interactive listing prints "Available interfaces
+// are: <name> [<name>...]" and, once one is selected, "Selected interface
+// '<name>'". Both shapes are read, and anything that is not a valid interface
+// name is ignored, so a FAIL line or a sentence cannot become a device name.
+func parseWpaCliInterfaceList(out string) []string {
+	seen := map[string]bool{}
+	var names []string
+	add := func(candidate string) {
+		name := strings.Trim(strings.TrimSpace(candidate), "'\"")
+		if !validIfaceName(name) || seen[name] {
+			return
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		t := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(t, "IFNAME="):
+			add(strings.TrimPrefix(t, "IFNAME="))
+		case strings.HasPrefix(t, "Available interfaces are:"):
+			for _, f := range strings.Fields(strings.TrimPrefix(t, "Available interfaces are:")) {
+				add(f)
+			}
+		case strings.HasPrefix(t, "Selected interface"):
+			for _, f := range strings.Fields(strings.TrimPrefix(t, "Selected interface")) {
+				add(f)
+			}
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// wpaCliDrivesInterface reports whether the supplicant answers for one netdev.
+// A status reply is a `key=value` list and always names a state; wpa_cli prints
+// FAIL, without one, for an interface that is not its own.
+func wpaCliDrivesInterface(wpa, name string) bool {
+	out, err := wifiRunner(wifiProbeTimeout, "", wpa, "-i", name, "status")
+	if err != nil {
+		return false
+	}
+	return strings.Contains(out, "wpa_state=")
+}
+
+// wpaCliDrivenInterface asks the supplicant which netdev it is actually
+// driving. It is the fifth source, and the only one that is ground truth: an
+// image can point ctrl_interface at a directory none of wifiSupplicantDirs cover
+// and still name a radio in neither sysfs nor /proc, and then the tool that owns
+// the radio is the one thing that knows its name.
+//
+// The listing comes first because it is one call and answers outright. Its
+// output shape differs between wpa_cli builds, and on an image whose supplicant
+// does not serve a global control socket the command answers nothing usable at
+// all, so the fallback sweeps the netdevs in turn asking each for its status: a
+// bounded number of them, since a desktop can list several.
+func wpaCliDrivenInterface() string {
+	if !wifiToolExists("wpa_cli") {
+		return ""
+	}
+	wpa := wifiToolCommand("wpa_cli")
+	if out, err := wifiRunner(wifiProbeTimeout, "", wpa, "interface"); err == nil {
+		if names := parseWpaCliInterfaceList(out); len(names) > 0 {
+			return names[0]
+		}
+	}
+	names, _ := sysfsNetdevs(wifiSysfsNetRoot)
+	tried := 0
+	started := time.Now()
+	for _, name := range names {
+		if name == "lo" || !validIfaceName(name) {
+			continue
+		}
+		if tried >= wifiProbeMaxCandidates || time.Since(started) > wifiProbeBudget {
+			break
+		}
+		tried++
+		if wpaCliDrivesInterface(wpa, name) {
+			return name
+		}
+	}
+	return ""
+}
+
+// supplicantDrivenInterfaceCached is wpaCliDrivenInterface behind a TTL cache.
+// Discovery is read while the status bar draws, so an uncached probe would fork
+// wpa_cli on every frame — and a negative answer has to be remembered too, or a
+// device with no radio would pay for a process per frame forever.
+func supplicantDrivenInterfaceCached() string {
+	wifiDrivenMu.Lock()
+	defer wifiDrivenMu.Unlock()
+	if wifiDrivenKnown && wifiDrivenNow().Sub(wifiDrivenAt) < wifiDrivenTTL {
+		return wifiDrivenName
+	}
+	wifiDrivenName = wpaCliDrivenInterface()
+	wifiDrivenAt = wifiDrivenNow()
+	wifiDrivenKnown = true
+	return wifiDrivenName
+}
+
+// resetSupplicantInterfaceCache forgets the remembered answer so the next
+// lookup asks the supplicant again. Opening the picker calls it, which is when a
+// person would have plugged an adapter in; tests call it to keep fixtures apart.
+func resetSupplicantInterfaceCache() {
+	wifiDrivenMu.Lock()
+	defer wifiDrivenMu.Unlock()
+	wifiDrivenName = ""
+	wifiDrivenAt = time.Time{}
+	wifiDrivenKnown = false
+}
+
+// looksLikeWirelessName is the last resort: no marker, no proc entry, no
+// control socket, and the netdev is named the way a Wi-Fi interface is. An image
+// whose vendor driver is built without wireless extensions and without cfg80211
+// attributes still has a radio that `wpa_cli -i wlan0` drives; nothing in sysfs
+// says which one it is, but the name does.
+func looksLikeWirelessName(name string) bool {
+	for _, prefix := range []string{"wlan", "wlp", "wlx", "ra0", "rai", "ath", "p2p"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// wirelessInterfaceNames names every candidate radio, strongest evidence first:
+// a sysfs wireless marker, then the kernel's own /proc list, then a
+// wpa_supplicant control socket, then the supplicant's own answer, then the
+// naming convention. Each source is sorted, so a device with two radios always
+// resolves to the same one.
+func wirelessInterfaceNames() []string {
+	names, _ := sysfsNetdevs(wifiSysfsNetRoot)
+	var marked, conventional []string
+	for _, name := range names {
+		if isWirelessNetdev(wifiSysfsNetRoot, name) {
+			marked = append(marked, name)
+			continue
+		}
+		if looksLikeWirelessName(name) {
+			conventional = append(conventional, name)
+		}
+	}
+	if len(marked) > 0 {
+		return marked
+	}
+	if data, err := os.ReadFile(wifiProcWirelessPath); err == nil {
+		if listed := parseWirelessProcIfaces(string(data)); len(listed) > 0 {
+			return listed
+		}
+	}
+	if viaSupplicant := supplicantInterfaceNames(wifiSupplicantDirs); len(viaSupplicant) > 0 {
+		return viaSupplicant
+	}
+	// Nothing on the card named the radio. Ask the tool that drives it: this is
+	// the only source that cannot be wrong about which netdev the supplicant
+	// holds, and it is cached, so a per-frame reader pays for it once a minute.
+	if driven := supplicantDrivenInterfaceCached(); driven != "" {
+		return []string{driven}
+	}
+	return conventional
 }
 
 // validIfaceName keeps an environment override from becoming an option or a
@@ -211,11 +506,11 @@ func wifiInterface() string {
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_WIFI_IFACE")); validIfaceName(override) {
 		return override
 	}
-	iface, err := findWirelessInterface("/sys/class/net")
-	if err != nil {
+	names := wirelessInterfaceNames()
+	if len(names) == 0 {
 		return ""
 	}
-	return iface
+	return names[0]
 }
 
 // wifiControlAvailable reports whether this device can be driven through

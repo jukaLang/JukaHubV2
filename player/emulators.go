@@ -42,6 +42,11 @@ type emuEntry struct {
 	Status emuStatus
 	Launch string
 	Pinned bool // RetroAchievements and the tool rows come first
+	// Core is the libretro core that provides this tile's system, when there
+	// is one. It is set on core rows themselves (the core that runs them is
+	// the core) and resolved from the system name for the rest, so the page can
+	// install the emulator a system is missing.
+	Core string
 	// IconPath is the emulator's own picture when the install ships one: the
 	// icon in a TrimUI Emus/ folder, or an image next to a Windows executable.
 	IconPath string
@@ -205,6 +210,7 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 
 	// RetroArch cores are emulators in their own right: listing each installed
 	// core shows exactly which systems are covered.
+	installed := map[string]bool{}
 	if coresDir != "" {
 		if cores, err := os.ReadDir(coresDir); err == nil {
 			for _, c := range cores {
@@ -213,10 +219,12 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 				}
 				name := strings.TrimSuffix(c.Name(), ".so")
 				name = strings.TrimSuffix(name, "_libretro")
+				installed[name] = true
 				add(emuEntry{
 					Name:   name,
 					Detail: "RetroArch core — " + filepath.Join(coresDir, c.Name()),
 					Status: emuAvailable,
+					Core:   name,
 					Glyph:  "gamepad",
 				})
 			}
@@ -224,7 +232,9 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	}
 
 	// Systems with games but no emulator are the rows that matter most: the
-	// user finds out here instead of when launching fails.
+	// user finds out here instead of when launching fails. A system a core
+	// already covers is not one of those rows — the core's own tile is the
+	// row, and calling the folder unplayable next to it would be wrong.
 	if romsRoot != "" {
 		if roms, err := os.ReadDir(romsRoot); err == nil {
 			for _, r := range roms {
@@ -232,6 +242,9 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 					continue
 				}
 				if _, ok := byName[strings.ToLower(r.Name())]; ok {
+					continue
+				}
+				if coreCoversSystem(installed, r.Name()) {
 					continue
 				}
 				add(emuEntry{
@@ -250,6 +263,14 @@ func deviceEmulatorEntries(emuRoots []string, romsRoot, coresDir string) []emuEn
 	}
 	sortEmulatorEntries(entries)
 	return entries
+}
+
+// coreCoversSystem reports whether an installed libretro core is the default
+// emulator for a system, so a Roms/ folder is not reported as having no
+// emulator when RetroArch already holds the core that runs it.
+func coreCoversSystem(installed map[string]bool, system string) bool {
+	core := normalizeCoreName(defaultCoreForSystem(system))
+	return core != "" && installed[core]
 }
 
 // sortEmulatorEntries groups rows by availability (available first), then
@@ -330,6 +351,7 @@ func emulatorEntries() []emuEntry {
 }
 
 func invalidateEmulatorCache() {
+	invalidateEmuCorePresence()
 	emuCache.mu.Lock()
 	emuCache.built = false
 	emuCache.entries = nil
@@ -571,10 +593,34 @@ func emuPanelActivate(config *Config) {
 		emuPanel.open = false
 		launchEmulatorEntry(e)
 	case emuBroken:
+		// A folder without a launcher is unusable, but the system may still have
+		// a core this page can install, so that is the offered fix first.
+		if emuCoreForEntry(e) != "" && emuCoreInstallSupported() {
+			startEmulatorInstall(e)
+			return
+		}
 		ShowToast(e.Name+" is installed but has no launcher", ToastKindWarning)
 	default:
+		// The page used to dead-end here with "no emulator found". The same
+		// buildbot channel the updater reads can install the core that runs
+		// this system, so a missing emulator is an offer instead of a verdict.
+		if emuCoreForEntry(e) != "" && emuCoreInstallSupported() {
+			startEmulatorInstall(e)
+			return
+		}
 		ShowToast(e.Name+": no emulator found", ToastKindWarning)
 	}
+}
+
+// emuPanelInstall starts an install or update for the highlighted tile. X is
+// the deliberate press: A opens an emulator that is there, X fixes the one that
+// is not (or is out of date).
+func emuPanelInstall() {
+	entries := emulatorEntries()
+	if emuPanel.cursor < 0 || emuPanel.cursor >= len(entries) {
+		return
+	}
+	startEmulatorInstall(entries[emuPanel.cursor])
 }
 
 // ctrlEmuPanel is called from the controller overlay priority chain.
@@ -590,6 +636,17 @@ func ctrlEmuPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 		emuPanelMove(1, 0)
 	case sdl.CONTROLLER_BUTTON_A:
 		emuPanelActivate(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		emuPanelInstall()
+	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+		// R1 puts back the build the last update replaced. It is the undo for
+		// L1 and for a single X update, and it only does anything when the
+		// highlighted tile's core has a kept build beside it.
+		startEmulatorRollback()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		// L1 updates every installed emulator the index has a newer build of,
+		// the same key the compatibility panel uses to fetch cores.
+		startEmulatorUpdateInstalled()
 	case sdl.CONTROLLER_BUTTON_Y:
 		if retroAchievementsSupported() {
 			openRetroAchievementsPanelFromEmu()
@@ -617,6 +674,12 @@ func handleEmuKey(e *sdl.KeyboardEvent, config *Config) bool {
 		emuPanelMove(1, 0)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		emuPanelActivate(config)
+	case sdl.K_x:
+		emuPanelInstall()
+	case sdl.K_u:
+		startEmulatorUpdateInstalled()
+	case sdl.K_r:
+		startEmulatorRollback()
 	case sdl.K_y:
 		if retroAchievementsSupported() {
 			openRetroAchievementsPanelFromEmu()

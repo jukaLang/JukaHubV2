@@ -114,12 +114,12 @@ func TestCompositeUILayerFadesAndSlides(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
 	if uiLayerTexture(renderer) == nil {
-		t.Skip("backend has no render targets; the panel draws unanimated")
+		t.Fatalf("the software renderer could not make the UI compositing layer; SDL reports render targets as supported here, so this is a defect")
 	}
 
 	drawPanel := func() {
@@ -131,7 +131,7 @@ func TestCompositeUILayerFadesAndSlides(t *testing.T) {
 	renderer.Clear()
 	compositeUILayer(renderer, 0.5, 20, drawPanel)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
 	// Inside the shifted, half-opacity panel.
@@ -172,13 +172,13 @@ func TestStartMenuEntranceFadesIn(t *testing.T) {
 		f := newProbeFrame(t)
 		renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 		if err != nil {
-			t.Skipf("software renderer unavailable: %v", err)
+			t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 		}
 		defer destroyTestRenderer(renderer)
 		withScreen(t, probeW, probeH)
 		ClearTextCache()
 		if uiLayerTexture(renderer) == nil {
-			t.Skip("backend has no render targets; the menu draws unanimated")
+			t.Fatalf("the software renderer could not make the UI compositing layer; SDL reports render targets as supported here, so this is a defect")
 		}
 
 		previousClock := uiClockMS
@@ -189,7 +189,7 @@ func TestStartMenuEntranceFadesIn(t *testing.T) {
 		renderer.Clear()
 		renderStartMenu(renderer, config)
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-			t.Skipf("ReadPixels unavailable: %v", err)
+			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 		return f
 	}
@@ -245,7 +245,7 @@ func TestStartMenuEntranceHonoursReducedMotion(t *testing.T) {
 	f := newProbeFrame(t)
 	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
 	if err != nil {
-		t.Skipf("software renderer unavailable: %v", err)
+		t.Fatalf("could not create the offscreen software renderer: %v (SDL video is already up and the dummy driver supports it, so this is a defect, not an environment gate)", err)
 	}
 	defer destroyTestRenderer(renderer)
 	withScreen(t, probeW, probeH)
@@ -259,7 +259,7 @@ func TestStartMenuEntranceHonoursReducedMotion(t *testing.T) {
 	renderer.Clear()
 	renderStartMenu(renderer, config)
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
-		t.Skipf("ReadPixels unavailable: %v", err)
+		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 	menuX, menuY := startMenuOrigin()
 	if f.isBG(menuX+60, menuY+260) {

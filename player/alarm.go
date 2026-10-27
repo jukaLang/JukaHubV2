@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
@@ -37,18 +36,15 @@ var (
 // --- Persistence ---
 
 func alarmLoad() {
-	data, err := os.ReadFile("jukaalarm.json")
-	if err != nil {
+	var al alarmList
+	if _, err := readJSONWithBackup("jukaalarm.json", &al); err != nil {
 		alarmStore = alarmList{}
 		return
 	}
-	var al alarmList
-	if json.Unmarshal(data, &al) == nil {
-		alarmStore = al
-		for _, a := range al.Alarms {
-			if a.ID >= alarmNextID {
-				alarmNextID = a.ID + 1
-			}
+	alarmStore = al
+	for _, a := range al.Alarms {
+		if a.ID >= alarmNextID {
+			alarmNextID = a.ID + 1
 		}
 	}
 	// Reset "fired" flags at midnight.
@@ -66,7 +62,11 @@ func alarmSave() {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile("jukaalarm.json", data, 0644)
+	// Same crash-safe path as the config and the notes: an alarm the user set
+	// must survive pulling the power, not just a clean shutdown.
+	if err := AtomicWrite("jukaalarm.json", data, 0644); err != nil {
+		Log().Warn("alarms could not be saved", "err", err)
+	}
 }
 
 // --- State ---
@@ -93,10 +93,25 @@ var alarmAddRect sdl.Rect
 // Alarm list geometry shared by the renderer and the mouse handler.
 const (
 	alarmListX = int32(100)
-	alarmListY = int32(160)
 	alarmListW = int32(740)
 	alarmRowH  = int32(64)
 )
+
+// alarmListTop is where the row list starts: under the shared header, the big
+// clock and the next-alarm countdown. On the compact canvas the mini calendar
+// and the list share columns, so there the list also starts below the calendar
+// instead of running under it. The renderer and the click hit-test both read
+// this, so a tap cannot land on the row above the one under the finger.
+func alarmListTop() int32 {
+	top := headerBarHeight() + 144
+	cardW, cardH := miniCalendarSize()
+	calLeft := screenWidth - cardW - 24
+	calBottom := headerBarHeight() + 8 + cardH + 12
+	if alarmListX+alarmListW > calLeft && calBottom > top {
+		top = calBottom
+	}
+	return top
+}
 
 func alarmInitUI() {
 	now := time.Now()
@@ -336,7 +351,8 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// Touch-visible Back pill (top-left), mirroring the other scenes' chrome.
+	// The app's one bar owns the top of the screen; the clock starts under it.
+	barH := headerBarHeight()
 	font, _ := getCachedFont(config, "medium")
 	bigFont, _ := getCachedFont(config, "big")
 	if bigFont == nil {
@@ -344,14 +360,16 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 	}
 	smallFont, _ := getCachedFont(config, "small")
 
-	cx := int32(640)
+	cx := screenWidth / 2
 
 	// --- Large current time display ---
+	timeBottom := barH + 10
 	if bigFont != nil {
 		timeStr := alarmUI.now.Format("15:04:05")
 		tw, th, _ := bigFont.SizeUTF8(timeStr)
 		tx := cx - int32(tw)/2
-		ty := int32(30)
+		ty := barH + 10
+		timeBottom = ty + int32(th)
 
 		// Glow behind time
 		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 25)
@@ -383,31 +401,15 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 		cw, _, _ := smallFont.SizeUTF8(countdown)
 		renderText(renderer, config, smallFont, countdown,
 			sdl.Color{R: 140, G: 200, B: 140, A: 180},
-			cx-int32(cw)/2, int32(110))
+			cx-int32(cw)/2, timeBottom+34)
 	}
 
-	if smallFont != nil {
-		label := "< Back"
-		lw, lh, _ := smallFont.SizeUTF8(label)
-		bw := int32(lw) + 24
-		bh := int32(lh) + 12
-		alarmBackRect = UIButton(renderer, config, sdl.Rect{X: 24, Y: 24, W: bw, H: bh}, label, UIButtonStyle{
-			Variant:    UIButtonCustom,
-			Fill:       WithAlpha(ColorSurfaceRaised, 220),
-			Border:     ColorBorder,
-			LabelColor: ColorTextSecondary(),
-			Font:       smallFont,
-			Pill:       true,
-			NoShadow:   true,
-		}, UIButtonState{})
-	}
-
-	// --- Mini calendar (top right) ---
+	// --- Mini calendar (top right, under the bar) ---
 	renderMiniCalendar(renderer, config)
 
 	// --- Alarm list or editor ---
 	listX := alarmListX
-	listY := alarmListY
+	listY := alarmListTop()
 	listW := alarmListW
 
 	if alarmUI.tab == 0 {
@@ -418,31 +420,11 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 		renderAlarmEditor(renderer, config, listX, listY, listW)
 	}
 
-	// Controls hint
-	if smallFont != nil {
-		controls := ""
-		switch alarmUI.tab {
-		case 0:
-			controls = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Edit"},
-				FooterHint{"X", "Toggle"}, FooterHint{"Y", "Add New"}, FooterHint{"B", "Back"})
-			if len(alarmStore.Alarms) > 0 {
-				controls = hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Edit"},
-					FooterHint{"X", "Toggle"}, FooterHint{"Y", "Add New"}, FooterHint{"Y+X", "Hold to Delete"})
-			}
-		case 1:
-			controls = hintLine(FooterHint{"D-Pad", "Change Hour"}, FooterHint{"A", "Next"}, FooterHint{"B", "Back"})
-		case 2:
-			controls = hintLine(FooterHint{"D-Pad", "Change Minute"}, FooterHint{"A", "Next"}, FooterHint{"B", "Back"})
-		case 3:
-			controls = hintLine(FooterHint{Label: "Type Label"}, FooterHint{"A", "Save"}, FooterHint{"B", "Back"})
-		case 4:
-			controls = hintLine(FooterHint{"A", "Confirm Delete"}, FooterHint{"B", "Cancel"})
-		}
-		chw, _, _ := smallFont.SizeUTF8(controls)
-		chx := (screenWidth - int32(chw)) / 2
-		renderText(renderer, config, smallFont, controls,
-			sdl.Color{R: 90, G: 105, B: 130, A: 140}, chx, screenHeight-40)
-	}
+	// The shared bars last. The Back pill is the bar's own, so touch users get
+	// the same control every other screen has instead of a bespoke text pill.
+	renderStatusBar(renderer, config)
+	renderFooter(renderer, config)
+	alarmBackRect = sceneTitleBackRect
 }
 
 func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
@@ -564,10 +546,11 @@ func handleAlarmMouseClick(mx, my int32, config *Config) bool {
 		PlayActivateSound()
 		return true
 	}
-	if my < alarmListY || my >= alarmListY+int32(len(alarmStore.Alarms))*alarmRowH {
+	listTop := alarmListTop()
+	if my < listTop || my >= listTop+int32(len(alarmStore.Alarms))*alarmRowH {
 		return false
 	}
-	idx := int((my - alarmListY) / alarmRowH)
+	idx := int((my - listTop) / alarmRowH)
 	if idx < 0 || idx >= len(alarmStore.Alarms) {
 		return false
 	}
@@ -694,8 +677,6 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 // --- Mini Calendar (top-right of alarm scene) ---
 
 const (
-	calX     = 880
-	calY     = 28
 	calCellW = 28
 	calCellH = 22
 	calPadX  = 8
@@ -705,11 +686,16 @@ const (
 	calDayHeaderH = 18
 )
 
-// renderMiniCalendar draws the mini month grid at the alarm scene's anchor in
-// the top-right corner. The home screen places its own copy with
-// renderMiniCalendarAt so the popover can sit under its header clock.
+// renderMiniCalendar draws the mini month grid in the alarm scene's corner:
+// under the shared header, against the right margin. The home screen places its
+// own copy with renderMiniCalendarAt so the popover can sit under its clock.
 func renderMiniCalendar(renderer *sdl.Renderer, config *Config) {
-	renderMiniCalendarAt(renderer, config, int32(calX), int32(calY))
+	cardW, _ := miniCalendarSize()
+	x := screenWidth - cardW - 24
+	if x < 24 {
+		x = 24
+	}
+	renderMiniCalendarAt(renderer, config, x, headerBarHeight()+8)
 }
 
 // miniCalendarSize returns the card size of the mini month grid for the
@@ -893,7 +879,9 @@ func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 		switch e.Keysym.Sym {
 		case sdl.K_RETURN, sdl.K_SPACE:
 			alarmSelect()
-		case sdl.K_ESCAPE, sdl.K_b:
+		case sdl.K_ESCAPE:
+			// Escape only: B is the first letter of half the labels, so it
+			// cannot also be the way out of the field.
 			alarmBack()
 		case sdl.K_BACKSPACE:
 			alarmUI.editLabel = trimLastRune(alarmUI.editLabel)

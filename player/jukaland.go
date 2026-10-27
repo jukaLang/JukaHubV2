@@ -553,6 +553,13 @@ func updateJukaLandEnemies(dt float64) {
 }
 
 func renderJukaLand(renderer *sdl.Renderer, config *Config) {
+	// The world used to exist only after the scene's init action ran. Entering
+	// JukaLand any other way — restoring it at startup, or opening it from the
+	// global search — drew an empty map with the player off-screen. initJukaLand
+	// returns immediately once the world is built, so this is free on every
+	// later frame.
+	initJukaLand()
+
 	renderer.SetDrawColor(20, 24, 40, 255)
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
 
@@ -648,13 +655,54 @@ func renderJukaLand(renderer *sdl.Renderer, config *Config) {
 
 	font, _ := getCachedFont(config, "small")
 	if font != nil {
-		renderText(renderer, config, font, fmt.Sprintf("JukaLand  Score: %d", jukaland.Score), sdl.Color{R: 240, G: 245, B: 255, A: 255}, 10, 10)
-		renderText(renderer, config, font, fmt.Sprintf("Health: %d%%", jukaland.Health), sdl.Color{R: 80, G: 220, B: 120, A: 255}, 10, 36)
-		carText := "No car"
+		// The read-outs used to be drawn from y=10, under the shared top bar:
+		// the score and health lines were invisible behind it and only the car
+		// state peeked out below. They now start under the bar, on one measured
+		// strip so the numbers stay legible over the terrain.
+		scoreText := fmt.Sprintf("Score %d", jukaland.Score)
+		healthText := fmt.Sprintf("Health %d%%", jukaland.Health)
+		carText := "On foot"
 		if jukaland.InCar {
-			carText = "In Car"
+			carText = "In car"
 		}
-		renderText(renderer, config, font, carText, sdl.Color{R: 255, G: 220, B: 100, A: 255}, 10, 62)
+		texts := []string{scoreText, healthText, carText}
+		colors := []sdl.Color{
+			{R: 240, G: 245, B: 255, A: 255},
+			{R: 80, G: 220, B: 120, A: 255},
+			{R: 255, G: 220, B: 100, A: 255},
+		}
+		padX := int32(12)
+		gapX := int32(14)
+		hudY := HomeTopBarH + 8
+		lineH := int32(font.Height())
+		stripW := padX * 2
+		widths := make([]int32, len(texts))
+		for i, s := range texts {
+			w, _, _ := font.SizeUTF8(s)
+			widths[i] = int32(w)
+			stripW += widths[i]
+			if i > 0 {
+				stripW += gapX
+			}
+		}
+		fillRoundedRect(renderer, 12, hudY, stripW, lineH+12, 8, WithAlpha(ColorSurfaceRaised, 190))
+		x := int32(12) + padX
+		for i, s := range texts {
+			renderText(renderer, config, font, s, colors[i], x, hudY+6)
+			x += widths[i] + gapX
+		}
+
+		// The game draws its own full frame, so the shared footer never runs:
+		// without this line the controller mapping was only in the docs.
+		hints := hintLine(
+			FooterHint{"D-Pad", "Move"}, FooterHint{"A", "Jump"}, FooterHint{"X", "Place"},
+			FooterHint{"B", "Break"}, FooterHint{"Start", "Craft"}, FooterHint{"Back", "Exit"})
+		hintW := screenWidth - 24
+		if tw, _, err := font.SizeUTF8(hints); err == nil && int32(tw) < hintW {
+			hintW = int32(tw)
+		}
+		renderText(renderer, config, font, ellipsize(font, hints, screenWidth-24),
+			ColorTextTertiary(), (screenWidth-hintW)/2, screenHeight-HomeFooterH-lineH-6)
 		if jukaland.CraftOpen {
 			panelW := int32(400)
 			panelH := int32(260)

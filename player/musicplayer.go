@@ -1166,16 +1166,12 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		bigFont = medFont
 	}
 
-	// Header.
-	const headerH = int32(56)
-	renderer.SetDrawColor(17, 23, 37, 255)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: headerH})
-	renderer.SetDrawColor(255, 255, 255, 18)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: headerH - 1, W: screenWidth, H: 1})
-	renderText(renderer, config, medFont, "Audio Player", ColorTextPrimary(), 24, (headerH-int32(medFont.Height()))/2)
-	back := hintLine(FooterHint{"B", "Back"})
-	bw, _, _ := font.SizeUTF8(back)
-	renderText(renderer, config, font, back, ColorTextTertiary(), screenWidth-int32(bw)-24, (headerH-int32(font.Height()))/2)
+	// The bar is the app's one header, drawn at the end of the frame like every
+	// other scene: wordmark, the scene in the caption, Back, Menu, the update
+	// offer and the system cluster. The player used to draw its own dark strip
+	// with the words "Audio Player" and a "B Back" hint, which made it the only
+	// top-level screen with a different header from the rest.
+	headerH := headerBarHeight()
 
 	music.mu.Lock()
 	tracks := append([]musicTrack(nil), music.tracks...)
@@ -1339,32 +1335,106 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 	if playing && !paused {
 		playIcon = "II"
 	}
+
+	// The button row is planned before anything is drawn. Mode labels are
+	// measured, not guessed: a fixed 124 px repeat button ellipsized
+	// "Repeat Off" (120 px at the 1280 type scale) to "Repeat O…". The fixed
+	// x offsets had a worse failure: they only ever fit the widest canvas, so
+	// on the Brick's 960 canvas Fav was drawn underneath the volume buttons and
+	// on an 800 px window it fell off the card. The modes now pack into the
+	// space really left of the volume cluster and wrap to a second line inside
+	// the card when they must, taking the height from the transport row first.
+	repeatLabel := "Repeat " + repeatMode.short()
+	repeatW := int32(0)
+	for _, mode := range []musicRepeatMode{musicRepeatOff, musicRepeatAll, musicRepeatOne} {
+		if w, _, err := font.SizeUTF8("Repeat " + mode.short()); err == nil && int32(w) > repeatW {
+			repeatW = int32(w)
+		}
+	}
+	repeatW += 2 * SpaceSM
+	if repeatW < 124 {
+		repeatW = 124
+	}
+	shuffleW := int32(104)
+	if w, _, err := font.SizeUTF8("Shuffle"); err == nil && int32(w)+2*SpaceSM > shuffleW {
+		shuffleW = int32(w) + 2*SpaceSM
+	}
+	const favW, modeGap = int32(64), int32(8)
+
+	// Volume cluster geometry first, because the mode row has to clear it.
+	volUpX := cardX + cardW - 24 - 44
+	volDownX := volUpX - 52
+	volLabel := fmt.Sprintf("Vol %d%%", int(math.Round(volume*100)))
+	volLabelW, _, _ := font.SizeUTF8(volLabel)
+	volLabelX := volDownX - int32(volLabelW) - 14
+
+	rowStart := textX + 286
+	rowLimit := volLabelX - SpaceMD
+	modeY2, modeH2 := int32(0), int32(0)
+	if rowStart+shuffleW+modeGap+repeatW+modeGap+favW > rowLimit {
+		// Two rows: split the space the card has left between them, and only
+		// wrap if the halves stay big enough to press.
+		if half := (cardY + cardH - 10 - btnY - 6) / 2; half >= 38 {
+			btnH = half
+			modeY2, modeH2 = btnY+half+6, half
+		}
+	}
+	rowX, rowY, rowH := rowStart, btnY, btnH
+	nextButton := func(w int32) (sdl.Rect, bool) {
+		if rowX+w > rowLimit {
+			if modeH2 == 0 {
+				return sdl.Rect{}, false
+			}
+			rowX, rowY, rowH = textX, modeY2, modeH2
+			rowLimit = cardX + cardW - 24
+			if rowX+w > rowLimit {
+				return sdl.Rect{}, false
+			}
+		}
+		rect := sdl.Rect{X: rowX, Y: rowY, W: w, H: rowH}
+		rowX += w + modeGap
+		return rect, true
+	}
+
 	musicRects.prev = musicButton(renderer, config, iconFont, textX, btnY, 54, btnH, "|<", false)
 	musicRects.playPause = musicButton(renderer, config, iconFont, textX+66, btnY, 76, btnH, playIcon, true)
 	musicRects.next = musicButton(renderer, config, iconFont, textX+154, btnY, 54, btnH, ">|", false)
 	musicRects.stop = musicButton(renderer, config, iconFont, textX+220, btnY, 54, btnH, "[]", false)
 
-	// Play modes. They sit after the transport where there is room, and show
-	// their state in the fill (accent = on) instead of a second label: on a
-	// handheld, a button that changes size or wording is harder to aim at.
+	// Play modes, drawn from the plan above. They show their state in the fill
+	// (accent = on) instead of a second label: on a handheld, a button that
+	// changes size or wording is harder to aim at. One that fits on neither row
+	// is left undrawn and its hit box cleared, so a tap can never land on a
+	// control that is not on screen.
 	modeFont := font
 	favPath := ""
 	if cur >= 0 && cur < len(tracks) {
 		favPath = tracks[cur].Path
 	}
-	musicRects.shuffle = musicButton(renderer, config, modeFont, textX+290, btnY, 104, btnH, "Shuffle", shuffleOn)
-	musicRects.repeat = musicButton(renderer, config, modeFont, textX+402, btnY, 124, btnH, "Repeat "+repeatMode.short(), repeatMode != musicRepeatOff)
-	musicRects.favorite = musicButton(renderer, config, modeFont, textX+534, btnY, 64, btnH, "Fav", musicIsFavorite(favPath))
+	if r, ok := nextButton(shuffleW); ok {
+		musicRects.shuffle = musicButton(renderer, config, modeFont, r.X, r.Y, r.W, r.H, "Shuffle", shuffleOn)
+	} else {
+		musicRects.shuffle = sdl.Rect{}
+	}
+	if r, ok := nextButton(repeatW); ok {
+		musicRects.repeat = musicButton(renderer, config, modeFont, r.X, r.Y, r.W, r.H, repeatLabel, repeatMode != musicRepeatOff)
+	} else {
+		musicRects.repeat = sdl.Rect{}
+	}
+	if r, ok := nextButton(favW); ok {
+		musicRects.favorite = musicButton(renderer, config, modeFont, r.X, r.Y, r.W, r.H, "Fav", musicIsFavorite(favPath))
+	} else {
+		musicRects.favorite = sdl.Rect{}
+	}
 
 	// Volume controls, right aligned in the card. The label sits left of the
-	// buttons so a long value ("Vol 100%") never slides underneath them.
-	volUpX := cardX + cardW - 24 - 44
-	volDownX := volUpX - 52
+	// buttons so a long value ("Vol 100%") never slides underneath them, and is
+	// left off when the transport cluster needs the space instead.
 	musicRects.volUp = musicButton(renderer, config, iconFont, volUpX, btnY, 44, btnH, "+", false)
 	musicRects.volDown = musicButton(renderer, config, iconFont, volDownX, btnY, 44, btnH, "-", false)
-	volLabel := fmt.Sprintf("Vol %d%%", int(math.Round(volume*100)))
-	vw, _, _ := font.SizeUTF8(volLabel)
-	renderText(renderer, config, font, volLabel, ColorTextSecondary(), volDownX-int32(vw)-14, btnY+16)
+	if volLabelX > textX+286+modeGap {
+		renderText(renderer, config, font, volLabel, ColorTextSecondary(), volLabelX, btnY+16)
+	}
 
 	// ── Playlist card ──
 	listY := cardY + cardH + 20
@@ -1467,6 +1537,8 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 			(screenWidth-int32(hw))/2, screenHeight-52+int32(i)*18)
 	}
 
+	// Header last, so no row or hint line can be painted over the bar.
+	renderStatusBar(renderer, config)
 	renderMusicSearchOverlay(renderer, config)
 	renderMusicPEQPanel(renderer, config)
 }

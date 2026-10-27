@@ -49,8 +49,11 @@ var (
 )
 
 // ipStreamsFilePath is the library location. It sits next to the other app data
-// so it survives updates (which never touch the data directory).
-func ipStreamsFilePath() string {
+// so it survives updates (which never touch the data directory). It is a
+// variable so tests can point the store at a temp file.
+var ipStreamsFilePath = defaultIPStreamsFilePath
+
+func defaultIPStreamsFilePath() string {
 	dir, err := P().DataDir()
 	if err != nil || dir == "" {
 		dir = "."
@@ -59,6 +62,8 @@ func ipStreamsFilePath() string {
 }
 
 // loadIPStreams reads the library once. A missing file is an empty library.
+// The save keeps the previous list as .bak, so an unreadable file comes back
+// as the channels the user added instead of as an empty library.
 func loadIPStreams() {
 	ipStreamsMu.Lock()
 	defer ipStreamsMu.Unlock()
@@ -66,13 +71,13 @@ func loadIPStreams() {
 		return
 	}
 	ipStreamsLoaded = true
-	data, err := os.ReadFile(ipStreamsFilePath())
-	if err != nil {
-		return
-	}
 	var list []IPStream
-	if err := json.Unmarshal(data, &list); err != nil {
-		log.Printf("[IPSTREAM] ignoring unreadable library: %v", err)
+	if _, err := readJSONWithBackup(ipStreamsFilePath(), &list); err != nil {
+		// A recovered store is logged by the helper; this line is for the case
+		// where the backup failed too, which used to pass for "no channels".
+		if !os.IsNotExist(err) {
+			log.Printf("[IPSTREAM] ignoring unreadable library: %v", err)
+		}
 		return
 	}
 	ipStreams = sanitizeIPStreams(list)
@@ -108,10 +113,9 @@ func saveIPStreams() error {
 		return err
 	}
 	path := ipStreamsFilePath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o644)
+	// The comment above promised atomicity: a plain WriteFile truncates the
+	// list first, so a power cut mid-save lost every channel the user added.
+	return AtomicWrite(path, data, 0o644)
 }
 
 // ipStreamList returns a copy of the saved streams.

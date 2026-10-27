@@ -84,17 +84,16 @@ func powerBuiltinScripts() []powerScript {
 func powerBuiltinScriptCount() int { return len(powerBuiltinScripts()) }
 
 // loadPowerScriptsFrom reads the user's snippet library. A missing file is an
-// empty library, not an error.
+// empty library, not an error. The save keeps the previous list as .bak, so a
+// truncated file comes back as the snippets the user wrote instead of as an
+// empty library — and the callers ignoring this error is exactly why silence
+// here used to look like the snippets had been deleted.
 func loadPowerScriptsFrom(path string) ([]powerScript, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	var list []powerScript
+	if _, err := readJSONWithBackup(path, &list); err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
-	}
-	var list []powerScript
-	if err := json.Unmarshal(data, &list); err != nil {
 		return nil, fmt.Errorf("power-scripts.json: %w", err)
 	}
 	out := make([]powerScript, 0, len(list))

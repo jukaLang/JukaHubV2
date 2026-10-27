@@ -345,9 +345,11 @@ func uiStateBlockMetrics(config *Config, glyph, title, body string) (glyphH, tit
 	if bodyFont != nil && body != "" {
 		bodyH = int32(bodyFont.Height())
 	}
-	if glyph == "@bell" {
-		// Drawn icons need a little more room than a text glyph; the bell reads
-		// as an empty-state illustration instead of an error marker.
+	if strings.HasPrefix(glyph, "@") {
+		// A drawn glyph needs a little more room than a text one, and reads as
+		// an empty-state illustration instead of a marker. Every empty state
+		// used to pass the literal "·", which painted a stray dot above the
+		// title — visible on Live TV, Weather and the package list.
 		glyphH = 36 + SpaceMD
 	} else if glyphFont != nil && glyph != "" {
 		glyphH = int32(glyphFont.Height()) + SpaceMD
@@ -378,7 +380,6 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 	}
 
 	glyphH, titleH, bodyH, gap := uiStateBlockMetrics(config, glyph, title, body)
-	bellGlyph := glyph == "@bell"
 	stackH := glyphH + titleH + gap + bodyH
 	y := rect.Y + (rect.H-stackH)/2
 	if y < rect.Y {
@@ -387,8 +388,8 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 	cx := rect.X + rect.W/2
 
 	if glyphH > 0 {
-		if bellGlyph {
-			drawBellIcon(renderer, cx, y+glyphH/2, 36, tone)
+		if strings.HasPrefix(glyph, "@") {
+			uiStateGlyph(renderer, glyph[1:], cx, y+glyphH/2, 36, tone)
 		} else {
 			gw, _, _ := glyphFont.SizeUTF8(glyph)
 			renderText(renderer, config, glyphFont, glyph, tone, cx-int32(gw)/2, y)
@@ -402,6 +403,21 @@ func uiStateBlock(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 		bw, _, _ := bodyFont.SizeUTF8(body)
 		renderText(renderer, config, bodyFont, body, ColorTextSecondary(), cx-int32(bw)/2, y)
 	}
+}
+
+// uiStateGlyph draws the illustration above an empty or error state. "@bell"
+// keeps its own painter (the notification dropdown's mark); every other name is
+// a home-icon glyph, so a list says "media" or "packages" at a glance instead of
+// showing a punctuation mark.
+func uiStateGlyph(renderer *sdl.Renderer, name string, cx, cy, size int32, tone sdl.Color) {
+	if renderer == nil || size <= 0 {
+		return
+	}
+	if name == "bell" {
+		drawBellIcon(renderer, cx, cy, size, tone)
+		return
+	}
+	DrawHomeIcon(renderer, name, sdl.Rect{X: cx - size/2, Y: cy - size/2, W: size, H: size}, false)
 }
 
 // UIGridColumns returns how many cells of at least minCellW fit across areaW

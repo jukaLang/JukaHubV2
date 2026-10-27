@@ -64,13 +64,119 @@ func convertTemperature(value float64, from, to string) (float64, bool) {
 }
 
 func unitConverterInputWidth(width int) int32 {
-	if width <= 260 {
+	// The value field starts after the two 200 px unit rows and their gaps, at
+	// element.X+480, and keeps a 20 px margin from the panel's right edge. The
+	// old width-260 sized it as if it started at +260, so it ran 240 px past the
+	// edge: over the panel border on the wide canvas and off the screen entirely
+	// on the Brick's compact one.
+	const fieldOffset = 500 // 480 + the 20 px right margin
+	if width <= fieldOffset {
 		return 0
 	}
-	if width >= 4260 {
+	if width >= fieldOffset+4000 {
 		return 4000
 	}
-	return int32(width - 260)
+	return int32(width - fieldOffset)
+}
+
+// The converter draws its category row and both swap controls like buttons,
+// so they keep the rects they were painted in and a tap can reach them. Before
+// this they had no hit area: tapping a category did nothing, and the "Swap"
+// button was purely decoration.
+var (
+	unitCategoryRects []sdl.Rect
+	unitFromRect      sdl.Rect
+	unitToRect        sdl.Rect
+	unitSwapCircle    sdl.Rect
+	unitSwapButton    sdl.Rect
+)
+
+// unitCategories is the chip row's order. It is the same slice renderUnitConverter
+// draws in, so index i of unitCategoryRects always names unitCategories[i].
+var unitCategories = []string{"length", "weight", "temperature", "volume", "speed", "time", "data", "area"}
+
+// unitPickCategory selects a category and clears the working conversion, the
+// same reset the unit_category action performs.
+func unitPickCategory(cat string) bool {
+	if cat == "" {
+		return false
+	}
+	unitCategory = cat
+	unitFrom = ""
+	unitTo = ""
+	unitInputValue = ""
+	unitResult = ""
+	return true
+}
+
+// unitSwapUnits mirrors the unit_swap action: the two sides trade places and
+// the old result no longer describes the new pair.
+func unitSwapUnits() {
+	unitFrom, unitTo = unitTo, unitFrom
+	unitResult = ""
+}
+
+// unitStepUnit advances one side of the conversion to the next unit in the
+// category, wrapping at the end. Tapping a unit box used to do nothing; the
+// box is the only place on the page that names the unit it would change.
+func unitStepUnit(toSide bool) {
+	units := getUnitsForCategory(unitCategory)
+	if len(units) < 2 {
+		return
+	}
+	cur := unitFrom
+	if toSide {
+		cur = unitTo
+	}
+	for i, u := range units {
+		if u != cur {
+			continue
+		}
+		next := units[(i+1)%len(units)]
+		if toSide {
+			unitTo = next
+		} else {
+			unitFrom = next
+		}
+		unitResult = ""
+		return
+	}
+}
+
+// handleUnitConverterMouse routes a tap on the converter's drawn controls. It
+// only claims clicks while the converter is the open scene, so its rects can
+// never swallow a click on the page behind it.
+func handleUnitConverterMouse(mx, my int32, config *Config) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) ||
+		config.Scenes[currentSceneIndex].Name != "UnitConverter" {
+		return false
+	}
+	for i, r := range unitCategoryRects {
+		if mx < r.X || mx > r.X+r.W || my < r.Y || my > r.Y+r.H {
+			continue
+		}
+		if i < len(unitCategories) {
+			unitPickCategory(unitCategories[i])
+		}
+		PlayNavSound()
+		return true
+	}
+	if pointInRect(mx, my, unitSwapCircle) || pointInRect(mx, my, unitSwapButton) {
+		unitSwapUnits()
+		PlayNavSound()
+		return true
+	}
+	if pointInRect(mx, my, unitFromRect) {
+		unitStepUnit(false)
+		PlayNavSound()
+		return true
+	}
+	if pointInRect(mx, my, unitToRect) {
+		unitStepUnit(true)
+		PlayNavSound()
+		return true
+	}
+	return false
 }
 
 func convertUnit(value float64, from, to, category string) (float64, bool) {
@@ -132,7 +238,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		font = titleFont
 	}
 
-	categories := []string{"length", "weight", "temperature", "volume", "speed", "time", "data", "area"}
+	categories := unitCategories
 	catLabels := map[string]string{
 		"length": "Length", "weight": "Weight", "temperature": "Temp",
 		"volume": "Volume", "speed": "Speed", "time": "Time", "data": "Data", "area": "Area",
@@ -142,14 +248,31 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	elemW := getElementWidth(element, 1080)
 	elemH := getElementHeight(element, 500)
 	unitInputRect = sdl.Rect{}
+	unitFromRect = sdl.Rect{}
+	unitToRect = sdl.Rect{}
+	unitSwapCircle = sdl.Rect{}
+	unitSwapButton = sdl.Rect{}
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, WithAlpha(ColorSurfacePanel, 220), accentColor)
 
 	catStartX := element.X + 20
 	catY := element.Y + 20
-	catW := int32(120)
 	catH := int32(34)
 	catGap := int32(10)
+	// The eight category tabs share the panel's inner width instead of a fixed
+	// 120 px each: at 120 they needed 1040 px, so on the Brick's compact canvas
+	// (770 inside the panel) the last tabs were drawn over the border and off
+	// the screen.
+	catW := int32(120)
+	if n := int32(len(categories)); n > 0 {
+		if fit := (elemW - 40 - (n-1)*catGap) / n; fit < catW {
+			catW = fit
+		}
+	}
+	if catW < 48 {
+		catW = 48
+	}
 
+	unitCategoryRects = unitCategoryRects[:0]
 	for i, cat := range categories {
 		cx := catStartX + int32(i)*(catW+catGap)
 		if cx < catStartX {
@@ -165,21 +288,24 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
 			renderer.FillRect(&sdl.Rect{X: cx + 8, Y: catY + catH - 2, W: catW - 16, H: 2})
 		} else {
-			renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 40)
-			renderer.DrawRect(&sdl.Rect{X: cx + 1, Y: catY + 1, W: catW - 2, H: 1})
-			renderer.DrawRect(&sdl.Rect{X: cx + 1, Y: catY + catH - 2, W: catW - 2, H: 1})
-			renderer.DrawRect(&sdl.Rect{X: cx + 1, Y: catY + 1, W: 1, H: catH - 2})
-			renderer.DrawRect(&sdl.Rect{X: cx + catW - 2, Y: catY + 1, W: 1, H: catH - 2})
+			// The four 1px DrawRect edges drew a square outline over the
+			// rounded fill, so an unselected tab read as a different shape from
+			// the selected one. The shared rounding keeps them a single chip.
+			strokeRoundedRect(renderer, cx, catY, catW, catH, 8, 1, WithAlpha(ColorBorderSubtle, 60))
 		}
+		// Every drawn tab is a tap target; the row used to be painted with no
+		// hit area at all, so tapping a category did nothing.
+		unitCategoryRects = append(unitCategoryRects, sdl.Rect{X: cx, Y: catY, W: catW, H: catH})
 		if font != nil {
-			lw, _, _ := font.SizeUTF8(catLabels[cat])
+			label := ellipsize(font, catLabels[cat], catW-12)
+			lw, _, _ := font.SizeUTF8(label)
 			var tc sdl.Color
 			if cat == unitCategory {
 				tc = ColorTextPrimary()
 			} else {
 				tc = ColorTextTertiary()
 			}
-			renderText(renderer, config, font, catLabels[cat], tc, cx+(catW-int32(lw))/2, catY+8)
+			renderText(renderer, config, font, label, tc, cx+(catW-int32(lw))/2, catY+8)
 		}
 	}
 
@@ -207,16 +333,17 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		inputW = unitConverterInputWidth(w)
 	}
 
+	// The unit boxes keep the card's rounding: two straight 1px lines drawn
+	// across a 10px radius poked out past the curved corners and read as a
+	// stray rule floating above each box.
 	fillRoundedRect(renderer, fromX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))
 	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, ColorSurfaceRow)
-	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 40)
-	renderer.DrawRect(&sdl.Rect{X: fromX + 1, Y: rowY + 1, W: rowW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: fromX + 1, Y: rowY + rowH - 2, W: rowW - 2, H: 1})
+	strokeRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, 1, WithAlpha(ColorBorderSubtle, 60))
 	fillRoundedRect(renderer, toX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))
 	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, ColorSurfaceRow)
-	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 40)
-	renderer.DrawRect(&sdl.Rect{X: toX + 1, Y: rowY + 1, W: rowW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: toX + 1, Y: rowY + rowH - 2, W: rowW - 2, H: 1})
+	strokeRoundedRect(renderer, toX, rowY, rowW, rowH, 10, 1, WithAlpha(ColorBorderSubtle, 60))
+	unitFromRect = sdl.Rect{X: fromX, Y: rowY, W: rowW, H: rowH}
+	unitToRect = sdl.Rect{X: toX, Y: rowY, W: rowW, H: rowH}
 	fillRoundedRect(renderer, inputX+1, rowY+1, inputW, rowH, 10, ShadowFill(30))
 	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, ColorSurfaceRaised)
 	unitInputRect = sdl.Rect{X: inputX, Y: rowY, W: inputW, H: rowH}
@@ -239,6 +366,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	arrowY := rowY + rowH/2
 	circleR := int32(16)
 	circleX := fromX + rowW + gap/2 - circleR
+	unitSwapCircle = sdl.Rect{X: circleX, Y: arrowY - circleR, W: circleR * 2, H: circleR * 2}
 	UIButton(renderer, config, sdl.Rect{X: circleX, Y: arrowY - circleR, W: circleR * 2, H: circleR * 2}, "<->", UIButtonStyle{
 		Variant:    UIButtonSecondary,
 		LabelColor: accentColor,
@@ -265,6 +393,7 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	swapW := int32(120)
 	swapH := int32(40)
 	swapX := inputX + inputW - swapW
+	unitSwapButton = sdl.Rect{X: swapX, Y: swapY, W: swapW, H: swapH}
 	UIButton(renderer, config, sdl.Rect{X: swapX, Y: swapY, W: swapW, H: swapH}, "Swap", UIButtonStyle{
 		Variant: UIButtonSecondary,
 		Font:    font,

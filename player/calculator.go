@@ -19,8 +19,6 @@ const (
 	calcBtnW = 108
 	calcBtnH = 60
 	calcGap  = 8
-	calcX0   = 340
-	calcY0   = 140
 )
 
 type calcBtn struct {
@@ -324,11 +322,30 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Display area.
+	// The display and the key grid form one block, centred in the space
+	// between the shared header and the shared footer. The old fixed origin
+	// (calcX0/calcY0) put the display under the 56px bar and pushed the history
+	// column past the right edge of the Brick's 960px canvas.
+	const histW = int32(300)
+	const histGap = int32(40)
 	displayW := int32(calcBtnW*calcCols + calcGap*(calcCols-1))
 	displayH := int32(80)
-	displayX := int32(calcX0)
-	displayY := int32(calcY0) - displayH - 20
+	gridH := int32(calcBtnH*calcRows + calcGap*(calcRows-1))
+	blockW := displayW + histGap + histW
+	blockH := displayH + 20 + gridH
+
+	blockX := (screenWidth - blockW) / 2
+	if blockX < 16 {
+		blockX = 16
+	}
+	blockY := headerBarHeight() + (screenHeight-footerBarHeight()-headerBarHeight()-blockH)/2
+	if blockY < headerBarHeight()+8 {
+		blockY = headerBarHeight() + 8
+	}
+	displayX := blockX
+	displayY := blockY
+	gridX := blockX
+	gridY := blockY + displayH + 20
 
 	// Display background.
 	drawCard(renderer, displayX, displayY, displayW, displayH, 16)
@@ -356,8 +373,8 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 	for row := 0; row < calcRows; row++ {
 		for col := 0; col < calcCols; col++ {
 			btn := calcButtons[row][col]
-			bx := int32(calcX0 + col*(calcBtnW+calcGap))
-			by := int32(calcY0 + row*(calcBtnH+calcGap))
+			bx := gridX + int32(col*(calcBtnW+calcGap))
+			by := gridY + int32(row*(calcBtnH+calcGap))
 			focused := calc.cursor[0] == row && calc.cursor[1] == col
 
 			// Button fill. The calculator keeps its own semantic colours
@@ -400,11 +417,10 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// History panel on the right.
-	histX := int32(calcX0 + calcBtnW*calcCols + calcGap*calcCols + 40)
-	histY := int32(calcY0) - 100
-	histW := int32(300)
-	histH := int32(calcBtnH*calcRows + calcGap*(calcRows-1))
+	// History panel on the right, the same height as the display plus grid.
+	histX := gridX + displayW + histGap
+	histY := blockY
+	histH := blockH
 
 	drawCard(renderer, histX, histY, histW, histH, 16)
 
@@ -435,16 +451,10 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 			sdl.Color{R: 80, G: 95, B: 120, A: 150}, histX+(histW-int32(ew))/2, histY+histH/2)
 	}
 
-	// Controls hint.
-	if smallFont != nil {
-		controls := hintLine(FooterHint{"D-Pad", "Navigate"}, FooterHint{"A", "Select"},
-			FooterHint{"C", "Clear"}, FooterHint{"B", "Back"})
-		chw, _, _ := smallFont.SizeUTF8(controls)
-		chx := (screenWidth - int32(chw)) / 2
-		chy := screenHeight - 40
-		renderText(renderer, config, smallFont, controls,
-			sdl.Color{R: 90, G: 105, B: 130, A: 140}, chx, chy)
-	}
+	// The shared bars: the calculator used to be the only full-screen scene
+	// with no header at all, so it read as a separate app.
+	renderStatusBar(renderer, config)
+	renderFooter(renderer, config)
 }
 
 // handleCalcInput processes controller/keyboard input in the Calculator scene.

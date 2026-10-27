@@ -106,7 +106,7 @@ func TestWrapTextLines(t *testing.T) {
 	config := &Config{}
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
-		t.Skip("no usable font in this environment")
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 	measure := func(s string) int32 {
 		w, _, _ := font.SizeUTF8(s)
