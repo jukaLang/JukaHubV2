@@ -390,3 +390,21 @@ test('the exported schemaVersion matches the player ConfigSchemaVersion', () => 
   const exported = window.eval("buildEditorConfig()");
   assert.equal(exported.schemaVersion, playerVersion, 'builder export carries the player schema version');
 });
+
+// Every form control needs an accessible name. Three trigger selects shipped
+// without one (axe: select-name, critical) because they sit in a panel that is
+// hidden until an element is selected, so a scan of the loaded page missed them.
+test('every form control has an accessible name', () => {
+  const { document: page } = dom.window;
+  const unnamed = [];
+  for (const control of page.querySelectorAll('select, textarea, input:not([type="hidden"])')) {
+    const named =
+      control.getAttribute('aria-label')?.trim() ||
+      control.getAttribute('aria-labelledby') ||
+      control.getAttribute('title')?.trim() ||
+      control.closest('label') ||
+      (control.id && page.querySelector(`label[for="${control.id}"]`));
+    if (!named) unnamed.push(control.tagName.toLowerCase() + (control.id ? '#' + control.id : ''));
+  }
+  assert.deepEqual(unnamed, [], 'unnamed controls: ' + unnamed.join(', '));
+});
