@@ -58,6 +58,13 @@ func closeGameProfilePanel() {
 	if !gpPanel.open {
 		return
 	}
+	if restoreLibraryFromHandoff() {
+		gpPanel = gameProfilePanelState{}
+		gameProfilePanelRect = sdl.Rect{}
+		gameProfileRowHits = nil
+		PlayBackSound()
+		return
+	}
 	returnEmu := gpPanel.returnEmu
 	gpPanel = gameProfilePanelState{}
 	gameProfilePanelRect = sdl.Rect{}

@@ -4457,6 +4457,12 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	// A registered scene owns its whole body. Everything else falls through to
 	// the config-driven element renderer below, which is the common case.
 	if m, ok := lookupScene(scene.Name); ok && m.render(renderer, config) {
+		// Most of these scenes draw the shared status bar themselves, so the
+		// menus its Apps pill, weather chip and bell open must float over them
+		// too. They were never drawn here: Start opened an invisible menu that
+		// still took every press until B closed it.
+		renderer.SetClipRect(nil)
+		renderTopBarOverlays(renderer, config)
 		return
 	}
 
@@ -4479,8 +4485,8 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 		statusClockRect = sdl.Rect{}
 		tb.startRect = sdl.Rect{}
 		renderHomeModern(renderer, config)
-		renderWeatherPopover(renderer, config)
-		renderNotifDropdown(renderer, config)
+		// With no Apps pill measured the Start menu anchors under the top bar.
+		renderTopBarOverlays(renderer, config)
 		renderer.SetDrawColor(0, 0, 0, 255)
 		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 		renderer.SetClipRect(nil)
@@ -4602,14 +4608,22 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 	// The bottom of every menu is reserved for buttons now: the controller
 	// hint bar, plus the app menu overlay when it is open.
 	renderFooter(renderer, config)
-	renderWeatherPopover(renderer, config)
-	renderStartMenu(renderer, config)
-	renderNotifDropdown(renderer, config)
+	renderTopBarOverlays(renderer, config)
 
 	// Reset renderer state after rendering to avoid state leakage
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	renderer.SetClipRect(nil)
+}
+
+// renderTopBarOverlays draws the menus the top bar opens, in their stacking
+// order: the weather card, the Start menu, the notification list. Each is a
+// no-op while closed. Every scene path in renderScene ends with this, Home and
+// the self-drawing registered scenes included.
+func renderTopBarOverlays(renderer *sdl.Renderer, config *Config) {
+	renderWeatherPopover(renderer, config)
+	renderStartMenu(renderer, config)
+	renderNotifDropdown(renderer, config)
 }
 
 // sceneHasBackButton reports whether the scene still declares a body-level

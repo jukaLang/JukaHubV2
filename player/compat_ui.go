@@ -71,6 +71,14 @@ func closeCompatPanel() {
 	if !cpPanel.open {
 		return
 	}
+	if restoreLibraryFromHandoff() {
+		cpPanel = compatPanelState{}
+		compatPanelRect = sdl.Rect{}
+		compatRowHits = nil
+		compatTabHits = nil
+		PlayBackSound()
+		return
+	}
 	returnEmu := cpPanel.returnEmu
 	cpPanel = compatPanelState{}
 	compatPanelRect = sdl.Rect{}

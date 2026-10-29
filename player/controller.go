@@ -288,8 +288,11 @@ func ctrlClipboard(e *sdl.ControllerButtonEvent) bool {
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_A:
 		if clipCursorIdx >= 0 && clipCursorIdx < len(clipHistory) {
-			sdl.SetClipboardText(clipHistory[clipCursorIdx].text)
-			ShowToast("Copied to clipboard", ToastKindSuccess)
+			if err := copyTextToClipboard(clipHistory[clipCursorIdx].text, "History"); err != nil {
+				ShowToast("Could not copy: "+err.Error(), ToastKindWarning)
+			} else {
+				ShowToast("Copied to clipboard", ToastKindSuccess)
+			}
 			clipSearchOpen = false
 			clipSearchBuf = ""
 			PlayActivateSound()

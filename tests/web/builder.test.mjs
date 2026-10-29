@@ -408,3 +408,143 @@ test('every form control has an accessible name', () => {
   }
   assert.deepEqual(unnamed, [], 'unnamed controls: ' + unnamed.join(', '));
 });
+
+// Preview resolves $variables on the canvas in place. The autosave that the
+// repaint itself triggers used to capture that canvas half a second in, so the
+// design permanently lost "$greeting" and exported "Hello" instead.
+test('preview never writes resolved $variables back into the design', async () => {
+  const { window } = dom;
+  window.eval("variables.greeting = 'Hello'");
+  const el = window.eval("addElement('label', 40, 40)");
+  el.querySelector('.text-content').textContent = '$greeting';
+  window.eval('enterPreviewMode()');
+  await new Promise(r => setTimeout(r, 700)); // past the 500 ms autosave debounce
+  assert.match(window.document.getElementById('canvas').textContent, /Hello/, 'preview shows the resolved value');
+  window.eval('exitPreviewMode()');
+  const texts = window.eval('buildEditorConfig().scenes.find(s => s.name === currentScene).elements.map(e => e.text)');
+  assert.ok(texts.includes('$greeting'), 'the design keeps the reference: ' + JSON.stringify(texts));
+  assert.ok(!texts.includes('Hello'), 'the resolved value never reaches the export');
+});
+
+test('one Undo after Clear All brings the whole project back', () => {
+  const { window } = dom;
+  const realConfirm = window.confirm;
+  window.confirm = () => true;
+  try {
+    const before = window.eval('Object.keys(scenes).length');
+    assert.ok(before > 1, 'the test needs a multi-scene project, got ' + before);
+    window.eval('clearAll()');
+    assert.equal(window.eval('Object.keys(scenes).length'), 1);
+    window.eval('undo()');
+    assert.equal(window.eval('Object.keys(scenes).length'), before, 'Undo restores every scene, not just the new menu');
+  } finally {
+    window.confirm = realConfirm;
+  }
+});
+
+test('scene bars share one clock timer instead of leaking one per menu', () => {
+  const { window } = dom;
+  const realSetInterval = window.setInterval;
+  let started = 0;
+  window.setInterval = (...args) => { started += 1; return realSetInterval.apply(window, args); };
+  try {
+    window.eval('addScene(); addScene();');
+  } finally {
+    window.setInterval = realSetInterval;
+  }
+  assert.equal(started, 0, 'adding scenes must not start timers');
+  const clocks = [...window.document.querySelectorAll('#canvas .menu-clock')];
+  assert.ok(clocks.length >= 1, 'the new scene has a scene bar');
+  assert.match(clocks[0].textContent, /^\d{2}:\d{2}$/, 'the clock shows the time now');
+});
+
+test('switching scenes releases the element the Inspector was editing', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const el = window.eval("addElement('button', 60, 60)");
+  el.click();
+  assert.equal(window.eval('currentElement'), el);
+  const other = window.eval('Object.keys(scenes).find(name => name !== currentScene)');
+  doc.getElementById('sceneSelector').value = other;
+  window.eval('changeScene()');
+  assert.equal(window.eval('currentElement'), null, 'no edits may land on a detached element');
+  assert.equal(doc.body.classList.contains('element-selected'), false);
+});
+
+test('Export menus keep aria-expanded in step and close on Escape', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const btn = doc.getElementById('headerExportBtn');
+  const menu = doc.getElementById('headerExportDropdown');
+  btn.click();
+  assert.equal(btn.getAttribute('aria-expanded'), 'true');
+  assert.ok(menu.classList.contains('open'));
+  doc.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  assert.equal(btn.getAttribute('aria-expanded'), 'false');
+  assert.ok(!menu.classList.contains('open'));
+});
+
+test('Delete from the context menu releases the Inspector', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const el = window.eval("addElement('button', 80, 80)");
+  el.click();
+  el.dispatchEvent(new window.MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 10, clientY: 10 }));
+  doc.querySelector('#contextMenu [data-action="delete"]').click();
+  assert.equal(el.isConnected, false);
+  assert.equal(window.eval('currentElement'), null);
+  assert.equal(doc.body.classList.contains('element-selected'), false, 'the Inspector no longer shows the deleted element');
+});
+
+// touchstart has to cancel its default so the page does not scroll under a
+// drag, and that also cancels the click a tap would produce.
+test('a tap selects an element on a touch screen', () => {
+  const { window } = dom;
+  const el = window.eval("addElement('label', 100, 100)");
+  window.eval('clearSelectionState()');
+  const touch = (type, target) => {
+    const event = new window.Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'touches', { value: type === 'touchend' ? [] : [{ clientX: 5, clientY: 5 }] });
+    target.dispatchEvent(event);
+  };
+  touch('touchstart', el);
+  touch('touchend', el);
+  assert.equal(window.eval('currentElement'), el);
+});
+
+test('a plain click records no undo step and a drag records one', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const el = window.eval("addElement('button', 120, 120)");
+  const top = () => window.eval('undoStack[undoStack.length - 1]');
+  const before = top();
+  el.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, clientX: 10, clientY: 10 }));
+  doc.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }));
+  assert.equal(top(), before, 'selecting is not an edit');
+  el.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, clientX: 10, clientY: 10 }));
+  doc.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 60, clientY: 40 }));
+  doc.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }));
+  assert.notEqual(top(), before);
+  assert.equal(top().label, 'move');
+  assert.notEqual(el.getAttribute('data-x'), '120', 'the element moved');
+});
+
+test('the mobile tab strip follows a drawer that closes on its own', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const own = Object.getOwnPropertyDescriptor(window, 'innerWidth');
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 400 });
+  try {
+    const tab = target => doc.querySelector(`.mobile-tab[data-target="${target}"]`);
+    tab('left').click();
+    assert.ok(doc.getElementById('leftSidebar').classList.contains('open'));
+    assert.equal(tab('left').getAttribute('aria-selected'), 'true');
+    doc.getElementById('canvas').click(); // a tap outside the drawer closes it
+    assert.ok(!doc.getElementById('leftSidebar').classList.contains('open'));
+    assert.equal(tab('canvas').getAttribute('aria-selected'), 'true', 'the strip is back on Canvas');
+    assert.ok(tab('canvas').classList.contains('active'));
+  } finally {
+    if (own) Object.defineProperty(window, 'innerWidth', own);
+    else delete window.innerWidth;
+  }
+});

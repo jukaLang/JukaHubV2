@@ -235,7 +235,9 @@ func startEmulatorInstall(e emuEntry) {
 	ShowToast("Checking the core index for "+e.Name+"…", ToastKindInfo)
 	go func() {
 		defer endPatchOp()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		// The timeout derives from the card's run token, so a cancel from the
+		// card or the activity strip stops the transfer mid-flight.
+		ctx, cancel := context.WithTimeout(installBarRunContext(), 10*time.Minute)
 		defer cancel()
 		client := newEmulatorUpdateClient()
 
@@ -355,7 +357,9 @@ func startEmulatorUpdateInstalled() {
 	ShowToast("Checking installed emulators…", ToastKindInfo)
 	go func() {
 		defer endPatchOp()
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		// The timeout derives from the card's run token, so a cancel from the
+		// card or the activity strip stops the transfer mid-flight.
+		ctx, cancel := context.WithTimeout(installBarRunContext(), 20*time.Minute)
 		defer cancel()
 		report := runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
 		installBarPhase(installPhaseDone)

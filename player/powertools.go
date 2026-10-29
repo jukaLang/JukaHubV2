@@ -720,7 +720,7 @@ func toolboxAuthorizedUseGate(t toolboxTool, config *Config) bool {
 }
 
 func powerClipboardText() (string, error) {
-	text, err := sdl.GetClipboardText()
+	text, err := pasteTextFromClipboard()
 	if err != nil {
 		return "", err
 	}
@@ -807,7 +807,7 @@ func powerActivate(config *Config) {
 			ShowToast(t.Name+" is not installed", ToastKindWarning)
 			return
 		}
-		if err := sdl.SetClipboardText(path); err != nil {
+		if err := copyTextToClipboard(path, "Power Tools"); err != nil {
 			ShowToast("Clipboard unavailable: "+err.Error(), ToastKindError)
 			return
 		}
@@ -958,7 +958,7 @@ func powerActivate(config *Config) {
 			ShowToast(err.Error(), ToastKindError)
 			return
 		}
-		if err := sdl.SetClipboardText(string(data)); err != nil {
+		if err := copyTextToClipboard(string(data), "Power Tools"); err != nil {
 			ShowToast("Could not copy the board", ToastKindError)
 			return
 		}

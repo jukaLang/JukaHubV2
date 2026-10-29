@@ -841,7 +841,7 @@ func patchConfirmModal() {
 	case "components-info":
 		// The card shows short digests so it stays readable; the clipboard copy
 		// carries the full hashes a maintainer needs to check a build.
-		if err := sdl.SetClipboardText(componentVersionsText(appConfig, true)); err == nil {
+		if err := copyTextToClipboard(componentVersionsText(appConfig, true), "Patch"); err == nil {
 			ShowToast("Component report copied", ToastKindSuccess)
 		} else {
 			ShowToast("Could not copy the component report", ToastKindWarning)

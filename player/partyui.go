@@ -347,7 +347,7 @@ func partyActivateRow(config *Config) {
 			partyUI.flash = "No invite yet"
 			return
 		}
-		if err := sdl.SetClipboardText(invite); err != nil {
+		if err := copyTextToClipboard(invite, "Party"); err != nil {
 			partyUI.flash = "Could not copy the invite"
 			return
 		}

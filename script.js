@@ -152,7 +152,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   setupMobileElementAdding();
   setupMobileCanvasClick();
-  setupMobileElementSelection();
 });
 
 // Create global tooltip element
@@ -169,6 +168,14 @@ const undoStack = [];
 const redoStack = [];
 const MAX_UNDO = 60;
 
+// Every scene as an array of element markup, the form undo snapshots and the
+// autosave both store. Callers sync the live canvas first (saveCurrentScene).
+function serializeScenes() {
+  const out = {};
+  for (const name of Object.keys(scenes)) out[name] = scenes[name].map(el => el.outerHTML);
+  return out;
+}
+
 // The complete editor state an undo step must restore. Scenes alone were not
 // enough: canvas size, background, font sizes and the imported metadata were
 // left behind, so undoing an edit could bring back elements on the wrong
@@ -180,9 +187,8 @@ function captureWorkspace(label) {
   saveCurrentScene();
   return {
     label: label || 'edit',
-    scenes: JSON.parse(JSON.stringify(
-      Object.fromEntries(Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)]))
-    )),
+    // outerHTML strings are immutable, so the map needs no deep copy.
+    scenes: serializeScenes(),
     currentScene,
     variables: JSON.parse(JSON.stringify(variables)),
     title: document.getElementById('title')?.value || '',
@@ -202,7 +208,6 @@ function captureWorkspace(label) {
 }
 
 function pushUndo(label) {
-  saveCurrentScene();
   undoStack.push(captureWorkspace(label));
   if (undoStack.length > MAX_UNDO) undoStack.shift();
   redoStack.length = 0;
@@ -330,7 +335,6 @@ function restoreSnapshot(snapshot) {
 
 function undo() {
   if (undoStack.length === 0) return;
-  saveCurrentScene();
   redoStack.push(captureWorkspace(undoStack[undoStack.length - 1].label || 'edit'));
   const snapshot = undoStack.pop();
   restoreSnapshot(snapshot);
@@ -339,7 +343,6 @@ function undo() {
 
 function redo() {
   if (redoStack.length === 0) return;
-  saveCurrentScene();
   const snapshot = redoStack.pop();
   undoStack.push(captureWorkspace(snapshot.label || 'edit'));
   restoreSnapshot(snapshot);
@@ -348,29 +351,48 @@ function redo() {
 
 // ---
 
+const EXPORT_DROPDOWNS = [
+  { btn: 'headerExportBtn', dd: 'headerExportDropdown' },
+  { btn: 'canvasExportBtn', dd: 'canvasExportDropdown' }
+];
+
+// Closes every Export dropdown and keeps aria-expanded in step. Returns
+// whether one was open; focus inside a closing dropdown goes back to its button.
+function closeExportDropdowns() {
+  let closed = false;
+  EXPORT_DROPDOWNS.forEach(({ btn, dd }) => {
+    const ddEl = document.getElementById(dd);
+    if (!ddEl || !ddEl.classList.contains('open')) return;
+    const btnEl = document.getElementById(btn);
+    const hadFocus = ddEl.contains(document.activeElement);
+    ddEl.classList.remove('open');
+    if (btnEl) {
+      btnEl.setAttribute('aria-expanded', 'false');
+      if (hadFocus) btnEl.focus();
+    }
+    closed = true;
+  });
+  return closed;
+}
+
 function setupExportDropdowns() {
-  const pairs = [
-    { btn: 'headerExportBtn', dd: 'headerExportDropdown' },
-    { btn: 'canvasExportBtn', dd: 'canvasExportDropdown' }
-  ];
-  pairs.forEach(({ btn, dd }) => {
+  EXPORT_DROPDOWNS.forEach(({ btn, dd }) => {
     const btnEl = document.getElementById(btn);
     const ddEl = document.getElementById(dd);
     if (!btnEl || !ddEl) return;
+    btnEl.setAttribute('aria-expanded', 'false');
     btnEl.addEventListener('click', (e) => {
       e.stopPropagation();
-      // Close other dropdown
-      pairs.forEach(({ dd: otherDd }) => {
-        const el = document.getElementById(otherDd);
-        if (el && el !== ddEl) el.classList.remove('open');
-      });
-      ddEl.classList.toggle('open');
+      const opening = !ddEl.classList.contains('open');
+      closeExportDropdowns();
+      if (opening) {
+        ddEl.classList.add('open');
+        btnEl.setAttribute('aria-expanded', 'true');
+      }
     });
   });
-  // Close dropdowns when clicking outside
-  document.addEventListener('click', () => {
-    document.querySelectorAll('.export-dropdown').forEach(dd => dd.classList.remove('open'));
-  });
+  // Close dropdowns when clicking outside (a choice inside also closes them)
+  document.addEventListener('click', closeExportDropdowns);
 }
 
 // ---
@@ -383,7 +405,7 @@ function setupContextMenu() {
 
   canvas.addEventListener('contextmenu', (e) => {
     const el = e.target.closest('.element');
-    if (!el || el.classList.contains('menu')) return;
+    if (!el || isMenuElement(el) || previewMode) return;
     e.preventDefault();
     contextMenuTarget = el;
 
@@ -403,45 +425,59 @@ function setupContextMenu() {
 
   menu.querySelectorAll('button[data-action]').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (!contextMenuTarget) return;
-      const action = btn.getAttribute('data-action');
-      pushUndo(action);
-
-      if (action === 'duplicate') {
-        duplicateElement(contextMenuTarget);
-      } else if (action === 'delete') {
-        contextMenuTarget.remove();
-        const sceneElements = scenes[currentScene];
-        const idx = sceneElements.findIndex(item => item.isEqualNode(contextMenuTarget));
-        if (idx > -1) sceneElements.splice(idx, 1);
-        currentElement = null;
-        showToast('Element deleted', 'info');
-      } else if (action === 'bring-front') {
-        contextMenuTarget.style.zIndex = '50';
-        showToast('Brought to front', 'info');
-      } else if (action === 'send-back') {
-        contextMenuTarget.style.zIndex = '0';
-        showToast('Sent to back', 'info');
-      } else if (action === 'edit-text') {
-        const type = contextMenuTarget.getAttribute('data-type');
-        if (['button', 'label'].includes(type)) {
-          const textSpan = contextMenuTarget.querySelector('.text-content');
-          const newText = prompt('Edit text:', textSpan?.textContent || '');
-          if (newText !== null && textSpan) textSpan.textContent = newText;
-        }
-      }
+      const target = contextMenuTarget;
       menu.style.display = 'none';
       contextMenuTarget = null;
+      if (!target) return;
+      const action = btn.getAttribute('data-action');
+
+      if (action === 'duplicate') {
+        pushUndo('duplicate');
+        duplicateElement(target);
+      } else if (action === 'delete') {
+        // Same path as the Delete key, so the inspector lets go of the element.
+        deleteCanvasElement(target);
+        showToast('Element deleted', 'info');
+      } else if (action === 'bring-front') {
+        pushUndo('bring to front');
+        target.style.zIndex = '50';
+        showToast('Brought to front', 'info');
+      } else if (action === 'send-back') {
+        pushUndo('send to back');
+        target.style.zIndex = '0';
+        showToast('Sent to back', 'info');
+      } else if (action === 'edit-text') {
+        editElementText(target);
+      }
     });
   });
 }
 
+// Text editing shared by double-click, double-tap and the context menu. A
+// cancelled or unchanged prompt records no undo step.
+function editElementText(el) {
+  const type = el && el.getAttribute('data-type');
+  if (!['button', 'label', 'video'].includes(type)) return;
+  const textSpan = el.querySelector('.text-content');
+  if (!textSpan) return;
+  const newText = prompt('Edit text:', textSpan.textContent);
+  if (newText === null || newText === textSpan.textContent) return;
+  pushUndo('edit text');
+  textSpan.textContent = newText;
+  processTextForVariables(textSpan);
+  scheduleValidationRefresh();
+}
+
 function duplicateElement(el) {
   const clone = el.cloneNode(true);
-  clone.style.left = (parseInt(el.getAttribute('data-x')) + 20) + 'px';
-  clone.style.top = (parseInt(el.getAttribute('data-y')) + 20) + 'px';
-  clone.setAttribute('data-x', parseInt(el.getAttribute('data-x')) + 20);
-  clone.setAttribute('data-y', parseInt(el.getAttribute('data-y')) + 20);
+  // The copy must not arrive wearing the original's selection outline.
+  clone.classList.remove('selected');
+  const x = (parseInt(el.getAttribute('data-x'), 10) || 0) + 20;
+  const y = (parseInt(el.getAttribute('data-y'), 10) || 0) + 20;
+  clone.style.left = x + 'px';
+  clone.style.top = y + 'px';
+  clone.setAttribute('data-x', x);
+  clone.setAttribute('data-y', y);
   canvas.appendChild(clone);
   setupElementEvents(clone);
   if (!scenes[currentScene]) scenes[currentScene] = [];
@@ -456,7 +492,7 @@ let elementClipboard = null;
 let pasteCount = 0;
 
 function copyElementToClipboard(el) {
-  if (!el || el.classList.contains('menu')) return false;
+  if (!el || isMenuElement(el)) return false;
   elementClipboard = JSON.parse(JSON.stringify(elementToConfig(el)));
   pasteCount = 0;
   showToast('Element copied', 'success');
@@ -498,9 +534,7 @@ function persistAutoSave() {
   autoSaveTimer = null;
   saveCurrentScene();
   const data = {
-    scenes: Object.fromEntries(
-      Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)])
-    ),
+    scenes: serializeScenes(),
     currentScene,
     variables,
     canvasWidth,
@@ -515,8 +549,9 @@ function persistAutoSave() {
     smallSize: smallSizeInput?.value || 18,
     // Imported metadata (theme colours, font paths, player settings) has to
     // survive a reload too, otherwise $labelColor loses its source and the
-    // preview cannot match the device after the first autosave.
-    importedConfig: JSON.parse(JSON.stringify(importedConfig))
+    // preview cannot match the device after the first autosave. It is
+    // serialised right below, so it needs no defensive copy.
+    importedConfig
   };
   try {
     localStorage.setItem('jukahub-autosave', JSON.stringify(data));
@@ -560,7 +595,12 @@ function setupAutoSaveTracking() {
   document.addEventListener('change', scheduleForEditorChange);
 
   if (typeof MutationObserver === 'function') {
-    const observer = new MutationObserver(scheduleAutoSave);
+    // Class changes on the canvas are UI state (selection, preview focus, the
+    // variable hint), never design data, so selecting an element does not
+    // re-serialise the whole project.
+    const observer = new MutationObserver(records => {
+      if (records.some(r => r.type !== 'attributes' || r.attributeName !== 'class')) scheduleAutoSave();
+    });
     observer.observe(canvas, { subtree: true, childList: true, characterData: true, attributes: true });
     observer.observe(variablesList, { subtree: true, childList: true, characterData: true });
   }
@@ -783,7 +823,26 @@ function customValueJs(custom, name) {
 }
 
 // The flattened, case-normalised view of a config's variables.Custom.
+// A repaint pass resolves every $reference on every element through this, and
+// each call deep-copies Custom twice, so a pass computes it once and shares the
+// (read-only) result: see withConfigCustomMemo.
+let configCustomMemo = null;
+
+function withConfigCustomMemo(fn) {
+  if (configCustomMemo) return fn();
+  configCustomMemo = computeFlattenedConfigCustom();
+  try {
+    return fn();
+  } finally {
+    configCustomMemo = null;
+  }
+}
+
 function flattenedConfigCustom() {
+  return configCustomMemo || computeFlattenedConfigCustom();
+}
+
+function computeFlattenedConfigCustom() {
   const imported = importedConfig.variables || {};
   const custom = customValueJs(imported, 'Custom');
   const merged = (typeof custom === 'object' && custom && !Array.isArray(custom) ? JSON.parse(JSON.stringify(custom)) : {});
@@ -873,6 +932,7 @@ function resolvePreviewText(text) {
 }
 
 function applyPreviewVariables() {
+  if (!configCustomMemo) return withConfigCustomMemo(applyPreviewVariables);
   canvas.querySelectorAll('.element').forEach(el => {
     const span = el.querySelector('.text-content');
     if (span) {
@@ -931,7 +991,12 @@ function applyCanvasScale(scale) {
   const readout = document.getElementById('zoomReadout');
   if (readout) readout.textContent = percent;
   const fitBtn = document.getElementById('zoomFitBtn');
-  if (fitBtn) fitBtn.title = `Canvas at ${percent} — click to fit the device to the window`;
+  if (fitBtn) {
+    fitBtn.title = `Canvas at ${percent} — click to fit the device to the window`;
+    // Its visible text is just the percentage, which says nothing about what
+    // the button does when read out on its own.
+    fitBtn.setAttribute('aria-label', `Zoom ${percent}. Fit the device to the window`);
+  }
 }
 
 function fitCanvasToViewport() {
@@ -1108,16 +1173,12 @@ function enterPreviewMode() {
   previewFocusReset();
   requestAnimationFrame(() => { fitPreviewCanvas(); previewFocusReset(); });
 
-  // Preserve a lightweight before-preview snapshot for diagnostics and cleanup.
   // Save immediately on entering preview so the latest workspace survives a
-  // reload even if the normal debounce timer has not fired yet.
-  if (autoSaveTimer) {
-    clearTimeout(autoSaveTimer);
-    autoSaveTimer = null;
-  }
-  try {
-    localStorage.setItem('jukahub-autosave', JSON.stringify(snapshotWorkspace()));
-  } catch (e) { /* private mode or storage quota can deny localStorage */ }
+  // reload even if the normal debounce timer has not fired yet. This is the
+  // regular autosave: a reduced snapshot here used to drop the imported
+  // metadata (theme colours, font paths) from the saved copy.
+  if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  persistAutoSave();
 
   showToast('Preview mode — click the scene menu, arrow keys, or Esc to exit', 'info');
   announce('Preview mode. Variables are resolved like the player. Press Escape to return to the editor.');
@@ -1232,30 +1293,6 @@ loadScene = function (sceneName) {
     applyEditorVariablePaint();
   }
 };
-
-
-function snapshotWorkspace() {
-  const sceneSelectorEl = document.getElementById('sceneSelector');
-  if (!sceneSelectorEl) return null;
-  return {
-    scenes: Object.fromEntries(
-      Object.entries(scenes).map(([k, v]) => [k, v.map(el => el.outerHTML)])
-    ),
-    currentScene,
-    variables: JSON.parse(JSON.stringify(variables)),
-    canvasWidth,
-    canvasHeight,
-    backgroundPath,
-    title: document.getElementById('title')?.value || '',
-    author: document.getElementById('author')?.value || '',
-    description: document.getElementById('description')?.value || '',
-    titleSize: titleSizeInput?.value || 48,
-    bigSize: bigSizeInput?.value || 36,
-    mediumSize: mediumSizeInput?.value || 24,
-    smallSize: smallSizeInput?.value || 18,
-    sceneSelectorValue: sceneSelectorEl.value
-  };
-}
 
 // The chatbox and its launcher float over the workspace, so they have to clear
 // the footer band that is pinned to the bottom of the 100dvh shell. How tall
@@ -1372,7 +1409,7 @@ function setupKeyboardShortcuts() {
     // Ctrl/Cmd + D = Duplicate selected element
     if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
       e.preventDefault();
-      if (currentElement && !currentElement.classList.contains('menu')) {
+      if (currentElement && !isMenuElement(currentElement)) {
         pushUndo('duplicate');
         duplicateElement(currentElement);
       }
@@ -1453,33 +1490,18 @@ function setupKeyboardShortcuts() {
       return;
     }
 
-    // Escape closes the design check first when it is open.
+    // Escape peels back one layer per press: an open menu, the design check,
+    // preview, the guide. The share, remix, device and gallery dialogs close
+    // themselves; only with nothing open does Escape drop the selection. (Two
+    // separate handlers used to run, so closing a dialog also deselected.)
     if (e.key === 'Escape') {
+      if (closeTransientMenus()) return;
       const validate = document.getElementById('validatePanel');
       if (validate && !validate.hasAttribute('hidden')) {
         e.preventDefault();
         closeValidationPanel();
         return;
       }
-    }
-
-    // Delete / Backspace = Delete selected element (when not in input)
-    if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput) {
-      if (currentElement && !currentElement.classList.contains('menu')) {
-        e.preventDefault();
-        pushUndo('delete');
-        currentElement.remove();
-        const sceneElements = scenes[currentScene];
-        const idx = sceneElements.findIndex(item => item.isEqualNode(currentElement));
-        if (idx > -1) sceneElements.splice(idx, 1);
-        clearSelectionState();
-        showToast('Element deleted', 'info');
-      }
-      return;
-    }
-
-    // Escape = deselect, close guide, or exit preview
-    if (e.key === 'Escape') {
       if (previewMode) {
         exitPreviewMode();
         return;
@@ -1488,18 +1510,54 @@ function setupKeyboardShortcuts() {
         closeGuideFn();
         return;
       }
-      if (currentElement) {
-        currentElement = null;
-        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-        document.body.classList.remove('element-selected');
-        const noSelection = document.getElementById('noSelection');
-        if (noSelection) noSelection.style.display = '';
-        switchTab('app-properties');
-      }
+      if (document.querySelector('.guide-modal:not([hidden])')) return;
+      if (currentElement) clearSelectionState();
       return;
     }
 
+    // Delete / Backspace = Delete selected element (when not in input)
+    if ((e.key === 'Delete' || e.key === 'Backspace') && !isInput) {
+      if (currentElement && !isMenuElement(currentElement)) {
+        e.preventDefault();
+        deleteCanvasElement(currentElement);
+        showToast('Element deleted', 'info');
+      }
+      return;
+    }
   });
+}
+
+// The context menu, the Export dropdowns and the phone component menu.
+// Returns whether one was open.
+function closeTransientMenus() {
+  let closed = false;
+  const ctx = document.getElementById('contextMenu');
+  if (ctx && ctx.style.display !== 'none') {
+    ctx.style.display = 'none';
+    closed = true;
+  }
+  contextMenuTarget = null;
+  const mobileMenu = document.getElementById('mobileElementMenu');
+  if (mobileMenu && mobileMenu.classList.contains('open')) {
+    setMobileElementMenuOpen(false);
+    closed = true;
+  }
+  return closeExportDropdowns() || closed;
+}
+
+// One delete path for the Delete key, the context menu and the remove button:
+// an undo step, the element gone from the canvas and its scene, and the
+// inspector released if it was showing that element.
+function deleteCanvasElement(el) {
+  if (!el) return;
+  pushUndo('delete');
+  el.remove();
+  const sceneElements = scenes[currentScene] || [];
+  const index = sceneElements.findIndex(item => item === el || item.isEqualNode(el));
+  if (index > -1) sceneElements.splice(index, 1);
+  if (currentElement && (currentElement === el || !canvas.contains(currentElement))) clearSelectionState();
+  scheduleAutoSave();
+  scheduleValidationRefresh();
 }
 
 // Set up all event listeners
@@ -1542,28 +1600,7 @@ function setupEventListeners() {
     closeGuide.addEventListener('click', closeGuideFn);
   }
 
-  // Escape key closes overlays
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') {
-      // Close context menu
-      const ctxMenu = document.getElementById('contextMenu');
-      if (ctxMenu) ctxMenu.style.display = 'none';
-
-      if (guidePanel && !guidePanel.hasAttribute('hidden')) {
-        closeGuideFn();
-        return;
-      }
-      // Deselect element on Escape
-      if (currentElement) {
-        currentElement = null;
-        document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-        document.body.classList.remove('element-selected');
-        const noSelection = document.getElementById('noSelection');
-        if (noSelection) noSelection.style.display = '';
-        switchTab('app-properties');
-      }
-    }
-  });
+  // (Escape is handled in setupKeyboardShortcuts, one layer per press.)
 
   // Properties tabs
   propertiesTabs.forEach(tab => {
@@ -1587,6 +1624,7 @@ function setupEventListeners() {
       if (window.innerWidth <= 992) {
         const open = sb.classList.toggle('open');
         if (btn) btn.setAttribute('aria-expanded', String(open));
+        syncMobileTabs();
         return;
       }
       const collapsed = sb.classList.toggle('collapsed');
@@ -1624,20 +1662,33 @@ function setupEventListeners() {
     }
   });
 
-  // Mobile panel tabs
-  document.querySelectorAll('.mobile-tab').forEach(tab => {
+  // Mobile panel tabs. The strip mirrors whichever drawer is open, including
+  // when a drawer closes another way (a tap outside it, its own chevron);
+  // before, the Library or Inspector tab stayed lit over a bare canvas.
+  const mobileTabs = Array.from(document.querySelectorAll('.mobile-tab'));
+  const leftDrawer = document.getElementById('leftSidebar');
+  const rightDrawer = document.getElementById('rightSidebar');
+  function syncMobileTabs() {
+    const open = leftDrawer.classList.contains('open') ? 'left'
+      : rightDrawer.classList.contains('open') ? 'right' : 'canvas';
+    mobileTabs.forEach(t => {
+      const on = t.getAttribute('data-target') === open;
+      t.classList.toggle('active', on);
+      t.setAttribute('aria-selected', String(on));
+    });
+    // On phones the drawer chevrons say whether their drawer is open (on
+    // desktop they describe the collapsed rail and are left alone).
+    if (window.innerWidth <= 992) {
+      if (leftToggle) leftToggle.setAttribute('aria-expanded', String(open === 'left'));
+      if (rightToggle) rightToggle.setAttribute('aria-expanded', String(open === 'right'));
+    }
+  }
+  mobileTabs.forEach(tab => {
     tab.addEventListener('click', () => {
       const target = tab.getAttribute('data-target');
-      document.querySelectorAll('.mobile-tab').forEach(t => {
-        t.classList.remove('active');
-        t.setAttribute('aria-selected', 'false');
-      });
-      tab.classList.add('active');
-      tab.setAttribute('aria-selected', 'true');
-      document.getElementById('leftSidebar').classList.remove('open');
-      document.getElementById('rightSidebar').classList.remove('open');
-      if (target === 'left') document.getElementById('leftSidebar').classList.add('open');
-      if (target === 'right') document.getElementById('rightSidebar').classList.add('open');
+      leftDrawer.classList.toggle('open', target === 'left');
+      rightDrawer.classList.toggle('open', target === 'right');
+      syncMobileTabs();
     });
   });
 
@@ -1669,14 +1720,7 @@ function setupEventListeners() {
 
   // Canvas click to deselect
   canvas.addEventListener('click', e => {
-    if (e.target === canvas) {
-      currentElement = null;
-      document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-      document.body.classList.remove('element-selected');
-      const noSelection = document.getElementById('noSelection');
-      if (noSelection) noSelection.style.display = '';
-      switchTab('app-properties');
-    }
+    if (e.target === canvas && !previewMode) clearSelectionState();
   });
 
   // Initialize drag events for elements
@@ -1716,24 +1760,16 @@ function setupEventListeners() {
   // Close mobile sidebars when clicking outside on narrow screens
   document.addEventListener('click', (e) => {
     if (window.innerWidth > 992) return;
-    const left = document.getElementById('leftSidebar');
-    const right = document.getElementById('rightSidebar');
-    const leftToggle = document.getElementById('leftSidebarToggle');
-    const rightToggle = document.getElementById('rightSidebarToggle');
-    if (left && left.classList.contains('open') &&
-        !left.contains(e.target) &&
-        e.target !== leftToggle &&
-        !leftToggle.contains(e.target) &&
-        !e.target.closest('.mobile-tab')) {
-      left.classList.remove('open');
-    }
-    if (right && right.classList.contains('open') &&
-        !right.contains(e.target) &&
-        e.target !== rightToggle &&
-        !rightToggle.contains(e.target) &&
-        !e.target.closest('.mobile-tab')) {
-      right.classList.remove('open');
-    }
+    if (!e.target.closest || e.target.closest('.mobile-tab')) return;
+    let changed = false;
+    [[leftDrawer, leftToggle], [rightDrawer, rightToggle]].forEach(([drawer, toggle]) => {
+      if (drawer && drawer.classList.contains('open') && !drawer.contains(e.target) &&
+          !(toggle && toggle.contains(e.target))) {
+        drawer.classList.remove('open');
+        changed = true;
+      }
+    });
+    if (changed) syncMobileTabs();
   });
 }
 
@@ -2070,24 +2106,33 @@ function duplicateScene() {
 
 function changeScene() {
   currentScene = sceneSelector.value;
-  loadScene(currentScene);
-  updateAllMenuSceneButtons();
+  loadScene(currentScene); // also refreshes the scene bars
   updateSceneBadge();
 }
 
 function loadScene(sceneName) {
   canvas.innerHTML = '';
   if (scenes[sceneName]) {
+    // One insertion instead of one per element.
+    const fragment = document.createDocumentFragment();
     scenes[sceneName].forEach(el => {
       const clonedEl = el.cloneNode(true);
       setupElementEvents(clonedEl);
-      canvas.appendChild(clonedEl);
+      fragment.appendChild(clonedEl);
     });
+    canvas.appendChild(fragment);
   }
 
-  // Update menu buttons
-  document.querySelectorAll('.menu').forEach(menu => {
+  // The inspector must not keep editing an element that just left the canvas:
+  // its edits would land on a detached node and be lost without a word.
+  if (currentElement && !canvas.contains(currentElement)) clearSelectionState();
+
+  // Scene bars list the current scenes and show the time now, not the time the
+  // stored copy was made. (Menus carry data-type="menu"; there is no .menu
+  // class, so the old '.menu' query here never matched anything.)
+  canvas.querySelectorAll('.element[data-type="menu"]').forEach(menu => {
     updateMenuSceneButtons(menu);
+    refreshMenuClock(menu.querySelector('.menu-clock'));
   });
 }
 
@@ -2171,7 +2216,6 @@ function addElement(type, x, y, recordHistory = true) {
                 `; // Removed the language button
     el.style.fontSize = '16px';
     el.setAttribute('data-type', 'menu');
-    setupMenuEvents(el);
     updateMenuSceneButtons(el);
     updateMenuClock(el.querySelector('.menu-clock'));
   } else {
@@ -2276,21 +2320,25 @@ function addElement(type, x, y, recordHistory = true) {
 let activeDrag = null;
 let dragListenersInstalled = false;
 
-function beginElementDrag(el, clientX, clientY) {
+function beginElementDrag(el, clientX, clientY, tapTarget) {
   // A pointer-up that never arrived (released outside the window) must not
   // leave the previous drag hanging.
   if (activeDrag) endElementDrag();
   // Pointer start plus the element's canvas offset at that moment. Dividing the
   // pointer delta by canvasScale keeps 1:1 tracking when the device is zoomed.
+  // The undo snapshot waits for the first real movement: a plain click (which
+  // is how every element gets selected) used to serialise the whole project
+  // twice, once here and once to find out nothing had changed.
   activeDrag = {
     el,
     startX: clientX,
     startY: clientY,
     startLeft: el.offsetLeft,
     startTop: el.offsetTop,
-    undoBase: captureWorkspace('move'),
+    undoBase: null,
+    moved: false,
+    tapTarget: tapTarget || null,
   };
-  el.style.cursor = 'grabbing';
   installDragListeners();
 }
 
@@ -2304,21 +2352,48 @@ function moveElementDrag(clientX, clientY) {
   newX = Math.round(Math.max(0, Math.min(newX, canvasWidth - el.offsetWidth)));
   newY = Math.round(Math.max(0, Math.min(newY, canvasHeight - el.offsetHeight)));
 
-  // Remove any transition effects
-  el.style.transition = 'none';
+  if (!drag.moved) {
+    if (newX === drag.startLeft && newY === drag.startTop) return;
+    drag.undoBase = captureWorkspace('move');
+    drag.moved = true;
+    // The grabbing cursor follows the pointer even when it outruns the element.
+    document.body.classList.add('is-dragging');
+    el.style.transition = 'none';
+  }
   el.style.left = `${newX}px`;
   el.style.top = `${newY}px`;
   el.setAttribute('data-x', newX);
   el.setAttribute('data-y', newY);
 }
 
-function endElementDrag() {
+function endElementDrag(event) {
   const drag = activeDrag;
   if (!drag) return;
   activeDrag = null;
-  drag.el.style.cursor = 'grab';
-  commitUndoSnapshot(drag.undoBase);
-  scheduleAutoSave();
+  if (drag.moved) {
+    document.body.classList.remove('is-dragging');
+    commitUndoSnapshot(drag.undoBase);
+    syncInspectorGeometry(drag.el, ['x', 'y']);
+    scheduleAutoSave();
+  } else if (event && event.type === 'touchend' && drag.tapTarget && drag.tapTarget.isConnected) {
+    // touchstart has to cancel the default (or the page scrolls under the
+    // drag), and that also cancels the click a tap produces. Without this a
+    // tap could not select an element, press its remove button or switch
+    // scenes from the scene bar on a phone or tablet.
+    drag.tapTarget.click();
+  }
+}
+
+// Keeps the Inspector's position/size fields in step with an element moved or
+// resized on the canvas (the change happened outside the fields).
+function syncInspectorGeometry(el, keys) {
+  if (!el || el !== currentElement) return;
+  const fields = { x: 'datax', y: 'datay', width: 'dataWidth', height: 'dataHeight' };
+  keys.forEach(key => {
+    const input = document.getElementById(fields[key]);
+    const value = el.getAttribute('data-' + key);
+    if (input && value !== null && value !== '') input.value = value;
+  });
 }
 
 function installDragListeners() {
@@ -2349,10 +2424,13 @@ function setupElementEvents(el) {
   // are shared (see beginElementDrag).
   el.addEventListener('touchstart', (event) => {
     if (previewMode) return;
+    // A text field inside the element must still take focus from a tap, the
+    // same exemption the mouse path makes.
+    if (event.target.tagName === 'INPUT') return;
     if (event.touches.length === 1) {
       event.preventDefault();
       const touch = event.touches[0];
-      beginElementDrag(el, touch.clientX, touch.clientY);
+      beginElementDrag(el, touch.clientX, touch.clientY, event.target);
     }
   }, { passive: false });
 
@@ -2383,14 +2461,7 @@ function setupElementEvents(el) {
     event.stopPropagation();
     const type = el.getAttribute('data-type');
     if (['button', 'label', 'video'].includes(type)) {
-      const textSpan = el.querySelector('.text-content');
-      const newText = prompt("Edit text:", textSpan.textContent);
-      if (newText !== null && newText !== textSpan.textContent) {
-        pushUndo('edit text');
-        textSpan.textContent = newText;
-        processTextForVariables(textSpan);
-        scheduleValidationRefresh();
-      }
+      editElementText(el);
     } else if (type === 'image') {
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
@@ -2430,9 +2501,9 @@ function setupElementEvents(el) {
     }
   });
 
-  // Selection
-  // Update the element click event listener to properly switch panels
-  // Update the element click event listener to work better on mobile
+  // Selection: highlight the element and open the Element tab of the
+  // Inspector. switchTab keeps aria-selected in step; the old hand-rolled
+  // toggle left screen readers announcing the App Info tab as current.
   el.addEventListener('click', (e) => {
     if (previewMode) return;
     if (e.target.classList.contains('remove-button') ||
@@ -2442,26 +2513,14 @@ function setupElementEvents(el) {
       return;
     }
 
-    document.querySelectorAll('.element').forEach(otherEl => {
-      otherEl.classList.remove('selected');
+    canvas.querySelectorAll('.element.selected').forEach(otherEl => {
+      if (otherEl !== el) otherEl.classList.remove('selected');
     });
     el.classList.add('selected');
     currentElement = el;
     document.body.classList.add('element-selected');
     showElementProperties(el);
-
-    // Force the properties panel to show element properties
-    document.getElementById('appInfoPanel').style.display = 'none';
-    document.getElementById('elementPropertiesPanel').style.display = 'block';
-
-    // Update tab states
-    document.querySelectorAll('.properties-tab').forEach(tab => {
-      if (tab.getAttribute('data-tab') === 'element-properties') {
-        tab.classList.add('active');
-      } else {
-        tab.classList.remove('active');
-      }
-    });
+    switchTab('element-properties');
   });
 
   // Remove button
@@ -2469,13 +2528,7 @@ function setupElementEvents(el) {
   if (removeButton) {
     removeButton.addEventListener('click', (event) => {
       event.stopPropagation();
-      pushUndo('delete');
-      el.remove();
-      const sceneElements = scenes[currentScene];
-      const index = sceneElements.findIndex(item => item.isEqualNode(el));
-      if (index > -1) sceneElements.splice(index, 1);
-      if (currentElement === el) clearSelectionState();
-      scheduleAutoSave();
+      deleteCanvasElement(el);
     });
   }
 
@@ -2487,12 +2540,13 @@ function setupElementEvents(el) {
 }
 
 function handleResize(el, event) {
-  el.style.cursor = 'nwse-resize';
   const startX = event.clientX;
   const startY = event.clientY;
   const startWidth = el.offsetWidth;
   const startHeight = el.offsetHeight;
-  const undoBase = captureWorkspace('resize');
+  // Taken on the first size change. A right-click usually just opens the
+  // context menu, and it used to snapshot the whole project twice for that.
+  let undoBase = null;
 
   // Dragging keeps an element on the device; resizing has to as well, or a
   // stretched button runs off the panel and the player clips it.
@@ -2504,6 +2558,11 @@ function handleResize(el, event) {
   const onMouseMove = (e) => {
     const newWidth = Math.min(maxWidth, Math.max(50, Math.round(startWidth + (e.clientX - startX) / canvasScale)));
     const newHeight = Math.min(maxHeight, Math.max(50, Math.round(startHeight + (e.clientY - startY) / canvasScale)));
+    if (!undoBase) {
+      if (newWidth === startWidth && newHeight === startHeight) return;
+      undoBase = captureWorkspace('resize');
+      document.body.classList.add('is-resizing');
+    }
     el.style.width = `${newWidth}px`;
     el.style.height = `${newHeight}px`;
     el.setAttribute('data-width', newWidth);
@@ -2511,10 +2570,12 @@ function handleResize(el, event) {
   };
 
   const onMouseUp = () => {
-    el.style.cursor = 'grab';
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
+    if (!undoBase) return;
+    document.body.classList.remove('is-resizing');
     commitUndoSnapshot(undoBase);
+    syncInspectorGeometry(el, ['width', 'height']);
     scheduleAutoSave();
   };
 
@@ -3016,18 +3077,11 @@ function showElementProperties(el) {
 }
 
 // Menu Functions
-function setupMenuEvents(menuEl) {
-  // Remove button
-  const removeButton = menuEl.querySelector('.remove-button');
-  if (removeButton) {
-    removeButton.addEventListener('click', (event) => {
-      event.stopPropagation();
-      menuEl.remove();
-      const sceneElements = scenes[currentScene];
-      const index = sceneElements.findIndex(item => item.isEqualNode(menuEl));
-      if (index > -1) sceneElements.splice(index, 1);
-    });
-  }
+// The scene bar ("menu") is the builder's own chrome. It has no .menu class,
+// so checks for that class never matched and the bar could be duplicated,
+// copied or opened in the element context menu.
+function isMenuElement(el) {
+  return Boolean(el && (el.getAttribute('data-type') === 'menu' || el.classList.contains('menu')));
 }
 
 function updateMenuSceneButtons(menuEl) {
@@ -3038,31 +3092,46 @@ function updateMenuSceneButtons(menuEl) {
 
   Object.keys(scenes).forEach(sceneName => {
     const button = document.createElement('button');
+    button.type = 'button';
     button.className = 'menu-scene-button';
-    if (sceneName === currentScene) button.classList.add('active');
+    if (sceneName === currentScene) {
+      button.classList.add('active');
+      button.setAttribute('aria-current', 'page');
+    }
     button.textContent = sceneName;
+    // changeScene() rebuilds the canvas, and the new bar marks the active scene.
     button.addEventListener('click', () => {
       sceneSelector.value = sceneName;
       changeScene();
-      menuEl.querySelectorAll('.menu-scene-button').forEach(btn => btn.classList.remove('active'));
-      button.classList.add('active');
     });
     sceneButtonsContainer.appendChild(button);
   });
 }
 
-function updateMenuClock(clockEl) {
+// One timer drives every scene-bar clock on the canvas. Each menu used to start
+// its own setInterval that was never cleared, so every added scene leaked a
+// timer that kept rewriting a detached element while the visible clock froze.
+let menuClockTimer = null;
+
+function refreshMenuClock(clockEl) {
   if (!clockEl) return;
+  const now = new Date();
+  clockEl.textContent = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+}
 
-  const updateTime = () => {
-    const now = new Date();
-    const hours = now.getHours().toString().padStart(2, '0');
-    const minutes = now.getMinutes().toString().padStart(2, '0');
-    clockEl.textContent = `${hours}:${minutes}`;
-  };
+function scheduleMenuClockTick() {
+  const now = new Date();
+  // Wake just after the next minute boundary so the bar flips on time.
+  const delay = 60000 - (now.getSeconds() * 1000 + now.getMilliseconds()) + 50;
+  menuClockTimer = setTimeout(() => {
+    canvas.querySelectorAll('.menu-clock').forEach(refreshMenuClock);
+    scheduleMenuClockTick();
+  }, delay);
+}
 
-  updateTime();
-  setInterval(updateTime, 60000);
+function updateMenuClock(clockEl) {
+  refreshMenuClock(clockEl);
+  if (menuClockTimer === null) scheduleMenuClockTick();
 }
 
 // Variable Management
@@ -3379,7 +3448,12 @@ function synthesizedTextFor(el) {
 // One config element built from the live DOM, starting from whatever the import
 // preserved so fields the builder does not model survive a round trip.
 function elementToConfig(el) {
-  const element = Object.assign({}, elementRawData(el));
+  // Decoded once: every export, design check and live-builder hash walks all
+  // elements, and this used to URI-decode and JSON-parse the same payload up
+  // to five times per element. `element` is a shallow copy, so `raw` keeps the
+  // imported values the checks below compare against.
+  const raw = elementRawData(el);
+  const element = Object.assign({}, raw);
   const type = (el.getAttribute('data-type') || '').toLowerCase();
   const attr = (name) => el.getAttribute(name);
   const assign = (key, value) => {
@@ -3405,7 +3479,7 @@ function elementToConfig(el) {
   // with no role from its own default instead; the two agree only while the
   // config defines no "medium" size, so a role the import never declared is not
   // written back out.
-  const rawFont = elementRawData(el).font;
+  const rawFont = raw.font;
   if (attr('data-font') !== null && (rawFont !== undefined || attr('data-font') !== 'medium')) {
     assign('font', attr('data-font'));
   }
@@ -3413,7 +3487,7 @@ function elementToConfig(el) {
   // Opacity: the canvas always carries a value, so an untouched default (100%)
   // is not a design decision and is left out - the player reads an absent
   // opacity as fully opaque, exactly like 1.
-  const rawOpacity = elementRawData(el).opacity;
+  const rawOpacity = raw.opacity;
   const opacity = attr('data-opacity');
   if (opacity !== null && opacity !== '' && !(rawOpacity === undefined && opacity === '100')) {
     element.opacity = parseInt(opacity, 10) / 100;
@@ -3448,7 +3522,7 @@ function elementToConfig(el) {
   // A text browser's source control defaults to "system", which is what the
   // player uses when the field is absent; only a declared or changed source is
   // part of the design.
-  const rawSource = elementRawData(el).source;
+  const rawSource = raw.source;
   if (attr('data-source') !== null && (rawSource !== undefined || attr('data-source') !== 'system')) {
     assign('source', attr('data-source'));
   }
@@ -3469,7 +3543,7 @@ function elementToConfig(el) {
     if (textSpan) {
       const synthesized = el.getAttribute('data-text-auto') === '1' &&
         textSpan.textContent === synthesizedTextFor(el);
-      if (synthesized) assign('text', elementRawData(el).text || '');
+      if (synthesized) assign('text', raw.text || '');
       else assign('text', textSpan.textContent);
     }
   }
@@ -4834,6 +4908,8 @@ function xmlToJson(xmlStr) {
 function clearAll() {
   if (confirm('Are you sure you want to clear everything and start new?')) {
     pushUndo('clear project');
+    // The inspector would otherwise keep editing an element that is gone.
+    clearSelectionState();
     scenes = { 'Scene 1': [] };
     currentScene = 'Scene 1';
     variables = {};
@@ -4859,7 +4935,10 @@ function clearAll() {
     backgroundPath = '';
 
     updateCanvasSize();
-    addElement('menu', 0, canvasHeight - 50);
+    // Part of the clear, not a step of its own: one Undo must bring the whole
+    // project back, as the toast below promises (it used to only remove this
+    // menu and leave an empty scene).
+    addElement('menu', 0, canvasHeight - 50, false);
     updateSceneBadge();
 
     document.querySelectorAll('.menu').forEach(menu => {
@@ -4876,6 +4955,11 @@ function clearAll() {
 }
 
 function saveCurrentScene() {
+  // Preview rewrites $variables on the canvas in place, so while it is active
+  // the copy taken on entering preview is the design. Capturing the canvas here
+  // let the autosave, which preview's own repaint triggers, replace "$name"
+  // with its resolved value for good half a second into any preview.
+  if (previewMode) return;
   scenes[currentScene] = Array.from(canvas.children).map(el => el.cloneNode(true));
 }
 
@@ -5047,20 +5131,13 @@ function loadJukaApp(input) {
     option.textContent = scene.name;
     sceneSelector.appendChild(option);
 
-    // Load scene elements
+    // Load scene elements. They are stored, not drawn: loadScene() below puts
+    // the current scene on the canvas (and wires it). Appending every element
+    // of every scene to the live canvas first, wiring each one, then clearing
+    // it again only cost time on import.
     scene.elements.forEach(elementData => {
       const el = createElementFromData(elementData);
-      if (el) {
-        canvas.appendChild(el);
-        scenes[scene.name].push(el.cloneNode(true));
-        setupElementEvents(el);
-
-        // Process text for variables if applicable
-        const textSpan = el.querySelector('.text-content');
-        if (textSpan) {
-          processTextForVariables(textSpan);
-        }
-      }
+      if (el) scenes[scene.name].push(el);
     });
   });
 
@@ -5254,6 +5331,7 @@ function assignSettingValue(key, value) {
 // against is what the device draws. Attributes keep the raw "$name" strings for
 // the round trip.
 function applyEditorVariablePaint() {
+  if (!configCustomMemo) return withConfigCustomMemo(applyEditorVariablePaint);
   const paintElement = el => {
     if (!el || el.nodeType !== 1) return;
     [['data-color', 'color'], ['data-bg-color', 'background']].forEach(([attr, styleProp]) => {
@@ -5273,13 +5351,29 @@ if (document.readyState === 'loading') {
   setupSettingsControlListeners();
 }
 
+// One offscreen 2D context for every measurement (an import measures each
+// unsized button and label). Where canvas is unavailable or blocked, a width
+// estimate keeps the import going instead of throwing on a null context and
+// abandoning the config halfway through.
+let textMeasureContext;
+
 function calculateTextDimensions(text, fontSize, fontFamily = 'Inter, sans-serif', fontWeight = '900') {
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  context.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
-  const metrics = context.measureText(text);
+  if (textMeasureContext === undefined) {
+    try {
+      textMeasureContext = document.createElement('canvas').getContext('2d') || null;
+    } catch (e) {
+      textMeasureContext = null;
+    }
+  }
+  let width;
+  if (textMeasureContext) {
+    textMeasureContext.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+    width = textMeasureContext.measureText(text).width;
+  } else {
+    width = estimateTextWidth(text, parseInt(fontSize, 10) || 24);
+  }
   return {
-    width: Math.ceil(metrics.width + 16), // Add padding
+    width: Math.ceil(width + 16), // Add padding
     height: Math.ceil(parseInt(fontSize) * 1.4) // Line height factor
   };
 }
@@ -5322,8 +5416,7 @@ function createElementFromData(elementData) {
             <span class="remove-button">✕</span>
         `;
 
-    // Set up menu events and buttons
-    setupMenuEvents(el);
+    // Scene buttons and clock (the remove button is wired by setupElementEvents)
     updateMenuSceneButtons(el);
     updateMenuClock(el.querySelector('.menu-clock'));
 
@@ -5445,100 +5538,83 @@ function createElementFromData(elementData) {
 
 
 
-function setupMobileElementAdding() {
-  if (window.innerWidth <= 768) {
-    // Remove any existing button first
-    const existingButton = document.querySelector('.mobile-add-button');
-    if (existingButton) existingButton.remove();
+// The phone "+" button and its component menu. Built once and kept: the resize
+// handler used to tear both down and rebuild them on every resize event below
+// 768 px, adding one more document click listener each time, and the menu's
+// inline styles named CSS variables that do not exist (--surface,
+// --border-radius-md), so it rendered with no background or rounding.
+const MOBILE_COMPONENTS = [
+  { type: 'button', icon: 'fas fa-square', name: 'Button' },
+  { type: 'label', icon: 'fas fa-font', name: 'Label' },
+  { type: 'image', icon: 'fas fa-image', name: 'Image' },
+  { type: 'input', icon: 'fas fa-edit', name: 'Input' },
+  { type: 'menu', icon: 'fas fa-bars', name: 'Menu' },
+  { type: 'dynamiclist', icon: 'fas fa-list', name: 'Dynamic List' },
+  { type: 'textlog', icon: 'fas fa-align-left', name: 'Text Log' },
+  { type: 'textbrowser', icon: 'fas fa-globe', name: 'Text Browser' },
+  { type: 'searchresults', icon: 'fas fa-th-large', name: 'Search Results' }
+];
 
-    const existingMenu = document.querySelector('.mobile-element-menu');
-    if (existingMenu) existingMenu.remove();
-
-    // Create mobile add button
-    const mobileAddButton = document.createElement('button');
-    mobileAddButton.className = 'mobile-add-button';
-    mobileAddButton.innerHTML = '<i class="fas fa-plus"></i>';
-    document.body.appendChild(mobileAddButton);
-
-    let elementType = null;
-
-    // Create mobile element selection menu
-    const mobileMenu = document.createElement('div');
-    mobileMenu.className = 'mobile-element-menu';
-    mobileMenu.style.display = 'none';
-    mobileMenu.style.position = 'fixed';
-    mobileMenu.style.bottom = '170px'; // Position above the add button
-    mobileMenu.style.right = '20px';
-    mobileMenu.style.background = 'var(--surface)';
-    mobileMenu.style.borderRadius = 'var(--border-radius-md)';
-    mobileMenu.style.padding = '1rem';
-    mobileMenu.style.boxShadow = 'var(--shadow-lg)';
-    mobileMenu.style.zIndex = '1001'; // Above other elements
-    mobileMenu.style.maxHeight = '60vh';
-    mobileMenu.style.overflowY = 'auto';
-
-    const elements = [
-      { type: 'button', icon: 'fas fa-square', name: 'Button' },
-      { type: 'label', icon: 'fas fa-font', name: 'Label' },
-      { type: 'image', icon: 'fas fa-image', name: 'Image' },
-      { type: 'input', icon: 'fas fa-edit', name: 'Input' },
-      { type: 'menu', icon: 'fas fa-bars', name: 'Menu' },
-      { type: 'dynamiclist', icon: 'fas fa-list', name: 'Dynamic List' },
-      { type: 'textlog', icon: 'fas fa-align-left', name: 'Text Log' },
-      { type: 'textbrowser', icon: 'fas fa-globe', name: 'Text Browser' }
-    ];
-
-    elements.forEach(element => {
-      const button = document.createElement('button');
-      button.className = 'mobile-menu-item';
-      button.style.display = 'flex';
-      button.style.alignItems = 'center';
-      button.style.gap = '0.5rem';
-      button.style.padding = '0.5rem';
-      button.style.width = '100%';
-      button.style.marginBottom = '0.5rem';
-      button.innerHTML = `<i class="${escapeHtml(element.icon)}" aria-hidden="true"></i> ${escapeHtml(element.name)}`;
-
-      button.addEventListener('click', () => {
-        elementType = element.type;
-        mobileMenu.style.display = 'none';
-        // Add element to center of canvas
-        const x = canvasWidth / 2 - 60;
-        const y = canvasHeight / 2 - 20;
-        addElement(elementType, x, y);
-      });
-
-      mobileMenu.appendChild(button);
-    });
-
-    document.body.appendChild(mobileMenu);
-
-    // Toggle menu on add button click
-    mobileAddButton.addEventListener('click', (e) => {
-      e.stopPropagation(); // Prevent event from bubbling
-      mobileMenu.style.display = mobileMenu.style.display === 'none' ? 'block' : 'none';
-    });
-
-    // Close menu when clicking outside
-    document.addEventListener('click', (e) => {
-      if (!mobileMenu.contains(e.target) && e.target !== mobileAddButton && !mobileAddButton.contains(e.target)) {
-        mobileMenu.style.display = 'none';
-      }
-    });
-  }
+function setMobileElementMenuOpen(open) {
+  const menu = document.getElementById('mobileElementMenu');
+  const button = document.querySelector('.mobile-add-button');
+  if (!menu || !button) return;
+  menu.classList.toggle('open', open);
+  button.setAttribute('aria-expanded', String(open));
 }
 
+function setupMobileElementAdding() {
+  if (window.innerWidth > 768 || document.querySelector('.mobile-add-button')) return;
+
+  const mobileAddButton = document.createElement('button');
+  mobileAddButton.type = 'button';
+  mobileAddButton.className = 'mobile-add-button';
+  mobileAddButton.setAttribute('aria-label', 'Add a component');
+  mobileAddButton.setAttribute('aria-haspopup', 'true');
+  mobileAddButton.setAttribute('aria-expanded', 'false');
+  mobileAddButton.setAttribute('aria-controls', 'mobileElementMenu');
+  mobileAddButton.innerHTML = '<i class="fas fa-plus" aria-hidden="true"></i>';
+
+  const mobileMenu = document.createElement('div');
+  mobileMenu.id = 'mobileElementMenu';
+  mobileMenu.className = 'mobile-element-menu';
+  mobileMenu.setAttribute('role', 'group');
+  mobileMenu.setAttribute('aria-label', 'Add a component');
+
+  MOBILE_COMPONENTS.forEach(component => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'mobile-menu-item';
+    item.innerHTML = `<i class="${escapeHtml(component.icon)}" aria-hidden="true"></i> ${escapeHtml(component.name)}`;
+    item.addEventListener('click', () => {
+      setMobileElementMenuOpen(false);
+      // Add element to center of canvas
+      addElement(component.type, canvasWidth / 2 - 60, canvasHeight / 2 - 20);
+    });
+    mobileMenu.appendChild(item);
+  });
+
+  mobileAddButton.addEventListener('click', (e) => {
+    e.stopPropagation(); // the document listener below would close it again
+    setMobileElementMenuOpen(!mobileMenu.classList.contains('open'));
+  });
+
+  document.body.append(mobileAddButton, mobileMenu);
+}
+
+// Registered once for the page's lifetime; both controls are looked up live.
+document.addEventListener('click', (e) => {
+  const menu = document.getElementById('mobileElementMenu');
+  if (menu && menu.classList.contains('open') && !menu.contains(e.target)) setMobileElementMenuOpen(false);
+});
+
 window.addEventListener('resize', () => {
-  // Update mobile interface when switching to mobile size
   if (window.innerWidth <= 768) {
     setupMobileElementAdding();
-  } else {
-    // Remove mobile buttons
-    const mobileButton = document.querySelector('.mobile-add-button');
-    if (mobileButton) mobileButton.remove();
-    const mobileMenu = document.querySelector('.mobile-element-menu');
-    if (mobileMenu) mobileMenu.remove();
+    return;
   }
+  document.querySelector('.mobile-add-button')?.remove();
+  document.getElementById('mobileElementMenu')?.remove();
 });
 
 function setupMobileDoubleTap() {
@@ -5548,25 +5624,12 @@ function setupMobileDoubleTap() {
       const currentTime = new Date().getTime();
       const tapLength = currentTime - lastTap;
 
-      if (tapLength < 300 && tapLength > 0) {
-        // Double tap detected
-        const target = event.target;
-        const element = target.closest('.element');
-
-        if (element && !element.classList.contains('menu')) {
+      if (tapLength < 300 && tapLength > 0 && !previewMode) {
+        // Double tap detected: the same undoable edit as a double-click.
+        const element = event.target.closest('#canvas .element');
+        if (element && !isMenuElement(element)) {
           event.preventDefault();
-          const type = element.getAttribute('data-type');
-
-          if (['button', 'label', 'video'].includes(type)) {
-            const textSpan = element.querySelector('.text-content');
-            if (textSpan) {
-              const newText = prompt("Edit text:", textSpan.textContent);
-              if (newText !== null) {
-                textSpan.textContent = newText;
-                processTextForVariables(textSpan);
-              }
-            }
-          }
+          editElementText(element);
         }
       }
       lastTap = currentTime;
@@ -5619,7 +5682,9 @@ function showDynamicListItems(el, items, variable) {
   removeButton.className = 'remove-button';
   removeButton.addEventListener('click', (e) => {
     e.stopPropagation();
-    el.remove();
+    // On the canvas this is an ordinary, undoable delete.
+    if (canvas.contains(el)) deleteCanvasElement(el);
+    else el.remove();
   });
   el.appendChild(removeButton);
 }
@@ -5628,18 +5693,15 @@ function showDynamicListItems(el, items, variable) {
 
 function setupMobileCanvasClick() {
   canvas.addEventListener('touchstart', (e) => {
-    if (e.target === canvas) {
-      currentElement = null;
-      document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
-      document.body.classList.remove('element-selected');
-      switchTab('app-properties');
+    if (e.target === canvas && !previewMode) {
+      clearSelectionState();
 
       // Scroll to top of properties panel on mobile
       if (window.innerWidth <= 768) {
         document.querySelector('.right-sidebar').scrollTo(0, 0);
       }
     }
-  });
+  }, { passive: true });
 }
 
 function setupDynamicListExecution(el) {
@@ -5656,18 +5718,6 @@ function setupDynamicListExecution(el) {
       executeDynamicListCommand(el, command, variable);
     }
   });
-}
-
-function setupMobileElementSelection() {
-  if (window.innerWidth <= 768) {
-    // Ensure properties panel shows element properties when an element is selected
-    document.addEventListener('click', (e) => {
-      if (e.target.closest('.element') && !e.target.closest('.menu')) {
-        document.getElementById('appInfoPanel').style.display = 'none';
-        document.getElementById('elementPropertiesPanel').style.display = 'block';
-      }
-    });
-  }
 }
 
 function updateVariableSelector(selector, currentValue) {
@@ -6039,8 +6089,11 @@ const AI = (() => {
       if (!answer || !answer.trim()) kil('Empty response from on-device AI.');
       return answer;
     } finally {
-      // Free the session/gpu ram promptly. We recreate next call.
-      try { chromeSession = null; } catch (e) { /* ignore */ }
+      // Free the session and its GPU memory now rather than whenever it is
+      // garbage-collected (dropping the reference alone kept it alive). The
+      // next call creates a fresh one.
+      try { if (typeof session.destroy === 'function') session.destroy(); } catch (e) { /* ignore */ }
+      chromeSession = null;
     }
   }
 
@@ -6481,6 +6534,7 @@ const AI = (() => {
     if (!canvasEl) kil('Canvas not found.');
 
     const applied = [];
+    const batch = { undoPushed: false };
     elements.forEach((spec) => {
       if (!spec || !spec.type) return;
       const type = String(spec.type).toLowerCase();
@@ -6557,19 +6611,34 @@ const AI = (() => {
       if (spec.variable) el.setAttribute('data-variable', String(spec.variable).slice(0, 120));
       if (spec.font) el.setAttribute('data-font', String(spec.font).slice(0, 40));
 
-      canvasEl.appendChild(el);
-      if (typeof setupElementEvents === 'function') setupElementEvents(el);
-      const sceneList = (typeof scenes !== 'undefined' && scenes[currentScene]) ? scenes[currentScene] : null;
-      if (!sceneList) scenes[currentScene] = [];
-      if (!scenes[currentScene].includes(el)) scenes[currentScene].push(el.cloneNode(true));
+      commitAssistantElement(canvasEl, el, spec, batch);
       applied.push(el);
     });
 
-    if (applied.length) {
-      if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
-    }
-
+    finishAssistantBatch(batch);
     return applied;
+  }
+
+  // Shared tail of both Apply paths. The whole batch is one undo step, taken
+  // before the first element lands (Apply could not be undone at all before),
+  // and each element gets the font size its role maps to like every other
+  // canvas element instead of the canvas's inherited default.
+  function commitAssistantElement(canvasEl, el, spec, batch) {
+    if (!batch.undoPushed) {
+      pushUndo('apply AI suggestion');
+      batch.undoPushed = true;
+    }
+    if (spec.font) el.style.fontSize = getFontSize(String(spec.font).toLowerCase()) + 'px';
+    canvasEl.appendChild(el);
+    setupElementEvents(el);
+    if (!scenes[currentScene]) scenes[currentScene] = [];
+    scenes[currentScene].push(el.cloneNode(true));
+  }
+
+  function finishAssistantBatch(batch) {
+    if (!batch.undoPushed) return;
+    scheduleAutoSave();
+    scheduleValidationRefresh();
   }
 
   function escapeAttribute(value) {
@@ -6614,8 +6683,9 @@ const AI = (() => {
     if (!canvasEl) kil('Canvas not found.');
 
     let added = 0;
+    const batch = { undoPushed: false };
     elements.forEach((spec) => {
-      if (!spec.type) return;
+      if (!spec || !spec.type) return;
       const existing = canvasEl.querySelector(
         '.element[data-type="' + String(spec.type).toLowerCase() + '"][data-text="' + escapeAttribute((spec.text || '').slice(0, 120)) + '"]'
       ) ||
@@ -6685,15 +6755,11 @@ const AI = (() => {
       if (spec.font) el.setAttribute('data-font', String(spec.font).slice(0, 40));
       if (spec.placeholder) el.setAttribute('data-placeholder', String(spec.placeholder).slice(0, 200));
 
-      canvasEl.appendChild(el);
-      if (typeof setupElementEvents === 'function') setupElementEvents(el);
-      const sceneList = (typeof scenes !== 'undefined' && scenes[currentScene]) ? scenes[currentScene] : null;
-      if (!sceneList) scenes[currentScene] = [];
-      if (!scenes[currentScene].includes(el)) scenes[currentScene].push(el.cloneNode(true));
+      commitAssistantElement(canvasEl, el, spec, batch);
       added++;
     });
 
-    if (typeof scheduleAutoSave === 'function') scheduleAutoSave();
+    finishAssistantBatch(batch);
     if (!added) {
       status('Those elements are already in this scene \u2014 nothing new to add.', 'warning');
       return;
@@ -6791,9 +6857,8 @@ const AI = (() => {
       syncComposer();
     }
 
-    // Wire voice controls if the browser supports them (elements may be static HTML
-    // or created by ensureVoiceUIElements()).
-    ensureVoiceUIElements();
+    // Wire the voice controls (static markup in the Settings section) if the
+    // browser supports speech recognition.
     if (!voiceSupported) {
       voiceSupported = detectVoiceSupport();
     }
@@ -6894,6 +6959,17 @@ const AI = (() => {
     return (window.SpeechRecognition || window.webkitSpeechRecognition);
   }
 
+  // The mic button shows that it is live (the stylesheet's pulsing
+  // .ai-mic-btn-listening state was never applied) and names its next action.
+  function setMicListening(on) {
+    voiceListening = on;
+    const micBtn = document.getElementById('aiMicBtn');
+    if (!micBtn) return;
+    micBtn.classList.toggle('ai-mic-btn-listening', on);
+    micBtn.setAttribute('aria-pressed', String(on));
+    micBtn.title = on ? 'Stop voice input' : 'Start voice input';
+  }
+
   function startVoiceSession(autoRunSuggest) {
     if (!voiceSupported) return false;
     if (voiceListening) return false;
@@ -6929,13 +7005,13 @@ const AI = (() => {
             status('Heard: ' + finalTranscript, 'success');
           } else {
             promptEl.value = interimTranscript;
-            status('Listening\u2026 ' + interimTranscript, '');
+            status('Listening\u2026 ' + interimTranscript, 'listening');
           }
         }
       };
 
       recognition.onerror = (event) => {
-        voiceListening = false;
+        setMicListening(false);
         if (event.error === 'no-speech') {
           status('No speech heard \u2014 try again.', 'warning');
         } else if (event.error === 'aborted') {
@@ -6947,7 +7023,7 @@ const AI = (() => {
       };
 
       recognition.onend = () => {
-        voiceListening = false;
+        setMicListening(false);
         voiceSession = null;
         if (finalTranscript) {
           if (promptEl) promptEl.value = finalTranscript;
@@ -6969,12 +7045,12 @@ const AI = (() => {
 
       recognition.start();
       voiceSession = recognition;
-      voiceListening = true;
-      status('Listening\u2026', '');
+      setMicListening(true);
+      status('Listening\u2026', 'listening');
       return true;
     } catch (e) {
       status('Voice start failed: ' + e.message, 'error');
-      voiceListening = false;
+      setMicListening(false);
       voiceSession = null;
       return false;
     }
@@ -6986,7 +7062,7 @@ const AI = (() => {
       voiceSession.stop();
     } catch (e) { /* ignore */ }
     voiceSession = null;
-    voiceListening = false;
+    setMicListening(false);
   }
 
   function toggleVoice(autoRunSuggest) {
@@ -7001,43 +7077,27 @@ const AI = (() => {
     return startVoiceSession(autoRunSuggest);
   }
 
-  function ensureVoiceUIElements() {
-    if (!document.getElementById('aiPanel')) return;
-    if (document.getElementById('aiMicBtn')) return; // already in DOM (e.g. static HTML)
-
-    const header = document.querySelector('#aiPanel .panel-header');
-    if (!header) return;
-
-    const micWrap = document.createElement('div');
-    micWrap.className = 'ai-mic-row';
-    micWrap.innerHTML =
-      '<button id="aiMicBtn" class="action-button small" type="button" title="Voice input">' +
-      '<i class="fa-solid fa-microphone" aria-hidden="true"></i></button>' +
-      '<label class="ai-toggle-label" title="Enable voice input">' +
-      '<input type="checkbox" id="aiVoiceToggle">' +
-      '<span>Voice</span>' +
-      '</label>' +
-      '<label class="ai-toggle-label ai-voice-hint" title="Auto-run suggest after voice input">' +
-      '<input type="checkbox" id="aiVoiceAutoRun">' +
-      '<span>Auto</span>' +
-      '</label>';
-
-    header.appendChild(micWrap);
-  }
-
   function wireVoiceUI() {
     const micBtn = document.getElementById('aiMicBtn');
     const voiceToggleEl = document.getElementById('aiVoiceToggle');
     const autoRunEl = document.getElementById('aiVoiceAutoRun');
 
     if (micBtn) {
+      micBtn.setAttribute('aria-pressed', 'false');
       micBtn.addEventListener('click', () => {
-        toggleVoice(false);
+        // The Auto-run box was never read here, so it did nothing.
+        toggleVoice(Boolean(autoRunEl && autoRunEl.checked));
       });
     }
 
     if (voiceToggleEl) {
       voiceToggleEl.addEventListener('change', () => {
+        if (!voiceToggleEl.checked) {
+          // Unticking used to report "Voice input enabled."
+          stopVoiceSession();
+          status('Voice input off.', '');
+          return;
+        }
         voiceSupported = detectVoiceSupport();
         if (!voiceSupported) {
           voiceToggleEl.checked = false;
@@ -7388,25 +7448,36 @@ function setupEditorQuality() {
     else exportConfig(true);
   });
 
-  // Inspector edits are undoable even though the inputs mutate the DOM directly:
-  // capture on focus, commit on change only if something actually changed.
+  // Inspector edits are undoable even though the inputs mutate the DOM directly.
+  // The "before" snapshot is taken in the capture phase of the first input or
+  // change event, i.e. before the field's own handler has touched anything, and
+  // committed on change only if something actually changed. Snapshotting on
+  // every focus (and again after every change) serialised the whole project
+  // each time focus moved through the panel.
   let inspectorBase = null;
   const inspectorPanels = [
     document.getElementById('elementProperties'),
     document.getElementById('appInfoPanel')
   ].filter(Boolean);
+  const takeInspectorBase = event => {
+    if (inspectorBase) return;
+    const input = event.target && event.target.closest ? event.target.closest('input, select, textarea') : null;
+    if (!input) return;
+    inspectorBase = captureWorkspace('edit ' + controlLabelFor(input));
+  };
   inspectorPanels.forEach(panel => {
-    panel.addEventListener('focusin', event => {
-      const input = event.target.closest('input, select, textarea');
-      if (!input) return;
-      inspectorBase = captureWorkspace('edit ' + controlLabelFor(input));
-    });
+    panel.addEventListener('input', takeInspectorBase, true);
+    panel.addEventListener('change', takeInspectorBase, true);
     panel.addEventListener('change', () => {
       if (!inspectorBase) return;
-      commitUndoSnapshot(inspectorBase);
-      inspectorBase = captureWorkspace('edit');
+      const base = inspectorBase;
+      inspectorBase = null;
+      commitUndoSnapshot(base);
       scheduleValidationRefresh();
     });
+    // A field typed into and put back without a change event must not leave
+    // a stale snapshot for the next edit. (change fires before focusout.)
+    panel.addEventListener('focusout', () => { inspectorBase = null; });
   });
 
   // Library tiles are keyboard buttons: Enter/Space drops the component in the
@@ -7424,14 +7495,11 @@ function setupEditorQuality() {
 
   document.querySelectorAll('.guide-modal').forEach(trapDialogFocus);
 
-  // Mobile tab strip: aria-selected was never updated, so assistive tech always
-  // announced the first tab as current.
+  // Mobile tab strip: arrow keys move between tabs. Selection state (class and
+  // aria-selected) is kept by the click handler in setupEventListeners, which
+  // also follows drawers that close on their own; the markup starts on Canvas.
   const mobileTabs = Array.from(document.querySelectorAll('.mobile-tab'));
   mobileTabs.forEach((tab, index) => {
-    tab.setAttribute('aria-selected', String(index === 0));
-    tab.addEventListener('click', () => {
-      mobileTabs.forEach(other => other.setAttribute('aria-selected', String(other === tab)));
-    });
     tab.addEventListener('keydown', event => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
       event.preventDefault();

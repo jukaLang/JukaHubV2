@@ -134,12 +134,6 @@
     return Boolean(hash && hash !== state.lastHash);
   }
 
-  function refreshDirtyState() {
-    if (!state.connected) return;
-    setDot(isDirty() ? 'dirty' : 'connected');
-    if (isDirty()) setMeta('Unsynced edits — ' + (state.auto ? 'auto-push will send them shortly.' : 'press Push to device.'));
-  }
-
   function fillFields() {
     const url = el('deviceUrl');
     const code = el('deviceCode');
@@ -430,16 +424,34 @@
     }
   }
 
+  // Called for every edit the builder sees, which during a drag is every mouse
+  // move. It used to export and hash the whole design twice per call just to
+  // colour the dot; now an edit marks the design unsynced straight away and
+  // the comparison with the last push happens once, when the debounce fires,
+  // on the same export that is then pushed.
   function noteEdit() {
     if (!state.auto || !state.connected || !state.url || !state.code) return;
-    refreshDirtyState();
+    if (!state.pushing) {
+      setDot('dirty');
+      setMeta('Unsynced edits — auto-push will send them shortly.');
+    }
     if (autoTimer) clearTimeout(autoTimer);
     autoTimer = setTimeout(() => {
       autoTimer = null;
       if (!state.auto || !state.connected || state.pushing) return;
-      const hash = currentDesignHash();
-      if (!hash || hash === state.lastHash) return;
-      pushConfig(buildEditorConfig(), { silent: true, skipConnect: true });
+      let design;
+      try {
+        design = buildEditorConfig();
+      } catch (e) {
+        return;
+      }
+      if (hashDesign(design) === state.lastHash) {
+        // Edited and put back (or undone): nothing to send.
+        setDot('connected');
+        setMeta('No changes since the last push · auto-push on');
+        return;
+      }
+      pushConfig(design, { silent: true, skipConnect: true });
     }, AUTO_PUSH_DELAY_MS);
   }
 

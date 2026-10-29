@@ -469,6 +469,12 @@ func openEmulatorPanel() {
 
 func closeEmulatorPanel() {
 	emuPanel.open = false
+	if restoreLibraryFromHandoff() {
+		emuPanelRect = sdl.Rect{}
+		emuRowHits = nil
+		PlayBackSound()
+		return
+	}
 	PlayBackSound()
 }
 

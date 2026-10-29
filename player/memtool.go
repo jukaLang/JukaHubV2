@@ -533,7 +533,14 @@ func memMove(delta int) {
 		if rows == 0 {
 			return
 		}
-		memPanel.actionCursor = (memPanel.actionCursor + delta + rows) % rows
+		// Wrap in both directions for any step. Adding rows once only covered
+		// steps of one; PgUp (-memKeyScroll) left the cursor negative, so no
+		// row was highlighted and A did nothing.
+		next := (memPanel.actionCursor + delta) % rows
+		if next < 0 {
+			next += rows
+		}
+		memPanel.actionCursor = next
 	case memPhaseResults:
 		candidates := 0
 		if memPanel.search != nil {

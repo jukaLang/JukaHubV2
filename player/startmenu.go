@@ -656,10 +656,11 @@ func startMenuActivate(config *Config) {
 }
 
 // sceneClaimsStart lists the scenes whose own controller handler already uses
-// Start (pause menu, replay). Start must not hijack those.
+// Start (pause menu, replay, JukaLand's craft menu). Start must not hijack
+// those: JukaLand's footer offers "Start Craft", but the menu took the press.
 func sceneClaimsStart(name string) bool {
 	switch name {
-	case "Games", "Ambient":
+	case "Games", "Ambient", "JukaLand":
 		return true
 	}
 	return false

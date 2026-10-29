@@ -610,7 +610,9 @@ func startEmulatorUpdates() {
 	ShowToast("Checking libretro cores and emulator releases…", ToastKindInfo)
 	go func() {
 		defer endPatchOp()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		// The timeout derives from the card's run token, so a cancel from the
+		// card or the activity strip stops the transfer mid-flight.
+		ctx, cancel := context.WithTimeout(installBarRunContext(), 15*time.Minute)
 		defer cancel()
 		report := runEmulatorUpdates(ctx, newEmulatorUpdateClient())
 		installBarPhase(installPhaseDone)

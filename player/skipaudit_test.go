@@ -75,6 +75,9 @@ var skipGates = []string{
 	// Opt-in probes that write previews or download a real release.
 	"set JUKA_PREVIEW=1",
 	"set JUKAHUB_TEST_UPDATE=1",
+	// Opt-in visual audits that dump rendered scenes to a temp directory.
+	"visual audit; run with JUKAHUB_UI_AUDIT=1",
+	"visual audit; run with JUKAHUB_UI_AUDIT_COMPACT=1",
 
 	// The helper-process pattern: the test re-execs itself, and the parent
 	// instance is the one that skips.

@@ -783,7 +783,7 @@ func toolsPanelActivate(config *Config) {
 			ShowToast("No WiFi address yet — connect to WiFi", ToastKindWarning)
 			return
 		}
-		if err := sdl.SetClipboardText(ip); err != nil {
+		if err := copyTextToClipboard(ip, "Tools"); err != nil {
 			ShowToast("Could not copy the address", ToastKindError)
 			return
 		}

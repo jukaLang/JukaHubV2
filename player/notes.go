@@ -547,7 +547,14 @@ func handleNotesInput(e *sdl.KeyboardEvent, config *Config) {
 }
 
 func handleNotesTextInput(e *sdl.TextInputEvent) {
-	for _, r := range e.GetText() {
+	notesInsertText(e.GetText())
+}
+
+// notesInsertText appends text to whichever field the editor has open. Clipboard
+// paste (Ctrl+V) shares this path, so pasted text lands in the open field under
+// the same limits a keystroke obeys and never sneaks into the other fields.
+func notesInsertText(text string) {
+	for _, r := range text {
 		switch notes.tab {
 		case 1:
 			if len(notes.editTitle) < 80 {

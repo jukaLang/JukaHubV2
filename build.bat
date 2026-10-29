@@ -24,6 +24,7 @@ set "ROOT=%~dp0"
 set "PLAYER_DIR=%ROOT%player"
 set "OUT_NAME=JukaHub.exe"
 set "BUILD_BAT=%PLAYER_DIR%\build.bat"
+set "MODE=%~1"
 set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 if not exist "%BUILD_BAT%" (
@@ -35,6 +36,11 @@ if not exist "%BUILD_BAT%" (
     echo PLAYER_DIR logic above and try again.
     exit /b 1
 )
+
+REM diag and clean never build anything: hand them straight to the real script
+REM so its own output is the only thing the user sees.
+if /i "%MODE%"=="diag"  goto run_real
+if /i "%MODE%"=="clean" goto run_real
 
 echo =========================================================
 echo  JukaHub build helper
@@ -100,23 +106,24 @@ echo =========================================================
 echo  Prerequisite check complete
 echo =========================================================
 echo.
-echo Next step: run the build.
-echo.
-echo   %BUILD_BAT%
-echo.
-echo If you want to skip the build step but keep the diagnostic output, run:
-echo.
-echo   %BUILD_BAT% nodebug
-echo.
-echo If you want the deepest troubleshooting view, run:
-echo.
-echo   %BUILD_BAT% diag
-echo.
+goto run_real
+
+REM ============================================================================
+REM  run_real - hand off to player\build.bat and return its exit code.
+REM  No argument builds and launches; nolaunch, nobuild, diag and clean behave
+REM  exactly as they do in the real script. The path and mode are expanded
+REM  before endlocal runs, so they still reach the call.
+REM ============================================================================
+:run_real
+echo =========================================================
+echo  Building with %BUILD_BAT%
 echo =========================================================
 echo.
 
-endlocal
-exit /b 0
+endlocal & call "%BUILD_BAT%" %MODE%
+REM Stop here: without this the script would fall through into the helper
+REM subroutines below and print their output after the build.
+exit /b %errorlevel%
 
 REM ============================================================================
 REM  Readable prerequisite checks.

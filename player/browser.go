@@ -1533,10 +1533,19 @@ func browserActivatePageControl(renderer *sdl.Renderer, config *Config, elem Ele
 		PlayActivateSound()
 		return
 	case "submit":
+		// A form whose text boxes are all empty has nothing to send, even when
+		// the page ships hidden inputs or a preset <select>: those are the
+		// site's constants, not the query the user has not typed yet. The press
+		// belongs on the box. A form with no text field at all (filters and
+		// tick boxes only) still sends on the button.
+		if field := browserFormFirstField(elem, ctrl.Form); field != nil &&
+			!browserFormHasTypedValue(elem, ctrl.Form) {
+			browserFillPageControl(renderer, config, elem, field)
+			return
+		}
 		if browserSubmitFormValues(config, elem, ctrl, "", true) {
 			return
 		}
-		// Nothing filled in yet: the useful press is on the field itself.
 		if field := browserFormFirstField(elem, ctrl.Form); field != nil {
 			browserFillPageControl(renderer, config, elem, field)
 			return
@@ -1592,6 +1601,24 @@ func browserFormFirstField(elem Element, form webForm) *webControl {
 		}
 	}
 	return nil
+}
+
+// browserFormHasTypedValue reports whether any text box of the form holds a
+// value the user can send. Hidden inputs and <select> defaults do not count:
+// they are always non-empty, so they cannot stand in for a query.
+func browserFormHasTypedValue(elem Element, form webForm) bool {
+	for _, ctrl := range browserFormControls(elem) {
+		if ctrl.Form.ID != form.ID {
+			continue
+		}
+		if ctrl.Kind != "text" && ctrl.Kind != "textarea" {
+			continue
+		}
+		if strings.TrimSpace(ctrl.Value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // browserFocusedPageControl returns the form control under the cursor, if the

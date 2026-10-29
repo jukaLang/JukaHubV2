@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -46,6 +47,40 @@ func TestHomeLayoutFitsViewport(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The Podcasts scene's hint line must sit fully above the results list that
+// follows it in every shipped config. It used to start 13px under a ~20px-tall
+// hint, so the list panel covered the text's lower half at both 1280x720 and
+// the Brick's 960x720 compact canvas.
+func TestPodcastsHintClearsTheResultsList(t *testing.T) {
+	for _, name := range auditConfigNames {
+		config, ok := loadAuditConfigs(t)[name]
+		if !ok {
+			continue
+		}
+		idx := sceneIndexExact(config, "Podcasts")
+		if idx < 0 {
+			continue
+		}
+		hintY, listY := int32(-1), int32(-1)
+		for _, el := range config.Scenes[idx].Elements {
+			switch {
+			case el.Type == "label" && strings.Contains(el.Text, "Curated feeds"):
+				hintY = el.Y
+			case el.Type == "dynamiclist" && el.Variable == "podcast_entries":
+				listY = el.Y
+			}
+		}
+		if hintY < 0 || listY < 0 {
+			t.Fatalf("%s: Podcasts hint label or podcast_entries list is missing", name)
+		}
+		// One hint line at the app's small font is about 20px tall; the panel
+		// must start below it, not through it.
+		if gap := listY - hintY; gap < 24 {
+			t.Errorf("%s: Podcasts list starts %dpx below the hint (hint y=%d, list y=%d); the panel covers the hint's lower half", name, gap, hintY, listY)
+		}
 	}
 }
 

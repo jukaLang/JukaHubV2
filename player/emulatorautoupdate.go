@@ -100,11 +100,13 @@ func startCoreAutoUpdate(config *Config) {
 		}
 		defer endPatchOp()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-		defer cancel()
-
 		logPatch("core auto-update: checking installed cores")
 		installBarBeginLabelled("Emulator cores", "Updating emulator cores")
+		// The timeout derives from the card's run token (minted by the begin
+		// above), so a cancel from the card or the strip stops the transfers.
+		ctx, cancel := context.WithTimeout(installBarRunContext(), 20*time.Minute)
+		defer cancel()
+
 		report := runInstalledCoreUpdates(ctx, newEmulatorUpdateClient(), installBarProgressHook())
 		installBarPhase(installPhaseDone)
 		installBarDone()

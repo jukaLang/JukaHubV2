@@ -354,7 +354,9 @@ func handleSmartHomeMouse(mx, my int32, config *Config) bool {
 	}
 	for i, r := range smartHomePanel.rects {
 		if r.W > 0 && pointInRect(mx, my, r) {
-			smartHomePanel.cursor = i
+			// rects[i] was drawn for rows[scroll+i]; once the list has scrolled
+			// the slot number alone points at a different device.
+			smartHomePanel.cursor = smartHomePanel.scroll + i
 			smartHomePanelActivate(config)
 			return true
 		}

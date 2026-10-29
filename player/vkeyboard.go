@@ -1352,6 +1352,12 @@ func vkSubmit(config *Config, askAI bool) {
 	case vkTargetPSRemote:
 		vkCloseKeyboard()
 		psPanelApplyEdit(text)
+	case vkTargetRA:
+		// Save the username or Web API key being edited (raPanel.edit says
+		// which). This case had gone missing, so Save fell through to the
+		// scene-search default and the credential was never stored.
+		vkCloseKeyboard()
+		raSubmitCredential(text)
 	case vkTargetWiFi:
 		// Passphrases are not trimmed: a leading or trailing space is part of
 		// the WPA key, and quietly removing it would fail with "wrong password".

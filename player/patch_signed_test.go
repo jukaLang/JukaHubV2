@@ -261,7 +261,14 @@ func TestSignedPackageFlow(t *testing.T) {
 	origFn := patchStateDirFn
 	dir := t.TempDir()
 	patchStateDirFn = func() (string, error) { return dir, nil }
-	defer func() { patchStateDirFn = origFn }()
+	defer func() {
+		patchStateDirFn = origFn
+		// A clean in-memory database afterwards: a leftover installed record
+		// from this flow cannot hand the next test's assertions a paid-for pass.
+		patchDBMu.Lock()
+		patchDB = &PatchDB{Schema: 1}
+		patchDBMu.Unlock()
+	}()
 	for _, sub := range []string{"backups", "journals", "downloads", "staging", "reports", "db", "repository", "cache"} {
 		os.MkdirAll(filepath.Join(dir, sub), 0o700)
 	}
@@ -320,18 +327,35 @@ func TestSignedPackageFlow(t *testing.T) {
 	if err := verifyPackageDigest(idx, "p1", filepath.Join(dir, "cache", "p1.zip")); err != nil {
 		t.Fatalf("cached digest verify: %v", err)
 	}
+	// Install step, as the real flow records it. patchDB is a process global
+	// refreshed by loadPatchDB from the state dir this test rewired, so the
+	// reload here starts from a clean (empty) database no matter what a
+	// previous test left in memory — the record below is what the flow's
+	// dbRecordInstall would have written, which the duplicate-favorite guard
+	// needs to do its job.
+	url := "/JukaHub/p1-f.txt"
+	loadPatchDB()
+	if err := dbRecordInstall(DBInstalledPkg{
+		Name: man.Name, Version: man.Version, Title: man.Title,
+		InstalledAt: "2026-01-01T00:00:00Z", KeyID: patchRepoKeyID, Transaction: "t1",
+		Files: []DBInstalledFile{{Path: url, SHA256: "deadbeef", Origin: "package"}},
+		Risk:  man.Risk, Restart: man.Restart,
+	}); err != nil {
+		t.Fatalf("dbRecordInstall: %v", err)
+	}
+
 	// Duplicate favorite guard: installing the same package twice must not add a
 	// duplicate favorite entry for the same target URL.
 	installed := []FavoriteItem{}
-	url := "/JukaHub/p1-f.txt"
 	toAdd := func(p *DBInstalledPkg) {
 		installed = appendInstalledFavorite(installed, *p, url)
 	}
 	p1 := dbFindInstalled("p1")
-	if p1 != nil {
-		toAdd(p1)
-		toAdd(p1)
+	if p1 == nil {
+		t.Fatal("the flow's install step left no installed record, so the dedup guard cannot even run")
 	}
+	toAdd(p1)
+	toAdd(p1)
 	if len(installed) != 1 {
 		t.Fatalf("duplicate favorite not deduplicated: got %d, want 1", len(installed))
 	}

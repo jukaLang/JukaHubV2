@@ -110,7 +110,7 @@ exits, exactly like the Emulators screen.
 ### Per-game launch options
 
 **Start** (or **O** on a keyboard) opens the options sheet for the highlighted
-game. It has three rows and applies to that title only:
+game. It has four rows and applies to that title only:
 
 - **CPU limit** — `Auto`, then 2.0, 1.8, 1.6, 1.4 and 1.2 GHz. `Auto` follows the
 global `powerProfileMaxFreq`; any other value caps the clock for this game's  launch and nothing else. **A** and **Right** step one rung cooler, **Left** warms
@@ -129,6 +129,8 @@ global `powerProfileMaxFreq`; any other value caps the clock for this game's  la
   launcher that forwards its arguments, or for an emulator binary started
 directly.
 - **Reset** — clears both rows for the game and puts it back on the defaults.
+- **Open in…** — hands this game straight to the tool that owns its next step
+  (see *Handing a game to its tool* below), the same as **E** in the library.
 
 A game with a cap shows it in the library list (`PSP · God of War.iso ·
 1.8 GHz`), so a deliberately cool title is recognisable without opening the
@@ -269,12 +271,32 @@ reconnect.
 | D-pad left | back to the console column |
 | **A** | open the highlighted console, or play the highlighted game |
 | **X** | LAN play for the highlighted game (host or join over Wi-Fi) |
+| **E** | open the highlighted game in its tool: a covering Game Profile, its exact Compatibility row, or the Emulators page with the console's tile highlighted. Closing that tool (**B**) comes back to the library where you left it |
 | **L1** / **F** | fill the gaps: fetch covers for scanned games without one; while a fetch runs, stop it |
 | **S** / **/** / **R1** | search the library (on-screen keyboard; the list filters as you type) |
 | **R** / **R3** | roll a random game from this console or the whole library |
 | **Y** | rescan the card (after copying new ROMs) |
 | **B** / Back | clear an active search, then close the panel |
 | Mouse | click a console to select it, a game to play it, outside to close |
+
+## Handing a game to its tool
+
+**E** (or the **Open in…** row in the options sheet) hands the highlighted
+game to the panel that owns its next step:
+
+1. a ready **Game Profile** whose game folder covers the ROM wins — that is a
+   PC or port game and the profile is its launcher;
+2. an exact **Compatibility** row (matched by path key) is next, so an already
+   assessed title opens on its own report and boost plan;
+3. the **Emulators** page follows, with the console's tile highlighted (folder
+   names like `GBA`, `PS` and `Genesis` are matched to the console, installed
+   tiles preferred), falling back to the first installed tile;
+4. anything else opens **Compatibility**, which can scan for a title it does
+   not know yet.
+
+The tool opens as the only overlay, and closing it with **B** reopens the
+library exactly where the handoff left it — same console, cursor, scroll and
+active search — instead of dropping on a default screen.
 
 ## Search
 

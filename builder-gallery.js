@@ -137,13 +137,30 @@
     return card;
   }
 
+  // Cards (with their miniature thumbnails) are built once, the first time the
+  // gallery opens; filtering only shows and hides them. Every keystroke in the
+  // search box used to rebuild every card, and the whole grid was built at page
+  // load for a dialog most visits never open.
+  const cards = new Map();
+
   function render() {
     const grid = el('galleryGrid');
     if (!grid) return;
+    if (cards.size === 0 && layouts.length) {
+      const fragment = document.createDocumentFragment();
+      layouts.forEach(layout => {
+        const card = makeCard(layout);
+        cards.set(layout, card);
+        fragment.appendChild(card);
+      });
+      grid.textContent = '';
+      grid.appendChild(fragment);
+    }
     const list = filtered();
-    grid.innerHTML = '';
-    list.forEach(layout => grid.appendChild(makeCard(layout)));
-    status(list.length === 0 ? 'No layouts match that filter.' : '');
+    const shown = new Set(list);
+    cards.forEach((card, layout) => { card.hidden = !shown.has(layout); });
+    if (layouts.length === 0) status('No bundled layouts were found.');
+    else status(list.length === 0 ? 'No layouts match that filter.' : '');
     const tagWrap = el('galleryTags');
     if (tagWrap) {
       tagWrap.querySelectorAll('.gallery-tag').forEach(button => {
@@ -255,7 +272,7 @@
       if (panel && !panel.hasAttribute('hidden')) closeGallery();
     });
     renderTags();
-    render();
+    // The grid itself is built by openGallery() on first use.
     if (layouts.length === 0) status('No bundled layouts were found.');
   }
 

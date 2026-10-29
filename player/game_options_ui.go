@@ -19,6 +19,7 @@ const (
 	gameOptionsRowCeiling = iota
 	gameOptionsRowArgs
 	gameOptionsRowReset
+	gameOptionsRowOpenIn
 	gameOptionsRowCount
 )
 
@@ -42,6 +43,8 @@ func gameOptionsRowName(row int) string {
 		return "CPU limit"
 	case gameOptionsRowArgs:
 		return "Extra arguments"
+	case gameOptionsRowOpenIn:
+		return "Open in…"
 	case gameOptionsRowReset:
 		return "Reset"
 	}
@@ -56,6 +59,8 @@ func gameOptionsRowHint(row int) string {
 		return "Clock ceiling for this game, restored when it exits"
 	case gameOptionsRowArgs:
 		return "Added after the ROM path, for launchers that read options"
+	case gameOptionsRowOpenIn:
+		return "Hand this game to its tool: profile, compatibility or emulator"
 	case gameOptionsRowReset:
 		return "Back to the global power profile and no extra arguments"
 	}
@@ -72,6 +77,8 @@ func gameOptionsRowValue(row int, opts gameOptions) string {
 			return "None"
 		}
 		return strings.TrimSpace(opts.Args)
+	case gameOptionsRowOpenIn:
+		return "→"
 	case gameOptionsRowReset:
 		if opts.empty() {
 			return "Defaults"
@@ -151,6 +158,8 @@ func activateGameOptionsRow() {
 		adjustGameOptions(1)
 	case gameOptionsRowArgs:
 		vkOpenGameArgs()
+	case gameOptionsRowOpenIn:
+		openGameLibraryHandoffFromSheet()
 	case gameOptionsRowReset:
 		resetGameOptions()
 	}

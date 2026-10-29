@@ -208,6 +208,29 @@ Everything that forks a process runs on a worker goroutine. The render loop
 drains one result slot per frame, which is also why a slow scan or a wedged
 supplicant cannot freeze the UI.
 
+## Windows
+
+Windows has no `wpa_supplicant`, no `/sys/class/net` and no `/proc/net/wireless`,
+so there the picker drives `netsh` instead (`wifi_windows.go`). The interface,
+the scan, the saved profiles, the join and the signal meter all come from
+`netsh wlan …`:
+
+* **Joining** writes a WLAN profile XML to a private temp file (`0600`), adds it
+  with `netsh wlan add profile`, connects by name, and deletes the file as soon
+  as netsh has read it. The passphrase lives in that file for one call and is
+  never an argument.
+* **The meter** maps Windows' signal quality percentage onto dBm (100% is
+  -50 dBm, 0% counts as unmeasured), which is the scale the handheld's meter
+  already uses.
+* **Scanning** reads the list Windows keeps current. There is no scan request to
+  make, so the picker does not wait for one and a refresh is immediate.
+* **The radio cannot be toggled** from the app: airplane mode and the hardware
+  switch belong to Windows, so the panel offers no radio action there.
+* **`netsh` is localized.** The parsers decide from structure wherever they can
+  (a BSSID line means associated, a percentage is the signal, an `SSID …` line
+  starts a row) and only use an English label for the adapter's name, so a
+  German or Japanese Windows reports the same link.
+
 ## Security notes
 
 * The passphrase is written to `wpa_cli`'s standard input, never to its command
@@ -243,6 +266,8 @@ supplicant cannot freeze the UI.
 | Message | Meaning |
 |---------|---------|
 | `Wi-Fi control needs wpa_cli, which is not installed` | the image lacks `wpa_cli`; use the stock Wi-Fi screen or add the tool |
+| `Wi-Fi control on Windows needs netsh` | `netsh` is missing from `PATH`; unusual on Windows, but a stripped-down image can lack it |
+| `Windows reports no wireless network interface` | no wireless adapter is present, or the WLAN service is off; wired networking is unaffected |
 | `Wi-Fi is turned off` | the radio is soft-blocked (airplane mode or the Quick Settings switch); press **A** on the empty list, or flip **Wi-Fi** in Quick Settings |
 | `No wireless network interface on this device` | no radio is exposed to Linux, or the radio is powered off. If the device is online, name the interface explicitly with `JUKAHUB_WIFI_IFACE` (e.g. `wlan0`) and report the image: discovery checks sysfs, `/proc/net/wireless`, the supplicant's control sockets, the supplicant's own answer through `wpa_cli` and the interface name |
 | `could not join <name>: the password was rejected` | the key is wrong (the supplicant reached the 4-way handshake and failed) |
@@ -288,7 +313,15 @@ config), that a failed call reports the tool's reason instead of `exit status
 255`, and that `FAIL-BUSY` still yields the arriving scan. `wifi_actions_test.go`
 keeps the panel's header honest about a refused scan.
 
+`wifi_windows_test.go` covers the netsh backend the same way: the interface
+report (English and localized), the profile list, the scan rows and how they pick
+one access point per network, the profile XML with a name and key full of XML
+metacharacters, the percentage-to-dBm mapping, the dispatch itself, and the join
+sequence — that the key is written to a temp file, never to a command line, and
+that the file is gone when the join returns. It also pins the messages for a
+machine with no netsh and for one with no adapter.
+
 ```sh
 cd player
-go test -run 'TestWiFi|TestParseWPA|TestMergeWiFi|TestValidateWiFiCredentials' -count=1 .
+go test -run 'TestWiFi|TestWinWifi|TestParseWPA|TestMergeWiFi|TestValidateWiFiCredentials' -count=1 .
 ```

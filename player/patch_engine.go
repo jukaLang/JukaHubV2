@@ -683,6 +683,12 @@ func ensureHelperToolCtx(ctx context.Context, tool string, config *Config) error
 	}
 	logPatch("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
 	installBarBegin(tool)
+	if ctx == context.Background() {
+		// A caller with no richer cancellation (the Play preload passes its
+		// own loading-card token) rides the card's run token, minted by the
+		// begin above: the X on this install's chip then stops the transfer.
+		ctx = installBarRunContext()
+	}
 	if err := downloadHelperToolCtx(ctx, tool, target, config); err != nil {
 		logPatch("[TOOLS] %s install failed: %v", tool, err)
 		if ctx.Err() != nil {

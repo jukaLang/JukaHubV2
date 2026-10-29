@@ -639,6 +639,24 @@ func main() {
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
 					screensaverNotifyInput()
+					// Shared clipboard chords (Ctrl+V paste, Ctrl+C copy) run before
+					// every modal and scene dispatch, because each of the four text
+					// surfaces — Browser, Notes, Terminal and Chat — can own the
+					// keyboard in a different state. The routing in clipboard.go is
+					// a no-op when nothing is being edited, so the chords fall
+					// through here and ordinary handling proceeds untouched.
+					// While the history overlay is up it owns every key; Enter already
+					// copies the focused entry back (see handleClipboardInput).
+					if !clipSearchOpen && e.Keysym.Sym == sdl.K_v && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 && (e.Keysym.Mod&sdl.KMOD_SHIFT) == 0 {
+						if clipboardPasteIntoActiveField(config) {
+							continue
+						}
+					}
+					if !clipSearchOpen && e.Keysym.Sym == sdl.K_c && (e.Keysym.Mod&sdl.KMOD_CTRL) != 0 {
+						if clipboardCopyFromActiveField(config) {
+							continue
+						}
+					}
 					// A video being prepared is modal: only Esc (cancel) is accepted,
 					// so the results grid cannot scroll behind the spinner.
 					if videoPrepareActive() {
@@ -1628,6 +1646,12 @@ func main() {
 						// Top-bar chrome buttons: the back pill and the status clock
 						// activate on click/touch like any focused button would.
 						if handleChromeBarClick(mx, my, config) {
+							break
+						}
+						// Activity strip chips: the X stops the work behind the
+						// chip, the body jumps to where it is managed. A miss
+						// falls through to the scene underneath.
+						if activityStripClick(mx, my) {
 							break
 						}
 						// Playtime has no config elements; its RA touch target lives
@@ -2798,6 +2822,10 @@ func main() {
 		timelapseDrainNotice()
 		renderToast(renderer, config)
 		renderInstallBar(renderer, config)
+		// The activity strip sits with the installer card so it is drawn over
+		// every scene the way the toasts are, and it can echo the card's own
+		// operation when the card is under it (see activity.go).
+		renderActivityStrip(renderer, config)
 
 		// Companion screen view: capture on the render thread only when the
 		// phone asked for a frame (see companion_screen.go).

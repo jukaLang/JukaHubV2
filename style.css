@@ -26,11 +26,15 @@
   --primary-pressed: #6445e0;
   --secondary: #25c2a0;
   --secondary-hover: #3fdcb5;
+  /* Used by the AI panel's "on-device model ready" status; it was never
+     defined, so that state rendered with no colour and an invisible dot. */
+  --success: #25c2a0;
   --danger: #ef5b72;
   --danger-hover: #ff7a8d;
 
   /* Welcome-surface treatment */
   --welcome-surface: linear-gradient(145deg, #161b27 0%, #10151f 100%);
+  --welcome-surface-hover: linear-gradient(145deg, #1b2231 0%, #131923 100%);
   --warning: #f4b860;
   --text-main: #f4f7fb;
   --text-muted: #9aa6b6;
@@ -123,9 +127,15 @@
   --primary-pressed: #5a3fc9;
   --secondary: #16897a;
   --secondary-hover: #1ca18e;
+  --success: #12846e;
   --danger: #c0304a;
   --danger-hover: #e25a71;
   --warning: #c98a1e;
+
+  /* The welcome cards kept the dark gradient in the light theme, so their
+     dark text sat on a near-black card. */
+  --welcome-surface: linear-gradient(145deg, #ffffff 0%, #f3f4f9 100%);
+  --welcome-surface-hover: linear-gradient(145deg, #f7f5ff 0%, #eeebfb 100%);
   --text-main: #1b2230;
   --text-muted: #5f6b80;
   --text-on-primary: #ffffff;
@@ -524,6 +534,23 @@ textarea {
 
 .export-dropdown button:hover {
   background: var(--surface-tertiary);
+}
+
+/* Format icons in the Export menus (were inline colours fixed for the dark
+   theme; these follow the active palette). */
+.export-icon-json { color: var(--warning); }
+.export-icon-copy { color: var(--text-muted); }
+.export-icon-xml { color: var(--secondary); }
+
+.canvas-export-caret {
+  margin-left: 2px;
+}
+
+/* The Load button is a <label> for a visually hidden file input, so keyboard
+   focus lands on the input and showed no ring anywhere. Draw it on the label. */
+.load-button:has(+ input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
 }
 
 @keyframes dropdown-in {
@@ -1651,9 +1678,11 @@ textarea:focus {
   font-size: var(--text-xs);
   font-weight: 500;
   color: var(--text-muted);
-  background: var(--bg-tertiary, rgba(255, 255, 255, 0.04));
-  border-radius: 0 var(--radius-sm, 6px) var(--radius-sm, 6px) 0;
-  border-left: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+  /* A faint tint of the text colour reads as a suffix pill in both themes
+     (the old white overlay was invisible on the light theme's white field). */
+  background: color-mix(in srgb, var(--text-main) 6%, transparent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-left: 1px solid var(--border);
   pointer-events: none;
 }
 
@@ -2127,17 +2156,6 @@ body.ai-open .ai-panel {
 }
 
 /* AI voice control (optional, browser-dependent) */
-.ai-mic-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-xs) 0;
-}
-
-.ai-mic-row .action-button {
-  flex: 0 0 auto;
-}
-
 .ai-toggle-label {
   display: inline-flex;
   align-items: center;
@@ -2253,6 +2271,19 @@ body.ai-open .ai-panel {
 
 .element:active {
   cursor: grabbing;
+}
+
+/* While a drag or right-button resize is under way the cursor stays put even
+   when the pointer outruns the element (set on <body>, so it never ends up in
+   the element's saved markup the way the old inline cursor did). */
+body.is-dragging,
+body.is-dragging * {
+  cursor: grabbing !important;
+}
+
+body.is-resizing,
+body.is-resizing * {
+  cursor: nwse-resize !important;
 }
 
 .element.selected {
@@ -2387,9 +2418,11 @@ body.ai-open .ai-panel {
 }
 
 /* === Guide Modal === */
+/* Four cards in a 2x2 grid. Three columns left "Load config" alone on a
+   second row under the other three. */
 .welcome-quick-starts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin: 0 0 4px;
 }
@@ -2414,7 +2447,7 @@ body.ai-open .ai-panel {
 
 .welcome-card:hover {
   border-color: var(--primary);
-  background: linear-gradient(145deg, #1b2231 0%, #131923 100%);
+  background: var(--welcome-surface-hover);
 }
 
 .welcome-card-title {
@@ -2600,7 +2633,7 @@ body.ai-open .ai-panel {
 
 .share-note {
   margin: 0;
-  color: var(--text-secondary, var(--text-muted));
+  color: var(--text-muted);
   font-size: var(--text-sm);
   line-height: 1.55;
 }
@@ -2701,9 +2734,13 @@ body.ai-open .ai-panel {
 }
 
 /* === Toast === */
+/* Toasts open below the app bar and let clicks through. Pinned to the top
+   right corner they covered Export and Share for three seconds after nearly
+   every action (each edit, undo and delete raises one). They hold no
+   controls, so nothing needs to receive the pointer. */
 .toast-container {
   position: fixed;
-  top: var(--space-lg);
+  top: calc(var(--header-height) + var(--space-sm));
   right: var(--space-lg);
   z-index: var(--z-toast);
   display: flex;
@@ -2723,8 +2760,15 @@ body.ai-open .ai-panel {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-md);
   font-size: var(--text-sm);
-  pointer-events: auto;
+  pointer-events: none;
   animation: toast-in var(--transition-slow) ease;
+}
+
+/* Clear the fixed mobile tab strip as well. */
+@media (max-width: 992px) {
+  .toast-container {
+    top: calc(var(--header-height) + 48px + var(--space-sm));
+  }
 }
 
 .toast.success { border-left-color: var(--secondary); }
@@ -2805,6 +2849,10 @@ body.ai-open .ai-panel {
   display: none;
 }
 
+.mobile-element-menu.open {
+  display: block;
+}
+
 .mobile-menu-item {
   display: flex;
   align-items: center;
@@ -2855,6 +2903,18 @@ body.ai-open .ai-panel {
     grid-template-columns: 220px 1fr 300px;
   }
 
+}
+
+/* Between the phone layout and a full desktop the bar's text labels squeezed
+   the brand down to an ellipsis and, just above 768 px, pushed Export past
+   the right edge. These buttons keep their icons and aria-labels. */
+@media (min-width: 769px) and (max-width: 1080px) {
+  .app-bar-actions .validate-button .btn-label,
+  .app-bar-actions .share-button .btn-label,
+  .app-bar-actions .remix-button .btn-label,
+  .app-bar-actions .ai-toggle-button .bar-label {
+    display: none;
+  }
 }
 
 @media (max-width: 992px) {
@@ -3184,6 +3244,30 @@ body.ai-open .ai-panel {
   color: var(--text-muted);
 }
 
+/* The white focus ring disappears on the light scene bar. */
+.theme-light .menu-scene-button:focus-visible {
+  outline-color: var(--focus);
+}
+
+/* Live builder status pill and warning: their pastel text is meant for the
+   dark dialog and was close to invisible on the light one. */
+.theme-light .device-state[data-state="connected"] {
+  color: #0f6b58;
+}
+
+.theme-light .device-state[data-state="connecting"] {
+  color: #8a5a00;
+}
+
+.theme-light .device-state[data-state="error"] {
+  color: #a3263c;
+}
+
+.theme-light .device-warning {
+  color: #7a4d00;
+  background: rgba(201, 138, 30, 0.12);
+}
+
 /* Text Browser component card + its sidebar chip. */
 .theme-light .element[data-type="textbrowser"] {
   border-color: rgba(90, 63, 216, 0.45);
@@ -3335,34 +3419,6 @@ body.element-selected #elementPropertiesPanel {
 .skip-link:focus {
   transform: translateY(0);
   text-decoration: none;
-}
-
-/* History controls */
-.history-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-secondary);
-}
-
-.history-button {
-  min-width: 34px;
-  padding: 0 var(--space-sm);
-  border: 0;
-  background: transparent;
-}
-
-.history-button:disabled {
-  opacity: 0.38;
-  cursor: not-allowed;
-}
-
-.history-label {
-  font-size: var(--text-xs);
-  font-weight: 600;
 }
 
 /* Design check */
@@ -3619,10 +3675,6 @@ body:not(.element-selected) .element:focus {
 
   .preview-chip,
   .preview-scale {
-    display: none;
-  }
-
-  .history-label {
     display: none;
   }
 }

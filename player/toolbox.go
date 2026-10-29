@@ -363,7 +363,9 @@ func toolboxInstall(id string, config *Config) error {
 	defer os.Remove(tmpName)
 
 	installBarPhase(installPhaseDownload)
-	if err := downloadFileWithProgress(asset.URL, tmpName, installBarProgress); err != nil {
+	// The transfer runs on the card's run token: the strip's X on this chip
+	// stops the download instead of only hiding the bar.
+	if err := downloadFileWithProgressCtx(installBarRunContext(), asset.URL, tmpName, installBarProgress); err != nil {
 		return fmt.Errorf("download %s: %w", t.Name, err)
 	}
 

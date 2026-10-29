@@ -521,8 +521,13 @@ func handleSaveManagerMouse(mx, my int32) bool {
 	}
 	for _, hit := range saveRowHits {
 		if pointInRect(mx, my, hit.rect) {
-			savePanel.cursor = hit.index
-			savePanel.confirm = ""
+			// A second tap on the same row is the confirming press; only a tap
+			// on another row drops a pending confirmation. Clearing it on every
+			// tap re-armed the restore each time, so it could never complete.
+			if hit.index != savePanel.cursor {
+				savePanel.cursor = hit.index
+				savePanel.confirm = ""
+			}
 			saveManagerActivate()
 			return true
 		}

@@ -353,8 +353,11 @@ func activateChatSelectionAction(kind string, config *Config) {
 	case "reply":
 		setChatReply(index)
 	case "copy":
-		sdl.SetClipboardText(msg.Text)
-		showToast("Message copied", ToastInfo())
+		if err := copyTextToClipboard(msg.Text, "Chat"); err != nil {
+			showToast("Could not copy the message", ColorToastWarn)
+		} else {
+			showToast("Message copied", ToastInfo())
+		}
 		clearChatSelection()
 	case "ask":
 		clearChatSelection()

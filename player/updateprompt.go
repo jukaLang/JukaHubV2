@@ -109,7 +109,9 @@ func startHeaderUpdate() bool {
 	go func() {
 		defer endPatchOp()
 		defer clearPatchBusy()
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+		// The timeout derives from the card's run token, so a cancel from the
+		// card or the activity strip stops the transfer mid-flight.
+		ctx, cancel := context.WithTimeout(installBarRunContext(), 20*time.Minute)
 		defer cancel()
 		if err := updateInstallRunner(ctx, appConfig); err != nil {
 			// A stale offer (the build already carries the release, or it was

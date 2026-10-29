@@ -14,6 +14,10 @@ import (
 // its own check.
 func TestMain(m *testing.M) {
 	userConfigWritesEnabled = false
+	// The Wi-Fi suite stubs wpa_cli output, so it must be answered by the
+	// supplicant backend even on a Windows machine that has netsh. The Windows
+	// backend's own tests call the winWifi* functions directly.
+	wifiPOSIXForced = true
 	// Keep the browser's per-site filter exceptions away from the developer's
 	// real data directory: page loads in the suite consult that list.
 	dir, err := os.MkdirTemp("", "jukahub-browser-block")

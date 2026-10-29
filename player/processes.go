@@ -43,6 +43,10 @@ var processPanel processPanelState
 // event thread.
 var processRowRects []sdl.Rect
 
+// processRowFirst is the list index of processRowRects[0]: the window scrolls
+// with the cursor, so a clicked slot is first+slot, not the slot number.
+var processRowFirst int
+
 var processPanelRect sdl.Rect
 
 const (
@@ -180,6 +184,17 @@ func closeProcessPanel() {
 	PlayBackSound()
 }
 
+// processPanelBack is B / Escape. While a kill is armed the footer reads
+// "B Cancel", so the first press disarms it; the next one closes the panel.
+func processPanelBack() {
+	if processPanel.confirmPID != 0 {
+		processPanel.confirmPID = 0
+		PlayBackSound()
+		return
+	}
+	closeProcessPanel()
+}
+
 func processPanelMove(delta int) {
 	if len(processPanel.rows) == 0 {
 		return
@@ -236,7 +251,7 @@ func ctrlProcessPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_Y:
 		refreshProcessPanel()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		closeProcessPanel()
+		processPanelBack()
 	}
 	return true
 }
@@ -262,7 +277,7 @@ func handleProcessKey(e *sdl.KeyboardEvent, config *Config) bool {
 		refreshProcessPanel()
 		PlayNavSound()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		closeProcessPanel()
+		processPanelBack()
 	}
 	return true
 }
@@ -275,7 +290,7 @@ func handleProcessMouse(mx, my int32, config *Config) bool {
 	}
 	for i, r := range processRowRects {
 		if r.W > 0 && pointInRect(mx, my, r) {
-			processPanel.cursor = i
+			processPanel.cursor = processRowFirst + i
 			processPanelActivate()
 			return true
 		}
@@ -371,6 +386,7 @@ func renderProcessPanel(renderer *sdl.Renderer, config *Config) {
 	focusColor := installHighlight()
 	rowW := panelW - 2*padX
 	processRowRects = make([]sdl.Rect, 0, visible)
+	processRowFirst = first
 	rowY := headY + tableHeadH
 	for i := 0; i < visible; i++ {
 		idx := first + i

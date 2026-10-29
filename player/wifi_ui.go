@@ -59,6 +59,11 @@ var wifiPanel wifiPanelState
 // wifiRowRects maps a tap back to a row; only touched on the event thread.
 var wifiRowRects []sdl.Rect
 
+// wifiRowFirst is the network index of wifiRowRects[0]. The list scrolls with
+// the cursor, so a tapped slot is first+slot; using the slot alone joined (or
+// asked a password for) a network further up the list.
+var wifiRowFirst int
+
 var wifiPanelRect sdl.Rect
 
 // wifiActionID is one tappable row of action pills at the bottom of the panel.
@@ -612,9 +617,20 @@ func handleWiFiKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_f:
 		wifiForgetSelected()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
-		closeWiFiPanel()
+		wifiPanelBack()
 	}
 	return true
+}
+
+// wifiPanelBack is B / Escape. With a forget armed the footer reads
+// "B Cancel", so the first press disarms it instead of closing the panel.
+func wifiPanelBack() {
+	if wifiPanel.confirmForget != "" {
+		wifiPanel.confirmForget = ""
+		PlayBackSound()
+		return
+	}
+	closeWiFiPanel()
 }
 
 // ctrlWiFi is called before every other controller overlay.
@@ -636,7 +652,7 @@ func ctrlWiFi(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_BACK:
 		wifiForgetSelected()
 	case sdl.CONTROLLER_BUTTON_B:
-		closeWiFiPanel()
+		wifiPanelBack()
 	}
 	return true
 }
@@ -677,7 +693,7 @@ func handleWiFiMouse(mx, my int32, config *Config) bool {
 	}
 	for i, r := range wifiRowRects {
 		if r.W > 0 && pointInRect(mx, my, r) {
-			wifiPanel.cursor = i
+			wifiPanel.cursor = wifiRowFirst + i
 			wifiActivate()
 			return true
 		}
@@ -850,6 +866,7 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	listY := panelY + headerH
 	wifiRowRects = wifiRowRects[:0]
+	wifiRowFirst = first
 	if len(wifiPanel.networks) == 0 {
 		empty := "Press Y to scan for nearby networks"
 		switch {

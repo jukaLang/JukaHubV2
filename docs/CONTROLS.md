@@ -978,6 +978,8 @@ Opened from **Emulators → Smart Pro Compatibility**.
 | Ctrl+L | Open the log viewer (the terminal keeps Ctrl+L to clear its output) |
 | Ctrl+Q | Quick settings |
 | Ctrl+Shift+V | Clipboard manager |
+| Ctrl+C | Copy the text being edited: the open Notes field, the Terminal command line, the Chat draft, or the buffer of an open on-screen keyboard (also filed in the clipboard history) |
+| Ctrl+V | Paste into whatever is being edited — the same Notes/Terminal/Chat and on-screen-keyboard fields — the way a keystroke would land (with nothing being edited, the key keeps its ordinary meaning) |
 | Ctrl+Shift+S | Shorts feed (the Media **Y** action) |
 | F1 | Shortcuts overlay |
 | F2 | Global search |

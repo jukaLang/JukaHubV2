@@ -430,7 +430,16 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 
 // handleTermTextInput processes text input for the terminal.
 func handleTermTextInput(e *sdl.TextInputEvent) {
-	for _, r := range e.GetText() {
+	termInsertText(e.GetText())
+}
+
+// termInsertText inserts text at the prompt cursor. It is shared by typed
+// input (SDL text events) and clipboard paste (Ctrl+V), so pasted text takes
+// exactly the path typed text does — the same printable-ASCII filter, the
+// same cursor arithmetic, nothing appended at the end when the cursor sits
+// mid-command.
+func termInsertText(text string) {
+	for _, r := range text {
 		if r >= 32 && r <= 126 {
 			term.input = term.input[:term.cursor] + string(r) + term.input[term.cursor:]
 			term.cursor++

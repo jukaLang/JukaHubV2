@@ -9,7 +9,6 @@ package main
 // Emulators screen instead of only through the firmware's own Ports tab.
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -286,13 +285,16 @@ func installPortMaster(sdRoot, downloadURL string) error {
 
 	archive := filepath.Join(stage, "trimui.portmaster.zip")
 	installBarPhase(installPhaseDownload)
-	if err := downloadFileWithProgress(downloadURL, archive, installBarProgress); err != nil {
+	// The transfer and the unpack both run on the card's run token: the strip's
+	// X on this chip stops them instead of only hiding the bar.
+	ctx := installBarRunContext()
+	if err := downloadFileWithProgressCtx(ctx, downloadURL, archive, installBarProgress); err != nil {
 		return err
 	}
 
 	installBarPhase(installPhaseExtract)
 	unpacked := filepath.Join(stage, "unpack")
-	if err := extractZipSafe(context.Background(), archive, unpacked, 4096, 512<<20); err != nil {
+	if err := extractZipSafe(ctx, archive, unpacked, 4096, 512<<20); err != nil {
 		return fmt.Errorf("unpack PortMaster: %w", err)
 	}
 	return installPortMasterFromStage(unpacked, sdRoot)

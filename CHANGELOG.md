@@ -13,6 +13,27 @@ For anything older, the git log and the
 
 ### Added
 
+- **A persistent activity strip now shows background work on every scene.** While
+  a tool or core install, the app's own update, an offline audio/video download
+  or a package install runs, a small stack of chips is pinned to the right edge
+  under the status bar — each chip names the operation and carries its own mini
+  progress rail (an indeterminate shimmer when the source has no byte size), and
+  the chips appear on any screen, so a download started in the video player or
+  an install started in Emulators stays visible over the Home screen, the
+  Terminal or wherever the user navigates. Active download rows show
+  individually and queued rows fold into one "N waiting in queue" line; four
+  chips show at a time and the rest collapse into an overflow line, and when
+  nothing runs in the background the strip draws nothing at all.
+  Package installs switched to the shared installer card (the same channel
+  tools, core updates and the app's own update use) instead of an opaque
+  scene-level spinner, so an install now names its package, walks through the
+  same Resolving → Downloading → Installing phases and reports success or
+  failure once — and the strip reads the same state, so there is only one
+  source of truth to aggregate.
+  ([player/activity.go](player/activity.go), [player/main.go](player/main.go),
+  [player/packages.go](player/packages.go); tests in
+  [player/activity_test.go](player/activity_test.go)).
+
 - **Frame cost is now measured on the device instead of inferred from a desktop.**
   The main loop times each iteration from the top of the loop to just after
   `Present` — input, scene logic, drawing and the flip, not the idle delay — and
@@ -292,6 +313,20 @@ For anything older, the git log and the
   tests in [player/header_test.go](player/header_test.go) and
   [player/calendar_popover_test.go](player/calendar_popover_test.go)).
 ### Fixed
+
+- **The Podcasts list no longer extends past the screen bottom on the Brick.**
+The curated-feed scene's `dynamiclist` element carried the root config's portrait
+geometry (x=24, y=148, width=1232, height=1672) in both shipped configs, on a
+device whose logical canvas is 720×576 with a header bar and a footer row below
+it: the 1232-wide, 1672-tall list rendered entirely off the screen, so podcast
+entries were drawn but invisible, and the scene looked empty with no scroll to
+reach them. The element now uses the landscape geometry every other list
+element in the config uses — x=25, y=82, width=670, height=508 on both configs,
+top-anchored under the header and ending above the footer — so the entries fill
+the content band and are reachable with the same navigation as the rest of the
+scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json),
+[player/jukaconfig.json](player/jukaconfig.json); regression test in
+[player/layout_bounds_test.go](player/layout_bounds_test.go)).
 
 - **Opening the Wi-Fi picker no longer answers `exit status 255`.** On an image
   whose supplicant keeps its control socket somewhere `wpa_cli` does not look by

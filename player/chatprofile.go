@@ -567,8 +567,11 @@ func activateChatProfileAction(kind string, config *Config) {
 		vkOpenName()
 	case "copy_id":
 		if profile.UserID != "" {
-			sdl.SetClipboardText(profile.UserID)
-			showToast("User ID copied", ToastInfo())
+			if err := copyTextToClipboard(profile.UserID, "Chat"); err != nil {
+				showToast("Could not copy the user ID", ColorToastWarn)
+			} else {
+				showToast("User ID copied", ToastInfo())
+			}
 		}
 	case "mention":
 		if token := chatProfileSearchText(profile); token != "" {

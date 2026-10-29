@@ -551,6 +551,9 @@ func resetWiFiSignalPollForTest() {
 // cfg80211 image — where the marker is "phy80211" — read as "no link" even with
 // the interface up.
 func wifiLinkIsUp() bool {
+	if winWifiActive() {
+		return winWifiLinkUp()
+	}
 	for _, name := range wirelessInterfaceNames() {
 		state, err := os.ReadFile(filepath.Join(wifiSysfsNetRoot, name, "operstate"))
 		if err == nil && strings.TrimSpace(string(state)) == "up" {

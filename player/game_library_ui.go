@@ -4,10 +4,11 @@ package main
 //
 // Three columns: consoles (with a leading Continue row built from the recents
 // file), the games of the selected console, and a box-art preview. A launches,
-// X opens LAN play (netplay_ui.go), L1 fetches missing covers, Y rescans after
-// copying new files onto the card, B closes. It is a modal overlay like the
-// Emulators panel, so it works on every config, including the desktop one with
-// no Roms folder.
+// X opens LAN play (netplay_ui.go), E hands the selected game to its tool
+// (handoff.go: profiles, compatibility or the emulator page), L1 fetches
+// missing covers, Y rescans after copying new files onto the card, B closes.
+// It is a modal overlay like the Emulators panel, so it works on every
+// config, including the desktop one with no Roms folder.
 
 import (
 	"math"
@@ -465,6 +466,10 @@ func handleGameLibraryKey(e *sdl.KeyboardEvent, config *Config) bool {
 		gameLibraryMove(1, 0)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		launchSelectedGame()
+	case sdl.K_e:
+		if game, ok := selectedLibraryGame(); ok {
+			openGameLibraryHandoff(game)
+		}
 	case sdl.K_o:
 		openGameOptions()
 	case sdl.K_r:

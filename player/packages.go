@@ -91,12 +91,21 @@ func packageDirName(name string) string {
 }
 
 // downloadAndInstallPackage downloads a package zip and extracts it.
+//
+// It publishes through the shared installer card (installbar.go) instead of
+// the generic scene spinner the registry fetch uses: the card — and therefore
+// the activity strip that echoes it on every scene — can name the package,
+// show its phases, and report the outcome once, instead of a bare
+// "Installing x..." spinner with no word on what happened.
 func downloadAndInstallPackage(config *Config, p Package) {
-	config.Variables.LoadingSpinner = true
-	config.Variables.SpinnerText = "Installing " + p.Name + "..."
-	defer func() { config.Variables.LoadingSpinner = false }()
+	// config stays unused: the spinner it used to carry belongs to the scene
+	// view, and the installer card is global. The parameter is kept so the
+	// call sites (one per install button) stay untouched.
+	_ = config
+	installBarBeginLabelled(p.Name, "Installing "+p.Name)
 
 	if p.Download == "" {
+		installBarFail("No download URL for " + p.Name)
 		showToast("No download URL for "+p.Name, ToastError())
 		return
 	}
@@ -107,16 +116,23 @@ func downloadAndInstallPackage(config *Config, p Package) {
 	os.MkdirAll(pkgDir, 0755)
 
 	// Download the file.
+	installBarPhase(installPhaseDownload)
 	showToast("Downloading "+p.Name+"...", ToastInfo())
-	raw, err := fetchURL(p.Download, 60*time.Second)
+	// The fetch is tied to the card's run token: the strip's X on this package's
+	// chip cancels the transfer instead of only hiding the bar.
+	raw, err := fetchURLContext(installBarRunContext(), p.Download, 60*time.Second)
 	if err != nil {
+		installBarFail("Download failed")
 		showToast("Download failed: "+err.Error(), ToastError())
 		return
 	}
 
+	installBarPhase(installPhaseExtract)
+
 	// Save as zip.
 	zipPath := filepath.Join(pkgDir, safeName+".zip")
 	if err := os.WriteFile(zipPath, []byte(raw), 0644); err != nil {
+		installBarFail("Save failed")
 		showToast("Save failed: "+err.Error(), ToastError())
 		return
 	}
@@ -135,6 +151,7 @@ func downloadAndInstallPackage(config *Config, p Package) {
 	installedPackagesMu.Unlock()
 
 	showToast("Installed "+p.Name+"!", ToastSuccess())
+	installBarDone()
 }
 
 // unzipToDir extracts a zip archive to the destination directory.

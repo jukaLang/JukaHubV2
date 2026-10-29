@@ -91,14 +91,14 @@
                     </button>
                 </div>
                 <div class="export-dropdown-wrapper">
-                    <button class="app-bar-button export-button" type="button" id="headerExportBtn" aria-label="Export design" title="Export as JSON or XML">
+                    <button class="app-bar-button export-button" type="button" id="headerExportBtn" aria-label="Export design" title="Export as JSON or XML" aria-haspopup="true" aria-expanded="false" aria-controls="headerExportDropdown">
                         <i class="fas fa-download" aria-hidden="true"></i> <span class="btn-label">Export</span>
                         <i class="fas fa-caret-down export-caret" aria-hidden="true"></i>
                     </button>
                     <div class="export-dropdown" id="headerExportDropdown">
-                        <button type="button" data-click="exportConfig"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
-                        <button type="button" data-click="copyConfigJson"><i class="fas fa-copy" style="color:#9aa4b2"></i> Copy JSON</button>
-                        <button type="button" data-click="exportConfigXml"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
+                        <button type="button" data-click="exportConfig"><i class="fab fa-js export-icon-json" aria-hidden="true"></i> Export as JSON</button>
+                        <button type="button" data-click="copyConfigJson"><i class="fas fa-copy export-icon-copy" aria-hidden="true"></i> Copy JSON</button>
+                        <button type="button" data-click="exportConfigXml"><i class="fas fa-code export-icon-xml" aria-hidden="true"></i> Export as XML</button>
                     </div>
                 </div>
             </div>
@@ -208,14 +208,14 @@
                         <li>Use the "Export" dropdown to download as <code>JSON</code> or <code>XML</code></li>
                         <li>Combine with the JukaHub template from <a href="https://github.com/jukaLang/JukaHubV2/releases" target="_blank" rel="noopener noreferrer">GitHub releases</a></li>
                     </ol>
-                    <h4 style="margin-top:1rem"><i class="fas fa-keyboard"></i> Keyboard Shortcuts</h4>
+                    <h3 class="guide-section-title">Keyboard shortcuts</h3>
                     <ul>
                         <li><kbd>Ctrl+Z</kbd> / <kbd>Ctrl+Shift+Z</kbd> — Undo / Redo</li>
                         <li><kbd>Delete</kbd> — Remove selected element</li>
                         <li><kbd>Ctrl+D</kbd> — Duplicate selected element</li>
                         <li><kbd>Ctrl+C</kbd> / <kbd>Ctrl+V</kbd> — Copy and paste an element (paste it into another scene too)</li>
                         <li><kbd>Ctrl+S</kbd> — Export JSON</li>
-                        <li><kbd>Ctrl+P</kbd> or <kbd>Ctrl+Shift+P</kbd> — Toggle Preview Mode ; <kbd>Esc</kbd> — Exit Preview</li>
+                        <li><kbd>Ctrl+P</kbd> or <kbd>Ctrl+Shift+P</kbd> — Toggle Preview Mode; <kbd>Esc</kbd> — Exit Preview</li>
                         <li><kbd>Ctrl+Shift+K</kbd> — Check the design for problems</li>
                         <li><kbd>Arrow keys</kbd> — Nudge the selected element (<kbd>Shift</kbd> moves 10 px)</li>
                         <li>Right-click elements for a context menu</li>
@@ -228,9 +228,9 @@
         <div class="editor-frame">
             <!-- Mobile panel toggles -->
             <div class="mobile-toolbar" role="tablist" aria-label="Panels">
-                <button class="mobile-tab" data-target="left" type="button" role="tab" aria-controls="leftSidebar">Library</button>
-                <button class="mobile-tab" data-target="canvas" type="button" role="tab" aria-controls="workspace">Canvas</button>
-                <button class="mobile-tab" data-target="right" type="button" role="tab" aria-controls="rightSidebar">Inspector</button>
+                <button class="mobile-tab" data-target="left" type="button" role="tab" aria-controls="leftSidebar" aria-selected="false">Library</button>
+                <button class="mobile-tab active" data-target="canvas" type="button" role="tab" aria-controls="workspace" aria-selected="true">Canvas</button>
+                <button class="mobile-tab" data-target="right" type="button" role="tab" aria-controls="rightSidebar" aria-selected="false">Inspector</button>
             </div>
 
             <!-- Left Sidebar - Component Library -->
@@ -309,7 +309,7 @@
                 <div class="canvas-header">
                     <div class="canvas-controls">
                         <div class="scene-controls">
-                            <button class="action-button" type="button" data-click="addScene">
+                            <button class="action-button" type="button" data-click="addScene" aria-label="Add scene">
                                 <i class="fas fa-plus" aria-hidden="true"></i> <span>Add Scene</span>
                             </button>
                             <select id="sceneSelector" aria-label="Current scene" data-change="changeScene"></select>
@@ -328,14 +328,14 @@
                                 <i class="fas fa-broom" aria-hidden="true"></i> <span>Clear All</span>
                             </button>
                             <div class="export-dropdown-wrapper">
-                                <button class="action-button primary" type="button" id="canvasExportBtn">
+                                <button class="action-button primary" type="button" id="canvasExportBtn" aria-label="Export design" aria-haspopup="true" aria-expanded="false" aria-controls="canvasExportDropdown">
                                     <i class="fas fa-download" aria-hidden="true"></i> <span>Export</span>
-                                    <i class="fas fa-caret-down" style="margin-left:2px"></i>
+                                    <i class="fas fa-caret-down canvas-export-caret" aria-hidden="true"></i>
                                 </button>
                                 <div class="export-dropdown" id="canvasExportDropdown">
-                                    <button type="button" data-click="exportConfig"><i class="fab fa-js" style="color:#f4b860"></i> Export as JSON</button>
-                                    <button type="button" data-click="copyConfigJson"><i class="fas fa-copy" style="color:#9aa4b2"></i> Copy JSON</button>
-                                    <button type="button" data-click="exportConfigXml"><i class="fas fa-code" style="color:#25c2a0"></i> Export as XML</button>
+                                    <button type="button" data-click="exportConfig"><i class="fab fa-js export-icon-json" aria-hidden="true"></i> Export as JSON</button>
+                                    <button type="button" data-click="copyConfigJson"><i class="fas fa-copy export-icon-copy" aria-hidden="true"></i> Copy JSON</button>
+                                    <button type="button" data-click="exportConfigXml"><i class="fas fa-code export-icon-xml" aria-hidden="true"></i> Export as XML</button>
                                 </div>
                             </div>
                         </div>
@@ -533,7 +533,7 @@
                                 </div>
                                 <div class="control-group">
                                     <label for="textBrowserSource"><i class="fas fa-globe" aria-hidden="true"></i> Data Source</label>
-                                                                        <select id="textBrowserSource" class="textbrowser-source-selector">
+                                    <select id="textBrowserSource" class="textbrowser-source-selector">
                                         <option value="system">System Info (gopsutil)</option>
                                         <option value="zeroconf">Zeroconf / mDNS</option>
                                         <option value="json">JSON (gjson)</option>
@@ -576,7 +576,6 @@
                         </div>
                     </div>
 
-                    <!-- App Properties -->
                     <!-- App Properties -->
                     <div id="appInfoPanel" class="properties-panel active" role="tabpanel" aria-label="App info">
                         <div class="input-container">
@@ -733,8 +732,10 @@
         <footer class="app-footer">
             <p>Need help? Join us on <a href="https://discord.gg/R9qgJjh5jG" target="_blank" rel="noopener noreferrer"><i class="fab fa-discord" aria-hidden="true"></i> Discord</a>.
             Want to contribute? Visit our <a href="https://github.com/jukaLang/JukaHubV2" target="_blank" rel="noopener noreferrer"><i class="fab fa-github" aria-hidden="true"></i> GitHub</a></p>
-        </footer>        </div>
-        <div id="aiPanel" class="ai-panel" role="dialog" aria-label="AI assistant" aria-hidden="true" hidden>
+        </footer>
+    </div>
+
+    <div id="aiPanel" class="ai-panel" role="dialog" aria-label="AI assistant" aria-hidden="true" hidden>
         <div class="panel-header ai-panel-header">
             <h2><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> AI Assistant</h2>
             <button id="aiPanelToggle" class="panel-toggle" type="button" aria-label="Close AI assistant" title="Close AI assistant">
@@ -807,13 +808,13 @@
 
     <!-- Element Context Menu -->
     <div id="contextMenu" class="context-menu" style="display:none">
-        <button type="button" data-action="duplicate"><i class="fas fa-copy"></i> Duplicate</button>
-        <button type="button" data-action="delete"><i class="fas fa-trash"></i> Delete</button>
-        <div class="context-menu-sep"></div>
-        <button type="button" data-action="bring-front"><i class="fas fa-arrow-up"></i> Bring to Front</button>
-        <button type="button" data-action="send-back"><i class="fas fa-arrow-down"></i> Send to Back</button>
-        <div class="context-menu-sep"></div>
-        <button type="button" data-action="edit-text"><i class="fas fa-pen"></i> Edit Text</button>
+        <button type="button" data-action="duplicate"><i class="fas fa-copy" aria-hidden="true"></i> Duplicate</button>
+        <button type="button" data-action="delete"><i class="fas fa-trash" aria-hidden="true"></i> Delete</button>
+        <div class="context-menu-sep" aria-hidden="true"></div>
+        <button type="button" data-action="bring-front"><i class="fas fa-arrow-up" aria-hidden="true"></i> Bring to Front</button>
+        <button type="button" data-action="send-back"><i class="fas fa-arrow-down" aria-hidden="true"></i> Send to Back</button>
+        <div class="context-menu-sep" aria-hidden="true"></div>
+        <button type="button" data-action="edit-text"><i class="fas fa-pen" aria-hidden="true"></i> Edit Text</button>
     </div>
 
     <!-- Live builder: push this design to a running JukaHub over Wi-Fi. -->

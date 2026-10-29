@@ -286,7 +286,7 @@ func BugReportURL(config *Config) string {
 // ReportBug saves a diagnostics file, copies the report and opens the issue.
 func ReportBug(config *Config) (string, error) {
 	path, _ := ExportDiagnostics(config)
-	_ = sdl.SetClipboardText(DiagnosticsText(config))
+	_ = copyTextToClipboard(DiagnosticsText(config), "Diagnostics")
 	return path, openExternalURL(BugReportURL(config))
 }
 

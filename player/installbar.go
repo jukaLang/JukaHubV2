@@ -10,6 +10,7 @@ package main
 // small secondary detail text (bytes done/total and speed).
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"strings"
@@ -51,6 +52,18 @@ type installBarState struct {
 	// retryable keeps a failed install on screen (with an A: retry hint) so a
 	// dropped connection or an offline launch does not need an app restart.
 	retryable bool
+	// runCtx carries the cancellation for the operation this card shows. Each
+	// installBarBegin* mints a fresh one and the B/X cancel path fires it, so
+	// a download stopped from the card actually stops instead of running on
+	// behind a dismissed screen. Flows that already own a richer context
+	// (the Play path's loading-card cancel) keep theirs; the rest derive
+	// their timeouts from installBarRunContext.
+	runCtx    context.Context
+	runCancel context.CancelFunc
+	// source is the name of the scene the run was launched from. The activity
+	// strip's chip tap focuses it, giving a background install a way back to
+	// the page that started it without a hunt through menus.
+	source string
 }
 
 var installBar installBarState
@@ -66,9 +79,18 @@ func installBarBeginLabelled(tool, label string) {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
 	now := time.Now()
+	// The previous run's token is freed here, not in installBarAbort: a run
+	// that is no longer on screen but whose goroutine is still winding down
+	// keeps a cancelled context, which is exactly where its own cleanup wants
+	// to see it.
+	if installBar.runCancel != nil {
+		installBar.runCancel()
+	}
+	installBar.runCtx, installBar.runCancel = context.WithCancel(context.Background())
 	installBar.visible = true
 	installBar.tool = tool
 	installBar.label = label
+	installBar.source = installSourceSceneName(appConfig)
 	installBar.phase = installPhaseResolving
 	installBar.done = 0
 	installBar.total = 0
@@ -79,6 +101,24 @@ func installBarBeginLabelled(tool, label string) {
 	installBar.endedAt = time.Time{}
 	installBar.animAt = now
 	installBar.retryable = false
+}
+
+// installSourceSceneName is the name of the scene that is up right now — the
+// scene the caller of an installBarBegin is on, and the strip chip's tap target
+// back to it. Empty when a run starts with no scene (early boot) or no config.
+func installSourceSceneName(config *Config) string {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return ""
+	}
+	return config.Scenes[currentSceneIndex].Name
+}
+
+// installBarSource returns the source scene of the run the card is showing.
+// Like the run token, it is read back through the card's lock.
+func installBarSource() string {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	return installBar.source
 }
 
 // installBarPhase updates the status line ("Downloading", "Installing", ...).
@@ -165,6 +205,14 @@ func installBarAbort() {
 	// The fields are cleared one by one: replacing the whole struct would copy
 	// the mutex this function is holding, and the deferred Unlock would then
 	// unlock a different one.
+	visible := installBar.visible
+	installBar.source = ""
+	if visible && installBar.runCancel != nil {
+		// A user cancel kills the operation behind the card, so the download
+		// goroutine sees the context stop instead of running on behind a
+		// dismissed screen.
+		installBar.runCancel()
+	}
 	installBar.visible = false
 	installBar.tool = ""
 	installBar.label = ""
@@ -187,6 +235,43 @@ func installBarFail(reason string) {
 	installBar.message = reason
 	installBar.endedAt = time.Now()
 	installBar.retryable = false
+}
+
+// installBarRunContext returns the cancellation context of the run the card is
+// showing. Install flows that own no richer context (a Play preload keeps its
+// own loading-card cancel) derive their request and timeout contexts from this
+// one, so a cancel from the card or the activity strip reaches the transfer.
+// With no run up — nothing begun, or a card a previous cancel already dropped
+// (its token stays dead by design, for the winding-down goroutine) — it falls
+// back to Background: a fresh operation must never inherit a retired token.
+func installBarRunContext() context.Context {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.runCtx != nil && installBar.visible {
+		return installBar.runCtx
+	}
+	return context.Background()
+}
+
+// installBarActive reports whether the card is showing an operation that is
+// still working, rather than a settled one holding its last frame (Ready or
+// the failure note). The activity strip draws an X only on the first.
+func installBarActive() bool {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	return installBar.visible && installBar.endedAt.IsZero()
+}
+
+// installBarCancelActive cancels the run the card (and the strip's install
+// chip) is showing and drops the card at once. It reports whether a working
+// install was actually cancelled, so callers can decide between feedback and
+// silence; a settled card has nothing to cancel.
+func installBarCancelActive() bool {
+	if !installBarActive() {
+		return false
+	}
+	installBarAbort()
+	return true
 }
 
 // installCardDetail trims a failure reason to what fits the card's detail

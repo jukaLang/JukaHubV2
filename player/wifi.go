@@ -533,6 +533,10 @@ func resetSupplicantInterfaceCache() {
 	wifiCtrlDirAt = time.Time{}
 	wifiCtrlDirKnown = false
 	wifiCtrlDirMu.Unlock()
+
+	// Windows remembers the adapter separately, and opening the picker is when
+	// a dongle may have been plugged in there too.
+	resetWinWifiIfaceCache()
 }
 
 // looksLikeWirelessName is the last resort: no marker, no proc entry, no
@@ -606,6 +610,9 @@ func validIfaceName(name string) bool {
 // wifiInterface is the netdev to control. JUKAHUB_WIFI_IFACE exists for images
 // whose radio is not named wlan* and for the desktop test rig.
 func wifiInterface() string {
+	if winWifiActive() {
+		return winWifiInterface()
+	}
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_WIFI_IFACE")); validIfaceName(override) {
 		return override
 	}
@@ -619,11 +626,17 @@ func wifiInterface() string {
 // wifiControlAvailable reports whether this device can be driven through
 // wpa_cli at all.
 func wifiControlAvailable() bool {
+	if winWifiActive() {
+		return winWifiControlAvailable()
+	}
 	return wifiInterface() != "" && wifiToolExists("wpa_cli")
 }
 
 // wifiUnavailableReason explains an unavailable backend in one line.
 func wifiUnavailableReason() string {
+	if winWifiActive() {
+		return winWifiUnavailableReason()
+	}
 	switch {
 	case wifiInterface() == "":
 		return "No wireless network interface on this device"
@@ -958,6 +971,9 @@ type wifiSignalSample struct {
 // with the reason a caller can show (no interface, no wpa_cli, FAIL, or a
 // report without a usable RSSI).
 func wifiSignalPoll() (wifiSignalSample, error) {
+	if winWifiActive() {
+		return winWifiSignalPoll()
+	}
 	out, err := wifiWPA("signal_poll")
 	if err := wifiCommandError(out, err); err != nil {
 		return wifiSignalSample{}, err
@@ -1098,6 +1114,9 @@ func wpaQuote(s string) string {
 
 // wifiReadStatus returns the current association state.
 func wifiReadStatus() (wifiStatus, error) {
+	if winWifiActive() {
+		return winWifiStatus()
+	}
 	out, err := wifiWPA("status")
 	if err := wifiCommandError(out, err); err != nil {
 		return wifiStatus{}, err
@@ -1107,6 +1126,9 @@ func wifiReadStatus() (wifiStatus, error) {
 
 // wifiReadSavedNetworks returns the networks wpa_supplicant remembers.
 func wifiReadSavedNetworks() ([]savedNetwork, error) {
+	if winWifiActive() {
+		return winWifiSavedNetworks()
+	}
 	out, err := wifiWPA("list_networks")
 	if err := wifiCommandError(out, err); err != nil {
 		return nil, err
@@ -1116,6 +1138,9 @@ func wifiReadSavedNetworks() ([]savedNetwork, error) {
 
 // wifiReadScanResults returns the last scan without starting a new one.
 func wifiReadScanResults() ([]wifiNetwork, error) {
+	if winWifiActive() {
+		return winWifiScanResults()
+	}
 	out, err := wifiWPA("scan_results")
 	if err := wifiCommandError(out, err); err != nil {
 		return nil, err
@@ -1127,6 +1152,9 @@ func wifiReadScanResults() ([]wifiNetwork, error) {
 // from the stale list. A supplicant that answers "OK" but never refreshes is
 // common enough that returning the old list silently would be misleading.
 func wifiScanNetworks() ([]wifiNetwork, error) {
+	if winWifiActive() {
+		return winWifiScanNetworks()
+	}
 	before, _ := wifiReadScanResults()
 	if out, err := wifiWPAChecked("scan"); err != nil && !wifiScanBusy(out) {
 		// A soft-blocked radio is the common "Wi-Fi stopped working" state
@@ -1164,6 +1192,9 @@ type wifiSnapshot struct {
 // wifiReadSnapshot merges status, saved networks and the last scan. It does not
 // trigger a scan, so it is cheap enough to call after a join.
 func wifiReadSnapshot() (wifiSnapshot, error) {
+	if winWifiActive() {
+		return winWifiReadSnapshot()
+	}
 	st, err := wifiReadStatus()
 	if err != nil {
 		return wifiSnapshot{}, err
@@ -1287,6 +1318,9 @@ func wifiObtainAddress(iface string) (string, error) {
 // secured tells key_mgmt what to use, so an open network is not asked for a
 // password and a WPA network is never configured as open.
 func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
+	if winWifiActive() {
+		return winWifiJoin(ssid, passphrase, secured)
+	}
 	res := wifiJoinResult{SSID: ssid}
 	if err := validateWiFiSSID(ssid); err != nil {
 		return res, err
@@ -1381,6 +1415,9 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 // wifiSelectSaved reconnects a saved network without asking for its password
 // again. The supplicant already holds the PSK.
 func wifiSelectSaved(id int) (wifiJoinResult, error) {
+	if winWifiActive() {
+		return winWifiSelectSaved(id)
+	}
 	res := wifiJoinResult{Saved: true}
 	if !wifiControlAvailable() {
 		return res, errors.New(wifiUnavailableReason())
@@ -1416,6 +1453,9 @@ func wifiSelectSaved(id int) (wifiJoinResult, error) {
 
 // wifiDisconnect drops the current association but keeps the saved network.
 func wifiDisconnect() error {
+	if winWifiActive() {
+		return winWifiDisconnect()
+	}
 	_, err := wifiWPAChecked("disconnect")
 	return err
 }
@@ -1426,6 +1466,9 @@ func wifiDisconnect() error {
 // (associated but no address after a suspend, or a router that rebooted), so
 // the association is dropped first and the saved key does the joining.
 func wifiReconnect() (wifiJoinResult, error) {
+	if winWifiActive() {
+		return winWifiReconnect()
+	}
 	if !wifiControlAvailable() {
 		return wifiJoinResult{}, errors.New(wifiUnavailableReason())
 	}
@@ -1457,6 +1500,9 @@ func wifiReconnect() (wifiJoinResult, error) {
 // wifiForget removes a saved network. The caller confirms first; this function
 // only refuses when the name is not actually saved.
 func wifiForget(ssid string) error {
+	if winWifiActive() {
+		return winWifiForget(ssid)
+	}
 	nets, err := wifiReadSavedNetworks()
 	if err != nil {
 		return err

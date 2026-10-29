@@ -430,6 +430,10 @@ func handleIPPanelKey(e *sdl.KeyboardEvent, config *Config) bool {
 // ipPanelRowRects is filled by renderIPPanel so a click maps back to a row.
 var ipPanelRowRects []sdl.Rect
 
+// ipPanelRowFirst is the list index of ipPanelRowRects[0]; the window scrolls
+// with the cursor, so a clicked slot is first+slot, not the slot number.
+var ipPanelRowFirst int
+
 var ipPanelRect sdl.Rect
 
 // handleIPPanelMouse activates a clicked row, or closes on an outside click.
@@ -439,7 +443,7 @@ func handleIPPanelMouse(mx, my int32, config *Config) bool {
 	}
 	for i, r := range ipPanelRowRects {
 		if r.W > 0 && pointInRect(mx, my, r) {
-			ipStreamsCursor = i
+			ipStreamsCursor = ipPanelRowFirst + i
 			ipPanelPlay(config)
 			return true
 		}
@@ -531,6 +535,7 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	if ipStreamsCursor >= visible {
 		first = ipStreamsCursor - visible + 1
 	}
+	ipPanelRowFirst = first
 	for i := 0; i < visible; i++ {
 		idx := first + i
 		if idx >= len(list) {

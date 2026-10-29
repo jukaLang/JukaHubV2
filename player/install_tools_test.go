@@ -316,6 +316,7 @@ func resetInstallBar() {
 	installBar.visible = false
 	installBar.tool = ""
 	installBar.label = ""
+	installBar.source = ""
 	installBar.phase = ""
 	installBar.done = 0
 	installBar.total = 0
@@ -324,6 +325,11 @@ func resetInstallBar() {
 	installBar.endedAt = time.Time{}
 	installBar.animAt = time.Time{}
 	installBar.retryable = false
+	if installBar.runCancel != nil {
+		installBar.runCancel()
+		installBar.runCancel = nil
+	}
+	installBar.runCtx = nil
 	installBar.mu.Unlock()
 }
 
@@ -380,6 +386,73 @@ func TestInstallBarFailureCarriesReason(t *testing.T) {
 	}
 	if _, ok := installBarRetryPending(); ok {
 		t.Error("a plain failure must not advertise an A: retry action")
+	}
+}
+
+// The card's X is a user cancel: it hides the card and fires the run token
+// every install flow derives its transfers from. A settled card (Ready or the
+// failure note) has nothing running, so its X must be a no-op.
+func TestInstallBarCancelActive(t *testing.T) {
+	t.Cleanup(resetInstallBar)
+
+	// Nothing running at all: the call reports what it did and changes nothing.
+	if installBarCancelActive() {
+		t.Fatal("cancelling with no card up reported a cancelled install")
+	}
+
+	// A working card is cancellable: the run token fires so the download
+	// goroutine sees the stop.
+	installBarBegin("ffmpeg")
+	installBarPhase(installPhaseDownload)
+	installBarProgress(1<<20, 60<<20)
+	runCtx := installBarRunContext()
+	if !installBarCancelActive() {
+		t.Fatal("an active install must be cancellable")
+	}
+	if visible, _, _, _, _, _, _, _, _ := installBarSnapshot(); visible {
+		t.Error("a cancelled install left its card on screen")
+	}
+	if runCtx.Err() == nil {
+		t.Error("the cancelled run token was not fired")
+	}
+
+	// A settled card is history, not work: Ready — and the failure note — must
+	// refuse the cancel instead of eating the press.
+	installBarBegin("ffmpeg")
+	installBarDone()
+	if installBarCancelActive() {
+		t.Error("a finished install reported a cancel")
+	}
+	if visible, _, phase, _, _, _, _, _, _ := installBarSnapshot(); !visible || phase != installPhaseDone {
+		t.Errorf("the finished card lost its ✓: visible=%v phase=%q", visible, phase)
+	}
+
+	installBarBegin("ffmpeg")
+	installBarFail("download timed out")
+	if installBarCancelActive() {
+		t.Error("a failed install reported a cancel")
+	}
+}
+
+// The run token is per-run minted: a second begin retires the previous
+// token (and any worse — the retired one is cancelled, so a goroutine still
+// winding down from the old run sees the stop) and a fresh cancel can no
+// longer clobber the new run's token.
+func TestInstallBarRunContextPerRun(t *testing.T) {
+	t.Cleanup(resetInstallBar)
+
+	installBarBegin("ffmpeg")
+	first := installBarRunContext()
+	installBarBegin("ffplay")
+	second := installBarRunContext()
+	if first == second {
+		t.Fatal("two runs share one token — a cancel for one would kill the other")
+	}
+	if first.Err() == nil {
+		t.Fatal("retiring the first run did not stop its still-winding goroutine")
+	}
+	if second.Err() != nil {
+		t.Fatalf("the fresh run started cancelled: %v", second.Err())
 	}
 }
 

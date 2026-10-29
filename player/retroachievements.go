@@ -1041,6 +1041,18 @@ func raOnCredentialsChanged() {
 	raState.mu.Unlock()
 }
 
+// raSettingsField maps the highlighted settings row to the field it edits: row
+// 0 is USERNAME and row 1 the WEB API KEY (see raRenderSettings). The field
+// constants start after raEditNone, so handing the zero-based cursor straight
+// to raBeginCredentialEdit made A on USERNAME do nothing and A on the key row
+// open the username editor.
+func raSettingsField(cursor int) int {
+	if cursor == 1 {
+		return raEditAPIKey
+	}
+	return raEditUsername
+}
+
 func raBeginCredentialEdit(field int) {
 	creds := raEffectiveCredentials()
 	switch field {
@@ -1134,7 +1146,7 @@ func handleRetroAchievementsKey(e *sdl.KeyboardEvent, config *Config) bool {
 		raToggleSettings()
 	case sdl.K_RETURN, sdl.K_SPACE:
 		if raPanel.settings {
-			raBeginCredentialEdit(raPanel.cursor)
+			raBeginCredentialEdit(raSettingsField(raPanel.cursor))
 		}
 	}
 	return true
@@ -1148,7 +1160,7 @@ func ctrlRetroAchievements(e *sdl.ControllerButtonEvent, config *Config) bool {
 		raPanelMove(1)
 	case sdl.CONTROLLER_BUTTON_A:
 		if raPanel.settings {
-			raBeginCredentialEdit(raPanel.cursor)
+			raBeginCredentialEdit(raSettingsField(raPanel.cursor))
 		}
 	case sdl.CONTROLLER_BUTTON_X, sdl.CONTROLLER_BUTTON_START:
 		raToggleSettings()
