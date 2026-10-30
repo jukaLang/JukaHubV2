@@ -224,7 +224,14 @@ func startAudioOutputMonitor() {
 		probeAudioOutput()
 		ticker := time.NewTicker(audioOutputPollInterval)
 		defer ticker.Stop()
-		for range ticker.C {
+		wake := subscribeForegroundWake()
+		for {
+			// bluetoothctl is a daemon call; skipping it while a game owns the
+			// screen also stops JukaHub from holding the Bluetooth stack the game
+			// may want for a headset. See backgroundwork.go.
+			if !waitForPoll(ticker.C, wake) {
+				continue
+			}
 			probeAudioOutput()
 		}
 	}()

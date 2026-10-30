@@ -45,19 +45,32 @@ import (
 // the flag to prove the dispatch.
 var wifiPOSIXForced = runtime.GOOS != "windows"
 
+// winWifiNegativeTTL is how long "there is no adapter" is trusted. A positive
+// answer is a device that is there; a negative one is usually a radio Windows
+// has not brought up yet — driver still loading after boot, a dongle being
+// plugged in, a laptop resuming — so it is retried soon instead of being held
+// for the full minute a present adapter is.
+const winWifiNegativeTTL = 5 * time.Second
+
 // winWifiActive reports whether the picker should talk to netsh instead of
 // wpa_supplicant.
 func winWifiActive() bool { return !wifiPOSIXForced }
 
 // netshIface is one interface block of `netsh wlan show interfaces`.
 type netshIface struct {
-	Name      string
-	SSID      string
-	State     string // the raw value, in whatever language Windows printed
-	BSSID     string
-	Signal    int     // percent, 0..100; 0 when Windows reported none
-	RxMbps    float64 // receive rate, 0 when not reported
-	Connected bool
+	Name string
+	// Description is the driver's name for the adapter ("Intel(R) Wi-Fi 6
+	// AX201"). Windows lists virtual adapters here rather than in Name — the
+	// Wi-Fi Direct one is called "Local Area Connection* 10" — so this is the
+	// only place their kind can be recognised.
+	Description string
+	SSID        string
+	State       string // the raw value, in whatever language Windows printed
+	BSSID       string
+	Signal      int     // percent, 0..100; 0 when Windows reported none
+	RssiDBM     int     // Windows 11 reports dBm directly; 0 when it does not
+	RxMbps      float64 // receive rate, 0 when not reported
+	Connected   bool
 }
 
 // ── Running netsh ──────────────────────────────────────────────────────────
@@ -66,6 +79,18 @@ type netshIface struct {
 // supplicant backend uses, so a test can answer it with captured output.
 func winWifiRun(args ...string) (string, error) {
 	return wifiRunner(wifiCommandTimeout, "", "netsh", args...)
+}
+
+// winWifiRunOnInterface confines an operation to the adapter the picker chose.
+// Without the interface argument, netsh may scan or join on a different radio
+// when Windows reports more than one wireless adapter.
+func winWifiRunOnInterface(iface string, args ...string) (string, error) {
+	iface = strings.TrimSpace(iface)
+	if iface == "" {
+		return "", errors.New("Windows reports no wireless network interface")
+	}
+	args = append(args, "interface="+iface)
+	return winWifiRun(args...)
 }
 
 // winWifiError turns netsh's own words into the error the panel shows. netsh
@@ -109,16 +134,18 @@ func parseNetshInterfaces(out string) []netshIface {
 		// hosted-network block are their own blocks; neither names an adapter.
 		name := fields["name"]
 		state := fields["state"]
-		bssid := fields["bssid"]
+		bssid := netshBSSID(fields)
 		if name == "" || (state == "" && bssid == "") {
 			continue
 		}
 		iface := netshIface{
-			Name:      name,
-			SSID:      fields["ssid"],
-			State:     state,
-			BSSID:     bssid,
-			Connected: strings.EqualFold(state, "connected") || bssid != "",
+			Name:        name,
+			Description: fields["description"],
+			SSID:        fields["ssid"],
+			State:       state,
+			BSSID:       bssid,
+			RssiDBM:     netshRSSI(fields),
+			Connected:   strings.EqualFold(state, "connected") || bssid != "",
 		}
 		for label, value := range fields {
 			switch {
@@ -133,6 +160,32 @@ func parseNetshInterfaces(out string) []netshIface {
 		ifaces = append(ifaces, iface)
 	}
 	return ifaces
+}
+
+// netshBSSID finds the access point's address. Windows 10 labels it "BSSID"
+// and Windows 11 labels it "AP BSSID", so the label is matched on its tail
+// rather than by exact name.
+func netshBSSID(fields map[string]string) string {
+	if v := fields["bssid"]; v != "" {
+		return v
+	}
+	for key, value := range fields {
+		if strings.Contains(key, "bssid") {
+			return value
+		}
+	}
+	return ""
+}
+
+// netshRSSI reads the dBm level Windows 11 prints next to the quality
+// percentage. 0 means "not reported", which is also what the meter treats as
+// unmeasured, so the caller falls back to the percentage instead.
+func netshRSSI(fields map[string]string) int {
+	n, err := strconv.Atoi(fields["rssi"])
+	if err != nil || n >= 0 || n < -110 {
+		return 0
+	}
+	return n
 }
 
 // parseNetshProfiles reads the profile names out of `netsh wlan show profiles`.
@@ -306,6 +359,94 @@ func leadingFloat(value string) float64 {
 
 // ── Interface discovery ────────────────────────────────────────────────────
 
+// A Windows machine can report several wireless interfaces. The physical NIC
+// comes with the machine's own adapter name, and Windows adds software adapters
+// over the same radio — the Wi-Fi Direct one (used for Miracast, printing and
+// nearby sharing), the hosted-network one, and whatever a VM or a VPN client
+// installs. `netsh wlan show interfaces` lists them all, and their order is not
+// a promise: after a resume or a driver reload the block that used to be first
+// can be a disconnected virtual adapter. Reading block zero meant the panel
+// reported "no network" while the machine sat on one, and the joiner worked on
+// an adapter that never associates.
+
+// netshIfaceIsVirtual reports adapters that share the Wi-Fi hardware but never
+// carry the user's link. Both words are English, so this is a preference and
+// never a filter: on a localized Windows the Description line is translated and
+// the check simply says no, which leaves the structural rules below in charge.
+func netshIfaceIsVirtual(iface netshIface) bool {
+	text := strings.ToLower(iface.Name + " " + iface.Description)
+	return strings.Contains(text, "virtual") ||
+		strings.Contains(text, "wi-fi direct") ||
+		strings.Contains(text, "hosted network")
+}
+
+// pickNetshIface chooses the adapter the picker drives.
+//
+// A linked adapter wins outright: it owns the SSID, the address and the measured
+// signal, and a join belongs on the radio that is already associated. When
+// nothing is linked, a real NIC beats a virtual one, and the stronger reported
+// signal breaks a tie — a disconnected adapter has no signal at all, so this
+// settles on the one Windows has actually seen something through. Order is only
+// the last resort, which keeps a single-adapter machine behaving exactly as
+// before.
+func pickNetshIface(ifaces []netshIface) (netshIface, bool) {
+	if len(ifaces) == 0 {
+		return netshIface{}, false
+	}
+	best := -1
+	for i, iface := range ifaces {
+		if !iface.Connected {
+			continue
+		}
+		if best < 0 || betterNetshLink(iface, ifaces[best]) {
+			best = i
+		}
+	}
+	if best < 0 {
+		for i, iface := range ifaces {
+			if netshIfaceIsVirtual(iface) {
+				continue
+			}
+			if best < 0 || betterNetshLink(iface, ifaces[best]) {
+				best = i
+			}
+		}
+	}
+	if best < 0 {
+		// Every block looks virtual (a localized report, or a driver name this
+		// check does not recognise): taking the first is still better than
+		// telling the user there is no radio.
+		best = 0
+	}
+	return ifaces[best], true
+}
+
+// betterNetshLink ranks two adapters: a real NIC over a software one, then the
+// stronger signal.
+func betterNetshLink(a, b netshIface) bool {
+	av, bv := netshIfaceIsVirtual(a), netshIfaceIsVirtual(b)
+	if av != bv {
+		return !av
+	}
+	return a.Signal > b.Signal
+}
+
+// findNetshIface returns the block Windows reported for this adapter name.
+// When a caller supplies a name, a missing adapter stays missing instead of
+// silently switching status or signal reads to a different radio. An empty name
+// is used only before an adapter has been selected, and may pick one normally.
+func findNetshIface(ifaces []netshIface, name string) (netshIface, bool) {
+	if name != "" {
+		for _, iface := range ifaces {
+			if strings.EqualFold(iface.Name, name) {
+				return iface, true
+			}
+		}
+		return netshIface{}, false
+	}
+	return pickNetshIface(ifaces)
+}
+
 // The adapter answer is cached like the supplicant's: wifiControlAvailable is
 // read while the status bar draws, and spawning netsh per frame would cost a
 // frame. A negative answer is remembered too, or a desktop without a radio
@@ -327,18 +468,21 @@ func winWifiProbeInterfaces() []netshIface {
 	return parseNetshInterfaces(out)
 }
 
-// winWifiIfaceCached is the first adapter, remembered for wifiDrivenTTL.
+// winWifiIfaceCached is the adapter the picker drives, remembered for
+// wifiDrivenTTL.
 func winWifiIfaceCached() (netshIface, bool) {
 	winWifiIfaceMu.Lock()
 	defer winWifiIfaceMu.Unlock()
-	if winWifiIfaceKnown && wifiDrivenNow().Sub(winWifiIfaceAt) < wifiDrivenTTL {
-		return winWifiIfaceVal, winWifiIfaceFound
+	if winWifiIfaceKnown {
+		ttl := wifiDrivenTTL
+		if !winWifiIfaceFound {
+			ttl = winWifiNegativeTTL
+		}
+		if wifiDrivenNow().Sub(winWifiIfaceAt) < ttl {
+			return winWifiIfaceVal, winWifiIfaceFound
+		}
 	}
-	ifaces := winWifiProbeInterfaces()
-	winWifiIfaceVal, winWifiIfaceFound = netshIface{}, false
-	if len(ifaces) > 0 {
-		winWifiIfaceVal, winWifiIfaceFound = ifaces[0], true
-	}
+	winWifiIfaceVal, winWifiIfaceFound = pickNetshIface(winWifiProbeInterfaces())
 	winWifiIfaceAt = wifiDrivenNow()
 	winWifiIfaceKnown = true
 	return winWifiIfaceVal, winWifiIfaceFound
@@ -354,6 +498,18 @@ func resetWinWifiIfaceCache() {
 	winWifiIfaceAt = time.Time{}
 	winWifiIfaceKnown = false
 	winWifiIfaceMu.Unlock()
+}
+
+// winWifiCachedIfaceName is the adapter name the cache already holds, without
+// asking Windows. The per-second readers use it so a warm cache costs no netsh
+// process and a cold one still probes exactly once.
+func winWifiCachedIfaceName() string {
+	winWifiIfaceMu.Lock()
+	defer winWifiIfaceMu.Unlock()
+	if !winWifiIfaceKnown || !winWifiIfaceFound {
+		return ""
+	}
+	return winWifiIfaceVal.Name
 }
 
 // winWifiInterface is the adapter name wifiInterface returns on Windows.
@@ -396,9 +552,15 @@ func winWifiStatus() (wifiStatus, error) {
 	}
 	// The cached block names the adapter; the association is read fresh, since
 	// this is what a join waits on and a minute-old answer would never change.
-	ifaces := winWifiProbeInterfaces()
-	if len(ifaces) > 0 {
-		iface = ifaces[0]
+	// The fresh report is matched back to that name: with several adapters the
+	// first block is not necessarily the one the panel is showing.
+	if fresh, found := findNetshIface(winWifiProbeInterfaces(), iface.Name); found {
+		iface = fresh
+	} else {
+		// Keep reads pinned to the selected adapter. If it disappears between
+		// probes, report it as disconnected instead of borrowing another radio's
+		// SSID and signal.
+		iface = netshIface{}
 	}
 	st := wifiStatus{
 		State:     winWifiStateWord(iface),
@@ -467,7 +629,11 @@ func winWifiSavedNetworks() ([]savedNetwork, error) {
 
 // winWifiScanResults lists the networks Windows has seen.
 func winWifiScanResults() ([]wifiNetwork, error) {
-	out, err := winWifiRun("wlan", "show", "networks", "mode=bssid")
+	iface := winWifiInterface()
+	if iface == "" {
+		return nil, errors.New(winWifiUnavailableReason())
+	}
+	out, err := winWifiRunOnInterface(iface, "wlan", "show", "networks", "mode=bssid")
 	if err != nil {
 		return nil, winWifiError(out, err)
 	}
@@ -490,15 +656,19 @@ func winWifiScanNetworks() ([]wifiNetwork, error) {
 // winWifiSignalPoll reads the link's strength. Windows reports a quality
 // percentage and a receive rate, which is all the status meter needs.
 func winWifiSignalPoll() (wifiSignalSample, error) {
-	ifaces := winWifiProbeInterfaces()
-	if len(ifaces) == 0 {
+	iface, ok := findNetshIface(winWifiProbeInterfaces(), winWifiCachedIfaceName())
+	if !ok {
 		return wifiSignalSample{}, errors.New(winWifiUnavailableReason())
 	}
-	iface := ifaces[0]
 	if !iface.Connected {
 		return wifiSignalSample{}, errors.New("not connected to a network")
 	}
-	rssi := winSignalDBM(iface.Signal)
+	// Windows 11 prints the level in dBm; the quality percentage is the
+	// fallback for versions that only print that.
+	rssi := iface.RssiDBM
+	if rssi >= 0 {
+		rssi = winSignalDBM(iface.Signal)
+	}
 	if rssi >= 0 {
 		return wifiSignalSample{}, errors.New("Windows reported no signal quality")
 	}
@@ -541,6 +711,18 @@ func winWifiReadSnapshot() (wifiSnapshot, error) {
 		Status:   st,
 		Saved:    saved,
 		Networks: mergeWiFiNetworks(scanned, saved, st),
+	}
+	// The scan's rows carry the strength netsh printed per access point, which
+	// on Windows 11 is a quality percentage; the adapter also reports the level
+	// it actually measured in dBm. The row the panel shows as CONNECTED should
+	// read the same strength as the status meter, so the measured level wins
+	// for that one when Windows printed one.
+	if iface, ok := winWifiIfaceCached(); ok && iface.RssiDBM < 0 {
+		for i := range snap.Networks {
+			if snap.Networks[i].Active {
+				snap.Networks[i].Signal = iface.RssiDBM
+			}
+		}
 	}
 	snap.RadioOn, snap.RadioOK = winWifiRadioState()
 	return snap, nil
@@ -662,8 +844,9 @@ func winWifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) 
 			return res, err
 		}
 	}
-	if reason := winWifiUnavailableReason(); reason != "" {
-		return res, errors.New(reason)
+	iface := winWifiInterface()
+	if iface == "" {
+		return res, errors.New(winWifiUnavailableReason())
 	}
 	profile, err := winWifiProfileXML(ssid, passphrase, secured)
 	if err != nil {
@@ -675,10 +858,10 @@ func winWifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) 
 	}
 	defer os.Remove(path)
 
-	if out, err := winWifiRun("wlan", "add", "profile", "filename="+path, "user=current"); err != nil {
+	if out, err := winWifiRunOnInterface(iface, "wlan", "add", "profile", "filename="+path, "user=current"); err != nil {
 		return res, winWifiError(out, err)
 	}
-	if out, err := winWifiRun("wlan", "connect", "name="+ssid); err != nil {
+	if out, err := winWifiRunOnInterface(iface, "wlan", "connect", "name="+ssid); err != nil {
 		return res, winWifiError(out, err)
 	}
 	st, err := wifiWaitForAssociation(ssid, wifiAssociateTimeout)
@@ -724,7 +907,11 @@ func winWifiSelectSaved(id int) (wifiJoinResult, error) {
 		return res, fmt.Errorf("network %d is no longer saved", id)
 	}
 	res.SSID = ssid
-	if out, err := winWifiRun("wlan", "connect", "name="+ssid); err != nil {
+	iface := winWifiInterface()
+	if iface == "" {
+		return res, errors.New(winWifiUnavailableReason())
+	}
+	if out, err := winWifiRunOnInterface(iface, "wlan", "connect", "name="+ssid); err != nil {
 		return res, winWifiError(out, err)
 	}
 	st, err := wifiWaitForAssociation(ssid, wifiAssociateTimeout)
@@ -741,7 +928,11 @@ func winWifiSelectSaved(id int) (wifiJoinResult, error) {
 
 // winWifiDisconnect drops the association but keeps the profile.
 func winWifiDisconnect() error {
-	out, err := winWifiRun("wlan", "disconnect")
+	iface := winWifiInterface()
+	if iface == "" {
+		return errors.New(winWifiUnavailableReason())
+	}
+	out, err := winWifiRunOnInterface(iface, "wlan", "disconnect")
 	if err != nil {
 		return winWifiError(out, err)
 	}
@@ -761,13 +952,17 @@ func winWifiReconnect() (wifiJoinResult, error) {
 		return wifiJoinResult{}, errors.New("not connected to a network")
 	}
 	ssid := status.SSID
-	if out, err := winWifiRun("wlan", "disconnect"); err != nil {
+	iface := winWifiInterface()
+	if iface == "" {
+		return wifiJoinResult{}, errors.New(winWifiUnavailableReason())
+	}
+	if out, err := winWifiRunOnInterface(iface, "wlan", "disconnect"); err != nil {
 		return wifiJoinResult{}, winWifiError(out, err)
 	}
 	// Give the driver a moment to leave the old association; connecting while
 	// the disconnect is still settling re-associates to the link just dropped.
 	time.Sleep(300 * time.Millisecond)
-	if out, err := winWifiRun("wlan", "connect", "name="+ssid); err != nil {
+	if out, err := winWifiRunOnInterface(iface, "wlan", "connect", "name="+ssid); err != nil {
 		return wifiJoinResult{}, winWifiError(out, err)
 	}
 	st, err := wifiWaitForAssociation(ssid, wifiAssociateTimeout)
@@ -803,7 +998,10 @@ func winWifiForget(ssid string) error {
 		return winWifiError(out, err)
 	}
 	if st, err := winWifiStatus(); err == nil && st.SSID == ssid {
-		_, _ = winWifiRun("wlan", "disconnect")
+		iface := winWifiInterface()
+		if iface != "" {
+			_, _ = winWifiRunOnInterface(iface, "wlan", "disconnect")
+		}
 	}
 	resetWinWifiIfaceCache()
 	return nil

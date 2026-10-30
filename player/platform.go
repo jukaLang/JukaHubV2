@@ -33,7 +33,7 @@ type Platform interface {
 	UserConfigPath() string
 
 	// ToolsDir returns the directory where external tools (yt-dlp, ffmpeg,
-	// ffplay, ffprobe) are expected to live.
+	// ffprobe) are expected to live.
 	ToolsDir() string
 
 	// RequiredDir returns the directory for bundled/extracted dependencies.

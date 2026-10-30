@@ -2,8 +2,8 @@ package main
 
 // toolbox.go — the curated tool catalog behind Tools → Toolbox.
 //
-// The launcher already ships four helper tools it needs itself (yt-dlp, ffmpeg,
-// ffplay, ffprobe). The toolbox is the other half: popular command-line tools
+// The launcher already ships three helper tools it needs itself (yt-dlp, ffmpeg,
+// ffprobe). The toolbox is the other half: popular command-line tools
 // the user may want on the card, installed on demand and run from the app.
 //
 // Trust boundary, deliberately small:

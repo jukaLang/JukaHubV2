@@ -176,6 +176,17 @@ Battery saver (see the Smart Widgets page) turns `lowPower` and `reducedMotion`
 on and switches to the OLED theme below 20%, restoring your own settings when
 charged again.
 
+The cadence only covers the frame loop. Anything on a timer of its own — the
+weather forecast, the connectivity probe, the audio-output probe, the LED
+animation — waits through `waitForPoll` in
+[`player/backgroundwork.go`](../player/backgroundwork.go) first, and skips its
+work while `backgroundPaused` is true: a launched game, emulator or port owns
+the framebuffer (`gameScreenSuspended`), or the desktop window is minimised.
+The tick is kept, so coming back costs one interval at most; the transition back
+to the foreground broadcasts a wake that refreshes the slow readings at once
+(the forecast is on a ten-minute timer). A new poller should use the same
+gate rather than reading on its own schedule.
+
 ### Scenes
 
 A scene either uses the generic element renderer or owns its body. Owning it is

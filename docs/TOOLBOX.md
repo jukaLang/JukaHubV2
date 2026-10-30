@@ -23,8 +23,10 @@ The last three send traffic to other machines, so they are the only entries in
 the catalog behind the one-time prompt described in
 [Network scanning](#network-scanning).
 
-The four helper tools JukaHub needs for media (`yt-dlp`, `ffmpeg`, `ffplay`,
-`ffprobe`) are separate: those install themselves on first need. See
+The three helper tools JukaHub needs for media (`yt-dlp`, `ffmpeg`,
+`ffprobe`) are separate: those install themselves on first need. `ffplay` is
+no longer fetched — the embedded player decodes with `ffmpeg`, and BtbN's
+`ffplay` needs X11, which the handheld does not have. See
 [DEPENDENCIES.md](DEPENDENCIES.md).
 
 ## Installing and running

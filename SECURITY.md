@@ -322,7 +322,7 @@ PATCH_SIGN_KEY=<hex private key> go run ./tools/build-patch-repo --src ./patch-p
 ## Toolbox and helper-tool downloads
 
 JukaHub fetches two kinds of files itself: the helper tools it needs to play
-media (`yt-dlp`, `ffmpeg`, `ffplay`, `ffprobe`) and the tools a user installs
+media (`yt-dlp`, `ffmpeg`, `ffprobe`) and the tools a user installs
 from **Tools → Toolbox** (`jq`, `rclone`, `ripgrep`, `fd`, `pandoc`, `age`, and
 the scanners `naabu`, `httpx`, `dnsx`).
 

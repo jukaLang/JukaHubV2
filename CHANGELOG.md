@@ -13,6 +13,47 @@ For anything older, the git log and the
 
 ### Added
 
+- **Playtime now answers "have I been consistent?" instead of "what did I use?"**
+  The second card on the Playtime screen was seven bars for the past week and
+  nothing else, even though the tracker already keeps 90 days of daily totals.
+  It now draws a Monday-aligned 13-week heatmap — one cell per day, four accent
+  levels by how long that day ran, unfilled slots for the rest of the current
+  week — with the current streak, the longest streak in the window, the best day,
+  the daily average over active days and the active-day count beside it. The
+  current streak survives an empty today (the day is still in progress) and a
+  gap ends it; the longest streak comes from the same single pass over the
+  window, and days after today are never counted. This is the "Playtime Wrapped"
+  entry from the modernization plan, minus a separate PNG export: the phone
+  companion already serves this screen through its screenshot endpoint, so the
+  card is what the phone sees. The card is also the first Playtime surface
+  checked on real pixels — a fully played window must light it, an empty one
+  must not, and neither may spill into the gap under the card — and the
+  "start exploring" empty state in the neighbouring card is now ellipsized
+  instead of running under it. ([player/wrapped.go](player/wrapped.go),
+  [player/playtime.go](player/playtime.go); tests in
+  [player/wrapped_test.go](player/wrapped_test.go),
+  [player/wrapped_render_test.go](player/wrapped_render_test.go)).
+
+- **The Wi-Fi picker now works on Windows.** The backend was written against the
+  handheld's `wpa_supplicant` — `wpa_cli`, `/sys/class/net`,
+  `/proc/net/wireless` — so on a desktop every probe answered "No wireless
+  network interface on this device" and nothing in the panel could connect.
+  Windows drives the same operations through `netsh`, and
+  [player/wifi_windows.go](player/wifi_windows.go) is that backend behind the
+  unchanged panel: the adapter, the scan, the saved profiles, the signal meter
+  and join, disconnect, reconnect and forget. A join stages a WLAN profile XML
+  in a private temp file, adds it with `netsh wlan add profile`, connects by
+  name and deletes the file, so the key is never an argument and never logged;
+  the meter maps Windows' quality percentage onto dBm and uses the exact `Rssi`
+  Windows 11 prints when it is there. `netsh` is localized, so association and
+  signal strength are read from structure — a BSSID line, a percentage — with an
+  English label used only for the adapter's name. A radio Windows has not
+  brought up yet (a driver still loading at boot, or a dongle plugged in after
+  the app started) is no longer remembered as "no interface": that answer is
+  re-checked within seconds, and opening the picker asks Windows again.
+  ([player/wifi.go](player/wifi.go), [docs/WIFI.md](docs/WIFI.md); tests in
+  [player/wifi_windows_test.go](player/wifi_windows_test.go)).
+
 - **A persistent activity strip now shows background work on every scene.** While
   a tool or core install, the app's own update, an offline audio/video download
   or a package install runs, a small stack of chips is pinned to the right edge
@@ -289,6 +330,23 @@ For anything older, the git log and the
   an imported design's own version when it has one.
   ([script.js](script.js); the 17 web-builder tests still pass).
 
+- **The builder's canvas now draws the shipped design the way the device does.**
+  Tile buttons were plain coloured boxes with centred text, a `recent` element
+  was a dark rectangle carrying its own (near-black) label colour, and the
+  device surface was the designer's grey instead of the design's `Background`,
+  so `player/jukaconfig.json` looked nothing like the handheld it was made for.
+  The canvas now paints `Background` under the background image, draws a
+  `style: "tile"` button as the player's launcher tile — 16 px radius, the glyph
+  named by the config's `icon` at 44–64 px centred at 36% of the height, the
+  label 14 px off the bottom edge — and draws a `recent` element as the Continue
+  card (card surface, heading at 18 px, the icon-and-two-lines empty state),
+  ignoring the colour fields the player ignores too. An `input` is now the
+  device's 8 px rounded field with its text against the left edge and its
+  placeholder in the muted colour, not a centred bold "Input", and generic
+  elements follow the player's `RadiusMD` of 12 px instead of 6.
+  ([script.js](script.js), [style.css](style.css); the 28 web-builder unit tests
+  and 17 Playwright tests still pass).
+
 - **Every tool screen draws the app's top bar.** Notes and the PDF reader
   painted a 44px strip with a title of their own, the alarm clock drew a
   bespoke "< Back" pill at 24,24, the Pomodoro timer drew no chrome at all and
@@ -313,6 +371,64 @@ For anything older, the git log and the
   tests in [player/header_test.go](player/header_test.go) and
   [player/calendar_popover_test.go](player/calendar_popover_test.go)).
 ### Fixed
+
+- **"Could not install ffplay" no longer fails on every attempt on the TrimUI
+  Brick.** The handheld FFmpeg bundle is a ~130 MB `.tar.xz`, and JukaHub
+  unpacked it with the system `tar`/`busybox`/`xz`. The Brick firmware cannot do
+  that (no xz in its busybox; a tar that can still writes the whole ~400 MB tree
+  to the card and, as root, trips over chown on exFAT), so the unpack failed
+  every time and the card only showed the release URL. Each retry, and again
+  each of ffplay, ffmpeg and ffprobe, downloaded the full 130 MB again. The
+  bundle is now decoded in-process with the already-vendored xz reader, streams
+  out only the binaries it needs, and reports unpack progress. A finished
+  download is kept until it has been unpacked, so a retry after a full card or a
+  cancel does not download it again; a damaged one is deleted so the retry
+  fetches a fresh copy. Leftover partial downloads and unpack stages from a
+  killed install are cleared, a card too full for the install is caught before
+  the download starts, and the card names the cause instead of a URL.
+  ([player/tools.go](player/tools.go), [player/patch_engine.go](player/patch_engine.go);
+  tests in [player/tools_unpack_test.go](player/tools_unpack_test.go)).
+
+- **`ffplay` is gone from every download.** Nothing has run it since playback
+  moved to the embedded player (which decodes with `ffmpeg`), and BtbN's build
+  needs X11, which the handhelds do not have, yet it was still fetched first on
+  every launch and copied into the Smart Pro SD-card package. It is no longer an
+  installable helper tool (asking for it by name is refused), the SD-card
+  package ships only `ffmpeg` and `ffprobe`, and the FFmpeg bundle's copy is
+  never unpacked. The **Settings → General → Audio Backend** row now says
+  `ffmpeg (built in)` instead of `ffplay`. Copies already on a card are left
+  alone and simply unused. ([player/patch_engine.go](player/patch_engine.go),
+  [player/netmon.go](player/netmon.go),
+  [player/package-sdcard.sh](player/package-sdcard.sh); tests in
+  [player/tools_unpack_test.go](player/tools_unpack_test.go) and
+  [player/mpv_removal_test.go](player/mpv_removal_test.go)).
+
+- **The Brick's front F1 / F2 keys do something.** The firmware reports them as
+  L3 / R3, which almost nothing listened for, and the Controller card told Brick
+  users to press "F1" for keyboard shortcuts. On a Brick (or Hammer) F1 now opens
+  the Controller card for the current screen and F2 opens Quick Settings; the
+  same key closes either. The audio player and the web browser keep their own
+  L3 / R3 bindings. The card lists the Brick keys, and the Home footer names
+  **Start** (the menu with every other screen) instead of a **B Back** that did
+  nothing on Home. ([player/brickkeys.go](player/brickkeys.go),
+  [player/controlslegend.go](player/controlslegend.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md); tests in
+  [player/brickkeys_test.go](player/brickkeys_test.go)).
+
+- **The header's "Update" pill can be selected from where it is drawn.** On Home
+  the pill sits in the header's system corner, immediately left of the
+  notification bell, but the home focus graph still had it where the chip used to
+  live — left of the Wi-Fi meter, on the other side of the bar. The result was an
+  offer that was visible and pressable with a mouse, yet impossible to reach with
+  the D-pad: pressing **Left**/**Right** beside it walked past it (bell →
+  now-playing chip → clock), and the only path the graph knew was pressing
+  **Left** on the meter, which moved focus rightward, away from the pill. The
+  graph now follows the drawn order — clock → now-playing → update → bell — so
+  **Right** from the clock, and **Left** from the bell, land on it, while a
+  hidden now-playing chip or an unadvertised release still falls through to the
+  next control instead of trapping the pad.
+  ([player/homefocus.go](player/homefocus.go), [docs/CONTROLS.md](docs/CONTROLS.md);
+  tests in [player/updatechip_test.go](player/updatechip_test.go)).
 
 - **The Podcasts list no longer extends past the screen bottom on the Brick.**
 The curated-feed scene's `dynamiclist` element carried the root config's portrait
@@ -582,6 +698,23 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   ([player/snappreview.go](player/snappreview.go), `player/snappreview_test.go`).
 
 ### Changed
+
+- **Background polling stops while JukaHub is not on screen.** The weather ticker,
+  the connectivity probe, the audio-output probe and the LED animation ran for
+  the whole life of the process, so a handheld sitting in a game — or a desktop
+  window minimised in the background — kept forking `bluetoothctl`, dialling a
+  probe host, fetching a geolocated forecast and writing LED sysfs thirty times
+  a second for a panel it could not see. They now wait through one gate,
+  `backgroundPaused` ([player/backgroundwork.go](player/backgroundwork.go)),
+  which is true while a launched game/emulator/port owns the framebuffer or the
+  window is minimised; the disk pie's existing per-scene skip is the same rule.
+  The tick is kept, so returning costs one interval at most, and the transition
+  back to the foreground — the last screen-taking child exiting, or a
+  store/restore of the window — broadcasts a wake that refreshes the slow
+  readings at once: a forecast on a ten-minute timer no longer stays stale for
+  the rest of the session after a game
+  ([player/gamesuspend.go](player/gamesuspend.go), [player/main.go](player/main.go);
+  tests in [player/backgroundwork_test.go](player/backgroundwork_test.go)).
 
 - **The handheld keeps its emulator cores current by itself, and stops piling
   up the builds it replaces.** Updating every installed core meant opening
@@ -1445,6 +1578,21 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   ([player/toolbox.go](player/toolbox.go)).
 
 ### Fixed
+
+- **The Wi-Fi picker reads the right adapter when Windows reports several.**
+  `netsh wlan show interfaces` lists the physical NIC alongside the software
+  adapters that share the radio — the Wi-Fi Direct one arrives as "Local Area
+  Connection* 10" — and their order is not stable across a resume or a driver
+  reload, so taking the first block could report "no network" on a machine that
+  was already connected, and point the status meter at an adapter that never
+  associates. Selection is now explicit (`pickNetshIface`): the linked adapter
+  wins, a real NIC beats a virtual one, the stronger signal breaks a tie, and the
+  first block is only the last resort. The status and signal reads re-read the
+  report for a fresh association and match it back by adapter name, so the panel
+  cannot start reading a different adapter mid-session when the ranking between
+  two connected adapters flips. ([player/wifi_windows.go](player/wifi_windows.go),
+  [docs/WIFI.md](docs/WIFI.md); tests in
+  [player/wifi_windows_test.go](player/wifi_windows_test.go)).
 
 - **The Package Manager shows which package is selected.** The cursor was a
   50-alpha accent wash plus a 3px spine, and the list's pane border was drawn in

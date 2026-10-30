@@ -672,12 +672,14 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 	// playing it may still be drawn (naming the headphones), but pressing it
 	// would open nothing, so the arrows skip it.
 	h.Focus.SetEnabled(HomeFocusNowPlaying, statusMediaRect.W > 0 && nowPlayingChipIsButton())
-	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusNowPlaying, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
+	for _, id := range []HomeFocusID{HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusNowPlaying, HomeFocusUpdate, HomeFocusBell, HomeFocusPS5, HomeFocusPS4} {
 		if h.Focus.Current() != id {
 			continue
 		}
 		r := h.Items[id].Rect
 		switch id {
+		case HomeFocusUpdate:
+			r = homeUpdateRect
 		case HomeFocusPS5:
 			r = ps5TileRect
 		case HomeFocusPS4:
@@ -1126,6 +1128,11 @@ func (h *HomeLayout) drawFooter(renderer *sdl.Renderer, fonts HomeFonts, showBac
 	}
 	if showBack {
 		hints = append(hints, footerHint{button: "B", label: "Back"})
+	} else {
+		// Without a Back hint the slot names Start: on a handheld it is the
+		// one way to every screen that has no card here, and nothing on Home
+		// said so.
+		hints = append(hints, footerHint{button: "Start", label: "Menu"})
 	}
 	hints = append(hints, footerHint{button: "L2/R2", label: "Sections"})
 

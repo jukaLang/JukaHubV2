@@ -622,9 +622,17 @@ func main() {
 				// no pointer, so this never fires there.
 				pollDropEvent(config, e)
 			case *sdl.WindowEvent:
-				if e.Event == sdl.WINDOWEVENT_SIZE_CHANGED {
+				switch e.Event {
+				case sdl.WINDOWEVENT_SIZE_CHANGED:
 					w, h := mainWindow.GetSize()
 					updateWindowScale(w, h)
+				case sdl.WINDOWEVENT_MINIMIZED, sdl.WINDOWEVENT_HIDDEN:
+					// Nothing this process draws can be seen, so the background
+					// pollers park (backgroundwork.go). The loop keeps running: SDL
+					// still delivers the restore below.
+					setWindowMinimised(true)
+				case sdl.WINDOWEVENT_RESTORED, sdl.WINDOWEVENT_SHOWN:
+					setWindowMinimised(false)
 				}
 			case *sdl.KeyboardEvent:
 				if e.Type == sdl.KEYUP {

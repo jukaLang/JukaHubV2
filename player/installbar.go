@@ -1,7 +1,7 @@
 package main
 
 // installbar.go — the "Installing tools" overlay shown while helper tools
-// (ffplay / ffmpeg / yt-dlp) are downloaded and installed. The download
+// (ffmpeg / ffprobe / yt-dlp) are downloaded and installed. The download
 // goroutine publishes progress through the installBar* helpers; the render
 // loop draws the card once per frame via renderInstallBar.
 //
@@ -152,6 +152,19 @@ func installBarProgress(done, total int64) {
 	}
 	installBar.done = done
 	installBar.total = total
+}
+
+// installBarResetProgress empties the bar for a second pass over the same
+// bytes (unpacking the archive that was just downloaded), without the speed
+// average reading the restart as a negative transfer rate.
+func installBarResetProgress() {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	installBar.done = 0
+	installBar.total = 0
+	installBar.speed = 0
+	installBar.lastLen = 0
+	installBar.lastAt = time.Now()
 }
 
 // installBarTitle is the custom title of the running operation, or "" when the
@@ -498,7 +511,7 @@ func renderInstallBar(renderer *sdl.Renderer, config *Config) {
 			tx+(tile-int32(gw))/2, ty+(tile-int32(gh))/2)
 	}
 
-	// Title row: "Installing ffplay" + phase/target on the right. A labelled
+	// Title row: "Installing ffmpeg" + phase/target on the right. A labelled
 	// card (a core update run) names the operation instead; its outcome is the
 	// glyph and the phase tint, which is the same reading an install gets.
 	textX := tx + tile + gap

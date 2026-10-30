@@ -219,9 +219,26 @@ the scan, the saved profiles, the join and the signal meter all come from
   with `netsh wlan add profile`, connects by name, and deletes the file as soon
   as netsh has read it. The passphrase lives in that file for one call and is
   never an argument.
-* **The meter** maps Windows' signal quality percentage onto dBm (100% is
-  -50 dBm, 0% counts as unmeasured), which is the scale the handheld's meter
-  already uses.
+* **The meter** uses the level Windows 11 prints in dBm when the report has
+  one, and otherwise maps the quality percentage onto dBm (100% is -50 dBm, 0%
+  counts as unmeasured), which is the scale the handheld's meter already uses.
+  The CONNECTED row in the picker reads the same number as the meter.
+* **One adapter is chosen out of the several Windows reports.** `netsh wlan show
+  interfaces` lists the physical NIC together with the software adapters over the
+  same radio (the Wi-Fi Direct one is called "Local Area Connection* 10"), and
+  their order is not a promise — after a resume the disconnected virtual adapter
+  can come first. Reading block zero therefore reported "no network" while the
+  machine was already on one. The picker now prefers the linked adapter, then a
+  real NIC over a virtual one, then the stronger reported signal, and falls back
+  to the first block only when nothing distinguishes them. The status and signal
+  reads re-read the report for a fresh association and match it back by adapter
+  name, so a changing signal ranking cannot make the panel read a different
+  adapter than the one it is showing.
+* **An absent adapter is re-checked.** A present adapter is remembered for a
+  minute; "there is no wireless interface" is only trusted for five seconds,
+  because it is usually a driver still loading after boot or a dongle that was
+  just plugged in. Opening the picker clears the answer outright and asks
+  Windows again.
 * **Scanning** reads the list Windows keeps current. There is no scan request to
   make, so the picker does not wait for one and a refresh is immediate.
 * **The radio cannot be toggled** from the app: airplane mode and the hardware

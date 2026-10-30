@@ -14,10 +14,11 @@ on every screen: four bars that are hollow when there is no link and fill with
 signal strength, plus `! Offline` while the device has no network at all. A
 click or tap opens the Wi-Fi picker (scan, connect, enter a password). From a
 controller it is part of the same focus row as the clock and the forecast: on
-Home **Up** from the Settings card reaches the header, then **Left** walks the
-weather chip, the meter and the update offer; in any other scene **Up** leaves
-the content for the top bar and **Left**/**Right** walk it. **A** on the meter
-opens the picker, exactly like a tap. The same picker is also
+Home **Up** from the Settings card reaches the header, then **Left**/**Right**
+walk the forecast, the meter, the clock, the now-playing chip, the update offer
+and the bell; in any other scene **Up** leaves the content for the top bar and
+**Left**/**Right** walk it. **A** on the meter opens the picker, exactly like a
+tap. The same picker is also
 **Start → Wi-Fi Networks** and the Wi-Fi row in Quick Settings.
 
 The **battery gauge** sits right of the clock: a cell filled to the charge left,
@@ -75,6 +76,27 @@ it, and the D-pad does not move the screen underneath while it is open.
 
 All bindings below are also listed in-app: press **F1** anywhere for the
 shortcuts overlay, **B** or **F1** to close it.
+
+### TrimUI Brick
+
+The Brick (and the Hammer, the same board) has two small keys under the screen,
+**F1** and **F2**. The firmware reports them as the stick clicks (L3 / R3), so
+they used to do nothing in JukaHub. Now:
+
+| Button | Action |
+|--------|--------|
+| F1 | The **Controller** card for the screen you are on: what every button does here. F1 or B closes it |
+| F2 | **Quick Settings** (Wi-Fi, volume, brightness). F2 or B closes it |
+| Menu | Back, like B and Select |
+| Start | The Start menu: every scene, game and tool |
+| Select + Start (hold both) | Quit JukaHub |
+| L2 / R2 (the small top buttons) | Previous / next section on Home, bigger jumps in lists |
+
+The audio player keeps L3 / R3 for lyrics and the sleep timer, the web browser
+keeps L3 for switching between scrolling and walking links, and the game
+library keeps R3 for a random game, so on those screens F1 / F2 do what those
+screens say. On Home the footer names **Start** instead of a **B Back** that
+had nothing to go back to.
 
 ---
 
@@ -165,9 +187,10 @@ their way, and no panel is covered by a menu drawn beneath it.
 |--------|--------|
 | A | Open the focused tile |
 | B | Close the calendar popover, or the video that is still playing |
-| D-pad | Move between tiles, the header chips (Wi-Fi meter, weather, clock, now-playing, bell, update offer, PS4/PS5) and the footer row |
+| D-pad | Move between tiles, the header chips (Wi-Fi meter, weather, clock, now-playing, update offer, bell, PS4/PS5) and the footer row |
 | Left (from the weather chip) | Move onto the Wi-Fi meter; **A** opens the Wi-Fi picker |
-| Right (from the clock) | Move onto the now-playing chip while something plays, else the notification bell; **A** opens that player or the notification centre |
+| Right (from the clock) | Move onto the now-playing chip while something plays, then the update offer while a release is advertised, then the notification bell; **A** opens that player, installs the release, or opens the notification centre |
+| Left (from the bell) | Move onto the update offer while a release is advertised; **A** installs it |
 | L2 / R2 | Previous / next section of the grid |
 
 ## Media

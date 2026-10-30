@@ -30,6 +30,9 @@ type controlsLegendState struct {
 	// scene is the snapshot taken when the legend was opened, so the rows
 	// answer "what do the buttons do here?" for the screen the user saw.
 	scene SceneConfig
+	// brick is set when the card opened on a Brick, whose front F1 / F2 keys
+	// get rows of their own (brickkeys.go). Read once at open, not per frame.
+	brick bool
 }
 
 var controlsLegend controlsLegendState
@@ -42,11 +45,20 @@ var controlsLegend controlsLegendState
 // The keyboard overlay keeps its own much longer list; this row only points
 // at it, so there is still exactly one full list in the app.
 func systemLegendRows() []FooterHint {
-	return []FooterHint{
+	rows := []FooterHint{
 		{Button: "Start", Label: "Start menu"},
 		{Button: "Select + Start", Label: "Quit JukaHub"},
-		{Button: "F1", Label: "Keyboard shortcuts"},
 	}
+	if controlsLegend.brick {
+		// On a Brick "F1" is a key on the device, not the keyboard's: it opens
+		// this card, F2 opens Quick Settings, and Menu goes back like B.
+		return append(rows,
+			FooterHint{Button: "F1", Label: "This help"},
+			FooterHint{Button: "F2", Label: "Quick Settings"},
+			FooterHint{Button: "Menu", Label: "Back"},
+		)
+	}
+	return append(rows, FooterHint{Button: "F1", Label: "Keyboard shortcuts"})
 }
 
 // controlsLegendSections builds the card's content. It never hardcodes scene
@@ -80,6 +92,7 @@ func openControlsLegend() {
 		return
 	}
 	controlsLegend.scene = appConfig.Scenes[currentSceneIndex]
+	controlsLegend.brick = brickHasFunctionKeys()
 	controlsLegend.open = true
 }
 
@@ -119,6 +132,11 @@ func ctrlControlsLegend(e *sdl.ControllerButtonEvent) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_START:
 		closeControlsLegend()
+	case sdl.CONTROLLER_BUTTON_LEFTSTICK:
+		// F1 on a Brick opened the card, and the same key puts it away.
+		if controlsLegend.brick {
+			closeControlsLegend()
+		}
 	}
 	return true
 }
@@ -252,6 +270,9 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 	}
 
 	hint := hintLine(FooterHint{"B", "Close"}, FooterHint{"F1", "Keyboard shortcuts"})
+	if controlsLegend.brick {
+		hint = hintLine(FooterHint{"B / F1", "Close"})
+	}
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint,
 		sdl.Color{R: 90, G: 100, B: 125, A: 190},

@@ -16,9 +16,8 @@ Apps/JukaHub/
 ├── VERSION.txt
 └── required/            ← helper tools, all ARM64
     ├── yt-dlp           ← fetches YouTube info/streams (no Python)
-    ├── ffmpeg           ← decoder for video playback
-    ├── ffprobe
-    └── ffplay
+    ├── ffmpeg           ← decoder for video and audio playback
+    └── ffprobe
 ```
 
 You do **not** need Python, Docker, Go or any toolchain on the device. Every
@@ -156,8 +155,9 @@ Send those files along with a bug report; no SSH needed.
   `libSDL2_ttf-2.0.so.0`), so it does not need to ship its own `.so` files.
 * **No Python in the stock OS**, so `yt-dlp` is used as the official static
   binary `yt-dlp_linux_aarch64`.
-* **ffmpeg** is used as the static ARM64 build from BtbN
-  (ffmpeg/ffprobe/ffplay).
+* **ffmpeg** is used as the static ARM64 build from BtbN (ffmpeg and
+  ffprobe). The bundle's `ffplay` is not shipped: nothing runs it, and it is
+  linked against X11, which the stock OS does not have.
 * **Device config:** `player/trimui/make-config.ps1` generates
   `player/trimui/jukaconfig.device.json` from the full config. It keeps **every
   scene** and only applies the handheld defaults (fullscreen, 1280×720, the

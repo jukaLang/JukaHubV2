@@ -147,24 +147,61 @@ func TestDownloadsPanelRendersRowsAndTabs(t *testing.T) {
 
 func TestDownloadsPanelScrollsToTheCursor(t *testing.T) {
 	var items []*downloadItem
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 1000; i++ {
 		items = append(items, &downloadItem{
 			ID: int64(i + 1), URL: "https://example.com/x", Status: downloadDone,
 			Title: "Track", Done: 1 << 20,
 		})
 	}
-	withDownloadsPanelState(t, items, 12) // the last row
+	withDownloadsPanelState(t, items, len(items)) // the last row
 	f, panel, hits, _ := renderDownloadsProbe(t, downloadUITestConfig())
 	if dlPanel.scroll <= 0 {
 		t.Fatal("a long list did not scroll to keep the cursor visible")
 	}
+	if len(hits) >= len(dlPanel.rows) {
+		t.Fatalf("rendered hit rows = %d for %d total rows; only viewport rows should be visited", len(hits), len(dlPanel.rows))
+	}
+	if len(hits) == 0 || len(dlPanel.hits) == 0 || dlPanel.hits[0].index == 0 {
+		first := -1
+		if len(dlPanel.hits) > 0 {
+			first = dlPanel.hits[0].index
+		}
+		t.Fatalf("visible window starts at row %d; expected it to follow the cursor into the long list", first)
+	}
 	last := hits[len(hits)-1]
-	if last.Y < panel.Y || last.Y+last.H > panel.Y+panel.H {
-		t.Fatalf("the focused row %+v fell outside the panel %+v", last, panel)
+	lastIndex := dlPanel.hits[len(dlPanel.hits)-1].index
+	if lastIndex != len(items) || last.Y < panel.Y || last.Y+last.H > panel.Y+panel.H {
+		t.Fatalf("last visible row %d at %+v, want the focused row %d inside panel %+v", lastIndex, last, len(items), panel)
 	}
 	// The rows that scrolled off are clipped rather than painted over the card.
 	if got := f.countColor(ColorPanelRaised, panel.X+40, panel.Y+60, panel.X+panel.W-40, panel.Y+250); got < 5000 {
 		t.Errorf("list painted over the storage card (%d card pixels left)", got)
+	}
+}
+
+func TestDownloadVisibleRowRangeSkipsOffscreenRows(t *testing.T) {
+	rows := make([]downloadRow, 10000)
+	for i := range rows {
+		if i == 0 || i == 2500 || i == 5000 || i == 7500 {
+			rows[i].section = "Group"
+		}
+	}
+	starts := downloadSectionStarts(rows)
+	const rowH, gap, sectionH = int32(68), int32(8), int32(24)
+	const cursor, viewportH = 7000, int32(480)
+	scroll := downloadRowOffset(cursor, starts, rowH, gap, sectionH)
+	first, end := downloadVisibleRowRange(rows, scroll, viewportH, rowH, gap, sectionH, starts)
+	if first <= 0 || first >= cursor || end <= first || end-first > 8 {
+		t.Fatalf("visible range = [%d, %d) for cursor %d; expected a small window near the cursor", first, end, cursor)
+	}
+	if got := downloadRowOffset(first, starts, rowH, gap, sectionH); got > scroll || got+rowH <= scroll {
+		t.Errorf("first row %d at [%d,%d) does not overlap scroll position %d", first, got, got+rowH, scroll)
+	}
+	if got := downloadRowOffset(end, starts, rowH, gap, sectionH); got < scroll+viewportH {
+		t.Errorf("row after visible range starts at %d before viewport bottom %d", got, scroll+viewportH)
+	}
+	if got := downloadRowOffset(first-1, starts, rowH, gap, sectionH); got+rowH > scroll {
+		t.Errorf("previous row ends at %d after viewport top %d", got+rowH, scroll)
 	}
 }
 

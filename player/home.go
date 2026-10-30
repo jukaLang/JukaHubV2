@@ -550,13 +550,15 @@ func homeGreeting(name string) string {
 }
 
 func homeViewData(config *Config) HomeViewData {
+	// Home is the root scene, so B has nothing to go back to there: the footer
+	// names Start instead, the menu that reaches every other screen.
 	data := HomeViewData{
 		Greeting:     homeGreeting(""),
 		Subtitle:     "What do you want to do?",
 		Version:      versionDisplayString(config),
 		StatusParts:  headerStatusParts(config),
 		Pressed:      homePressedID,
-		ShowBackHint: true,
+		ShowBackHint: false,
 	}
 	// Use the status bar's own bell metrics here, not a second home-only size,
 	// so the control is pixel-identical on Home and every other scene.

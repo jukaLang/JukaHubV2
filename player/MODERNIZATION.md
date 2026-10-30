@@ -37,12 +37,12 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 |-------|------|---------|-------------|
 | 1. UI/UX fixes | 7 | 0 | 0 |
 | 2. Architecture | 31 | 2 | 0 |
-| 3. Async & performance | 17 | 2 | 2 |
+| 3. Async & performance | 18 | 2 | 1 |
 | 4. Reliability | 25 | 0 | 0 |
-| 5. Features | 13 | 2 | 3 |
+| 5. Features | 14 | 2 | 2 |
 | 6. Testing | 13 | 0 | 0 |
 | 7. Web builder | 7 | 2 | 8 |
-| 8. Handheld polish | 13 | 2 | 5 |
+| 8. Handheld polish | 14 | 2 | 4 |
 | 8b. GPU offload | 6 | 0 | 3 |
 | 9. Browser & handheld input | 12 | 0 | 1 |
 
@@ -120,9 +120,9 @@ already exists, not a task list, so it is not counted here.
 #### 4. Performance Issues (Phase 3)
 - ✅ Text textures are cached (`textcache.go`)
 - ✅ Texture/thumbnail caching with entry and byte limits
-- 🟡 No list virtualization: full lists are still drawn, clipped to the viewport
-- 🟡 Idle frame cadence exists; background polling is not scene-scoped
-- 🟡 Low-power mode and adaptive frame rate; no named profiles
+- 🟡 Primary long lists bound row drawing to the visible window; audit the remaining screens for lists that can grow without bound (Phase 8)
+- 🟡 Idle frame cadence and foreground-aware polling exist; polling is not yet consistently scoped to the screen or resource that needs it
+- ✅ Named power modes (Battery Saver / Balanced / Performance / Default)
 - ✅ Adaptive frame budget (`adaptive.go`)
 
 #### 5. Reliability Issues (Phase 4)
@@ -235,7 +235,7 @@ already exists, not a task list, so it is not counted here.
       the executable (`patch_repo.go`, `apps.go`, `packages.go`).
 
 ### Phase 3: Async Work & Performance
-**Status**: 🟡 In progress (17 shipped, 2 partial, 2 not started)
+**Status**: 🟡 In progress (18 shipped, 2 partial, 1 not started)
 
 #### 3.1 Concurrency Model
 
@@ -321,8 +321,18 @@ already exists, not a task list, so it is not counted here.
       cycling, a toast and a persisted save; while a mode is live its two
       managed pills show the mode's verdict and their presses explain where
       the control lives (`powermode_test.go`).
-- [ ] ⬜ Stop polling when a scene is hidden (weather ticker and monitors run for
-      the whole process lifetime).
+- [x] ✅ Stop polling while JukaHub is not on screen — `backgroundwork.go` is one
+      gate (`backgroundPaused`: a game/emulator/port owns the framebuffer, or the
+      desktop window is minimised) that the weather ticker, the connectivity
+      probe, the audio-output probe and the LED animation all wait through
+      (`waitForPoll`), so a session behind a game no longer forks bluetoothctl,
+      dials a probe host, fetches a forecast or writes sysfs thirty times a
+      second for a panel it cannot see. The ticks stay, so returning costs one
+      interval at most, and the transition back to the foreground (the last
+      screen-taking child exiting, or a store/restore of the window) broadcasts a
+      wake that refreshes the slow readings — the forecast is on a ten-minute
+      timer — immediately. The disk pie's existing "a hidden screen does not
+      poll" check is the same rule applied to its scene (`backgroundwork_test.go`).
 
 ### Phase 4: Reliability & Configuration
 **Status**: ✅ Done (25 shipped, 0 partial, 0 not started)
@@ -416,7 +426,7 @@ already exists, not a task list, so it is not counted here.
       uncacheable-304 contract, eviction, oversize skip, concurrent use).
 
 ### Phase 5: Features
-**Status**: 🟡 Partially complete (13 shipped, 2 partial, 3 not started)
+**Status**: 🟡 Partially complete (14 shipped, 2 partial, 2 not started)
 
 #### 5.1 Media
 
@@ -511,15 +521,26 @@ code and the test that pins it.
 | Toolbox: nine curated CLI tools (rclone, jq, ripgrep, fd, pandoc, age plus the network scanners naabu, httpx, dnsx) installed on demand from allowlisted releases, run with typed arguments and visible output; scanner runs sit behind a one-time authorized-use acknowledgement stored in the config | `toolbox.go`, `powertools.go`, `vkeyboard.go`, [TOOLBOX](../docs/TOOLBOX.md#network-scanning), [SECURITY.md](../SECURITY.md#toolbox-and-helper-tool-downloads) | `toolbox_test.go`, `toolbox_scan_gate_test.go` |
 | Security & trust page: plaintext secrets, storage key, package count, LAN listeners, browser session and telemetry state, read-only | `toolbox.go` (`securityPostureRows`), `toolsui.go` | `toolbox_test.go` |
 
-#### 5.6 Adopted, not started
+#### 5.6 Adopted features
 
-Ideas that have been accepted into this plan and do not have code yet. Being
-here is a decision, not a schedule.
+Ideas that were accepted into this plan before they had code. A checked item has
+shipped; an unchecked one is a decision, not a schedule.
 
-- [ ] ⬜ **Playtime Wrapped / insights** — adopted as the next feature build: a
-      90-day heatmap from `playtimeData.Days`, top systems from `Scenes`, the
-      current streak, and a PNG the phone companion can show. No new tracking;
-      the data is already collected.
+- [x] ✅ **Playtime Wrapped / insights** — the Playtime screen's right-hand card
+      is a Monday-aligned 13-week heatmap over `playtimeData.Days` (13 whole
+      weeks is the largest grid the 90-day pruner fills), four accent levels for
+      how long a day ran, unfilled slots for the rest of the current week, and
+      the current streak, longest streak, best day, daily average over active
+      days and active-day count beside it; the top-systems half was already the
+      neighbouring MOST USED card, fed from `Scenes`. No new tracking: all of it
+      is derived per frame from the same snapshot (`wrapped.go`), and days after
+      today are marked future so a caller never consults the clock again. The
+      companion PNG needed no new export — `/api/screen` already serves the
+      rendered frame, so the card is what the phone sees. Checked on pixels, not
+      just geometry (`wrapped_render_test.go`: a played window lights the grid,
+      an empty one does not, the grid stays inside its card and nothing lands in
+      the gap below it), with the date arithmetic and streak rules in
+      `wrapped_test.go`.
 - [ ] ⬜ **Checkpoints / quick switch** — the largest item ever put on the
       backlog, designed in [CHECKPOINTS.md](../docs/CHECKPOINTS.md) and
       explicitly unimplemented. Named per-game save slots need core-specific
@@ -660,8 +681,8 @@ guides, a module split and the CSP are still missing
       builder tests still pass.
 
 ### Phase 8: TrimUI handheld polish
-**Status**: 🟡 Started (13 shipped, 2 partial, 5 not started) — interaction feedback,
-card rendering, the Tools page and a repeating D-pad landed; the rest is queued
+**Status**: 🟡 Started (14 shipped, 2 partial, 4 not started) — interaction feedback,
+card rendering, the Tools page, visible-window list drawing and a repeating D-pad landed; the rest is queued
 
 This phase collects the work that specifically targets the TrimUI Smart Pro
 (1280×720, ARM64, 1 GB RAM, 60 Hz panel) rather than desktop parity. Shipped
@@ -732,10 +753,15 @@ Open:
       there"). Window bounds and the pixel consequences (virtualized row
       flat, window row painted, partial row drawn clipped) are pinned by
       `appgrid_window_test.go`.
-- [ ] ⬜ Row-virtualize the remaining scrolling lists (game library,
-      favorites, save manager, downloads) that still visit every row and
-      rely on clipping — the same window arithmetic applies, but each list
-      has its own row pitch and selection model, so they are separate edits.
+- [x] ✅ Bound primary long-list drawing to the visible window — the game
+      library, Favorites and Save Manager already draw only their visible rows;
+      Downloads now does the same even with variable section headers. Its sparse
+      header offsets plus binary search select the viewport rows, and the render
+      loop records hit targets only for those rows (`downloadsui.go`,
+      `downloadsui_test.go`: 1,000-row panel and 10,000-row range coverage).
+      This bounds per-frame row painting, not all list preparation: Downloads
+      still constructs/filter-counts its snapshot before drawing. Audit other
+      screens only when their data can grow substantially.
 - [x] ✅ Keep thumbnail decoding out of the render path (decode budget of
       2/frame, 8 desktop): `allowThumbnailDecode` (`thumbstore.go`) tokens
       per frame number, so a cold scrolled grid starts at most two decodes–
@@ -768,15 +794,12 @@ Open:
       geometry. Not done: nothing forces Settings to stay a page if a config
       author adds a non-button element to it (`menutiles_test.go`).
 - [ ] ⬜ Scene-scoped texture release for scenes that are not open.
-- [ ] 🟡 Scene-scoped polling — started with the disk pie: `startDiskPieAutoRefresh`
-      used to statfs the card every five seconds for the whole session, so a
-      hidden Disk Space scene kept the CPU awake for a chart nobody was looking
-      at. The ticker now skips while the active scene has no `piechart` element
-      (`sceneHasPieChart`) and scene entry takes a fresh reading instead
-      (`hardware_poll_test.go`). What stays open: the weather ticker is a
-      process-lifetime ten-minute loop, which is deliberate — the forecast feeds
-      the status cluster on every screen — but the Weather screen's own refresh
-      and the network monitor are still not scoped to the screen that shows them.
+- [ ] 🟡 Scope background work to the resource that needs it — the disk pie skips
+      polling off-scene (`hardware_poll_test.go`), and `backgroundwork.go` pauses
+      weather, connectivity, audio-output and LED work while a game owns the
+      screen or the desktop window is hidden. Remaining opportunity: avoid
+      redundant or unnecessary work while the app is foregrounded, while keeping
+      always-visible status data fresh and waking promptly on screen entry.
 - [ ] ⬜ On-device measurement of cold start (<1.5 s interactive), transition
       frame time and idle RSS (<5% CPU at the capped cadence) — all numbers so
       far are desktop proxies.
@@ -911,9 +934,11 @@ Field expectations for the TrimUI Smart Pro / Smart Pro S / Brick family
   `TestRenderPipelineInfoUnderSoftwareFallback`, which pins that exact value
   for the dummy-driver fallback). The Brick's kernel driver for this GPU is
   `pvrsrvkm` (https://knulli.org/devices/trimui/brick/).
-- [x] ✅ Row-virtualize the launcher app grid — `appGridVisibleRange`
-      visits only the visible rows plus one slack row; see the Phase 8 entry
-      for the full description. The remaining lists listed there stay open.
+- [x] ✅ Bound long-list row drawing to the visible window — the launcher grid
+      and the game library, Favorites, Save Manager and Downloads now paint only
+      rows on screen. See the Phase 8 entry for the launcher and Downloads
+      details; the other three already limited their row loops to the visible
+      window.
 - [x] ✅ Icon atlas for the shared 32 px glyph set — `iconatlas.go` bakes each
       (name, focused) glyph once, at the canonical 32px `DrawIconTile` size,
       into one 1024×64 strip and every later occurrence is one Copy of its
@@ -1243,32 +1268,48 @@ rather than by eye:
 
 ## Next Steps
 
-The phases above are now mostly implemented. The highest-value remaining work:
+The plan is broad; prioritize work with a user-visible payoff and a clear way to
+verify it. The strongest remaining additions are:
 
-1. **Playtime Wrapped** — adopted next (Phase 5.6): the data is already there, so
-   this is a page, a heatmap, a streak and a PNG export.
-2. **Builder snap-to-grid + alignment guides + safe-area overlay** — pure front-end
-   work with immediate design-time payoff.
-3. **Debounced search input** — first name the path it is for: the Tube field
-   only submits on Enter/its button, and the global search filters in memory, so
-   this item is worth doing only where a keystroke really starts work.
-4. **Phase 8 handheld polish** — touch-target audit, safe-area insets, cached
-   ambient glow, list virtualization, and on-device measurement of
-   cold start, transition frame time, idle RSS and the GC/decode tuning above
-   (all numbers so far are desktop proxies).
-5. **Convert remaining fixed-offset panel layouts to font metrics** — the
-   Downloads panel's SD card now derives its rows from `font.Height()`
-   (`downloadStorageCardHeight`); panels that still hard-code text offsets
-   (Start menu, Quick Settings, the browser chrome) can adopt the same
-   pattern so taller accessibility scales never overlap there either.
-6. **Move more screens onto `UIPageHeader` / `UICategoryTile`** — the Settings
-   menu is the next fixed grid, and the Downloads and Power tools panels still
-   draw their own header band.
-7. **Measure the hold-to-repeat cadence on the device** — 320 ms / 70 ms is the
-   keyboard's long-standing value and feels right on a list, but a 1 GB ARM64
-   device under a slow SD card may want a shorter delay. It is one constant in
-   `navrepeat.go`; a hardware pass should confirm it before it is treated as
-   settled.
+1. **Finish the handheld touch-target and safe-area audit** (Phase 8). The Exit
+   chip is the only shared control currently using `growTouchTarget`; extend it
+   to the remaining interactive controls and keep drawn and hit geometry
+   consistent. Verify on-device around the rounded screen corners.
+2. **Complete cancellation for feature network work** (Phase 3.1). `context.Context`
+   already reaches Patch, downloads, text browser and scene tasks, but older
+   feature fetches still use bare clients. Thread cancellation through the
+   remaining calls so leaving a screen stops stale work instead of only hiding
+   its result.
+3. **Reduce unnecessary foreground polling and release scene-owned resources**
+   (Phases 3.4 / 8). Background work now pauses behind games and minimized
+   windows, but screen-specific refreshes and renderer-owned scene resources
+   still merit a lifecycle audit; preserve the always-visible status cluster
+   and existing cache budgets.
+4. **Add the already-identified media playback queue** (Phase 5.1). A small,
+   explicit Up Next list would make sequential listening useful without adding
+   new tracking or a service dependency; keep queue persistence and video
+   behavior separate unless users need them.
+5. **Run the outstanding handheld measurements** (Phase 8). Capture cold-start
+   time, transition frame time, idle RSS and D-pad repeat feel on the actual
+   1 GB ARM64 device; desktop proxies cannot settle those targets.
+6. **Continue the large-list audit selectively.** Primary game, Favorites, Save
+   Manager and Downloads row drawing is now window-bounded. Profile the other
+   screens first and virtualize only where a real large collection makes the
+   per-frame work proportional to total list size.
+
+## Audit log — 2026-10-29 (list virtualization refresh)
+
+- Corrected the Phase 8 count and removed the stale claim that the game library,
+  Favorites and Save Manager still draw every row. Downloads now uses a sparse
+  section-offset index and binary search to select rows intersecting the viewport;
+  its hit targets are likewise limited to those rows. The new regression coverage
+  exercises a 1,000-item panel and a 10,000-row range.
+- Replaced the obsolete Playtime Wrapped next-step entry (shipped in Phase 5.6)
+  with the remaining handheld touch-target audit, feature-fetch cancellation,
+  foreground resource/polling lifecycle, media queue, on-device measurements,
+  and a profile-first audit of other large lists.
+- The earlier full-suite audit remains dated 2026-10-26; checks for this focused
+  refresh are recorded after the targeted tests below.
 
 ## Audit log — 2026-10-26 (memory pass)
 

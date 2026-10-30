@@ -4,8 +4,9 @@ package main
 //
 // The startup check only advertises a release (see autoupdate.go); this file
 // turns that advertisement into a visible, one-press offer:
-//   - a download icon in the home header's status cluster, immediately left of
-//     the weather chip, reachable with the D-pad and clickable, and
+//   - an "Update" pill in the header's system corner, immediately left of the
+//     notification bell on Home and on every scene, reachable with the D-pad
+//     and clickable, and
 //   - the scene-header badge and the once-per-launch modal, which now install
 //     directly instead of walking the user through the Patch scene.
 //

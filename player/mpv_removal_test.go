@@ -1,8 +1,9 @@
 package main
 
-// Guards for the removal of the MPV backend: playback is ffplay-only, so no
-// shipped config may advertise an audio-backend choice, and old configs that
-// still contain the retired key must load cleanly and drop it.
+// Guards for the removal of the MPV and ffplay backends: playback is the
+// built-in player fed by ffmpeg, so no shipped config may advertise another
+// audio backend, and old configs that still contain the retired key must load
+// cleanly and drop it.
 
 import (
 	"encoding/json"
@@ -21,13 +22,13 @@ func TestShippedConfigsHaveNoMPVSettings(t *testing.T) {
 			t.Fatalf("%s is not valid JSON", path)
 		}
 		lower := strings.ToLower(string(data))
-		for _, banned := range []string{"mpv", "audiobackend"} {
+		for _, banned := range []string{"mpv", "audiobackend", "ffplay"} {
 			if strings.Contains(lower, banned) {
 				t.Errorf("%s still mentions %q", path, banned)
 			}
 		}
-		if !strings.Contains(string(data), "ffplay (built in)") {
-			t.Errorf("%s should describe playback as ffplay (built in)", path)
+		if !strings.Contains(string(data), "ffmpeg (built in)") {
+			t.Errorf("%s should describe playback as ffmpeg (built in)", path)
 		}
 	}
 }

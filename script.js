@@ -197,6 +197,7 @@ function captureWorkspace(label) {
     canvasWidth,
     canvasHeight,
     backgroundPath,
+    deviceBackground: canvas.style.backgroundColor,
     fontSizes: {
       title: document.getElementById('titleSize')?.value ?? '',
       big: document.getElementById('bigSize')?.value ?? '',
@@ -300,6 +301,7 @@ function restoreSnapshot(snapshot) {
   backgroundPath = snapshot.backgroundPath || '';
   canvas.style.backgroundImage = backgroundPath ? `url(${backgroundPath})` : '';
   canvas.style.backgroundSize = backgroundPath ? 'cover' : '';
+  canvas.style.backgroundColor = snapshot.deviceBackground || '';
   syncCanvasSizeControls();
   const sizes = snapshot.fontSizes || {};
   ['title', 'big', 'medium', 'small'].forEach(role => {
@@ -5088,7 +5090,9 @@ function loadJukaApp(input) {
   // Load background and clear a previous config's background if absent.
   backgroundPath = (data.variables && data.variables.backgroundImage) || '';
   canvas.style.backgroundImage = backgroundPath ? `url(${backgroundPath})` : '';
-  canvas.style.backgroundSize = backgroundPath ? 'cover' : '';  // Clear existing scenes and variables
+  canvas.style.backgroundSize = backgroundPath ? 'cover' : '';
+  applyDeviceBackground(importedConfig.top || data);
+  // Clear existing scenes and variables
   scenes = {};
   variables = {};
   variablesList.innerHTML = '';
@@ -5378,6 +5382,46 @@ function calculateTextDimensions(text, fontSize, fontFamily = 'Inter, sans-serif
   };
 }
 
+// tileIconClass maps a tile's `icon` name onto the glyph the player draws.
+// player/launcher.go tileIconKind picks the shape from the name, the label and
+// the trigger; this mirrors that order so a tile shows the same picture here.
+function tileIconClass(icon, text, trigger) {
+  const key = `${text || ''} ${icon || ''} ${trigger || ''}`.toLowerCase();
+  const map = [
+    [['continue', 'recent'], 'fa-solid fa-play'],
+    [['youtube', 'media', 'play'], 'fa-solid fa-play'],
+    [['chat', 'discord'], 'fa-solid fa-comments'],
+    [['file', 'explorer'], 'fa-solid fa-folder'],
+    [['live', 'tv', 'stream'], 'fa-solid fa-tv'],
+    [['package', 'store'], 'fa-solid fa-box'],
+    [['podcast', 'shorts'], 'fa-solid fa-microphone'],
+    [['ticker'], 'fa-solid fa-chart-line'],
+    [['favorite'], 'fa-solid fa-star'],
+    [['weather'], 'fa-solid fa-cloud'],
+    [['setting'], 'fa-solid fa-gear'],
+    [['hardware', 'device', 'system'], 'fa-solid fa-microchip'],
+    [['terminal', 'cron', 'task'], 'fa-solid fa-terminal'],
+    [['jukaland', 'game'], 'fa-solid fa-gamepad'],
+    [['browser'], 'fa-solid fa-globe'],
+    [['emulator'], 'fa-solid fa-gamepad'],
+    [['exit'], 'fa-solid fa-right-from-bracket'],
+    [['misc', 'apps', 'tools'], 'fa-solid fa-table-cells-large']
+  ];
+  for (const [needles, cls] of map) {
+    if (needles.some(needle => key.includes(needle))) return cls;
+  }
+  return 'fa-solid fa-table-cells-large';
+}
+
+// applyDeviceBackground paints the design's own Background colour on the
+// canvas. The player fills the screen with config.Background before it draws
+// anything, but the canvas kept the designer's device colour, so a config with
+// #0B0F17 and one with #F0F2F5 looked identical until the design was exported.
+function applyDeviceBackground(top) {
+  const value = top && typeof top.Background === 'string' ? top.Background.trim() : '';
+  canvas.style.backgroundColor = value;
+}
+
 function createElementFromData(elementData) {
   const el = document.createElement('div');
   el.className = 'element';
@@ -5462,6 +5506,58 @@ function createElementFromData(elementData) {
   textSpan.textContent = elementData.text || elementData.type.charAt(0).toUpperCase() + elementData.type.slice(1);
   if (!elementData.text) el.setAttribute('data-text-auto', '1');
   el.appendChild(textSpan);
+
+  // The player draws a tile button as a rounded card with an icon above the
+  // label and the label along the bottom edge (player/core.go renderAppTile),
+  // not as a plain box with centred text. Without the icon the home screen's
+  // eight tiles read as coloured rectangles, which is the biggest difference
+  // between the canvas and the device.
+  if (elementData.type === 'button' && elementData.style === 'tile') {
+    el.classList.add('is-tile');
+    const icon = document.createElement('span');
+    icon.className = 'tile-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.innerHTML = `<i class="${tileIconClass(elementData.icon, elementData.text, elementData.trigger)}"></i>`;
+    // The player sizes the glyph at a third of the tile, clamped to 44..64 px.
+    icon.style.fontSize = Math.min(64, Math.max(44, Math.round(width / 3))) + 'px';
+    el.insertBefore(icon, textSpan);
+  }
+
+  // A form field is a rounded 8 px box with its text against the left edge on
+  // the device (player/core.go renderInputField), and an empty one shows its
+  // placeholder. The canvas centred a bold "Input" instead, which read as a
+  // button rather than a field.
+  if (elementData.type === 'input') {
+    el.classList.add('is-input');
+    if (!elementData.text && elementData.placeholder) {
+      textSpan.textContent = elementData.placeholder;
+      el.classList.add('is-placeholder');
+    }
+  }
+
+  // The Continue card is its own renderer on the device (player/recent.go).
+  // Its own `color`/`bgColor` are ignored there, and an empty history shows the
+  // icon-and-two-lines state, so the canvas shows that same card.
+  if (elementData.type === 'recent') {
+    el.classList.add('is-recent');
+    const card = document.createElement('span');
+    card.className = 'recent-card';
+    card.innerHTML = '<span class="recent-title">Continue</span>' +
+      '<span class="recent-empty">' +
+      '<i class="fa-solid fa-photo-film" aria-hidden="true"></i>' +
+      '<span class="recent-empty-title">Nothing played recently</span>' +
+      '<span class="recent-empty-hint">Play a game or open Media to start</span>' +
+      '</span>';
+    el.insertBefore(card, textSpan);
+    const title = card.querySelector('.recent-title');
+    if (title) title.style.fontSize = getFontSize('medium') + 'px';
+    card.querySelectorAll('.recent-empty-title, .recent-empty-hint').forEach(line => {
+      line.style.fontSize = getFontSize('small') + 'px';
+    });
+    // The card's heading is fixed on the device; the element's own text stays in
+    // the markup (and in the export) but is not what the player draws.
+    textSpan.hidden = true;
+  }
 
   // Add remove button
   const removeButton = document.createElement('span');

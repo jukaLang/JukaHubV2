@@ -1962,7 +1962,7 @@ func getToolPath(tool string, config *Config) string {
 		exeName += ".exe"
 	}
 	// Resolve to an absolute path so the OS reliably locates the tool's
-	// sibling DLLs (e.g. ffplay.exe's av*.dll) regardless of the process CWD.
+	// sibling DLLs (e.g. a shared ffmpeg.exe's av*.dll) regardless of the process CWD.
 	resolve := func(p string) string {
 		if abs, err := filepath.Abs(p); err == nil {
 			return abs
@@ -1993,7 +1993,7 @@ func getToolPath(tool string, config *Config) string {
 		return resolve(commonPath)
 	}
 	// Fallback to system PATH: resolve the actual binary so callers can stat
-	// it (a bare "ffplay.exe" only stats against the working directory).
+	// it (a bare "ffmpeg.exe" only stats against the working directory).
 	if p, err := exec.LookPath(exeName); err == nil {
 		if abs, err := filepath.Abs(p); err == nil {
 			return abs
@@ -2009,7 +2009,7 @@ func getToolPath(tool string, config *Config) string {
 // user-supplied command string can never select an arbitrary program.
 func helperExecutable(name string, config *Config) (string, error) {
 	switch name {
-	case "yt-dlp", "ffplay", "ffmpeg", "ffprobe":
+	case "yt-dlp", "ffmpeg", "ffprobe":
 	default:
 		return "", fmt.Errorf("unsupported helper tool %q", name)
 	}

@@ -257,6 +257,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 			return true
 		}
 	}
+	// The Brick's front F1 / F2 keys (reported as L3 / R3): the Controller
+	// card and Quick Settings, unless the screen uses the stick clicks itself.
+	if handleBrickFunctionKey(e, config) {
+		return true
+	}
 	return false
 }
 
@@ -389,6 +394,12 @@ func ctrlQuickSettings(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		qsToggleOpen()
 		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_RIGHTSTICK:
+		// F2 on a Brick opened the panel, and the same key puts it away.
+		if brickHasFunctionKeys() {
+			qsToggleOpen()
+			PlayBackSound()
+		}
 	default:
 		return true
 	}

@@ -141,7 +141,14 @@ func startNetworkMonitor() {
 		netMon.update()
 		ticker := time.NewTicker(20 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
+		wake := subscribeForegroundWake()
+		for {
+			// A probe is a TCP dial; while a game owns the screen nobody can see
+			// the offline chip it keeps current. The first tick after coming
+			// back answers for the network the game may have just left.
+			if !waitForPoll(ticker.C, wake) {
+				continue
+			}
 			netMon.update()
 		}
 	}()
@@ -169,7 +176,11 @@ var toolHealthState = &toolHealth{
 var toolsAutoAttempted = make(map[string]bool)
 
 // autoInstallTools are the tools JukaHub can fetch by itself when missing.
-var autoInstallTools = []string{"yt-dlp", "ffplay", "ffmpeg", "ffprobe"}
+// ffplay is not one of them: nothing runs it (the embedded player decodes with
+// ffmpeg), and BtbN's build needs X11, which the handheld does not have. It
+// used to be fetched first on every launch, so a failing bundle showed up as
+// "Could not install ffplay".
+var autoInstallTools = []string{"yt-dlp", "ffmpeg", "ffprobe"}
 
 // checkToolPresence reports whether the given tool is usable in the required/
 // folder or on PATH. Only the file is inspected: JukaHub never runs a tool to
@@ -219,7 +230,7 @@ func installMissingToolsAfterReconnect() {
 // refreshToolHealth re-checks the required tools and publishes a summary
 // variable plus per-tool status entries.
 func refreshToolHealth() {
-	tools := []string{"yt-dlp", "ffplay", "ffmpeg", "ffprobe"}
+	tools := autoInstallTools
 	toolHealthState.mu.Lock()
 	statuses := make(map[string]string, len(tools))
 	var missing []string
@@ -239,7 +250,7 @@ func refreshToolHealth() {
 		summary = "Missing: " + strings.Join(missing, ", ")
 	}
 	// Auto-provision any missing tool JukaHub can fetch itself (yt-dlp,
-	// ffplay, ffmpeg). One attempt per tool per app run; installs run
+	// ffmpeg, ffprobe). One attempt per tool per app run; installs run
 	// sequentially so the install bar shows one download at a time.
 	var toFetch []string
 	for _, t := range autoInstallTools {
@@ -276,12 +287,21 @@ func refreshToolHealth() {
 	if len(toFetch) > 0 {
 		go func(list []string) {
 			var installed []string
+			bundleFailed := false
 			for _, t := range list {
+				// ffmpeg and ffprobe come out of one bundle: once installing it
+				// has failed for one of them, the next would only fail the same way.
+				if bundleFailed && ffmpegFamilyTool(t) {
+					continue
+				}
 				if err := EnsureHelperTool(t, appConfig); err != nil {
 					log.Printf("[tools] %s auto-download failed: %v", t, err)
 					toolHealthState.mu.Lock()
 					toolHealthState.failures[t] = toolInstallFailureReason(err)
 					toolHealthState.mu.Unlock()
+					if ffmpegFamilyTool(t) {
+						bundleFailed = true
+					}
 					continue
 				}
 				if _, ok := checkToolPresence(t); !ok {

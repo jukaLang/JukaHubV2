@@ -391,6 +391,204 @@ func TestToolScreensDrawTheSharedBar(t *testing.T) {
 	}
 }
 
+// TestHomeHeaderControlsDrawFocus checks Home's separate header renderer. The
+// scene bar has its own checks below, but Home chips and remote-play tiles are
+// painted by HomeLayout and used to drift independently.
+func TestHomeHeaderControlsDrawFocus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	snapshotHomeGlobals(t)
+	withAvailableUpdate(t, "JukaHub-20261019120000")
+	newProbeFrame(t)
+	renderer, err := sdl.CreateRenderer(renderWin, -1, sdl.RENDERER_SOFTWARE)
+	if err != nil {
+		t.Fatalf("could not create the offscreen software renderer: %v", err)
+	}
+	defer destroyTestRenderer(renderer)
+	withScreen(t, probeW, probeH)
+	ClearTextCache()
+	t.Cleanup(ClearTextCache)
+
+	prevConfig, prevNC, prevActive := appConfig, nc, homeLayoutActive
+	prevHomeRect, prevWifiRect, prevWeatherRect, prevMediaRect := homeUpdateRect, statusWiFiRect, weatherStatusRect, statusMediaRect
+	prevFocus := focusEngine
+	focusEngine = NewFocusEngine()
+	t.Cleanup(func() { focusEngine = prevFocus })
+	prevPS4, prevPS5 := ps4TileRect, ps5TileRect
+	prevAccent := accentColor
+	appConfig = &Config{}
+	homeLayoutActive = true
+	accentColor = ColorAccent
+	layout := NewHomeLayout(probeW, probeH)
+	homeLayout = layout
+	t.Cleanup(func() {
+		appConfig, nc, homeLayoutActive = prevConfig, prevNC, prevActive
+		homeUpdateRect, statusWiFiRect, weatherStatusRect, statusMediaRect = prevHomeRect, prevWifiRect, prevWeatherRect, prevMediaRect
+		ps4TileRect, ps5TileRect = prevPS4, prevPS5
+		accentColor = prevAccent
+	})
+	data := HomeViewData{
+		Greeting:    "Good afternoon",
+		Subtitle:    "What do you want to do?",
+		Version:     "v0.4.0",
+		StatusParts: []string{statusWiFiMarker, "21C / 12C", "12:40", "87%"},
+	}
+	targets := []HomeFocusID{
+		HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusBell,
+		HomeFocusUpdate, HomeFocusNowPlaying, HomeFocusPS4, HomeFocusPS5,
+	}
+	checked := 0
+	for _, target := range targets {
+		if !layout.Focus.Set(target) {
+			continue // The preceding frame may have hidden a genuinely optional control.
+		}
+		renderer.SetDrawColor(9, 14, 25, 255)
+		renderer.Clear()
+		if err := layout.Render(renderer, loadHomeFonts(), data); err != nil {
+			t.Fatalf("render home header: %v", err)
+		}
+		if layout.Focus.Current() != target {
+			continue // It was disabled because this frame did not draw it.
+		}
+		var rect sdl.Rect
+		switch target {
+		case HomeFocusClock, HomeFocusWeather, HomeFocusWiFi, HomeFocusBell,
+			HomeFocusUpdate, HomeFocusNowPlaying:
+			rect = layout.Items[target].Rect
+		case HomeFocusPS4:
+			rect = ps4TileRect
+		case HomeFocusPS5:
+			rect = ps5TileRect
+		}
+		if rect.W <= 0 || rect.H <= 0 {
+			continue
+		}
+		frame := &probeFrame{buf: make([]byte, probeW*probeH*4), bg: sdl.Color{R: 9, G: 14, B: 25, A: 255}}
+		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&frame.buf[0]), int(probeW)*4); err != nil {
+			t.Fatalf("ReadPixels failed for focused Home %s: %v", target, err)
+		}
+		isFocusColor := func(c sdl.Color) bool {
+			if target == HomeFocusPS4 || target == HomeFocusPS5 {
+				return c.R > 200 && c.G > 210 && c.B > 220
+			}
+			return nearColor(c, accentColor, 35)
+		}
+		pixels := 0
+		for y := rect.Y - 5; y <= rect.Y+rect.H+5; y++ {
+			for x := rect.X - 5; x <= rect.X+rect.W+5; x++ {
+				if x > rect.X+4 && x < rect.X+rect.W-4 && y > rect.Y+4 && y < rect.Y+rect.H-4 {
+					continue
+				}
+				if x >= 0 && y >= 0 && x < probeW && y < probeH && isFocusColor(frame.at(x, y)) {
+					pixels++
+				}
+			}
+		}
+		checked++
+		if pixels < 8 {
+			t.Errorf("focused Home %s control %+v has only %d visible focus-edge pixels", target, rect, pixels)
+		}
+	}
+	if checked < 4 {
+		t.Fatalf("only %d focusable Home header controls were drawn", checked)
+	}
+}
+
+// TestEveryFocusableHeaderControlDrawsFocus makes one focused render per
+// visible header control and checks the selected edge contains accent pixels.
+// This catches a particularly quiet regression: a control remains in the
+// keyboard focus graph and still activates, but looks identical when selected.
+func TestEveryFocusableHeaderControlDrawsFocus(t *testing.T) {
+	if testing.Short() {
+		t.Skip("render probe skipped in -short mode")
+	}
+	snapshotHomeGlobals(t)
+	withAvailableUpdate(t, "JukaHub-20261019120000")
+	prevEngine := focusEngine
+	focusEngine = NewFocusEngine()
+	t.Cleanup(func() { focusEngine = prevEngine })
+
+	targets := []struct {
+		name  string
+		index int
+	}{
+		{"Back", ChromeBackIndex},
+		{"Menu", ChromeStartIndex},
+		{"Clock", ChromeClockIndex},
+		{"Weather", ChromeWeatherIndex},
+		{"Wi-Fi", ChromeWiFiIndex},
+		{"Notifications", ChromeBellIndex},
+		{"Now playing", ChromeMediaIndex},
+		{"Update", ChromeUpdateIndex},
+	}
+	checked := 0
+	for _, target := range targets {
+		// FocusEngine.ElementIndex is what every bar renderer consults. A
+		// one-node graph lets each frame isolate one control without relying
+		// on navigation order or persisted selection from another test.
+		focusEngine.SetGraph("header-focus-probe", &FocusGraph{Nodes: []FocusNode{{Index: target.index}}})
+		if !focusEngine.SetByElementIndex(target.index) {
+			t.Fatalf("cannot focus %s", target.name)
+		}
+		frame := renderSceneBarForTest(t, "Settings")
+
+		var rect sdl.Rect
+		switch target.index {
+		case ChromeBackIndex:
+			rect = sceneTitleBackRect
+		case ChromeStartIndex:
+			rect = tb.startRect
+		case ChromeClockIndex:
+			rect = statusClockRect
+		case ChromeWeatherIndex:
+			rect = weatherStatusRect
+		case ChromeWiFiIndex:
+			rect = statusWiFiRect
+		case ChromeBellIndex:
+			rect = nc.bellRect
+		case ChromeMediaIndex:
+			rect = statusMediaRect
+		case ChromeUpdateIndex:
+			rect = updatePrompt.badge
+		}
+		// Dynamic controls (weather, media and update) can be absent on a
+		// given host/session. If absent they are not drawn and not focusable;
+		// all controls that are drawn must have a visible selection edge.
+		if rect.W <= 0 || rect.H <= 0 {
+			continue
+		}
+		checked++
+		margin := int32(5)
+		isAccent := func(x, y int32) bool {
+			if x < 0 || y < 0 || x >= probeW || y >= probeH {
+				return false
+			}
+			return nearColor(frame.at(x, y), accentColor, 35)
+		}
+		pixels := 0
+		// Include both rings outside the pill and the one-pixel outlines on
+		// the status text hitboxes. Skip the interior so an accent icon or a
+		// focused fill cannot masquerade as the focus ring.
+		for y := rect.Y - margin; y <= rect.Y+rect.H+margin; y++ {
+			for x := rect.X - margin; x <= rect.X+rect.W+margin; x++ {
+				if x >= rect.X+2 && x < rect.X+rect.W-2 && y >= rect.Y+2 && y < rect.Y+rect.H-2 {
+					continue
+				}
+				if isAccent(x, y) {
+					pixels++
+				}
+			}
+		}
+		if pixels < 8 {
+			t.Errorf("focused %s header control %+v has only %d accent edge pixels; its focus ring is not visible", target.name, rect, pixels)
+		}
+	}
+	if checked < 5 {
+		t.Fatalf("only %d focusable header controls were drawn; want at least the core Back/Menu/Clock/Wi-Fi/Bell controls", checked)
+	}
+}
+
 func absI(v int) int {
 	if v < 0 {
 		return -v

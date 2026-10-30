@@ -30,9 +30,10 @@ const (
 	// HomeFocusPS4 is the stable PS4 Remote Play tile, one slot left of the PS5
 	// tile. Disabled (and skipped by the D-pad) while it is not drawn.
 	HomeFocusPS4 HomeFocusID = "ps4"
-	// HomeFocusUpdate is the "new release available" download chip in the status
-	// cluster, left of the weather text. It is disabled unless a release is
-	// actually offered and drawn.
+	// HomeFocusUpdate is the "new release available" download chip in the header's
+	// system corner, immediately left of the notification bell — the same place
+	// every scene header draws it. It is disabled unless a release is actually
+	// offered and drawn.
 	HomeFocusUpdate HomeFocusID = "update"
 	// HomeFocusNowPlaying is the now-playing chip at the right end of the status
 	// cluster, between the clock and the bell. It is a chrome control on other
@@ -136,37 +137,46 @@ var homeFocusGraph = map[HomeFocusID]homeNeighbors{
 		Up: HomeFocusWeather, Down: HomeFocusSettings,
 		Left: HomeFocusWiFi, Right: HomeFocusClock,
 	},
-	// The signal meter is the Wi-Fi button: Left reaches the update offer, Right
-	// the weather text, Down the settings column. It keeps its place when a
-	// release is not offered because Update's own Left neighbour is Media, so a
-	// disabled offer is skipped instead of trapping the pad on the bar.
+	// The signal meter is the Wi-Fi button: Left leaves the bar for the cards,
+	// Right reads the weather text, Down the settings column. The release offer
+	// is drawn at the other end of the bar, beside the bell, so the meter does
+	// not point at it: the pad used to jump from here to a pill on the far right.
 	HomeFocusWiFi: {
 		Up: HomeFocusWiFi, Down: HomeFocusSettings,
-		Left: HomeFocusUpdate, Right: HomeFocusWeather,
+		Left: HomeFocusMedia, Right: HomeFocusWeather,
 	},
-	// The update download chip is a header button: Right returns to the network
-	// slot, Down drops to the first card in the settings column.
+	// The update download chip is a header button drawn immediately left of the
+	// notification bell, right of the now-playing chip. Its neighbours are the
+	// controls actually beside it on screen: before this, the graph put it left
+	// of the Wi-Fi meter, so pressing Left/Right next to the drawn pill skipped
+	// it and the offer could only be reached by walking to the meter and
+	// pressing Left — which moved focus rightward, away from the pill.
+	//
+	// Both neighbours may be disabled (nothing playing, no release offered);
+	// Move keeps walking their own neighbour chains, so clock -> bell still
+	// works with the chip hidden and bell -> clock still works with it shown.
 	HomeFocusUpdate: {
 		Up: HomeFocusUpdate, Down: HomeFocusSettings,
-		Left: HomeFocusMedia, Right: HomeFocusWiFi,
+		Left: HomeFocusNowPlaying, Right: HomeFocusBell,
 	},
 	// The now-playing chip sits right of the clock and names the running
 	// player. Disabled while nothing plays, so Right from the clock falls
-	// through to the bell exactly as it did before.
+	// through to the release offer (or the bell when none is offered).
 	HomeFocusNowPlaying: {
 		Up: HomeFocusNowPlaying, Down: HomeFocusSettings,
-		Left: HomeFocusClock, Right: HomeFocusBell,
+		Left: HomeFocusClock, Right: HomeFocusUpdate,
 	},
 	HomeFocusClock: {
 		Up: HomeFocusClock, Down: HomeFocusSettings,
 		Left: HomeFocusWeather, Right: HomeFocusNowPlaying,
 	},
-	// The bell is the last control in the header, right of the clock. Right
-	// stays put at the screen edge and Down drops into the Settings column
-	// under it.
+	// The bell is the last control in the header, right of the clock. Left
+	// crosses the release offer when it is drawn (skipping it when it is not);
+	// Right stays put at the screen edge and Down drops into the Settings
+	// column under it.
 	HomeFocusBell: {
 		Up: HomeFocusBell, Down: HomeFocusSettings,
-		Left: HomeFocusNowPlaying, Right: HomeFocusBell,
+		Left: HomeFocusUpdate, Right: HomeFocusBell,
 	},
 	// Exit sits on the footer's left end; Favorites drops down to it.
 	HomeFocusExit: {
@@ -338,8 +348,8 @@ func (f *HomeFocusController) firstEnabled() HomeFocusID {
 		HomeFocusContinue, HomeFocusMedia, HomeFocusFiles,
 		HomeFocusPackages, HomeFocusApps, HomeFocusFavorites,
 		HomeFocusChat, HomeFocusTools, HomeFocusSettings,
-		HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying, HomeFocusBell,
-		HomeFocusUpdate, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
+		HomeFocusWeather, HomeFocusClock, HomeFocusNowPlaying, HomeFocusUpdate,
+		HomeFocusBell, HomeFocusPS4, HomeFocusPS5, HomeFocusExit,
 	}
 	for _, id := range order {
 		if f.IsEnabled(id) {

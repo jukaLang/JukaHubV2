@@ -16,6 +16,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -511,27 +512,21 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// The cursor is always visible: the list scrolls by whole rows.
+	// Section headers are sparse (at most one per status group), so derive a
+	// row's offset from its index instead of allocating an offsets slice for the
+	// whole saved-media queue on every frame.
+	sectionStarts := downloadSectionStarts(rows)
 	visibleH := listBottom - listTop
-	offsets := make([]int32, len(rows))
-	y := int32(0)
-	for i, row := range rows {
-		if row.section != "" {
-			y += sectionH
-		}
-		offsets[i] = y
-		y += rowH + gap
-	}
-	totalH := y
+	totalH := downloadRowOffset(len(rows), sectionStarts, rowH, gap, sectionH)
 	maxScroll := totalH - visibleH
 	if maxScroll < 0 {
 		maxScroll = 0
 	}
-	want := offsets[dlPanel.cursor] + rowH + gap - visibleH
+	want := downloadRowOffset(dlPanel.cursor, sectionStarts, rowH, gap, sectionH) + rowH + gap - visibleH
 	if want > dlPanel.scroll {
 		dlPanel.scroll = want
 	}
-	if below := offsets[dlPanel.cursor]; below < dlPanel.scroll {
+	if below := downloadRowOffset(dlPanel.cursor, sectionStarts, rowH, gap, sectionH); below < dlPanel.scroll {
 		dlPanel.scroll = below
 	}
 	if dlPanel.scroll > maxScroll {
@@ -546,8 +541,10 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	// scrolled heading cannot leak into the tabs above.
 	listRect := sdl.Rect{X: panelX + padX - 14, Y: listTop, W: textW + 28, H: listBottom - listTop}
 	renderer.SetClipRect(&listRect)
-	for i, row := range rows {
-		ry := listTop + offsets[i] - dlPanel.scroll
+	firstRow, endRow := downloadVisibleRowRange(rows, dlPanel.scroll, visibleH, rowH, gap, sectionH, sectionStarts)
+	for i := firstRow; i < endRow; i++ {
+		row := rows[i]
+		ry := listTop + downloadRowOffset(i, sectionStarts, rowH, gap, sectionH) - dlPanel.scroll
 		if row.section != "" {
 			if sy := ry - sectionH; sy >= listTop && sy+sectionH <= listBottom {
 				drawDownloadSectionLabel(renderer, config, row.section, panelX+padX, sy, textW)
@@ -584,6 +581,48 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	fw, _, _ := small.SizeUTF8(footer)
 	renderText(renderer, config, small, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-footerH+2)
+}
+
+// downloadSectionStarts records only the sparse indices at which a section
+// heading precedes a row. Downloads has at most four status groups, independent
+// of how many saved items the user has.
+func downloadSectionStarts(rows []downloadRow) []int {
+	starts := make([]int, 0, 4)
+	for i := range rows {
+		if rows[i].section != "" {
+			starts = append(starts, i)
+		}
+	}
+	return starts
+}
+
+// downloadRowOffset is a row's top position in the unscrolled list. A section
+// heading occupies space immediately before its first row.
+func downloadRowOffset(index int, sectionStarts []int, rowH, gap, sectionH int32) int32 {
+	offset := int32(index) * (rowH + gap)
+	for _, start := range sectionStarts {
+		if start > index {
+			break
+		}
+		offset += sectionH
+	}
+	return offset
+}
+
+// downloadVisibleRowRange returns the row indices that overlap the viewport.
+// Binary searches keep the draw/hit-test loop proportional to the rows on
+// screen, not to the size of the saved queue.
+func downloadVisibleRowRange(rows []downloadRow, scroll, visibleH, rowH, gap, sectionH int32, sectionStarts []int) (int, int) {
+	first := sort.Search(len(rows), func(i int) bool {
+		return downloadRowOffset(i, sectionStarts, rowH, gap, sectionH)+rowH > scroll
+	})
+	end := sort.Search(len(rows), func(i int) bool {
+		return downloadRowOffset(i, sectionStarts, rowH, gap, sectionH) >= scroll+visibleH
+	})
+	if end < first {
+		end = first
+	}
+	return first, end
 }
 
 // drawDownloadTabs paints the tab strip and records each tab's hit rect. The

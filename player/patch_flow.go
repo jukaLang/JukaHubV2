@@ -194,7 +194,9 @@ func OpVerifyTools(ctx context.Context, config *Config) error {
 	}
 	patchRowStatus(ComponentTools, StatusChecking)
 	var missing []string
-	for _, tool := range []string{"yt-dlp", "ffplay", "ffmpeg"} {
+	// The tools playback actually runs. ffplay is no longer installed: the
+	// embedded player decodes with ffmpeg, and BtbN's ffplay needs X11.
+	for _, tool := range []string{"yt-dlp", "ffmpeg", "ffprobe"} {
 		if runtime.GOOS == "windows" && !strings.HasSuffix(tool, ".exe") {
 			tool += ".exe"
 		}

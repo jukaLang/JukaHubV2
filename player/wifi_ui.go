@@ -248,7 +248,7 @@ func openWiFiPanel() {
 	// Opening the panel is the moment a person would have plugged an adapter
 	// in, so the supplicant is asked again instead of trusting a cached answer
 	// for the rest of its minute.
-	resetSupplicantInterfaceCache()
+	resetWiFiInterfaceCache()
 
 	_, detail := wifiSupport()
 	wifiPanel.available = detail == ""

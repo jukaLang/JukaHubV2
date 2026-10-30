@@ -158,34 +158,95 @@ func TestHomeUpdateChipSelectableWithArrows(t *testing.T) {
 	useHomeAsCurrent(t)
 	withAvailableUpdate(t, "JukaHub-20261019120000")
 
-	if !homeLayout.Focus.Set(HomeFocusClock) {
-		t.Fatal("cannot focus the clock")
-	}
-	homeKey(t, &Config{}, sdl.K_LEFT)
-	if got := homeLayout.Focus.Current(); got != HomeFocusWeather {
-		t.Fatalf("Left from the clock focused %q, want weather", got)
-	}
-	// The Wi-Fi meter sits between the weather text and the update offer, so
-	// Left crosses it before reaching the chip.
-	homeKey(t, &Config{}, sdl.K_LEFT)
-	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
-		t.Fatalf("Left from weather focused %q, want the Wi-Fi meter", got)
+	// The chip is drawn immediately left of the bell, so the bell is what the
+	// pad walks through to reach it. It used to be modelled as sitting left of
+	// the Wi-Fi meter, which is on the other side of the header: the pill was
+	// visible but Left/Right beside it skipped it.
+	if !homeLayout.Focus.Set(HomeFocusBell) {
+		t.Fatal("cannot focus the bell")
 	}
 	homeKey(t, &Config{}, sdl.K_LEFT)
 	if got := homeLayout.Focus.Current(); got != HomeFocusUpdate {
-		t.Fatalf("Left from the Wi-Fi meter focused %q, want the update chip", got)
+		t.Fatalf("Left from the bell focused %q, want the update chip", got)
+	}
+	homeKey(t, &Config{}, sdl.K_RIGHT)
+	if got := homeLayout.Focus.Current(); got != HomeFocusBell {
+		t.Fatalf("Right from the update chip focused %q, want the bell", got)
+	}
+	// From the clock the chip is to the right, past the now-playing slot when a
+	// player chip is drawn, and never to the left.
+	if !homeLayout.Focus.Set(HomeFocusClock) {
+		t.Fatal("cannot focus the clock")
+	}
+	for i := 0; i < 3 && homeLayout.Focus.Current() != HomeFocusUpdate; i++ {
+		homeKey(t, &Config{}, sdl.K_RIGHT)
+	}
+	if got := homeLayout.Focus.Current(); got != HomeFocusUpdate {
+		t.Fatalf("Right from the clock focused %q, want the update chip", got)
 	}
 	// Down must not strand the user in the header.
 	homeKey(t, &Config{}, sdl.K_DOWN)
 	if got := homeLayout.Focus.Current(); got != HomeFocusSettings {
 		t.Fatalf("Down from the update chip focused %q, want settings", got)
 	}
+	// Left leaves through the now-playing slot (when it is drawn) and stays on
+	// the header either way: it must never jump to a card below the bar.
 	if !homeLayout.Focus.Set(HomeFocusUpdate) {
 		t.Fatal("cannot focus the update chip")
 	}
-	homeKey(t, &Config{}, sdl.K_RIGHT)
-	if got := homeLayout.Focus.Current(); got != HomeFocusWiFi {
-		t.Fatalf("Right from the update chip focused %q, want the Wi-Fi meter", got)
+	homeKey(t, &Config{}, sdl.K_LEFT)
+	if got := homeLayout.Focus.Current(); got != HomeFocusNowPlaying && got != HomeFocusClock {
+		t.Fatalf("Left from the update chip focused %q, want the now-playing chip or the clock", got)
+	}
+}
+
+// TestHomeUpdateChipFocusFollowsTheDrawnBar pins the graph to the pixels: the
+// chip's drawn rect has the clock on its left and the bell on its right, and the
+// pad reaches it from both. This is the check that would have caught the offer
+// being drawn beside the bell while the focus graph still had it on the far side
+// of the Wi-Fi meter — visible, but unreachable from where it is.
+func TestHomeUpdateChipFocusFollowsTheDrawnBar(t *testing.T) {
+	snapshotHomeGlobals(t)
+	prevChip := homeUpdateRect
+	t.Cleanup(func() { homeUpdateRect = prevChip })
+	withAvailableUpdate(t, "JukaHub-20261019120000")
+
+	layout := homeUpdateProbe(t)
+	if homeUpdateRect.W == 0 {
+		t.Fatal("the chip was not drawn")
+	}
+	clock := layout.Items[HomeFocusClock].Rect
+	bell := layout.Items[HomeFocusBell].Rect
+	chip := homeUpdateRect
+	if !(chip.X > clock.X && chip.X+chip.W <= bell.X) {
+		t.Fatalf("chip %+v is not between the clock %+v and the bell %+v", chip, clock, bell)
+	}
+
+	homeLayout = layout
+	homeLayoutActive = true
+	// Right from the clock, in whatever number of steps the header's drawn
+	// neighbours take, must end on the chip without touching Left.
+	if !layout.Focus.Set(HomeFocusClock) {
+		t.Fatal("cannot focus the clock")
+	}
+	reached := false
+	for i := 0; i < 4; i++ {
+		homeKey(t, &Config{}, sdl.K_RIGHT)
+		if layout.Focus.Current() == HomeFocusUpdate {
+			reached = true
+			break
+		}
+	}
+	if !reached {
+		t.Fatalf("Right from the clock never reached the update chip; focus ended on %q", layout.Focus.Current())
+	}
+	// And Left from the bell must reach it in one step.
+	if !layout.Focus.Set(HomeFocusBell) {
+		t.Fatal("cannot focus the bell")
+	}
+	homeKey(t, &Config{}, sdl.K_LEFT)
+	if got := layout.Focus.Current(); got != HomeFocusUpdate {
+		t.Fatalf("Left from the bell focused %q, want the update chip", got)
 	}
 }
 

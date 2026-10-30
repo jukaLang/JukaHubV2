@@ -623,6 +623,19 @@ func wifiInterface() string {
 	return names[0]
 }
 
+// resetWiFiInterfaceCache forgets the cached interface answer, so the next
+// caller asks the platform again instead of trusting a minute-old reply. The
+// picker calls it when it opens: that is the moment a person may have just
+// plugged an adapter in, and on Windows a radio that was still coming up at
+// boot would otherwise keep answering "no interface" for the rest of the TTL.
+func resetWiFiInterfaceCache() {
+	if winWifiActive() {
+		resetWinWifiIfaceCache()
+		return
+	}
+	resetSupplicantInterfaceCache()
+}
+
 // wifiControlAvailable reports whether this device can be driven through
 // wpa_cli at all.
 func wifiControlAvailable() bool {

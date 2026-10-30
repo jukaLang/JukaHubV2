@@ -591,19 +591,19 @@ func installedPatchVersions(config *Config) map[PatchComponent]string {
 	}
 	if v := helperToolVersion("yt-dlp"); v != "" {
 		m[ComponentTools] = "yt-dlp " + v
-	} else if v := helperToolVersion("ffplay"); v != "" {
-		m[ComponentTools] = "ffplay " + v
+	} else if v := helperToolVersion("ffmpeg"); v != "" {
+		m[ComponentTools] = "ffmpeg " + v
 	} else {
 		m[ComponentTools] = "Not installed"
 	}
 	return m
 }
 
-// EnsureHelperTool downloads and installs a helper tool (yt-dlp, ffplay,
-// ffmpeg or ffprobe) into the application tools directory (the "required"
-// folder next to the binary) when it is missing. It is intentionally tolerant
-// of transient network failures so the app can still launch offline; failures
-// are reported with a retry action instead of aborting the app.
+// EnsureHelperTool downloads and installs a helper tool (yt-dlp, ffmpeg or
+// ffprobe) into the application tools directory (the "required" folder next to
+// the binary) when it is missing. It is intentionally tolerant of transient
+// network failures so the app can still launch offline; failures are reported
+// with a retry action instead of aborting the app.
 func EnsureHelperTool(tool string, config *Config) error {
 	return ensureHelperTool(tool, config)
 }
@@ -617,7 +617,7 @@ var helperInstallMu sync.Mutex
 var errToolsOffline = errors.New("offline: connect to WiFi to install helper tools")
 
 // minHelperToolBytes rejects obviously truncated downloads without executing
-// them. Every bundled tool (yt-dlp, ffmpeg, ffplay, ffprobe) is megabytes large.
+// them. Every bundled tool (yt-dlp, ffmpeg, ffprobe) is megabytes large.
 const minHelperToolBytes = 256 << 10
 
 func ensureHelperTool(tool string, config *Config) error {
@@ -628,8 +628,12 @@ func ensureHelperTool(tool string, config *Config) error {
 // install hides its progress card instead of leaving it on screen paused at the
 // byte it had reached.
 func ensureHelperToolCtx(ctx context.Context, tool string, config *Config) error {
-	if tool != "ffplay" && tool != "yt-dlp" && tool != "ffmpeg" && tool != "ffprobe" {
-		return fmt.Errorf("unsupported helper tool %q (supported: ffplay, ffmpeg, ffprobe, yt-dlp)", tool)
+	// ffplay is deliberately not a helper tool any more: nothing runs it (the
+	// embedded player decodes with ffmpeg), and BtbN links it against X11, so
+	// on the handheld it could not even start. Refusing the name keeps a stale
+	// caller from bringing the ~130 MB binary back.
+	if tool != "yt-dlp" && tool != "ffmpeg" && tool != "ffprobe" {
+		return fmt.Errorf("unsupported helper tool %q (supported: ffmpeg, ffprobe, yt-dlp)", tool)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -714,7 +718,39 @@ func toolInstallFailureReason(err error) string {
 	if !IsOnline() {
 		return "No internet — connect WiFi, then press A"
 	}
-	return firstLine(err.Error())
+	var reasoned *toolInstallError
+	if errors.As(err, &reasoned) {
+		return firstLine(reasoned.reason)
+	}
+	if isDiskFullError(err) {
+		return "SD card is full — free some space, then press A"
+	}
+	line, _, _ := strings.Cut(err.Error(), "\n")
+	return firstLine(stripURLs(line))
+}
+
+// stripURLs drops web addresses from an error line. The install card has room
+// for one short row, and a GitHub release URL used to fill all of it, hiding
+// the actual reason ("extract ffmpeg from https://github.com/BtbN/FFm...").
+// The full error, URL included, is still in the log.
+func stripURLs(s string) string {
+	fields := strings.Fields(s)
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		bare := strings.ToLower(strings.TrimLeft(f, "\"'(<"))
+		if !strings.HasPrefix(bare, "http://") && !strings.HasPrefix(bare, "https://") {
+			out = append(out, f)
+			continue
+		}
+		// "download ffmpeg from <url>: ..." reads "download ffmpeg: ...".
+		if n := len(out); n > 0 && (out[n-1] == "from" || out[n-1] == "at") {
+			out = out[:n-1]
+		}
+		if strings.HasSuffix(f, ":") && len(out) > 0 && !strings.HasSuffix(out[len(out)-1], ":") {
+			out[len(out)-1] += ":"
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 // helperToolEnv builds the environment for a helper-tool child process.
@@ -947,9 +983,9 @@ func downloadHelperTool(tool, target string, config *Config) error {
 
 // downloadHelperToolCtx is downloadHelperTool that honours cancellation.
 func downloadHelperToolCtx(ctx context.Context, tool, target string, config *Config) error {
-	// ffplay/ffmpeg/ffprobe ship together in one FFmpeg bundle, so a single
-	// download installs the whole family.
-	if tool == "ffmpeg" || tool == "ffplay" || tool == "ffprobe" {
+	// ffmpeg and ffprobe ship together in one FFmpeg bundle, so a single
+	// download installs both.
+	if tool == "ffmpeg" || tool == "ffprobe" {
 		return downloadFFmpegBundleCtx(ctx, target, config)
 	}
 	if tool == "yt-dlp" {
@@ -996,67 +1032,271 @@ func ffmpegArchiveExt(url string) string {
 }
 
 // downloadFFmpegBundle downloads the FFmpeg build for this platform and
-// installs ffplay, ffmpeg and ffprobe into the tools directory. The archive
-// nests the binaries a few folders deep, so extraction is by base name.
+// installs ffmpeg and ffprobe into the tools directory. The archive nests the
+// binaries a few folders deep, so extraction is by base name.
 func downloadFFmpegBundle(target string, config *Config) error {
 	return downloadFFmpegBundleCtx(context.Background(), target, config)
+}
+
+// toolInstallError is an install failure with the one short line the install
+// card and toast show for it. The underlying error stays attached for the log
+// and for errors.Is.
+type toolInstallError struct {
+	reason string
+	err    error
+}
+
+func (e *toolInstallError) Error() string {
+	if e.err == nil {
+		return e.reason
+	}
+	return e.reason + ": " + e.err.Error()
+}
+
+func (e *toolInstallError) Unwrap() error { return e.err }
+
+// ffmpegFamilyTool reports whether tool ships in the FFmpeg bundle, so a
+// failed bundle install is not repeated, download and all, for each member.
+func ffmpegFamilyTool(tool string) bool {
+	switch strings.TrimSuffix(strings.ToLower(tool), ".exe") {
+	case "ffmpeg", "ffprobe", "ffplay":
+		return true
+	}
+	return false
+}
+
+// ffmpegBundleWanted lists the binaries to take out of the FFmpeg bundle: the
+// tool the install was started for, plus ffmpeg and ffprobe when they are
+// missing. A tool that is already there is never replaced: a running player
+// may be using it.
+//
+// BtbN's bundle also carries ffplay, which is never unpacked: nothing in
+// JukaHub runs it (the embedded player decodes with ffmpeg), and on the
+// handheld it could not start anyway, because BtbN links it against X11.
+// Leaving it in the archive saves ~130 MB of SD card writes and space.
+func ffmpegBundleWanted(dir, need, goos string) []string {
+	suffix := ""
+	if goos == "windows" {
+		suffix = ".exe"
+	}
+	var wanted []string
+	for _, name := range []string{strings.ToLower(need), "ffmpeg" + suffix, "ffprobe" + suffix} {
+		if name == "" || helperFileUsable(filepath.Join(dir, name)) {
+			continue
+		}
+		duplicate := false
+		for _, w := range wanted {
+			if w == name {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			wanted = append(wanted, name)
+		}
+	}
+	return wanted
+}
+
+// ffmpegBundleCachePath is where a downloaded FFmpeg bundle waits while it is
+// unpacked, and stays after an install that failed for a reason other than
+// the archive itself (a full card, a cancel). The next attempt unpacks it
+// again instead of downloading ~130 MB over handheld Wi-Fi once more: a failed
+// install used to cost a full download on every retry, and again for each of
+// ffplay, ffmpeg and ffprobe.
+func ffmpegBundleCachePath(dir, ext string) string {
+	return filepath.Join(dir, ".ffmpeg-bundle"+ext)
+}
+
+// ffmpegBundleCacheMaxAge bounds how old a kept bundle may be and still be
+// unpacked. BtbN rebuilds its "latest" release daily, and after a couple of
+// days a fresh download is the better install.
+const ffmpegBundleCacheMaxAge = 48 * time.Hour
+
+// ffmpegBundleCacheUsable reports whether the bundle kept at path can be
+// unpacked instead of downloading again. Only a complete download is ever
+// renamed to that path, so presence, a plausible size and its age decide.
+func ffmpegBundleCacheUsable(path string, now time.Time) bool {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 1<<20 {
+		return false
+	}
+	return now.Sub(info.ModTime()) <= ffmpegBundleCacheMaxAge
+}
+
+// ffmpegBundleSpaceNeeded estimates the free space an install needs: the
+// archive unless it is already on disk, plus each binary it unpacks. A static
+// BtbN binary is about as large as the whole compressed bundle, so each one
+// is budgeted at the archive's size. That errs low on purpose: the check only
+// stops an install that certainly cannot fit.
+func ffmpegBundleSpaceNeeded(archiveSize int64, haveArchive bool, binaries int) int64 {
+	if archiveSize <= 0 || binaries <= 0 {
+		return 0
+	}
+	need := int64(binaries) * archiveSize
+	if !haveArchive {
+		need += archiveSize
+	}
+	return need
+}
+
+// ffmpegBundleSpaceCheck refuses an install that cannot fit before the bundle
+// is downloaded for nothing. Where free space cannot be measured (Windows) the
+// install goes ahead.
+func ffmpegBundleSpaceCheck(dir string, archiveSize int64, haveArchive bool, binaries int) error {
+	need := ffmpegBundleSpaceNeeded(archiveSize, haveArchive, binaries)
+	if need <= 0 {
+		return nil
+	}
+	free, err := freeBytes(dir)
+	if err != nil || free >= need {
+		return nil
+	}
+	return &toolInstallError{reason: fmt.Sprintf("ffmpeg needs %s free space, only %s left", humanBytes(need), humanBytes(free))}
+}
+
+// toolScratchMaxAge is how old a partial download or unpack stage in the
+// tools folder must be before it counts as a leftover. A younger one may
+// belong to an install that is running right now (Toolbox installs unpack
+// into the same kind of stage).
+const toolScratchMaxAge = 30 * time.Minute
+
+// purgeStaleToolScratch deletes what a killed install leaves in the tools
+// folder: partial downloads and unpack stages. Each can be hundreds of
+// megabytes, and on a handheld a few of them fill the card, after which every
+// retry fails while unpacking.
+func purgeStaleToolScratch(dir string, now time.Time) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasPrefix(name, ".tool-stage-") && !strings.HasPrefix(name, ".ffmpeg-download-") &&
+			!strings.HasPrefix(name, ".yt-dlp-") {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil || now.Sub(info.ModTime()) < toolScratchMaxAge {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(dir, name)); err != nil {
+			logPatch("[TOOLS] could not remove leftover %s: %v", name, err)
+			continue
+		}
+		logPatch("[TOOLS] removed leftover %s from an interrupted install", name)
+	}
+}
+
+// isDiskFullError reports an out-of-space failure by its text, which is what
+// survives the exec and wrapping layers: ENOSPC's on Linux, ERROR_DISK_FULL's
+// on Windows.
+func isDiskFullError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "no space left") || strings.Contains(s, "not enough space")
+}
+
+// downloadFFmpegArchive downloads the bundle beside the tools and renames it
+// to cache only once it is complete, so a kept bundle is never a partial one.
+// Staying on the SD card matters: on TrimUI /tmp is a small tmpfs on another
+// filesystem.
+func downloadFFmpegArchive(ctx context.Context, url, cache string) error {
+	_ = os.Remove(cache)
+	dir := filepath.Dir(cache)
+	tmp, err := os.CreateTemp(dir, ".ffmpeg-download-*"+ffmpegArchiveExt(url))
+	if err != nil {
+		return fmt.Errorf("create temp file in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	_ = tmp.Close()
+	defer os.Remove(tmpName)
+	logPatch("[TOOLS] downloading ffmpeg from %s", url)
+	installBarPhase(installPhaseDownload)
+	if err := downloadFileWithProgressCtx(ctx, url, tmpName, installBarProgress); err != nil {
+		if isDiskFullError(err) {
+			return &toolInstallError{reason: "SD card is full — free some space, then retry", err: err}
+		}
+		return fmt.Errorf("download ffmpeg: %w", err)
+	}
+	if err := os.Rename(tmpName, cache); err != nil {
+		return fmt.Errorf("keep the ffmpeg download: %w", err)
+	}
+	return nil
 }
 
 // downloadFFmpegBundleCtx is downloadFFmpegBundle that stops when ctx is
 // cancelled: a Play the user backed out of must not keep the bundle download
 // running behind the scene they went back to.
 func downloadFFmpegBundleCtx(ctx context.Context, target string, config *Config) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	assets, err := ffmpegAssetNames(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
-	}
-	installBarPhase(installPhaseResolving)
-	url, err := resolveToolURL("BtbN/FFmpeg-Builds", "", assets...)
-	if err != nil {
-		return fmt.Errorf("find ffmpeg release: %w", err)
 	}
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create tools directory %s: %w", dir, err)
 	}
-	// Stage the archive next to the tools, not in the system temp dir: on
-	// TrimUI /tmp is a small tmpfs on a different filesystem from the SD card.
-	// The temp file keeps the real asset extension: extraction picks zip vs
-	// tar.xz from the name, and the Linux/handheld builds are tar.xz.
-	tmp, err := os.CreateTemp(dir, ".ffmpeg-download-*"+ffmpegArchiveExt(url))
-	if err != nil {
-		return fmt.Errorf("create temp file in %s: %w", dir, err)
+	purgeStaleToolScratch(dir, time.Now())
+	wanted := ffmpegBundleWanted(dir, filepath.Base(target), runtime.GOOS)
+	// Every candidate asset of a platform has the same extension, and the
+	// unpacker picks its reader from the name.
+	cache := ffmpegBundleCachePath(dir, ffmpegArchiveExt(assets[0]))
+	reuse := ffmpegBundleCacheUsable(cache, time.Now())
+	var archiveSize int64
+	url := ""
+	if reuse {
+		archiveSize = fileSize(cache)
+		logPatch("[TOOLS] unpacking the ffmpeg bundle kept from the last attempt (%s)", humanBytes(archiveSize))
+	} else {
+		// A stale or partial copy goes before free space is measured.
+		_ = os.Remove(cache)
+		installBarPhase(installPhaseResolving)
+		asset, err := resolveToolAsset("BtbN/FFmpeg-Builds", "", assets...)
+		if err != nil {
+			return fmt.Errorf("find ffmpeg release: %w", err)
+		}
+		archiveSize, url = asset.Size, asset.URL
 	}
-	defer os.Remove(tmp.Name())
-	defer tmp.Close()
-	logPatch("[TOOLS] downloading ffmpeg from %s", url)
-	installBarPhase(installPhaseDownload)
-	if err := downloadFileWithProgressCtx(ctx, url, tmp.Name(), installBarProgress); err != nil {
-		return fmt.Errorf("download ffmpeg from %s: %w", url, err)
-	}
-	if err := tmp.Close(); err != nil {
+	if err := ffmpegBundleSpaceCheck(dir, archiveSize, reuse, len(wanted)); err != nil {
 		return err
 	}
-	installBarPhase(installPhaseExtract)
-	suffix := ""
-	if runtime.GOOS == "windows" {
-		suffix = ".exe"
-	}
-	family := []string{"ffplay" + suffix, "ffmpeg" + suffix, "ffprobe" + suffix}
-	// Only install the members that are actually missing. Replacing a tool
-	// that is already present is unnecessary and can clash with a copy that a
-	// running player still uses.
-	var wanted []string
-	for _, name := range family {
-		if helperFileUsable(filepath.Join(dir, name)) {
-			continue
+	if !reuse {
+		if err := downloadFFmpegArchive(ctx, url, cache); err != nil {
+			return err
 		}
-		wanted = append(wanted, name)
 	}
-	found, err := extractToolFiles(tmp.Name(), dir, wanted)
+	installBarResetProgress()
+	installBarPhase(installPhaseExtract)
+	installBarDetail("Unpacking — this can take a minute")
+	found, err := extractToolFilesCtx(ctx, cache, dir, wanted, installBarProgress)
 	if err != nil {
-		return fmt.Errorf("extract ffmpeg from %s: %w", url, err)
+		damaged := errors.Is(err, errBadToolArchive)
+		if damaged {
+			// A damaged download is useless; the next attempt fetches a new one.
+			_ = os.Remove(cache)
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// Cancelled: an intact download is kept for the next attempt.
+			return ctxErr
+		}
+		logPatch("[TOOLS] unpacking %s failed: %v", filepath.Base(cache), err)
+		if damaged {
+			return &toolInstallError{reason: "Download was damaged — retry downloads it again", err: err}
+		}
+		if isDiskFullError(err) {
+			return &toolInstallError{reason: "SD card is full — free some space, then retry", err: err}
+		}
+		return fmt.Errorf("unpack ffmpeg: %w", err)
 	}
+	// Whatever the checks below decide, this download has served its purpose.
+	_ = os.Remove(cache)
+	installBarDetail("")
 	if runtime.GOOS != "windows" {
 		for _, name := range found {
 			if err := os.Chmod(filepath.Join(dir, name), PermExec); err != nil {
@@ -2194,8 +2434,9 @@ func RepairJukaHub(config *Config) PatchRepairReport {
 		r.Warned = append(r.Warned, "patch state directory: "+err.Error())
 	}
 	// 3. Helper tool presence/architecture (without executing downloads).
+	// These are the tools playback runs; ffplay is not one of them.
 	if DetectDevice().IsTrimui() {
-		for _, tool := range []string{"yt-dlp", "ffplay"} {
+		for _, tool := range []string{"yt-dlp", "ffmpeg", "ffprobe"} {
 			p, err := P().LookPath(tool)
 			if err != nil {
 				r.Warned = append(r.Warned, tool+" not found (will fall back to system PATH)")

@@ -8,11 +8,42 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+// netshAdapter writes one interface block of `netsh wlan show interfaces`.
+// Empty arguments are left out, the way Windows omits a line it has nothing to
+// say about (a disconnected adapter has no SSID, BSSID or receive rate).
+func netshAdapter(name, description, state, ssid, rssi, signal string) string {
+	block := fmt.Sprintf("    Name                   : %s\n", name)
+	if description != "" {
+		block += fmt.Sprintf("    Description            : %s\n", description)
+	}
+	if state != "" {
+		block += fmt.Sprintf("    State                  : %s\n", state)
+	}
+	if ssid != "" {
+		block += fmt.Sprintf("    SSID                   : %s\n", ssid)
+		block += "    BSSID                  : a4:2b:8c:00:11:22\n"
+	}
+	if rssi != "" {
+		block += fmt.Sprintf("    Rssi                   : %s\n", rssi)
+	}
+	if signal != "" {
+		block += fmt.Sprintf("    Signal                 : %s\n", signal)
+	}
+	return block + "\n"
+}
+
+// netshReport wraps adapter blocks in a report header.
+func netshReport(blocks ...string) string {
+	header := fmt.Sprintf("There are %d interfaces on the system:\n\n", len(blocks))
+	return header + strings.Join(blocks, "")
+}
 
 // winWifiTestOutput is a Windows 11 `netsh wlan show interfaces` report, in the
 // English layout, the way the panel's source actually prints it.
@@ -120,6 +151,55 @@ func TestWinWifiReadsALocalizedReport(t *testing.T) {
 	got := ifaces[0]
 	if got.SSID != "Heimnetz" || !got.Connected || got.Signal != 87 {
 		t.Errorf("localized report read as %+v", got)
+	}
+}
+
+// Windows 11 renamed the BSSID line to "AP BSSID" and added an exact RSSI, so
+// a report captured on a current machine has to read the same link as the
+// Windows 10 layout above.
+func TestWinWifiParsesAWindows11Report(t *testing.T) {
+	const out = `
+There is 1 interface on the system:
+
+    Name                   : Wi-Fi
+    Description            : Intel(R) Wi-Fi 6 AX201 160MHz
+    GUID                   : 35e2a7e9-7689-446b-a24b-abed36ad8f49
+    Physical address       : a8:64:f1:bf:58:51
+    Interface type         : Primary
+    State                  : connected
+    SSID                   : Coffee Shop
+    AP BSSID               : cc:1b:5a:b2:b6:fd
+    Band                   : 5 GHz
+    Channel                : 36
+    Network type           : Infrastructure
+    Radio type             : 802.11ax
+    Authentication         : Open
+    Cipher                 : None
+    Connection mode        : Auto Connect
+    Receive rate (Mbps)    : 413
+    Transmit rate (Mbps)   : 287
+    Signal                 : 83%
+    Rssi                   : -54
+    Profile                : Coffee Shop
+    QoS MSCS Configured         : 0
+
+`
+	ifaces := parseNetshInterfaces(out)
+	if len(ifaces) != 1 {
+		t.Fatalf("parsed %d interfaces from a Windows 11 report: %+v", len(ifaces), ifaces)
+	}
+	got := ifaces[0]
+	if got.Name != "Wi-Fi" || got.SSID != "Coffee Shop" || !got.Connected {
+		t.Errorf("interface came out as %+v", got)
+	}
+	if got.BSSID != "cc:1b:5a:b2:b6:fd" {
+		t.Errorf("AP BSSID = %q, want the access point's address", got.BSSID)
+	}
+	if got.RssiDBM != -54 {
+		t.Errorf("Rssi = %d dBm, want -54", got.RssiDBM)
+	}
+	if got.RxMbps != 413 {
+		t.Errorf("receive rate = %v Mbit/s, want 413", got.RxMbps)
 	}
 }
 
@@ -236,10 +316,67 @@ SSID 2 : Cafe
 	}
 }
 
+// Scans must use the physical adapter selected by the picker, not whichever
+// wireless interface netsh happens to choose by default.
+func TestWinWifiRunOnInterfaceRejectsAnEmptyAdapter(t *testing.T) {
+	calls := stubWinWifi(t, func(args []string) (string, error) {
+		return "", nil
+	})
+	if _, err := winWifiRunOnInterface(" \t", "wlan", "show", "networks"); err == nil {
+		t.Fatal("an empty adapter name ran an unscoped netsh command")
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("empty adapter invoked netsh: %v", *calls)
+	}
+}
+
+func TestWinWifiScanUsesTheSelectedAdapter(t *testing.T) {
+	report := netshReport(
+		netshAdapter("Local Area Connection* 10", "Microsoft Wi-Fi Direct Virtual Adapter", "disconnected", "", "", ""),
+		netshAdapter("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", "disconnected", "", "", ""),
+	)
+	calls := stubWinWifi(t, func(args []string) (string, error) {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "show interfaces") {
+			return report, nil
+		}
+		if strings.Contains(joined, "show networks") {
+			if !strings.Contains(joined, "interface=Wi-Fi") {
+				t.Errorf("scan was not pinned to the selected physical adapter: %q", joined)
+			}
+			return "SSID 1 : Cafe\n    Authentication : Open\n    Encryption : None\n", nil
+		}
+		return "", nil
+	})
+	nets, err := winWifiScanResults()
+	if err != nil {
+		t.Fatalf("winWifiScanResults: %v", err)
+	}
+	if len(nets) != 1 || nets[0].SSID != "Cafe" {
+		t.Fatalf("scan networks = %+v", nets)
+	}
+	found := false
+	for _, call := range *calls {
+		if strings.Contains(call, "show networks") && strings.Contains(call, "interface=Wi-Fi") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no scan was issued against the selected adapter: %v", *calls)
+	}
+}
+
 // A report with no networks is an answer, not a crash.
 func TestWinWifiScanWithNothingInRange(t *testing.T) {
 	stubWinWifi(t, func(args []string) (string, error) {
-		if strings.Contains(strings.Join(args, " "), "networks") {
+		joined := strings.Join(args, " ")
+		if strings.Contains(joined, "show interfaces") {
+			return winWifiTestOutput, nil
+		}
+		if strings.Contains(joined, "networks") {
+			if !strings.Contains(joined, "interface=Wi-Fi") {
+				t.Errorf("scan was not pinned to Wi-Fi: %q", joined)
+			}
 			return "Interface name : Wi-Fi\nThere are 0 networks currently visible.\n", nil
 		}
 		return "", nil
@@ -387,10 +524,20 @@ func TestWinWifiJoinWritesAProfile(t *testing.T) {
 	if _, err := os.Stat(profilePath); !os.IsNotExist(err) {
 		t.Errorf("the profile file holding the key was left behind at %s", profilePath)
 	}
+	sawScopedAdd, sawScopedConnect := false, false
 	for _, call := range *calls {
 		if strings.Contains(call, pass) {
 			t.Fatalf("the passphrase reached a command line: %q", call)
 		}
+		if strings.Contains(call, "add profile") {
+			sawScopedAdd = strings.Contains(call, "interface=Wi-Fi")
+		}
+		if strings.Contains(call, "connect name=HomeNet") {
+			sawScopedConnect = strings.Contains(call, "interface=Wi-Fi")
+		}
+	}
+	if !sawScopedAdd || !sawScopedConnect {
+		t.Errorf("profile import/connect were not pinned to the selected adapter: %v", *calls)
 	}
 }
 
@@ -434,6 +581,9 @@ func TestWinWifiSelectSavedConnectsTheProfile(t *testing.T) {
 		case strings.Contains(joined, "profiles"):
 			return "Profiles on interface Wi-Fi:\n\nUser profiles\n-------------\n    All User Profile     : HomeNet\n", nil
 		case strings.Contains(joined, "connect"):
+			if !strings.Contains(joined, "interface=Wi-Fi") {
+				t.Errorf("saved-profile connect was not pinned to Wi-Fi: %q", joined)
+			}
 			return "Connection request was completed successfully.\r\n", nil
 		case strings.Contains(joined, "show interfaces"):
 			return winWifiTestOutput, nil
@@ -447,10 +597,17 @@ func TestWinWifiSelectSavedConnectsTheProfile(t *testing.T) {
 	if res.SSID != "HomeNet" || !res.Saved {
 		t.Errorf("result = %+v", res)
 	}
+	sawScopedConnect := false
 	for _, call := range *calls {
 		if strings.Contains(call, "add profile") {
 			t.Fatalf("a saved network was re-added instead of connected: %q", call)
 		}
+		if strings.Contains(call, "connect name=HomeNet") && strings.Contains(call, "interface=Wi-Fi") {
+			sawScopedConnect = true
+		}
+	}
+	if !sawScopedConnect {
+		t.Errorf("no adapter-scoped saved-profile connect was made: %v", *calls)
 	}
 }
 
@@ -489,6 +646,29 @@ func TestWinWifiForgetDeletesTheProfile(t *testing.T) {
 	}
 }
 
+// An exact dBm from Windows 11 wins over the quality percentage: -54 is what
+// the adapter measured, while 83% maps to -59.
+func TestWinWifiSignalPrefersAnExactRssi(t *testing.T) {
+	const out = `There is 1 interface on the system:
+
+    Name                   : Wi-Fi
+    State                  : connected
+    SSID                   : Coffee Shop
+    AP BSSID               : cc:1b:5a:b2:b6:fd
+    Signal                 : 83%
+    Rssi                   : -54
+
+`
+	stubWinWifi(t, func(args []string) (string, error) { return out, nil })
+	sample, err := wifiSignalPoll()
+	if err != nil {
+		t.Fatalf("wifiSignalPoll: %v", err)
+	}
+	if sample.RSSI != -54 {
+		t.Errorf("RSSI = %d dBm, want the reported -54", sample.RSSI)
+	}
+}
+
 // The status meter needs a strength even when the kernel has no /proc: the
 // Windows poll answers from the interface report.
 func TestWinWifiSignalPollReadsTheReport(t *testing.T) {
@@ -515,6 +695,244 @@ func TestWinWifiSignalPollReadsTheReport(t *testing.T) {
 	})
 	if _, err := wifiSignalPoll(); err == nil {
 		t.Error("a disconnected adapter reported a signal")
+	}
+}
+
+// A missing adapter is answers, not a verdict: Windows often has not brought the
+// radio up yet when the app starts, so "there is no interface" is retried after
+// winWifiNegativeTTL instead of being held for the full minute a real adapter is.
+func TestWinWifiNoAdapterAnswerExpiresQuickly(t *testing.T) {
+	var present bool
+	calls := 0
+	stubWinWifi(t, func(args []string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "show interfaces") {
+			calls++
+		}
+		if present {
+			return winWifiTestOutput, nil
+		}
+		return "There is no wireless interface on the system.\r\n", nil
+	})
+	prevNow := wifiDrivenNow
+	now := time.Now()
+	wifiDrivenNow = func() time.Time { return now }
+	t.Cleanup(func() { wifiDrivenNow = prevNow })
+
+	if wifiControlAvailable() {
+		t.Fatal("an absent adapter reported itself usable")
+	}
+	// Inside the negative TTL the answer is cached: the status bar asks often.
+	if wifiControlAvailable() {
+		t.Fatal("the absent adapter became usable")
+	}
+	if calls != 1 {
+		t.Fatalf("probed %d times inside the TTL, want the one cached probe", calls)
+	}
+
+	present = true
+	now = now.Add(winWifiNegativeTTL + time.Second)
+	if !wifiControlAvailable() {
+		t.Fatal("a radio that appeared was not noticed after the negative TTL")
+	}
+	if got := winWifiInterface(); got != "Wi-Fi" {
+		t.Errorf("interface = %q, want Wi-Fi", got)
+	}
+}
+
+// Opening the picker asks the platform again on Windows too. Without this a
+// radio that was still loading at boot keeps answering "no interface" from the
+// cache, which is what made the panel unreachable after a resume or a plug-in.
+func TestResetWiFiInterfaceCacheAsksNetshAgain(t *testing.T) {
+	var present bool
+	stubWinWifi(t, func(args []string) (string, error) {
+		if present {
+			return winWifiTestOutput, nil
+		}
+		return "There is no wireless interface on the system.\r\n", nil
+	})
+	if wifiControlAvailable() {
+		t.Fatal("an absent adapter reported itself usable")
+	}
+	present = true
+	resetWiFiInterfaceCache()
+	if !wifiControlAvailable() {
+		t.Fatal("the picker's reset did not re-probe the adapter")
+	}
+}
+
+// The CONNECTED row and the status meter must read the same strength: the scan
+// reports a quality percentage, the adapter reports the dBm it measured, and the
+// measured level is the one both end up showing.
+func TestWinWifiSnapshotUsesTheMeasuredSignal(t *testing.T) {
+	// The adapter measured -54 dBm; the scan row for the same access point
+	// reports 78%, which maps to -61.
+	const interfaces = `There is 1 interface on the system:
+
+    Name                   : Wi-Fi
+    State                  : connected
+    SSID                   : HomeNet
+    AP BSSID               : a4:2b:8c:00:11:22
+    Receive rate (Mbps)    : 866.7
+    Signal                 : 78%
+    Rssi                   : -54
+
+`
+	const networks = `Interface name : Wi-Fi
+There are 1 networks currently visible.
+
+SSID 1 : HomeNet
+    Network type            : Infrastructure
+    Authentication          : WPA2-Personal
+    Encryption              : CCMP
+    BSSID 1                 : a4:2b:8c:00:11:22
+         Signal             : 78%
+`
+	stubWinWifi(t, func(args []string) (string, error) {
+		joined := strings.Join(args, " ")
+		switch {
+		case strings.Contains(joined, "show interfaces"):
+			return interfaces, nil
+		case strings.Contains(joined, "show networks"):
+			return networks, nil
+		}
+		return "", nil
+	})
+	snap, err := winWifiReadSnapshot()
+	if err != nil {
+		t.Fatalf("winWifiReadSnapshot: %v", err)
+	}
+	if len(snap.Networks) != 1 {
+		t.Fatalf("snapshot holds %d networks: %+v", len(snap.Networks), snap.Networks)
+	}
+	row := snap.Networks[0]
+	if !row.Active {
+		t.Fatalf("the connected network is not marked active: %+v", row)
+	}
+	if row.Signal != -54 {
+		t.Errorf("row signal = %d dBm, want the measured -54", row.Signal)
+	}
+}
+
+// A machine can report several wireless adapters. The linked one is the one the
+// picker must show: reading block zero reported "no network" while the machine
+// sat on one, because Windows puts the disconnected virtual adapter first.
+func TestWinWifiPicksTheLinkedAdapter(t *testing.T) {
+	report := netshReport(
+		netshAdapter("Local Area Connection* 10", "Microsoft Wi-Fi Direct Virtual Adapter", "disconnected", "", "", ""),
+		netshAdapter("Wi-Fi 2", "Realtek RTL8852BE WiFi 6", "disconnected", "", "", ""),
+		netshAdapter("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", "connected", "BoatNet", "-54", "83%"),
+	)
+	stubWinWifi(t, func(args []string) (string, error) { return report, nil })
+
+	if got := winWifiInterface(); got != "Wi-Fi" {
+		t.Fatalf("interface = %q, want the linked adapter", got)
+	}
+	st, err := wifiReadStatus()
+	if err != nil {
+		t.Fatalf("wifiReadStatus: %v", err)
+	}
+	if !st.Connected || st.SSID != "BoatNet" || st.State != wifiCompleteState {
+		t.Errorf("status = %+v, want the linked adapter's association", st)
+	}
+}
+
+// With nothing linked, a real NIC beats a software adapter over the same radio.
+func TestWinWifiPrefersARealAdapterOverAVirtualOne(t *testing.T) {
+	report := netshReport(
+		netshAdapter("Local Area Connection* 1", "Microsoft Wi-Fi Direct Virtual Adapter", "disconnected", "", "", ""),
+		netshAdapter("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", "disconnected", "", "", ""),
+	)
+	stubWinWifi(t, func(args []string) (string, error) { return report, nil })
+	if got := winWifiInterface(); got != "Wi-Fi" {
+		t.Fatalf("interface = %q, want the physical adapter", got)
+	}
+}
+
+// A report whose blocks are all unrecognisable still has to answer with an
+// adapter: a localized Description line must not turn into "no interface".
+func TestWinWifiPicksAnAdapterWhenNoBlockLooksVirtual(t *testing.T) {
+	report := netshReport(
+		netshAdapter("WLAN", "", "getrennt", "", "", ""),
+		netshAdapter("WLAN 2", "", "getrennt", "", "", ""),
+	)
+	stubWinWifi(t, func(args []string) (string, error) { return report, nil })
+	if got := winWifiInterface(); got != "WLAN" {
+		t.Fatalf("interface = %q, want the first adapter as the last resort", got)
+	}
+}
+
+// The status read re-reads the report for a fresh association, and with several
+// adapters it must stay on the one the panel is showing — even after the
+// strength ranking between them flips.
+func TestWinWifiStatusDoesNotSwitchWhenTheSelectedAdapterDisappears(t *testing.T) {
+	first := true
+	stubWinWifi(t, func(args []string) (string, error) {
+		if first {
+			first = false
+			return netshReport(
+				netshAdapter("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", "connected", "HomeNet", "-55", "80%"),
+			), nil
+		}
+		return netshReport(
+			netshAdapter("Wi-Fi 2", "Realtek RTL8852BE WiFi 6", "connected", "CafeNet", "-40", "99%"),
+		), nil
+	})
+	if got := winWifiInterface(); got != "Wi-Fi" {
+		t.Fatalf("selected adapter = %q, want Wi-Fi", got)
+	}
+	st, err := wifiReadStatus()
+	if err != nil {
+		t.Fatalf("wifiReadStatus: %v", err)
+	}
+	if st.Connected || st.SSID != "" {
+		t.Errorf("status silently switched to another adapter: %+v", st)
+	}
+}
+
+func TestWinWifiStatusReadsTheAdapterItNamed(t *testing.T) {
+	first := true
+	stubWinWifi(t, func(args []string) (string, error) {
+		// The first read links Wi-Fi at 80%; the second read has the dongle
+		// stronger, so a fresh pick would move to it.
+		if first {
+			first = false
+			return netshReport(
+				netshAdapter("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", "connected", "HomeNet", "-55", "80%"),
+				netshAdapter("Wi-Fi 2", "Realtek RTL8852BE WiFi 6", "connected", "CafeNet", "-80", "40%"),
+			), nil
+		}
+		return netshReport(
+			netshAdapter("Wi-Fi 2", "Realtek RTL8852BE WiFi 6", "connected", "CafeNet", "-40", "99%"),
+			netshAdapter("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", "connected", "HomeNet", "-55", "80%"),
+		), nil
+	})
+
+	if got := winWifiInterface(); got != "Wi-Fi" {
+		t.Fatalf("the stronger adapter was not chosen first: %q", got)
+	}
+	st, err := wifiReadStatus()
+	if err != nil {
+		t.Fatalf("wifiReadStatus: %v", err)
+	}
+	if st.SSID != "HomeNet" {
+		t.Errorf("status read %q, want the adapter the panel is showing (HomeNet)", st.SSID)
+	}
+}
+
+// The status meter reads the adapter's measured level, so with several adapters
+// it must read the linked one rather than a disconnected first block.
+func TestWinWifiSignalPollUsesTheLinkedAdapter(t *testing.T) {
+	report := netshReport(
+		netshAdapter("Local Area Connection* 10", "Microsoft Wi-Fi Direct Virtual Adapter", "disconnected", "", "", ""),
+		netshAdapter("Wi-Fi", "Intel(R) Wi-Fi 6 AX201 160MHz", "connected", "BoatNet", "-54", "83%"),
+	)
+	stubWinWifi(t, func(args []string) (string, error) { return report, nil })
+	sample, err := wifiSignalPoll()
+	if err != nil {
+		t.Fatalf("wifiSignalPoll: %v", err)
+	}
+	if sample.RSSI != -54 {
+		t.Errorf("RSSI = %d dBm, want the linked adapter's -54", sample.RSSI)
 	}
 }
 

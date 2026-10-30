@@ -13,7 +13,7 @@
 #  Environment:
 #      SYSROOT        TrimUI SDK sysroot (default: the linaro toolchain)
 #      WITH_YTDLP     1 = download the static ARM64 yt-dlp   (default 1)
-#      WITH_FFMPEG    1 = download ffmpeg/ffprobe/ffplay     (default 1)
+#      WITH_FFMPEG    1 = download ffmpeg/ffprobe            (default 1)
 #      FFMPEG_BUILD   BtbN asset name                       (default rolling master)
 # ---------------------------------------------------------------------------
 set -euo pipefail
@@ -116,11 +116,14 @@ if [ "$WITH_FFMPEG" = "1" ]; then
     fetch "$FFMPEG_URL" "$TMP/ffmpeg.tar.xz"
     tar -xJf "$TMP/ffmpeg.tar.xz" -C "$TMP"
     BINDIR="$(find "$TMP" -type d -name bin | head -n1)"
-    # The static builds ship with symbols (~130 MB each, 400 MB for all three).
-    # Stripping drops that to a fraction; the handhelds only have 1 GB of RAM
-    # and a FAT32 card, so the size matters more than being able to debug ffmpeg.
+    # The static builds ship with symbols (~130 MB each). Stripping drops that
+    # to a fraction; the handhelds only have 1 GB of RAM and a FAT32 card, so
+    # the size matters more than being able to debug ffmpeg.
+    # ffplay stays out of the package: nothing in JukaHub runs it (the embedded
+    # player decodes with ffmpeg), and BtbN links it against X11, which the
+    # handheld does not have, so it could not even start there.
     STRIP="$(command -v aarch64-linux-gnu-strip || true)"
-    for tool in ffmpeg ffprobe ffplay; do
+    for tool in ffmpeg ffprobe; do
         if [ -f "$BINDIR/$tool" ]; then
             cp -f "$BINDIR/$tool" "$REQ/$tool"
             if [ -n "$STRIP" ]; then

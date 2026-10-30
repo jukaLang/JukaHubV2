@@ -666,6 +666,12 @@ func runLEDLoop(stop <-chan struct{}, devs []ledDevice) {
 			}
 			return
 		case <-ticker.C:
+			// While a game owns the screen there is no JukaHub UI to light: keep
+			// the frame clock but stop writing sysfs thirty times a second. See
+			// backgroundwork.go.
+			if backgroundPaused() {
+				continue
+			}
 			r, g, b := ledFrameColor(time.Now())
 			// Quantise to 32 steps per channel: visually identical, far fewer
 			// sysfs writes.

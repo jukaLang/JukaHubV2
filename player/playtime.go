@@ -306,10 +306,16 @@ func ensurePlaytimeEntry(config *Config) {
 
 // renderPlaytime draws the stats screen. All numbers are formatted, never raw
 // seconds, so the handheld's tiny screen stays readable.
-var playtimeRARect sdl.Rect
+var (
+	playtimeRARect sdl.Rect
+	// playtimeHeatRect is where this frame drew the insights grid, so a probe
+	// can assert against the real geometry instead of a copied layout.
+	playtimeHeatRect sdl.Rect
+)
 
 func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	playtimeRARect = sdl.Rect{}
+	playtimeHeatRect = sdl.Rect{}
 	renderer.SetDrawColor(9, 12, 20, 255)
 	renderer.Clear()
 	renderAmbientBackground(renderer)
@@ -365,7 +371,8 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, "MOST USED", ColorTextTertiary(), 52, 214)
 	rows := sortedPlaytimeScenes(playtime.data)
 	if len(rows) == 0 {
-		renderText(renderer, config, font, "Start exploring — your stats appear here.", ColorTextSecondary(), 52, 254)
+		empty := "Start exploring — your stats appear here."
+		renderText(renderer, config, font, ellipsize(font, empty, leftW-48), ColorTextSecondary(), 52, 254)
 	} else {
 		max := rows[0].Seconds
 		for i := 0; i < len(rows) && i < 5; i++ {
@@ -386,11 +393,37 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
+	// Insights: the same Days series the old seven bars used, over the whole
+	// 13-week window the pruner keeps, with the streak and best day the bars
+	// could not show. See wrapped.go.
 	rightX := int32(504)
 	rightW := screenWidth - rightX - 28
 	drawCard(renderer, rightX, 194, rightW, 238, 16)
-	renderText(renderer, config, font, "LAST 7 DAYS", ColorTextTertiary(), rightX+24, 214)
-	drawPlaytimeWeek(renderer, config, sdl.Rect{X: rightX + 24, Y: 244, W: rightW - 48, H: 158})
+	ins := buildWrappedInsights(playtime.data, time.Now())
+	renderText(renderer, config, font, "LAST 13 WEEKS", ColorTextTertiary(), rightX+24, 214)
+	// The grid takes the card's full height (13 columns of ~23px, seven rows of
+	// ~22px) because a 12px cell is unreadable at arm's length on the handheld's
+	// 4.96" panel. The stat column that is left is still ~390px wide, enough for
+	// two 190px columns of label + value.
+	heat := sdl.Rect{X: rightX + 24, Y: 244, W: 300, H: 155}
+	playtimeHeatRect = heat
+	drawWrappedHeatmap(renderer, config, heat, ins)
+
+	// Three stat rows beside the grid. The pitch is 64px because the value is
+	// drawn at the medium role (24px) with room for an accessibility step
+	// before it touches the row below.
+	statsX := heat.X + heat.W + 28
+	statsColW := int32(190)
+	renderText(renderer, config, font, "STREAK", ColorTextTertiary(), statsX, 240)
+	renderText(renderer, config, med, wrappedDaysLabel(ins.CurrentStreak), ColorTextPrimary(), statsX, 258)
+	renderText(renderer, config, font, "LONGEST", ColorTextTertiary(), statsX+statsColW, 240)
+	renderText(renderer, config, med, wrappedDaysLabel(ins.LongestStreak), ColorTextPrimary(), statsX+statsColW, 258)
+	renderText(renderer, config, font, "BEST DAY", ColorTextTertiary(), statsX, 304)
+	renderText(renderer, config, med, wrappedBestDayLabel(ins), ColorTextPrimary(), statsX, 322)
+	renderText(renderer, config, font, "DAILY AVERAGE", ColorTextTertiary(), statsX+statsColW, 304)
+	renderText(renderer, config, med, formatPlaytime(ins.DailyAverage), ColorTextPrimary(), statsX+statsColW, 322)
+	renderText(renderer, config, font, "ACTIVE DAYS", ColorTextTertiary(), statsX, 368)
+	renderText(renderer, config, med, fmt.Sprintf("%d of %d", ins.ActiveDays, wrappedDays), ColorTextPrimary(), statsX, 386)
 
 	// Achievements.
 	achY := int32(448)
@@ -431,43 +464,6 @@ func playtimeWeekSeconds(data playtimeData) int64 {
 		total += data.Days[time.Now().AddDate(0, 0, -i).Format("2006-01-02")]
 	}
 	return total
-}
-
-func drawPlaytimeWeek(renderer *sdl.Renderer, config *Config, rect sdl.Rect) {
-	values := make([]int64, 7)
-	var max int64
-	for i := 0; i < 7; i++ {
-		values[i] = playtime.data.Days[time.Now().AddDate(0, 0, -6+i).Format("2006-01-02")]
-		if values[i] > max {
-			max = values[i]
-		}
-	}
-	barW := int32(22)
-	gap := int32(16)
-	baseY := rect.Y + rect.H - 18
-	for i, v := range values {
-		x := rect.X + int32(i)*(barW+gap)
-		h := int32(12)
-		if max > 0 && v > 0 {
-			h = int32(float64(v) / float64(max) * float64(rect.H-52))
-			if h < 12 {
-				h = 12
-			}
-		}
-		col := WithAlpha(ColorBorder, 100)
-		if v > 0 {
-			col = WithAlpha(accentColor, 210)
-		}
-		fillRoundedRect(renderer, x, baseY-h, barW, h, 5, col)
-		label := time.Now().AddDate(0, 0, -6+i).Format("Mon")[:1]
-		// Initials avoid a 7×3-letter row on the handheld. Use the shared
-		// renderer with the caller's font for the label.
-		f, _ := getCachedFont(config, "small")
-		if f != nil {
-			lw, _, _ := f.SizeUTF8(label)
-			renderText(renderer, config, f, label, ColorTextTertiary(), x+(barW-int32(lw))/2, baseY+4)
-		}
-	}
 }
 
 // Scene registration: the Playtime screen has no config elements, so it owns

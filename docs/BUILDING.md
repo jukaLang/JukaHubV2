@@ -105,18 +105,22 @@ SYSROOT=/usr/local/aarch64-linux-gnu-7.5.0-linaro/sysroot ./package-sdcard.sh
 
 It builds `linux/arm64` with CGO, stages the app files from
 [`player/trimui/Apps/JukaHub/`](../player/trimui/Apps/JukaHub), fetches the
-static ARM64 `yt-dlp` and ffmpeg/ffprobe/ffplay builds into `required/`,
+static ARM64 `yt-dlp` and the ffmpeg/ffprobe builds into `required/`,
 strips them, and writes:
 
 - `dist/JukaHub-SDCARD/Apps/JukaHub/` — copy-ready folder
 - `dist/JukaHub-SDCARD.zip` — the same folder as an archive
 - `dist/build-summary.txt` — version, linked SONAMEs, file list
 
+BtbN's bundle also carries `ffplay`; it is left out of the package because
+nothing runs it (playback decodes with `ffmpeg`) and it needs X11, which the
+handheld does not have.
+
 | Environment variable | Default | Effect |
 |----------------------|---------|--------|
 | `SYSROOT` | linaro toolchain path | device SDK sysroot |
 | `WITH_YTDLP` | `1` | download the static ARM64 `yt-dlp` |
-| `WITH_FFMPEG` | `1` | download and strip ffmpeg/ffprobe/ffplay |
+| `WITH_FFMPEG` | `1` | download and strip ffmpeg/ffprobe |
 | `FFMPEG_BUILD` | `ffmpeg-master-latest-linuxarm64-gpl` | BtbN release asset |
 | `YTDLP_URL`, `FFMPEG_URL` | upstream latest | override the download sources |
 

@@ -227,8 +227,16 @@ func startWeather(config *Config) {
 	restoreWeatherCache(time.Now())
 	go func() {
 		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+		wake := subscribeForegroundWake()
 		fetchWeatherOnce()
-		for range ticker.C {
+		for {
+			// Ten minutes is a long time to sit out while a game owns the screen; a
+			// wake when JukaHub is back refreshes the header immediately instead
+			// of leaving yesterday's forecast up. See backgroundwork.go.
+			if !waitForPoll(ticker.C, wake) {
+				continue
+			}
 			fetchWeatherOnce()
 		}
 	}()

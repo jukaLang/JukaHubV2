@@ -4072,3 +4072,126 @@ body:not(.element-selected) .element:focus {
 .noscript-note a {
   color: var(--accent, #a78bfa);
 }
+
+/* === Player-fidelity preview ==============================================
+   The canvas is meant to show the design as the device draws it, so the two
+   shapes the player renders most distinctly are painted the way
+   player/core.go (tile buttons) and player/recent.go (the Continue card) do.
+   Radii and dimensions are the player's own tokens: TileRadius = 16, the glyph
+   clamped to 44..64 px, the label 14 px off the bottom edge, and the Continue
+   card's inner padding of 18 px. */
+:root {
+  --player-card: #182236;                 /* design.go ColorCard */
+  --player-card-border: rgba(42, 57, 83, 0.47); /* ColorBorder at the card's hairline alpha */
+  --player-text: #F6F8FC;                 /* ColorTextPrimary */
+  --player-text-dim: #9CA9BD;             /* ColorTextSecondary */
+}
+
+.theme-light {
+  --player-card: #ffffff;
+  --player-card-border: rgba(27, 34, 48, 0.12);
+  --player-text: #1a1d26;
+  --player-text-dim: #5f6b80;
+}
+
+/* Tiles: icon centred at 36% of the height, label along the bottom. */
+.element.is-tile {
+  border-radius: 16px;
+  padding: 0;
+}
+
+.element.is-tile .tile-icon {
+  position: absolute;
+  left: 50%;
+  top: 36%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.element.is-tile .text-content {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 14px;
+  text-align: center;
+}
+
+/* The Continue card the device draws for a `recent` element. Its own colour
+   fields are ignored by the player, so the canvas ignores them too. */
+.element.is-recent {
+  border-radius: 16px;
+  padding: 0;
+  background: var(--player-card);
+  border-color: var(--player-card-border);
+  color: var(--player-text);
+}
+
+.element.is-recent .recent-card {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.element.is-recent .recent-title {
+  position: absolute;
+  left: 18px;
+  top: 18px;
+  color: var(--player-text);
+  font-weight: 600;
+}
+
+.element.is-recent .recent-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px;
+  text-align: center;
+  color: var(--player-text-dim);
+}
+
+.element.is-recent .recent-empty i {
+  font-size: 32px;
+  color: var(--player-text-dim);
+}
+
+.element.is-recent .recent-empty-title {
+  color: var(--player-text);
+}
+
+/* The device draws buttons and generic cards with RadiusMD = 12 px. */
+.element {
+  border-radius: 12px;
+}
+
+/* Inputs: the device's field is an 8 px rounded box whose text sits against the
+   left edge, in a slightly lifted surface, with the placeholder in the muted
+   colour (player/core.go renderInputField). */
+.element.is-input {
+  border-radius: 8px;
+  justify-content: flex-start;
+  padding: 0 14px;
+  background: var(--player-input, #141822);
+  color: var(--player-input-text, #DCE2F0);
+}
+
+.element.is-input .text-content {
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.element.is-input.is-placeholder .text-content {
+  color: var(--player-text-dim);
+  font-weight: 500;
+}
+
+.theme-light {
+  --player-input: #eef1f7;
+  --player-input-text: #242a38;
+}

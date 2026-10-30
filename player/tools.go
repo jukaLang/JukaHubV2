@@ -1,11 +1,15 @@
 package main
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"bufio"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ulikunitz/xz"
 )
 
 // resolveToolURL returns the download URL for the first release asset whose
@@ -49,25 +55,46 @@ var allowedToolRepos = map[string]bool{
 }
 
 func resolveToolURL(repo, apiToken string, wants ...string) (string, error) {
-	if len(wants) == 0 {
-		return "", fmt.Errorf("resolveToolURL called without any wanted asset names")
-	}
-	assets, err := latestReleaseAssets(repo, apiToken)
+	asset, err := resolveToolAsset(repo, apiToken, wants...)
 	if err != nil {
 		return "", err
 	}
-	for _, a := range assets {
-		for _, w := range wants {
-			if strings.EqualFold(a.Name, w) {
-				return a.URL, nil
-			}
-		}
+	return asset.URL, nil
+}
+
+// resolveToolAsset is resolveToolURL returning the whole asset, size included.
+// The wanted names are a preference order (the GPL ffmpeg build before the LGPL
+// one), so they are tried in turn rather than in the order the API lists the
+// release's files.
+func resolveToolAsset(repo, apiToken string, wants ...string) (releaseAsset, error) {
+	if len(wants) == 0 {
+		return releaseAsset{}, fmt.Errorf("resolveToolAsset called without any wanted asset names")
+	}
+	assets, err := latestReleaseAssets(repo, apiToken)
+	if err != nil {
+		return releaseAsset{}, err
+	}
+	if a, ok := pickReleaseAsset(assets, wants); ok {
+		return a, nil
 	}
 	names := make([]string, 0, len(wants))
 	for _, w := range wants {
 		names = append(names, fmt.Sprintf("%q", w))
 	}
-	return "", fmt.Errorf("no matching asset found in %s latest release (wanted %s)", repo, strings.Join(names, ", "))
+	return releaseAsset{}, fmt.Errorf("no matching asset found in %s latest release (wanted %s)", repo, strings.Join(names, ", "))
+}
+
+// pickReleaseAsset returns the asset named by the first entry of wants that
+// the release has, comparing names case-insensitively.
+func pickReleaseAsset(assets []releaseAsset, wants []string) (releaseAsset, bool) {
+	for _, w := range wants {
+		for _, a := range assets {
+			if strings.EqualFold(a.Name, w) {
+				return a, true
+			}
+		}
+	}
+	return releaseAsset{}, false
 }
 
 // releaseAsset is one file attached to a GitHub release.
@@ -306,7 +333,7 @@ func (c *ioWriteCloserNW) Close() error {
 
 // extractToolFiles pulls specific files out of a tool archive and places them
 // at the top of destDir regardless of how deeply the archive nests them
-// (BtbN ffmpeg zips ship bin/ffplay.exe inside a versioned folder). Only the
+// (BtbN ffmpeg zips ship bin/ffmpeg.exe inside a versioned folder). Only the
 // requested base names are written, so archive traversal is impossible by
 // construction. Returns the base names actually extracted.
 //
@@ -316,6 +343,24 @@ func (c *ioWriteCloserNW) Close() error {
 // filesystem also lets each finished binary be renamed into place instead of
 // being written over, which avoids ETXTBSY when a copy is already running.
 func extractToolFiles(archivePath, destDir string, names []string) ([]string, error) {
+	return extractToolFilesCtx(context.Background(), archivePath, destDir, names, nil)
+}
+
+// extractToolFilesCtx is extractToolFiles that stops when ctx is cancelled and
+// reports how far it has read through the archive (bytes, archive size) to
+// progress, which may be nil.
+//
+// Tar archives (plain, .tar.gz, .tar.xz) are decoded in-process. The handheld
+// ffmpeg builds are .tar.xz, and the TrimUI firmware cannot unpack those with
+// its own tools: its busybox has no xz, and a tar that can still writes the
+// whole ~400 MB bundle to the card and, running as root, trips over chown on
+// the card's exFAT. That was "Could not install ffplay" on every attempt and
+// every retry. The system tar is now only a second opinion for an archive the
+// built-in reader rejects.
+func extractToolFilesCtx(ctx context.Context, archivePath, destDir string, names []string, progress func(done, total int64)) ([]string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := os.MkdirAll(destDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create tools directory %s: %w", destDir, err)
 	}
@@ -330,55 +375,30 @@ func extractToolFiles(archivePath, destDir string, names []string) ([]string, er
 	defer os.RemoveAll(stage)
 
 	// Base name -> path inside the staging dir.
-	staged := make(map[string]string, len(names))
-	if strings.HasSuffix(strings.ToLower(archivePath), ".zip") {
-		zr, err := zip.OpenReader(archivePath)
-		if err != nil {
-			return nil, fmt.Errorf("open archive %s: %w", archivePath, err)
+	var staged map[string]string
+	_, isTar := toolTarCompression(archivePath)
+	switch {
+	case strings.HasSuffix(strings.ToLower(archivePath), ".zip"):
+		staged, err = extractZipMembers(ctx, archivePath, stage, want)
+	case isTar:
+		staged, err = extractTarMembers(ctx, archivePath, stage, want, progress)
+		if err != nil && errors.Is(err, errBadToolArchive) && ctx.Err() == nil {
+			// The built-in reader could not decode the archive. A system tar may
+			// know a variant it does not, so it gets one try before the archive
+			// is reported damaged; its own error only goes to the log.
+			log.Printf("[tools] built-in unpack of %s failed: %v; trying the system tar", filepath.Base(archivePath), err)
+			alt, altErr := extractWithSystemTar(archivePath, stage, want)
+			if altErr == nil {
+				staged, err = alt, nil
+			} else {
+				log.Printf("[tools] the system tar could not unpack %s either: %v", filepath.Base(archivePath), altErr)
+			}
 		}
-		defer zr.Close()
-		for _, f := range zr.File {
-			if f.FileInfo().IsDir() {
-				continue
-			}
-			base := strings.ToLower(path.Base(filepath.ToSlash(f.Name)))
-			if !want[base] {
-				continue
-			}
-			if _, done := staged[base]; done {
-				continue
-			}
-			dest, err := safeJoinFile(stage, base)
-			if err != nil {
-				return nil, err
-			}
-			if err := extractZipEntryTo(f, dest); err != nil {
-				return nil, err
-			}
-			staged[base] = dest
-		}
-	} else {
-		// tar.xz (and friends): use the system tar, which is present on Linux
-		// and on Windows 10+ (bsdtar).
-		if err := runTarExtract(archivePath, stage); err != nil {
-			return nil, err
-		}
-		err := filepath.Walk(stage, func(p string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return err
-			}
-			base := strings.ToLower(info.Name())
-			if !want[base] {
-				return nil
-			}
-			if _, done := staged[base]; !done {
-				staged[base] = p
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
+	default:
+		staged, err = extractWithSystemTar(archivePath, stage, want)
+	}
+	if err != nil {
+		return nil, err
 	}
 
 	// Move the staged binaries into place. A destination that already has
@@ -433,28 +453,249 @@ func copyFileStream(src, dst string, perm os.FileMode) error {
 	return out.Close()
 }
 
-// extractZipEntryTo writes a single zip entry to dest with a size cap.
-func extractZipEntryTo(f *zip.File, dest string) error {
+// errBadToolArchive marks an archive that could not be read back: truncated,
+// corrupt, or in a format the decoders do not handle. Such a download is
+// deleted so the next attempt fetches a fresh copy. A write failure (a full or
+// read-only card) is returned untagged instead, because downloading the same
+// bytes again would not help.
+var errBadToolArchive = errors.New("archive is damaged")
+
+// maxToolEntryBytes caps a single unpacked tool. BtbN's static ffmpeg is in the
+// low hundreds of megabytes; nothing JukaHub installs comes near this.
+const maxToolEntryBytes = int64(1 << 30)
+
+// toolTarCompression reports whether an archive name is a tar archive the
+// built-in reader handles, and the compression around it: "xz", "gz", or ""
+// for a plain tar.
+func toolTarCompression(name string) (string, bool) {
+	lower := strings.ToLower(name)
+	switch {
+	case strings.HasSuffix(lower, ".tar.xz"), strings.HasSuffix(lower, ".txz"):
+		return "xz", true
+	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
+		return "gz", true
+	case strings.HasSuffix(lower, ".tar"):
+		return "", true
+	}
+	return "", false
+}
+
+// archiveReader is what the unpackers read an archive through. It stops
+// between reads once ctx is cancelled, and tags decode failures with
+// errBadToolArchive so a damaged download can be told apart from a full card.
+type archiveReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (a *archiveReader) Read(p []byte) (int, error) {
+	if err := a.ctx.Err(); err != nil {
+		return 0, err
+	}
+	n, err := a.r.Read(p)
+	if err == nil || err == io.EOF || errors.Is(err, errBadToolArchive) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return n, err
+	}
+	return n, fmt.Errorf("%w (%v)", errBadToolArchive, err)
+}
+
+// extractTarMembers streams a tar archive once and writes only the wanted
+// regular files into stage, matched by lower-cased base name, so an ffmpeg
+// bundle costs the card the binaries it was opened for rather than its whole
+// tree, and no external tar, xz or busybox is involved. The stream is still
+// read to its end: the xz and gzip checksums are only verified there.
+func extractTarMembers(ctx context.Context, archivePath, stage string, want map[string]bool, progress func(done, total int64)) (map[string]string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var total int64
+	if info, err := f.Stat(); err == nil {
+		total = info.Size()
+	}
+	// Progress counts the compressed bytes consumed, the one figure known up
+	// front. The buffer above it matters for speed: the xz decoder pulls its
+	// input a byte at a time, and unbuffered every byte of a 128 MB download
+	// would be a read system call.
+	src := bufio.NewReaderSize(&progressReader{r: f, total: total, fn: progress}, 1<<20)
+	var stream io.Reader = src
+	compression, _ := toolTarCompression(archivePath)
+	switch compression {
+	case "xz":
+		xr, err := xz.NewReader(src)
+		if err != nil {
+			return nil, fmt.Errorf("%w (xz: %v)", errBadToolArchive, err)
+		}
+		stream = xr
+	case "gz":
+		gr, err := gzip.NewReader(src)
+		if err != nil {
+			return nil, fmt.Errorf("%w (gzip: %v)", errBadToolArchive, err)
+		}
+		defer gr.Close()
+		stream = gr
+	}
+	tr := tar.NewReader(&archiveReader{ctx: ctx, r: stream})
+	staged := make(map[string]string, len(want))
+	for len(staged) < len(want) {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, ctxErr
+			}
+			if errors.Is(err, errBadToolArchive) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("%w (tar: %v)", errBadToolArchive, err)
+		}
+		// File contents only: links (hard links included, which carry no data)
+		// and devices are never materialised.
+		if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeGNUSparse {
+			continue
+		}
+		base := strings.ToLower(path.Base(hdr.Name))
+		if !want[base] {
+			continue
+		}
+		if _, done := staged[base]; done {
+			continue
+		}
+		dest, err := safeJoinFile(stage, base)
+		if err != nil {
+			return nil, err
+		}
+		if err := writeArchiveEntry(ctx, tr, dest, hdr.Size); err != nil {
+			return nil, err
+		}
+		staged[base] = dest
+	}
+	// Drain the rest even when every wanted file came early. A single-block
+	// .xz is only checked at its very end, and a corrupt download must not be
+	// installed as a binary that crashes the first time a video plays.
+	if _, err := io.Copy(io.Discard, &archiveReader{ctx: ctx, r: stream}); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, err
+	}
+	return staged, nil
+}
+
+// extractZipMembers writes the wanted entries of a zip archive into stage.
+func extractZipMembers(ctx context.Context, archivePath, stage string, want map[string]bool) (map[string]string, error) {
+	zr, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("%w (open %s: %v)", errBadToolArchive, filepath.Base(archivePath), err)
+	}
+	defer zr.Close()
+	staged := make(map[string]string, len(want))
+	for _, f := range zr.File {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if f.FileInfo().IsDir() {
+			continue
+		}
+		base := strings.ToLower(path.Base(filepath.ToSlash(f.Name)))
+		if !want[base] {
+			continue
+		}
+		if _, done := staged[base]; done {
+			continue
+		}
+		dest, err := safeJoinFile(stage, base)
+		if err != nil {
+			return nil, err
+		}
+		if err := extractZipEntryTo(ctx, f, dest); err != nil {
+			return nil, err
+		}
+		staged[base] = dest
+	}
+	return staged, nil
+}
+
+// extractZipEntryTo writes a single zip entry to dest. The zip reader checks
+// the entry's CRC when it reaches the end, so a corrupt download surfaces as
+// errBadToolArchive rather than as a broken binary.
+func extractZipEntryTo(ctx context.Context, f *zip.File, dest string) error {
 	rc, err := f.Open()
 	if err != nil {
-		return err
+		return fmt.Errorf("%w (%s: %v)", errBadToolArchive, f.Name, err)
 	}
 	defer rc.Close()
+	return writeArchiveEntry(ctx, rc, dest, int64(f.UncompressedSize64))
+}
+
+// writeArchiveEntry copies one archive member to dest and never leaves a
+// partial file behind. size is the length the archive declares (0 if unknown);
+// a member that ends early is a damaged archive.
+func writeArchiveEntry(ctx context.Context, src io.Reader, dest string, size int64) error {
+	if size > maxToolEntryBytes {
+		return fmt.Errorf("%w (%s declares %d bytes)", errBadToolArchive, filepath.Base(dest), size)
+	}
 	out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, PermExec)
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(out, io.LimitReader(rc, 1<<30))
+	n, err := io.Copy(out, &archiveReader{ctx: ctx, r: io.LimitReader(src, maxToolEntryBytes+1)})
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}
-	if err != nil {
-		return fmt.Errorf("extract %s: %w", f.Name, err)
+	if err == nil {
+		switch {
+		case n > maxToolEntryBytes:
+			err = fmt.Errorf("%w (%s is larger than %d bytes)", errBadToolArchive, filepath.Base(dest), maxToolEntryBytes)
+		case n == 0:
+			err = fmt.Errorf("%w (%s is empty)", errBadToolArchive, filepath.Base(dest))
+		case size > 0 && n != size:
+			err = fmt.Errorf("%w (%s ended after %d of %d bytes)", errBadToolArchive, filepath.Base(dest), n, size)
+		}
 	}
-	if n == 0 {
-		return fmt.Errorf("extract %s: empty entry", f.Name)
+	if err != nil {
+		_ = os.Remove(dest)
+		return err
 	}
 	return nil
+}
+
+// extractWithSystemTar is the external route: the system tar unpacks the whole
+// archive into a folder inside stage and the wanted names are picked out of it.
+// It is what every tar archive used to go through.
+func extractWithSystemTar(archivePath, stage string, want map[string]bool) (map[string]string, error) {
+	dir, err := os.MkdirTemp(stage, "tar-")
+	if err != nil {
+		return nil, err
+	}
+	if err := runTarExtract(archivePath, dir); err != nil {
+		return nil, err
+	}
+	staged := make(map[string]string, len(want))
+	err = filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		base := strings.ToLower(info.Name())
+		if !want[base] {
+			return nil
+		}
+		if _, done := staged[base]; !done {
+			staged[base] = p
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return staged, nil
 }
 
 // runTarExtract extracts an archive into dstDir using the system tar, with a
@@ -523,7 +764,7 @@ func runTarExtract(archivePath, dstDir string) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("could not unpack %s: xz support missing from tar/xz (copy ffmpeg, ffplay and ffprobe into the required folder manually)", base)
+	return fmt.Errorf("could not unpack %s: xz support missing from tar/xz (copy ffmpeg and ffprobe into the required folder manually)", base)
 }
 
 // decompressXZ writes the decompressed contents of an .xz file to dst using
@@ -563,48 +804,6 @@ func decompressXZ(src, dst string) error {
 		lastErr = fmt.Errorf("no xz decompressor available")
 	}
 	return lastErr
-}
-
-func extractFilesFromZip(ctx context.Context, archivePath, requiredDir string, wants []string) error {
-	// Keep a small, targeted extraction path for bundled tool archives, but
-	// route the actual zip extraction through the project's shared safe helper so
-	// there is only one zip sanitization/escape path. After extraction, verify
-	// that any requested filenames are actually present.
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	maxEntries := 256
-	maxTotalBytes := int64(1 << 30) // 1 GiB for large ffmpeg zip candidates
-	if err := extractZipSafe(ctx, archivePath, requiredDir, maxEntries, maxTotalBytes); err != nil {
-		return err
-	}
-	if len(wants) == 0 {
-		return nil
-	}
-	for _, w := range wants {
-		if w == "" {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(requiredDir, filepath.FromSlash(w))); err != nil {
-			return fmt.Errorf("expected entry %q not found after extraction", w)
-		}
-	}
-	return nil
-}
-
-// extractFFmpegZip was previously a separate ffmpeg-zip extraction path that
-// reimplemented zip sanitization. It now routes through extractFilesFromZip via
-// extractZipSafe so there is a single safe-zip code path.
-func extractFFmpegZip(archivePath, requiredDir string) error {
-	return extractFilesFromZip(context.TODO(), archivePath, requiredDir, []string{"ffplay.exe", "ffmpeg.exe"})
-}
-
-// extractFFmpegTarXz downloads an archive to a temp file and then extracts it
-// through the shared safe-zip path. Despite the historical name, this helper does
-// not implement real tar/xz extraction; it is intentionally limited to the same
-// zip-based extraction the rest of the tool download path uses.
-func extractFFmpegTarXz(archivePath, requiredDir string) error {
-	return extractFFmpegZip(archivePath, requiredDir)
 }
 
 // hashFile returns the SHA256 of path.

@@ -206,8 +206,15 @@ func drawNotifBell(renderer *sdl.Renderer, font *ttf.Font, rect sdl.Rect) {
 		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, accentColor)
 	}
 
-	// Focus ring when the D-pad/arrows sit on the bell.
-	if focusEngine.ElementIndex() == ChromeBellIndex {
+	// Focus ring when the D-pad/arrows sit on the bell. Home has its own focus
+	// graph rather than the scene Chrome indexes, so account for both owners;
+	// otherwise the bell is keyboard/controller-focusable on Home but looks
+	// unselected while the focus cursor is on it.
+	focused := focusEngine.ElementIndex() == ChromeBellIndex
+	if homeLayoutActive && homeLayout != nil && homeLayout.Focus != nil {
+		focused = focused || homeLayout.Focus.Current() == HomeFocusBell
+	}
+	if focused {
 		strokeRoundedRect(renderer, rect.X-2, rect.Y-2, rect.W+4, rect.H+4, (rect.H+4)/2, 2, accentColor)
 	}
 

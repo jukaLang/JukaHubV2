@@ -79,6 +79,14 @@ func noteGameChildExited(cmd *exec.Cmd) {
 			break
 		}
 	}
+	// The last screen-taking child is gone, so JukaHub is on screen again: the
+	// pollers that parked for the game (backgroundwork.go) refresh now. This is
+	// deliberately before the registry cleanup below, so the wake does not
+	// depend on the exit having been paired with a command. A wake while another
+	// child still runs is not sent — the count above covers it.
+	if !gameScreenSuspended() {
+		wakeForegroundWork()
+	}
 	if cmd == nil {
 		return
 	}
