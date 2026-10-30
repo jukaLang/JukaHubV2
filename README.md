@@ -539,17 +539,16 @@ bundled and nothing is uploaded. What the toolbox does and does not verify is in
 
 ## Contributing
 
-Small, well-scoped work is the best way in: issues labelled
-[`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue)
-come from the open gaps in [IMPROVEMENTS.md](docs/IMPROVEMENTS.md) and
-[FEATURE-BACKLOG.md](docs/FEATURE-BACKLOG.md); what is already shipped is
-inventoried in the modernization plan, so you do not rebuild it. Two plans cover
-the rest and do not overlap:
-[ROADMAP.md](ROADMAP.md) is the 30/60/90 plan for the *project* (GitHub setup,
-CI, releases, contributor path), and
-[player/MODERNIZATION.md](player/MODERNIZATION.md) is the *app's* engineering
-status, phase by phase, verified against the code. Setup, test commands and the
-commit rules are in [CONTRIBUTING.md](CONTRIBUTING.md). Questions and feature talk happen on
+Start with [Project status and improvement priorities](docs/PROJECT_STATUS.md)
+for a concise view of what is partly complete, what is prioritized for
+improvement, and what still needs device verification. It links to the detailed
+[player modernization plan](player/MODERNIZATION.md) and
+[project roadmap](ROADMAP.md); the [feature backlog](docs/FEATURE-BACKLOG.md) and
+[feature slate](docs/FEATURE-SLATE.md) are ideas, not active commitments. Small,
+well-scoped work is the best way in: issues labelled
+[`good first issue`](https://github.com/jukaLang/JukaHubV2/labels/good%20first%20issue).
+Setup, test commands and commit rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
+Questions and feature talk happen on
 [Discord](https://discord.gg/R9qgJjh5jG) and in
 [Discussions](https://github.com/jukaLang/JukaHubV2/discussions); support
 paths are listed in [SUPPORT.md](SUPPORT.md).
@@ -581,9 +580,10 @@ paths are listed in [SUPPORT.md](SUPPORT.md).
 | [Packages](docs/PACKAGES.md) | the package format and the Patch package manager |
 | [Toolbox](docs/TOOLBOX.md) | installing rclone, jq, ripgrep, fd, pandoc and age plus the naabu/httpx/dnsx scanners, running them with arguments, the one-time authorization prompt, what is and is not verified |
 | [Plugins](docs/PLUGINS.md) | plugin manifests and the script execution contract |
-| [Feature slate](docs/FEATURE-SLATE.md) | the 36-idea slate ranked by cost, fit and device risk — unadopted ideas only |
-| [Roadmap](ROADMAP.md) | the 30/60/90 project plan: GitHub mechanics, CI, releases, contributor path |
-| [Modernization plan](player/MODERNIZATION.md) | the player's engineering status by phase, verified against the code on every pass |
+| [Project status](docs/PROJECT_STATUS.md) | one-page overview of progress, open improvements and device checks |
+| [Roadmap](ROADMAP.md) | detailed project plan: GitHub mechanics, CI, releases, contributor path |
+| [Modernization plan](player/MODERNIZATION.md) | detailed player engineering status and implementation evidence |
+| [Feature slate](docs/FEATURE-SLATE.md) | unadopted ideas ranked by cost, fit and device risk |
 | [Developer guide](docs/DEVELOPMENT.md) | architecture, design system, key files |
 | [Architecture](docs/ARCHITECTURE.md) | the three runtimes (player, builder, patch repo), where a change lands |
 | [Contributing](CONTRIBUTING.md) | local setup, tests, what to commit |

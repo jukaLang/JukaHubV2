@@ -1,5 +1,9 @@
 # Feature slate, ranked
 
+For current progress and chosen improvement priorities, see
+[PROJECT_STATUS.md](PROJECT_STATUS.md). This page contains unadopted ideas only;
+its rankings are not an implementation schedule.
+
 Two slates are ranked here. The first (time machine, ghost runs, Library Royale,
 AI hints) is the 36-idea list; the second, further down, is the dashboard /
 platform / ecosystem list (widgets, radio, sync, AI configuration).

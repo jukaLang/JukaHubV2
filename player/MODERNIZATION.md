@@ -1,13 +1,14 @@
 # JukaHubV2 Modernization Plan
 
-Status of every item below, checked against the code in this tree on
-**2026-10-26** (go1.27.3 windows/amd64, SDL2 from `player/.sdl2`):
-
-```
-go vet ./...      # exit 0
-go test ./...     # ok jukahub/JukaHub, ok jukahub/JukaHub/web
-go build .        # exit 0
-```
+Status of the roadmap items below, checked against the code in this tree on
+**2026-10-29**. For a concise overview of progress and improvement priorities,
+start at [the project status page](../docs/PROJECT_STATUS.md); this is the detailed
+evidence and phase checklist. “Partial” describes implementation state, not an
+assigned owner or a promise that work is actively underway. The current Windows
+build/launch path was also exercised via
+[`build.bat`](build.bat) (Go 1.27.2, GCC 14.2.0, local SDL2): build succeeded
+and the executable launched. The broader Go test/vet results recorded in the
+2026-10-26 audit below have not been rerun as part of this documentation pass.
 
 Legend: **✅ shipped** (code exists and is exercised by tests), **🟡 partial**
 (some of the item works, the rest is genuinely missing), **⬜ not started**.
@@ -36,9 +37,9 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 | Phase | Done | Partial | Not started |
 |-------|------|---------|-------------|
 | 1. UI/UX fixes | 7 | 0 | 0 |
-| 2. Architecture | 31 | 2 | 0 |
+| 2. Architecture | 32 | 2 | 0 |
 | 3. Async & performance | 18 | 2 | 1 |
-| 4. Reliability | 25 | 0 | 0 |
+| 4. Reliability | 26 | 0 | 1 |
 | 5. Features | 14 | 2 | 2 |
 | 6. Testing | 13 | 0 | 0 |
 | 7. Web builder | 7 | 2 | 8 |
@@ -54,23 +55,23 @@ already exists, not a task list, so it is not counted here.
 
 ### Architecture Overview
 
-**Runtime**: Go 1.26 + SDL2 (go-sdl2) + SDL_ttf + SDL_image\
+**Runtime**: Go 1.27 + SDL2 (go-sdl2) + SDL_ttf + SDL_image\
 **Config Model**: JSON-driven (`jukaconfig.json`, `jukauser.json`)\
-**Rendering**: Single-threaded SDL2 renderer with per-frame allocations\
-**State Management**: Global variables in `main.go`\
-**Package Structure**: Monolithic `player/` package with feature files
+**Rendering**: Single-threaded SDL2 renderer; shared text/shape/icon caches and bounded hot paths\
+**State Management**: Package-level state, with ownership split across feature files\
+**Package Structure**: Single `player/` package with feature-focused files
 
 ### Key Files
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `main.go` | Main render loop, input handling, scene dispatch | ~5000 lines, monolithic |
-| `design.go` | Design tokens, colors, spacing | Partially updated |
-| `themes.go` | Theme presets | Basic color-only themes |
-| `extras.go` | Status bar, error bar, footer hints | Needs footer rendering |
-| `launcher.go` | Icon rendering helpers | Needs opaque backgrounds |
-| `homelayout.go` | Home screen layout computation | Responsive grid logic exists |
-| `recent.go` | Continue/recent panel | Partially updated |
+| `main.go` | Main render loop, input handling, scene dispatch | 2,984 lines; still owns the loop |
+| `design.go` | Semantic colors, spacing, typography, motion and density tokens | Shared design system |
+| `themes.go` | Theme presets and application | Semantic colors and surface roles |
+| `extras.go` | Status bar, error bar, footer hints | Shared status cluster and rendered footer |
+| `launcher.go` | Home/app tile icon rendering helpers | Opaque tile surfaces and shared icon drawing |
+| `homelayout.go` | Home screen layout computation | Responsive grid and home hit testing |
+| `recent.go` | Continue/recent panel | Merged game/media recents and resume state |
 | `jukaconfig.json` | Scene configuration | Config-driven scenes; the Home grid is drawn from `homelayout.go` |
 
 ### Current Issues Identified
@@ -83,7 +84,7 @@ already exists, not a task list, so it is not counted here.
 - ✅ Icon rendering: Made backgrounds opaque
 
 #### 2. Architecture Issues (Phase 2)
-- 🟡 **Large main.go**: split into core/extras/feature files, but `main.go` (~1.8k lines) still owns the loop
+- 🟡 **Large main.go**: split into core/extras/feature files, but `main.go` (~3k lines) still owns the loop
 - 🟡 **Global state**: still package-level, though ownership is now split by file
 - 🟡 **Async isolation**: most network work is off-thread; some render-path decoding remains
 - 🟡 **Context cancellation**: Patch, downloads and text browser use contexts; older fetches do not
@@ -97,6 +98,7 @@ already exists, not a task list, so it is not counted here.
 #### 3. UI/UX Issues (Phase 1 - Partially Fixed)
 - ✅ Home screen layout: Responsive grid with 4/3/2 columns
 - ✅ Focus state: 3px cyan accent outline
+- ✅ Header focus visibility: every drawn header control that accepts focus is checked for a visible focus ring (`header_test.go`, `TestEveryFocusableHeaderControlDrawsFocus`).
 - ✅ Focus preservation: per-scene persist/restore (`focus.go`)
 - ✅ Focus graph: explicit per-scene graph with deterministic navigation
 - ✅ Empty states: shared `UIEmptyState` / `UIErrorState`
@@ -148,7 +150,7 @@ already exists, not a task list, so it is not counted here.
 - [x] ✅ Format all Go files
 
 ### Phase 2: Architecture Refactoring
-**Status**: 🟡 Mostly complete (31 shipped, 2 partial, 0 not started)
+**Status**: 🟡 Mostly complete (32 shipped, 2 partial, 0 not started)
 
 #### 2.1 Design System
 
@@ -222,6 +224,9 @@ already exists, not a task list, so it is not counted here.
       there is no Go interface implemented by element types.
 - [x] ✅ Input remapping screen — the Accessibility panel's per-button rows
       (`a11yRows`, `player/a11y.go`).
+- [x] ✅ Header focus visibility audit — every drawn header control that accepts
+      focus has a visible ring when selected; `TestEveryFocusableHeaderControlDrawsFocus`
+      renders each eligible control and checks the ring pixels (`header_test.go`).
 
 #### 2.4 Platform Abstraction
 
@@ -335,7 +340,18 @@ already exists, not a task list, so it is not counted here.
       poll" check is the same rule applied to its scene (`backgroundwork_test.go`).
 
 ### Phase 4: Reliability & Configuration
-**Status**: ✅ Done (25 shipped, 0 partial, 0 not started)
+**Status**: 🟡 In progress (26 shipped, 0 partial, 1 not started)
+
+- [ ] ⬜ Snapshot restore integrity preflight — `saveSnapshotFile` records each
+      file's expected size and SHA-256 in `savemanager.go`, but
+      `restoreSaveSnapshot` currently copies entries without checking either
+      value and can begin writing before discovering a later missing/corrupt
+      file. Validate the manifest paths, sizes and hashes for every source file
+      before creating the safety snapshot or mutating live save roots; add tests
+      proving corrupt/missing input leaves the live saves untouched.
+
+The Phase 4 count now includes this preflight item; the earlier 4.1–4.5
+configuration, logging, recovery, update and network safeguards remain shipped.
 
 #### 4.1 Configuration
 
@@ -410,6 +426,10 @@ already exists, not a task list, so it is not counted here.
       `Retry-After`, retries 408/425/429/5xx and transport errors, refuses to
       replay an unrewindable body; adopted by the Patch metadata fetch and
       weather forecast; covered by `retry_test.go`.
+- [x] ✅ Windows Wi-Fi operations stay on the selected adapter — scans,
+      profile import/connect, saved-profile reconnect and status/signal reads
+      carry the chosen interface instead of letting `netsh` select another
+      radio (`wifi_windows.go`, `wifi_windows_test.go`).
 - [x] ✅ Conditional caching (`If-None-Match` / `If-Modified-Since`) —
       `httpcache.go` keeps the last successful body and its validators per URL
       (bounded: 64 entries, 1 MiB per body, process-lifetime by design — a
@@ -1268,48 +1288,63 @@ rather than by eye:
 
 ## Next Steps
 
-The plan is broad; prioritize work with a user-visible payoff and a clear way to
-verify it. The strongest remaining additions are:
+This detailed list supports the concise, canonical summary in
+[PROJECT_STATUS.md](../docs/PROJECT_STATUS.md). Priorities below favour concrete
+user/data protection and responsiveness, with a
+clear verification path. Hardware-only items remain explicitly separate from
+work that can be completed and tested on a desktop:
 
-1. **Finish the handheld touch-target and safe-area audit** (Phase 8). The Exit
-   chip is the only shared control currently using `growTouchTarget`; extend it
-   to the remaining interactive controls and keep drawn and hit geometry
-   consistent. Verify on-device around the rounded screen corners.
-2. **Complete cancellation for feature network work** (Phase 3.1). `context.Context`
+1. **Preflight save snapshot integrity before restore** (Phase 4). Snapshot
+   manifests already record per-file size and SHA-256, but restore currently
+   does not verify those claims and may write earlier files before a later
+   damaged entry fails. Validate every source path and digest before touching
+   live saves; test corrupt, missing and path-escape cases leave live data
+   unchanged. This protects user saves and does not depend on the emulator.
+2. **Finish the handheld touch-target and safe-area audit** (Phase 8). The Exit
+   chip and browser chrome already use `growTouchTarget`; extend the shared
+   behavior to remaining interactive controls and keep drawn and hit geometry
+   consistent. Verify on-device around rounded screen corners.
+3. **Complete cancellation for feature network work** (Phase 3.1). `context.Context`
    already reaches Patch, downloads, text browser and scene tasks, but older
    feature fetches still use bare clients. Thread cancellation through the
    remaining calls so leaving a screen stops stale work instead of only hiding
    its result.
-3. **Reduce unnecessary foreground polling and release scene-owned resources**
-   (Phases 3.4 / 8). Background work now pauses behind games and minimized
-   windows, but screen-specific refreshes and renderer-owned scene resources
-   still merit a lifecycle audit; preserve the always-visible status cluster
-   and existing cache budgets.
-4. **Add the already-identified media playback queue** (Phase 5.1). A small,
-   explicit Up Next list would make sequential listening useful without adding
-   new tracking or a service dependency; keep queue persistence and video
-   behavior separate unless users need them.
-5. **Run the outstanding handheld measurements** (Phase 8). Capture cold-start
-   time, transition frame time, idle RSS and D-pad repeat feel on the actual
-   1 GB ARM64 device; desktop proxies cannot settle those targets.
-6. **Continue the large-list audit selectively.** Primary game, Favorites, Save
-   Manager and Downloads row drawing is now window-bounded. Profile the other
-   screens first and virtualize only where a real large collection makes the
-   per-frame work proportional to total list size.
+4. **Reduce redundant foreground work and release scene-owned resources**
+   (Phases 3.4 / 8). Background work pauses behind games and minimized windows,
+   but screen-specific refreshes and renderer-owned scene resources still merit a
+   lifecycle audit; preserve always-visible status freshness and cache budgets.
+5. **Add the already-identified media playback queue** (Phase 5.1). A small,
+   explicit Up Next list would make sequential listening useful without adding a
+   service dependency; keep queue persistence and video behavior separate unless
+   user needs call for them.
+6. **Run outstanding handheld measurements** (Phase 8). Capture cold-start,
+   transition frame time, idle RSS and D-pad repeat feel on the actual 1 GB ARM64
+   device; desktop proxies cannot settle those targets.
+7. **Continue the large-list audit selectively.** Game library, Favorites, Save
+   Manager and Downloads row drawing is now window-bounded. Profile other screens
+   first; optimize list preparation only where real data demonstrates material
+   cost.
 
-## Audit log — 2026-10-29 (list virtualization refresh)
+## Audit log — 2026-10-29 (roadmap refresh)
 
-- Corrected the Phase 8 count and removed the stale claim that the game library,
-  Favorites and Save Manager still draw every row. Downloads now uses a sparse
-  section-offset index and binary search to select rows intersecting the viewport;
-  its hit targets are likewise limited to those rows. The new regression coverage
-  exercises a 1,000-item panel and a 10,000-row range.
-- Replaced the obsolete Playtime Wrapped next-step entry (shipped in Phase 5.6)
-  with the remaining handheld touch-target audit, feature-fetch cancellation,
-  foreground resource/polling lifecycle, media queue, on-device measurements,
-  and a profile-first audit of other large lists.
-- The earlier full-suite audit remains dated 2026-10-26; checks for this focused
-  refresh are recorded after the targeted tests below.
+- Rechecked proposed work against the implementation. Downloads row painting is
+  viewport-bounded, but `downloadRowsFor` still snapshots, groups and counts the
+  complete queue each panel frame; retained this as a profile-first opportunity,
+  not a measured performance claim or unconditional rewrite task.
+- Adopted a Phase 4 data-integrity item: `saveSnapshotFile` records size and
+  SHA-256, while `restoreSaveSnapshot` copies entries without verifying those
+  values or preflighting the whole manifest. The priority is to verify all source
+  files before any live write and cover fail-closed behavior with tests.
+- Recorded two completed safeguards in their implementation phases: the header
+  focus-ring render audit (`TestEveryFocusableHeaderControlDrawsFocus`) and
+  adapter-pinned Windows Wi-Fi scan/join operations (`wifi_windows_test.go`).
+- Refreshed next-step ranking around save protection, handheld input, cancellation,
+  lifecycle/performance and on-device verification. Kept speculative ideas (for
+  example, larger sync services or a multi-emulator switcher) out of the plan.
+- `player/build.bat` completed a Windows build and launched `JukaHub.exe` during
+  this pass; the focus-ring render checks and Windows scan/join tests also passed.
+  The broad Go test/vet results recorded on 2026-10-26 remain historical and were
+  not rerun during this roadmap update.
 
 ## Audit log — 2026-10-26 (memory pass)
 

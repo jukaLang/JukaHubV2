@@ -92,7 +92,7 @@ bash tests/smoke/run-smoke.sh   # host lifecycle check, exit 0 on success
 | `libandroid.so` | **Subset.** Window/ALooper/assets finish + `AConfiguration` minimum. The *surface* is a stub: games get a real number-sized window, no pixels. |
 | `libOpenSLES.so` | **Audio path done.** `slCreateEngine` → `CreateAudioPlayer` (S16 1/2-ch BufferQueue → OutputMix) → `Enqueue`/`SetPlayState` streams PCM through ALSA `default` (`snd_pcm_*` via `dlopen("libasound.so.2")`); missing libasound degrades to silence at real-time pacing instead of failing. Per-buffer callbacks fire from the worker, `Destroy` from inside a callback is safe, and unknown interfaces answer `SL_RESULT_FEATURE_UNSUPPORTED` with the real UUID table. Proven by the host audio probe; *unproven with real device sound on the A133P*. |
 | Loading bionic-linked game `.so` files | **Deliberately naive** (`dlopen`). Expected to fail with a printable undefined symbol; the runner turns that into next-shim instructions. |
-| PowerVR EGL surface backend | **Probe shipped** — `src/surface.c` measures the whole GBM+EGL chain (glibc GE8300 userspace per [docs/ANDROID-GAMMAOS.md](../../docs/ANDROID-GAMMAOS.md)); the swap chain/present loop is still open. |
+| PowerVR EGL surface backend | **Probe shipped** — `src/surface.c` measures the whole GBM+EGL chain; the swap chain/present loop is still open. |
 | Input (`AInputQueue` from the TSP's controller) | **Shim shipped.** `src/inputshim.c` implements the NDK queue semantics (getEvent/hasEvents/preDispatch/finish, axis coalescing, held-slot immutability, `LOOPER_ID_INPUT` wakeups through `ALooper_pollAll`), and `src/evdev.c` reads `/dev/input/event*` on the device (`-DJUKAHUB_EVDEV`, off via `ANDROIDPAK_INPUT=off`). *Unverified on hardware*: the TSP's actual evdev nodes and the glue-thread wakeup pairing. |
 
 ## Milestone order
@@ -116,7 +116,7 @@ bash tests/smoke/run-smoke.sh   # host lifecycle check, exit 0 on success
    [ge8300-drivers](https://github.com/knulli-cfw/ge8300-drivers) package,
    proven on Linux A133P devices, stock firmware's own GLES userspace as the
    other path) — not the Android/Bionic GPU blobs, which a glibc process cannot
-   load. Context: [docs/ANDROID-GAMMAOS.md](../../docs/ANDROID-GAMMAOS.md).
+   load.   Current engine scope: [docs/ANDROID.md](../../docs/ANDROID.md).
    The measurement step ships: `src/surface.c` walks the whole stack
    (libEGL → client extensions → gbm device → platform display → config →
    GBM surface → window surface) and prints exactly which layer holds; the

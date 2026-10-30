@@ -32,8 +32,9 @@ targets a 1280×720 logical canvas.
 | [ANDROID.md](ANDROID.md) | the Android container engine: binder gate, package list, launch and display bridge |
 | [PLUGINS.md](PLUGINS.md) | plugin manifest and the script execution contract |
 | [SECURITY.md](../SECURITY.md) | secret storage, crypto, threat notes |
-| [IMPROVEMENTS.md](IMPROVEMENTS.md) | what we learned from BrickOS, where we are ahead, and the one idea from it still open |
-| [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | the open gaps — in-game overlay, simple mode, box-art matching, checkpoints, per-emulator rumble, a curated storefront — and what cannot work |
+| [PROJECT_STATUS.md](PROJECT_STATUS.md) | current progress, improvement priorities and hardware checks at a glance |
+| [IMPROVEMENTS.md](IMPROVEMENTS.md) | historical comparison with BrickOS and what was learned |
+| [FEATURE-BACKLOG.md](FEATURE-BACKLOG.md) | unadopted feature designs and their constraints |
 | [TOOLBOX.md](TOOLBOX.md) | the curated tool catalog: install, run, the download allowlist and its gaps |
 | [trimui/README.md](../player/trimui/README.md) | device package and launcher details |
 

@@ -1,9 +1,10 @@
 # Roadmap — 30 / 60 / 90 days
 
-Community and engineering plan for JukaHubV2. Each item has a **definition of
-done** so "added X" is always measurable, not aspirational. Items marked
-**done** below were already in the repo when this roadmap was written — they
-are listed so the boxes stay honest and the remaining work is visible.
+Community and engineering plan for JukaHubV2. For the concise view of current
+progress and recommended improvements, start at [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md).
+This file is the detailed repository/process plan; each active plan item has a
+**definition of done** so "added X" is measurable, not aspirational. Completed
+items remain listed for context.
 
 One lead per item (the maintainer by default). **The main risk is process
 outrunning contributors**, so nothing here grows a required check or an
@@ -155,9 +156,9 @@ links rot silently. The check walks every Markdown file in the checkout
 fails on missing paths, with URL fragments stripped before checking.
 
 **Status: done.** It runs as part of `make test`/`make check`, and it found
-four broken links on the way in: three pointers to the Android-on-A133P study
-(now [docs/ANDROID-GAMMAOS.md](docs/ANDROID-GAMMAOS.md), restored) and a
-`player/README.md` link to a `player/SECURITY.md` that does not exist.
+four broken links on the way in, including links to an Android-on-A133P study
+that was later removed and a `player/README.md` link to a
+`player/SECURITY.md` that does not exist.
 
 ### 4. Visible focus states in the web builder
 

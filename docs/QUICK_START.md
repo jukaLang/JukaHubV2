@@ -83,4 +83,4 @@ through it: describe what the user sees, how you verified it, and add a
 | Buttons and keys on every screen | [CONTROLS.md](CONTROLS.md) |
 | Packages and the Patch manager | [PACKAGES.md](PACKAGES.md) |
 | Security model, reporting a vulnerability | [SECURITY.md](../SECURITY.md) |
-| Starter-sized open tasks | [../player/MODERNIZATION.md](../player/MODERNIZATION.md) → *Next Steps* |
+| Current progress and improvement priorities | [PROJECT_STATUS.md](PROJECT_STATUS.md) |

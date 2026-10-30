@@ -1,4 +1,8 @@
-# Where JukaHub can get better
+# What the BrickOS comparison taught us
+
+For current progress and the improvement priorities selected for JukaHub, see
+[PROJECT_STATUS.md](PROJECT_STATUS.md). This page is a historical comparison
+record, not the current task list.
 
 I read [BrickOS's improvements page](https://github.com/hugorosario/BrickOS/blob/main/docs/improvements.md)
 (a TrimUI Brick frontend reimplementation) and mapped every item onto this

@@ -1267,8 +1267,8 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   ([player/docs_links_test.go](player/docs_links_test.go)): every relative
   Markdown link in the checkout must resolve, so a renamed page fails the build
   instead of shipping a dead pointer. It found four broken links on the way in,
-  including the Android-on-A133P study the Android docs cite (restored as
-  [docs/ANDROID-GAMMAOS.md](docs/ANDROID-GAMMAOS.md)).
+  including links to an Android-on-A133P study that was later removed; current
+  engine status is documented in [docs/ANDROID.md](docs/ANDROID.md).
 - Component versions in Patch (and in the diagnostics report): a new row lists
   the running app, launcher script, design config, helper tools and installed
   packages with their SHA-256 digests, so a bug report names exact builds.
@@ -1361,13 +1361,11 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   Run smoke and AndroidPak suites verified; the probe's on-device verdict is
   still to be taken (no GPU stack on this desk).
 
-- GammaOS study for the Android engine: docs/ANDROID-GAMMAOS.md records what
-  full-Android community firmware (GammaOS Core/Nano for the same A133P
-  hardware) proves — Android on this SoC is a firmware swap, not an app-level
-  integration — retargets the AndroidRT surface milestone at the proven glibc
-  GE8300 userspace instead of the Android/Bionic GPU blobs, and proposes a
-  memory pre-flight for AndroidPak launches. The Android ways table gains the
-  firmware row and the binder-missing panel now names the alternative.
+- Android engine work: AndroidPak launches gained a memory pre-flight, and
+  AndroidRT gained a host-testable probe for the GBM+EGL surface stack
+  (`player/androidpak.go`, `player/androidrt/src/surface.c`). Current scope and
+  hardware-validation status are in [docs/ANDROID.md](docs/ANDROID.md) and
+  [player/androidrt/README.md](player/androidrt/README.md).
 
 - Hardware decode investigation doc: docs/VIDEO_VPU_OFFLOAD.md records the desk
   pass over offloading the video player's decoder to the A133P's Cedar VPU —

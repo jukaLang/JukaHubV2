@@ -1,12 +1,15 @@
 # Android engine
 
-The **Android engine** is JukaHub's integration with an Android container on the
-handheld. It detects the container the device already has, lists the apps
-installed in it, and launches them with the display bridged the same way
-[Windows apps](WINDOWS_APPS.md) bridge Wine.
+The **Android engine** integrates with an Android container on the handheld.
+It detects the container the device already has, lists the apps installed in
+it, and launches them with the display bridged the same way [Windows
+apps](WINDOWS_APPS.md) bridge Wine.
 
-It does **not** contain an Android runtime. That is not a limitation of effort
-but of what an Android app is.
+JukaHub does not ship a complete Android runtime. The separate AndroidPak path
+supports a limited class of native-only games; its runtime source is included,
+but a target-built runtime must be installed separately and real-game support
+is still unverified on hardware. Running arbitrary Android apps would require
+more than the loader and shims described below.
 
 ## Why an APK cannot simply be run
 
@@ -66,15 +69,15 @@ profile runtime](GAME_PROFILES.md) is the hub's side of exactly this path:
   the process cannot read prints the missing-`input`-group note instead of
   failing the launch. See [player/androidrt/README.md](../player/androidrt/README.md).
 
-A **headless smoke check** of the runtime's lifecycle lives in
-[`player/androidrt/tests/smoke/`](../player/androidrt/tests/smoke/) — it builds
-a stub game with the host gcc and proves loader → onCreate → window → frames →
-clean teardown without a device, exit 0.
-
-The runtime itself (loader + shims) is not shipped with JukaHub yet; the
-directory contract above is the integration point for the C shim layer, and a
-profile without it shows exactly what is missing. Camera, identity, privacy
-and framework features stay out of scope by design.
+The AndroidRT source, cross-build script, and **headless smoke check** live in
+[`player/androidrt/`](../player/androidrt/README.md). The smoke test builds a
+stub game with the host compiler and exercises loader → onCreate → window →
+frames → clean teardown without a device. JukaHub's AndroidPak profile support
+triages and stages an APK and hands it to an installed runtime; JukaHub does not
+ship a prebuilt AndroidRT package. The included loader is intentionally
+incomplete (`dlopen` plus shims), and successful execution of a real game has
+not been demonstrated on hardware. Camera, identity, privacy and framework
+features stay out of scope by design.
 
 ## The ways Android could exist here, ranked
 
@@ -83,9 +86,9 @@ and framework features stay out of scope by design.
 | **Container integration (Waydroid)** — Android runs in a container on the device kernel; JukaHub detects, lists and launches. | **Shipped.** The only approach that runs real Android apps, and it costs JukaHub no root: the one-time root step belongs to Waydroid. |
 | **QEMU / full emulation** | Not viable. There is no KVM on the handheld, so it is software emulation on a 1.8 GHz A53: single-digit FPS, plus the system image's RAM. |
 | **A custom ART/Dalvik interpreter** | Out of scope. DEX execution is the smaller half; the framework, bionic and SurfaceFlinger are the rest. |
-| **AndroidPak — NDK-only games via the bionic translation runtime** | **Shipped as a profile runtime.** The hub triages APKs, stages the native subset to tmpfs and launches the installed loader; the loader/shims themselves are a user install ([GAME_PROFILES.md](GAME_PROFILES.md)). |
+| **AndroidPak — NDK-only games via the bionic translation runtime** | **Profile support and runtime source shipped; experimental.** The hub triages APKs, stages the native subset to tmpfs and launches a separately built/installed runtime; the included loader/shims are incomplete and real-game hardware support is unverified ([GAME_PROFILES.md](GAME_PROFILES.md), [AndroidRT](../player/androidrt/README.md)). |
 | **Sideloading APKs into the container** | Next slice. `waydroid app install <file>` is a container feature; the hub's job is validating the package and handing it over. |
-| **Full Android firmware (GammaOS Core/Nano)** | Real, community-maintained, and not an integration point: an Android 13/14 image flashed to the microSD — which is then the boot medium, so a JukaHub boot and a GammaOS boot are different cards. It also says nothing about this engine's hard gate: stock firmware still exposes no binder device for a container. |
+| **Full Android firmware** | A separate OS/image for the device, not a JukaHub integration path. It does not change whether the stock firmware exposes the binder device required by a container. |
 | **ADB bridge to a real phone** | A different product: install and drive apps on a paired phone. Not part of this engine. |
 
 ## What ships now
@@ -129,9 +132,10 @@ and framework features stay out of scope by design.
   stack, and the handheld's driver is not one Waydroid supports out of the box.
 * Memory is shared with everything else on a 1 GB device. A heavy app can make
   the hub itself get killed while the user works inside it.
-* Nothing here is verified on hardware yet. Detection, listing, the launch
-  argv, the display bridge and the injection guard are unit-tested against a
-  fake host, which is the part that can be proven without a device.
+* **Nothing here is verified on hardware yet.** Waydroid detection, listing,
+  launch argv, display-bridge selection and package-name validation are
+  unit-tested against a fake host. AndroidPak staging and its runtime contract
+  also have host-side tests/smokes, but those do not prove real APK execution.
 
 ## Next slices
 

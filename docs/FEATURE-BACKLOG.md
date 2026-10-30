@@ -1,5 +1,9 @@
 # Feature backlog: the gaps, with the honest design
 
+For current progress and the improvement priorities selected from the detailed
+plans, see [PROJECT_STATUS.md](PROJECT_STATUS.md). This page is a design
+reference for unadopted feature ideas, not a list of work in progress.
+
 What is **not** built yet, and why the obvious version of it often cannot work on
 this device. The items that used to be listed here as shipped have left this
 page: the shipped register is
