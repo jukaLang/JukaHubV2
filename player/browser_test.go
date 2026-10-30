@@ -14,6 +14,53 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 )
 
+func TestBrowserHistoryToolbarAndHints(t *testing.T) {
+	resetBrowserStateForTest()
+	t.Cleanup(resetBrowserStateForTest)
+	browserRecordURL("https://example.com/one")
+	browserRecordURL("https://example.com/two")
+	if !browserHistoryAvailable(-1) || browserHistoryAvailable(1) {
+		t.Fatal("wrong history availability")
+	}
+	browserHistoryStep(-1)
+	if browserHistoryAvailable(-1) || !browserHistoryAvailable(1) {
+		t.Fatal("wrong availability after Back")
+	}
+	config := layoutTestConfig(t)
+	for _, width := range []string{"460", "960", "1232"} {
+		elem := Element{Width: StringOrInt(width)}
+		back, forward := textBrowserHistoryRects(config, elem)
+		address, _ := textBrowserToolbarRects(config, elem)
+		if width == "460" {
+			if back.W != 0 || forward.W != 0 {
+				t.Fatal("history controls should fit only on wider bars")
+			}
+		} else if back.W <= 0 || forward.X+forward.W > address.X {
+			t.Fatalf("overlapping history controls: %+v %+v %+v", back, forward, address)
+		}
+	}
+	hints := footerHints(&Config{}, SceneConfig{Name: "Browser"})
+	if label, ok := hintLabel(hints, "Left/Right"); !ok || label != "Previous / next link" {
+		t.Fatalf("link hint = %q", label)
+	}
+}
+
+func TestBrowserFaviconAndSecureAddress(t *testing.T) {
+	base, _ := url.Parse("https://example.com/path/page")
+	for _, tc := range []struct{ html, want string }{
+		{`<link rel="shortcut icon" href="/icon.png">`, "https://example.com/icon.png"},
+		{`<link rel="icon" href="http://example.com/icon.png">`, "https://example.com/favicon.ico"},
+		{`<link rel="stylesheet" href="/style.css">`, "https://example.com/favicon.ico"},
+	} {
+		if got := browserFaviconURL(tc.html, base); got != tc.want {
+			t.Errorf("icon = %q, want %q", got, tc.want)
+		}
+	}
+	if !browserHTTPSAddress("https://example.com/") || browserHTTPSAddress("http://example.com/") || browserHTTPSAddress("https://user@example.com/") {
+		t.Fatal("incorrect secure address classification")
+	}
+}
+
 func TestEnsureBrowserSceneIsIdempotentAndWired(t *testing.T) {
 	config := &Config{}
 	ensureBrowserScene(config)

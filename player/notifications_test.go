@@ -341,6 +341,44 @@ func TestNotifClickSelectsRow(t *testing.T) {
 	}
 }
 
+// The bell is a header button, not a headline: its chip is square, no taller
+// than the shared header button height, and the unread badge stays inside the
+// top bar instead of hanging over its top edge.
+func TestBellChipMatchesHeaderMetrics(t *testing.T) {
+	config, err := loadConfig("jukaconfig.json")
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	newProbeFrame(t)
+	withScreen(t, probeW, probeH)
+	ClearTextCache()
+	t.Cleanup(ClearTextCache)
+
+	w, h := notifBellSize(config)
+	if w <= 0 || h <= 0 {
+		t.Fatalf("bell measured %dx%d", w, h)
+	}
+	if w != h {
+		t.Errorf("bell chip is %dx%d; a bell control should be square", w, h)
+	}
+	if h > headerPillHeight() {
+		t.Errorf("bell chip is %dpx tall, taller than the %dpx header buttons", h, headerPillHeight())
+	}
+	barH := headerBarHeight()
+	y := (barH - h) / 2
+	if y < 0 || y+h > barH {
+		t.Errorf("bell chip %dpx at y=%d does not fit the %dpx bar", h, y, barH)
+	}
+	if icon := h - notifBellIconInset; icon >= h-4 {
+		t.Errorf("bell glyph is %dpx in a %dpx chip; it needs padding to read as a control", icon, h)
+	}
+	chip := sdl.Rect{X: screenWidth - StatusBarMargin - w, Y: y, W: w, H: h}
+	badge := notifBadgeRect(notifBadgeFont(config), chip, "99")
+	if badge.Y < 0 || badge.Y+badge.H > barH {
+		t.Errorf("unread badge %+v hangs outside the %dpx bar", badge, barH)
+	}
+}
+
 func TestToastKindPriorityRoundTrip(t *testing.T) {
 	cases := []ToastKind{ToastKindInfo, ToastKindSuccess, ToastKindWarning, ToastKindError}
 	for _, k := range cases {

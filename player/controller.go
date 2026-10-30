@@ -174,6 +174,11 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if emuPanel.open {
 		return ctrlEmuPanel(e, config)
 	}
+	// The clock popover is the other top-bar overlay: it takes the pad before the
+	// notification centre and the scene, and its D-pad maps onto months.
+	if homeCalendarOpen && calendarPopoverController(e) {
+		return true
+	}
 	// The notification centre is a top-bar overlay: while it is open the D-pad
 	// walks its rows and A/B close it, matching handleChromeOverlayKey so the
 	// controller and the keyboard behave the same on every scene, Home included.
@@ -234,6 +239,13 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 	if chatSelectionBar.open && !virtualKeyboardActive {
 		return ctrlChatSelection(e, config)
+	}
+
+	// The Now Playing chip is the pad-accessible anchor for the floating
+	// video. Keep X local to that focus so scene actions remain available.
+	if !virtualKeyboardActive && activeSceneIndex == -1 && !homeLayoutActive &&
+		e.Button == sdl.CONTROLLER_BUTTON_X && focusEngine.ElementIndex() == ChromeMediaIndex && closeFocusedMiniVideo() {
+		return true
 	}
 
 	// A failed helper-tool install keeps its card on screen with an

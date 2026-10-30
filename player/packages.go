@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +39,7 @@ var (
 	packagesList       []Package
 	packagesMutex      sync.Mutex
 	packagesFocusIndex int
+	packageRepoFocused bool
 )
 
 // packageInstallDir returns the directory where downloaded packages are stored.
@@ -418,11 +420,11 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 	}
 	// Lines below the description lead straight into the Install button and
 	// the URL, so the description stops above a band that always stays free.
-	const footerReserve = int32(66)
+	const footerReserve = int32(106)
 	y := element.Y + 20
 	if titleFont != nil {
 		name := ellipsize(titleFont, p.Name, detailW-28)
-		renderText(renderer, config, titleFont, name, accentColor, detailX+14, y)
+		renderText(renderer, config, titleFont, name, ColorTextPrimary(), detailX+14, y)
 		y += int32(titleFont.Height()) + 8
 	}
 
@@ -456,13 +458,13 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 		if len(p.Dependencies) > 0 {
 			deps := strings.Join(p.Dependencies, ", ")
-			renderText(renderer, config, smallFont, ellipsize(smallFont, "Dependencies: "+deps, detailW-28), ColorTextTertiary(), detailX+14, y)
+			renderText(renderer, config, smallFont, ellipsize(smallFont, "Dependencies: "+deps, detailW-28), ColorTextSecondary(), detailX+14, y)
 			y += descLineH
 		}
 
 		if p.Description != "" {
 			y += 8
-			renderText(renderer, config, smallFont, "Description", ColorTextTertiary(), detailX+14, y)
+			renderText(renderer, config, smallFont, "Description", ColorTextSecondary(), detailX+14, y)
 			y += descLabelH + 4
 			availH := element.Y + elemH - footerReserve - y
 			for _, line := range wrapPackageText(p.Description, smallFont, detailW-28) {
@@ -498,18 +500,66 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 				HideFocusRing: true,
 			}, UIButtonState{})
 
-			// The registry URL never fits a pane verbatim, so it is cut by
-			// pixel width (long hostnames are not served by a rune count),
-			// and it rides on the button row instead of under the pane.
-			url := ellipsize(smallFont, p.Download, detailW-btnW-42)
-			urlY := sy + (btnH-descLabelH)/2
-			renderText(renderer, config, smallFont, url, sdl.Color{R: 110, G: 200, B: 255, A: 255}, detailX+14, urlY)
+			if label, _, ok := packageRepository(p.Download); ok {
+				repo := packageRepositoryRect(element)
+				drawRow(renderer, repo.X, repo.Y, repo.W, repo.H, 6, packageRepoFocused, false)
+				label = ellipsize(smallFont, label, repo.W-16)
+				renderText(renderer, config, smallFont, label, ColorTextPrimary(), repo.X+8, repo.Y+(repo.H-descLabelH)/2)
+			}
 		}
 	}
 
 	// The row menu floats over the details pane, last, so nothing in either
 	// pane paints over it.
 	renderPackageActions(renderer, config, element)
+}
+
+// packageRepository uses the source's real host, and only labels GitHub URLs
+// as repositories when they include an owner and repo. Other web downloads
+// remain selectable without pretending they are GitHub repositories.
+func packageRepository(raw string) (label, target string, ok bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil {
+		return "", "", false
+	}
+	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	host := strings.ToLower(u.Hostname())
+	if host == "api.github.com" && len(parts) >= 3 && parts[0] == "repos" {
+		parts = parts[1:]
+	}
+	if (host == "github.com" || host == "www.github.com" || host == "raw.githubusercontent.com" || host == "api.github.com" || host == "codeload.github.com") && len(parts) >= 2 && parts[0] != "" && parts[1] != "" {
+		owner, e1 := url.PathUnescape(parts[0])
+		repo, e2 := url.PathUnescape(parts[1])
+		repo = strings.TrimSuffix(repo, ".git")
+		if e1 == nil && e2 == nil && owner != "" && repo != "" && !strings.ContainsAny(owner+repo, "/\\") {
+			return owner + "/" + repo, "https://github.com/" + url.PathEscape(owner) + "/" + url.PathEscape(repo), true
+		}
+	}
+	return u.Hostname() + u.EscapedPath(), u.String(), true
+}
+
+func packageRepositoryRect(element Element) sdl.Rect {
+	w, h := getElementWidth(element, 1160), getElementHeight(element, 500)
+	listW := w*3/5 - 16
+	return sdl.Rect{X: element.X + listW + 16 + 14, Y: element.Y + h - 82, W: w - listW - 16 - 28, H: 32}
+}
+
+func packageOpenRepository(config *Config) {
+	if config == nil {
+		return
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	packagesMutex.Lock()
+	var download string
+	if packagesFocusIndex >= 0 && packagesFocusIndex < len(packagesList) {
+		download = packagesList[packagesFocusIndex].Download
+	}
+	packagesMutex.Unlock()
+	if _, target, ok := packageRepository(download); ok {
+		openBrowserAtURL(config, target)
+	}
 }
 
 // packageRowPadY is the breathing room above and below a row's single line.
@@ -600,9 +650,9 @@ func handlePackageInput(e *sdl.KeyboardEvent, config *Config) {
 			packageMenuMove(-1)
 		case sdl.K_DOWN:
 			packageMenuMove(1)
-		case sdl.K_RETURN, sdl.K_SPACE:
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 			activatePackageAction(config)
-		case sdl.K_BACKSPACE, sdl.K_ESCAPE:
+		case sdl.K_BACKSPACE, sdl.K_ESCAPE, sdl.K_b:
 			closePackageActions()
 			PlayBackSound()
 		}
@@ -614,29 +664,49 @@ func handlePackageInput(e *sdl.KeyboardEvent, config *Config) {
 	packagesMutex.Unlock()
 
 	switch e.Keysym.Sym {
+	case sdl.K_LEFT:
+		packageRepoFocused = false
+	case sdl.K_RIGHT:
+		packagesMutex.Lock()
+		if packagesFocusIndex >= 0 && packagesFocusIndex < len(packagesList) {
+			_, _, packageRepoFocused = packageRepository(packagesList[packagesFocusIndex].Download)
+		}
+		packagesMutex.Unlock()
 	case sdl.K_UP:
+		packageRepoFocused = false
 		if packagesFocusIndex > 0 {
 			packagesFocusIndex--
 		}
 	case sdl.K_DOWN:
+		packageRepoFocused = false
 		if packagesFocusIndex < n-1 {
 			packagesFocusIndex++
 		}
 	case sdl.K_PAGEUP:
+		packageRepoFocused = false
 		packagesFocusIndex -= 8
 		if packagesFocusIndex < 0 {
 			packagesFocusIndex = 0
 		}
 	case sdl.K_PAGEDOWN:
+		packageRepoFocused = false
 		packagesFocusIndex += 8
 		if packagesFocusIndex >= n {
 			packagesFocusIndex = n - 1
 		}
-	case sdl.K_RETURN, sdl.K_SPACE:
+	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 		// One press, three meanings: run the open menu's item, offer the menu
 		// on a row already on the card, install a row that is not.
-		packagePress(config)
-	case sdl.K_BACKSPACE, sdl.K_ESCAPE:
+		if packageRepoFocused {
+			packageOpenRepository(config)
+		} else {
+			packagePress(config)
+		}
+	case sdl.K_BACKSPACE, sdl.K_ESCAPE, sdl.K_b:
+		if packageRepoFocused {
+			packageRepoFocused = false
+			return
+		}
 		for _, scene := range config.Scenes {
 			if scene.Name == "Main" {
 				changeSceneTo(config, findSceneIndex(config, "Main"))
@@ -672,6 +742,17 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 			}
 			return
 		}
+		packagesMutex.Lock()
+		var download string
+		if packagesFocusIndex >= 0 && packagesFocusIndex < len(packagesList) {
+			download = packagesList[packagesFocusIndex].Download
+		}
+		packagesMutex.Unlock()
+		if _, _, ok := packageRepository(download); ok && pointInRect(mx, my, packageRepositoryRect(e)) {
+			packageRepoFocused = true
+			packageOpenRepository(config)
+			return
+		}
 		listW := elemW*3/5 - 16
 		if mx < e.X || mx > e.X+listW || my < e.Y || my > e.Y+elemH {
 			return
@@ -700,6 +781,7 @@ func handlePackageMouseClick(mx, my int32, config *Config) {
 					packagePress(config)
 				} else {
 					packagesFocusIndex = i
+					packageRepoFocused = false
 				}
 				return
 			}
@@ -848,6 +930,48 @@ func packageMenuMove(delta int) {
 	if next != packageActionsFocus {
 		packageActionsFocus = next
 		PlayNavSound()
+	}
+}
+
+// packageListController keeps list and repository focus consistent for the pad.
+func packageListController(e *sdl.ControllerButtonEvent, config *Config) {
+	if packageActionsController(e, config) {
+		return
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		packageRepoFocused = false
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		packagesMutex.Lock()
+		if packagesFocusIndex >= 0 && packagesFocusIndex < len(packagesList) {
+			_, _, packageRepoFocused = packageRepository(packagesList[packagesFocusIndex].Download)
+		}
+		packagesMutex.Unlock()
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		packageRepoFocused = false
+		if packagesFocusIndex > 0 {
+			packagesFocusIndex--
+		}
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		packageRepoFocused = false
+		packagesMutex.Lock()
+		n := len(packagesList)
+		packagesMutex.Unlock()
+		if packagesFocusIndex < n-1 {
+			packagesFocusIndex++
+		}
+	case sdl.CONTROLLER_BUTTON_A:
+		if packageRepoFocused {
+			packageOpenRepository(config)
+		} else {
+			packagePress(config)
+		}
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		if packageRepoFocused {
+			packageRepoFocused = false
+		} else {
+			goBackScene(config)
+		}
 	}
 }
 

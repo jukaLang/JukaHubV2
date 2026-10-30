@@ -94,6 +94,56 @@ func TestDetectDeviceForSystem(t *testing.T) {
 	}
 }
 
+// The Brick's own images stamp their model code into the device tree and never
+// say "TrimUI" where this code used to look, so the canvas was fixed by the 4:3
+// panel fallback while the board stayed unidentified: no F1/F2 keys and none of
+// the handheld budgets. The kernel's board description names it now.
+func TestDetectDeviceFromDeviceTreeModelCode(t *testing.T) {
+	cases := []struct {
+		name, goos, model, compatible string
+		want                          DeviceModel
+	}{
+		{"brick from the compatible list alone", "linux", "", "allwinner,h700-tg3040", DeviceTrimuiBrick},
+		{"smart pro from the compatible list alone", "linux", "", "allwinner,h700,tg5040", DeviceTrimuiSmartPro},
+		{"brick pro from the compatible list alone", "linux", "", "allwinner,h700-tg4040", DeviceTrimuiBrickPro},
+		{"smart pro s from the compatible list alone", "linux", "", "allwinner,a523-tg5050", DeviceTrimuiSmartProS},
+		{"model string plus code", "linux", "TrimUI Brick", "allwinner,h700-tg3040", DeviceTrimuiBrick},
+		{"marketing model without a code", "linux", "TRIMUI Brick", "allwinner,h700", DeviceUnknown},
+		{"hammer on the shared board", "linux", "TrimUI Hammer", "allwinner,h700-tg3040", DeviceTrimuiHammer},
+		{"hammer with a contradictory code", "linux", "TrimUI Hammer", "allwinner,h700-tg4040", DeviceUnknown},
+		{"conflicting codes", "linux", "", "allwinner,h700-tg3040 allwinner,h700-tg5040", DeviceUnknown},
+		{"code must be a whole token", "linux", "", "allwinner,h700-tg30401", DeviceUnknown},
+		{"no code at all", "linux", "", "allwinner,h700", DeviceUnknown},
+		{"other operating system", "windows", "", "allwinner,h700-tg3040", DeviceUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := detectDeviceForHardware(tc.goos, tc.model, tc.compatible); got != tc.want {
+				t.Fatalf("detectDeviceForHardware(%q, %q) = %q, want %q", tc.model, tc.compatible, got, tc.want)
+			}
+		})
+	}
+}
+
+// A device-tree property packs several NUL-terminated strings; trimming the
+// padding must not glue the entries together.
+func TestReadDeviceTreeStringSplitsNulEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "compatible")
+	if err := os.WriteFile(path, []byte("allwinner,h700\x00trimui,tg3040\x00"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := readDeviceTreeString(path)
+	if strings.Contains(got, "\x00") {
+		t.Fatalf("readDeviceTreeString kept a NUL byte: %q", got)
+	}
+	if !strings.Contains(got, "trimui,tg3040") {
+		t.Fatalf("readDeviceTreeString = %q, want the second entry intact", got)
+	}
+	if got := readDeviceTreeString(filepath.Join(t.TempDir(), "missing")); got != "" {
+		t.Fatalf("a missing property read %q, want empty", got)
+	}
+}
+
 func TestDeviceModelForHardwareID(t *testing.T) {
 	for _, tc := range []struct {
 		id   string

@@ -200,10 +200,13 @@ var (
 	wifiProcWirelessPath = "/proc/net/wireless"
 	// wpa_supplicant's control directory, wherever a firmware build put it.
 	// Embedded images with a read-only root often point ctrl_interface at /tmp,
-	// and an older image uses /var/run directly.
+	// and an older image uses /var/run directly. /etc/wifi/sockets is where
+	// TrimUI's TG5040 images (Brick and Smart Pro) put it: their init writes
+	// `ctrl_interface=/etc/wifi/sockets` into /etc/wifi/wpa_supplicant.conf.
 	wifiSupplicantDirs = []string{
 		"/run/wpa_supplicant",
 		"/var/run/wpa_supplicant",
+		"/etc/wifi/sockets",
 		"/tmp/wpa_supplicant",
 		"/tmp/run/wpa_supplicant",
 	}
@@ -310,11 +313,26 @@ func parseWirelessProcIfaces(out string) []string {
 	return names
 }
 
+// stationSocketName reports whether one entry of a supplicant control directory
+// can be the station interface. wpa_supplicant also publishes a P2P-device
+// socket (`p2p-dev-wlan0`) and, for the global control interface,
+// `<iface>_global`; both pass a plain interface-name check, and both sort ahead
+// of `wlan0`, so taking the first entry by name put every command — and the
+// interface discovery — on an object that cannot scan. The supplicant's own
+// config file is a directory entry too, and validIfaceName filters it out (its
+// name is longer than an interface name can be).
+func stationSocketName(name string) bool {
+	if strings.HasPrefix(name, "p2p-dev-") || strings.HasSuffix(name, "_global") {
+		return false
+	}
+	return validIfaceName(name)
+}
+
 // supplicantInterfaceNames reads the interfaces wpa_supplicant is managing. The
 // control directory holds one socket per interface; it names a radio the
-// supplicant can actually drive, whatever sysfs says about the driver.
-// wpa_supplicant's own config file is a directory entry too, and validIfaceName
-// filters it out (its name is longer than an interface name can be).
+// supplicant can actually drive, whatever sysfs says about the driver. Names
+// that look like a station interface come first, so the socket route resolves
+// to `wlan0` rather than to a neighbour that cannot scan.
 func supplicantInterfaceNames(dirs []string) []string {
 	seen := map[string]bool{}
 	var names []string
@@ -325,7 +343,7 @@ func supplicantInterfaceNames(dirs []string) []string {
 		}
 		for _, e := range entries {
 			name := e.Name()
-			if !validIfaceName(name) || seen[name] {
+			if !stationSocketName(name) || seen[name] {
 				continue
 			}
 			info, err := os.Stat(filepath.Join(dir, name))
@@ -337,7 +355,17 @@ func supplicantInterfaceNames(dirs []string) []string {
 		}
 	}
 	sort.Strings(names)
-	return names
+	// Stable partition: station-looking names keep their order and move first.
+	stations := make([]string, 0, len(names))
+	others := make([]string, 0, len(names))
+	for _, name := range names {
+		if looksLikeWirelessName(name) {
+			stations = append(stations, name)
+			continue
+		}
+		others = append(others, name)
+	}
+	return append(stations, others...)
 }
 
 // parseWpaCliInterfaceList reads the interfaces wpa_cli reports. The
@@ -452,28 +480,44 @@ func parseSupplicantCtrlDir(text string) string {
 	return ""
 }
 
-// supplicantCtrlDir finds the directory holding the control socket for one
-// interface: the supplicant's own config first, then the conventional places.
-// It returns "" when nothing was found, and the caller then leaves wpa_cli on its
-// default rather than guessing a -p that could be wrong.
-func supplicantCtrlDir(iface string) string {
-	dirs := append([]string(nil), wifiSupplicantDirs...)
+// supplicantControlDirs lists every directory a control socket may live in,
+// the ones the supplicant's own config declares first and the conventional
+// guesses after. Discovery and command resolution both read this one list: they
+// used to disagree, because the config's ctrl_interface was only consulted when
+// building a command, while the socket that *names the interface* was looked for
+// in the conventional directories alone. An image whose ctrl_interface points
+// somewhere none of those cover then had a radio the app could not name — and a
+// radio it cannot name is a picker that never opens.
+func supplicantControlDirs() []string {
+	dirs := make([]string, 0, len(wifiSupplicantConfigs)+len(wifiSupplicantDirs))
 	for _, path := range wifiSupplicantConfigs {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
 		if dir := parseSupplicantCtrlDir(string(data)); dir != "" {
-			// The config's own answer wins over the conventions.
-			dirs = append([]string{dir}, dirs...)
+			dirs = append(dirs, dir)
 		}
 	}
+	dirs = append(dirs, wifiSupplicantDirs...)
 	seen := map[string]bool{}
+	out := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
 		if dir == "" || seen[dir] {
 			continue
 		}
 		seen[dir] = true
+		out = append(out, dir)
+	}
+	return out
+}
+
+// supplicantCtrlDir finds the directory holding the control socket for one
+// interface: the supplicant's own config first, then the conventional places.
+// It returns "" when nothing was found, and the caller then leaves wpa_cli on its
+// default rather than guessing a -p that could be wrong.
+func supplicantCtrlDir(iface string) string {
+	for _, dir := range supplicantControlDirs() {
 		if iface == "" {
 			if len(supplicantInterfaceNames([]string{dir})) > 0 {
 				return dir
@@ -578,7 +622,7 @@ func wirelessInterfaceNames() []string {
 			return listed
 		}
 	}
-	if viaSupplicant := supplicantInterfaceNames(wifiSupplicantDirs); len(viaSupplicant) > 0 {
+	if viaSupplicant := supplicantInterfaceNames(supplicantControlDirs()); len(viaSupplicant) > 0 {
 		return viaSupplicant
 	}
 	// Nothing on the card named the radio. Ask the tool that drives it: this is
@@ -636,13 +680,227 @@ func resetWiFiInterfaceCache() {
 	resetSupplicantInterfaceCache()
 }
 
-// wifiControlAvailable reports whether this device can be driven through
-// wpa_cli at all.
+// Backend names, as wifiCommandBackend reports them.
+const (
+	wifiBackendCli    = "wpa_cli"
+	wifiBackendSocket = "wpa_supplicant socket"
+)
+
+// wifiCommandBackend names how a command reaches the supplicant: the CLI when
+// the image ships it, the supplicant's own control socket when it does not, and
+// "" when neither is there. The socket is the fallback on purpose — wpa_cli is
+// the better-known path, and a command that works today should not start taking
+// a different route because a socket happens to exist.
+func wifiCommandBackend() string {
+	iface := wifiInterface()
+	if iface == "" {
+		return ""
+	}
+	if wifiToolExists("wpa_cli") {
+		return wifiBackendCli
+	}
+	if dir := wifiCtrlDirCached(iface); dir != "" && wpaCtrlSocketExists(dir, iface) {
+		return wifiBackendSocket
+	}
+	return ""
+}
+
+// wifiControlAvailable reports whether this device can be driven at all: a
+// radio plus either the CLI or the supplicant's socket.
 func wifiControlAvailable() bool {
 	if winWifiActive() {
 		return winWifiControlAvailable()
 	}
-	return wifiInterface() != "" && wifiToolExists("wpa_cli")
+	return wifiCommandBackend() != ""
+}
+
+// wifiRadioSwitchable reports whether the firmware exposes a radio switch
+// (nmcli or rfkill), which is what lets the picker turn Wi-Fi on by itself.
+var wifiRadioSwitchable = func() bool {
+	if winWifiActive() {
+		return winWifiControlAvailable()
+	}
+	return wifiRadioBackend() != ""
+}
+
+// wifiSupplicantConfigPath returns the supplicant config this image keeps, or
+// "" when there is none. It is the file the supplicant itself reads, so its
+// presence is the clearest evidence that the image has a Wi-Fi stack even while
+// nothing is up.
+func wifiSupplicantConfigPath() string {
+	for _, path := range wifiSupplicantConfigs {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path
+		}
+	}
+	return ""
+}
+
+// wifiHardwarePresent reports whether this image has Wi-Fi hardware and stack,
+// with no process started to find out: a netdev the driver already created, the
+// kernel's own wireless list, a supplicant control socket, or the supplicant's
+// binary and config. Every TrimUI handheld ships a radio, so that counts too.
+func wifiHardwarePresent() bool {
+	if names, err := sysfsNetdevs(wifiSysfsNetRoot); err == nil {
+		for _, name := range names {
+			if isWirelessNetdev(wifiSysfsNetRoot, name) || looksLikeWirelessName(name) {
+				return true
+			}
+		}
+	}
+	if data, err := os.ReadFile(wifiProcWirelessPath); err == nil {
+		if len(parseWirelessProcIfaces(string(data))) > 0 {
+			return true
+		}
+	}
+	if len(supplicantInterfaceNames(supplicantControlDirs())) > 0 {
+		return true
+	}
+	if wifiSupplicantConfigPath() != "" && wifiToolExists("wpa_supplicant") {
+		return true
+	}
+	return IsTrimuiDevice()
+}
+
+// wifiEntryReachable reports whether the picker is worth opening: a live backend,
+// or hardware whose radio can still be switched on from inside it. The start
+// menu dropped the entry whenever no backend was live — which is exactly the
+// state a device is in before Wi-Fi has been turned on there once, so the one
+// control that could create the backend disappeared with it.
+func wifiEntryReachable() bool {
+	if wifiControlAvailable() {
+		return true
+	}
+	if winWifiActive() {
+		return false
+	}
+	return wifiRadioSwitchable() && wifiHardwarePresent()
+}
+
+// supplicantStartTimeout bounds the one-time `wpa_supplicant -B` start. The
+// daemon forks, so the call itself is quick; a stuck one is a stuck supplicant.
+const supplicantStartTimeout = 10 * time.Second
+
+// The supplicant is started at most once per interface per process, so a
+// backend that cannot come up is reported rather than retried on every frame or
+// every visit.
+var (
+	supplicantStartMu    sync.Mutex
+	supplicantStartTried = map[string]bool{}
+)
+
+// beginSupplicantStart claims the one attempt for an interface.
+func beginSupplicantStart(iface string) bool {
+	supplicantStartMu.Lock()
+	defer supplicantStartMu.Unlock()
+	if supplicantStartTried[iface] {
+		return false
+	}
+	supplicantStartTried[iface] = true
+	return true
+}
+
+// resetSupplicantStart forgets the attempt, so turning the radio off and on
+// again inside one session can start the supplicant a second time.
+func resetSupplicantStart(iface string) {
+	supplicantStartMu.Lock()
+	delete(supplicantStartTried, iface)
+	supplicantStartMu.Unlock()
+}
+
+// supplicantStartDir picks the control directory to hand to a supplicant we
+// start: the one its config names, else the TrimUI image's own when it is
+// writable, else a /tmp directory this process can create.
+func supplicantStartDir() string {
+	for _, dir := range supplicantControlDirs() {
+		if dir == "" {
+			continue
+		}
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return dir
+		}
+	}
+	return tempSupplicantDir()
+}
+
+// tempSupplicantDir is the writable control directory a supplicant we start
+// falls back to when the image's own is missing or root-owned. It is on the
+// conventional list, so discovery looks there too.
+func tempSupplicantDir() string { return filepath.Join(os.TempDir(), "wpa_supplicant") }
+
+// startSupplicantFor starts wpa_supplicant for one interface with the arguments
+// the TG5040 images use: daemonise, nl80211, this interface, this config, this
+// control directory. It is the same command MinUI and NextUI's own Wi-Fi
+// packages run on this hardware.
+func startSupplicantFor(iface, config, ctrlDir string) (string, error) {
+	args := []string{"-B", "-D", "nl80211", "-i", iface, "-c", config, "-O", ctrlDir}
+	return wifiRunner(supplicantStartTimeout, "", wifiToolCommand("wpa_supplicant"), args...)
+}
+
+// ensureWifiBackend creates the supplicant route when the image has a supplicant
+// but nothing is listening. A Brick that has never had Wi-Fi switched on in the
+// stock firmware has a radio and no control socket — the supplicant is started
+// by the firmware's own menu — so the socket the picker looks for only exists
+// after something starts it. It reports whether it ran the start command.
+func ensureWifiBackend() bool {
+	if winWifiActive() {
+		return false
+	}
+	if wifiCommandBackend() != "" {
+		return false
+	}
+	iface := wifiInterface()
+	if iface == "" {
+		return false
+	}
+	// Never start a supplicant against a radio the firmware has switched off:
+	// the first thing it would do is fail, and the picker's radio switch owns
+	// that decision.
+	if on, ok := wifiRadioState(); ok && !on {
+		return false
+	}
+	config := wifiSupplicantConfigPath()
+	if config == "" || !wifiToolExists("wpa_supplicant") {
+		return false
+	}
+	if !beginSupplicantStart(iface) {
+		return false
+	}
+	dir := supplicantStartDir()
+	out, err := startSupplicantFor(iface, config, dir)
+	if err != nil && dir != tempSupplicantDir() {
+		// The image's control directory can be root-owned and read-only for this
+		// process; a socket in a temporary directory is still reachable, and
+		// discovery reads the same list this start was given.
+		alt := tempSupplicantDir()
+		if out2, err2 := startSupplicantFor(iface, config, alt); err2 == nil {
+			dir, out, err = alt, out2, nil
+		}
+	}
+	if err != nil {
+		reason := firstLine(err.Error())
+		if extra := firstLine(strings.TrimSpace(out)); extra != "" {
+			reason += ": " + extra
+		}
+		recordSupplicantStart(iface, "failed: "+reason)
+		recordWiFiError("supplicant start", errors.New(reason))
+		logPatch("wifi: starting wpa_supplicant for %s failed: %v %s", iface, err, firstLine(strings.TrimSpace(out)))
+		return true
+	}
+	recordSupplicantStart(iface, "started by JukaHub (ctrl_interface "+dir+")")
+	logPatch("wifi: started wpa_supplicant for %s (ctrl_interface %s)", iface, dir)
+	// The daemon creates the socket as it initialises; a fresh dial is cheap and
+	// the answer is what the picker needs before it scans.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		resetWiFiInterfaceCache()
+		if wifiCommandBackend() == wifiBackendSocket {
+			return true
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	recordSupplicantStart(iface, "started, but no control socket appeared in "+dir)
+	return true
 }
 
 // wifiUnavailableReason explains an unavailable backend in one line.
@@ -652,9 +910,12 @@ func wifiUnavailableReason() string {
 	}
 	switch {
 	case wifiInterface() == "":
+		if wifiHardwarePresent() {
+			return "Wi-Fi is off — turn the radio on, then reopen this list"
+		}
 		return "No wireless network interface on this device"
 	case !wifiToolExists("wpa_cli"):
-		return "Wi-Fi control needs wpa_cli, which is not installed"
+		return "Wi-Fi control needs wpa_cli or a wpa_supplicant control socket, and this image has neither"
 	}
 	return ""
 }
@@ -711,16 +972,21 @@ func wifiWPAInput(stdin string, args ...string) (string, error) {
 	if iface == "" {
 		return "", errors.New(wifiUnavailableReason())
 	}
-	if !wifiToolExists("wpa_cli") {
-		return "", errors.New(wifiUnavailableReason())
+	switch wifiCommandBackend() {
+	case wifiBackendCli:
+		full := make([]string, 0, len(args)+4)
+		if dir := wifiCtrlDirCached(iface); dir != "" {
+			full = append(full, "-p", dir)
+		}
+		full = append(full, "-i", iface)
+		full = append(full, args...)
+		return wifiRunner(wifiCommandTimeout, stdin, wifiToolCommand("wpa_cli"), full...)
+	case wifiBackendSocket:
+		// The same commands over the supplicant's own socket, for an image
+		// that ships no wpa_cli.
+		return wifiSocketScript(wifiCtrlDirCached(iface), iface, stdin, args...)
 	}
-	full := make([]string, 0, len(args)+4)
-	if dir := wifiCtrlDirCached(iface); dir != "" {
-		full = append(full, "-p", dir)
-	}
-	full = append(full, "-i", iface)
-	full = append(full, args...)
-	return wifiRunner(wifiCommandTimeout, stdin, wifiToolCommand("wpa_cli"), full...)
+	return "", errors.New(wifiUnavailableReason())
 }
 
 // wifiWPAChecked is wifiWPA that also treats a printed FAIL as an error, and
@@ -742,16 +1008,25 @@ func wifiCommandError(out string, err error) error {
 	// A FAIL is a failure whether or not the CLI also exited non-zero: some
 	// builds exit 0 for a refused command, and the output is the only signal
 	// that is the same everywhere.
+	// Every command failure passes through here, so this is also where the
+	// diagnostics sheet's "last error" is kept: one choke point, and the sheet
+	// cannot disagree with what the panel was told.
 	if wifiCommandFailed(out) {
-		return errors.New(wifiFailureMessage(out))
+		e := errors.New(wifiFailureMessage(out))
+		recordWiFiError("command", e)
+		return e
 	}
 	if err == nil {
 		return nil
 	}
 	if line := wifiFirstOutputLine(out); line != "" {
-		return errors.New(wifiExplainWPAOutput(line))
+		e := errors.New(wifiExplainWPAOutput(line))
+		recordWiFiError("command", e)
+		return e
 	}
-	return fmt.Errorf("wpa_cli did not answer (%w)", err)
+	e := fmt.Errorf("wpa_cli did not answer (%w)", err)
+	recordWiFiError("command", e)
+	return e
 }
 
 // wifiExplainWPAOutput turns wpa_cli's own prose into a sentence the picker can

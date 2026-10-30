@@ -5,9 +5,12 @@ package main
 // "JukaHub-trimui-smart-pro-linux-arm64.tar.gz" directly from it.
 
 import (
+	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 )
 
 type DeviceModel string
@@ -32,49 +35,180 @@ func (d DeviceModel) IsTrimui() bool {
 	}
 }
 
-// hardwareModelID returns the TG/TR model identifier (e.g. "TG5040").
-func (d DeviceModel) hardwareModelID() string {
-	switch d {
-	case DeviceTrimuiSmartPro:
-		return "TG5040"
-	case DeviceTrimuiSmartProS:
-		return "TG5050"
-	case DeviceTrimuiBrick:
-		return "TG3040"
-	case DeviceTrimuiBrickPro:
-		return "TG4040"
-	case DeviceTrimuiHammer:
-		// The Hammer is a Brick variant on the same TG3040 hardware; there is
-		// no separate Hammer model code in the firmware.
-		return "TG3040"
-	default:
-		return ""
-	}
+// deviceModelCodes maps each supported model to the code TrimUI stamps into
+// its firmware and device tree.
+var deviceModelCodes = map[DeviceModel]string{
+	DeviceTrimuiSmartPro:  "TG5040",
+	DeviceTrimuiSmartProS: "TG5050",
+	DeviceTrimuiBrick:     "TG3040",
+	DeviceTrimuiBrickPro:  "TG4040",
 }
 
-// DetectDevice returns the current device, reading the MODEL env var,
-// /etc/hostname, or the device-tree model on TrimUI hardware. Firmware images
-// do not all put the marketing name in the hostname, so the device tree is a
-// second source for the Brick/Hammer family. On Windows it returns
-// DeviceDevBuild.
-func DetectDevice() DeviceModel {
-	model := strings.TrimSpace(os.Getenv("JUKAHUB_DEVICE_MODEL"))
-	if model == "" {
-		model = readDeviceModelFile("/etc/hostname")
+// hardwareModelID returns the TG/TR model identifier (e.g. "TG5040").
+func (d DeviceModel) hardwareModelID() string {
+	if d == DeviceTrimuiHammer {
+		// The Hammer is a Brick variant on the same TG3040 hardware; there is
+		// no separate Hammer model code in the firmware.
+		return deviceModelCodes[DeviceTrimuiBrick]
 	}
-	// Prefer a string the classifier already understands. If the hostname is
-	// generic ("trimui", "localhost"), append the device-tree model instead of
-	// letting a model-less name decide the device.
-	if detectDeviceForSystem(runtime.GOOS, model) == DeviceUnknown {
-		if tree := readDeviceModelFile("/proc/device-tree/model"); tree != "" {
-			if model == "" {
-				model = tree
-			} else if !strings.EqualFold(model, tree) {
-				model += " " + tree
-			}
+	return deviceModelCodes[d]
+}
+
+// DetectDevice returns the current device. On Windows it returns
+// DeviceDevBuild. On Linux the evidence collected by readDeviceIdentity names
+// the board: a launcher's exported device, a model code in the kernel's board
+// description (or cpuinfo, or the hostname), then the model names the image
+// ships, and finally the panel when the image is a TrimUI one but names no
+// model.
+func DetectDevice() DeviceModel {
+	deviceModelOnce.Do(func() {
+		deviceModelCache, deviceSourceCache, deviceEvidenceCache = detectDeviceIdentity()
+	})
+	return deviceModelCache
+}
+
+// deviceIdentityReport is the evidence behind DetectDevice, for diagnostics:
+// which model was named, by which source, and what the platform exposed. It
+// starts detection if it has not run yet.
+func deviceIdentityReport() (DeviceModel, string, deviceIdentity) {
+	DetectDevice()
+	return deviceModelCache, deviceSourceCache, deviceEvidenceCache
+}
+
+var (
+	deviceModelOnce     sync.Once
+	deviceModelCache    DeviceModel
+	deviceSourceCache   string
+	deviceEvidenceCache deviceIdentity
+)
+
+// detectDevice is the uncached detection. It runs once per process: the board
+// cannot change while the app is running, and DetectDevice sits on per-frame
+// paths (the frame-rate controller and the texture budgets read it every
+// frame), so it must not re-read sysfs there.
+//
+// Order: an explicit JUKAHUB_DEVICE_MODEL override, then the evidence collected
+// by readDeviceIdentity and classified by classifyDevice (launcher env, kernel
+// model codes, the firmware's own model strings, the panel). The override goes
+// through both classifiers so a test can say "TG3040" as well as
+// "trimui-brick".
+func detectDevice() DeviceModel {
+	device, _, _ := detectDeviceIdentity()
+	return device
+}
+
+// detectDeviceIdentity is detectDevice plus the source and evidence it used.
+func detectDeviceIdentity() (DeviceModel, string, deviceIdentity) {
+	if override := strings.TrimSpace(os.Getenv("JUKAHUB_DEVICE_MODEL")); override != "" {
+		if d := detectDeviceForSystem(runtime.GOOS, override); d != DeviceUnknown {
+			return d, "override", deviceIdentity{EnvModel: override}
+		}
+		if d := detectDeviceForHardware(runtime.GOOS, override, ""); d != DeviceUnknown {
+			return d, "override", deviceIdentity{EnvModel: override}
 		}
 	}
-	return detectDeviceForSystem(runtime.GOOS, model)
+	if runtime.GOOS != "linux" {
+		return detectDeviceForSystem(runtime.GOOS, ""), "", deviceIdentity{}
+	}
+	id := readDeviceIdentity()
+	device, source := classifyDevice(id)
+	logDeviceIdentity(device, source, id)
+	return device, source, id
+}
+
+// logDeviceIdentity records how the board was named, with the raw strings it was
+// named from. On a handheld the log is the only way to see what the firmware
+// actually exposes, so a device that stays unidentified prints the same line and
+// says which sources were missing.
+func logDeviceIdentity(device DeviceModel, source string, id deviceIdentity) {
+	name := string(device)
+	if device == DeviceUnknown {
+		name = "unidentified"
+	} else if source != "" {
+		name += " (from " + source + ")"
+	}
+	panel := "unknown"
+	if id.PanelW > 0 && id.PanelH > 0 {
+		panel = panelLabel(id.PanelW, id.PanelH)
+	}
+	firmware := strings.Join(id.Names, " | ")
+	if len(firmware) > 220 {
+		firmware = firmware[:220] + "…"
+	}
+	log.Printf("[device] %s: dt model=%q compatible=%q cpuinfo=%q hostname=%q firmware=%q trimui=%v panel=%s env(device=%q platform=%q model=%q)",
+		name, id.Model, id.Compatible, id.CPUInfo, id.Hostname, firmware, id.TrimUI, panel,
+		id.EnvDevice, id.EnvPlatform, id.EnvModel)
+}
+
+// deviceTreeDirs are the two ways the kernel exposes its board description:
+// procfs and the sysfs mirror of the same tree.
+var deviceTreeDirs = []string{"/proc/device-tree", "/sys/firmware/devicetree/base"}
+
+// deviceTreeIdentity returns the board's model and compatible properties. Both
+// are written by the kernel for the hardware it booted on, and TrimUI images
+// carry the TG model code in them even when the model string is only a
+// marketing name.
+func deviceTreeIdentity() (model, compatible string) {
+	for _, dir := range deviceTreeDirs {
+		if model == "" {
+			model = readDeviceTreeString(filepath.Join(dir, "model"))
+		}
+		if compatible == "" {
+			compatible = readDeviceTreeString(filepath.Join(dir, "compatible"))
+		}
+		if model != "" && compatible != "" {
+			break
+		}
+	}
+	return model, compatible
+}
+
+// readDeviceTreeString reads one device-tree property. Properties are
+// NUL-terminated and "compatible" packs several strings into one property, so
+// the NULs become separators rather than trailing padding to trim.
+func readDeviceTreeString(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.ReplaceAll(string(data), "\x00", " "))
+}
+
+// detectDeviceForHardware classifies the kernel's board description. Unlike a
+// hostname, the device tree is written by the kernel for the board it booted
+// on, so a bare model code there is enough to name the device: a TrimUI image
+// whose hostname and model string never say "TrimUI" still lists "tg3040" in
+// its compatible strings. A marketing name in the same string is still
+// accepted, and a Hammer on the shared TG3040 board stays a Hammer.
+func detectDeviceForHardware(goos, model, compatible string) DeviceModel {
+	if goos != "linux" {
+		return DeviceUnknown
+	}
+	joined := strings.ToUpper(model + " " + compatible)
+	found := deviceCodesIn(joined)
+	if len(found) != 1 {
+		// No code names the board (fall back to the names), or two conflict.
+		return DeviceUnknown
+	}
+	if containsToken(joined, "HAMMER") {
+		if found[0] != DeviceTrimuiBrick {
+			return DeviceUnknown
+		}
+		return DeviceTrimuiHammer
+	}
+	return found[0]
+}
+
+// deviceCodesIn returns the distinct model codes named in an upper-cased
+// string. Two different codes mean the string contradicts itself.
+func deviceCodesIn(s string) []DeviceModel {
+	var found []DeviceModel
+	for device, id := range deviceModelCodes {
+		if containsToken(s, id) {
+			found = append(found, device)
+		}
+	}
+	return found
 }
 
 // readDeviceModelFile reads a model string and strips the NUL padding used by
@@ -101,19 +235,8 @@ func detectDeviceForSystem(goos, model string) DeviceModel {
 	}
 	// A model-specific match requires BOTH the marketing name and a TG id.
 	// The exact-token check is enforced by DeviceModelForHardwareID.
-	ids := map[DeviceModel]string{
-		DeviceTrimuiSmartPro:  "TG5040",
-		DeviceTrimuiSmartProS: "TG5050",
-		DeviceTrimuiBrick:     "TG3040",
-		DeviceTrimuiBrickPro:  "TG4040",
-	}
 	// If two conflicting TG ids appear in the model string, refuse.
-	var found []DeviceModel
-	for device, id := range ids {
-		if containsToken(upper, id) {
-			found = append(found, device)
-		}
-	}
+	found := deviceCodesIn(upper)
 	// "Hammer" is an explicit marketing name for a Brick variant. A TG3040
 	// alongside it is the same hardware, not a conflict; any other TG id is
 	// contradictory and stays unknown.

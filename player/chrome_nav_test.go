@@ -173,6 +173,32 @@ func TestHandleChromeKeyOwnsInputWhileChromeFocused(t *testing.T) {
 	}
 }
 
+func TestChromeControllerNavigatesAndActivates(t *testing.T) {
+	config := useNavScene(t, makeNavGridScene("ChromePad", 2, 2))
+	useChromeBar(t)
+	prevHome, prevCalendar := homeLayoutActive, homeCalendarOpen
+	homeLayoutActive, homeCalendarOpen = false, false
+	t.Cleanup(func() { homeLayoutActive, homeCalendarOpen = prevHome, prevCalendar })
+	installGraph(t, config, 0)
+	moveSelection(config, ActionNavigateUp)
+	press := func(button uint8) bool {
+		return handleChromeController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: button}, config)
+	}
+	if !press(sdl.CONTROLLER_BUTTON_DPAD_RIGHT) || selectedButtonIndex != ChromeClockIndex {
+		t.Fatalf("Right on chrome selected %d, want clock", selectedButtonIndex)
+	}
+	if !press(sdl.CONTROLLER_BUTTON_A) || !homeCalendarOpen {
+		t.Fatal("A on clock did not open calendar")
+	}
+	homeCalendarOpen = false
+	if !press(sdl.CONTROLLER_BUTTON_DPAD_DOWN) || selectedButtonIndex < 0 {
+		t.Fatalf("Down from chrome selected %d, want content", selectedButtonIndex)
+	}
+	if press(sdl.CONTROLLER_BUTTON_A) {
+		t.Fatal("chrome handler consumed A while content is focused")
+	}
+}
+
 // TestChromeBarClick: tapping the back pill or the status clock behaves like
 // pressing the focused button (the TrimUI Smart Pro is a touch device).
 func TestChromeBarClick(t *testing.T) {

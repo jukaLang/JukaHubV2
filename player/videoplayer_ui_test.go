@@ -44,6 +44,7 @@ func controlRectsByName() map[string]sdl.Rect {
 		"volDown":    videoControlRects.volDown,
 		"volUp":      videoControlRects.volUp,
 		"back":       videoControlRects.back,
+		"close":      videoControlRects.close,
 		"subs":       videoControlRects.subs,
 		"settings":   videoControlRects.settings,
 		"fullscreen": videoControlRects.fullscreen,

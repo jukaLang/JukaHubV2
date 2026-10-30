@@ -15,6 +15,7 @@ package main
 // of being clipped or squeezed into a letterbox.
 
 import (
+	"fmt"
 	"log"
 	"math"
 	"strconv"
@@ -67,11 +68,70 @@ func applyDeviceUIProfile(config *Config) bool {
 
 // applyUIProfileForDevice is the testable core of applyDeviceUIProfile.
 func applyUIProfileForDevice(config *Config, device DeviceModel) bool {
-	if config == nil {
-		return false
-	}
 	profile, ok := deviceScreenProfileFor(device)
 	if !ok {
+		return false
+	}
+	return applyScreenProfile(config, profile, deviceDisplayName(device))
+}
+
+// applyPanelCanvas gives a 4:3 panel the compact canvas when the device could
+// not be named. The panel is the one fact a launcher always has: drawing the
+// 16:9 design into it letterboxes the whole UI into a strip with bars above and
+// below, which is what a Brick whose hostname and device tree name no TrimUI
+// model did. Only the shipped 16:9 design is remapped — a canvas that is
+// already 4:3 or narrower is left exactly as authored.
+func applyPanelCanvas(config *Config, panelW, panelH int32) bool {
+	if config == nil || !panelIsFourThree(panelW, panelH) {
+		return false
+	}
+	if designW, designH := canvasDimensionsOf(config); designW > 0 && designH > 0 {
+		if float64(designW)/float64(designH) <= 4.0/3.0+0.01 {
+			return false
+		}
+	}
+	profile, ok := deviceScreenProfileFor(DeviceTrimuiBrick)
+	if !ok {
+		return false
+	}
+	return applyScreenProfile(config, profile,
+		fmt.Sprintf("panel %dx%d (device not identified)", panelW, panelH))
+}
+
+// panelIsFourThree reports whether a panel is 4:3 within 1% of rounding, which
+// is the aspect the shipped 16:9 design cannot fill without letterboxing. An
+// unknown size is not 4:3: a zero would otherwise match every comparison.
+func panelIsFourThree(w, h int32) bool {
+	if w <= 0 || h <= 0 {
+		return false
+	}
+	diff := float64(w)/float64(h) - 4.0/3.0
+	return diff > -0.0134 && diff < 0.0134
+}
+
+// canvasDimensionsOf is the design size the config declares, falling back to
+// the built-in 1280x720 the shipped configs are authored at.
+func canvasDimensionsOf(config *Config) (int32, int32) {
+	designW, designH := canvasDimension(config.Width), canvasDimension(config.Height)
+	if designW <= 0 {
+		designW = canvasDimension(config.Variables.ScreenWidth)
+	}
+	if designH <= 0 {
+		designH = canvasDimension(config.Variables.ScreenHeight)
+	}
+	if designW <= 0 {
+		designW = uiCanvasWideWidth
+	}
+	if designH <= 0 {
+		designH = uiCanvasWideHeight
+	}
+	return designW, designH
+}
+
+// applyScreenProfile squeezes the authored geometry into one profile's canvas
+// and records which panel it chose. label names the device in the log line.
+func applyScreenProfile(config *Config, profile deviceScreenProfile, label string) bool {
+	if config == nil {
 		return false
 	}
 
@@ -104,7 +164,7 @@ func applyUIProfileForDevice(config *Config, device DeviceModel) bool {
 		mode = "compact"
 	}
 	log.Printf("[ui] %s: %dx%d panel, %s canvas %dx%d",
-		deviceDisplayName(device), profile.NativeW, profile.NativeH,
+		label, profile.NativeW, profile.NativeH,
 		mode, profile.CanvasW, profile.CanvasH)
 	return true
 }

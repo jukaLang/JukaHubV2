@@ -241,6 +241,57 @@ func webImageDimsFromBlock(b webBlock, doc *webDocument, scale, contentW int32) 
 	return w, h
 }
 
+// browserFaviconURL resolves a page's declared icon, falling back to the
+// origin's conventional favicon. Never downgrade an HTTPS page to HTTP.
+func browserFaviconURL(source string, base *url.URL) string {
+	if base == nil || (base.Scheme != "http" && base.Scheme != "https") || base.Hostname() == "" {
+		return ""
+	}
+	pos := 0
+	for pos < len(source) {
+		i := webIndexFold(source[pos:], "<link")
+		if i < 0 {
+			break
+		}
+		start := pos + i
+		end := findTextBrowserTagEnd(source, start+1)
+		if end < 0 {
+			break
+		}
+		tag := source[start+1 : end]
+		pos = end + 1
+		found := false
+		for _, rel := range strings.Fields(strings.ToLower(htmlTagAttribute(tag, "rel"))) {
+			if rel == "icon" {
+				found = true
+			}
+		}
+		if !found {
+			continue
+		}
+		ref, err := url.Parse(strings.TrimSpace(htmlTagAttribute(tag, "href")))
+		if err != nil || ref.String() == "" {
+			continue
+		}
+		icon := base.ResolveReference(ref)
+		if (icon.Scheme == "http" || icon.Scheme == "https") && icon.Hostname() != "" && icon.User == nil && !(base.Scheme == "https" && icon.Scheme != "https") {
+			return icon.String()
+		}
+	}
+	return base.ResolveReference(&url.URL{Path: "/favicon.ico"}).String()
+}
+
+func drawBrowserFavicon(r *sdl.Renderer, config *Config, doc *webDocument, rect sdl.Rect) {
+	if doc != nil && doc.Favicon != "" && len(doc.imageBytes(doc.Favicon)) > 0 {
+		drawWebImage(r, config, doc, webImagePos{Key: doc.Favicon, Rect: rect}, rect.X, rect.Y)
+		return
+	}
+	// A neutral globe is the fallback, not a claim about site identity.
+	r.SetDrawColor(155, 170, 195, 255)
+	strokeCircle(r, rect.X+rect.W/2, rect.Y+rect.H/2, 7, sdl.Color{R: 155, G: 170, B: 195, A: 255})
+	r.DrawLine(rect.X+4, rect.Y+rect.H/2, rect.X+rect.W-4, rect.Y+rect.H/2)
+}
+
 // fetchWebImages loads every <img> in a parsed document once, concurrently
 // and under the per-page/per-byte limits. It also records the natural sizes
 // the layout needs, and always stores an entry per key so the layout never
@@ -277,6 +328,9 @@ func fetchWebImages(doc *webDocument) {
 		thumbSrcs = append(thumbSrcs, b.VideoThumb)
 	}
 	srcs = append(srcs, thumbSrcs...)
+	if doc.Favicon != "" && !seen[doc.Favicon] && !thumbSeen[doc.Favicon] {
+		srcs = append(srcs, doc.Favicon)
+	}
 	if len(srcs) == 0 {
 		return
 	}

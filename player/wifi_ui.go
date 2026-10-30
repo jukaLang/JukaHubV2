@@ -40,6 +40,12 @@ type wifiPanelState struct {
 	radioOn   bool
 	radioOK   bool
 	available bool
+	// startable: no backend yet, but this image has a radio and a switch, so
+	// the panel opens in "turn Wi-Fi on" mode instead of refusing. The Brick's
+	// image starts its supplicant from the firmware's own Wi-Fi menu, so a
+	// device that never had Wi-Fi on there has no control socket to find and
+	// the one control that could create it used to be unreachable.
+	startable bool
 	detail    string
 	err       string
 	// scanErr is why the last scan did not run, kept apart from err so a
@@ -52,6 +58,13 @@ type wifiPanelState struct {
 
 	confirmForget string
 	confirmAt     time.Time
+
+	// diagOpen shows the diagnostics sheet instead of the network list. It is a
+	// sub-view, not a second panel: B steps back to the list, and the sheet is
+	// reachable while the list itself cannot load — the state it diagnoses.
+	diagOpen   bool
+	diagScroll int
+	diag       wifiDiagReport
 }
 
 var wifiPanel wifiPanelState
@@ -77,6 +90,9 @@ const (
 	wifiActionReconnect
 	wifiActionDisconnect
 	wifiActionForget
+	wifiActionDiag
+	wifiActionDiagRefresh
+	wifiActionDiagBack
 	wifiActionClose
 )
 
@@ -98,6 +114,7 @@ type wifiUpdateKind int
 const (
 	wifiUpdateState wifiUpdateKind = iota
 	wifiUpdateJoin
+	wifiUpdateDiag
 )
 
 type wifiUpdate struct {
@@ -114,6 +131,8 @@ type wifiUpdate struct {
 	// prompt names the SSID whose stored password turned out to be wrong;
 	// the drain opens the passphrase keyboard for it after showing the error.
 	prompt string
+	// diag carries a collected diagnostics report for the sheet.
+	diag *wifiDiagReport
 }
 
 var (
@@ -164,6 +183,9 @@ func wifiDrainUpdates() {
 			if u.snap != nil {
 				wifiApplySnapshot(*u.snap)
 			}
+			if u.diag != nil {
+				wifiPanel.diag = *u.diag
+			}
 			switch {
 			case u.scanned:
 				wifiPanel.scanErr = u.scanErr
@@ -212,6 +234,11 @@ func wifiApplySnapshot(snap wifiSnapshot) {
 	wifiPanel.networks = snap.Networks
 	wifiPanel.radioOn = snap.RadioOn
 	wifiPanel.radioOK = snap.RadioOK
+	// A snapshot that could be read is proof the backend answers, so a panel
+	// opened in "turn Wi-Fi on" mode promotes itself to the real list.
+	wifiPanel.available = true
+	wifiPanel.startable = false
+	wifiPanel.detail = ""
 	wifiPanel.err = ""
 	wifiPanel.loadedAt = time.Now()
 	wifiPanel.cursor = 0
@@ -253,7 +280,15 @@ func openWiFiPanel() {
 	_, detail := wifiSupport()
 	wifiPanel.available = detail == ""
 	wifiPanel.detail = detail
+	wifiPanel.startable = !wifiPanel.available && wifiEntryReachable()
 	if !wifiPanel.available {
+		if wifiPanel.startable {
+			// The picker can still switch the radio on and start the supplicant,
+			// so it opens on that instead of turning the user away.
+			wifiPanel.radioOn, wifiPanel.radioOK = wifiRadioState()
+			PlayActivateSound()
+			return
+		}
 		wifiPanel.err = detail
 		PlayBackSound()
 		return
@@ -362,7 +397,17 @@ func wifiActivate() {
 		return
 	}
 	if !wifiPanel.available {
-		ShowToast(wifiPanel.detail, ToastKindWarning)
+		if !wifiPanel.startable {
+			ShowToast(wifiPanel.detail, ToastKindWarning)
+			return
+		}
+		if wifiPanel.radioOK && !wifiPanel.radioOn {
+			wifiEnableRadioAsync()
+			return
+		}
+		// The radio is already on: the missing piece is the supplicant, so
+		// start it and try the route again.
+		wifiStartBackendAsync()
 		return
 	}
 	n := wifiSelected()
@@ -416,25 +461,57 @@ func wifiEnableRadioAsync() {
 	if wifiPanel.busy {
 		return
 	}
+	if iface := wifiInterface(); iface != "" {
+		resetSupplicantStart(iface)
+	}
 	wifiStartWork("Turning Wi-Fi on…", func() wifiUpdate {
 		if err := setWifiEnabled(true); err != nil {
 			return wifiUpdate{kind: wifiUpdateJoin, err: firstLine(err.Error())}
 		}
 		// Give the interface a moment to come up before scanning.
 		time.Sleep(600 * time.Millisecond)
-		scanErr := ""
-		if _, err := wifiScanNetworks(); err != nil {
-			scanErr = firstLine(err.Error())
-		}
-		snap, err := wifiReadSnapshot()
-		if err != nil {
-			if scanErr != "" {
-				return wifiUpdate{kind: wifiUpdateState, err: scanErr}
-			}
-			return wifiUpdate{err: firstLine(err.Error())}
-		}
-		return wifiUpdate{kind: wifiUpdateState, snap: &snap, scanErr: scanErr, scanned: true, msg: "Wi-Fi on"}
+		return wifiBackendUpdate("Wi-Fi on")
 	})
+}
+
+// wifiStartBackendAsync retries the supplicant start without touching the radio,
+// for a device whose radio is on but whose control socket is missing.
+func wifiStartBackendAsync() {
+	if wifiPanel.busy {
+		return
+	}
+	if iface := wifiInterface(); iface != "" {
+		resetSupplicantStart(iface)
+	}
+	wifiStartWork("Starting Wi-Fi…", func() wifiUpdate {
+		return wifiBackendUpdate("Wi-Fi ready")
+	})
+}
+
+// wifiBackendUpdate brings the supplicant route up (when the image has one but
+// nothing is listening), then reads the snapshot. It runs on the worker
+// goroutine; the answer goes back through the usual update slot.
+func wifiBackendUpdate(msg string) wifiUpdate {
+	if wifiCommandBackend() == "" {
+		ensureWifiBackend()
+	}
+	if !wifiControlAvailable() {
+		// No route still: report the reason the picker knows, so a radio that
+		// refused to come up says why instead of looking like a dead button.
+		return wifiUpdate{kind: wifiUpdateState, err: firstLine(wifiUnavailableReason())}
+	}
+	scanErr := ""
+	if _, err := wifiScanNetworks(); err != nil {
+		scanErr = firstLine(err.Error())
+	}
+	snap, err := wifiReadSnapshot()
+	if err != nil {
+		if scanErr != "" {
+			return wifiUpdate{kind: wifiUpdateState, err: scanErr}
+		}
+		return wifiUpdate{err: firstLine(err.Error())}
+	}
+	return wifiUpdate{kind: wifiUpdateState, snap: &snap, scanErr: scanErr, scanned: true, msg: msg}
 }
 
 func wifiJoinAsync(ssid, pass string, secured bool) {
@@ -597,6 +674,25 @@ func handleWiFiKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if wifiPanel.confirmForget != "" && time.Since(wifiPanel.confirmAt) > wifiForgetConfirmWindow {
 		wifiPanel.confirmForget = ""
 	}
+	// The diagnostics sheet owns the keys while it is open: it scrolls, it
+	// refreshes, and B steps back to the list instead of closing the picker.
+	if wifiPanel.diagOpen {
+		switch e.Keysym.Sym {
+		case sdl.K_UP:
+			wifiDiagScroll(-1)
+		case sdl.K_DOWN:
+			wifiDiagScroll(1)
+		case sdl.K_PAGEUP:
+			wifiDiagScroll(-5)
+		case sdl.K_PAGEDOWN:
+			wifiDiagScroll(5)
+		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_r, sdl.K_y:
+			wifiDiagRefreshAsync()
+		case sdl.K_i, sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
+			closeWiFiDiagnostics()
+		}
+		return true
+	}
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
 		wifiMove(-1)
@@ -616,6 +712,8 @@ func handleWiFiKey(e *sdl.KeyboardEvent, config *Config) bool {
 		wifiReconnectSelected()
 	case sdl.K_f:
 		wifiForgetSelected()
+	case sdl.K_i:
+		openWiFiDiagnostics()
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 		wifiPanelBack()
 	}
@@ -638,6 +736,19 @@ func ctrlWiFi(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if e == nil || !wifiPanel.open || virtualKeyboardActive {
 		return false
 	}
+	if wifiPanel.diagOpen {
+		switch e.Button {
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			wifiDiagScroll(-1)
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			wifiDiagScroll(1)
+		case sdl.CONTROLLER_BUTTON_A:
+			wifiDiagRefreshAsync()
+		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+			closeWiFiDiagnostics()
+		}
+		return true
+	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		wifiMove(-1)
@@ -651,6 +762,10 @@ func ctrlWiFi(e *sdl.ControllerButtonEvent, config *Config) bool {
 		wifiDisconnectSelected()
 	case sdl.CONTROLLER_BUTTON_BACK:
 		wifiForgetSelected()
+	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
+		// The shoulder is free in this panel and is the pad's way in: the
+		// Diagnostics pill below the list is touch-only.
+		openWiFiDiagnostics()
 	case sdl.CONTROLLER_BUTTON_B:
 		wifiPanelBack()
 	}
@@ -669,6 +784,12 @@ func wifiRunAction(id wifiActionID) {
 		wifiDisconnectSelected()
 	case wifiActionForget:
 		wifiForgetSelected()
+	case wifiActionDiag:
+		openWiFiDiagnostics()
+	case wifiActionDiagRefresh:
+		wifiDiagRefreshAsync()
+	case wifiActionDiagBack:
+		closeWiFiDiagnostics()
 	case wifiActionClose:
 		closeWiFiPanel()
 	}
@@ -710,6 +831,8 @@ func handleWiFiMouse(mx, my int32, config *Config) bool {
 // work in flight, then the connection.
 func wifiStatusLine() (string, sdl.Color) {
 	switch {
+	case wifiPanel.startable && wifiPanel.radioOK && !wifiPanel.radioOn:
+		return "Wi-Fi is off — press A to turn it on", ColorToastWarn
 	case !wifiPanel.available:
 		return wifiPanel.detail, ColorToastWarn
 	case wifiPanel.busy:
@@ -785,6 +908,17 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	if wifiPanel.confirmForget != "" && time.Since(wifiPanel.confirmAt) > wifiForgetConfirmWindow {
 		wifiPanel.confirmForget = ""
 	}
+	if wifiPanel.diagOpen {
+		// The sheet has its own probes to keep current, and it must refresh even
+		// when the list cannot load, so it does not go through the list's
+		// available check.
+		if !wifiWorkPending && !wifiPanel.busy &&
+			(wifiPanel.diag.At.IsZero() || time.Since(wifiPanel.diag.At) > wifiAutoRefresh) {
+			wifiDiagRefreshAsync()
+		}
+		renderWiFiDiagnostics(renderer, config)
+		return
+	}
 	if wifiPanel.available && !wifiPanel.busy && !wifiWorkPending &&
 		(wifiPanel.loadedAt.IsZero() || time.Since(wifiPanel.loadedAt) > wifiAutoRefresh) {
 		wifiRefreshAsync(false)
@@ -812,12 +946,10 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 	// Touch users need visible buttons for rescan/reconnect/disconnect/forget;
-	// the hint line below stays for the pad. No backend means nothing to do, so
-	// the bar is only reserved while the picker can act.
-	actionH := int32(0)
-	if wifiPanel.available {
-		actionH = smallH + 18
-	}
+	// the hint line below stays for the pad. The bar is always reserved, because
+	// Diagnostics must stay reachable when no backend answered — that is the
+	// state the sheet exists for.
+	actionH := smallH + 18
 
 	// Fit the list to the screen before laying the panel out: on a 480p
 	// handheld the same panel must still show its header, actions and footer.
@@ -872,6 +1004,9 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 		switch {
 		case !wifiPanel.available:
 			empty = wifiPanel.detail
+			if wifiPanel.startable && wifiPanel.radioOK && !wifiPanel.radioOn {
+				empty = "Turn Wi-Fi on to see nearby networks"
+			}
 		case wifiPanel.radioOK && !wifiPanel.radioOn:
 			empty = "Turn Wi-Fi on to see nearby networks"
 		}
@@ -944,6 +1079,13 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 
 	footer := hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Disconnect"},
 		FooterHint{"Y", "Rescan"}, FooterHint{"Select", "Forget"}, FooterHint{"B", "Close"})
+	// The diagnostics hint is added only when the row still fits: on the 4:3
+	// canvas one more hint runs the line off both edges of the panel.
+	withDiag := hintLine(FooterHint{"A", "Join"}, FooterHint{"X", "Disconnect"},
+		FooterHint{"Y", "Rescan"}, FooterHint{"L1", "Info"}, FooterHint{"B", "Close"})
+	if dw, _, _ := font.SizeUTF8(withDiag); int32(dw) <= panelW-2*padX {
+		footer = withDiag
+	}
 	footerColor := ColorTextTertiary()
 	switch {
 	case wifiPanel.confirmForget != "":
@@ -951,7 +1093,7 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 			FooterHint{"B", "Cancel"})
 		footerColor = ColorToastWarn
 	case !wifiPanel.available:
-		footer = hintLine(FooterHint{"B", "Close"})
+		footer = hintLine(FooterHint{"L1", "Info"}, FooterHint{"B", "Close"})
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, footerColor,
@@ -972,21 +1114,30 @@ func wifiPanelActionBar(renderer *sdl.Renderer, config *Config, font *ttf.Font,
 		id    wifiActionID
 		label string
 	}
-	pills := []pill{{wifiActionRescan, "Rescan"}}
-	if wifiPanel.status.Connected {
-		pills = append(pills,
-			pill{wifiActionReconnect, "Reconnect"},
-			pill{wifiActionDisconnect, "Disconnect"})
-	}
-	if n := wifiSelected(); n != nil && n.Saved {
-		label := "Forget"
-		if wifiPanel.confirmForget == n.SSID {
-			// The second press is the confirmation, so the pill says so.
-			label = "Forget?"
+	var pills []pill
+	if wifiPanel.diagOpen {
+		pills = []pill{{wifiActionDiagRefresh, "Refresh"}, {wifiActionDiagBack, "Back"}}
+	} else {
+		if wifiPanel.available {
+			pills = append(pills, pill{wifiActionRescan, "Rescan"})
+			if wifiPanel.status.Connected {
+				pills = append(pills,
+					pill{wifiActionReconnect, "Reconnect"},
+					pill{wifiActionDisconnect, "Disconnect"})
+			}
+			if n := wifiSelected(); n != nil && n.Saved {
+				label := "Forget"
+				if wifiPanel.confirmForget == n.SSID {
+					// The second press is the confirmation, so the pill says so.
+					label = "Forget?"
+				}
+				pills = append(pills, pill{wifiActionForget, label})
+			}
 		}
-		pills = append(pills, pill{wifiActionForget, label})
+		// Diagnostics is offered in every state: with no backend there is
+		// nothing else this panel can do, and the sheet says why.
+		pills = append(pills, pill{wifiActionDiag, "Diagnostics"}, pill{wifiActionClose, "Close"})
 	}
-	pills = append(pills, pill{wifiActionClose, "Close"})
 
 	const gap = int32(8)
 	padX := int32(14)

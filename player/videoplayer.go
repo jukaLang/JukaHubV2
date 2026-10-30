@@ -76,10 +76,16 @@ var videoControlRects = struct {
 	speed       sdl.Rect
 	speedCycle  sdl.Rect
 	back        sdl.Rect
+	close       sdl.Rect
 	subs        sdl.Rect
 	settings    sdl.Rect
 	fullscreen  sdl.Rect
 }{}
+
+// videoControlBounds is the window the last layout was computed for: the video
+// element, or the whole panel in full screen. A windowed player only claims taps
+// inside it, so the scene around the video keeps its own targets.
+var videoControlBounds sdl.Rect
 
 // Video chrome state: full screen hides the controls until the user interacts,
 // and the settings sheet lists subtitles / full screen / speed.
@@ -108,6 +114,13 @@ const (
 	vcSubs
 	vcSettings
 	vcFullscreen
+	// The two corner actions. Close ends playback where it stands; back steps
+	// the player down a size (full screen -> window -> floating mini) without
+	// ending it. They used to be one button — an X that meant "back" — so backing
+	// out of a windowed video was the only option and nothing could close it
+	// except Stop at the far end of the bar.
+	vcClose
+	vcBack
 )
 
 // videoControlEntry pairs a control with the rect it was laid out at.
@@ -129,6 +142,8 @@ func videoControlsInOrder() []videoControlEntry {
 		{vcSubs, videoControlRects.subs},
 		{vcSettings, videoControlRects.settings},
 		{vcFullscreen, videoControlRects.fullscreen},
+		{vcClose, videoControlRects.close},
+		{vcBack, videoControlRects.back},
 	}
 }
 
@@ -298,15 +313,14 @@ func cyclePlaybackSpeed() {
 // toggleSubtitlesWithFeedback toggles subtitles and reports the result, since
 // the button gives no other visible confirmation.
 func toggleSubtitlesWithFeedback() {
-	if !subtitlesAvailable() {
-		showToast("No subtitles found for this video", ToastInfo())
-		return
-	}
+	wasEnabled := subtitlesEnabled()
 	if toggleSubtitles() {
 		showToast("Subtitles on", ToastInfo())
-		return
+	} else if wasEnabled {
+		showToast("Subtitles off", ToastInfo())
+	} else {
+		showToast(subtitleStatusLine(), ToastInfo())
 	}
-	showToast("Subtitles off", ToastInfo())
 }
 
 // moveVideoSettingsItem steps the settings sheet selection, wrapping.
@@ -342,6 +356,14 @@ func activateVideoControl() {
 	case vcFullscreen:
 		PlayActivateSound()
 		toggleVideoFullscreen()
+	case vcClose:
+		// Close ends the session on the spot: the video stops and the screen
+		// under it stays, with no window left behind.
+		PlayBackSound()
+		StopEmbeddedPlayback()
+	case vcBack:
+		PlayActivateSound()
+		videoBackOut(appConfig)
 	default:
 		PlayActivateSound()
 		ToggleVideoPlayback()
@@ -1116,13 +1138,10 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 	// The top bar names this session from its page URL (see statusbar_media.go).
 	rememberVideoPage(pageURL)
 	sess := beginPlaybackSession(url, pageURL, tempFile)
-	// Network sources have no sidecar; ask yt-dlp for the page's subtitles
-	// in the background so playback is not delayed.
-	videoSubs.mu.Lock()
-	videoSubs.cues = nil
-	videoSubs.status = ""
-	videoSubs.mu.Unlock()
-	go fetchNetworkSubtitles(sess, config, pageURL)
+	// Only fetch remote subtitles when CC is enabled. The original page URL
+	// remains available even if the stream itself is a temporary local file.
+	resetVideoSubtitles(sess)
+	startEnabledNetworkSubtitles(config)
 	// If a Watch Party is open, opening a video makes it the room's stream.
 	// Remote peers get the original page URL, not the resolved CDN URL.
 	partyPublishStart(pageURL, startSec)
@@ -1197,7 +1216,7 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 
 		// Sidecar / embedded subtitle tracks belong to this source; load them
 		// before the first frame so the CC button knows what it can turn on.
-		prepareVideoSubtitles(config, url)
+		prepareVideoSubtitles(sess, config, url)
 
 		go startFFmpegAudio(sess, ffmpegPath, url, startSec)
 		startFFmpegDecoder(sess, ffmpegPath, url, w, h, startSec)
@@ -1248,6 +1267,7 @@ func StopEmbeddedPlayback() {
 	videoControlFocus = vcNone
 	videoMiniClear()
 	setSubtitlesEnabled(false)
+	resetVideoSubtitles(nil)
 
 	videoPlaybackMutex.Lock()
 	videoPlaybackPhase = "idle"
@@ -1423,13 +1443,20 @@ func pad2(n int) string {
 // It runs every frame regardless of the overlay cache, so mouse/touch hit
 // testing keeps working when the cached overlay path is used.
 func computeVideoControlLayout(x, y, w, h int32, state videoStateSnapshot) {
+	// Remember the window itself: a windowed player's hit test is bounded by
+	// this rect, so the scene around the video keeps its own taps.
+	videoControlBounds = sdl.Rect{X: x, Y: y, W: w, H: h}
+
 	barH := int32(72)
 	barY := y + h - barH
 
-	backBtnSize := int32(30)
+	// Top-right pair: close (ends the session) then back (steps down a size).
+	// The volume reading sits to their left.
+	cornerBtnSize := int32(30)
 	badgeY := y + 12
-	backX := x + w - backBtnSize - 18
-	videoControlRects.back = sdl.Rect{X: backX, Y: badgeY - 2, W: backBtnSize, H: backBtnSize}
+	closeX := x + w - cornerBtnSize - 18
+	videoControlRects.close = sdl.Rect{X: closeX, Y: badgeY - 2, W: cornerBtnSize, H: cornerBtnSize}
+	videoControlRects.back = sdl.Rect{X: closeX - cornerBtnSize - 8, Y: badgeY - 2, W: cornerBtnSize, H: cornerBtnSize}
 
 	seekBarY := barY - 16
 	seekBarW := w - 48
@@ -1721,14 +1748,18 @@ func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoSta
 		WithAlpha(ColorSurfaceRaised, 230))
 	renderText(renderer, config, font, phaseText, phaseCol, badgeX+9, badgeY+6)
 
-	// Top-right: back button + volume text.
+	// Top-right: close and back buttons + volume text.
 	volText := formatPercentSimple(state.volume)
 	volW, _, _ := font.SizeUTF8(volText)
+	closeRect := videoControlRects.close
+	fillRoundedRect(renderer, closeRect.X, closeRect.Y, closeRect.W, closeRect.H, 8,
+		WithAlpha(ColorSurfaceRaised, 180))
+	drawCloseIcon(renderer, closeRect.X+closeRect.W/2, closeRect.Y+closeRect.H/2, 9, ColorTextPrimary())
 	backRect := videoControlRects.back
 	fillRoundedRect(renderer, backRect.X, backRect.Y, backRect.W, backRect.H, 8,
 		WithAlpha(ColorSurfaceRaised, 180))
-	drawCloseIcon(renderer, backRect.X+backRect.W/2, backRect.Y+backRect.H/2, 11, ColorTextPrimary())
-	renderText(renderer, config, font, volText, ColorTextPrimary(), x+w-int32(volW)-58, y+18)
+	drawChevronLeft(renderer, backRect.X+backRect.W/2, backRect.Y+backRect.H/2, 10, ColorTextPrimary())
+	renderText(renderer, config, font, volText, ColorTextPrimary(), x+w-int32(volW)-96, y+18)
 
 	// Seek fill + thumb.
 	seekBarH := int32(6)
@@ -1971,9 +2002,6 @@ func drawVideoSettingsSheet(renderer *sdl.Renderer, config *Config, x, y, w, h i
 	if subtitlesEnabled() {
 		subState = "On"
 	}
-	if !subtitlesAvailable() {
-		subState = "none found"
-	}
 	fullscreenState := "Off"
 	if videoFullscreen {
 		fullscreenState = "On"
@@ -2061,6 +2089,15 @@ func drawCloseIcon(renderer *sdl.Renderer, cx, cy, r int32, col sdl.Color) {
 	renderer.DrawLine(cx-r, cy+r, cx+r, cy-r)
 }
 
+// drawChevronLeft is the back glyph beside the close button: an X means "end
+// this", a chevron means "step out of it", and the two sat on the same button
+// before.
+func drawChevronLeft(renderer *sdl.Renderer, cx, cy, r int32, col sdl.Color) {
+	renderer.SetDrawColor(col.R, col.G, col.B, col.A)
+	renderer.DrawLine(cx+r/2, cy-r, cx-r/2, cy)
+	renderer.DrawLine(cx-r/2, cy, cx+r/2, cy+r)
+}
+
 func formatPercentSimple(v float64) string {
 	p := int(v * 100)
 	if p < 0 {
@@ -2113,6 +2150,15 @@ func HandleVideoControlClick(mx, my int32) bool {
 	}
 	if videoFullscreen {
 		revealVideoChrome()
+	}
+
+	// Windowed, the player covers only the rect its controls were laid out in.
+	// Clicks on the rest of the scene stay the scene's, and clicks inside the
+	// window reach the controls — they used to be drawn there but unreachable, so
+	// the only working close was Stop in the bar, and only in full screen. This
+	// gate sits after the settings sheet below, which is modal over the panel.
+	if !videoFullscreen && !videoSettingsOpen && !pointInRect(mx, my, videoControlBounds) {
+		return false
 	}
 
 	// The settings sheet owns every click while it is open.
@@ -2175,9 +2221,14 @@ func HandleVideoControlClick(mx, my int32) bool {
 	} else if pointInRect(mx, my, videoControlRects.speedCycle) {
 		videoControlFocus = vcSpeed
 		cyclePlaybackSpeed()
+	} else if pointInRect(mx, my, videoControlRects.close) {
+		videoControlFocus = vcClose
+		PlayBackSound()
+		StopEmbeddedPlayback()
 	} else if pointInRect(mx, my, videoControlRects.back) {
 		// Backing out keeps the video: full screen steps down to the window,
 		// and the window steps down to the floating mini player.
+		videoControlFocus = vcBack
 		videoBackOut(appConfig)
 	}
 	return true
@@ -2187,11 +2238,7 @@ func HandleVideoControlClick(mx, my int32) bool {
 func videoSettingsActivate(idx int) {
 	switch idx {
 	case 0:
-		if subtitlesAvailable() {
-			toggleSubtitles()
-		} else {
-			showToast("No subtitles found for this video", ToastInfo())
-		}
+		toggleSubtitlesWithFeedback()
 	case 1:
 		toggleVideoFullscreen()
 		videoSettingsOpen = !videoSettingsOpen

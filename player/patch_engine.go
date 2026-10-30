@@ -557,6 +557,7 @@ func InitPatchModule() {
 	loadPatchState()
 	checkInterruptedJournal()
 	confirmAppliedUpdate()
+	pruneStaleUpdateAdvertisement()
 	clearStaleRestartMarkers()
 	ensureDefaultRepo()
 }
@@ -2498,6 +2499,15 @@ func DiagnosticsText(config *Config) string {
 	}
 	sb.WriteString("Platform     : " + P().Name() + " " + runtime.GOOS + "/" + runtime.GOARCH + "\n")
 	sb.WriteString("Device       : " + deviceDisplayName(DetectDevice()) + "\n")
+	// What the firmware exposed, so a model that was not named can be diagnosed
+	// without guessing which file the image is missing.
+	if model, source, id := deviceIdentityReport(); runtime.GOOS == "linux" {
+		label := string(model)
+		if source != "" {
+			label += " (from " + source + ")"
+		}
+		sb.WriteString("Device id    : " + label + identitySummary(id) + "\n")
+	}
 	sb.WriteString(fmt.Sprintf("CPUs         : %d\n", runtime.NumCPU()))
 	if config != nil {
 		elements := 0

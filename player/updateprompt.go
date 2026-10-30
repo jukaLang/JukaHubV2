@@ -35,7 +35,14 @@ var updatePrompt struct {
 	laterBtn sdl.Rect
 }
 
-func updateAvailable() bool { return availableUpdateTag() != "" }
+// updateAvailable reports whether the header should offer a release. A stored
+// advertisement is not enough: it is persisted state, and a build that already
+// caught up with it (installed without the swap helper, or a card image copied
+// over the old install) must not keep showing "Update" until a network check
+// happens to clear it. advertisedUpdateIsStale answers that locally.
+func updateAvailable() bool {
+	return availableUpdateTag() != "" && !advertisedUpdateIsStale()
+}
 
 // openUpdatePrompt shows the modal (from a badge click or the automatic offer).
 func openUpdatePrompt() {

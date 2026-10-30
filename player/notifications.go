@@ -122,19 +122,67 @@ func notifUnreadCount() int {
 	return n
 }
 
-// notifBellSize returns the bell pill's width and height for the active font,
-// so the top bar can reserve its corner before drawing. The icon is drawn from
-// primitives, so the pill is sized from the font height rather than a glyph.
+const (
+	// notifBellHeightInset keeps the bell a step quieter than the labelled
+	// header buttons (Back, Menu, the release offer) it sits beside.
+	notifBellHeightInset = int32(2)
+	// notifBellMinHeight is the floor: below this the drawn silhouette and its
+	// unread badge stop reading as a control.
+	notifBellMinHeight = int32(24)
+	// notifBellIconInset is the padding the glyph gives up inside the chip.
+	notifBellIconInset = int32(12)
+	// notifBadgeFontSize is the unread count's size in pixels.
+	notifBadgeFontSize = 11
+)
+
+// notifBellSize returns the bell chip's width and height, so the top bar can
+// reserve its corner before drawing.
+//
+// The bell is a header button, so it takes the shared header button height
+// rather than one derived from the status font: that produced a 54×40 chip
+// with a 32px glyph on the 1280 canvas — taller than the Back pill and nearly
+// twice the height of the caption text beside it. It is square because a bell
+// is not wider than it is tall, which also stops the corner widening the bar's
+// right edge on the narrow handheld canvas.
 func notifBellSize(config *Config) (int32, int32) {
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
 		return 0, 0
 	}
-	h := int32(font.Height()) + 10
-	if h < 24 {
-		h = 24
+	h := headerPillHeight() - notifBellHeightInset
+	if h < notifBellMinHeight {
+		h = notifBellMinHeight
 	}
-	return h + 14, h
+	return h, h
+}
+
+// notifBadgeFont is the unread count's digit font. The chip's height comes from
+// the header button metrics, which do not follow the text-size setting, so the
+// digits are opened at a fixed size too: a status-sized badge was taller than
+// the pill it hangs on and hung over the bar's top edge.
+func notifBadgeFont(config *Config) *ttf.Font {
+	if config == nil {
+		return nil
+	}
+	return loadRoleFont(config, "small", notifBadgeFontSize)
+}
+
+// notifBadgeRect hangs the unread count on the chip's top-right corner. The
+// geometry lives here so the drawer and the tests agree on it: the badge must
+// stay inside the top bar instead of hanging over its top edge.
+func notifBadgeRect(badgeFont *ttf.Font, chip sdl.Rect, label string) sdl.Rect {
+	tw, th, _ := badgeFont.SizeUTF8(label)
+	bh := int32(th) + 3
+	bw := int32(tw) + SpaceXS*2
+	if bw < bh {
+		bw = bh
+	}
+	return sdl.Rect{
+		X: chip.X + chip.W - bw + SpaceXS,
+		Y: chip.Y - bh/2,
+		W: bw,
+		H: bh,
+	}
 }
 
 // drawBellIcon paints a notification bell centred in a size×size box using only
@@ -195,7 +243,7 @@ func drawBellIcon(renderer *sdl.Renderer, cx, cy, size int32, col sdl.Color) {
 // drawNotifBell paints the bell pill, focus/open ring, icon and unread badge.
 // Every screen (home header and the scene status bar) funnels through here, so
 // the control cannot drift between the home screen and the rest of the app.
-func drawNotifBell(renderer *sdl.Renderer, font *ttf.Font, rect sdl.Rect) {
+func drawNotifBell(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect) {
 	if renderer == nil || font == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
@@ -219,21 +267,27 @@ func drawNotifBell(renderer *sdl.Renderer, font *ttf.Font, rect sdl.Rect) {
 	}
 
 	// Bell icon: primary text colour so it reads as a control, with the accent
-	// ring already marking focus/open state.
-	drawBellIcon(renderer, rect.X+rect.W/2, rect.Y+rect.H/2, rect.H-8, ColorTextPrimary())
+	// ring already marking focus/open state. The glyph is inset from the chip so
+	// the silhouette never touches the pill's edge at handheld sizes.
+	icon := rect.H - notifBellIconInset
+	if icon < 12 {
+		icon = 12
+	}
+	drawBellIcon(renderer, rect.X+rect.W/2, rect.Y+rect.H/2, icon, ColorTextPrimary())
 
-	// Unread count badge, measured from the same font the bell is sized for so
-	// its pill and digits match on every screen.
+	// Unread count badge, on its own small font so the count sits inside the
+	// corner instead of towering over the chip.
 	if unread := notifUnreadCount(); unread > 0 {
 		numStr := fmt.Sprintf("%d", unread)
-		tw, th, _ := font.SizeUTF8(numStr)
-		bw := int32(tw) + SpaceSM*2
-		bh := int32(th) + 8
-		badgeX := rect.X + rect.W - bw + SpaceXS
-		badgeY := rect.Y - bh/2
-		fillRoundedRect(renderer, badgeX, badgeY, bw, bh, bh/2,
+		badgeFont := notifBadgeFont(config)
+		if badgeFont == nil {
+			badgeFont = font
+		}
+		badge := notifBadgeRect(badgeFont, rect, numStr)
+		tw, th, _ := badgeFont.SizeUTF8(numStr)
+		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2,
 			sdl.Color{R: 220, G: 60, B: 60, A: 240})
-		drawText(renderer, font, numStr, badgeX+SpaceSM, badgeY+(bh-int32(th))/2,
+		drawText(renderer, badgeFont, numStr, badge.X+(badge.W-int32(tw))/2, badge.Y+(badge.H-int32(th))/2,
 			sdl.Color{R: 255, G: 255, B: 255, A: 255}, textAlignLeft)
 	}
 
@@ -252,7 +306,7 @@ func renderNotifBell(renderer *sdl.Renderer, config *Config, x, y int32) sdl.Rec
 		return sdl.Rect{}
 	}
 	rect := sdl.Rect{X: x - bellW, Y: y, W: bellW, H: bellH}
-	drawNotifBell(renderer, font, rect)
+	drawNotifBell(renderer, config, font, rect)
 	return rect
 }
 

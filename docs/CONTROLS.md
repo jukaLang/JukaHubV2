@@ -302,7 +302,13 @@ folder is chosen and what recording itself looks like.
 
 The control bar is a focus ring: **Left / Right** walk it from stop through
 rewind, play/pause, fast-forward, speed, subtitles, settings and full screen, and
-**A** presses the highlighted button.
+on to the two corner buttons, and **A** presses the highlighted button.
+
+The corners are two separate actions: **Close** (the X) ends playback and leaves
+the video, and the chevron beside it steps the player down a size without
+ending it — the same thing **B** does, and the way to reach the floating window
+from a pad. On a touch screen the windowed player's controls take taps now, and
+a tap anywhere else on the scene still belongs to the scene.
 
 | Button | Action |
 |--------|--------|
@@ -570,10 +576,33 @@ running game. **R** restarts a lost round.
 ## Playtime & achievements
 
 Open **Tools → Playtime & Achievements** for total time, the last seven days,
-the most-used screens, and the badge list. Stats are stored in the same user
-config as other settings and survive restarts. Badges unlock automatically for
-milestones such as one hour total, 30 minutes of games, 30 minutes of music, and
-eight different screens.
+the most-used screens, the 13-week heatmap and the badge list. Stats are stored
+in the same user config as other settings and survive restarts.
+
+There are **100 badges**, covering app time, days used, streaks, best days,
+screens explored, one or more milestones per screen (games, music, video,
+browser, files, settings, notes, terminal and the rest) and badges that count
+the badges you already earned. The card lists what you have **already earned
+first**, marked “Achieved first”, then the rest; each badge keeps its number
+wherever it sits. An earned badge also shows **when** it was earned on the line
+under its description (“Unlocked 2 Mar 2026”), while a locked badge leaves that
+line empty. Every check reads the saved totals, so nothing unlocks from a
+screen you have only visited.
+
+The page is taller than the screen, so it scrolls. The page owns the D-pad and
+the arrow keys on this screen — it has no buttons of its own, so the top bar is
+a tap target here rather than a focus stop:
+
+| Button | Action |
+|--------|--------|
+| D-pad Up / Down, arrow keys (or wheel) | Scroll the page |
+| Page Up / Page Down, L1 / R1 | Scroll one screen |
+| Home / End | Jump to the top / bottom |
+| B | Back |
+| Y | RetroAchievements |
+
+A fresh visit starts at the top, and a scrollbar on the right shows where in the
+page you are.
 
 ### RetroAchievements
 

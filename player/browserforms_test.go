@@ -407,6 +407,28 @@ func TestBrowserPasswordFieldDrawsDots(t *testing.T) {
 	}
 }
 
+func TestBrowserFormBoxMatchesFocusAndTapGeometry(t *testing.T) {
+	config := layoutTestConfig(t)
+	elem := browserCursorTestElement("box_geometry")
+	doc := parseWebPage(`<body><input name="q" placeholder="Search" style="width: 220px; height: 70px"></body>`, "", "https://example.com/")
+	setBrowserDocument(elem.Variable, doc)
+	t.Cleanup(func() { setBrowserDocument(elem.Variable, nil); resetBrowserCursorForTest() })
+	layout := browserPageLayout(config, elem)
+	if layout == nil || len(layout.Links) != 1 {
+		t.Fatal("missing input")
+	}
+	hit := layout.Links[0]
+	if hit.Box.W <= 0 || hit.Box.H <= layout.RowH || hit.W != hit.Box.W {
+		t.Fatalf("incorrect input box: %+v", hit)
+	}
+	rects := browserPageLinkRects(config, elem, layout)
+	left, top, _, _ := browserPageContentBox(elem)
+	want := sdl.Rect{X: left + hit.Box.X, Y: top + hit.Box.Y - int32(textBrowserScrollY)*layout.RowH, W: hit.Box.W, H: hit.Box.H}
+	if rects[0] != want {
+		t.Fatalf("tap rect = %+v, want %+v", rects[0], want)
+	}
+}
+
 // A page can carry two search forms that post to one address. They are two
 // forms, not one: pressing the first one's button must not send the second
 // one's field, which is what matching them by action alone did.

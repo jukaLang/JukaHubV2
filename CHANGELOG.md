@@ -13,6 +13,70 @@ For anything older, the git log and the
 
 ### Added
 
+- **Earned badges show their unlock date.** The unlock time was already saved
+  with each badge (RFC3339, from the moment the check passed) and never shown,
+  so the list could say what you earned but not when. Each earned badge now
+  carries "Unlocked 2 Mar 2026" on a third line under its description, in the
+  accent colour; locked badges leave the line empty, and a save whose timestamp
+  cannot be read shows nothing rather than a zero date. Badge rows are 74px so
+  the third line cannot be clipped by the row below ([player/playtime.go](player/playtime.go);
+  `TestPlaytimeUnlockLabel` and `TestEarnedBadgesShowTheirUnlockDate` in
+  `player/playtime_achievements_test.go`).
+
+- **Playtime has 100 badges on a page that scrolls, earned badges first.**
+  The screen shipped six badges in a grid that stopped drawing once the card was
+  full, so a badge set of any real size would have been invisible. It now has
+  exactly 100 — lifetime time, days used, streaks, single-day records, weekly
+  totals, screens explored, 57 per-screen milestones (games, music, video,
+  browser, files, settings, notes, terminal, emulators and the rest) and ten
+  that count the badges you already earned — and the whole page scrolls under a
+  pinned title band with a scrollbar, driven by the D-pad, the wheel, Page
+  Up/Down or L1/R1, with Home/End jumping to either end. Earned badges are
+  listed **first** under an "Achieved first" tag and keep their fixed number
+  wherever they sit, so nothing jumps around as you unlock it. Every check reads
+  the saved totals, so a screen you have not used cannot unlock anything, and
+  the badge count in the read-out is pinned to the list by a test. Two layout
+  defects the bigger page exposed are fixed with it: the MOST USED value used to
+  be drawn on top of its own bar, and on the compact (Brick) canvas the insight
+  stats ran off the card edge. ([player/playtime.go](player/playtime.go),
+  [player/main.go](player/main.go), [docs/CONTROLS.md](docs/CONTROLS.md); tests
+  in [player/playtime_achievements_test.go](player/playtime_achievements_test.go)).
+
+- **About now shows the device identification evidence, not just the log.**
+  `[device] …` was the only place the model, the source that named it, the panel
+  and the firmware's own model strings were visible, and a handheld has no
+  shell to read it. About has a **Device** card with those rows: the model and
+  the source that decided it (`launcher env`, `device tree`, `cpuinfo`,
+  `hostname`, `firmware name`, `trimui firmware + panel`, `override` or an
+  honest `not identified`), the panel the image reports, the model names found
+  in the firmware (longest match only, so a Pro S does not read as two models),
+  and the kernel's device-tree model and compatible list. Empty sources are
+  omitted rather than printed as blank labels. The four About cards now share
+  two measured rows, so the new card cannot push the licence list into the
+  footer band on either the wide or the compact canvas, and a card too short
+  for the whole list says `+N more` instead of clipping it. ([player/about.go](player/about.go);
+  tests in [player/about_device_test.go](player/about_device_test.go)).
+
+- **A Wi-Fi diagnostics sheet, for a handheld that cannot connect and has no
+  shell.** The picker could only say "no networks", which is the same line for
+  a missing radio, a supplicant that is not running, a control socket in a
+  directory nothing looked in, and a permission error — and the device that
+  hits it has nowhere to type `wpa_cli status`. **L1** (or `i`, or the new
+  **Diagnostics** pill) opens a sheet that names every deciding fact: the
+  interface and which probe found it, the backend (`wpa_cli` or the supplicant
+  socket), the control directory and whether its socket is actually there, the
+  directories that were searched, the supplicant config, whether JukaHub started
+  a supplicant and what happened, the radio's state and its switch, the station's
+  `wpa_state`/SSID/IP, and the last error with the phase it came from and its
+  age. It opens even when the list cannot load — that is the state it exists for
+  — refreshes itself while open, and **B** steps back to the list instead of
+  closing the picker. The last error is recorded at the single function every
+  command failure already passes through, so the sheet and the panel cannot
+  disagree. ([player/wifi_diag.go](player/wifi_diag.go),
+  [player/wifi_ui.go](player/wifi_ui.go), [player/wifi.go](player/wifi.go),
+  [docs/WIFI.md](docs/WIFI.md); tests in
+  [player/wifi_diag_test.go](player/wifi_diag_test.go)).
+
 - **Playtime now answers "have I been consistent?" instead of "what did I use?"**
   The second card on the Playtime screen was seven bars for the past week and
   nothing else, even though the tracker already keeps 90 days of daily totals.
@@ -370,7 +434,161 @@ For anything older, the git log and the
   [player/pomodoro.go](player/pomodoro.go), [player/extras.go](player/extras.go);
   tests in [player/header_test.go](player/header_test.go) and
   [player/calendar_popover_test.go](player/calendar_popover_test.go)).
+
+- **The top-bar calendar is a month view you can page through.** The clock's
+  popover borrowed the alarm screen's corner widget: 28×22 cells drawn with the
+  24px body font, so a day numeral was taller than its own row and two-digit
+  days nearly touched, and it could only ever show the current month — there was
+  no way to look at last week or at next month. The popover now has a card of its
+  own with 46×38 cells, a month header (`‹ October 2026 ›`) and a fixed six-row
+  grid, so the arrows do not move when a month needs five rows. The arrows are
+  tap targets; Left/Right (or PageUp/PageDown, the D-pad, the shoulders) step a
+  month and roll the year, and the month title — tinted while you are away from
+  it — returns to today, as does A or `t`. The alarm's compact corner widget is
+  unchanged. ([player/calendarpopover.go](player/calendarpopover.go),
+  [player/home.go](player/home.go), [player/main.go](player/main.go),
+  [player/controller.go](player/controller.go); tests in
+  [player/calendarpopover_test.go](player/calendarpopover_test.go)).
 ### Fixed
+
+- **The Playtime badge list scrolls with the D-pad and the arrow keys.** The
+  screen has no config elements, so its only focus nodes were the top-bar
+  buttons: focus started on the Back pill, `handleChromeKey` claimed every arrow
+  press, and the page's own key handler was never reached, so only the wheel,
+  Page Up/Down, L1/R1 and Home/End moved the page while the D-pad and the arrow
+  keys did nothing. A scene with no focusable content is a page that owns the pad,
+  so the focus graph no longer adds the bar for it (the bar stays a tap target
+  and is reachable through the Start menu). The same rule applies to every
+  element-less module screen ([player/focus.go](player/focus.go); pinned by
+  `TestPlaytimePageKeepsThePadFromTheTopBar`).
+
+- **The Files, Packages and Emulator cards draw real pictures.** The Emulator
+  card asked for an `emulator` glyph and the painter only knew `emulators`, so it
+  fell through to the unknown-icon ring — a bare circle on the home screen.
+  Files and Packages were each drawn in one flat tone (a folder whose tab and
+  body were both white, a cube whose faces were 16 and 30 shades apart, which on
+  a white glyph is still white), so at the 32px tile both read as blank
+  rectangles with a detached tab or seam. Files is now a folder in three planes —
+  a dark tab and back panel, a light sheet with a folded corner and two ruled
+  lines, and a front pocket whose seam crosses the paper — and Packages is a
+  taped parcel: shaded lid, tape band down the middle, shipping label off to one
+  side. ([player/homelayout.go](player/homelayout.go); tests in
+  [player/homelayout_icon_test.go](player/homelayout_icon_test.go) pin both the
+  missing-glyph fallback and that the two redrawn glyphs paint three or more
+  tones).
+
+- **A Brick is identified even when its firmware names no model.** Identification
+  trusted a model code in the device tree and a hostname that said "TrimUI",
+  and a Brick image is not obliged to provide either: its kernel can describe
+  only the SoC (`sun50iw10`, `allwinner,sun50i-a100`), and then the board stayed
+  unnamed — no front F1/F2 keys, none of the handheld budgets, and the 4:3 canvas
+  only because the panel fallback guessed it. Detection now reads every source
+  the image offers and classifies the union: the launcher's exported `DEVICE`
+  before its `PLATFORM` code (NextUI reports a Brick as `tg5040` plus
+  `DEVICE=brick`), a model code in the device tree, `/proc/cpuinfo` or the
+  hostname, the model names in `/etc/os-release` and the vendor launcher's own
+  string table (the source community launchers use), and finally the panel —
+  1024x768 for the Brick family, 1280x720 for the Smart Pro family — when the
+  image is demonstrably TrimUI but nothing names a model. The startup log and the
+  new `Device id` diagnostics line print the evidence, so an unidentified device
+  reports what its firmware actually exposed instead of leaving it a guess.
+  ([player/device.go](player/device.go), [player/device_probe.go](player/device_probe.go),
+  [player/device_detect_first_run.go](player/device_detect_first_run.go),
+  [docs/DEVICE_TUNING.md](docs/DEVICE_TUNING.md); tests in
+  [player/device_probe_test.go](player/device_probe_test.go)).
+
+- **Close and back are two buttons on the video player, and the windowed player
+  answers taps.** Backing out of a playing video was one X that only meant
+  "step down a size": it floated the video into the mini window and nothing on
+  the overlay could end the session, so closing a windowed video meant leaving it
+  playing or finding Stop at the far end of the bar. The corner now has Close,
+  which ends playback where it stands, and the chevron beside it keeps the old
+  behaviour (full screen → the scene's window → the floating window). Both are in
+  the D-pad ring, so a pad user reaches either one. The windowed player's controls
+  also take taps again: they were drawn over the video element but the hit test
+  only ran in full screen, so touches in the window did nothing, and the bound is
+  now the laid-out window itself, leaving the rest of the scene to the scene.
+  ([player/videoplayer.go](player/videoplayer.go); tests in
+  [player/videoplayer_close_test.go](player/videoplayer_close_test.go),
+  [player/videoplayer_controls_test.go](player/videoplayer_controls_test.go)).
+
+- **The Wi-Fi switch no longer turns the radio off.** `rfkill`'s verbs are
+  `block`/`unblock`, and `runRfkill` had them the wrong way round: asking for
+  Wi-Fi *on* ran `rfkill block wifi`, and *off* unblocked it. On an image whose
+  only radio control is rfkill — every TrimUI handheld, since none ships
+  `nmcli` — the Quick Settings switch and the picker's "press A to turn Wi-Fi
+  on" both did the opposite of what they said, which is why the list stayed
+  empty after turning Wi-Fi on. ([player/systemcontrol.go](player/systemcontrol.go);
+  test in [player/wifi_supplicant_start_test.go](player/wifi_supplicant_start_test.go)).
+
+- **The Brick's Wi-Fi picker finds (and if needed starts) its supplicant.** Three
+  gaps kept the picker from ever opening on the Brick. The supplicant's
+  `ctrl_interface` was read when building a command but not when looking for the
+  socket that *names the interface*, so discovery and the command path could
+  disagree about the same device; P2P-device and `_global` sockets sort ahead of
+  `wlan0` and were taken as the interface; and the TrimUI images start
+  `wpa_supplicant` from the firmware's own Wi-Fi menu, so a device that had never
+  had Wi-Fi on there had a radio and no socket — discovery then answered "no
+  wireless interface" and the start menu dropped the Wi-Fi row, taking with it
+  the only control that could create the socket. Discovery now reads the config's
+  own directory first, skips P2P/global sockets, prefers a station name, and the
+  picker starts the supplicant itself (once per interface, radio on only) and
+  re-probes. The row and the Quick Settings link stay reachable while the radio is
+  simply off, opening the picker in "turn Wi-Fi on" mode instead of turning the
+  user away. ([player/wifi.go](player/wifi.go), [player/wifi_ui.go](player/wifi_ui.go),
+  [player/startmenu.go](player/startmenu.go), [player/quicksettings.go](player/quicksettings.go),
+  [docs/WIFI.md](docs/WIFI.md); tests in [player/wifi_supplicant_start_test.go](player/wifi_supplicant_start_test.go)).
+
+- **A Brick is identified by its model code, not only by its panel.** TrimUI
+  images do not all stamp a name into `/etc/hostname`, so the Brick fell through
+  to the 4:3 panel fallback: the canvas was compact while the board stayed
+  unnamed, which left its front F1 / F2 keys dead and kept it on the desktop
+  budgets. Detection now reads the kernel's own board description —
+  `/proc/device-tree/model` and `/proc/device-tree/compatible`, with the sysfs
+  mirror as a fallback — and accepts the `TG3040`-style model code found there as
+  the device, so the Brick family gets its keys and handheld caps. A marketing
+  name or an explicit override still works, conflicting codes are refused, and
+  the result is cached instead of re-read every frame. ([player/device.go](player/device.go),
+  [docs/DEVICE_TUNING.md](docs/DEVICE_TUNING.md); test in
+  [player/patch_engine_test.go](player/patch_engine_test.go)).
+
+- **The header stops offering an update the device already has.** The "Update"
+  chip and the boot notification read a release recorded in patch state, and
+  only a successful GitHub check cleared it — so a Brick without working Wi-Fi,
+  or an install that replaced the files without going through the swap helper,
+  kept showing the offer for a build it was already running. The advertisement
+  is now compared with the running build's own stamp at startup and again
+  before it is drawn, so "Update" appears only while it is a real update, and the
+  stale entry is dropped from state instead of lingering. ([player/autoupdate.go](player/autoupdate.go),
+  [player/updateprompt.go](player/updateprompt.go), [player/patch.go](player/patch.go),
+  [player/toolsui.go](player/toolsui.go); test in
+  [player/autoupdate_test.go](player/autoupdate_test.go)).
+
+- **Wi-Fi works on a TrimUI Brick, and on any image that ships no `wpa_cli`.**
+  The picker drives `wpa_supplicant`, but every command went through `wpa_cli`,
+  and the start menu deletes the Wi-Fi row when the backend is unavailable — so
+  a Brick that was online and downloading showed no Wi-Fi entry at all. TrimUI's
+  TG5040 images (Brick and Smart Pro) run the supplicant with
+  `ctrl_interface=/etc/wifi/sockets` and do not all include the client, so
+  JukaHub now speaks the supplicant's own control socket when the CLI is absent:
+  one command per write, the same parsers, the same password rules, and no
+  process per poll (the status bar's signal read gets cheaper too).
+  `/etc/wifi/sockets` is part of interface discovery now, and the unavailable
+  message names both routes instead of claiming a missing `wpa_cli` that the
+  image never had. ([player/wifi_ctrl.go](player/wifi_ctrl.go),
+  [player/wifi.go](player/wifi.go); tests in
+  [player/wifi_ctrl_test.go](player/wifi_ctrl_test.go)).
+
+- **A 4:3 panel fills the screen even when the hardware cannot be named.** The
+  shipped design is 1280x720 and a 4:3 display letterboxes it into a strip with
+  bars above and below — exactly what a Brick whose hostname and device tree
+  name no TrimUI model showed, with the whole UI sitting in the middle 75% of
+  the panel. The compact 960x720 canvas used to be reachable only through device
+  detection; now the panel's own aspect picks it, and the startup log names the
+  panel it chose. A design that is already 4:3, and the 16:9 Smart Pro panels,
+  are left alone. ([player/uiprofile.go](player/uiprofile.go),
+  [player/main.go](player/main.go); tests in
+  [player/uiprofile_test.go](player/uiprofile_test.go)).
 
 - **"Could not install ffplay" no longer fails on every attempt on the TrimUI
   Brick.** The handheld FFmpeg bundle is a ~130 MB `.tar.xz`, and JukaHub
@@ -698,6 +916,17 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   ([player/snappreview.go](player/snappreview.go), `player/snappreview_test.go`).
 
 ### Changed
+
+- **The notification bell is a header button, not a headline.** It was sized off
+  the status font and came out a 54×40 capsule with a 32px glyph on the 1280
+  canvas — taller than the Back pill and nearly twice the height of the caption
+  text beside it, with an unread badge that hung over the bar's top edge. It now
+  takes the shared header button height minus a step (a square 32px chip), the
+  glyph is inset to 20px so it reads with the clock, and the count is drawn on
+  its own small font inside the corner. Home and the scene bar draw it through
+  one sizing rule, so the corner is identical on both ([player/notifications.go](player/notifications.go),
+  [player/homelayout.go](player/homelayout.go); pinned by `TestBellChipMatchesHeaderMetrics`
+  in `player/notifications_test.go`).
 
 - **Background polling stops while JukaHub is not on screen.** The weather ticker,
   the connectivity probe, the audio-output probe and the LED animation ran for

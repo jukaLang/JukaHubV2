@@ -29,6 +29,58 @@ to change for the compact canvas. `JUKAHUB_BRICK_DUMP=1 go test -run
 TestCompactCanvasRendersEveryScene` renders every shipped scene at 960×720 and
 writes the frames to `tmp/` for a visual pass.
 
+The canvas is normally chosen from the detected device. When the hardware cannot
+be named, the panel's own aspect decides: a 4:3 display gets the compact canvas
+instead of a letterboxed 16:9 strip, and the startup log says so (`[ui] panel
+1024x768 (device not identified): 1024x768 panel, compact canvas 960x720`).
+
+### How the device names itself
+
+The panel only decides the canvas. Everything else about a Brick — the front
+**F1 / F2** keys, the handheld texture and decode budgets, the LED and haptic
+layout, the package `devices` gate — needs the *model*, and TrimUI images are not
+consistent about exposing one. A Brick's kernel may describe only the SoC
+(`sun50iw10`, `allwinner,sun50i-a100`), its hostname may be a build string, and
+the model code may appear in neither. Identification therefore reads every
+source the image offers and classifies the union:
+
+1. **The launcher's environment.** `DEVICE` first (NextUI reports a Brick as
+   `DEVICE=brick`), then `PLATFORM` (`tg3040`). The order is deliberate: NextUI
+   reports the Brick as `PLATFORM=tg5040` as well, so the platform code alone
+   would name a Smart Pro.
+2. **A model code in the kernel's board description.** Device-tree `model` and
+   `compatible` (`/proc/device-tree`, falling back to the sysfs mirror
+   `/sys/firmware/devicetree/base/`), then the `Hardware` / `Revision` values in
+   `/proc/cpuinfo`, then the hostname. A single unopposed code is the board; two
+   conflicting codes are refused, and `TG3040` plus the name `Hammer` is a
+   Hammer.
+3. **The model names the image ships.** `/etc/os-release`,
+   `/etc/trimui_version`, `/etc/trimui/version`, `/etc/version`, and the string
+   table of `/usr/trimui/bin/MainUI` — the vendor launcher is the same source
+   community launchers read with `strings MainUI | grep ^Trimui` to tell a Brick
+   from a Smart Pro. The binary is scanned in chunks and only when a TrimUI file
+   is present, so a desktop build never reads it.
+4. **The panel.** When the image is demonstrably TrimUI (its own files exist) but
+   nothing names a model, 1024×768 selects the Brick family and 1280×720 the
+   Smart Pro family. The panel cannot name a variant, so the family's base model
+   is used instead of guessing a Pro or a Hammer.
+
+A model named by an earlier source wins over a later one; a name that contradicts
+the panel loses to the panel's family. `JUKAHUB_DEVICE_MODEL` still overrides
+everything, for a desktop build imitating a handheld. The result is cached for the
+process: the board cannot change under a running app, and the frame-rate
+controller reads it every frame.
+
+The startup log records the evidence, so a device that stays unidentified says
+what its firmware actually exposed:
+
+```
+[device] trimui-brick (from panel 1024x768): dt model="sun50iw10" compatible="allwinner,sun50i-a100" cpuinfo="Allwinner sun50iw10 (Family: sun50i-a100)" hostname="..." firmware="Trimui Brick" trimui=true panel=1024x768 env(device="" platform="" model="")
+```
+
+The same facts, minus the hostname, are on the `Device id` line of Diagnostics
+and of an exported diagnostics bundle.
+
 ## PPSSPP stick calibration
 
 `Start → Stick Calibration` (also offered on desktop when a `ppsspp.ini` is

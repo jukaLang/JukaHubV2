@@ -306,7 +306,15 @@ func main() {
 	// Pick the logical canvas for this panel (the Brick/Hammer family needs the
 	// compact 4:3 canvas). Scene geometry is scaled once here, after every
 	// injected scene has been added, so the whole UI uses one coordinate space.
-	applyDeviceUIProfile(config)
+	//
+	// When the hardware cannot be named the panel still can: the 16:9 design
+	// drawn into a 4:3 display is letterboxed into a strip with bars above and
+	// below, so the display's own aspect picks the compact canvas instead.
+	if !applyDeviceUIProfile(config) {
+		if mode, err := sdl.GetCurrentDisplayMode(0); err == nil {
+			applyPanelCanvas(config, mode.W, mode.H)
+		}
+	}
 
 	// Optional resolution / fullscreen configuration (great for TrimuiSmartPro)
 	screenW, screenH := 1280, 720
@@ -879,6 +887,13 @@ func main() {
 							activeElementIndex = -1
 						}
 					} else {
+						// The clock popover floats above every scene and owns its own
+						// keys before the chrome or the scene sees them: Left/Right
+						// change month, the month title returns to today, Escape/B
+						// close it.
+						if calendarPopoverKey(e) {
+							continue
+						}
 						// The app menu and notification center are modal:
 						// while one is open it owns the D-pad and Confirm/Back keys.
 						if handleChromeOverlayKey(e, config) {
@@ -892,12 +907,6 @@ func main() {
 						inTerminalScene := currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
 							config.Scenes[currentSceneIndex].Name == "Terminal"
 						if handleLogShortcut(e, config, inTerminalScene) {
-							continue
-						}
-						// The clock popover is shared by every scene, so Escape closes
-						// it before the scene's own input runs.
-						if homeCalendarOpen && (e.Keysym.Sym == sdl.K_ESCAPE || e.Keysym.Sym == sdl.K_b) {
-							homeCalendarOpen = false
 							continue
 						}
 						// Home scene uses the dedicated focus graph + activation.
@@ -987,6 +996,11 @@ func main() {
 								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
+							if curScene.Name == "FileExplorer" {
+								if action, ok := feKeyAction(e.Keysym.Sym); ok && feListAction(config, action) {
+									continue
+								}
+							}
 							// The Apps launcher is a tile grid: the D-pad walks it in two
 							// dimensions instead of stepping a single column of rows.
 							if curElem.Variable == appsEntriesVar && appGridKey(e.Keysym.Sym, config) {
@@ -1058,8 +1072,12 @@ func main() {
 							}
 						} else if curElem.Type == "toggle" {
 							switch e.Keysym.Sym {
+							case sdl.K_UP:
+								handleToggleAction(config, curElem, ActionNavigateUp)
+							case sdl.K_DOWN:
+								handleToggleAction(config, curElem, ActionNavigateDown)
 							case sdl.K_RETURN, sdl.K_SPACE, sdl.K_LEFT, sdl.K_RIGHT:
-								toggleVariable(config, curElem)
+								handleToggleAction(config, curElem, ActionConfirm)
 							case sdl.K_ESCAPE:
 								moveSelection(config, ActionNavigateUp)
 							}
@@ -1151,7 +1169,9 @@ func main() {
 										sdl.K_UP: -1, sdl.K_DOWN: 1,
 									}[e.Keysym.Sym])
 								} else {
-									moveSelection(config, map[sdl.Keycode]Action{sdl.K_UP: ActionNavigateUp, sdl.K_DOWN: ActionNavigateDown}[e.Keysym.Sym])
+									if curScene.Name != "FileExplorer" || e.Keysym.Sym != sdl.K_UP || curElem.Type != "button" || !feFocusList(config) {
+										moveSelection(config, map[sdl.Keycode]Action{sdl.K_UP: ActionNavigateUp, sdl.K_DOWN: ActionNavigateDown}[e.Keysym.Sym])
+									}
 								}
 							case sdl.K_LEFT, sdl.K_RIGHT:
 								if homeLayoutActive && curElem.Type == "button" && curElem.Style == "tile" {
@@ -1161,7 +1181,10 @@ func main() {
 								} else {
 									moveSelection(config, map[sdl.Keycode]Action{sdl.K_LEFT: ActionNavigateLeft, sdl.K_RIGHT: ActionNavigateRight}[e.Keysym.Sym])
 								}
-							case sdl.K_RETURN, sdl.K_SPACE:
+							case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+								if e.Keysym.Sym == sdl.K_a && curScene.Name != "FileExplorer" {
+									break
+								}
 								if selectedButtonIndex >= 0 && selectedButtonIndex < len(config.Scenes[currentSceneIndex].Elements) {
 									elem := config.Scenes[currentSceneIndex].Elements[selectedButtonIndex]
 									if elem.Type == "input" {
@@ -1183,7 +1206,11 @@ func main() {
 								// other screen and the footer's "B Back" hint): returns to the
 								// previous scene (or Home). Never exits the app.
 								if !homeLayoutActive {
-									goBackScene(config)
+									if curScene.Name == "FileExplorer" {
+										feBack(config)
+									} else {
+										goBackScene(config)
+									}
 								}
 							}
 						}
@@ -1284,6 +1311,12 @@ func main() {
 					continue
 				}
 				if communityPanel.open && handleCommunityWheel(e.Y) {
+					continue
+				}
+				// Playtime is a long, scrolling page on a config-driven canvas: the
+				// wheel and a touchpad drag move it like the D-pad does.
+				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+					config.Scenes[currentSceneIndex].Name == playtimeSceneName && handlePlaytimeWheel(e.Y) {
 					continue
 				}
 				if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
@@ -1550,6 +1583,12 @@ func main() {
 						// panel, so nothing underneath may react through it.
 						if videoFullscreen && playerPhase() != "idle" {
 							HandleVideoControlClick(mx, my)
+							break
+						}
+						// Windowed video owns its own element: the close and back
+						// buttons it draws have to be tappable there too, and its handler
+						// declines clicks on the rest of the scene.
+						if playerPhase() != "idle" && HandleVideoControlClick(mx, my) {
 							break
 						}
 
@@ -1916,7 +1955,12 @@ func main() {
 									focusEngine.SetByElementIndex(i)
 									if textBrowserElementSource(elem) == textBrowserSourceWeb {
 										addressRect, searchRect, filterRect, modeRect, zoomRect, goRect := textBrowserToolbarTapRects(config, elem)
-										if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
+										backRect, forwardRect := textBrowserHistoryRects(config, elem)
+										if pointInRect(mx, my, textBrowserTouchTarget(backRect)) {
+											browserBack(config)
+										} else if pointInRect(mx, my, textBrowserTouchTarget(forwardRect)) {
+											browserForward(config)
+										} else if mx >= addressRect.X && mx <= addressRect.X+addressRect.W && my >= addressRect.Y && my <= addressRect.Y+addressRect.H {
 											handleTextBrowserAddressInput(renderer, config, elem)
 										} else if searchRect.W > 0 && mx >= searchRect.X && mx <= searchRect.X+searchRect.W && my >= searchRect.Y && my <= searchRect.Y+searchRect.H {
 											openBrowserSearch(renderer, config, elem)
@@ -2040,6 +2084,10 @@ func main() {
 								continue
 							}
 						}
+						// Chrome uses negative focus indices, not scene element indices.
+						if handleChromeController(e, config) {
+							continue
+						}
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
@@ -2061,6 +2109,10 @@ func main() {
 							switch {
 							case curElem.Type == "searchresults":
 								handleSearchResultsAction(ActionBack, config)
+							case curElem.Type == "textbrowser" && textBrowserElementSource(curElem) == textBrowserSourceWeb:
+								handleBrowserController(renderer, e, config, curElem)
+							case curElem.Type == "packagelist":
+								packageListController(e, config)
 							case curScene.Name == "FileExplorer":
 								feBack(config)
 							default:
@@ -2089,6 +2141,11 @@ func main() {
 								handleSearchResultsAction(ActionBack, config)
 							}
 						} else if curElem.Type == "dynamiclist" {
+							if curScene.Name == "FileExplorer" {
+								if action, ok := feControllerAction(e.Button); ok && feListAction(config, action) {
+									continue
+								}
+							}
 							// Apps launcher: two-dimensional D-pad navigation over tiles.
 							if curElem.Variable == appsEntriesVar && appGridController(e.Button, config) {
 								continue
@@ -2149,8 +2206,12 @@ func main() {
 							}
 						} else if curElem.Type == "toggle" {
 							switch e.Button {
+							case sdl.CONTROLLER_BUTTON_DPAD_UP:
+								handleToggleAction(config, curElem, ActionNavigateUp)
+							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+								handleToggleAction(config, curElem, ActionNavigateDown)
 							case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-								toggleVariable(config, curElem)
+								handleToggleAction(config, curElem, ActionConfirm)
 							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 								goBackScene(config)
 							}
@@ -2243,27 +2304,7 @@ func main() {
 								goBackScene(config)
 							}
 						} else if curElem.Type == "packagelist" {
-							if packageActionsController(e, config) {
-								// The open row menu consumed the press.
-							} else {
-								switch e.Button {
-								case sdl.CONTROLLER_BUTTON_DPAD_UP:
-									if packagesFocusIndex > 0 {
-										packagesFocusIndex--
-									}
-								case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-									packagesMutex.Lock()
-									pCount := len(packagesList)
-									packagesMutex.Unlock()
-									if packagesFocusIndex < pCount-1 {
-										packagesFocusIndex++
-									}
-								case sdl.CONTROLLER_BUTTON_A:
-									packagePress(config)
-								case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-									goBackScene(config)
-								}
-							}
+							packageListController(e, config)
 						} else if curElem.Type == "chat" {
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_DPAD_UP:
@@ -2314,7 +2355,9 @@ func main() {
 							// Normal button/input navigation
 							switch e.Button {
 							case sdl.CONTROLLER_BUTTON_DPAD_UP:
-								moveSelection(config, ActionNavigateUp)
+								if curScene.Name != "FileExplorer" || curElem.Type != "button" || !feFocusList(config) {
+									moveSelection(config, ActionNavigateUp)
+								}
 							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 								moveSelection(config, ActionNavigateDown)
 							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:

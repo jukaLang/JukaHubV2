@@ -46,6 +46,37 @@ func makeNavGridScene(name string, rows, cols int) SceneConfig {
 	return SceneConfig{Name: name, Elements: els}
 }
 
+func TestToggleAllowsNavigationAndActivation(t *testing.T) {
+	scene := SceneConfig{Name: "ToggleNav", Elements: []Element{
+		{Type: "toggle", Variable: "testToggle", X: 40, Y: 96, Width: "280", Height: "48"},
+		{Type: "input", X: 40, Y: 200, Width: "280", Height: "48"},
+	}}
+	config := useNavScene(t, scene)
+	config.Variables.Custom = map[string]interface{}{"testToggle": false}
+	installGraph(t, config, 0)
+	handleToggleAction(config, scene.Elements[0], ActionNavigateDown)
+	if selectedButtonIndex != 1 || toggleValue(config, scene.Elements[0]) {
+		t.Fatalf("Down from toggle: focus=%d, value=%v", selectedButtonIndex, toggleValue(config, scene.Elements[0]))
+	}
+	moveSelection(config, ActionNavigateUp)
+	if selectedButtonIndex != 0 {
+		t.Fatalf("Up from input: focus=%d, want toggle", selectedButtonIndex)
+	}
+	handleToggleAction(config, scene.Elements[0], ActionConfirm)
+	if !toggleValue(config, scene.Elements[0]) {
+		t.Fatal("Confirm did not activate toggle")
+	}
+}
+
+func TestFirstSelectableIncludesAllFocusTypes(t *testing.T) {
+	for _, typ := range []string{"toggle", "themegallery", "chat", "textbrowser", "packagelist"} {
+		scene := SceneConfig{Elements: []Element{{Type: "label"}, {Type: typ}}}
+		if got := findFirstSelectableElement(scene); got != 1 {
+			t.Errorf("first selectable %s = %d, want 1", typ, got)
+		}
+	}
+}
+
 // TestMoveSelectionNotTrappedOnFirstNodes covers the keyboard/D-pad focus trap:
 // moveSelection used to reinstall the focus graph on every press, which reset
 // focus to the first node each time, so navigation could only ever reach the

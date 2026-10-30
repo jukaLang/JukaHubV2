@@ -6,6 +6,7 @@ package main
 // The decoder itself is not exercised: the tests only need the player phase.
 
 import (
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -200,6 +201,7 @@ func TestVideoMiniWindowFitsAndHandlesTaps(t *testing.T) {
 	}{
 		{"1280x720", 1280, 720},
 		{"800x480", 800, 480},
+		{"brick", 960, 720},
 	} {
 		t.Run(size.name, func(t *testing.T) {
 			config := setupVideoMiniTest(t, miniTestTube)
@@ -223,6 +225,20 @@ func TestVideoMiniWindowFitsAndHandlesTaps(t *testing.T) {
 			}
 
 			computeVideoMiniLayout(r)
+			newProbeFrame(t)
+			hintFont := getFontSized(config, "small", 16)
+			if hintFont == nil {
+				t.Fatal("no font for mini-player hints")
+			}
+			for i, hint := range videoMiniHints() {
+				w, _, err := hintFont.SizeUTF8(hint)
+				if err != nil || int32(w) > r.W-16 {
+					t.Errorf("hint %q does not fit mini-player width %d", hint, r.W)
+				}
+				if bottom := videoMiniHits.body.Y + videoMiniHits.body.H + 1 + videoMiniProgressH + int32(i)*17 + int32(hintFont.Height()); bottom > r.Y+r.H {
+					t.Errorf("hint %q ends at %d outside window %+v", hint, bottom, r)
+				}
+			}
 			if c := videoMiniHits.close; c.W < 24 || c.H < 24 {
 				t.Errorf("close target %+v is smaller than a fingertip", c)
 			}
@@ -254,6 +270,76 @@ func TestVideoMiniWindowFitsAndHandlesTaps(t *testing.T) {
 				t.Error("close left the window state armed")
 			}
 		})
+	}
+}
+
+func TestVideoMiniPadControlsAndHints(t *testing.T) {
+	config := setupVideoMiniTest(t, miniTestTube)
+	useHomeAsCurrent(t)
+	videoMiniShow()
+	currentSceneIndex = miniTestHome
+	rememberVideoPage("https://example.com/video")
+	t.Cleanup(forgetVideoPage)
+	homeLayout.Focus.SetEnabled(HomeFocusNowPlaying, true)
+	if !homeLayout.Focus.Set(HomeFocusNowPlaying) {
+		t.Fatal("cannot focus now playing")
+	}
+	press := func(button uint8) bool {
+		return handleHomeController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: button}, config)
+	}
+	if !press(sdl.CONTROLLER_BUTTON_A) || pendingSceneIndex != miniTestTube || videoMiniActive() {
+		t.Fatal("A on now playing did not expand the video")
+	}
+	landSceneTransition()
+	videoMiniShow()
+	currentSceneIndex = miniTestHome
+	if !homeLayout.Focus.Set(HomeFocusMedia) {
+		t.Fatal("cannot focus a home card")
+	}
+	if press(sdl.CONTROLLER_BUTTON_X) || playerPhase() != "playing" {
+		t.Fatal("X outside now playing consumed input or stopped video")
+	}
+	homeLayout.Focus.Set(HomeFocusNowPlaying)
+	if !press(sdl.CONTROLLER_BUTTON_X) || playerPhase() != "idle" || videoMiniActive() {
+		t.Fatal("X on now playing did not close the floating video")
+	}
+	if !strings.Contains(strings.Join(videoMiniHints(), " "), "A open  X close") {
+		t.Fatal("window does not advertise pad controls")
+	}
+}
+
+func TestVideoMiniChromePadCloseAndModalPriority(t *testing.T) {
+	config := setupVideoMiniTest(t, miniTestTube)
+	videoMiniShow()
+	currentSceneIndex = 2
+	oldFocus, oldHome, oldKeyboard, oldActive, oldMenu := focusEngine, homeLayoutActive, virtualKeyboardActive, activeSceneIndex, tb.startOpen
+	t.Cleanup(func() {
+		focusEngine, homeLayoutActive, virtualKeyboardActive, activeSceneIndex, tb.startOpen = oldFocus, oldHome, oldKeyboard, oldActive, oldMenu
+	})
+	focusEngine = NewFocusEngine()
+	focusEngine.SetGraph("Settings", &FocusGraph{Nodes: []FocusNode{{Index: ChromeMediaIndex}}})
+	homeLayoutActive, virtualKeyboardActive, activeSceneIndex, tb.startOpen = false, false, -1, false
+	e := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_X}
+	tb.startOpen = true
+	handleControllerEvent(e, config)
+	if playerPhase() != "playing" {
+		t.Fatal("mini control bypassed an open menu")
+	}
+	tb.startOpen = false
+	if !handleControllerEvent(e, config) || playerPhase() != "idle" {
+		t.Fatal("X on shared now-playing chip did not close video")
+	}
+}
+
+func TestVideoMiniKeepsNowPlayingInCrowdedStatusBar(t *testing.T) {
+	setupVideoMiniTest(t, miniTestTube)
+	videoMiniShow()
+	currentSceneIndex = miniTestHome
+	media := statusMediaPartPrefix + "Video"
+	parts := []string{statusWiFiMarker, "12:40", "87%", media}
+	fitted := fitStatusParts(parts, func(string) int32 { return 40 }, 5, 45)
+	if len(fitted) != 1 || fitted[0] != media {
+		t.Fatalf("crowded status bar lost mini-player control: %v", fitted)
 	}
 }
 

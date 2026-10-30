@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -116,18 +119,29 @@ func isMediaFile(name string) bool {
 	return false
 }
 
-// feRoot returns the configured File Explorer root, defaulting to "." so it
-// works both on the device and during Windows development. If the configured
-// root does not exist (e.g. /mnt on a dev PC), fall back to the current dir.
+// feRoot uses the configured directory when present. On TrimUI, an unset
+// root starts at the SD card rather than the application's own directory.
 func feRoot(config *Config) string {
-	root := strings.TrimSpace(config.Variables.FileExplorerRoot)
+	root := ""
+	if config != nil {
+		root = strings.TrimSpace(config.Variables.FileExplorerRoot)
+	}
+	if root == "" && IsTrimuiDevice() {
+		root = defaultTrimuiSDRoot()
+		if root == "" {
+			root = "/mnt/SDCARD"
+		}
+	}
 	if root == "" {
 		root = "."
 	}
-	if _, err := os.Stat(root); err != nil {
-		return "."
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		root = "."
 	}
-	return root
+	if absolute, err := filepath.Abs(root); err == nil {
+		return filepath.Clean(absolute)
+	}
+	return filepath.Clean(root)
 }
 
 // resolveExplorerEntry validates a FileEntry path selected from a scene list:
@@ -161,10 +175,14 @@ func feCurrentPath(config *Config) string {
 
 // feListDirectory reads the current path and stores its entries in fe_entries.
 func feListDirectory(config *Config) {
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
 	path := feCurrentPath(config)
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		log.Printf("File Explorer: cannot read %q: %v", path, err)
+		showToast("Cannot read folder: "+err.Error(), ToastError())
 		config.Variables.Custom["fe_entries"] = []FileEntry{}
 		config.Variables.Custom["fe_path"] = path
 		return
@@ -286,6 +304,14 @@ func feEnterFocused(config *Config) {
 		feListDirectory(config)
 		return
 	}
+	if strings.EqualFold(filepath.Ext(entry.Path), ".sh") {
+		if err := feLaunchScript(config, entry.Path); err != nil {
+			showToast("Cannot run script: "+err.Error(), ToastError())
+		} else {
+			showToast("Started "+entry.Name, ToastSuccess())
+		}
+		return
+	}
 	if strings.EqualFold(filepath.Ext(entry.Path), ".zip") {
 		if err := unzipFile(entry.Path); err != nil {
 			log.Printf("Unzip error: %v", err)
@@ -348,8 +374,141 @@ func feEnterFocused(config *Config) {
 		}
 		playSmartURL(config, entry.Path)
 	} else {
-		log.Printf("[DEBUG] File Explorer: skipping non-media file: %s", entry.Name)
+		log.Printf("[DEBUG] File Explorer: unsupported file: %s", entry.Name)
+		showToast("No handler for "+entry.Name, ToastInfo())
 	}
+}
+
+// feScriptCommand only accepts an explicitly selected shell script inside the
+// explorer root, resolving symlinks before starting it.
+func feScriptCommand(config *Config, path string) (*exec.Cmd, error) {
+	if runtime.GOOS == "windows" {
+		return nil, fmt.Errorf("shell scripts require Linux")
+	}
+	file, err := resolveExplorerEntry(config, path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := filepath.EvalSymlinks(feRoot(config))
+	if err != nil {
+		return nil, err
+	}
+	file, err = filepath.EvalSymlinks(file)
+	if err != nil {
+		return nil, err
+	}
+	if !isPathWithin(file, root) || !strings.EqualFold(filepath.Ext(file), ".sh") {
+		return nil, fmt.Errorf("script is outside the Files root or has an unsupported type")
+	}
+	cmd := exec.Command("sh", file)
+	cmd.Dir = filepath.Dir(file)
+	return cmd, nil
+}
+
+func feLaunchScript(config *Config, path string) error {
+	cmd, err := feScriptCommand(config, path)
+	if err != nil {
+		return err
+	}
+	if err = cmd.Start(); err != nil {
+		return err
+	}
+	noteGameChildStarted(cmd)
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Printf("File Explorer: script %q failed: %v", path, err)
+		}
+		noteGameChildExited(cmd)
+	}()
+	return nil
+}
+
+// feFocusList returns focus to the list from the Files action row.
+func feFocusList(config *Config) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	for i, el := range config.Scenes[currentSceneIndex].Elements {
+		if el.Type == "dynamiclist" && el.Variable == "fe_entries" && focusEngine.SetByElementIndex(i) {
+			selectedButtonIndex = i
+			return true
+		}
+	}
+	return false
+}
+
+func feKeyAction(key sdl.Keycode) (Action, bool) {
+	switch key {
+	case sdl.K_UP:
+		return ActionNavigateUp, true
+	case sdl.K_DOWN:
+		return ActionNavigateDown, true
+	case sdl.K_RIGHT:
+		return ActionNavigateRight, true
+	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
+		return ActionConfirm, true
+	case sdl.K_ESCAPE, sdl.K_b:
+		return ActionBack, true
+	}
+	return 0, false
+}
+
+func feControllerAction(button uint8) (Action, bool) {
+	switch button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		return ActionNavigateUp, true
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		return ActionNavigateDown, true
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		return ActionNavigateRight, true
+	case sdl.CONTROLLER_BUTTON_A:
+		return ActionConfirm, true
+	}
+	return 0, false
+}
+
+// feListAction owns row navigation while the file list has focus. Right or
+// Down at the end reaches the action buttons; Up from a button returns to the
+// list via the usual focus graph.
+func feListAction(config *Config, action Action) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	scene := config.Scenes[currentSceneIndex]
+	if scene.Name != "FileExplorer" || selectedButtonIndex < 0 || selectedButtonIndex >= len(scene.Elements) || scene.Elements[selectedButtonIndex].Variable != "fe_entries" {
+		return false
+	}
+	entries, _ := getSceneFileEntries(config, scene)
+	switch action {
+	case ActionNavigateUp:
+		if focusedFileIndex > 0 {
+			focusedFileIndex--
+		} else {
+			moveSelection(config, action)
+		}
+	case ActionNavigateDown:
+		if focusedFileIndex < len(entries)-1 {
+			focusedFileIndex++
+		} else {
+			moveSelection(config, action)
+		}
+	case ActionNavigateRight:
+		// The list is wider than the button row, so spatial Right has no
+		// neighbor. Enter the first action explicitly.
+		for i, el := range scene.Elements {
+			if el.Type == "button" && focusEngine.SetByElementIndex(i) {
+				selectedButtonIndex = i
+				break
+			}
+		}
+	case ActionConfirm:
+		feEnterFocused(config)
+	case ActionBack:
+		feBack(config)
+	default:
+		return false
+	}
+	return true
 }
 
 // --- dynamiclist helpers (config-driven, mirrors searchresults helpers) ---

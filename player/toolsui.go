@@ -372,7 +372,7 @@ func toolsRows(config *Config) []toolsRow {
 			action:  toolsActionPatch,
 			enabled: true,
 		}
-		if availableUpdateTag() != "" {
+		if updateAvailable() {
 			patchRow.value = "Update " + availableUpdateLabel()
 			patchRow.status = toolsStatusWarn
 		}

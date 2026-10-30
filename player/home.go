@@ -199,7 +199,9 @@ var homeCalendarOpen bool
 // under the header clock, right-aligned with the header status cluster. Both
 // the renderer and the click hit-testing use this one rect.
 func homeCalendarRect() sdl.Rect {
-	w, h := miniCalendarSize()
+	// The popover has its own, roomier card (calendarpopover.go); the Alarm
+	// screen's corner widget keeps the compact one.
+	w, h := calendarCardSize()
 	return sdl.Rect{
 		X: screenWidth - scaleX(32, screenWidth) - w,
 		Y: scaleY(64, screenHeight),
@@ -239,6 +241,9 @@ func toggleCalendarPopover() {
 		tb.startOpen = false
 		nc.open = false
 		dismissWeatherPopover()
+		// Every open starts on the current month: a view left on March must not
+		// look like the clock's date the next time it is opened.
+		resetCalendarView()
 	}
 }
 
@@ -247,7 +252,7 @@ func toggleCalendarPopover() {
 // other scenes, so the clock looks and behaves identically everywhere.
 func renderCalendarPopover(renderer *sdl.Renderer, config *Config) {
 	r := homeCalendarRect()
-	renderMiniCalendarAt(renderer, config, r.X, r.Y)
+	renderCalendarCard(renderer, config, r.X, r.Y)
 
 	b := calendarAlarmButtonRect()
 	font, _ := getCachedFont(config, "small")
@@ -271,6 +276,12 @@ func renderCalendarPopover(renderer *sdl.Renderer, config *Config) {
 func calendarPopoverClick(mx, my int32, config *Config) bool {
 	if !homeCalendarOpen {
 		return false
+	}
+	// The header's arrows change month and the title returns to today. These
+	// are inside the card, so they must be tested before the "click inside the
+	// card is inert" rule below.
+	if calendarPopoverNavigation(mx, my) {
+		return true
 	}
 	// Clicks on the calendar card itself stay inside the popover (viewing the
 	// month must not dismiss it); only the action row changes screens.
@@ -472,6 +483,10 @@ func handleHomeController(e *sdl.ControllerButtonEvent, config *Config) bool {
 		}
 	case sdl.CONTROLLER_BUTTON_A:
 		homeActivate(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		if homeLayout.Focus.Current() != HomeFocusNowPlaying || !closeFocusedMiniVideo() {
+			return false
+		}
 	case sdl.CONTROLLER_BUTTON_B:
 		// B dismisses the calendar popover first.
 		if homeCalendarOpen {

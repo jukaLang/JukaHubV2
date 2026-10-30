@@ -341,19 +341,32 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	contentTop := element.Y + 8 + headerH
 	if source == textBrowserSourceWeb {
 		addressRect, modeRect, searchRect, goRect, filterRect, zoomRect := textBrowserToolbarLayout(config, element)
+		backRect, forwardRect := textBrowserHistoryRects(config, element)
+		drawBrowserHistoryIcon(renderer, backRect, -1, browserHistoryAvailable(-1))
+		drawBrowserHistoryIcon(renderer, forwardRect, 1, browserHistoryAvailable(1))
 		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
 		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, 1, sdl.Color{R: 93, G: 110, B: 138, A: 210})
 		address := textBrowserAddress(config)
+		if styledDoc != nil && styledDoc.URL != "" {
+			address = styledDoc.URL // the final URL after redirects, not the requested URL
+		}
 		if labelFont != nil {
-			hint := "EDIT URL"
-			hw, _, _ := labelFont.SizeUTF8(hint)
-			// Fit the address to the bar in pixels. A long URL used to run
-			// under the hint and into the Go button.
-			if avail := addressRect.W - int32(hw) - 30; avail > 40 {
-				address = ellipsize(labelFont, address, avail)
-			}
-			renderText(renderer, config, labelFont, address, ColorTextPrimary(), addressRect.X+10, addressRect.Y+9)
-			renderText(renderer, config, labelFont, hint, sdl.Color{R: 155, G: 170, B: 195, A: 255}, addressRect.X+addressRect.W-int32(hw)-10, addressRect.Y+9)
+			icon := sdl.Rect{X: addressRect.X + 6, Y: addressRect.Y + (addressRect.H-20)/2, W: 20, H: 20}
+			drawBrowserFavicon(renderer, config, styledDoc, icon)
+			textX := icon.X + icon.W + 6
+			avail := addressRect.X + addressRect.W - textX - 8
+			renderWithClip(renderer, textX, addressRect.Y, avail, addressRect.H, func(r *sdl.Renderer) {
+				display := ellipsize(labelFont, address, avail)
+				y := addressRect.Y + (addressRect.H-int32(labelFont.Height()))/2
+				if styledDoc != nil && browserHTTPSAddress(styledDoc.URL) && strings.HasPrefix(display, "https://") {
+					prefix := "https://"
+					pw, _, _ := labelFont.SizeUTF8(prefix)
+					renderText(r, config, labelFont, prefix, sdl.Color{R: 105, G: 218, B: 155, A: 255}, textX, y)
+					renderText(r, config, labelFont, strings.TrimPrefix(display, prefix), ColorTextPrimary(), textX+int32(pw), y)
+				} else {
+					renderText(r, config, labelFont, display, ColorTextPrimary(), textX, y)
+				}
+			})
 			if searchRect.W > 0 {
 				fillRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 6, sdl.Color{R: 36, G: 45, B: 63, A: 255})
 				strokeRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 6, 1, WithAlpha(accentColor, 170))
@@ -818,6 +831,11 @@ func textBrowserToolbarLayout(config *Config, element Element) (address, mode, s
 	width := getElementWidth(element, 1100)
 	y := element.Y + 36
 	h := textBrowserURLBarHeight - 4
+	historyW := int32(0)
+	if width >= 600 {
+		historyW = 2 * (h + textBrowserBarGap)
+	}
+	width -= historyW
 	// Chips are sized from the labels they will draw, measured in the same
 	// "small" font the renderer draws them with — not from fixed pixels. The
 	// old constants were narrower than their own labels ("SEARCH" is 97px and
@@ -876,7 +894,7 @@ func textBrowserToolbarLayout(config *Config, element Element) (address, mode, s
 		addressW = 80
 	}
 
-	address = sdl.Rect{X: element.X + 8, Y: y, W: addressW, H: h}
+	address = sdl.Rect{X: element.X + 8 + historyW, Y: y, W: addressW, H: h}
 	cursor := address.X + address.W + textBrowserBarGap
 	if showSearch {
 		search = sdl.Rect{X: cursor, Y: y, W: searchW, H: h}
@@ -896,6 +914,45 @@ func textBrowserToolbarLayout(config *Config, element Element) (address, mode, s
 		zoom = sdl.Rect{X: cursor, Y: y, W: zoomW, H: h}
 	}
 	return
+}
+
+func textBrowserHistoryRects(config *Config, element Element) (sdl.Rect, sdl.Rect) {
+	if getElementWidth(element, 1100) < 600 {
+		return sdl.Rect{}, sdl.Rect{}
+	}
+	h := textBrowserURLBarHeight - 4
+	back := sdl.Rect{X: element.X + 8, Y: element.Y + 36, W: h, H: h}
+	forward := back
+	forward.X += h + textBrowserBarGap
+	return back, forward
+}
+
+func browserHistoryAvailable(delta int) bool {
+	browserState.mu.Lock()
+	defer browserState.mu.Unlock()
+	next := browserState.index + delta
+	return next >= 0 && next < len(browserState.history)
+}
+
+func drawBrowserHistoryIcon(r *sdl.Renderer, rect sdl.Rect, dir int32, enabled bool) {
+	if rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	ink := sdl.Color{R: 125, G: 139, B: 158, A: 255}
+	if enabled {
+		ink = ColorTextPrimary()
+	}
+	fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 6, sdl.Color{R: 36, G: 45, B: 63, A: 255})
+	cx, cy := rect.X+rect.W/2, rect.Y+rect.H/2
+	r.SetDrawColor(ink.R, ink.G, ink.B, ink.A)
+	r.DrawLine(cx-6, cy, cx+6, cy)
+	r.DrawLine(cx+dir*6, cy, cx+dir, cy-5)
+	r.DrawLine(cx+dir*6, cy, cx+dir, cy+5)
+}
+
+func browserHTTPSAddress(address string) bool {
+	u, err := url.Parse(address)
+	return err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil
 }
 
 // textBrowserSearchRect is the Search chip's hit area.
@@ -1207,6 +1264,7 @@ func browseWebPageResult(rawURL string) browserPage {
 		source = withTextBrowserTruncationNote(source)
 	}
 	doc := parseWebPage(source, pageCSS, resp.Request.URL.String())
+	doc.Favicon = browserFaviconURL(source, resp.Request.URL)
 	// Images load with the page: one bounded concurrent pass stores the bytes
 	// and natural sizes the reader paints from (webpage_image.go).
 	fetchWebImages(doc)

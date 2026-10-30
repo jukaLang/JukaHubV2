@@ -182,9 +182,16 @@ jobs:
               echo "### go test failed"
               echo '```'
               grep -E '^\s*(--- FAIL|FAIL|panic:)' "$RUNNER_TEMP/gotest.log" | head -60
+              # The cause, not just the test name: a failing assertion is the
+              # indented file:line: message line.
+              grep -E '^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/gotest.log" | head -40
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            excerpt=$(grep -E -A2 '^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/gotest.log" | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+            # The two lines after a FAIL header are usually the test's own Logf
+            # output, not the assertion. Grepping the assertion lines instead is
+            # what makes the annotation diagnosable (a memory-test failure once
+            # reached a report showing only its warm-up logs).
+            excerpt=$(grep -E '^\s*--- FAIL|^panic:|^FAIL|^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/gotest.log" | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error title=go test failed::${excerpt}"
             grep -E '^\s*--- FAIL' "$RUNNER_TEMP/gotest.log" | head -9 | while IFS= read -r line; do
               echo "::error title=Failing test::${line}"
@@ -307,8 +314,12 @@ jobs:
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             # Surface the cause as annotations: the raw log is hard to reach.
-            excerpt=$(grep -E -A3 'WARNING: DATA RACE|^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/race.log" | head -40 | sed ':a;N;$!ba;s/\n/%0A/g')
+            excerpt=$(grep -E -A3 'WARNING: DATA RACE|^\s*--- FAIL|^panic:|^FAIL' "$RUNNER_TEMP/race.log" | head -30 | sed ':a;N;$!ba;s/\n/%0A/g')
             echo "::error title=go test -race failed::${excerpt}"
-            { echo "### go test -race failed"; echo '```'; grep -E 'WARNING: DATA RACE|--- FAIL|^FAIL|panic:' "$RUNNER_TEMP/race.log" | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+            # Same reason as the plain job: the assertion carries the message.
+            if failures=$(grep -E '^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/race.log" | head -12 | sed ':a;N;$!ba;s/\n/%0A/g'); [ -n "$failures" ]; then
+              echo "::error title=Failing assertion::${failures}"
+            fi
+            { echo "### go test -race failed"; echo '```'; grep -E 'WARNING: DATA RACE|--- FAIL|^FAIL|panic:|^\s+\S+_test\.go:[0-9]+:' "$RUNNER_TEMP/race.log" | head -60; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           fi
           exit "$status"

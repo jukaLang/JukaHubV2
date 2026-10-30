@@ -84,7 +84,8 @@ the radio on and scans.
 | **X**, `d` | disconnect (the saved network is kept) |
 | **Y**, `r` | rescan |
 | **SELECT**, `f` | forget the saved network (press twice) |
-| **B**, Esc, tap **Close** | close the picker |
+| **L1**, `i`, tap **Diagnostics** | open the diagnostics sheet (works even when no backend answered) |
+| **B**, Esc, tap **Close** | close the picker, or leave the diagnostics sheet first |
 
 Every one of those actions is also a pill along the bottom of the panel, so the
 picker is fully usable by touch. The pills follow the state: Reconnect and
@@ -108,7 +109,32 @@ layer, and closing it returns to the picker.
 
 ## How it works
 
-The backend is `wpa_supplicant`, driven through `wpa_cli`:
+The backend is `wpa_supplicant`. Commands reach it through `wpa_cli` when the
+image ships that client, and otherwise over the supplicant's own control socket
+(`wifi_ctrl.go`) — the pair of writes the CLI is a thin wrapper around. That
+second route is what makes the picker work on TrimUI's TG5040 images (Brick and
+Smart Pro), which run `wpa_supplicant` with `ctrl_interface=/etc/wifi/sockets`
+and do not all include `wpa_cli`: without it the start menu dropped the Wi-Fi
+row entirely on a device that was online. The socket also costs no process per
+poll, which the status bar's signal read pays every interval.
+
+The TrimUI images start their supplicant from the firmware's own Wi-Fi menu, not
+at boot, so a device that has never had Wi-Fi on there has a radio and no
+control socket at all. The picker therefore starts it when it has to: if the
+image ships `wpa_supplicant` and a config and nothing is listening, opening the
+picker (or pressing **A** on a list that says Wi-Fi is off) runs
+
+```text
+wpa_supplicant -B -D nl80211 -i <iface> -c /etc/wifi/wpa_supplicant.conf -O <ctrl dir>
+```
+
+once per interface per session, then waits briefly for the socket and scans. It
+never does this while the radio is switched off — that decision belongs to the
+radio switch — and a failed start is reported in its own words instead of being
+retried every frame.
+
+Whichever route is live, the commands, the parsers, the password rules and the
+error text are the same:
 
 * **Interface discovery.** Five sources, strongest evidence first, and the
   first that answers wins:
@@ -118,10 +144,16 @@ The backend is `wpa_supplicant`, driven through `wpa_cli`:
      second);
   2. the interface names in `/proc/net/wireless`, which the kernel fills in
      even when the driver creates neither attribute;
-  3. a control socket in the supplicant's control directory —
-     `/run/wpa_supplicant`, `/var/run/wpa_supplicant` or a `/tmp` variant, which
-     is where images with a read-only root often put it — naming a radio the
-     supplicant is already driving;
+  3. a control socket in the supplicant's control directory, naming a radio the
+     supplicant is already driving. The directory list is the `ctrl_interface`
+     its own config declares first, then `/run/wpa_supplicant`,
+     `/var/run/wpa_supplicant`, `/etc/wifi/sockets` (TrimUI's TG5040 images) and a
+     `/tmp` variant, which is where images with a read-only root often put it.
+     Discovery reads that list; it used to read only the conventional
+     directories while the command path read the config, so the two could
+     disagree about where the same device kept its socket. P2P-device sockets
+     (`p2p-dev-wlan0`) and `<iface>_global` are skipped: both look like interface
+     names, both sort ahead of `wlan0`, and neither can scan;
   4. the supplicant itself: when none of the three above named a radio, `wpa_cli
      interface` is asked which netdev it is driving (falling back to `wpa_cli -i
      <netdev> status` for each candidate, at most four, when the listing is
@@ -250,22 +282,26 @@ the scan, the saved profiles, the join and the signal meter all come from
 
 ## Security notes
 
-* The passphrase is written to `wpa_cli`'s standard input, never to its command
-  line: `ps` shows every argument of every process. It is also never logged and
-  never included in an error message.
+* The passphrase is written to `wpa_cli`'s standard input, or sent as the quoted
+  argument of a `set_network` command over the supplicant socket, and never to a
+  process command line: `ps` shows every argument of every process. It is also
+  never logged and never included in an error message.
 * `wi-fi` passwords are masked in the keyboard field, and the buffer is cleared
   when the keyboard closes or submits.
 * Network names and passwords are validated before they reach the supplicant:
   SSIDs are limited to 32 bytes with no control characters; WPA keys must be
   8–63 characters or exactly 64 hexadecimal digits.
-* `wpa_cli` re-parses quoted strings, so backslashes and quotes in a network
-  name or password are escaped rather than interpreted as new commands.
+* `wpa_cli` and the supplicant re-parse quoted strings, so backslashes and
+  quotes in a network name or password are escaped rather than interpreted as
+  new commands.
 
 ## Limits
 
-* **`wpa_cli` is required.** On a firmware image without it, the picker opens
-  with an explanation instead of pretending to scan. The Quick Settings Wi-Fi
-  switch may still work through `nmcli`/`rfkill`, but joining networks does not.
+* **A route to the supplicant is required.** `wpa_cli` is used when the image
+  ships it, and the supplicant's control socket when it does not. An image with
+  neither, and with no `wpa_supplicant` to start, opens the picker with an
+  explanation instead of pretending to scan. The picker starts the supplicant
+  itself when the image ships one and the radio is already on.
 * **No WPA-Enterprise / 802.1X.** This is a home-network picker, not a corporate
   supplicant configuration screen.
 * **Hidden networks are not listed.** Joining one by typed name is not exposed
@@ -278,15 +314,46 @@ the scan, the saved profiles, the join and the signal meter all come from
   `update_config=0`, `save_config` fails; the panel still reports the connection
   but warns that it will not survive a reboot.
 
+## Diagnostics
+
+The sheet behind **L1** / `i` / the **Diagnostics** pill answers "why is Wi-Fi
+broken?" without a shell. It opens even when the picker cannot reach a backend,
+which is the case it exists for, and it refreshes itself every 15 seconds while
+it is open. **A** re-reads it immediately.
+
+| Row | What it answers |
+|-----|-----------------|
+| **Interface** | the netdev commands are aimed at, or `none found` |
+| **Found by** | which probe named it: `JUKAHUB_WIFI_IFACE`, a sysfs wireless marker, the kernel list in `/proc/net/wireless`, a supplicant control directory, `wpa_cli` asking the supplicant, or the interface-name convention. `nothing found` means all five were empty |
+| **Backend** | how a command reaches the supplicant: `wpa_cli`, `wpa_supplicant socket`, or `none` |
+| **Control dir** | the directory holding the supplicant's control socket — from its own `ctrl_interface` first, then the conventional places |
+| **Control socket** | the exact socket path and whether it exists. `missing` with a `Control dir` present means nothing is serving that directory: the supplicant is not running |
+| **Searched** | every directory `Ctrl dir` was resolved from, in order |
+| **Supplicant config** | the config file the image ships, or `none found` |
+| **Supplicant start** | what happened when JukaHub started the supplicant itself: `not attempted`, `started by JukaHub (ctrl_interface …)`, `started, but no control socket appeared in …`, or `failed: …` |
+| **Radio** | `on`/`off` and whether that came from `rfkill` or `nmcli`; `unknown` when the image has neither |
+| **Station** | `wpa_state` with the SSID and IP, straight from the supplicant |
+| **Last error** | the most recent failure, the phase it came from (`command`, `supplicant start`) and how long ago it was |
+
+Green is the expected answer, amber is a state the picker can work around, red
+is the reason it cannot. A row that says `none` or `missing` is the one to quote
+in a report; the diagnostics bundle's log carries the same facts.
+
 ## Troubleshooting
+
+The messages below are what the panel's status line shows. When the panel says
+one of them, open **Diagnostics** first: it names the interface, the control
+directory, the socket, the backend and the last error, which is usually the
+whole report.
 
 | Message | Meaning |
 |---------|---------|
-| `Wi-Fi control needs wpa_cli, which is not installed` | the image lacks `wpa_cli`; use the stock Wi-Fi screen or add the tool |
+| `Wi-Fi control needs wpa_cli or a wpa_supplicant control socket, and this image has neither` | a radio is present but neither route to the supplicant works: no `wpa_cli` on the card and no control socket in the known directories (which include the `ctrl_interface` the supplicant's own config names). Report the image with `ls /etc/wifi/sockets /var/run/wpa_supplicant` and the `ctrl_interface` line of its `/etc/wifi/wpa_supplicant.conf` |
 | `Wi-Fi control on Windows needs netsh` | `netsh` is missing from `PATH`; unusual on Windows, but a stripped-down image can lack it |
 | `Windows reports no wireless network interface` | no wireless adapter is present, or the WLAN service is off; wired networking is unaffected |
-| `Wi-Fi is turned off` | the radio is soft-blocked (airplane mode or the Quick Settings switch); press **A** on the empty list, or flip **Wi-Fi** in Quick Settings |
-| `No wireless network interface on this device` | no radio is exposed to Linux, or the radio is powered off. If the device is online, name the interface explicitly with `JUKAHUB_WIFI_IFACE` (e.g. `wlan0`) and report the image: discovery checks sysfs, `/proc/net/wireless`, the supplicant's control sockets, the supplicant's own answer through `wpa_cli` and the interface name |
+| `Wi-Fi is turned off — press A to turn it on` | the radio is soft-blocked (airplane mode or the Quick Settings switch). The picker stays reachable in this state and **A** switches the radio on, so this is not a dead end |
+| `Wi-Fi is off — turn the radio on, then reopen this list` | the image has a Wi-Fi stack, but nothing is up yet and the picker could not start it: switch the radio on in Quick Settings, then reopen |
+| `No wireless network interface on this device` | no radio is exposed to Linux at all — the driver has not created a netdev and the image has no supplicant to ask. Name the interface explicitly with `JUKAHUB_WIFI_IFACE` (e.g. `wlan0`) and report the image: discovery checks sysfs, `/proc/net/wireless`, the supplicant's control sockets, the supplicant's own answer through `wpa_cli` and the interface name |
 | `could not join <name>: the password was rejected` | the key is wrong (the supplicant reached the 4-way handshake and failed) |
 | `could not join <name> (disconnected)` | out of range or the access point refused the association |
 | `no IP address was assigned; check DHCP on this network` | associated, but no lease: the network's DHCP server or the firmware's client is the problem |
@@ -329,6 +396,26 @@ found in a conventional directory, and one named only by the supplicant's own
 config), that a failed call reports the tool's reason instead of `exit status
 255`, and that `FAIL-BUSY` still yields the arriving scan. `wifi_actions_test.go`
 keeps the panel's header honest about a refused scan.
+
+`wifi_ctrl_test.go` covers the socket transport and the backend choice: one
+command per write with its reply read back, unsolicited `<n>…` event messages
+stepped over instead of returned as the answer, a socket that closes without
+answering reported as an error naming the command, and a skipped script's
+printed `FAIL` left for the caller to read. It also builds the TG5040 shape — no
+radio in sysfs, no `/proc/net/wireless`, no `wpa_cli`, one socket whose name is
+the interface — and requires the picker to read status through it, sends the
+passphrase as quoted command text (never as a process argument, because no
+process starts), and reports unavailable only when neither route exists.
+
+`wifi_diag_test.go` covers the diagnostics sheet: a radio with no supplicant
+reports `none found` for the backend and a warning on the control directory, a
+working socket reports its directory, socket, backend and station, the last
+command error is kept with its phase (through the same function that builds the
+panel's message), a supplicant start records `failed:` for the sheet, `I` / **L1**
+opens the sheet while the list has no backend and **B** goes back to the list
+before it closes the panel, the sheet draws its Refresh/Back pills inside the
+panel at 720p and 480p without leaving stale list rows behind, and the list keeps
+a **Diagnostics** pill when it cannot rescan.
 
 `wifi_windows_test.go` covers the netsh backend the same way: the interface
 report (English and localized), the profile list, the scan rows and how they pick

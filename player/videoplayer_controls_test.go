@@ -35,15 +35,17 @@ func TestVideoControlRingStartsAtPlayPause(t *testing.T) {
 	}
 }
 
+// The ring ends on the corner actions: Stop is the leftmost button, and the
+// chevron that steps the player down a size is the rightmost after Close.
 func TestVideoControlRingWrapsAtBothEnds(t *testing.T) {
 	resetVideoControlState(t)
 
 	videoControlFocus = vcStop
 	moveVideoControlFocus(-1)
-	if videoControlFocus != vcFullscreen {
+	if videoControlFocus != vcBack {
 		t.Fatalf("left from the first control focused %v, want the last", videoControlFocus)
 	}
-	videoControlFocus = vcFullscreen
+	videoControlFocus = vcBack
 	moveVideoControlFocus(1)
 	if videoControlFocus != vcStop {
 		t.Fatalf("right from the last control focused %v, want the first", videoControlFocus)

@@ -138,6 +138,7 @@ func userConfigFromVariables(config *Config) *UserConfig {
 		WeatherUnit:        config.Variables.WeatherUnit,
 		TSPUsername:        config.Variables.TSPUsername,
 		PlaybackResolution: config.Variables.PlaybackResolution,
+		SubtitleLanguage:   config.Variables.SubtitleLanguage,
 		GridColumns:        config.Variables.GridColumns,
 		SearchWidth:        config.Variables.SearchWidth,
 		DynamicBg:          config.Variables.DynamicBg,
@@ -823,8 +824,14 @@ func statusDropIndex(parts []string) int {
 	// The chip goes before any reading: it is the one part that can be
 	// arbitrarily long — a media title or a headset's name — and the network,
 	// forecast, clock and battery are what the corner exists for.
-	if n := len(parts); n > 2 && isChipStatusPart(parts[n-1]) {
-		return n - 1
+	if n := len(parts); n > 1 && isChipStatusPart(parts[n-1]) {
+		if videoMiniVisible() && isMediaStatusPart(parts[n-1]) {
+			if n == 2 {
+				return 0
+			}
+		} else if n > 2 {
+			return n - 1
+		}
 	}
 	if len(parts) > 2 && !strings.HasPrefix(parts[0], "! Offline") {
 		return 0
@@ -836,6 +843,9 @@ func statusDropIndex(parts []string) int {
 	}
 	if len(parts) > 2 && strings.HasPrefix(parts[0], "! Offline") {
 		return 0
+	}
+	if videoMiniVisible() && len(parts) > 1 && isMediaStatusPart(parts[len(parts)-1]) {
+		return len(parts) - 2
 	}
 	return len(parts) - 1
 }
@@ -912,8 +922,10 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		// bar on A, the search keyboard on Y and the full link list on X. The
 		// triggers zoom the reader text — the same action the toolbar chip
 		// steps — so both ways in are named here.
+		hints[0] = FooterHint{Button: "Up/Down", Label: "Scroll"}
 		hints[1] = FooterHint{Button: "A", Label: "Link / URL"}
 		hints = append(hints,
+			FooterHint{Button: "Left/Right", Label: "Previous / next link"},
 			FooterHint{Button: "L1/R1", Label: "Scroll"},
 			FooterHint{Button: "L2/R2", Label: "Zoom"},
 			FooterHint{Button: "Y", Label: "Search"},
@@ -945,6 +957,11 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		if packageActionsOpen {
 			hints[1] = FooterHint{Button: "A", Label: "Select"}
 			hints[2] = FooterHint{Button: "B", Label: "Close"}
+		} else if packageRepoFocused {
+			hints[1] = FooterHint{Button: "A", Label: "Open source"}
+			hints[2] = FooterHint{Button: "B", Label: "List"}
+		} else {
+			hints = append(hints, FooterHint{Button: "Right", Label: "Source"})
 		}
 	case "Patch":
 		// Patch is modal-aware and lists the keys the open dialog takes.
@@ -1228,6 +1245,7 @@ type UserVariables struct {
 	WeatherUnit        string `json:"weatherUnit"`
 	TSPUsername        string `json:"tspUsername"`
 	PlaybackResolution string `json:"playbackResolution"`
+	SubtitleLanguage   string `json:"subtitleLanguage,omitempty"`
 	ReducedMotion      bool   `json:"reducedMotion"`
 	LowPower           bool   `json:"lowPower"`
 	PowerMode          string `json:"powerMode"`
@@ -1505,6 +1523,9 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	config.Variables.WeatherUnit = user.Variables.WeatherUnit
 	config.Variables.TSPUsername = user.Variables.TSPUsername
 	config.Variables.PlaybackResolution = user.Variables.PlaybackResolution
+	if user.Variables.SubtitleLanguage != "" {
+		config.Variables.SubtitleLanguage = user.Variables.SubtitleLanguage
+	}
 	config.Variables.ReducedMotion = user.Variables.ReducedMotion
 	config.Variables.LowPower = user.Variables.LowPower
 	config.Variables.LEDSync = user.Variables.LedSync
@@ -1561,6 +1582,7 @@ func saveConfig(config *Config) {
 	saved.Variables.WeatherUnit = ""
 	saved.Variables.TSPUsername = ""
 	saved.Variables.PlaybackResolution = ""
+	saved.Variables.SubtitleLanguage = ""
 
 	data, err := json.MarshalIndent(saved, "", "  ")
 	if err != nil {

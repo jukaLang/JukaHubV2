@@ -1825,22 +1825,12 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 		if browserNav == browserModeLinks {
 			return browserStepPageLinkRow(config, elem, -1)
 		}
-		textBrowserScrollVelocity -= textBrowserScrollAccel
-		if textBrowserScrollVelocity < -textBrowserScrollMaxVel {
-			textBrowserScrollVelocity = -textBrowserScrollMaxVel
-		}
-		textBrowserScrollCooldown = 8
-		return true
+		return browserScrollButton(config, elem, -1)
 	case sdl.K_DOWN:
 		if browserNav == browserModeLinks {
 			return browserStepPageLinkRow(config, elem, 1)
 		}
-		textBrowserScrollVelocity += textBrowserScrollAccel
-		if textBrowserScrollVelocity > textBrowserScrollMaxVel {
-			textBrowserScrollVelocity = textBrowserScrollMaxVel
-		}
-		textBrowserScrollCooldown = 8
-		return true
+		return browserScrollButton(config, elem, 1)
 	case sdl.K_LEFT:
 		return browserMovePageLink(config, elem, -1)
 	case sdl.K_RIGHT:
@@ -1848,9 +1838,6 @@ func handleBrowserKey(renderer *sdl.Renderer, e *sdl.KeyboardEvent, config *Conf
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 		if browserActivateFocusedLink(renderer, config, elem) {
 			return true
-		}
-		if e.Keysym.Sym != sdl.K_RETURN {
-			return false
 		}
 		handleTextBrowserAddressInput(renderer, config, elem)
 		return true
@@ -2009,7 +1996,15 @@ func handleBrowserController(renderer *sdl.Renderer, e *sdl.ControllerButtonEven
 	}
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		goBackScene(config)
+		if browserFind.active {
+			browserFindClear()
+		} else if browserNav == browserModeLinks {
+			browserNav = browserModeScroll
+			showToast("Scroll mode — D-Pad scrolls the page", ToastInfo())
+			PlayNavSound()
+		} else {
+			goBackScene(config)
+		}
 		return true
 	case sdl.CONTROLLER_BUTTON_X:
 		openBrowserLinkPanel(config, elem)
@@ -2062,7 +2057,7 @@ func browserPageContentBox(elem Element) (left, top, width, height int32) {
 	headerH := int32(28)
 	height = getElementHeight(elem, 480) - headerH - textBrowserURLBarHeight - 12
 	left = elem.X + 7
-	top = elem.Y + 8 + headerH + textBrowserURLBarHeight + 4
+	top = elem.Y + 8 + headerH + textBrowserURLBarHeight + 8
 	return left, top, width, height
 }
 
@@ -2080,7 +2075,11 @@ func browserPageLinkRects(config *Config, elem Element, layout *webLayout) []sdl
 	}
 	rects := make([]sdl.Rect, len(layout.Links))
 	for i, hit := range layout.Links {
-		y := top + int32(hit.Row-scroll)*layout.RowH - 2
+		if hit.Box.W > 0 && hit.Box.H > 0 {
+			rects[i] = sdl.Rect{X: left + hit.Box.X, Y: top + hit.Box.Y - int32(scroll)*layout.RowH, W: hit.Box.W, H: hit.Box.H}
+			continue
+		}
+		y := top + layout.Rows[hit.Row].Y - int32(scroll)*layout.RowH - 2
 		rects[i] = sdl.Rect{
 			X: left + hit.X - 4,
 			Y: y,
@@ -2153,9 +2152,8 @@ func browserTapPageLink(renderer *sdl.Renderer, config *Config, elem Element, mx
 		return false
 	}
 	for i, rect := range browserPageLinkRects(config, elem, layout) {
-		rel := int32(layout.Links[i].Row - int(textBrowserScrollY))
-		if rel < 0 || rel*layout.RowH >= height {
-			continue // off screen; the outline cannot be there either
+		if rect.Y+rect.H <= top || rect.Y >= top+height {
+			continue
 		}
 		if rect.W > 0 && pointInRect(mx, my, rect) {
 			// A form control is a tap target like a link, and a tap does what its
@@ -2194,25 +2192,16 @@ func browserDrawPageLinkFocus(renderer *sdl.Renderer, elem Element, layout *webL
 		return
 	}
 	hit := layout.Links[cursor]
-	rel := hit.Row - scroll
-	if rel < 0 || int32(rel)*layout.RowH >= contentH {
-		return
-	}
 	left := elem.X + 7
-	right := left + getElementWidth(elem, 1100) - 14
-	x := left + hit.X - 4
-	w := hit.W + 8
-	if x < left {
-		w -= left - x
-		x = left
+	box := sdl.Rect{X: left + hit.X - 4, Y: contentTop + layout.Rows[hit.Row].Y - int32(scroll)*layout.RowH - 2, W: hit.W + 8, H: layout.RowH}
+	if hit.Box.W > 0 && hit.Box.H > 0 {
+		box = sdl.Rect{X: left + hit.Box.X, Y: contentTop + hit.Box.Y - int32(scroll)*layout.RowH, W: hit.Box.W, H: hit.Box.H}
 	}
-	if x+w > right {
-		w = right - x
-	}
-	if w < 8 {
+	if box.Y+box.H <= contentTop || box.Y >= contentTop+contentH {
 		return
 	}
-	y := contentTop + int32(rel)*layout.RowH - 2
-	fillRoundedRect(renderer, x, y, w, layout.RowH, 4, WithAlpha(accentColor, 48))
-	strokeRoundedRect(renderer, x, y, w, layout.RowH, 4, 2, WithAlpha(accentColor, 235))
+	renderWithClip(renderer, left, contentTop, getElementWidth(elem, 1100)-14, contentH, func(r *sdl.Renderer) {
+		fillRoundedRect(r, box.X, box.Y, box.W, box.H, 4, WithAlpha(accentColor, 48))
+		strokeRoundedRect(r, box.X, box.Y, box.W, box.H, 4, 2, WithAlpha(accentColor, 235))
+	})
 }

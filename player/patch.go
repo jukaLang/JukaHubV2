@@ -80,7 +80,7 @@ func patchActions() []patchAction {
 	}
 	if patchState.LastUpdateVer != "" {
 		actions = append(actions, patchAction{ID: "apply", Label: "Apply staged update", Sub: patchState.LastUpdateVer + " is staged and verified"})
-	} else if patchState.AvailableUpdateTag != "" {
+	} else if updateAvailable() {
 		actions = append(actions, patchAction{ID: "install", Label: "Install JukaHub update", Sub: availableUpdateLabel() + " · download & restart after you confirm"})
 	}
 	if patchSnap != nil && len(patchSnap.Backups) > 0 {
@@ -1017,7 +1017,7 @@ func patchRowActivate(config *Config, comp PatchComponent) {
 			}
 			return
 		}
-		if patchState.AvailableUpdateTag != "" {
+		if updateAvailable() {
 			openInstallUpdateModal()
 			return
 		}

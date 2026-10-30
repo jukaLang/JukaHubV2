@@ -185,7 +185,10 @@ func qsRefreshAvailability() {
 		l := &qs.links[i]
 		switch l.Action {
 		case qsLinkWiFi:
-			l.Available = wifiControlAvailable()
+			// Reachable, not merely live: with the radio off the picker is what
+			// turns it on, so the row must not go dim just because nothing is
+			// listening on the control socket yet.
+			l.Available = wifiEntryReachable()
 			// The row is 400 px wide; the full reason lives in the picker's
 			// header and in the toast, so the row only says there is no backend.
 			l.Detail = "N/A"

@@ -11,7 +11,7 @@ package main
 // back to the panel's own default return rule.
 
 import (
-	"path/filepath"
+	"path"
 	"strings"
 )
 
@@ -97,12 +97,15 @@ func profileCoversGame(profileDir, gamePath string) bool {
 	return strings.HasPrefix(game, dir+"/")
 }
 
-// slashPath cleans a path and normalises its separators to "/".
+// slashPath cleans a path and normalises its separators to "/". This cannot
+// go through filepath, whose separator handling follows runtime.GOOS: a profile
+// path can be written with Windows separators in a config the launcher reads on
+// the handheld, and the comparison has to fold both forms on every build.
 func slashPath(p string) string {
 	if p == "" {
 		return ""
 	}
-	return filepath.ToSlash(filepath.Clean(p))
+	return path.Clean(strings.ReplaceAll(p, `\`, "/"))
 }
 
 // handoffAliases maps a folded console name to the folder/logical names

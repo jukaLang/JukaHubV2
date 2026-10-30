@@ -4258,6 +4258,7 @@ func syncVariableOverrides(config *Config) {
 	setStr("weatherUnit", &config.Variables.WeatherUnit)
 	setStr("tspUsername", &config.Variables.TSPUsername)
 	setStr("playbackResolution", &config.Variables.PlaybackResolution)
+	setStr("subtitleLanguage", &config.Variables.SubtitleLanguage)
 	setStr("fileExplorerRoot", &config.Variables.FileExplorerRoot)
 	setStr("tools_path", &config.Variables.ToolsPath)
 	setInt("gridColumns", &config.Variables.GridColumns)
@@ -4302,6 +4303,8 @@ func inputVariableValue(config *Config, variable string) string {
 		return config.Variables.TSPUsername
 	case "playbackResolution":
 		return config.Variables.PlaybackResolution
+	case "subtitleLanguage":
+		return config.Variables.SubtitleLanguage
 	case "fileExplorerRoot":
 		return config.Variables.FileExplorerRoot
 	case "reducedMotion":
@@ -4959,6 +4962,17 @@ func toggleVariable(config *Config, element Element) {
 		label = element.Variable
 	}
 	showToast(label+": "+map[bool]string{true: "On", false: "Off"}[on], ToastInfo())
+}
+
+// handleToggleAction lets a toggle participate in scene navigation without
+// treating Up/Down as changes to its value.
+func handleToggleAction(config *Config, element Element, action Action) {
+	switch action {
+	case ActionNavigateUp, ActionNavigateDown:
+		moveSelection(config, action)
+	case ActionConfirm, ActionNavigateLeft, ActionNavigateRight:
+		toggleVariable(config, element)
+	}
 }
 
 // renderToggleElement draws a controller-first boolean switch: the label on
@@ -6325,10 +6339,10 @@ func findFirstSelectableElement(scene SceneConfig) int {
 			return i
 		}
 	}
-	// Fallback: select the first focusable element even if it's display-only
-	// (textbrowser, shortslist, packagelist) so arrow navigation still works.
+	// Keep the fallback in sync with the focus graph, including scenes whose
+	// only controls are toggles, a theme gallery or chat.
 	for i, e := range scene.Elements {
-		if e.Type == "textbrowser" || e.Type == "shortslist" || e.Type == "packagelist" {
+		if isFocusableElement(e) {
 			return i
 		}
 	}
@@ -6494,8 +6508,9 @@ func completeSceneTransition(config *Config) {
 
 	focusedResultIndex = -1
 	resetResultActions()
-	// A Package Manager row menu belongs to the scene it was opened on.
+	// Package selection and its row menu belong to the scene being left.
 	closePackageActions()
+	packageRepoFocused = false
 	focusedFileIndex = 0
 	scrollY = 0
 	textBrowserScrollY = 0
@@ -6559,6 +6574,7 @@ func completeSceneTransition(config *Config) {
 		switch dl.Variable {
 		case "fe_entries":
 			feListDirectory(config)
+			feFocusList(config)
 		case "iptv_entries":
 			loadIPTV(config)
 		case "podcast_entries":
@@ -6903,6 +6919,36 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	return false
 }
 
+// handleChromeController owns pad input while a top-bar button is focused.
+// It must run before the scene element dispatch, since chrome uses negative
+// indices rather than indices into the scene's element slice.
+func handleChromeController(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN || homeLayoutActive || chromeTier(focusEngine.ElementIndex()) == 0 {
+		return false
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		moveSelection(config, ActionNavigateUp)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		moveSelection(config, ActionNavigateDown)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		moveSelection(config, ActionNavigateLeft)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		moveSelection(config, ActionNavigateRight)
+	case sdl.CONTROLLER_BUTTON_A:
+		activateChromeFocus(config)
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) && config.Scenes[currentSceneIndex].Name == "FileExplorer" {
+			feBack(config)
+		} else {
+			goBackScene(config)
+		}
+	default:
+		return false
+	}
+	return true
+}
+
 // handleChromeKey processes input while a chrome button (the back pill, the
 // status clock, the Apps pill or the notification bell) is focused
 // on a non-home scene. Chrome consumes every key while focused so the element
@@ -6933,7 +6979,7 @@ func handleChromeKey(e *sdl.KeyboardEvent, config *Config) bool {
 		moveSelection(config, ActionNavigateLeft)
 	case sdl.K_RIGHT:
 		moveSelection(config, ActionNavigateRight)
-	case sdl.K_RETURN, sdl.K_SPACE:
+	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
 		activateChromeFocus(config)
 	case sdl.K_ESCAPE, sdl.K_b:
 		// Back over an open top-bar overlay closes it first.
@@ -6941,6 +6987,8 @@ func handleChromeKey(e *sdl.KeyboardEvent, config *Config) bool {
 			startMenuDismiss()
 		} else if nc.open {
 			notifDismiss()
+		} else if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) && config.Scenes[currentSceneIndex].Name == "FileExplorer" {
+			feBack(config)
 		} else {
 			goBackScene(config)
 		}

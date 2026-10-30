@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"html"
 	"log"
 	"os"
 	"os/exec"
@@ -30,10 +31,14 @@ type subtitleCue struct {
 }
 
 var videoSubs struct {
-	mu      sync.Mutex
-	cues    []subtitleCue
-	enabled bool
-	status  string // human-readable source, e.g. "movie.srt"
+	mu       sync.Mutex
+	cues     []subtitleCue
+	enabled  bool
+	status   string // human-readable source or download status
+	owner    *playbackSession
+	language string
+	request  uint64
+	cancel   context.CancelFunc
 }
 
 // parseSubtitleTimestamp parses "00:01:02,500" / "00:01:02.500" / "01:02.500".
@@ -84,7 +89,7 @@ func cleanSubtitleText(s string) string {
 		}
 		s = s[:start] + s[start+end+1:]
 	}
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(html.UnescapeString(s))
 }
 
 // parseSubtitles parses SubRip and WebVTT data into timed cues. Unparseable
@@ -193,16 +198,12 @@ func extractEmbeddedSubtitles(ffmpegPath, videoPath string) ([]subtitleCue, stri
 // prepareVideoSubtitles loads subtitles for a new playback source. Local files
 // use a sidecar first and fall back to an embedded track; network streams have
 // neither, so subtitles stay off with an explanatory status.
-func prepareVideoSubtitles(config *Config, source string) {
-	if isNetworkSource(source) {
+func prepareVideoSubtitles(sess *playbackSession, config *Config, source string) {
+	if sess == nil || isNetworkSource(sess.pageURL) || isNetworkSource(source) {
 		// Cues for network sources come from fetchNetworkSubtitles, which may
 		// already have finished; do not clear them here.
 		return
 	}
-	videoSubs.mu.Lock()
-	videoSubs.cues = nil
-	videoSubs.status = ""
-	videoSubs.mu.Unlock()
 	cues, label := loadSidecarSubtitles(source)
 	if len(cues) == 0 {
 		ffmpegPath := ""
@@ -212,8 +213,10 @@ func prepareVideoSubtitles(config *Config, source string) {
 		cues, label = extractEmbeddedSubtitles(ffmpegPath, source)
 	}
 	videoSubs.mu.Lock()
-	videoSubs.cues = cues
-	videoSubs.status = label
+	if videoSubs.owner == sess {
+		videoSubs.cues = cues
+		videoSubs.status = label
+	}
 	videoSubs.mu.Unlock()
 }
 
@@ -236,59 +239,95 @@ func pickSubtitleFile(dir string) string {
 	return ""
 }
 
-// fetchNetworkSubtitles asks yt-dlp for the page's own subtitles in the
-// background. It downloads only text tracks (no media), and sets cues only if
-// the playback session is still current when the download finishes.
-func fetchNetworkSubtitles(sess *playbackSession, config *Config, pageURL string) {
-	if sess == nil || config == nil || !isNetworkSource(pageURL) {
+// subtitleLanguage defaults to English. Only literal language codes are accepted:
+// yt-dlp interprets its argument as a regex, so do not let configuration inject
+// an unintended selector.
+func subtitleLanguage(config *Config) (string, error) {
+	lang := ""
+	if config != nil {
+		lang = strings.TrimSpace(config.Variables.SubtitleLanguage)
+	}
+	if lang == "" {
+		return "en", nil
+	}
+	for _, r := range lang {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+			return "", fmt.Errorf("invalid subtitle language code")
+		}
+	}
+	return lang, nil
+}
+
+// resetVideoSubtitles transfers ownership before a new source starts.
+func resetVideoSubtitles(sess *playbackSession) {
+	videoSubs.mu.Lock()
+	defer videoSubs.mu.Unlock()
+	if videoSubs.cancel != nil {
+		videoSubs.cancel()
+		videoSubs.cancel = nil
+	}
+	videoSubs.request++
+	videoSubs.owner = sess
+	videoSubs.cues = nil
+	videoSubs.status = ""
+	videoSubs.language = ""
+}
+
+// fetchNetworkSubtitles downloads only the requested text track. Results from
+// canceled requests or a previous playback session are never installed.
+var subtitleDownload = downloadNetworkSubtitles
+
+func fetchNetworkSubtitles(ctx context.Context, sess *playbackSession, request uint64, config *Config, lang string) {
+	cues, status := subtitleDownload(ctx, config, sess.pageURL, lang)
+	videoSubs.mu.Lock()
+	defer videoSubs.mu.Unlock()
+	if videoSubs.owner != sess || videoSubs.request != request || !videoSubs.enabled || ctx.Err() != nil {
 		return
 	}
-	ytDlpPath := getToolPath("yt-dlp", config)
-	if ytDlpPath == "" {
-		return
-	}
+	videoSubs.cancel()
+	videoSubs.cancel = nil
+	videoSubs.cues = cues
+	videoSubs.status = status
+	videoSubs.language = lang
+}
+
+func downloadNetworkSubtitles(ctx context.Context, config *Config, pageURL, lang string) ([]subtitleCue, string) {
 	dir, err := os.MkdirTemp("", "juka-subs-")
 	if err != nil {
-		return
+		return nil, "Could not create subtitle download directory"
 	}
 	defer os.RemoveAll(dir)
-
-	ctx, cancel := context.WithTimeout(sess.ctx, 2*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
-	args := []string{
-		"--skip-download",
-		"--no-playlist",
-		"--write-subs",
-		"--sub-langs", "en.*,en",
-		"--sub-format", "vtt/srt/best",
-		"-o", filepath.Join(dir, "subs"),
-		pageURL,
-	}
-	args = append(args, ytDlpExtraArgsSlice(config)...)
+	ytDlpPath := getToolPath("yt-dlp", config)
+	args := subtitleDownloadArgs(config, dir, pageURL, lang)
 	cmd := exec.CommandContext(ctx, ytDlpPath, args...)
 	cmd.Env = helperToolEnv(ytDlpPath)
 	cmd.WaitDelay = 3 * time.Second
-	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("[SUBS] yt-dlp subtitle fetch failed: %v (%s)", err, strings.TrimSpace(string(out)))
-		return
+	if _, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("[SUBS] yt-dlp subtitle fetch failed: %v", err)
+		return nil, "Subtitle download failed"
 	}
-
 	path := pickSubtitleFile(dir)
-	if path == "" || !sess.isCurrent() {
-		return
+	if path == "" {
+		return nil, "No subtitles found for " + lang
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return
+		return nil, "Could not read downloaded subtitles"
 	}
 	cues := parseSubtitles(string(data))
-	if len(cues) == 0 || !sess.isCurrent() {
-		return
+	if len(cues) == 0 {
+		return nil, "Downloaded subtitles could not be read"
 	}
-	videoSubs.mu.Lock()
-	videoSubs.cues = cues
-	videoSubs.status = "yt-dlp"
-	videoSubs.mu.Unlock()
+	return cues, "yt-dlp " + lang
+}
+
+func subtitleDownloadArgs(config *Config, dir, pageURL, lang string) []string {
+	args := []string{"--skip-download", "--no-playlist", "--write-subs", "--write-auto-subs",
+		"--sub-langs", lang, "--sub-format", "vtt/srt", "-o", filepath.Join(dir, "subs")}
+	args = append(args, ytDlpExtraArgsSlice(config)...)
+	return append(args, "--", pageURL)
 }
 
 // subtitlesAvailable reports whether the current source has cues.
@@ -307,19 +346,78 @@ func subtitlesEnabled() bool {
 
 // toggleSubtitles flips CC and reports the new state.
 func toggleSubtitles() bool {
+	return toggleSubtitlesForConfig(appConfig)
+}
+
+func toggleSubtitlesForConfig(config *Config) bool {
 	videoSubs.mu.Lock()
 	defer videoSubs.mu.Unlock()
-	if len(videoSubs.cues) == 0 {
+	if videoSubs.enabled {
+		videoSubs.enabled = false
+		if videoSubs.cancel != nil {
+			videoSubs.cancel()
+			videoSubs.cancel = nil
+			videoSubs.request++
+			videoSubs.status = ""
+		}
 		return false
 	}
-	videoSubs.enabled = !videoSubs.enabled
-	return videoSubs.enabled
+	if len(videoSubs.cues) > 0 {
+		if videoSubs.owner == nil || !isNetworkSource(videoSubs.owner.pageURL) {
+			videoSubs.enabled = true
+			return true
+		}
+		lang, err := subtitleLanguage(config)
+		if err != nil {
+			videoSubs.status = err.Error()
+			return false
+		}
+		if lang == videoSubs.language {
+			videoSubs.enabled = true
+			return true
+		}
+		videoSubs.cues = nil
+	}
+	return startNetworkSubtitleDownloadLocked(config)
+}
+
+// startNetworkSubtitleDownloadLocked starts a request for the current owner.
+func startNetworkSubtitleDownloadLocked(config *Config) bool {
+	sess := videoSubs.owner
+	if sess == nil || !isNetworkSource(sess.pageURL) || sess.ctx.Err() != nil {
+		return false
+	}
+	lang, err := subtitleLanguage(config)
+	if err != nil {
+		videoSubs.status = err.Error()
+		return false
+	}
+	videoSubs.enabled = true
+	videoSubs.status = "Downloading subtitles: " + lang
+	videoSubs.request++
+	ctx, cancel := context.WithCancel(sess.ctx)
+	videoSubs.cancel = cancel
+	go fetchNetworkSubtitles(ctx, sess, videoSubs.request, config, lang)
+	return true
+}
+
+func startEnabledNetworkSubtitles(config *Config) {
+	videoSubs.mu.Lock()
+	defer videoSubs.mu.Unlock()
+	if videoSubs.enabled {
+		startNetworkSubtitleDownloadLocked(config)
+	}
 }
 
 // setSubtitlesEnabled forces the CC state (used when a source has no cues).
 func setSubtitlesEnabled(on bool) {
 	videoSubs.mu.Lock()
 	videoSubs.enabled = on
+	if !on && videoSubs.cancel != nil {
+		videoSubs.cancel()
+		videoSubs.cancel = nil
+		videoSubs.request++
+	}
 	videoSubs.mu.Unlock()
 }
 
@@ -331,7 +429,7 @@ func subtitleTextAt(seconds float64) string {
 		return ""
 	}
 	for _, cue := range videoSubs.cues {
-		if seconds >= cue.Start && seconds <= cue.End {
+		if seconds >= cue.Start && seconds < cue.End {
 			return cue.Text
 		}
 	}
@@ -352,19 +450,36 @@ func renderVideoSubtitles(renderer *sdl.Renderer, config *Config, x, y, w, h int
 	if font == nil {
 		return
 	}
-	lines := strings.Split(text, "\n")
+	if w <= 32 || h <= 0 {
+		return
+	}
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		lines = append(lines, wrapTextLines(font, line, w-32, 20)...)
+	}
 	lineH := int32(font.Height()) + 4
+	maxLines := int((h - 16) / lineH)
+	if maxLines < 1 || len(lines) == 0 {
+		return
+	}
+	if len(lines) > maxLines {
+		lines = lines[:maxLines]
+	}
 	top := y + h - bottomInset - int32(len(lines))*lineH
 	if top < y+8 {
 		top = y + 8
 	}
+	var maxWidth int32
+	for _, line := range lines {
+		lineW, _, _ := font.SizeUTF8(line)
+		maxWidth = max32(maxWidth, int32(lineW))
+	}
+	fillRoundedRect(renderer, x+(w-maxWidth)/2-8, top-2, maxWidth+16, int32(len(lines))*lineH+4, 6, sdl.Color{R: 0, G: 0, B: 0, A: 170})
 	for i, line := range lines {
 		lineW, _, _ := font.SizeUTF8(line)
 		lx := x + (w-int32(lineW))/2
 		ly := top + int32(i)*lineH
-		// Soft shadow behind the text so it stays readable over bright frames.
-		fillRoundedRect(renderer, lx-8, ly-2, int32(lineW)+16, lineH, 6, sdl.Color{R: 0, G: 0, B: 0, A: 150})
-		renderText(renderer, config, font, line, sdl.Color{R: 245, G: 245, B: 245, A: 255}, lx, ly)
+		renderText(renderer, config, font, line, sdl.Color{R: 255, G: 255, B: 255, A: 255}, lx, ly)
 	}
 }
 
@@ -373,7 +488,10 @@ func subtitleStatusLine() string {
 	videoSubs.mu.Lock()
 	defer videoSubs.mu.Unlock()
 	if len(videoSubs.cues) == 0 {
-		return "No subtitles found for this video"
+		if videoSubs.status != "" {
+			return videoSubs.status
+		}
+		return "No subtitles loaded"
 	}
 	state := "Off"
 	if videoSubs.enabled {

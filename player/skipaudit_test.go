@@ -71,6 +71,9 @@ var skipGates = []string{
 	"ffmpeg",
 	"cannot build a test clip",
 	"system tar cannot extract this archive",
+	// Build targets the app publishes no helper bundle for, so the fixture the
+	// install probe needs cannot be named, let alone installed, there.
+	"no FFmpeg bundle for ",
 
 	// Opt-in probes that write previews or download a real release.
 	"set JUKA_PREVIEW=1",

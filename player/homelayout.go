@@ -510,17 +510,15 @@ func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data Ho
 		bellFont = fonts.Small
 	}
 	bellW, bellH := data.BellW, data.BellH
-	if bellW <= 0 && bellFont != nil {
-		bellH = int32(bellFont.Height()) + 10
-		if bellH < 24 {
-			bellH = 24
-		}
-		bellW = bellH + 14
+	if bellW <= 0 {
+		// One sizing rule for the corner: the shared metrics the scene bar uses,
+		// so the chip cannot be a different size before the view data is built.
+		bellW, bellH = notifBellSize(headerConfig)
 	}
 	bellRight := h.Width - StatusBarMargin
 	bellX := bellRight - bellW
 	bellY := (header.H - bellH) / 2
-	renderHomeBell(renderer, bellFont, bellX, bellY, bellW, bellH)
+	renderHomeBell(renderer, headerConfig, bellFont, bellX, bellY, bellW, bellH)
 	// The bell is a full member of the home focus graph: record the rect it was
 	// actually drawn at, and only let the D-pad land on it while it is visible.
 	if nc.bellRect.W > 0 {
@@ -750,13 +748,13 @@ func isClockStatusPart(s string) bool {
 // renderHomeBell draws the notification bell in the home header's top-right
 // corner. It mirrors the status-bar bell so the system corner is identical on
 // every screen, and it records the rect the click handler uses.
-func renderHomeBell(renderer *sdl.Renderer, font *ttf.Font, x, y, w, h int32) {
+func renderHomeBell(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32) {
 	if font == nil {
 		return
 	}
 	// The pill, icon and unread badge come from the shared notification-center
 	// renderer; only the home header's position differs from the scene bar.
-	drawNotifBell(renderer, font, sdl.Rect{X: x, Y: y, W: w, H: h})
+	drawNotifBell(renderer, config, font, sdl.Rect{X: x, Y: y, W: w, H: h})
 }
 
 func (h *HomeLayout) drawGreeting(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {
@@ -1501,6 +1499,14 @@ func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, f
 	cx := x + w/2
 	cy := y + h/2
 
+	// Keep detail visible on both light glyphs and the dark focused glyph.
+	shadeTarget := sdl.Color{R: 0, G: 0, B: 0, A: color.A}
+	if int(color.R)*299+int(color.G)*587+int(color.B)*114 < 128000 {
+		shadeTarget = sdl.Color{R: 255, G: 255, B: 255, A: color.A}
+	}
+	shade := lerpColor(color, shadeTarget, 0.25)
+	deepShade := lerpColor(color, shadeTarget, 0.42)
+
 	switch name {
 	case "media", "continue":
 		// Play triangle inside a rounded frame.
@@ -1510,31 +1516,29 @@ func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, f
 			pt{x: cx - w/5, y: cy + h/4},
 			pt{x: cx + w/4, y: cy}, color)
 	case "files":
-		// Filled folder: body + tab. The tab used to run into the body (it
-		// ended at h/3+1, exactly where the body starts), so at empty-state size
-		// the two merged into one white lozenge with no folder silhouette.
-		body := sdl.Rect{X: x + w/8, Y: y + h*5/12, W: w - w/4, H: h * 5 / 12}
-		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, 4, color)
-		tab := sdl.Rect{X: x + w/8, Y: y + h/6, W: w/2 - w/8, H: h / 6}
-		fillRoundedRect(renderer, tab.X, tab.Y, tab.W, tab.H, 2, color)
+		// A connected folder silhouette with a raised tab and a clean front flap.
+		fillRoundedRect(renderer, x+w/8, y+h/6, w*3/8, h/4, max32(2, w/12), shade)
+		fillRoundedRect(renderer, x+w/8, y+h/4, w*3/4, h*5/8, max32(2, w/10), shade)
+		fillRoundedRect(renderer, x+w/8, y+h*7/16, w*3/4, h*7/16, max32(2, w/10), color)
+		// A small label gives the front plane detail without crowding the tab.
+		fillRoundedRect(renderer, x+w/4, y+h*5/8, w/4, max32(2, h/16), 1, deepShade)
 	case "packages":
-		// Filled isometric cube: front, top, and right faces. The top face used
-		// to be lightened, which on a white glyph is still white: all three
-		// faces merged into one block. Shading each face away from the base
-		// keeps the box readable in both the white and the accent tint.
-		front := sdl.Rect{X: x + w/6, Y: y + h/3, W: w - w/3, H: h / 2}
-		fillRoundedRect(renderer, front.X, front.Y, front.W, front.H, 3, color)
-		topRight := pt{x: x + w - w/6, y: y + h/6}
-		topLeft := pt{x: x + w/4, y: y + h/6}
+		// Three distinct planes form a parcel; the seam and tape remain visible
+		// in both the normal and focused palette, including at 32px.
+		top := pt{x: cx, y: y + h/12}
+		left := pt{x: x + w/8, y: y + h/3}
+		middle := pt{x: cx, y: y + h*13/24}
+		right := pt{x: x + w*7/8, y: y + h/3}
+		bottom := pt{x: cx, y: y + h*11/12}
+		fillQuad(renderer, top, right, middle, left, color)
+		fillQuad(renderer, left, middle, bottom, pt{x: left.x, y: y + h*3/4}, shade)
+		fillQuad(renderer, middle, right, pt{x: right.x, y: y + h*3/4}, bottom, deepShade)
+		// A short tape strip follows the top plane toward the front edge.
 		fillQuad(renderer,
-			pt{x: front.X, y: front.Y},
-			pt{x: front.X + front.W, y: front.Y},
-			topRight, topLeft, darken(color, 16))
-		fillQuad(renderer,
-			pt{x: front.X + front.W, y: front.Y},
-			topRight,
-			pt{x: topRight.x, y: topRight.y + front.H},
-			pt{x: front.X + front.W, y: front.Y + front.H}, darken(color, 30))
+			pt{x: x + w*3/8, y: y + h*5/24},
+			pt{x: x + w*7/16, y: y + h*4/24},
+			pt{x: x + w*11/16, y: y + h*9/24},
+			pt{x: x + w*5/8, y: y + h*10/24}, deepShade)
 	case "apps":
 		// Four filled rounded squares in a 2x2 grid: 10px cells with 5px gaps
 		// and a 3px corner radius, optically centered in the glyph box so the
@@ -1607,22 +1611,18 @@ func drawHomeIconShapes(renderer *sdl.Renderer, name string, x, y, w, h int32, f
 		drawClockHand(renderer, cx, cy, -math.Pi/2+0.7, w/4, 2, color)
 		drawClockHand(renderer, cx, cy, -math.Pi/2+2.4, w/3, 2, color)
 		fillCircle(renderer, cx, cy, 2, color)
-	case "gamepad", "emulators", "controller":
-		// Gamepad: a rounded body with two grips, a d-pad and two buttons. At
-		// tile size the silhouette is what reads; the details are cut-outs in
-		// the tile's own surface colour.
-		body := sdl.Rect{X: x + w/12, Y: y + h/3, W: w - w/6, H: h / 3}
-		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, body.H/2, color)
-		fillCircle(renderer, x+w/4, y+h*2/3, w/9, color)
-		fillCircle(renderer, x+w-w/4, y+h*2/3, w/9, color)
-		cut := ColorIconSurface
-		if focused {
-			cut = ColorAccent
-		}
-		fillRoundedRect(renderer, cx-w/6, cy-2, w/5, 4, 2, cut)
-		fillRoundedRect(renderer, cx-w/6+w/10-2, cy-w/8, 4, w/5, 2, cut)
-		fillCircle(renderer, cx+w/4, cy-w/12, w/22, cut)
-		fillCircle(renderer, cx+w/3, cy+w/12, w/22, cut)
+	case "gamepad", "emulator", "emulators", "controller":
+		// A single controller silhouette with rounded grips and clear controls.
+		body := sdl.Rect{X: x + w/8, Y: y + h/4, W: w * 3 / 4, H: h / 2}
+		fillRoundedRect(renderer, body.X, body.Y, body.W, body.H, max32(3, h/5), color)
+		fillCircle(renderer, x+w/4, y+h*11/16, max32(2, w/8), color)
+		fillCircle(renderer, x+w*3/4, y+h*11/16, max32(2, w/8), color)
+		unit := max32(2, w/12)
+		dx, dy := x+w/3, y+h*7/16
+		fillRoundedRect(renderer, dx-unit*2, dy, unit*4, unit, 1, deepShade)
+		fillRoundedRect(renderer, dx-unit/2, dy-unit*3/2, unit, unit*4, 1, deepShade)
+		fillCircle(renderer, x+w*2/3, y+h*3/8, max32(1, w/24), deepShade)
+		fillCircle(renderer, x+w*3/4, y+h/2, max32(1, w/24), deepShade)
 	case "exit":
 		// Power icon: a ring with a vertical bar through the top.
 		tileBG := ColorIconSurface

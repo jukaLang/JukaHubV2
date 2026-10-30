@@ -344,8 +344,13 @@ func rfkillBlocked(out string) (blocked bool, ok bool) {
 }
 
 // wifiEnabled reads the Wi-Fi radio state.
+// wifiRadioBackend names how the Wi-Fi radio is switched. It is the same probe
+// wifiBackend runs, behind a variable so a test can stand in for rfkill/nmcli
+// exactly like systemCommandRunner.
+var wifiRadioBackend = wifiBackend
+
 func wifiEnabled() (bool, bool) {
-	switch wifiBackend() {
+	switch wifiRadioBackend() {
 	case "nmcli":
 		out, err := systemCommandRunner("nmcli", "radio", "wifi")
 		if err != nil {
@@ -380,7 +385,7 @@ func rfkillState(out string) (bool, bool) {
 
 // setWifiEnabled switches the Wi-Fi radio.
 func setWifiEnabled(on bool) error {
-	switch wifiBackend() {
+	switch wifiRadioBackend() {
 	case "nmcli":
 		arg := "off"
 		if on {
@@ -482,11 +487,14 @@ func setAirplaneMode(on bool) error {
 }
 
 func runRfkill(kind string, on bool) error {
-	verb := "unblock"
+	// rfkill's argument is a block verb, not an on/off flag: switching a radio
+	// ON is "unblock". These two were swapped, so on an image whose only radio
+	// control is rfkill — every TrimUI handheld, which ships no nmcli — the
+	// Wi-Fi switch turned the radio off every time it was asked to turn it on.
+	verb := "block"
 	if on {
-		verb = "block"
+		verb = "unblock"
 	}
-	// rfkill's argument is a block verb; "block" turns the radio off.
 	if _, err := systemCommandRunner("rfkill", verb, kind); err != nil {
 		return fmt.Errorf("rfkill %s %s: %w", verb, kind, err)
 	}

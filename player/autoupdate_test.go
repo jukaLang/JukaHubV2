@@ -94,6 +94,68 @@ func TestBuildTimeStampedUpdateDecision(t *testing.T) {
 	}
 }
 
+// A stored advertisement outlives the update it offered: a card image copied
+// over the old install never ran the swap helper, and a handheld without Wi-Fi
+// never reaches the check that would clear it. The header chip used to keep
+// saying "Update" in both cases. The running build's own stamp settles it.
+func TestStaleUpdateAdvertisementIsDroppedLocally(t *testing.T) {
+	patchStateMu.Lock()
+	prevTag, prevAt, prevInstalled := patchState.AvailableUpdateTag, patchState.AvailableUpdateAt, patchState.InstalledReleaseAt
+	patchStateMu.Unlock()
+	prevTime, prevDate := buildTime, buildDate
+	t.Cleanup(func() {
+		patchStateMu.Lock()
+		patchState.AvailableUpdateTag, patchState.AvailableUpdateAt, patchState.InstalledReleaseAt = prevTag, prevAt, prevInstalled
+		patchStateMu.Unlock()
+		buildTime, buildDate = prevTime, prevDate
+	})
+
+	setState := func(advertisedTag, advertisedAt, installedAt string) {
+		patchStateMu.Lock()
+		patchState.AvailableUpdateTag = advertisedTag
+		patchState.AvailableUpdateAt = advertisedAt
+		patchState.InstalledReleaseAt = installedAt
+		patchStateMu.Unlock()
+	}
+
+	// The advertised release is older than the running build: no update.
+	setState("JukaHub-20261018154556", "2026-10-18T15:45:57Z", "2026-10-30T01:00:00Z")
+	if !advertisedUpdateIsStale() {
+		t.Fatal("a release installed after the advertisement must read as stale")
+	}
+	if updateAvailable() {
+		t.Fatal("updateAvailable must not offer a release the build already has")
+	}
+	if !pruneStaleUpdateAdvertisement() {
+		t.Fatal("pruneStaleUpdateAdvertisement = false, want the advertisement dropped")
+	}
+	if tag := availableUpdateTag(); tag != "" {
+		t.Fatalf("advertisement %q survived the prune", tag)
+	}
+
+	// A genuinely newer release stays offered.
+	setState("JukaHub-20261101090000", "2026-11-01T09:00:00Z", "2026-10-30T01:00:00Z")
+	if advertisedUpdateIsStale() || !updateAvailable() {
+		t.Fatal("a newer release must stay in the header")
+	}
+	if pruneStaleUpdateAdvertisement() {
+		t.Fatal("pruneStaleUpdateAdvertisement dropped a live offer")
+	}
+
+	// With no installed stamp nothing is proven, so the offer is kept: the
+	// network check stays the authority for an unknown build.
+	setState("JukaHub-20261018154556", "2026-10-18T15:45:57Z", "")
+	if advertisedUpdateIsStale() {
+		t.Fatal("an unknown installed stamp must not be treated as stale")
+	}
+
+	// Older state format: only the tag carries the timestamp.
+	setState("JukaHub-20261018154556", "", "2026-10-30T01:00:00Z")
+	if !advertisedUpdateIsStale() {
+		t.Fatal("a tag-only advertisement must still be compared")
+	}
+}
+
 // The automatic check only advertises a release: it must not download, stage
 // or replace anything before the user confirms in the Patch scene.
 func TestAvailableUpdateIsAdvertisedWithoutStaging(t *testing.T) {

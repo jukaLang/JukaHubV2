@@ -430,6 +430,12 @@ configuration, logging, recovery, update and network safeguards remain shipped.
       profile import/connect, saved-profile reconnect and status/signal reads
       carry the chosen interface instead of letting `netsh` select another
       radio (`wifi_windows.go`, `wifi_windows_test.go`).
+- [x] ✅ Wi-Fi without `wpa_cli` — the picker drives `wpa_supplicant`'s own
+      control socket when the image ships no client, which is the state a
+      TrimUI Brick reported (the start menu deletes the Wi-Fi row when the
+      backend is unavailable, so the feature was invisible on a device that was
+      online). `/etc/wifi/sockets`, where TG5040 images put `ctrl_interface`, is
+      part of discovery (`wifi_ctrl.go`, `wifi_ctrl_test.go`).
 - [x] ✅ Conditional caching (`If-None-Match` / `If-Modified-Since`) —
       `httpcache.go` keeps the last successful body and its validators per URL
       (bounded: 64 entries, 1 MiB per body, process-lifetime by design — a

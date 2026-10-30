@@ -370,6 +370,52 @@ func availableUpdateLabel() string {
 	return "new release"
 }
 
+// advertisedReleaseTime returns the publication time recorded with the
+// advertised release. It is stored in patch state, so it survives restarts and
+// also outlives the release when the user installs by copying a card image
+// over the old one.
+func advertisedReleaseTime() (time.Time, bool) {
+	patchStateMu.Lock()
+	at, tag := patchState.AvailableUpdateAt, patchState.AvailableUpdateTag
+	patchStateMu.Unlock()
+	if t, ok := parseReleaseTimestamp(at); ok {
+		return t, true
+	}
+	return releaseTimeFromTag(tag)
+}
+
+// advertisedUpdateIsStale reports that the advertised release is not newer than
+// the running build. The advertisement is persisted state: a successful check
+// clears it, but a device without Wi-Fi never reaches the check, so a chip could
+// outlive the update it was offering (or be carried over by an install that
+// replaced the files without going through the swap helper). Comparing the two
+// stamps locally answers "is this still an update?" without the network.
+func advertisedUpdateIsStale() bool {
+	advertised, ok := advertisedReleaseTime()
+	if !ok {
+		return false // cannot prove it stale: keep advertising
+	}
+	installed, known := installedReleaseTime()
+	if !known {
+		return false
+	}
+	return !advertised.After(installed)
+}
+
+// pruneStaleUpdateAdvertisement forgets an advertisement the running build has
+// already caught up with, and reports whether it did. It runs at startup and
+// before a boot announcement so the header chip and the toast never offer a
+// release the device already has.
+func pruneStaleUpdateAdvertisement() bool {
+	if availableUpdateTag() == "" || !advertisedUpdateIsStale() {
+		return false
+	}
+	tag := availableUpdateTag()
+	clearAvailableUpdate()
+	logPatch("auto-update: dropped stale advertisement for %s; the installed build is %s", tag, versionString(nil))
+	return true
+}
+
 // errAlreadyUpToDate reports that the advertised release is not newer than the
 // running build (a stale advertisement, or a build that already applied it).
 var errAlreadyUpToDate = errors.New("already up to date")
@@ -438,6 +484,10 @@ func startAutoUpdateCheck(config *Config) {
 			return
 		}
 		logPatch("auto-update: startup check")
+		// A pending offer the running build already satisfies is dropped before
+		// it can be announced: the check below needs the network, and a handheld
+		// that never reaches it used to keep the chip and the boot toast forever.
+		pruneStaleUpdateAdvertisement()
 		patchStateMu.Lock()
 		last := patchState.AutoUpdateCheckedAt
 		pending := patchState.AvailableUpdateTag != ""

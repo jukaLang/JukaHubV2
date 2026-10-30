@@ -176,6 +176,7 @@ type webStyle struct {
 	// `width: 33%` or `width: 240px` does.
 	Width    float64
 	WidthPct float64
+	Height   float64
 	// ZIndex and Position place an element in the stacking order. Absolute and
 	// fixed elements leave the flow and are painted over the text in z order.
 	ZIndex    int
@@ -309,10 +310,11 @@ type webBlock struct {
 // styled blocks and the layout builds from those — plus the paper and text
 // colours the page asked for.
 type webDocument struct {
-	URL    string
-	Title  string
-	Blocks []webBlock
-	Paper  sdl.Color
+	URL     string
+	Title   string
+	Favicon string
+	Blocks  []webBlock
+	Paper   sdl.Color
 	// PaperGradient is a body/html background ramp: the page under the text is
 	// the one gradient that covers the whole panel, so it is painted too.
 	PaperGradient    webGradient
@@ -358,7 +360,8 @@ type webRunPos struct {
 	HasBg bool
 	Bg    sdl.Color
 	// Control carries the form control this run draws, if any.
-	Control *webControl
+	Control    *webControl
+	BoxW, BoxH int32
 }
 
 // webRow is one line slot in the uniform layout grid. Tall lines (headings)
@@ -423,9 +426,11 @@ type webLayout struct {
 // pixel extent inside that row. Href is the raw attribute; the browser
 // resolves it against the document URL when the link is opened.
 type webLinkHit struct {
-	Row  int
-	X    int32
-	W    int32
+	Row int
+	X   int32
+	W   int32
+	// Box holds a form control's actual layout-local dimensions.
+	Box  sdl.Rect
 	Href string
 	Text string
 	// Video marks a hit generated from a <video> play card rather than an
@@ -485,8 +490,9 @@ type webControl struct {
 	// Secret marks a password field. Its value is typed as usual but drawn as
 	// dots: the reader paints on a shared screen, and a prefilled password
 	// rendered in the clear is one glance away from being read off it.
-	Secret bool
-	Form   webForm
+	Secret                  bool
+	Form                    webForm
+	Width, WidthPct, Height float64
 }
 
 // PlaceholderShown reports that a field is drawing its prompt rather than a
@@ -2277,6 +2283,11 @@ func applyWebLayoutDecls(st *webStyle, decls map[string]string) {
 			st.Width = px
 		}
 	}
+	if v, ok := decls["height"]; ok {
+		if px := webLength(v, st.FontPx); px > 0 {
+			st.Height = px
+		}
+	}
 	if v, ok := decls["position"]; ok {
 		switch strings.ToLower(strings.TrimSpace(v)) {
 		case "relative":
@@ -3023,7 +3034,7 @@ func (p *webParser) computeStyle(el webElement, attrs string) webStyle {
 	st.Justify, st.AlignItems, st.AlignSelf = webJustifyStart, webItemStretch, -1
 	st.GapX, st.GapY, st.FlexWrap = 0, 0, false
 	st.FlexGrow, st.FlexBasis, st.BasisPct = 0, -1, 0
-	st.Width, st.WidthPct = 0, 0
+	st.Width, st.WidthPct, st.Height = 0, 0, 0
 	st.ZIndex, st.Position = 0, webPositionStatic
 	st.Top, st.Right, st.Bottom, st.Left = 0, 0, 0, 0
 	st.HasTop, st.HasRight, st.HasBottom, st.HasLeft = false, false, false, false
@@ -3267,6 +3278,7 @@ func (p *webParser) addControlFromInput(attrs string, style webStyle) {
 func (p *webParser) emitControl(ctrl *webControl, style webStyle, boxed bool) {
 	st := style
 	st.Control = ctrl
+	ctrl.Width, ctrl.WidthPct, ctrl.Height = style.Width, style.WidthPct, style.Height
 	if boxed {
 		// The same filled chip an inline <code> gets, sized by the text it
 		// shows, so a field cannot be mistaken for body copy.
@@ -4078,6 +4090,33 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						continue
 					}
 					wordW := int32(width)
+					boxW, boxH := int32(0), int32(0)
+					if ctrl := run.Style.Control; ctrl != nil && (ctrl.Kind == "text" || ctrl.Kind == "textarea") {
+						boxW = int32(ctrl.Width * baseSize / 16)
+						if ctrl.WidthPct > 0 {
+							boxW = int32(float64(avail) * ctrl.WidthPct / 100)
+						}
+						if boxW <= 0 {
+							boxW = int32(baseSize * 12)
+						}
+						if boxW > avail {
+							boxW = avail
+						}
+						boxH = int32(ctrl.Height * baseSize / 16)
+						if boxH < int32(height)+8 {
+							boxH = int32(height) + 8
+						}
+						if boxH > rowH*8 {
+							boxH = rowH * 8
+						}
+						if boxW < 16 {
+							boxW = 16
+						}
+						if wordW > boxW-12 {
+							text = ellipsize(font, text, boxW-12)
+						}
+						wordW = boxW
+					}
 					if len(line) > 0 && (wi > 0 || leadingSpace) {
 						spaceW := l.spaceWidth(font)
 						if x+spaceW+wordW > padX+contentW {
@@ -4086,7 +4125,10 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 							x += spaceW
 						}
 					}
-					if wordW > avail {
+					if boxW > 0 && len(line) > 0 && x+boxW > padX+contentW-indentRight {
+						flushLine()
+					}
+					if boxW == 0 && wordW > avail {
 						text = ellipsize(font, text, avail)
 						if w2, _, e := font.SizeUTF8(text); e == nil {
 							wordW = int32(w2)
@@ -4114,13 +4156,17 @@ func (l *webLayouter) layoutBlocks(blocks []webBlock, padX, contentW int32) {
 						Underline: run.Style.Underline,
 						Strike:    run.Style.Strike,
 						Href:      run.Style.Href,
-						HasBg:     run.Style.HasBg && !block.HasBg,
+						HasBg:     run.Style.HasBg && (!block.HasBg || boxW > 0),
 						Bg:        run.Style.Background,
 						Control:   run.Style.Control,
+						BoxW:      boxW, BoxH: boxH,
 					})
 					x += wordW
 					if x > lineMax {
 						lineMax = x
+					}
+					if boxH > int32(height) {
+						height = int(boxH)
 					}
 					if int32(height) > lineFontH {
 						lineFontH = int32(height)
@@ -4278,13 +4324,12 @@ func collectWebControls(layout *webLayout) []webLinkHit {
 			if j == i {
 				j = i + 1
 			}
-			hits = append(hits, webLinkHit{
-				Row:     rowIdx,
-				X:       startX,
-				W:       endX - startX,
-				Text:    strings.TrimSpace(label),
-				Control: ctrl,
-			})
+			hit := webLinkHit{Row: rowIdx, X: startX, W: endX - startX, Text: strings.TrimSpace(label), Control: ctrl}
+			if run := row.Runs[i]; run.BoxW > 0 && run.BoxH > 0 {
+				hit.W = run.BoxW
+				hit.Box = sdl.Rect{X: run.X, Y: row.Y, W: run.BoxW, H: run.BoxH}
+			}
+			hits = append(hits, hit)
 			i = j
 		}
 	}
@@ -4582,6 +4627,10 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				if !run.HasBg || run.Font == nil {
 					continue
 				}
+				if run.BoxW > 0 && run.BoxH > 0 {
+					fillRoundedRect(r, rect.X+run.X, y, run.BoxW, run.BoxH, 3, run.Bg)
+					continue
+				}
 				w, h, err := run.Font.SizeUTF8(run.Text)
 				if err != nil {
 					continue
@@ -4603,11 +4652,16 @@ func drawWebDocument(renderer *sdl.Renderer, config *Config, doc *webDocument, l
 				fillRoundedRect(r, startX, y, endX-startX+4, int32(h), 3, run.Bg)
 			}
 			for _, run := range row.Runs {
-				drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+run.X, y)
+				x, textY := rect.X+run.X, y
+				if run.BoxW > 0 && run.BoxH > 0 && run.Font != nil {
+					x += 6
+					textY += (run.BoxH - int32(run.Font.Height())) / 2
+				}
+				drawTextRun(r, config, run.Font, run.Text, run.Color, x, textY)
 				if run.Bold {
 					// One pixel of fake weight: the app ships one font face, and
 					// a second offset copy reads as bold at this size.
-					drawTextRun(r, config, run.Font, run.Text, run.Color, rect.X+run.X+1, y)
+					drawTextRun(r, config, run.Font, run.Text, run.Color, x+1, textY)
 				}
 				if (run.Underline || run.Strike) && run.Font != nil {
 					if w, _, err := run.Font.SizeUTF8(run.Text); err == nil {

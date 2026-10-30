@@ -68,6 +68,7 @@ settings such as `search_query` or `stream_url`.
 | `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country |
 | `tspUsername` | string | name used in the greeting |
 | `playbackResolution` | string | maximum video height, e.g. `"720"` |
+| `subtitleLanguage` | string | Subtitle language code for online video (Settings → General), e.g. `"en"`, `"es"`, or `"pt-BR"`; blank defaults to English. Turn on CC to fetch available manual or automatic captions with yt-dlp. |
 | `reducedMotion`, `lowPower` | bool | fewer animations / slower frame cadence |
 | `gridColumns`, `searchWidth` | int | Home grid width, search box width |
 | `dynamicBg` | bool | animated, weather-aware background instead of the ambient one |

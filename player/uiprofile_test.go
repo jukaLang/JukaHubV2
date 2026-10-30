@@ -130,6 +130,77 @@ func TestCompactCanvasMouseMapping(t *testing.T) {
 	}
 }
 
+// The panel's own aspect is the last resort for hardware the launcher cannot
+// name: the shipped 16:9 design drawn into a 4:3 display is letterboxed into a
+// strip with bars above and below, which is what a Brick whose model string
+// names no TrimUI device showed. A zero size must never count as 4:3.
+func TestPanelIsFourThree(t *testing.T) {
+	cases := []struct {
+		w, h int32
+		want bool
+	}{
+		{1024, 768, true},
+		{800, 600, true},
+		{960, 720, true},
+		{1280, 720, false},
+		{1280, 1024, false}, // 5:4
+		{480, 272, false},
+		{0, 0, false},
+		{1024, 0, false},
+		{-1024, 768, false},
+	}
+	for _, tc := range cases {
+		if got := panelIsFourThree(tc.w, tc.h); got != tc.want {
+			t.Errorf("panelIsFourThree(%d, %d) = %v, want %v", tc.w, tc.h, got, tc.want)
+		}
+	}
+}
+
+func TestApplyPanelCanvasFillsAFourThreePanel(t *testing.T) {
+	cfg := &Config{
+		Width:  1280,
+		Height: 720,
+		Scenes: []SceneConfig{{Name: "Main", Elements: []Element{
+			{Type: "button", X: 900, Y: 164, Width: "348", Height: "121"},
+		}}},
+	}
+	if !applyPanelCanvas(cfg, 1024, 768) {
+		t.Fatal("a 1024x768 panel did not get the compact canvas")
+	}
+	if cfg.Width != 960 || cfg.Height != 720 {
+		t.Fatalf("canvas = %dx%d, want 960x720", cfg.Width, cfg.Height)
+	}
+	if cfg.Variables.ScreenWidth != 960 || cfg.Variables.ScreenHeight != 720 {
+		t.Fatalf("screen variables = %dx%d, want 960x720",
+			cfg.Variables.ScreenWidth, cfg.Variables.ScreenHeight)
+	}
+	e := cfg.Scenes[0].Elements[0]
+	if e.X != 675 || e.Y != 164 || e.Width != "261" || e.Height != "121" {
+		t.Fatalf("element = %+v, want the design squeezed into the compact canvas", e)
+	}
+}
+
+func TestApplyPanelCanvasLeavesOtherPanelsAndDesignsAlone(t *testing.T) {
+	wide := &Config{Width: 1280, Height: 720}
+	if applyPanelCanvas(wide, 1280, 720) {
+		t.Error("a 16:9 panel must keep the wide canvas")
+	}
+	if wide.Width != 1280 {
+		t.Fatalf("a 16:9 panel was resized to %dx%d", wide.Width, wide.Height)
+	}
+	// A design that is already 4:3 is what its author drew; it is not remapped.
+	compact := &Config{Width: 960, Height: 720}
+	if applyPanelCanvas(compact, 1024, 768) {
+		t.Error("a 4:3 design must be left as authored")
+	}
+	if compact.Width != 960 {
+		t.Fatalf("a 4:3 design was resized to %dx%d", compact.Width, compact.Height)
+	}
+	if applyPanelCanvas(nil, 1024, 768) {
+		t.Error("a nil config was accepted")
+	}
+}
+
 // The compact canvas is a real viewport for the home layout too.
 func TestHomeLayoutFitsCompactCanvas(t *testing.T) {
 	h := NewHomeLayout(uiCanvasCompactW, uiCanvasCompactH)

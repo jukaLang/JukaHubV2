@@ -191,8 +191,10 @@ func TestDownloadVisibleRowRangeSkipsOffscreenRows(t *testing.T) {
 	const cursor, viewportH = 7000, int32(480)
 	scroll := downloadRowOffset(cursor, starts, rowH, gap, sectionH)
 	first, end := downloadVisibleRowRange(rows, scroll, viewportH, rowH, gap, sectionH, starts)
-	if first <= 0 || first >= cursor || end <= first || end-first > 8 {
-		t.Fatalf("visible range = [%d, %d) for cursor %d; expected a small window near the cursor", first, end, cursor)
+	// The scroll offset is the cursor row's own top, so the window starts on the
+	// cursor; what has to hold is that it holds the cursor and stays a screenful.
+	if first <= 0 || first > cursor || cursor >= end || end-first > 8 {
+		t.Fatalf("visible range = [%d, %d) for cursor %d; expected a small window holding the cursor", first, end, cursor)
 	}
 	if got := downloadRowOffset(first, starts, rowH, gap, sectionH); got > scroll || got+rowH <= scroll {
 		t.Errorf("first row %d at [%d,%d) does not overlap scroll position %d", first, got, got+rowH, scroll)

@@ -456,6 +456,7 @@ func packageListShoulder(s padShoulder) bool {
 	if count == 0 {
 		return false
 	}
+	packageRepoFocused = false
 	switch s {
 	case padL1:
 		packagesFocusIndex -= 8

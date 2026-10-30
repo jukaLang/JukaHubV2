@@ -168,8 +168,10 @@ func startMenuGroups(config *Config) []startMenuGroup {
 		{name: "Quit JukaHub", icon: "X", action: func(*Config) { requestAppExit() }},
 	}
 	// A button that cannot do anything on this firmware would only confuse;
-	// Quick Settings still reports the backend when it is missing.
-	if !IsWindows() && !wifiControlAvailable() {
+	// Quick Settings still reports the backend when it is missing. "Cannot do
+	// anything" means no radio to switch either: while the radio is simply off,
+	// the picker is the control that turns it on, so the row stays.
+	if !IsWindows() && !wifiEntryReachable() {
 		device = withoutStartMenuEntry(device, "Wi-Fi Networks")
 	}
 

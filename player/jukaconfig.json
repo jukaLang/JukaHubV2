@@ -3555,7 +3555,7 @@
           "triggerTarget": "",
           "triggerValue": "",
           "image": "",
-          "width": "580",
+          "width": "280",
           "height": "48",
           "video": "",
           "variable": "playbackResolution",
@@ -3563,7 +3563,7 @@
           "listVariable": "",
           "columns": 0,
           "rows": 0,
-          "placeholder": "Playback resolution height (e.g. 720)",
+          "placeholder": "Height (e.g. 720)",
           "style": "",
           "icon": "",
           "jsonPath": "",
@@ -3572,6 +3572,24 @@
           "externalAppReturn": "",
           "variableChange": "",
           "variableChangeValue": ""
+        },
+        {
+          "type": "label",
+          "text": "Subtitle Language",
+          "color": "$labelColor",
+          "x": 340,
+          "y": 286
+        },
+        {
+          "type": "input",
+          "color": "$labelColor",
+          "bgColor": "$inputColor",
+          "x": 340,
+          "y": 320,
+          "width": "280",
+          "height": "48",
+          "variable": "subtitleLanguage",
+          "placeholder": "Language code (default en)"
         },
         {
           "type": "label",

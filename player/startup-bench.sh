@@ -38,6 +38,22 @@ fi
 echo "building player..."
 go build -o "$bin" .
 
+# Windows resolves SDL from the executable's own folder, and every sample runs
+# from a fresh temp folder, so the DLLs have to travel with it: without them a
+# run dies at load time and the bench reports "cannot open shared object file".
+# build.bat copies them next to the player; the managed SDK keeps them in
+# .sdl2/<triplet>/bin.
+if [ "${OS:-}" = "Windows_NT" ]; then
+  for dll in SDL2.dll SDL2_image.dll SDL2_ttf.dll; do
+    for dir in . .sdl2/*/bin; do
+      if [ -f "$dir/$dll" ]; then
+        cp "$dir/$dll" "$work/"
+        break
+      fi
+    done
+  done
+fi
+
 # CI has no jukaconfig.json (it is a user file). The shipped device config is
 # the same schema and exercises the real home screen, so use it there.
 config="jukaconfig.json"

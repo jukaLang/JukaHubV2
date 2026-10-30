@@ -79,6 +79,7 @@ type Variables struct {
 	WeatherUnit        string            `json:"weatherUnit"`
 	TSPUsername        string            `json:"tspUsername"`
 	PlaybackResolution string            `json:"playbackResolution"`
+	SubtitleLanguage   string            `json:"subtitleLanguage,omitempty"`
 	ReducedMotion      bool              `json:"reducedMotion"`
 	LowPower           bool              `json:"lowPower"`
 	// PowerMode is the named selector ("battery"/"balanced"/"performance"
@@ -225,6 +226,7 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		"weatherUnit":        true,
 		"tspUsername":        true,
 		"playbackResolution": true,
+		"subtitleLanguage":   true,
 		"gridColumns":        true,
 		"searchWidth":        true,
 		"dynamicBg":          true,

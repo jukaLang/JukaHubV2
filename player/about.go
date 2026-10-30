@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -66,16 +67,23 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		Centered:     true,
 	})
 
-	// Two columns of cards, then a full-width card for the licences. Heights
-	// come from the panel, so adding a credit line cannot push text into the
-	// footer band again.
+	// Two rows of two cards: build and credits on top, the device evidence and
+	// the licences below. The row height is measured from the panel rather than
+	// fixed, so the four cards fill the content band on both the wide and the
+	// compact (4:3) canvas and no text can be pushed into the footer band.
 	gap := int32(24)
+	rowGap := int32(16)
 	cardY := headerBottom + 20
 	cardW := (screenWidth - margin*2 - gap) / 2
-	rowH := int32(224)
+	rowH := (bottom - cardY - rowGap) / 2
+	if rowH < 140 {
+		rowH = 140
+	}
+	row2Y := cardY + rowH + rowGap
 	buildRect := sdl.Rect{X: margin, Y: cardY, W: cardW, H: rowH}
 	creditsRect := sdl.Rect{X: margin + cardW + gap, Y: cardY, W: cardW, H: rowH}
-	srcRect := sdl.Rect{X: margin, Y: cardY + rowH + 16, W: screenWidth - margin*2, H: bottom - (cardY + rowH + 16)}
+	deviceRect := sdl.Rect{X: margin, Y: row2Y, W: cardW, H: bottom - row2Y}
+	srcRect := sdl.Rect{X: margin + cardW + gap, Y: row2Y, W: cardW, H: bottom - row2Y}
 
 	// Measured this frame so the render test can prove nothing painted past a
 	// card: the licence list used to be a single 8-line column, which needs
@@ -151,10 +159,28 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		y = note(y, 22)
 	}
 
-	// Open source licences. Two columns: the card is full width, so eight
-	// licences stack four deep and clear the card's bottom edge with room to
-	// spare. renderWithClip is the hard guarantee — a future ninth licence can
-	// lose a line inside the card but can never paint over the border again.
+	// Device identification: the evidence DetectDevice used, so a handheld that
+	// is named — or is not — can be checked on the device itself instead of in
+	// the log. The rows are the same facts the diagnostics report carries.
+	y = cardTitle(deviceRect, "Device")
+	deviceRows := aboutDeviceRows(deviceIdentityReport())
+	devLabelW := int32(0)
+	for _, row := range deviceRows {
+		if lw, _, _ := font.SizeUTF8(row.label); int32(lw) > devLabelW {
+			devLabelW = int32(lw)
+		}
+	}
+	devValueW := deviceRect.W - 48 - devLabelW - 18
+	for _, row := range deviceRows {
+		renderText(renderer, config, font, row.label, ColorTextTertiary(), deviceRect.X+24, y)
+		renderText(renderer, config, font, ellipsize(font, row.value, devValueW), ColorTextSecondary(), deviceRect.X+24+devLabelW+18, y)
+		y = note(y, 21)
+	}
+
+	// Open source licences. One column now that the card shares its row: eight
+	// licences fit the row height on both canvases. renderWithClip is the hard
+	// guarantee — a future ninth licence can lose a line inside the card but can
+	// never paint over the border again, and the count that fits is measured.
 	y = cardTitle(srcRect, "Open Source")
 	licenses := []string{
 		"Go - BSD License",
@@ -166,20 +192,15 @@ func renderAbout(renderer *sdl.Renderer, config *Config) {
 		"gopsutil - BSD License",
 		"gjson - MIT License",
 	}
-	colH := int32(20)
-	colGap := int32(28)
-	colW := (srcRect.W - 48 - colGap) / 2
-	half := (len(licenses) + 1) / 2
+	const colH = int32(20)
+	shown := aboutLicenceRows(licenses, srcRect.H, colH)
 	renderWithClip(renderer, srcRect.X+1, srcRect.Y+1, srcRect.W-2, srcRect.H-2, func(_ *sdl.Renderer) {
-		for i, lic := range licenses {
-			col := i / half
-			row := i % half
-			lx := srcRect.X + 24 + int32(col)*(colW+colGap)
-			ly := y + int32(row)*colH
-			renderText(renderer, config, font, ellipsize(font, lic, colW), ColorTextTertiary(), lx, ly)
+		for i, lic := range shown {
+			ly := y + int32(i)*colH
+			renderText(renderer, config, font, ellipsize(font, lic, srcRect.W-48), ColorTextTertiary(), srcRect.X+24, ly)
 		}
-		// Account for every row the loop would have drawn, clipped or not.
-		note(y+int32(half-1)*colH, colH)
+		// Account for every row the loop drew, clipped or not.
+		note(y+int32(len(shown)-1)*colH, colH)
 	})
 
 	// The clip is reset below; record the card's own edge as the content bound
@@ -232,6 +253,96 @@ func (aboutScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool
 }
 
 func init() { registerScene(aboutScene{sceneBase{name: "About"}}) }
+
+// aboutLicenceRows trims the licence list to the rows a card can hold and says
+// how many were left out. The card is measured on every canvas, so a short one
+// owes the reader a count instead of a silently clipped list.
+func aboutLicenceRows(licenses []string, cardH, lineH int32) []string {
+	if cardH <= 0 || lineH <= 0 {
+		return licenses
+	}
+	fits := int((cardH - 54 - 8) / lineH)
+	if fits < 1 {
+		fits = 1
+	}
+	if len(licenses) <= fits {
+		return licenses
+	}
+	moved := len(licenses) - (fits - 1)
+	trimmed := append([]string{}, licenses[:fits-1]...)
+	return append(trimmed, fmt.Sprintf("+%d more - see NOTICE", moved))
+}
+
+// aboutRow is one label/value line on an About card.
+type aboutRow struct{ label, value string }
+
+// aboutDeviceRows is the identification evidence as the About screen shows it:
+// the model, which source named it, the panel the image reports, the model
+// names the firmware carries and the kernel's own board description. It takes
+// the values rather than reading them so the wording can be tested without a
+// device, and it drops the rows a platform does not expose instead of printing
+// empty labels.
+func aboutDeviceRows(model DeviceModel, source string, id deviceIdentity) []aboutRow {
+	found := firmwareEvidenceNames(id)
+	firmware := strings.Join(found, ", ")
+	if firmware == "" {
+		firmware = "no model name"
+	}
+	identified := source
+	if identified == "" {
+		identified = "not identified"
+	}
+	panel := "not detected"
+	if id.PanelW > 0 && id.PanelH > 0 {
+		panel = panelLabel(id.PanelW, id.PanelH)
+	}
+	rows := []aboutRow{
+		{"Model", deviceDisplayName(model)},
+		{"Identified by", identified},
+		{"Panel", panel},
+		{"Firmware", firmware},
+	}
+	if tree := strings.TrimSpace(id.Model); tree != "" {
+		rows = append(rows, aboutRow{"Device tree", tree})
+	}
+	if compatible := strings.TrimSpace(id.Compatible); compatible != "" {
+		rows = append(rows, aboutRow{"Compatible", compatible})
+	}
+	return rows
+}
+
+// firmwareEvidenceNames lists the model names the image's own files carry, in
+// the specificity order firmwareModelNames defines. A longer name contains the
+// shorter one ("Trimui Smart Pro S" holds "Trimui Smart Pro"), so only the
+// longest name at each site is reported: one model must not read as two.
+func firmwareEvidenceNames(id deviceIdentity) []string {
+	matched := make([]bool, len(firmwareModelNames))
+	for i, name := range firmwareModelNames {
+		for _, text := range id.Names {
+			if strings.Contains(strings.ToLower(text), strings.ToLower(name)) {
+				matched[i] = true
+				break
+			}
+		}
+	}
+	var found []string
+	for i, name := range firmwareModelNames {
+		if !matched[i] {
+			continue
+		}
+		contained := false
+		for j, other := range firmwareModelNames {
+			if i != j && matched[j] && strings.Contains(other, name) {
+				contained = true
+				break
+			}
+		}
+		if !contained {
+			found = append(found, name)
+		}
+	}
+	return found
+}
 
 // deviceCreditName is the short, human name of the handheld the About screen
 // credits. It keeps the SoC suffix (TG3040…) of deviceDisplayName out of a

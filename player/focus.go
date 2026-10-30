@@ -133,7 +133,14 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 	// shallow angles whose vectors would hijack Left/Right along the grid rows.
 	// The four bar buttons connect left-to-right in their measured order; Up/
 	// Down between the content and the bar is routed by StepChrome.
-	if scene.Layout != "home" {
+	//
+	// A scene with no focusable content of its own is a page that owns the pad —
+	// the Playtime badge list, a module screen that draws its own rows. Adding
+	// the bar there would leave its buttons as the only targets, so every
+	// Up/Down press would walk the bar (and the scene's key handler would never
+	// see the D-pad) instead of scrolling the page. Those screens keep the bar
+	// as a tap target and reach it through the Start menu.
+	if scene.Layout != "home" && len(nodes) > 0 {
 		var chromeIdx []int
 		addNode := func(idx int, rect sdl.Rect, typ, label string) {
 			nodes = append(nodes, FocusNode{Index: idx, Rect: rect, Type: typ, Label: label})
@@ -303,7 +310,7 @@ func (fe *FocusEngine) Navigate(action Action) int {
 
 	neighbors := fe.graph.Edges[fe.current]
 	best := -1
-	bestDist := int32(math.MaxInt32)
+	bestDist := int64(math.MaxInt64)
 
 	curNode := fe.graph.Nodes[fe.current]
 	cx := curNode.Rect.X + curNode.Rect.W/2
@@ -322,7 +329,14 @@ func (fe *FocusEngine) Navigate(action Action) int {
 		if !isValidDirection(dx, dy, action) {
 			continue
 		}
-		dist := dx*dx + dy*dy
+		// Prefer a target aligned with the requested direction over a closer
+		// diagonal one. Otherwise Left from a right-hand field can jump to an
+		// input in the row above, making its neighboring field unreachable.
+		primary, cross := int64(dx), int64(dy)
+		if action == ActionNavigateUp || action == ActionNavigateDown {
+			primary, cross = cross, primary
+		}
+		dist := primary*primary + 9*cross*cross
 		if dist < bestDist {
 			bestDist = dist
 			best = ni

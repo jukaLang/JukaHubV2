@@ -382,6 +382,66 @@ func focusRingBounds(f *probeFrame, rect sdl.Rect, match func(sdl.Color) bool) (
 	return sdl.Rect{X: x0, Y: y0, W: x1 - x0 + 1, H: y1 - y0 + 1}, true
 }
 
+func TestPackageRepositoryDisplayAndControls(t *testing.T) {
+	for _, tc := range []struct {
+		raw, label, target string
+		ok                 bool
+	}{
+		{"https://github.com/org/repo/releases/download/v1/pkg.zip", "org/repo", "https://github.com/org/repo", true},
+		{"https://raw.githubusercontent.com/org/repo/main/pkg.zip", "org/repo", "https://github.com/org/repo", true},
+		{"https://api.github.com/repos/org/repo/releases/latest", "org/repo", "https://github.com/org/repo", true},
+		{"https://example.com/files/pkg.zip", "example.com/files/pkg.zip", "https://example.com/files/pkg.zip", true},
+		{"https://github.com@evil.example/x", "", "", false},
+		{"javascript:alert(1)", "", "", false},
+	} {
+		label, target, ok := packageRepository(tc.raw)
+		if label != tc.label || target != tc.target || ok != tc.ok {
+			t.Errorf("%q = %q, %q, %v", tc.raw, label, target, ok)
+		}
+	}
+	withPackagesForTest(t, []Package{{Name: "Sample", Download: "https://github.com/org/repo/archive/main.zip"}}, 0)
+	packageRepoFocused = false
+	cfg := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	pressPackageKey(cfg, sdl.K_RIGHT)
+	if !packageRepoFocused {
+		t.Fatal("Right did not select source")
+	}
+	pressPackageKey(cfg, sdl.K_b)
+	if packageRepoFocused {
+		t.Fatal("B did not return to list")
+	}
+	packageListController(&sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_DPAD_RIGHT}, cfg)
+	if !packageRepoFocused {
+		t.Fatal("pad Right did not select source")
+	}
+	packageListController(&sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_B}, cfg)
+	if packageRepoFocused {
+		t.Fatal("pad B did not return to list")
+	}
+}
+
+func TestPackageRepositoryOpensInBrowser(t *testing.T) {
+	withPackagesForTest(t, []Package{{Name: "Sample", Download: "https://github.com/org/repo/archive/main.zip"}}, 0)
+	isolateSceneSwitch(t)
+	oldScene, oldHome := currentSceneIndex, browserHomeLoaded
+	t.Cleanup(func() { currentSceneIndex, browserHomeLoaded = oldScene, oldHome; packageRepoFocused = false })
+	elem := Element{Type: "packagelist", X: 60, Y: 110, Width: "1160", Height: "500"}
+	cfg := &Config{Scenes: []SceneConfig{{Name: "Packages", Elements: []Element{elem}}}, Variables: Variables{Custom: map[string]interface{}{}}}
+	currentSceneIndex = 0
+	packageListController(&sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_DPAD_RIGHT}, cfg)
+	packageListController(&sdl.ControllerButtonEvent{Button: sdl.CONTROLLER_BUTTON_A}, cfg)
+	if got := cfg.Variables.Custom[textBrowserURLVariable]; got != "https://github.com/org/repo" {
+		t.Fatalf("pad opened %v", got)
+	}
+	transitionPhase = "none"
+	cfg.Variables.Custom[textBrowserURLVariable] = ""
+	r := packageRepositoryRect(elem)
+	handlePackageMouseClick(r.X+r.W/2, r.Y+r.H/2, cfg)
+	if got := cfg.Variables.Custom[textBrowserURLVariable]; got != "https://github.com/org/repo" {
+		t.Fatalf("tap opened %v", got)
+	}
+}
+
 // withPackagesForTest points the list at pkgs with the given focus and takes
 // any open row menu down afterwards.
 func withPackagesForTest(t *testing.T, pkgs []Package, focus int) {
@@ -397,6 +457,7 @@ func withPackagesForTest(t *testing.T, pkgs []Package, focus int) {
 		packagesFocusIndex = prevFocus
 		packagesMutex.Unlock()
 		closePackageActions()
+		packageRepoFocused = false
 	})
 }
 

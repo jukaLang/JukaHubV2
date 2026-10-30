@@ -28,6 +28,7 @@ const (
 	// The picture stops short of the panel's bottom edge so the visible
 	// progress bar sits inside the rounded corner instead of squaring it off.
 	videoMiniProgressH = int32(6)
+	videoMiniHintH     = int32(78)
 )
 
 // videoMiniHitRects is the layout of the last drawn window. A click falls back
@@ -169,7 +170,7 @@ func videoMiniPanelRect() sdl.Rect {
 	if w < 1 {
 		w = 1
 	}
-	h := videoMiniHeaderH + videoMiniProgressH + w*9/16
+	h := videoMiniHeaderH + videoMiniProgressH + videoMiniHintH + w*9/16
 	if h > screenHeight-videoMiniMargin*2 {
 		h = screenHeight - videoMiniMargin*2
 	}
@@ -190,7 +191,7 @@ func computeVideoMiniLayout(r sdl.Rect) {
 		panel: r,
 		body: sdl.Rect{
 			X: r.X, Y: r.Y + videoMiniHeaderH,
-			W: r.W, H: max32(0, r.H-videoMiniHeaderH-videoMiniProgressH),
+			W: r.W, H: max32(0, r.H-videoMiniHeaderH-videoMiniProgressH-videoMiniHintH),
 		},
 		close: sdl.Rect{X: r.X + r.W - videoMiniCloseSz, Y: r.Y, W: videoMiniCloseSz, H: videoMiniHeaderH},
 	}
@@ -225,9 +226,10 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 
 	renderWithClip(renderer, frame.X, frame.Y, frame.W, frame.H, func(rr *sdl.Renderer) {
 		drawVideoFrameArea(rr, tex, frame.X, frame.Y, frame.W, frame.H)
+		renderVideoSubtitles(rr, config, frame.X, frame.Y, frame.W, frame.H, state.progress*state.duration, 12)
 	})
 
-	barY := r.Y + r.H - videoMiniProgressH + 1
+	barY := frame.Y + frame.H + 1
 	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 120)
 	renderer.FillRect(&sdl.Rect{X: frame.X + 2, Y: barY, W: max32(0, frame.W-4), H: 3})
 	if state.progress > 0 {
@@ -254,12 +256,38 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 			r.X+10, r.Y+(videoMiniHeaderH-int32(th))/2)
 	}
 
+	// Keep touch and pad instructions on the window itself rather than stealing
+	// the underlying scene's footer. A/X apply only while Now Playing is focused.
+	if hintFont := getFontSized(config, "small", 16); hintFont != nil {
+		for i, hint := range videoMiniHints() {
+			hint = ellipsize(hintFont, hint, r.W-16)
+			tw, _, _ := hintFont.SizeUTF8(hint)
+			renderText(renderer, config, hintFont, hint, ColorTextPrimary(),
+				r.X+(r.W-int32(tw))/2, barY+videoMiniProgressH+int32(i)*17)
+		}
+	}
+
 	close := videoMiniHits.close
 	fillRoundedRect(renderer, close.X+4, close.Y+4, close.W-8, close.H-8, 6,
 		WithAlpha(ColorSurfaceRaised, 210))
 	drawCloseIcon(renderer, close.X+close.W/2, close.Y+close.H/2, 5, ColorTextPrimary())
 
 	strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, RadiusMD, 1, WithAlpha(ColorBorder, 220))
+}
+
+func videoMiniHints() []string {
+	return []string{"Tap video: open", "Tap X icon: close", "Focus Now Playing", "A open  X close"}
+}
+
+// closeFocusedMiniVideo lets the now-playing focus target close only the
+// floating video, without taking X away from the scene's other controls.
+func closeFocusedMiniVideo() bool {
+	if !videoMiniVisible() {
+		return false
+	}
+	PlayBackSound()
+	StopEmbeddedPlayback()
+	return true
 }
 
 // handleVideoMiniClick consumes a tap on the floating window: the picture goes
