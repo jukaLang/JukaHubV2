@@ -11,7 +11,11 @@ package main
 // The icon checks are pure geometry, so they run without SDL; the animation
 // checks drive the shared keyframe helpers directly.
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/veandco/go-sdl2/sdl"
+)
 
 // homeActionCards lists the cards drawn by drawActionCard (Continue, Clock and
 // Exit use dedicated renderers and are covered separately).
@@ -30,55 +34,50 @@ func homeActionCards(h *HomeLayout) []HomeFocusID {
 	return ids
 }
 
-// TestHomeActionCardDrawsSingleIcon pins the duplicated-icon bug: the layout
-// must pick one composition (beside-the-label or stacked) before drawing, so
-// no card is ever given a wide tile and a stacked tile at the same time.
-func TestHomeActionCardDrawsSingleIcon(t *testing.T) {
+// cardBadgeRect mirrors drawActionCard's badge placement. The design sheet has
+// exactly one tile anatomy, so the badge is always the 48px square in the card's
+// top-left corner, inset by the card padding.
+func cardBadgeRect(card sdl.Rect, width, height int32) sdl.Rect {
+	pad := scaleX(homeTilePad, width)
+	size := min32(scaleX(homeIconSize, width), scaleY(homeIconSize, height))
+	if maxIcon := min32(card.W-pad*2, card.H-pad*2-scaleY(homeGlyphSize, height)); size > maxIcon {
+		size = maxIcon
+	}
+	return sdl.Rect{X: card.X + pad, Y: card.Y + pad, W: size, H: size}
+}
+
+// TestHomeActionCardDrawsSingleIconBadge pins the duplicated-icon bug and the
+// one-composition rule: every action card resolves to exactly one icon badge,
+// in its top-left corner, and the label sits below it inside the card.
+func TestHomeActionCardDrawsSingleIconBadge(t *testing.T) {
 	snapshotHomeGlobals(t)
 	screenWidth, screenHeight = probeW, probeH
 	layout := NewHomeLayout(probeW, probeH)
 
-	pad := scaleX(20, probeW)
+	wantSize := min32(scaleX(homeIconSize, probeW), scaleY(homeIconSize, probeH))
+	pad := scaleX(homeTilePad, probeW)
 	for _, id := range homeActionCards(layout) {
 		item := layout.Items[id]
-		tile, stacked, ok := homeActionIconTile(item.Rect, probeW, probeH)
-		if !ok {
-			t.Errorf("%s: no icon tile resolved for card %+v", id, item.Rect)
-			continue
+		badge := cardBadgeRect(item.Rect, probeW, probeH)
+		if badge.W != badge.H {
+			t.Errorf("%s: icon badge is not square: %+v", id, badge)
 		}
-		if tile.W != tile.H {
-			t.Errorf("%s: icon tile is not square: %+v", id, tile)
+		if badge.W != wantSize {
+			t.Errorf("%s: icon badge size = %d, want %d", id, badge.W, wantSize)
 		}
-		if tile.X < item.Rect.X || tile.Y < item.Rect.Y ||
-			tile.X+tile.W > item.Rect.X+item.Rect.W ||
-			tile.Y+tile.H > item.Rect.Y+item.Rect.H {
-			t.Errorf("%s: icon tile %+v escapes card %+v", id, tile, item.Rect)
+		if badge.X != item.Rect.X+pad || badge.Y != item.Rect.Y+pad {
+			t.Errorf("%s: icon badge %+v is not in the card's top-left corner (card %+v)", id, badge, item.Rect)
 		}
+		if badge.X+badge.W > item.Rect.X+item.Rect.W || badge.Y+badge.H > item.Rect.Y+item.Rect.H {
+			t.Errorf("%s: icon badge %+v escapes card %+v", id, badge, item.Rect)
+		}
+	}
 
-		// Favorites and Browser share the bottom row as half-width cards, so
-		// they use the same stacked composition as Files and Settings.
-		narrow := id == HomeFocusFiles || id == HomeFocusSettings ||
-			id == HomeFocusFavorites || id == HomeFocusBrowser
-		if stacked != narrow {
-			t.Errorf("%s: stacked = %v, want %v", id, stacked, narrow)
-		}
-		if stacked {
-			// The stacked tile is the small centred one; a wide left-aligned
-			// tile is what used to sit underneath it.
-			if want := scaleX(40, probeW); tile.W != want {
-				t.Errorf("%s: stacked icon size = %d, want %d", id, tile.W, want)
-			}
-			if center := item.Rect.X + item.Rect.W/2; tile.X+tile.W/2 != center {
-				t.Errorf("%s: stacked icon is not centred: tile %+v, card %+v", id, tile, item.Rect)
-			}
-		} else {
-			if want := min32(scaleX(56, probeW), scaleY(56, probeH)); tile.W != want {
-				t.Errorf("%s: horizontal icon size = %d, want %d", id, tile.W, want)
-			}
-			if tile.X != item.Rect.X+pad {
-				t.Errorf("%s: horizontal icon x = %d, want %d", id, tile.X, item.Rect.X+pad)
-			}
-		}
+	// Continue and Media have dedicated renderers, but they carry a badge too:
+	// the header/hero pair must not drift back to a different anatomy.
+	continueCard := layout.Items[HomeFocusContinue].Rect
+	if cardBadgeRect(continueCard, probeW, probeH).H <= 0 {
+		t.Errorf("the Continue card has no icon badge: %+v", continueCard)
 	}
 }
 

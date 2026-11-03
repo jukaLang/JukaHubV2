@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>JukaHub — Tube · 16:9 gamepad redesign</title>
+<style>
+  /* ── Design tokens ────────────────────────────────────────────────────
+     8px grid, 24px safe margins, one accent (cyan), 16px cards.
+     No :hover rules anywhere — this screen is driven by D-pad only.     */
+  :root{
+    --accent:#22d3ee;
+    --accent-soft:rgba(34,211,238,.14);
+    --accent-line:rgba(34,211,238,.55);
+    --ink:#eaf2f7;
+    --ink-2:#a9bcc8;
+    --ink-3:#71858f;
+    --bg-0:#05080c;
+    --glass:rgba(18,26,35,.62);
+    --glass-2:rgba(24,34,45,.72);
+    --stroke:rgba(255,255,255,.10);
+    --stroke-strong:rgba(255,255,255,.16);
+    --r-card:16px;
+    --r-pill:999px;
+    --u:8px;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:#020406;
+    display:grid;place-items:center;
+    font-family:"Inter","Segoe UI",system-ui,-apple-system,sans-serif;
+    color:var(--ink);
+    -webkit-font-smoothing:antialiased;
+    overflow:hidden;
+  }
+  /* The stage is a real 1280×720 device; JS scales it to the window. */
+  .stage{
+    width:1280px;height:720px;position:relative;flex:none;
+    transform-origin:center center;
+    background:
+      radial-gradient(120% 120% at 12% -10%, rgba(34,211,238,.10), transparent 55%),
+      radial-gradient(90% 90% at 100% 0%, rgba(59,130,246,.10), transparent 60%),
+      linear-gradient(180deg,#060a10 0%,#04070b 100%);
+    border-radius:20px;overflow:hidden;
+    padding:24px;                 /* 24px safe margins */
+    display:flex;flex-direction:column;gap:8px;
+  }
+  .stage::after{ /* faint glass grain so surfaces read as panels, not flat fills */
+    content:"";position:absolute;inset:0;pointer-events:none;opacity:.35;
+    background-image:radial-gradient(rgba(255,255,255,.045) 1px, transparent 1px);
+    background-size:3px 3px;mix-blend-mode:overlay;
+  }
+
+  /* ── Focus ring: the only visual difference between controls ─────────── */
+  .focusable{outline:none;position:relative}
+  .focusable.is-focused{
+    box-shadow:
+      0 0 0 2px var(--bg-0),
+      0 0 0 4px var(--accent),
+      0 0 22px 2px rgba(34,211,238,.35);
+    z-index:3;
+  }
+  .focusable.is-focused .icon{color:var(--accent)}
+
+  /* ── Status bar ─────────────────────────────────────────────────────── */
+  .statusbar{
+    height:32px;flex:none;display:flex;align-items:center;justify-content:space-between;
+    font-size:13px;color:var(--ink-2);z-index:2;
+  }
+  .status-left,.status-right{display:flex;align-items:center;gap:16px}
+  .clock{font-size:15px;font-weight:600;color:var(--ink);letter-spacing:.01em;font-variant-numeric:tabular-nums}
+  .status-item{display:flex;align-items:center;gap:8px}
+  .status-item .icon{width:16px;height:16px;color:var(--ink-3)}
+  .bell{
+    width:32px;height:32px;border-radius:var(--r-pill);
+    background:var(--glass);border:1px solid var(--stroke);
+    display:grid;place-items:center;cursor:pointer;
+  }
+  .bell .icon{width:18px;height:18px;color:var(--ink-2)}
+  .battery{width:26px;height:13px;border:1.5px solid var(--ink-3);border-radius:4px;position:relative;display:block}
+  .battery::after{content:"";position:absolute;right:-4px;top:3px;width:2px;height:5px;background:var(--ink-3);border-radius:1px}
+  .battery i{position:absolute;inset:1.5px;width:64%;background:var(--accent);border-radius:2px}
+
+  /* ── Search row ─────────────────────────────────────────────────────── */
+  .searchrow{height:48px;flex:none;display:flex;align-items:center;gap:8px;z-index:2}
+  .searchfield{
+    flex:1;height:48px;display:flex;align-items:center;gap:12px;padding:0 16px;
+    border-radius:var(--r-card);
+    background:linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.025));
+    border:1px solid var(--stroke);
+    backdrop-filter:blur(18px) saturate(140%);
+    font-size:15px;color:var(--ink-3);
+  }
+  .searchfield .icon{width:20px;height:20px;color:var(--ink-3);flex:none}
+  .searchfield .caret{width:1.5px;height:18px;background:var(--accent);border-radius:1px;animation:blink 1.1s steps(1) infinite}
+  @keyframes blink{50%{opacity:0}}
+  .btn{
+    height:48px;padding:0 20px;border-radius:var(--r-card);cursor:pointer;
+    display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;
+    background:var(--glass-2);border:1px solid var(--stroke-strong);color:var(--ink);
+    backdrop-filter:blur(18px) saturate(140%);
+  }
+  .btn .icon{width:20px;height:20px}
+  .btn-primary{
+    background:linear-gradient(180deg,rgba(34,211,238,.22),rgba(34,211,238,.10));
+    border-color:var(--accent-line);color:#eafcff;
+  }
+
+  /* ── Segmented tabs ─────────────────────────────────────────────────── */
+  .tabs{
+    height:40px;flex:none;align-self:flex-start;display:flex;align-items:center;gap:4px;padding:4px;
+    border-radius:var(--r-pill);background:var(--glass);border:1px solid var(--stroke);
+    backdrop-filter:blur(18px) saturate(140%);z-index:2;
+  }
+  .tab{
+    height:32px;padding:0 16px;border-radius:var(--r-pill);cursor:pointer;
+    display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600;color:var(--ink-2);
+  }
+  .tab .icon{width:16px;height:16px}
+  .tab[aria-selected="true"]{background:var(--accent-soft);color:var(--accent);box-shadow:inset 0 0 0 1px rgba(34,211,238,.35)}
+  .tab[aria-selected="true"] .icon{color:var(--accent)}
+
+  /* ── Hero video ─────────────────────────────────────────────────────── */
+  .hero{
+    position:relative;flex:1;min-height:0;margin-top:8px;
+    border-radius:var(--r-card);overflow:hidden;
+    border:1px solid var(--stroke);
+    background:#000;
+    box-shadow:0 24px 60px -20px rgba(0,0,0,.9), inset 0 1px 0 rgba(255,255,255,.06);
+    z-index:1;
+  }
+  /* Stand-in for the video frame: a cinematic still, cropped to fill the band. */
+  .frame{
+    position:absolute;inset:0;
+    background:
+      radial-gradient(55% 70% at 22% 30%, rgba(34,211,238,.30), transparent 62%),
+      radial-gradient(45% 60% at 78% 22%, rgba(99,102,241,.26), transparent 60%),
+      radial-gradient(70% 90% at 50% 120%, rgba(8,47,60,.9), transparent 70%),
+      linear-gradient(165deg,#0a1a22 0%,#0b2030 45%,#050a10 100%);
+  }
+  .frame::before{ /* horizon + bloom, so it reads as footage rather than a gradient */
+    content:"";position:absolute;left:-10%;right:-10%;top:58%;height:1px;
+    background:linear-gradient(90deg,transparent,rgba(34,211,238,.55),transparent);
+    filter:blur(.4px);box-shadow:0 0 60px 12px rgba(34,211,238,.18);
+  }
+  .frame::after{ /* vignette */
+    content:"";position:absolute;inset:0;
+    background:radial-gradient(120% 100% at 50% 45%, transparent 45%, rgba(0,0,0,.55) 100%);
+  }
+
+  /* Title block: overlaid top-left, inside the 24px safe margin of the card. */
+  .titleblock{position:absolute;left:24px;top:24px;max-width:644px;z-index:2}
+  .chip{
+    display:inline-flex;align-items:center;gap:8px;height:24px;padding:0 10px;
+    border-radius:var(--r-pill);font-size:11px;font-weight:700;letter-spacing:.08em;
+    color:var(--accent);background:rgba(6,20,26,.62);border:1px solid rgba(34,211,238,.42);
+    backdrop-filter:blur(14px);text-transform:uppercase;
+  }
+  .chip .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);box-shadow:0 0 8px var(--accent)}
+  .chip.paused{color:var(--ink-2);border-color:rgba(255,255,255,.26)}
+  .chip.paused .dot{background:var(--ink-2);box-shadow:none}
+  .title{margin-top:12px;font-size:22px;line-height:1.25;font-weight:650;letter-spacing:-.01em;
+    text-shadow:0 2px 18px rgba(0,0,0,.75)}
+  .channel{margin-top:4px;font-size:13px;color:var(--ink-2);text-shadow:0 1px 10px rgba(0,0,0,.8)}
+  .channel b{color:var(--ink);font-weight:600}
+
+  /* ── Auto-hiding transport bar ──────────────────────────────────────── */
+  .chrome{
+    position:absolute;left:0;right:0;bottom:0;z-index:4;
+    padding:0 24px 24px;
+    background:linear-gradient(180deg,transparent,rgba(4,8,12,.55) 28%,rgba(4,8,12,.88) 100%);
+    transition:opacity .28s ease, transform .28s ease;
+  }
+  .titleblock{transition:opacity .28s ease}
+  .video-hidden .chrome{opacity:0;transform:translateY(8px);pointer-events:none}
+  .video-hidden .titleblock{opacity:0}
+
+  .bar{
+    border-radius:var(--r-card);
+    background:var(--glass);border:1px solid var(--stroke);
+    backdrop-filter:blur(24px) saturate(150%);
+    padding:12px 16px 8px;
+    box-shadow:0 12px 32px -12px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.07);
+  }
+
+  /* Thick seek bar with a large scrub handle and time labels at each end. */
+  .seekrow{display:flex;align-items:center;gap:16px;height:32px}
+  .time{font-size:12px;font-variant-numeric:tabular-nums;color:var(--ink-2);flex:none;min-width:40px}
+  .time.end{text-align:right;color:var(--ink-3)}
+  .seek{
+    position:relative;flex:1;height:32px;display:flex;align-items:center;cursor:pointer;
+    border-radius:var(--r-pill);
+  }
+  .track{position:relative;width:100%;height:10px;border-radius:var(--r-pill);background:rgba(255,255,255,.14);overflow:hidden}
+  .buffer{position:absolute;inset:0;width:64%;background:rgba(255,255,255,.16)}
+  .played{position:absolute;inset:0;width:34%;background:linear-gradient(90deg,#12a5bd,var(--accent));border-radius:var(--r-pill);box-shadow:0 0 16px rgba(34,211,238,.5)}
+  .handle{
+    position:absolute;left:34%;top:50%;width:24px;height:24px;margin-left:-12px;margin-top:-12px;
+    border-radius:50%;background:#eafcff;border:3px solid var(--accent);
+    box-shadow:0 0 0 4px rgba(34,211,238,.18),0 6px 16px rgba(0,0,0,.55);
+    transition:transform .12s ease;
+  }
+  .seek.is-focused .handle{transform:scale(1.12)}
+  .seek.is-focused{box-shadow:none}
+  .seek.is-focused .track{box-shadow:0 0 0 2px var(--bg-0),0 0 0 4px var(--accent),0 0 18px rgba(34,211,238,.35)}
+
+  /* Transport buttons */
+  .transport{display:flex;align-items:center;justify-content:space-between;height:56px;margin-top:4px}
+  .group{display:flex;align-items:center;gap:8px}
+  .tbtn{
+    width:48px;height:48px;border-radius:12px;display:grid;place-items:center;cursor:pointer;
+    background:transparent;border:1px solid transparent;color:var(--ink);
+  }
+  .tbtn .icon{width:24px;height:24px;color:var(--ink-2)}
+  .tbtn.is-focused .icon{color:var(--accent)}
+  .tbtn.play{
+    width:56px;height:56px;border-radius:50%;
+    background:linear-gradient(180deg,rgba(34,211,238,.24),rgba(34,211,238,.14));
+    border:1px solid var(--accent-line);
+    box-shadow:0 0 24px rgba(34,211,238,.22);
+  }
+  .tbtn.play .icon{width:26px;height:26px;color:#eafcff}
+  .tbtn[aria-pressed="true"]{background:var(--accent-soft);border-color:rgba(34,211,238,.38)}
+  .tbtn[aria-pressed="true"] .icon{color:var(--accent)}
+  .speed{
+    width:auto;min-width:56px;padding:0 12px;border-radius:12px;height:40px;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink);
+    background:rgba(255,255,255,.06);border:1px solid var(--stroke);
+  }
+  .divider{width:1px;height:24px;background:var(--stroke);margin:0 8px}
+
+  /* ── Footer hints ───────────────────────────────────────────────────── */
+  .hints{
+    height:24px;flex:none;display:flex;align-items:center;justify-content:space-between;
+    font-size:11px;color:rgba(234,242,247,.40);z-index:2;margin-top:8px;
+  }
+  .hints .group{gap:16px}
+  .hint{display:flex;align-items:center;gap:6px}
+  .glyph{
+    display:inline-grid;place-items:center;width:16px;height:16px;border-radius:50%;
+    border:1px solid rgba(234,242,247,.35);font-size:9px;font-weight:700;color:rgba(234,242,247,.75);
+    line-height:1;
+  }
+  .glyph.dpad{border-radius:4px}
+  .brand{color:rgba(234,242,247,.28);letter-spacing:.12em;text-transform:uppercase;font-size:10px}
+
+  /* Icon defaults: one set, 24px box, 1.75 stroke, round caps. */
+  .icon{width:24px;height:24px;display:block;fill:none;stroke:currentColor;stroke-width:1.75;
+    stroke-linecap:round;stroke-linejoin:round;color:inherit;flex:none}
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+
+  <!-- Slim status bar -->
+  <div class="statusbar">
+    <div class="status-left">
+      <span class="clock" id="clock">21:47</span>
+      <span class="status-item">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></svg>
+        18° Clear
+      </span>
+    </div>
+    <div class="status-right">
+      <button class="bell focusable" data-row="0" data-focusable tabindex="-1" aria-label="Notifications">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      </button>
+      <span class="status-item">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M5 12.5a10 10 0 0 1 14 0"/><path d="M8.5 16a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r=".8" fill="currentColor"/></svg>
+        <span class="battery"><i></i></span>
+        78%
+      </span>
+    </div>
+  </div>
+
+  <!-- Search + actions -->
+  <div class="searchrow">
+    <div class="searchfield focusable" data-row="1" data-focusable tabindex="-1" role="searchbox" aria-label="Search YouTube or paste a link">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+      <span id="searchText">Paste a link or search…</span>
+    </div>
+    <button class="btn btn-primary focusable" data-row="1" data-focusable tabindex="-1" data-action="search">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.6-3.6"/></svg>
+      Search
+    </button>
+    <button class="btn focusable" data-row="1" data-focusable tabindex="-1" data-action="play-link">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1.5 1.5"/><path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7L12.5 19.5"/></svg>
+      Play Link
+    </button>
+  </div>
+
+  <!-- Segmented tabs -->
+  <div class="tabs" role="tablist" aria-label="Media source">
+    <div class="tab focusable" data-row="2" data-focusable role="tab" tabindex="-1" aria-selected="true" data-tab="trending">
+      <svg class="icon" viewBox="0 0 24 24"><path d="m3 17 6-6 4 4 7-7"/><path d="M14 8h6v6"/></svg>
+      Trending
+    </div>
+    <div class="tab focusable" data-row="2" data-focusable role="tab" tabindex="-1" aria-selected="false" data-tab="shorts">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M13 2 4.5 13.5H11l-1 8.5 8.5-11.5H12z"/></svg>
+      Shorts
+    </div>
+    <div class="tab focusable" data-row="2" data-focusable role="tab" tabindex="-1" aria-selected="false" data-tab="streams">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M7.8 16.2a6 6 0 0 1 0-8.4M16.2 7.8a6 6 0 0 1 0 8.4M4.9 19.1a10 10 0 0 1 0-14.2M19.1 4.9a10 10 0 0 1 0 14.2"/></svg>
+      Streams
+    </div>
+  </div>
+
+  <!-- Hero video -->
+  <section class="hero" id="hero" aria-label="Now playing">
+    <div class="frame"></div>
+
+    <div class="titleblock">
+      <span class="chip" id="stateChip"><span class="dot"></span><span id="stateText">Playing</span></span>
+      <h1 class="title">Deep Focus — Live Coding Session</h1>
+      <p class="channel"><b>@northlight.studio</b> · 128k watching · 2h 14m</p>
+    </div>
+
+    <div class="chrome" id="chrome">
+      <div class="bar">
+        <div class="seekrow">
+          <span class="time" id="elapsed">12:04</span>
+          <div class="seek focusable" data-row="3" id="seek" data-focusable tabindex="-1" role="slider"
+               aria-label="Seek" aria-valuemin="0" aria-valuemax="2112" aria-valuenow="724">
+            <div class="track">
+              <div class="buffer"></div>
+              <div class="played" id="played" style="width:9%"></div>
+            </div>
+            <div class="handle" id="handle" style="left:9%"></div>
+          </div>
+          <span class="time end" id="remaining">−2:01:56</span>
+        </div>
+
+        <div class="transport">
+          <div class="group">
+            <button class="tbtn focusable" data-row="4" data-focusable tabindex="-1" data-action="stop" aria-label="Stop">
+              <svg class="icon" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+            </button>
+            <button class="tbtn focusable" data-row="4" data-focusable tabindex="-1" data-action="prev" aria-label="Previous">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M19 5v14L9 12z"/><path d="M5 5v14"/></svg>
+            </button>
+            <button class="tbtn play focusable" data-row="4" data-focusable tabindex="-1" data-action="playpause" aria-label="Play or pause" aria-pressed="false">
+              <svg class="icon" id="playIcon" viewBox="0 0 24 24"><rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none"/></svg>
+            </button>
+            <button class="tbtn focusable" data-row="4" data-focusable tabindex="-1" data-action="next" aria-label="Next">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M5 5v14l10-7z"/><path d="M19 5v14"/></svg>
+            </button>
+          </div>
+
+          <div class="group">
+            <div class="speed focusable" data-row="4" data-focusable tabindex="-1" role="button" data-action="speed" aria-label="Playback speed">1×</div>
+            <div class="divider"></div>
+            <button class="tbtn focusable" data-row="4" data-focusable tabindex="-1" data-action="cc" aria-label="Subtitles" aria-pressed="false">
+              <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 10.5a2.5 2.5 0 1 0 0 3M17 10.5a2.5 2.5 0 1 0 0 3"/></svg>
+            </button>
+            <button class="tbtn focusable" data-row="4" data-focusable tabindex="-1" data-action="settings" aria-label="Settings">
+              <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+            </button>
+            <button class="tbtn focusable" data-row="4" data-focusable tabindex="-1" data-action="fullscreen" aria-label="Fullscreen">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Controller hints -->
+  <div class="hints">
+    <div class="group">
+      <span class="hint"><span class="glyph dpad">✥</span>Move</span>
+      <span class="hint"><span class="glyph">A</span>Select</span>
+      <span class="hint"><span class="glyph">B</span>Back</span>
+      <span class="hint"><span class="glyph">Y</span>Speed</span>
+      <span class="hint"><span class="glyph">X</span>Subtitles</span>
+    </div>
+    <span class="brand">JukaHub</span>
+  </div>
+</div>
+
+<script>
+(() => {
+  const stage = document.getElementById('stage');
+  const hero = document.getElementById('hero');
+  const chrome = document.getElementById('chrome');
+  const seek = document.getElementById('seek');
+  const played = document.getElementById('played');
+  const handle = document.getElementById('handle');
+  const elapsed = document.getElementById('elapsed');
+  const remaining = document.getElementById('remaining');
+  const stateChip = document.getElementById('stateChip');
+  const stateText = document.getElementById('stateText');
+  const playIcon = document.getElementById('playIcon');
+  const searchText = document.getElementById('searchText');
+
+  /* Fit the 1280×720 stage into the window without reflowing the design. */
+  const fit = () => {
+    const s = Math.min(window.innerWidth / 1280, window.innerHeight / 720) * 0.96;
+    stage.style.transform = `scale(${s})`;
+  };
+  window.addEventListener('resize', fit);
+  fit();
+
+  /* ── Focus model: one ring, moved only by the D-pad ─────────────────── */
+  const items = () => [...document.querySelectorAll('[data-focusable]')];
+  let focused = items()[0];
+
+  /* Row-aware neighbours. Pure geometry put the wide seek bar in the way of the
+     transport group: Left from Settings landed on the bar, whose Left/Right are
+     spent scrubbing, so the play button became unreachable from the right. Rows
+     make horizontal movement stay on its row and vertical movement pick the
+     closest control in the row above or below — what a D-pad UI expects. */
+  const rowOf = el => Number(el.dataset.row || 0);
+  const centerX = el => { const r = el.getBoundingClientRect(); return r.left + r.width / 2; };
+
+  function move(dir) {
+    const all = items();
+    const here = rowOf(focused);
+
+    if (dir === 'left' || dir === 'right') {
+      const sign = dir === 'left' ? -1 : 1;
+      const cx = centerX(focused);
+      let best = null, bestD = Infinity;
+      for (const el of all) {
+        if (el === focused || rowOf(el) !== here) continue;
+        const d = (centerX(el) - cx) * sign;
+        if (d > 4 && d < bestD) { bestD = d; best = el; }
+      }
+      if (best) setFocus(best);
+      return;
+    }
+
+    // Vertical: the next row in that direction that holds any control.
+    const rows = [...new Set(all.map(rowOf))].sort((a, b) => a - b);
+    const next = dir === 'up'
+      ? rows.filter(r => r < here).pop()
+      : rows.find(r => r > here);
+    if (next === undefined) return;
+
+    const cx = centerX(focused);
+    let best = null, bestD = Infinity;
+    for (const el of all) {
+      if (rowOf(el) !== next) continue;
+      const d = Math.abs(centerX(el) - cx);
+      if (d < bestD) { bestD = d; best = el; }
+    }
+    if (best) setFocus(best);
+  }
+
+  function setFocus(el) {
+    if (!el) return;
+    focused = el;
+    for (const item of items()) item.classList.toggle('is-focused', item === el);
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  /* ── Fake playback state ────────────────────────────────────────────── */
+  const DURATION = 8040;      // 2h 14m, matching the channel line
+  let position = 724, playing = true, speedIdx = 0;
+  const speeds = [1, 1.25, 1.5, 2];
+
+  const fmt = s => {
+    s = Math.max(0, Math.round(s));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? `${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`
+             : `${m}:${String(sec).padStart(2,'0')}`;
+  };
+
+  function paint() {
+    const frac = Math.min(1, position / DURATION);
+    played.style.width = (frac * 100) + '%';
+    handle.style.left = (frac * 100) + '%';
+    elapsed.textContent = fmt(position);
+    remaining.textContent = '−' + fmt(DURATION - position);
+    seek.setAttribute('aria-valuenow', String(Math.round(position)));
+    stateChip.classList.toggle('paused', !playing);
+    stateText.textContent = playing ? 'Playing' : 'Paused';
+    playIcon.innerHTML = playing
+      ? '<rect x="7" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="13.5" y="5" width="3.5" height="14" rx="1" fill="currentColor" stroke="none"/>'
+      : '<path d="M8 5.5v13l11-6.5z" fill="currentColor" stroke="none"/>';
+  }
+
+  setInterval(() => {
+    if (!playing) return;
+    position = Math.min(DURATION, position + speeds[speedIdx]);
+    paint();
+  }, 1000);
+  paint();
+
+  /* ── Auto-hide: controls leave the video alone until the pad is touched ── */
+  let hideTimer = null, hidden = false;
+  function poke() {
+    hidden = false;
+    hero.classList.remove('video-hidden');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => { hidden = true; hero.classList.add('video-hidden'); }, 3500);
+  }
+  hero.addEventListener('mousemove', poke);
+  hero.addEventListener('animationend', poke);
+  poke();
+
+  /* ── Actions ────────────────────────────────────────────────────────── */
+  function activate(el) {
+    const action = el.dataset.action;
+    if (el.dataset.tab) {
+      for (const t of document.querySelectorAll('[role="tab"]')) t.setAttribute('aria-selected', String(t === el));
+      return;
+    }
+    switch (action) {
+      case 'playpause':
+        playing = !playing;
+        el.setAttribute('aria-pressed', String(!playing));
+        paint(); poke(); return;
+      case 'speed':
+        speedIdx = (speedIdx + 1) % speeds.length;
+        el.textContent = speeds[speedIdx] === 1 ? '1×' : speeds[speedIdx] + '×';
+        poke(); return;
+      case 'cc': {
+        const on = el.getAttribute('aria-pressed') !== 'true';
+        el.setAttribute('aria-pressed', String(on));
+        poke(); return;
+      }
+      case 'search':
+        searchText.textContent = 'deep focus live coding';
+        poke(); return;
+      case 'play-link':
+        searchText.textContent = 'youtube.com/watch?v=…';
+        poke(); return;
+      case 'stop':
+        playing = false; position = 0;
+        document.querySelector('[data-action="playpause"]').setAttribute('aria-pressed', 'true');
+        paint(); poke(); return;
+      case 'prev':
+        position = Math.max(0, position - 15); poke(); return;
+      case 'next':
+        position = Math.min(DURATION, position + 15); poke(); return;
+      case 'fullscreen':
+      case 'settings':
+        poke(); return;
+    }
+  }
+
+  window.addEventListener('keydown', (e) => {
+    const dirs = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+                   a: 'left', d: 'right', w: 'up', s: 'down' };
+    // A press that wakes the controls may also move the ring: on a handheld the
+    // pad is the only input, so a swallowed direction feels broken. Select is the
+    // exception — it must not fire an action the user could not see.
+    const wasHidden = hidden;
+    poke();
+    if (wasHidden && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); return; }
+
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(focused); return; }
+    if (e.key === 'Escape' || e.key === 'Backspace') {
+      e.preventDefault();
+      setFocus(items()[0]);
+      return;
+    }
+    // The seek bar spends left/right on scrubbing rather than on moving focus.
+    if (focused.id === 'seek' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault();
+      position = Math.min(DURATION, Math.max(0, position + (e.key === 'ArrowRight' ? 10 : -10)));
+      paint(); return;
+    }
+    if (focused.id === 'seek' && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      e.preventDefault(); move(e.key === 'ArrowUp' ? 'up' : 'down'); return;
+    }
+    const dir = dirs[e.key];
+    if (dir) { e.preventDefault(); move(dir); }
+  });
+
+  setFocus(focused);
+})();
+</script>
+</body>
+</html>

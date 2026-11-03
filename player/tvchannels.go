@@ -293,22 +293,70 @@ func loadTVChannelsFromDir(dir string) []TVChannel {
 // loadTVPublicPlaylist reads the bundled public playlist, using the six-hour
 // disk cache so a cold launch on the handheld does not always hit the network.
 func loadTVPublicPlaylist() []TVChannel {
-	if db, err := cacheOpen("jukahub.cache"); err == nil {
-		defer db.Close()
+	// The shared handle, not a fresh open: bbolt takes an exclusive lock, so a
+	// second open of the same file in this process waits out its one-second
+	// timeout and reports no cache — which cost the Live TV scene a second plus a
+	// full playlist download on every entry into that screen.
+	if db, err := openSharedCache("jukahub.cache"); err == nil {
 		if cached, cErr := cacheGet(db, "iptv:"+tvPublicPlaylistURL); cErr == nil && cached != nil {
-			return parseM3UChannels(string(cached))
+			return parseM3URemembered(string(cached))
 		}
 		if data := httpGetText(tvPublicPlaylistURL, 20*time.Second); data != "" {
 			cacheSet(db, "iptv:"+tvPublicPlaylistURL, []byte(data), 6*time.Hour)
-			return parseM3UChannels(data)
+			return parseM3URemembered(data)
 		}
 		return nil
 	}
-	return parseM3UChannels(httpGetText(tvPublicPlaylistURL, 20*time.Second))
+	return parseM3URemembered(httpGetText(tvPublicPlaylistURL, 20*time.Second))
+}
+
+// tvPlaylistMemo holds the last parse of the public playlist. The list is about
+// 11,400 channels and parsing it measured 1.1 s, and the Live TV scene called
+// loadIPTV again on every entry — so every visit to that screen re-parsed the
+// whole thing. The body is unchanged almost always (the on-disk cache refreshes
+// it every six hours), so the same text can hand back the same channels.
+var tvPlaylistMemo struct {
+	mu       sync.Mutex
+	text     string
+	channels []TVChannel
+}
+
+// parseM3URemembered parses playlist text, reusing the previous result while the
+// text is identical. Callers that must see a fresh parse (the iptv_load trigger)
+// clear the memo through reloadIPTV instead.
+func parseM3URemembered(text string) []TVChannel {
+	tvPlaylistMemo.mu.Lock()
+	if tvPlaylistMemo.channels != nil && tvPlaylistMemo.text == text {
+		list := tvPlaylistMemo.channels
+		tvPlaylistMemo.mu.Unlock()
+		return list
+	}
+	tvPlaylistMemo.mu.Unlock()
+
+	list := parseM3UChannels(text)
+	tvPlaylistMemo.mu.Lock()
+	tvPlaylistMemo.text, tvPlaylistMemo.channels = text, list
+	tvPlaylistMemo.mu.Unlock()
+	return list
+}
+
+// forgetTVPlaylistParse drops the memoised parse, so the next load parses the
+// bytes again.
+func forgetTVPlaylistParse() {
+	tvPlaylistMemo.mu.Lock()
+	tvPlaylistMemo.text, tvPlaylistMemo.channels = "", nil
+	tvPlaylistMemo.mu.Unlock()
 }
 
 // loadIPTV reloads the playlists and republishes the filtered list. Local
 // playlists in tv/ win; the public iptv-org list is the fallback.
+// reloadIPTV is the explicit refresh (the iptv_load trigger): it re-parses the
+// playlist instead of reusing the memo the scene entry filled.
+func reloadIPTV(config *Config) {
+	forgetTVPlaylistParse()
+	loadIPTV(config)
+}
+
 func loadIPTV(config *Config) {
 	channels := loadTVChannelsFromDir("tv")
 	if len(channels) == 0 {

@@ -287,10 +287,10 @@ func TestHomeCardHoverLift(t *testing.T) {
 	homeLayout = h
 	t.Cleanup(func() { homeLayout = prevLayout })
 	// Hit areas keep their settled geometry; only the drawn rect lifts.
-	if r := h.Items[HomeFocusContinue].Rect; r.X != 32 || r.Y != 164 || r.W != 480 {
+	if r := h.Items[HomeFocusContinue].Rect; r.X != 32 || r.Y != 160 || r.W != 480 || r.H != 320 {
 		t.Errorf("Continue hit rect moved: %+v", r)
 	}
-	if r := h.Items[HomeFocusFiles].Rect; r.W != 162 {
+	if r := h.Items[HomeFocusFiles].Rect; r.W != 230 {
 		t.Errorf("Files hit rect moved: %+v", r)
 	}
 }

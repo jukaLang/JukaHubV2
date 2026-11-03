@@ -67,12 +67,11 @@ func dictLookup(word string) dictResult {
 
 	// Check cache first.
 	cacheKey := "dict:" + word
-	if db, err := cacheOpen("jukahub.cache"); err == nil {
+	if db, err := openSharedCache("jukahub.cache"); err == nil {
 		if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
 			var result dictResult
 			if json.Unmarshal(cached, &result) == nil && result.Found {
 				result.Cached = true
-				db.Close()
 				return result
 			}
 		}
@@ -149,9 +148,8 @@ func dictLookup(word string) dictResult {
 
 	// Cache the result.
 	if data, err := json.Marshal(result); err == nil {
-		if db, err := cacheOpen("jukahub.cache"); err == nil {
+		if db, err := openSharedCache("jukahub.cache"); err == nil {
 			_ = cacheSet(db, cacheKey, data, 24*time.Hour)
-			db.Close()
 		}
 	}
 

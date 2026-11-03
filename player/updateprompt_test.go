@@ -158,7 +158,7 @@ func TestToolsRowsPatchAndCalculator(t *testing.T) {
 	}
 }
 
-// Twenty-seven tiles across the five sections (sharing, probes, lookups, this
+// Thirty-one tiles across the five sections (sharing, probes, lookups, this
 // device, party, Updates, power tools, toolbox, security, disc helpers,
 // Calculator, Community, Classic Tools) plus the SFTP credentials line must
 // render on a 720p panel: the tile grid scrolls instead of shrinking rows, and
@@ -178,8 +178,8 @@ func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
 	}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 28 {
-		t.Fatalf("tile rects = %d, want 28 with Patch and Calculator", len(rects))
+	if len(rects) != 32 {
+		t.Fatalf("tile rects = %d, want 32 with Patch and Calculator", len(rects))
 	}
 	layout := toolsPanelMetrics(config, toolsRows(config))
 	if panel.H > probeH-40 {

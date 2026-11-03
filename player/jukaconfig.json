@@ -25,7 +25,7 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "258",
+          "height": "320",
           "icon": "continue",
           "image": "",
           "jsonPath": "",
@@ -44,7 +44,7 @@
           "video": "",
           "width": "480",
           "x": "32",
-          "y": "164"
+          "y": "160"
         },
         {
           "autoRefresh": false,
@@ -55,7 +55,7 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "121",
+          "height": "152",
           "icon": "media",
           "image": "",
           "jsonPath": "",
@@ -72,9 +72,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "348",
-          "x": "536",
-          "y": "164"
+          "width": "720",
+          "x": "528",
+          "y": "160"
         },
         {
           "autoRefresh": false,
@@ -85,7 +85,7 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "121",
+          "height": "152",
           "icon": "files",
           "image": "",
           "jsonPath": "",
@@ -102,9 +102,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "162",
-          "x": "900",
-          "y": "164"
+          "width": "230",
+          "x": "528",
+          "y": "328"
         },
         {
           "autoRefresh": false,
@@ -115,12 +115,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "121",
+          "height": "152",
           "icon": "packages",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Discover content",
+          "placeholder": "Install and update",
           "rows": 0,
           "style": "tile",
           "text": "Packages",
@@ -132,9 +132,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "348",
-          "x": "536",
-          "y": "301"
+          "width": "229",
+          "x": "774",
+          "y": "328"
         },
         {
           "autoRefresh": false,
@@ -145,12 +145,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "158",
+          "height": "152",
           "icon": "chat",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Chat with others",
+          "placeholder": "Messages and servers",
           "rows": 0,
           "style": "tile",
           "text": "Chat",
@@ -162,9 +162,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "292",
-          "x": "340",
-          "y": "454"
+          "width": "189",
+          "x": "444",
+          "y": "496"
         },
         {
           "autoRefresh": false,
@@ -175,12 +175,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "158",
+          "height": "152",
           "icon": "favorites",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Saved",
+          "placeholder": "Pinned for later",
           "rows": 0,
           "style": "tile",
           "text": "Favorites",
@@ -192,9 +192,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "138",
+          "width": "190",
           "x": "32",
-          "y": "454"
+          "y": "496"
         },
         {
           "autoRefresh": false,
@@ -205,12 +205,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "121",
+          "height": "152",
           "icon": "apps",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Launch installed apps",
+          "placeholder": "Portable and desktop",
           "rows": 0,
           "style": "tile",
           "text": "Apps",
@@ -222,9 +222,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "348",
-          "x": "900",
-          "y": "301"
+          "width": "229",
+          "x": "1019",
+          "y": "328"
         },
         {
           "autoRefresh": false,
@@ -235,12 +235,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "121",
+          "height": "152",
           "icon": "settings",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Preferences",
+          "placeholder": "Device and design",
           "rows": 0,
           "style": "tile",
           "text": "Settings",
@@ -252,9 +252,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "166",
-          "x": "1082",
-          "y": "164"
+          "width": "189",
+          "x": "1059",
+          "y": "496"
         },
         {
           "autoRefresh": false,
@@ -265,12 +265,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "158",
+          "height": "152",
           "icon": "tools",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Network and utilities",
+          "placeholder": "Network and system",
           "rows": 0,
           "style": "tile",
           "text": "Tools",
@@ -282,9 +282,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "292",
-          "x": "648",
-          "y": "454"
+          "width": "189",
+          "x": "649",
+          "y": "496"
         },
         {
           "autoRefresh": false,
@@ -295,12 +295,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "158",
+          "height": "152",
           "icon": "browser",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Internet",
+          "placeholder": "The open web",
           "rows": 0,
           "style": "tile",
           "text": "Browser",
@@ -312,9 +312,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "138",
-          "x": "186",
-          "y": "454"
+          "width": "190",
+          "x": "238",
+          "y": "496"
         },
         {
           "autoRefresh": false,
@@ -325,12 +325,12 @@
           "externalAppPath": "",
           "externalAppReturn": "",
           "font": "",
-          "height": "158",
+          "height": "152",
           "icon": "emulator",
           "image": "",
           "jsonPath": "",
           "listVariable": "",
-          "placeholder": "Play games",
+          "placeholder": "Retro library",
           "rows": 0,
           "style": "tile",
           "text": "Emulator",
@@ -342,9 +342,9 @@
           "variableChange": "",
           "variableChangeValue": "",
           "video": "",
-          "width": "292",
-          "x": "956",
-          "y": "454"
+          "width": "189",
+          "x": "854",
+          "y": "496"
         },
         {
           "autoRefresh": false,
@@ -373,8 +373,8 @@
           "variableChangeValue": "",
           "video": "",
           "width": "116",
-          "x": "8",
-          "y": "678"
+          "x": "48",
+          "y": "674"
         }
       ],
       "icon": "*",
@@ -725,7 +725,7 @@
           "y": 128
         }
       ],
-      "icon": "\u003e\u003e",
+      "icon": ">>",
       "layout": "",
       "name": "IPStream"
     },
@@ -1825,7 +1825,7 @@
           "y": 136
         }
       ],
-      "icon": "\u003e_",
+      "icon": ">_",
       "layout": "",
       "name": "Terminal"
     },

@@ -591,10 +591,15 @@ func installedPatchVersions(config *Config) map[PatchComponent]string {
 	if repo, err := LoadPackageRepo(); err == nil {
 		m[ComponentPackages] = fmt.Sprintf("%d package(s)", len(repo.Packages))
 	}
+	// Cached reads only: the probes run in the background (see toolVersionCache).
 	if v := helperToolVersion("yt-dlp"); v != "" {
 		m[ComponentTools] = "yt-dlp " + v
 	} else if v := helperToolVersion("ffmpeg"); v != "" {
 		m[ComponentTools] = "ffmpeg " + v
+	} else if toolVersionCheckPending("yt-dlp") || toolVersionCheckPending("ffmpeg") {
+		// The first frame after boot may not have a version yet; saying "Not
+		// installed" there would be a lie the next frame corrects.
+		m[ComponentTools] = "Checking…"
 	} else {
 		m[ComponentTools] = "Not installed"
 	}
@@ -708,6 +713,9 @@ func ensureHelperToolCtx(ctx context.Context, tool string, config *Config) error
 	}
 	installBarDone()
 	logPatch("[TOOLS] %s installed at %s", tool, target)
+	// The cached versions (and the Patch row that shows them) must notice the
+	// tool that just appeared.
+	invalidateToolVersionCache()
 	return nil
 }
 
@@ -1543,17 +1551,95 @@ func helperToolPathCtx(ctx context.Context, tool string, config *Config) (string
 	return verified, nil
 }
 
+// ── Tool version cache ────────────────────────────────────────────────────
+//
+// A version probe spawns a process: yt-dlp --version costs over a second even
+// on a desktop (it is a packaged Python app) and several on a handheld card,
+// while ffmpeg -version costs tens of milliseconds. BuildPatchSnapshot used to
+// run those probes on the render thread — once when the Patch screen opened and
+// again every two seconds — so the menu blocked for seconds at a time. Versions
+// now come from a cache that is refreshed on a background goroutine; the render
+// path never spawns anything.
+
+const toolVersionTTL = 10 * time.Minute
+
+// toolVersionProbe is the subprocess call itself, swappable in tests so a test
+// can count probes without launching a real tool.
+var toolVersionProbe = toolVersionFromPath
+
+type cachedToolVersion struct {
+	value string
+	at    time.Time
+}
+
+var toolVersionCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedToolVersion
+	probing map[string]bool
+}
+
 // helperToolVersion returns the version string for a helper tool when available.
 func helperToolVersion(tool string) string {
-	if runtime.GOOS == "windows" && !strings.HasSuffix(tool, ".exe") {
-		tool += ".exe"
+	toolVersionCache.mu.Lock()
+	entry, ok := toolVersionCache.entries[tool]
+	alreadyProbing := toolVersionCache.probing[tool]
+	stale := !ok || time.Since(entry.at) > toolVersionTTL
+	startProbe := stale && !alreadyProbing
+	if startProbe {
+		if toolVersionCache.probing == nil {
+			toolVersionCache.probing = map[string]bool{}
+		}
+		toolVersionCache.probing[tool] = true
 	}
-	path, err := P().LookPath(tool)
-	if err != nil {
+	toolVersionCache.mu.Unlock()
+
+	if startProbe {
+		go probeToolVersion(tool)
+	}
+	if !ok {
 		return ""
 	}
+	return entry.value
+}
+
+// toolVersionCheckPending reports whether a probe for tool is still running, so
+// the Patch row can say "Checking…" instead of claiming the tool is missing on
+// the first frame after the screen opens.
+func toolVersionCheckPending(tool string) bool {
+	toolVersionCache.mu.Lock()
+	defer toolVersionCache.mu.Unlock()
+	return toolVersionCache.probing[tool]
+}
+
+// probeToolVersion resolves the tool and runs its version probe off the render
+// thread, then publishes the result for helperToolVersion.
+func probeToolVersion(tool string) {
+	exe := tool
+	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(exe), ".exe") {
+		exe += ".exe"
+	}
+	value := ""
 	// Version probing is optional metadata; a failure is not fatal.
-	return toolVersionFromPath(path)
+	if path, err := P().LookPath(exe); err == nil && path != "" {
+		value = toolVersionProbe(path)
+	}
+	toolVersionCache.mu.Lock()
+	if toolVersionCache.entries == nil {
+		toolVersionCache.entries = map[string]cachedToolVersion{}
+	}
+	toolVersionCache.entries[tool] = cachedToolVersion{value: value, at: time.Now()}
+	if toolVersionCache.probing != nil {
+		delete(toolVersionCache.probing, tool)
+	}
+	toolVersionCache.mu.Unlock()
+}
+
+// invalidateToolVersionCache drops every cached probe so the next read starts a
+// fresh one. Called after tools are installed, repaired or removed.
+func invalidateToolVersionCache() {
+	toolVersionCache.mu.Lock()
+	toolVersionCache.entries = nil
+	toolVersionCache.mu.Unlock()
 }
 
 // toolVersionFromPath returns a short version string for a local tool binary.
@@ -2831,7 +2917,9 @@ func BuildPatchSnapshot(config *Config) *PatchSnapshot {
 	repoStatus := StatusUnavailable
 	repoDetail := "No packages.json index found"
 	repoEnabled := false
-	if repo, err := LoadPackageRepo(); err == nil {
+	// One read of the index serves both the row and the package list below.
+	repo, repoErr := LoadPackageRepo()
+	if repoErr == nil {
 		repoStatus = StatusCurrent
 		repoDetail = fmt.Sprintf("%d package(s) defined · %s", len(repo.Packages), mustRepoPath())
 		repoEnabled = len(repo.Packages) > 0
@@ -2848,8 +2936,8 @@ func BuildPatchSnapshot(config *Config) *PatchSnapshot {
 	})
 	s.Rows = rows
 
-	// Package list for the scene's package section.
-	if repo, err := LoadPackageRepo(); err == nil {
+	// Package list for the scene's package section (same read as the row).
+	if repoErr == nil && repo != nil {
 		s.Packages = repo.Packages
 	}
 	// Diagnostics report path if one exists.

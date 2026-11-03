@@ -599,6 +599,9 @@ func OpRefreshRepo(ctx context.Context, config *Config) error {
 	if _, err := LoadPackageRepo(); err != nil {
 		return fmt.Errorf("packages.json: %w", err)
 	}
+	// The index may describe different versions now, so every cached package
+	// state is out of date.
+	invalidatePackageStatus("")
 	patchEventSafe(PatchEvent{Kind: PatchEventSnap, Snap: BuildPatchSnapshot(config)})
 	return nil
 }

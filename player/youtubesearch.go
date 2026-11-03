@@ -59,6 +59,18 @@ const (
 	// a plausible build string.
 	youtubeWebClientVersion = "2.20240101.00.00"
 
+	// youtubeWebUserAgent is the browser every web request is dressed as: a
+	// current mobile Chrome, because this is what the app runs next to on a
+	// handheld and because a years-old desktop string is itself a signal that
+	// the request did not come from a browser.
+	youtubeWebUserAgent = "Mozilla/5.0 (Linux; Android 16; Pixel 9) AppleWebKit/537.36 " +
+		"(KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36"
+
+	// youtubeWebClientHints must agree with that user agent: a request that
+	// claims Chrome 154 but reports an old hint set, or no hints at all, is the
+	// odd one out. Client hints are how current Chrome describes itself.
+	youtubeWebClientHints = `"Chromium";v="154", "Google Chrome";v="154", "Not)A;Brand";v="99"`
+
 	// nativeSearchWindowLimit is the deepest result window this path will
 	// build. One response describes about twenty entries, so anything past that
 	// is fetched by following the response's continuation token — measured at
@@ -107,9 +119,8 @@ func cacheMediaSearchResults(cacheKey string, videos []VideoInfo) {
 	if err != nil {
 		return
 	}
-	if db, cacheErr := cacheOpen("jukahub.cache"); cacheErr == nil {
+	if db, cacheErr := openSharedCache("jukahub.cache"); cacheErr == nil {
 		cacheSet(db, cacheKey, data, time.Hour)
-		db.Close()
 	}
 }
 
@@ -480,12 +491,12 @@ func postNativeSearch(ctx context.Context, body map[string]interface{}, continua
 		return nativeSearchPage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// The body names the web client: the mobile and TV clients answer with a
+	// different shape, and the embedded clients carry account context this
+	// reader does not have. The headers are the mobile browser's, which is what
+	// a page running on this device would send.
+	setWebBrowserHeaders(req, "same-origin", "cors", "empty")
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	// A plain desktop web client: the mobile and TV clients answer with a
-	// different body shape, and the embedded clients carry account context
-	// this reader does not have.
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Origin", "https://www.youtube.com")
 	req.Header.Set("X-Youtube-Client-Name", "1")
 	req.Header.Set("X-Youtube-Client-Version", youtubeWebClientVersion)
@@ -534,6 +545,24 @@ func nativeSearchRequestBody(query string) map[string]interface{} {
 		"query":   query,
 		"params":  nil,
 	}
+}
+
+// setWebBrowserHeaders dresses a request as the mobile browser the web client
+// names: the client hints, fetch metadata and language a real Chrome sends. A
+// request that carries a user agent but none of them is the odd one out, which
+// is exactly the fingerprint a bot check looks for.
+//
+// site, mode and dest are the call's own values: "none", "navigate", "document"
+// for a page load; "same-origin", "cors", "empty" for the API call.
+func setWebBrowserHeaders(req *http.Request, site, mode, dest string) {
+	req.Header.Set("User-Agent", youtubeWebUserAgent)
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	req.Header.Set("Sec-Ch-Ua", youtubeWebClientHints)
+	req.Header.Set("Sec-Ch-Ua-Mobile", "?1")
+	req.Header.Set("Sec-Ch-Ua-Platform", `"Android"`)
+	req.Header.Set("Sec-Fetch-Site", site)
+	req.Header.Set("Sec-Fetch-Mode", mode)
+	req.Header.Set("Sec-Fetch-Dest", dest)
 }
 
 // nativeSearchClientContext is the client block both bodies carry. The endpoint

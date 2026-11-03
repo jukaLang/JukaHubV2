@@ -224,15 +224,16 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
 	rows := toolsRows(config)
-	if len(rows) != 25 {
-		t.Fatalf("rows = %d, want the eighteen FTP & IP rows, party, power tools, toolbox, audit, security, disc helpers and community only", len(rows))
+	if len(rows) != 29 {
+		t.Fatalf("rows = %d, want the twenty-two FTP & IP rows, party, power tools, toolbox, audit, security, disc helpers and community only", len(rows))
 	}
 	want := []toolsAction{
 		toolsActionCopyIP, toolsActionFTP, toolsActionCompanion, toolsActionSSH,
-		toolsActionGatewayScan, toolsActionClipboardScan, toolsActionPing,
+		toolsActionGatewayScan, toolsActionClipboardScan, toolsActionBanner, toolsActionPing,
 		toolsActionTraceroute, toolsActionDNSLookup, toolsActionWiFiSignal,
 		toolsActionLANDevices,
-		toolsActionPublicIP, toolsActionHTTPCheck, toolsActionPortCheck, toolsActionWhois,
+		toolsActionPublicIP, toolsActionHTTPCheck, toolsActionCert, toolsActionHeaders,
+		toolsActionPortCheck, toolsActionWhois, toolsActionCodec,
 		toolsActionListeningPorts, toolsActionClockCheck, toolsActionSubnet,
 		toolsActionParty, toolsActionPowerTools, toolsActionToolbox,
 		toolsActionAudit, toolsActionSecurity,
@@ -248,14 +249,14 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	// Three bands inside the transfer tools, then the two older groups: an
 	// eighteen-tile heading was the wall this split removed.
 	if rows[0].section != "SERVERS & SHARING" || rows[4].section != "NETWORK PROBES" ||
-		rows[11].section != "LOOKUPS & CHECKS" || rows[15].section != "THIS DEVICE" ||
-		rows[18].section != "WATCH TOGETHER" || rows[19].section != "SYSTEM & UPDATES" {
+		rows[12].section != "LOOKUPS & CHECKS" || rows[19].section != "THIS DEVICE" ||
+		rows[22].section != "WATCH TOGETHER" || rows[23].section != "SYSTEM & UPDATES" {
 		t.Fatalf("section headings are wrong: %q %q %q %q %q %q",
 			rows[0].section, rows[4].section, rows[11].section, rows[15].section, rows[18].section, rows[19].section)
 	}
 	// The probes came out of Power tools; each one must still carry its action
 	// hint so the panel reads like the rest of the list.
-	for _, action := range want[4:18] {
+	for _, action := range want[4:22] {
 		row := toolsRowByAction(rows, action)
 		if row == nil || row.hint == "" {
 			t.Fatalf("probe row %v = %+v, want an action hint", action, row)
@@ -278,7 +279,7 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 func TestToolsRowsWithMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	rows := toolsRows(config)
-	if len(rows) != 26 {
+	if len(rows) != 30 {
 		t.Fatalf("rows = %d, want a Classic Tools row too", len(rows))
 	}
 	if rows[len(rows)-1].action != toolsActionUtilities {
@@ -344,8 +345,8 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 26 {
-		t.Fatalf("tile rects = %d, want 26 with the Misc scene", len(rects))
+	if len(rects) != 30 {
+		t.Fatalf("tile rects = %d, want 30 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Fatalf("no usable font: the shipped Inter-Regular.ttf did not load, so this check cannot run")

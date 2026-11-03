@@ -240,23 +240,26 @@ func streamAttempts(maxHeight int) []streamAttempt {
 	anyMuxed := "18/" + muxed
 	return []streamAttempt{
 		{
-			name: "android",
+			// Both android clients in one invocation, in yt-dlp's own client
+			// list, which is what makes a dead client cheap: yt-dlp falls
+			// through to the next one inside the same process. Asking for them
+			// as two attempts cost a whole second extraction when the first
+			// failed — a cold helper is most of an attempt (yt-dlp --version
+			// alone measured 2.8 s here, because the one-file binary unpacks
+			// itself on every run), so the serial fallback measured 9.2-10.4 s
+			// and the run in the field logged 2.4 s + 4.5 s. As one call with
+			// both clients it measured 4.2-4.5 s, and a client that still fails
+			// inside it (web,android_vr was the probe) still returns a URL.
+			name: "android clients",
 			args: []string{
-				"--extractor-args", "youtube:player_client=android",
-				"-f", muxed,
-			},
-		},
-		{
-			name: "android_vr",
-			args: []string{
-				"--extractor-args", "youtube:player_client=android_vr",
+				"--extractor-args", "youtube:player_client=android,android_vr",
 				"-f", muxed,
 			},
 		},
 		{
 			name: "android 360p",
 			args: []string{
-				"--extractor-args", "youtube:player_client=android",
+				"--extractor-args", "youtube:player_client=android,android_vr",
 				"-f", anyMuxed,
 			},
 		},
@@ -486,6 +489,10 @@ func ytDlpGetURL(ctx context.Context, ytDlpPath string, args []string) (string, 
 // parameter so the attempt order can be tested without subprocesses.
 type ytDlpURLRunner func(ctx context.Context, args []string) (string, error)
 
+// ytNativeStreamFor is the native fast path. It is a variable so tests can
+// stand it down without reaching YouTube.
+var ytNativeStreamFor = youtubeNativeStream
+
 // resolveDirectStream asks yt-dlp for a direct media URL, trying the client
 // strategies in order until one yields a single muxed stream.
 func resolveDirectStream(ctx context.Context, config *Config, ytDlpPath, source string, maxHeight int) (string, bool) {
@@ -548,6 +555,18 @@ func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraA
 	return "", lastErr
 } // streamableSource returns a URL ffmpeg can read directly, using the cache when
 // possible. Direct stream links (RTSP, HLS, progressive files) are used as-is.
+// resolveStreamSource resolves a source to a direct URL, asking the native
+// client first and the extractor second. Every entry point that needs a stream
+// goes through here so prefetching benefits from the fast path as well.
+func resolveStreamSource(ctx context.Context, config *Config, ytDlpPath, source string, height int) (string, bool) {
+	if id := youtubeVideoID(source); id != "" && ytNativeAllowed() {
+		if direct, ok := ytNativeStreamFor(ctx, id, height); ok {
+			return direct, true
+		}
+	}
+	return resolveDirectStream(ctx, config, ytDlpPath, source, height)
+}
+
 func streamableSource(ctx context.Context, config *Config, ytDlpPath, source string) (string, bool) {
 	source = strings.TrimSpace(source)
 	if source == "" {
@@ -563,7 +582,10 @@ func streamableSource(ctx context.Context, config *Config, ytDlpPath, source str
 	}
 	ctx, cancel := context.WithTimeout(ctx, streamResolveBudget)
 	defer cancel()
-	direct, ok := resolveDirectStream(ctx, config, ytDlpPath, source, height)
+	// The native client answers in ~150 ms over a warm session where the
+	// extractor needs ~4 s, and stands down after a refusal so a network where
+	// YouTube's bot check fires pays for the attempt once, not on every play.
+	direct, ok := resolveStreamSource(ctx, config, ytDlpPath, source, height)
 	if !ok {
 		return "", false
 	}
@@ -1345,7 +1367,7 @@ func prefetchResolveOne(ctx context.Context, config *Config, ytDlpPath, ffprobeP
 	jobCtx, cancel := context.WithTimeout(ctx, prefetchJobBudget)
 	defer cancel()
 
-	direct, ok := resolveDirectStream(jobCtx, config, ytDlpPath, source, effectivePlaybackMaxHeight(config, source))
+	direct, ok := resolveStreamSource(jobCtx, config, ytDlpPath, source, effectivePlaybackMaxHeight(config, source))
 	if ctx.Err() != nil {
 		return false // superseded or Play: leave the cache alone
 	}

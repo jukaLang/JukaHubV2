@@ -253,17 +253,19 @@ func TestHomeWiFiMeterSelectableWithDpad(t *testing.T) {
 	}
 }
 
-// TestHomeLayoutGeometry pins the requested card layout: Continue takes over
-// the old Settings slot, Files halves its width and Settings fills the same
-// width right of Files.
+// TestHomeLayoutGeometry pins the design sheet's grid: a 480x320 Continue card
+// beside a 720px right column, and the six-tile row underneath.
 func TestHomeLayoutGeometry(t *testing.T) {
 	snapshotHomeGlobals(t)
 	homeLayout = NewHomeLayout(probeW, probeH)
 	homeLayout.Resize(probeW, probeH)
 
 	cont := homeLayout.Items[HomeFocusContinue].Rect
-	if cont.H != 258 {
-		t.Errorf("Continue height = %d, want 258 (its own row plus the old Settings slot)", cont.H)
+	if cont.H != 320 {
+		t.Errorf("Continue height = %d, want the design's 320", cont.H)
+	}
+	if cont.Y+cont.H != homeLayout.Items[HomeFocusFiles].Rect.Y+homeLayout.Items[HomeFocusFiles].Rect.H {
+		t.Errorf("the Continue card %+v does not end with the right column", cont)
 	}
 	files := homeLayout.Items[HomeFocusFiles].Rect
 	settings := homeLayout.Items[HomeFocusSettings].Rect
@@ -284,30 +286,42 @@ func TestHomeLayoutGeometry(t *testing.T) {
 	}
 }
 
-// TestNarrowHomeCardsUseStackedLayout pins the fix for the "Files and Settings
-// look squished" complaint: the half-width tiles must stack their icon above
-// the label instead of squeezing the text into a ~60px column, while the wider
-// rows keep the icon-beside-label composition.
-func TestNarrowHomeCardsUseStackedLayout(t *testing.T) {
+// TestEveryHomeCardUsesTheSameTileAnatomy pins the design's one-composition
+// rule: the narrow cards that used to centre a small stacked icon (Files,
+// Settings, Favorites, Browser) now use the same top-left badge and bottom-left
+// label as every other tile, and the label still fits inside the card.
+func TestEveryHomeCardUsesTheSameTileAnatomy(t *testing.T) {
 	snapshotHomeGlobals(t)
 	homeLayout = NewHomeLayout(probeW, probeH)
 	homeLayout.Resize(probeW, probeH)
-	iconSize := scaleX(56, probeW)
-	pad := scaleX(20, probeW)
 
-	for _, id := range []HomeFocusID{HomeFocusFiles, HomeFocusSettings} {
-		r := homeLayout.Items[id].Rect
-		if !homeCardStacksIcon(r, iconSize, pad, probeW) {
-			t.Errorf("%s card %+v is narrow but still uses the horizontal layout", id, r)
-		}
+	fonts := loadHomeFonts()
+	if fonts.Card == nil {
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so the labels cannot be measured")
 	}
+	pad := scaleX(homeTilePad, probeW)
 	for _, id := range []HomeFocusID{
 		HomeFocusMedia, HomeFocusPackages, HomeFocusApps,
-		HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
+		HomeFocusFiles, HomeFocusSettings, HomeFocusFavorites,
+		HomeFocusBrowser, HomeFocusChat, HomeFocusTools, HomeFocusEmulator,
 	} {
 		r := homeLayout.Items[id].Rect
-		if homeCardStacksIcon(r, iconSize, pad, probeW) {
-			t.Errorf("%s card %+v should keep the icon beside its label", id, r)
+		badge := cardBadgeRect(r, probeW, probeH)
+		if badge.H <= 0 {
+			t.Errorf("%s: no icon badge for card %+v", id, r)
+			continue
+		}
+		if badge.W < scaleY(40, probeH) {
+			t.Errorf("%s: badge %+v is too small to read", id, badge)
+		}
+		// The label block lives under the badge, inside the card's padding.
+		labelTop := badge.Y + badge.H
+		if labelTop >= r.Y+r.H-pad {
+			t.Errorf("%s: card %+v has no room for a label under its badge %+v", id, r, badge)
+		}
+		labelW := r.W - pad*2
+		if w, _ := measureText(fonts.Card, "Settings"); w > labelW {
+			t.Errorf("%s: label column %dpx is narrower than a typical title", id, labelW)
 		}
 	}
 }

@@ -27,6 +27,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // PackageFile describes one file a package manages.
@@ -321,7 +323,13 @@ func InstallPackage(ctx context.Context, p *PatchPackage, files []PackageFile) e
 			_ = os.Chmod(dst, 0o755)
 		}
 	}
-	return journal.commit()
+	if err := journal.commit(); err != nil {
+		return err
+	}
+	// The files on disk just changed; the cached status would keep saying
+	// "available" until its TTL expired.
+	invalidatePackageStatus(p.ID)
+	return nil
 }
 
 // RemovePackage backs up and removes every file a package manages. Files the
@@ -355,7 +363,11 @@ func RemovePackage(ctx context.Context, p *PatchPackage, files []PackageFile) er
 			return fmt.Errorf("remove %s: %w", f.Src, err)
 		}
 	}
-	return journal.commit()
+	if err := journal.commit(); err != nil {
+		return err
+	}
+	invalidatePackageStatus(p.ID)
+	return nil
 }
 
 // IsPackageInstalled reports whether every managed file exists.
@@ -370,6 +382,113 @@ func IsPackageInstalled(p *PatchPackage) bool {
 		}
 	}
 	return true
+}
+
+// ── Package status cache ──────────────────────────────────────────────────
+//
+// IsPackageCurrent hashes every managed file of a package. The Patch row
+// builder called it for every package on every frame, so a repository with real
+// packages (tools, theme packs, config bundles) read and hashed megabytes from
+// the card continuously while the screen was open. The answer only changes when
+// something installs or removes a file, so it is computed in the background and
+// cached; the list shows "Checking…" until the first result lands.
+
+const packageStatusTTL = 30 * time.Second
+
+// packageStatusProbe is the disk work, swappable in tests so a test can count
+// checks without hashing real files.
+var packageStatusProbe = func(p *PatchPackage) (installed, current bool) {
+	installed = IsPackageInstalled(p)
+	current = installed && IsPackageCurrent(p)
+	return installed, current
+}
+
+type cachedPackageStatus struct {
+	installed bool
+	current   bool
+	at        time.Time
+}
+
+var packageStatusCache struct {
+	mu       sync.Mutex
+	entries  map[string]cachedPackageStatus
+	checking map[string]bool
+	// gen is bumped by every invalidation so a check that started before an
+	// install finished cannot publish its now-stale answer.
+	gen uint64
+}
+
+func packageStatusKey(p *PatchPackage) string { return p.ID + "@" + p.Version }
+
+// packageStatusFor returns the cached state of p and starts a background check
+// when the entry is missing or stale. known is false until the first check
+// lands, which is what the row uses to say "Checking…" instead of "Install".
+func packageStatusFor(p *PatchPackage) (installed, current, known bool) {
+	if p == nil {
+		return false, false, true
+	}
+	key := packageStatusKey(p)
+	packageStatusCache.mu.Lock()
+	entry, ok := packageStatusCache.entries[key]
+	alreadyChecking := packageStatusCache.checking[key]
+	stale := !ok || time.Since(entry.at) > packageStatusTTL
+	startCheck := stale && !alreadyChecking
+	gen := packageStatusCache.gen
+	if startCheck {
+		if packageStatusCache.checking == nil {
+			packageStatusCache.checking = map[string]bool{}
+		}
+		packageStatusCache.checking[key] = true
+	}
+	packageStatusCache.mu.Unlock()
+
+	if startCheck {
+		go checkPackageStatus(p, gen)
+	}
+	if !ok {
+		return false, false, false
+	}
+	return entry.installed, entry.current, true
+}
+
+// checkPackageStatus runs the hashes off the render thread and publishes them,
+// unless an install or removal invalidated the cache while it was running.
+func checkPackageStatus(p *PatchPackage, gen uint64) {
+	installed, current := packageStatusProbe(p)
+	key := packageStatusKey(p)
+	packageStatusCache.mu.Lock()
+	if packageStatusCache.gen != gen {
+		// A newer read owns this key now; this answer describes files that
+		// have since been replaced.
+		packageStatusCache.mu.Unlock()
+		return
+	}
+	if packageStatusCache.entries == nil {
+		packageStatusCache.entries = map[string]cachedPackageStatus{}
+	}
+	packageStatusCache.entries[key] = cachedPackageStatus{installed: installed, current: current, at: time.Now()}
+	if packageStatusCache.checking != nil {
+		delete(packageStatusCache.checking, key)
+	}
+	packageStatusCache.mu.Unlock()
+}
+
+// invalidatePackageStatus forgets one package's cached state, or every package
+// when id is empty. Called after an install, update or removal so the list does
+// not keep claiming the old status.
+func invalidatePackageStatus(id string) {
+	packageStatusCache.mu.Lock()
+	defer packageStatusCache.mu.Unlock()
+	packageStatusCache.gen++
+	if id == "" {
+		packageStatusCache.entries = nil
+		return
+	}
+	for key := range packageStatusCache.entries {
+		if strings.HasPrefix(key, id+"@") {
+			delete(packageStatusCache.entries, key)
+		}
+	}
 }
 
 // IsPackageCurrent reports whether every managed file matches its checksum.

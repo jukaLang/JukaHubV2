@@ -2875,11 +2875,10 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	// is consulted before the tool is resolved as well: a page the user has
 	// already seen needs neither the network nor an installed extractor.
 	cacheKey := "ytsearch:" + normalizeCacheKey(fullCommand)
-	if db, err := cacheOpen("jukahub.cache"); err == nil {
+	if db, err := openSharedCache("jukahub.cache"); err == nil {
 		if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
 			var videos []VideoInfo
 			if json.Unmarshal(cached, &videos) == nil {
-				db.Close()
 				if stale() {
 					return
 				}
@@ -2897,7 +2896,6 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 				}
 			}
 		}
-		db.Close()
 	}
 
 	// A plain search is answered in this process (youtubesearch.go). On a
@@ -6221,7 +6219,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			log.Printf("custom_link: no URL in custom_link_url")
 		}
 	case "iptv_load":
-		loadIPTV(config)
+		reloadIPTV(config)
 	case triggerRecordingsScan:
 		count := loadRecordings(config)
 		kind := ToastSuccess()
@@ -6745,9 +6743,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		textBrowserScrollVelocity = 0
 		textBrowserScrollCooldown = 0
 	case "cache_clear":
-		if db, err := cacheOpen("jukahub.cache"); err == nil {
+		if db, err := openSharedCache("jukahub.cache"); err == nil {
 			cacheClear(db)
-			db.Close()
 			showToast("Cache cleared", ToastInfo())
 		}
 	case "tools_open":

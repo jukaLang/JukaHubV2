@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>JukaHub — Home · 1280×720 &amp; 1024×768</title>
+<style>
+/* ── Tokens (identical in both frames) ─────────────────────────────────── */
+:root{
+  --cyan:#22D3EE;
+  --cyan-ink:#06202a;
+  --violet:#7C3AED;
+  --green:#34D399;
+  --grey:#64748B;
+  --red:#F43F5E;
+  --white:#FFFFFF;
+  --navy-a:#070B14;
+  --navy-b:#0B1426;
+  --card:rgba(255,255,255,0.05);
+  --card-border:rgba(255,255,255,0.08);
+  --tile-r:20px;
+  --icon-r:12px;
+  --pill-r:999px;
+  --gutter:16px;
+  --side:32px;
+  --ring:3px;
+  --ring-offset:4px;
+  --glow:0 0 32px rgba(34,211,238,0.45);
+  --t-fast:120ms;
+  --t-press:80ms;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:#04070d;color:#e8eef6;font-family:Inter,"Segoe UI",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased}
+
+/* ── Board shell (documentation chrome, not part of the design) ─────────── */
+.board{max-width:1720px;margin:0 auto;padding:40px 28px 72px}
+.board-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px 20px;margin-bottom:24px}
+.board-head h1{font-size:22px;font-weight:650;letter-spacing:-.01em}
+.board-head p{font-size:13px;color:rgba(232,238,246,.5)}
+.legend{display:flex;flex-wrap:wrap;gap:8px;margin-left:auto}
+.chip-spec{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:rgba(232,238,246,.55);
+  border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:5px 10px;background:rgba(255,255,255,.03)}
+
+.pair{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:28px;align-items:start;margin-bottom:56px}
+@media (max-width:1180px){.pair{grid-template-columns:minmax(0,1fr)}.rail{max-width:none;padding-top:0}}
+.frame-wrap{min-width:0;position:relative;overflow-x:auto;overflow-y:hidden;padding:8px 10px 4px;margin:-8px -10px -4px}
+.frame-wrap::-webkit-scrollbar{height:8px}
+.frame-wrap::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:999px}
+.zoom{display:inline-flex;gap:2px;padding:3px;border-radius:999px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1)}
+.zoom button{background:none;border:0;color:rgba(232,238,246,.6);font:inherit;font-size:11.5px;font-weight:600;
+  padding:4px 10px;border-radius:999px;cursor:pointer}
+.zoom button[aria-pressed="true"]{background:rgba(34,211,238,.16);color:#c9f7ff;box-shadow:inset 0 0 0 1px rgba(34,211,238,.45)}
+.frame-label{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+.frame-label b{font-size:14px;font-weight:650}
+.frame-label span{font-size:12px;color:rgba(232,238,246,.45)}
+.frame-scaler{position:relative;transform-origin:top left}
+.rail{min-width:0;display:flex;flex-direction:column;gap:14px;padding-top:28px}
+.rail h3{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:rgba(34,211,238,.8);font-weight:700}
+.rail ul{list-style:none;display:flex;flex-direction:column;gap:7px}
+.rail li{font-size:12.5px;line-height:1.5;color:rgba(232,238,246,.62);display:flex;gap:8px}
+.rail li b{color:#e8eef6;font-weight:600}
+.rail code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:#9fe9f6;
+  background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.18);border-radius:6px;padding:1px 5px}
+.rail .note{font-size:12px;line-height:1.55;color:rgba(232,238,246,.42);border-left:2px solid rgba(34,211,238,.35);padding-left:10px}
+
+/* ── The device frames ────────────────────────────────────────────────── */
+.frame{
+  position:relative;overflow:hidden;flex:none;
+  background:
+    radial-gradient(480px 480px at 240px 300px, rgba(34,211,238,.14), transparent 70%),
+    radial-gradient(520px 420px at 92% 96%, rgba(124,58,237,.12), transparent 70%),
+    linear-gradient(135deg, var(--navy-a), var(--navy-b));
+  border-radius:6px;
+  box-shadow:0 30px 80px -30px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.06);
+  display:flex;flex-direction:column;
+}
+.frame.a{width:1280px;height:720px;padding:0 var(--side)}
+.frame.b{width:1024px;height:768px;padding:0 var(--side)}
+/* 2% film grain, identical in both frames */
+.frame::after{
+  content:"";position:absolute;inset:0;pointer-events:none;opacity:.02;z-index:9;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3'/></filter><rect width='120' height='120' filter='url(%23n)'/></svg>");
+}
+
+/* Status bar */
+.statusbar{height:56px;flex:none;display:flex;align-items:center;justify-content:space-between}
+.idline{display:flex;align-items:baseline;gap:10px}
+.idline .name{font-size:20px;font-weight:650;letter-spacing:-.01em}
+.idline .ver{font-size:12px;color:rgba(232,238,246,.4)}
+.frame.b .idline .ver{font-size:14px}          /* 12px is below the Brick floor; annotated */
+.status-right{display:flex;align-items:center;gap:18px;font-size:14px;color:rgba(232,238,246,.72)}
+.signal{display:flex;align-items:flex-end;gap:2px;height:14px}
+.signal i{width:3px;border-radius:1px;background:rgba(232,238,246,.75);display:block}
+.signal i:nth-child(1){height:5px}.signal i:nth-child(2){height:8px}
+.signal i:nth-child(3){height:11px}.signal i:nth-child(4){height:14px;background:rgba(232,238,246,.28)}
+.bell{width:40px;height:40px;border-radius:999px;display:grid;place-items:center;position:relative;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);cursor:pointer}
+.bell .badge{position:absolute;top:-2px;right:-2px;min-width:18px;height:18px;border-radius:999px;
+  background:var(--red);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;
+  box-shadow:0 0 0 2px rgba(7,11,20,.9)}
+
+/* Header */
+.header{flex:none;display:flex;align-items:center;justify-content:space-between;gap:24px}
+.frame.a .header{height:72px;margin-top:16px}
+.frame.b .header{height:64px;margin-top:8px}
+.greeting{font-size:32px;line-height:40px;font-weight:600;letter-spacing:-.015em}
+.subline{font-size:16px;line-height:22px;color:rgba(232,238,246,.6);margin-top:2px}
+.header-right{display:flex;align-items:center;gap:12px}
+
+/* PS4 / PS5 pill toggle group */
+.psgroup{display:flex;align-items:center;gap:4px;height:44px;padding:4px;border-radius:999px;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08)}
+.pspill{height:36px;display:flex;align-items:center;gap:8px;padding:0 14px;border-radius:999px;
+  font-size:14px;font-weight:600;color:rgba(232,238,246,.72);cursor:pointer;transition:transform var(--t-press) ease-out}
+.pspill .dot{width:8px;height:8px;border-radius:999px;background:var(--grey)}
+.pspill[data-state="on"]{background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.45);color:#e8fbff}
+.pspill[data-state="on"] .dot{background:var(--green);box-shadow:0 0 8px rgba(52,211,153,.7)}
+.scanbtn{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;cursor:pointer;
+  background:linear-gradient(180deg,rgba(255,255,255,.09),rgba(255,255,255,.04));
+  border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(18px)}
+
+/* Continue card */
+.hero{flex:none;display:flex;gap:var(--gutter);margin-top:16px}
+.frame.a .hero{height:320px}
+.frame.b .hero{height:280px}
+.continue{position:relative;border-radius:var(--tile-r);overflow:hidden;flex:none;cursor:pointer;
+  transition:transform var(--t-fast) ease-out}
+.frame.a .continue{width:480px}
+.frame.b .continue{width:384px}
+.continue .thumb{position:absolute;inset:0;filter:blur(12px);transform:scale(1.12);
+  background:
+    radial-gradient(60% 70% at 30% 30%, rgba(34,211,238,.5), transparent 65%),
+    radial-gradient(50% 60% at 75% 25%, rgba(124,58,237,.55), transparent 62%),
+    linear-gradient(150deg,#0b2a3a,#15244a 55%,#08101c);}
+.continue .scrim{position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(0,0,0,.2) 0%,rgba(0,0,0,.35) 45%,rgba(0,0,0,.7) 100%)}
+.continue .top{position:absolute;left:20px;right:20px;top:20px;display:flex;justify-content:space-between;align-items:flex-start}
+.chip-continue{display:inline-flex;align-items:center;height:26px;padding:0 10px;border-radius:8px;
+  font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--cyan);
+  background:rgba(34,211,238,.15);border:1px solid rgba(34,211,238,.35)}
+.playbtn{width:56px;height:56px;border-radius:999px;background:var(--cyan);display:grid;place-items:center;
+  box-shadow:0 0 24px rgba(34,211,238,.35)}
+.playbtn svg{color:var(--cyan-ink)}
+.continue .bottom{position:absolute;left:24px;right:24px;bottom:24px}
+.continue .title{font-size:24px;line-height:29px;font-weight:600;letter-spacing:-.01em;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;text-shadow:0 2px 16px rgba(0,0,0,.6)}
+.continue .meta{font-size:14px;color:rgba(232,238,246,.6);margin-top:6px}
+.continue .progrow{display:flex;align-items:center;gap:12px;margin-top:12px}
+.progress{position:relative;flex:1;height:8px;border-radius:999px;background:rgba(255,255,255,.2)}
+.progress .fill{position:absolute;inset:0;width:63%;border-radius:999px;
+  background:linear-gradient(90deg,#12a7bd,var(--cyan))}
+.progress .head{position:absolute;left:63%;top:50%;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:999px;
+  background:#eafcff;box-shadow:0 0 12px rgba(34,211,238,.9),0 0 0 2px rgba(34,211,238,.45)}
+.progress-label{font-size:14px;color:rgba(232,238,246,.7);flex:none}
+.resume{margin-top:14px;height:44px;padding:0 18px;border-radius:999px;display:inline-flex;align-items:center;gap:10px;
+  background:var(--cyan);color:var(--cyan-ink);font-size:15px;font-weight:700;cursor:pointer}
+.glyph{width:20px;height:20px;border-radius:999px;background:rgba(6,32,42,.22);display:grid;place-items:center;
+  font-size:11px;font-weight:800;line-height:1}
+
+/* Right column */
+.rightcol{flex:1;display:flex;flex-direction:column;gap:var(--gutter);min-width:0}
+.frame.a .rightcol{height:320px}
+.frame.b .rightcol{height:280px}
+
+.tile{position:relative;border-radius:var(--tile-r);background:var(--card);
+  border:1px solid var(--card-border);backdrop-filter:blur(24px);
+  cursor:pointer;overflow:hidden;transition:transform var(--t-fast) ease-out}
+.frame.b .tile{backdrop-filter:none;background:rgba(255,255,255,.06)}  /* low-power: flat fill */
+
+/* Media tile (accent) */
+.media{display:flex;align-items:center;gap:20px;padding:0 24px;
+  background:linear-gradient(100deg,rgba(34,211,238,.22),rgba(59,130,246,.22) 70%,rgba(124,58,237,.14));
+  border:1px solid rgba(34,211,238,.4)}
+.frame.a .media{height:152px}
+.frame.b .media{height:132px}
+.media .iconbox{width:56px;height:56px}
+.media .txt{display:flex;flex-direction:column;gap:2px;min-width:0}
+.media .name{font-size:24px;font-weight:600;letter-spacing:-.01em}
+.media .desc{font-size:14px;color:rgba(232,238,246,.6)}
+.frame.b .media .desc{font-size:16px}
+.wave{position:absolute;right:0;top:0;bottom:0;width:200px;opacity:.08;pointer-events:none}
+
+/* Standard tile anatomy: icon top-left, text bottom-left, never centred */
+.tile.std{padding:20px;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-start;text-align:left}
+.tile.std .name{font-size:20px;line-height:24px;font-weight:600;letter-spacing:-.01em;
+  max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile.std .desc{font-size:14px;line-height:20px;color:rgba(232,238,246,.6);margin-top:2px;
+  max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.frame.b .tile.std{padding:16px}
+/* The 120px grid tile + 48px icon + 16px type floor leaves exactly 12px of inset:
+   20px would clip the subtitle. */
+.frame.b .row2 .tile.std{padding:12px 16px}
+/* FRAME B reads the 16px floor as absolute: chip, meta, progress label, pill
+   and version line all sit at 16px instead of 12–14px. */
+.frame.b .chip-continue{font-size:16px;height:28px;padding:0 12px}
+.frame.b .continue .meta,.frame.b .progress-label{font-size:16px}
+.frame.b .pspill{font-size:16px;padding:0 16px}
+.frame.b .idline .ver{font-size:16px}
+.frame.b .tile.std .desc{font-size:16px;line-height:22px}
+
+.iconbox{width:48px;height:48px;border-radius:var(--icon-r);display:grid;place-items:center;
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.07);flex:none}
+.iconbox svg{width:24px;height:24px;stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.media .iconbox{background:rgba(6,32,42,.45);border-color:rgba(255,255,255,.18)}
+.media .iconbox svg{stroke:var(--cyan)}
+
+/* Rows */
+.hero-right1{flex:none;display:flex}
+.hero-right1 .tile{flex:1;min-width:0}
+.hero-right2{flex:none;display:flex;gap:var(--gutter)}
+.frame.a .hero-right1{height:152px}
+.frame.a .hero-right2{height:152px}
+.frame.b .hero-right1{height:132px}
+.frame.b .hero-right2{height:132px}
+.hero-right2 .tile{flex:1;min-width:0}
+
+.row2{flex:none;display:flex;gap:var(--gutter);margin-top:16px}
+.frame.a .row2{height:152px}
+.frame.b .row2{height:256px;display:grid;grid-template-columns:repeat(3,1fr);
+  grid-template-rows:repeat(2,120px);gap:var(--gutter)}
+.row2 .tile{flex:1;min-width:0}
+
+.footer{flex:none;height:56px;margin-top:16px;display:flex;align-items:center;justify-content:space-between;
+  padding:0 16px;border-radius:12px 12px 0 0;background:rgba(0,0,0,.25);
+  border-top:1px solid rgba(255,255,255,.06)}
+.exit{height:36px;padding:0 14px;border-radius:999px;display:inline-flex;align-items:center;gap:8px;
+  font-size:14px;color:rgba(232,238,246,.8);background:rgba(255,255,255,.06);
+  border:1px solid rgba(255,255,255,.1);cursor:pointer}
+.frame.b .exit{font-size:16px}
+.hints{display:flex;align-items:center;gap:18px}
+.hint{display:flex;align-items:center;gap:7px;font-size:14px;color:rgba(232,238,246,.5)}
+.frame.b .hint{font-size:16px}
+.hglyph{min-width:22px;height:22px;padding:0 6px;border-radius:999px;display:grid;place-items:center;
+  font-size:11px;font-weight:700;color:rgba(232,238,246,.8);
+  border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.05)}
+
+/* ── Focus: the only interactive style. Hover uses it too. ─────────────── */
+.is-focused{outline:var(--ring) solid var(--cyan);outline-offset:var(--ring-offset);
+  transform:scale(1.03);box-shadow:var(--glow);z-index:5}
+.is-pressed{transform:scale(.98)}
+.tile,.continue,.pspill,.scanbtn,.bell,.exit{transition:transform var(--t-fast) ease-out,
+  outline-color var(--t-fast) ease-out, box-shadow var(--t-fast) ease-out}
+
+.orderflow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.orderflow span{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:rgba(232,238,246,.75);
+  background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.22);border-radius:999px;padding:3px 9px 3px 4px}
+.orderflow span b{width:16px;height:16px;border-radius:999px;background:rgba(34,211,238,.9);color:#04141a;
+  font-size:10px;display:grid;place-items:center;font-weight:800}
+.orderflow i{color:rgba(34,211,238,.7);font-style:normal;font-size:11px}
+
+/* ── States strip ─────────────────────────────────────────────────────── */
+.states{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:16px;margin-top:8px}
+.state-card{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:20px}
+.state-card h4{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:rgba(232,238,246,.45);
+  font-weight:700;margin-bottom:14px}
+.state-row{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.mini-tile{width:112px;height:76px;border-radius:14px;background:var(--card);
+  border:1px solid var(--card-border);padding:10px;display:flex;flex-direction:column;justify-content:space-between}
+.mini-tile .iconbox{width:26px;height:26px;border-radius:8px}
+.mini-tile .iconbox svg{width:15px;height:15px}
+.mini-tile .lbl{font-size:12px;font-weight:600}
+.mini-caption{font-size:11px;color:rgba(232,238,246,.4);margin-top:8px;text-align:center;width:112px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <g id="i-play"><path d="M6 4.5v15l13-7.5z" fill="currentColor" stroke="none"/></g>
+    <g id="i-media"><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M8 21h8M12 17v4"/><path d="M10.5 8.2v5.1l4.2-2.55z" fill="currentColor" stroke="none"/></g>
+    <g id="i-files"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l1.6 2H18.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></g>
+    <g id="i-packages"><path d="M12 3.2 20 7v10l-8 3.8L4 17V7z"/><path d="M4 7l8 3.8L20 7M12 10.8V20.8"/></g>
+    <g id="i-apps"><rect x="4" y="4" width="7" height="7" rx="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.6"/></g>
+    <g id="i-star"><path d="M12 3.6l2.6 5.3 5.9.85-4.25 4.1 1 5.85L12 16.9l-5.25 2.8 1-5.85L3.5 9.75l5.9-.85z"/></g>
+    <g id="i-browser"><circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5c2.2 2.4 3.3 5.4 3.3 8.5s-1.1 6.1-3.3 8.5c-2.2-2.4-3.3-5.4-3.3-8.5S9.8 5.9 12 3.5z"/></g>
+    <g id="i-chat"><path d="M20 12.2c0 3.7-3.6 6.7-8 6.7-.9 0-1.8-.1-2.6-.4L4 20.5l1.3-3.6C4 15.6 3.5 14 3.5 12.2c0-3.7 3.6-6.7 8.5-6.7s8 3 8 6.7z"/></g>
+    <g id="i-tools"><path d="M14.7 6.3a4 4 0 0 1 5 5L9.5 21.5l-4-4z"/><path d="M6.8 3.5l3.9 3.9-2.1 2.1L4.7 5.6a3 3 0 0 0 0 4.2l-.9.9a4.2 4.2 0 0 1 3-7.2z"/></g>
+    <g id="i-emulator"><path d="M7.5 8.5h9a4.5 4.5 0 0 1 4.4 3.6l.7 4A3 3 0 0 1 18.7 19c-1 0-1.9-.5-2.4-1.3L15.2 16H8.8l-1.1 1.7A2.9 2.9 0 0 1 5.3 19a3 3 0 0 1-2.9-3l.7-4A4.5 4.5 0 0 1 7.5 8.5z"/><path d="M7 11.5v3M5.5 13h3M15.5 12.5h.01M17.5 14h.01"/></g>
+    <g id="i-settings"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.9 19.3a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15 1.7 1.7 0 0 0 3 14H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3.09V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.51 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1.03z"/></g>
+    <g id="i-power"><path d="M12 3v9"/><path d="M6.6 6.6a8 8 0 1 0 10.8 0"/></g>
+    <g id="i-qr"><rect x="4" y="4" width="6" height="6" rx="1.4"/><rect x="14" y="4" width="6" height="6" rx="1.4"/><rect x="4" y="14" width="6" height="6" rx="1.4"/><path d="M14 14h2.5v2.5H14zM19.5 19.5H17M14 19.5h.01M19.5 14v.01"/></g>
+    <g id="i-bell"><path d="M18 8.5a6 6 0 1 0-12 0c0 6.5-2.5 8.5-2.5 8.5h17S18 15 18 8.5"/><path d="M13.7 20.5a2 2 0 0 1-3.4 0"/></g>
+  </defs>
+</svg>
+
+<div class="board">
+  <div class="board-head">
+    <h1>JukaHub — Home</h1>
+    <p>Two frames, one design system. Gamepad-first; hover mirrors focus exactly. Fit on a wide panel, pan sideways on a narrow one, 1:1 to inspect detail.</p>
+    <div class="legend">
+      <span class="chip-spec">8px grid</span>
+      <span class="chip-spec">32 / 16 margins</span>
+      <span class="chip-spec">R20 · R12 · pill</span>
+      <span class="chip-spec">#22D3EE</span>
+      <span class="chip-spec">Inter</span>
+      <div class="zoom" role="group" aria-label="Zoom">
+        <button data-zoom="fit" aria-pressed="true">Fit</button>
+        <button data-zoom="1" aria-pressed="false">1:1</button>
+        <button data-zoom="1.5" aria-pressed="false">1.5×</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ FRAME A ══════════════════════════════════════════════════════ -->
+  <div class="pair">
+    <div class="frame-wrap">
+      <div class="frame-label"><b>FRAME A</b><span>1280×720 · Windows, TrimUI Smart Pro</span></div>
+      <div class="frame-scaler" id="scalerA">
+        <div class="frame a" id="frameA">
+
+          <div class="statusbar">
+            <div class="idline"><span class="name">JukaHub</span><span class="ver">v0.4.0 · 2026-11-03</span></div>
+            <div class="status-right">
+              <span class="signal"><i></i><i></i><i></i><i></i></span>
+              <span>64°F / 50°F</span>
+              <span>07:31</span>
+              <div class="bell" data-focus="bell" data-hover><svg width="20" height="20" viewBox="0 0 24 24"><use href="#i-bell"/></svg><span class="badge">2</span></div>
+            </div>
+          </div>
+
+          <div class="header">
+            <div>
+              <div class="greeting">Good morning</div>
+              <div class="subline">What do you want to do?</div>
+            </div>
+            <div class="header-right">
+              <div class="psgroup">
+                <div class="pspill" data-focus="ps4" data-state="on" data-hover><span class="dot"></span>PS4</div>
+                <div class="pspill" data-focus="ps5" data-state="off" data-hover><span class="dot"></span>PS5</div>
+              </div>
+              <div class="scanbtn" data-focus="scan" data-hover><svg width="22" height="22" viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-qr"/></svg></div>
+            </div>
+          </div>
+
+          <div class="hero">
+            <div class="continue" data-focus="continue" data-hover>
+              <div class="thumb"></div><div class="scrim"></div>
+              <div class="top">
+                <span class="chip-continue">Continue watching</span>
+                <span class="playbtn"><svg width="24" height="24" viewBox="0 0 24 24"><use href="#i-play"/></svg></span>
+              </div>
+              <div class="bottom">
+                <div class="title">Trending - Dei V (Official Video)</div>
+                <div class="meta">Video · 11m ago</div>
+                <div class="progrow">
+                  <div class="progress"><div class="fill"></div><div class="head"></div></div>
+                  <span class="progress-label">2:34 left</span>
+                </div>
+                <span class="resume"><span class="glyph">A</span>Resume</span>
+              </div>
+            </div>
+
+            <div class="rightcol">
+              <div class="hero-right1">
+                <div class="tile media" data-focus="media" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-media"/></svg></div>
+                  <div class="txt"><span class="name">Media</span><span class="desc">Watch and listen</span></div>
+                  <svg class="wave" viewBox="0 0 200 152" preserveAspectRatio="none"><path d="M0 96h10v-24h8v46h9v-62h8v40h10v-22h9v54h9v-34h10v18h9v-44h9v58h10v-26h10v12h9v-38h9v30h10v-16h9v34h10v-48h10v22h9v-10h8v26h6" stroke="#22D3EE" stroke-width="2" fill="none"/></svg>
+                </div>
+              </div>
+              <div class="hero-right2">
+                <div class="tile std" data-focus="files" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-files"/></svg></div>
+                  <div><div class="name">Files</div><div class="desc">Browse storage</div></div>
+                </div>
+                <div class="tile std" data-focus="packages" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-packages"/></svg></div>
+                  <div><div class="name">Packages</div><div class="desc">Install and update</div></div>
+                </div>
+                <div class="tile std" data-focus="apps" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-apps"/></svg></div>
+                  <div><div class="name">Apps</div><div class="desc">Portable and desktop</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row2">
+            <div class="tile std" data-focus="favorites" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-star"/></svg></div>
+              <div><div class="name">Favorites</div><div class="desc">Pinned for later</div></div>
+            </div>
+            <div class="tile std" data-focus="browser" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-browser"/></svg></div>
+              <div><div class="name">Browser</div><div class="desc">The open web</div></div>
+            </div>
+            <div class="tile std" data-focus="chat" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-chat"/></svg></div>
+              <div><div class="name">Chat</div><div class="desc">Messages and servers</div></div>
+            </div>
+            <div class="tile std" data-focus="tools" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-tools"/></svg></div>
+              <div><div class="name">Tools</div><div class="desc">Network and system</div></div>
+            </div>
+            <div class="tile std" data-focus="emulator" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-emulator"/></svg></div>
+              <div><div class="name">Emulator</div><div class="desc">Retro library</div></div>
+            </div>
+            <div class="tile std" data-focus="settings" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-settings"/></svg></div>
+              <div><div class="name">Settings</div><div class="desc">Device and design</div></div>
+            </div>
+          </div>
+
+          <div class="footer">
+            <div class="exit" data-focus="exit" data-hover><svg width="18" height="18" viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-power"/></svg>Exit</div>
+            <div class="hints">
+              <span class="hint"><span class="hglyph"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.2 3h5.6v6.2H21v5.6h-6.2V21H9.2v-6.2H3V9.2h6.2z" fill="currentColor"/></svg></span>D-Pad Navigate</span>
+              <span class="hint"><span class="hglyph">A</span>Open</span>
+              <span class="hint"><span class="hglyph">☰</span>Start Menu</span>
+              <span class="hint"><span class="hglyph">L2</span>R2 Sections</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="rail">
+      <h3>Geometry</h3>
+      <ul>
+        <li><b>Status</b><span>y 0–56 · full bleed</span></li>
+        <li><b>Header</b><span>y 72–144 · 72px</span></li>
+        <li><b>Hero</b><span>y 160–480 · 320px · card 480, column 720</span></li>
+        <li><b>Rows</b><span>Media 720×152 · Files/Packages/Apps 229×152</span></li>
+        <li><b>Second row</b><span>y 496–648 · six tiles 189×152</span></li>
+        <li><b>Footer</b><span>y 664–720 · 56px</span></li>
+        <li><b>Rhythm</b><span>16px gutters everywhere, 32px side margins, no gap left empty</span></li>
+      </ul>
+      <h3>Focus order &#8594;</h3>
+      <div class="orderflow">
+        <span><b>1</b>Continue</span><i>&#8594;</i>
+        <span><b>2</b>Media</span><i>&#8595;</i>
+        <span><b>3</b>Files</span><i>&#8594;</i>
+        <span><b>4</b>Packages</span><i>&#8594;</i>
+        <span><b>5</b>Apps</span><i>&#8595;</i>
+        <span><b>6</b>Chat</span><i>&#8595;</i>
+        <span><b>7</b>Exit</span>
+      </div>
+      <ul>
+        <li><b>&#8593; from hero</b><span>header: PS4 &#8594; PS5 &#8594; Scan</span></li>
+        <li><b>Second row</b><span>Favorites &#8594; &#8230; &#8594; Settings, clamps at both ends</span></li>
+        <li><b>L2 / R2</b><span>jump header &#8596; hero &#8596; second row</span></li>
+      </ul>      <p class="note">This board is live: arrows/WASD move focus in <b>both</b> frames, each following its own geometry (this strip clamps at the ends; the Brick grid wraps), Enter presses, hover paints the same ring. One focus style, no separate hover look.</p>
+    </aside>
+  </div>
+
+  <!-- ══ FRAME B ══════════════════════════════════════════════════════ -->
+  <div class="pair">
+    <div class="frame-wrap">
+      <div class="frame-label"><b>FRAME B</b><span>1024×768 (4:3) · TrimUI Brick</span></div>
+      <div class="frame-scaler" id="scalerB">
+        <div class="frame b" id="frameB">
+
+          <div class="statusbar">
+            <div class="idline"><span class="name">JukaHub</span><span class="ver">v0.4.0</span></div>
+            <div class="status-right">
+              <span class="signal"><i></i><i></i><i></i><i></i></span>
+              <span>64° / 50°</span>
+              <span>07:31</span>
+              <div class="bell" data-focus="bell" data-hover><svg width="20" height="20" viewBox="0 0 24 24"><use href="#i-bell"/></svg><span class="badge">2</span></div>
+            </div>
+          </div>
+
+          <div class="header">
+            <div>
+              <div class="greeting">Good morning</div>
+              <div class="subline">What do you want to do?</div>
+            </div>
+            <div class="header-right">
+              <div class="psgroup">
+                <div class="pspill" data-focus="ps4" data-state="on" data-hover><span class="dot"></span>PS4</div>
+                <div class="pspill" data-focus="ps5" data-state="off" data-hover><span class="dot"></span>PS5</div>
+              </div>
+              <div class="scanbtn" data-focus="scan" data-hover><svg width="22" height="22" viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-qr"/></svg></div>
+            </div>
+          </div>
+
+          <div class="hero">
+            <div class="continue" data-focus="continue" data-hover>
+              <div class="thumb"></div><div class="scrim"></div>
+              <div class="top">
+                <span class="chip-continue">Continue watching</span>
+                <span class="playbtn"><svg width="24" height="24" viewBox="0 0 24 24"><use href="#i-play"/></svg></span>
+              </div>
+              <div class="bottom">
+                <div class="title">Trending - Dei V (Official Video)</div>
+                <div class="meta">Video · 11m ago</div>
+                <div class="progrow">
+                  <div class="progress"><div class="fill"></div><div class="head"></div></div>
+                  <span class="progress-label">2:34 left</span>
+                </div>
+                <span class="resume"><span class="glyph">A</span>Resume</span>
+              </div>
+            </div>
+
+            <div class="rightcol">
+              <div class="hero-right1">
+                <div class="tile media" data-focus="media" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-media"/></svg></div>
+                  <div class="txt"><span class="name">Media</span><span class="desc">Watch and listen</span></div>
+                  <svg class="wave" viewBox="0 0 200 132" preserveAspectRatio="none"><path d="M0 82h10v-20h8v38h9v-52h8v34h10v-18h9v44h9v-28h10v14h9v-36h9v48h10v-22h10v10h9v-30h9v24h10v-13h9v28h10v-40h10v18h9v-8h8v22h6" stroke="#22D3EE" stroke-width="2" fill="none"/></svg>
+                </div>
+              </div>
+              <div class="hero-right2">
+                <div class="tile std" data-focus="files" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-files"/></svg></div>
+                  <div><div class="name">Files</div><div class="desc">Browse storage</div></div>
+                </div>
+                <div class="tile std" data-focus="packages" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-packages"/></svg></div>
+                  <div><div class="name">Packages</div><div class="desc">Install and update</div></div>
+                </div>
+                <div class="tile std" data-focus="apps" data-hover>
+                  <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-apps"/></svg></div>
+                  <div><div class="name">Apps</div><div class="desc">Portable and desktop</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="row2">
+            <div class="tile std" data-focus="favorites" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-star"/></svg></div>
+              <div><div class="name">Favorites</div><div class="desc">Pinned for later</div></div>
+            </div>
+            <div class="tile std" data-focus="browser" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-browser"/></svg></div>
+              <div><div class="name">Browser</div><div class="desc">The open web</div></div>
+            </div>
+            <div class="tile std" data-focus="chat" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-chat"/></svg></div>
+              <div><div class="name">Chat</div><div class="desc">Messages and servers</div></div>
+            </div>
+            <div class="tile std" data-focus="tools" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-tools"/></svg></div>
+              <div><div class="name">Tools</div><div class="desc">Network and system</div></div>
+            </div>
+            <div class="tile std" data-focus="emulator" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-emulator"/></svg></div>
+              <div><div class="name">Emulator</div><div class="desc">Retro library</div></div>
+            </div>
+            <div class="tile std" data-focus="settings" data-hover>
+              <div class="iconbox"><svg viewBox="0 0 24 24"><use href="#i-settings"/></svg></div>
+              <div><div class="name">Settings</div><div class="desc">Device and design</div></div>
+            </div>
+          </div>
+
+          <div class="footer">
+            <div class="exit" data-focus="exit" data-hover><svg width="18" height="18" viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-power"/></svg>Exit</div>
+            <div class="hints">
+              <span class="hint"><span class="hglyph"><svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true"><path d="M9.2 3h5.6v6.2H21v5.6h-6.2V21H9.2v-6.2H3V9.2h6.2z" fill="currentColor"/></svg></span>D-Pad Navigate</span>
+              <span class="hint"><span class="hglyph">A</span>Open</span>
+              <span class="hint"><span class="hglyph">☰</span>Start Menu</span>
+              <span class="hint"><span class="hglyph">L2</span>R2 Sections</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <aside class="rail">
+      <h3>Geometry</h3>
+      <ul>
+        <li><b>Status</b><span>y 0–56</span></li>
+        <li><b>Header</b><span>y 64–128 · 64px</span></li>
+        <li><b>Hero</b><span>y 144–424 · 280px · card 384, column 560</span></li>
+        <li><b>Rows</b><span>Media 560×132 · Files/Packages/Apps 176×132</span></li>
+        <li><b>Grid</b><span>y 440–696 · 3×2 of 309×120, wraps at edges</span></li>
+        <li><b>Footer</b><span>y 712–768 · 56px</span></li>
+        <li><b>Type floor</b><span>16px everywhere — chip, meta and version included; the version drops its date rather than shrinking</span></li>
+      </ul>
+      <h3>Device differences</h3>
+      <ul>
+        <li><b>Blur off</b><span>flat white 6% tiles — low-power GPU</span></li>
+        <li><b>Glow drift off</b><span>static ambience to save battery</span></li>
+        <li><b>Hints</b><span>full labels still fit at 16px; “Start Menu” collapses to glyph-only rather than shrinking if a locale needs the room</span></li>
+      </ul>
+      <h3>Focus order &#8594;</h3>
+      <div class="orderflow">
+        <span><b>1</b>Continue</span><i>&#8594;</i>
+        <span><b>2</b>Media</span><i>&#8595;</i>
+        <span><b>3</b>Files</span><i>&#8594;</i>
+        <span><b>4</b>Packages</span><i>&#8594;</i>
+        <span><b>5</b>Apps</span><i>&#8595;</i>
+        <span><b>6</b>Settings</span>
+      </div>
+      <ul>
+        <li><b>Grid</b><span>Favorites &#8594; Browser &#8594; Chat &#8594; Tools &#8594; Emulator &#8594; Settings, then wraps to Favorites</span></li>
+        <li><b>&#8593; from grid</b><span>lands on the card / row above (Favorites &#8594; Continue)</span></li>
+        <li><b>L2 / R2</b><span>jump header &#8596; hero &#8596; grid</span></li>
+      </ul>
+      <h3>Scaling</h3>
+      <ul>
+        <li><b>≥ 1.6</b><span>FRAME A · 1080p ×1.5 · 1440p ×2 · 4K ×3</span></li>
+        <li><b>≤ 1.4</b><span>FRAME B</span></li>
+        <li><b>16:10 / 3:2</b><span>FRAME A, extra height split between hero and second row</span></li>
+        <li><b>Resize</b><span>focused tile stays in view · letterbox, never stretch</span></li>
+      </ul>
+      <p class="note">Motion: 120ms ease-out on ring, scale and glow; 80ms press; 20s ambient drift on Frame A only. Both frames share every token — only the arrangement changes.</p>
+    </aside>
+  </div>
+
+  <!-- ══ States ═══════════════════════════════════════════════════════ -->
+  <div class="board-head" style="margin-bottom:16px">
+    <h1 style="font-size:16px">States</h1>
+    <p>Same components, identical tokens in both frames.</p>
+  </div>
+  <div class="states">
+    <div class="state-card">
+      <h4>Tile</h4>
+      <div class="state-row">
+        <div>
+          <div class="mini-tile"><div class="iconbox"><svg viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-files"/></svg></div><div class="lbl">Default</div></div>
+          <div class="mini-caption">no ring</div>
+        </div>
+        <div>
+          <div class="mini-tile is-focused"><div class="iconbox"><svg viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-files"/></svg></div><div class="lbl">Focused</div></div>
+          <div class="mini-caption">3px + 4px · 1.03</div>
+        </div>
+        <div>
+          <div class="mini-tile is-focused is-pressed"><div class="iconbox"><svg viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-files"/></svg></div><div class="lbl">Pressed</div></div>
+          <div class="mini-caption">0.98 · 80ms</div>
+        </div>
+      </div>
+    </div>
+    <div class="state-card">
+      <h4>PS4 / PS5 pill</h4>
+      <div class="state-row">
+        <div>
+          <div class="psgroup"><div class="pspill" data-state="on"><span class="dot"></span>PS4</div></div>
+          <div class="mini-caption">connected</div>
+        </div>
+        <div>
+          <div class="psgroup"><div class="pspill" data-state="off"><span class="dot"></span>PS5</div></div>
+          <div class="mini-caption">disconnected</div>
+        </div>
+        <div>
+          <div class="psgroup"><div class="pspill is-focused" data-state="off"><span class="dot"></span>PS5</div></div>
+          <div class="mini-caption">focused</div>
+        </div>
+      </div>
+    </div>
+    <div class="state-card">
+      <h4>Bell</h4>
+      <div class="state-row">
+        <div>
+          <div class="bell"><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-bell"/></svg><span class="badge">2</span></div>
+          <div class="mini-caption">unread: 2</div>
+        </div>
+        <div>
+          <div class="bell"><svg width="20" height="20" viewBox="0 0 24 24" style="stroke:#e8eef6;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"><use href="#i-bell"/></svg></div>
+          <div class="mini-caption">badge hidden</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  /* Focus is keyed by control name, so one key drives BOTH frames: the same
+     arrows, the same order, whichever aspect the device reports. */
+  const nodes = () => [...document.querySelectorAll('[data-focus]')];
+  const keys = () => [...new Set(nodes().map(n => n.dataset.focus))];
+
+  /* Adjacency, authored once per frame. Frame B's second row is a 3×2 grid that
+     wraps at the edges; Frame A is a single row, so its ends clamp. */
+  const shared = {
+    continue: { right: 'media', down: 'favorites', up: 'ps4' },
+    media:    { left: 'continue', down: 'files', up: 'scan' },
+    files:    { right: 'packages', left: 'continue', up: 'media' },
+    packages: { left: 'files', right: 'apps', up: 'media' },
+    apps:     { left: 'packages', up: 'media' },
+    ps4:      { right: 'ps5', down: 'continue' },
+    ps5:      { left: 'ps4', right: 'scan', down: 'continue' },
+    scan:     { left: 'ps5', down: 'media' },
+    bell:     { down: 'scan' }
+  };
+
+  /* Frame A: the second row is one six-wide strip. Vertical moves fall on the
+     tile actually beneath (Continue covers both hero rows), ends clamp. */
+  const strip = ['favorites', 'browser', 'chat', 'tools', 'emulator', 'settings'];
+  const upFromA = { favorites: 'continue', browser: 'continue', chat: 'files', tools: 'media', emulator: 'media', settings: 'media' };
+  const frameA = { ...shared, files: { ...shared.files, down: 'favorites' },
+                    packages: { ...shared.packages, down: 'browser' },
+                    apps: { ...shared.apps, down: 'chat' }, exit: { up: 'favorites' } };
+  strip.forEach((k, i) => {
+    frameA[k] = {
+      right: i < strip.length - 1 ? strip[i + 1] : undefined,
+      left: i > 0 ? strip[i - 1] : undefined,
+      up: upFromA[k],
+      down: 'exit'
+    };
+  });
+
+  /* Frame B: 3×2 grid. Rows connect vertically; the edges wrap (Chat → Tools,
+     Settings → Favorites) and the hero tiles point at the tile below them. */
+  const frameB = {
+    ...shared,
+    files:    { ...shared.files, down: 'emulator' },
+    packages: { ...shared.packages, down: 'settings' },
+    apps:     { ...shared.apps, down: 'settings' },
+    exit:     { up: 'tools' },
+    favorites: { right: 'browser', left: 'settings', down: 'tools', up: 'continue' },
+    browser:   { right: 'chat', left: 'favorites', down: 'emulator', up: 'files' },
+    chat:      { right: 'tools', left: 'browser', down: 'settings', up: 'apps' },
+    tools:     { right: 'emulator', left: 'chat', down: 'favorites', up: 'continue' },
+    emulator:  { right: 'settings', left: 'tools', down: 'browser', up: 'files' },
+    settings:  { right: 'favorites', left: 'emulator', down: 'chat', up: 'apps' }
+  };
+
+  /* One focus key per frame: the same label, moved by that frame's own graph, so
+     Frame A's strip clamps where Frame B's grid wraps. */
+  const state = { frameA: 'continue', frameB: 'continue' };
+  const graphOf = id => (id === 'frameB' ? frameB : frameA);
+  function paint() {
+    for (const n of nodes()) {
+      const id = n.closest('.frame').id;
+      n.classList.toggle('is-focused', state[id] === n.dataset.focus);
+    }
+  }
+  function move(dir) {
+    for (const id of Object.keys(state)) {
+      const next = (graphOf(id)[state[id]] || {})[dir];
+      if (next) state[id] = next;
+    }
+    paint();
+  }
+
+  /* Hover paints the same ring — the spec has no separate hover style — and
+     sets both frames to that control, since the label exists in both. */
+  for (const n of nodes()) {
+    n.addEventListener('mouseenter', () => {
+      state.frameA = n.dataset.focus; state.frameB = n.dataset.focus; paint();
+    });
+    n.addEventListener('mousedown', () => n.classList.add('is-pressed'));
+    n.addEventListener('mouseup', () => n.classList.remove('is-pressed'));
+    n.addEventListener('mouseleave', () => n.classList.remove('is-pressed'));
+  }
+
+  const bands = [
+    ['ps4', 'ps5', 'scan'],
+    ['continue', 'media', 'files', 'packages', 'apps'],
+    ['favorites', 'browser', 'chat', 'tools', 'emulator', 'settings']
+  ];
+  const bandOf = k => Math.max(0, bands.findIndex(b => b.includes(k)));
+
+  window.addEventListener('keydown', e => {
+    const dirs = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+                   a: 'left', d: 'right', w: 'up', s: 'down' };
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      for (const n of document.querySelectorAll('.frame .is-focused')) {
+        n.classList.add('is-pressed');
+        setTimeout(() => n.classList.remove('is-pressed'), 80);
+      }
+      return;
+    }
+    // L2 / R2 (PageUp / PageDown, Q / E) jump between the three bands.
+    if (['PageUp', 'PageDown', 'q', 'Q', 'e', 'E'].includes(e.key)) {
+      e.preventDefault();
+      const back = ['PageUp', 'q', 'Q'].includes(e.key);
+      for (const id of Object.keys(state)) {
+        state[id] = bands[(bandOf(state[id]) + (back ? 2 : 1)) % 3][0];
+      }
+      paint(); return;
+    }
+    const dir = dirs[e.key];
+    if (dir) { e.preventDefault(); move(dir); }
+  });
+
+  paint();
+
+  /* The design is fixed at its logical size; only the canvas is scaled. "Fit"
+     letterboxes into the rail's column, 1:1 and 1.5x pan inside it. */
+  let zoomMode = 'fit';
+  function fit() {
+    for (const [scalerId, frameId, natural] of [['scalerA', 'frameA', 1280], ['scalerB', 'frameB', 1024]]) {
+      const scaler = document.getElementById(scalerId);
+      const frame = document.getElementById(frameId);
+      const avail = scaler.parentElement.clientWidth - 20;
+      // Never shrink below half size: on a narrow panel panning beats illegible.
+      const scale = zoomMode === 'fit' ? Math.min(1, Math.max(0.55, avail / natural)) : Number(zoomMode);
+      frame.style.transform = `scale(${scale})`;
+      frame.style.transformOrigin = 'top left';
+      scaler.style.width = (natural * scale) + 'px';
+      scaler.style.height = (frame.offsetHeight * scale) + 'px';
+    }
+    document.querySelectorAll('[data-zoom]').forEach(b =>
+      b.setAttribute('aria-pressed', String(b.dataset.zoom === zoomMode)));
+  }
+  document.querySelectorAll('[data-zoom]').forEach(b => b.addEventListener('click', () => {
+    if (!b.dataset.zoom) return;
+    zoomMode = b.dataset.zoom; fit();
+  }));
+  window.addEventListener('resize', fit);
+  fit();
+})();
+</script>
+</body>
+</html>

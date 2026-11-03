@@ -11,21 +11,53 @@ import (
 // combination can be pinned.
 func TestIdleScreenHoldOff(t *testing.T) {
 	cases := []struct {
-		name                                        string
-		uiBlocked, music, paused, download, patched bool
-		want                                        bool
+		name                                               string
+		uiBlocked, music, paused, video, download, patched bool
+		want                                               bool
 	}{
-		{"idle device", false, false, false, false, false, false},
-		{"panel open", true, false, false, false, false, true},
-		{"music playing", false, true, false, false, false, true},
-		{"music paused", false, false, true, false, false, true},
-		{"download running", false, false, false, true, false, true},
-		{"patch install running", false, false, false, false, true, true},
+		{"idle device", false, false, false, false, false, false, false},
+		{"panel open", true, false, false, false, false, false, true},
+		{"music playing", false, true, false, false, false, false, true},
+		{"music paused", false, false, true, false, false, false, true},
+		{"video playing", false, false, false, true, false, false, true},
+		{"download running", false, false, false, false, true, false, true},
+		{"patch install running", false, false, false, false, false, true, true},
 	}
 	for _, tc := range cases {
-		got := idleScreenHoldOffFrom(tc.uiBlocked, tc.music, tc.paused, tc.download, tc.patched)
+		got := idleScreenHoldOffFrom(tc.uiBlocked, tc.music, tc.paused, tc.video, tc.download, tc.patched)
 		if got != tc.want {
 			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A video that is playing, paused or still downloading is a reason to keep the
+// panel awake; an idle or finished player is not. This is the state the gate
+// used to miss, which is how a video kept playing into a dark screen.
+func TestVideoHoldsScreenAwake(t *testing.T) {
+	embeddedPlayer.mu.Lock()
+	previous := embeddedPlayer.phase
+	embeddedPlayer.mu.Unlock()
+	t.Cleanup(func() {
+		embeddedPlayer.mu.Lock()
+		embeddedPlayer.phase = previous
+		embeddedPlayer.mu.Unlock()
+	})
+
+	cases := map[string]bool{
+		"":            false,
+		"idle":        false,
+		"playing":     true,
+		"paused":      true,
+		"downloading": true,
+		"error":       true,
+	}
+	for phase, want := range cases {
+		embeddedPlayer.mu.Lock()
+		embeddedPlayer.phase = phase
+		embeddedPlayer.mu.Unlock()
+		if got := videoHoldsScreenAwake(); got != want {
+			t.Errorf("phase %q: got %v, want %v", phase, got, want)
 		}
 	}
 }

@@ -43,11 +43,44 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
+
+// lowestWorkingSet is the smallest resident set among the given samples, the
+// floor the process has demonstrated it can get back to. Hosts without a reader
+// report 0, and a sample without a reading is not a floor, so those are skipped
+// rather than counted as the best pass ever.
+func lowestWorkingSet(samples []navMemSample) uint64 {
+	var floor uint64
+	for _, s := range samples {
+		if s.rss > 0 && (floor == 0 || s.rss < floor) {
+			floor = s.rss
+		}
+	}
+	return floor
+}
+
+// workingSetGrowth is how far the last pass ended above the floor, or 0 when it
+// stayed within slack or the host cannot read a working set (a missing reading
+// is not an opinion, and must never read as "no growth" on a host that has one).
+func workingSetGrowth(samples []navMemSample, slack int64) int64 {
+	if len(samples) < 3 {
+		return 0
+	}
+	floor := lowestWorkingSet(samples[1 : len(samples)-1])
+	final := samples[len(samples)-1]
+	if floor == 0 || final.rss == 0 {
+		return 0
+	}
+	if d := int64(final.rss) - int64(floor); d > slack {
+		return d
+	}
+	return 0
+}
 
 // navMemSample is one round's accounting. Bytes unless the name says entries.
 type navMemSample struct {
@@ -88,10 +121,13 @@ func (s navMemSample) sceneOwnedBytes() int64 {
 	return s.textCache + s.homeLabels + s.shapes
 }
 
-// sampleNavMemory reads every cache the player knows about. runtime.GC runs
-// first so heapLive is live data rather than garbage nobody has swept yet.
+// sampleNavMemory reads every cache the player knows about. The collection and
+// the scavenge run first so both memory numbers describe live data: heapLive is
+// what survived the sweep, and the working set read below has already had the
+// freed Go arenas handed back to the OS instead of still counting them.
 func sampleNavMemory(round int) navMemSample {
 	runtime.GC()
+	debug.FreeOSMemory()
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
@@ -168,6 +204,71 @@ func TestSceneNavigationSamplerSeesGrowth(t *testing.T) {
 	}
 	if after.textures() <= before.textures() {
 		t.Fatal("the texture total did not move with the cache it is built from")
+	}
+}
+
+// The working-set gate takes its reference from this helper, so the one thing
+// that could quietly disable it is a floor of 0 — a comparison against nothing —
+// or a floor taken from the wrong sample. Both are checked here rather than
+// inferred from a green run.
+func TestLowestWorkingSetSkipsUnreadableSamples(t *testing.T) {
+	cases := []struct {
+		name string
+		rss  []uint64
+		want uint64
+	}{
+		{"no reader on this host", []uint64{0, 0, 0}, 0},
+		{"an unreadable sample is not the floor", []uint64{0, 900, 0, 700}, 700},
+		{"the minimum wins in any order", []uint64{900, 700, 800}, 700},
+		{"one sample is its own floor", []uint64{512}, 512},
+	}
+	for _, c := range cases {
+		samples := make([]navMemSample, len(c.rss))
+		for i, rss := range c.rss {
+			samples[i].round, samples[i].rss = i+1, rss
+		}
+		if got := lowestWorkingSet(samples); got != c.want {
+			t.Errorf("%s: lowestWorkingSet = %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// The gate itself, on the numbers it has actually been asked to judge: the
+// ubuntu runner's four passes (929/939/920/938 MB — a reclaim then a rise, which
+// the old neighbouring-pair rule failed) and a leak that adds 10 MB to every
+// pass (which it must still fail, or the extra passes buy nothing).
+func TestWorkingSetGateReadsTheFloorNotTheLastPair(t *testing.T) {
+	const mb = 1 << 20 // untyped: the table uses it for bytes and for a difference
+	seq := func(rss ...uint64) []navMemSample {
+		samples := make([]navMemSample, len(rss))
+		for i, v := range rss {
+			samples[i].round, samples[i].rss = i+1, v
+		}
+		return samples
+	}
+	const slack = int64(24 << 20)
+
+	cases := []struct {
+		name string
+		rss  []uint64
+		want int64
+	}{
+		{"the runner's churn is not a leak", []uint64{907 * mb, 917 * mb, 898 * mb, 916 * mb}, 0},
+		{"a leak every pass still fails", []uint64{907 * mb, 917 * mb, 927 * mb, 937 * mb, 947 * mb, 957 * mb}, 40 * mb},
+		{"a single spike after a reclaim is churn", []uint64{900 * mb, 910 * mb, 890 * mb, 905 * mb}, 0},
+		{"no reading on this host is not a pass or a failure", []uint64{0, 0, 0, 0}, 0},
+		{"too few passes to have a floor", []uint64{900 * mb, 950 * mb}, 0},
+	}
+	for _, c := range cases {
+		got := workingSetGrowth(seq(c.rss...), slack)
+		if (got > 0) != (c.want > 0) {
+			t.Errorf("%s: workingSetGrowth = %d, want the gate to %s", c.name, got,
+				map[bool]string{true: "fail", false: "pass"}[c.want > 0])
+			continue
+		}
+		if c.want > 0 && got != c.want {
+			t.Errorf("%s: workingSetGrowth = %d bytes, want %d", c.name, got, c.want)
+		}
 	}
 }
 
@@ -400,7 +501,12 @@ func TestSceneNavigationMemory(t *testing.T) {
 	covers, coverBytes := openNavMemLibraryArt(t)
 	t.Cleanup(closeNavMemLibraryArt)
 
-	const rounds = 4
+	// Six passes, not four. The working set is the one column a leaked native
+	// surface shows in, and it is also the noisiest — an identical pass can move
+	// it by 20 MB (see rssSlack). A leak adds to it every pass while noise
+	// averages out, so the extra passes are what tell the two apart: they widen
+	// the leak's signal without widening the allowance it is read against.
+	const rounds = 6
 	samples := make([]navMemSample, 0, rounds)
 	for round := 1; round <= rounds; round++ {
 		if n := walkScenePass(t, renderer, config); n < 20 {
@@ -442,7 +548,7 @@ func TestSceneNavigationMemory(t *testing.T) {
 			(cur.homeLabels-prev.homeLabels)>>10,
 			(cur.artBytes-prev.artBytes)>>10, cur.artCount-prev.artCount,
 			int64(cur.heapLive-prev.heapLive)>>10,
-			int64(cur.rss-prev.rss)>>10)
+			(int64(cur.rss)-int64(prev.rss))>>10)
 	}
 
 	// The first pass is the warm-up: it fills the caches, so it is allowed to
@@ -452,8 +558,16 @@ func TestSceneNavigationMemory(t *testing.T) {
 	// growth in the resident set (where a native surface leaked by a draw path
 	// would show up, since the Go heap cannot see it).
 	const (
-		heapSlack = int64(4 << 20)  // collector noise, observed at <100 KB
-		rssSlack  = int64(16 << 20) // allocator/page-cache noise, observed at ~1.4 MB
+		heapSlack = int64(4 << 20) // collector noise, observed at <100 KB
+		// The working set is not a per-pass number: each pass decodes the same
+		// covers again and frees them, and the allocator keeps the freed blocks
+		// for reuse instead of returning them. Identical passes moved it 19 MB
+		// in either direction on the ubuntu runner (6 MB on a Windows desktop),
+		// so the allowance has to sit above that churn — the 16 MB it used to
+		// be was measured on the desktop and failed the runner on a 18 MB rise
+		// that followed a 19 MB drop. It is read against the floor below, which
+		// the extra passes raise only when something is actually retained.
+		rssSlack = int64(24 << 20)
 		// A background goroutine left by another test can draw one label or
 		// measure one string while the next pass renders (a clock tick, a
 		// toast, a thumbnail note). That is real work, not a leak, so the
@@ -501,12 +615,20 @@ func TestSceneNavigationMemory(t *testing.T) {
 		if d := int64(cur.heapLive) - int64(prev.heapLive); d > heapSlack {
 			t.Errorf("pass %d→%d grew the live Go heap by %d bytes", prev.round, cur.round, d)
 		}
-		if prev.rss > 0 && cur.rss > 0 {
-			if d := int64(cur.rss) - int64(prev.rss); d > rssSlack {
-				t.Errorf("pass %d→%d grew the process working set by %d bytes (a native surface/texture may not be freed)",
-					prev.round, cur.round, d)
-			}
-		}
+	}
+
+	// A leak is what noise is not: it raises the floor. Any memory the process
+	// has already given back is memory it can reach again, so the reference is
+	// the lowest working set of the passes after the warm-up, and the last pass
+	// has to come back to within rssSlack of it. Comparing two neighbouring
+	// passes instead — what this used to do — reads a single reclaim as the
+	// baseline and fails on the ordinary swing that follows it; that is exactly
+	// how the run that prompted this change failed (round 3→4, after 2→3 had
+	// dropped 19 MB).
+	if d := workingSetGrowth(samples, rssSlack); d > 0 {
+		floor := lowestWorkingSet(samples[1 : len(samples)-1])
+		t.Errorf("the working set settled at %d KB but the last pass ended %d KB above it "+
+			"(a native surface/texture may not be freed)", floor>>10, d>>10)
 	}
 
 	// The substitution cache is the one cache whose entry count is *not* a leak

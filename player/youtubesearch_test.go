@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -333,6 +334,71 @@ func TestSameMediaResults(t *testing.T) {
 //
 // These run against a local server: the window logic is the part that decides
 // how many requests a page costs, and that has to be provable without a network.
+
+// The web request must look like the browser it names. A user agent with no
+// client hints or fetch metadata is the odd one out, and that is the pattern a
+// bot check reacts to, so the whole set is asserted rather than just the agent.
+func TestNativeSearchSendsMobileBrowserHeaders(t *testing.T) {
+	var got http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		_, _ = io.WriteString(w, nativeSearchFirstPageFixture)
+	}))
+	prevURL, prevClient := nativeSearchURL, nativeSearchHTTPClient
+	nativeSearchURL, nativeSearchHTTPClient = server.URL, server.Client()
+	nativeSearchWindows = nativeSearchWindowCache{}
+	t.Cleanup(func() {
+		nativeSearchURL, nativeSearchHTTPClient = prevURL, prevClient
+		nativeSearchWindows = nativeSearchWindowCache{}
+		server.Close()
+	})
+
+	if _, err := nativeSearchWindowFor(context.Background(), "lofi", 2); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if got == nil {
+		t.Fatal("the endpoint was never called")
+	}
+
+	want := map[string]string{
+		"User-Agent":         youtubeWebUserAgent,
+		"Sec-Ch-Ua":          youtubeWebClientHints,
+		"Sec-Ch-Ua-Mobile":   "?1",
+		"Sec-Ch-Ua-Platform": `"Android"`,
+		"Sec-Fetch-Site":     "same-origin",
+		"Sec-Fetch-Mode":     "cors",
+		"Sec-Fetch-Dest":     "empty",
+		"Accept-Language":    "en-US,en;q=0.9",
+		"Accept":             "application/json",
+	}
+	for name, value := range want {
+		if actual := got.Get(name); actual != value {
+			t.Errorf("%s = %q, want %q", name, actual, value)
+		}
+	}
+	if agent := got.Get("User-Agent"); !strings.Contains(agent, "Mobile Safari") {
+		t.Errorf("user agent %q is not a mobile browser", agent)
+	}
+}
+
+// A user agent claiming one Chrome major version and client hints claiming
+// another is worse than either alone: the pair has to stay in step when the
+// browser identity is bumped.
+func TestWebBrowserIdentityAgreesWithItself(t *testing.T) {
+	major := ""
+	if m := regexp.MustCompile(`Chrome/(\d+)\.`).FindStringSubmatch(youtubeWebUserAgent); len(m) == 2 {
+		major = m[1]
+	}
+	if major == "" {
+		t.Fatalf("user agent %q names no Chrome version", youtubeWebUserAgent)
+	}
+	if !strings.Contains(youtubeWebClientHints, `"Google Chrome";v="`+major+`"`) {
+		t.Fatalf("hints %q do not name Chrome %s from the user agent", youtubeWebClientHints, major)
+	}
+	if strings.Contains(youtubeWebUserAgent, "Windows NT") {
+		t.Fatalf("user agent %q is a desktop browser", youtubeWebUserAgent)
+	}
+}
 
 const nativeSearchFirstPageFixture = `{"contents":{"twoColumnSearchResultsRenderer":{"primaryContents":{"sectionListRenderer":{"contents":[
 {"itemSectionRenderer":{"contents":[

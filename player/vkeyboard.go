@@ -810,8 +810,17 @@ func vkTitle() string {
 	case vkTargetToolsURL:
 		return "HTTP CHECK"
 	case vkTargetNetwork:
-		if netPrompt == netPromptWhois {
+		switch netPrompt {
+		case netPromptWhois:
 			return "WHOIS LOOKUP"
+		case netPromptCert:
+			return "TLS CERTIFICATE"
+		case netPromptBanner:
+			return "SERVICE BANNER"
+		case netPromptHeaders:
+			return "SECURITY HEADERS"
+		case netPromptCodec:
+			return "ENCODE / DECODE"
 		}
 		return "PORT CHECK"
 	case vkTargetFiles:
@@ -907,8 +916,17 @@ func vkPlaceholder() string {
 	case vkTargetToolsURL:
 		return "example.com or https://…"
 	case vkTargetNetwork:
-		if netPrompt == netPromptWhois {
+		switch netPrompt {
+		case netPromptWhois:
 			return "example.com"
+		case netPromptCert:
+			return "example.com or example.com:8443"
+		case netPromptBanner:
+			return "192.168.1.7:22"
+		case netPromptHeaders:
+			return "example.com or https://…"
+		case netPromptCodec:
+			return "paste a token, a URL or hex"
 		}
 		return "192.168.1.7:22"
 	case vkTargetFiles:
@@ -1249,9 +1267,20 @@ func vkOpenNetPrompt(kind netPromptKind, seed string) {
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
 	if seed == "" {
-		if kind == netPromptWhois {
+		// Each row remembers its own last target, so a correction is an edit
+		// rather than a retype.
+		switch kind {
+		case netPromptWhois:
 			seed = netLastDomain
-		} else {
+		case netPromptCert:
+			seed = netLastCert
+		case netPromptBanner:
+			seed = netLastBanner
+		case netPromptHeaders:
+			seed = netLastHeaders
+		case netPromptCodec:
+			seed = netLastCodec
+		default:
 			seed = netLastPort
 		}
 	}

@@ -32,6 +32,13 @@ const (
 	splashStars    = 320  // warp starfield size
 	splashRingN    = 84   // stars on the orbital ring
 	splashFadeMS   = 260  // soft fade at the very end
+
+	// splashWorkBudget is how much of each splash frame may be spent on queued
+	// startup work. The frame itself costs a few milliseconds on the software
+	// renderer, so this keeps the animation at roughly 60 fps while turning the
+	// rest of the window into boot time. A step that overruns simply drops a
+	// frame, which a starfield hides.
+	splashWorkBudget = 8 * time.Millisecond
 )
 
 // splash timeline keyframes in milliseconds.
@@ -631,10 +638,12 @@ func drawParticle(renderer *sdl.Renderer, cx, cy, r int32, red, green, blue, alp
 	}
 }
 
-// ShowSplash plays the boot sequence for the time the boot budget left over.
-// The animation's own timeline is compressed into that window, so a short run
-// still shows the whole arc instead of a frozen frame, and a zero allotment
-// opens the UI immediately. Any key press or click skips the rest of it.
+// ShowSplash plays the boot sequence for the time the boot budget left over,
+// running the queued startup work between frames (bootwork.go) so the window is
+// spent booting rather than idling. The animation's own timeline is compressed
+// into that window, so a short run still shows the whole arc instead of a frozen
+// frame, and a zero allotment opens the UI immediately. Any key press or click
+// skips the rest of it; the caller drains whatever work is left.
 func ShowSplash(renderer *sdl.Renderer, config *Config, allotted time.Duration) {
 	if allotted <= 0 {
 		return
@@ -666,6 +675,10 @@ func ShowSplash(renderer *sdl.Renderer, config *Config, allotted time.Duration) 
 		tick := uint64(scaled) + splash.startTick
 		renderSplash(renderer, config, tick)
 		renderer.Present()
+		// The splash is a progress screen, not a pause: the frame it just drew
+		// pays for the queued startup work (placeholder texture, gamepad probe,
+		// keyboard map, focus graph). Bounded so the starfield keeps cadence.
+		bootWorkTick(splashWorkBudget)
 		sdl.Delay(16) // ~60fps
 	}
 	splash.inited = false

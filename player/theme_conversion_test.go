@@ -167,7 +167,7 @@ func TestHomeGridArrangementLaysAHeroMosaic(t *testing.T) {
 	}
 
 	// The header chips and Exit are not part of the mosaic.
-	if got := layout.Items[HomeFocusExit].Rect; got.X != 8 || got.Y != 678 {
+	if got := layout.Items[HomeFocusExit].Rect; got.X != 48 || got.Y != 674 {
 		t.Fatalf("Exit moved to %+v under the grid arrangement", got)
 	}
 	if got := layout.Items[HomeFocusBell].Rect; got.Y >= 164 {
@@ -176,7 +176,7 @@ func TestHomeGridArrangementLaysAHeroMosaic(t *testing.T) {
 
 	// The dashboard composition stays the default, and is not the mosaic.
 	layout.SetArrangement(homeArrangementDashboard)
-	if got := layout.Items[HomeFocusContinue].Rect; got != (sdl.Rect{X: 32, Y: 164, W: 480, H: 258}) {
+	if got := layout.Items[HomeFocusContinue].Rect; got != (sdl.Rect{X: 32, Y: 160, W: 480, H: 320}) {
 		t.Fatalf("dashboard Continue = %+v, want the built-in card", got)
 	}
 }

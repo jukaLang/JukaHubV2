@@ -2071,6 +2071,17 @@ body.ai-open .ai-panel {
   word-break: break-word;
 }
 
+/* Selected transcript text says so itself. Without a rule the highlight is the
+   OS one, and on some systems that is a flat grey-blue close enough to the user
+   bubble's purple (and to the dark bubble's brightness) that dragging over a
+   message looked like nothing had been selected. Inverting against
+   --text-main reads on every bubble colour, and follows the theme because the
+   two variables swap together. */
+.ai-panel ::selection {
+  background: var(--text-main);
+  color: var(--app-bg);
+}
+
 .ai-msg-ai .ai-bubble {
   background: var(--surface-secondary);
   border: 1px solid var(--border-subtle);

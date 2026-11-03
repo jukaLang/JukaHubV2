@@ -497,6 +497,13 @@ type netPromptKind int
 const (
 	netPromptPort netPromptKind = iota
 	netPromptWhois
+	// The rows added with the recon set: what a port presents, what it says,
+	// which hardening headers a site sends, and the codec for the strings those
+	// turn up. All four are read-only; see nettools3.go.
+	netPromptCert
+	netPromptBanner
+	netPromptHeaders
+	netPromptCodec
 )
 
 // netPromptBuffer is the keyboard's working copy; the remembered values below
@@ -506,6 +513,10 @@ var (
 	netPrompt       = netPromptPort
 	netLastPort     string
 	netLastDomain   string
+	netLastCert     string
+	netLastBanner   string
+	netLastHeaders  string
+	netLastCodec    string
 )
 
 // netPortRowValue and netWhoisRowValue are what the tiles show.
@@ -523,6 +534,34 @@ func netWhoisRowValue() string {
 		return netLastDomain
 	}
 	return "Not looked up yet"
+}
+
+func netCertRowValue() string {
+	if netLastCert != "" {
+		return netLastCert
+	}
+	return "Not inspected yet"
+}
+
+func netBannerRowValue() string {
+	if netLastBanner != "" {
+		return netLastBanner
+	}
+	return "Not read yet"
+}
+
+func netHeadersRowValue() string {
+	if netLastHeaders != "" {
+		return netLastHeaders
+	}
+	return "Not checked yet"
+}
+
+func netCodecRowValue() string {
+	if netLastCodec != "" {
+		return netLastCodec
+	}
+	return "Nothing decoded yet"
 }
 
 // netPromptSubmit validates and runs the row that opened the keyboard.
@@ -552,12 +591,64 @@ func netPromptSubmit(raw string) {
 			text, err := whoisSummary(value)
 			return powerAsyncResult{text: text, err: err}
 		})
+	case netPromptCert:
+		if _, _, err := netTargetHostPort(raw, 443); err != nil {
+			ShowToast(err.Error(), ToastKindWarning)
+			vkOpenNetPrompt(netPromptCert, raw)
+			return
+		}
+		netLastCert = strings.TrimSpace(raw)
+		value := netLastCert
+		powerRunFromTools(appConfig, "TLS · "+value, "Reading the certificate…", func() powerAsyncResult {
+			text, err := certSummary(value)
+			return powerAsyncResult{text: text, err: err}
+		})
+	case netPromptBanner:
+		if _, _, err := netPortParseTarget(raw); err != nil {
+			ShowToast(err.Error(), ToastKindWarning)
+			vkOpenNetPrompt(netPromptBanner, raw)
+			return
+		}
+		netLastBanner = strings.TrimSpace(raw)
+		value := netLastBanner
+		powerRunFromTools(appConfig, "Banner · "+value, "Waiting for "+value+"…", func() powerAsyncResult {
+			text, err := bannerSummary(value)
+			return powerAsyncResult{text: text, err: err}
+		})
+	case netPromptHeaders:
+		if _, err := netToolsParseURL(raw); err != nil {
+			ShowToast(err.Error(), ToastKindWarning)
+			vkOpenNetPrompt(netPromptHeaders, raw)
+			return
+		}
+		netLastHeaders = strings.TrimSpace(raw)
+		value := netLastHeaders
+		powerRunFromTools(appConfig, "Headers · "+value, "Fetching "+value+"…", func() powerAsyncResult {
+			text, err := headerAuditSummary(value)
+			return powerAsyncResult{text: text, err: err}
+		})
+	case netPromptCodec:
+		if strings.TrimSpace(raw) == "" {
+			ShowToast("type or paste a string first", ToastKindWarning)
+			vkOpenNetPrompt(netPromptCodec, raw)
+			return
+		}
+		netLastCodec = strings.TrimSpace(raw)
+		value := netLastCodec
+		powerRunFromTools(appConfig, "Codec", "Decoding…", func() powerAsyncResult {
+			text, err := codecSummary(value)
+			return powerAsyncResult{text: text, err: err}
+		})
 	}
 }
 
 // powerProbePortCheck and powerProbeWhois are the tiles' A actions.
 func powerProbePortCheck() { vkOpenNetPrompt(netPromptPort, "") }
 func powerProbeWhois()     { vkOpenNetPrompt(netPromptWhois, "") }
+func powerProbeCert()      { vkOpenNetPrompt(netPromptCert, "") }
+func powerProbeBanner()    { vkOpenNetPrompt(netPromptBanner, "") }
+func powerProbeHeaders()   { vkOpenNetPrompt(netPromptHeaders, "") }
+func powerProbeCodec()     { vkOpenNetPrompt(netPromptCodec, "") }
 func powerProbeClock(config *Config) {
 	powerRunFromTools(config, "Clock check", "Asking pool.ntp.org…", func() powerAsyncResult {
 		text, err := clockOffsetSummary()

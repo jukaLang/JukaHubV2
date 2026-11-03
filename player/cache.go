@@ -18,6 +18,12 @@ type cacheEntry struct {
 }
 
 // cacheOpen opens (or creates) the bbolt cache database.
+//
+// bbolt holds an exclusive lock on the file, so opening the database that
+// openSharedCache already holds waits out the one-second timeout and then fails
+// — silently turning a cache read into a network fetch. In-process callers that
+// touch jukahub.cache must use openSharedCache; cacheOpen is for a path nothing
+// else in the process has open (a copy, a test, a second database).
 func cacheOpen(path string) (*bolt.DB, error) {
 	return bolt.Open(path, 0o600, &bolt.Options{Timeout: time.Second})
 }

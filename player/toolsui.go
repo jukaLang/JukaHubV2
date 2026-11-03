@@ -55,6 +55,14 @@ const (
 	toolsActionWhois
 	toolsActionClockCheck
 	toolsActionSubnet
+	// What is behind a port rather than whether it is open: the certificate a
+	// TLS service presents, the greeting a service sends, the hardening headers
+	// a site returns, and the codec for the strings those checks turn up.
+	// Implementations live in nettools3.go.
+	toolsActionCert
+	toolsActionBanner
+	toolsActionHeaders
+	toolsActionCodec
 )
 
 // toolsStatus colours the small dot on a row: a server that is running is
@@ -328,6 +336,14 @@ func toolsRows(config *Config) []toolsRow {
 		enabled: true,
 	})
 	share = append(share, toolsRow{
+		label:   "Service banner",
+		value:   netBannerRowValue(),
+		detail:  "The greeting a port sends before it is asked anything",
+		hint:    hintLine(FooterHint{"A", "Read"}),
+		action:  toolsActionBanner,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
 		label:   "Ping",
 		value:   "1.1.1.1",
 		detail:  "ICMP if the device has ping, then a TCP fallback",
@@ -386,6 +402,22 @@ func toolsRows(config *Config) []toolsRow {
 		enabled: true,
 	})
 	share = append(share, toolsRow{
+		label:   "TLS certificate",
+		value:   netCertRowValue(),
+		detail:  "Issuer, dates, names and whether this device trusts it",
+		hint:    hintLine(FooterHint{"A", "Inspect"}),
+		action:  toolsActionCert,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Security headers",
+		value:   netHeadersRowValue(),
+		detail:  "HSTS, CSP, frame and type options for one URL",
+		hint:    hintLine(FooterHint{"A", "Check"}),
+		action:  toolsActionHeaders,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
 		label:   "Port check",
 		value:   netPortRowValue(),
 		detail:  "Is one port open? Type host:port on the keyboard",
@@ -399,6 +431,14 @@ func toolsRows(config *Config) []toolsRow {
 		detail:  "Registrar, dates and name servers, from RDAP",
 		hint:    hintLine(FooterHint{"A", "Look up"}),
 		action:  toolsActionWhois,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Encode / decode",
+		value:   netCodecRowValue(),
+		detail:  "Base64, hex and URL, decoded and encoded, on the device",
+		hint:    hintLine(FooterHint{"A", "Open"}),
+		action:  toolsActionCodec,
 		enabled: true,
 	})
 	share = append(share, toolsRow{
@@ -985,6 +1025,14 @@ func toolsPanelActivate(config *Config) {
 		powerProbeClock(config)
 	case toolsActionSubnet:
 		powerProbeSubnet(config)
+	case toolsActionCert:
+		powerProbeCert()
+	case toolsActionBanner:
+		powerProbeBanner()
+	case toolsActionHeaders:
+		powerProbeHeaders()
+	case toolsActionCodec:
+		powerProbeCodec()
 	}
 }
 
@@ -1530,6 +1578,28 @@ func drawToolsIcon(r *sdl.Renderer, box sdl.Rect, action toolsAction, color sdl.
 		// Subnet plan: a network frame with one host inside it.
 		strokeRoundedRect(r, box.X+w/7, box.Y+h/7, w*5/7, h*5/7, 4, 2, color)
 		fillRoundedRect(r, cx-w/8, cy-h/8, w/4, h/4, 2, color)
+	case toolsActionBanner:
+		// Service banner: a prompt chevron with the reply line beside it.
+		r.DrawLine(box.X+w/4, box.Y+h/3, box.X+w/3, cy)
+		r.DrawLine(box.X+w/3, cy, box.X+w/4, box.Y+h*2/3)
+		fillRoundedRect(r, box.X+w/2, cy-1, w/4, 2, 1, color)
+	case toolsActionCert:
+		// TLS certificate: a sheet with a seal on its lower corner.
+		strokeRoundedRect(r, box.X+w/3, box.Y+h/7, w/3, h*2/3, 3, 2, color)
+		fillCircle(r, cx+w/8, box.Y+h*3/4, h/9, color)
+	case toolsActionHeaders:
+		// Security headers: response lines with a tick against the first.
+		for i := int32(0); i < 3; i++ {
+			fillRoundedRect(r, box.X+w/5, box.Y+h/4+i*h/5, w*3/5, 2, 1, color)
+		}
+		r.DrawLine(box.X+w/2, cy, box.X+w*3/5, cy+h/8)
+		r.DrawLine(box.X+w*3/5, cy+h/8, box.X+w*4/5, cy-h/6)
+	case toolsActionCodec:
+		// Codec: angle brackets around a value.
+		r.DrawLine(box.X+w/3, box.Y+h/3, box.X+w/5, cy)
+		r.DrawLine(box.X+w/5, cy, box.X+w/3, box.Y+h*2/3)
+		r.DrawLine(box.X+w*2/3, box.Y+h/3, box.X+w*4/5, cy)
+		r.DrawLine(box.X+w*4/5, cy, box.X+w*2/3, box.Y+h*2/3)
 	case toolsActionCompanion:
 		// Phone: a rounded body with a home dot.
 		strokeRoundedRect(r, box.X+w/4, box.Y+h/8, w/2, h*3/4, 4, 2, color)

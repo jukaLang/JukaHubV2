@@ -277,9 +277,13 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 		for _, p := range patchSnap.Packages {
 			status := StatusAvailable
 			right := hintLine(FooterHint{"A", "Install"})
-			installed := IsPackageInstalled(&p)
-			current := installed && IsPackageCurrent(&p)
+			installed, current, known := packageStatusFor(&p)
 			switch {
+			case !known:
+				// The checksum check runs in the background; claiming "Install"
+				// here would offer to install a package that is already there.
+				status = StatusUnavailable
+				right = "Checking…"
 			case installed && current:
 				status = StatusCurrent
 				right = "Installed · " + hintLine(FooterHint{"A", "Menu"})
@@ -966,11 +970,17 @@ func patchActivate(config *Config) {
 			ShowToast(err.Error(), ToastKindError)
 			return
 		}
+		// A press may land before the background check has finished; the menu
+		// has to be right, so this one-off falls back to the direct check.
+		installed, current, known := packageStatusFor(p)
+		if !known {
+			installed, current = packageStatusProbe(p)
+		}
 		menu := []string{"Cancel"}
-		if !IsPackageInstalled(p) {
+		if !installed {
 			menu = append([]string{"Install"}, menu...)
 		} else {
-			if !IsPackageCurrent(p) {
+			if !current {
 				menu = append([]string{"Update"}, menu...)
 			} else {
 				menu = append([]string{"Reinstall"}, menu...)

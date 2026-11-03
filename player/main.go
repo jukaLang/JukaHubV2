@@ -426,67 +426,111 @@ func main() {
 	if note := startupBudgetNote(bootElapsed); note != "" && allotment > 0 {
 		log.Printf("startup: %s", note)
 	}
-	ShowSplash(renderer, config, allotment)
-	startupMarkNow("splash")
-	config.Variables.LoadingSpinner = false
+	// Everything below is real setup that the animation does not need, so it is
+	// queued and executed between splash frames instead of after them
+	// (bootwork.go). The cache handle is the one piece that must not block a
+	// frame at all, so it opens on its own goroutine while the warp runs.
+	bootWarmCacheInBackground()
 
 	// Create placeholder texture for missing thumbnails
-	placeholderSurface, _ := sdl.CreateRGBSurfaceWithFormat(0, 120, 90, 32, sdl.PIXELFORMAT_RGBA8888)
-	if placeholderSurface != nil {
+	bootEnqueue("placeholder-texture", func() {
+		placeholderSurface, _ := sdl.CreateRGBSurfaceWithFormat(0, 120, 90, 32, sdl.PIXELFORMAT_RGBA8888)
+		if placeholderSurface == nil {
+			return
+		}
 		placeholderSurface.FillRect(&sdl.Rect{X: 0, Y: 0, W: 120, H: 90}, sdl.MapRGBA(placeholderSurface.Format, 30, 35, 50, 255))
 		placeholderTexture, _ = renderer.CreateTextureFromSurface(placeholderSurface)
 		placeholderSurface.Free()
-	}
+	})
 
-	// Add Xbox 360 controller mapping for Trimui Smart Pro / Linux
-	sdl.GameControllerAddMapping("030000005e0400008e02000014010000,X360 Controller,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,")
+	bootEnqueue("gamepad", func() {
+		// Add Xbox 360 controller mapping for Trimui Smart Pro / Linux
+		sdl.GameControllerAddMapping("030000005e0400008e02000014010000,X360 Controller,a:b0,b:b1,back:b6,dpdown:h0.4,dpleft:h0.8,dpright:h0.2,dpup:h0.1,guide:b8,leftshoulder:b4,leftstick:b9,lefttrigger:a2,leftx:a0,lefty:a1,rightshoulder:b5,rightstick:b10,righttrigger:a5,rightx:a3,righty:a4,start:b7,x:b2,y:b3,platform:Linux,")
 
-	// Initialize gamepad support
-	if sdl.NumJoysticks() > 0 {
-		log.Printf("[GAMEPAD] Found %d joystick(s)", sdl.NumJoysticks())
-		for i := 0; i < sdl.NumJoysticks(); i++ {
-			if sdl.IsGameController(i) {
-				// go-sdl2 has no GameControllerFromIndex: the name/ID are
-				// queried per index, and the handle comes from Open.
-				log.Printf("[GAMEPAD] Controller %d: %s (GUID: %s)", i,
-					sdl.GameControllerNameForIndex(i),
-					sdl.JoystickGetGUIDString(sdl.JoystickGetDeviceGUID(i)))
-			} else {
-				log.Printf("[GAMEPAD] Joystick %d: %s (not a game controller)", i, sdl.JoystickNameForIndex(i))
+		// Initialize gamepad support
+		if sdl.NumJoysticks() > 0 {
+			log.Printf("[GAMEPAD] Found %d joystick(s)", sdl.NumJoysticks())
+			for i := 0; i < sdl.NumJoysticks(); i++ {
+				if sdl.IsGameController(i) {
+					// go-sdl2 has no GameControllerFromIndex: the name/ID are
+					// queried per index, and the handle comes from Open.
+					log.Printf("[GAMEPAD] Controller %d: %s (GUID: %s)", i,
+						sdl.GameControllerNameForIndex(i),
+						sdl.JoystickGetGUIDString(sdl.JoystickGetDeviceGUID(i)))
+				} else {
+					log.Printf("[GAMEPAD] Joystick %d: %s (not a game controller)", i, sdl.JoystickNameForIndex(i))
+				}
 			}
+			if c := sdl.GameControllerOpen(0); c != nil {
+				// Closed by the defer below once the loop owns the handle; a
+				// defer inside this step would close it the moment it returns.
+				gameController = c
+				log.Printf("[GAMEPAD] Opened controller 0: %s", c.Name())
+			}
+		} else {
+			log.Printf("[GAMEPAD] No joysticks/gamepads detected")
 		}
-		if c := sdl.GameControllerOpen(0); c != nil {
-			defer c.Close()
-			// Kept for the keyboard's hold-to-repeat poller; every other path
-			// stays driven by controller events.
-			gameController = c
-			log.Printf("[GAMEPAD] Opened controller 0: %s", c.Name())
-		}
-	} else {
-		log.Printf("[GAMEPAD] No joysticks/gamepads detected")
-	}
+	})
 
 	// Find the vibration motor before the Settings switch is injected: the row
 	// exists only on hardware that can actually buzz.
-	hapticsBind(config)
-	ensureHapticsSetting(config)
+	bootEnqueue("haptics", func() {
+		hapticsBind(config)
+		ensureHapticsSetting(config)
+	})
 
-	initKeyboard()
+	bootEnqueue("keyboard", initKeyboard)
 
-	thumbnailDownloadCh = make(chan string, 256)
 	// More than one worker: prefetching a results grid is latency-bound, and a
 	// single worker downloaded exactly one thumbnail per network round trip.
-	for i := 0; i < thumbnailWorkerCount(); i++ {
-		go thumbnailPrefetchWorker()
+	bootEnqueue("thumbnail-workers", func() {
+		thumbnailDownloadCh = make(chan string, 256)
+		for i := 0; i < thumbnailWorkerCount(); i++ {
+			go thumbnailPrefetchWorker()
+		}
+	})
+
+	// The focus graph is the last thing the first frame needs and the first
+	// thing it would otherwise wait for.
+	bootEnqueue("focus-graph", func() {
+		currentSceneIndex = 0
+		// The first scene skips the transition that normally lays a Tools menu
+		// out as tiles, so it is applied here before the focus graph is built.
+		menuTilesApply(config, currentSceneIndex)
+		selectedButtonIndex = findFirstSelectableElement(config.Scenes[currentSceneIndex])
+		focusEngine.SetGraph(config.Scenes[currentSceneIndex].Name, focusEngine.BuildGraph(config.Scenes[currentSceneIndex]))
+		focusEngine.SyncSelected()
+	})
+
+	// The first frame's own draw is the largest remaining cost: every label and
+	// shape is rasterised cold. Drawing the scene once into a throwaway target
+	// while the splash is up leaves those caches warm, so the frame the user
+	// sees is fast. Runs after the focus graph, which is what lays the scene out.
+	//
+	// Only worth it when there is an animation to hide it in: on a warm start
+	// the claim on the splash is zero, and paying for a second cold draw with
+	// nothing on screen would make that launch slower, not faster.
+	if allotment > 0 {
+		bootEnqueue("scene-warm", func() {
+			warmSceneCaches(renderer, config, config.Scenes[currentSceneIndex])
+		})
 	}
 
-	currentSceneIndex = 0
-	// The first scene skips the transition that normally lays a Tools menu out
-	// as tiles, so it is applied here before the focus graph is built.
-	menuTilesApply(config, currentSceneIndex)
-	selectedButtonIndex = findFirstSelectableElement(config.Scenes[currentSceneIndex])
-	focusEngine.SetGraph(config.Scenes[currentSceneIndex].Name, focusEngine.BuildGraph(config.Scenes[currentSceneIndex]))
-	focusEngine.SyncSelected()
+	// Hardware volume buttons: a long hold skips a track even while the screen
+	// is off or the player is in the background. The OS still owns the short
+	// press, so nothing about the volume itself changes.
+	bootEnqueue("volume-buttons", startVolumeButtonWatcher)
+
+	ShowSplash(renderer, config, allotment)
+	startupMarkNow("splash")
+	// Whatever did not fit between frames runs now — and on a warm start, where
+	// no splash was drawn, this is where all of it happens.
+	bootWorkDrain()
+	startupMarkNow("boot-work")
+	config.Variables.LoadingSpinner = false
+	if gameController != nil {
+		defer gameController.Close()
+	}
 
 	// Start config file watcher for hot-reload
 	StartConfigWatcher("jukaconfig.json", func(newCfg *Config) {
@@ -517,11 +561,6 @@ func main() {
 	if liveBuilder := startLiveBuilderIfEnabled(); liveBuilder != nil {
 		defer liveBuilder.Stop()
 	}
-
-	// Hardware volume buttons: a long hold skips a track even while the screen
-	// is off or the player is in the background. The OS still owns the short
-	// press, so nothing about the volume itself changes.
-	startVolumeButtonWatcher()
 
 	// Adaptive frame rate and memory monitoring for TSP ARM64 devices.
 	// The controller is package-level so the Power Mode selector

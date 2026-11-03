@@ -612,6 +612,7 @@ func homeViewData(config *Config) HomeViewData {
 					pos = v.Duration
 				}
 				data.Continue.Subtitle = fmt.Sprintf("%s · %s / %s", data.Continue.Subtitle, formatTime(pos), formatTime(v.Duration))
+				data.Continue.Remaining = formatTime(v.Duration-pos) + " left"
 			}
 		}
 	}
@@ -732,6 +733,8 @@ func loadHomeFonts() HomeFonts {
 			Greeting: openHomeFont(uiScaleFontSize(32)),
 			Subtitle: openHomeFont(uiScaleFontSize(19)),
 			Card:     openHomeFont(uiScaleFontSize(23)),
+			Tile:     openHomeFont(uiScaleFontSize(20)),
+			Meta:     openHomeFont(uiScaleFontSize(14)),
 			Helper:   openHomeFont(uiScaleFontSize(17)),
 			Small:    openHomeFont(uiScaleFontSize(16)),
 		}

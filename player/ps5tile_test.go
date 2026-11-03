@@ -32,33 +32,34 @@ func closePSPanelAfterTest(t *testing.T) {
 	})
 }
 
-func TestPS5TileRectSitsLeftOfQR(t *testing.T) {
-	qr := sdl.Rect{X: 1000, Y: 58, W: 104, H: 104}
-	got, ok := ps5TileRectFor(qr, 12, 560)
-	if !ok {
-		t.Fatal("tile should fit left of the QR")
+func TestPSPillsSitLeftOfQR(t *testing.T) {
+	// The pill geometry is measured, so the font stack (and with it SDL_ttf)
+	// has to be up before the layout is asked for sizes.
+	newProbeFrame(t)
+	fonts := loadHomeFonts()
+	if fonts.Small == nil {
+		t.Fatalf("no usable font in this environment: the shipped Inter-Regular.ttf did not load, so the pills cannot be measured")
 	}
-	if got.X+got.W > qr.X {
-		t.Fatalf("tile %+v overlaps the QR %+v", got, qr)
+	group, ps4, ps5 := psPillRects(fonts, 1000, 78, 44)
+	if group.W <= 0 || ps4.W <= 0 || ps5.W <= 0 {
+		t.Fatalf("the pill group did not lay out: group %+v ps4 %+v ps5 %+v", group, ps4, ps5)
 	}
-	if got.X != qr.X-12-qr.W {
-		t.Fatalf("tile x = %d, want %d", got.X, qr.X-12-qr.W)
+	if group.X+group.W != 1000 {
+		t.Fatalf("group right edge = %d, want 1000", group.X+group.W)
 	}
-	if got.Y != qr.Y || got.W != qr.W || got.H != qr.H {
-		t.Fatalf("tile should share the QR's band and size: %+v vs %+v", got, qr)
+	if ps4.X < group.X || ps5.X+ps5.W > group.X+group.W {
+		t.Fatalf("pills %+v / %+v escape their group %+v", ps4, ps5, group)
 	}
-
-	// A QR that has slid left leaves no room; the tile must disappear rather
-	// than crowd the brand or the greeting column.
-	if _, ok := ps5TileRectFor(sdl.Rect{X: 600, Y: 58, W: 104, H: 104}, 12, 560); ok {
-		t.Fatal("tile was placed too close to the left edge")
+	if ps4.X+ps4.W > ps5.X || ps4.Y != ps5.Y || ps4.H != ps5.H {
+		t.Fatalf("pills are not a left-to-right pair: %+v / %+v", ps4, ps5)
 	}
-	if _, ok := ps5TileRectFor(sdl.Rect{}, 12, 560); ok {
-		t.Fatal("tile was placed without a QR rect")
+	// Both pills sit inside the header band, not under the greeting column.
+	if ps4.X >= ps5.X {
+		t.Fatalf("PS4 pill %+v should be left of the PS5 pill %+v", ps4, ps5)
 	}
-	// A negative gap must never be allowed to overlap.
-	if _, ok := ps5TileRectFor(sdl.Rect{X: 1000, Y: 58, W: 104, H: 104}, -40, 0); ok {
-		t.Fatal("a negative gap produced an overlapping tile")
+	// No font, no pills: the caller hides the group instead of drawing junk.
+	if g, a, b := psPillRects(HomeFonts{}, 1000, 78, 44); g.W != 0 || a.W != 0 || b.W != 0 {
+		t.Fatalf("pills were laid out without a font: %+v %+v %+v", g, a, b)
 	}
 }
 
@@ -145,19 +146,19 @@ func TestHomeHeaderDrawsPS5TileBesideQR(t *testing.T) {
 	if ps5TileRect.X+ps5TileRect.W > companionHeaderRect.X {
 		t.Fatalf("launcher %+v overlaps the QR %+v", ps5TileRect, companionHeaderRect)
 	}
-	if ps5TileRect.Y != companionHeaderRect.Y || ps5TileRect.H != companionHeaderRect.H {
-		t.Fatalf("launcher %+v is not in the QR's band %+v", ps5TileRect, companionHeaderRect)
+	// The pills sit vertically centred on the QR they are beside, not at its
+	// top edge: the group is a 44px capsule in a 72px band.
+	if ps5TileRect.Y < companionHeaderRect.Y || ps5TileRect.Y+ps5TileRect.H > companionHeaderRect.Y+companionHeaderRect.H {
+		t.Fatalf("launcher %+v is not inside the QR's band %+v", ps5TileRect, companionHeaderRect)
 	}
-
-	// The tile body is PlayStation blue; sample above the centred label. A
-	// host that cannot run the native client shows the disabled fill instead.
-	want := sdl.Color{R: 0, G: 112, B: 209}
-	if !psRemoteSupported() {
-		want = sdl.Color{R: 38, G: 66, B: 102}
+	if center := ps5TileRect.Y + ps5TileRect.H/2; center < companionHeaderRect.Y+companionHeaderRect.H/2-scaleY(4, probeH) ||
+		center > companionHeaderRect.Y+companionHeaderRect.H/2+scaleY(4, probeH) {
+		t.Fatalf("launcher centre y=%d is not level with the QR band %+v", center, companionHeaderRect)
 	}
-	probe := frame.at(ps5TileRect.X+ps5TileRect.W/2, ps5TileRect.Y+8)
-	if !nearColor(probe, want, 40) {
-		t.Fatalf("tile pixel %v is not the launcher fill %v", probe, want)
+	// The pill draws its label, so its centre must not be the page background.
+	probe := frame.at(ps5TileRect.X+ps5TileRect.W/2, ps5TileRect.Y+ps5TileRect.H/2)
+	if frame.isBG(ps5TileRect.X+ps5TileRect.W/2, ps5TileRect.Y+ps5TileRect.H/2) && nearColor(probe, frame.bg, 2) {
+		t.Fatalf("nothing was drawn inside the pill group at %+v", ps5TileRect)
 	}
 }
 
@@ -298,16 +299,15 @@ func TestHomePS5LauncherLinksTheCardBeneathItOnWideHeader(t *testing.T) {
 	}
 }
 
-func TestPS5TileHiddenWithoutRoom(t *testing.T) {
-	prevTile := ps5TileRect
-	t.Cleanup(func() { ps5TileRect = prevTile })
-	ps5TileRect = sdl.Rect{X: 10, Y: 10, W: 100, H: 100}
+func TestPSPillGroupIsNotDrawnWithoutRenderer(t *testing.T) {
+	prevPS4, prevPS5 := ps4TileRect, ps5TileRect
+	t.Cleanup(func() { ps4TileRect, ps5TileRect = prevPS4, prevPS5 })
 
-	// The tile is hidden at 480p; a stale rect must not keep swallowing clicks.
-	got := renderPS5HeaderTile(nil, HomeFonts{}, sdl.Rect{X: 900, Y: 58, W: 104, H: 104}, ps5TileVisual{})
-	if got.W != 0 || ps5TileRect.W != 0 {
-		t.Fatalf("hidden tile kept a rect: %+v", ps5TileRect)
-	}
+	// renderPSPillGroup records nothing itself; the layout owns the rects. What
+	// matters here is that a nil renderer paints nothing instead of panicking on
+	// the handheld's first frame.
+	renderPSPillGroup(nil, HomeFonts{}, sdl.Rect{X: 900, Y: 78, W: 200, H: 44},
+		sdl.Rect{X: 904, Y: 82, W: 96, H: 36}, sdl.Rect{X: 1004, Y: 82, W: 96, H: 36}, psPillVisual{})
 }
 
 // TestHomePS5TileIsTheDpadTargetAboveItsCard checks the real 1280x720 home

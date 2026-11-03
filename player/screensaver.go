@@ -408,14 +408,19 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 			n.r, n.g, n.b, alpha)
 	}
 
-	// Rotating quote.
+	// Whatever is still playing owns the middle of the screen: the live video
+	// frame, or the track's cover art with equaliser bars. The quote only shows
+	// when nothing is running, so the two never stack on one line.
+	media := screensaverNowPlaying()
+	drawScreensaverMedia(renderer, config, media, ss.fadeAlpha)
+
 	now := time.Now()
 	if now.Sub(ss.lastQuoteChange) > ssQuoteInterval {
 		ss.quoteIndex = (ss.quoteIndex + 1) % len(screensaverQuotes)
 		ss.lastQuoteChange = now
 	}
 	font, _ := getCachedFont(config, "small")
-	if font != nil && ss.fadeAlpha > 60 {
+	if media.kind == saverMediaNone && font != nil && ss.fadeAlpha > 60 {
 		q := screensaverQuotes[ss.quoteIndex]
 		qw, _, _ := font.SizeUTF8(q)
 		qx := (screenWidth - int32(qw)) / 2
@@ -456,9 +461,13 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 			if lineAlpha > 170 {
 				lineAlpha = 170
 			}
+			lineY := ty + int32(timeFont.Height()) + 6
 			renderText(renderer, config, small, line,
 				sdl.Color{R: 160, G: 175, B: 198, A: lineAlpha},
-				screenWidth-int32(lw)-40, ty+int32(timeFont.Height())+6)
+				screenWidth-int32(lw)-40, lineY)
+			// The link state sits with the battery: one glance answers "is this
+			// thing online, and does it need charging".
+			drawScreensaverWifi(renderer, screenWidth-int32(lw)-40-30, lineY+1, ss.fadeAlpha)
 		}
 	}
 
@@ -640,8 +649,8 @@ func screensaverAutoTick(config *Config, now time.Time) {
 // idleScreenHoldOffFrom is the pure decision at the heart of the gate: the
 // screen stays awake while a modal owns the UI, while audio or video plays, and
 // while a download or install is running.
-func idleScreenHoldOffFrom(uiBlocked, musicPlaying, musicPaused, downloadActive, patchBusy bool) bool {
-	return uiBlocked || musicPlaying || musicPaused || downloadActive || patchBusy
+func idleScreenHoldOffFrom(uiBlocked, musicPlaying, musicPaused, videoBusy, downloadActive, patchBusy bool) bool {
+	return uiBlocked || musicPlaying || musicPaused || videoBusy || downloadActive || patchBusy
 }
 
 // idleScreenHoldOff reports whether something is using the device right now, so
@@ -652,9 +661,21 @@ func idleScreenHoldOff(config *Config) bool {
 		ambientEntryBlocked(config),
 		playing,
 		paused,
+		videoHoldsScreenAwake(),
 		installInProgress(),
 		patchInstallBusy(),
 	)
+}
+
+// videoHoldsScreenAwake reports whether the video player owns the panel: a video
+// that is playing, paused or still downloading. This gate looked at music alone,
+// so a video left running went dark under the idle screen partway through
+// playback while the same state already held the dock screen off
+// (ambientEntryBlocked counts any non-idle media player). The user asked for the
+// opposite: a video that is on screen keeps playing, and the saver waits.
+func videoHoldsScreenAwake() bool {
+	phase := snapshotVideoState().phase
+	return phase != "" && phase != "idle"
 }
 
 // installInProgress reports whether a package is being fetched or unpacked, so

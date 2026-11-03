@@ -80,6 +80,36 @@ func TestStreamAttemptsAskForOneMuxedStream(t *testing.T) {
 	}
 }
 
+// TestStreamAttemptsAskForBothAndroidClientsAtOnce pins the measured shape of
+// the first attempt. A cold helper dominates an attempt (yt-dlp --version
+// measured 2.8 s on this desktop build, because the one-file binary unpacks
+// itself on every run), so asking for android and android_vr as two attempts
+// charged a second extraction whenever the first client was dead: 9.2-10.4 s
+// measured, and 2.4 s + 4.5 s in the field. yt-dlp walks its own client list
+// inside one process, and one call listing both measured 4.2-4.5 s.
+func TestStreamAttemptsAskForBothAndroidClientsAtOnce(t *testing.T) {
+	attempts := streamAttempts(720)
+	first := strings.Join(attempts[0].args, " ")
+	if !strings.Contains(first, "player_client=android,android_vr") {
+		t.Fatalf("first attempt = %q, want both android clients in a single extraction", first)
+	}
+	const marker = "youtube:player_client="
+	for _, attempt := range attempts {
+		joined := strings.Join(attempt.args, " ")
+		idx := strings.Index(joined, marker)
+		if idx < 0 {
+			continue // the default-client attempt deliberately names none
+		}
+		clients := strings.Fields(joined[idx+len(marker):])
+		if len(clients) == 0 {
+			continue
+		}
+		if value := clients[0]; value == "android" || value == "android_vr" {
+			t.Errorf("%s asks for the single client %q: a dead client then costs a second extraction", attempt.name, value)
+		}
+	}
+}
+
 func TestStreamAttemptsUseDistinctClients(t *testing.T) {
 	attempts := streamAttempts(720)
 	// One attempt must leave the client list alone: forcing a client is what
