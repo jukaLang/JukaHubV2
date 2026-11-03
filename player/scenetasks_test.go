@@ -3,13 +3,16 @@ package main
 // Tests for the scene-scoped task scope and the coordinated group helper.
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -438,6 +441,100 @@ func TestSceneLeaveCancelsRunningYtDlpSearch(t *testing.T) {
 	if got, ok := config.Variables.Custom["shorts_list"]; ok {
 		if _, isVideos := got.([]VideoInfo); isVideos {
 			t.Errorf("a cancelled search published results into the next scene: %d entries", len(got.([]VideoInfo)))
+		}
+	}
+}
+
+// The network panel is idle until Run, then reports a real sample or a failure.
+func TestNetSpeedRunStates(t *testing.T) {
+	drainCustomForTest()
+	previousClient, previousURL := netSpeedHTTP, netSpeedURL
+	enterSceneWork("NetSpeed")
+	t.Cleanup(func() {
+		cancelSceneWork()
+		waitForSceneWork()
+		netSpeedHTTP, netSpeedURL = previousClient, previousURL
+		drainCustomForTest()
+	})
+	started, release := make(chan struct{}), make(chan struct{})
+	var calls atomic.Int32
+	netSpeedHTTP = &http.Client{Timeout: time.Second, Transport: geoTransport(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		close(started)
+		select {
+		case <-release:
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(make([]byte, netSpeedSampleBytes))), Header: make(http.Header)}, nil
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		}
+	})}
+	netSpeedURL = "https://example.test/sample"
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+	button := Element{Type: "button", Trigger: "netspeed_run", Text: "Run"}
+	handleTrigger(nil, config, button)
+	waitClosed(t, started, time.Second, "speed test start")
+	if text, _ := config.Variables.Custom["netspeed_text"].(string); !strings.Contains(text, "Measuring download speed") {
+		t.Fatalf("running state = %q", text)
+	}
+	if label, busy := benchmarkButtonFace(button); !busy || label != "Running…" {
+		t.Fatalf("button = %q, busy=%v", label, busy)
+	}
+	handleTrigger(nil, config, button)
+	close(release)
+	waitForSceneWork()
+	drainCustom(config)
+	if calls.Load() != 1 {
+		t.Fatalf("overlapping measurements: %d", calls.Load())
+	}
+	if text, _ := config.Variables.Custom["netspeed_text"].(string); !strings.Contains(text, "Downloaded 5.0 MiB") || !strings.Contains(text, "Speed:") {
+		t.Fatalf("result = %q", text)
+	}
+	if _, busy := benchmarkButtonFace(button); busy {
+		t.Fatal("button stayed busy")
+	}
+
+	netSpeedHTTP = &http.Client{Transport: geoTransport(func(*http.Request) (*http.Response, error) { return nil, errors.New("offline") })}
+	handleTrigger(nil, config, button)
+	waitForSceneWork()
+	drainCustom(config)
+	if text, _ := config.Variables.Custom["netspeed_text"].(string); !strings.Contains(text, "Speed test failed") || !strings.Contains(text, "offline") {
+		t.Fatalf("failure = %q", text)
+	}
+
+	cancelStarted := make(chan struct{})
+	netSpeedHTTP = &http.Client{Transport: geoTransport(func(req *http.Request) (*http.Response, error) {
+		close(cancelStarted)
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+	handleTrigger(nil, config, button)
+	waitClosed(t, cancelStarted, time.Second, "cancelled speed test start")
+	cancelSceneWork()
+	waitForSceneWork()
+	drainCustom(config)
+	if !strings.HasPrefix(config.Variables.Custom["netspeed_text"].(string), "Measuring download speed") || netSpeedRunActive.Load() {
+		t.Fatal("cancelled test published a result or stayed active")
+	}
+	resetNetSpeedOnSceneEntry(config, SceneConfig{Elements: []Element{{Type: "textlog", Variable: "netspeed_text"}}})
+	if _, ok := config.Variables.Custom["netspeed_text"]; ok {
+		t.Fatal("cancelled test still appears active")
+	}
+}
+
+func TestNetSpeedRejectsBadResponses(t *testing.T) {
+	for _, tc := range []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{http.StatusNotFound, "not found", "HTTP 404"},
+		{http.StatusOK, "short", "download ended early"},
+	} {
+		client := &http.Client{Transport: geoTransport(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body)), Header: make(http.Header)}, nil
+		})}
+		if _, err := measureNetSpeed(context.Background(), client, "https://example.test"); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("error = %v, want %s", err, tc.want)
 		}
 	}
 }

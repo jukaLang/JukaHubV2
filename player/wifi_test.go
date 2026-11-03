@@ -425,6 +425,26 @@ func TestEnsureHardwareWiFiEntry(t *testing.T) {
 	}
 }
 
+// wifiSettleForTest lets any worker the test started finish and takes its
+// result out of the one-slot channel. The channel is capacity one and its
+// producers block rather than drop, so a worker that outlives its test would
+// otherwise land a stale update after the cleanup drained it, and the next
+// Wi-Fi test's own send would block until the suite's ten-minute alarm. The
+// generation bump makes anything that still slips through a discarded result
+// rather than one the following test applies.
+func wifiSettleForTest() {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		wifiDrainUpdates()
+		if !wifiWorkPending || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	wifiGeneration++
+	wifiDrainDiscarded()
+}
+
 // waitForWiFiIdle drains results until no worker is in flight. It is the test
 // stand-in for the render loop's drain.
 func waitForWiFiIdle(t *testing.T) {
@@ -491,16 +511,7 @@ func TestWiFiPanelJoinFlow(t *testing.T) {
 	t.Cleanup(func() {
 		// Let a worker finish before the stub runner is restored, so a failed
 		// assertion cannot leave a goroutine calling a replaced function.
-		deadline := time.Now().Add(2 * time.Second)
-		for {
-			wifiDrainUpdates()
-			if !wifiWorkPending || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		wifiGeneration++
-		wifiDrainDiscarded()
+		wifiSettleForTest()
 		wifiPanel = prevPanel
 		virtualKeyboardActive, vkTarget = prevActive, prevTarget
 		wifiPendingSSID, wifiPassphraseBuffer = prevPending, prevBuffer

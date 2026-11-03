@@ -102,43 +102,37 @@ func renderSocialNotifPanel(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Dim
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-
-	// Card
 	cardW := int32(600)
 	cardH := int32(500)
 	cx := (screenWidth - cardW) / 2
 	cy := (screenHeight - cardH) / 2
-	fillRoundedRect(renderer, cx, cy, cardW, cardH, 16, ColorPanel)
-	strokeRoundedRect(renderer, cx, cy, cardW, cardH, 16, 1, ColorBorder)
+	card := sdl.Rect{X: cx, Y: cy, W: cardW, H: cardH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
 
-	// Title
-	titleFont, _ := getCachedFont(config, "large")
 	bodyFont, _ := getCachedFont(config, "medium")
 	smallFont, _ := getCachedFont(config, "small")
 
-	if titleFont != nil {
-		title := "[Social] Notifications"
-		tw, _, _ := titleFont.SizeUTF8(title)
-		drawText(renderer, titleFont, title, cx+(cardW-int32(tw))/2, cy+16, getAccentColor(config), textAlignLeft)
-	}
+	// A page-sized sheet opens with the shared page header: title, subtitle and
+	// glyph well at the inset every other panel uses, instead of a bracketed
+	// headline centred by hand.
+	header := overlayPageHeader(card, "Notifications", "Chat, friends and system alerts", "chat")
+	band := UIPanelHeaderBand(config, header, 4)
+	UIPageHeaderDraw(renderer, config, header)
 
 	// Channel filter tabs
 	if bodyFont != nil {
-		tabX := cx + 16
+		tabX := cx + OverlayPadX
 		for _, ch := range socialChannels {
 			tw, _, _ := bodyFont.SizeUTF8(ch.icon)
-			drawText(renderer, bodyFont, ch.icon, tabX, cy+56, ch.color, textAlignLeft)
+			drawText(renderer, bodyFont, ch.icon, tabX, cy+band, ch.color, textAlignLeft)
 			tabX += int32(tw) + 16
 		}
 	}
 
 	// Notification list
-	listY := cy + 88
-	listH := cardH - 120
+	listY := cy + band + 28
+	listH := cardH - (listY - cy) - 40
 	itemH := int32(56)
 	maxVisible := int(listH / itemH)
 
@@ -156,30 +150,30 @@ func renderSocialNotifPanel(renderer *sdl.Renderer, config *Config) {
 
 		// Channel color bar
 		renderer.SetDrawColor(notif.channel.color.R, notif.channel.color.G, notif.channel.color.B, 255)
-		renderer.FillRect(&sdl.Rect{X: cx + 16, Y: y + 4, W: 3, H: itemH - 8})
+		renderer.FillRect(&sdl.Rect{X: cx + OverlayPadX, Y: y + 4, W: 3, H: itemH - 8})
 
 		// Icon
 		if bodyFont != nil {
-			drawText(renderer, bodyFont, notif.channel.icon, cx+28, y+6, notif.channel.color, textAlignLeft)
+			drawText(renderer, bodyFont, notif.channel.icon, cx+OverlayPadX+12, y+6, notif.channel.color, textAlignLeft)
 		}
 
 		// Title + body
 		if bodyFont != nil {
-			drawText(renderer, bodyFont, notif.channel.name, cx+56, y+6, ColorTextPrimary(), textAlignLeft)
+			drawText(renderer, bodyFont, notif.channel.name, cx+OverlayPadX+40, y+6, ColorTextPrimary(), textAlignLeft)
 		}
 		if smallFont != nil {
 			body := notif.body
 			if len(body) > 55 {
 				body = body[:52] + "..."
 			}
-			drawText(renderer, smallFont, body, cx+56, y+28, ColorTextSecondary(), textAlignLeft)
+			drawText(renderer, smallFont, body, cx+OverlayPadX+40, y+28, ColorTextSecondary(), textAlignLeft)
 		}
 
 		// Time
 		if smallFont != nil {
 			ts := timeSince(notif.timestamp)
 			tw, _, _ := smallFont.SizeUTF8(ts)
-			drawText(renderer, smallFont, ts, cx+cardW-int32(tw)-16, y+6, ColorTextTertiary(), textAlignLeft)
+			drawText(renderer, smallFont, ts, cx+cardW-int32(tw)-OverlayPadX, y+6, ColorTextTertiary(), textAlignLeft)
 		}
 	}
 

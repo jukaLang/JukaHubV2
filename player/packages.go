@@ -367,7 +367,7 @@ func renderPackageList(renderer *sdl.Renderer, config *Config, element Element) 
 			// check glyph (the one the install bar ends on) in the success
 			// colour, so it reads the same as every other "this is done" state.
 			if installed[i] && smallFont != nil && checkW > 0 {
-				renderText(renderer, config, smallFont, packageInstalledMark, ColorSuccess,
+				renderText(renderer, config, smallFont, packageInstalledMark, SuccessInk(),
 					rowX+12, rowY+(rowH-checkH)/2)
 			}
 
@@ -833,6 +833,16 @@ func openPackageActions(p Package) {
 // closePackageActions takes the menu down without acting on it.
 func closePackageActions() {
 	packageActionsOpen = false
+}
+
+// packageActionsForget takes the menu down silently and forgets the row it was
+// acting on. Leaving the scene and closing by hand are different moments — one
+// is silent, one chirps — but both must leave nothing behind for a later press
+// to run, so the scene transition calls this instead of closePackageActions.
+func packageActionsForget() {
+	packageActionsOpen = false
+	packageActionsFocus = 0
+	packageActionsPkg = Package{}
 }
 
 // packagePress is one press on the packagelist, from any device: it runs the

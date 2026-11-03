@@ -20,6 +20,15 @@ func closePSPanelAfterTest(t *testing.T) {
 	t.Cleanup(func() {
 		chiakiPanel = chiakiPanelState{}
 		chiakiRowHits = nil
+		// The panel's transient edit state lives outside chiakiPanel, so
+		// closing it properly means clearing that too: a test that leaves the
+		// PS5 Account-ID hand-off armed makes the next account submit continue
+		// to the PIN instead of finishing, and a keyboard left up changes what
+		// every later keyboard test sees. Both only show up when the suite runs
+		// in a shuffled order.
+		psPanelEditField = psEditNone
+		psPanelPairAfterAccount = false
+		vkCloseKeyboard()
 	})
 }
 

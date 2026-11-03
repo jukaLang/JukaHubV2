@@ -202,34 +202,15 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Dim background
-	drawRect(renderer, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight}, 0, 0, 0, 180)
-
-	// Card
 	cardW := int32(700)
 	cardH := int32(520)
 	cardX := (screenWidth - cardW) / 2
 	cardY := (screenHeight - cardH) / 2
-	drawRoundedRect(renderer, &sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, 16, 22, 22, 28, 245)
+	card := sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
 
-	// Title
-	titleFont := getDisplayFont(config, 22)
-	title := "[Clipboard] History"
-	titleW, _, _ := titleFont.SizeUTF8(title)
-	drawText(renderer, titleFont, title, cardX+(cardW-int32(titleW))/2, cardY+16, getAccentColor(config), textAlignLeft)
-
-	// Search bar
-	searchY := cardY + 52
-	drawRoundedRect(renderer, &sdl.Rect{X: cardX + 16, Y: searchY, W: cardW - 32, H: 32}, 6, 35, 35, 45, 255)
-	searchFont := getBodyFont(config, 14)
-	searchPlaceholder := "[Search] Type to search..."
-	if clipSearchBuf != "" {
-		drawText(renderer, searchFont, clipSearchBuf+"_", cardX+24, searchY+8, colorNew(200, 200, 215, 255), textAlignLeft)
-	} else {
-		drawText(renderer, searchFont, searchPlaceholder, cardX+24, searchY+8, colorNew(100, 100, 115, 255), textAlignLeft)
-	}
-
-	// Filter entries
+	// Filter entries first: the header's subtitle counts what the search left.
 	filtered := clipHistory
 	if clipSearchBuf != "" {
 		q := strings.ToLower(clipSearchBuf)
@@ -241,6 +222,26 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
+	subtitle := "Recent copies"
+	if len(filtered) == 1 {
+		subtitle = "1 entry"
+	} else if len(filtered) > 1 {
+		subtitle = fmt.Sprintf("%d entries", len(filtered))
+	}
+	header := overlayPageHeader(card, "Clipboard", subtitle, "files")
+	headerH := UIPanelHeaderBand(config, header, 10)
+	UIPageHeaderDraw(renderer, config, header)
+
+	// Search bar
+	searchY := cardY + headerH
+	drawRoundedRect(renderer, &sdl.Rect{X: cardX + OverlayPadX, Y: searchY, W: cardW - 2*OverlayPadX, H: 32}, RadiusSM, 35, 35, 45, 255)
+	searchFont := getBodyFont(config, 14)
+	searchPlaceholder := "[Search] Type to search..."
+	if clipSearchBuf != "" {
+		drawText(renderer, searchFont, clipSearchBuf+"_", cardX+OverlayPadX+8, searchY+8, colorNew(200, 200, 215, 255), textAlignLeft)
+	} else {
+		drawText(renderer, searchFont, searchPlaceholder, cardX+OverlayPadX+8, searchY+8, colorNew(100, 100, 115, 255), textAlignLeft)
+	}
 	// Clamp cursor
 	if len(filtered) == 0 {
 		clipCursorIdx = 0
@@ -248,9 +249,11 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 		clipCursorIdx = len(filtered) - 1
 	}
 
-	// Entry list
+	// Entry list: it stops above the footer, which sits on the card's own
+	// bottom margin.
+	footerY := cardY + cardH - 28
 	listY := searchY + 42
-	listH := cardH - 100
+	listH := footerY - 8 - listY
 	entryFont := getBodyFont(config, 13)
 	smallFont := getBodyFont(config, 11)
 	entryH := int32(58)
@@ -272,7 +275,7 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 
 		// Entry background
 		if isFocused {
-			drawRoundedRect(renderer, &sdl.Rect{X: cardX + 16, Y: y, W: cardW - 32, H: entryH - 4}, 6, 40, 40, 55, 255)
+			drawRoundedRect(renderer, &sdl.Rect{X: cardX + OverlayPadX, Y: y, W: cardW - 2*OverlayPadX, H: entryH - 4}, RadiusSM, 40, 40, 55, 255)
 		}
 
 		// Text preview (truncate to 1-2 lines)
@@ -280,26 +283,28 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 		text = truncateRunesSuffix(text, 80, "...")
 		lines := strings.SplitN(text, "\n", 2)
 
+		textX := cardX + OverlayPadX + 8
 		if isFocused {
-			drawText(renderer, entryFont, lines[0], cardX+24, y+6, colorNew(220, 220, 235, 255), textAlignLeft)
+			drawText(renderer, entryFont, lines[0], textX, y+6, colorNew(220, 220, 235, 255), textAlignLeft)
 		} else {
-			drawText(renderer, entryFont, lines[0], cardX+24, y+6, colorNew(180, 180, 195, 255), textAlignLeft)
+			drawText(renderer, entryFont, lines[0], textX, y+6, colorNew(180, 180, 195, 255), textAlignLeft)
 		}
 
 		if len(lines) > 1 {
 			sub := lines[1]
 			sub = truncateRunesSuffix(sub, 60, "...")
-			drawText(renderer, smallFont, sub, cardX+24, y+24, colorNew(110, 110, 125, 255), textAlignLeft)
+			drawText(renderer, smallFont, sub, textX, y+24, colorNew(110, 110, 125, 255), textAlignLeft)
 		}
 
 		// Timestamp
 		ts := fmt.Sprintf("%s ago", timeSince(e.timestamp))
 		tsW, _, _ := smallFont.SizeUTF8(ts)
-		drawText(renderer, smallFont, ts, cardX+cardW-24-int32(tsW), y+6, colorNew(100, 100, 115, 255), textAlignLeft)
+		tsX := cardX + cardW - OverlayPadX - int32(tsW)
+		drawText(renderer, smallFont, ts, tsX, y+6, colorNew(100, 100, 115, 255), textAlignLeft)
 
 		// Source tag
 		if e.source != "" {
-			drawText(renderer, smallFont, e.source, cardX+cardW-24-int32(tsW), y+22, getAccentColor(config), textAlignLeft)
+			drawText(renderer, smallFont, e.source, tsX, y+22, getAccentColor(config), textAlignLeft)
 		}
 	}
 
@@ -315,14 +320,14 @@ func renderClipboardOverlay(renderer *sdl.Renderer, config *Config) {
 	footer := hintLine(FooterHint{"↑ ↓", "Navigate"}, FooterHint{"Enter", "Copy"},
 		FooterHint{"Del", "Clear"}, FooterHint{"Esc", "Close"})
 	fw, _, _ := footerFont.SizeUTF8(footer)
-	drawText(renderer, footerFont, footer, cardX+(cardW-int32(fw))/2, cardY+cardH-28, colorNew(100, 100, 120, 255), textAlignLeft)
+	drawText(renderer, footerFont, footer, cardX+(cardW-int32(fw))/2, footerY, colorNew(100, 100, 120, 255), textAlignLeft)
 
 	// Scrollbar
 	if len(filtered) > maxVisible {
 		scrollBarH := listH - 4
 		knobH := scrollBarH * int32(maxVisible) / int32(len(filtered))
 		knobY := listY + scrollBarH*int32(clipCursorIdx)/int32(len(filtered))
-		scrollX := cardX + cardW - 12
+		scrollX := cardX + cardW - 14
 		drawRoundedRect(renderer, &sdl.Rect{X: scrollX, Y: listY, W: 4, H: scrollBarH}, 2, 35, 35, 45, 120)
 		drawRoundedRect(renderer, &sdl.Rect{X: scrollX, Y: knobY, W: 4, H: knobH}, 2, 80, 80, 100, 255)
 	}

@@ -113,11 +113,9 @@ func renderLaunchFailure(renderer *sdl.Renderer, config *Config) {
 	}
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 205)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
 	title := "Couldn't launch"
 	if launchFailure.target != "" {

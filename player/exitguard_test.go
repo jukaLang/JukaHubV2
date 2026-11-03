@@ -29,7 +29,14 @@ func TestExitSignalRequestsQuitAndArmsTheDeadline(t *testing.T) {
 		exitRequestedBySignal.Store(prevBySignal)
 		exitShutdownGrace = prevGrace
 		forceExitAction = prevAction
+		// Leave the guard unarmed for whichever test runs next: the deadline is
+		// armed once per process, and this test owns the one it just used.
+		exitDeadlineOnce = sync.Once{}
 	})
+	// The deadline is armed at most once per process by design. A test that has
+	// to observe it starting from unarmed — including this test's own second run
+	// and any earlier test that asked for an exit — clears the guard first.
+	exitDeadlineOnce = sync.Once{}
 
 	exitRequested.Store(false)
 	exitRequestedBySignal.Store(false)

@@ -70,6 +70,43 @@ func weatherUnit(config *Config) string {
 	return "C"
 }
 
+// weatherUnitSettingLabel distinguishes automatic selection from an override.
+func weatherUnitSettingLabel(config *Config) string {
+	if config != nil {
+		switch strings.ToUpper(strings.TrimSpace(config.Variables.WeatherUnit)) {
+		case "C":
+			return "Celsius (C)"
+		case "F":
+			return "Fahrenheit (F)"
+		}
+	}
+	return "Auto (" + weatherUnit(config) + ")"
+}
+
+// cycleWeatherUnit keeps the location-based default available alongside both
+// explicit units. Drop legacy custom mirrors so they cannot override the choice.
+func cycleWeatherUnit(config *Config) {
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = make(map[string]interface{})
+	}
+	switch strings.ToUpper(strings.TrimSpace(config.Variables.WeatherUnit)) {
+	case "C":
+		config.Variables.WeatherUnit = "F"
+	case "F":
+		config.Variables.WeatherUnit = ""
+	default:
+		config.Variables.WeatherUnit = "C"
+	}
+	for key := range config.Variables.Custom {
+		if strings.EqualFold(key, "weatherUnit") {
+			delete(config.Variables.Custom, key)
+		}
+	}
+	// A deliberate Celsius selection must not be mistaken for the old default.
+	config.Variables.Custom["weatherUnitAuto"] = true
+	saveUserConfigDebounced(userConfigFromVariables(config))
+}
+
 // weatherTemp converts a Celsius reading from Open-Meteo into the display unit.
 func weatherTemp(celsius float64, unit string) float64 {
 	if unit == "F" {

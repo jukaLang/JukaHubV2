@@ -145,6 +145,58 @@ var textBrowserSearchSubmitted bool
 var textBrowserFindEditing bool
 var textBrowserFindSubmitted bool
 
+// browserLandedURL carries "this load started at A and ended at B" from the
+// fetch goroutine to the render pass. The address bar can only be rewritten
+// there: the reader may be typing a new address, and a background load must
+// never replace it.
+var browserLandedURL struct {
+	mu           sync.Mutex
+	from, target string
+}
+
+// browserRememberLandedURL records where a redirected load ended.
+func browserRememberLandedURL(from, target string) {
+	if from == "" || target == "" || from == target {
+		return
+	}
+	browserLandedURL.mu.Lock()
+	browserLandedURL.from, browserLandedURL.target = from, target
+	browserLandedURL.mu.Unlock()
+}
+
+// browserTakeLandedURL returns and clears the pending correction.
+func browserTakeLandedURL() (string, string) {
+	browserLandedURL.mu.Lock()
+	defer browserLandedURL.mu.Unlock()
+	from, target := browserLandedURL.from, browserLandedURL.target
+	browserLandedURL.from, browserLandedURL.target = "", ""
+	return from, target
+}
+
+// browserSyncLandedURL moves the address bar and the current history entry onto
+// the URL a redirect landed on, which is the page actually on screen. It runs
+// from the render pass so it can see whether the address is being edited: an
+// address the reader is typing is theirs to finish.
+func browserSyncLandedURL(config *Config) {
+	if config == nil || textBrowserAddressEditing {
+		return
+	}
+	from, target := browserTakeLandedURL()
+	if from == "" || target == "" {
+		return
+	}
+	if textBrowserAddress(config) != from {
+		// The reader navigated somewhere else in the meantime; the correction
+		// describes a page that is no longer on screen.
+		return
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	config.Variables.Custom[textBrowserURLVariable] = target
+	browserReplaceURL(from, target)
+}
+
 // renderTextBrowser renders a scrollable text panel, including readable web pages.
 func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) {
 	defer func() {
@@ -162,6 +214,8 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		// Save and Marks carry live state the same way: whether the page on
 		// screen is already saved, and how many pages the list holds.
 		browserSyncBookmarkChips(config)
+		// A page a redirect moved lands under the URL it actually came from.
+		browserSyncLandedURL(config)
 	}
 
 	elemW := getElementWidth(element, 1100)
@@ -388,7 +442,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				switch {
 				case view.Off:
 					fill = sdl.Color{R: 68, G: 48, B: 30, A: 255}
-					ink = ColorWarning
+					ink = WarningInk()
 					border = WithAlpha(ColorWarning, 190)
 				case view.Blocked > 0:
 					fill = sdl.Color{R: 24, G: 58, B: 66, A: 255}
@@ -1098,6 +1152,16 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 		// Remember the page for Back/Forward before publishing it: the next
 		// visit to the same address is then a map lookup instead of a download.
 		browserCachePage(pageURL, page)
+		// A redirect (HTTP or the page's own meta refresh) landed somewhere
+		// else. The render pass moves the address bar and the history entry
+		// there; doing it from here would race with someone typing a new
+		// address, and Back would then step through a URL that was only a hop.
+		if page.FinalURL != "" && page.FinalURL != pageURL {
+			browserRememberLandedURL(pageURL, page.FinalURL)
+			// Cache the landing URL too, so Back to the corrected entry is a map
+			// lookup instead of a second walk through the redirect.
+			browserCachePage(page.FinalURL, page)
+		}
 		setBrowserAdBlockView(variable, browserAdBlockView{
 			Site:    browserAdBlockSiteKey(page.FinalURL),
 			Blocked: page.Blocked,
@@ -1198,73 +1262,44 @@ func browseWebPageResult(rawURL string) browserPage {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), textBrowserFetchTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return browserPage{Text: "Browser error: " + err.Error()}
-	}
-	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
 	// The jar travels with the client, so a cookie a redirect sets is already
 	// in hand when the next hop — and the page's stylesheets and images — go
 	// out.
 	client := browserHTTPClient(textBrowserFetchTimeout)
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
-			return fmt.Errorf("redirected to an unsupported URL scheme")
-		}
-		if len(via) >= 5 {
-			return fmt.Errorf("too many redirects")
-		}
-		return nil
-	}
-	resp, err := client.Do(req)
+	client.CheckRedirect = textBrowserRedirectPolicy
+	fetched, err := fetchTextBrowserDocument(ctx, client, address)
 	if err != nil {
-		if ctx.Err() != nil {
-			return browserPage{Text: fmt.Sprintf("Could not load %s\nTimed out after %s. Check Wi-Fi, then press Reload (or Y to search).",
-				address, textBrowserFetchTimeout)}
-		}
-		return browserPage{Text: fmt.Sprintf("Could not load %s\n%s", address, err.Error())}
+		return browserPage{Text: err.Error()}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return browserPage{Text: fmt.Sprintf("Could not load %s\nHTTP %s", address, resp.Status)}
-	}
-	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
-	if contentType != "" && !strings.Contains(contentType, "html") {
-		return browserPage{Text: fmt.Sprintf("This page is not HTML (%s).\nTry a website that serves readable HTML.", contentType)}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, textBrowserMaxPageBytes+1))
-	if err != nil {
-		return browserPage{Text: fmt.Sprintf("Could not read %s\n%s", address, err.Error())}
-	}
-	body, truncated := truncateTextBrowserBody(body, textBrowserMaxPageBytes)
+	body, truncated, pageURL := fetched.Body, fetched.Truncated, fetched.URL
 	// Ad and tracker scripts are removed before the script pass: there is no
 	// reason to spend the page's 5-second script budget running them, and some
 	// ship an inline fallback that would run even with the src blocked.
-	html := stripBlockedWebScripts(string(body), resp.Request.URL)
+	html := stripBlockedWebScripts(string(body), pageURL)
 	// Page scripts run first, so the text, link, CSS and image passes below see
 	// the markup they produced (webscript.go).
-	source := runWebPageScripts(html, resp.Request.URL)
+	source := runWebPageScripts(html, pageURL)
 	title, pageText := extractTextBrowserHTML(source)
 	if title == "" {
-		title = resp.Request.URL.Hostname()
+		title = pageURL.Hostname()
 	}
 	if pageText == "" {
 		pageText = "This page has no readable text content."
 	}
 	pageText = capTextBrowserText(pageText)
-	links := extractBrowserLinks(source, resp.Request.URL)
+	links := extractBrowserLinks(source, pageURL)
 	// Linked stylesheets carry most of a real page's look. Fetching a few small
 	// ones is cheap; the parser then applies the presentation subset it can
 	// draw, and the plain text above remains the fallback for everything else.
-	pageCSS := fetchWebStylesheets(source, resp.Request.URL)
+	pageCSS := fetchWebStylesheets(source, pageURL)
 	if truncated {
 		// Say so on the drawn page itself: the reader shows the styled document
 		// rather than the plain text, so a note only in the text would be
 		// invisible, and a page that simply stops mid-sentence looks broken.
 		source = withTextBrowserTruncationNote(source)
 	}
-	doc := parseWebPage(source, pageCSS, resp.Request.URL.String())
-	doc.Favicon = browserFaviconURL(source, resp.Request.URL)
+	doc := parseWebPage(source, pageCSS, pageURL.String())
+	doc.Favicon = browserFaviconURL(source, pageURL)
 	// Images load with the page: one bounded concurrent pass stores the bytes
 	// and natural sizes the reader paints from (webpage_image.go).
 	fetchWebImages(doc)
@@ -1276,15 +1311,187 @@ func browseWebPageResult(rawURL string) browserPage {
 	}
 	// The reader text is assembled last: the blocked count and truncation state
 	// are only final once the stylesheet and image passes have run.
-	text := browserReaderText(title, resp.Request.URL.String(), len(links), pageText,
-		browserBlockedRequests(), browserAdBlockOff(resp.Request.URL.String()), truncated)
+	text := browserReaderText(title, pageURL.String(), len(links), pageText,
+		browserBlockedRequests(), browserAdBlockOff(pageURL.String()), truncated)
 	return browserPage{
 		Text:     text,
 		Links:    links,
-		FinalURL: resp.Request.URL.String(),
+		FinalURL: pageURL.String(),
 		Doc:      doc,
 		Blocked:  browserBlockedRequests(),
 	}
+}
+
+// textBrowserRedirectLimit is how many HTTP hops one request may walk: enough
+// for the http→https, old-path→new-path and trailing-slash hops a site chains
+// on purpose, and short enough that a misconfigured site cannot spin the
+// reader forever.
+const textBrowserRedirectLimit = 5
+
+// textBrowserMetaRedirectLimit bounds the redirects a page asks for in its own
+// markup. Sites use them for "this page moved" stubs and for the bounce a
+// landing page makes to a locale or a login form; a page that points at
+// itself, or a pair that point at each other, must not keep the reader loading.
+const textBrowserMetaRedirectLimit = 3
+
+// textBrowserMetaRedirectDelay is the longest <meta http-equiv="refresh"> delay
+// still treated as a redirect. A longer one is a page asking to be reloaded
+// periodically, which the reader should not act on behind the user's back.
+const textBrowserMetaRedirectDelay = 2 * time.Second
+
+// textBrowserRedirectPolicy is the browser's rule for an HTTP redirect: stay on
+// a web scheme, and stop after a chain of five, so a site cannot send the
+// reader to a scheme this app cannot show.
+func textBrowserRedirectPolicy(req *http.Request, via []*http.Request) error {
+	if req.URL.Scheme != "http" && req.URL.Scheme != "https" {
+		return fmt.Errorf("redirected to %s, which this browser cannot open", req.URL.Scheme)
+	}
+	if len(via) >= textBrowserRedirectLimit {
+		return fmt.Errorf("more than %d redirects in a row", textBrowserRedirectLimit)
+	}
+	return nil
+}
+
+// textBrowserDocument is one page as it arrived: the bytes, where the load
+// finally landed after HTTP and in-page redirects, and whether the tail of a
+// page larger than the cap was cut.
+type textBrowserDocument struct {
+	Body      []byte
+	URL       *url.URL
+	Truncated bool
+}
+
+// fetchTextBrowserDocument performs one page load and follows the redirect the
+// page asks for in its own markup. HTTP redirects are the client's job, but a
+// <meta http-equiv="refresh"> arrives with a 200 and a body, so nothing follows
+// it automatically — and the reader used to be left on a stub whose whole
+// content was "this page has moved", with the link that would have followed it
+// stripped along with the page's scripts. The hops share the client, so the
+// cookie jar and the load's one time budget carry across them.
+func fetchTextBrowserDocument(ctx context.Context, client *http.Client, address string) (textBrowserDocument, error) {
+	current := address
+	for hop := 0; ; hop++ {
+		doc, err := fetchTextBrowserOnce(ctx, client, current)
+		if err != nil {
+			return doc, err
+		}
+		if hop >= textBrowserMetaRedirectLimit {
+			return doc, nil
+		}
+		target := browserMetaRefreshTarget(string(doc.Body), doc.URL)
+		if target == "" || target == doc.URL.String() {
+			return doc, nil
+		}
+		current = target
+	}
+}
+
+// fetchTextBrowserOnce is one request and body read, with the wording the error
+// card shows.
+func fetchTextBrowserOnce(ctx context.Context, client *http.Client, address string) (textBrowserDocument, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return textBrowserDocument{}, fmt.Errorf("Browser error: %w", err)
+	}
+	req.Header.Set("User-Agent", "JukaHub Browser/1.1")
+	resp, err := client.Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return textBrowserDocument{}, fmt.Errorf("Could not load %s\nTimed out after %s. Check Wi-Fi, then press Reload (or Y to search).",
+				address, textBrowserFetchTimeout)
+		}
+		return textBrowserDocument{}, fmt.Errorf("Could not load %s\n%s", address, err.Error())
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		// The client follows every redirect it can, so a 3xx here is a reply
+		// with no Location to follow. Say that instead of a bare status code.
+		return textBrowserDocument{}, fmt.Errorf("Could not load %s\nHTTP %s — the redirect named no usable target", address, resp.Status)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return textBrowserDocument{}, fmt.Errorf("Could not load %s\nHTTP %s", address, resp.Status)
+	}
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if contentType != "" && !strings.Contains(contentType, "html") {
+		return textBrowserDocument{}, fmt.Errorf("This page is not HTML (%s).\nTry a website that serves readable HTML.", contentType)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, textBrowserMaxPageBytes+1))
+	if err != nil {
+		return textBrowserDocument{}, fmt.Errorf("Could not read %s\n%s", address, err.Error())
+	}
+	body, truncated := truncateTextBrowserBody(body, textBrowserMaxPageBytes)
+	return textBrowserDocument{Body: body, URL: resp.Request.URL, Truncated: truncated}, nil
+}
+
+// browserMetaRefreshTarget reads the redirect a page asks for in its markup:
+// <meta http-equiv="refresh" content="0; url=/next">. A refresh that only
+// reloads the page, waits longer than a couple of seconds, or names something
+// other than an http(s) URL is not a redirect and returns "".
+func browserMetaRefreshTarget(html string, base *url.URL) string {
+	if base == nil {
+		return ""
+	}
+	lower := strings.ToLower(html)
+	for from := 0; from < len(lower); {
+		i := strings.Index(lower[from:], "<meta")
+		if i < 0 {
+			break
+		}
+		i += from
+		end := findTextBrowserTagEnd(html, i+len("<meta"))
+		if end < 0 {
+			break
+		}
+		tag := html[i:end]
+		from = end + 1
+		if !strings.EqualFold(strings.TrimSpace(htmlTagAttribute(tag, "http-equiv")), "refresh") {
+			continue
+		}
+		delay, target := parseBrowserMetaRefresh(htmlAttrValue(htmlTagAttribute(tag, "content")))
+		if target == "" || delay > textBrowserMetaRedirectDelay {
+			return ""
+		}
+		resolved, err := base.Parse(target)
+		if err != nil || (resolved.Scheme != "http" && resolved.Scheme != "https") {
+			return ""
+		}
+		return resolved.String()
+	}
+	return ""
+}
+
+// parseBrowserMetaRefresh splits a refresh content value into its delay and
+// target. The grammar is "seconds[; url=...]", but pages ship the URL quoted,
+// unquoted, with stray spaces or with "URL=" in any case, so all of those are
+// accepted rather than the redirect being silently dropped.
+func parseBrowserMetaRefresh(content string) (time.Duration, string) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return 0, ""
+	}
+	delayPart, rest := content, ""
+	if i := strings.IndexAny(content, ";,"); i >= 0 {
+		delayPart, rest = content[:i], content[i+1:]
+	}
+	seconds, err := strconv.ParseFloat(strings.TrimSpace(delayPart), 64)
+	if err != nil || seconds < 0 {
+		// No delay before the separator: the spec has no such form, so this is
+		// not a refresh the reader should act on.
+		return 0, ""
+	}
+	rest = strings.TrimSpace(rest)
+	if len(rest) >= 3 && strings.EqualFold(rest[:3], "url") {
+		i := strings.IndexByte(rest, '=')
+		if i < 0 {
+			return 0, ""
+		}
+		rest = strings.TrimSpace(rest[i+1:])
+	}
+	rest = strings.Trim(rest, "\"' \t")
+	if rest == "" || strings.ContainsAny(rest, "\r\n") {
+		return 0, ""
+	}
+	return time.Duration(seconds * float64(time.Second)), rest
 }
 
 // browserReaderText builds the plain-text view a page without a drawable

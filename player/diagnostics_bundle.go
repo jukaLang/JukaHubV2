@@ -37,6 +37,11 @@ var (
 	// diagnosticBearer catches the credential in "Authorization: Bearer <x>"
 	// even when the header name was already scrubbed.
 	diagnosticBearer = regexp.MustCompile(`(?i)\b(bearer)\s+[A-Za-z0-9._~+/=-]{8,}`)
+	// diagnosticURLKey covers the query-string spelling of the same credential:
+	// yt-dlp echoes the extractor arguments it was given, and a YouTube media
+	// URL carries the key as "?key=<value>". The value stops at the next
+	// parameter so the rest of the URL stays readable in the report.
+	diagnosticURLKey = regexp.MustCompile(`(?i)([?&](?:api[_-]?)?key=)[^&\s"']+`)
 	// diagnosticURLUser strips "user:password@" from a URL before it is shared.
 	diagnosticURLUser = regexp.MustCompile(`://[^/\s:@]+:[^/\s@]+@`)
 	// diagnosticHomeUnix and diagnosticHomeWin remove the account name from a
@@ -53,6 +58,7 @@ var (
 // folders, network names and addresses, which is why the bundle says so and the
 // user is expected to read the file before sharing it.
 func redactDiagnosticText(text string) string {
+	text = diagnosticURLKey.ReplaceAllString(text, "${1}[redacted]")
 	text = diagnosticURLUser.ReplaceAllString(text, "://[credentials]@")
 	// The named field runs before the bare bearer token: "Authorization: Bearer
 	// <jwt>" must become one [redacted], not "[redacted] [redacted]".
@@ -118,9 +124,9 @@ func cookieSessionFacts(config *Config) string {
 }
 
 // DiagnosticsBundleText is the support file: the redacted report, the cookie
-// session's date and window, and the redacted log tail. A bundle with no
-// usable log still says so instead of ending silently, because "the log was
-// empty" is itself a support fact.
+// session's date and window, the Wi-Fi diagnostics sheet's last collection, and
+// the redacted log tail. A bundle with no usable log still says so instead of
+// ending silently, because "the log was empty" is itself a support fact.
 func DiagnosticsBundleText(config *Config) string {
 	var sb strings.Builder
 	sb.WriteString(DiagnosticsText(config))
@@ -128,6 +134,10 @@ func DiagnosticsBundleText(config *Config) string {
 	// bug-report URL, and these are the two numbers a login report needs
 	// without another round trip.
 	sb.WriteString("\n" + cookieSessionFacts(config))
+	// Wi-Fi is the other report that needs a round trip to collect: the sheet's
+	// last collection rides along, so a "no networks" thread does not have to
+	// ask the user to open the sheet, read it out and retype it.
+	sb.WriteString("\n" + wifiDiagBundleFacts())
 	sb.WriteString("\nRecent log\n----------\n")
 	tail := diagnosticLogTail(appLog.String())
 	if strings.TrimSpace(tail) == "" {

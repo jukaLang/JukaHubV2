@@ -56,6 +56,7 @@ if not exist "%DLTMP%" mkdir "%DLTMP%" >nul 2>&1
 call :ensure_go  || goto failed
 call :ensure_gcc || goto failed
 call :ensure_sdl || goto failed
+call :ensure_icon || goto failed
 if /i "%MODE%"=="nobuild" goto done
 
 call :build      || goto failed
@@ -290,6 +291,29 @@ exit /b 1
 
 
 REM ============================================================================
+REM  ICON - compile the icon resource into the executable
+REM  Windows reads a program's icon from a resource inside the .exe, so without
+REM  one every build shows the generic application icon. windres turns
+REM  JukaHub.rc + JukaHub.ico into rsrc_windows_amd64.syso, which the Go linker
+REM  links automatically on windows/amd64. It runs on every build because it
+REM  costs milliseconds, so a changed .ico can never be left stale.
+REM ============================================================================
+:ensure_icon
+if not exist "%ROOT%JukaHub.rc" exit /b 0
+if not exist "%GCC_DIR%\windres.exe" (
+    if not exist "%ROOT%rsrc_windows_amd64.syso" (
+        set "ERR=No windres.exe and no prebuilt rsrc_windows_amd64.syso - the exe would have no icon."
+        exit /b 1
+    )
+    echo [warn] windres.exe not found - reusing the committed icon resource.
+    exit /b 0
+)
+"%GCC_DIR%\windres.exe" -i JukaHub.rc -o rsrc_windows_amd64.syso -O coff || (set "ERR=windres failed to compile JukaHub.rc." & exit /b 1)
+echo [ok] icon resource  ^(JukaHub.ico^)
+exit /b 0
+
+
+REM ============================================================================
 REM  BUILD / STAGE / LAUNCH
 REM ============================================================================
 :build
@@ -371,6 +395,7 @@ echo SDL root    : %SDL_ROOT%
 call :validate_sdl && echo SDL2 files  : complete
 echo.
 for %%D in (SDL2.dll SDL2_image.dll SDL2_ttf.dll %OUT%) do if exist "%ROOT%%%D" (echo %%D : present) else (echo %%D : missing)
+if exist "%ROOT%rsrc_windows_amd64.syso" (echo icon resource: compiled) else (echo icon resource: MISSING - the exe would show the generic icon)
 exit /b 0
 
 :clean

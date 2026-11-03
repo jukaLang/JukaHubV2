@@ -120,9 +120,13 @@ func TestNotifShoulderPagesRows(t *testing.T) {
 func TestQSShoulderPagesRows(t *testing.T) {
 	prev := qs
 	t.Cleanup(func() { qs = prev })
+	// Every row list is set here: the page maths reads all four, so leaving one
+	// at whatever an earlier test (or no init at all) put there made this check
+	// depend on the row count of a different screen visit.
 	qs.toggles = []qsToggle{{}, {}, {}}
 	qs.sliders = nil
 	qs.links = nil
+	qs.cycles = []qsCycle{{}}
 	qs.cursor = 0
 
 	qsShoulder(padR1)

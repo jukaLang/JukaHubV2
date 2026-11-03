@@ -70,7 +70,7 @@ func maybeOfferUpdate() {
 		patchModal != nil || transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
 		nc.open || tb.startOpen || processPanel.open || wifiPanel.open || ipPanelOpen || emuPanel.open || gpPanel.open || winAppsPanel.open || portsPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open || raPanel.open || a11y.open ||
 		wpOpen || socialNotifOpen || shortcutsOpen || globalSearchOpen || clipSearchOpen || smartHomePanel.open ||
-		memPanel.open || ctrldiag.open {
+		memPanel.open || ctrldiag.open || fileEditor.open {
 		return
 	}
 	openUpdatePrompt()
@@ -146,24 +146,61 @@ func startHeaderUpdate() bool {
 // Drawing
 // ──────────────────────────────────────────────────────────────────────
 
-// drawUpdateBadge draws the download pill ending at rightX and returns the
-// horizontal space it consumed (including the gap before the bell). It records
-// the hit rect used by handleChromeBarClick.
 // updatePillLabel is the word both headers put on the release offer. One label
 // and one footprint everywhere is what keeps the top bar recognisable: the home
 // header used to show a bare download glyph while every scene header showed a
 // wider pill with text.
-const updatePillLabel = "Update"
+const (
+	updatePillLabel = "Update"
+	// updatePillHeightInset keeps the offer a step quieter than the labelled
+	// header buttons (Back, Menu), the same inset the bell chip takes: the two
+	// controls share the system corner and used to be two different heights.
+	updatePillHeightInset = notifBellHeightInset
+	// updatePillIconPad is where the arrow sits from the pill's left edge.
+	updatePillIconPad = int32(14)
+	// updatePillTextGap is where the label starts: far enough past the arrow
+	// that the two never touch at handheld sizes.
+	updatePillTextGap = int32(26)
+	// updatePillRightPad is the breathing room after the label.
+	updatePillRightPad = int32(12)
+	// updatePillIconWidth is the pill's width without the label: the arrow's
+	// drawn span plus a pad on either side. The 4:3 device canvases are only
+	// 960px wide, and there the word "Update" costs the header more room than
+	// the offer is worth next to the bell, so the pill keeps just the arrow.
+	updatePillIconWidth = int32(28)
+)
+
+// updatePillHeight is the release pill's own height: one step below the
+// labelled header buttons, exactly like the bell chip beside it.
+func updatePillHeight() int32 {
+	h := headerPillHeight() - updatePillHeightInset
+	if h < notifBellMinHeight {
+		h = notifBellMinHeight
+	}
+	return h
+}
+
+// updatePillIconOnly reports whether the offer is drawn without its label. The
+// wide 1280 canvas has room for the word; the compact 960 canvas the 4:3
+// devices draw into does not, and there the pill shrinks to its arrow so it
+// stays a system-corner chip instead of a wide button crowding the bell.
+func updatePillIconOnly() bool {
+	return uiTextScaleFactor() < 0.999
+}
 
 // updatePillSize is the shared footprint of the release pill: the label plus
-// room for the arrow, at the header's button height so it lines up with Back and
-// Menu. Every caller gets the same numbers, on Home and in every scene.
+// room for the arrow on the wide canvas, just the arrow on the compact one, at
+// the bell chip's height so the system corner reads as one row. Every caller
+// gets the same numbers, on Home and in every scene.
 func updatePillSize(font *ttf.Font) (int32, int32) {
 	if font == nil {
 		return 0, 0
 	}
+	if updatePillIconOnly() {
+		return updatePillIconWidth, updatePillHeight()
+	}
 	tw, _, _ := font.SizeUTF8(updatePillLabel)
-	return int32(tw) + 46, headerPillHeight()
+	return updatePillTextGap + int32(tw) + updatePillRightPad, updatePillHeight()
 }
 
 // drawHeaderUpdatePill draws the release offer in the header's system corner:
@@ -172,41 +209,53 @@ func updatePillSize(font *ttf.Font) (int32, int32) {
 // for its own screen (homeUpdateRect or updatePrompt.badge).
 func drawHeaderUpdatePill(renderer *sdl.Renderer, config *Config, rightX, barH int32, focused bool) sdl.Rect {
 	font := headerCaptionFont(config)
-	w, _ := updatePillSize(font)
-	h := headerPillHeight()
+	w, h := updatePillSize(font)
 	rect := sdl.Rect{X: rightX - w, Y: (barH - h) / 2, W: w, H: h}
 	return drawUpdatePill(renderer, config, font, rect, focused)
 }
 
-// drawUpdatePill draws the "a release is available" pill inside rect: warning
-// fill, a download arrow, the label and a focus ring while the header focus
-// sits on it. The home header and the scene header both call this, so the
-// offer cannot drift into two different controls again.
+// drawUpdatePill draws the "a release is available" pill inside rect: the
+// bell's surface, a small warning-toned arrow, a secondary label on the wide
+// canvas, and a focus ring while the header focus sits on it. The home header
+// and the scene header both call this, so the offer cannot drift into two
+// different controls again.
+//
+// It used to be the loudest thing in the bar — a full-height button with a
+// warning-filled pill and a 200-alpha warning outline, next to a bell that is a
+// quiet 32px surface chip. The offer now takes the same height and the same
+// surface as the bell and lets only the arrow keep a hint of the warning
+// colour, so an available release reads as one more system control instead of
+// a banner shouting over the header.
 func drawUpdatePill(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect, focused bool) sdl.Rect {
 	if renderer == nil || font == nil || rect.W < 24 || rect.H < 18 || !updateAvailable() {
 		return sdl.Rect{}
 	}
 	radius := rect.H / 2
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, WithAlpha(ColorWarning, 40))
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, WithAlpha(ColorWarning, 200))
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, ColorIconSurface)
 	// Focus ring while the D-pad/arrows sit on the pill. Every other top-bar
 	// control draws one; without it a controller user cannot tell the offer is
 	// selected rather than merely present.
 	if focused {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-		renderer.DrawRect(&sdl.Rect{X: rect.X - 3, Y: rect.Y - 3, W: rect.W + 6, H: rect.H + 6})
+		strokeRoundedRect(renderer, rect.X-2, rect.Y-2, rect.W+4, rect.H+4, (rect.H+4)/2, 2, accentColor)
 	}
 
 	// Down-arrow drawn with lines: Inter may not contain U+2193 on the device.
-	cx := rect.X + 16
+	// Icon-only pills centre it, since there is no label to sit beside.
+	cx := rect.X + updatePillIconPad
+	if updatePillIconOnly() {
+		cx = rect.X + rect.W/2
+	}
 	cy := rect.Y + rect.H/2
-	renderer.SetDrawColor(ColorWarning.R, ColorWarning.G, ColorWarning.B, 235)
-	renderer.DrawLine(cx, cy-7, cx, cy+5)
-	renderer.DrawLine(cx-5, cy, cx, cy+5)
-	renderer.DrawLine(cx+5, cy, cx, cy+5)
+	renderer.SetDrawColor(ColorWarning.R, ColorWarning.G, ColorWarning.B, 200)
+	renderer.DrawLine(cx, cy-6, cx, cy+4)
+	renderer.DrawLine(cx-4, cy-1, cx, cy+4)
+	renderer.DrawLine(cx+4, cy-1, cx, cy+4)
 
-	renderText(renderer, config, font, updatePillLabel, ColorTextPrimary(),
-		rect.X+30, rect.Y+(rect.H-int32(font.Height()))/2)
+	if updatePillIconOnly() {
+		return rect
+	}
+	renderText(renderer, config, font, updatePillLabel, ColorTextSecondary(),
+		rect.X+updatePillTextGap, rect.Y+(rect.H-int32(font.Height()))/2)
 	return rect
 }
 
@@ -235,31 +284,27 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 190)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
 	smallH := int32(font.Height())
 	layout := layoutUpdatePrompt(font, medium)
-	x, y, cardW, cardH := layout.card.X, layout.card.Y, layout.card.W, layout.card.H
-	fillRoundedRect(renderer, x, y, cardW, cardH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, x, y, cardW, cardH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 140)
-	renderer.FillRect(&sdl.Rect{X: x + 18, Y: y + 1, W: cardW - 36, H: 2})
+	x, y, cardW := layout.card.X, layout.card.Y, layout.card.W
+	drawOverlayCard(renderer, layout.card)
+	drawOverlayCardAccent(renderer, x, y, cardW)
 
-	renderText(renderer, config, medium, "JukaHub update available", ColorTextPrimary(), x+28, layout.titleY)
+	renderText(renderer, config, medium, "JukaHub update available", ColorTextPrimary(), x+OverlayPadX, layout.titleY)
 	for i, line := range layout.bodyLines {
-		renderText(renderer, config, font, line, ColorTextTertiary(), x+28, layout.bodyY+int32(i)*smallH)
+		renderText(renderer, config, font, line, ColorTextTertiary(), x+OverlayPadX, layout.bodyY+int32(i)*smallH)
 	}
 	for i, line := range layout.hintLines {
-		renderText(renderer, config, font, line, ColorTextTertiary(), x+28, layout.hintY+int32(i)*smallH)
+		renderText(renderer, config, font, line, ColorTextTertiary(), x+OverlayPadX, layout.hintY+int32(i)*smallH)
 	}
 	if len(layout.notes) > 0 {
-		renderText(renderer, config, font, "WHAT'S NEW", accentColor, x+28, layout.noteLabelY)
+		renderText(renderer, config, font, "WHAT'S NEW", accentColor, x+OverlayPadX, layout.noteLabelY)
 		for i, note := range layout.notes {
 			// ASCII dash: the bundled handheld fonts are not guaranteed to
 			// carry a bullet glyph.
-			renderText(renderer, config, font, "- "+note, ColorTextSecondary(), x+28, layout.noteLabelY+smallH+6+int32(i)*smallH)
+			renderText(renderer, config, font, "- "+note, ColorTextSecondary(), x+OverlayPadX, layout.noteLabelY+smallH+6+int32(i)*smallH)
 		}
 	}
 
@@ -267,7 +312,7 @@ func renderUpdatePrompt(renderer *sdl.Renderer, config *Config) {
 	btnH := int32(42)
 	updateW := int32(160)
 	laterW := int32(120)
-	laterX := x + cardW - 28 - laterW
+	laterX := x + cardW - OverlayPadX - laterW
 	updateX := laterX - 12 - updateW
 	btnY := layout.buttonsY
 	updatePrompt.laterBtn = sdl.Rect{X: laterX, Y: btnY, W: laterW, H: btnH}
@@ -317,7 +362,7 @@ type updatePromptLayout struct {
 }
 
 const (
-	updatePromptPad      = int32(24)
+	updatePromptPad      = OverlayPadX
 	updatePromptBtnH     = int32(42)
 	updatePromptBtnGap   = int32(28)
 	updatePromptMaxNotes = 3
@@ -332,7 +377,7 @@ func layoutUpdatePrompt(font, medium *ttf.Font) updatePromptLayout {
 	if cardW > screenWidth-64 {
 		cardW = screenWidth - 64
 	}
-	innerW := cardW - 56
+	innerW := cardW - 2*OverlayPadX
 
 	body := fmt.Sprintf("Release %s is ready to install. Download and restart when you are ready — nothing is installed without your confirmation.", availableUpdateLabel())
 	bodyLines := wrapTextLines(font, body, innerW, 3)

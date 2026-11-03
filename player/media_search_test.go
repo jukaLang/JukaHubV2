@@ -63,8 +63,8 @@ func TestMediaSearchPlanFromTheTubeTrigger(t *testing.T) {
 		t.Errorf("results variable = %q, want search_results", plan.resultVar)
 	}
 	resolved := substituteVars(plan.command, config.Variables.Custom)
-	if !strings.Contains(resolved, "ytsearch20:lofi beats") {
-		t.Errorf("search command %q does not search for the typed query", resolved)
+	if !strings.Contains(resolved, "ytsearch5:lofi beats") || !strings.Contains(resolved, "--playlist-end 5") {
+		t.Errorf("search command %q does not search for one initial result page", resolved)
 	}
 
 	// A pasted link plays instead of searching.

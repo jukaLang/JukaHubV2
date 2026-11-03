@@ -131,6 +131,24 @@ func TestStreamFailureReasonFallsBackToLastLine(t *testing.T) {
 	}
 }
 
+func TestStreamFailureReasonRedactsSecrets(t *testing.T) {
+	// yt-dlp echoes back the arguments it was given, including the decrypted
+	// API key, and this reason ends up in the log and in the UI.
+	stderr := "ERROR: [youtube] abc: extractor args youtube:api_key=AIzaSyD-EXAMPLEKEYVALUE\n"
+	got := streamFailureReason(stderr)
+	if strings.Contains(got, "AIzaSyD-EXAMPLEKEYVALUE") {
+		t.Fatalf("reason leaked the api key: %q", got)
+	}
+	if !strings.Contains(got, "[redacted]") {
+		t.Errorf("reason = %q, want a redaction marker", got)
+	}
+	// The query-string spelling of the same key, and the rest of the URL kept.
+	got = streamFailureReason("ERROR: unable to download https://x/y?key=AIzaSyD-EXAMPLEKEYVALUE&itag=18")
+	if strings.Contains(got, "AIzaSyD-EXAMPLEKEYVALUE") || !strings.Contains(got, "itag=18") {
+		t.Errorf("query-string key not redacted cleanly: %q", got)
+	}
+}
+
 func TestStreamFailureFatal(t *testing.T) {
 	fatal := []string{
 		"ERROR: [youtube] x: Private video. Sign in if you've been granted access",

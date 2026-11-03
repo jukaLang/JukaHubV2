@@ -139,32 +139,25 @@ func renderShortcutsOverlay(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Full-screen dim
-	drawRect(renderer, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight}, 0, 0, 0, 200)
-
-	// Main card
 	cardW := screenWidth - 200
 	cardH := screenHeight - 120
 	cardX := (screenWidth - cardW) / 2
 	cardY := (screenHeight - cardH) / 2
-	drawRoundedRect(renderer, &sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, 16, 22, 22, 28, 245)
+	card := sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
 
-	// Title
-	titleFont := getDisplayFont(config, 28)
-	titleText := "[Keyboard] Shortcuts"
-	titleW, _, _ := titleFont.SizeUTF8(titleText)
-	drawText(renderer, titleFont, titleText, cardX+(cardW-int32(titleW))/2, cardY+20, getAccentColor(config), textAlignLeft)
-
-	// Close hint
-	closeFont := getBodyFont(config, 14)
-	closeText := "Press F1 or B to close"
-	closeW, _, _ := closeFont.SizeUTF8(closeText)
-	drawText(renderer, closeFont, closeText, cardX+(cardW-int32(closeW))/2, cardY+56, colorNew(140, 140, 155, 255), textAlignLeft)
+	// The sheet opens with the shared page header, like every other panel, so
+	// the closing hint belongs in its subtitle instead of a second title line.
+	header := overlayPageHeader(card, "Keyboard shortcuts", "F1 or B closes this sheet", "settings")
+	headerH := UIPanelHeaderBand(config, header, 14)
+	UIPageHeaderDraw(renderer, config, header)
 
 	// Column layout
-	colW := (cardW - 60) / 2
-	startY := cardY + 80
-	cols := []int32{cardX + 20, cardX + 20 + colW + 20}
+	closeFont := getBodyFont(config, 14)
+	colW := (cardW - 3*OverlayPadX) / 2
+	startY := cardY + headerH
+	cols := []int32{cardX + OverlayPadX, cardX + 2*OverlayPadX + colW}
 
 	keyFont := getBodyFont(config, 13)
 	descFont := getBodyFont(config, 13)
@@ -194,7 +187,7 @@ func renderShortcutsOverlay(renderer *sdl.Renderer, config *Config) {
 		colY += 22
 
 		for _, item := range cat.items {
-			if colY+22 > cardY+cardH-20 {
+			if colY+22 > cardY+cardH-40 {
 				break
 			}
 			// Key badge

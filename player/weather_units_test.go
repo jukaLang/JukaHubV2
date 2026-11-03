@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setWeatherCountryForTest(t *testing.T, code string) {
@@ -190,5 +193,103 @@ func TestHeaderWeatherChipUsesLocalUnit(t *testing.T) {
 	}
 	if !isWeatherStatusPart("69F / 53F") {
 		t.Error("Fahrenheit chip is not recognised as the weather button")
+	}
+}
+
+// The existing Weather Unit input becomes a cycling button in both designs,
+// including older copies of the configs already installed on devices.
+func TestWeatherUnitSettingsCycleAndPersistence(t *testing.T) {
+	setWeatherCountryForTest(t, "US")
+	withWeatherData(t, []WeatherDay{{Date: "2026-10-19", TMax: 21, TMin: 12, Code: 1}})
+	for _, path := range []string{"jukaconfig.json", "trimui/jukaconfig.device.json"} {
+		config, err := loadConfig(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scene := settingsGeneralScene(config)
+		if scene == nil {
+			t.Fatalf("%s has no SettingsGeneral", path)
+		}
+		var old Element
+		for _, elem := range scene.Elements {
+			if elem.Type == "input" && elem.Variable == "weatherUnit" {
+				old = elem
+				break
+			}
+		}
+		if old.Variable == "" {
+			t.Fatalf("%s has no weather unit field", path)
+		}
+		ensureWeatherUnitSetting(config)
+		ensureWeatherUnitSetting(config)
+		var row Element
+		count := 0
+		for _, elem := range scene.Elements {
+			if elem.Trigger == "cycle_weather_unit" {
+				row = elem
+				count++
+			}
+		}
+		if count != 1 || row.Type != "button" || row.X != old.X || row.Y != old.Y || row.Width != old.Width || row.Height != old.Height {
+			t.Fatalf("%s: converted row count=%d, row=%+v, old=%+v", path, count, row, old)
+		}
+	}
+
+	prevWrites, prevDelay := userConfigWritesEnabled, userConfigSaveDelay
+	prevScene, prevElement := activeSceneIndex, activeElementIndex
+	userConfigWritesEnabled = true
+	userConfigSaveDelay = time.Hour
+	activeSceneIndex, activeElementIndex = -1, -1
+	t.Cleanup(func() {
+		cancelPendingUserConfigSave(t)
+		userConfigWritesEnabled, userConfigSaveDelay = prevWrites, prevDelay
+		activeSceneIndex, activeElementIndex = prevScene, prevElement
+	})
+	if err := os.MkdirAll("tmp", 0755); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp("tmp", "weather-unit-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{"WeatherUnit": "F"}}}
+	row := Element{Type: "button", Trigger: "cycle_weather_unit"}
+	if got := weatherUnitSettingLabel(config); got != "Auto (F)" {
+		t.Fatalf("auto label = %q", got)
+	}
+	cases := []struct{ saved, label, unit, header string }{
+		{"C", "Celsius (C)", "C", "21C / 12C"},
+		{"F", "Fahrenheit (F)", "F", "69F / 53F"},
+		{"", "Auto (F)", "F", "69F / 53F"},
+	}
+	for _, tc := range cases {
+		handleTrigger(nil, config, row)
+		if config.Variables.WeatherUnit != tc.saved || weatherUnitSettingLabel(config) != tc.label || weatherUnit(config) != tc.unit {
+			t.Fatalf("choice = %q, label = %q, display = %q; want %+v", config.Variables.WeatherUnit, weatherUnitSettingLabel(config), weatherUnit(config), tc)
+		}
+		if parts := headerStatusParts(config); !strings.Contains(strings.Join(parts, " | "), tc.header) {
+			t.Fatalf("header = %v, want %q", parts, tc.header)
+		}
+		if _, exists := config.Variables.Custom["WeatherUnit"]; exists {
+			t.Fatal("stale custom weather unit remains")
+		}
+		userConfigSaveMutex.Lock()
+		pending := pendingUserConfig
+		userConfigSaveMutex.Unlock()
+		if pending == nil || pending.Variables.WeatherUnit != tc.saved {
+			t.Fatalf("pending save = %+v, want %q", pending, tc.saved)
+		}
+		saveUserConfigToDir(dir, pending)
+		saved, err := readUserConfigFile(filepath.Join(dir, "jukauser.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		migrateWeatherUnitAuto(saved)
+		reloaded := &Config{Variables: Variables{Custom: map[string]interface{}{}}}
+		mergeUserConfig(reloaded, saved)
+		if reloaded.Variables.WeatherUnit != tc.saved || weatherUnitSettingLabel(reloaded) != tc.label {
+			t.Fatalf("reloaded choice = %q, label = %q, want %+v", reloaded.Variables.WeatherUnit, weatherUnitSettingLabel(reloaded), tc)
+		}
 	}
 }

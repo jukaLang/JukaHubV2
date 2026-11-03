@@ -109,14 +109,28 @@ func browserCookieStripTap(mx, my int32, config *Config) bool {
 	return true
 }
 
+// browserCookiePickerForget clears the picker and the row rects it was clicked
+// through, without a sound. Closing it by hand and leaving the page both go
+// through here, so neither path can leave a hit behind for a later press.
+func browserCookiePickerForget() {
+	browserCookiePanel = browserCookiePanelState{}
+	browserCookieRowHits = nil
+	browserCookiePanelRect = sdl.Rect{}
+}
+
 func closeBrowserCookiePanel() {
 	if !browserCookiePanel.open {
 		return
 	}
-	browserCookiePanel = browserCookiePanelState{}
-	browserCookieRowHits = nil
-	browserCookiePanelRect = sdl.Rect{}
+	browserCookiePickerForget()
 	PlayBackSound()
+}
+
+// browserCookiePageForget also drops the strip that opens the picker: the page
+// those rows name is the one being left, so its tap target must go with it.
+func browserCookiePageForget() {
+	browserCookiePickerForget()
+	browserCookieStripHit = sdl.Rect{}
 }
 
 func browserCookiePanelMove(delta int) {
@@ -276,7 +290,7 @@ func renderBrowserCookiePanel(renderer *sdl.Renderer, config *Config) {
 	subtitleInk := ColorTextSecondary()
 	if armedNow {
 		subtitle = "Press A again to drop the cookies from " + browserCookiePanel.armed
-		subtitleInk = ColorWarning
+		subtitleInk = WarningInk()
 	}
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar drawn into it measure the same height. Trailing 9
@@ -315,15 +329,10 @@ func renderBrowserCookiePanel(renderer *sdl.Renderer, config *Config) {
 		browserCookiePanel.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, 1, ColorBorderDefault)
-
-	header.X = panelX + 22
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 44
+	card := sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
+	header = overlayHeaderOnCard(header, card)
 	UIPageHeaderDraw(renderer, config, header)
 
 	browserCookieRowHits = browserCookieRowHits[:0]
@@ -338,7 +347,7 @@ func renderBrowserCookiePanel(renderer *sdl.Renderer, config *Config) {
 		ink := ColorTextPrimary()
 		if row.ForgetAll {
 			label = "Forget all " + browserCookieCountLabel(row.Count)
-			ink = ColorToastError
+			ink = ToastErrorInk()
 		}
 		// The count and the site's own session start sit on the right, the way
 		// the package list right-aligns its version: the name identifies the

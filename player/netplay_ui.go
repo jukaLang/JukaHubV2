@@ -305,7 +305,7 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const pad = int32(24)
+	const pad = OverlayPadX
 	// The rows carry a title and a detail line; 76px leaves the detail clear of
 	// the rounded border at both the 34px and the scaled-up medium font.
 	rowH := int32(76)
@@ -334,17 +334,11 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	netplayPanel.panel = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 200)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + pad
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*pad
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
@@ -372,11 +366,11 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 		renderText(renderer, config, medium, "This device: "+address, ColorTextAccent(), panelX+pad, infoY)
 	} else {
 		renderText(renderer, config, medium, "No Wi-Fi address — connect to a network first",
-			ColorWarning, panelX+pad, infoY)
+			WarningInk(), panelX+pad, infoY)
 	}
 	readyColor := ColorTextTertiary()
 	if !netplayPanel.readyOK {
-		readyColor = ColorWarning
+		readyColor = WarningInk()
 	}
 	readyY := infoY + medH + 8
 	renderText(renderer, config, font, ellipsize(font, netplayPanel.ready, panelW-2*pad),
@@ -389,7 +383,7 @@ func renderNetplayPanel(renderer *sdl.Renderer, config *Config) {
 	if netplayPanel.status != "" {
 		hint = netplayPanel.status
 		if netplayPanel.warn {
-			hintColor = ColorWarning
+			hintColor = WarningInk()
 		}
 	}
 	renderText(renderer, config, font, ellipsize(font, hint, panelW-2*pad),

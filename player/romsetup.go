@@ -177,6 +177,18 @@ const artworkMissTTL = 30 * 24 * time.Hour
 
 const artworkMissFile = ".missing-art.json"
 
+// artworkMissVersion stamps the not-found cache. It is bumped whenever title
+// matching changes: a title that was "not found" under the old lookup deserves
+// one more try instead of waiting out the 30-day window.
+const artworkMissVersion = 2
+
+// artworkVariantLimit caps how many names one ROM asks the thumbnail server
+// for. A library fetch walks every ROM, so a title that generates ten lookups
+// would multiply the whole job; eight covers the shapes the matcher builds
+// (exact, tags off, subtitle off, article off, each spaced and underscored)
+// without turning a miss into a sweep.
+const artworkVariantLimit = 8
+
 // artworkBaseURL is a variable so the tests can point at an httptest server.
 var artworkBaseURL = "https://thumbnails.libretro.com"
 
@@ -218,6 +230,13 @@ func loadArtworkMisses(dest string) map[string]time.Time {
 		log.Printf("[art] ignoring %s: %v", path, err)
 		return out
 	}
+	if store.Version != artworkMissVersion {
+		// Written by an older matcher, so these misses answer a question the
+		// downloader no longer asks. Rewriting the file on the next fetch also
+		// migrates it.
+		log.Printf("[art] %s was written by matcher v%d, retrying its titles once", path, store.Version)
+		return out
+	}
 	now := time.Now()
 	for key, at := range store.Missing {
 		key = strings.TrimSpace(key)
@@ -250,7 +269,7 @@ func saveArtworkMisses(dest string, misses map[string]time.Time) error {
 		}
 		return nil
 	}
-	payload, err := json.MarshalIndent(artworkMissStore{Version: 1, Missing: kept}, "", "  ")
+	payload, err := json.MarshalIndent(artworkMissStore{Version: artworkMissVersion, Missing: kept}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -372,11 +391,7 @@ func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, col
 	if base == "" || collection == "" || title == "" {
 		return nil, os.ErrNotExist
 	}
-	variants := []string{title, strings.ReplaceAll(title, " ", "_")}
-	for i, variant := range variants {
-		if i > 0 && variant == variants[0] {
-			continue
-		}
+	for _, variant := range artworkTitleVariants(title) {
 		u := base + "/" + url.PathEscape(collection) + "/Named_Boxarts/" + url.PathEscape(variant) + ".png"
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 		if err != nil {
@@ -405,6 +420,122 @@ func fetchROMArtworkImage(ctx context.Context, client *http.Client, baseURL, col
 		return data, nil
 	}
 	return nil, os.ErrNotExist
+}
+
+// artworkTitleVariants lists the names to try for one ROM stem, best first.
+//
+// The thumbnail set names a file exactly as the reference title reads, and the
+// ROM in the folder often does not:
+//
+//   - "(USA)", "(Rev 1)", "[!]" and friends are dump tags, not part of a title;
+//   - a reference title carries the subtitle ("Zelda II - The Adventure of
+//     Link") while a trimmed ROM name may only say "Zelda II";
+//   - a reference title may open with an article the local name drops, or the
+//     other way round;
+//   - the server accepts either spaces or underscores.
+//
+// Ordering matters more than reach. Every step below is a guess, so the exact
+// name is asked first and the guesses only run after it 404s: a truncated title
+// can land on a different game's cover, and that is only acceptable as a last
+// resort. The list is capped so one odd title cannot turn a library fetch into a
+// sweep.
+func artworkTitleVariants(title string) []string {
+	base := strings.TrimSpace(title)
+	if base == "" {
+		return nil
+	}
+
+	// Build the spaced forms first, in widening order of guesswork, then give
+	// each one its underscored twin. The server's own convention is underscores,
+	// so that twin belongs beside the name it came from rather than at the end.
+	spaced := []string{base}
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		for _, have := range spaced {
+			if have == name {
+				return
+			}
+		}
+		spaced = append(spaced, name)
+	}
+
+	tagged := stripArtworkTagGroups(base)
+	add(tagged)
+	add(artworkSubtitleCut(tagged))
+	add(artworkSubtitleCut(base))
+	// Articles last: dropping "The" is a bigger change to the name than
+	// dropping a dump tag, so it is asked for last.
+	for _, name := range append([]string(nil), spaced...) {
+		add(trimArtworkArticle(name))
+	}
+
+	out := make([]string, 0, len(spaced)*2)
+	seen := make(map[string]bool, len(spaced)*2)
+	push := func(name string) {
+		if name == "" || seen[name] || len(out) >= artworkVariantLimit {
+			return
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, name := range spaced {
+		push(name)
+		push(strings.ReplaceAll(name, " ", "_"))
+	}
+	return out
+}
+
+// stripArtworkTagGroups removes bracketed dump tags: "(USA)", "(Rev 1)",
+// "[!]". Nested brackets are dropped whole instead of leaving a stray half
+// behind, and the surrounding spaces are tidied so the result is a real title.
+func stripArtworkTagGroups(s string) string {
+	var b strings.Builder
+	depth := 0
+	for _, r := range s {
+		switch r {
+		case '(', '[':
+			depth++
+			continue
+		case ')', ']':
+			if depth > 0 {
+				depth--
+			}
+			continue
+		}
+		if depth == 0 {
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// artworkSubtitleCut keeps the part before the first " - ", the separator the
+// reference sets use between a series name and its subtitle.
+func artworkSubtitleCut(s string) string {
+	if i := strings.Index(s, " - "); i > 0 {
+		if head := strings.TrimSpace(s[:i]); head != "" {
+			return head
+		}
+	}
+	return s
+}
+
+// trimArtworkArticle drops a leading "The", "A" or "An". A name that is only
+// the article is left alone rather than becoming empty.
+func trimArtworkArticle(s string) string {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	for _, article := range []string{"the ", "an ", "a "} {
+		if strings.HasPrefix(lower, article) {
+			rest := strings.TrimSpace(s[len(article):])
+			if rest != "" {
+				return rest
+			}
+		}
+	}
+	return s
 }
 
 var artworkFetchState = struct {

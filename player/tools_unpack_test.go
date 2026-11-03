@@ -218,6 +218,18 @@ func TestExtractToolFilesCancelled(t *testing.T) {
 	}
 }
 
+// Unknown formats are refused instead of being unpacked by an external tar,
+// which cannot enforce our regular-file-only extraction policy.
+func TestExtractToolFilesRefusesUnsupportedArchive(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "bundle.unknown")
+	if err := os.WriteFile(archive, []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := extractToolFiles(archive, t.TempDir(), []string{"ffmpeg"}); !errors.Is(err, errBadToolArchive) {
+		t.Fatalf("unsupported archive: %v, want errBadToolArchive", err)
+	}
+}
+
 // TestPickReleaseAssetPrefersOrder: the wanted names are a preference order,
 // whatever order the release lists its files in.
 func TestPickReleaseAssetPrefersOrder(t *testing.T) {
@@ -510,5 +522,68 @@ func TestFFmpegBundleDropsDamagedKeptDownload(t *testing.T) {
 	}
 	if _, err := os.Stat(cache); !os.IsNotExist(err) {
 		t.Errorf("the damaged download should have been deleted (stat err %v)", err)
+	}
+}
+
+func TestExtractToolFilesDoesNotFollowArchivePathsOrLinks(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "bundle.tar.xz")
+	buildToolTarXZ(t, archive, []*tar.Header{
+		{Name: "../escape/ffmpeg", Typeflag: tar.TypeSymlink, Linkname: "../../../victim"},
+		{Name: "../../ffmpeg", Typeflag: tar.TypeReg, Mode: 0o755},
+	}, map[string][]byte{"../../ffmpeg": []byte("binary")})
+	out := filepath.Join(dir, "out")
+	_, err := extractToolFiles(archive, out, []string{"ffmpeg"})
+	if !errors.Is(err, errBadToolArchive) {
+		t.Fatalf("expected traversal rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "ffmpeg")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive wrote outside staging: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(out, "ffmpeg")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("archive installed after rejection: %v", err)
+	}
+}
+
+func TestExtractToolFilesZipSkipsSymlink(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "bundle.zip")
+	writeUnzipTestArchive(t, archive, func(zw *zip.Writer) {
+		h := &zip.FileHeader{Name: "link/ffmpeg", Method: zip.Store}
+		h.SetMode(os.ModeSymlink | 0o777)
+		w, err := zw.CreateHeader(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("../../victim")); err != nil {
+			t.Fatal(err)
+		}
+		w, err = zw.Create("bin/ffmpeg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("binary")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	out := t.TempDir()
+	if _, err := extractToolFiles(archive, out, []string{"ffmpeg"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(out, "ffmpeg"))
+	if err != nil || string(got) != "binary" {
+		t.Fatalf("installed %q: %v", got, err)
+	}
+}
+
+func TestUnsafeArchiveName(t *testing.T) {
+	for _, name := range []string{"../evil", "pkg/../../evil", `..\evil`, `pkg\..\..\evil`, "/etc/passwd", `C:\Windows\System32\evil.dll`, "C:ffmpeg", "/..", "pkg/.."} {
+		if !unsafeArchiveName(name) {
+			t.Errorf("unsafeArchiveName(%q) = false", name)
+		}
+	}
+	for _, name := range []string{"", "ffmpeg", "bin/ffmpeg", "ffmpeg-7.1-linuxarm64/bin/ffprobe", "a..b/ffmpeg", "bin/..ffmpeg", "pkg/C:ffmpeg"} {
+		if unsafeArchiveName(name) {
+			t.Errorf("unsafeArchiveName(%q) = true", name)
+		}
 	}
 }

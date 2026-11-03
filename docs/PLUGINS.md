@@ -1,228 +1,201 @@
-# Plugin API reference
+# Plugins: authoring and execution
 
-JukaHub loads plugins from a `plugins/` directory next to the application. A
-plugin is **a directory with a `plugin.json` manifest and one script**; the
-script is invoked with an action name and the current config variables as
-arguments, and whatever it prints is shown on screen.
+Plugins are small programs invoked by buttons in a JukaHub configuration. Each
+plugin needs a directory containing a `plugin.json` manifest and an entry script.
+The runner captures the script's output and shows it as a toast. It does **not**
+automatically create buttons for the plugin or let scripts draw a UI.
 
-Plugins are ordinary programs: they run with the same permissions as JukaHub.
-There is no sandbox beyond path confinement — install only plugins you trust.
+> **Trust first:** plugins run with JukaHub's permissions, inherit its
+> environment and can read or modify accessible files or use the network. They
+> are not sandboxed or automatically verified. Install only code you trust.
+> Custom variables are also passed on the command line and may be visible to
+> other processes; do not put secrets in them or print them in plugin output.
 
----
+## Try the example plugin
 
-## Directory layout
+The repository ships a few examples in [`player/plugins/`](../player/plugins).
+This section walks through `hello`: [`player/plugins/hello/hello.sh`](../player/plugins/hello/hello.sh)
+with its required [`plugin.json`](../player/plugins/hello/plugin.json). It prints
+`Hello, friend!` for the `greet` action, or uses the optional custom variable
+`plugin_name` for the greeting. It does not modify files or use the network.
+No example is automatically included in release packages: copy the plugin's
+folder (both files) to your installation as follows:
 
 ```text
-Apps/JukaHub/
+Apps/JukaHub/                 # or the desktop player's working directory
 └── plugins/
-    └── hello/                 ← the plugin name is the folder name
-        ├── plugin.json        ← manifest (required)
-        └── hello.sh           ← entry point, named by "entry"
+    └── hello/                # triggerTarget is this directory name
+        ├── plugin.json
+        └── hello.sh
 ```
 
-The directory is created on first use. A subdirectory without a readable
-`plugin.json` is skipped.
+1. Copy the example's `hello` folder to `plugins/` as shown. A loose script
+   directly in `plugins/` is not discovered. A shell interpreter named `sh`
+   must be available on PATH; on Windows this may require installing one.
+2. In your `jukaconfig.json` (or the web builder), add the following buttons to
+   an existing scene's `elements` array. Adjust the coordinates to leave room
+   for existing elements, then save and reload the config or restart JukaHub:
 
-## `plugin.json`
+   ```json
+   {
+     "type": "button", "text": "Refresh plugins",
+     "x": 60, "y": 550, "width": "220", "height": "45",
+     "trigger": "plugin_refresh"
+   },
+   {
+     "type": "button", "text": "Say hello",
+     "x": 300, "y": 550, "width": "220", "height": "45",
+     "trigger": "plugin_action", "triggerTarget": "hello", "triggerValue": "greet"
+   }
+   ```
+
+3. Press **Refresh plugins** before **Say hello**. The greeting appears as a
+   toast. The shipped Plugins scene has its own Refresh button, but its list is
+   informational: selecting an entry does not run an action.
+4. Optionally add `"plugin_name": "Alex"` inside the top-level `variables`
+   object of `jukaconfig.json`; after reloading, the greeting is `Hello, Alex!`.
+   If the variable is missing or empty, the script uses `friend`.
+
+To check the script independently from a terminal, run it from its own folder:
+
+```sh
+cd plugins/hello
+sh hello.sh greet '--plugin_name=Alex'
+# Hello, Alex!
+sh hello.sh greet
+# Hello, friend!
+```
+
+An unknown action prints an error and exits nonzero. This terminal check tests
+the script, not discovery or the JukaHub button; use the refresh and action
+buttons to check the complete path.
+
+## The other examples
+
+Every example is a folder with a manifest and one `sh` script, installed the
+same way: copy the folder into `plugins/` and add a button whose `triggerTarget`
+is the folder name.
+
+| Example | Actions | What it does |
+|---------|---------|--------------|
+| [`clock`](../player/plugins/clock/clock.sh) | `now`, `date`, `both`, `uptime` | The time, the date, or how long the device has been up. Pass `--clock_24h=0` for a 12-hour clock. |
+| [`dice`](../player/plugins/dice/dice.sh) | `roll`, `coin`, `pick` | A die roll (`--dice_sides=N`, 2 to 1000), a coin flip, or one entry picked from `--dice_list=a,b,c`. |
+| [`notes`](../player/plugins/notes/notes.sh) | `add`, `last`, `count`, `clear` | A one-line-at-a-time scratchpad kept in `notes.txt` beside the script. `add` takes `--notes_text=...`. |
+| [`sysinfo`](../player/plugins/sysinfo/sysinfo.sh) | `status`, `memory`, `disk`, `power` | Free memory, free disk space and battery level; anything the system does not report is said plainly instead of failing. |
+
+`notes` is the only example that writes a file, and it writes inside its own
+folder: deleting `notes.txt` empties the pad. `sysinfo` reads `/proc/meminfo` and
+`/sys/class/power_supply`, so on a desktop it reports only what that system
+exposes — `Memory info unavailable` there is a correct answer, not an error.
+
+All of them print one short line, which is what a toast can show. The scripts are
+plain POSIX `sh` with no network use; the only external commands are `date`,
+`awk`, `cut`, `tail` and `wc`, in the actions that need them.
+
+## Manifest and discovery
+
+Each immediate subdirectory of `plugins/` is scanned for a readable, valid
+`plugin.json` with `"enabled": true`:
 
 ```json
 {
   "name": "hello",
   "version": "1.0.0",
-  "description": "Says hello and echoes the variables it was given.",
-  "author": "you",
-  "entry": "hello.sh",
-  "enabled": true,
-  "config": {}
-}
-```
-
-| Field | Type | Meaning |
-|-------|------|---------|
-| `name` | string | display name; **the directory name always wins** |
-| `version` | string | shown in the plugin list |
-| `description` | string | free text |
-| `author` | string | shown in the plugin list |
-| `entry` | string | script to run, relative to the plugin directory |
-| `enabled` | bool | `false` skips the plugin during the scan |
-| `config` | object | reserved for per-plugin settings; loaded but not passed to scripts yet |
-
-A manifest that does not parse, or one with `"enabled": false`, is skipped.
-Loading happens when the **Plugins** screen is entered and when the
-`plugin_refresh` trigger runs — not at every launch.
-
-> `plugin.json` is the manifest for *this* system only. It is unrelated to the
-> package `manifest.json` described in [Packages](PACKAGES.md).
-
-## Entry point and execution contract
-
-When a config element fires the `plugin_action` trigger, JukaHub runs:
-
-```bash
-sh      <entry> <action> --key=value --key2=value2 …
-# or
-python3 <entry> <action> --key=value --key2=value2 …
-```
-
-| Aspect | Behaviour |
-|--------|-----------|
-| Interpreter | `sh` for a `.sh` entry, `python3` for a `.py` entry |
-| `$1` | the action string from `triggerValue` |
-| Remaining arguments | one `--name=value` per entry in the config's `custom` variables |
-| Working directory | the plugin's own directory |
-| Output | stdout **and** stderr are captured together and returned to the app |
-| Result | shown as an on-screen toast |
-| Failure | `Plugin error: <message>` followed by the captured output |
-
-Path safety: the plugin name must be a single directory name (no `/`, `\` or
-`..`), and `entry` is resolved *inside* the plugin directory — a manifest
-cannot point at `/bin/sh`, another plugin or anything above its own folder. The
-entry must be an existing regular file.
-
-Two limitations worth knowing before you design a plugin:
-
-- **The call blocks the UI.** The script runs on the frame that activated it;
-  a slow plugin freezes the app until it exits. Keep work under a second, or
-  print a result and let the next action poll.
-- **Only `.sh` and `.py` entries execute.** Any other extension returns
-  `Plugin "<name>" action "<action>" executed (entry=<path>)` without running
-  anything, so a typo in `entry` looks like success rather than a failure.
-  Note also that the stock TrimUI OS has **no Python** — on the handheld, `.py`
-  plugins need a Python you install yourself, so prefer `sh`.
-
-## Wiring a plugin into the UI
-
-Plugins are reached through the normal config: a button whose trigger is
-`plugin_action`, with `triggerTarget` naming the plugin directory and
-`triggerValue` naming the action.
-
-```json
-{
-  "type": "button",
-  "text": "Say hello",
-  "trigger": "plugin_action",
-  "triggerTarget": "hello",
-  "triggerValue": "greet"
-}
-```
-
-The **Plugins** screen in the shipped config lists what was found and offers a
-refresh button:
-
-```json
-[
-  { "type": "textlog", "variable": "plugin_list", "x": 24, "y": 72, "width": "1232", "height": "539" },
-  { "type": "button", "text": "Refresh", "trigger": "plugin_refresh", "x": 60, "y": 611, "width": "140", "height": "45" }
-]
-```
-
-Entering a scene whose list variable is `plugin_list` (or pressing refresh)
-rescans the directory and renders one line per plugin:
-
-```text
-- hello v1.0.0 (you) [enabled]
-```
-
-When nothing is found it shows
-`No plugins found. Drop .py/.sh scripts into plugins/`.
-
----
-
-## Worked example
-
-`plugins/hello/plugin.json`:
-
-```json
-{
-  "name": "hello",
-  "version": "1.0.0",
-  "description": "Greets the user, echoes the search query variable.",
-  "author": "you",
+  "description": "Example greeting plugin for JukaHub.",
+  "author": "JukaHub",
   "entry": "hello.sh",
   "enabled": true
 }
 ```
 
-`plugins/hello/hello.sh`:
+| Field | Meaning |
+|-------|---------|
+| `name` | Ignored as the identifier: the containing directory name wins. |
+| `version`, `author` | Strings displayed in the plugin list. |
+| `description` | Free-text description. |
+| `entry` | Path to a regular file, relative to the plugin directory; use `.sh` or `.py`. |
+| `enabled` | Must be `true`; missing or false manifests are skipped. |
+| `config` | Optional object; parsed but **not** passed to the script. |
 
-```sh
-#!/bin/sh
-# $1 is the action; the rest are --name=value pairs from the config.
-action="$1"
-shift
+`plugin.json` is unrelated to the package `manifest.json` described in
+[Packages](PACKAGES.md). The root `plugins/` directory is relative to the
+process working directory; the TrimUI launcher changes to `Apps/JukaHub/`.
 
-case "$action" in
-  greet)
-    echo "Hello, ${tspUsername:-friend}!"
-    ;;
-  env)
-    # Every variable the app knows is available as an argument.
-    echo "action=$action args=$*"
-    ;;
-  *)
-    echo "Unknown action: $action"
-    ;;
-esac
+The `plugin_refresh` trigger scans and updates `plugin_list`. A scan also occurs
+when entering a scene with a `dynamiclist` whose `variable` is `plugin_list`;
+the shipped Plugins scene uses a `textlog`, so **press Refresh there** rather
+than relying on entering the scene. The current scan does not clear previously
+loaded entries in normal mode: after disabling, deleting or breaking a manifest,
+restart JukaHub and refresh to remove the stale entry. Safe mode clears the
+loaded list for that launch.
+
+## Action contract
+
+A button with `trigger: "plugin_action"` uses `triggerTarget` as the plugin
+folder and `triggerValue` as the action. It invokes the entry synchronously:
+
+```text
+sh <entry-path> <action> --key=value ...
+# or
+python3 <entry-path> <action> --key=value ...
 ```
 
-The script does not need its executable bit for `sh entry.sh` to work, but
-setting it (`chmod +x`) keeps the file usable from a terminal too.
+- Extensions are case-sensitive: `.sh` runs with `sh`, `.py` with `python3`.
+  Other extensions return a status message **without executing the file**.
+  Stock TrimUI does not ship Python, so use POSIX `sh` unless you have supplied
+  Python yourself. The script does not need an executable bit.
+- The action is the first argument; each remaining argument is one custom
+  runtime variable formatted as `--name=value`. Argument order is unspecified.
+  Values are formatted with Go's `%v`, not JSON; quote `"$@"` when parsing and
+  do not rely on typed or structured round-tripping. The runner does not invoke
+  a shell to expand these arguments.
+- Only the `Variables.Custom` snapshot is passed. Built-in typed settings such
+  as `tspUsername` are not automatically passed as arguments or environment
+  variables. In config files, custom keys such as `plugin_name` can be placed
+  directly in `variables`; see [Configuration](CONFIGURATION.md).
+- The script runs in the entry file's directory and inherits the app's
+  environment. Standard output and standard error are combined. A nonzero exit
+  or missing interpreter returns `Plugin error: ...` with captured output; the
+  UI displays the returned text as an informational toast. Keep output short.
+- The script blocks the UI and has no timeout. Keep actions quick and avoid
+  interactive input. It cannot directly call `PluginContext`, change scenes,
+  render, or write values back into the running app.
 
-Because the arguments are a `--name=value` list, a `sh` plugin can read one
-directly:
+The runner rejects entry paths that **lexically** escape the plugin folder and
+requires an existing regular file. This is not a sandbox: symlinks are not
+resolved by the containment check, and scripts themselves can access anything
+JukaHub can. Avoid symlinks and untrusted plugins.
 
-```sh
-for arg in "$@"; do
-  case "$arg" in
-    --search_query=*) query="${arg#*=}" ;;
-  esac
-done
-```
+## Troubleshooting
 
-## Safe mode
+| Symptom | Check |
+|---------|-------|
+| Plugin is missing from the list | Check the folder layout, valid JSON, `"enabled": true`, the working directory and safe mode; then press Refresh. |
+| Disabled or removed plugin still appears | Restart JukaHub, then refresh: a normal scan retains earlier entries. |
+| `Plugin "hello" not found` | Press Refresh first and check `triggerTarget` matches the folder name exactly. |
+| `Plugin entry ... not found` or unsafe entry path | Check `entry` names an existing file inside the plugin folder. |
+| `Plugin error` | Check the action, script output and that `sh` or `python3` is on PATH; run the script from a terminal. |
+| A message says an action executed but nothing happened | Check that the entry extension is lowercase `.sh` or `.py`; other extensions are not run. |
+| UI freezes | The script is still running; there is no timeout. Shorten the action and restart if necessary. |
 
-Plugins are the first thing safe mode disables. Turn it on with any of:
+If a plugin prevents normal use, start with `--safe-mode`, set
+`JUKAHUB_SAFE_MODE=1`, or create an empty `safe-mode.flag` in the app working
+directory. Safe mode skips plugin loading, updates, tool installation and
+background network work without editing the configuration. Remove the flag or
+other safe-mode setting and restart when the plugin has been fixed or removed.
 
-- `JukaHub --safe-mode`
-- `JUKAHUB_SAFE_MODE=1`
-- a `safe-mode.flag` file next to the application (easiest over USB or FTP)
+## Internal Go API
 
-While active, plugins are not loaded at all (the list renders empty), the
-updater and tool installer do not start, and background network work is
-skipped. Scenes, navigation, local media and settings keep working, and safe
-mode never edits your config.
-
-## Programmatic API
-
-These functions exist in `player/plugins.go` and are what the UI path uses
-internally. They are **not** exposed as triggers today — there is no on-device
-install or uninstall screen yet:
-
-| Function | Behaviour |
-|----------|-----------|
-| `LoadPlugins(config)` | rescan `plugins/`, honour `enabled`, skip everything in safe mode |
-| `GetPlugins()` | the loaded plugins, keyed by directory name |
-| `ExecutePluginAction(plugin, action, vars)` | run the entry point and return its output |
-| `InstallPlugin(sourcePath, destName)` | copy one file into `plugins/<name>/`; refuses to overwrite |
-| `UninstallPlugin(name)` | remove `plugins/<name>` |
-
-If you call `InstallPlugin` / `UninstallPlugin` yourself, treat them as
-destructive: they act on the real directories. Both validate the target name
-(a plain file or directory name, nothing else).
-
-### Not implemented yet
-
-- `PluginContext` (config, toast, scene change and render callbacks) is
-  declared in `player/plugins.go` but not passed to any plugin — a script
-  cannot draw or change scenes; it returns text.
-- The `config` block in `plugin.json` is parsed but not forwarded to scripts;
-  use config variables (which *are* forwarded) instead.
-- No timeout: a hung script hangs the frame that started it.
-
----
+`LoadPlugins`, `GetPlugins` and `ExecutePluginAction` in `player/plugins.go`
+back the UI path. `InstallPlugin` copies **one file** into a new plugin folder;
+it does not create a manifest or install a complete directory. `UninstallPlugin`
+removes a directory and does not validate the name itself; callers must validate
+names before invoking it. Neither install nor uninstall is exposed as an
+on-device plugin-management trigger. Manual copying of trusted plugin folders
+is the supported workflow described above.
 
 ## Related
 
-- [Configuration reference](CONFIGURATION.md) — the `plugin_action` / `plugin_refresh` triggers and variables
-- [Packages](PACKAGES.md) — the declarative package format for shipping files, including tools a plugin may call
-- [Security](../SECURITY.md) — how secrets are encrypted and kept out of configs
+- [Configuration reference](CONFIGURATION.md) — elements, triggers and variables
+- [Packages](PACKAGES.md) — the separate package format
+- [Security](../SECURITY.md) — JukaHub's security model

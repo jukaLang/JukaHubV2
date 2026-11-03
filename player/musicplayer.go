@@ -121,6 +121,17 @@ func isAudioFile(name string) bool {
 	return false
 }
 
+// isAudioURL reports whether a remote URL points at an audio file. The query
+// string is dropped first: podcast enclosures routinely end in .mp3?track=...
+// and the extension test would otherwise miss them.
+func isAudioURL(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if i := strings.IndexAny(s, "?#"); i >= 0 {
+		s = s[:i]
+	}
+	return isHTTPMediaURL(s) && isAudioFile(s)
+}
+
 // audioFilesIn lists the audio files of one folder, sorted by name.
 func audioFilesIn(dir string) []FileEntry {
 	if strings.TrimSpace(dir) == "" {
@@ -222,9 +233,53 @@ func openMusicPlayerScene(config *Config) {
 	}
 }
 
+// musicPlayPlaylist installs tracks as the queue and reports whether it did.
+// It is the entry point for lists that do not live in a folder — a podcast
+// show's episodes, for instance — and leaves the folder empty so the player's
+// subtitle does not claim a directory that has nothing to do with the queue.
+func musicPlayPlaylist(tracks []musicTrack, start int) bool {
+	if len(tracks) == 0 {
+		return false
+	}
+	if start < 0 || start >= len(tracks) {
+		start = 0
+	}
+	music.mu.Lock()
+	music.tracks = append([]musicTrack(nil), tracks...)
+	music.dir = ""
+	music.cursor = start
+	music.current = -1
+	music.playing = false
+	music.paused = false
+	music.position = 0
+	music.duration = 0
+	music.ready = true
+	music.order = nil
+	music.orderPos = 0
+	music.queue = nil
+	music.queueLen = 0
+	music.mu.Unlock()
+	return true
+}
+
 // openAudioPlayer starts the file at path and switches to the player, using
 // every audio file in its folder as the playlist.
+//
+// A remote path is not a folder: podcast and radio URLs used to be walked with
+// os.ReadDir on the URL's "directory", so an episode click reported "No audio
+// files in https://..." and never played. Remote audio now becomes its own
+// playlist (or the show's queue when the URL belongs to a subscription).
 func openAudioPlayer(config *Config, path string) {
+	if isHTTPMediaURL(path) {
+		if show, idx, ok := podcastEpisodeLookup(path); ok {
+			playPodcastEpisode(config, show, idx)
+			return
+		}
+		musicPlayPlaylist([]musicTrack{{Path: path, Name: podcastEpisodeTitleFromURL(path)}}, 0)
+		openMusicPlayerScene(config)
+		musicPlayTrack(0)
+		return
+	}
 	dir := filepath.Dir(path)
 	idx := musicLoadPlaylist(dir, path)
 	if len(music.tracks) == 0 {
@@ -1939,10 +1994,16 @@ func ctrlMusicPlayer(e *sdl.ControllerButtonEvent) bool {
 		musicTogglePause()
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
 		music.mu.Lock()
-		if music.cursor > 0 {
+		atTop := music.cursor <= 0
+		if !atTop {
 			music.cursor--
 		}
 		music.mu.Unlock()
+		if atTop {
+			// Nothing above the first track: release the press so Up steps
+			// onto the top bar, the only Back, clock and bell this screen has.
+			return false
+		}
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		music.mu.Lock()

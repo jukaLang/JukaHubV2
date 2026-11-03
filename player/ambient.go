@@ -165,20 +165,66 @@ func ambientShouldEnter(charging bool, idle, dockIdle, idleTimeout time.Duration
 // ambientEntryBlocked reports whether some other UI owns the screen right now.
 // Auto-entry must never cover a modal, a game or a full-screen video.
 func ambientEntryBlocked(config *Config) bool {
+	return ambientEntryBlockReason(config) != ""
+}
+
+// ambientEntryBlockReason names the surface that owns the screen, or "" when
+// auto-entry may proceed. Naming it matters in the ambient audit: a suite that
+// leaks a panel through one test reads "notification centre is open" instead of
+// a generic "something is open".
+func ambientEntryBlockReason(config *Config) string {
 	if config == nil {
-		return true
+		return "no config"
 	}
-	if onboarding.active || qs.open || updatePrompt.open || companion.open ||
-		shortcutsOpen || clipSearchOpen || globalSearchOpen || virtualKeyboardActive ||
-		toolsPanel.open || imageViewerPath != "" || patchModal != nil ||
-		transitionPhase != "none" || videoFullscreen || playerPhase() != "idle" ||
-		nc.open || tb.startOpen || processPanel.open || wifiPanel.open || ipPanelOpen || emuPanel.open || gameLib.open ||
-		gpPanel.open || winAppsPanel.open || portsPanel.open || savePanel.open || curationPanel.open || chiakiPanel.open ||
-		raPanel.open || a11y.open || wpOpen || socialNotifOpen || smartHomePanel.open || memPanel.open ||
-		ctrldiag.open {
-		return true
+	open := []struct {
+		name string
+		yes  bool
+	}{
+		{"onboarding", onboarding.active},
+		{"Quick Settings", qs.open},
+		{"update prompt", updatePrompt.open},
+		{"companion", companion.open},
+		{"shortcuts sheet", shortcutsOpen},
+		{"clipboard search", clipSearchOpen},
+		{"global search", globalSearchOpen},
+		{"on-screen keyboard", virtualKeyboardActive},
+		{"Tools panel", toolsPanel.open},
+		{"image viewer", imageViewerPath != ""},
+		{"patch modal", patchModal != nil},
+		{"scene transition (" + transitionPhase + ")", transitionPhase != "none"},
+		{"full-screen video", videoFullscreen},
+		{"media player", playerPhase() != "idle"},
+		{"notification centre", nc.open},
+		{"start menu", tb.startOpen},
+		{"process panel", processPanel.open},
+		{"Wi-Fi panel", wifiPanel.open},
+		{"IP panel", ipPanelOpen},
+		{"emulator panel", emuPanel.open},
+		{"game library", gameLib.open},
+		{"game profiles panel", gpPanel.open},
+		{"Windows apps panel", winAppsPanel.open},
+		{"ports panel", portsPanel.open},
+		{"save manager", savePanel.open},
+		{"curation panel", curationPanel.open},
+		{"remote play panel", chiakiPanel.open},
+		{"achievements panel", raPanel.open},
+		{"accessibility panel", a11y.open},
+		{"wave background panel", wpOpen},
+		{"social notifications", socialNotifOpen},
+		{"smart home panel", smartHomePanel.open},
+		{"memory panel", memPanel.open},
+		{"text editor", fileEditor.open},
+		{"controller diagnostics", ctrldiag.open},
 	}
-	return retroArchRunning()
+	for _, b := range open {
+		if b.yes {
+			return b.name + " is open"
+		}
+	}
+	if retroArchRunning() {
+		return "a game is running"
+	}
+	return ""
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -898,6 +944,12 @@ func ambientScrimTexture(renderer *sdl.Renderer) *sdl.Texture {
 	return texture
 }
 
+// ambientDockLift raises the bottom furniture — the now-playing card, the
+// status column beside it and the chat card above it — clear of the chip row.
+// At 720p the old offsets left the card sitting on the chips; the lift keeps
+// every element moving together so the bottom row stays one composition.
+const ambientDockLift = int32(48)
+
 // ambientClockSize scales the dock clock to the panel, bounded so it still fits
 // above the now-playing card on a short screen.
 func ambientClockSize() int {
@@ -911,30 +963,37 @@ func ambientClockSize() int {
 	return size
 }
 
+// ambientShowNowPlaying decides whether the dock has a now-playing card at all.
+// With no track loaded the card would be an empty box reading "Nothing playing"
+// with a 0:00 clock, which looks like a broken panel rather than a screen saver,
+// so the dock simply has none until there is something to name.
+func ambientShowNowPlaying(title string, playing, paused bool) bool {
+	return title != "" || playing || paused
+}
+
+// ambientDrawNowPlaying draws the dock's now-playing card.
 func ambientDrawNowPlaying(renderer *sdl.Renderer, config *Config, smallFont, mediumFont *ttf.Font) {
 	if smallFont == nil {
 		return
 	}
 	title, pos, dur, playing, paused := ambientNowPlaying()
+	if !ambientShowNowPlaying(title, playing, paused) {
+		return
+	}
 	cardW := int32(430)
 	if cardW > screenWidth-112 {
 		cardW = screenWidth - 112
 	}
 	cardH := int32(92)
 	cardX := int32(56)
-	cardY := screenHeight - 176
+	cardY := screenHeight - 176 - ambientDockLift
 
 	fillRoundedRect(renderer, cardX, cardY, cardW, cardH, 16, sdl.Color{R: 12, G: 16, B: 26, A: 190})
 	strokeRoundedRect(renderer, cardX, cardY, cardW, cardH, 16, 1, sdl.Color{R: 255, G: 255, B: 255, A: 28})
 
-	label := "Nothing playing"
-	col := sdl.Color{R: 150, G: 162, B: 184, A: 200}
-	if title != "" {
-		label = title
-		col = sdl.Color{R: 238, G: 243, B: 252, A: 240}
-	}
-	if mediumFont != nil {
-		renderText(renderer, config, mediumFont, truncateRunes(label, 34), col, cardX+18, cardY+12)
+	if title != "" && mediumFont != nil {
+		renderText(renderer, config, mediumFont, truncateRunes(title, 34),
+			sdl.Color{R: 238, G: 243, B: 252, A: 240}, cardX+18, cardY+12)
 	}
 	state := ""
 	switch {
@@ -949,7 +1008,11 @@ func ambientDrawNowPlaying(renderer *sdl.Renderer, config *Config, smallFont, me
 			cardX+cardW-18-int32(sw), cardY+14)
 	}
 
-	// Progress bar and time.
+	// Progress bar and time. Without a known length there is nothing to draw
+	// along, so the row is skipped rather than showing an empty 0:00 track.
+	if dur <= 0 {
+		return
+	}
 	barX := cardX + 18
 	barY := cardY + 54
 	barW := cardW - 36
@@ -964,10 +1027,7 @@ func ambientDrawNowPlaying(renderer *sdl.Renderer, config *Config, smallFont, me
 			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 230})
 	}
 	if smallFont != nil {
-		timing := "0:00"
-		if dur > 0 {
-			timing = fmt.Sprintf("%s / %s", ambientTimeText(pos), ambientTimeText(dur))
-		}
+		timing := fmt.Sprintf("%s / %s", ambientTimeText(pos), ambientTimeText(dur))
 		renderText(renderer, config, smallFont, timing, sdl.Color{R: 150, G: 162, B: 184, A: 190},
 			barX, barY+12)
 	}
@@ -992,29 +1052,52 @@ func ambientDrawStatus(renderer *sdl.Renderer, config *Config, smallFont *ttf.Fo
 		return
 	}
 	status := ambientReadStatus(now)
-	line := "Battery unknown"
-	if status.battery >= 0 {
-		line = fmt.Sprintf("Battery %d%%", status.battery)
-	}
-	if status.charging {
-		line += " · Charging"
-	}
-	lw, _, _ := smallFont.SizeUTF8(line)
-	renderText(renderer, config, smallFont, line, sdl.Color{R: 184, G: 196, B: 216, A: 215},
-		screenWidth-56-int32(lw), screenHeight-176)
 
-	if remaining := ambientSleepRemaining(); remaining > 0 {
-		sleep := "Sleep in " + ambientTimeText(remaining.Round(time.Second).Seconds())
-		sw, _, _ := smallFont.SizeUTF8(sleep)
-		renderText(renderer, config, smallFont, sleep, sdl.Color{R: 190, G: 170, B: 140, A: 210},
-			screenWidth-56-int32(sw), screenHeight-150)
+	// The column is built from the lines that actually have something to say
+	// and stacked from the bottom of the dock upwards. A device that reports no
+	// battery used to get "Battery unknown" in the corner, which reads as a
+	// failure rather than a screen saver, so that line is simply absent; if the
+	// charge state is known without a percentage, that is still worth a word.
+	lines := ambientStatusLines(status, ambientSleepRemaining(), ambientPhotos.index, len(ambientPhotos.files))
+	y := screenHeight - 176 - ambientDockLift
+	for _, line := range lines {
+		lw, _, _ := smallFont.SizeUTF8(line.text)
+		renderText(renderer, config, smallFont, line.text, line.color,
+			screenWidth-56-int32(lw), y)
+		y += 26
 	}
-	if len(ambientPhotos.files) > 0 {
-		hint := fmt.Sprintf("Photo %d/%d", ambientPhotos.index+1, len(ambientPhotos.files))
-		hw, _, _ := smallFont.SizeUTF8(hint)
-		renderText(renderer, config, smallFont, hint, sdl.Color{R: 140, G: 152, B: 174, A: 160},
-			screenWidth-56-int32(hw), screenHeight-124)
+}
+
+// ambientStatusLine is one line of the dock's bottom-right column.
+type ambientStatusLine struct {
+	text  string
+	color sdl.Color
+}
+
+// ambientStatusLines builds that column from the lines that actually have
+// something to say. A device that reports no battery used to get "Battery
+// unknown" in the corner, which reads as a failure rather than a screen saver,
+// so that line is simply absent; a known charge state is still worth a word.
+func ambientStatusLines(status ambientStatus, sleepLeft time.Duration, photoIndex, photoTotal int) []ambientStatusLine {
+	var lines []ambientStatusLine
+	batteryCol := sdl.Color{R: 184, G: 196, B: 216, A: 215}
+	switch {
+	case status.battery >= 0 && status.charging:
+		lines = append(lines, ambientStatusLine{fmt.Sprintf("Battery %d%% · Charging", status.battery), batteryCol})
+	case status.battery >= 0:
+		lines = append(lines, ambientStatusLine{fmt.Sprintf("Battery %d%%", status.battery), batteryCol})
+	case status.charging:
+		lines = append(lines, ambientStatusLine{"Charging", batteryCol})
 	}
+	if sleepLeft > 0 {
+		lines = append(lines, ambientStatusLine{"Sleep in " + ambientTimeText(sleepLeft.Round(time.Second).Seconds()),
+			sdl.Color{R: 190, G: 170, B: 140, A: 210}})
+	}
+	if photoTotal > 0 {
+		lines = append(lines, ambientStatusLine{fmt.Sprintf("Photo %d/%d", photoIndex+1, photoTotal),
+			sdl.Color{R: 140, G: 152, B: 174, A: 160}})
+	}
+	return lines
 }
 
 // ambientDrawChat keeps the newest incoming messages visible on the dock. It
@@ -1031,7 +1114,7 @@ func ambientDrawChat(renderer *sdl.Renderer, config *Config, now time.Time) {
 	}
 	lineH := int32(font.Height()) + 6
 	cardH := int32(38) + lineH*int32(len(notes))
-	drawChatCard(renderer, config, notes, 255, 56, screenHeight-192-cardH)
+	drawChatCard(renderer, config, notes, 255, 56, screenHeight-192-cardH-ambientDockLift)
 }
 
 // ambientDrawButtons lays out the bottom chip row and records the hit rects.

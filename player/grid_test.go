@@ -78,7 +78,9 @@ func TestThemeGalleryUsesGridGeometry(t *testing.T) {
 	if want := UIGridCellWidth(1280, cols, themeGalleryGap); cardW != want {
 		t.Errorf("cardW = %d, want %d", cardW, want)
 	}
-	if want := UIGridVisibleRows(560, themeGalleryH, themeGalleryGap); rows != want {
+	// The tab strip above the cards is part of the geometry: the grid gets the
+	// element's height minus that band.
+	if want := UIGridVisibleRows(560-themeGalleryGridOffset(), themeGalleryH, themeGalleryGap); rows != want {
 		t.Errorf("rows = %d, want %d", rows, want)
 	}
 }

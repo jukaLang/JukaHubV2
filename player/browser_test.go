@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 func TestBrowserHistoryToolbarAndHints(t *testing.T) {
@@ -694,6 +695,16 @@ func TestBrowserToolbarHasSearchChip(t *testing.T) {
 	// with it the font) has to be up first: these are the widths every frame
 	// ships with on the Smart Pro's canvas.
 	withScreen(t, 1280, 720)
+	// A full run has the font stack up from whichever test went first; a
+	// focused run has not, and getCachedFont returns nil without TTF_Init.
+	// Start it here (both calls are refcounted) and skip when the library is
+	// missing, as the offscreen render probes do.
+	if err := sdl.Init(sdl.INIT_VIDEO); err != nil {
+		t.Skipf("SDL video unavailable: %v", err)
+	}
+	if err := ttf.Init(); err != nil {
+		t.Skipf("SDL_ttf unavailable: %v", err)
+	}
 	config := &Config{}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Fatal("no small font — the toolbar would fall back to guessed widths")

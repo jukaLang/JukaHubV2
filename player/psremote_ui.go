@@ -677,7 +677,7 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const padX = int32(24)
+	const padX = OverlayPadX
 	// The focused row's stroke and the detail line's descenders both need room;
 	// a tighter row clipped "Ready to stream" at the bottom edge.
 	rowH := 10 + medH + 4 + smallH + 10
@@ -718,18 +718,12 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 		chiakiPanel.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()
@@ -765,7 +759,7 @@ func renderChiakiPanel(renderer *sdl.Renderer, config *Config) {
 			case "Play", "Pair", "Scan", "Add":
 				statusColor = focusColor
 			case "Error":
-				statusColor = ColorDanger
+				statusColor = DangerInk()
 			}
 			w, _, _ := font.SizeUTF8(row.status)
 			renderText(renderer, config, font, row.status, statusColor, r.X+r.W-int32(w)-16, r.Y+8+medH-smallH)

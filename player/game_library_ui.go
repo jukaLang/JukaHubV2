@@ -841,7 +841,7 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const pad = int32(24)
+	const pad = OverlayPadX
 	// Same header as every other panel: the shared page header, measured before
 	// the columns are placed so the list starts under the bar rather than under
 	// an assumption about it.
@@ -860,17 +860,11 @@ func renderGameLibraryPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	gameLib.panel = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 190)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + pad
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*pad
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	band := uiPageHeaderMetricsFor(config, header)
 	UIPageHeaderDraw(renderer, config, header)
 

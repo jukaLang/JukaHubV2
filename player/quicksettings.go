@@ -69,6 +69,7 @@ const (
 	qsLinkNone qsLinkAction = iota
 	qsLinkWiFi
 	qsLinkControls
+	qsLinkLEDPanel
 )
 
 type qsLink struct {
@@ -141,6 +142,9 @@ func qsInit() {
 			// The controller legend's card needs nothing from the device, so
 			// its row is offered on every host (see qsLinkControls below).
 			{Label: "Controller Legend", Icon: "[?]", Action: qsLinkControls},
+			// Colour, effect and brightness live in their own panel; the LED
+			// Mode cycler below stays the one-press shortcut.
+			{Label: "LED Style", Icon: "[R]", Action: qsLinkLEDPanel},
 		},
 		// The app's idle timer drives the screensaver overlay, not a display
 		// blank, so the row says what it actually controls.
@@ -196,6 +200,11 @@ func qsRefreshAvailability() {
 			// The legend card runs local to the app, so this row is always
 			// offered, even on a host with no radios at all.
 			l.Available = true
+		case qsLinkLEDPanel:
+			l.Available = ledSyncAvailable()
+			if !l.Available {
+				l.Detail = "N/A"
+			}
 		}
 	}
 	volumeOK := volumeBackend() != ""
@@ -470,6 +479,9 @@ func qsOpenLink(l qsLink) {
 		// cards are never stacked.
 		qs.open = false
 		openControlsLegend()
+	case qsLinkLEDPanel:
+		qs.open = false
+		openLEDPanel()
 	}
 }
 

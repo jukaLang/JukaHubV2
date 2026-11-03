@@ -8,10 +8,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // --- Favorites types ---
@@ -129,7 +131,12 @@ func (f *FavoriteItem) Play(config *Config) {
 	case "video":
 		if v, ok := f.Data.(VideoInfo); ok {
 			// v.Position flows through to the embedded player so the Continue
-			// card can truly resume where the user left off.
+			// card can truly resume where the user left off. A saved video keeps
+			// its own copy of the metadata, so its resume offset is read from the
+			// recent timeline when the copy does not carry one.
+			if v.Position <= 0 {
+				v.Position = favoriteResumePosition(v.GetURL())
+			}
 			playVideoInfo(config, v)
 		}
 	case "audio":
@@ -332,255 +339,939 @@ func removeDuplicateFavorite(list []FavoriteItem, key string, itemType string, d
 	return filtered
 }
 
-func removeFavoriteAt(tabIndex int, idx int) {
+// --- Favorites library ---
+//
+// The page used to be four flat lists drawn by hand, with its own Back button
+// inside the panel. Nothing in the app added a favorite, so the only content it
+// could show was whatever an older build had written into favorites.json, and
+// the row geometry the pointer tested was not the geometry the rows were drawn
+// with. The page is a library now: it opens on what is in progress, keeps saved
+// videos, saved streams and the recent timeline in separate tabs, and every tab
+// draws the same card — artwork, title, metadata and resume progress — from one
+// layout that drawing, the D-pad and the pointer all share.
+
+const (
+	favTabContinue = iota
+	favTabVideos
+	favTabStreams
+	favTabRecent
+	favTabCount
+)
+
+const (
+	favRowH         = int32(68)
+	favRowGap       = int32(8)
+	favGroupHeaderH = int32(30)
+	favPanelPad     = int32(18)
+	favTabH         = int32(34)
+)
+
+// favoritesTabNames is the tab strip's fixed order. The count beside each name
+// is measured at draw time, so the strip says how much is behind every tab
+// before it is opened.
+var favoritesTabNames = [favTabCount]string{"Continue", "Videos", "Streams", "Recent"}
+
+var (
+	favTabRects       [favTabCount]sdl.Rect
+	favoritesRowHits  []favoritesRowHit
+	favoritesListRect sdl.Rect
+)
+
+// favoritesRowHit is one drawn row: the item it shows and where it landed.
+// Drawing records it, so a tap resolves the row that was actually painted
+// instead of a second, hand-maintained guess at the geometry.
+type favoritesRowHit struct {
+	index int
+	rect  sdl.Rect
+}
+
+// favoritesLayout is the page's geometry: one source for the panel, the title
+// band, the tab strip and the list viewport.
+type favoritesLayout struct {
+	panel     sdl.Rect
+	titleY    int32
+	subtitleY int32
+	tabsY     int32
+	list      sdl.Rect
+}
+
+func newFavoritesLayout(element Element) favoritesLayout {
+	panelW := getElementWidth(element, 1160)
+	panelH := getElementHeight(element, 500)
+	if panelW < 320 {
+		panelW = 320
+	}
+	if panelH < 220 {
+		panelH = 220
+	}
+	panel := sdl.Rect{X: element.X, Y: element.Y, W: panelW, H: panelH}
+	titleY := panel.Y + favPanelPad
+	subtitleY := titleY + 30
+	tabsY := subtitleY + 28
+	listTop := tabsY + favTabH + 12
+	list := sdl.Rect{
+		X: panel.X + favPanelPad,
+		Y: listTop,
+		W: panel.W - 2*favPanelPad,
+		H: panel.Y + panel.H - favPanelPad - listTop,
+	}
+	if list.H < favRowH {
+		list.H = favRowH
+	}
+	return favoritesLayout{panel: panel, titleY: titleY, subtitleY: subtitleY, tabsY: tabsY, list: list}
+}
+
+// --- Favorites sources ---
+
+// favoritesSnapshot copies the store so the renderer and the hit tests never
+// hold the favorites lock while they measure, draw or load artwork.
+func favoritesSnapshot() FavoritesStore {
 	favoritesMutex.Lock()
 	defer favoritesMutex.Unlock()
-	switch tabIndex {
-	case 0:
-		if idx >= 0 && idx < len(favoritesStore.Videos) {
-			favoritesStore.Videos = append(favoritesStore.Videos[:idx], favoritesStore.Videos[idx+1:]...)
+	return FavoritesStore{
+		Videos: append([]FavoriteItem{}, favoritesStore.Videos...),
+		Recent: append([]FavoriteItem{}, favoritesStore.Recent...),
+		Files:  append([]FavoriteItem{}, favoritesStore.Files...),
+		IPTV:   append([]FavoriteItem{}, favoritesStore.IPTV...),
+	}
+}
+
+// favoritesInProgress is the Continue tab: videos the user started but did not
+// finish. The recent store is where resume offsets are written, so it is the
+// source for this shelf rather than a second copy of the videos.
+func favoritesInProgress(recent []FavoriteItem) []FavoriteItem {
+	out := make([]FavoriteItem, 0, len(recent))
+	for _, it := range recent {
+		v, ok := it.Data.(VideoInfo)
+		if it.Type != "video" || !ok || v.Position <= 0 {
+			continue
 		}
-	case 1:
-		if idx >= 0 && idx < len(favoritesStore.Recent) {
-			favoritesStore.Recent = append(favoritesStore.Recent[:idx], favoritesStore.Recent[idx+1:]...)
+		if v.Duration > 0 && v.Position >= v.Duration*0.95 {
+			continue
 		}
-	case 2:
-		if idx >= 0 && idx < len(favoritesStore.Files) {
-			favoritesStore.Files = append(favoritesStore.Files[:idx], favoritesStore.Files[idx+1:]...)
-		}
-	case 3:
-		if idx >= 0 && idx < len(favoritesStore.IPTV) {
-			favoritesStore.IPTV = append(favoritesStore.IPTV[:idx], favoritesStore.IPTV[idx+1:]...)
+		out = append(out, it)
+	}
+	return out
+}
+
+// favoritesWithResume folds the resume offset recorded in Recent into a saved
+// video, so a saved video shows (and resumes from) the same place the Continue
+// shelf does. Saved copies keep their own data when it already carries a
+// position.
+func favoritesWithResume(videos, recent []FavoriteItem) []FavoriteItem {
+	positions := map[string]float64{}
+	for _, it := range recent {
+		if v, ok := it.Data.(VideoInfo); ok && v.Position > 0 {
+			positions[v.GetURL()] = v.Position
 		}
 	}
-	if favoritesFocusIndex < 0 {
-		favoritesFocusIndex = 0
+	if len(positions) == 0 {
+		return videos
+	}
+	out := make([]FavoriteItem, len(videos))
+	copy(out, videos)
+	for i := range out {
+		v, ok := out[i].Data.(VideoInfo)
+		if !ok || v.Position > 0 {
+			continue
+		}
+		if p, ok := positions[v.GetURL()]; ok {
+			v.Position = p
+			out[i].Data = v
+		}
+	}
+	return out
+}
+
+// favoriteStreamItems merges the IP-stream library with channels an older build
+// saved into the favorites file, so the tab lists every stream the user kept
+// and never the same URL twice.
+func favoriteStreamItems(legacy []FavoriteItem) []FavoriteItem {
+	out := make([]FavoriteItem, 0, len(legacy)+8)
+	seen := map[string]bool{}
+	for _, st := range ipStreamList() {
+		url := strings.TrimSpace(st.URL)
+		if url == "" || seen[url] {
+			continue
+		}
+		seen[url] = true
+		out = append(out, FavoriteItem{Type: "iptv", Data: FileEntry{Name: st.Name, Path: url}})
+	}
+	for _, it := range legacy {
+		fe, ok := it.Data.(FileEntry)
+		if !ok || fe.Path == "" || seen[fe.Path] {
+			continue
+		}
+		seen[fe.Path] = true
+		out = append(out, it)
+	}
+	return out
+}
+
+// favoritesItemsForTab is the list behind one tab. Continue and Streams are
+// views built from other stores, so they cannot drift out of sync with the
+// screens that own that data.
+func favoritesItemsForTab(tab int) []FavoriteItem {
+	snap := favoritesSnapshot()
+	switch tab {
+	case favTabContinue:
+		return favoritesInProgress(snap.Recent)
+	case favTabVideos:
+		return favoritesWithResume(snap.Videos, snap.Recent)
+	case favTabStreams:
+		return favoriteStreamItems(snap.IPTV)
+	case favTabRecent:
+		return snap.Recent
+	default:
+		return snap.Videos
 	}
 }
 
 func getCurrentFavorites() []FavoriteItem {
+	return favoritesItemsForTab(favoritesCurrentTab)
+}
+
+func favoritesTabCounts() [favTabCount]int {
+	snap := favoritesSnapshot()
+	var counts [favTabCount]int
+	counts[favTabContinue] = len(favoritesInProgress(snap.Recent))
+	counts[favTabVideos] = len(snap.Videos)
+	counts[favTabStreams] = len(favoriteStreamItems(snap.IPTV))
+	counts[favTabRecent] = len(snap.Recent)
+	return counts
+}
+
+func favoritesTabLabel(tab, count int) string {
+	if tab < 0 || tab >= favTabCount {
+		return ""
+	}
+	return fmt.Sprintf("%s %d", favoritesTabNames[tab], count)
+}
+
+// --- Favorites mutations ---
+
+func favoriteItemKey(it FavoriteItem) string {
+	switch d := it.Data.(type) {
+	case VideoInfo:
+		return d.GetURL()
+	case FileEntry:
+		return d.Path
+	}
+	return ""
+}
+
+func sameFavorite(a, b FavoriteItem) bool {
+	if a.Type != b.Type {
+		return false
+	}
+	key := favoriteItemKey(b)
+	return key != "" && favoriteItemKey(a) == key
+}
+
+func dropFavorite(list []FavoriteItem, it FavoriteItem) ([]FavoriteItem, bool) {
+	out := make([]FavoriteItem, 0, len(list))
+	removed := false
+	for _, cur := range list {
+		if !removed && sameFavorite(cur, it) {
+			removed = true
+			continue
+		}
+		out = append(out, cur)
+	}
+	return out, removed
+}
+
+// removeFavoriteItem removes the entry from the list its tab draws and persists
+// that list. Continue is a view of Recent, so forgetting an item there forgets
+// the resume point it was offering. Streams live in the IP-stream library, so
+// removing one removes the saved stream itself.
+func removeFavoriteItem(tab int, it FavoriteItem) bool {
+	removed := false
+	switch tab {
+	case favTabVideos:
+		favoritesMutex.Lock()
+		favoritesStore.Videos, removed = dropFavorite(favoritesStore.Videos, it)
+		favoritesMutex.Unlock()
+		if removed {
+			saveFavorites()
+		}
+	case favTabContinue, favTabRecent:
+		favoritesMutex.Lock()
+		favoritesStore.Recent, removed = dropFavorite(favoritesStore.Recent, it)
+		favoritesMutex.Unlock()
+		if removed {
+			saveFavorites()
+		}
+	case favTabStreams:
+		if fe, ok := it.Data.(FileEntry); ok && fe.Path != "" {
+			url := strings.TrimSpace(fe.Path)
+			for i, st := range ipStreamList() {
+				if strings.TrimSpace(st.URL) != url {
+					continue
+				}
+				if removeIPStreamAt(i) {
+					removed = true
+					if err := saveIPStreams(); err != nil {
+						log.Printf("removeFavoriteItem: saving streams: %v", err)
+					}
+				}
+				break
+			}
+		}
+		var removedLegacy bool
+		favoritesMutex.Lock()
+		favoritesStore.IPTV, removedLegacy = dropFavorite(favoritesStore.IPTV, it)
+		favoritesMutex.Unlock()
+		if removedLegacy {
+			removed = true
+			saveFavorites()
+		}
+	}
+	return removed
+}
+
+func removeFavoriteAt(tabIndex int, idx int) {
+	items := favoritesItemsForTab(tabIndex)
+	if idx < 0 || idx >= len(items) {
+		return
+	}
+	removeFavoriteItem(tabIndex, items[idx])
+}
+
+// favoriteVideoSaved reports whether a URL is already in the Videos tab.
+func favoriteVideoSaved(url string) bool {
+	if url == "" {
+		return false
+	}
 	favoritesMutex.Lock()
 	defer favoritesMutex.Unlock()
-	switch favoritesCurrentTab {
-	case 0:
-		return favoritesStore.Videos
-	case 1:
-		return favoritesStore.Recent
-	case 2:
-		return favoritesStore.Files
-	case 3:
-		return favoritesStore.IPTV
-	default:
-		return favoritesStore.Videos
+	for _, it := range favoritesStore.Videos {
+		if v, ok := it.Data.(VideoInfo); ok && v.GetURL() == url {
+			return true
+		}
 	}
+	return false
+}
+
+// removeFavoriteVideo drops a saved video. The caller persists the store.
+func removeFavoriteVideo(url string) bool {
+	if url == "" {
+		return false
+	}
+	favoritesMutex.Lock()
+	defer favoritesMutex.Unlock()
+	var removed bool
+	favoritesStore.Videos, removed = dropFavorite(favoritesStore.Videos,
+		FavoriteItem{Type: "video", Data: VideoInfo{WebpageURL: url}})
+	return removed
+}
+
+// toggleFavoriteVideo saves a video, or removes it when it is already saved. It
+// reports whether the video is saved afterwards, so the Save action can say
+// which way the press went.
+func toggleFavoriteVideo(v VideoInfo) bool {
+	url := v.GetURL()
+	if url == "" {
+		return false
+	}
+	if favoriteVideoSaved(url) {
+		removeFavoriteVideo(url)
+		return false
+	}
+	addFavoriteVideo(v)
+	return true
+}
+
+// favoriteResumePosition is the saved offset for a video, used by Play when the
+// item itself does not carry one.
+func favoriteResumePosition(url string) float64 {
+	if url == "" {
+		return 0
+	}
+	favoritesMutex.Lock()
+	defer favoritesMutex.Unlock()
+	for _, it := range favoritesStore.Recent {
+		if v, ok := it.Data.(VideoInfo); ok && v.GetURL() == url {
+			return v.Position
+		}
+	}
+	return 0
+}
+
+// --- Favorites grouping ---
+
+type favoritesGroup struct {
+	label   string
+	indexes []int
+}
+
+type favoritesLine struct {
+	header string
+	item   int
+	y      int32
+	h      int32
+}
+
+// favoriteDateBucket is how the Recent tab's timeline is broken up. Calendar
+// days, not hours: a clip watched at 23:50 and one at 00:10 belong to different
+// days for the reader even though they are twenty minutes apart.
+func favoriteDateBucket(t time.Time) string {
+	if t.IsZero() {
+		return "Earlier"
+	}
+	now := time.Now()
+	y, m, d := now.Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+	ty, tm, td := t.In(now.Location()).Date()
+	day := time.Date(ty, tm, td, 0, 0, 0, 0, now.Location())
+	days := int(today.Sub(day).Hours() / 24)
+	switch {
+	case days <= 0:
+		return "Today"
+	case days == 1:
+		return "Yesterday"
+	case days < 7:
+		return "This week"
+	default:
+		return "Earlier"
+	}
+}
+
+func favoriteGroupLabel(tab int, it FavoriteItem) string {
+	switch tab {
+	case favTabVideos:
+		if v, ok := it.Data.(VideoInfo); ok {
+			if name := strings.TrimSpace(v.Uploader); name != "" {
+				return name
+			}
+			if name := strings.TrimSpace(v.Channel); name != "" {
+				return name
+			}
+		}
+		return "Other videos"
+	case favTabRecent:
+		return favoriteDateBucket(it.Timestamp)
+	}
+	return ""
+}
+
+// favoritesGroups splits a tab into headings. Videos are grouped by channel and
+// Recent by day; Continue and Streams are short lists that read better without
+// a heading between every row.
+func favoritesGroups(tab int, items []FavoriteItem) []favoritesGroup {
+	if len(items) == 0 {
+		return nil
+	}
+	if tab != favTabVideos && tab != favTabRecent {
+		indexes := make([]int, len(items))
+		for i := range indexes {
+			indexes[i] = i
+		}
+		return []favoritesGroup{{indexes: indexes}}
+	}
+	order := []string{}
+	byLabel := map[string][]int{}
+	for i, it := range items {
+		label := favoriteGroupLabel(tab, it)
+		if _, ok := byLabel[label]; !ok {
+			order = append(order, label)
+		}
+		byLabel[label] = append(byLabel[label], i)
+	}
+	if tab == favTabRecent {
+		// The timeline is already newest-first, so the buckets follow it.
+		groups := make([]favoritesGroup, 0, len(order))
+		for _, label := range []string{"Today", "Yesterday", "This week", "Earlier"} {
+			if idx, ok := byLabel[label]; ok && len(idx) > 0 {
+				groups = append(groups, favoritesGroup{label: label, indexes: idx})
+			}
+		}
+		return groups
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return strings.ToLower(order[i]) < strings.ToLower(order[j])
+	})
+	groups := make([]favoritesGroup, 0, len(order))
+	for _, label := range order {
+		groups = append(groups, favoritesGroup{label: label, indexes: byLabel[label]})
+	}
+	if len(groups) == 1 {
+		// One channel needs no heading repeating what every row already says.
+		groups[0].label = ""
+	}
+	return groups
+}
+
+func favoritesLines(groups []favoritesGroup, list sdl.Rect) []favoritesLine {
+	lines := make([]favoritesLine, 0, 32)
+	y := list.Y
+	for _, g := range groups {
+		if g.label != "" {
+			lines = append(lines, favoritesLine{header: g.label, item: -1, y: y, h: favGroupHeaderH})
+			y += favGroupHeaderH
+		}
+		for _, idx := range g.indexes {
+			lines = append(lines, favoritesLine{item: idx, y: y, h: favRowH})
+			y += favRowH + favRowGap
+		}
+	}
+	return lines
+}
+
+// favoritesScrollShift moves the list just far enough to show the focused row.
+// It is computed from the same line geometry that is drawn, so a heading can
+// never be scrolled over the row the D-pad is holding.
+func favoritesScrollShift(lines []favoritesLine, focus int, list sdl.Rect) int32 {
+	var top, bottom, contentBottom int32 = 0, 0, list.Y
+	found := false
+	for _, ln := range lines {
+		if ln.y+ln.h > contentBottom {
+			contentBottom = ln.y + ln.h
+		}
+		if ln.item == focus && ln.item >= 0 {
+			top, bottom = ln.y, ln.y+ln.h
+			found = true
+		}
+	}
+	if !found {
+		return 0
+	}
+	shift := int32(0)
+	if top < list.Y {
+		shift = top - list.Y
+	}
+	if bottom-shift > list.Y+list.H {
+		shift = bottom - (list.Y + list.H)
+	}
+	if maxShift := contentBottom - (list.Y + list.H); shift > maxShift {
+		shift = maxShift
+	}
+	if shift < 0 {
+		shift = 0
+	}
+	return shift
 }
 
 // --- Favorites rendering ---
 
-var favTabRects [4]sdl.Rect
-var favBackRect sdl.Rect
+func drawFavoritesTab(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect, label string, active bool) {
+	if active {
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(accentColor, 60))
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, accentColor)
+		fillRoundedRect(renderer, rect.X+12, rect.Y+rect.H-5, rect.W-24, 3, 2, accentColor)
+	} else {
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, ColorIconSurface)
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, ColorBorder)
+	}
+	color := ColorTextSecondary()
+	if active {
+		color = ColorTextPrimary()
+	}
+	tw, th, err := font.SizeUTF8(label)
+	if err != nil {
+		return
+	}
+	renderText(renderer, config, font, label, color,
+		rect.X+(rect.W-int32(tw))/2, rect.Y+(rect.H-int32(th))/2)
+}
+
+func drawFavoritesGroupHeader(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect, label string) {
+	lw, lh, err := font.SizeUTF8(label)
+	if err != nil {
+		return
+	}
+	y := rect.Y + (rect.H-int32(lh))/2 + 2
+	renderText(renderer, config, font, label, ColorTextTertiary(), rect.X, y)
+	lineX := rect.X + int32(lw) + 12
+	if lineX < rect.X+rect.W {
+		renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 70)
+		renderer.DrawLine(lineX, y+int32(lh)/2, rect.X+rect.W, y+int32(lh)/2)
+	}
+}
+
+// favoriteStreamHost is the host part of a stream URL: enough to tell two
+// channels from two providers apart without printing the whole link.
+func favoriteStreamHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if i := strings.Index(raw, "://"); i >= 0 {
+		raw = raw[i+3:]
+	}
+	if i := strings.IndexAny(raw, "/?#"); i >= 0 {
+		raw = raw[:i]
+	}
+	return raw
+}
+
+func favoriteMetaLine(it FavoriteItem) string {
+	parts := []string{}
+	switch d := it.Data.(type) {
+	case VideoInfo:
+		// The duration is already on the artwork's badge, so this line only
+		// carries who made it and where playback would resume.
+		if line := strings.TrimSpace(resultMetaLine(d)); line != "" {
+			parts = append(parts, line)
+		}
+		if d.Position > 0 && (d.Duration <= 0 || d.Position < d.Duration*0.95) {
+			parts = append(parts, "resume "+formatDuration(d.Position))
+		}
+	case FileEntry:
+		if it.Type == "iptv" {
+			// Every row on this tab is a stream, so the provider is the only
+			// thing that tells two of them apart.
+			if host := favoriteStreamHost(d.Path); host != "" {
+				parts = append(parts, host)
+			}
+		} else if dir := filepath.Dir(d.Path); dir != "" && dir != "." {
+			parts = append(parts, filepath.Base(dir))
+		}
+	}
+	if len(parts) == 0 {
+		return "Saved"
+	}
+	return strings.Join(parts, "  ·  ")
+}
+
+func favoriteProgress(it FavoriteItem) (position, duration float64) {
+	v, ok := it.Data.(VideoInfo)
+	if !ok {
+		return 0, 0
+	}
+	return v.Position, v.Duration
+}
+
+// drawFavoriteRow paints one library card. The artwork is a 16:9 frame for a
+// video and a drawn tile for a stream, so a row is recognisable before its
+// title is read.
+func drawFavoriteRow(renderer *sdl.Renderer, config *Config, rect sdl.Rect, it FavoriteItem, focused bool, titleFont, metaFont *ttf.Font) {
+	fill := ColorCard
+	if focused {
+		fill = ColorCardFocus
+	}
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, fill)
+	if focused {
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, 2, ColorAccent)
+		renderer.SetDrawColor(ColorAccent.R, ColorAccent.G, ColorAccent.B, 230)
+		renderer.FillRect(&sdl.Rect{X: rect.X + 1, Y: rect.Y + 10, W: 3, H: rect.H - 20})
+	} else {
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, 1, ColorBorder)
+	}
+
+	const thumbW, thumbH = int32(96), int32(54)
+	thumb := sdl.Rect{X: rect.X + 9, Y: rect.Y + (rect.H-thumbH)/2, W: thumbW, H: thumbH}
+	if video, ok := it.Data.(VideoInfo); ok {
+		if !drawThumbnail(renderer, config, video, thumb.X, thumb.Y, thumb.W, thumb.H) {
+			// No artwork yet: a bordered frame with a play glyph keeps the slot
+			// reading as a video instead of as a hole beside the title. The
+			// glyph sits left of centre so the duration badge has its corner.
+			strokeRoundedRect(renderer, thumb.X, thumb.Y, thumb.W, thumb.H, 6, 1, WithAlpha(ColorBorder, 200))
+			drawTileIcon(renderer, thumb.X+20, thumb.Y+19, 24, "play", ColorTextSecondary(), WithAlpha(ColorIconSurface, 235))
+		}
+		if video.Duration > 0 {
+			drawDurationBadge(renderer, config, metaFont, video.Duration,
+				thumb.X+thumb.W-46, thumb.Y+thumb.H-18, 40, 14)
+		}
+	} else {
+		fillRoundedRect(renderer, thumb.X, thumb.Y, thumb.W, thumb.H, 8, ColorIconSurface)
+		kind := "files"
+		if it.Type == "iptv" {
+			kind = "tv"
+		}
+		drawTileIcon(renderer, thumb.X+thumb.W/2, thumb.Y+thumb.H/2, 26, kind, ColorTextSecondary(), ColorIconSurface)
+	}
+
+	textX := thumb.X + thumb.W + 14
+	textW := rect.X + rect.W - 14 - textX
+	if textW < 40 {
+		textW = 40
+	}
+	title := ellipsize(titleFont, it.Label(), textW)
+	meta := ellipsize(metaFont, favoriteMetaLine(it), textW)
+
+	position, duration := favoriteProgress(it)
+	hasProgress := duration > 0 && position > 0 && position < duration*0.95
+	titleH := int32(titleFont.Height())
+	metaH := int32(metaFont.Height())
+	stackH := titleH + 4 + metaH
+	textTop := rect.Y + (rect.H-stackH)/2
+	renderText(renderer, config, titleFont, title, ColorTextPrimary(), textX, textTop)
+	renderText(renderer, config, metaFont, meta, ColorTextMuted(), textX, textTop+titleH+4)
+	if hasProgress {
+		// A hairline along the card's foot reads as "how far in" without
+		// crowding the two text lines.
+		drawSimpleProgress(renderer, textX, rect.Y+rect.H-6, textW, 3, position/duration)
+	}
+}
+
+func favoritesTabSubtitle(tab, count int) string {
+	switch tab {
+	case favTabContinue:
+		return pluralizeCount(count, "video in progress", "videos in progress") + " · resume where you left off"
+	case favTabVideos:
+		return pluralizeCount(count, "saved video", "saved videos") + " · grouped by channel"
+	case favTabStreams:
+		return pluralizeCount(count, "saved stream", "saved streams") + " · add more on the IP Stream screen"
+	default:
+		return pluralizeCount(count, "recent item", "recent items") + " · newest first"
+	}
+}
+
+func pluralizeCount(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return fmt.Sprintf("%d %s", n, many)
+}
+
+func favoritesEmptyState(tab int) (glyph, title, body string) {
+	switch tab {
+	case favTabContinue:
+		return "@media", "Nothing in progress", "Start a video and your place is kept here."
+	case favTabVideos:
+		return "@favorites", "No saved videos", "Highlight a result and press Save to keep it here."
+	case favTabStreams:
+		return "@media", "No saved streams", "Add a channel on the IP Stream screen and it lands here."
+	default:
+		return "@clock", "Nothing played yet", "Videos and channels you play show up here."
+	}
+}
 
 func renderFavorites(renderer *sdl.Renderer, config *Config, element Element) {
-	tabLabels := []string{"Videos", "Recent", "Files", "IPTV"}
-	tabColors := []sdl.Color{
-		{R: 255, G: 59, B: 59, A: 255},
-		{R: 59, G: 155, B: 255, A: 255},
-		{R: 46, G: 204, B: 113, A: 255},
-		{R: 155, G: 89, B: 182, A: 255},
+	favoritesRowHits = favoritesRowHits[:0]
+	favTabRects = [favTabCount]sdl.Rect{}
+	if favoritesCurrentTab < 0 {
+		favoritesCurrentTab = 0
 	}
-	tabWidth := int32(180)
-	tabHeight := int32(40)
-	tabY := element.Y + 8
-	tabStartX := element.X + 10
-	tabGap := int32(12)
+	if favoritesCurrentTab >= favTabCount {
+		favoritesCurrentTab = favTabCount - 1
+	}
 
-	favTabRects = [4]sdl.Rect{}
+	layout := newFavoritesLayout(element)
+	favoritesListRect = layout.list
+
+	drawPanel(renderer, layout.panel.X, layout.panel.Y, layout.panel.W, layout.panel.H,
+		WithAlpha(ColorSurfacePanel, 235), WithAlpha(ColorBorder, 130))
+
 	titleFont, _ := getCachedFont(config, "medium")
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
-		font = titleFont
+		return
+	}
+	if titleFont == nil {
+		titleFont = font
 	}
 
-	for i, label := range tabLabels {
-		tx := tabStartX + int32(i)*(tabWidth+tabGap)
-		active := i == favoritesCurrentTab
-		// inactive tab background with hairline border
-		fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, ColorSurfaceRow)
-		renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 28)
-		renderer.DrawRect(&sdl.Rect{X: tx + 1, Y: tabY + 1, W: tabWidth - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: tx + 1, Y: tabY + 1, W: 1, H: tabHeight - 2})
-		renderer.DrawRect(&sdl.Rect{X: tx + 1, Y: tabY + tabHeight - 2, W: tabWidth - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: tx + tabWidth - 2, Y: tabY + 1, W: 1, H: tabHeight - 2})
-		if active {
-			// active tab: soft accent-tinted fill + bottom color bar + colored label
-			fillRoundedRect(renderer, tx, tabY, tabWidth, tabHeight, 10, WithAlpha(tabColors[i], 55))
-			fillRoundedRect(renderer, tx, tabY, tabWidth, 3, 2, tabColors[i])
-			renderer.SetDrawColor(255, 255, 255, 70)
-			renderer.FillRect(&sdl.Rect{X: tx + 6, Y: tabY + 2, W: tabWidth - 12, H: 1})
-		} else {
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 70)
-			renderer.FillRect(&sdl.Rect{X: tx + 8, Y: tabY + tabHeight - 2, W: tabWidth - 16, H: 1})
+	renderText(renderer, config, titleFont, "Favorites", ColorTextPrimary(),
+		layout.panel.X+favPanelPad, layout.titleY)
+
+	items := favoritesItemsForTab(favoritesCurrentTab)
+	renderText(renderer, config, font, favoritesTabSubtitle(favoritesCurrentTab, len(items)),
+		ColorTextSecondary(), layout.panel.X+favPanelPad, layout.subtitleY)
+
+	// One measured width for every tab keeps the strip even as counts grow.
+	counts := favoritesTabCounts()
+	labels := [favTabCount]string{}
+	tabW := int32(96)
+	for i := 0; i < favTabCount; i++ {
+		labels[i] = favoritesTabLabel(i, counts[i])
+		if w, _, err := font.SizeUTF8(labels[i]); err == nil && int32(w)+28 > tabW {
+			tabW = int32(w) + 28
 		}
-		if font != nil {
-			lw, _, _ := font.SizeUTF8(label)
-			lx := tx + (tabWidth-int32(lw))/2
-			ly := tabY + (tabHeight-int32(14))/2
-			var tc sdl.Color
-			if active {
-				tc = tabColors[i]
-			} else {
-				tc = ColorTextTertiary()
-			}
-			renderText(renderer, config, font, label, tc, lx, ly)
-		}
-		favTabRects[i] = sdl.Rect{X: tx, Y: tabY, W: tabWidth, H: tabHeight}
+	}
+	if limit := (layout.panel.W - 2*favPanelPad - (favTabCount-1)*10) / favTabCount; tabW > limit && limit > 0 {
+		tabW = limit
+	}
+	tabX := layout.panel.X + favPanelPad
+	for i := 0; i < favTabCount; i++ {
+		rect := sdl.Rect{X: tabX, Y: layout.tabsY, W: tabW, H: favTabH}
+		favTabRects[i] = rect
+		drawFavoritesTab(renderer, config, font, rect, labels[i], i == favoritesCurrentTab)
+		tabX += tabW + 10
 	}
 
-	items := getCurrentFavorites()
-	listX := element.X + 10
-	listY := tabY + tabHeight + 14
-	listW := getElementWidth(element, 1160)
-	listH := getElementHeight(element, 500)
-	listW -= 20
-	if listW < 200 {
-		listW = 200
+	// The focus is an item index, so a shorter list (a delete, a video leaving
+	// Continue) must not leave the cursor past the end.
+	if favoritesFocusIndex >= len(items) {
+		favoritesFocusIndex = len(items) - 1
 	}
-
-	drawPanel(renderer, listX, listY, listW, listH, WithAlpha(ColorSurfacePanel, 220), accentColor)
+	if favoritesFocusIndex < 0 {
+		favoritesFocusIndex = 0
+	}
 
 	if len(items) == 0 {
-		if font != nil {
-			renderText(renderer, config, font, "No favorites yet. Browse and add items!", ColorTextTertiary(), listX+20, listY+20)
+		glyph, title, body := favoritesEmptyState(favoritesCurrentTab)
+		UIEmptyState(renderer, config, layout.list, glyph, title, body)
+		return
+	}
+
+	groups := favoritesGroups(favoritesCurrentTab, items)
+	lines := favoritesLines(groups, layout.list)
+	shift := favoritesScrollShift(lines, favoritesFocusIndex, layout.list)
+
+	renderWithClip(renderer, layout.list.X, layout.list.Y, layout.list.W, layout.list.H, func(r *sdl.Renderer) {
+		for _, ln := range lines {
+			y := ln.y - shift
+			if y+ln.h < layout.list.Y || y > layout.list.Y+layout.list.H {
+				continue
+			}
+			rect := sdl.Rect{X: layout.list.X, Y: y, W: layout.list.W, H: ln.h}
+			if ln.item < 0 {
+				drawFavoritesGroupHeader(r, config, font, rect, ln.header)
+				continue
+			}
+			if ln.item < 0 || ln.item >= len(items) {
+				continue
+			}
+			drawFavoriteRow(r, config, rect, items[ln.item], ln.item == favoritesFocusIndex, titleFont, font)
+			favoritesRowHits = append(favoritesRowHits, favoritesRowHit{index: ln.item, rect: rect})
 		}
+	})
+
+	// Scrollbar: the viewport only moves when the list is taller than it.
+	contentBottom := int32(0)
+	if len(lines) > 0 {
+		contentBottom = lines[len(lines)-1].y + lines[len(lines)-1].h
+	}
+	if contentH := contentBottom - layout.list.Y; contentH > layout.list.H {
+		thumb := float64(layout.list.H) / float64(contentH)
+		frac := 0.0
+		if maxShift := float64(contentH - layout.list.H); maxShift > 0 {
+			frac = float64(shift) / maxShift
+		}
+		drawScrollbar(renderer, layout.list.X+layout.list.W-3, layout.list.Y+2, 4, layout.list.H-4, thumb, frac)
+	}
+}
+
+// --- Favorites input ---
+
+func favoritesSelectTab(tab int) {
+	if tab < 0 {
+		tab = 0
+	}
+	if tab >= favTabCount {
+		tab = favTabCount - 1
+	}
+	if tab == favoritesCurrentTab {
+		return
+	}
+	favoritesCurrentTab = tab
+	favoritesFocusIndex = 0
+	PlayNavSound()
+}
+
+func favoritesMoveFocus(delta int, config *Config) {
+	items := getCurrentFavorites()
+	if len(items) == 0 || favoritesFocusIndex+delta < 0 {
+		// Leaving the list upward (or entering from an empty one) is the
+		// scene's own navigation, so the D-pad can still reach the Play and
+		// Remove buttons and the header.
+		if delta < 0 {
+			moveSelection(config, ActionNavigateUp)
+		} else {
+			moveSelection(config, ActionNavigateDown)
+		}
+		return
+	}
+	if favoritesFocusIndex+delta >= len(items) {
+		// Past the last row is the action row below the panel.
+		moveSelection(config, ActionNavigateDown)
+		return
+	}
+	favoritesFocusIndex += delta
+	PlayNavSound()
+}
+
+func favoritesPlayFocused(config *Config) {
+	items := getCurrentFavorites()
+	if favoritesFocusIndex < 0 || favoritesFocusIndex >= len(items) {
+		return
+	}
+	items[favoritesFocusIndex].Play(config)
+}
+
+func favoritesRemoveFocused(config *Config) {
+	items := getCurrentFavorites()
+	if favoritesFocusIndex < 0 || favoritesFocusIndex >= len(items) {
+		return
+	}
+	removed := removeFavoriteItem(favoritesCurrentTab, items[favoritesFocusIndex])
+	if !removed {
+		return
+	}
+	if favoritesCurrentTab == favTabStreams {
+		ShowToast("Removed from saved streams", ToastKindWarning)
 	} else {
-		lineH := int32(40)
-		maxVisible := int((listH - 20) / lineH)
-		if maxVisible < 1 {
-			maxVisible = 1
-		}
-		if favoritesFocusIndex >= len(items) {
-			favoritesFocusIndex = len(items) - 1
-		}
-		if favoritesFocusIndex < 0 {
-			favoritesFocusIndex = 0
-		}
-		start := 0
-		if favoritesFocusIndex >= maxVisible {
-			start = favoritesFocusIndex - maxVisible + 1
-		}
-		end := start + maxVisible
-		if end > len(items) {
-			end = len(items)
-		}
-		listFont, _ := getCachedFont(config, element.Font)
-		if listFont == nil {
-			listFont = font
-		}
-		prefixMap := map[string]string{
-			"video": "\u25b6 ",
-			"iptv":  "\u25b6 ",
-			"file":  "\U0001f4c1 ",
-		}
-		colorMap := map[string]sdl.Color{
-			"video": {R: 120, G: 200, B: 255, A: 255},
-			"iptv":  {R: 155, G: 89, B: 182, A: 255},
-			"file":  {R: 255, G: 230, B: 120, A: 255},
-		}
-		for i := start; i < end; i++ {
-			item := items[i]
-			iy := listY + 10 + int32(i-start)*lineH
-			rowX := listX + 8
-			rowY := iy + 2
-			rowW := listW - 16
-			rowH := lineH - 4
-			drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == favoritesFocusIndex, false)
-
-			prefix := prefixMap[item.Type]
-			if prefix == "" {
-				prefix = "\u25b6 "
-			}
-			tc := colorMap[item.Type]
-			if tc.R == 0 && tc.G == 0 && tc.B == 0 {
-				tc = ColorTextSecondary()
-			}
-			labelText := truncateRunesSuffix(prefix+item.Label(), 60, "...")
-			if listFont != nil {
-				renderText(renderer, config, listFont, labelText, tc, rowX+12, rowY+8)
-			}
-		}
-
-		// scrollbar
-		if len(items) > maxVisible {
-			thumbFrac := float64(maxVisible) / float64(len(items))
-			scrollFrac := 0.0
-			if len(items) > maxVisible {
-				scrollFrac = float64(start) / float64(len(items)-maxVisible)
-			}
-			drawScrollbar(renderer, listX+listW-5, listY+6, 3, listH-12, thumbFrac, scrollFrac)
-		}
+		ShowToast("Removed from favorites", ToastKindWarning)
 	}
-
-	backText := "Back"
-	bw, bh := int32(120), int32(40)
-	bx := element.X + getElementWidth(element, 1160) - bw - 20
-	by := element.Y + getElementHeight(element, 500) + 26
-	if by < element.Y+getElementHeight(element, 500) {
-		by = element.Y + getElementHeight(element, 500) + 10
+	PlayBackSound()
+	if remaining := len(getCurrentFavorites()); favoritesFocusIndex >= remaining && favoritesFocusIndex > 0 {
+		favoritesFocusIndex = remaining - 1
 	}
-	favBackRect = UIButton(renderer, config, sdl.Rect{X: bx, Y: by, W: bw, H: bh}, backText, UIButtonStyle{
-		Variant: UIButtonSecondary,
-		Font:    font,
-		Radius:  RadiusMD,
-	}, UIButtonState{})
+}
+
+// handleFavoritesController gives the pad the same model as the keyboard: the
+// tab strip on Left/Right, rows on Up/Down, A plays what is highlighted and X
+// removes it.
+func handleFavoritesController(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if e == nil {
+		return false
+	}
+	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		favoritesMoveFocus(-1, config)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+		favoritesMoveFocus(1, config)
+	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		favoritesSelectTab(favoritesCurrentTab - 1)
+	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		favoritesSelectTab(favoritesCurrentTab + 1)
+	case sdl.CONTROLLER_BUTTON_A:
+		favoritesPlayFocused(config)
+	case sdl.CONTROLLER_BUTTON_X:
+		favoritesRemoveFocused(config)
+	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+		goBackScene(config)
+	default:
+		return false
+	}
+	return true
 }
 
 func handleFavoritesInput(e *sdl.KeyboardEvent, config *Config) {
-	items := getCurrentFavorites()
 	switch e.Keysym.Sym {
 	case sdl.K_LEFT:
-		if favoritesCurrentTab > 0 {
-			favoritesCurrentTab--
-			favoritesFocusIndex = 0
-		}
+		favoritesSelectTab(favoritesCurrentTab - 1)
 	case sdl.K_RIGHT:
-		if favoritesCurrentTab < 3 {
-			favoritesCurrentTab++
-			favoritesFocusIndex = 0
-		}
+		favoritesSelectTab(favoritesCurrentTab + 1)
 	case sdl.K_UP:
-		if favoritesFocusIndex > 0 {
-			favoritesFocusIndex--
-		}
+		favoritesMoveFocus(-1, config)
 	case sdl.K_DOWN:
-		if favoritesFocusIndex < len(items)-1 {
-			favoritesFocusIndex++
-		}
+		favoritesMoveFocus(1, config)
 	case sdl.K_RETURN, sdl.K_SPACE:
-		if favoritesFocusIndex >= 0 && favoritesFocusIndex < len(items) {
-			items := getCurrentFavorites()
-			if favoritesFocusIndex < len(items) {
-				items[favoritesFocusIndex].Play(config)
-			}
-		}
+		favoritesPlayFocused(config)
+	case sdl.K_x, sdl.K_d, sdl.K_DELETE:
+		favoritesRemoveFocused(config)
 	case sdl.K_BACKSPACE, sdl.K_ESCAPE:
-		for _, scene := range config.Scenes {
-			if scene.Name == "Main" {
-				changeSceneTo(config, findSceneIndex(config, "Main"))
-				break
-			}
+		goBackScene(config)
+	}
+}
+
+func handleFavoritesMouseClick(mx, my int32, config *Config) {
+	for i, rect := range favTabRects {
+		if rect.W > 0 && pointInRect(mx, my, rect) {
+			favoritesSelectTab(i)
+			return
 		}
-	case sdl.K_d:
-		if favoritesFocusIndex >= 0 && favoritesFocusIndex < len(items) {
-			removeFavoriteAt(favoritesCurrentTab, favoritesFocusIndex)
-			saveFavorites()
-			if favoritesFocusIndex >= len(getCurrentFavorites()) && favoritesFocusIndex > 0 {
-				favoritesFocusIndex--
-			}
-			showToast("Removed from favorites", ToastError())
+	}
+	for _, hit := range favoritesRowHits {
+		if pointInRect(mx, my, hit.rect) {
+			favoritesFocusIndex = hit.index
+			favoritesPlayFocused(config)
+			return
 		}
 	}
 }
 
+// findSceneIndex is the index of a scene by name, or 0 when it is absent.
 func findSceneIndex(config *Config, name string) int {
 	for i, scene := range config.Scenes {
 		if scene.Name == name {
@@ -588,72 +1279,6 @@ func findSceneIndex(config *Config, name string) int {
 		}
 	}
 	return 0
-}
-
-func handleFavoritesMouseClick(mx, my int32, config *Config) {
-	for i, rect := range favTabRects {
-		if rect.W > 0 && mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H {
-			favoritesCurrentTab = i
-			favoritesFocusIndex = 0
-			return
-		}
-	}
-	if mx >= favBackRect.X && mx <= favBackRect.X+favBackRect.W && my >= favBackRect.Y && my <= favBackRect.Y+favBackRect.H {
-		for _, scene := range config.Scenes {
-			if scene.Name == "Main" {
-				changeSceneTo(config, findSceneIndex(config, "Main"))
-				break
-			}
-		}
-		return
-	}
-	items := getCurrentFavorites()
-	lineH := int32(42)
-	maxVisible := 12
-	if maxVisible < 1 {
-		maxVisible = 1
-	}
-	if favoritesFocusIndex >= len(items) {
-		favoritesFocusIndex = len(items) - 1
-	}
-	if favoritesFocusIndex < 0 {
-		favoritesFocusIndex = 0
-	}
-	start := 0
-	if favoritesFocusIndex >= maxVisible {
-		start = favoritesFocusIndex - maxVisible + 1
-	}
-	end := start + maxVisible
-	if end > len(items) {
-		end = len(items)
-	}
-	elem := config.Scenes[currentSceneIndex].Elements[0]
-	if len(config.Scenes[currentSceneIndex].Elements) > 0 {
-		for _, e := range config.Scenes[currentSceneIndex].Elements {
-			if e.Type == "favorites" {
-				elem = e
-				break
-			}
-		}
-	}
-	listY := elem.Y + 10 + 44 + 16
-	for i := start; i < end; i++ {
-		iy := listY + 10 + int32(i-start)*lineH
-		rowX := elem.X + 18
-		rowY := iy + 2
-		rowW := getElementWidth(elem, 1160) - 36
-		rowH := lineH - 4
-		if rowW < 200 {
-			rowW = 200
-		}
-		if mx >= rowX && mx <= rowX+rowW && my >= rowY && my <= rowY+rowH {
-			favoritesFocusIndex = i
-			if i < len(items) {
-				items[i].Play(config)
-			}
-			return
-		}
-	}
 }
 
 func openInExplorer(path string) {

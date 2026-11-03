@@ -28,6 +28,7 @@ func resetWiFiDiagnostics(t *testing.T) {
 	wifiSupplicantStartLog.mu.Lock()
 	wifiSupplicantStartLog.iface, wifiSupplicantStartLog.note = "", ""
 	wifiSupplicantStartLog.mu.Unlock()
+	rememberWiFiDiagReport(wifiDiagReport{})
 }
 
 // diagEntry finds one row by its label prefix.
@@ -287,11 +288,132 @@ func TestWiFiListDrawsTheDiagnosticsPillWithoutABackend(t *testing.T) {
 	}
 }
 
+// The text form is what Copy puts on the clipboard and what the bundle carries:
+// every row, in the sheet's own words, dated so a report read later still says
+// when the radio was probed.
+func TestWiFiDiagReportTextListsEveryFact(t *testing.T) {
+	at := time.Date(2026, time.October, 31, 14, 22, 5, 0, time.Local)
+	report := wifiDiagReport{At: at, Entries: []wifiDiagEntry{
+		{Label: "Interface", Value: "wlan0", State: wifiDiagOK},
+		{Label: "Last error", Value: "FAIL-AUTH · 12s ago", State: wifiDiagErr},
+	}}
+	text := wifiDiagReportText(report)
+	for _, want := range []string{
+		"Wi-Fi diagnostics",
+		"Collected    : Oct 31 2026 14:22:05",
+		"Interface", "wlan0",
+		"Last error", "FAIL-AUTH · 12s ago",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("report text is missing %q:\n%s", want, text)
+		}
+	}
+	if text := wifiDiagReportText(wifiDiagReport{}); !strings.Contains(text, "not yet") {
+		t.Errorf("an empty report does not say it is pending:\n%s", text)
+	}
+}
+
+// Copy does both destinations: the report lands on the clipboard and a
+// diagnostics bundle on the card carries the same facts plus the log.
+func TestWiFiDiagCopyPutsTheReportOnTheClipboardAndInTheBundle(t *testing.T) {
+	dir := withTempPatchState(t)
+	resetWiFiDiagnostics(t)
+	var spy clipboardSpy
+	installClipboardSpy(t, &spy)
+	resetClipboardHistory(t)
+
+	prev := wifiPanel
+	t.Cleanup(func() { wifiPanel = prev })
+	report := wifiDiagReport{At: time.Now(), Entries: []wifiDiagEntry{
+		{Label: "Interface", Value: "wlan0", State: wifiDiagOK},
+		{Label: "Backend", Value: "wpa_cli", State: wifiDiagOK},
+	}}
+	wifiPanel = wifiPanelState{open: true, diagOpen: true, diag: report}
+	rememberWiFiDiagReport(report)
+
+	wifiDiagCopyReport()
+
+	for _, want := range []string{"Wi-Fi diagnostics", "Interface", "wlan0", "Backend", "wpa_cli"} {
+		if !strings.Contains(spy.set, want) {
+			t.Errorf("clipboard is missing %q:\n%s", want, spy.set)
+		}
+	}
+	if len(clipHistory) == 0 || clipHistory[0].source != "Wi-Fi diagnostics" {
+		t.Errorf("the copy did not reach the clipboard history: %+v", clipHistory)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(dir, "reports"))
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("Copy wrote no bundle: %v", err)
+	}
+	data, readErr := os.ReadFile(filepath.Join(dir, "reports", entries[len(entries)-1].Name()))
+	if readErr != nil {
+		t.Fatalf("read bundle: %v", readErr)
+	}
+	bundle := string(data)
+	if !strings.Contains(bundle, "Interface") || !strings.Contains(bundle, "wlan0") {
+		t.Errorf("the bundle lost the Wi-Fi report:\n%s", bundle)
+	}
+	if !strings.Contains(bundle, "Recent log") {
+		t.Errorf("the bundle is not the support file:\n%s", bundle)
+	}
+}
+
+// Copy before the worker answered must not paste half a report or write an
+// empty bundle: the sheet says it is still reading instead.
+func TestWiFiDiagCopyWaitsForTheReport(t *testing.T) {
+	dir := withTempPatchState(t)
+	resetWiFiDiagnostics(t)
+	var spy clipboardSpy
+	installClipboardSpy(t, &spy)
+
+	prev := wifiPanel
+	t.Cleanup(func() { wifiPanel = prev })
+	wifiPanel = wifiPanelState{open: true, diagOpen: true}
+
+	wifiDiagCopyReport()
+
+	if spy.set != "" {
+		t.Fatalf("copied an uncollected report: %q", spy.set)
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, "reports")); err == nil && len(entries) != 0 {
+		t.Fatalf("wrote %d bundles for a report that was not collected", len(entries))
+	}
+}
+
+// The sheet's pills, key and pad all reach Copy, so the action is not
+// touch-only on a device whose owner is holding a controller.
+func TestWiFiDiagCopyReachableFromKeyAndPad(t *testing.T) {
+	prev := wifiPanel
+	t.Cleanup(func() { wifiPanel = prev })
+	wifiPanel = wifiPanelState{open: true, diagOpen: true}
+
+	// With no report yet Copy stays inert, which is the path the key and pad
+	// handlers take; the point here is that they do not fall through to the
+	// list's actions or back out of the sheet.
+	if !handleWiFiKey(&sdl.KeyboardEvent{Type: sdl.KEYDOWN, Keysym: sdl.Keysym{Sym: sdl.K_c}}, &Config{}) {
+		t.Fatal("C was not consumed by the sheet")
+	}
+	if !wifiPanel.diagOpen {
+		t.Fatal("C left the sheet")
+	}
+	if !ctrlWiFi(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_Y}, &Config{}) {
+		t.Fatal("Y was not consumed by the sheet")
+	}
+	if !wifiPanel.diagOpen {
+		t.Fatal("Y left the sheet")
+	}
+}
+
 // A report collected on a worker reaches the panel through the drain, which is
 // the only path that may write panel state.
 func TestWiFiDiagnosticsUpdateReachesThePanel(t *testing.T) {
 	prev := wifiPanel
-	t.Cleanup(func() { wifiPanel = prev })
+	t.Cleanup(func() {
+		wifiSettleForTest()
+		wifiPanel = prev
+	})
+	wifiSettleForTest()
 	wifiPanel = wifiPanelState{open: true}
 	wifiWorkPending = true
 	wifiGeneration++

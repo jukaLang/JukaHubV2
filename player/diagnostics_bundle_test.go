@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // diagnostics_bundle_test.go pins the support export: it has to carry enough to
@@ -117,6 +118,33 @@ func TestDiagnosticsBundleSaysWhenTheLogIsEmpty(t *testing.T) {
 	bundle := DiagnosticsBundleText(nil)
 	if !strings.Contains(bundle, "the in-memory log is empty") {
 		t.Fatalf("empty log is not explained:\n%s", bundle)
+	}
+}
+
+// The Wi-Fi sheet's last collection rides along in the bundle, redacted like the
+// log; a session that never opened the sheet says so instead of reading like a
+// device with no radio facts at all.
+func TestDiagnosticsBundleCarriesTheWiFiSheet(t *testing.T) {
+	withTempPatchState(t)
+	appLog.Clear()
+	t.Cleanup(appLog.Clear)
+	t.Cleanup(func() { rememberWiFiDiagReport(wifiDiagReport{}) })
+
+	rememberWiFiDiagReport(wifiDiagReport{At: time.Now(), Entries: []wifiDiagEntry{
+		{Label: "Interface", Value: "wlan0", State: wifiDiagOK},
+		{Label: "Control dir", Value: "/home/stepan/run", State: wifiDiagOK},
+	}})
+	bundle := DiagnosticsBundleText(nil)
+	if !strings.Contains(bundle, "Wi-Fi diagnostics") || !strings.Contains(bundle, "wlan0") {
+		t.Fatalf("the bundle lost the Wi-Fi report:\n%s", bundle)
+	}
+	if strings.Contains(bundle, "/home/stepan") {
+		t.Errorf("the Wi-Fi section leaked the account name:\n%s", bundle)
+	}
+
+	rememberWiFiDiagReport(wifiDiagReport{})
+	if text := DiagnosticsBundleText(nil); !strings.Contains(text, "Not collected this session") {
+		t.Fatalf("an unopened sheet is not explained:\n%s", text)
 	}
 }
 

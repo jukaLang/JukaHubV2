@@ -110,7 +110,7 @@ func TestDownloadArgsKeepTheTransferReal(t *testing.T) {
 	}
 	// --print switches yt-dlp into simulation and quiet mode; both helpers are
 	// what keep the download and its progress alive.
-	for _, want := range []string{"--no-simulate", "--progress", "--newline", "--extract-audio", "--audio-format"} {
+	for _, want := range []string{"--no-simulate", "--progress", "--newline", "--continue", "--extract-audio", "--audio-format"} {
 		if !has(want) {
 			t.Errorf("download args are missing %s (%v)", want, args)
 		}
@@ -145,7 +145,7 @@ func TestVideoDownloadArgsKeepPictureAndSound(t *testing.T) {
 		}
 		return false
 	}
-	for _, want := range []string{"--no-simulate", "--progress", "--newline", "--merge-output-format"} {
+	for _, want := range []string{"--no-simulate", "--progress", "--newline", "--continue", "--merge-output-format"} {
 		if !has(want) {
 			t.Errorf("video args are missing %s (%v)", want, args)
 		}
@@ -394,7 +394,15 @@ func TestDownloadQueueRunsOneAtATime(t *testing.T) {
 	}
 	waitForDownload(t, "the first track to start", func() bool {
 		active, _, _, _ := downloadCountsNow()
-		return active == 1
+		if active != 1 {
+			return false
+		}
+		// The row counts as running the moment the worker picks the job up;
+		// the progress it reports is published a moment later. Waiting on the
+		// count alone read the row before its first update and raced the
+		// percent assertion below on a busy machine.
+		items := downloadsSnapshot()
+		return len(items) > 0 && items[0].Title == "Track"
 	})
 	active, queued, _, _ := downloadCountsNow()
 	if active != 1 || queued != 2 {
@@ -683,5 +691,69 @@ func TestDownloadRowStatusText(t *testing.T) {
 	}
 	if detail := downloadRowDetail(downloadItem{Status: downloadDone}); !strings.Contains(detail, "Audio") {
 		t.Errorf("saved audio detail = %q, want the kind named", detail)
+	}
+}
+
+func TestDownloadStartsWithEnoughSpace(t *testing.T) {
+	enough := func(string) (int64, error) { return downloadsMinFreeBytes + 1, nil }
+	if err := downloadsRequireSpace("card", enough); err != nil {
+		t.Fatalf("a card with room was refused: %v", err)
+	}
+	full := func(string) (int64, error) { return 4 << 20, nil }
+	err := downloadsRequireSpace("card", full)
+	if err == nil || !strings.Contains(err.Error(), "not enough space") {
+		t.Fatalf("a full card gave %v, want a refusal that names the space", err)
+	}
+	if !strings.Contains(err.Error(), "4.0 MB") && !strings.Contains(err.Error(), "4 MB") {
+		t.Fatalf("refusal %q does not say how much is free", err)
+	}
+	// A platform that cannot report free space must not block every download.
+	unknown := func(string) (int64, error) { return 0, errors.New("statfs not supported") }
+	if err := downloadsRequireSpace("card", unknown); err != nil {
+		t.Fatalf("an unmeasurable card was refused: %v", err)
+	}
+}
+
+func TestDownloadResumeKeepsThePartialFile(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "stage")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	partial := filepath.Join(dir, "Song.webm.part")
+	if err := os.WriteFile(partial, []byte("half a song"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A dropped link or a pause must leave the staged bytes on the card, or
+	// Resume re-downloads the whole track on the handheld's slow storage.
+	downloadsCleanStaging(dir, errors.New("no data for 60 s"))
+	if !regularFile(partial) {
+		t.Fatal("a failed transfer deleted its partial file")
+	}
+	downloadsCleanStaging(dir, nil)
+	if regularFile(partial) {
+		t.Fatal("a finished transfer left its staging folder behind")
+	}
+}
+
+func TestDownloadRejectsTinySavedFile(t *testing.T) {
+	dir := t.TempDir()
+	tiny := filepath.Join(dir, "error-page.m4a")
+	if err := os.WriteFile(tiny, []byte("not media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := downloadsValidateSavedFile(tiny, downloadKindAudio)
+	if err == nil || !strings.Contains(err.Error(), "not playable media") {
+		t.Fatalf("tiny file gave %v, want a rejection explaining the size", err)
+	}
+	if regularFile(tiny) {
+		t.Fatal("the rejected file was left in the music folder")
+	}
+
+	good := filepath.Join(dir, "song.m4a")
+	if err := os.WriteFile(good, make([]byte, downloadMinimumBytes(downloadKindAudio)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := downloadsValidateSavedFile(good, downloadKindAudio); err != nil {
+		t.Fatalf("a real file was rejected: %v", err)
 	}
 }

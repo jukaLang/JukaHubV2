@@ -65,7 +65,7 @@ settings such as `search_query` or `stream_url`.
 | `screenWidth`, `screenHeight` | int | window size on desktop. On supported TrimUI models the runtime uses the device's canvas: 1280×720 on the Smart Pro / Smart Pro S and a compact 960×720 canvas scaled to the 1024×768 Brick, Brick Pro and Hammer panels. Logical font sizes follow that canvas (0.75× on the compact one) so text keeps its proportion to the layout. |
 | `tools_path` | string | where yt-dlp / ffmpeg live |
 | `fileExplorerRoot` | string | starting directory of the file explorer |
-| `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country |
+| `weatherEnabled`, `weatherUnit` | bool, `""`/`"C"`/`"F"` | status-bar weather; empty picks C/F from the detected country. In Settings → General, press Weather Unit to cycle Auto, Celsius and Fahrenheit. |
 | `tspUsername` | string | name used in the greeting |
 | `playbackResolution` | string | maximum video height, e.g. `"720"` |
 | `subtitleLanguage` | string | Subtitle language code for online video (Settings → General), e.g. `"en"`, `"es"`, or `"pt-BR"`; blank defaults to English. Turn on CC to fetch available manual or automatic captions with yt-dlp. |
@@ -198,7 +198,18 @@ The LED policy is the custom key `led_policy` — `audio` (the default),
 Quick Settings. Battery runs red → green across 10–80%, charging breathes green
 and goes dark unplugged, and temperature runs green → red across 45–80 °C (read
 from the thermal zone, cached for two seconds). Custom uses `led_color`
-(`"#rrggbb"`) and an optional `led_effect` of `solid` (default) or `pulse`.
+(`"#rrggbb"`) and an optional `led_effect` of `solid` (default), `pulse`
+(two-second breathing) or `rainbow` (a full hue turn every twelve seconds).
+
+`led_brightness` (int, 0–100, default 100) trims every policy's colour, so it
+dims audio, battery, charging, temperature and custom alike; 0 is an off LED. It
+is applied to the RGB value rather than to the sysfs `brightness` file, because
+brightness-only LEDs derive their level from the peak channel.
+
+**Quick Settings → LED Style** edits all four keys — mode, effect, colour and
+brightness — with the animation running for a live preview, and writes them
+through the same debounced user-config save. The panel also carries the **LED
+Sync** switch, so turning the lights off does not require leaving it.
 
 LAN Play is `netPlayEnabled` (default true in the shipped config) with a
 user-level override in the custom key `netplay_enabled`, written by the **LAN
@@ -232,11 +243,42 @@ and Exit. Editing a tile (or hot-reloading the config) moves, resizes, renames
 and re-icons the card on the next frame; `trigger` keeps controlling what the
 card opens. Coordinates are declared on the 1280×720 design canvas and are
 scaled (including the 4:3 handheld profile) like every other scene's
-geometry. A tile that names no card is ignored, and geometry outside the
-canvas or without a positive size falls back to the built-in card instead of
-appearing broken. The header cluster (network, weather, clock, update,
+geometry. A tile that names no card is ignored — including a tile with no
+`text` at all — and geometry outside the canvas or without a positive size falls
+back to the built-in card instead of appearing broken. On this scene `icon` names
+the card's glyph exactly (`tools` is the slider glyph, `exit` the power ring); an
+unknown name draws the plain ring, and an absent one keeps the card's built-in
+glyph. The header cluster (network, weather, clock, update,
 notifications) is system chrome re-measured every frame and is not
 config-customizable.
+
+### Home arrangements and total conversions
+
+The home screen has two built-in arrangements, chosen with the
+`homeArrangement` custom variable:
+
+| Value | What it is |
+|---|---|
+| `custom` (default, and any unset value) | the scene's own tiles decide where the cards are — the arrangement described above |
+| `dashboard` | the built-in composition: the wide Continue card with the smaller cards beside it |
+| `grid` | a 4×3 mosaic with the Continue card standing two rows tall as a hero tile and the other ten cards filling the rest |
+
+`dashboard` and `grid` ignore the tiles' `x`/`y`/`width`/`height` (and their
+titles and icons) while they are in force, and **never rewrite them**: the
+scene's elements are left exactly as authored, so switching back to `custom`
+puts the user's arrangement back untouched. That is what makes an arrangement
+safe to try.
+
+The **Total conversion** tab of the theme gallery (Settings → Appearance) is
+where these are offered: each preset there is a palette *plus* an arrangement,
+so picking one repaints and rearranges the interface in one press. The colour
+tab holds the palettes, which never move a card. A theme file in the themes
+folder can join the conversion tab by naming an arrangement:
+
+```json
+{"name": "Paper tiles", "arrangement": "grid",
+ "background": "#f6f1e7", "buttonColor": "#e8dfcd", "...": "the rest of the colours"}
+```
 
 ## `elements`
 
@@ -258,7 +300,7 @@ config-customizable.
 | `columns`, `rows` | int | grid/list geometry |
 | `placeholder` | string | input hint text |
 | `style` | string | `"tile"` renders the OS-style app tile |
-| `icon` | string | monogram/short glyph for tiles |
+| `icon` | string | glyph name for a tile: a home card's name (`media`, `files`, `tools`, `exit`, …), an explicit tile glyph (`disk`, `cache`, `clock`, `logs`, …), or empty to let the label pick the picture |
 | `source`, `jsonPath` | string | data source for text/list elements |
 | `autoRefresh` | bool | re-run the trigger on a timer where supported |
 | `image`, `video` | string | media path/URL |
@@ -311,7 +353,7 @@ config-customizable.
 | `app_refresh`, `app_open_folder` | rescan the Apps list, open the apps folder |
 | `chat_send`, `chat_clear`, `groq_chat`, `discord_connect`, `attach_image`, `send_to_chat` | chat and assistant |
 | `tick`, `add_ticker`, `clear_tickers` | stock/crypto tickers |
-| `netspeed_run`, `benchmark_run`, `benchmark_random`, `hw_load`, `cron_load`, `cron_startup` | network test, benchmarks, hardware info, scheduled tasks |
+| `netspeed_run`, `benchmark_run`, `benchmark_random`, `hw_load`, `cron_load`, `cron_startup` | network test, benchmarks, hardware info, scheduled tasks and startup items |
 | `terminal_run`, `emulator_run`, `external_app` | run a command, an emulator, or an external program |
 | `log_export`, `log_clear` | export or clear the app log |
 | `cache_clear` | clear the on-disk cache |
@@ -323,6 +365,13 @@ config-customizable.
 | `companion_open` | the phone companion QR card (toggles) |
 | `ftp_toggle`, `ftp_start`, `ftp_stop`, `ssh_toggle`, `ssh_start`, `ssh_stop` | FTP and SSH/SFTP servers |
 | anything starting with `http://` or `https://` | opens the URL in the system browser |
+
+On the Tasks screen, **Refresh** (`cron_load`) updates both scheduled tasks and
+startup items; **Startup** (`cron_startup`) updates only startup items. On
+Windows, scheduled tasks come from a read-only `schtasks /query` and only the
+first entries fit in the panel; open Windows Task Scheduler for the full list.
+Windows startup-item scanning is not supported. On Linux, the viewer reads cron
+and systemd information and checks common startup locations.
 
 An unrecognised trigger does nothing (and is not logged as an error), so a
 config from a newer builder degrades to an inert button instead of a crash.

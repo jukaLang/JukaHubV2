@@ -679,6 +679,22 @@ func browserRecordURL(address string) {
 	browserState.index = len(browserState.history) - 1
 }
 
+// browserReplaceURL rewrites the current history entry after a redirect: the
+// page the reader is on is the one the redirect landed on, and Back must not
+// step through a URL that was only ever a hop to it.
+func browserReplaceURL(from, to string) {
+	from, to = strings.TrimSpace(from), strings.TrimSpace(to)
+	if from == "" || to == "" || from == to {
+		return
+	}
+	browserState.mu.Lock()
+	defer browserState.mu.Unlock()
+	if browserState.index >= 0 && browserState.index < len(browserState.history) &&
+		browserState.history[browserState.index] == from {
+		browserState.history[browserState.index] = to
+	}
+}
+
 func browserHistoryStep(delta int) (string, bool) {
 	browserState.mu.Lock()
 	defer browserState.mu.Unlock()
@@ -884,6 +900,16 @@ func htmlTagAttribute(tag, want string) string {
 	return ""
 }
 
+// htmlAttrValue decodes one attribute value. Character references are decoded
+// inside attribute values just as they are in text, so a paginator button's
+// value="&gt;" is an arrow, a field's placeholder="Search&nbsp;here" holds a
+// non-breaking space, and a src="?a=1&amp;b=2" still resolves. Read raw, the
+// markup itself was drawn on the button face and the query string went out with
+// a stray &amp; in it.
+func htmlAttrValue(value string) string {
+	return strings.TrimSpace(htmlstd.UnescapeString(value))
+}
+
 func setBrowserLinks(variable string, links []browserLink) {
 	if variable == "" {
 		return
@@ -1080,15 +1106,10 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 		browserLinkPanel.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, 1, ColorBorderDefault)
-
-	header.X = panelX + 22
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 44
+	card := sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
+	header = overlayHeaderOnCard(header, card)
 	UIPageHeaderDraw(renderer, config, header)
 
 	browserLinkRowHits = browserLinkRowHits[:0]
@@ -1516,6 +1537,13 @@ func browserActivatePageControl(renderer *sdl.Renderer, config *Config, elem Ele
 		browserRefreshFormState(elem)
 		PlayActivateSound()
 		return
+	case "details":
+		// A section opens and closes in place, like a tick box: the body was
+		// parsed and kept, so this is a re-measure rather than a re-fetch.
+		ctrl.Checked = !ctrl.Checked
+		browserRefreshFormState(elem)
+		PlayActivateSound()
+		return
 	case "check", "radio":
 		ctrl.Checked = !ctrl.Checked
 		if ctrl.Kind == "radio" && ctrl.Checked {
@@ -1576,6 +1604,9 @@ func browserFormControls(elem Element) []*webControl {
 	var out []*webControl
 	seen := map[*webControl]bool{}
 	for _, block := range doc.Blocks {
+		if block.Hidden() {
+			continue
+		}
 		for _, run := range block.Runs {
 			ctrl := run.Style.Control
 			if ctrl == nil || seen[ctrl] {

@@ -76,8 +76,13 @@ func TestHomeUpdateChipSitsLeftOfTheBell(t *testing.T) {
 	if homeUpdateRect.Y < 0 || homeUpdateRect.Y+homeUpdateRect.H > headerBarHeight() {
 		t.Fatalf("chip %+v escapes the header band", homeUpdateRect)
 	}
-	if homeUpdateRect.H != headerPillHeight() {
-		t.Fatalf("chip height %d is not the header's button height %d", homeUpdateRect.H, headerPillHeight())
+	// Same height as the bell: the two controls share the system corner, and the
+	// offer is deliberately a step quieter than the labelled buttons.
+	if homeUpdateRect.H != bell.H {
+		t.Fatalf("chip height %d is not the bell's %d", homeUpdateRect.H, bell.H)
+	}
+	if homeUpdateRect.H >= headerPillHeight() {
+		t.Fatalf("chip height %d is not quieter than the header's button height %d", homeUpdateRect.H, headerPillHeight())
 	}
 	if !layout.Focus.IsEnabled(HomeFocusUpdate) {
 		t.Fatal("the chip is drawn but its focus entry is disabled")
@@ -287,6 +292,9 @@ func TestHomeUpdateChipClearsAStaleOffer(t *testing.T) {
 		updateInstallRunner = prevRunner
 		endPatchOp()
 		clearPatchBusy()
+		// The chip raises the install card and settles it; leaving the card
+		// up would show as a background row in whichever test runs next.
+		resetInstallBar()
 	})
 	done := make(chan struct{}, 1)
 	updateInstallRunner = func(ctx context.Context, cfg *Config) error {
@@ -413,6 +421,9 @@ func TestHomeUpdateChipInstallsOnPressAndClick(t *testing.T) {
 		updateInstallRunner = prevRunner
 		endPatchOp()
 		clearPatchBusy()
+		// Two presses raise the card twice; clear it so the finished card's
+		// hold cannot leak into the next test's background rows.
+		resetInstallBar()
 	})
 	started := make(chan struct{}, 2)
 	updateInstallRunner = func(ctx context.Context, cfg *Config) error {

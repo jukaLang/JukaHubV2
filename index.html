@@ -246,6 +246,7 @@
                         <i class="fas fa-search" aria-hidden="true"></i>
                         <input type="search" id="componentSearch" placeholder="Filter components..." aria-label="Filter components">
                     </div>
+                    <p id="componentSearchEmpty" class="component-search-empty" role="status" hidden>No components found. Try another search.</p>
                     <div class="component-section">
                         <h3 class="component-section-title">Basic</h3>
                         <div class="elements-container">
@@ -347,10 +348,20 @@
                 <div class="canvas-container" id="canvasWrapper">
                     <div class="canvas-scaler" id="canvasScaler">
                         <div class="canvas" id="canvas"></div>
+                        <div id="safeAreaOverlay" class="safe-area-overlay" aria-hidden="true" hidden></div>
+                        <div id="alignmentGuides" class="alignment-guides" aria-hidden="true" hidden>
+                            <div class="alignment-guide alignment-guide--vertical" hidden></div>
+                            <div class="alignment-guide alignment-guide--horizontal" hidden></div>
+                        </div>
                     </div>
                 </div>
                 <div class="workspace-status">
                     <span class="status-device"><i class="fas fa-mobile-screen-button" aria-hidden="true"></i> <span id="canvasSizeReadout">1280 × 720</span></span>
+                    <div class="workspace-guides" role="group" aria-label="Canvas guides">
+                        <button id="snapGridBtn" class="zoom-button" type="button" aria-pressed="false" title="Snap dragged elements to an 8-pixel grid">Snap to grid</button>
+                        <button id="alignmentGuidesBtn" class="zoom-button" type="button" aria-pressed="false" title="Show alignment guides while dragging">Alignment guides</button>
+                        <button id="safeAreaBtn" class="zoom-button" type="button" aria-pressed="false" title="Show an advisory 32-pixel inset on the 1280 × 720 canvas; hidden for other sizes and in preview. Not a measured device specification.">Safe area</button>
+                    </div>
                     <div class="zoom-controls" role="group" aria-label="Canvas zoom">
                         <button id="zoomOutBtn" class="zoom-button" type="button" aria-label="Zoom out" title="Zoom out">
                             <i class="fas fa-minus" aria-hidden="true"></i>
@@ -385,15 +396,16 @@
                         <div id="elementProperties" class="element-properties">
                             <div class="no-selection" id="noSelection">
                                 <i class="fas fa-mouse-pointer" aria-hidden="true"></i>
-                                <p>Select an element on the canvas to edit its properties, or pick a tab above.</p>
+                                <h3>Nothing selected</h3>
+                                <p>Select an element on the canvas to edit its properties.</p>
                                 <ul class="empty-hints">
-                                    <li><kbd>Ctrl+Z</kbd> undo, <kbd>Ctrl+Shift+Z</kbd> redo</li>
-                                    <li>Drag from the Library to add elements</li>
-                                    <li>Double-click text to edit it</li>
+                                    <li>Add an element from the library.</li>
+                                    <li>Select it on the canvas to customize it.</li>
                                 </ul>
                             </div>
 
                             <div class="position-controls">
+                                <h3 class="element-section-title">Position &amp; size</h3>
                                 <div class="control-group">
                                     <label for="datax"><i class="fas fa-arrows-alt-h" aria-hidden="true"></i> X</label>
                                     <input type="number" id="datax" class="coordinate-input">
@@ -413,6 +425,7 @@
                             </div>
 
                             <div class="style-controls">
+                                <h3 class="element-section-title">Appearance</h3>
                                 <div class="control-group">
                                     <label for="colorPicker"><i class="fas fa-palette" aria-hidden="true"></i> Text Color</label>
                                     <input type="color" id="colorPicker" class="color-picker" value="#000000">
@@ -758,10 +771,10 @@
                 </div>
 
                 <div id="aiKeyRow" class="ai-key-row" style="display:none">
-                    <label for="aiApiKey">API key <span class="ai-hint">(stored locally only)</span></label>
+                    <label for="aiApiKey">API key <span class="ai-hint">(this page only; cleared on reload)</span></label>
                     <div class="ai-key-input-row">
                         <input type="password" id="aiApiKey" class="ai-input" placeholder="Paste your API key" autocomplete="off" autocapitalize="off" spellcheck="false">
-                        <button id="aiKeySaveBtn" class="action-button small" type="button" title="Remember key locally"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i></button>
+                        <button id="aiKeyClearBtn" class="action-button small" type="button" title="Clear API key" aria-label="Clear API key"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
                     </div>
                 </div>
 

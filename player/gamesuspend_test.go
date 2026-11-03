@@ -166,8 +166,20 @@ func TestEveryScreenTakingLaunchSuspendsPresentation(t *testing.T) {
 		if !strings.Contains(text, "noteGameChildStarted(cmd)") {
 			t.Errorf("%s starts a screen-taking child but never calls noteGameChildStarted(cmd)", name)
 		}
-		if !strings.Contains(text, "noteGameChildExited(cmd)") {
-			t.Errorf("%s reaps a screen-taking child but never calls noteGameChildExited(cmd)", name)
+		// The reaper must finish through screenChildReaped: it keeps the
+		// display parked while a launcher's own process group still has the
+		// emulator in it (a stock launch.sh can return before RetroArch), and
+		// it holds the settle before JukaHub draws again. Calling
+		// noteGameChildExited directly skips both, which is the flicker this
+		// test exists to prevent.
+		if !strings.Contains(text, "screenChildReaped(cmd)") {
+			t.Errorf("%s reaps a screen-taking child without screenChildReaped(cmd), so the hand-off has no group check and no settle", name)
+		}
+		if !strings.Contains(text, "screenChildGroupConfigure(cmd)") {
+			t.Errorf("%s starts a screen-taking child without screenChildGroupConfigure(cmd), so a launcher that backgrounds the game cannot be tracked", name)
+		}
+		if strings.Contains(text, "noteGameChildExited(cmd)") {
+			t.Errorf("%s calls noteGameChildExited(cmd) directly, bypassing the group check and the settle", name)
 		}
 	}
 }

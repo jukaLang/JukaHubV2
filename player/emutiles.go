@@ -26,14 +26,26 @@ import (
 )
 
 const (
-	emuTileMinW    = int32(186)
-	emuTileH       = int32(150)
-	emuTileGap     = int32(14)
-	emuPagePad     = int32(24)
-	emuIconBox     = int32(64)
-	emuPageHeaderH = int32(96)
-	emuPageFooterH = int32(82)
-	emuPageMargin  = int32(20)
+	emuTileMinW = int32(186)
+	emuTileH    = int32(150)
+	emuTileGap  = int32(14)
+	emuPagePad  = OverlayPadX
+	emuIconBox  = int32(64)
+	// emuPageW is the width of the shared full-page card: the same 1040 the
+	// Compatibility page uses, so the Emulators page lands on the same left and
+	// right edges as its neighbours instead of running out to the screen edge.
+	emuPageW = int32(1040)
+	// emuPageMargin is the screen inset above and below that card.
+	emuPageMargin = int32(20)
+	// emuHeaderGap is the space between the shared header band and the first
+	// row of tiles, matching the gap Downloads and Compatibility leave.
+	emuHeaderGap = int32(10)
+	// emuHeaderFallback is the band's height when the page is measured before a
+	// config (and therefore the fonts) is available. It is the height the
+	// shipped 720p config produces, so navigation and geometry tests that never
+	// open a font still measure the page the way the device draws it.
+	emuHeaderFallback = int32(86)
+	emuPageFooterH    = int32(82)
 	// emuStatusChipSize is the pill's own type size. It is deliberately smaller
 	// than the tile name (22): the name identifies, the pill classifies.
 	emuStatusChipSize = 15
@@ -55,13 +67,68 @@ type emuGridLayout struct {
 	rows  int
 }
 
-func emuGridView() emuGridLayout {
-	page := sdl.Rect{
-		X: emuPageMargin,
-		Y: emuPageMargin,
-		W: screenWidth - 2*emuPageMargin,
-		H: screenHeight - 2*emuPageMargin,
+// emuPageRect is the page card: centred on the canvas, at the shared page's
+// width, with the screen inset every full page keeps above and below it.
+func emuPageRect() sdl.Rect {
+	w := emuPageW
+	if w > screenWidth-48 {
+		w = screenWidth - 48
 	}
+	if w < 0 {
+		w = screenWidth
+	}
+	h := screenHeight - 2*emuPageMargin
+	if h < 0 {
+		h = screenHeight
+	}
+	return sdl.Rect{
+		X: (screenWidth - w) / 2,
+		Y: (screenHeight - h) / 2,
+		W: w,
+		H: h,
+	}
+}
+
+// emuPageHeader is the header the page opens with: the shared page bar, with
+// the catalog's own summary under the title and its count opposite. Every
+// caller builds it here, so the band the grid reserves and the bar that is
+// drawn are one measurement.
+func emuPageHeader(entries []emuEntry, count string) UIPageHeader {
+	h := UIPanelHeader("Emulators", emuSummary(entries), "gamepad")
+	h.Status = count
+	h.StatusColor = ColorTextSecondary()
+	return h
+}
+
+// emuPageHeaderBand is the strip the header owns above the grid. The height
+// comes from the fonts, so it is measured from the page's own header; before a
+// config exists (tests that only measure the page) it is the design height.
+func emuPageHeaderBand(config *Config) int32 {
+	if config == nil {
+		return emuHeaderFallback
+	}
+	// The band depends on which header parts are present, not on their text,
+	// so the catalog is not needed to measure it.
+	return UIPanelHeaderBand(config, emuPageHeader(nil, "0"), emuHeaderGap)
+}
+
+// emuGridColumns is how many tiles fit across the page. Navigation needs only
+// this number, and it follows the canvas rather than the type, so it can be
+// answered without a config.
+func emuGridColumns() int {
+	bodyW := emuPageRect().W - 2*emuPagePad
+	cols := int((bodyW + emuTileGap) / (emuTileMinW + emuTileGap))
+	if cols < 1 {
+		return 1
+	}
+	return cols
+}
+
+// emuGridView measures the page: the card, the area under the shared header,
+// and how many tiles fit at the current screen size.
+func emuGridView(config *Config) emuGridLayout {
+	page := emuPageRect()
+	band := emuPageHeaderBand(config)
 	layout := emuGridLayout{
 		page:  page,
 		tileW: emuTileMinW,
@@ -72,9 +139,9 @@ func emuGridView() emuGridLayout {
 	}
 	layout.body = sdl.Rect{
 		X: page.X + emuPagePad,
-		Y: page.Y + emuPageHeaderH,
+		Y: page.Y + band,
 		W: page.W - 2*emuPagePad,
-		H: page.H - emuPageHeaderH - emuPageFooterH,
+		H: page.H - band - emuPageFooterH,
 	}
 	if layout.body.W <= 0 || layout.body.H <= 0 {
 		return layout
@@ -259,10 +326,10 @@ func emuStatusChipColors(status emuStatus) (fill, text sdl.Color) {
 	text = ColorTextTertiary()
 	switch status {
 	case emuAvailable:
-		text = ColorToastSuccess
+		text = ToastSuccessInk()
 		return WithAlpha(text, 38), text
 	case emuBroken:
-		text = ColorToastError
+		text = ToastErrorInk()
 		return WithAlpha(text, 40), text
 	}
 	return WithAlpha(text, 34), text
@@ -376,9 +443,10 @@ func drawEmuTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry,
 	drawCard(r, cell.X, cell.Y, cell.W, cell.H, 14)
 	if focused {
 		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, ColorSurfaceRaised)
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, WithAlpha(accentColor, 70))
-		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, 2, WithAlpha(accentColor, 235))
-		fillRoundedRect(r, cell.X+2, cell.Y+14, 3, cell.H-28, 2, accentColor)
+		tint := visibleAccent()
+		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, WithAlpha(tint, 70))
+		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, 2, WithAlpha(tint, 235))
+		fillRoundedRect(r, cell.X+2, cell.Y+14, 3, cell.H-28, 2, tint)
 	} else if hovered {
 		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, WithAlpha(accentColor, 26))
 		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, 1, WithAlpha(accentColor, 110))
@@ -466,24 +534,22 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	smallH := int32(font.Height())
 
-	layout := emuGridView()
+	layout := emuGridView(config)
 	emuPanelRect = layout.page
 	firstRow := appGridFirstRow(emuPanel.cursor, layout.rows, len(entries), layout.cols)
 	emuPanel.scroll = firstRow * layout.cols
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 200)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, layout.page.X, layout.page.Y, layout.page.W, layout.page.H, 22, ColorPanelRaised)
-	strokeRoundedRect(renderer, layout.page.X, layout.page.Y, layout.page.W, layout.page.H, 22, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: layout.page.X + 20, Y: layout.page.Y + 1, W: layout.page.W - 40, H: 2})
+	// The card is the shared full-page card: same width, radius, border and
+	// accent hairline as Compatibility and the other page overlays.
+	drawOverlayCard(renderer, layout.page)
+	drawOverlayCardAccent(renderer, layout.page.X, layout.page.Y, layout.page.W)
 
 	// The page opens with the shared header every other page uses — a tinted
 	// glyph well, the title, a one-line summary under it and the count
-	// opposite — so the Emulators screen reads as the same kind of surface as
-	// Tools and About instead of a bespoke panel.
+	// opposite — placed by the same inset and reserved with the same measured
+	// band, so the grid starts exactly where the header ends.
 	count := itoa(len(entries)) + " emulators"
 	if len(entries) == 1 {
 		count = "1 emulator"
@@ -492,21 +558,8 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	if totalRows > layout.rows {
 		count = itoa(emuPanel.cursor+1) + " / " + itoa(len(entries))
 	}
-	UIPageHeaderDraw(renderer, config, UIPageHeader{
-		X:           layout.page.X + emuPagePad,
-		Y:           layout.page.Y + 16,
-		W:           layout.page.W - 2*emuPagePad,
-		Title:       "Emulators",
-		Subtitle:    emuSummary(entries),
-		Status:      count,
-		StatusColor: ColorTextSecondary(),
-		// The same title size the Tools page and the Settings tiles use: one
-		// recipe, so every page header measures and draws the same.
-		TitleSize: menuTitleSize,
-		Glyph: func(r *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
-			DrawHomeIcon(r, "gamepad", box, false)
-		},
-	})
+	header := overlayHeaderOnCard(emuPageHeader(entries, count), layout.page)
+	UIPageHeaderDraw(renderer, config, header)
 
 	// ── Tiles ───────────────────────────────────────────────────────────
 	hovered := -1
@@ -571,11 +624,48 @@ func renderEmuPanel(renderer *sdl.Renderer, config *Config) {
 	}
 
 	hints := emuFooterHints(selected, retroAchievementsSupported())
-	// The line is measured against the body instead of hoping it fits: the
-	// Brick's canvas is narrower than the Smart Pro's, and a hint that runs
-	// under the page border is unreadable.
-	renderText(renderer, config, font, ellipsize(font, hintLine(hints...), layout.body.W),
+	// The line is measured against the body instead of hoping it fits: the page
+	// is one card wide, and a hint that runs under the page border is
+	// unreadable.
+	renderText(renderer, config, font, emuFooterLine(font, hints, layout.body.W),
 		ColorTextSecondary(), layout.body.X, footerY+12+smallH+8)
+}
+
+// emuFooterLine fits the control hints into the width the page has. The widest
+// set — a tile with a core to update, a build to roll back to, and the L1/R2/Y
+// page keys all live — is wider than one page card, and a line that has to be
+// ellipsized gets its tail cut, which is where B Back lives. Dropping whole
+// hints is the readable trade: the D-pad line goes first (this page is a grid
+// and the arrows are the one control nobody needs telling), then the optional
+// page keys from the right, and Back is always the last hint standing.
+func emuFooterLine(font *ttf.Font, hints []FooterHint, width int32) string {
+	fits := func(line string) bool {
+		if font == nil || width <= 0 {
+			return true
+		}
+		tw, _, err := font.SizeUTF8(line)
+		return err != nil || int32(tw) <= width
+	}
+	line := hintLine(hints...)
+	if fits(line) {
+		return line
+	}
+	trimmed := hints
+	if len(trimmed) > 2 && strings.EqualFold(strings.TrimSpace(trimmed[0].Button), "D-Pad") {
+		trimmed = trimmed[1:]
+		if line = hintLine(trimmed...); fits(line) {
+			return line
+		}
+	}
+	for len(trimmed) > 2 {
+		// Drop the hint just before Back: the optional page key is the one the
+		// line can do without.
+		trimmed = append(append([]FooterHint(nil), trimmed[:len(trimmed)-2]...), trimmed[len(trimmed)-1])
+		if line = hintLine(trimmed...); fits(line) {
+			return line
+		}
+	}
+	return line
 }
 
 // emuEntryBackup is the newest kept build for a tile's core, if any. It goes

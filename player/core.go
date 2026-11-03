@@ -742,6 +742,8 @@ func finalizeConfig(config *Config) {
 	ensureHardwareWiFiEntry(config)
 	// IPStream library entry points (IPStream screen + Media page).
 	ensureIPStreamEntries(config)
+	// Podcast library entry point (the Podcasts screen's Shows button).
+	ensurePodcastEntries(config)
 }
 
 func customString(m map[string]interface{}, name string) (string, bool) {
@@ -1218,124 +1220,168 @@ func drawCircleDisc(renderer *sdl.Renderer, ccx, ccy, r int32, c sdl.Color) {
 	}
 }
 
-// diskPieRadius returns the donut radius that fits the card: inside its padding
-// and clear of the two usage lines in the bottom-left corner.
-func diskPieRadius(elemW, elemH int32) int32 {
-	r := int32(120)
-	if r > elemW/2-20 {
-		r = elemW/2 - 20
-	}
-	if r > elemH/2-88 {
-		r = elemH/2 - 88
-	}
-	if r < 20 {
-		r = 20
-	}
-	return r
+// diskPieLayout reserves separate space for the title, ring and three rows.
+type diskPieLayout struct {
+	cx, cy, radius         int32
+	usageX, usageY         int32
+	usageWidth, lineHeight int32
 }
 
-// diskPieUsageLayout places the used/free figures in the bottom-left corner of
-// the chart card. Pure geometry so a test can pin that the numbers never sit on
-// top of the centred percentage.
-func diskPieUsageLayout(element Element, elemH, lineH int32) (x, y int32) {
-	x = element.X + 24
-	y = element.Y + elemH - 2*lineH - 26
-	if y < element.Y+12 {
-		y = element.Y + 12
+func layoutDiskPie(element Element, elemW, elemH, titleH, lineH int32) diskPieLayout {
+	const pad = int32(16)
+	const gap = int32(4)
+	usageY := element.Y + elemH - pad - (3*lineH + 2*gap)
+	top := element.Y + 12 + titleH + 10
+	bottom := usageY - 10
+	available := bottom - top
+	if available < 0 {
+		available = 0
 	}
-	return x, y
+	radius := min32(120, min32(max32(0, (elemW-2*pad)/2), available/2))
+	return diskPieLayout{
+		cx: element.X + elemW/2, cy: top + available/2, radius: radius,
+		usageX: element.X + pad, usageY: usageY,
+		usageWidth: max32(0, elemW-2*pad), lineHeight: lineH,
+	}
 }
 
-// renderDiskPieChart draws a donut-style pie chart showing used vs free disk
-// space. The used slice uses the provided color; the free slice is drawn in a
-// darker shade. Only the percentage sits in the ring; the used/free figures are
-// written in the bottom-left corner.
+// drawDiskPieSector paints a solid clockwise arc from 12 o'clock. Grouping
+// pixels into horizontal spans avoids the gaps left by a radial line fan.
+func drawDiskPieSector(renderer *sdl.Renderer, cx, cy, radius, innerR int32, fraction float64, color sdl.Color) {
+	if radius <= 0 || fraction <= 0 {
+		return
+	}
+	if fraction > 1 {
+		fraction = 1
+	}
+	// A tenth of a percent is finer than the displayed whole percentage and
+	// lets the existing shape cache reuse the same arc on subsequent frames.
+	steps := int32(math.Round(fraction * 1000))
+	if steps <= 0 {
+		return
+	}
+	fraction = float64(steps) / 1000
+	angle := 2 * math.Pi * fraction
+	ex, ey := math.Sin(angle), -math.Cos(angle)
+	diameter := 2*radius + 1
+	drawShapeCached(renderer, shapeKindDiskPieSector, cx-radius, cy-radius, diameter, diameter, innerR, steps, color,
+		func(r *sdl.Renderer, x, y, _, _ int32) {
+			r.SetDrawColor(color.R, color.G, color.B, 255)
+			for dy := -radius; dy <= radius; dy++ {
+				start := int32(-radius - 1)
+				for dx := -radius; dx <= radius+1; dx++ {
+					distance := int64(dx)*int64(dx) + int64(dy)*int64(dy)
+					inRing := dx <= radius && distance <= int64(radius)*int64(radius) && distance > int64(innerR)*int64(innerR)
+					endCross := float64(dx)*ey - float64(dy)*ex
+					inArc := fraction >= 1 || (fraction <= 0.5 && dx >= 0 && endCross >= 0) || (fraction > 0.5 && (dx >= 0 || endCross >= 0))
+					if inRing && inArc {
+						if start < -radius {
+							start = dx
+						}
+					} else if start >= -radius {
+						r.DrawLine(x+radius+start, y+radius+dy, x+radius+dx-1, y+radius+dy)
+						start = -radius - 1
+					}
+				}
+			}
+		})
+}
+
+func diskPieUsageLines(total, used uint64) []string {
+	if used > total {
+		used = total
+	}
+	return []string{"Used " + formatBytes(used), "Free " + formatBytes(total-used), "Total " + formatBytes(total)}
+}
+
+func diskPiePercentFont(config *Config, text string, innerR int32) *ttf.Font {
+	font, size := getCachedFont(config, "big")
+	// Keep the whole number inside the circular hole, including its corners.
+	for font != nil {
+		w, h, _ := font.SizeUTF8(text)
+		if innerR > 4 && math.Hypot(float64(w)/2, float64(h)/2) <= float64(innerR-4) {
+			return font
+		}
+		if size <= 8 {
+			break
+		}
+		size--
+		font = loadRoleFont(config, "big", size)
+	}
+	return nil
+}
+
+// renderDiskPieChart shows the percentage in a solid ring, with the figures
+// on separate rows beneath it so long disk sizes cannot run off the card.
 func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element) {
 	elemW := getElementWidth(element, 500)
 	elemH := getElementHeight(element, 400)
 
 	diskPieMutex.Lock()
-	total := diskPie.Total
-	used := diskPie.Used
-	pct := diskPie.Pct
+	total, used, pct := diskPie.Total, diskPie.Used, diskPie.Pct
 	diskPieMutex.Unlock()
 
-	cx := element.X + elemW/2
-	cy := element.Y + elemH/2
-	radius := diskPieRadius(elemW, elemH)
-	innerR := radius / 2
-
 	drawPanel(renderer, element.X, element.Y, elemW, elemH, WithAlpha(ColorSurfacePanel, 235), accentColor)
-
-	label := "Disk Usage"
-	font, _ := getCachedFont(config, "medium")
+	titleFont, _ := getCachedFont(config, "medium")
+	font, _ := getCachedFont(config, "small")
+	if titleFont == nil {
+		titleFont = font
+	}
 	if font == nil {
-		font, _ = getCachedFont(config, "small")
+		font = titleFont
 	}
-	if font != nil {
-		lw, _, _ := font.SizeUTF8(label)
-		renderText(renderer, config, font, label, ColorTextSecondary(), element.X+(elemW-int32(lw))/2, element.Y+10)
+	titleH, lineH := int32(0), int32(0)
+	if titleFont != nil {
+		titleH = int32(titleFont.Height())
+		title := ellipsize(titleFont, "Disk Usage", max32(0, elemW-32))
+		lw, _, _ := titleFont.SizeUTF8(title)
+		renderText(renderer, config, titleFont, title, ColorTextSecondary(), element.X+(elemW-int32(lw))/2, element.Y+12)
 	}
-
 	if total == 0 {
-		// A bare "N/A" floating in an empty card read like a broken chart.
-		// The shared state card names what is happening instead.
 		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
 			"@tools", "Reading storage", "Disk figures appear once the card answers.")
 		return
 	}
-
-	usedFrac := float64(used) / float64(total)
-	if usedFrac > 1 {
-		usedFrac = 1
+	if used > total {
+		used = total
 	}
-
-	// outer ring
-	renderer.SetDrawColor(ColorSurfaceRow.R, ColorSurfaceRow.G, ColorSurfaceRow.B, 255)
-	renderCircleSector(renderer, cx, cy, radius+4, radius, 0, 2*math.Pi)
-
-	// Free sector (background)
-	ringColor := ColorSurfaceRow
-	renderCircleSectorColor(renderer, cx, cy, radius, innerR, 0, 2*math.Pi, ringColor)
-
-	// Used sector
-	usedAngle := 2 * math.Pi * usedFrac
+	if pct < 0 {
+		pct = 0
+	} else if pct > 100 {
+		pct = 100
+	}
+	if font != nil {
+		lineH = int32(font.Height())
+	}
+	layout := layoutDiskPie(element, elemW, elemH, titleH, lineH)
+	innerR := layout.radius * 2 / 3
+	usedFrac := float64(used) / float64(total)
 	sectorColor := accentColor
 	if usedFrac > 0.9 {
 		sectorColor = ColorDanger
 	} else if usedFrac > 0.75 {
 		sectorColor = ColorWarning
 	}
-	renderCircleSectorColor(renderer, cx, cy, radius, innerR, -math.Pi/2, -math.Pi/2+usedAngle, sectorColor)
+	fillCircle(renderer, layout.cx, layout.cy, layout.radius, ColorSurfaceRow)
+	drawDiskPieSector(renderer, layout.cx, layout.cy, layout.radius, innerR, usedFrac, sectorColor)
+	fillCircle(renderer, layout.cx, layout.cy, innerR, ColorSurfacePanel)
 
-	// Center disk
-	centerColor := ColorSurfacePanel
-	fillCircle(renderer, cx, cy, innerR, centerColor)
-
-	// Center text: the percentage alone. The used/total lines used to be
-	// stacked under it inside the ring, where the big number and the small
-	// lines overprinted each other.
-	usedMB := float64(used) / (1024 * 1024)
-	totalMB := float64(total) / (1024 * 1024)
-	freeMB := float64(total-used) / (1024 * 1024)
-	centerFont, _ := getCachedFont(config, "big")
-	if centerFont == nil {
-		centerFont = font
-	}
-	if centerFont != nil {
-		pctStr := fmt.Sprintf("%d%%", pct)
+	pctStr := fmt.Sprintf("%d%%", pct)
+	if centerFont := diskPiePercentFont(config, pctStr, innerR); centerFont != nil {
 		pw, ph, _ := centerFont.SizeUTF8(pctStr)
-		renderText(renderer, config, centerFont, pctStr, ColorTextPrimary(), cx-int32(pw)/2, cy-int32(ph)/2)
+		renderText(renderer, config, centerFont, pctStr, ColorTextPrimary(), layout.cx-int32(pw)/2, layout.cy-int32(ph)/2)
 	}
 
-	// Usage figures are anchored bottom-left, clear of the ring.
-	if font != nil {
-		lineH := int32(font.Height())
-		usageX, usageY := diskPieUsageLayout(element, elemH, lineH)
-		usage := fmt.Sprintf("Used %.1f MB    Free %.1f MB", usedMB, freeMB)
-		total := fmt.Sprintf("Total %.1f MB", totalMB)
-		renderText(renderer, config, font, usage, ColorTextSecondary(), usageX, usageY)
-		renderText(renderer, config, font, total, ColorTextTertiary(), usageX, usageY+lineH+6)
+	if font != nil && layout.usageWidth > 0 {
+		lines := diskPieUsageLines(total, used)
+		for i, line := range lines {
+			color := ColorTextSecondary()
+			if i == 2 {
+				color = ColorTextTertiary()
+			}
+			renderText(renderer, config, font, ellipsize(font, line, layout.usageWidth), color,
+				layout.usageX, layout.usageY+int32(i)*(layout.lineHeight+4))
+		}
 	}
 }
 
@@ -1790,7 +1836,22 @@ func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Elemen
 	width, height := buttonHitSize(elem, font)
 	// The hit size is measured from the requested label, so the button keeps
 	// the geometry the focus graph and hit testing already know about.
-	font = buttonLabelFont(config, elem.Font, elem.Text, width)
+	//
+	// A busy control is drawn as one: the Benchmark screen's Run button is
+	// disabled and relabelled for the length of a measurement, so it never
+	// looks like a press would do anything. Focus, hover and the press dip are
+	// dropped with it — a press that landed just before the run started must
+	// not leave the button looking pressed. Its configured width still holds,
+	// so the label is fitted to the label actually drawn and "Running…" is
+	// stepped down rather than ellipsized.
+	label, busy := benchmarkButtonFace(elem)
+	if elem.Trigger == "cycle_weather_unit" {
+		label = weatherUnitSettingLabel(config)
+	}
+	if busy {
+		selected, hovered, pressed = false, false, false
+	}
+	font = buttonLabelFont(config, elem.Font, label, width)
 	x, y := elem.X, elem.Y
 	r := RadiusMD
 
@@ -1817,14 +1878,14 @@ func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Elemen
 	ox := x + pressOffset
 	oy := y + pressOffset
 
-	UIButton(renderer, config, sdl.Rect{X: ox, Y: oy, W: width, H: height}, elem.Text, UIButtonStyle{
+	UIButton(renderer, config, sdl.Rect{X: ox, Y: oy, W: width, H: height}, label, UIButtonStyle{
 		Variant:   UIButtonCustom,
 		Fill:      resolveColor(config, elem.BgColor, ColorCard),
 		HoverFill: ColorCardHover,
 		FocusFill: ColorCardFocus,
 		Font:      font,
 		Radius:    r,
-	}, UIButtonState{Focused: selected, Hovered: hovered, Pressed: pressed})
+	}, UIButtonState{Focused: selected, Hovered: hovered, Pressed: pressed, Disabled: busy})
 }
 
 // renderAppTile draws an OS-style launcher icon: a clean opaque card with a
@@ -2173,7 +2234,7 @@ func ytDlpExtraArgs(config *Config) string {
 // handlers share one command builder instead of duplicating the base yt-dlp
 // invocation.
 func ytSearchCmd(config *Config) string {
-	base := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 20 "ytsearch20:$search_query"`
+	base := fmt.Sprintf(`yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end %d "ytsearch%d:$search_query"`, mediaSearchPageSize, mediaSearchPageSize)
 	if extra := ytDlpExtraArgs(config); extra != "" {
 		return base + " " + extra
 	}
@@ -2655,6 +2716,24 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	// must then neither publish results nor clear the error line.
 	stale := func() bool { return mediaSearchSuperseded(resultVar, gen) }
 
+	// staleResults is the expired page this search can paint immediately, if
+	// the cache still holds one. It is what makes a repeat visit to a media
+	// screen instant instead of a spinner: the grid appears from the last known
+	// list and the fetch below replaces it only if the page really changed.
+	var staleResults []VideoInfo
+	stalePainted := false
+
+	// publish replaces the grid with a first page: the list, a cleared error
+	// line, no focus ring and the first card warmed so Play is immediate.
+	publish := func(videos []VideoInfo) {
+		markMediaPageSettled(resultVar, false)
+		publishCustom(resultVar, videos)
+		publishCustom("search_error", nil)
+		focusedResultIndex = -1
+		resetResultActions()
+		prefetchFirstResult(config, videos)
+	}
+
 	// deliver publishes a successful fetch. A first page replaces the list and
 	// resets the focus to the top; an appended page adds to the end and focuses
 	// the first new card so the scroll continues where the user left off.
@@ -2662,6 +2741,12 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		if stale() {
 			return
 		}
+		// The stale page painted the same list a moment ago: publishing it again
+		// would reset the focus ring and the action row for nothing.
+		if stalePainted && !appendMode && sameMediaResults(videos, staleResults) {
+			return
+		}
+		stalePainted = false
 		if appendMode {
 			current, _ := config.Variables.Custom[resultVar].([]VideoInfo)
 			merged, added := mergeMediaResults(current, videos)
@@ -2678,12 +2763,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 			prefetchVideos(config, merged, focusedResultIndex)
 			return
 		}
-		markMediaPageSettled(resultVar, false)
-		publishCustom(resultVar, videos)
-		publishCustom("search_error", nil)
-		focusedResultIndex = -1
-		resetResultActions()
-		prefetchFirstResult(config, videos)
+		publish(videos)
 	}
 	publishVideos := func(videos []VideoInfo) {
 		if stale() {
@@ -2701,6 +2781,12 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		if stale() {
 			return
 		}
+		if stalePainted {
+			// The grid already shows the last page for this search: a refresh
+			// that failed must not replace readable results with an error line.
+			log.Printf("[STREAM] refresh for %s failed: %s", resultVar, msg)
+			return
+		}
 		if appendMode {
 			// A failed page must not leave the grid stuck on "Loading…".
 			markMediaPageSettled(resultVar, false)
@@ -2713,30 +2799,24 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	// Substitute variables (e.g., $search_query)
 	cmdWithVars := substituteVars(command, vars)
 
-	// If the query part is empty (e.g., "ytsearch20:"), replace with "popular"
-	re := regexp.MustCompile(`"ytsearch20:\s*"`)
-	cmdWithVars = re.ReplaceAllString(cmdWithVars, `"ytsearch20:popular"`)
+	// If the query part is empty, replace it with "popular" while preserving
+	// the same initial page size as ytSearchCmd.
+	searchSpec := fmt.Sprintf(`"ytsearch%d:\s*"`, mediaSearchPageSize)
+	re := regexp.MustCompile(searchSpec)
+	cmdWithVars = re.ReplaceAllString(cmdWithVars, fmt.Sprintf(`"ytsearch%d:popular"`, mediaSearchPageSize))
 
 	// Apply a playback-resolution cap if the user set one in Settings > General.
 	if res, ok := vars["PlaybackResolution"].(string); ok && res != "" && res != "best" {
 		cmdWithVars += fmt.Sprintf(" -f \"best[height<=%s]\"", res)
 	}
 
-	// Append extra yt-dlp args from config (cookies, api_key, etc.).
-	extraArgs := ytDlpExtraArgs(config)
-	if extraArgs != "" {
-		cmdWithVars += " " + extraArgs
-	}
-
-	// Remember how this list was built so the triggers can request the next
-	// page of the same query. A follow-up page must not overwrite it.
-	if !appendMode {
-		rememberMediaPaging(resultVar, cmdWithVars)
-	}
-
 	// Tokenize the command into arguments, honouring double quotes so that
 	// URLs and filter expressions (which may contain characters like <, >,
 	// [ ]) are passed verbatim to yt-dlp instead of being re-parsed by a shell.
+	//
+	// This happens before the config-provided arguments are folded in: those
+	// carry the user's API key, and the tool name taken from this list is
+	// written to the log.
 	tokens := splitShellArgs(cmdWithVars)
 	if len(tokens) == 0 {
 		log.Printf("[ERROR] Empty command after substitution")
@@ -2749,10 +2829,32 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	// A search command may only invoke the bundled yt-dlp. The executable path
 	// is then derived from that fixed name, never from the command text.
 	if tool != "yt-dlp" {
-		log.Printf("[SECURITY] executeYouTubeSearch: refusing tool %q", tool)
+		// The tool name comes from the configured command text, so it goes
+		// through the same redactor as the extractor's stderr: a command line
+		// that embedded a credential must not put it in the log either.
+		log.Printf("[SECURITY] executeYouTubeSearch: refusing tool %q", redactDiagnosticText(tool))
 		publishSearchError("Unsupported search command")
 		publishVideos([]VideoInfo{})
 		return
+	}
+
+	// The extra yt-dlp args from config (cookies, api_key, …) join the argument
+	// list, never the command text the tool name came from.
+	extraArgs := ytDlpExtraArgs(config)
+	if extraArgs != "" {
+		args = append(args, splitShellArgs(extraArgs)...)
+	}
+	// The cache key and the remembered paging command describe the whole
+	// invocation, so they do include those arguments.
+	fullCommand := cmdWithVars
+	if extraArgs != "" {
+		fullCommand += " " + extraArgs
+	}
+
+	// Remember how this list was built so the triggers can request the next
+	// page of the same query. A follow-up page must not overwrite it.
+	if !appendMode {
+		rememberMediaPaging(resultVar, fullCommand)
 	}
 	if err := rejectYtDlpExecFlags(args); err != nil {
 		log.Printf("[SECURITY] executeYouTubeSearch: %v", err)
@@ -2760,6 +2862,75 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		publishVideos([]VideoInfo{})
 		return
 	}
+	// The context bounds both the native request and the extractor run: a
+	// stalled endpoint or process is killed instead of leaving the spinner and
+	// an empty grid up until the app restarts, a newer search for the same
+	// variable cancels this one, and — because the timeout is taken from the
+	// scene's context — leaving the scene kills the work too.
+	ctx, cancel := context.WithTimeout(parent, mediaSearchTimeout)
+	registerMediaSearchCancel(resultVar, cancel)
+	defer cancel()
+
+	// Check bbolt cache for YouTube search results before any fetch. The cache
+	// is consulted before the tool is resolved as well: a page the user has
+	// already seen needs neither the network nor an installed extractor.
+	cacheKey := "ytsearch:" + normalizeCacheKey(fullCommand)
+	if db, err := cacheOpen("jukahub.cache"); err == nil {
+		if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
+			var videos []VideoInfo
+			if json.Unmarshal(cached, &videos) == nil {
+				db.Close()
+				if stale() {
+					return
+				}
+				deliver(videos)
+				return
+			}
+		}
+		// An expired page still paints at once. The refresh that follows either
+		// confirms it (and publishes nothing) or replaces it.
+		if !appendMode {
+			if cached, ok := cacheGetStale(db, cacheKey); ok {
+				if json.Unmarshal(cached, &staleResults) == nil && len(staleResults) > 0 {
+					publish(staleResults)
+					stalePainted = true
+				}
+			}
+		}
+		db.Close()
+	}
+
+	// A plain search is answered in this process (youtubesearch.go). On a
+	// handheld CPU the extractor binary's startup is the largest fixed cost of
+	// a search, and the site's own endpoint needs none of it. Every command
+	// this path does not model falls through to yt-dlp below, and so does a
+	// failed attempt: the failure is logged, not shown.
+	if request, ok := nativeSearchRequestFor(fullCommand); ok {
+		window, nativeErr := fetchNativeSearchAttempt(ctx, request)
+		if nativeErr == nil {
+			if len(window) > 0 {
+				cacheMediaSearchResults(cacheKey, window)
+				deliver(window)
+				return
+			}
+			// The endpoint answered and has nothing in this window. On a
+			// follow-up page that is the end of the list, which the extractor
+			// would discover only after its own startup; on a first page it is
+			// a reason to let yt-dlp try.
+			if appendMode {
+				deliver(window)
+				return
+			}
+			nativeErr = fmt.Errorf("no result in the requested window")
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if !nativeSearchSkipped(nativeErr) {
+			log.Printf("[YouTube] native search unavailable, using yt-dlp: %v", nativeErr)
+		}
+	}
+
 	// Resolve before searching. If the tool is missing, start the repair in
 	// the background instead of blocking the render loop on a download; the
 	// startup tool-health check may already be installing it.
@@ -2782,32 +2953,8 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 		return
 	}
 
-	// Check bbolt cache for YouTube search results before hitting yt-dlp.
-	cacheKey := "ytsearch:" + normalizeCacheKey(cmdWithVars)
-	if db, err := cacheOpen("jukahub.cache"); err == nil {
-		if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
-			var videos []VideoInfo
-			if json.Unmarshal(cached, &videos) == nil {
-				db.Close()
-				if stale() {
-					return
-				}
-				deliver(videos)
-				return
-			}
-		}
-		db.Close()
-	}
-
 	// Run the tool directly (no shell) so special characters are not
-	// interpreted by cmd.exe / sh (e.g. "<" as input redirection). The
-	// context bounds the run: a stalled extractor is killed instead of leaving
-	// the spinner and an empty grid up until the app restarts, a newer search
-	// for the same variable cancels this one, and — because the timeout is
-	// taken from the scene's context — leaving the scene kills the process too.
-	ctx, cancel := context.WithTimeout(parent, mediaSearchTimeout)
-	registerMediaSearchCancel(resultVar, cancel)
-	defer cancel()
+	// interpreted by cmd.exe / sh (e.g. "<" as input redirection).
 	cmd := exec.CommandContext(ctx, fullToolPath, args...)
 	cmd.Env = helperToolEnv(fullToolPath)
 	var stdout, stderr bytes.Buffer
@@ -2830,7 +2977,10 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	}
 	if err != nil {
 		log.Printf("[ERROR] yt-dlp execution error: %v", err)
-		log.Printf("[ERROR] stderr: %s", stderr.String())
+		// Redacted: the extractor receives the decrypted API key and the cookies
+		// path as its own arguments, so its stderr is the one log line that can
+		// carry a credential verbatim.
+		log.Printf("[ERROR] stderr: %s", redactDiagnosticText(stderr.String()))
 		reason := ytDlpFailureReason(stderr.String(), err, fullToolPath)
 		publishSearchError(reason)
 		publishVideos([]VideoInfo{})
@@ -2919,14 +3069,7 @@ func executeYouTubeSearchContext(parent context.Context, config *Config, command
 	}
 
 	// Cache successful YouTube search results for 1 hour.
-	if len(videos) > 0 {
-		if data, err := json.Marshal(videos); err == nil {
-			if db, cErr := cacheOpen("jukahub.cache"); cErr == nil {
-				cacheSet(db, cacheKey, data, time.Hour)
-				db.Close()
-			}
-		}
-	}
+	cacheMediaSearchResults(cacheKey, videos)
 
 	deliver(videos)
 }
@@ -2936,7 +3079,7 @@ func fetchTrendingVideos(config *Config, resultVar string, vars map[string]inter
 	// debug removed
 	// Use the same reliable search-based approach as youtube_search,
 	// with "trending" as the query. This works unauthenticated on all devices.
-	cmd := `yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end 12 "ytsearch12:trending"`
+	cmd := fmt.Sprintf(`yt-dlp --flat-playlist --dump-single-json --default-search ytsearch --no-playlist --no-check-certificate --geo-bypass --skip-download --quiet --ignore-errors --playlist-start 1 --playlist-end %d "ytsearch%d:trending"`, mediaSearchPageSize, mediaSearchPageSize)
 	executeYouTubeSearch(config, cmd, resultVar, vars)
 }
 
@@ -3105,12 +3248,75 @@ func searchResultIndexAt(element Element, videos []VideoInfo, mx, my int32) int 
 	return -1
 }
 
+// focusMediaResultAt makes mouse hover behave like D-pad selection in the media
+// results. It does not start stream resolution; it only warms preview artwork.
+func focusMediaResultAt(config *Config, mx, my int32) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	scene := config.Scenes[currentSceneIndex]
+	for elementIndex, element := range scene.Elements {
+		if element.Type != "searchresults" {
+			continue
+		}
+		videos, ok := config.Variables.Custom[element.Variable].([]VideoInfo)
+		if !ok {
+			continue
+		}
+		// The Next chip is painted above the result rows. Hovering it must
+		// never move selection to the row beneath it.
+		if config.Variables.Custom["search_error"] == nil && mediaNextPageHit(config, element, videos, mx, my) {
+			return false
+		}
+		index := searchResultIndexAt(element, videos, mx, my)
+		if index < 0 {
+			continue
+		}
+		if focusedResultIndex != index {
+			resetResultActions()
+			focusedResultIndex = index
+			prefetchCardPreviewFrames(videos[index])
+		}
+		selectedButtonIndex = elementIndex
+		focusEngine.SetByElementIndex(elementIndex)
+		return true
+	}
+	return false
+}
+
+// mediaPreviewFrameURLs returns YouTube's optional fixed preview samples. They
+// are not animated GIFs or a full storyboard, and may be missing for a video.
+func mediaPreviewFrameURLs(vid VideoInfo) []string {
+	id := webYouTubeVideoID(strings.TrimSpace(vid.GetURL()))
+	if id == "" {
+		return nil
+	}
+	base := webYouTubeThumbBase + url.PathEscape(id) + "/"
+	return []string{base + "1.jpg", base + "2.jpg", base + "3.jpg"}
+}
+
+const mediaPreviewFrameInterval = uint64(900)
+
+// mediaPreviewFrameIndex changes at a relaxed pace so cycling preview samples
+// doesn't compete with video playback or render work on handhelds.
+func mediaPreviewFrameIndex(ticks uint64, count int) int {
+	if count <= 0 {
+		return -1
+	}
+	return int(ticks/mediaPreviewFrameInterval) % count
+}
+
 // renderSearchResultsList renders results as one readable vertical list:
 // ~100px rows with 16:9 thumbnails, one measured title line and one measured
 // metadata line (both ellipsized), and the duration badge inside the
 // thumbnail. The viewport is SDL-clipped so rows can never escape the content
 // area, and the focused row keeps its own bright cyan ring.
 func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Element, videos []VideoInfo, elemWidth, elemHeight int32) {
+	// The pills are recorded by this frame only: a list drawn twice (a resize,
+	// or two renders in one test) must not leave the first frame's rects to
+	// shadow the second's, and a direct call to this layout must be as
+	// self-contained as renderSearchResults' other branches.
+	resultActionHits = resultActionHits[:0]
 	rowH, gap := searchResultRowH, searchResultRowGap
 
 	maxVisibleRows := (elemHeight + gap) / (rowH + gap)
@@ -3202,13 +3408,13 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 			// 16:9 thumbnail, vertically centered on the left.
 			thumbW, thumbH := int32(168), int32(95)
 			thumbX, thumbY := cardX+10, cardY+(cardH-thumbH)/2
-			drawThumbnail(r, config, vid, thumbX, thumbY, thumbW, thumbH)
+			drawResultThumbnail(r, config, vid, i, thumbX, thumbY, thumbW, thumbH)
 			drawDurationBadge(r, config, font, vid.Duration, thumbX+thumbW-56, thumbY+thumbH-22, 48, 16)
 
-			// Audio / Video / Chat pills own the right edge of the row; the
-			// title column stops where they begin, on every row so text never
-			// jumps as the highlight moves.
-			textLimit := drawResultActions(r, config, font, sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, i, focused)
+			// Audio / Video / Chat / Save / Queue pills own the right edge of the
+			// row; the title column stops where they begin, on every row so text
+			// never jumps as the highlight moves.
+			textLimit := drawResultActions(r, config, font, sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, i, focused, favoriteVideoSaved(vid.GetURL()), upNextHas(vid.GetURL()))
 
 			// Measured text block, vertically centered against the thumbnail.
 			textX := thumbX + thumbW + 16
@@ -3227,7 +3433,7 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 			titleColor := ColorTextPrimary()
 			if videoStreamPreloaded(vid.GetURL()) {
 				const boltSize = 16
-				titleColor = ColorWarning
+				titleColor = WarningInk()
 				drawPreloadBolt(r, textX, textTop+(th-boltSize)/2, boltSize, ColorWarning)
 				titleX = textX + boltSize + 6
 				titleW = textW - boltSize - 6
@@ -3329,7 +3535,7 @@ func renderSearchResultsGrid(renderer *sdl.Renderer, config *Config, element Ele
 			}
 
 			// Thumbnail with duration badge inside its bottom-right corner.
-			drawThumbnail(r, config, vid, cardX+8, cardY+8, thumbWidth, thumbHeight)
+			drawResultThumbnail(r, config, vid, i, cardX+8, cardY+8, thumbWidth, thumbHeight)
 			drawDurationBadge(r, config, font, vid.Duration, cardX+thumbWidth-48+8, cardY+thumbHeight-20+8, 44, 16)
 
 			textStartX := cardX + 8 + thumbWidth + 10
@@ -3343,7 +3549,7 @@ func renderSearchResultsGrid(renderer *sdl.Renderer, config *Config, element Ele
 			titleColor := ColorTextPrimary()
 			if videoStreamPreloaded(vid.GetURL()) {
 				const boltSize = 12
-				titleColor = ColorWarning
+				titleColor = WarningInk()
 				drawPreloadBolt(r, textStartX, textY+2, boltSize, ColorWarning)
 				titleX = textStartX + boltSize + 5
 				titleW = textW - boltSize - 5
@@ -3416,12 +3622,72 @@ func prefetchCardThumbnail(vid VideoInfo) {
 	}
 }
 
+// prefetchCardPreviewFrames warms YouTube's optional fixed preview samples for
+// the selected card. Prefetch is non-blocking and shared with the normal image
+// cache; absent samples simply leave the poster thumbnail in place.
+func prefetchCardPreviewFrames(vid VideoInfo) {
+	for _, frameURL := range mediaPreviewFrameURLs(vid) {
+		PrefetchThumbnail(frameURL)
+	}
+}
+
+// cachedThumbnailTexture may decode an already-prefetched in-memory payload,
+// but never reads disk or touches the network. This keeps the animated preview
+// from adding a blocking fetch to the render loop on a handheld.
+func cachedThumbnailTexture(renderer *sdl.Renderer, rawURL string) *sdl.Texture {
+	url := normalizeThumbnailURL(rawURL)
+	if tex := getThumbnailTextures().Get(url); tex != nil {
+		return tex
+	}
+	data := thumbnailDataGet(url)
+	if len(data) == 0 || !allowThumbnailDecode(frameCount, thumbnailDecodeBudgetPerFrame()) {
+		return nil
+	}
+	rwops, err := sdl.RWFromMem(data)
+	if err != nil {
+		return nil
+	}
+	tex, err := img.LoadTextureRW(renderer, rwops, false)
+	_ = rwops.Close()
+	if err != nil {
+		return nil
+	}
+	var w, h int32
+	if _, _, tw, th, err := tex.Query(); err == nil {
+		w, h = tw, th
+	}
+	getThumbnailTextures().Put(url, tex, w, h)
+	return tex
+}
+
+// drawResultThumbnail keeps the normal poster for idle rows and cycles through
+// any cached YouTube preview samples on the selected row. Missing samples are
+// skipped, and the poster is always the fallback.
+func drawResultThumbnail(renderer *sdl.Renderer, config *Config, vid VideoInfo, index int, x, y, w, h int32) {
+	if index == focusedResultIndex {
+		urls := mediaPreviewFrameURLs(vid)
+		if len(urls) > 0 {
+			start := mediaPreviewFrameIndex(sdl.GetTicks64(), len(urls))
+			for offset := 0; offset < len(urls); offset++ {
+				frameURL := urls[(start+offset)%len(urls)]
+				if tex := cachedThumbnailTexture(renderer, frameURL); tex != nil {
+					renderer.Copy(tex, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
+					return
+				}
+			}
+		}
+	}
+	drawThumbnail(renderer, config, vid, x, y, w, h)
+}
+
 // drawThumbnail renders the cached thumbnail, a placeholder, or a dark tile so
 // a row never shows an empty hole. The artwork pass walks the card's candidate
 // URLs in order — metadata first, the URL-derived YouTube artwork last — so a
 // card misses out on real art only when both the extractor and the CDN come up
 // empty.
-func drawThumbnail(renderer *sdl.Renderer, config *Config, vid VideoInfo, x, y, w, h int32) {
+// It reports whether real artwork was painted, so a caller that wants a glyph
+// on an empty frame (the Favorites library rows) can draw one.
+func drawThumbnail(renderer *sdl.Renderer, config *Config, vid VideoInfo, x, y, w, h int32) bool {
 	loaded := false
 	if tex := loadThumbnailFromURLs(renderer, realThumbnailCandidates(vid)); tex != nil {
 		renderer.Copy(tex, nil, &sdl.Rect{X: x, Y: y, W: w, H: h})
@@ -3434,6 +3700,7 @@ func drawThumbnail(renderer *sdl.Renderer, config *Config, vid VideoInfo, x, y, 
 			fillRoundedRect(renderer, x, y, w, h, 4, ColorIconSurface)
 		}
 	}
+	return loaded
 }
 
 // drawDurationBadge renders the compact duration pill inside a thumbnail's
@@ -3657,7 +3924,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	// The caller's spinner covers the download; every way out of here has to
 	// clear it, including failures, or the media screen stays blocked.
 	defer finishVideoPrepare(prepareSeq)
-	log.Printf("[DEBUG] playWithTempFile: downloading to temp file for %s (resume %.1fs)", url, startSec)
+	log.Printf("[DEBUG] playWithTempFile: downloading to temp file for %s (resume %.1fs)", sanitizeLogURL(url), startSec)
 
 	videoPlaybackMutex.Lock()
 	videoPlaybackPhase = "downloading"
@@ -3727,7 +3994,9 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 					return
 				}
 				log.Printf("[ERROR] playWithTempFile: download failed: %v", err)
-				log.Printf("[ERROR] playWithTempFile: stderr: %s", stderrBuf.String())
+				// Same redaction as the search path: these arguments include the
+				// decrypted API key.
+				log.Printf("[ERROR] playWithTempFile: stderr: %s", redactDiagnosticText(stderrBuf.String()))
 				if !IsOnline() {
 					showToast("Download failed — offline, connect WiFi", ToastWarn())
 				} else {
@@ -3923,7 +4192,7 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 					vkBackspace(config)
 				case sdl.K_RETURN, sdl.K_KP_ENTER:
 					vkSubmit(config, false)
-					exitInput = true
+					exitInput = !virtualKeyboardActive
 				case sdl.K_TAB:
 					vkMoveFocus(1, 0)
 				case sdl.K_UP:
@@ -3971,10 +4240,7 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 						break
 					}
 					if row, col, ok := vkHitTest(mx, my); ok {
-						keyboardPosY, keyboardPosX = row, col
-						key := vkFocusedKey()
-						vkActivateFocused(config)
-						if vkIsActionKey(key) {
+						if vkHandleKeyClick(row, col, config) {
 							exitInput = true
 						}
 						break
@@ -4656,14 +4922,101 @@ const (
 // themeGalleryScroll is the first visible row.
 var themeGalleryScroll int
 
+// themeGalleryTab is which tab of the gallery is open. Switching tabs resets
+// the focus and the scroll: a colour preset and a total conversion are not
+// positions in one list, so carrying an index across would land on a card the
+// user never looked at.
+var themeGalleryTab int
+
+// themeGalleryTabH is the strip above the cards: one pill per tab.
+const themeGalleryTabH = int32(40)
+
+// themeGalleryCurrentTab clamps the open tab and returns it.
+func themeGalleryCurrentTab() themeTab {
+	if themeGalleryTab < 0 || themeGalleryTab >= len(themeGalleryTabs) {
+		themeGalleryTab = 0
+	}
+	return themeGalleryTabs[themeGalleryTab]
+}
+
+// themeGalleryPresets is the list the grid draws: the presets of the open tab,
+// in the canonical order.
+func themeGalleryPresets() []string {
+	return ListThemePresetsFor(themeGalleryCurrentTab().Kind)
+}
+
+// themeGallerySwitchTab moves to another tab and resets the grid to its first
+// card. It reports whether anything changed.
+func themeGallerySwitchTab(delta int) bool {
+	if len(themeGalleryTabs) == 0 {
+		return false
+	}
+	next := (themeGalleryTab + delta) % len(themeGalleryTabs)
+	if next < 0 {
+		next += len(themeGalleryTabs)
+	}
+	if next == themeGalleryTab {
+		return false
+	}
+	themeGalleryTab = next
+	themeGalleryIndex = 0
+	themeGalleryScroll = 0
+	return true
+}
+
+// themeGalleryTabRect is the pill of tab i in screen space.
+func themeGalleryTabRect(element Element, i int) sdl.Rect {
+	x := element.X
+	for j := 0; j < i && j < len(themeGalleryTabs); j++ {
+		x += themeGalleryTabWidth(j) + 10
+	}
+	return sdl.Rect{X: x, Y: element.Y, W: themeGalleryTabWidth(i), H: themeGalleryTabH - 8}
+}
+
+// themeGalleryTabWidth measures a tab by its label: a pill that does not fit
+// its word is worse than a wider strip.
+func themeGalleryTabWidth(i int) int32 {
+	if i < 0 || i >= len(themeGalleryTabs) {
+		return 0
+	}
+	// Hit-testing asks for a tab's width without a config in hand, so the
+	// global one is used when it exists and the label's own length stands in
+	// when nothing has been loaded yet.
+	var font *ttf.Font
+	if appConfig != nil {
+		font, _ = getCachedFont(appConfig, "small")
+	}
+	if font == nil {
+		return int32(24 + 9*len(themeGalleryTabs[i].Label))
+	}
+	w, _, _ := font.SizeUTF8(themeGalleryTabs[i].Label)
+	return int32(w) + 32
+}
+
+// themeGalleryTabAt returns the tab under (mx, my), or -1.
+func themeGalleryTabAt(element Element, mx, my int32) int {
+	for i := range themeGalleryTabs {
+		if pointInRect(mx, my, themeGalleryTabRect(element, i)) {
+			return i
+		}
+	}
+	return -1
+}
+
 // themeGalleryMetrics returns the grid geometry for an element.
 func themeGalleryMetrics(element Element) (cols int, cardW int32, visibleRows int) {
 	elemW := getElementWidth(element, 1160)
-	elemH := getElementHeight(element, 560)
+	elemH := getElementHeight(element, 560) - themeGalleryGridOffset()
 	cols = UIGridColumns(elemW, themeGalleryMinW, themeGalleryGap)
 	cardW = UIGridCellWidth(elemW, cols, themeGalleryGap)
 	visibleRows = UIGridVisibleRows(elemH, themeGalleryH, themeGalleryGap)
 	return cols, cardW, visibleRows
+}
+
+// themeGalleryGridOffset is how far the cards start below the element's top
+// edge: the tab strip, plus a gap.
+func themeGalleryGridOffset() int32 {
+	return themeGalleryTabH + 8
 }
 
 // themeGalleryColumns is the number of cards per row (used for Up/Down).
@@ -4677,7 +5030,7 @@ func themeGalleryColumns(element Element) int {
 // a short nav does not jerk the grid around.
 func themeGalleryScrollFor(element Element, focus int) int {
 	cols, _, visibleRows := themeGalleryMetrics(element)
-	rows := (len(ListThemePresets()) + cols - 1) / cols
+	rows := (len(themeGalleryPresets()) + cols - 1) / cols
 	row := 0
 	if focus > 0 {
 		row = focus / cols
@@ -4704,7 +5057,7 @@ func themeGalleryScrollFor(element Element, focus int) int {
 // themeGalleryMove shifts the focused card by delta cards inside the grid and
 // reports whether the focus moved. Up/Down pass ±columns, Left/Right ±1.
 func themeGalleryMove(element Element, delta int) bool {
-	n := len(ListThemePresets())
+	n := len(themeGalleryPresets())
 	if n == 0 {
 		return false
 	}
@@ -4725,7 +5078,7 @@ func themeGalleryMove(element Element, delta int) bool {
 
 // themeGalleryCardAt returns the preset index under (mx, my) or -1.
 func themeGalleryCardAt(element Element, mx, my int32) int {
-	presets := ListThemePresets()
+	presets := themeGalleryPresets()
 	if len(presets) == 0 {
 		return -1
 	}
@@ -4758,7 +5111,8 @@ func themeGalleryCardAt(element Element, mx, my int32) int {
 // and a Current badge on the active preset. The focused card uses the same 3px
 // accent ring as home cards so selection is unmistakable.
 func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element) {
-	presets := ListThemePresets()
+	renderThemeGalleryTabs(renderer, config, element)
+	presets := themeGalleryPresets()
 	if len(presets) == 0 {
 		return
 	}
@@ -4790,7 +5144,7 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		p := GetThemePreset(name)
 		row, col := i/cols, i%cols
 		x := element.X + int32(col)*(cardW+themeGalleryGap)
-		y := element.Y + int32(row-scroll)*(themeGalleryH+themeGalleryGap)
+		y := element.Y + themeGalleryGridOffset() + int32(row-scroll)*(themeGalleryH+themeGalleryGap)
 		focused := i == themeGalleryIndex
 
 		fill := ColorCard
@@ -4815,7 +5169,15 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		strokeRoundedRect(renderer, prevX, prevY, prevW, prevH, 10, 1, hexRGBA(p.BorderDefault))
 		// A sample card inside the preview shows the theme's surface + text.
 		fillRoundedRect(renderer, prevX+10, prevY+8, prevW-20, prevH-24, 6, hexRGBA(p.SurfaceRaised))
-		drawText(renderer, small, "Aa", prevX+18, prevY+14, hexRGBA(p.TextPrimary), textAlignLeft)
+		if p.Kind == themeKindConversion {
+			// A conversion is judged by its arrangement, so its preview is a
+			// sketch of one: a big card and small ones for the dashboard, equal
+			// tiles for the grid.
+			drawThemeArrangementSketch(renderer, p.Arrangement, prevX+10, prevY+8, prevW-20, prevH-24,
+				hexRGBA(p.TextSecondary), hexRGBA(p.Info))
+		} else {
+			drawText(renderer, small, "Aa", prevX+18, prevY+14, hexRGBA(p.TextPrimary), textAlignLeft)
+		}
 		// Accent strip along the preview's bottom edge.
 		fillRoundedRect(renderer, prevX, prevY+prevH-7, prevW, 7, 3, hexRGBA(p.Info))
 
@@ -4834,7 +5196,10 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		nameY := prevY + prevH + 8
 		drawText(renderer, font, ellipsize(font, p.Name, cardW-36), x+18, nameY, ColorTextPrimary(), textAlignLeft)
 
-		// Mini palette chips: Surface, Text, Focus border.
+		// Mini palette chips: Surface, Text, Focus border. A conversion shows
+		// these too — it repaints as well as rearranges — and its preview above
+		// is the sketch of the arrangement. The summary line is the toast's job
+		// to read out: at this card width it was always ellipsised.
 		chipY := nameY + int32(font.Height()) + 6
 		chipH := int32(12)
 		chipW := (cardW - 36 - 16) / 3
@@ -4858,7 +5223,80 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		if rows > visibleRows {
 			scrollFrac = float64(scroll) / float64(rows-visibleRows)
 		}
-		drawScrollbar(renderer, element.X+elemW-4, element.Y, 3, elemH, thumbFrac, scrollFrac)
+		drawScrollbar(renderer, element.X+elemW-4, element.Y+themeGalleryGridOffset(), 3,
+			elemH-themeGalleryGridOffset(), thumbFrac, scrollFrac)
+	}
+}
+
+// renderThemeGalleryTabs draws the gallery's tabs: a pill per kind, the open
+// one filled with the accent. Colour and "Total conversion" are different
+// promises, so they are different tabs rather than one long list.
+func renderThemeGalleryTabs(renderer *sdl.Renderer, config *Config, element Element) {
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		return
+	}
+	active := themeGalleryCurrentTab()
+	for i, tab := range themeGalleryTabs {
+		rect := themeGalleryTabRect(element, i)
+		open := tab.Kind == active.Kind
+		fill := sdl.Color{R: 255, G: 255, B: 255, A: 12}
+		ink := ColorTextSecondary()
+		if open {
+			fill = ColorAccent
+			ink = contrastText(ColorAccent)
+		}
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, fill)
+		if !open {
+			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, ColorBorder)
+		}
+		tw, th, _ := font.SizeUTF8(tab.Label)
+		drawText(renderer, font, tab.Label, rect.X+(rect.W-int32(tw))/2,
+			rect.Y+(rect.H-int32(th))/2, ink, textAlignLeft)
+	}
+}
+
+// drawThemeArrangementSketch draws a miniature of an arrangement inside a
+// theme preview: the dashboard's wide lead card and small ones, or an even
+// grid of tiles.
+func drawThemeArrangementSketch(renderer *sdl.Renderer, arrangement string, x, y, w, h int32, ink, accent sdl.Color) {
+	if w <= 0 || h <= 0 {
+		return
+	}
+	tile := func(r sdl.Rect, colour sdl.Color) {
+		if r.W <= 0 || r.H <= 0 {
+			return
+		}
+		fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 3, colour)
+	}
+	soft := sdl.Color{R: ink.R, G: ink.G, B: ink.B, A: 90}
+	switch normalizeHomeArrangement(arrangement) {
+	case homeArrangementGrid:
+		// The hero tile, then the ten cards that fill the rest of the mosaic.
+		gap := int32(4)
+		cw := (w - 3*gap) / 4
+		ch := (h - 2*gap) / 3
+		tile(sdl.Rect{X: x, Y: y, W: cw, H: 2*ch + gap}, accent)
+		for _, cellPos := range [][2]int32{
+			{1, 0}, {2, 0}, {3, 0},
+			{1, 1}, {2, 1}, {3, 1},
+			{0, 2}, {1, 2}, {2, 2}, {3, 2},
+		} {
+			tile(sdl.Rect{
+				X: x + cellPos[0]*(cw+gap),
+				Y: y + cellPos[1]*(ch+gap),
+				W: cw, H: ch,
+			}, soft)
+		}
+	default:
+		gap := int32(4)
+		leadW := (w - gap) * 3 / 5
+		sideW := w - gap - leadW
+		smallH := (h - 2*gap) / 3
+		tile(sdl.Rect{X: x, Y: y, W: leadW, H: h}, accent)
+		for row := int32(0); row < 3; row++ {
+			tile(sdl.Rect{X: x + leadW + gap, Y: y + row*(smallH+gap), W: sideW, H: smallH}, soft)
+		}
 	}
 }
 
@@ -5626,6 +6064,13 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	if element.Trigger == "" {
 		return
 	}
+	// A control drawn busy is not pressable, at the source: no activate sound,
+	// no press dip, no dispatch. The Benchmark screen's Run button is the one
+	// scene button busy for a long time — a whole 100 MB measurement — and the
+	// run guard in runBenchmark is the backstop, not the only answer.
+	if _, busy := benchmarkButtonFace(element); busy {
+		return
+	}
 	PlayActivateSound()
 	// Normalize "change_scene:<Scene>" (used by jukaconfig.json and the web
 	// editor) into the internal "change_scene" type + TriggerTarget form.
@@ -5654,21 +6099,23 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		// running. Same path as the Y button and Ctrl+Shift+S.
 		openShortsFeed(config)
 	case "youtube_play":
-		videos, ok := getSceneVideos(config, config.Scenes[currentSceneIndex])
-		if ok && focusedResultIndex >= 0 && focusedResultIndex < len(videos) {
-			playVideoInfo(config, videos[focusedResultIndex])
-			return
-		}
-		// "Play Link" is also the way to play whatever was typed into the
-		// scene's URL field: with no highlighted result the button used to do
-		// nothing at all, which read as a dead button.
-		if url := sceneInputURL(config, config.Scenes[currentSceneIndex]); url != "" {
+		scene := config.Scenes[currentSceneIndex]
+		videos, _ := getSceneVideos(config, scene)
+		plan := planYouTubePlay(videos, focusedResultIndex, sceneInputURL(config, scene))
+		switch {
+		case plan.result >= 0:
+			playVideoInfo(config, videos[plan.result])
+		case plan.url != "":
 			log.Printf("youtube_play: playing the typed link")
-			playVideoURL(config, url)
-			return
+			playVideoURL(config, plan.url)
+		case plan.askURL:
+			// No result and no link yet: ask for one instead of failing the
+			// press. Submitting the keyboard plays what was typed.
+			log.Printf("youtube_play: asking for a link")
+			if !openMediaPlayLink(config) {
+				ShowToast("This scene has no link field", ToastKindInfo)
+			}
 		}
-		log.Printf("youtube_play: no focused video and no link typed")
-		ShowToast("Type a video link or pick a result first", ToastKindInfo)
 	case "music_player":
 		// Opens the audio player on the folder the Files scene is browsing.
 		dir := feCurrentPath(config)
@@ -5725,9 +6172,15 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		openAppsFolder()
 	case "ip_stream":
 		url := strings.TrimSpace(inputVariableValue(config, "stream_url"))
-		if url == "" {
-			showToast("Enter a stream URL first.", ToastError())
-		} else {
+		// An empty field is not a failed press: the button is the screen's way
+		// in, so it opens the channel menu, which can add a link or browse public
+		// channels. Typing a link still plays it straight away.
+		switch {
+		case url == "":
+			openIPStreamPanel()
+		case !looksLikeStreamURL(url):
+			showToast("That does not look like a stream URL.", ToastError())
+		default:
 			StartEmbeddedPlayback(config, url)
 			currentPlaybackURL = url
 			addRecentVideo(VideoInfo{URL: url, Title: url})
@@ -5764,6 +6217,8 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		} else {
 			loadPodcasts(config)
 		}
+	case "podcast_panel":
+		openPodcastPanel()
 	case "attach_image":
 		// Set config variable to indicate we're in image attach mode.
 		config.Variables.Custom["chat_attach_image"] = "1"
@@ -5817,6 +6272,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	case "cron_load":
 		loadCron(config)
+		publishCustom(cronStartupVar, loadStartupItems())
 	case "cron_startup":
 		publishCustom(cronStartupVar, loadStartupItems())
 	case "hw_load":
@@ -6045,6 +6501,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 		SetAccentColor(resolveColor(config, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
 		saveConfig(config)
 		showToast("Settings saved", ToastInfo())
+	case "cycle_weather_unit":
+		cycleWeatherUnit(config)
+		showToast("Weather unit: "+weatherUnitSettingLabel(config), ToastInfo())
 	case "cycle_screensaver_timeout":
 		// Settings → General and Quick Settings share this step list.
 		next := applyScreensaverTimeout(config, nextScreenTimeout(config.Variables.ScreensaverTimeout))
@@ -6476,6 +6935,30 @@ func switchScene(config *Config, targetIdx int, record bool) {
 	browserLinkPanel = browserLinkPanelState{}
 	browserLinkRowHits = nil
 	browserLinkPanelRect = sdl.Rect{}
+	// The same is true of the other scene-owned menus: the saved-cookie picker,
+	// the saved-page picker and the Files action sheet all name rows on the
+	// screen being left. They are drawn and route input on the strength of their
+	// open flag alone, so left up they float over the next scene and eat the
+	// press meant for it — the cookie picker's A would drop a site from a page
+	// nobody can see. Dismissed silently: the transition is already the feedback,
+	// and a back chirp for a scene the user did not press B on would be a lie.
+	browserCookiePageForget()
+	browserBookmarkPickerForget()
+	feSheetForget()
+	// The editor's card names one file on the screen being left, and its keys
+	// would otherwise keep answering on the next scene.
+	fileEditorForget()
+	// The package row menu and the Audio / Video / Chat selection used to be
+	// cleared when the next scene arrived. That is a frame too late: input is
+	// not gated while the fade runs and the scene index still points at the
+	// screen being left, so a press during the fade still reached them — a
+	// doubled or held A would Reinstall the package the user just walked away
+	// from, and a tap could press a pill on a row that is no longer drawn.
+	// Cleared here so departure is the one moment they go, exactly like the
+	// pickers above.
+	packageActionsForget()
+	resetResultActions()
+	resultActionHits = nil
 }
 
 func changeSceneTo(config *Config, targetIdx int) {
@@ -6539,6 +7022,7 @@ func completeSceneTransition(config *Config) {
 	if sceneHasPieChart(config) {
 		refreshDiskPie()
 	}
+	resetNetSpeedOnSceneEntry(config, scene)
 	// Settings → General's Video snaps row reports how many of the card's games
 	// have a clip. The library scan is started here, on the scene's goroutine,
 	// so the row can show a count without the page ever walking the card.
@@ -6615,9 +7099,10 @@ func completeSceneTransition(config *Config) {
 	if config.Scenes[currentSceneIndex].Name == "Dictionary" {
 		dictInit()
 	}
-	// Initialize PDF reader when entering.
+	// Prepare the reader when entering. An open document is kept: Files
+	// opens the file, then navigates here.
 	if config.Scenes[currentSceneIndex].Name == "PDFReader" {
-		pdfInit()
+		pdfSceneEnter()
 	}
 	// Prepare the audio player when entering. An active playlist is kept, so
 	// coming back from Files does not restart the song.
@@ -6628,6 +7113,8 @@ func completeSceneTransition(config *Config) {
 	if config.Scenes[currentSceneIndex].Name == "Notes" {
 		notesInit()
 	}
+	// The Benchmark screen measures as it opens.
+	benchmarkAutoStartOnOpen(config, config.Scenes[currentSceneIndex])
 	for _, e := range config.Scenes[currentSceneIndex].Elements {
 		if e.Type == "textlog" && e.Variable == "weather_screen_text" {
 			runSceneTask(func(ctx context.Context) {
@@ -6758,8 +7245,9 @@ func moveGridSelection(config *Config, dx, dy int) {
 		resetResultActions()
 	}
 	focusedResultIndex = newIdx
-	// Resolve the highlighted card's stream in the background while the user
-	// keeps moving: pressing Play then skips the yt-dlp round-trip.
+	// Warm the selected card's optional hover-preview frames and resolve its
+	// stream in the background while the user keeps moving.
+	prefetchCardPreviewFrames(videos[newIdx])
 	prefetchFocusedResult(config, videos)
 }
 
@@ -6919,6 +7407,57 @@ func handleChromeBarClick(mx, my int32, config *Config) bool {
 	return false
 }
 
+// screenPadPress routes one controller press for the screen on display. The
+// order is the accessibility contract, and it is one function so the main loop
+// and the audits cannot disagree about it:
+//
+//  1. The top bar, when it holds the focus. A bar button that draws its focus
+//     ring has to answer to A: the screen underneath binds the same buttons
+//     (the music player's A plays a track, the terminal's arrows scroll), and
+//     running the scene first left the ring on a button the pad could not
+//     press.
+//  2. The home layout, the Patch list and the screen's own module.
+//  3. The top bar again, for an Up the screen did not take. A screen with no
+//     controls of its own (Playtime, MusicPlayer, Terminal) has no grid to step
+//     up from, so Up on an unfocused screen is how the header is reached on a
+//     handheld with no touchscreen.
+//
+// It reports whether the press was used.
+func screenPadPress(e *sdl.ControllerButtonEvent, config *Config) bool {
+	if e == nil || e.Type != sdl.CONTROLLERBUTTONDOWN {
+		return false
+	}
+	if handleChromeController(e, config) {
+		return true
+	}
+	if homeLayoutActive && handleHomeController(e, config) {
+		return true
+	}
+	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) &&
+		config.Scenes[currentSceneIndex].Name == "Patch" && handlePatchController(e, config) {
+		return true
+	}
+	if handleSceneController(e, config) {
+		return true
+	}
+	if e.Button == sdl.CONTROLLER_BUTTON_DPAD_UP && focusEngine.ElementIndex() < 0 {
+		return focusChromeBar()
+	}
+	return false
+}
+
+// focusChromeBar moves the pad onto the top bar's leftmost button and reports
+// whether the bar had one to focus. It is the entry point screens with nothing
+// focusable use to reach the header's buttons.
+func focusChromeBar() bool {
+	if !focusEngine.FocusChromeBar() {
+		return false
+	}
+	PlayNavSound()
+	focusEngine.SyncSelected()
+	return true
+}
+
 // handleChromeController owns pad input while a top-bar button is focused.
 // It must run before the scene element dispatch, since chrome uses negative
 // indices rather than indices into the scene's element slice.
@@ -7072,6 +7611,13 @@ func moveSelection(config *Config, action Action) {
 		// (back pill / status clock), which the spatial cones cannot reach.
 		if alt, ok := focusEngine.StepChrome(action); ok && focusEngine.SetByElementIndex(alt) {
 			result = alt
+		} else if action == ActionNavigateDown && chromeTier(before) == 1 {
+			// Nothing below the bar to step back into: the screen draws no
+			// controls of its own, so drop the focus and hand the pad back to
+			// it instead of stranding the ring on a bar button.
+			focusEngine.ClearFocus()
+			selectedButtonIndex = -1
+			return
 		}
 	}
 	// -1 means "no focus possible"; the top-bar chrome buttons use negative
@@ -7087,6 +7633,9 @@ func moveSelection(config *Config, action Action) {
 			currentScene.Elements[result].Type == "searchresults" {
 			focusedResultIndex = 0
 			if videos, ok := getSceneVideos(config, currentScene); ok {
+				if len(videos) > 0 {
+					prefetchCardPreviewFrames(videos[0])
+				}
 				prefetchFocusedResult(config, videos)
 			}
 		}

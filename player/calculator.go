@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 )
 
 // ──────────────────────────────────────────────────────────────────────
@@ -36,14 +37,22 @@ var calcButtons = [calcRows][calcCols]calcBtn{
 }
 
 type calcState struct {
-	expression string
-	display    string
-	cursor     [2]int // [row, col]
-	history    []string
-	histIdx    int
-	result     string
-	hasResult  bool
+	expression      string
+	display         string
+	cursor          [2]int // [row, col]
+	history         []string
+	histIdx         int
+	result          string
+	hasResult       bool
+	graphMode       bool
+	graphExpression string
+	graphSamples    []calcGraphSample
+	graphCached     bool
 }
+
+var calcGraphButtonRect sdl.Rect
+var calcXButtonRect sdl.Rect
+var calcButtonRects [calcRows][calcCols]sdl.Rect
 
 var calc calcState
 
@@ -90,12 +99,9 @@ func calcSelect() {
 		calc.display = "0"
 		calc.result = ""
 		calc.hasResult = true
+		calc.graphCached = false
 	case "back":
-		calc.expression = trimLastRune(calc.expression)
-		if calc.expression == "" {
-			calc.display = "0"
-			calc.hasResult = true
-		}
+		calcBackspace()
 	case "eq":
 		calcEvaluate()
 	}
@@ -106,6 +112,10 @@ func calcSelect() {
 
 func calcHandleFunc(label string) {
 	switch label {
+	case "C":
+		calcClear()
+	case "<":
+		calcBackspace()
 	case "+/-":
 		if calc.expression != "" {
 			if strings.HasPrefix(calc.expression, "-") {
@@ -141,6 +151,35 @@ func calcHandleFunc(label string) {
 	case "tan":
 		calc.expression = "tan(" + calc.expression + ")"
 	}
+}
+
+func calcInsertX() {
+	if calc.hasResult {
+		calc.expression = ""
+		calc.hasResult = false
+	}
+	calc.expression += "x"
+	calc.display = calc.expression
+}
+
+func calcBackspace() {
+	calc.expression = trimLastRune(calc.expression)
+	if calc.expression == "" {
+		calc.display = "0"
+		calc.hasResult = true
+	}
+}
+
+func calcClear() {
+	calc.expression = ""
+	calc.display = "0"
+	calc.result = ""
+	calc.hasResult = true
+	calc.graphCached = false
+}
+
+func calcToggleGraph() {
+	calc.graphMode = !calc.graphMode
 }
 
 func calcEvaluate() {
@@ -311,6 +350,189 @@ func calcEvalExpr(expr string) (float64, error) {
 	return val, nil
 }
 
+// calcGraphSample is one evaluated point; invalid or discontinuous samples
+// break the stroke instead of connecting across a pole or a domain error.
+type calcGraphSample struct {
+	x, y  float64
+	valid bool
+}
+
+// calcEvalExprAtX evaluates the calculator's existing expression language with
+// x bound to the requested value. Adjacent numeric factors such as 2x and x2
+// are treated as multiplication; malformed or unsupported expressions still
+// return the parser's ordinary error.
+func calcEvalExprAtX(expression string, x float64) (float64, error) {
+	if len(expression) > 512 {
+		return 0, fmt.Errorf("expression is too long to graph")
+	}
+	if math.IsNaN(x) || math.IsInf(x, 0) {
+		return 0, fmt.Errorf("x must be finite")
+	}
+	value := strconv.FormatFloat(x, 'f', 12, 64)
+	var expanded strings.Builder
+	expanded.Grow(len(expression) + 16)
+	for i := 0; i < len(expression); i++ {
+		if expression[i] != 'x' {
+			expanded.WriteByte(expression[i])
+			continue
+		}
+		prevLetter := i > 0 && (expression[i-1] >= 'a' && expression[i-1] <= 'z' || expression[i-1] >= 'A' && expression[i-1] <= 'Z')
+		nextLetter := i+1 < len(expression) && (expression[i+1] >= 'a' && expression[i+1] <= 'z' || expression[i+1] >= 'A' && expression[i+1] <= 'Z')
+		if prevLetter || nextLetter {
+			expanded.WriteByte('x')
+			continue
+		}
+		if i > 0 {
+			prev := expression[i-1]
+			if (prev >= '0' && prev <= '9') || prev == '.' || prev == ')' {
+				expanded.WriteByte('*')
+			}
+		}
+		expanded.WriteByte('(')
+		expanded.WriteString(value)
+		expanded.WriteByte(')')
+		if i+1 < len(expression) {
+			next := expression[i+1]
+			if (next >= '0' && next <= '9') || next == '.' || next == '(' {
+				expanded.WriteByte('*')
+			}
+		}
+	}
+	// Expand only the two named constants, matching calcEvaluate.
+	expr := strings.ReplaceAll(expanded.String(), "pi", fmt.Sprintf("%.16g", math.Pi))
+	expr = strings.ReplaceAll(expr, "e", fmt.Sprintf("%.16g", math.E))
+	result, err := calcEvalExpr(expr)
+	if err != nil {
+		return 0, err
+	}
+	if math.IsNaN(result) || math.IsInf(result, 0) {
+		return 0, fmt.Errorf("expression is not finite")
+	}
+	return result, nil
+}
+
+// calcGraphSamples evaluates a bounded number of points across the requested
+// x-range. A fixed cap keeps graph redraws inexpensive on the Smart Pro.
+func calcGraphSamples(expression string, minX, maxX float64, count int) []calcGraphSample {
+	if count < 2 || count > 512 || math.IsNaN(minX) || math.IsNaN(maxX) ||
+		math.IsInf(minX, 0) || math.IsInf(maxX, 0) || minX >= maxX {
+		return nil
+	}
+	samples := make([]calcGraphSample, count)
+	for i := range samples {
+		x := minX + (maxX-minX)*float64(i)/float64(count-1)
+		y, err := calcEvalExprAtX(expression, x)
+		valid := err == nil && !math.IsNaN(y) && !math.IsInf(y, 0) && math.Abs(y) <= 1e6
+		samples[i] = calcGraphSample{x: x, y: y, valid: valid}
+	}
+	return samples
+}
+
+func currentCalcGraphSamples() []calcGraphSample {
+	if calc.graphCached && calc.graphExpression == calc.expression {
+		return calc.graphSamples
+	}
+	calc.graphExpression = calc.expression
+	calc.graphSamples = calcGraphSamples(calc.expression, -10, 10, 160)
+	calc.graphCached = true
+	return calc.graphSamples
+}
+
+func calcGraphYBounds(samples []calcGraphSample) (float64, float64, bool) {
+	minY, maxY := math.Inf(1), math.Inf(-1)
+	for _, sample := range samples {
+		if !sample.valid {
+			continue
+		}
+		if sample.y < minY {
+			minY = sample.y
+		}
+		if sample.y > maxY {
+			maxY = sample.y
+		}
+	}
+	if math.IsInf(minY, 0) || math.IsInf(maxY, 0) {
+		return 0, 0, false
+	}
+	if math.Abs(maxY-minY) < 1e-9 {
+		padding := math.Max(1, math.Abs(minY)*0.1)
+		return minY - padding, maxY + padding, true
+	}
+	padding := (maxY - minY) * 0.08
+	return minY - padding, maxY + padding, true
+}
+
+func calcGraphMapPoint(sample calcGraphSample, minX, maxX, minY, maxY float64, plot sdl.Rect) (int32, int32, bool) {
+	if !sample.valid || minX >= maxX || minY >= maxY || plot.W <= 1 || plot.H <= 1 || sample.y < minY || sample.y > maxY {
+		return 0, 0, false
+	}
+	x := float64(plot.X) + (sample.x-minX)/(maxX-minX)*float64(plot.W-1)
+	y := float64(plot.Y+plot.H-1) - (sample.y-minY)/(maxY-minY)*float64(plot.H-1)
+	return int32(math.Round(x)), int32(math.Round(y)), true
+}
+
+func drawCalcGraph(renderer *sdl.Renderer, config *Config, font *ttf.Font, panel sdl.Rect) {
+	if panel.W < 100 || panel.H < 120 {
+		return
+	}
+	if font != nil {
+		renderText(renderer, config, font, "Graph: y = f(x)", ColorTextPrimary(), panel.X+12, panel.Y+10)
+	}
+	plot := sdl.Rect{X: panel.X + 42, Y: panel.Y + 48, W: panel.W - 56, H: panel.H - 92}
+	if plot.W < 20 || plot.H < 20 {
+		return
+	}
+	fillRoundedRect(renderer, plot.X, plot.Y, plot.W, plot.H, 8, ColorSurfaceRow)
+	strokeRoundedRect(renderer, plot.X, plot.Y, plot.W, plot.H, 8, 1, ColorBorder)
+
+	const minX, maxX = -10.0, 10.0
+	samples := currentCalcGraphSamples()
+	minY, maxY, ok := calcGraphYBounds(samples)
+	if !ok {
+		if font != nil {
+			message := "Enter an expression with x"
+			mw, _, _ := font.SizeUTF8(message)
+			renderText(renderer, config, font, message, ColorTextSecondary(), plot.X+(plot.W-int32(mw))/2, plot.Y+plot.H/2-8)
+		}
+		return
+	}
+
+	// Five quiet grid lines keep the small handheld plot readable without
+	// crowding it with labels.
+	grid := WithAlpha(ColorBorderSubtle, 100)
+	for i := int32(1); i < 4; i++ {
+		x := plot.X + plot.W*i/4
+		y := plot.Y + plot.H*i/4
+		renderer.SetDrawColor(grid.R, grid.G, grid.B, grid.A)
+		_ = renderer.DrawLine(x, plot.Y+1, x, plot.Y+plot.H-2)
+		_ = renderer.DrawLine(plot.X+1, y, plot.X+plot.W-2, y)
+	}
+	if minY <= 0 && maxY >= 0 {
+		y := plot.Y + plot.H - 1 - int32((-minY)/(maxY-minY)*float64(plot.H-1))
+		renderer.SetDrawColor(130, 145, 165, 210)
+		_ = renderer.DrawLine(plot.X+1, y, plot.X+plot.W-2, y)
+	}
+	if minX <= 0 && maxX >= 0 {
+		x := plot.X + int32((-minX)/(maxX-minX)*float64(plot.W-1))
+		renderer.SetDrawColor(130, 145, 165, 210)
+		_ = renderer.DrawLine(x, plot.Y+1, x, plot.Y+plot.H-2)
+	}
+
+	for i := 1; i < len(samples); i++ {
+		x1, y1, ok1 := calcGraphMapPoint(samples[i-1], minX, maxX, minY, maxY, plot)
+		x2, y2, ok2 := calcGraphMapPoint(samples[i], minX, maxX, minY, maxY, plot)
+		if !ok1 || !ok2 || abs(int(y2-y1)) > int(plot.H/3) || math.Abs(samples[i].y-samples[i-1].y) > (maxY-minY)*0.5 {
+			continue
+		}
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 255)
+		_ = renderer.DrawLine(x1, y1, x2, y2)
+	}
+	if font != nil {
+		bounds := fmt.Sprintf("x: %.0f to %.0f", minX, maxX)
+		renderText(renderer, config, font, bounds, ColorTextTertiary(), panel.X+12, plot.Y+plot.H+8)
+	}
+}
+
 // renderCalculator draws the full-screen calculator scene.
 func renderCalculator(renderer *sdl.Renderer, config *Config) {
 	renderer.SetDrawColor(8, 10, 18, 255)
@@ -355,10 +577,25 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 	if exprText == "" {
 		exprText = " "
 	}
+	calcGraphButtonRect = sdl.Rect{X: displayX + displayW - 98, Y: displayY + 8, W: 86, H: 30}
+	calcXButtonRect = sdl.Rect{X: displayX + displayW - 142, Y: displayY + 8, W: 36, H: 30}
 	if smallFont != nil {
-		renderText(renderer, config, smallFont, exprText,
+		exprWidth := calcXButtonRect.X - displayX - 24
+		renderText(renderer, config, smallFont, ellipsize(smallFont, exprText, exprWidth),
 			sdl.Color{R: 120, G: 135, B: 160, A: 200}, displayX+16, displayY+12)
 	}
+	UIButton(renderer, config, calcXButtonRect, "x", UIButtonStyle{
+		Variant: UIButtonSecondary, LabelColor: ColorTextPrimary(), Font: font,
+		Radius: 8, NoShadow: true,
+	}, UIButtonState{})
+	graphLabel := "Graph"
+	if calc.graphMode {
+		graphLabel = "Calc"
+	}
+	UIButton(renderer, config, calcGraphButtonRect, graphLabel, UIButtonStyle{
+		Variant: UIButtonSecondary, LabelColor: ColorTextPrimary(), Font: smallFont,
+		Radius: 8, NoShadow: true,
+	}, UIButtonState{Focused: calc.graphMode})
 
 	// Result / display value.
 	dispText := calc.display
@@ -376,6 +613,8 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 			bx := gridX + int32(col*(calcBtnW+calcGap))
 			by := gridY + int32(row*(calcBtnH+calcGap))
 			focused := calc.cursor[0] == row && calc.cursor[1] == col
+			buttonRect := sdl.Rect{X: bx, Y: by, W: int32(calcBtnW), H: int32(calcBtnH)}
+			calcButtonRects[row][col] = buttonRect
 
 			// Button fill. The calculator keeps its own semantic colours
 			// (equals is blue, clear/back are red) while sharing the shape,
@@ -403,7 +642,7 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 			if btn.action == "eq" {
 				textCol = sdl.Color{R: 255, G: 255, B: 255, A: 255}
 			}
-			UIButton(renderer, config, sdl.Rect{X: bx, Y: by, W: int32(calcBtnW), H: int32(calcBtnH)}, btn.label, UIButtonStyle{
+			UIButton(renderer, config, buttonRect, btn.label, UIButtonStyle{
 				Variant:    UIButtonCustom,
 				Fill:       fill,
 				HoverFill:  fill,
@@ -424,7 +663,9 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 
 	drawCard(renderer, histX, histY, histW, histH, 16)
 
-	if smallFont != nil && len(calc.history) > 0 {
+	if calc.graphMode {
+		drawCalcGraph(renderer, config, smallFont, sdl.Rect{X: histX, Y: histY, W: histW, H: histH})
+	} else if smallFont != nil && len(calc.history) > 0 {
 		// Show last 8 history entries.
 		start := len(calc.history) - 8
 		if start < 0 {
@@ -473,17 +714,14 @@ func handleCalcInput(e *sdl.KeyboardEvent) {
 		calcNavigate(0, 1)
 	case sdl.K_RETURN, sdl.K_SPACE:
 		calcSelect()
+	case sdl.K_g:
+		calcToggleGraph()
+	case sdl.K_x:
+		calcInsertX()
 	case sdl.K_c:
-		calc.expression = ""
-		calc.display = "0"
-		calc.result = ""
-		calc.hasResult = true
-	case sdl.K_BACKSPACE, sdl.K_x:
-		calc.expression = trimLastRune(calc.expression)
-		if calc.expression == "" {
-			calc.display = "0"
-			calc.hasResult = true
-		}
+		calcClear()
+	case sdl.K_BACKSPACE, sdl.K_DELETE:
+		calcBackspace()
 	}
 }
 
@@ -507,11 +745,17 @@ func ctrlCalculator(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		calcSelect()
 		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_X:
+		calcInsertX()
+		PlayActivateSound()
+	case sdl.CONTROLLER_BUTTON_Y:
+		calcToggleGraph()
+		PlayActivateSound()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		calcHandleFunc("C")
+		calcClear()
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
-		calcHandleFunc("<")
+		calcBackspace()
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		goBackScene(appConfig)
@@ -534,6 +778,36 @@ func (calculatorScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 
 func (calculatorScene) handleController(e *sdl.ControllerButtonEvent, c *Config) bool {
 	return ctrlCalculator(e)
+}
+
+func handleCalculatorMouse(mx, my int32, config *Config) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) || config.Scenes[currentSceneIndex].Name != "Calculator" {
+		return false
+	}
+	if pointInRect(mx, my, calcGraphButtonRect) {
+		calcToggleGraph()
+		PlayActivateSound()
+		return true
+	}
+	if pointInRect(mx, my, calcXButtonRect) {
+		calcInsertX()
+		PlayActivateSound()
+		return true
+	}
+	if !calc.graphMode {
+		for row := range calcButtonRects {
+			for col, rect := range calcButtonRects[row] {
+				if !pointInRect(mx, my, rect) {
+					continue
+				}
+				calc.cursor = [2]int{row, col}
+				calcSelect()
+				PlayActivateSound()
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func init() { registerScene(calculatorScene{sceneBase{name: "Calculator"}}) }

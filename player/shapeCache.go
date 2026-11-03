@@ -32,6 +32,7 @@ const (
 	shapeKindStrokeRound
 	shapeKindFillCircle
 	shapeKindStrokeCircle
+	shapeKindDiskPieSector
 )
 
 // shapeTextureMaxSize caps the geometry we cache; nothing in the shell should

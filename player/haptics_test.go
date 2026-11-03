@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,12 +44,17 @@ func installFakeHaptics(t *testing.T, dev hapticBackend) {
 	hapticsMu.Unlock()
 	prevOn := hapticOn.Load()
 	hapticOn.Store(true)
+	// The strength step is process-wide too, so a test that steps it must not
+	// leave the next one's exact-pulse comparisons off by a scale factor.
+	prevStep := hapticStep.Load()
+	hapticStep.Store(hapticLevelDefault)
 	t.Cleanup(func() {
 		hapticsMu.Lock()
 		hapticDev, hapticTried = prevDev, prevTried
 		hapticLastAt = time.Time{}
 		hapticsMu.Unlock()
 		hapticOn.Store(prevOn)
+		hapticStep.Store(prevStep)
 	})
 }
 
@@ -311,6 +317,123 @@ func TestHapticsToggleAppliesImmediately(t *testing.T) {
 	}
 	if len(dev.pulses) != 1 {
 		t.Fatalf("pulses = %d, want one confirmation bump when enabling", len(dev.pulses))
+	}
+}
+
+// ── Vibration strength ────────────────────────────────────────────────────
+
+// The stored spelling is what the panel, a hand-edited config and the web
+// builder all have to agree on, so every shape resolves to the same step.
+func TestHapticsConfiguredLevel(t *testing.T) {
+	cases := []struct {
+		name   string
+		custom map[string]interface{}
+		want   int
+	}{
+		{"no map", nil, hapticLevelDefault},
+		{"empty", map[string]interface{}{}, hapticLevelDefault},
+		{"soft", map[string]interface{}{hapticsIntensityVariable: "soft"}, 0},
+		{"upper strong", map[string]interface{}{hapticsIntensityVariable: "STRONG"}, 2},
+		{"padded", map[string]interface{}{hapticsIntensityVariable: "  Normal "}, 1},
+		{"typo", map[string]interface{}{hapticsIntensityVariable: "louder"}, hapticLevelDefault},
+		{"number index", map[string]interface{}{hapticsIntensityVariable: float64(2)}, 2},
+		{"number out of range", map[string]interface{}{hapticsIntensityVariable: float64(9)}, hapticLevelDefault},
+		// The web builder capitalises custom keys, so the reader must find this
+		// spelling too instead of silently falling back to Normal.
+		{"builder casing", map[string]interface{}{"HapticsIntensity": "soft"}, 0},
+	}
+	for _, tc := range cases {
+		if got := hapticsConfiguredLevel(hapticsTestConfig(tc.custom)); got != tc.want {
+			t.Errorf("%s: got step %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	if got := hapticsConfiguredLevel(nil); got != hapticLevelDefault {
+		t.Errorf("a nil config resolved step %d, want the default", got)
+	}
+}
+
+// The step is applied where the pulse is built, so every kind of feedback —
+// navigation, confirm, error — follows it without a second table of pulses.
+func TestHapticsLevelScalesPulses(t *testing.T) {
+	dev := &fakeHaptics{}
+	installFakeHaptics(t, dev)
+	hapticsBind(nil)
+
+	playHaptic(hapticActivatePulse)
+	if len(dev.pulses) != 1 || dev.pulses[0] != hapticActivatePulse {
+		t.Fatalf("default pulses = %+v, want the pulse unchanged (%+v)", dev.pulses, hapticActivatePulse)
+	}
+
+	soft := hapticsSetLevel(nil, hapticsLevelIndex("soft"))
+	playHaptic(hapticActivatePulse)
+	if len(dev.pulses) != 2 {
+		t.Fatalf("pulses = %d, want the soft one too", len(dev.pulses))
+	}
+	if got, want := dev.pulses[1].strength, hapticActivatePulse.strength*soft.scale; math.Abs(float64(got-want)) > 1e-6 {
+		t.Errorf("soft strength = %v, want %v", got, want)
+	}
+	if got := dev.pulses[1]; got.ms != hapticActivatePulse.ms {
+		t.Errorf("soft pulse length = %d ms, want it left alone (%d)", got.ms, hapticActivatePulse.ms)
+	}
+
+	strong := hapticsSetLevel(nil, hapticsLevelIndex("strong"))
+	playHaptic(hapticActivatePulse)
+	playHaptic(hapticErrorPulse)
+	if len(dev.pulses) != 4 {
+		t.Fatalf("pulses = %d, want 4", len(dev.pulses))
+	}
+	if got, want := dev.pulses[2].strength, hapticActivatePulse.strength*strong.scale; math.Abs(float64(got-want)) > 1e-6 {
+		t.Errorf("strong strength = %v, want %v", got, want)
+	}
+	// The error pulse is already full scale, so Strong cannot push it past the
+	// range every backend clamps to anyway.
+	if got := dev.pulses[3].strength; got != 1 {
+		t.Errorf("strong error strength = %v, want it capped at 1", got)
+	}
+}
+
+// The row is a ring like the other cycling rows, and stepping it saves the
+// spelling the loader reads back.
+func TestHapticsLevelRowStepsAndWraps(t *testing.T) {
+	installFakeHaptics(t, &fakeHaptics{})
+	defer resetA11yForTest()
+	config := hapticsTestConfig(map[string]interface{}{})
+
+	rows := a11yRows()
+	a11y.cursor = -1
+	for i, row := range rows {
+		if row.kind == a11yRowVibration {
+			a11y.cursor = i
+		}
+	}
+	if a11y.cursor < 0 {
+		t.Fatal("the accessibility panel has no Vibration strength row")
+	}
+	if got := rows[a11y.cursor].value; got != "Normal" {
+		t.Fatalf("row value = %q, want Normal on a fresh install", got)
+	}
+
+	a11yAdjust(1, config)
+	if got := hapticsLevelNow().label; got != "Strong" {
+		t.Fatalf("one step right = %q, want Strong", got)
+	}
+	if got, _ := customValue(config.Variables.Custom, hapticsIntensityVariable); got != "strong" {
+		t.Fatalf("saved value = %v, want the strong spelling", got)
+	}
+
+	a11yAdjust(1, config)
+	if got := hapticsLevelNow().label; got != "Soft" {
+		t.Fatalf("stepping past Strong = %q, want it to wrap to Soft", got)
+	}
+	a11yAdjust(-1, config)
+	if got := hapticsLevelNow().label; got != "Strong" {
+		t.Fatalf("stepping left from Soft = %q, want it to wrap to Strong", got)
+	}
+
+	// A saved step is what the next launch binds.
+	hapticsBind(config)
+	if got := hapticsLevelNow().label; got != "Strong" {
+		t.Fatalf("after a reload the step is %q, want Strong", got)
 	}
 }
 

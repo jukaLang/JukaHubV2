@@ -31,6 +31,7 @@ const (
 	toolsActionCommunity
 	toolsActionPowerTools
 	toolsActionToolbox
+	toolsActionAudit
 	toolsActionSecurity
 	toolsActionDiscHelpers
 	toolsActionCopyIP
@@ -43,6 +44,17 @@ const (
 	toolsActionTraceroute
 	toolsActionDNSLookup
 	toolsActionWiFiSignal
+	// Identity and reachability. These four answer "what does the internet
+	// see", "who else is on the LAN", "what have I opened" and "is this URL
+	// healthy", which are the questions that followed the probes above.
+	toolsActionPublicIP
+	toolsActionLANDevices
+	toolsActionListeningPorts
+	toolsActionHTTPCheck
+	toolsActionPortCheck
+	toolsActionWhois
+	toolsActionClockCheck
+	toolsActionSubnet
 )
 
 // toolsStatus colours the small dot on a row: a server that is running is
@@ -170,7 +182,9 @@ func ensureToolsMenuEntry(config *Config) {
 			}
 		}
 		y := maxY + 10
-		if y+55 > int32(config.Height)-40 {
+		// Compare in the config's own integer type: the caller's height is an
+		// int, and squeezing it into int32 is a narrowing cast for no gain.
+		if int(y)+55 > config.Height-40 {
 			return
 		}
 		scene.Elements = append(scene.Elements, Element{
@@ -330,11 +344,13 @@ func toolsRows(config *Config) []toolsRow {
 		enabled: true,
 	})
 	share = append(share, toolsRow{
-		label:   "DNS lookup",
-		value:   "github.com · example.com",
-		detail:  "Uses the resolver configured on this device",
-		hint:    hintLine(FooterHint{"A", "Run"}),
-		action:  toolsActionDNSLookup,
+		label:  "DNS lookup",
+		value:  powerDNSRowHost(),
+		detail: "Type a host or IP: A, AAAA, CNAME, MX, NS, TXT, PTR",
+		hint:   hintLine(FooterHint{"A", "Look up"}),
+		action: toolsActionDNSLookup,
+		// The row asks for the name on the keyboard first, so it is usable
+		// without copying anything to the clipboard.
 		enabled: true,
 	})
 	share = append(share, toolsRow{
@@ -343,6 +359,70 @@ func toolsRows(config *Config) []toolsRow {
 		detail:  "Link quality and dBm when associated",
 		hint:    hintLine(FooterHint{"A", "Read"}),
 		action:  toolsActionWiFiSignal,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "LAN neighbours",
+		value:   "Devices already seen",
+		detail:  "ARP table: IP, MAC and interface, read without probing",
+		hint:    hintLine(FooterHint{"A", "Read"}),
+		action:  toolsActionLANDevices,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Public IP",
+		value:   "What the internet sees",
+		detail:  "Address, country and the edge it lands on",
+		hint:    hintLine(FooterHint{"A", "Look up"}),
+		action:  toolsActionPublicIP,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "HTTP check",
+		value:   toolsURLRowValue(),
+		detail:  "Status, time, server and certificate expiry for one URL",
+		hint:    hintLine(FooterHint{"A", "Check"}),
+		action:  toolsActionHTTPCheck,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Port check",
+		value:   netPortRowValue(),
+		detail:  "Is one port open? Type host:port on the keyboard",
+		hint:    hintLine(FooterHint{"A", "Check"}),
+		action:  toolsActionPortCheck,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Domain whois",
+		value:   netWhoisRowValue(),
+		detail:  "Registrar, dates and name servers, from RDAP",
+		hint:    hintLine(FooterHint{"A", "Look up"}),
+		action:  toolsActionWhois,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Listening ports",
+		value:   "This device",
+		detail:  "Open TCP ports and the process holding them",
+		hint:    hintLine(FooterHint{"A", "Read"}),
+		action:  toolsActionListeningPorts,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Clock check",
+		value:   "pool.ntp.org",
+		detail:  "Device time against NTP: a wrong clock breaks TLS",
+		hint:    hintLine(FooterHint{"A", "Compare"}),
+		action:  toolsActionClockCheck,
+		enabled: true,
+	})
+	share = append(share, toolsRow{
+		label:   "Subnet plan",
+		value:   "This device",
+		detail:  "Network, broadcast, usable range and host count",
+		hint:    hintLine(FooterHint{"A", "Read"}),
+		action:  toolsActionSubnet,
 		enabled: true,
 	})
 
@@ -406,6 +486,19 @@ func toolsRows(config *Config) []toolsRow {
 	}
 	system = append(system, toolboxRow)
 
+	auditRow := toolsRow{
+		label:   "Audit toolkit",
+		value:   fmt.Sprintf("%d of %d installed", secAuditInstalledCount(), len(secAuditCatalog())),
+		detail:  "Burp, ZAP, sqlmap, Nikto, Wireshark, aircrack-ng, Metasploit, hashcat, John",
+		hint:    hintLine(FooterHint{"A", "Open"}),
+		action:  toolsActionAudit,
+		enabled: true,
+	}
+	if secAuditInstalledCount() > 0 {
+		auditRow.status = toolsStatusGood
+	}
+	system = append(system, auditRow)
+
 	securityValue, securityWarn := securityPostureValue(config)
 	securityRow := toolsRow{
 		label:   "Security & trust",
@@ -464,8 +557,13 @@ func toolsRows(config *Config) []toolsRow {
 	}
 
 	// One heading per group; rows are added conditionally, so the label goes on
-	// whichever row ended up first.
-	markToolsSection(share, "FTP & IP")
+	// whichever row ended up first. The transfer tools used to share a single
+	// eighteen-tile heading, which read as an undifferentiated wall: the
+	// servers, the probes and the lookups now each get their own band.
+	markToolsSectionFrom(share, toolsActionCopyIP, "SERVERS & SHARING")
+	markToolsSectionFrom(share, toolsActionGatewayScan, "NETWORK PROBES")
+	markToolsSectionFrom(share, toolsActionPublicIP, "LOOKUPS & CHECKS")
+	markToolsSectionFrom(share, toolsActionListeningPorts, "THIS DEVICE")
 	markToolsSection(together, "WATCH TOGETHER")
 	markToolsSection(system, "SYSTEM & UPDATES")
 
@@ -484,6 +582,18 @@ func markToolsSection(rows []toolsRow, title string) {
 	}
 }
 
+// markToolsSectionFrom labels the row that carries action, which is the first
+// row of its group. Naming the row instead of indexing it keeps the heading with
+// its tools when a conditional row is added or removed above it.
+func markToolsSectionFrom(rows []toolsRow, action toolsAction, title string) {
+	for i := range rows {
+		if rows[i].action == action {
+			rows[i].section = title
+			return
+		}
+	}
+}
+
 // toolsPanelMove moves the tile cursor. Left/Right walk the focused row,
 // Up/Down jump by the grid's column count — the same ragged-grid semantics as
 // the Apps launcher — and both clamp so focus can never wrap somewhere
@@ -494,21 +604,61 @@ func toolsPanelMove(config *Config, dx, dy int) {
 		return
 	}
 	prev := toolsPanel.cursor
-	switch {
-	case dx != 0:
-		toolsPanel.cursor += dx
-	case dy != 0:
-		toolsPanel.cursor += dy * toolsPanelMetrics(config, rows).cols
-	}
-	if toolsPanel.cursor < 0 {
-		toolsPanel.cursor = 0
-	}
-	if toolsPanel.cursor >= len(rows) {
-		toolsPanel.cursor = len(rows) - 1
-	}
+	g := toolsGridBuild(rows, toolsPanelMetrics(config, rows))
+	toolsPanel.cursor = toolsGridTarget(g, toolsPanel.cursor, dx, dy)
 	if toolsPanel.cursor != prev {
 		PlayNavSound()
 	}
+}
+
+// toolsGridTarget maps a direction onto the tile the eye expects. Left/Right
+// stay inside the row and clamp at its ends; Up/Down keep the column in the
+// neighbouring row and clamp to that row's length. Flat index arithmetic was
+// wrong in two visible ways: Right at the end of a row landed on the first tile
+// of the row below, and with the rows now broken by section headings that jump
+// crossed a heading and read as a diagonal teleport.
+func toolsGridTarget(g toolsGrid, cursor, dx, dy int) int {
+	if cursor < 0 || cursor >= len(g.rects) {
+		return cursor
+	}
+	lineIdx, col := -1, -1
+	for i, line := range g.lines {
+		for k, idx := range line.tiles {
+			if idx == cursor {
+				lineIdx, col = i, k
+				break
+			}
+		}
+		if lineIdx >= 0 {
+			break
+		}
+	}
+	if lineIdx < 0 {
+		return cursor
+	}
+	line := g.lines[lineIdx]
+	if dx != 0 {
+		next := col + dx
+		if next < 0 || next >= len(line.tiles) {
+			return cursor
+		}
+		return line.tiles[next]
+	}
+	if dy == 0 {
+		return cursor
+	}
+	target := lineIdx + dy
+	if target < 0 || target >= len(g.lines) || len(g.lines[target].tiles) == 0 {
+		return cursor
+	}
+	next := g.lines[target]
+	if col >= len(next.tiles) {
+		col = len(next.tiles) - 1
+	}
+	if col < 0 {
+		return cursor
+	}
+	return next.tiles[col]
 }
 
 // The tile grid reuses the Apps launcher's look with this panel's data. Each
@@ -566,7 +716,7 @@ func toolsPanelMetrics(config *Config, rows []toolsRow) toolsGridMetrics {
 	}
 
 	m := toolsGridMetrics{
-		padX: 24,
+		padX: OverlayPadX,
 		gap:  12,
 		info: toolsInfoLines(),
 	}
@@ -583,9 +733,12 @@ func toolsPanelMetrics(config *Config, rows []toolsRow) toolsGridMetrics {
 	// The header is the shared page bar: its height comes from the component
 	// that draws it, so the panel and the bar cannot disagree about the band.
 	headerBand := uiPageHeaderMetricsFor(config, toolsHeader(config, 0, 0, 0))
-	m.headerH = 12 + headerBand.Height + 12
-	// Footer: value line, detail line, and the closing hint.
-	m.footH = 6 + medH + 2 + smallH + 6 + smallH + 6
+	m.headerH = UIPanelHeaderInset + headerBand.Height + 12
+	// Footer: the focused tile's value with its action chip, then its detail
+	// with the close hint at the right end of the same line. The close hint
+	// used to get a third line of its own, which cost a whole row of tiles on a
+	// 720p panel for two words that repeat on every screen.
+	m.footH = 12 + medH + 2 + smallH + 10
 
 	m.sectionH = 28
 	if label := getFontSized(config, "small", 15); label != nil {
@@ -756,6 +909,13 @@ func toolsPanelActivate(config *Config) {
 		powerTools.returnToTools = true
 		powerSetPage(powerPageToolbox)
 		PlayActivateSound()
+	case toolsActionAudit:
+		// The audit page is a Power tools page, but it is reached from here:
+		// Back returns to this panel rather than to a menu never opened.
+		openPowerTools(config)
+		powerTools.returnToTools = true
+		powerSetPage(powerPageAudit)
+		PlayActivateSound()
 	case toolsActionSecurity:
 		openPowerTools(config)
 		powerTools.returnToTools = true
@@ -806,9 +966,25 @@ func toolsPanelActivate(config *Config) {
 	case toolsActionTraceroute:
 		powerProbeTraceroute(config)
 	case toolsActionDNSLookup:
-		powerProbeDNS(config)
+		vkOpenDNSQuery("")
 	case toolsActionWiFiSignal:
 		powerProbeWiFiSignal(config)
+	case toolsActionPublicIP:
+		powerProbePublicIP(config)
+	case toolsActionLANDevices:
+		powerProbeLANNeighbours(config)
+	case toolsActionListeningPorts:
+		powerProbeListeningPorts(config)
+	case toolsActionHTTPCheck:
+		toolsUIURLPrompt()
+	case toolsActionPortCheck:
+		powerProbePortCheck()
+	case toolsActionWhois:
+		powerProbeWhois()
+	case toolsActionClockCheck:
+		powerProbeClock(config)
+	case toolsActionSubnet:
+		powerProbeSubnet(config)
 	}
 }
 
@@ -947,7 +1123,6 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	m := toolsPanelMetrics(config, rows)
 	g := toolsGridBuild(rows, m)
 	padX := m.padX
-	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
 	// A little wider than before: the values (addresses, "Files · Scripts ·
@@ -969,20 +1144,16 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	toolsPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	// Accent hairline at the top of the panel.
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
 	// The header is the shared page bar, the same one the Tools page and About
 	// use: title well, subtitle, and the status read-out every transfer tool
 	// below needs.
-	UIPageHeaderDraw(renderer, config, toolsHeader(config, panelX+padX, panelY+12, panelW-2*padX))
+	UIPageHeaderDraw(renderer, config, toolsHeader(config, panelX+padX, panelY+UIPanelHeaderInset, panelW-2*padX))
 
 	bodyTop := panelY + m.headerH
 	bodyViewH := panelH - m.headerH - m.footH - m.infoH
@@ -1035,7 +1206,18 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 				// of a scrolled panel, and a card cut by the panel edge reads as
 				// the edge itself.
 				drawToolsTile(r, config, cell, rows[idx], idx == toolsPanel.cursor)
-				toolsRowRects[idx] = cell
+				// Record only the part that is on screen: the renderer clips
+				// the tile, so a rect that reached past the body would let a
+				// tap land on the few invisible pixels under the footer.
+				visible := cell
+				if visible.Y < bodyTop {
+					visible.H -= bodyTop - visible.Y
+					visible.Y = bodyTop
+				}
+				if bottom := bodyTop + bodyViewH; visible.Y+visible.H > bottom {
+					visible.H = bottom - visible.Y
+				}
+				toolsRowRects[idx] = visible
 			}
 		}
 	})
@@ -1082,17 +1264,21 @@ func renderToolsPanel(renderer *sdl.Renderer, config *Config) {
 		value := ellipsize(medium, row.value, valueW)
 		renderText(renderer, config, medium, value, toolsValueColor(row), panelX+padX, valueY(m, footY))
 	}
-	if row.detail != "" {
-		detailW := panelW - 2*padX
-		if detailW > 0 {
-			renderText(renderer, config, font, ellipsize(font, row.detail, detailW), ColorTextTertiary(),
-				panelX+padX, valueY(m, footY)+medH+2)
-		}
-	}
 	closeText := hintLine(FooterHint{"B", "Close"})
 	cw, _, _ := font.SizeUTF8(closeText)
+	detailY := valueY(m, footY) + medH + 2
+	if row.detail != "" {
+		detailW := panelW - 2*padX - int32(cw) - 16
+		if detailW > 0 {
+			renderText(renderer, config, font, ellipsize(font, row.detail, detailW), ColorTextTertiary(),
+				panelX+padX, detailY)
+		}
+	}
+	// The close hint shares the detail line instead of owning a third one: the
+	// grid gets that band back, and every other overlay puts its B hint on the
+	// bottom bar rather than on a line of its own.
 	renderText(renderer, config, font, closeText, ColorTextTertiary(),
-		panelX+(panelW-int32(cw))/2, panelY+panelH-smallH-6)
+		panelX+panelW-padX-int32(cw), detailY)
 }
 
 // toolsValueColor colours the focused tile's value line: warnings are amber,
@@ -1121,8 +1307,14 @@ func valueY(m toolsGridMetrics, footY int32) int32 { return footY + 6 }
 // small-caps label is read. An unknown group falls back to the Tools glyph.
 func toolsSectionGlyph(title string) toolsAction {
 	switch strings.ToUpper(strings.TrimSpace(title)) {
-	case "FTP & IP":
+	case "FTP & IP", "SERVERS & SHARING":
 		return toolsActionFTP
+	case "NETWORK PROBES":
+		return toolsActionPing
+	case "LOOKUPS & CHECKS":
+		return toolsActionDNSLookup
+	case "THIS DEVICE":
+		return toolsActionSSH
 	case "WATCH TOGETHER":
 		return toolsActionParty
 	case "SYSTEM & UPDATES":
@@ -1157,7 +1349,7 @@ func drawToolsHintChip(renderer *sdl.Renderer, config *Config, font *ttf.Font, h
 	border := WithAlpha(ColorBorder, 140)
 	label := ColorTextSecondary()
 	if focused {
-		fill = WithAlpha(accentColor, 90)
+		fill = WithAlpha(visibleAccent(), 90)
 		border = WithAlpha(focus, 220)
 		label = ColorTextPrimary()
 	}
@@ -1183,7 +1375,7 @@ func toolsStatusColor(status toolsStatus) sdl.Color {
 // The metrics pass calls it with a zero rect, because only the fonts matter to
 // the height.
 func toolsHeader(config *Config, x, y, w int32) UIPageHeader {
-	sub := "FTP & IP transfers, network probes and device utilities"
+	sub := "Sharing, network probes and lookups for this device"
 	if !IsOnline() {
 		sub = "Offline — connect WiFi to transfer files"
 	}
@@ -1291,6 +1483,53 @@ func drawToolsIcon(r *sdl.Renderer, box sdl.Rect, action toolsAction, color sdl.
 		fillCircle(r, cx, box.Y+h*3/4, 4, color)
 		arc(r, cx, box.Y+h*3/4, h/3, 200, 140, color)
 		arc(r, cx, box.Y+h*3/4, h*13/20, 200, 140, color)
+	case toolsActionPublicIP:
+		// Public IP: the globe, with an arrow leaving it for the internet.
+		DrawHomeIcon(r, "browser", box, false)
+		r.DrawLine(box.X+w-6, box.Y+h/4, box.X+w-6, box.Y+4)
+		r.DrawLine(box.X+w-6, box.Y+4, box.X+w-11, box.Y+9)
+		r.DrawLine(box.X+w-6, box.Y+4, box.X+w-1, box.Y+9)
+	case toolsActionLANDevices:
+		// LAN neighbours: the same device-and-peers glyph as Copy IP, drawn
+		// hollow so the two tiles read as related but distinct.
+		strokeCircle(r, cx, cy, 6, color)
+		strokeCircle(r, cx-w/3, box.Y+h/4, 4, color)
+		strokeCircle(r, cx+w/3, box.Y+h*3/4, 4, color)
+		r.DrawLine(cx-5, cy-4, cx-w/3+3, box.Y+h/4+2)
+		r.DrawLine(cx+5, cy+4, cx+w/3-3, box.Y+h*3/4-2)
+	case toolsActionListeningPorts:
+		// Listening ports: stacked rows, like the socket table.
+		for i := 0; i < 3; i++ {
+			fillRoundedRect(r, box.X+w/6, box.Y+h/4+int32(i)*h/4, w*2/3, h/8, 2, color)
+		}
+	case toolsActionHTTPCheck:
+		// HTTP check: a frame with an arrow coming into it.
+		strokeRoundedRect(r, box.X+w/8, box.Y+h/4, w*3/4, h/2, 4, 2, color)
+		r.DrawLine(box.X+2, cy, box.X+w/5, cy)
+		r.DrawLine(box.X+w/5, cy, box.X+w/5-5, cy-5)
+		r.DrawLine(box.X+w/5, cy, box.X+w/5-5, cy+5)
+	case toolsActionPortCheck:
+		// Port check: a socket with its two pins.
+		strokeRoundedRect(r, box.X+w/5, box.Y+h/3, w*3/5, h/2, 3, 2, color)
+		for _, px := range []int32{cx - 4, cx + 4} {
+			r.DrawLine(px, box.Y+h/5, px, box.Y+h/3)
+		}
+		fillCircle(r, cx, box.Y+h*7/12, 2, color)
+	case toolsActionWhois:
+		// Domain whois: a document with its lines.
+		strokeRoundedRect(r, box.X+w/4, box.Y+h/8, w/2, h*3/4, 3, 2, color)
+		for i := int32(0); i < 3; i++ {
+			fillRoundedRect(r, box.X+w/4+4, box.Y+h/3+int32(i)*h/6, w/2-8, 2, 1, color)
+		}
+	case toolsActionClockCheck:
+		// Clock check: a clock face at ten past ten.
+		strokeCircle(r, cx, cy, w*15/50, color)
+		r.DrawLine(cx, cy, cx, cy-h/4)
+		r.DrawLine(cx, cy, cx+w/6, cy+h/12)
+	case toolsActionSubnet:
+		// Subnet plan: a network frame with one host inside it.
+		strokeRoundedRect(r, box.X+w/7, box.Y+h/7, w*5/7, h*5/7, 4, 2, color)
+		fillRoundedRect(r, cx-w/8, cy-h/8, w/4, h/4, 2, color)
 	case toolsActionCompanion:
 		// Phone: a rounded body with a home dot.
 		strokeRoundedRect(r, box.X+w/4, box.Y+h/8, w/2, h*3/4, 4, 2, color)

@@ -198,6 +198,9 @@ func TestOpenAudioPlayerBrowserLoadsFolder(t *testing.T) {
 
 func TestOpenAudioPlayerFindsTrackInFolder(t *testing.T) {
 	resetMusicState(t)
+	// Opening a track also opens the Music scene, which arms a fade this test
+	// has no render loop to finish.
+	isolateSceneSwitch(t)
 	cfg := audioTestConfig()
 	dir := musicTestFiles(t)
 

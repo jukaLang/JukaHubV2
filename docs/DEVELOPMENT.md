@@ -556,18 +556,27 @@ Base palette from `design.go` (theme presets override these through
 
 | Token | Value |
 |-------|-------|
-| Background | `#090E19` |
-| Top bar | `#111725` |
-| Surface / panel | `#121A2A` |
-| Card | `#182236` |
-| Card focused | `#24344E` |
-| Card hover | `#1C273C` |
-| Border | `#2A3953` |
+| Background | `#070B12` |
+| Top bar | `#16202F` |
+| Surface / panel | `#16202F` |
+| Card | `#1F2B3E` |
+| Card raised (rows, tiles) | `#27364C` |
+| Card focused | `#384D6E` |
+| Card hover | `#2E4059` |
+| Border | `#3A4B6B` |
 | Border focus | `#6EE7FF` at ~31% alpha |
 | Accent | `#55D8FF` |
 | Accent secondary | `#8B7CFF` |
-| Text primary / secondary / tertiary | `#F6F8FC` / `#9CA9BD` / `#66758B` |
-| Success / warning / danger | `#48D597` / `#FFBF69` / `#E26878` |
+| Text primary / secondary / tertiary | `#F6F8FC` / `#B4C1D4` / `#8FA0BA` |
+| Success / warning / danger | `#48D597` / `#FFBF69` / `#F0788A` |
+
+Each step of the ramp is a measurable step, not a suggestion: the panel sits
+1.20:1 above the background, rows 1.34:1 above the panel and a focused row
+1.43:1 above a resting one, and tertiary text clears 4.5:1 on a raised row.
+`TestShippedDarkPaletteSeparates` enforces those floors — the ramp used to move
+by ~1.1:1 a level, which flattened cards, rows and page into one dark blue field
+on a handheld panel. The shipped configs' `buttonColor`/`inputColor` have the
+same guard (`TestShippedConfigsKeepButtonsVisible`).
 
 Spacing follows a 4 pt grid (`SpaceXS`…`Space3XL`) with an "airy" variant for
 larger screens; corner radii match the same scale (`RadiusSM` … `RadiusXXL`).
@@ -623,6 +632,25 @@ and tokens that fail validation. Never commit a config with real credentials —
 `jukaconfig.json` and `jukauser.json` are git-ignored for that reason.
 
 Full details: [SECURITY.md](../SECURITY.md).
+
+### Fuzzing
+
+[player/fuzz_test.go](../player/fuzz_test.go) covers the two places where text
+from outside the app becomes a path or an address: the Windows-runtime archive
+entry and symlink names, and the SFTP address field. Each target asserts an
+invariant (`runtimeArchivePath` either refuses a name or resolves it below the
+extraction root; `parseFeRemote` either refuses the text or returns a usable
+address that round-trips), so a crash means a real escape rather than a diff.
+
+```bash
+cd player
+go test . -run '^$' -fuzz '^FuzzRuntimeArchivePath$' -fuzztime 30s
+```
+
+`go test .` alone runs every target over its seed corpus as an ordinary test, so
+the seeds are the regression cases; the nightly workflow (`fuzz` job) lists the
+targets per package and gives each one a 30-second burst. Add a target whenever a
+new parser is added, and keep the seeds to the shapes that actually mattered.
 
 ## Key files
 

@@ -127,7 +127,7 @@ func androidPakStageFootprint(apk string, libs androidPakLibs) (int64, error) {
 		if strings.HasPrefix(slash, "lib/") && !strings.HasPrefix(slash, chosenPrefix) {
 			continue
 		}
-		total += int64(f.UncompressedSize64)
+		total = satAddBytes(total, declaredEntryBytes(f.UncompressedSize64))
 	}
 	return total, nil
 }
@@ -218,7 +218,7 @@ func inspectAndroidPak(apk string, requestedMain string) (androidPakLibs, error)
 					seen[abi] = true
 					abils = append(abils, abi)
 				}
-				sizes[slash] = int64(f.UncompressedSize64)
+				sizes[slash] = declaredEntryBytes(f.UncompressedSize64)
 			}
 		}
 	}
@@ -376,10 +376,14 @@ func stageAndroidPak(id, apk string, libs androidPakLibs) (stageDir, libDir stri
 			}
 			continue
 		}
-		total += int64(f.UncompressedSize64)
-		if total > androidPakStageMaxBytes {
+		// The declared size is what the stage budget is summed from, and it is
+		// a uint64 from the archive: converting it blindly let a header that
+		// claims more than int64 holds wrap negative and pass the cap below.
+		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), androidPakStageMaxBytes)
+		if !ok {
 			return "", "", fmt.Errorf("staged files exceed %d bytes — APK too large for RAM staging", androidPakStageMaxBytes)
 		}
+		total = sum
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return "", "", err
 		}

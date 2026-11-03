@@ -70,6 +70,11 @@ type FileEntry struct {
 	Name  string `json:"name"`
 	Path  string `json:"path"`
 	IsDir bool   `json:"isDir"`
+	// Size and Mod are what a file manager's rows show on the right. The File
+	// Explorer fills them when it reads a folder; every other list leaves them
+	// zero, which reads as "unknown" rather than "empty file".
+	Size int64     `json:"size,omitempty"`
+	Mod  time.Time `json:"mod,omitempty"`
 	// Icon is an optional image that belongs to the entry. Only the Apps
 	// launcher sets it: the file explorer and the media lists leave it empty.
 	Icon string `json:"icon,omitempty"`
@@ -107,6 +112,71 @@ func openSearchShortcut(config *Config) bool {
 		}
 	}
 	return false
+}
+
+// mediaPlayLinkPending marks the one keyboard session that was opened by the
+// Play Link button. Its submit plays the typed text instead of searching for
+// it, so asking for a link and searching for a query cannot be confused.
+var mediaPlayLinkPending bool
+
+// openMediaPlayLink asks for a link to play. Play Link used to act only on a
+// link that was already typed into the URL field, which on a handheld means
+// walking the focus to a small input before the button does anything at all.
+// It now opens that field on the on-screen keyboard with an empty buffer, so
+// the button itself is the way in.
+func openMediaPlayLink(config *Config) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	for i, el := range config.Scenes[currentSceneIndex].Elements {
+		if el.Type != "input" {
+			continue
+		}
+		mediaPlayLinkPending = true
+		vkOpenSceneInput(config, currentSceneIndex, i)
+		// An empty field, not the old search query: the keyboard is asking for
+		// a link, and a stale query would read as a pre-filled answer.
+		inputTextBuffer = ""
+		vkTextSelected = false
+		showToast("Paste a video link, then Save", ToastInfo())
+		return true
+	}
+	return false
+}
+
+// mediaPlayPlan is what a media scene's play button asks for, worked out
+// without running anything so it can be tested.
+type mediaPlayPlan struct {
+	result int    // index of the highlighted result, -1 when none
+	url    string // play this link
+	askURL bool   // ask the user for a link
+}
+
+// planYouTubePlay decides what the Play Link button should do: a highlighted
+// result plays, otherwise a link already in the field plays, otherwise the
+// keyboard asks for one. The button never ends in a dead press.
+func planYouTubePlay(videos []VideoInfo, focus int, fieldValue string) mediaPlayPlan {
+	if focus >= 0 && focus < len(videos) {
+		return mediaPlayPlan{result: focus}
+	}
+	if url := strings.TrimSpace(fieldValue); looksLikeStreamURL(url) {
+		return mediaPlayPlan{result: -1, url: url}
+	}
+	return mediaPlayPlan{result: -1, askURL: true}
+}
+
+// mediaPlayLinkPlay plays a link. It is a variable so the prompt's submit path
+// can be tested without starting a real playback.
+var mediaPlayLinkPlay = playVideoURL
+
+// submitMediaPlayLink plays the link the Play Link keyboard was opened for.
+func submitMediaPlayLink(config *Config, text string) {
+	link := strings.TrimSpace(text)
+	if link == "" {
+		showToast("Nothing to play — type a video link", ToastInfo())
+		return
+	}
+	mediaPlayLinkPlay(config, link)
 }
 
 func isMediaFile(name string) bool {
@@ -195,6 +265,13 @@ func feListDirectory(config *Config) {
 		if e.IsDir() {
 			dirs = append(dirs, fe)
 		} else {
+			// Size and date are what the file manager's rows show on the right.
+			// Info() costs one lstat per entry, paid once when the folder is
+			// read rather than on every frame.
+			if info, err := e.Info(); err == nil {
+				fe.Size = info.Size()
+				fe.Mod = info.ModTime()
+			}
 			files = append(files, fe)
 		}
 	}
@@ -208,6 +285,9 @@ func feListDirectory(config *Config) {
 	list := append(dirs, files...)
 	config.Variables.Custom["fe_entries"] = list
 	config.Variables.Custom["fe_path"] = path
+	// The bar's free-space reading, refreshed with the listing rather than per
+	// frame: this is the one place a new folder makes it stale.
+	feRefreshFreeSpace(path)
 
 	if focusedFileIndex < 0 && len(list) > 0 {
 		focusedFileIndex = 0
@@ -356,7 +436,7 @@ func feEnterFocused(config *Config) {
 		openFileInCanvasSandbox(entry.Path)
 		return
 	}
-	if ext == ".pdf" {
+	if ext == ".pdf" || ext == ".epub" {
 		pdfOpenFile(entry.Path)
 		if idx := findSceneIndex(config, "PDFReader"); idx >= 0 {
 			changeSceneTo(config, idx)
@@ -368,11 +448,17 @@ func feEnterFocused(config *Config) {
 		// Audio files open the audio player instead of the video decoder: it
 		// builds a playlist from the folder and keeps the track list usable
 		// while the song plays.
-		if isAudioFile(entry.Name) {
+		// A podcast row's Name is the episode title, so the extension test has
+		// to look at the path too; those rows are audio URLs, not video links.
+		if isAudioFile(entry.Name) || isAudioURL(entry.Path) {
 			openAudioPlayer(config, entry.Path)
 			return
 		}
 		playSmartURL(config, entry.Path)
+	} else if fileEditorAutoOpens(entry.Path) {
+		// A text file used to answer "No handler for …", which left the device
+		// with no way to read or change a config, a JSON index or a note.
+		fileEditorOpen(entry.Path)
 	} else {
 		log.Printf("[DEBUG] File Explorer: unsupported file: %s", entry.Name)
 		showToast("No handler for "+entry.Name, ToastInfo())
@@ -410,6 +496,10 @@ func feLaunchScript(config *Config, path string) error {
 	if err != nil {
 		return err
 	}
+	// Same hand-off rule as the emulator launchers: the child leads its own
+	// process group, so a wrapper script that backgrounds the game keeps the
+	// screen parked until the game itself exits.
+	screenChildGroupConfigure(cmd)
 	if err = cmd.Start(); err != nil {
 		return err
 	}
@@ -418,7 +508,7 @@ func feLaunchScript(config *Config, path string) error {
 		if err := cmd.Wait(); err != nil {
 			log.Printf("File Explorer: script %q failed: %v", path, err)
 		}
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 	}()
 	return nil
 }
@@ -568,30 +658,11 @@ func dynamicListRowAt(element Element, start, end int, my int32) int {
 	return -1
 }
 
-// renderFileExplorerPathBar draws the current path above the File Explorer's
-// list. It sits in the band the scene's panel leaves free, so the two share the
-// page instead of the toolbar being drawn over the list.
+// renderFileExplorerPathBar is kept for the callers that still order the path
+// above the list; the Files screen draws the richer breadcrumb bar itself (see
+// renderFilesBreadcrumbBar in files_manager.go).
 func renderFileExplorerPathBar(renderer *sdl.Renderer, config *Config, element Element, elemW int32, font *ttf.Font) {
-	toolbar := sdl.Rect{X: element.X, Y: element.Y - 52, W: elemW, H: 44}
-	fillRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, ColorCard)
-	strokeRoundedRect(renderer, toolbar.X, toolbar.Y, toolbar.W, toolbar.H, 10, 1, ColorBorder)
-	pathText := feDisplayPath(config)
-	// With no folder set the path is just ".", which says nothing about where
-	// the list is browsing. Naming the working directory is what a file browser
-	// is expected to show. feDisplayPath caches the resolved path, so the cwd
-	// lookup only runs on the frames that actually print it.
-	if pathText == "" || pathText == "." {
-		if wd, err := os.Getwd(); err == nil {
-			pathText = wd
-		} else {
-			pathText = "No folder selected"
-		}
-	}
-	textY := toolbar.Y + (toolbar.H-int32(font.Height()))/2
-	renderWithClip(renderer, toolbar.X+12, toolbar.Y+4, toolbar.W-24, toolbar.H-8, func(ren *sdl.Renderer) {
-		drawText(ren, font, ellipsize(font, pathText, toolbar.W-30), toolbar.X+12, textY,
-			ColorTextSecondary(), textAlignLeft)
-	})
+	renderFilesBreadcrumbBar(renderer, config, element, elemW, font)
 }
 
 // renderDynamicList draws a vertical, scrollable list of file entries.
@@ -675,6 +746,13 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 		rowY := y + 2
 
 		drawRow(renderer, rowX, rowY, rowW, rowH, 8, i == focusedFileIndex, false)
+
+		if isFileExplorer {
+			// The rows carry a type badge, the name and the size/date, so the
+			// list is scanned rather than read row by row.
+			renderFilesRow(renderer, config, font, entries[i], rowX, rowY, rowW, rowH, i == focusedFileIndex)
+			continue
+		}
 
 		if isRecentlyPlayed(entries[i].Path) {
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 200)

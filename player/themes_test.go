@@ -5,6 +5,8 @@ import (
 	"math"
 	"regexp"
 	"testing"
+
+	"github.com/veandco/go-sdl2/sdl"
 )
 
 var themeColorPattern = regexp.MustCompile(`^#(?:[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$`)
@@ -145,7 +147,8 @@ func TestThemeGalleryGridFitsAndScrolls(t *testing.T) {
 	prevIndex, prevScroll := themeGalleryIndex, themeGalleryScroll
 	t.Cleanup(func() { themeGalleryIndex, themeGalleryScroll = prevIndex, prevScroll })
 
-	presets := ListThemePresets()
+	// The grid draws the open tab's list, and starts below the tab strip.
+	presets := themeGalleryPresets()
 	cols, cardW, visibleRows := themeGalleryMetrics(element)
 	if cols < 3 {
 		t.Fatalf("gallery has %d columns, want at least 3", cols)
@@ -159,11 +162,11 @@ func TestThemeGalleryGridFitsAndScrolls(t *testing.T) {
 	}
 
 	themeGalleryIndex, themeGalleryScroll = 0, 0
-	if got := themeGalleryCardAt(element, element.X+8, element.Y+8); got != 0 {
+	if got := themeGalleryCardAt(element, element.X+8, element.Y+themeGalleryGridOffset()+8); got != 0 {
 		t.Fatalf("click on the first card hit %d, want 0", got)
 	}
 	// The gutter between two cards is not a card.
-	if got := themeGalleryCardAt(element, element.X+cardW+4, element.Y+8); got != -1 {
+	if got := themeGalleryCardAt(element, element.X+cardW+4, element.Y+themeGalleryGridOffset()+8); got != -1 {
 		t.Fatalf("click in the column gutter hit %d, want -1", got)
 	}
 	// Hit-testing follows the focused row's scroll offset.
@@ -175,7 +178,7 @@ func TestThemeGalleryGridFitsAndScrolls(t *testing.T) {
 	}
 	lastRow, lastCol := last/cols, last%cols
 	x := element.X + int32(lastCol)*(cardW+themeGalleryGap) + 8
-	y := element.Y + int32(lastRow-scroll)*(themeGalleryH+themeGalleryGap) + 8
+	y := element.Y + themeGalleryGridOffset() + int32(lastRow-scroll)*(themeGalleryH+themeGalleryGap) + 8
 	if got := themeGalleryCardAt(element, x, y); got != last {
 		t.Fatalf("click on the last card hit %d, want %d", got, last)
 	}
@@ -207,5 +210,116 @@ func TestThemeGalleryGridFitsAndScrolls(t *testing.T) {
 	themeGalleryScrollFor(element, 0)
 	if themeGalleryScroll != 0 {
 		t.Fatalf("scroll row %d at the first card, want 0", themeGalleryScroll)
+	}
+}
+
+// sdlRGB adapts a rendered colour to the WCAG helper's value type.
+func sdlRGB(c sdl.Color) rgbValue { return rgbValue{r: c.R, g: c.G, b: c.B} }
+
+// configRGB adapts a resolved config colour to the WCAG helper's value type.
+func configRGB(c RGB) rgbValue {
+	return rgbValue{r: uint8(c.R), g: uint8(c.G), b: uint8(c.B)}
+}
+
+// TestShippedDarkPaletteSeparates covers the palette in design.go: it is what
+// the app paints when no theme preset is stored, so it is the one most users
+// see, and it had no test at all (TestThemePresetsAreReadable only checks the
+// presets). The dark blue steps used to move by ~1.1:1 per level, so panels,
+// cards and the page behind them were one flat field on a handheld panel, and
+// tertiary text sat at 3.4:1 on a card — below WCAG AA. These are the floors.
+func TestShippedDarkPaletteSeparates(t *testing.T) {
+	bg := sdlRGB(ColorBackground)
+	surface := sdlRGB(ColorSurface)
+	raised := sdlRGB(ColorSurfaceRaised)
+	focus := sdlRGB(ColorCardFocus)
+	border := sdlRGB(ColorBorder)
+
+	for _, step := range []struct {
+		name string
+		a, b rgbValue
+		min  float64
+	}{
+		{"panel above the page", surface, bg, 1.18},
+		{"rows above a panel", raised, surface, 1.25},
+		{"a focused row above a resting row", focus, raised, 1.35},
+		{"a card border above a panel", border, surface, 1.60},
+	} {
+		if got := contrastRatio(step.a, step.b); got < step.min {
+			t.Errorf("%s: %.2f:1, want >= %.2f:1 (the step has to survive a cheap panel)",
+				step.name, got, step.min)
+		}
+	}
+
+	// Raised rows are the brightest surface text is drawn on, so they are the
+	// worst case for every text token.
+	for _, text := range []struct {
+		name string
+		c    sdl.Color
+		min  float64
+	}{
+		{"primary", ColorTextPrimary(), 7.0},
+		{"secondary", ColorTextSecondary(), 4.5},
+		{"tertiary", ColorTextTertiary(), 4.5},
+		{"success", ColorSuccess, 4.5},
+		{"warning", ColorWarning, 4.5},
+		{"danger", ColorDanger, 4.5},
+	} {
+		if got := contrastRatio(sdlRGB(text.c), raised); got < text.min {
+			t.Errorf("%s text on a raised row: %.2f:1, want >= %.2f:1 (WCAG AA body text)",
+				text.name, got, text.min)
+		}
+	}
+}
+
+// TestContrastTextPicksTheReadableLabel: button labels are chosen by
+// contrastText, so its crossover decides whether every coloured fill in the app
+// gets readable text. A lifted dark blue (#2E4061) used to fall on the wrong
+// side of it and come out near-black on near-black.
+func TestContrastTextPicksTheReadableLabel(t *testing.T) {
+	for _, fill := range []sdl.Color{
+		{R: 46, G: 64, B: 97, A: 255},    // lifted dark blue button
+		{R: 30, G: 41, B: 59, A: 255},    // the old button colour
+		{R: 85, G: 216, B: 255, A: 255},  // cyan accent
+		{R: 246, G: 248, B: 252, A: 255}, // light
+		{R: 7, G: 11, B: 18, A: 255},     // page background
+		{R: 255, G: 203, B: 102, A: 255}, // warning yellow
+	} {
+		label := contrastText(fill)
+		if got := contrastRatio(sdlRGB(label), sdlRGB(fill)); got < 4.5 {
+			t.Errorf("contrastText(%v) = %v: %.2f:1 on the fill, want >= 4.5:1",
+				sdlRGB(fill), sdlRGB(label), got)
+		}
+	}
+}
+
+// TestShippedConfigsKeepButtonsVisible: scene buttons are filled with the
+// config's $buttonColor and separated from the page by a single hairline, so a
+// button colour that sits ~1.3:1 above the page is a button nobody can find.
+// Both shipped configs used that value (#1E293B on #0B0F17), which is the "dark
+// blue hard to see" that reached the device.
+func TestShippedConfigsKeepButtonsVisible(t *testing.T) {
+	configs := loadAuditConfigs(t)
+	for _, name := range auditConfigNames {
+		config := configs[name]
+		if config == nil {
+			t.Errorf("%s did not load", name)
+			continue
+		}
+		bg := parseRGB(t, config.Background)
+		button := configRGB(effectiveThemeColor(config, "buttonColor"))
+		input := configRGB(effectiveThemeColor(config, "inputColor"))
+		label := configRGB(effectiveThemeColor(config, "labelColor"))
+
+		if got := contrastRatio(button, bg); got < 1.7 {
+			t.Errorf("%s: buttons sit %.2f:1 above the page background %s, want >= 1.7:1",
+				name, got, config.Background)
+		}
+		if got := contrastRatio(input, bg); got < 1.2 {
+			t.Errorf("%s: input fields sit %.2f:1 above the page background %s, want >= 1.2:1",
+				name, got, config.Background)
+		}
+		if got := contrastRatio(label, button); got < 7 {
+			t.Errorf("%s: labels on a button: %.2f:1, want >= 7:1", name, got)
+		}
 	}
 }

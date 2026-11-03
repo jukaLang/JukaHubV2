@@ -76,8 +76,19 @@ func TestAmbientShouldEnterIgnoresTimeoutOrdering(t *testing.T) {
 	}
 }
 
+// clearArmedSceneFade finishes a scene fade the way the render loop would.
+// The fade machine is frame state: in the app the next frame completes it, and
+// the main loop refuses new scene changes while one is armed. A UI test that
+// switches scenes has no loop, so a fade it left armed says nothing about the
+// panels this audit is for — it only says the suite has no frames. Healing it
+// here keeps the audit about surfaces the user can actually be looking at.
+func clearArmedSceneFade() {
+	transitionPhase, pendingSceneIndex = "none", -1
+}
+
 func TestAmbientAutoTickEntersWhenIdle(t *testing.T) {
 	resetAmbientState(t)
+	clearArmedSceneFade()
 	prevTimeout := screensaverIdleTimeout
 	screensaverIdleTimeout = time.Minute
 	ambientLastAutoCheck = time.Time{}
@@ -86,8 +97,8 @@ func TestAmbientAutoTickEntersWhenIdle(t *testing.T) {
 		ambientLastAutoCheck = time.Time{}
 	})
 	config := &Config{}
-	if ambientEntryBlocked(config) {
-		t.Fatalf("an earlier test left a UI surface open; the ambient gate sees it")
+	if reason := ambientEntryBlockReason(config); reason != "" {
+		t.Fatalf("an earlier test left the screen owned by %s", reason)
 	}
 
 	// Recently used: no dock screen yet.
@@ -109,6 +120,7 @@ func TestAmbientAutoTickEntersWhenIdle(t *testing.T) {
 
 func TestAmbientAutoTickRespectsSetting(t *testing.T) {
 	resetAmbientState(t)
+	clearArmedSceneFade()
 	prevTimeout := screensaverIdleTimeout
 	screensaverIdleTimeout = time.Minute
 	ambientLastAutoCheck = time.Time{}
@@ -118,8 +130,8 @@ func TestAmbientAutoTickRespectsSetting(t *testing.T) {
 	})
 	config := &Config{}
 	config.Variables.Custom = map[string]interface{}{"ambientMode": false}
-	if ambientEntryBlocked(config) {
-		t.Fatalf("an earlier test left a UI surface open; the ambient gate sees it")
+	if reason := ambientEntryBlockReason(config); reason != "" {
+		t.Fatalf("an earlier test left the screen owned by %s", reason)
 	}
 	noteUserInputTime(time.Now().Add(-90 * time.Second))
 	ambientAutoTick(config, time.Now())
@@ -504,6 +516,47 @@ func TestRenderAmbientFrame(t *testing.T) {
 		}
 		if b.rect.X < 0 || b.rect.X+b.rect.W > probeW {
 			t.Errorf("chip %v at x=%d w=%d is off screen", b.action, b.rect.X, b.rect.W)
+		}
+	}
+}
+
+// The dock used to advertise its own empty states: a card reading "Nothing
+// playing" with a 0:00 clock, and "Battery unknown" in the corner. Both read as
+// a broken panel on a screen whose whole job is to look calm, so neither is
+// drawn; the column stacks only the lines that have something to say.
+func TestAmbientEmptyStatesStayOffTheDock(t *testing.T) {
+	if ambientShowNowPlaying("", false, false) {
+		t.Fatal("the dock would draw a now-playing card with no track")
+	}
+	for _, c := range []struct {
+		title           string
+		playing, paused bool
+	}{
+		{"Track", false, false},
+		{"", true, false},
+		{"", false, true},
+	} {
+		if !ambientShowNowPlaying(c.title, c.playing, c.paused) {
+			t.Fatalf("the dock hid a real state: %+v", c)
+		}
+	}
+
+	if lines := ambientStatusLines(ambientStatus{battery: -1}, 0, 0, 0); len(lines) != 0 {
+		t.Fatalf("unknown battery drew %d line(s): %+v", len(lines), lines)
+	}
+	lines := ambientStatusLines(ambientStatus{battery: -1, charging: true}, 0, 0, 0)
+	if len(lines) != 1 || lines[0].text != "Charging" {
+		t.Fatalf("charging without a percentage = %+v, want one Charging line", lines)
+	}
+
+	lines = ambientStatusLines(ambientStatus{battery: 82, charging: true}, 90*time.Second, 2, 5)
+	want := []string{"Battery 82% · Charging", "Sleep in 1:30", "Photo 3/5"}
+	if len(lines) != len(want) {
+		t.Fatalf("column = %+v, want %d lines", lines, len(want))
+	}
+	for i, text := range want {
+		if lines[i].text != text {
+			t.Fatalf("line %d = %q, want %q", i, lines[i].text, text)
 		}
 	}
 }

@@ -16,15 +16,15 @@ require (
 )
 
 require (
-	github.com/ebitengine/purego v0.11.1 // indirect
-	github.com/shirou/gopsutil/v4 v4.26.9
+	github.com/ebitengine/purego v0.11.2 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.10
 )
 
 require (
-	github.com/dlclark/regexp2/v2 v2.8.1 // indirect
-	github.com/dop251/goja v0.0.0-20261024144015-2a9269b6b6de
-	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
-	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
+	github.com/dlclark/regexp2/v2 v2.12.0 // indirect
+	github.com/dop251/goja v0.0.0-20261031103838-cf2ff0ec0b31
+	github.com/go-sourcemap/sourcemap v2.1.4+incompatible // indirect
+	github.com/google/pprof v0.0.0-20261026192309-dbd0ed30aa88 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
 )
@@ -33,15 +33,15 @@ require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
-	github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 // indirect
-	github.com/miekg/dns v1.1.27 // indirect
-	github.com/power-devops/perfstat v0.0.0-20260805114148-88456608a4f6 // indirect
-	github.com/tidwall/match v1.1.1 // indirect
-	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/lufia/plan9stats v0.0.0-20261101121723-be84dd9509a0 // indirect
+	github.com/miekg/dns v1.1.73 // indirect
+	github.com/power-devops/perfstat v0.0.0-20260916203055-22a1a467d9f0 // indirect
+	github.com/tidwall/match v1.2.0 // indirect
+	github.com/tidwall/pretty v1.2.2 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.58.0
-	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 )

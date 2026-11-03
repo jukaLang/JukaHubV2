@@ -143,13 +143,21 @@ func selectChatMessage(index int) {
 func chatSelectionActions(index int) []chatProfileAction {
 	chatMutex.Lock()
 	own := index >= 0 && index < len(chatMessages) && chatMessages[index].Own
+	hasPicture := index >= 0 && index < len(chatMessages) && chatMessageImageURL(chatMessages[index]) != ""
 	chatMutex.Unlock()
-	actions := []chatProfileAction{
-		{label: "Reply", kind: "reply"},
-		{label: "Copy", kind: "copy"},
-		{label: "Ask AI", kind: "ask"},
-		{label: "Profile", kind: "profile"},
+	actions := make([]chatProfileAction, 0, 6)
+	// A picture is the one part of a message that cannot be read at bubble
+	// size, so enlarging it is the first thing the bar offers when there is
+	// one; every other entry is about the message's text.
+	if hasPicture {
+		actions = append(actions, chatProfileAction{label: "Enlarge", kind: "image"})
 	}
+	actions = append(actions,
+		chatProfileAction{label: "Reply", kind: "reply"},
+		chatProfileAction{label: "Copy", kind: "copy"},
+		chatProfileAction{label: "Ask AI", kind: "ask"},
+		chatProfileAction{label: "Profile", kind: "profile"},
+	)
 	if own {
 		actions = append(actions, chatProfileAction{label: "Delete", kind: "delete"})
 	}
@@ -289,7 +297,7 @@ func drawChatReplyStrip(renderer *sdl.Renderer, config *Config, font *ttf.Font, 
 
 	head := "Replying to " + chatReplyTo.Author
 	headW, _, _ := font.SizeUTF8(head)
-	renderText(renderer, config, font, head, ColorInfo, rect.X+pad, rect.Y+3)
+	renderText(renderer, config, font, head, InfoInk(), rect.X+pad, rect.Y+3)
 
 	textX := rect.X + pad + int32(headW) + SpaceSM
 	textW := chatReplyCancelRect.X - textX - SpaceSM
@@ -350,6 +358,17 @@ func activateChatSelectionAction(kind string, config *Config) {
 		return
 	}
 	switch kind {
+	case "image":
+		// The viewer owns the screen once it opens, so the bar is dropped
+		// first: a bar left behind would reappear over the page when the
+		// picture closed, still pointing at an old selection.
+		url := chatMessageImageURL(msg)
+		clearChatSelection()
+		if url == "" {
+			showToast("This message has no picture to enlarge", ColorToastWarn)
+			return
+		}
+		openImageViewerURL(url)
 	case "reply":
 		setChatReply(index)
 	case "copy":
@@ -406,11 +425,31 @@ func deleteChatMessage(id string) {
 
 // --- Input ---------------------------------------------------------------
 
+// chatSelectionOwnsInput reports whether the message action bar should take
+// the pad and the keys. The bar is drawn inside the chat panel, so it only has
+// a meaning while that panel is the scene on screen; a bar left open by a
+// scene change is stale and drops itself here instead of swallowing the next
+// press on the screen underneath (it used to eat X on Home's Now Playing chip,
+// which is how the floating video is closed).
+func chatSelectionOwnsInput(config *Config) bool {
+	if !chatSelectionBar.open {
+		return false
+	}
+	if !currentSceneHasChat(config) {
+		clearChatSelection()
+		return false
+	}
+	return true
+}
+
 // handleChatSelectionKey drives the action bar from the keyboard. It consumes
 // every key while the bar is open.
 func handleChatSelectionKey(e *sdl.KeyboardEvent, config *Config) bool {
-	if !chatSelectionBar.open || e == nil || e.Type != sdl.KEYDOWN {
-		return chatSelectionBar.open
+	if e == nil || e.Type != sdl.KEYDOWN {
+		return chatSelectionOwnsInput(config)
+	}
+	if !chatSelectionOwnsInput(config) {
+		return false
 	}
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
@@ -432,7 +471,7 @@ func handleChatSelectionKey(e *sdl.KeyboardEvent, config *Config) bool {
 
 // ctrlChatSelection is the controller twin of handleChatSelectionKey.
 func ctrlChatSelection(e *sdl.ControllerButtonEvent, config *Config) bool {
-	if !chatSelectionBar.open {
+	if !chatSelectionOwnsInput(config) {
 		return false
 	}
 	switch e.Button {
@@ -626,7 +665,7 @@ func drawChatQuoteBlock(renderer *sdl.Renderer, config *Config, font *ttf.Font, 
 	fillRoundedRect(renderer, x, y, w, h, RadiusSM, WithAlpha(ColorSurfaceAlt, 200))
 	fillRoundedRect(renderer, x, y+3, 3, h-6, 2, WithAlpha(ColorInfo, 190))
 	author := "↳ " + quote.Author
-	renderText(renderer, config, font, ellipsize(font, author, w-16), ColorInfo, x+10, y+2)
+	renderText(renderer, config, font, ellipsize(font, author, w-16), InfoInk(), x+10, y+2)
 	renderText(renderer, config, font, ellipsize(font, quote.summary(90), w-16), ColorTextTertiary(), x+10, y+2+lineH)
 	return h
 }

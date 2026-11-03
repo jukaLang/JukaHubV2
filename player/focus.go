@@ -134,13 +134,13 @@ func (fe *FocusEngine) BuildGraph(scene SceneConfig) *FocusGraph {
 	// The four bar buttons connect left-to-right in their measured order; Up/
 	// Down between the content and the bar is routed by StepChrome.
 	//
-	// A scene with no focusable content of its own is a page that owns the pad —
-	// the Playtime badge list, a module screen that draws its own rows. Adding
-	// the bar there would leave its buttons as the only targets, so every
-	// Up/Down press would walk the bar (and the scene's key handler would never
-	// see the D-pad) instead of scrolling the page. Those screens keep the bar
-	// as a tap target and reach it through the Start menu.
-	if scene.Layout != "home" && len(nodes) > 0 {
+	// Every screen keeps the bar, including the ones that draw no controls of
+	// their own (Playtime's badge list, the music player, the terminal): on a
+	// pad-only handheld the bar is the only Back, clock and bell those screens
+	// have, so it cannot be tap-only. What such a screen must not get is focus
+	// *starting* on the bar: SetGraph leaves a bar-only graph unfocused, and
+	// screenPadPress steps onto the bar with Up.
+	if scene.Layout != "home" {
 		var chromeIdx []int
 		addNode := func(idx int, rect sdl.Rect, typ, label string) {
 			nodes = append(nodes, FocusNode{Index: idx, Rect: rect, Type: typ, Label: label})
@@ -254,9 +254,69 @@ func (fe *FocusEngine) SetGraph(sceneName string, graph *FocusGraph) {
 			}
 		}
 		if fe.current == -1 {
-			fe.current = 0
+			fe.current = firstSceneNode(graph)
 		}
 	}
+}
+
+// firstSceneNode picks the node a fresh screen starts on: the first content
+// node, left-to-right then top-to-bottom, or -1 when the screen has no controls
+// of its own.
+//
+// Starting on node 0 would put the focus on the first top-bar button for a
+// screen whose only nodes are the bar, which is wrong twice over: the ring says
+// the bar holds the press, and a module that binds the same buttons (the music
+// player's A, the terminal's arrows) still gets them. A screen with nothing to
+// focus starts with no focus, so the bar is entered on purpose with Up.
+func firstSceneNode(graph *FocusGraph) int {
+	if graph == nil {
+		return -1
+	}
+	for i, node := range graph.Nodes {
+		if chromeTier(node.Index) == 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// firstChromeNode returns the index into graph.Nodes of the bar's leftmost
+// button, in the order the bar draws them, or -1 when the bar has no nodes.
+func (fe *FocusEngine) firstChromeNode() int {
+	if fe.graph == nil {
+		return -1
+	}
+	for i, node := range fe.graph.Nodes {
+		if chromeTier(node.Index) == 1 {
+			return i
+		}
+	}
+	return -1
+}
+
+// FocusChromeBar moves the focus onto the top bar's leftmost button and
+// reports whether the bar had one. It is how a screen with no controls of its
+// own reaches the header: there is nothing above to step up from, so Up on an
+// unfocused screen goes straight to the bar.
+func (fe *FocusEngine) FocusChromeBar() bool {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	i := fe.firstChromeNode()
+	if i < 0 {
+		return false
+	}
+	fe.current = i
+	return true
+}
+
+// ClearFocus drops the focus entirely (ElementIndex reports -1). It hands the
+// pad back to a screen that draws no controls: Down from the bar on such a
+// screen has nowhere to step, so without this the ring would sit on a bar
+// button the user can no longer leave.
+func (fe *FocusEngine) ClearFocus() {
+	fe.mu.Lock()
+	defer fe.mu.Unlock()
+	fe.current = -1
 }
 
 // SceneName returns the scene the installed graph was built for ("" if none).

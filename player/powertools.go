@@ -42,6 +42,7 @@ const (
 	powerPageBench
 	powerPageToolbox
 	powerPageSecurity
+	powerPageAudit
 	powerPageOutput
 )
 
@@ -73,6 +74,8 @@ const (
 	powerActionToolboxRun
 	powerActionToolboxArgs
 	powerActionToolboxCopy
+	powerActionOpenAudit
+	powerActionSecAuditCheck
 	powerActionBack
 	powerActionClose
 )
@@ -212,6 +215,7 @@ func powerToolRows(config *Config) []powerToolRow {
 			{label: "Benchmark board", value: device, detail: "Local read/write results, optional online feed", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenBench, enabled: true},
 			{label: "Memory scanner", value: memoryMenuValue(), detail: "Scan and edit a running game's RAM, then write a value back", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenMemory, enabled: true},
 			{label: "Controller test", value: "Sticks · triggers · buttons", detail: "Raw axis values, drift verdicts and a button check", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenCtrlDiag, enabled: true},
+			{label: "Audit toolkit", value: fmt.Sprintf("%d of %d installed", secAuditInstalledCount(), len(secAuditCatalog())), detail: "Burp, ZAP, sqlmap, Nikto, Wireshark, aircrack-ng, Metasploit, hashcat, John", hint: hintLine(FooterHint{"A", "Open"}), action: powerActionOpenAudit, enabled: true},
 		}
 	case powerPageFiles:
 		rows := make([]powerToolRow, 0, len(powerTools.files)+1)
@@ -331,6 +335,10 @@ func powerToolRows(config *Config) []powerToolRow {
 			})
 		}
 		return rows
+	case powerPageAudit:
+		// What is already installed, from PATH and the usual installer paths.
+		// The page installs nothing and starts no traffic; see secaudit.go.
+		return secAuditRows()
 	case powerPageBench:
 		url := powerBenchRemoteURL()
 		online := "Set powerBenchURL"
@@ -425,7 +433,7 @@ func powerSetPage(page powerPage) {
 }
 
 func powerBack() {
-	if powerTools.returnToTools && (powerTools.page == powerPageToolbox || powerTools.page == powerPageSecurity) {
+	if powerTools.returnToTools && (powerTools.page == powerPageToolbox || powerTools.page == powerPageSecurity || powerTools.page == powerPageAudit) {
 		// These pages are opened from the Tools panel, so Back returns there
 		// instead of to a Power tools menu the user never saw.
 		powerTools.returnToTools = false
@@ -602,21 +610,40 @@ func powerProbeTraceroute(config *Config) {
 	})
 }
 
-func powerProbeDNS(config *Config) {
-	powerRunFromTools(config, "DNS lookup", "Resolving…", func() powerAsyncResult {
-		var b strings.Builder
-		for _, host := range []string{"github.com", "example.com"} {
-			ips, err := powerResolve(host)
-			if err != nil {
-				fmt.Fprintf(&b, "%s: %v\n", host, err)
-				continue
-			}
-			fmt.Fprintf(&b, "%s:\n", host)
-			for _, ip := range ips {
-				fmt.Fprintf(&b, "  %s\n", ip)
-			}
-		}
-		return powerAsyncResult{text: b.String()}
+// powerDNSLastHost remembers the last host looked up, so opening the row again
+// is a correction instead of a retype. It is touched on the UI thread only.
+var powerDNSLastHost string
+
+// powerDNSRowHost is what the Tools row shows: the remembered host, or the
+// example the row starts from.
+func powerDNSRowHost() string {
+	if host := strings.TrimSpace(powerDNSLastHost); host != "" {
+		return host
+	}
+	return "github.com"
+}
+
+// powerDNSLookupSubmit starts the lookup for the typed host. Text that is not a
+// host name or IP reopens the keyboard with it still in the field, so a typo is
+// a correction rather than a retype.
+func powerDNSLookupSubmit(raw string) {
+	q, err := powerDNSParseQuery(raw)
+	if err != nil {
+		ShowToast(err.Error(), ToastKindWarning)
+		vkOpenDNSQuery(raw)
+		return
+	}
+	powerDNSLastHost = q.Host
+	powerProbeDNS(appConfig, q)
+}
+
+func powerProbeDNS(config *Config, q powerDNSQuery) {
+	title := "DNS · " + q.Host
+	if q.IP != nil {
+		title = "Reverse DNS · " + q.Host
+	}
+	powerRunFromTools(config, title, "Resolving "+q.Host+"…", func() powerAsyncResult {
+		return powerAsyncResult{text: powerDNSReport(q)}
 	})
 }
 
@@ -758,6 +785,41 @@ func powerActivate(config *Config) {
 		openMemPanel()
 	case powerActionOpenCtrlDiag:
 		openCtrldiag()
+	case powerActionOpenAudit:
+		powerSetPage(powerPageAudit)
+		PlayActivateSound()
+	case powerActionSecAuditCheck:
+		t, ok := secAuditFind(row.arg)
+		if !ok {
+			return
+		}
+		if path, installed := secAuditResolve(t); installed {
+			id := t.ID
+			if t.GUI() {
+				// A window is not a command, so there is nothing to wait for:
+				// start it and keep the page where the user left it.
+				if _, err := secAuditProbe(id, 0); err != nil {
+					ShowToast("Could not open "+t.Name, ToastKindError)
+					return
+				}
+				PlaySuccessSound()
+				ShowToast("Opened "+t.Name, ToastKindSuccess)
+				return
+			}
+			powerStartAsync(t.Name, "Checking "+filepath.Base(path)+"…", func() powerAsyncResult {
+				text, err := secAuditProbe(id, powerTimeoutScript)
+				return powerAsyncResult{text: text, raw: []byte(text), mode: "text", err: err}
+			})
+			PlayActivateSound()
+			return
+		}
+		// Nothing installed: the useful press is the hint, ready to paste.
+		if err := copyTextToClipboard(t.Install, "Audit toolkit"); err != nil {
+			ShowToast(t.Name+" is not installed · "+t.Install, ToastKindWarning)
+			return
+		}
+		PlaySuccessSound()
+		ShowToast("Install hint copied: "+t.Install, ToastKindInfo)
 	case powerActionToolboxInstall:
 		t, ok := toolboxFind(row.arg)
 		if !ok {
@@ -1263,6 +1325,8 @@ func powerPageTitle(page powerPage) (string, string) {
 		return "Toolbox", "Popular CLI tools · installed from curated GitHub releases"
 	case powerPageSecurity:
 		return "Security & trust", "What this build protects · the long form is SECURITY.md"
+	case powerPageAudit:
+		return "Audit toolkit", "Security tools already on this machine · version checks, no scans"
 	case powerPageOutput:
 		name, _, mode, _ := powerOutputSnapshot()
 		if name == "" {
@@ -1432,19 +1496,13 @@ func renderPowerToolsPanel(renderer *sdl.Renderer, config *Config) {
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
 	powerPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
-	const padX = int32(24)
+	const padX = OverlayPadX
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	if powerTools.page == powerPageOutput {

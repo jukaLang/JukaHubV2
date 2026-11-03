@@ -179,12 +179,11 @@ func TestBuiltinAppletScenesExist(t *testing.T) {
 }
 
 // TestDeviceConfigShipsEveryBuiltinApplet is the regression guard for the
-// stale make-config.ps1 whitelist. That list dropped nine scenes (JukaLand,
-// Live TV, Podcasts, Tickers, Weather, Unit Converter, Canvas Sandbox, IP
-// Stream and the Audio Player), and builtinAppEntries silently hides a row
-// whose scene the config does not ship — so the handheld lost nine working
-// apps with no error anywhere. Every applet the Apps launcher offers must be
-// openable on the handheld build too.
+// stale make-config.ps1 whitelist. That list dropped scenes the launcher
+// opened, and builtinAppEntries silently hides a row whose scene the config
+// does not ship — so the handheld lost working apps with no error anywhere.
+// Every applet the Apps launcher offers must be openable on the handheld build
+// too.
 func TestDeviceConfigShipsEveryBuiltinApplet(t *testing.T) {
 	data, err := os.ReadFile("trimui/jukaconfig.device.json")
 	if err != nil {

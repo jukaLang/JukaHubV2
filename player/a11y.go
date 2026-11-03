@@ -659,6 +659,12 @@ const (
 	// one value, so a player picks a battery trade-off without learning two
 	// toggles; the Quick Settings row drives the same helper.
 	a11yRowPowerMode
+	// a11yRowVibration steps how hard the motor pulses (Soft / Normal /
+	// Strong). It is the strength half of the Settings → General Vibration
+	// switch, which stays the on/off half: this row is where "quieter at night"
+	// is answered, and it is here because it is a comfort setting like the rest
+	// of the panel.
+	a11yRowVibration
 	a11yRowReset
 )
 
@@ -718,6 +724,7 @@ func a11yRows() []a11yRow {
 		a11yRow{label: "Chord button", detail: "The button that arms the one-handed chord. Pick one your other hand's index finger can reach.", value: a11yChordLabel(a11y.chordButton), kind: a11yRowChordButton},
 		a11yRow{label: "Key repeat", detail: "How fast a held direction repeats on the on-screen keyboard. Slow is for hands that overshoot a key.", value: repeat, kind: a11yRowSlowRepeat},
 		a11yRow{label: "Power mode", detail: "One setting for battery vs speed: Battery Saver slows the frame and cuts motion, Performance keeps both full, Default lets the Low Power and Reduced Motion toggles decide.", value: powerModeLabel(currentPowerMode(appConfig)), kind: a11yRowPowerMode},
+		a11yRow{label: "Vibration strength", detail: "How hard the motor pulses. Soft is for playing in bed, Strong is easier to feel through a case. The Vibration switch in Settings still turns feedback off entirely.", value: hapticsLevelNow().label, kind: a11yRowVibration},
 		a11yRow{label: "Reset to defaults", detail: "Back to 100% text, default colours, standard buttons.", value: "", kind: a11yRowReset},
 	)
 }
@@ -1029,6 +1036,10 @@ func a11yAdjust(dir int, config *Config) {
 		label := cyclePowerModeTo(config, nextPowerMode(cur, dir))
 		ShowToast("Power mode: "+label, ToastKindInfo)
 		changed = true
+	case a11yRowVibration:
+		level := hapticsCycleLevel(config, dir)
+		ShowToast("Vibration: "+level.label, ToastKindInfo)
+		changed = true
 	case a11yRowReset:
 		a11y.fontScale = 1.0
 		a11y.highContrast = false
@@ -1129,7 +1140,7 @@ func renderAccessibilityPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const padX = int32(24)
+	const padX = OverlayPadX
 	// Rows are one line each (label left, value right) and the focused row's
 	// explanation is drawn once underneath the list. Two-line rows wasted a
 	// third of a 720p screen and left the last settings unreachable at 130%
@@ -1174,18 +1185,12 @@ func renderAccessibilityPanel(renderer *sdl.Renderer, config *Config) {
 		a11y.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()

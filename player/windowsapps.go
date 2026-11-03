@@ -718,6 +718,10 @@ func launchWindowsApp(entry windowsAppEntry) error {
 		}
 	}
 
+	// Same hand-off rule as the emulator launchers: the child leads its own
+	// process group, so a wrapper script that backgrounds the game keeps the
+	// screen parked until the game itself exits.
+	screenChildGroupConfigure(cmd)
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {
 			fmt.Fprintf(logFile, "start failed: %v\n", err)
@@ -731,7 +735,7 @@ func launchWindowsApp(entry windowsAppEntry) error {
 
 	go func() {
 		waitErr := cmd.Wait()
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 		windowsAppSetRunning(entry.Path, 0)
 		if logFile != nil {
 			if waitErr != nil {

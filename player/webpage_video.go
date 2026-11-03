@@ -23,7 +23,6 @@ package main
 // all rather than a dead box.
 
 import (
-	htmlstd "html"
 	"net/url"
 	"regexp"
 	"strings"
@@ -64,11 +63,11 @@ var webVideoFileExts = []string{".mp4", ".webm", ".m3u8", ".mkv", ".mov"}
 // src attribute or its lazy-loading data-src.
 func webVideoSrcFromElement(attrs, inner string) string {
 	if m := webSourceRe.FindStringSubmatch(inner); len(m) > 1 && m[1] != "" {
-		return htmlUnescapeMedia(m[1])
+		return htmlAttrValue(m[1])
 	}
 	for _, name := range []string{"src", "data-src"} {
 		if v := htmlTagAttribute(attrs, name); v != "" {
-			return htmlUnescapeMedia(v)
+			return htmlAttrValue(v)
 		}
 	}
 	return ""
@@ -163,12 +162,6 @@ func webYouTubeThumbURL(raw string) string {
 	return webYouTubeThumbBase + url.PathEscape(id) + "/mqdefault.jpg"
 }
 
-// htmlUnescapeMedia decodes entities in an attribute value; a &amp;-encoded
-// query string is the single most common reason a resolved media URL 404s.
-func htmlUnescapeMedia(s string) string {
-	return strings.TrimSpace(htmlstd.UnescapeString(s))
-}
-
 // addVideoBlock turns one raw <video> or <iframe> into a play-card block.
 // An element without a resolvable URL is skipped entirely (no dead box);
 // iframe embeds must point at a known video host or media file.
@@ -189,9 +182,9 @@ func (p *webParser) addVideoBlock(name, attrs, inner string) {
 	if resolved == "" {
 		return
 	}
-	title := htmlUnescapeMedia(htmlTagAttribute(attrs, "title"))
+	title := htmlAttrValue(htmlTagAttribute(attrs, "title"))
 	if title == "" {
-		title = htmlUnescapeMedia(htmlTagAttribute(attrs, "aria-label"))
+		title = htmlAttrValue(htmlTagAttribute(attrs, "aria-label"))
 	}
 	title = strings.Join(strings.Fields(title), " ")
 	p.flush()

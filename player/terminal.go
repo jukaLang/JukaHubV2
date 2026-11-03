@@ -658,6 +658,11 @@ func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// goBackScene plays the back sound itself.
 		goBackScene(config)
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		if term.scrollY <= 0 {
+			// The output is already at its oldest line: release the press so
+			// Up steps onto the top bar rather than scrolling into nothing.
+			return false
+		}
 		termScroll(3)
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
 		termScroll(-3)

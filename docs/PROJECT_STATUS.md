@@ -1,6 +1,6 @@
 # Project status and improvement priorities
 
-**Reviewed:** 2026-10-29  
+**Reviewed:** 2026-11-01  
 **Purpose:** one quick, readable view of what is partly complete, what needs work,
 and what still requires a real device. This page summarizes the detailed plans;
 it is not a schedule, and no owner or delivery date is implied.
@@ -13,8 +13,8 @@ controller focus/navigation, structured diagnostics, and broad automated tests.
 The remaining work is mainly about protecting user data, finishing lifecycle and
 handheld usability work, and validating behavior on actual devices.
 
-For a short answer: **protect save data first; then finish cancellation and
-handheld usability; measure the remaining device-only risks before optimizing.**
+For a short answer: **finish cancellation and handheld usability next; measure
+the remaining device-only risks before optimizing.**
 
 ## Partly complete
 
@@ -29,26 +29,34 @@ handheld usability; measure the remaining device-only risks before optimizing.**
 
 These are ranked recommendations, not scheduled commitments.
 
-1. **Protect save data during restore.** Before changing live save folders,
-   validate every snapshot path, file, size and SHA-256 digest. A corrupt or
-   incomplete snapshot must fail before any live file is changed. Add tests for
-   missing, corrupt and unsafe paths.
-2. **Finish cancellation for feature network work.** Thread request contexts
+**Shipped since the last review:** save data is protected during restore
+(2026-11-01). `restoreSaveSnapshot` now verifies every snapshot path, size and
+SHA-256 before it takes a safety snapshot or changes a live save, refuses a
+snapshot with a missing, corrupt or escaping entry as a whole, and re-hashes
+each file it writes — see [player/savemanager.go](../player/savemanager.go) and
+the fail-closed tests in
+[player/savemanager_test.go](../player/savemanager_test.go).
+
+1. **Finish cancellation for feature network work.** Thread request contexts
    through remaining older fetches so leaving a screen stops obsolete work,
    rather than merely hiding its result.
-3. **Complete handheld touch and safe-area coverage.** Apply the existing
+2. **Complete handheld touch and safe-area coverage.** Apply the existing
    hit-target approach consistently, keep visible and clickable geometry aligned,
    and check the rounded screen edges on hardware.
-4. **Validate the device-only paths.** Test Wi-Fi on the supported stock images,
+3. **Validate the device-only paths.** Test Wi-Fi on the supported stock images,
    LAN Play between two machines, browser input/touch behavior, and the actual
    render backend on the handheld. Desktop or dummy-renderer tests do not settle
    these questions.
-5. **Profile before expanding performance work.** Background polling is already
+4. **Profile before expanding performance work.** Background polling is already
    paused in key hidden states and several long lists draw only visible rows.
    Measure remaining list preparation, polling and scene-resource costs first;
    optimize only where measurements show a user-visible problem.
-6. **Consider a small media “Up Next” queue.** This is a useful, service-free
-   feature, but it follows the data-safety and reliability work above.
+5. **Media “Up Next” queue — shipped.** The Queue pill, the overlay line, the
+   settings-sheet row and the natural-end hand-off live in
+   [player/playbackqueue.go](../player/playbackqueue.go); the list is
+   session-only by design. What is still adopted but unstarted is recorded in
+   [MODERNIZATION §5.6](../player/MODERNIZATION.md#56-adopted-features) —
+   Checkpoints is the large one.
 
 ## Device checks still needed
 

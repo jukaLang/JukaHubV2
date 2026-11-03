@@ -13,6 +13,260 @@ For anything older, the git log and the
 
 ### Added
 
+- **The idle screen can take its own backdrop photo away.** The starfield sleep
+  screen is the only place the photo is drawn, so it is also where it can be
+  forgotten: **Y** (pad or keyboard) offers **Y clear photo** above the wake
+  hint, and a second **Y** inside five seconds drops the backdrop without
+  waking the panel or opening Files. The first press only arms it — every other
+  input on this screen means "wake up", and an ordinary wake must not throw the
+  photo away — so the line turns amber as **Y again to clear**, then green as
+  **Backdrop cleared · any key wakes** for a moment. The picture on the card is
+  untouched; only the setting is forgotten, and a default saver with no photo
+  shows no line and wakes on **Y** like any other key
+  ([player/screensaver.go](player/screensaver.go),
+  [player/main.go](player/main.go); tests in
+  [player/screensaver_backdrop_test.go](player/screensaver_backdrop_test.go)).
+
+- **The Benchmark screen's Run button says it is running.** While a measurement
+  is in flight — and the screen starts one as it opens, so on a slow card that
+  is the whole first visit — the screen's one Run button is drawn disabled and
+  reads **Running…** instead of **Run**, so it no longer looks like a press
+  would do something. A press that lands mid-run is refused at the control: no
+  activate tap, no press dip, and no second 100 MB pass over the first, which
+  the panel's progress line already answers. The button takes its configured
+  width back as soon as the run ends, and the busy label is fitted to that width
+  rather than ellipsized
+  ([player/core.go](player/core.go),
+  [player/morefeatures.go](player/morefeatures.go); test in
+  [player/benchmark_test.go](player/benchmark_test.go)).
+
+- **Picture and video thumbnails in Files.** A row whose file is a photo or a
+  video now shows the picture itself in the leading chip instead of **IMG** or
+  **VID**: 44×28, cropped from the centre to fill rather than squashed, with a
+  play mark on a video frame so a still and a photo are told apart. The chip's
+  footprint is unchanged, so names, sizes and dates stay in their columns.
+  Frames are made off the render thread — a photo is decoded and averaged down
+  by the Go image decoders, and one ffmpeg grab pulls a video's frame a second
+  in, falling back to the opening frame for a clip shorter than that — and both
+  the bytes and the decoded texture are cached, so a folder is decoded once and
+  again only when the file changes. A row keeps its type chip when there is nothing to show: no ffmpeg
+  installed, a codec the tool cannot read, or a picture past the
+  24-megapixel decode ceiling
+  ([player/filethumb.go](player/filethumb.go),
+  [player/files_manager.go](player/files_manager.go); tests in
+  [player/filethumb_test.go](player/filethumb_test.go)).
+
+- **A playback queue: results can be lined up, and each one starts when the last
+  finishes.** The **Queue** pill on a search-result row adds that video to Up
+  Next and reads *Queued* while it is waiting; pressing it again takes it back
+  out. The list survives leaving the results screen, the player overlay names
+  what comes next (`Up next: <title> (+3)`), and a video that reaches its
+  natural end starts the head of the list by itself — stopping one by hand
+  never does. The player's settings sheet gained an **Up Next: N queued** row
+  that empties the list once the rows it was filled from are gone, and the
+  Shorts feed keeps its own hand-off while it is armed. Entries are
+  deduplicated by link and capped at 50, and the list is session-only on
+  purpose ([player/playbackqueue.go](player/playbackqueue.go),
+  [player/videoplayer.go](player/videoplayer.go),
+  [player/result_actions.go](player/result_actions.go); tests in
+  [player/playbackqueue_test.go](player/playbackqueue_test.go)).
+
+- **Vibration strength: Soft, Normal or Strong.** A new row in the Accessibility
+  panel scales the drive level of every pulse — navigation ticks, confirmations,
+  errors — so the motor can be quiet at night without switching feedback off
+  entirely, which the Vibration switch in Settings still does. The pulse length
+  is left alone: a coin motor needs tens of milliseconds to spin up, so a
+  shorter pulse would read as unreliable rather than gentle. The step is stored
+  as `hapticsIntensity` beside the switch and a Strong error pulse is capped at
+  full scale ([player/haptics.go](player/haptics.go),
+  [player/a11y.go](player/a11y.go); tests in
+  [player/haptics_test.go](player/haptics_test.go)).
+
+- **Box art for ROM names that do not match the reference title.** The lookup
+  now asks for the exact name first, then the underscored twin, the name without
+  dump tags (`(USA)`, `(Rev 1)`, `[!]`), the part before the subtitle separator,
+  and finally the article-stripped form — each of them spaced and underscored,
+  capped at eight requests, and a hit stops the guesses so a full library fetch
+  is not multiplied by the variant count. The not-found cache is stamped with
+  the matcher version, so titles the older lookup gave up on are retried once
+  instead of being hidden for the month-long window
+  ([player/romsetup.go](player/romsetup.go); tests in
+  [player/artwork_match_test.go](player/artwork_match_test.go)).
+
+- **Files is a file manager, and it moves files between two consoles.** The
+  screen opens on a breadcrumb bar where every folder in the path is its own
+  chip — one press to any ancestor instead of five **B** presses — carrying the
+  folder's item count, its size, the card's free space and a sort chip that
+  cycles name / size / newest. Rows gained a type chip (**DIR**, **IMG**,
+  **AUD**, **VID**, **PDF**, **ZIP**, **BOOK**, **TXT**, **UP**), the size and the
+  date, and the parent row names the folder it goes back to. **X** marks rows
+  (a marked row is tinted and its chip becomes a tick), and **Y** opens one
+  action sheet: new folder, rename, copy, cut, paste, delete, select all, sort,
+  connect and remote files. Actions apply to the marked rows or, with nothing
+  marked, to the row under the cursor; a paste never overwrites, landing as
+  `name (2).ext`; delete arms on the first press and acts on the second, and
+  every path is still resolved against the Files root before it is touched.
+  **Connect to device** takes `user@host:port/folder`, and **Remote files**
+  browses the other console over SFTP — download into the open folder, upload
+  the marked files to the remote one — as one background job per transfer with
+  its progress in the panel's subtitle. The first connection to a device pins
+  its host key and a later change is refused
+  ([player/files_manager.go](player/files_manager.go),
+  [player/filetransfer.go](player/filetransfer.go),
+  [player/features.go](player/features.go), [player/main.go](player/main.go);
+  tests in [player/files_manager_test.go](player/files_manager_test.go)).
+
+- **The lock-screen image can be cleared again, and clearing it never touches
+  the photo.** The picture a Files viewer handed to the idle screen stays
+  reachable: opened in the viewer, the same action now reads **Clear lock
+  screen** and puts the starfield idle screen back — the button, the **L** key
+  and the pad's **X** are one toggle, so the second press undoes the first. Only
+  the `screenlockImage` setting is forgotten, so the file stays on the card and
+  can be set again from the same place; the decoded picture is dropped in the
+  same call, so the default look returns on the next frame instead of after the
+  reload window, and clearing a screen that already has no picture is a quiet
+  no-op that writes nothing
+  ([player/screenlock.go](player/screenlock.go),
+  [player/imageviewer.go](player/imageviewer.go),
+  [player/controller.go](player/controller.go); tests in
+  `player/screenlock_test.go` pin the restored default, the untouched file, the
+  saved state after a reload and the toggle's remote-image guard).
+
+- **The Wi-Fi diagnostics sheet can be copied, and it is in the support
+  bundle.** A **Copy** pill (also `c` and pad **Y**) puts the sheet's report on
+  the clipboard — header, collection time and every row, aligned — and writes a
+  diagnostics bundle on the card in the same press, so the radio's own answer
+  reaches a support thread however it gets shared. The two destinations are
+  attempted independently: a platform without a clipboard still gets the file,
+  and a full card still gets the paste. The sheet's last collection also joins
+  every bundle, redacted like the log, and a session that never opened the sheet
+  says so instead of reading like a device with no Wi-Fi facts
+  ([player/wifi_diag.go](player/wifi_diag.go),
+  [player/diagnostics_bundle.go](player/diagnostics_bundle.go),
+  [player/wifi_ui.go](player/wifi_ui.go); tests in
+  [player/wifi_diag_test.go](player/wifi_diag_test.go),
+  [player/diagnostics_bundle_test.go](player/diagnostics_bundle_test.go)).
+
+- **Podcasts are a subscription library, not a URL box.** The Podcasts screen
+  now keeps a saved list of feeds in `podcasts.json` next to the app's other
+  data, gives each feed its show title, author and episodes, and opens on a
+  two-column library: shows on the left (with an **+ Add a feed** row) and that
+  show's episodes on the right. Episodes keep their published date and feed
+  duration, sort newest first, carry the resume position and speed the audio
+  player already stores for long-form listening, and play as a one-show
+  playlist through the music player's streaming path — the same path the URL
+  box used, but with a title and a next episode instead of a bare URL. Feeds are
+  fetched in parallel, four curated shows seed a fresh install, and subscribing
+  or removing a feed is written immediately, so an offline boot opens the saved
+  library instead of an empty panel. The `podcast_panel` action and the screen's
+  own Library button open it; the pad drives the two columns (Left/Right
+  switches, A opens a show or plays an episode, X adds a feed, Y refreshes,
+  Start deletes a subscription, B closes), and the keyboard and pointer use the
+  same row map
+  ([player/podcasts.go](player/podcasts.go), [player/core.go](player/core.go),
+  [player/main.go](player/main.go), [player/controller.go](player/controller.go);
+  tests in [player/podcasts_test.go](player/podcasts_test.go)).
+
+- **The reader opens EPUB books, and PDF pages are page-accurate.** The old PDF
+  extractor scanned every `BT…ET` block in the file and handed the whole
+  document back for each page, so page one showed the entire book and page two
+  showed it again. The reader now walks the PDF page tree from the catalog,
+  decompresses each page's content streams, and extracts only that page's text
+  (with `TJ` kerning above the word-space threshold becoming spaces and `Td`,
+  `T*` and `Tm` becoming line breaks); a file whose page tree cannot be read
+  still falls back to the old whole-document scan rather than showing an empty
+  sheet. EPUB support is new: container → OPF → spine, one chapter per spine
+  document with its `<title>` or first heading, paginated to about 1,200
+  characters a page, entities decoded and paragraphs kept apart. The scene keeps
+  its `PDFReader` name so favourites, playtime and saved configs still resolve,
+  but it is **Reader** everywhere in the UI: the title line shows the format and
+  page count, a book adds a chapter line, L1/R1 turn chapters (or pages for a
+  PDF), `[`/`]` do the same on a keyboard, and Files accepts `.epub` as well as
+  `.pdf`. Entering the scene no longer wipes the document that Files just
+  opened, which was why an opened PDF used to show "No document open"
+  ([player/reader.go](player/reader.go), [player/pdfreader.go](player/pdfreader.go),
+  [player/features.go](player/features.go), [player/extras.go](player/extras.go),
+  [player/core.go](player/core.go); tests in
+  [player/reader_test.go](player/reader_test.go)).
+
+- **An LED Style panel for mode, effect, colour and brightness.** The LED sync
+  could already drive `multi_intensity`, `color` and decorative brightness LEDs,
+  but only the policy was reachable from the UI and the rest meant editing
+  `jukauser.json`. **Quick Settings → LED Style** now opens a panel with Mode
+  (Audio, Battery, Charging, Temperature, Custom), Effect (Solid, Pulse,
+  Rainbow), a hue strip with a live swatch and hex value, a 10–100% brightness
+  trim, and the LED Sync switch itself. Every change is written to the
+  debounced user config, so it survives a reboot, and the animation runs while
+  the panel is open so the lights show the change on the next frame; closing the
+  panel stops a preview it started, leaving the saved setting as it was.
+  Brightness is applied to the colour (so it dims every LED mode the same way)
+  and `rainbow` is a new custom effect. The panel is modal for the pad, the
+  keyboard and the pointer, and its row is dimmed with a reason on a device with
+  no addressable LED
+  ([player/ledpanel.go](player/ledpanel.go), [player/ledsync.go](player/ledsync.go),
+  [player/quicksettings.go](player/quicksettings.go), [player/main.go](player/main.go),
+  [player/controller.go](player/controller.go); tests in
+  [player/ledpanel_test.go](player/ledpanel_test.go)).
+
+- **Favorites is a library, not a flat list of links.** The page now opens on
+  **Continue** and has four tabs with their counts on the strip — Continue
+  (videos started but not finished), Videos (everything saved from a result,
+  grouped by channel), Streams (the channels kept on the IP Stream screen) and
+  Recent (grouped into Today / Yesterday / This week / Earlier). Every row shows
+  a 16:9 frame or a drawn tile, the title, the channel or stream host, a
+  duration badge and a resume line, with a hairline along the card's foot for
+  how far in the video is; a row without artwork still reads as a video because
+  the frame gets a border and a play glyph. The list scrolls only as far as the
+  focused row needs and a group heading is never scrolled over its row. Empty
+  tabs say what they hold and how to fill them. Saved videos inherit the resume
+  offset recorded in Recent, so Continue and Videos agree on where playback
+  starts. The pad drives the whole page (Left/Right tabs, Up/Down rows with the
+  Play / Remove buttons reachable at the ends, A plays, X removes, B backs out,
+  L1/R1 and L2/R2 jump), the keyboard and the pointer use the same row map the
+  renderer records, and the scene's controller block now delegates to one
+  handler instead of its own copy of the old two-tab logic. Results gained a
+  fourth pill: **Save** keeps a video in the library and reads **Saved** when it
+  is already there, then takes it back out on the next press
+  ([player/favorites.go](player/favorites.go), [player/result_actions.go](player/result_actions.go),
+  [player/core.go](player/core.go), [player/main.go](player/main.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md); tests in
+  [player/favorites_library_test.go](player/favorites_library_test.go),
+  [player/result_actions_test.go](player/result_actions_test.go)).
+
+- **Files can keep the picture it opens as the lock-screen image.** The
+  full-screen viewer in Files now has a **Set lock screen** action — the button,
+  the **L** key or the pad's **X** — which saves the picture and paints it across
+  the idle screen under the clock, quote and chat card, cropped to fill and
+  dimmed so that text stays legible. The saved setting is a path, so it is
+  treated as best-effort: a photo that was deleted, left on an unplugged card or
+  no longer decodable simply leaves the default starfield idle screen in place.
+  The miss is checked (and logged) once, not once per frame, and a replaced file
+  is reloaded instead of the saver keeping a stale picture; a remote chat image
+  cannot set it, because that file lives in the download cache
+  ([player/screenlock.go](player/screenlock.go),
+  [player/imageviewer.go](player/imageviewer.go),
+  [player/screensaver.go](player/screensaver.go); tests in
+  `player/screenlock_test.go` pin the validation, storage, the drawn frame and
+  the missing-file fallback).
+
+- **The Streams button opens a menu that can always start content.** The IP
+  stream screen was a single URL box, and the Media screen's button (labelled
+  "IPStream") plus the screen's own "Library" button opened a list of saved
+  links that is empty on a fresh install — a dead end on a handheld, where the
+  button is the only way in. Both now open one menu with two rows that are
+  always there — **Add a stream link** and **Browse channels** (the public IPTV
+  playlist import) — above the saved channels, so there is never a press with
+  nothing behind it. The D-pad walks every row including the action rows, A or
+  Enter opens or plays the highlighted one, X saves the URL box as a channel, Y
+  imports, Start or Delete removes, and B or Esc closes. The two buttons are
+  named the way the screens name themselves (**Streams** on Media, **Channels**
+  on the stream screen), the hint row now gives each pad button its keyboard
+  twin (`A / Enter`, `B / Esc`) the way the rest of the overlays do, and the
+  injected Media button is a real focus target: a test walks the D-pad from
+  Shorts to it on the compact Brick canvas and checks that confirming it opens
+  the menu ([player/ipstreams.go](player/ipstreams.go); tests in
+  [player/ipstreams_test.go](player/ipstreams_test.go)).
+
 - **Earned badges show their unlock date.** The unlock time was already saved
   with each badge (RFC3339, from the moment the check passed) and never shown,
   so the list could say what you earned but not when. Each earned badge now
@@ -449,18 +703,154 @@ For anything older, the git log and the
   [player/home.go](player/home.go), [player/main.go](player/main.go),
   [player/controller.go](player/controller.go); tests in
   [player/calendarpopover_test.go](player/calendarpopover_test.go)).
+
 ### Fixed
+
+- **An SFTP client's `stat` of a folder described one of its children.** The
+  server answered stat from the same listing it uses to browse, and the protocol
+  reads only the first entry, so a folder looked like whatever file sorted first
+  inside it and an empty folder looked missing — enough to make "create
+  directory" fail in a client that calls `mkdir -p` underneath. Stat now answers
+  with the entry itself, and a loopback test drives the console's own transfer
+  client against its own server, covering connect, host-key pinning, download
+  and upload ([player/sftp_root.go](player/sftp_root.go); tests in
+  [player/filetransfer_loopback_test.go](player/filetransfer_loopback_test.go)).
+
+- **A damaged snapshot can no longer half-overwrite live saves.** A restore
+  copied the snapshot's files one at a time, so a truncated copy, a flipped byte
+  or a file the card lost was only noticed after earlier saves had already been
+  replaced. The whole snapshot is now planned and verified first — the folders
+  are matched by path or by a unique name, no entry may escape its folder, a
+  save subfolder may not be a link out of the tree, and every file must still
+  match the size and SHA-256 recorded at capture time — and a snapshot that
+  fails any of that is refused as a whole with "nothing was changed", before the
+  safety snapshot is taken and before a live file is touched. Each file the
+  restore does write is re-hashed, so a card that fills up part way through is
+  caught there instead of at the next boot
+  ([player/savemanager.go](player/savemanager.go); tests in
+  [player/savemanager_test.go](player/savemanager_test.go)).
+
+- **An archive cannot write outside its folder through a link it shipped.** The
+  Windows-runtime extractor used to create the archive's symlinks while members
+  were still being written, so a later member could be written *through* a link
+  the archive itself supplied. Links are now collected during extraction and
+  built once the tree is complete, with both ends re-checked against the
+  extraction root, and every member name and link text now also passes the same
+  prefix test the tool-download extractor uses — the check the analyser can see
+  without following the helper — on top of the existing resolution guard. On the
+  FAT/exFAT card, where links are impossible, the alias is still copied as
+  before ([player/windows_runtime_install.go](player/windows_runtime_install.go);
+  fuzz targets in [player/fuzz_test.go](player/fuzz_test.go)).
+
+- **The search log can no longer be derived from the API key.** The tool name a
+  refused search command reports is now taken from the scene's own command text,
+  before the config-provided `--extractor-args youtube:api_key=…` and
+  `--cookies` arguments are appended to the argument list, so the string that
+  reaches the log has nothing to do with the key. The cache key and the
+  remembered paging command still describe the whole invocation, so the next
+  page is built exactly as before ([player/core.go](player/core.go)). Three
+  allocations stopped sizing themselves from a sum of lengths — merged search
+  results, the yt-dlp argument vector and the MQTT length-prefixed string — and
+  the battery reader now works in one integer type, which also keeps its charge
+  counters from overflowing the percentage math on a 32-bit build
+  ([player/media_paging.go](player/media_paging.go),
+  [player/streaming.go](player/streaming.go),
+  [player/smart_home.go](player/smart_home.go),
+  [player/widgets.go](player/widgets.go)).
+
+- **The parsers are fuzzed instead of only reviewed.**
+  [player/fuzz_test.go](player/fuzz_test.go) adds native Go fuzz targets for the
+  archive entry and symlink names and for the transfer address field: each
+  asserts an invariant (a name either gets refused or resolves below the
+  extraction root; an address either gets refused or round-trips through its own
+  canonical form), and `go test` runs every seed as an ordinary test. The nightly
+  fuzz job now lists its targets per package — `-fuzz` accepts one package at a
+  time — and installs the SDL headers the player package needs to build
+  ([.github/workflows/nightly.yml](.github/workflows/nightly.yml),
+  [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#fuzzing)).
+
+- **The browser follows a redirect, and the address bar says where it landed.**
+  A `<meta http-equiv="refresh">` stub — "this page has moved" — arrives with a
+  200 and a body, so nothing followed it automatically, and the reader sat on the
+  stub with the link that would have continued stripped along with the page's
+  scripts. A load now follows up to three in-page redirects with the same client
+  and cookie jar, resolving the target against the page (quoted, unquoted,
+  relative, `URL=` in any case) and refusing a non-web scheme, a target that
+  names nothing, or a page that only asks to be reloaded on a longer timer; a
+  loop stops at the limit. HTTP redirects were already followed by the client,
+  but the toolbar and Back still named the address the reader typed, so they now
+  move to the URL the load actually ended on — from the render pass, never while
+  the address bar is being edited, and never for a page the reader has already
+  navigated past ([player/textbrowser.go](player/textbrowser.go),
+  [player/browser.go](player/browser.go); tests in
+  [player/browser_redirect_test.go](player/browser_redirect_test.go)).
+
+- **The dark blue palette now separates, and its text is readable.** The shipped
+  dark blue was one flat field: panels sat 1.11:1 above the page, rows 1.09:1
+  above a panel and a focused row 1.27:1 above a resting one, so on the Brick's
+  panel every card, row and button read as the same colour as the page behind
+  it, and tertiary text (hints, captions, placeholders) sat at 3.4:1 on a card —
+  under WCAG AA. The ramp is rebuilt so each step is a measured step (1.20:1,
+  1.34:1 and 1.43:1), borders and hairlines rise with the surfaces they sit on,
+  secondary and tertiary text clear 4.5:1 on the brightest surface, and the
+  shipped configs' `$buttonColor`/`$inputColor` — the fill a scene button and an
+  input field actually use — moved from `#1E293B`/`#0F1420` to
+  `#2E4061`/`#1C2839`, where they read at 1.85:1 and 1.29:1 instead of 1.31:1 and
+  1.04:1. Two defects the lighter buttons exposed are fixed with it: the
+  label-colour chooser used a weighted 8-bit sum whose crossover sat at a 23.5%
+  mean channel, so a mid-dark fill was given near-black text (~1.7:1) instead of
+  white, and a focused tile was tinted with the raw accent — which is the
+  config's button colour — so a dark accent painted the focused card darker
+  than its neighbours, a hole instead of the brightest state on the page
+  ([player/design.go](player/design.go), [player/themes.go](player/themes.go),
+  [player/components.go](player/components.go), [player/appgrid.go](player/appgrid.go),
+  [player/emutiles.go](player/emutiles.go), [player/toolsui.go](player/toolsui.go),
+  [player/jukaconfig.json](player/jukaconfig.json),
+  [player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json),
+  [script.js](script.js), [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md); tests in
+  [player/themes_test.go](player/themes_test.go)).
+
+- **The Emulators page is the same page as every other overlay.** It drew the
+  shared title bar inside a card that ran out to the screen edge (20px of
+  margin, a 22px radius and a hand-reserved 96px band), so its header sat in the
+  corner at a different inset from Tools, Downloads and Compatibility and the
+  band below it was a guess. The page now uses the shared full-page card —
+  centred, 1040px wide (screen-clamped), 20px radius, the same 18px hairline and
+  the same 24px body padding — and reserves the strip above the grid with
+  `UIPanelHeaderBand`, the measurement the header itself is drawn from, placed
+  at `UIPanelHeaderInset` like the rest. Because the card is narrower than the
+  old edge-to-edge one, the widest control line (a core to update, a build to
+  roll back to and the L1/R2/Y page keys all live) no longer fits: the page now
+  sheds whole hints by measurement instead of letting the line be ellipsized,
+  dropping the D-pad line first and always keeping Back
+  ([player/emutiles.go](player/emutiles.go); tests in
+  [player/emulators_test.go](player/emulators_test.go),
+  [player/emulatorinstall_test.go](player/emulatorinstall_test.go) and
+  [player/page_header_consistency_test.go](player/page_header_consistency_test.go)).
+
+- **Play Link asks for a link and plays it.** The Media screen's Play Link button
+  only acted on a link that was already typed into the URL field, so with nothing
+  highlighted it showed a toast and did nothing — and reaching that small field
+  first is the very thing a handheld pad makes awkward. The button now opens the
+  field on the on-screen keyboard with an empty buffer and the hint "Paste a video
+  link, then Save"; Save plays what was typed instead of searching for it, an
+  empty Save plays nothing, and dismissing the prompt disarms it so the next
+  search still searches. A highlighted result still plays first, and a link
+  already in the field still plays without asking again
+  ([player/features.go](player/features.go), [player/core.go](player/core.go),
+  [player/vkeyboard.go](player/vkeyboard.go); tests in
+  [player/media_playlink_test.go](player/media_playlink_test.go)).
 
 - **The Playtime badge list scrolls with the D-pad and the arrow keys.** The
   screen has no config elements, so its only focus nodes were the top-bar
   buttons: focus started on the Back pill, `handleChromeKey` claimed every arrow
   press, and the page's own key handler was never reached, so only the wheel,
   Page Up/Down, L1/R1 and Home/End moved the page while the D-pad and the arrow
-  keys did nothing. A scene with no focusable content is a page that owns the pad,
-  so the focus graph no longer adds the bar for it (the bar stays a tap target
-  and is reachable through the Start menu). The same rule applies to every
-  element-less module screen ([player/focus.go](player/focus.go); pinned by
-  `TestPlaytimePageKeepsThePadFromTheTopBar`).
+  keys did nothing. A scene can now declare that it owns the page keys
+  (`claimsPageKeys`), and the focus graph leaves the top bar out for it, so no
+  arrow can be consumed by a button the screen is not offering. The bar stays a
+  tap target there and is reachable through the Start menu ([player/focus.go](player/focus.go),
+  [player/scene.go](player/scene.go); pinned by `TestPlaytimePageKeepsThePadFromTheTopBar`).
 
 - **The Files, Packages and Emulator cards draw real pictures.** The Emulator
   card asked for an `emulator` glyph and the painter only knew `emulators`, so it
@@ -916,6 +1306,33 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   ([player/snappreview.go](player/snappreview.go), `player/snappreview_test.go`).
 
 ### Changed
+
+- **The release offer is a quiet system chip, not a warning banner.** It sat in
+  the same corner as the notification bell but at the labelled buttons' full
+  height, filled with a warning tint and outlined at 200 alpha — the loudest
+  thing in the bar, next to a bell that is a plain surface chip. It now takes the
+  bell's height (the shared button height minus the same step), the same
+  `ColorIconSurface` fill with no outline, a secondary-colour label and a
+  smaller, dimmer arrow, so an available release reads as one more system
+  control. Geometry still comes from one helper, so Home and every scene draw
+  the same pill, and the focused state is the same accent ring the bell uses
+  ([player/updateprompt.go](player/updateprompt.go); pinned by
+  `TestReleaseOfferWearsTheBellsSurface`, `TestSceneHeaderUsesTheSharedButtonHeight`
+  and `TestHomeUpdateChipSitsLeftOfTheBell`).
+
+- **The Benchmark screen has one Run button that measures both phases.** Run and
+  Random were two buttons running two tests, so pressing Run reported half of what
+  the screen measures and recorded the board entry from the sequential pass alone;
+  the random pass happened only if someone remembered the second button, and its
+  numbers then replaced the first pass's text. One press now runs the sequential
+  50 MB stream and then the 10 MB scattered 4 KiB test automatically, reports all
+  four numbers in one panel (or which phase failed, and the other phase still
+  runs), keeps recording the board entry from the sequential pass, and still
+  stops on leaving the screen. The old `benchmark_random` trigger is left handled
+  for hand-edited configs ([player/morefeatures.go](player/morefeatures.go),
+  [player/jukaconfig.json](player/jukaconfig.json),
+  [player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.json);
+  tests in [player/benchmark_test.go](player/benchmark_test.go)).
 
 - **The notification bell is a header button, not a headline.** It was sized off
   the status font and came out a 54×40 capsule with a 32px glyph on the 1280
@@ -2040,3 +2457,18 @@ skipped as before. See [docs/BROWSER.md](docs/BROWSER.md#videos-and-yt-dlp-playb
   now sized to the rows it actually shows, so the capped height no longer left
   a dead band under the last row (`powertools.go`, pinned by
   `powertools_ui_test.go`).
+
+### Fixed
+
+- **Chat overlays let go of the pad when you leave the chat scene.** The
+  message action bar, the member list and the profile card are all drawn inside
+  the chat panel, but their input guards only asked whether they were open — so
+  a bar or a card left behind by a scene change kept eating the next press on
+  the screen you were actually looking at (the floating video's **X** on Home
+  was one of them). Each now checks that the panel that draws it is the scene on
+  screen and drops itself when it is not, so the press lands where it looks like
+  it will ([player/chatactions.go](player/chatactions.go),
+  [player/chatprofile.go](player/chatprofile.go),
+  [player/controller.go](player/controller.go), [player/main.go](player/main.go),
+  [docs/CONTROLS.md](docs/CONTROLS.md); tests in
+  [player/chat_profile_test.go](player/chat_profile_test.go)).

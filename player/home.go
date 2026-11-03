@@ -49,6 +49,11 @@ func refreshHomeLayout(config *Config) {
 	} else if homeLayout.Width != screenWidth || homeLayout.Height != screenHeight {
 		homeLayout.Resize(screenWidth, screenHeight)
 	}
+	// The arrangement a total-conversion preset installed, applied to the live
+	// layout as soon as it differs. Custom leaves the authored geometry in
+	// charge, which is what ApplyConfig below then applies.
+	homeLayout.SetArrangement(homeArrangement(config))
+
 	// Keep the cards following jukaconfig.json: position, size, title, subtitle
 	// and icon of every menu card are the Main scene's tiles (ApplyConfig),
 	// so a config edit (or hot reload) reaches the screen on the next frame.

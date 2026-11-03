@@ -66,18 +66,17 @@ type chatMembersPanel struct {
 	scroll int
 	rows   []chatMemberProfile
 	rect   sdl.Rect
+	layout chatMembersLayout
 }
 
 var chatMembers chatMembersPanel
 
 const (
-	chatProfileCardW = int32(470)
-	chatProfileCardH = int32(330)
-	chatMembersCardW = int32(470)
-	// A row carries a name and a meta line, so its height follows two lines of
-	// the small font plus padding; 52 px clipped the meta line on the handheld.
-	chatMemberRowH = int32(64)
-	chatMembersMax = 5
+	chatProfileCardW  = int32(470)
+	chatProfileCardH  = int32(330)
+	chatMembersCardW  = int32(470)
+	chatMemberRowMinH = int32(64)
+	chatMembersMax    = 5
 	// chatGroupWindow is how close together two messages from one sender must
 	// be to collapse into one group (name and avatar drawn once).
 	chatGroupWindow = 5 * time.Minute
@@ -305,6 +304,22 @@ func chatOverlayOpen() bool {
 	return chatProfile.open || chatMembers.open
 }
 
+// chatOverlayOwnsInput reports whether the member list or the profile card
+// should take the pad, the keys and the clicks. Both float inside the chat
+// panel, so off that scene they are stale: they drop themselves here instead of
+// swallowing input meant for the screen underneath.
+func chatOverlayOwnsInput(config *Config) bool {
+	if !chatOverlayOpen() {
+		return false
+	}
+	if !currentSceneHasChat(config) {
+		chatProfile = chatProfileCard{}
+		chatMembers = chatMembersPanel{}
+		return false
+	}
+	return true
+}
+
 // openChatProfile shows the card for a speaker.
 func openChatProfile(name, userID string) bool {
 	name = strings.TrimSpace(name)
@@ -399,7 +414,7 @@ func chatProfileSearchText(p chatMemberProfile) string {
 // whether the key was consumed, and always consumes while a card is up so the
 // scene underneath cannot react.
 func handleChatOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
-	if !chatOverlayOpen() || e == nil {
+	if e == nil || !chatOverlayOwnsInput(config) {
 		return false
 	}
 	if e.Type != sdl.KEYDOWN {
@@ -450,8 +465,11 @@ func handleChatOverlayKey(e *sdl.KeyboardEvent, config *Config) bool {
 
 // ctrlChatOverlay is the controller twin of handleChatOverlayKey.
 func ctrlChatOverlay(e *sdl.ControllerButtonEvent, config *Config) bool {
-	if !chatOverlayOpen() || e == nil {
-		return true
+	if e == nil {
+		return chatOverlayOwnsInput(config)
+	}
+	if !chatOverlayOwnsInput(config) {
+		return false
 	}
 	if chatProfile.open {
 		switch e.Button {
@@ -497,13 +515,17 @@ func ctrlChatOverlay(e *sdl.ControllerButtonEvent, config *Config) bool {
 }
 
 func chatMembersEnsureVisible() {
+	visible := chatMembers.layout.visible
+	if visible < 1 {
+		visible = chatMembersMax
+	}
 	if chatMembers.focus < chatMembers.scroll {
 		chatMembers.scroll = chatMembers.focus
 	}
-	if chatMembers.focus >= chatMembers.scroll+chatMembersMax {
-		chatMembers.scroll = chatMembers.focus - chatMembersMax + 1
+	if chatMembers.focus >= chatMembers.scroll+visible {
+		chatMembers.scroll = chatMembers.focus - visible + 1
 	}
-	chatMembers.scroll = clampIndex(chatMembers.scroll, len(chatMembers.rows)-chatMembersMax+1)
+	chatMembers.scroll = clampIndex(chatMembers.scroll, len(chatMembers.rows)-visible+1)
 }
 
 // chatOverlayClick consumes clicks while either overlay is up: a click on an
@@ -530,19 +552,10 @@ func chatOverlayClick(mx, my int32, config *Config) bool {
 		}
 		return true
 	}
-	rowH := chatMemberRowH
-	for i, row := range chatMembers.rows[chatMembers.scroll:] {
-		if i >= chatMembersMax {
-			break
-		}
-		rowRect := sdl.Rect{
-			X: chatMembers.rect.X + SpaceMD,
-			Y: chatMembers.rect.Y + 52 + int32(i)*rowH,
-			W: chatMembers.rect.W - SpaceMD*2,
-			H: rowH - SpaceXS,
-		}
-		if pointInRect(mx, my, rowRect) {
+	for i := 0; i < chatMembers.layout.visible && chatMembers.scroll+i < len(chatMembers.rows); i++ {
+		if pointInRect(mx, my, chatMembers.layout.rowRect(i)) {
 			chatMembers.focus = chatMembers.scroll + i
+			row := chatMembers.rows[chatMembers.focus]
 			openChatProfile(row.Name, row.UserID)
 			return true
 		}
@@ -648,26 +661,42 @@ func chatProfileCardRect() sdl.Rect {
 	}
 }
 
-// chatMembersCardRect sizes the member list to its rows.
-func chatMembersCardRect() sdl.Rect {
-	w := chatMembersCardW
-	if w > screenWidth-32 {
-		w = screenWidth - 32
+// chatMembersLayout is shared by drawing, navigation and hit testing. The
+// font height is measured after UI and accessibility scaling have been applied.
+type chatMembersLayout struct {
+	rect    sdl.Rect
+	headerH int32
+	rowH    int32
+	footerH int32
+	visible int
+}
+
+func chatMembersLayoutFor(width, height, lineH int32, count int) chatMembersLayout {
+	w := min32(chatMembersCardW, max32(1, width-32))
+	lineH = max32(1, lineH)
+	headerH := max32(52, lineH+24)
+	footerH := lineH + 20
+	rowH := max32(chatMemberRowMinH, 2*lineH+14+SpaceXS)
+	available := max32(1, height-32)
+	visible := int(max32(0, (available-headerH-footerH)/rowH))
+	visible = min(min(visible, chatMembersMax), count)
+	// Preserve one scroll slot on a very small viewport; row drawing is
+	// clipped to the space left between the header and footer.
+	if count > 0 && visible == 0 {
+		visible = 1
 	}
-	rows := len(chatMembers.rows)
-	if rows > chatMembersMax {
-		rows = chatMembersMax
+	h := min32(available, headerH+int32(visible)*rowH+footerH)
+	return chatMembersLayout{
+		rect:    sdl.Rect{X: (width - w) / 2, Y: (height - h) / 2, W: w, H: h},
+		headerH: headerH, rowH: rowH, footerH: footerH, visible: visible,
 	}
-	h := 52 + int32(rows)*chatMemberRowH + 34
-	if h > screenHeight-100 {
-		h = screenHeight - 100
-	}
-	return sdl.Rect{
-		X: (screenWidth - w) / 2,
-		Y: (screenHeight - h) / 2,
-		W: w,
-		H: h,
-	}
+}
+
+func (l chatMembersLayout) rowRect(i int) sdl.Rect {
+	y := l.rect.Y + l.headerH + int32(i)*l.rowH
+	bottom := l.rect.Y + l.rect.H - l.footerH
+	return sdl.Rect{X: l.rect.X + 16, Y: y, W: max32(0, l.rect.W-32),
+		H: max32(0, min32(l.rowH-SpaceXS, bottom-y-SpaceXS))}
 }
 
 // drawChatScrim dims the scene behind a card so the card reads as foreground.
@@ -753,7 +782,7 @@ func renderChatProfile(renderer *sdl.Renderer, config *Config) {
 		bw, _, _ := font.SizeUTF8(label)
 		bw += 14
 		fillRoundedRect(renderer, textX, badgeY, int32(bw), int32(font.Height())+6, (int32(font.Height())+6)/2, WithAlpha(ColorInfo, 45))
-		renderText(renderer, config, font, label, ColorInfo, textX+7, badgeY+3)
+		renderText(renderer, config, font, label, InfoInk(), textX+7, badgeY+3)
 		textX += int32(bw) + 6
 	}
 
@@ -846,7 +875,12 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 	if font == nil {
 		return
 	}
-	r := chatMembersCardRect()
+	chatMembers.rows = chatMembersList()
+	chatMembers.focus = clampIndex(chatMembers.focus, len(chatMembers.rows))
+	chatMembers.layout = chatMembersLayoutFor(screenWidth, screenHeight, int32(font.Height()), len(chatMembers.rows))
+	chatMembersEnsureVisible()
+	layout := chatMembers.layout
+	r := layout.rect
 	chatMembers.rect = r
 	drawChatScrim(renderer)
 	UICard(renderer, r, UICardStyle{
@@ -863,53 +897,68 @@ func renderChatMembers(renderer *sdl.Renderer, config *Config) {
 	renderText(renderer, config, font, count, ColorTextTertiary(), r.X+r.W-pad-int32(countW), r.Y+14)
 
 	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 90)
-	renderer.FillRect(&sdl.Rect{X: r.X + pad, Y: r.Y + 44, W: r.W - pad*2, H: 1})
+	renderer.FillRect(&sdl.Rect{X: r.X + pad, Y: r.Y + layout.headerH - 8, W: r.W - pad*2, H: 1})
 
-	chatMembers.rows = chatMembersList()
-	chatMembers.focus = clampIndex(chatMembers.focus, len(chatMembers.rows))
-	rowH := chatMemberRowH
-	for i := chatMembers.scroll; i < len(chatMembers.rows) && i < chatMembers.scroll+chatMembersMax; i++ {
+	for i := chatMembers.scroll; i < len(chatMembers.rows) && i < chatMembers.scroll+layout.visible; i++ {
 		row := chatMembers.rows[i]
-		rowRect := sdl.Rect{X: r.X + pad, Y: r.Y + 52 + int32(i-chatMembers.scroll)*rowH, W: r.W - pad*2, H: rowH - SpaceXS}
+		rowRect := layout.rowRect(i - chatMembers.scroll)
+		if rowRect.H <= 0 || rowRect.W <= 0 {
+			continue
+		}
 		UIListRow(renderer, rowRect, RadiusSM, i == chatMembers.focus, false)
-		avatar := int32(32)
-		renderChatAvatar(renderer, config, font, rowRect.X+8, rowRect.Y+(rowRect.H-avatar)/2, avatar, row.Name, row.AvatarURL, senderColorForName(row.Name))
-		nameX := rowRect.X + 8 + avatar + 10
-		nameW := rowRect.W - (nameX - rowRect.X) - 160
-		if nameW < 60 {
-			nameW = 60
-		}
-		renderText(renderer, config, font, ellipsize(font, row.Name, nameW), ColorTextPrimary(), nameX, rowRect.Y+5)
-		meta := fmt.Sprintf("%d msg", row.Messages)
-		if !row.LastSeen.IsZero() {
-			meta += " · " + timeSince(row.LastSeen)
-		}
-		renderText(renderer, config, font, ellipsize(font, meta, rowRect.W-16), ColorTextTertiary(), nameX, rowRect.Y+5+int32(font.Height()))
-		if row.Local || row.Bot || row.AI {
-			tag := "BOT"
+		renderWithClip(renderer, rowRect.X, rowRect.Y, rowRect.W, rowRect.H, func(renderer *sdl.Renderer) {
+			avatar := int32(32)
+			renderChatAvatar(renderer, config, font, rowRect.X+8, rowRect.Y+(rowRect.H-avatar)/2, avatar, row.Name, row.AvatarURL, senderColorForName(row.Name))
+			nameX := rowRect.X + 8 + avatar + 10
+			textW := max32(0, rowRect.X+rowRect.W-8-nameX)
+			tag := ""
 			switch {
 			case row.Local:
 				tag = "YOU"
 			case row.AI:
 				tag = "AI"
+			case row.Bot:
+				tag = "BOT"
 			}
-			tw, _, _ := font.SizeUTF8(tag)
-			chipW := int32(tw) + 12
-			chipX := rowRect.X + rowRect.W - chipW - 8
-			chipY := rowRect.Y + (rowRect.H-(int32(font.Height())+4))/2
-			fillRoundedRect(renderer, chipX, chipY, chipW, int32(font.Height())+4, (int32(font.Height())+4)/2, WithAlpha(ColorInfo, 45))
-			renderText(renderer, config, font, tag, ColorInfo, chipX+6, chipY+2)
-		}
+			nameW := textW
+			if tag != "" {
+				tw, _, _ := font.SizeUTF8(tag)
+				nameW = max32(0, textW-int32(tw)-20)
+			}
+			textY := rowRect.Y + max32(0, (rowRect.H-2*int32(font.Height()))/2)
+			if nameW > 0 {
+				renderText(renderer, config, font, ellipsize(font, row.Name, nameW), ColorTextPrimary(), nameX, textY)
+			}
+			meta := fmt.Sprintf("%d msg", row.Messages)
+			if !row.LastSeen.IsZero() {
+				meta += " · " + timeSince(row.LastSeen)
+			}
+			if nameW > 0 {
+				renderText(renderer, config, font, ellipsize(font, meta, nameW), ColorTextTertiary(), nameX, textY+int32(font.Height()))
+			}
+			if tag != "" {
+				tw, _, _ := font.SizeUTF8(tag)
+				chipW := int32(tw) + 12
+				chipX := rowRect.X + rowRect.W - chipW - 8
+				chipY := rowRect.Y + (rowRect.H-(int32(font.Height())+4))/2
+				fillRoundedRect(renderer, chipX, chipY, chipW, int32(font.Height())+4, (int32(font.Height())+4)/2, WithAlpha(ColorInfo, 45))
+				renderText(renderer, config, font, tag, InfoInk(), chipX+6, chipY+2)
+			}
+		})
 	}
 
-	// Scroll hint only when there is more than one screen of members.
-	hints := []FooterHint{{Button: "A", Label: "Open profile"}, {Button: "B", Label: "Close"}}
-	if len(chatMembers.rows) > chatMembersMax {
-		hints = append([]FooterHint{{Button: "Up/Down", Label: "Members"}}, hints...)
+	// Keep the action hints visible when a larger font leaves no room for the
+	// optional scroll hint.
+	hint := hintLine(FooterHint{"A", "Open"}, FooterHint{"B", "Close"})
+	if len(chatMembers.rows) > layout.visible {
+		withScroll := hintLine(FooterHint{"Up/Down", "Move"}, FooterHint{"A", "Open"}, FooterHint{"B", "Close"})
+		if w, _, _ := font.SizeUTF8(withScroll); int32(w) <= r.W-2*pad {
+			hint = withScroll
+		}
 	}
-	hint := hintLine(hints...)
+	hint = ellipsize(font, hint, max32(1, r.W-2*pad))
 	hintW, _, _ := font.SizeUTF8(hint)
-	renderText(renderer, config, font, hint, ColorTextTertiary(), r.X+(r.W-int32(hintW))/2, r.Y+r.H-24)
+	renderText(renderer, config, font, hint, ColorTextTertiary(), r.X+(r.W-int32(hintW))/2, r.Y+r.H-layout.footerH+10)
 }
 
 // drawChatMembersChip draws the header chip that opens the member list. It is

@@ -30,6 +30,10 @@ type companionOverlay struct {
 
 var companion companionOverlay
 
+// companionQRRect is the pairing code as drawn in the card, so a tap can
+// enlarge it. Render/event thread only; empty when no card is up.
+var companionQRRect sdl.Rect
+
 // companionHeaderRect is the QR tile in the home header. It is set by the
 // renderer and read by the home click handler, so the visible code and its hit
 // target can never drift apart.
@@ -65,6 +69,7 @@ func openCompanionOverlay() {
 // server down is reserved for app exit and "new PIN".
 func closeCompanionOverlay() {
 	companion.open = false
+	companionQRRect = sdl.Rect{}
 	resetCompanionQueue()
 }
 
@@ -278,6 +283,66 @@ func companionFontLine(font *ttf.Font) int32 {
 	return 14
 }
 
+// companionCardLayout keeps the QR captions in their own column and reserves
+// a full-width footer, even when the selected font is larger than expected.
+type companionCardLayout struct {
+	card, qr, left, right sdl.Rect
+	titleY, footerY       int32
+	contentBottom         int32
+}
+
+func companionCardLayoutFor(width, height, titleH, lineH int32) companionCardLayout {
+	cardW := min32(780, max32(1, width-24))
+	cardH := min32(470, max32(1, height-24))
+	card := sdl.Rect{X: (width - cardW) / 2, Y: (height - cardH) / 2, W: cardW, H: cardH}
+	pad := int32(26)
+	titleY := card.Y + pad
+	contentY := titleY + titleH + 16
+	footerY := card.Y + card.H - pad - lineH
+	bottom := footerY - 8
+	innerW := max32(1, cardW-2*pad)
+	// Reserve three measured lines under the QR for scanning, enlargement
+	// and the shared-Wi-Fi instruction.
+	qrSize := min32(320, innerW*36/100)
+	qrSize = min32(qrSize, max32(0, bottom-contentY-3*lineH-6))
+	leftW := qrSize
+	rightX := card.X + pad + leftW + 16
+	rightW := max32(0, card.X+card.W-pad-rightX)
+	return companionCardLayout{
+		card:   card,
+		qr:     sdl.Rect{X: card.X + pad, Y: contentY, W: qrSize, H: qrSize},
+		left:   sdl.Rect{X: card.X + pad, Y: contentY, W: leftW, H: max32(0, bottom-contentY)},
+		right:  sdl.Rect{X: rightX, Y: contentY, W: rightW, H: max32(0, bottom-contentY)},
+		titleY: titleY, footerY: footerY, contentBottom: bottom,
+	}
+}
+
+// companionWrapAddress breaks an address at rune boundaries rather than
+// ellipsizing it: users who cannot scan the QR need the entire address.
+func companionWrapAddress(font *ttf.Font, text string, width int32) []string {
+	if font == nil || width <= 0 {
+		return nil
+	}
+	runes := []rune(text)
+	var lines []string
+	for len(runes) > 0 {
+		end := 0
+		for end < len(runes) {
+			w, _, err := font.SizeUTF8(string(runes[:end+1]))
+			if err != nil || int32(w) > width {
+				break
+			}
+			end++
+		}
+		if end == 0 {
+			return nil
+		}
+		lines = append(lines, string(runes[:end]))
+		runes = runes[end:]
+	}
+	return lines
+}
+
 // renderCompanionOverlay draws the pairing card: QR on the left, everything a
 // person needs to know on the right. Every offset comes from the measured font
 // height, because the design tokens choose those sizes and a handheld font is
@@ -288,107 +353,91 @@ func renderCompanionOverlay(renderer *sdl.Renderer, config *Config) {
 	}
 	drawRect(renderer, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight}, 0, 0, 0, 190)
 
-	cardW := int32(780)
-	cardH := int32(470)
-	if cardW > screenWidth-24 {
-		cardW = screenWidth - 24
-	}
-	if cardH > screenHeight-24 {
-		cardH = screenHeight - 24
-	}
-	cardX := (screenWidth - cardW) / 2
-	cardY := (screenHeight - cardH) / 2
-	drawRoundedRect(renderer, &sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, 18, 22, 22, 28, 248)
-
 	const pad = int32(26)
 	titleFont := getDisplayFont(config, 22)
 	bodyFont := getBodyFont(config, 14)
-	smallFont := getBodyFont(config, 12)
+	smallFont := getSmallFont(config)
 	pinFont := getDisplayFont(config, 30)
 	accent := getAccentColor(config)
-	dim := colorNew(139, 147, 167, 255)
+	dim := colorNew(160, 170, 190, 255)
 	ink := colorNew(230, 232, 239, 255)
 	red := colorNew(255, 107, 107, 255)
 	green := colorNew(62, 207, 142, 255)
 
 	line := companionFontLine(smallFont)
-	titleY := cardY + pad
-	drawText(renderer, titleFont, "Phone Companion", cardX+pad, titleY, accent, textAlignLeft)
+	layout := companionCardLayoutFor(screenWidth, screenHeight, companionFontLine(titleFont), line)
+	card := layout.card
+	drawRoundedRect(renderer, &card, 18, 22, 22, 28, 248)
+	drawText(renderer, titleFont, ellipsize(titleFont, "Phone Companion", max32(1, card.W-2*pad)), card.X+pad, layout.titleY, ink, textAlignLeft)
 
-	footerY := cardY + cardH - pad - companionFontLine(smallFont)
-	contentY := titleY + companionFontLine(titleFont) + 16
-	limit := footerY - 6
-
-	// QR block: a square that fills the height left between the title and the
-	// two caption lines, so a small screen shrinks the code instead of
-	// overlapping the text.
-	captionLines := int32(2)
-	if cardH < 300 {
-		captionLines = 1
+	qr := layout.qr
+	companionQRRect = qr
+	if qr.W > 0 {
+		drawRoundedRect(renderer, &qr, 8, 255, 255, 255, 255)
+		// A QR smaller than its module grid cannot be scanned; leave the tile
+		// blank rather than drawing modules outside the column.
+		if qr.W >= int32(len(companion.qr)) {
+			drawCompanionQR(renderer, qr, companion.qr)
+		}
+		if len(companion.qr) > 0 {
+			strokeRoundedRect(renderer, qr.X-3, qr.Y-3, qr.W+6, qr.H+6, 10, 3, accent)
+		}
 	}
-	qrSize := limit - contentY - captionLines*line - 8
-	if qrSize > 320 {
-		qrSize = 320
-	}
-	if qrSize < 64 {
-		qrSize = 64
-	}
-	qrX := cardX + pad
-	qrY := contentY
-	drawRoundedRect(renderer, &sdl.Rect{X: qrX, Y: qrY, W: qrSize, H: qrSize}, 8, 255, 255, 255, 255)
-	drawCompanionQR(renderer, sdl.Rect{X: qrX, Y: qrY, W: qrSize, H: qrSize}, companion.qr)
-
-	caption := "Scan with your phone camera"
+	// Short, individually fitted lines cannot spill into the details column.
+	captionY := qr.Y + qr.H + 6
+	captions := []string{"Scan with phone", "A Enlarge QR", "Use same Wi-Fi"}
 	if companion.err != "" {
-		caption = "Companion is offline"
+		captions = []string{"Companion offline", "", "Use same Wi-Fi"}
+	} else if len(companion.qr) == 0 {
+		captions[1] = ""
 	}
-	captionY := qrY + qrSize + 6
-	drawText(renderer, smallFont, caption, qrX, captionY, dim, textAlignLeft)
-	if captionLines > 1 {
-		drawText(renderer, smallFont, "Phone and handheld must share Wi-Fi", qrX, captionY+line, dim, textAlignLeft)
-	}
-
-	rightX := qrX + qrSize + pad + 6
-	rightW := cardX + cardW - pad - rightX
-	if rightW < 80 {
-		rightW = 80
-	}
-	y := contentY
-
-	drawText(renderer, smallFont, "PAIRING PIN", rightX, y, dim, textAlignLeft)
-	y += line + 2
-	pinText := companion.pin
-	if pinText == "" {
-		pinText = "------"
-	}
-	drawText(renderer, pinFont, pinText, rightX, y, accent, textAlignLeft)
-	y += companionFontLine(pinFont) + 2
-
-	status := "Listening"
-	statusColor := green
-	if companion.err != "" {
-		status = "Offline"
-		statusColor = red
-	}
-	drawText(renderer, bodyFont, status, rightX, y, statusColor, textAlignLeft)
-	y += companionFontLine(bodyFont)
-	if companion.srv != nil {
-		drawText(renderer, smallFont, companion.url, rightX, y, ink, textAlignLeft)
-		y += line
-	}
-	y += 8
-
-	if companion.err != "" {
-		y = drawCompanionParagraph(renderer, smallFont, companion.err, rightX, y, rightW, red, line, limit)
-		y += 4
+	if layout.left.W > 0 && layout.left.H > 0 {
+		renderWithClip(renderer, layout.left.X, layout.left.Y, layout.left.W, layout.left.H, func(r *sdl.Renderer) {
+			for i, caption := range captions {
+				drawText(r, smallFont, ellipsize(smallFont, caption, layout.left.W), layout.left.X, captionY+int32(i)*line, dim, textAlignLeft)
+			}
+		})
 	}
 
-	help := "Your phone gets a keyboard, a D-pad remote, a \"send link\" box and a file drop. " +
-		"Files land in the PhoneDrop folder, links open in the player."
-	drawCompanionParagraph(renderer, smallFont, help, rightX, y+2, rightW, dim, line, limit)
-
-	drawText(renderer, smallFont, hintLine(FooterHint{"Y", "New PIN"}, FooterHint{"B / Esc", "Close"}),
-		rightX, footerY, dim, textAlignLeft)
+	// The column is clipped as a final guard against very small displays or
+	// unusually large accessibility fonts. Essential pairing details come first.
+	if layout.right.W > 0 && layout.right.H > 0 {
+		renderWithClip(renderer, layout.right.X, layout.right.Y, layout.right.W, layout.right.H, func(r *sdl.Renderer) {
+			y := layout.right.Y
+			drawText(r, smallFont, "PAIRING PIN", layout.right.X, y, dim, textAlignLeft)
+			y += line + 2
+			pinText := companion.pin
+			if pinText == "" {
+				pinText = "------"
+			}
+			drawText(r, pinFont, pinText, layout.right.X, y, ink, textAlignLeft)
+			y += companionFontLine(pinFont) + 2
+			status, statusColor := "Listening", green
+			if companion.err != "" {
+				status, statusColor = "Offline", red
+			}
+			drawText(r, bodyFont, status, layout.right.X, y, statusColor, textAlignLeft)
+			y += companionFontLine(bodyFont) + 4
+			if companion.srv != nil {
+				for _, addressLine := range companionWrapAddress(smallFont, companion.url, layout.right.W) {
+					if y+line > layout.contentBottom {
+						break
+					}
+					drawText(r, smallFont, addressLine, layout.right.X, y, ink, textAlignLeft)
+					y += line
+				}
+			}
+			y += 8
+			if companion.err != "" {
+				y = drawCompanionParagraph(r, smallFont, companion.err, layout.right.X, y, layout.right.W, red, line, layout.contentBottom)
+				y += 4
+			}
+			help := "Your phone gets a keyboard, remote, link sender and file drop. Files land in PhoneDrop."
+			drawCompanionParagraph(r, smallFont, help, layout.right.X, y, layout.right.W, dim, line, layout.contentBottom)
+		})
+	}
+	footer := hintLine(FooterHint{"Y", "New PIN"}, FooterHint{"B / Esc", "Close"})
+	drawText(renderer, smallFont, ellipsize(smallFont, footer, max32(1, card.W-2*pad)), card.X+pad, layout.footerY, dim, textAlignLeft)
 }
 
 // drawCompanionParagraph wraps text at word boundaries and returns the y of
@@ -409,7 +458,7 @@ func drawCompanionParagraph(renderer *sdl.Renderer, font *ttf.Font, text string,
 			if y+lineH > maxY {
 				return y
 			}
-			drawText(renderer, font, line, x, y, col, textAlignLeft)
+			drawText(renderer, font, ellipsize(font, line, maxW), x, y, col, textAlignLeft)
 			y += lineH
 			line = word
 			continue
@@ -417,7 +466,7 @@ func drawCompanionParagraph(renderer *sdl.Renderer, font *ttf.Font, text string,
 		line = candidate
 	}
 	if line != "" && y+lineH <= maxY {
-		drawText(renderer, font, line, x, y, col, textAlignLeft)
+		drawText(renderer, font, ellipsize(font, line, maxW), x, y, col, textAlignLeft)
 		y += lineH
 	}
 	return y
@@ -433,9 +482,27 @@ func handleCompanionKey(e *sdl.KeyboardEvent, config *Config) bool {
 	case sdl.K_ESCAPE, sdl.K_RETURN, sdl.K_KP_ENTER:
 		closeCompanionOverlay()
 		PlayBackSound()
+	case sdl.K_a:
+		// A enlarges the pairing code; Escape/Enter remain the way out, so
+		// the card's existing dismissal keys do not change meaning.
+		qrZoomOpenCard(companion.qr, "Phone Companion")
 	case sdl.K_y:
 		companionRestart()
 	}
+	return true
+}
+
+// handleCompanionMouse is the card's tap path: the code enlarges, anything
+// else on the card dismisses it. It reports whether the click was consumed.
+func handleCompanionMouse(mx, my int32) bool {
+	if !companion.open {
+		return false
+	}
+	if companionQRRect.W > 0 && pointInRect(mx, my, companionQRRect) {
+		qrZoomOpenCard(companion.qr, "Phone Companion")
+		return true
+	}
+	closeCompanionOverlay()
 	return true
 }
 

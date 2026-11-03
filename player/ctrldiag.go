@@ -359,7 +359,7 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	const padX = int32(24)
+	const padX = OverlayPadX
 
 	stickSize := int32(150)
 	if screenHeight < 700 {
@@ -375,7 +375,7 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	// stick or a dead button inks the subtitle in the warning colour.
 	header := UIPanelHeader("Controller test", ctrldiagSummary(), "gamepad")
 	if len(ctrldiagProblems()) > 0 {
-		header.SubtitleColor = ColorToastWarn
+		header.SubtitleColor = ToastWarnInk()
 	}
 	headerH := UIPanelHeaderBand(config, header, 10)
 	bodyH := stickSize + labelH + 14 + // sticks
@@ -395,17 +395,11 @@ func renderCtrldiagPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	ctrldiagPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	bodyY := panelY + headerH

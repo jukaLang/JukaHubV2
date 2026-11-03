@@ -8,19 +8,24 @@ on:
     branches:
       - main
 
+# Read-only by default: every job that publishes something asks for the
+# contents write it needs on its own block, so a job added later starts with a
+# token that cannot change the repository.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   create-tag:
     name: Create Tag and Draft Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # create the tag and the draft release
     outputs:
       tag_name: ${{ steps.generate_tag.outputs.tag_name }}
       upload_url: ${{ steps.create_release.outputs.upload_url }}
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Generate Tag Name
         id: generate_tag
@@ -31,7 +36,7 @@ jobs:
 
       - name: Set Tag using GitHub Script
         id: set_tag
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             await github.rest.git.createRef({
@@ -50,7 +55,7 @@ jobs:
       # once publish-release has verified both archives are attached.
       - name: Create Draft Release
         id: create_release
-        uses: actions/create-release@v1
+        uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e # v1.1.4
         with:
           tag_name: ${{ steps.generate_tag.outputs.tag_name }}
           release_name: ${{ steps.generate_tag.outputs.tag_name }}
@@ -60,8 +65,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-and-publish-ubuntu:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: create-tag
+    permissions:
+      contents: write   # attach the handheld archive to the draft
     container:
       # Pinned by digest: the image has one tag (latest), last pushed long ago, and a
       # silent re-push would change every build. Dependabot does not bump this.
@@ -83,7 +90,7 @@ jobs:
           fi
     
       - name: Check out the repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Download and Install ARM Libraries
         run: |
@@ -91,7 +98,11 @@ jobs:
           mkdir -p ${SYSROOT}/usr/include
 
           # Download and install zlib 1.3.1
+          # Each source tarball below is checked against its published
+          # digest: this step fetches six archives from six hosts and runs
+          # their Makefiles, so an altered one would run here.
           wget https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
+          echo "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23  zlib-1.3.1.tar.gz" | sha256sum -c -
           tar -xzf zlib-1.3.1.tar.gz
           cd zlib-1.3.1
           ./configure --prefix=${SYSROOT}/usr
@@ -101,6 +112,7 @@ jobs:
 
           # Download and install libpng 1.6.37
           wget https://download.sourceforge.net/libpng/libpng-1.6.37.tar.gz
+          echo "daeb2620d829575513e35fecc83f0d3791a620b9b93d800b763542ece9390fb4  libpng-1.6.37.tar.gz" | sha256sum -c -
           tar -xzf libpng-1.6.37.tar.gz
           cd libpng-1.6.37
           ./configure --host=aarch64-linux-gnu --prefix=${SYSROOT}/usr
@@ -110,6 +122,7 @@ jobs:
 
           # Download and install libjpeg
           wget http://www.ijg.org/files/jpegsrc.v9d.tar.gz
+          echo "2303a6acfb6cc533e0e86e8a9d29f7e6079e118b9de3f96e07a71a11c082fa6a  jpegsrc.v9d.tar.gz" | sha256sum -c -
           tar -xzf jpegsrc.v9d.tar.gz
           cd jpeg-9d
           ./configure --host=aarch64-linux-gnu --prefix=${SYSROOT}/usr
@@ -119,6 +132,7 @@ jobs:
 
           # Download and install libbz2
           wget https://sourceware.org/pub/bzip2/bzip2-1.0.8.tar.gz
+          echo "ab5a03176ee106d3f0fa90e381da478ddae405918153cca248e682cd0c4a2269  bzip2-1.0.8.tar.gz" | sha256sum -c -
           tar -xzf bzip2-1.0.8.tar.gz
           cd bzip2-1.0.8
           make CC="aarch64-linux-gnu-gcc" AR="aarch64-linux-gnu-ar" RANLIB="aarch64-linux-gnu-ranlib" libbz2.a
@@ -128,6 +142,7 @@ jobs:
 
           # Download and install libtiff
           wget http://download.osgeo.org/libtiff/tiff-4.0.9.tar.gz
+          echo "6e7bdeec2c310734e734d19aae3a71ebe37a4d842e0e23dbb1b8921c0026cfcd  tiff-4.0.9.tar.gz" | sha256sum -c -
           tar -xzf tiff-4.0.9.tar.gz
           cd tiff-4.0.9
           if [ -f config/config.sub ]; then sed -i 's/| x86_64)/| x86_64| aarch64)/' config/config.sub; fi
@@ -138,6 +153,7 @@ jobs:
 
           # Download and install libwebp
           wget https://storage.googleapis.com/downloads.webmproject.org/releases/webp/libwebp-1.0.0.tar.gz
+          echo "84259c4388f18637af3c5a6361536d754a5394492f91be1abc2e981d4983225b  libwebp-1.0.0.tar.gz" | sha256sum -c -
           tar -xzf libwebp-1.0.0.tar.gz
           cd libwebp-1.0.0
           if [ -f config/config.sub ]; then sed -i 's/| x86_64)/| x86_64| aarch64)/' config/config.sub; fi
@@ -193,7 +209,7 @@ jobs:
           zip -r JukaHub-Trimui.zip JukaHub-Trimui/
 
       - name: Upload Release Assets
-        uses: actions/upload-release-asset@v1
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
         with:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-Trimui.zip
@@ -205,17 +221,18 @@ jobs:
   build-and-publish-windows:
     runs-on: macos-latest
     needs: create-tag
+    permissions:
+      contents: write   # attach the Windows archive to the draft
     env: 
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
       UPLOAD_URL: ${{ needs.create-tag.outputs.upload_url }}
     steps:
       - name: Check out the repo
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Homebrew
-        run: |
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
+      # No Homebrew install step: the GitHub macOS runners ship it already, and
+      # running the installer through bash was an unpinned fetch executed on
+      # every release build.
       - name: Install MinGW
         run: brew install mingw-w64
 
@@ -226,32 +243,22 @@ jobs:
           mkdir -p $MINGW_DIR/x86_64-w64-mingw32/include
           mkdir -p $MINGW_DIR/x86_64-w64-mingw32/lib
 
-      - name: Download and Install SDL2
-        run: |
-          # Download SDL2 development libraries
-          curl -LO https://www.libsdl.org/release/SDL2-devel-2.30.11-mingw.tar.gz
-          tar -xzf SDL2-devel-2.30.11-mingw.tar.gz
-          MINGW_DIR=$(brew --prefix mingw-w64)/toolchain-x86_64
-          sudo cp -r SDL2-2.30.11/x86_64-w64-mingw32/* $MINGW_DIR/x86_64-w64-mingw32/
+      - name: Download and verify SDL2 development libraries
+        # Versions, URLs and digests live in the shared script, so a bump is
+        # one edit for this pipeline and the nightly Windows job alike.
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/install-sdl-mingw.sh" .
 
-      - name: Download and Install SDL2_image
+      - name: Install SDL2 into the MinGW toolchain
         run: |
-          # Download SDL2_image development libraries
-          curl -LO https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.4/SDL2_image-devel-2.8.4-mingw.tar.gz
-          tar -xzf SDL2_image-devel-2.8.4-mingw.tar.gz
           MINGW_DIR=$(brew --prefix mingw-w64)/toolchain-x86_64
-          sudo cp -r SDL2_image-2.8.4/x86_64-w64-mingw32/* $MINGW_DIR/x86_64-w64-mingw32/
-
-      - name: Download and Install SDL2_ttf
-        run: |
-          # Download SDL2_ttf development libraries
-          curl -LO https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-devel-2.22.0-mingw.tar.gz
-          tar -xzf SDL2_ttf-devel-2.22.0-mingw.tar.gz
-          MINGW_DIR=$(brew --prefix mingw-w64)/toolchain-x86_64
-          sudo cp -r SDL2_ttf-2.22.0/x86_64-w64-mingw32/* $MINGW_DIR/x86_64-w64-mingw32/
+          # Globbed so a version bump in the shared script needs no edit here.
+          for dir in SDL2-*/x86_64-w64-mingw32; do
+            echo "installing $dir"
+            sudo cp -r "$dir/"* "$MINGW_DIR/x86_64-w64-mingw32/"
+          done
 
       - name: Set up Go
-        uses: actions/setup-go@v7
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
 
@@ -298,7 +305,7 @@ jobs:
           zip -r JukaHub-Windows.zip JukaHub-Trimui-Windows/
 
       - name: Upload Release Assets
-        uses: actions/upload-release-asset@v1
+        uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1.0.2
         with:
           upload_url: ${{ needs.create-tag.outputs.upload_url }}
           asset_path: ./JukaHub-Windows.zip
@@ -314,8 +321,10 @@ jobs:
   # an update that was still building.
   publish-release:
     name: Publish Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [create-tag, build-and-publish-ubuntu, build-and-publish-windows]
+    permissions:
+      contents: write   # flip the verified draft to published
     # A pull-request build must not become a release: it was published before
     # too, which is how a branch build could take over /releases/latest.
     if: github.event_name != 'pull_request'
@@ -323,7 +332,7 @@ jobs:
       TAG_NAME: ${{ needs.create-tag.outputs.tag_name }}
     steps:
       - name: Verify assets and publish
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const tag = process.env.TAG_NAME;

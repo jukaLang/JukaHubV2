@@ -13,9 +13,14 @@ import (
 
 // --- Image Viewer ---
 
-// imageViewerCloseBtn is the screen rect of the on-screen close button,
-// populated each frame by renderImageViewer so the mouse handler can detect taps.
-var imageViewerCloseBtn sdl.Rect
+// imageViewerCloseBtn and imageViewerLockBtn are the screen rects of the
+// on-screen actions, populated each frame by renderImageViewer so the mouse
+// handler can detect taps. The lock rect stays empty for a remote image, whose
+// file lives in the chat cache rather than in Files.
+var (
+	imageViewerCloseBtn sdl.Rect
+	imageViewerLockBtn  sdl.Rect
+)
 
 // imageViewerFiles is the ordered list of images in the folder the viewer was
 // opened from, so Left/Right (or the controller bumpers) can walk them without
@@ -44,6 +49,7 @@ func openImageViewerURL(url string) {
 	imageViewerPanX = 0
 	imageViewerPanY = 0
 	imageViewerPath = url
+	imageViewerLockBtn = sdl.Rect{}
 	if imageViewerTexture != nil {
 		imageViewerTexture.Destroy()
 		imageViewerTexture = nil
@@ -181,6 +187,31 @@ func closeImageViewer() {
 	imageViewerFiles = nil
 	imageViewerIndex = -1
 	imageViewerRemote = false
+	imageViewerCloseBtn = sdl.Rect{}
+	imageViewerLockBtn = sdl.Rect{}
+}
+
+// toggleScreenlockFromViewer gives the picture currently on screen to the idle
+// screen, or takes it back when it already is the backdrop. It is the one place
+// the Files app writes that setting, so the keyboard shortcut, the pad button
+// and the on-screen button agree.
+func toggleScreenlockFromViewer(config *Config) {
+	if imageViewerRemote || strings.TrimSpace(imageViewerPath) == "" {
+		return
+	}
+	if screenlockImageIsCurrent(config, imageViewerPath) {
+		if err := clearScreenlockImage(config); err != nil {
+			showToast("Cannot clear lock screen: "+err.Error(), ToastError())
+			return
+		}
+		showToast("Lock screen image cleared", ToastSuccess())
+		return
+	}
+	if err := setScreenlockImage(config, imageViewerPath); err != nil {
+		showToast("Cannot set lock screen: "+err.Error(), ToastError())
+		return
+	}
+	showToast("Lock screen image set", ToastSuccess())
 }
 
 func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
@@ -281,6 +312,30 @@ func renderImageViewer(renderer *sdl.Renderer, config *Config, path string) {
 			Font:    font,
 			Radius:  RadiusMD,
 		}, UIButtonState{})
+
+		// The lock action sits beside Close so it is reachable with a tap or a
+		// click; the pad's X and the keyboard's L do the same thing.
+		imageViewerLockBtn = sdl.Rect{}
+		if !imageViewerRemote {
+			// The same button takes the backdrop back, so clearing it does not
+			// need a trip to the settings screen.
+			lockLabel := "Set lock screen  L"
+			lockVariant := UIButtonPrimary
+			if screenlockImageIsCurrent(config, imageViewerPath) {
+				lockLabel = "Clear lock screen  L"
+				lockVariant = UIButtonSecondary
+			}
+			lockW := int32(180)
+			if tw, _, err := font.SizeUTF8(lockLabel); err == nil && int32(tw)+28 > lockW {
+				lockW = int32(tw) + 28
+			}
+			lockX := bx - lockW - 10
+			imageViewerLockBtn = UIButton(renderer, config, sdl.Rect{X: lockX, Y: by, W: lockW, H: btnH}, lockLabel, UIButtonStyle{
+				Variant: lockVariant,
+				Font:    font,
+				Radius:  RadiusMD,
+			}, UIButtonState{})
+		}
 	}
 }
 
@@ -305,12 +360,18 @@ func renderImageViewerBackdrop(renderer *sdl.Renderer, config *Config, msg strin
 		Font:    font,
 		Radius:  RadiusMD,
 	}, UIButtonState{})
+	// Nothing to lock while the picture is still downloading.
+	imageViewerLockBtn = sdl.Rect{}
 }
 
-func handleImageViewerInput(e *sdl.KeyboardEvent) {
+func handleImageViewerInput(e *sdl.KeyboardEvent, config *Config) {
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_RETURN:
 		closeImageViewer()
+	case sdl.K_l:
+		if !imageViewerRemote {
+			toggleScreenlockFromViewer(config)
+		}
 	case sdl.K_UP:
 		imageViewerZoom += 0.1
 		if imageViewerZoom > 5.0 {

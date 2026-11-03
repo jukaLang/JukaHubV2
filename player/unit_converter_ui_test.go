@@ -190,3 +190,25 @@ func TestUnitConverterIgnoresTapsOnOtherScenes(t *testing.T) {
 		t.Fatalf("units changed behind another scene: %q", unitFrom)
 	}
 }
+
+// The value input, like the other converter controls, is only live on its page.
+func TestUnitConverterInputStaysOnItsScene(t *testing.T) {
+	resetKeyboardState(t)
+	config, _, _, _ := renderConverterPage(t, uiCanvasWideWidth, uiCanvasWideHeight)
+	if unitInputRect.W <= 0 || unitInputRect.H <= 0 {
+		t.Fatal("converter input was not drawn")
+	}
+	mx, my := centre(unitInputRect)
+	virtualKeyboardActive = false
+	if !handleUnitConverterMouse(mx, my, config) || !virtualKeyboardActive || vkTarget != vkTargetUnit {
+		t.Fatal("converter input did not open its keyboard")
+	}
+	vkCloseKeyboard()
+	currentSceneIndex = findSceneIndex(config, "Main")
+	if currentSceneIndex < 0 {
+		t.Fatal("no Main scene")
+	}
+	if handleUnitConverterMouse(mx, my, config) || virtualKeyboardActive {
+		t.Fatal("stale converter input stole a click on another scene")
+	}
+}

@@ -42,7 +42,7 @@ This document outlines the modernization of JukaHubV2 for production use on **Tr
 | 4. Reliability | 26 | 0 | 1 |
 | 5. Features | 14 | 2 | 2 |
 | 6. Testing | 13 | 0 | 0 |
-| 7. Web builder | 7 | 2 | 8 |
+| 7. Web builder | 10 | 2 | 5 |
 | 8. Handheld polish | 14 | 2 | 4 |
 | 8b. GPU offload | 6 | 0 | 3 |
 | 9. Browser & handheld input | 12 | 0 | 1 |
@@ -340,15 +340,22 @@ already exists, not a task list, so it is not counted here.
       poll" check is the same rule applied to its scene (`backgroundwork_test.go`).
 
 ### Phase 4: Reliability & Configuration
-**Status**: 🟡 In progress (26 shipped, 0 partial, 1 not started)
+**Status**: ✅ Complete (28 shipped, 0 partial, 0 not started)
 
-- [ ] ⬜ Snapshot restore integrity preflight — `saveSnapshotFile` records each
-      file's expected size and SHA-256 in `savemanager.go`, but
-      `restoreSaveSnapshot` currently copies entries without checking either
-      value and can begin writing before discovering a later missing/corrupt
-      file. Validate the manifest paths, sizes and hashes for every source file
-      before creating the safety snapshot or mutating live save roots; add tests
-      proving corrupt/missing input leaves the live saves untouched.
+- [x] ✅ Snapshot restore integrity preflight — `restoreSaveSnapshot` now builds
+      the whole restore plan before it moves a byte (`planSaveRestore` in
+      `savemanager.go`): roots must match by path or by a unique label, every
+      entry must stay inside both the snapshot and the live folder, nothing may
+      be written through a link that resolves outside the save folder, and each
+      source file must exist, be a regular file, match the recorded size and
+      match the recorded SHA-256. A snapshot that fails any of that is refused
+      as a whole — before the safety snapshot, so nothing is spent and no live
+      save is touched — and each written file is re-hashed so a card that filled
+      up mid-restore is caught on the spot. `TestRestoreRefusesDamagedSnapshot`
+      (truncated copy, flipped bytes, missing file, missing checksum),
+      `TestRestoreRefusesEntryOutsideRoot` and
+      `TestRestoreRefusesLinkedFolderOutsideRoot` prove the fail-closed path and
+      assert the live save is unchanged afterwards.
 
 The Phase 4 count now includes this preflight item; the earlier 4.1–4.5
 configuration, logging, recovery, update and network safeguards remain shipped.
@@ -452,7 +459,7 @@ configuration, logging, recovery, update and network safeguards remain shipped.
       uncacheable-304 contract, eviction, oversize skip, concurrent use).
 
 ### Phase 5: Features
-**Status**: 🟡 Partially complete (14 shipped, 2 partial, 2 not started)
+**Status**: 🟡 Partially complete (15 shipped, 2 partial, 1 not started)
 
 #### 5.1 Media
 
@@ -463,7 +470,22 @@ configuration, logging, recovery, update and network safeguards remain shipped.
 - [ ] 🟡 Cancellation — playback stop/cancel exists; in-flight downloads are
       only partly context-aware.
 - [x] ✅ Clear failure messages — player errors surface as toasts and scene text.
-- [ ] ⬜ Playback queue.
+- [x] ✅ Playback queue — **Up Next**, the explicit list the shoulder-button
+      hand-off was always missing. The **Queue** pill on a search-result row
+      adds or removes that video (the pill reads *Queued* once it is waiting),
+      it survives leaving the results screen — gathering a few things while
+      browsing and then letting them play is the point — and a video that
+      reaches its natural end starts the head of the list by itself. The player
+      overlay names what is next (`Up next: <title> (+3)`), the settings sheet
+      carries an **Up Next: N queued** row that empties it once the rows it was
+      filled from are gone, and the Shorts feed keeps its own hand-off while it
+      is armed so a queue cannot hijack a stop. Entries are deduplicated by
+      link and capped at 50, and the list is deliberately session-only: a queue
+      is a plan for tonight, and Favorites already covers "keep this for
+      later". `playbackqueue.go`, `videoplayer.go`, `result_actions.go`; pinned
+      by `playbackqueue_test.go` (order, dedupe, cap, take, toggle, the
+      end-of-stream decision, the sheet row) and
+      `TestSearchResultsListDrawsQueuePill`.
 
 #### 5.2 Files
 
@@ -546,6 +568,8 @@ code and the test that pins it.
 | Seasonal theming — **partial**: time-of-day switching ships, date-keyed packs do not | `themes.go` | `themes_test.go` |
 | Toolbox: nine curated CLI tools (rclone, jq, ripgrep, fd, pandoc, age plus the network scanners naabu, httpx, dnsx) installed on demand from allowlisted releases, run with typed arguments and visible output; scanner runs sit behind a one-time authorized-use acknowledgement stored in the config | `toolbox.go`, `powertools.go`, `vkeyboard.go`, [TOOLBOX](../docs/TOOLBOX.md#network-scanning), [SECURITY.md](../SECURITY.md#toolbox-and-helper-tool-downloads) | `toolbox_test.go`, `toolbox_scan_gate_test.go` |
 | Security & trust page: plaintext secrets, storage key, package count, LAN listeners, browser session and telemetry state, read-only | `toolbox.go` (`securityPostureRows`), `toolsui.go` | `toolbox_test.go` |
+| Vibration strength: **Soft / Normal / Strong** as a cycling row in the Accessibility panel, scaling the drive level of every pulse (navigation ticks, confirmations, errors) from one place while the pulse length is left alone — a coin motor needs tens of milliseconds to spin up, so shortening it would make "soft" unreliable rather than gentle. Stored as `hapticsIntensity` beside the Vibration switch, accepts `soft`/`normal`/`strong`, a step index, or the builder's capitalised key, and a Strong error pulse is capped at full scale | `haptics.go`, `a11y.go` | `TestHapticsConfiguredLevel`, `TestHapticsLevelScalesPulses`, `TestHapticsLevelRowStepsAndWraps` |
+| Box art for ROM names that do not match the reference title: the lookup asks for the exact stem first, then the underscored twin, the name without dump tags (`(USA)`, `(Rev 1)`, `[!]`), the subtitle before ` - `, and finally the article-stripped form — each spaced and underscored, capped at eight requests so one odd name cannot turn a library fetch into a sweep, and a hit stops the guesses. The not-found cache is stamped with the matcher version, so titles the older lookup recorded as missing are retried once instead of being hidden for the 30-day window | `romsetup.go` (`artworkTitleVariants`) | `artwork_match_test.go` |
 
 #### 5.6 Adopted features
 
@@ -670,8 +694,8 @@ persistence and harness gaps closed
       suffix on `LookPath` (with the Linux side pinned to NOT add one).
 
 ### Phase 7: Web Builder
-**Status**: 🟡 Mostly complete (7 shipped, 2 partial, 8 not started) — snapping,
-guides, a module split and the CSP are still missing
+**Status**: 🟡 Mostly complete (10 shipped, 2 partial, 5 not started) — a module
+split and the CSP are still missing
 
 - [x] ✅ Semantic design tokens — `style.css` (`--canvas-*`, surfaces, spacing).
 - [x] ✅ State previews — preview mode (`script.js`, Ctrl+P).
@@ -693,9 +717,18 @@ guides, a module split and the CSP are still missing
 - [ ] ⬜ Self-hosted fonts instead of the CDN.
 - [ ] ⬜ PWA / service worker — only with a stale-cache recovery story, and the
       favicon is currently below the installable minimum.
-- [ ] ⬜ Snap-to-grid.
-- [ ] ⬜ Alignment guides.
-- [ ] ⬜ Safe-area overlay (1280×720 device frame).
+- [x] ✅ Snap-to-grid — the builder workspace has an opt-in 8-pixel grid
+      for dragging, respecting canvas zoom and bounds; it leaves an ordinary
+      click and existing coordinates untouched. The move remains undoable
+      (`script.js`, `tests/web/builder.test.mjs`).
+- [x] ✅ Alignment guides — opt-in visual feedback marks the nearest element or
+      canvas edge/center while dragging, with zoom-aware tolerance. The guides
+      do not snap or enter saved layouts (`script.js`, `tests/web/builder.test.mjs`).
+- [x] ✅ Safe-area overlay — an opt-in editor-only guide shows a suggested
+      32-pixel inset on the 1280×720 canvas. It scales with zoom, is hidden in
+      preview mode and on other canvas sizes, and never changes or exports the
+      design. The margin is advisory, not a measured device specification
+      (`index.html`, `style.css`, `script.js`, `tests/web/builder.test.mjs`).
 - [ ] ⬜ Focus-order editor.
 - [x] ✅ Schema stamp in the builder — `buildEditorConfig` (`script.js`) now emits
       `schemaVersion` on every export, so a file the builder writes carries the
@@ -1319,10 +1352,10 @@ work that can be completed and tested on a desktop:
    (Phases 3.4 / 8). Background work pauses behind games and minimized windows,
    but screen-specific refreshes and renderer-owned scene resources still merit a
    lifecycle audit; preserve always-visible status freshness and cache budgets.
-5. **Add the already-identified media playback queue** (Phase 5.1). A small,
-   explicit Up Next list would make sequential listening useful without adding a
-   service dependency; keep queue persistence and video behavior separate unless
-   user needs call for them.
+5. **Playback queue — shipped** (Phase 5.1). The **Queue** pill, the overlay
+   line, the sheet row and the end-of-stream hand-off are in `playbackqueue.go`;
+   persistence stays deliberately out until a user need makes an expired link
+   on the next boot a question worth answering.
 6. **Run outstanding handheld measurements** (Phase 8). Capture cold-start,
    transition frame time, idle RSS and D-pad repeat feel on the actual 1 GB ARM64
    device; desktop proxies cannot settle those targets.
@@ -1351,6 +1384,51 @@ work that can be completed and tested on a desktop:
   this pass; the focus-ring render checks and Windows scan/join tests also passed.
   The broad Go test/vet results recorded on 2026-10-26 remain historical and were
   not rerun during this roadmap update.
+
+## Audit log — 2026-11-01 (save restore preflight)
+
+- Closed the Phase 4 data-integrity item adopted on 2026-10-29: restore verifies
+  every manifest path, size and SHA-256 before creating the safety snapshot, and
+  re-hashes each file it writes. Fail-closed tests cover a truncated copy, a
+  same-length byte flip, a missing file, a manifest without a checksum, an entry
+  whose path escapes its folder and a save subfolder that is a symlink out of the
+  tree; each asserts the live save is byte-identical afterwards.
+- `go build`, `go vet .` and the full `go test . -count=1` suite pass
+  (2026-11-01: 171 s) after the change.
+
+## Audit log — 2026-11-01 (playback queue, vibration strength, box-art matching)
+
+- Closed the last not-started item in Phase 5.1: the **Up Next** playback queue
+  is recorded in §5.1 and §5.5 with its code and tests, and the priority list
+  above now marks it shipped instead of pending. Persistence stays out on
+  purpose (see the entry in `playbackqueue.go`).
+- Adopted two of the open ideas from [FEATURE-BACKLOG](../docs/FEATURE-BACKLOG.md)
+  as shipped work: vibration **strength** (§5 backlog item 5) and box-art
+  matching for ROM names that differ from the reference title (§3). Both are
+  recorded in §5.5 with the test that pins them, and neither adds a dependency —
+  the vibration row reuses the Accessibility cycling rows, and the matcher is a
+  name list built from the stem the ROM already has.
+- `tmp/audit_modernization.py` now checks more than existence: it reconciles
+  each phase's hand-written `(N shipped, M partial, K not started)` header with
+  the checkboxes underneath, flags a not-started item whose own prose names code
+  and tests that already exist (skipping on-device items, which cite shipped
+  code as evidence by design), verifies every relative link, and exits non-zero
+  on a hard failure. Symbol resolution became informational — it reads every
+  code file type, so the JavaScript and C names the plan cites resolve — and the
+  report no longer crashes on a cp1252 console. Running it found one real drift
+  the previous pass left behind: Phase 4's header said 27 shipped for 28
+  checked items.
+- `go build ./...` and the full `go test . -count=1` suite pass (2026-11-01:
+  54 s) on the final tree.
+- Found and closed a hazard while wiring the new row: `hapticsSetLevel` first
+  persisted through `saveConfig`, which writes the *design* config in the process
+  working directory, so a settings test with an in-memory config overwrote
+  `player/jukaconfig.json`. The row now records the value in the config it was
+  given and leaves persisting to the Accessibility panel's own save, which is
+  what every other row on that panel does, and the shipped config was rebuilt
+  from its device twin (`trimui/jukaconfig.device.json`) and the contrast audit
+  that pins it. The full suite is the check that both configs are back in
+  agreement: it caught the three differences that remained.
 
 ## Audit log — 2026-10-26 (memory pass)
 

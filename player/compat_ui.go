@@ -481,7 +481,7 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	compatPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	const padX = int32(24)
+	const padX = OverlayPadX
 
 	// The title band is the shared page header, measured before the body is
 	// placed so the list starts under the bar rather than under an assumption
@@ -496,18 +496,12 @@ func renderCompatibilityPanel(renderer *sdl.Renderer, config *Config) {
 	detailX := panelX + listW + 18
 	detailW := panelW - listW - 18 - padX
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 185)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	// Tab strip: two text buttons, with the active one underlined.

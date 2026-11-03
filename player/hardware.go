@@ -351,6 +351,9 @@ func getHardwareInfo() string {
 // loadStartupItems collects apps that launch on boot from common Linux
 // mechanisms (init.d, systemd wants, rc.local, supervisor).
 func loadStartupItems() string {
+	if runtime.GOOS == "windows" {
+		return "Windows startup item scanning is not available."
+	}
 	var items []string
 
 	if entries, err := os.ReadDir("/etc/init.d"); err == nil {

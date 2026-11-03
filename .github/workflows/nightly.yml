@@ -40,9 +40,9 @@ jobs:
       SDL_VIDEODRIVER: dummy
       SDL_AUDIODRIVER: dummy
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -58,12 +58,10 @@ jobs:
         shell: bash
         run: |
           choco install mingw -y --no-progress
-          mkdir -p /c/sdl2 && cd /c/sdl2
-          curl -fsSLO https://www.libsdl.org/release/SDL2-devel-2.30.11-mingw.tar.gz
-          curl -fsSLO https://github.com/libsdl-org/SDL_image/releases/download/release-2.8.4/SDL2_image-devel-2.8.4-mingw.tar.gz
-          curl -fsSLO https://github.com/libsdl-org/SDL_ttf/releases/download/release-2.22.0/SDL2_ttf-devel-2.22.0-mingw.tar.gz
-          for f in *.tar.gz; do tar -xzf "$f"; done
-          rm -f *.tar.gz
+          # The tarballs, their digests and the extraction live in one script
+          # the release pipeline uses too, so a version bump is a single edit
+          # instead of two copies that can drift apart.
+          bash "$GITHUB_WORKSPACE/.github/scripts/install-sdl-mingw.sh" /c/sdl2
 
       - name: Point cgo at the SDL2 headers (Windows)
         if: runner.os == 'Windows'
@@ -87,33 +85,48 @@ jobs:
     name: Fuzz smoke (30 s per target)
     # Nightly only, so the fuzz corpus gets *some* continuous attention without
     # slowing PR CI. Targets live where parsers do; add one per new parser.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
+      - name: Install SDL2 headers
+        # The archive and address fuzz targets live in the player package, which
+        # links SDL through cgo, so the test binary needs the headers.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
       - name: Mine the seed corpus
+        # One "package target" pair per line: -fuzz only accepts a single
+        # package, so the package has to travel with the target name.
         run: |
           set +e
-          keys=$(go test ./internal/... -list 'Fuzz' 2>/dev/null | grep '^Fuzz' | sort -u)
-          if [ -z "$keys" ]; then
-            echo "No fuzz targets yet (see ROADMAP item on fuzzing parsers)." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+          : > fuzz_targets.txt
+          for pkg in $(go list ./...); do
+            for target in $(go test "$pkg" -list '^Fuzz' 2>/dev/null | grep '^Fuzz' | sort -u); do
+              echo "$pkg $target" >> fuzz_targets.txt
+            done
+          done
+          if [ ! -s fuzz_targets.txt ]; then
+            rm -f fuzz_targets.txt
+            echo "No fuzz targets found; add one per new parser." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat fuzz_targets.txt >> "$GITHUB_STEP_SUMMARY"
           fi
-          echo "$keys" > fuzz_targets.txt
       - name: Run each target briefly
         if: hashFiles('player/fuzz_targets.txt') != ''
         # -run '^$' skips ordinary tests so only the fuzz engines run; the seed
         # corpus refines on every nightly, and a crash exits non-zero.
         run: |
           set -e
-          while IFS= read -r target; do
-            echo "=== $target ==="
-            go test ./internal/... -run '^$' -fuzz "^${target}\$" -fuzztime 30s
+          while read -r pkg target; do
+            [ -n "$target" ] || continue
+            echo "=== $pkg: $target ==="
+            go test "$pkg" -run '^$' -fuzz "^${target}\$" -fuzztime 30s
           done < fuzz_targets.txt

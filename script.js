@@ -30,6 +30,12 @@ let variables = {};
 let currentElement = null;
 let canvasWidth = 1280;
 let canvasHeight = 720;
+let snapToGrid = false;
+let showAlignmentGuides = false;
+let showSafeArea = false;
+const SNAP_GRID_SIZE = 8;
+// An advisory layout margin, not a hardware-measured display inset.
+const SAFE_AREA_INSET = 32;
 let globalTooltip = null;
 // Import/init also adds elements; those are not user edits and must not land on
 // the undo stack. Set once the editor is fully constructed.
@@ -514,7 +520,7 @@ function pasteElementFromClipboard() {
   data.y = Math.min(data.y + shift, room(canvasHeight, data.height));
 
   pushUndo('paste');
-  const el = createElementFromData(data);
+  const el = createElementFromData(data, sceneLayout(currentScene));
   if (!el) return null;
   canvas.appendChild(el);
   if (!scenes[currentScene]) scenes[currentScene] = [];
@@ -754,7 +760,7 @@ const PLAYER_THEME_PRESETS = {
   light: { background: '#f0f2f5', buttonColor: '#ffffff', labelColor: '#1a1d26', inputColor: '#e8eaef' },
   oled: { background: '#000000', buttonColor: '#0a0a0a', labelColor: '#ffffff', inputColor: '#050505' },
   midnight: { background: '#090b14', buttonColor: '#151927', labelColor: '#f5f7ff', inputColor: '#0f1320' },
-  hub: { background: '#090E19', buttonColor: '#1E293B', labelColor: '#F6F8FC', inputColor: '#0F1420' },
+  hub: { background: '#070B12', buttonColor: '#2E4061', labelColor: '#F6F8FC', inputColor: '#121A29' },
   ocean: { background: '#0B1526', buttonColor: '#142740', labelColor: '#E8F1FF', inputColor: '#0E1C31' },
   sunset: { background: '#1A0F14', buttonColor: '#2B1A24', labelColor: '#FFF0F3', inputColor: '#201219' },
   highcontrast: { background: '#000000', buttonColor: '#000000', labelColor: '#ffffff', inputColor: '#000000' },
@@ -989,6 +995,7 @@ function applyCanvasScale(scale) {
     scaler.style.width = `${canvasWidth * canvasScale}px`;
     scaler.style.height = `${canvasHeight * canvasScale}px`;
   }
+  updateSafeAreaOverlay();
   const percent = `${Math.round(canvasScale * 100)}%`;
   const readout = document.getElementById('zoomReadout');
   if (readout) readout.textContent = percent;
@@ -999,6 +1006,18 @@ function applyCanvasScale(scale) {
     // the button does when read out on its own.
     fitBtn.setAttribute('aria-label', `Zoom ${percent}. Fit the device to the window`);
   }
+}
+
+function updateSafeAreaOverlay() {
+  const overlay = document.getElementById('safeAreaOverlay');
+  if (!overlay) return;
+  // The guide is specific to the handheld's 1280 × 720 design frame.
+  overlay.hidden = !showSafeArea || previewMode || canvasWidth !== 1280 || canvasHeight !== 720;
+  const inset = SAFE_AREA_INSET * canvasScale;
+  overlay.style.left = `${inset}px`;
+  overlay.style.top = `${inset}px`;
+  overlay.style.width = `${(canvasWidth - SAFE_AREA_INSET * 2) * canvasScale}px`;
+  overlay.style.height = `${(canvasHeight - SAFE_AREA_INSET * 2) * canvasScale}px`;
 }
 
 function fitCanvasToViewport() {
@@ -1150,6 +1169,7 @@ previewGoTo = function (sceneName) {
 
 function enterPreviewMode() {
   if (previewMode) return;
+  if (activeDrag) endElementDrag();
   // Snapshot the live DOM first: preview rewrites $variables in place and must
   // never write those resolved strings back into the design.
   saveCurrentScene();
@@ -1163,6 +1183,8 @@ function enterPreviewMode() {
   currentElement = null;
   document.querySelectorAll('.element').forEach(el => el.classList.remove('selected'));
   document.body.classList.remove('element-selected');
+  const noSelection = document.getElementById('noSelection');
+  if (noSelection) noSelection.style.display = '';
 
   applyPreviewVariables();
   previewSceneHistory.length = 0;
@@ -1574,6 +1596,26 @@ function setupEventListeners() {
     });
   }
 
+  const snapGridBtn = document.getElementById('snapGridBtn');
+  if (snapGridBtn) snapGridBtn.addEventListener('click', () => {
+    snapToGrid = !snapToGrid;
+    snapGridBtn.setAttribute('aria-pressed', String(snapToGrid));
+  });
+
+  const safeAreaBtn = document.getElementById('safeAreaBtn');
+  if (safeAreaBtn) safeAreaBtn.addEventListener('click', () => {
+    showSafeArea = !showSafeArea;
+    safeAreaBtn.setAttribute('aria-pressed', String(showSafeArea));
+    updateSafeAreaOverlay();
+  });
+
+  const alignmentGuidesBtn = document.getElementById('alignmentGuidesBtn');
+  if (alignmentGuidesBtn) alignmentGuidesBtn.addEventListener('click', () => {
+    showAlignmentGuides = !showAlignmentGuides;
+    alignmentGuidesBtn.setAttribute('aria-pressed', String(showAlignmentGuides));
+    if (!showAlignmentGuides) hideAlignmentGuides();
+  });
+
   // Canvas zoom: fit by default, with explicit stepping. Refit on resize while
   // the user has not chosen a scale, so the device stays fully visible.
   const zoomOutBtn = document.getElementById('zoomOutBtn');
@@ -1699,11 +1741,20 @@ function setupEventListeners() {
   if (componentSearch) {
     componentSearch.addEventListener('input', (e) => {
       const term = e.target.value.trim().toLowerCase();
-      document.querySelectorAll('.left-sidebar .element[data-type]').forEach(el => {
-        const text = (el.textContent || '').toLowerCase();
-        const type = (el.getAttribute('data-type') || '').toLowerCase();
-        el.hidden = term.length > 0 && !text.includes(term) && !type.includes(term);
+      let matches = 0;
+      document.querySelectorAll('.left-sidebar .component-section').forEach(section => {
+        let sectionMatches = 0;
+        section.querySelectorAll('.element[data-type]').forEach(el => {
+          const text = (el.textContent || '').toLowerCase();
+          const type = (el.getAttribute('data-type') || '').toLowerCase();
+          el.hidden = term.length > 0 && !text.includes(term) && !type.includes(term);
+          if (!el.hidden) sectionMatches++;
+        });
+        section.hidden = sectionMatches === 0;
+        matches += sectionMatches;
       });
+      const empty = document.getElementById('componentSearchEmpty');
+      if (empty) empty.hidden = matches > 0;
     });
   }
 
@@ -2113,6 +2164,7 @@ function changeScene() {
 }
 
 function loadScene(sceneName) {
+  if (activeDrag) endElementDrag();
   canvas.innerHTML = '';
   if (scenes[sceneName]) {
     // One insertion instead of one per element.
@@ -2322,6 +2374,45 @@ function addElement(type, x, y, recordHistory = true) {
 let activeDrag = null;
 let dragListenersInstalled = false;
 
+function hideAlignmentGuides() {
+  const overlay = document.getElementById('alignmentGuides');
+  if (overlay) overlay.hidden = true;
+}
+
+// Draw the closest edge or center match on each axis. The tolerance is in
+// screen pixels so it feels the same at every zoom; guides do not snap.
+function updateAlignmentGuides(el, x, y) {
+  const overlay = document.getElementById('alignmentGuides');
+  if (!overlay || !showAlignmentGuides) return;
+  const candidatesX = [0, canvasWidth / 2, canvasWidth];
+  const candidatesY = [0, canvasHeight / 2, canvasHeight];
+  for (const other of canvas.children) {
+    if (other === el || !other.classList.contains('element') || other.hidden) continue;
+    const left = other.offsetLeft, top = other.offsetTop;
+    candidatesX.push(left, left + other.offsetWidth / 2, left + other.offsetWidth);
+    candidatesY.push(top, top + other.offsetHeight / 2, top + other.offsetHeight);
+  }
+  const closest = (positions, candidates) => {
+    let best = null, distance = 4 / canvasScale;
+    for (const position of positions) {
+      for (const candidate of candidates) {
+        const delta = Math.abs(position - candidate);
+        if (delta <= distance && (best === null || delta < distance)) { best = candidate; distance = delta; }
+      }
+    }
+    return best;
+  };
+  const vertical = closest([x, x + el.offsetWidth / 2, x + el.offsetWidth], candidatesX);
+  const horizontal = closest([y, y + el.offsetHeight / 2, y + el.offsetHeight], candidatesY);
+  const vLine = overlay.querySelector('.alignment-guide--vertical');
+  const hLine = overlay.querySelector('.alignment-guide--horizontal');
+  vLine.hidden = vertical === null;
+  hLine.hidden = horizontal === null;
+  if (vertical !== null) vLine.style.left = `${vertical * canvasScale}px`;
+  if (horizontal !== null) hLine.style.top = `${horizontal * canvasScale}px`;
+  overlay.hidden = vertical === null && horizontal === null;
+}
+
 function beginElementDrag(el, clientX, clientY, tapTarget) {
   // A pointer-up that never arrived (released outside the window) must not
   // leave the previous drag hanging.
@@ -2351,6 +2442,11 @@ function moveElementDrag(clientX, clientY) {
   let newX = drag.startLeft + (clientX - drag.startX) / canvasScale;
   let newY = drag.startTop + (clientY - drag.startY) / canvasScale;
 
+  // A stationary pointer must not move an off-grid element when it is selected.
+  if (snapToGrid && (clientX !== drag.startX || clientY !== drag.startY)) {
+    newX = Math.round(newX / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+    newY = Math.round(newY / SNAP_GRID_SIZE) * SNAP_GRID_SIZE;
+  }
   newX = Math.round(Math.max(0, Math.min(newX, canvasWidth - el.offsetWidth)));
   newY = Math.round(Math.max(0, Math.min(newY, canvasHeight - el.offsetHeight)));
 
@@ -2366,12 +2462,14 @@ function moveElementDrag(clientX, clientY) {
   el.style.top = `${newY}px`;
   el.setAttribute('data-x', newX);
   el.setAttribute('data-y', newY);
+  updateAlignmentGuides(el, newX, newY);
 }
 
 function endElementDrag(event) {
   const drag = activeDrag;
   if (!drag) return;
   activeDrag = null;
+  hideAlignmentGuides();
   if (drag.moved) {
     document.body.classList.remove('is-dragging');
     commitUndoSnapshot(drag.undoBase);
@@ -2408,6 +2506,7 @@ function installDragListeners() {
     if (touch) moveElementDrag(touch.clientX, touch.clientY);
   }, { passive: false });
   document.addEventListener('touchend', endElementDrag, { passive: false });
+  document.addEventListener('touchcancel', endElementDrag, { passive: false });
   document.addEventListener('mousemove', (event) => moveElementDrag(event.clientX, event.clientY));
   document.addEventListener('mouseup', endElementDrag);
 }
@@ -5140,7 +5239,7 @@ function loadJukaApp(input) {
     // of every scene to the live canvas first, wiring each one, then clearing
     // it again only cost time on import.
     scene.elements.forEach(elementData => {
-      const el = createElementFromData(elementData);
+      const el = createElementFromData(elementData, String(scene.layout || '').trim().toLowerCase());
       if (el) scenes[scene.name].push(el);
     });
   });
@@ -5382,35 +5481,147 @@ function calculateTextDimensions(text, fontSize, fontFamily = 'Inter, sans-serif
   };
 }
 
-// tileIconClass maps a tile's `icon` name onto the glyph the player draws.
-// player/launcher.go tileIconKind picks the shape from the name, the label and
-// the trigger; this mirrors that order so a tile shows the same picture here.
-function tileIconClass(icon, text, trigger) {
-  const key = `${text || ''} ${icon || ''} ${trigger || ''}`.toLowerCase();
-  const map = [
-    [['continue', 'recent'], 'fa-solid fa-play'],
-    [['youtube', 'media', 'play'], 'fa-solid fa-play'],
-    [['chat', 'discord'], 'fa-solid fa-comments'],
-    [['file', 'explorer'], 'fa-solid fa-folder'],
-    [['live', 'tv', 'stream'], 'fa-solid fa-tv'],
-    [['package', 'store'], 'fa-solid fa-box'],
-    [['podcast', 'shorts'], 'fa-solid fa-microphone'],
-    [['ticker'], 'fa-solid fa-chart-line'],
-    [['favorite'], 'fa-solid fa-star'],
-    [['weather'], 'fa-solid fa-cloud'],
-    [['setting'], 'fa-solid fa-gear'],
-    [['hardware', 'device', 'system'], 'fa-solid fa-microchip'],
-    [['terminal', 'cron', 'task'], 'fa-solid fa-terminal'],
-    [['jukaland', 'game'], 'fa-solid fa-gamepad'],
-    [['browser'], 'fa-solid fa-globe'],
-    [['emulator'], 'fa-solid fa-gamepad'],
-    [['exit'], 'fa-solid fa-right-from-bracket'],
-    [['misc', 'apps', 'tools'], 'fa-solid fa-table-cells-large']
-  ];
-  for (const [needles, cls] of map) {
+// The player has two icon vocabularies, and a tile has to be drawn with the one
+// its screen uses: the same `icon` name is not the same picture everywhere.
+//
+//  - A scene with `layout: "home"` is drawn by player/homelayout.go
+//    drawHomeIconShapes. It picks the glyph from the element's `icon` name alone
+//    (no label matching) and falls back to a plain ring. An element without an
+//    `icon` keeps the icon its home card was built with (rebuildItems), which is
+//    why the title is enough on that screen.
+//  - Every other scene draws tiles the way player/launcher.go does: tileIconKind
+//    takes an explicit glyph name first (explicitTileIcon), then searches the
+//    label and the trigger for a known word in a fixed order, and falls back to
+//    the app grid; drawTileIcon paints the result.
+//
+// The tables below mirror both, name for name and in the player's order.
+// tests/web/builder.test.mjs checks them against the shipped jukaconfig.json, so
+// a glyph the player gains without a picture here fails the suite instead of
+// shipping a tile that looks one way on the web and another on the handheld.
+const HOME_ICON_CLASSES = {
+  media: 'fa-solid fa-play',
+  continue: 'fa-solid fa-play',
+  files: 'fa-solid fa-folder',
+  packages: 'fa-solid fa-box',
+  apps: 'fa-solid fa-table-cells-large',
+  favorites: 'fa-solid fa-star',
+  browser: 'fa-solid fa-globe',
+  chat: 'fa-solid fa-comment',
+  tools: 'fa-solid fa-sliders',
+  settings: 'fa-solid fa-gear',
+  clock: 'fa-solid fa-clock',
+  gamepad: 'fa-solid fa-gamepad',
+  emulator: 'fa-solid fa-gamepad',
+  emulators: 'fa-solid fa-gamepad',
+  controller: 'fa-solid fa-gamepad',
+  exit: 'fa-solid fa-power-off',
+  back: 'fa-solid fa-arrow-left'
+};
+
+// A home card's built-in icon, so a tile without its own `icon` still shows the
+// picture the device shows. Keys are card titles, lowercased.
+const HOME_TITLE_ICONS = {
+  continue: 'continue',
+  media: 'media',
+  files: 'files',
+  packages: 'packages',
+  apps: 'apps',
+  favorites: 'favorites',
+  browser: 'browser',
+  chat: 'chat',
+  tools: 'tools',
+  emulator: 'emulator',
+  settings: 'settings',
+  clock: 'clock',
+  exit: 'exit',
+  back: 'back'
+};
+
+// explicitTileIcon: the names a config may put in `icon` to mean one shape.
+const TILE_ICON_CLASSES = {
+  play: 'fa-solid fa-play',
+  chat: 'fa-solid fa-comment',
+  files: 'fa-solid fa-folder',
+  tv: 'fa-solid fa-tv',
+  box: 'fa-solid fa-box',
+  mic: 'fa-solid fa-microphone',
+  chart: 'fa-solid fa-chart-line',
+  star: 'fa-solid fa-star',
+  cloud: 'fa-solid fa-cloud',
+  gear: 'fa-solid fa-gear',
+  palette: 'fa-solid fa-palette',
+  chip: 'fa-solid fa-microchip',
+  terminal: 'fa-solid fa-terminal',
+  game: 'fa-solid fa-gamepad',
+  resume: 'fa-solid fa-play',
+  clock: 'fa-solid fa-clock',
+  speed: 'fa-solid fa-gauge-high',
+  disk: 'fa-solid fa-hard-drive',
+  logs: 'fa-solid fa-file-lines',
+  cache: 'fa-solid fa-broom',
+  update: 'fa-solid fa-download',
+  network: 'fa-solid fa-network-wired'
+};
+
+// tileIconKind's word list, in its order. The order is the point: "Tools" hits
+// apps/tools before it can be read as a tool of its own, and "Continue" is last.
+const TILE_ICON_NEEDLES = [
+  [['youtube', 'media', 'play'], 'fa-solid fa-play'],
+  [['chat', 'discord'], 'fa-solid fa-comment'],
+  [['file', 'explorer'], 'fa-solid fa-folder'],
+  [['live', 'tv', 'stream'], 'fa-solid fa-tv'],
+  [['package', 'store'], 'fa-solid fa-box'],
+  [['podcast', 'shorts'], 'fa-solid fa-microphone'],
+  [['ticker'], 'fa-solid fa-chart-line'],
+  [['favorite'], 'fa-solid fa-star'],
+  [['weather'], 'fa-solid fa-cloud'],
+  [['setting'], 'fa-solid fa-gear'],
+  [['misc', 'apps', 'tools'], 'fa-solid fa-table-cells-large'],
+  [['hardware', 'device', 'system'], 'fa-solid fa-microchip'],
+  [['terminal', 'cron', 'task'], 'fa-solid fa-terminal'],
+  [['jukaland', 'game'], 'fa-solid fa-gamepad'],
+  [['continue', 'recent'], 'fa-solid fa-play']
+];
+
+const TILE_ICON_FALLBACK = 'fa-solid fa-table-cells-large';
+const HOME_ICON_FALLBACK = 'fa-solid fa-circle';
+
+// sceneLayout is the loaded scene's `layout` field ("home" or ""). The player
+// switches the whole screen onto its home card renderer on that field, so the
+// canvas has to know it before it can draw the same icons.
+function sceneLayout(name) {
+  const extras = importedConfig && importedConfig.scenes ? importedConfig.scenes[name] : null;
+  if (!extras || typeof extras.layout !== 'string') return '';
+  return extras.layout.trim().toLowerCase();
+}
+
+// tileIconClass picks the glyph for one tile from its icon name, label and
+// trigger, the way the player does for the scene that holds it.
+function tileIconClass(icon, text, trigger, layout) {
+  const name = String(icon || '').trim().toLowerCase();
+  const title = String(text || '').trim().toLowerCase();
+
+  if (layout === 'home') {
+    // An icon name in the config replaces the card's own glyph outright, so an
+    // unknown name draws the ring the player's fallback paints instead of
+    // guessing from the title.
+    if (name) return HOME_ICON_CLASSES[name] || HOME_ICON_FALLBACK;
+    // With no icon of its own the card keeps the one rebuildItems gave it, and
+    // configItemFor finds that card by title (or by any title naming tools).
+    const card = Object.prototype.hasOwnProperty.call(HOME_TITLE_ICONS, title)
+      ? HOME_TITLE_ICONS[title]
+      : title.includes('tools') ? 'tools' : '';
+    return HOME_ICON_CLASSES[card] || HOME_ICON_FALLBACK;
+  }
+
+  if (name && Object.prototype.hasOwnProperty.call(TILE_ICON_CLASSES, name)) {
+    return TILE_ICON_CLASSES[name];
+  }
+  const key = (title + ' ' + name + ' ' + String(trigger || '').toLowerCase()).toLowerCase();
+  for (const [needles, cls] of TILE_ICON_NEEDLES) {
     if (needles.some(needle => key.includes(needle))) return cls;
   }
-  return 'fa-solid fa-table-cells-large';
+  return TILE_ICON_FALLBACK;
 }
 
 // applyDeviceBackground paints the design's own Background colour on the
@@ -5422,7 +5633,7 @@ function applyDeviceBackground(top) {
   canvas.style.backgroundColor = value;
 }
 
-function createElementFromData(elementData) {
+function createElementFromData(elementData, layout) {
   const el = document.createElement('div');
   el.className = 'element';
   el.style.position = 'absolute';
@@ -5517,7 +5728,7 @@ function createElementFromData(elementData) {
     const icon = document.createElement('span');
     icon.className = 'tile-icon';
     icon.setAttribute('aria-hidden', 'true');
-    icon.innerHTML = `<i class="${tileIconClass(elementData.icon, elementData.text, elementData.trigger)}"></i>`;
+    icon.innerHTML = `<i class="${tileIconClass(elementData.icon, elementData.text, elementData.trigger, layout)}"></i>`;
     // The player sizes the glyph at a third of the tile, clamped to 44..64 px.
     icon.style.fontSize = Math.min(64, Math.max(44, Math.round(width / 3))) + 'px';
     el.insertBefore(icon, textSpan);
@@ -5843,14 +6054,13 @@ function updateVariableSelector(selector, currentValue) {
 
 // AI Assistant (builder-only helper)
 // Suggests element placement and can generate a scene config JSON blob.
-// Uses a free provider by default; paid providers require an API key
-// that is stored only in browser localStorage (never committed).
+// Uses a free provider by default; paid provider keys stay in the page only.
 
 const AI = (() => {
   const $ = (id) => document.getElementById(id);
   const providerEl = $('aiProvider');
   const keyEl = $('aiApiKey');
-  const keySaveBtn = $('aiKeySaveBtn');
+  const keyClearBtn = $('aiKeyClearBtn');
   const keyRowEl = $('aiKeyRow');
   const promptEl = $('aiPrompt');
   const suggestBtn = $('aiSuggestBtn');
@@ -5861,8 +6071,8 @@ const AI = (() => {
   const applyBtn = $('aiApplyBtn');
   const statusEl = $('aiStatus');
 
-  const LOCAL_KEY_NAME = 'jukahub-ai-key';
-  const LOCAL_PROVIDER_NAME = 'jukahub-ai-provider';
+  const LEGACY_KEY_NAME = 'jukahub-ai-key';
+  const LEGACY_PROVIDER_NAME = 'jukahub-ai-provider';
 
   const FREE_PROVIDER = 'free';
   const CHROME_PROVIDER = 'chrome';
@@ -5933,32 +6143,16 @@ const AI = (() => {
   function apiKey() {
     const p = provider();
     if (p === FREE_PROVIDER || p === CHROME_PROVIDER) return null;
-    return (keyEl && keyEl.value.trim()) || loadStoredKey();
+    return (keyEl && keyEl.value.trim()) || null;
   }
 
-
-  function loadStoredKey() {
+  // Earlier versions saved credentials in localStorage. Remove the old entry
+  // without reading or restoring it; users can enter a new key for this page.
+  function clearLegacyKey() {
     try {
-      const stored = localStorage.getItem(LOCAL_KEY_NAME);
-      if (stored) {
-        if (keyEl) keyEl.value = stored;
-        const storedProvider = localStorage.getItem(LOCAL_PROVIDER_NAME);
-        if (storedProvider && providerEl) providerEl.value = storedProvider;
-      }
+      localStorage.removeItem(LEGACY_KEY_NAME);
+      localStorage.removeItem(LEGACY_PROVIDER_NAME);
     } catch (e) { /* private mode can deny localStorage */ }
-    return null;
-  }
-
-  function storeKey(key) {
-    try {
-      if (key) {
-        localStorage.setItem(LOCAL_KEY_NAME, key);
-        localStorage.setItem(LOCAL_PROVIDER_NAME, provider());
-      } else {
-        localStorage.removeItem(LOCAL_KEY_NAME);
-        localStorage.removeItem(LOCAL_PROVIDER_NAME);
-      }
-    } catch (e) { /* ignore */ }
   }
 
   let lastReplyText = '';
@@ -6260,6 +6454,18 @@ const AI = (() => {
     });
   }
 
+  // A provider body is read as Anthropic's only when the host really is
+  // anthropic.com. A substring test would also accept
+  // https://evil.example/anthropic.com, whose body has another shape.
+  function isAnthropicEndpoint(url) {
+    try {
+      const host = new URL(url).hostname.toLowerCase();
+      return host === 'anthropic.com' || host.endsWith('.anthropic.com');
+    } catch (e) {
+      return false;
+    }
+  }
+
   async function callJsonChat(req) {
     const res = await fetch(req.url, { method: 'POST', headers: req.headers, body: JSON.stringify(req.body) });
     if (!res.ok) {
@@ -6272,7 +6478,7 @@ const AI = (() => {
     }
     const data = await res.json();
     const answer =
-      req.url.includes('anthropic.com')
+      isAnthropicEndpoint(req.url)
         ? (data.content && Array.isArray(data.content) && data.content[0] && data.content[0].text) || ''
         : (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || '';
     if (!answer.trim()) kil('Empty response from provider.');
@@ -6894,26 +7100,23 @@ const AI = (() => {
   let lastGenerated = null;
 
   function init() {
-    loadStoredKey();
+    clearLegacyKey();
     showWelcome();
 
     if (providerEl && keyEl) {
-      // A provider restored from localStorage must reveal the key row too.
       syncKeyRowVisibility();
-
       providerEl.addEventListener('change', () => {
+        // A key for one provider must not be sent to a different provider.
+        keyEl.value = '';
         syncKeyRowVisibility();
         const p = provider();
-        if (p !== FREE_PROVIDER && p !== CHROME_PROVIDER && !keyEl.value) {
-          status('Paste your ' + p + ' key above, then click Save key.', 'warning');
+        if (p !== FREE_PROVIDER && p !== CHROME_PROVIDER) {
+          status('Paste your ' + p + ' key above. It stays in this page only.', 'warning');
         }
-        storeKey(keyEl.value.trim());
       });
-
-      keySaveBtn.addEventListener('click', () => {
-        const key = (keyEl && keyEl.value.trim()) || '';
-        storeKey(key);
-        status(key ? 'API key saved locally.' : 'API key cleared.', key ? 'success' : 'warning');
+      if (keyClearBtn) keyClearBtn.addEventListener('click', () => {
+        keyEl.value = '';
+        status('API key cleared.', 'success');
       });
     }
 

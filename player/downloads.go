@@ -30,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -153,6 +154,76 @@ type downloadProgress struct {
 // downloadRunner performs one job. Tests swap it so the queue can be exercised
 // without a network, a binary or a card.
 var downloadRunner = runQueuedDownload
+
+// Device limits. The handheld writes to a shared SD card over a slow bus, so a
+// transfer that goes quiet is far more common than one that fails outright:
+// yt-dlp can sit on a stalled socket indefinitely with no error to report.
+const (
+	// downloadStallTimeout is how long a job may produce no output at all
+	// before it is cancelled with an explanation. Normal yt-dlp runs print a
+	// progress line every second or two even at 20 KB/s.
+	downloadStallTimeout = 60 * time.Second
+	// downloadStallCheck is the watchdog's tick.
+	downloadStallCheck = 5 * time.Second
+	// downloadsMinFreeBytes is the space a download may start with. Small
+	// enough to allow an ordinary track on a nearly full card, large enough
+	// that the row fails at the start instead of at 99%.
+	downloadsMinFreeBytes = 64 << 20
+	// downloadProgressInterval coalesces progress callbacks: yt-dlp can print
+	// several lines a second, and re-rendering the queue that often costs more
+	// on the device than the numbers are worth.
+	downloadProgressInterval = 150 * time.Millisecond
+)
+
+// downloadsRequireSpace refuses a job before it starts when the card cannot
+// hold a download. free is injected so the check is testable, and a platform
+// that cannot report free space (Windows) does not block the job.
+func downloadsRequireSpace(dir string, free func(string) (int64, error)) error {
+	available, err := free(dir)
+	if err != nil || available <= 0 {
+		return nil
+	}
+	if available < downloadsMinFreeBytes {
+		return fmt.Errorf("not enough space on the card: %s free, a download needs at least %s",
+			formatBytes(uint64(available)), formatBytes(downloadsMinFreeBytes))
+	}
+	return nil
+}
+
+// downloadsCleanStaging removes a finished job's staging folder. A failed or
+// paused job keeps it, which is what lets Resume continue with --continue
+// instead of starting the whole track again on the device's slow card.
+func downloadsCleanStaging(partDir string, err error) {
+	if err != nil || strings.TrimSpace(partDir) == "" {
+		return
+	}
+	os.RemoveAll(partDir)
+}
+
+// downloadMinimumBytes is the size below which a "finished" file is almost
+// certainly an error page or an empty container rather than media. Video is
+// larger because a merged MP4 has an index and an audio track.
+func downloadMinimumBytes(kind downloadKind) int64 {
+	if kind == downloadKindVideo {
+		return 64 << 10
+	}
+	return 16 << 10
+}
+
+// downloadsValidateSavedFile rejects the tiny files the download row used to
+// report as saved. The file is removed again so the queue does not keep a row
+// that cannot play.
+func downloadsValidateSavedFile(path string, kind downloadKind) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("the saved file disappeared: %w", err)
+	}
+	if info.Size() < downloadMinimumBytes(kind) {
+		os.Remove(path)
+		return fmt.Errorf("the source returned only %s — that is not playable media", formatBytes(uint64(info.Size())))
+	}
+	return nil
+}
 
 // downloadQueue is the whole queue. Every field is read and written under mu.
 type downloadQueue struct {
@@ -466,7 +537,16 @@ func downloadsWorker() {
 		}
 		downloads.mu.Unlock()
 
+		// Progress is coalesced: the queue redraws on a change, and yt-dlp can
+		// print several lines a second that would cost more than they show.
+		var lastProgress time.Time
 		res, err := downloadRunner(ctx, job, func(p downloadProgress) {
+			now := time.Now()
+			complete := p.Total > 0 && p.Done >= p.Total
+			if !lastProgress.IsZero() && !complete && now.Sub(lastProgress) < downloadProgressInterval {
+				return
+			}
+			lastProgress = now
 			downloadsApplyProgress(job.ID, p)
 		})
 		cancel()
@@ -589,15 +669,50 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 	if err := os.MkdirAll(partDir, 0o755); err != nil {
 		return downloadResult{}, fmt.Errorf("cannot write to the SD card: %w", err)
 	}
-	defer os.RemoveAll(partDir)
+	// Refuse before the transfer starts when the card is nearly full. The row
+	// used to fail at the end, after the user had waited for the whole file.
+	if err := downloadsRequireSpace(downloadsRoot(), freeBytes); err != nil {
+		return downloadResult{}, err
+	}
 	if err := os.MkdirAll(job.Dir, 0o755); err != nil {
 		return downloadResult{}, fmt.Errorf("cannot create the download folder: %w", err)
 	}
+
+	// The watchdog cancels a transfer that stops producing output. yt-dlp can
+	// wait on a dead socket forever, and the row used to sit at "Downloading"
+	// with no progress until the app was restarted.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var lastOutput atomic.Int64
+	lastOutput.Store(time.Now().UnixNano())
+	touch := func() { lastOutput.Store(time.Now().UnixNano()) }
+	var stalled atomic.Bool
+	watchdogDone := make(chan struct{})
+	go func() {
+		defer close(watchdogDone)
+		ticker := time.NewTicker(downloadStallCheck)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				last := time.Unix(0, lastOutput.Load())
+				if time.Since(last) >= downloadStallTimeout {
+					stalled.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 
 	cmd := exec.CommandContext(ctx, ytDlp, args...)
 	cmd.Env = helperToolEnv(ytDlp)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		cancel()
+		<-watchdogDone
 		return downloadResult{}, err
 	}
 	var stderr textTail
@@ -614,6 +729,7 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 		for sc.Scan() {
 			line := sc.Text()
+			touch()
 			if strings.HasPrefix(strings.TrimSpace(line), "[") {
 				if p, ok := parseDownloadLine(line); ok {
 					onProgress(p)
@@ -638,7 +754,12 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 	}()
 	<-scanned
 	waitErr := cmd.Wait()
+	cancel()
+	<-watchdogDone
 
+	if stalled.Load() {
+		return res, fmt.Errorf("no data for %d s — the source stopped responding; the partial file is kept for Resume", int(downloadStallTimeout.Seconds()))
+	}
 	if ctx.Err() != nil {
 		return res, ctx.Err()
 	}
@@ -653,6 +774,12 @@ func runYTDLPDownload(ctx context.Context, job downloadJob, onProgress func(down
 	if err != nil {
 		return res, err
 	}
+	if err := downloadsValidateSavedFile(path, job.Kind); err != nil {
+		return res, err
+	}
+	// Only a finished job clears its staging folder. A pause or a failure keeps
+	// it, so Resume continues with --continue instead of starting over.
+	downloadsCleanStaging(partDir, nil)
 	res.Path = path
 	return res, nil
 }
@@ -674,6 +801,9 @@ func downloadArgs(partDir string, job downloadJob, config *Config) []string {
 		// parser sees complete lines.
 		"--newline",
 		"--progress",
+		// Resume a staged file after a pause or a dropped link instead of
+		// re-downloading it from zero on the card.
+		"--continue",
 		"--no-simulate",
 		"--print", "before_dl:%(title)s",
 		"--print", "before_dl:%(uploader)s",
@@ -698,6 +828,9 @@ func videoDownloadArgs(partDir string, job downloadJob, config *Config) []string
 		"--geo-bypass",
 		"--newline",
 		"--progress",
+		// Resume the staged streams after an interruption instead of pulling
+		// several hundred megabytes again on the handheld's card.
+		"--continue",
 		"--no-simulate",
 		"--print", "before_dl:%(title)s",
 		"--print", "before_dl:%(uploader)s",

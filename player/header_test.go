@@ -69,8 +69,9 @@ func renderSceneBarForTest(t *testing.T, scene string) *probeFrame {
 	return f
 }
 
-// TestSceneHeaderUsesTheSharedButtonHeight pins the bar's geometry: Menu and
-// the release offer share one height, and Back is both wider and taller than
+// TestSceneHeaderUsesTheSharedButtonHeight pins the bar's geometry: Menu takes
+// the shared button height, the release offer and the bell take one step less
+// because they share the system corner, and Back is both wider and taller than
 // them, because it is the control the bar exists to make obvious.
 func TestSceneHeaderUsesTheSharedButtonHeight(t *testing.T) {
 	snapshotHomeGlobals(t)
@@ -82,13 +83,26 @@ func TestSceneHeaderUsesTheSharedButtonHeight(t *testing.T) {
 	if sceneTitleBackRect.W == 0 {
 		t.Fatal("the scene bar drew no Back button")
 	}
+	// The bell and the release offer are the two quiet system-corner chips; they
+	// share one height, a step below Menu's.
+	bellH := nc.bellRect.H
+	if bellH == 0 {
+		t.Fatal("the scene bar drew no notification bell")
+	}
+	if updatePrompt.badge.H != bellH {
+		t.Errorf("update pill is %dpx tall, want the bell's %dpx", updatePrompt.badge.H, bellH)
+	}
+	if updatePrompt.badge.H >= pillH {
+		t.Errorf("update pill is %dpx tall, not quieter than the %dpx buttons", updatePrompt.badge.H, pillH)
+	}
+	if r := tb.startRect; r.H != pillH {
+		t.Errorf("menu pill is %dpx tall, want the shared %d", r.H, pillH)
+	}
 	for name, r := range map[string]sdl.Rect{
 		"menu":   tb.startRect,
 		"update": updatePrompt.badge,
+		"bell":   nc.bellRect,
 	} {
-		if r.H != pillH {
-			t.Errorf("%s pill is %dpx tall, want the shared %d", name, r.H, pillH)
-		}
 		if r.Y < 0 || r.Y+r.H > barH {
 			t.Errorf("%s pill %+v escapes the %dpx bar", name, r, barH)
 		}
@@ -135,12 +149,41 @@ func TestUpdatePillSitsInTheSameCornerOnEveryScreen(t *testing.T) {
 		if gap := bell.X - (chip.X + chip.W); gap < 0 || gap > 12 {
 			t.Errorf("%s: chip %+v is not immediately left of the bell %+v (gap %d)", name, chip, bell, gap)
 		}
-		if chip.H != headerPillHeight() {
-			t.Errorf("%s: chip is %dpx tall, want the shared %d", name, chip.H, headerPillHeight())
+		// The offer and the bell share the system corner, so they share the
+		// bell's quieter height rather than the labelled buttons'.
+		if chip.H != bell.H {
+			t.Errorf("%s: chip is %dpx tall, want the bell's %d", name, chip.H, bell.H)
+		}
+		if chip.H >= headerPillHeight() {
+			t.Errorf("%s: chip is %dpx tall, not quieter than the %dpx header buttons", name, chip.H, headerPillHeight())
 		}
 	}
 	if homeChip.W != sceneChip.W || homeChip.H != sceneChip.H {
 		t.Fatalf("the offer is %dx%d on Home and %dx%d in a scene", homeChip.W, homeChip.H, sceneChip.W, sceneChip.H)
+	}
+}
+
+// TestReleaseOfferWearsTheBellsSurface pins the visual weight: the offer and the
+// bell are the same quiet surface chip in the corner, so an available release
+// reads as one more system control instead of a warning banner in the bar.
+func TestReleaseOfferWearsTheBellsSurface(t *testing.T) {
+	snapshotHomeGlobals(t)
+	withAvailableUpdate(t, "JukaHub-20261019120000")
+	f := renderSceneBarForTest(t, "Settings")
+	chip, bell := updatePrompt.badge, nc.bellRect
+	if chip.W == 0 || bell.W == 0 {
+		t.Fatalf("scene bar drew offer %+v and bell %+v", chip, bell)
+	}
+
+	// The padding after the label and the bell's left inset are both bare
+	// surface at mid-height, so those samples read each chip's fill.
+	chipPixel := f.at(chip.X+chip.W-4, chip.Y+chip.H/2)
+	bellPixel := f.at(bell.X+4, bell.Y+bell.H/2)
+	if chipPixel != bellPixel {
+		t.Fatalf("offer fill %v is not the bell's fill %v", chipPixel, bellPixel)
+	}
+	if chipPixel.R != ColorIconSurface.R || chipPixel.G != ColorIconSurface.G || chipPixel.B != ColorIconSurface.B {
+		t.Fatalf("offer fill %v is not the shared icon surface %v", chipPixel, ColorIconSurface)
 	}
 }
 

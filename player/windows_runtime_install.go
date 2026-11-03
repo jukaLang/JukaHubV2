@@ -510,13 +510,18 @@ func runtimeArchiveRoot(dir string) string {
 }
 
 func extractRuntimeTar(r io.Reader, dest string) error {
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	tr := tar.NewReader(r)
 	count := 0
 	var links []archiveLink
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
-			return materializeArchiveLinks(dest, links)
+			return materializeArchiveLinks(root, dest, links)
 		}
 		if err != nil {
 			return err
@@ -529,20 +534,27 @@ func extractRuntimeTar(r io.Reader, dest string) error {
 		if err != nil {
 			return err
 		}
+		rel, err := filepath.Rel(dest, target)
+		if err != nil {
+			return err
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := root.MkdirAll(rel, 0o755); err != nil {
 				return err
 			}
 		case tar.TypeReg:
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 				return err
 			}
 			mode := os.FileMode(hdr.Mode).Perm()
 			if mode == 0 {
 				mode = 0o644
 			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+			if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			out, err := root.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 			if err != nil {
 				return err
 			}
@@ -558,26 +570,35 @@ func extractRuntimeTar(r io.Reader, dest string) error {
 			if err != nil {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			_ = os.Remove(target)
-			if err := os.Symlink(filepath.FromSlash(strings.TrimSpace(hdr.Linkname)), target); err != nil {
-				// SD cards are usually FAT/exFAT, where symlinks are not
-				// supported. Materialise the link once the archive has been
-				// unpacked, when its target exists.
-				links = append(links, archiveLink{target: target, source: resolved})
-			}
+			// Collected, never created here: while members are being written
+			// there must be no link the archive supplied, or a later member
+			// could be written through it and land outside the runtime folder.
+			// Links are built once the tree is complete (SD cards are usually
+			// FAT/exFAT, where they are copied instead).
+			links = append(links, archiveLink{target: target, source: resolved, link: strings.TrimSpace(hdr.Linkname)})
 		case tar.TypeLink:
 			source, err := runtimeArchivePath(dest, hdr.Linkname)
 			if err != nil {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			sourceRel, err := filepath.Rel(dest, source)
+			if err != nil {
 				return err
 			}
-			_ = os.Remove(target)
-			if err := os.Link(source, target); err != nil {
+			info, err := root.Lstat(sourceRel)
+			if err != nil {
+				return err
+			}
+			if !info.Mode().IsRegular() {
+				return errors.New("archive hard link source is not a regular file")
+			}
+			if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
+				return err
+			}
+			if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			if err := root.Link(sourceRel, rel); err != nil {
 				return err
 			}
 		}
@@ -585,6 +606,11 @@ func extractRuntimeTar(r io.Reader, dest string) error {
 }
 
 func extractRuntimeZip(archive, dest string) error {
+	root, err := os.OpenRoot(dest)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
 	zr, err := zip.OpenReader(archive)
 	if err != nil {
 		return err
@@ -599,8 +625,12 @@ func extractRuntimeZip(archive, dest string) error {
 		if err != nil {
 			return err
 		}
+		rel, err := filepath.Rel(dest, target)
+		if err != nil {
+			return err
+		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
+			if err := root.MkdirAll(rel, 0o755); err != nil {
 				return err
 			}
 			continue
@@ -615,21 +645,17 @@ func extractRuntimeZip(archive, dest string) error {
 			if readErr != nil {
 				return readErr
 			}
-			linkName := string(link)
+			linkName := strings.TrimSpace(string(link))
 			resolved, err := archiveLinkTarget(dest, target, linkName)
 			if err != nil {
 				return err
 			}
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				return err
-			}
-			_ = os.Remove(target)
-			if err := os.Symlink(filepath.FromSlash(strings.TrimSpace(linkName)), target); err != nil {
-				links = append(links, archiveLink{target: target, source: resolved})
-			}
+			// Deferred for the same reason as the tar case: nothing in the
+			// archive may exist as a link while files are still being written.
+			links = append(links, archiveLink{target: target, source: resolved, link: linkName})
 			continue
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := root.MkdirAll(filepath.Dir(rel), 0o755); err != nil {
 			return err
 		}
 		rc, err := f.Open()
@@ -640,7 +666,11 @@ func extractRuntimeZip(archive, dest string) error {
 		if mode == 0 {
 			mode = 0o644
 		}
-		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, mode)
+		if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
+			rc.Close()
+			return err
+		}
+		out, err := root.OpenFile(rel, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 		if err != nil {
 			rc.Close()
 			return err
@@ -655,7 +685,7 @@ func extractRuntimeZip(archive, dest string) error {
 			return closeErr
 		}
 	}
-	return materializeArchiveLinks(dest, links)
+	return materializeArchiveLinks(root, dest, links)
 }
 
 func runtimeArchivePath(dest, name string) (string, error) {
@@ -664,6 +694,12 @@ func runtimeArchivePath(dest, name string) (string, error) {
 		return "", fmt.Errorf("unsafe archive entry %q", name)
 	}
 	target := filepath.Join(dest, filepath.FromSlash(name))
+	// The prefix test is the guard a reader (and a static analyser) can see
+	// without following isPathWithin; the second check catches the Windows
+	// case where the join keeps a drive letter from the entry name.
+	if !strings.HasPrefix(target, filepath.Clean(dest)+string(filepath.Separator)) {
+		return "", fmt.Errorf("archive entry %q escapes the runtime folder", name)
+	}
 	if !isPathWithin(target, dest) {
 		return "", fmt.Errorf("archive entry %q escapes the runtime folder", name)
 	}
@@ -678,6 +714,9 @@ func archiveLinkTarget(dest, target, link string) (string, error) {
 		return "", fmt.Errorf("unsafe archive symlink %q", link)
 	}
 	resolved := filepath.Clean(filepath.Join(filepath.Dir(target), filepath.FromSlash(link)))
+	if !strings.HasPrefix(resolved, filepath.Clean(dest)+string(filepath.Separator)) {
+		return "", fmt.Errorf("archive symlink %q escapes the runtime folder", link)
+	}
 	if !isPathWithin(resolved, dest) {
 		return "", fmt.Errorf("archive symlink %q escapes the runtime folder", link)
 	}
@@ -687,25 +726,76 @@ func archiveLinkTarget(dest, target, link string) (string, error) {
 type archiveLink struct {
 	target string // where the link should be
 	source string // what it points at, already validated as inside dest
+	link   string // the link text, kept relative exactly as the archive spelled it
 }
 
-// materializeArchiveLinks copies link targets for filesystems without symlink
-// support. Wine archives use them for the winecfg/notepad aliases; losing them
-// must not abort an otherwise valid install.
-func materializeArchiveLinks(dest string, links []archiveLink) error {
+// materializeArchiveLinks creates the links after every member has been
+// extracted. Wine archives use them for the winecfg/notepad aliases; on a
+// filesystem without symlink support (the FAT/exFAT card) the target is copied
+// instead, and losing a link must not abort an otherwise valid install.
+func materializeArchiveLinks(root *os.Root, dest string, links []archiveLink) error {
+	var copyNeeded []archiveLink
+	for _, link := range links {
+		// Revalidate both ends before creating the relative link.
+		if !isPathWithin(link.target, dest) || !isPathWithin(link.source, dest) {
+			return errors.New("archive symlink targets an unexpected path")
+		}
+		target, err := filepath.Rel(dest, link.target)
+		if err != nil {
+			return err
+		}
+		if err := root.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		if err := root.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := root.Symlink(filepath.FromSlash(link.link), target); err != nil {
+			copyNeeded = append(copyNeeded, link)
+		}
+	}
+	links = copyNeeded
 	for pass := 0; pass < 4 && len(links) > 0; pass++ {
 		var pending []archiveLink
 		for _, link := range links {
-			if !isPathWithin(link.source, dest) {
-				return errors.New("archive symlink targets an unexpected path")
+			source, err := filepath.Rel(dest, link.source)
+			if err != nil {
+				return err
 			}
-			info, err := os.Stat(link.source)
+			target, err := filepath.Rel(dest, link.target)
+			if err != nil {
+				return err
+			}
+			info, err := root.Stat(source)
 			if err != nil || !info.Mode().IsRegular() {
 				pending = append(pending, link)
 				continue
 			}
-			if err := copyArchiveFile(link.source, link.target, info.Mode().Perm()); err != nil {
+			in, err := root.Open(source)
+			if err != nil {
 				return err
+			}
+			if err := root.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				in.Close()
+				return err
+			}
+			if err := root.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+				in.Close()
+				return err
+			}
+			out, err := root.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
+			if err != nil {
+				in.Close()
+				return err
+			}
+			_, copyErr := io.Copy(out, in)
+			in.Close()
+			closeErr := out.Close()
+			if copyErr != nil {
+				return copyErr
+			}
+			if closeErr != nil {
+				return closeErr
 			}
 		}
 		links = pending

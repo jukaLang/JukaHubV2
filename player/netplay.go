@@ -507,6 +507,10 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(plan.RetroArch)
 	restoreProfile := beginGamePowerProfile(config)
+	// Same hand-off rule as the emulator launchers: the child leads its own
+	// process group, so a wrapper script that backgrounds the game keeps the
+	// screen parked until the game itself exits.
+	screenChildGroupConfigure(cmd)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
 		return fmt.Errorf("could not start RetroArch: %w", err)
@@ -515,7 +519,7 @@ func netplayLaunch(plan netplayPlan, config *Config) error {
 	recorder := startTimelapse(config, plan.Session.Game.Title)
 	go func() {
 		_ = cmd.Wait()
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()
 	}()

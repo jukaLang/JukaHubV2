@@ -455,7 +455,10 @@ func toolboxCommandLine(t toolboxTool, argLine string) (string, []string) {
 	if len(args) == 0 {
 		args = append(args, t.Example...)
 	}
-	parts := make([]string, 0, len(args)+1)
+	// Capacity of the argument count alone: len(args)+1 is a sum that could in
+	// principle wrap, and one spare element is not worth an expression nothing
+	// can bound.
+	parts := make([]string, 0, len(args))
 	parts = append(parts, t.Binary)
 	for _, a := range args {
 		if a == "" || strings.ContainsAny(a, " \t\"'") {

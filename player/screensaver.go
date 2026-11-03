@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"strconv"
@@ -83,6 +84,17 @@ const (
 	ssConstellationCount = 8
 	ssQuoteInterval      = 12 * time.Second
 	ssFadeInDuration     = 1500
+
+	// ssBackdropArmWindow is how long the idle screen's clear button stays armed
+	// after its first press. Every other input on this screen means "wake up",
+	// so the most likely press of that button is not a request to forget the
+	// photo: the first press asks, and the second one inside this window answers.
+	ssBackdropArmWindow = 5 * time.Second
+
+	// ssBackdropNoticeTTL is how long the confirmation stays up. Nothing else is
+	// drawn over the idle screen — no toast layer reaches here — so this line is
+	// the whole receipt for the photo having been forgotten.
+	ssBackdropNoticeTTL = 3 * time.Second
 )
 
 var screensaverQuotes = []string{
@@ -130,6 +142,12 @@ type screensaverState struct {
 	nodes           []ssNode
 	connections     [][2]int
 	inited          bool
+	// backdropArmedAt is when the clear button was pressed the first time, so
+	// the second press inside ssBackdropArmWindow can act. Zero when unarmed.
+	backdropArmedAt time.Time
+	// backdropClearedAt is when the backdrop photo was last forgotten, which is
+	// how long the screen keeps saying so.
+	backdropClearedAt time.Time
 }
 
 var ss screensaverState
@@ -221,6 +239,87 @@ func screensaverNotifyInput() {
 	}
 }
 
+// ──────────────────────────────────────────────────────────────────────
+// Clearing the backdrop photo from the idle screen
+//
+// The idle screen is the only thing that draws the backdrop photo, so it is
+// also the place to take it away: without this the only way back to the default
+// starfield was to wake the panel, open Files, open the same picture and use the
+// viewer's lock button. The screen wakes on any input, which is why the clear is
+// a two-press action — the first press only arms it.
+// ──────────────────────────────────────────────────────────────────────
+
+// screensaverClearKey reports whether a keyboard key is the idle screen's
+// backdrop-clear button. The key is spelled out in the hint the screen draws, so
+// the button and the sentence naming it come from the same place.
+func screensaverClearKey(sym sdl.Keycode, mod uint16) bool {
+	return sym == sdl.K_y && mod&uint16(sdl.KMOD_CTRL|sdl.KMOD_ALT|sdl.KMOD_GUI) == 0
+}
+
+// screensaverClearButton reports whether a pad press is that same button.
+func screensaverClearButton(button uint8) bool {
+	return button == sdl.CONTROLLER_BUTTON_Y
+}
+
+// screensaverBackdropClearable reports whether there is a backdrop photo to
+// forget. With none set the clear button is not offered, and a press of it is an
+// ordinary wake.
+func screensaverBackdropClearable(config *Config) bool {
+	return screenlockImagePath(config) != ""
+}
+
+// screensaverBackdropArmed reports whether the first press happened and its
+// window is still open.
+func screensaverBackdropArmed(now time.Time) bool {
+	return !ss.backdropArmedAt.IsZero() && now.Sub(ss.backdropArmedAt) <= ssBackdropArmWindow
+}
+
+// screensaverBackdropNotice reports whether the clear happened recently enough
+// for the screen to still confirm it.
+func screensaverBackdropNotice(now time.Time) bool {
+	return !ss.backdropClearedAt.IsZero() && now.Sub(ss.backdropClearedAt) <= ssBackdropNoticeTTL
+}
+
+// screensaverBackdropHint is the line the idle screen draws above its "press any
+// key" hint: what the clear button does right now, or the receipt for having
+// done it. Empty when there is no photo to forget, so a default saver is exactly
+// the screen it was before.
+func screensaverBackdropHint(config *Config, now time.Time) string {
+	switch {
+	case screensaverBackdropNotice(now):
+		return "Backdrop cleared · any key wakes"
+	case !screensaverBackdropClearable(config):
+		return ""
+	case screensaverBackdropArmed(now):
+		return "Y again to clear"
+	default:
+		return "Y clear photo"
+	}
+}
+
+// screensaverBackdropPress answers one press of the clear button and reports
+// whether it consumed the press. A consumed press leaves the idle screen asleep;
+// an unconsumed one falls through to the normal wake, which is what a press with
+// no backdrop to forget should do.
+func screensaverBackdropPress(config *Config, now time.Time) bool {
+	if !screensaverBackdropClearable(config) {
+		ss.backdropArmedAt = time.Time{}
+		return false
+	}
+	if !screensaverBackdropArmed(now) {
+		ss.backdropArmedAt = now
+		return true
+	}
+	ss.backdropArmedAt = time.Time{}
+	if err := clearScreenlockImage(config); err != nil {
+		// The photo is still there, so say why instead of pretending it is gone.
+		log.Printf("[IDLE] could not clear the backdrop: %v", err)
+		return true
+	}
+	ss.backdropClearedAt = now
+	return true
+}
+
 // renderScreensaver draws one frame of the screensaver. Returns true while
 // active so the caller skips normal UI rendering.
 func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool {
@@ -244,6 +343,10 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 
 	renderer.SetDrawColor(6, 8, 14, 255)
 	renderer.Clear()
+
+	// A picture chosen in Files is the backdrop; a missing or undecodable file
+	// simply leaves the default starfield exposed.
+	drawScreenlockImage(renderer, config, ss.fadeAlpha)
 
 	// Stars.
 	for i := range ss.stars {
@@ -373,6 +476,24 @@ func renderScreensaver(renderer *sdl.Renderer, config *Config, tick uint64) bool
 			a := uint8(float64(ss.fadeAlpha) * pulse * 0.5)
 			renderText(renderer, config, hintFont, hint,
 				sdl.Color{R: 120, G: 130, B: 150, A: a}, hx, hy)
+
+			// The backdrop's clear button, on its own line above the wake hint
+			// and steady rather than pulsing: it is an action, and the line
+			// below already pulses. Green while the confirmation is up, amber
+			// once the first press has armed it, blue while it is still an
+			// offer — so the armed line does not read as the same sentence.
+			if line := screensaverBackdropHint(config, now); line != "" {
+				col := sdl.Color{R: 150, G: 190, B: 240}
+				if screensaverBackdropNotice(now) {
+					col = sdl.Color{R: 150, G: 220, B: 170}
+				} else if screensaverBackdropArmed(now) {
+					col = sdl.Color{R: 235, G: 200, B: 130}
+				}
+				col.A = uint8(float64(ss.fadeAlpha) * 0.8)
+				lw, _, _ := hintFont.SizeUTF8(line)
+				renderText(renderer, config, hintFont, line, col,
+					(screenWidth-int32(lw))/2, hy-int32(hintFont.Height())-10)
+			}
 		}
 	}
 
@@ -440,6 +561,12 @@ func drawChatCard(renderer *sdl.Renderer, config *Config, notes []ssChatNote, al
 func deactivateScreensaver() {
 	ss.active = false
 	ss.fadingIn = false
+	// Waking is not the first half of a clear: the next sleep starts with the
+	// clear button at rest, whatever this session left armed.
+	ss.backdropArmedAt = time.Time{}
+	// A full-screen photo is several megabytes; it is decoded again when the
+	// saver next appears instead of sitting in memory behind the whole UI.
+	releaseScreenlockTexture()
 }
 
 // lastInputUnixNano tracks when the user last interacted. It is an atomic
@@ -558,6 +685,10 @@ func activateScreensaver() {
 	ss.fadingIn = true
 	ss.fadeAlpha = 0
 	ss.startTick = sdl.GetTicks64()
+	// Each appearance offers the clear afresh: an old arm must not let a single
+	// stray press clear the photo minutes later.
+	ss.backdropArmedAt = time.Time{}
+	ss.backdropClearedAt = time.Time{}
 }
 
 // applyScreensaverTimeout sets the idle timeout everywhere it is needed: the

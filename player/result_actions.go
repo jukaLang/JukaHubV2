@@ -19,6 +19,7 @@ package main
 // buttons are not wired there.
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -30,8 +31,15 @@ const (
 	resultActionAudio
 	resultActionVideo
 	resultActionChat
+	resultActionSave
+	resultActionQueue
 	resultActionCount
 )
+
+// resultActionOrder is the order the pills are drawn and cycled through, left
+// to right: the two downloads, then Chat, then the two list actions (Favorites
+// and Up Next).
+var resultActionOrder = []int{resultActionAudio, resultActionVideo, resultActionChat, resultActionSave, resultActionQueue}
 
 // focusedResultAction is the highlighted button on the focused row, or
 // resultActionNone while the row itself holds the focus.
@@ -90,6 +98,10 @@ func resultActionLabel(action int) string {
 		return "Video"
 	case resultActionChat:
 		return "Chat"
+	case resultActionSave:
+		return "Save"
+	case resultActionQueue:
+		return "Queue"
 	}
 	return ""
 }
@@ -105,20 +117,32 @@ func resultActionKind(action int) (downloadKind, bool) {
 	return downloadKindAudio, false
 }
 
-// resultActionPills lays the three pills out inside a result card and returns
-// the x where the title/metadata column must stop. The width is measured from
-// the font so the same layout works on the 1280-wide panel and the 960-wide
-// Brick, and it is reserved on every row so text does not reflow as the
-// highlight moves. Audio and Video are separate because saving the sound is a
-// different choice from saving the picture, and a video is much larger.
-func resultActionPills(font *ttf.Font, cardX, cardY, cardW, cardH int32) (sdl.Rect, sdl.Rect, sdl.Rect, int32) {
-	h := int32(30)
-	gap := int32(8)
+// resultActionPills lays the pills out inside a result card and returns them in
+// resultActionOrder, plus the x where the title/metadata column must stop. The
+// width is measured from the font so the same layout works on the 1280-wide
+// panel and the 960-wide Brick, and it is reserved on every row so text does
+// not reflow as the highlight moves. Audio and Video are separate because
+// saving the sound is a different choice from saving the picture, and the Save
+// pill is how a result lands in the Favorites library.
+func resultActionPills(font *ttf.Font, cardX, cardY, cardW, cardH int32) ([]sdl.Rect, int32) {
+	const (
+		h     = int32(30)
+		gap   = int32(8)
+		inset = int32(12)
+	)
+	count := len(resultActionOrder)
 	w := int32(76)
 	if font != nil {
 		widest := 0
-		for _, label := range []string{"Audio", "Video", "Chat"} {
-			if tw, _, err := font.SizeUTF8(label); err == nil && int(tw) > widest {
+		for _, action := range resultActionOrder {
+			if tw, _, err := font.SizeUTF8(resultActionLabel(action)); err == nil && int(tw) > widest {
+				widest = int(tw)
+			}
+		}
+		// Every pill is as wide as the longest label any row can show, so a
+		// saved row saying "Saved" does not resize the strip.
+		for _, done := range []string{"Saved", "Queued"} {
+			if tw, _, err := font.SizeUTF8(done); err == nil && int(tw) > widest {
 				widest = int(tw)
 			}
 		}
@@ -126,33 +150,40 @@ func resultActionPills(font *ttf.Font, cardX, cardY, cardW, cardH int32) (sdl.Re
 			w = measured
 		}
 	}
-	// Three pills still have to leave a readable title column, so each one is
-	// capped at a quarter of the card.
-	if limit := cardW / 4; w > limit {
+	// The pills share the right edge, so each one is capped by the room the
+	// whole strip has once the gaps and the card insets are taken out — and by
+	// the title column, which keeps a width of its own. Without that second
+	// limit a fifth pill squeezes the name out of a narrow row and a result
+	// turns into a strip of buttons with nothing to recognise it by.
+	const minTitle = int32(144) // title column plus the gap back to the pills
+	if limit := (cardW - 2*inset - minTitle - gap*int32(count-1)) / int32(count); w > limit {
 		w = limit
 	}
-	if w < 56 {
-		w = 56
+	if w < 40 {
+		w = 40
 	}
 	y := cardY + (cardH-h)/2
-	chat := sdl.Rect{X: cardX + cardW - 12 - w, Y: y, W: w, H: h}
-	video := sdl.Rect{X: chat.X - gap - w, Y: y, W: w, H: h}
-	audio := sdl.Rect{X: video.X - gap - w, Y: y, W: w, H: h}
-	return audio, video, chat, audio.X - 12
+	rects := make([]sdl.Rect, count)
+	right := cardX + cardW - inset
+	for i := count - 1; i >= 0; i-- {
+		rects[i] = sdl.Rect{X: right - w, Y: y, W: w, H: h}
+		right -= w + gap
+	}
+	return rects, rects[0].X - 12
 }
 
-// drawResultActions draws the three pills for one row and records their hit
-// rects. The focused row's pills are brighter, and the one selected with the
-// d-pad is filled with the accent.
-func drawResultActions(r *sdl.Renderer, config *Config, font *ttf.Font, card sdl.Rect, index int, focused bool) int32 {
-	audio, video, chat, textRight := resultActionPills(font, card.X, card.Y, card.W, card.H)
+// drawResultActions draws the pills for one row and records their hit rects.
+// The focused row's pills are brighter, and the one selected with the d-pad is
+// filled with the accent. A row already in Favorites says "Saved" on the last
+// pill, which is also the press that takes it back out.
+func drawResultActions(r *sdl.Renderer, config *Config, font *ttf.Font, card sdl.Rect, index int, focused, saved, queued bool) int32 {
+	rects, textRight := resultActionPills(font, card.X, card.Y, card.W, card.H)
 	if r == nil {
 		return textRight
 	}
-	resultActionHits = append(resultActionHits,
-		resultActionHit{action: resultActionAudio, index: index, rect: audio},
-		resultActionHit{action: resultActionVideo, index: index, rect: video},
-		resultActionHit{action: resultActionChat, index: index, rect: chat})
+	for i, action := range resultActionOrder {
+		resultActionHits = append(resultActionHits, resultActionHit{action: action, index: index, rect: rects[i]})
+	}
 
 	drawPill := func(rect sdl.Rect, action int) {
 		selected := focused && focusedResultAction == action
@@ -178,6 +209,12 @@ func drawResultActions(r *sdl.Renderer, config *Config, font *ttf.Font, card sdl
 			return
 		}
 		label := resultActionLabel(action)
+		if action == resultActionSave && saved {
+			label = "Saved"
+		}
+		if action == resultActionQueue && queued {
+			label = "Queued"
+		}
 		tw, th, err := font.SizeUTF8(label)
 		if err != nil {
 			return
@@ -185,9 +222,9 @@ func drawResultActions(r *sdl.Renderer, config *Config, font *ttf.Font, card sdl
 		renderText(r, config, font, label, color,
 			rect.X+(rect.W-int32(tw))/2, rect.Y+(rect.H-int32(th))/2)
 	}
-	drawPill(audio, resultActionAudio)
-	drawPill(video, resultActionVideo)
-	drawPill(chat, resultActionChat)
+	for i, action := range resultActionOrder {
+		drawPill(rects[i], action)
+	}
 	return textRight
 }
 
@@ -205,7 +242,7 @@ func resultActionHitAt(mx, my int32) (int, int) {
 // press was handled, so the caller can fall through to playback.
 func performResultAction(action, index int, videos []VideoInfo) bool {
 	kind, isDownload := resultActionKind(action)
-	if !isDownload && action != resultActionChat {
+	if !isDownload && action != resultActionChat && action != resultActionSave && action != resultActionQueue {
 		return false
 	}
 	if index < 0 || index >= len(videos) {
@@ -229,14 +266,37 @@ func performResultAction(action, index int, videos []VideoInfo) bool {
 	case resultActionChat:
 		resultSendToChat(link)
 		ShowToast("Link sent to chat", ToastKindSuccess)
+	case resultActionSave:
+		if toggleFavoriteVideo(video) {
+			ShowToast("Saved to Favorites", ToastKindSuccess)
+		} else {
+			ShowToast("Removed from Favorites", ToastKindWarning)
+		}
+		saveFavorites()
+	case resultActionQueue:
+		// Up Next is the one pill whose label already reports the state, so the
+		// toast only has to confirm the press and say how long the list is.
+		if queued, position, err := upNextToggle(video); err != nil {
+			ShowToast(err.Error(), ToastKindWarning)
+			return true
+		} else if queued {
+			ShowToast(fmt.Sprintf("Added to Up Next · %d waiting", position), ToastKindSuccess)
+		} else {
+			ShowToast("Removed from Up Next", ToastKindWarning)
+		}
 	}
 	PlaySuccessSound()
 	return true
 }
 
 func resultActionVerb(action int) string {
-	if action == resultActionChat {
+	switch action {
+	case resultActionChat:
 		return "send"
+	case resultActionSave:
+		return "save"
+	case resultActionQueue:
+		return "queue"
 	}
 	return "download"
 }

@@ -1,0 +1,8 @@
+{
+  "name": "sysinfo",
+  "version": "1.0.0",
+  "description": "Reports free memory, free disk space and battery level.",
+  "author": "JukaHub",
+  "entry": "sysinfo.sh",
+  "enabled": true
+}

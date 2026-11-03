@@ -73,6 +73,9 @@ func TestChromeUpdatePillActivatesTheInstall(t *testing.T) {
 		updateInstallRunner = prevRunner
 		clearPatchBusy()
 		currentToast = ToastState{}
+		// The install settled through the card; its hold would otherwise show
+		// as a background row in whatever test runs next.
+		resetInstallBar()
 	})
 
 	done := make(chan struct{}, 1)

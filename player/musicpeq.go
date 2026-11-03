@@ -500,26 +500,26 @@ func renderMusicPEQPanel(renderer *sdl.Renderer, config *Config) {
 	panel := musicPEQPanelRect()
 
 	// Dim the player so the panel reads as modal without hiding context.
-	renderer.SetDrawColor(0, 0, 0, 150)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	drawCard(renderer, panel.X, panel.Y, panel.W, panel.H, 18)
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, panel)
 
-	title := "31-band PEQ   ·   " + musicPEQStatus()
-	renderText(renderer, config, font, title, ColorTextPrimary(), panel.X+24, panel.Y+18)
+	// The panel opens with the shared page header. The selected band's readout,
+	// which used to float on the title line, is the header's status so the two
+	// cannot overlap on a wide frequency label.
+	header := overlayPageHeader(panel, "31-band PEQ", musicPEQStatus(), "media")
+	if musicEQ.sel >= 0 && musicEQ.sel < musicPEQBands {
+		header.Status = fmt.Sprintf("%s Hz   %+.1f dB", musicBandLabel(musicPEQFrequencies[musicEQ.sel]),
+			musicEQ.gains[musicEQ.sel])
+		header.StatusColor = ColorTextSecondary()
+	}
+	band := UIPanelHeaderBand(config, header, 6)
+	UIPageHeaderDraw(renderer, config, header)
+
 	hint := hintLine(FooterHint{"Left/Right", "Band"}, FooterHint{"Up/Down", "Gain"},
 		FooterHint{"Y", "Preset"}, FooterHint{"X", "Flatten Band"}, FooterHint{"G", "Close"})
 	hw, _, _ := font.SizeUTF8(hint)
 	renderText(renderer, config, font, hint, ColorTextTertiary(),
-		panel.X+(panel.W-int32(hw))/2, panel.Y+46)
-
-	// Selected band readout, so the number is exact even when the bar is short.
-	if musicEQ.sel >= 0 && musicEQ.sel < musicPEQBands {
-		readout := fmt.Sprintf("%s Hz   %+.1f dB", musicBandLabel(musicPEQFrequencies[musicEQ.sel]),
-			musicEQ.gains[musicEQ.sel])
-		rw, _, _ := font.SizeUTF8(readout)
-		renderText(renderer, config, font, readout, ColorTextSecondary(),
-			panel.X+panel.W-int32(rw)-24, panel.Y+18)
-	}
+		panel.X+(panel.W-int32(hw))/2, panel.Y+band)
 
 	midY := panel.Y + 96 + 84
 	renderer.SetDrawColor(255, 255, 255, 26)

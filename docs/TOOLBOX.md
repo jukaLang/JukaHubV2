@@ -96,6 +96,42 @@ What you scan is your responsibility. The acknowledgement exists so that the
 feature cannot be used by accident out of the box, not because the app can tell
 whether a target is yours — it cannot, and it does not try.
 
+## Audit toolkit: tools you installed yourself
+
+**Tools → Audit toolkit** (also **Power tools → Audit toolkit**) lists the
+security tools that are already on this machine and checks that they run. It is
+a launcher, not an installer: nothing in this page downloads anything.
+
+| Tool | Category | Found by |
+|---|---|---|
+| Burp Suite | Web & API | `burpsuite`, or the Community/Professional install folder |
+| OWASP ZAP | Web & API | `zap.sh`, `zaproxy`, `zap`, or the ZAP install folder |
+| sqlmap | Web & API | `sqlmap`, `sqlmap.py` |
+| Nikto | Web & API | `nikto`, `nikto.pl` |
+| Wireshark | Network | `wireshark`, or `C:\Program Files\Wireshark` |
+| Aircrack-ng | Network | `aircrack-ng` |
+| Metasploit Framework | Validation | `msfconsole`, `msfvenom` |
+| Hashcat | Validation | `hashcat` |
+| John the Ripper | Validation | `john`, `john-the-ripper` |
+
+| Button | What it does |
+|---|---|
+| **A** on an installed command-line tool | Runs its version report (`sqlmap --version`, `nikto -Version`, …) and shows the output with the resolved path |
+| **A** on an installed GUI tool | Opens the application itself (Burp Suite, ZAP, Wireshark) |
+| **A** on a tool that is not installed | Copies the install hint (`pip install sqlmap`, `apt install nikto`, a vendor page) so it can be pasted |
+
+Detection is PATH first, then the absolute paths the vendor installers use, so a
+GUI application that never touched PATH is still found. Nothing is downloaded
+and no check sends traffic: pressing **A** never passes a target, a host or a
+scan profile. A real run against a host you own belongs in **Power tools →
+Script snippets**, where the whole command line is visible before it starts.
+
+The catalog leaves out command-and-control platforms and autonomous
+exploitation drivers on purpose: an app that starts those on a button press is a
+different trust decision from an app that starts a scanner's version report. The
+list is `secAuditCatalog` in `player/secaudit.go`; adding a tool there is one
+entry, because nothing is fetched.
+
 ## Using a tool from the rest of the app
 
 Installed tools are placed on `PATH` for **Power tools → Script snippets**, so a

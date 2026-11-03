@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -19,6 +20,11 @@ import (
 // build a UIPanelHeader now, and the band is the only thing this test looks at:
 // a panel that stopped using the component has no bright title pixels in the
 // strip the component owns, and says so.
+//
+// The same frames also pin the shared card recipe: the pixel beside the card is
+// the backdrop at OverlayScrimAlpha, and the pixel inside the card near its top
+// edge is ColorPanelRaised. A panel that paints its own dim, or its own card
+// fill, fails here even if its title still comes from the component.
 
 func TestFullScreensShareThePageHeader(t *testing.T) {
 	if testing.Short() {
@@ -34,6 +40,10 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 		begin  func() func()
 		render func(*sdl.Renderer, *Config)
 		rect   func() sdl.Rect
+		// fill is the card surface the page paints. Downloads recesses its card
+		// so its raised rows read as separate bands; every other page is the
+		// shared ColorPanelRaised.
+		fill sdl.Color
 	}{
 		{
 			name: "Games library",
@@ -44,6 +54,17 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 			},
 			render: renderGameLibraryPanel,
 			rect:   func() sdl.Rect { return gameLib.panel },
+		},
+		{
+			name: "Emulators",
+			begin: func() func() {
+				prevOpen, prevCursor, prevRect := emuPanel.open, emuPanel.cursor, emuPanelRect
+				emuPanel.open = true
+				emuPanel.cursor = 0
+				return func() { emuPanel.open, emuPanel.cursor, emuPanelRect = prevOpen, prevCursor, prevRect }
+			},
+			render: renderEmuPanel,
+			rect:   func() sdl.Rect { return emuPanelRect },
 		},
 		{
 			name: "Save manager",
@@ -67,6 +88,7 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 			},
 			render: renderDownloadsPanel,
 			rect:   func() sdl.Rect { return dlPanel.panel },
+			fill:   ColorSurface,
 		},
 		{
 			name: "Curation hub",
@@ -263,12 +285,181 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 			render: renderBrowserCookiePanel,
 			rect:   func() sdl.Rect { return browserCookiePanelRect },
 		},
+		{
+			name: "LED",
+			begin: func() func() {
+				prev := ledPanel
+				ledPanel.open = true
+				ledPanel.row = 0
+				return func() { ledPanel = prev }
+			},
+			render: renderLEDPanel,
+			rect:   func() sdl.Rect { return ledPanel.rect },
+		},
+		{
+			name: "Podcasts",
+			begin: func() func() {
+				prev := podPanel
+				podPanel.open = true
+				return func() { podPanel = prev }
+			},
+			render: renderPodcastPanel,
+			rect:   func() sdl.Rect { return podcastPanelRect },
+		},
+		{
+			name: "Audio settings",
+			begin: func() func() {
+				prev := musicSettings
+				musicSettings.open = true
+				return func() { musicSettings = prev }
+			},
+			render: renderMusicSettingsPanel,
+			rect:   func() sdl.Rect { return musicSettings.panelRect },
+		},
+		{
+			name: "Watch Party",
+			begin: func() func() {
+				prev, prevRect := partyUI, partyPanelRect
+				partyUI.open = true
+				partyUI.history = false
+				return func() { partyUI, partyPanelRect = prev, prevRect }
+			},
+			render: partyRender,
+			rect:   func() sdl.Rect { return partyPanelRect },
+		},
+		{
+			name: "Music PEQ",
+			begin: func() func() {
+				prev := musicEQ.panel
+				prevSel := musicEQ.sel
+				musicEQ.panel = true
+				musicEQ.sel = 0
+				return func() { musicEQ.panel, musicEQ.sel = prev, prevSel }
+			},
+			render: renderMusicPEQPanel,
+			rect:   func() sdl.Rect { return musicPEQPanelRect() },
+		},
+		{
+			name: "Tools",
+			begin: func() func() {
+				prev, prevRect := toolsPanel, toolsPanelRect
+				toolsPanel.open = true
+				toolsPanel.cursor = 0
+				return func() { toolsPanel, toolsPanelRect = prev, prevRect }
+			},
+			render: renderToolsPanel,
+			rect:   func() sdl.Rect { return toolsPanelRect },
+		},
+		{
+			name: "Wi-Fi",
+			begin: func() func() {
+				prev, prevRect := wifiPanel, wifiPanelRect
+				wifiPanel.open = true
+				wifiPanel.diagOpen = false
+				// No backend in the probe: the panel draws its "no adapter" state
+				// instead of kicking off a scan goroutine.
+				wifiPanel.available = false
+				return func() { wifiPanel, wifiPanelRect = prev, prevRect }
+			},
+			render: renderWiFiPanel,
+			rect:   func() sdl.Rect { return wifiPanelRect },
+		},
+		{
+			name: "Wi-Fi diagnostics",
+			begin: func() func() {
+				prev, prevRect := wifiPanel, wifiPanelRect
+				wifiPanel.open = true
+				wifiPanel.diagOpen = true
+				// A fresh probe stamp keeps the async reader from firing mid-frame.
+				wifiPanel.diag.At = time.Now()
+				return func() { wifiPanel, wifiPanelRect = prev, prevRect }
+			},
+			render: renderWiFiPanel,
+			rect:   func() sdl.Rect { return wifiPanelRect },
+		},
+		{
+			name: "Accessibility",
+			begin: func() func() {
+				prev, prevRect := a11y, a11yPanelRect
+				a11y.open = true
+				a11y.cursor = 0
+				return func() { a11y, a11yPanelRect = prev, prevRect }
+			},
+			render: renderAccessibilityPanel,
+			rect:   func() sdl.Rect { return a11yPanelRect },
+		},
+		{
+			name: "Controller test",
+			begin: func() func() {
+				prev, prevRect := ctrldiag, ctrldiagPanelRect
+				ctrldiag.open = true
+				return func() { ctrldiag, ctrldiagPanelRect = prev, prevRect }
+			},
+			render: renderCtrldiagPanel,
+			rect:   func() sdl.Rect { return ctrldiagPanelRect },
+		},
+		{
+			name: "Memory tools",
+			begin: func() func() {
+				prev, prevRect := memPanel, memPanelRect
+				memPanel.open = true
+				memPanel.phase = memPhaseTarget
+				return func() { memPanel, memPanelRect = prev, prevRect }
+			},
+			render: renderMemPanel,
+			rect:   func() sdl.Rect { return memPanelRect },
+		},
+		{
+			name: "Ports",
+			begin: func() func() {
+				prev, prevRect := portsPanel, portsPanelRect
+				portsPanel.open = true
+				portsPanel.cursor = 0
+				return func() { portsPanel, portsPanelRect = prev, prevRect }
+			},
+			render: renderPortsPanel,
+			rect:   func() sdl.Rect { return portsPanelRect },
+		},
+		{
+			name: "Processes",
+			begin: func() func() {
+				prev, prevRect := processPanel, processPanelRect
+				processPanel.open = true
+				return func() { processPanel, processPanelRect = prev, prevRect }
+			},
+			render: renderProcessPanel,
+			rect:   func() sdl.Rect { return processPanelRect },
+		},
+		{
+			name: "PS Remote Play",
+			begin: func() func() {
+				prev, prevRect := chiakiPanel, chiakiPanelRect
+				chiakiPanel.open = true
+				chiakiPanel.cursor = 0
+				return func() { chiakiPanel, chiakiPanelRect = prev, prevRect }
+			},
+			render: renderChiakiPanel,
+			rect:   func() sdl.Rect { return chiakiPanelRect },
+		},
+		{
+			name: "Smart home",
+			begin: func() func() {
+				prev, prevRect := smartHomePanel, smartHomePanelRect
+				smartHomePanel.open = true
+				smartHomePanel.cursor = 0
+				return func() { smartHomePanel, smartHomePanelRect = prev, prevRect }
+			},
+			render: renderSmartHomePanel,
+			rect:   func() sdl.Rect { return smartHomePanelRect },
+		},
 	}
 
 	buf := make([]byte, probeW*probeH*4)
 	for _, s := range screens {
 		undo := s.begin()
-		renderer.SetDrawColor(0, 0, 0, 255)
+		// A known backdrop: the scrim over it is measurable, which is how the
+		// shared dim and card surface are checked from the frame.
+		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
 		renderer.Clear()
 		s.render(renderer, config)
 		card := s.rect()
@@ -281,6 +472,39 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 		if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888,
 			unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
 			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
+		}
+
+		// The shared scrim: a pixel beside the card is the backdrop at
+		// OverlayScrimAlpha, not an undimmed scene and not a different dim.
+		sx, sy := int(card.X)-6, int(card.Y+card.H/2)
+		if sx < 0 {
+			sx = 0
+		}
+		if sy >= int(probeH) {
+			sy = int(probeH) - 1
+		}
+		i := (sy*int(probeW) + sx) * 4
+		got := int(buf[i]) + int(buf[i+1]) + int(buf[i+2])
+		base := (int(ColorBackground.R) + int(ColorBackground.G) + int(ColorBackground.B)) *
+			(255 - int(OverlayScrimAlpha)) / 255
+		if diff := got - base; diff > 10 || diff < -10 {
+			t.Errorf("%s: the scrim beside the card read %d, want about %d for the shared dim", s.name, got, base)
+		}
+
+		// The shared card surface, sampled just inside the top edge away from
+		// the rounded corner and the accent hairline.
+		cx, cy := int(card.X+OverlayPadX), int(card.Y+6)
+		if cx < int(probeW) && cy < int(probeH) {
+			i := (cy*int(probeW) + cx) * 4
+			got := int(buf[i]) + int(buf[i+1]) + int(buf[i+2])
+			surface := s.fill
+			if surface.A == 0 {
+				surface = ColorPanelRaised
+			}
+			want := int(surface.R) + int(surface.G) + int(surface.B)
+			if diff := got - want; diff > 12 || diff < -12 {
+				t.Errorf("%s: the card surface read %d, want %d (%+v)", s.name, got, want, surface)
+			}
 		}
 
 		// The band the shared header owns: where the component starts the bar,

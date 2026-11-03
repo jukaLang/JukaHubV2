@@ -95,6 +95,12 @@ func ExecutePluginAction(pluginName, action string, vars map[string]interface{})
 		return fmt.Sprintf("Plugin entry %q not found", plugin.Entry)
 	}
 	if strings.HasSuffix(entryPath, ".py") || strings.HasSuffix(entryPath, ".sh") {
+		// The child runs from the entry's directory, so a relative path from
+		// the app directory would otherwise be resolved a second time there.
+		entryPath, err = filepath.Abs(entryPath)
+		if err != nil {
+			return fmt.Sprintf("Plugin %q has an invalid entry path: %v", pluginName, err)
+		}
 		return runPluginScript(entryPath, action, vars)
 	}
 	return fmt.Sprintf("Plugin %q action %q executed (entry=%s)", pluginName, action, entryPath)

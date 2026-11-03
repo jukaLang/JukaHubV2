@@ -501,6 +501,22 @@ or accepted by design.
 - Archive entries (tool downloads and File Explorer unzip) are reduced to a
   plain base name or checked to stay below the destination directory, so a
   hostile archive cannot write outside it.
+- The Windows-runtime extractor writes nothing through a link the archive
+  supplied: member names and link texts are resolved against the extraction
+  root, then passed through the prefix test the analyser can follow, and the
+  links themselves are created only after the last member has been written
+  (`runtimeArchivePath`, `archiveLinkTarget` and `materializeArchiveLinks` in
+  `windows_runtime_install.go`).
+- The tool name that reaches the log is taken from the scene's own search
+  command, before the config-provided `--extractor-args youtube:api_key=…` and
+  `--cookies` arguments are appended to the argument list, so no logged string
+  is derived from the API key (`executeYouTubeSearch` in `core.go`).
+- Slice and map allocations no longer size themselves from a sum of lengths:
+  merged search pages (`media_paging.go`), the yt-dlp argument vector
+  (`streaming.go`) and the MQTT length-prefixed string (`smart_home.go`) take a
+  single length or grow by `append`. The battery reader works in one integer
+  type (`readBatteryCounter` in `widgets.go`), which also keeps the charge
+  counters from overflowing the `*100` on a 32-bit build.
 - `removeTempVideo` only deletes `jukahub-video-*.mp4` files in the player's own
   temp directory; stopping a video no longer removes user media.
 - Editing a secret in `jukaconfig.json` rebuilds the byte slice with `append`
@@ -520,12 +536,32 @@ or accepted by design.
 - The SSH password is compared through a salted HMAC-SHA256 digest, and a
   server started without a password refuses password auth instead of accepting
   an empty one (`sshPasswordDigest` in `ssh_server.go`).
+- An archive member's size never narrows as it leaves the ZIP header: the
+  `uint64` is converted through `declaredEntryBytes`, and running totals are
+  added through `addDeclaredBytes`, which subtracts from the limit instead of
+  summing two sizes (`patch_engine.go`). A header claiming more than `int64`
+  holds is reported as `math.MaxInt64` and rejected by the cap rather than
+  wrapping negative past it. Tool installs, core updates, APK staging, package
+  archives and the File Explorer unzip all use these helpers.
+- The tar extractor refuses a negative declared size before any arithmetic, so a
+  header cannot subtract from the running total and let the rest of an archive
+  through (`extractTarGzSafe` in `patch_engine.go`).
+- The video frame buffer is sized in `int64` and capped by `maxVideoFrameBytes`
+  before it becomes an `int` (`startFFmpegDecoder` in `videoplayer.go`), and the
+  companion-screen copy takes its length from the surface's own pixel slice
+  (`companion_screen.go`). Both used to form a `width*height` product in `int`,
+  which wraps on the 32-bit build.
+- A RAM search re-checks its width before sizing a read buffer from it
+  (`ramNarrow` in `ramsearch.go`).
+- Text that yt-dlp or a URL may have carried a secret into is redacted before it
+  is logged: `streamFailureReason` passes the extractor's stderr through the
+  same redactor the support bundle uses, and that redactor now also covers the
+  query-string spelling of a key (`?key=`, `&api_key=`) while leaving the rest
+  of the URL readable (`diagnostics_bundle.go`). Thumbnail prefetch failures log
+  a sanitized URL like every other log line (`thumbstore.go`).
 
 **Guarded and tested (re-reported because the guard is a helper call)**
 
-- Archive extraction: `runtimeArchivePath` and `archiveLinkTarget` contain every
-  entry and symlink target below the destination; `windows_runtime_install_test.go`
-  builds archives with `../` entries and escaping links and asserts the error.
 - App launch: `isLaunchableAppPath` confines a row to the scanned app folders and
   the extension allowlist; `apps_test.go` covers the refusals.
 - Plugin scripts: `resolveWithinRoot` confines the entry to the plugin folder.
@@ -533,9 +569,6 @@ or accepted by design.
   gallery (`ambient.go`) open files next to media the user already chose. The
   path is cleaned, but it is deliberately not confined to one root: the media
   library spans the SD card.
-- `make([]string, 0, len(a)+len(b)+len(c)+1)` in `streaming.go` sizes an argument
-  vector from three slice lengths; integer overflow would need more live slices
-  than an address space can hold, so this is a false positive.
 
 **Accepted by design**
 
@@ -576,3 +609,26 @@ For high-security applications, consider:
 - Using a dedicated secrets manager (HashiCorp Vault, AWS Secrets Manager, etc.)
 - Running in a trusted execution environment (TEE)
 - Implementing additional access controls and key management policies
+
+## OpenSSF best-practices badge
+
+Scorecard's `CII-Best-Practices` check is the one finding that cannot be fixed by
+changing this repository: the checker asks the OpenSSF Best Practices service
+whether this project has claimed a badge, and scores 0 until one exists. The
+claim is a maintainer action, so it is written down here instead of being
+silently carried as an open alert:
+
+1. Register the repository at
+   [bestpractices.dev](https://www.bestpractices.dev/) (it is free, and the
+   questionnaire doubles as the project's own checklist).
+2. Claim the passing level. Most criteria are already answered by this repo:
+   published vulnerability reporting ([above](#reporting-a-vulnerability)),
+   dependency update automation, a security scan on every push, fuzzing in the
+   nightly workflow, no bundled binaries, and dependencies pinned by commit or
+   digest in CI.
+3. Paste the project's badge into the top of [`README.md`](README.md) once the
+   id exists, so the score has something to read:
+   `[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/<ID>/badge)](https://www.bestpractices.dev/projects/<ID>)`
+
+The badge is a claim about the process, not a substitute for any of the controls
+above; keep both current when either changes.

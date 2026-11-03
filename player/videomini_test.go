@@ -303,8 +303,21 @@ func TestVideoMiniPadControlsAndHints(t *testing.T) {
 	if !press(sdl.CONTROLLER_BUTTON_X) || playerPhase() != "idle" || videoMiniActive() {
 		t.Fatal("X on now playing did not close the floating video")
 	}
-	if !strings.Contains(strings.Join(videoMiniHints(), " "), "A open  X close") {
-		t.Fatal("window does not advertise pad controls")
+	// The pad line is built by the same hintLine() every footer uses, so the
+	// window cannot drift into its own separators or casing. The other lines
+	// are the window's own tap instructions, one per drawn row.
+	hints := videoMiniHints()
+	if len(hints) != 4 {
+		t.Fatalf("window draws %d hint lines, want the four-row layout: %q", len(hints), hints)
+	}
+	if want := hintLine(FooterHint{"A", "Open"}, FooterHint{"X", "Close"}); hints[len(hints)-1] != want {
+		t.Fatalf("pad hint = %q, want the shared key-hint format %q", hints[len(hints)-1], want)
+	}
+	joined := strings.Join(hints, " | ")
+	for _, want := range []string{"Tap video: open", "Tap X icon: close", "Focus Now Playing"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("window hints %q are missing %q", joined, want)
+		}
 	}
 }
 
@@ -318,6 +331,11 @@ func TestVideoMiniChromePadCloseAndModalPriority(t *testing.T) {
 	})
 	focusEngine = NewFocusEngine()
 	focusEngine.SetGraph("Settings", &FocusGraph{Nodes: []FocusNode{{Index: ChromeMediaIndex}}})
+	// The bar is never focused by itself; a user reaches the chip with the
+	// pad, so the test puts the focus there the same way one does.
+	if !focusEngine.SetByElementIndex(ChromeMediaIndex) {
+		t.Fatal("cannot focus the now-playing chip")
+	}
 	homeLayoutActive, virtualKeyboardActive, activeSceneIndex, tb.startOpen = false, false, -1, false
 	e := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_X}
 	tb.startOpen = true
@@ -335,11 +353,39 @@ func TestVideoMiniKeepsNowPlayingInCrowdedStatusBar(t *testing.T) {
 	setupVideoMiniTest(t, miniTestTube)
 	videoMiniShow()
 	currentSceneIndex = miniTestHome
+
+	measure := func(string) int32 { return 40 }
 	media := statusMediaPartPrefix + "Video"
-	parts := []string{statusWiFiMarker, "12:40", "87%", media}
-	fitted := fitStatusParts(parts, func(string) int32 { return 40 }, 5, 45)
-	if len(fitted) != 1 || fitted[0] != media {
-		t.Fatalf("crowded status bar lost mini-player control: %v", fitted)
+	if !isMediaStatusPart(media) {
+		t.Fatalf("%q is not recognised as the media chip", media)
+	}
+	// The same crowded cluster the header builds, narrowed until only one part
+	// fits: the chip has to be the survivor while the window owns the video,
+	// because it is the only way back to the player from that screen.
+	crowded := func(chip string) []string {
+		return []string{statusWiFiMarker, "12:40", "87%", chip}
+	}
+	fitted := fitStatusParts(crowded(media), measure, 5, 45)
+	if len(fitted) != 1 || !isMediaStatusPart(fitted[0]) || statusMediaTitle(fitted[0]) != "Video" {
+		t.Fatalf("crowded status bar lost the mini-player chip: %v", fitted)
+	}
+
+	// Without the floating window the chip is only a title, so it leaves
+	// before the clock and the battery do.
+	videoMiniClear()
+	for _, part := range fitStatusParts(crowded(media), measure, 5, 45) {
+		if isMediaStatusPart(part) {
+			t.Fatalf("the media chip outlived the mini window it controls: %v", part)
+		}
+	}
+
+	// An output chip names the device, not a session, so the mini-player rule
+	// does not keep it either.
+	videoMiniShow()
+	for _, part := range fitStatusParts(crowded(statusOutputPartPrefix+"Headphones"), measure, 5, 45) {
+		if isChipStatusPart(part) {
+			t.Fatalf("an idle output chip was kept as a mini-player control: %v", part)
+		}
 	}
 }
 

@@ -93,6 +93,22 @@ func TestTouchPixelCoordinatesAccepted(t *testing.T) {
 	}
 }
 
+// clearChromeRects forgets every measured top-bar button. The focus graph is
+// built from the rects the last frame recorded, so a test that hand-builds a
+// graph must start from an empty bar: a neighbouring test's render otherwise
+// leaves its Apps pill (or clock, bell, Wi-Fi meter) in this test's graph,
+// where the D-pad can land on it instead of the back pill.
+func clearChromeRects() {
+	sceneTitleBackRect = sdl.Rect{}
+	statusClockRect = sdl.Rect{}
+	tb.startRect = sdl.Rect{}
+	statusWiFiRect = sdl.Rect{}
+	weatherStatusRect = sdl.Rect{}
+	statusMediaRect = sdl.Rect{}
+	nc.bellRect = sdl.Rect{}
+	updatePrompt.badge = sdl.Rect{}
+}
+
 // TestLogsBackPillIsSelectableAndLeaves drives the real Logs scene from
 // jukaconfig.json: Up from the action row must focus the top-bar back pill, and
 // Enter there must start a transition back to the previous scene.
@@ -111,6 +127,8 @@ func TestLogsBackPillIsSelectableAndLeaves(t *testing.T) {
 	prevHomeActive := homeLayoutActive
 	homeLayoutActive = false
 	t.Cleanup(func() { homeLayoutActive = prevHomeActive })
+	clearChromeRects()
+	t.Cleanup(clearChromeRects)
 	sceneTitleBackRect = sdl.Rect{X: 300, Y: 17, W: 30, H: 22}
 	statusClockRect = sdl.Rect{X: 1150, Y: 10, W: 100, H: 36}
 	focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))

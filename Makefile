@@ -55,7 +55,7 @@ GO_SOURCES := find $(PLAYER) -path '*/vendor' -prune -o -name '*.go' -print
 WEB_SCRIPTS := script.js builder-device.js builder-gallery.js gallery/layouts.js
 
 .PHONY: help dev build run test test-web e2e vet fmt fmt-check lint bench web \
-        release clean check coverage
+        release clean check coverage workflows test-scripts
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -125,5 +125,11 @@ release: ## Package the release artifacts into player/dist
 clean: ## Remove build outputs (Windows also removes the local SDL copy)
 	$(CLEAN)
 
-check: lint test test-web ## Everything a pull request must pass (no browser needed); ESLint is skipped by lint until test-web installs it
+workflows: ## Check the workflow pins: actions, images and downloaded archives
+	@bash .github/scripts/check-workflows.sh
+
+test-scripts: ## Check the CI helper scripts (a tampered archive must be refused)
+	@bash tests/scripts/install-sdl-mingw.test.sh
+
+check: lint test test-web workflows test-scripts ## Everything a pull request must pass (no browser needed); ESLint is skipped by lint until test-web installs it
 	@echo "check: ok"

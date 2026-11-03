@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -137,6 +138,12 @@ func ramFirstScan(mem memReader, width int, value uint64) (*ramSearch, error) {
 // ramNarrow re-reads each candidate and keeps the ones that now equal value.
 // Addresses that can no longer be read are dropped.
 func ramNarrow(mem memReader, s *ramSearch, value uint64) {
+	// Width sizes the read buffer, so it is re-checked here rather than trusted
+	// from the struct: a search restored from elsewhere must not make this
+	// allocate a buffer of arbitrary length.
+	if !ramValidWidth(s.Width) {
+		return
+	}
 	want := ramMask(s.Width, value)
 	buf := make([]byte, s.Width)
 	kept := s.Candidates[:0]
@@ -153,12 +160,16 @@ func ramNarrow(mem memReader, s *ramSearch, value uint64) {
 // ramEncode stores v as a little-endian value of the given width in b.
 func ramEncode(width int, v uint64, b []byte) {
 	switch width {
+	// The masks are the job: a search of width 2 stores the low two bytes of a
+	// uint64 on purpose. Saying so at the conversion keeps the truncation
+	// visible to a reader and to the analyser, instead of looking like a value
+	// that happened to be narrow enough.
 	case 1:
-		b[0] = byte(v)
+		b[0] = byte(v & 0xff)
 	case 2:
-		binary.LittleEndian.PutUint16(b, uint16(v))
+		binary.LittleEndian.PutUint16(b, uint16(v&0xffff))
 	case 4:
-		binary.LittleEndian.PutUint32(b, uint32(v))
+		binary.LittleEndian.PutUint32(b, uint32(v&0xffffffff))
 	default:
 		binary.LittleEndian.PutUint64(b, v)
 	}
@@ -198,13 +209,15 @@ func ramParseValue(text string) (uint64, bool) {
 	if s == "" {
 		return 0, false
 	}
-	base := 10
+	// The sign is read before the base, so -0x10 is minus sixteen rather than
+	// a hexadecimal number that happens to start with a dash and is rejected.
 	negative := false
-	switch {
-	case strings.HasPrefix(s, "0x"), strings.HasPrefix(s, "0X"):
+	if strings.HasPrefix(s, "-") {
+		negative, s = true, strings.TrimSpace(s[1:])
+	}
+	base := 10
+	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 		s, base = s[2:], 16
-	case strings.HasPrefix(s, "-"):
-		negative, s = true, s[1:]
 	}
 	if s == "" {
 		return 0, false
@@ -214,7 +227,18 @@ func ramParseValue(text string) (uint64, bool) {
 		return 0, false
 	}
 	if negative {
-		raw = uint64(-int64(raw))
+		// A negative value is stored as its two's complement, so the magnitude
+		// has to fit a signed 64-bit number: -9223372036854775808 is the
+		// narrowest one a search can name. Anything larger would wrap to a
+		// small positive value (negating it overflows back), so it is rejected
+		// instead of silently searching for the wrapping number.
+		if raw > uint64(math.MaxInt64)+1 {
+			return 0, false
+		}
+		// Negated as an unsigned operation: ^raw+1 is exactly the value a game
+		// stores after the counter underflows, and it reaches the most negative
+		// case (1<<63) without a signed negation that would overflow there.
+		raw = ^raw + 1
 	}
 	return raw, true
 }

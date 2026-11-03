@@ -83,9 +83,45 @@ Open it from **Apps → Browser** or **Start → Browser**.
   missing. `@supports` and `@layer` blocks are kept, because this reader does
   implement the properties they gate.
 
+* Fold what the page folds. A `<details>` section draws its summary and its
+  `[+]` / `[-]` marker, and keeps the body out of the layout until the marker is
+  pressed — which is what a browser does, and what makes a GitHub issue whose
+  crash log or screenshot sits behind one read as the issue instead of the log.
+  The body is parsed and kept, so opening it is a re-measure rather than a
+  second download; a section that ships `open` starts expanded, and nesting
+  follows the outer section: a closed one keeps an open section inside it
+  hidden too.
+
 Pages are capped at 8 MiB and 20 seconds; anything past 8 MiB is drawn partially
-from what arrived, with a note at the top of the page. Redirects must stay on
-HTTP or HTTPS.
+from what arrived, with a note at the top of the page.
+
+### Redirects
+
+A redirect reaches the reader in two shapes, and both are followed:
+
+* **HTTP 3xx.** The client follows up to five hops, and every hop must stay on
+  HTTP or HTTPS: a site cannot send the reader to a scheme this app cannot draw.
+  The hops share the load's cookie jar, so a `Set-Cookie` on the first hop is
+  already in hand on the next.
+* **A page's own `<meta http-equiv="refresh">`.** "This page has moved" stubs and
+  locale or login bounces arrive with a 200 and a body, so nothing follows them
+  on its own — the reader would be left on the stub, whose telltale link is
+  stripped along with the page's scripts. A load follows up to three of these,
+  resolving the target against the page it came from and accepting it quoted,
+  unquoted, spaced or as `URL=` in any case.
+
+Only a real redirect is followed. A refresh that names no target, names a
+non-web scheme, asks to reload the same page, or waits longer than two seconds
+(a page asking to be refreshed periodically) is left alone; a pair of pages that
+point at each other stops at the hop limit instead of loading forever. All the
+hops share the load's one 20-second budget, so a slow chain cannot extend it.
+
+When a load ends somewhere other than the address it started from, the address
+bar and the current Back entry move to the URL that actually loaded, and the
+landing page is cached under it so Back is a map lookup rather than a second
+walk through the redirect. The move happens during the render pass, never while
+the address bar is being edited, and a correction for a page the reader has
+already navigated past is dropped.
 
 ## Ads and trackers
 

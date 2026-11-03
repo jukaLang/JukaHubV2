@@ -367,18 +367,18 @@ func TestRecordingsSceneIsWiredInBothConfigs(t *testing.T) {
 			}
 		}
 
-	}
-
-	// The Apps launcher is how the screen is reached: the Media row is already
-	// full (the IPStream chip is injected into it at runtime), so there is no
-	// room for another button there and the applet table carries the entry.
-	found := false
-	for _, a := range builtinApplets {
-		if a.Scene == "Recordings" {
-			found = true
+		// The Media row is already full (the IPStream chip is injected into
+		// it at runtime), so the screen is reached from the Start menu's
+		// Scenes group, which lists every scene the config ships.
+		found := false
+		for _, entry := range startMenuSceneEntries(&cfg) {
+			if entry.scene == "Recordings" {
+				found = true
+				break
+			}
 		}
-	}
-	if !found {
-		t.Error("no built-in applet opens the Recordings scene")
+		if !found {
+			t.Errorf("%s: the Start menu does not list the Recordings scene", name)
+		}
 	}
 }

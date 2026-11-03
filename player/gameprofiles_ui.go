@@ -292,7 +292,7 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const padX = int32(24)
+	const padX = OverlayPadX
 	rowH := 8 + medH + 4 + smallH + 8
 
 	// The title band is the shared page header, built before the card is sized so
@@ -343,18 +343,12 @@ func renderGameProfilesPanel(renderer *sdl.Renderer, config *Config) {
 		gpPanel.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	if len(entries) == 0 {

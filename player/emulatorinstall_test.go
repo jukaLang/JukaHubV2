@@ -370,11 +370,11 @@ func TestEmulatorFooterHintsMatchTheHandlers(t *testing.T) {
 }
 
 // TestEmulatorHintLineFitsBothCanvases keeps the page from drawing a key it
-// cannot show. The hint line carries up to six groups once a core has a kept
-// build, and the Brick's body is 320px narrower than the Smart Pro's: a line
-// that does not fit would be ellipsized on screen, cutting the B hint that every
-// page has to offer. Measured with the widest fixture, the line leaves 84px of
-// headroom on the Brick.
+// cannot show. The widest hint set — a core to update, a build to roll back to,
+// and the L1/R2/Y page keys all live — is wider than the page card on either
+// canvas, so the page sheds whole hints rather than letting the line be cut,
+// and the hints that survive must still fit: the B hint every page offers has
+// to be there, unellipsized.
 func TestEmulatorHintLineFitsBothCanvases(t *testing.T) {
 	withCoreInstallsAllowed(t, true)
 	coresDir, _ := installHistoryFixture(t, map[string]string{"mgba_libretro.so": "installed build"})
@@ -391,11 +391,12 @@ func TestEmulatorHintLineFitsBothCanvases(t *testing.T) {
 	// Render tests need SDL and TTF up before a font can be measured.
 	newProbeFrame(t)
 
-	// The longest line the page can produce: A, X, R1, L1, Y and B are all
+	// The widest set the page can produce: A, X, R1, L1, R2, Y and B are all
 	// offered.
-	line := hintLine(emuFooterHints(emuEntry{
+	hints := emuFooterHints(emuEntry{
 		Name: "GBA", Status: emuAvailable, Launch: "/emus/GBA/launch.sh",
-	}, true)...)
+	}, true)
+	line := hintLine(hints...)
 	if !strings.Contains(line, "L1 Update all") || !strings.Contains(line, "B Back") ||
 		!strings.Contains(line, "R1 ") {
 		t.Fatalf("the fixture does not produce the longest hint line: %q", line)
@@ -413,9 +414,13 @@ func TestEmulatorHintLineFitsBothCanvases(t *testing.T) {
 		if font == nil {
 			t.Fatalf("%s: no small font", canvas.name)
 		}
-		body := emuGridView().body
-		if width, _, _ := font.SizeUTF8(line); int32(width) > body.W {
-			t.Errorf("%s: the hint line is %dpx wide in a %dpx body (%q)", canvas.name, width, body.W, line)
+		body := emuGridView(config).body
+		drawn := emuFooterLine(font, hints, body.W)
+		if width, _, _ := font.SizeUTF8(drawn); int32(width) > body.W {
+			t.Errorf("%s: the hint line is %dpx wide in a %dpx body (%q)", canvas.name, width, body.W, drawn)
+		}
+		if !strings.Contains(drawn, "B Back") {
+			t.Errorf("%s: the fitted hint line lost Back: %q", canvas.name, drawn)
 		}
 	}
 }
@@ -610,5 +615,35 @@ func TestEmuRollbackHintOnlyAppearsWithAKeptBuild(t *testing.T) {
 	// A tool row is not an emulator core.
 	if got := emuRollbackHintLabel(emuEntry{Name: "Smart Pro Compatibility", Pinned: true}); got != "" {
 		t.Fatalf("a pinned tool row offers a rollback: %q", got)
+	}
+}
+
+func TestEmuCoreBuildsMatch(t *testing.T) {
+	dir := t.TempDir()
+	core := filepath.Join(dir, "mgba_libretro.so")
+	if err := os.WriteFile(core, make([]byte, 4096), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installed := coreBuild{Core: "mgba", Size: 4096}
+	if err := emuCoreBuildsMatch(coreBuild{Core: "mgba", Path: core, Size: 4096}, installed); err != nil {
+		t.Fatalf("a matching active core was rejected: %v", err)
+	}
+
+	// The active file is a different size: the copy into cores/ did not land.
+	err := emuCoreBuildsMatch(coreBuild{Core: "mgba", Path: core, Size: 1024}, installed)
+	if err == nil || !strings.Contains(err.Error(), "did not take") {
+		t.Fatalf("size mismatch gave %v, want an explanation that the copy failed", err)
+	}
+
+	// Nothing active at all: the tile must not claim the core is ready.
+	missing := emuCoreBuildsMatch(coreBuild{Core: "mgba"}, installed)
+	if missing == nil || !strings.Contains(missing.Error(), "cannot see") {
+		t.Fatalf("missing core gave %v, want a message pointing at the cores folder", missing)
+	}
+
+	// An active path that no longer exists is the same story.
+	gone := emuCoreBuildsMatch(coreBuild{Core: "mgba", Path: filepath.Join(dir, "gone.so"), Size: 4096}, installed)
+	if gone == nil {
+		t.Fatal("a vanished core file was reported as usable")
 	}
 }

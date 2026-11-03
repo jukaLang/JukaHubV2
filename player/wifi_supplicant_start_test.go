@@ -282,16 +282,7 @@ func TestWiFiPanelOpensOnADeviceWithNoSupplicantYet(t *testing.T) {
 
 	prevPanel := wifiPanel
 	t.Cleanup(func() {
-		deadline := time.Now().Add(2 * time.Second)
-		for {
-			wifiDrainUpdates()
-			if !wifiWorkPending || time.Now().After(deadline) {
-				break
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-		wifiGeneration++
-		wifiDrainDiscarded()
+		wifiSettleForTest()
 		wifiPanel = prevPanel
 	})
 

@@ -261,7 +261,65 @@ func ipPanelRows() []IPStream {
 	return append([]IPStream(nil), ipStreams...)
 }
 
-// openIPStreamPanel shows the library panel.
+// ipPanelItemKind is the kind of row in the stream menu.
+type ipPanelItemKind int
+
+const (
+	// ipItemChannel is a saved stream: A plays it, Start removes it.
+	ipItemChannel ipPanelItemKind = iota
+	// ipItemAdd asks for a link, saves it as a channel and plays it.
+	ipItemAdd
+	// ipItemBrowse fetches the public IPTV playlist.
+	ipItemBrowse
+)
+
+// ipPanelActionRows is how many always-available rows sit above the channels.
+const ipPanelActionRows = 2
+
+// ipPanelItem is one row of the stream menu: an action, or a saved channel.
+type ipPanelItem struct {
+	Kind   ipPanelItemKind
+	Stream IPStream
+}
+
+// ipPanelItems builds the menu: the two ways to get content first, then every
+// saved channel. The panel used to be the channel list alone, so on a fresh
+// install the IPStream button opened a note telling the user to type a link on
+// a screen it had not opened, with nothing to play — a dead end on the Media
+// page, where the button is the only way in.
+func ipPanelItems() []ipPanelItem {
+	rows := ipPanelRows()
+	items := make([]ipPanelItem, 0, len(rows)+ipPanelActionRows)
+	items = append(items,
+		ipPanelItem{Kind: ipItemAdd},
+		ipPanelItem{Kind: ipItemBrowse},
+	)
+	for _, s := range rows {
+		items = append(items, ipPanelItem{Kind: ipItemChannel, Stream: s})
+	}
+	return items
+}
+
+// ipPanelChannelIndex converts a menu cursor into an index in the saved-channel
+// list; -1 means the cursor is on one of the action rows.
+func ipPanelChannelIndex(cursor int) int {
+	if cursor < ipPanelActionRows {
+		return -1
+	}
+	return cursor - ipPanelActionRows
+}
+
+// ipPanelClamp keeps the cursor inside the menu after a removal or a reload.
+func ipPanelClamp(items []ipPanelItem) {
+	if ipStreamsCursor >= len(items) {
+		ipStreamsCursor = len(items) - 1
+	}
+	if ipStreamsCursor < 0 {
+		ipStreamsCursor = 0
+	}
+}
+
+// openIPStreamPanel shows the stream menu.
 func openIPStreamPanel() {
 	qs.open = false
 	toolsPanel.open = false
@@ -269,6 +327,7 @@ func openIPStreamPanel() {
 	loadIPStreams()
 	ipPanelOpen = true
 	ipPanelStatus = ""
+	ipPanelClamp(ipPanelItems())
 	PlayActivateSound()
 }
 
@@ -277,8 +336,86 @@ func closeIPStreamPanel() {
 	PlayBackSound()
 }
 
-// ipPanelActivateAct runs an explicit action on the highlighted row. The first
-// row (index -1) saves whatever link the scene's URL box holds.
+// ipPanelActivate runs the highlighted row: an action row does its action, a
+// channel row plays that channel. D-pad, Enter and a click all land here, so a
+// row can never look selected without doing anything.
+func ipPanelActivate(config *Config) {
+	items := ipPanelItems()
+	ipPanelClamp(items)
+	if len(items) == 0 {
+		return
+	}
+	switch items[ipStreamsCursor].Kind {
+	case ipItemAdd:
+		ipPanelAskForLink(config)
+	case ipItemBrowse:
+		ipPanelImport()
+	default:
+		ipPanelPlay(config)
+	}
+}
+
+// ipPromptPending marks the one keyboard session opened by the menu's "Add a
+// stream link" row, so its submit saves a channel instead of searching.
+var ipPromptPending bool
+
+// ipPanelAskForLink asks for a stream link without leaving the app. The
+// keyboard edits the screen's own link field when it has one (the Streams
+// screen and Media both do), so the typed link stays visible afterwards.
+func ipPanelAskForLink(config *Config) bool {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return false
+	}
+	scene := config.Scenes[currentSceneIndex]
+	field := -1
+	for i, e := range scene.Elements {
+		if e.Type != "input" {
+			continue
+		}
+		if field < 0 {
+			field = i
+		}
+		if e.Variable == "stream_url" {
+			field = i
+			break
+		}
+	}
+	if field < 0 {
+		ShowToast("Open Streams to add a channel", ToastKindInfo)
+		return false
+	}
+	ipPanelOpen = false
+	ipPromptPending = true
+	vkOpenSceneInput(config, currentSceneIndex, field)
+	inputTextBuffer = ""
+	vkTextSelected = false
+	ShowToast("Paste a stream link, then Save", ToastKindInfo)
+	return true
+}
+
+// ipPanelPlayLink plays a channel. It is a variable so the menu's row actions
+// can be tested without starting a real player.
+var ipPanelPlayLink = playVideoURL
+
+// submitIPStreamLink saves the link typed into the menu and plays it.
+func submitIPStreamLink(config *Config, text string) {
+	link := strings.TrimSpace(text)
+	if !looksLikeStreamURL(link) {
+		ShowToast("That is not a stream link", ToastKindWarning)
+		return
+	}
+	name := channelNameFromURL(link)
+	if addIPStream(name, link) {
+		if err := saveIPStreams(); err != nil {
+			ShowToast("Could not save the channel: "+firstLine(err.Error()), ToastKindError)
+		} else {
+			ShowToast("Added "+name, ToastKindSuccess)
+		}
+	}
+	ipPanelPlayLink(config, link)
+}
+
+// ipPanelSaveCurrentLink saves whatever link the scene's URL box holds.
 func ipPanelSaveCurrentLink(config *Config) {
 	url := ""
 	if config != nil && currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {
@@ -304,22 +441,25 @@ func ipPanelSaveCurrentLink(config *Config) {
 // ipPanelPlay plays the highlighted stream.
 func ipPanelPlay(config *Config) {
 	list := ipPanelRows()
-	if ipStreamsCursor < 0 || ipStreamsCursor >= len(list) {
+	idx := ipPanelChannelIndex(ipStreamsCursor)
+	if idx < 0 || idx >= len(list) {
 		return
 	}
-	entry := list[ipStreamsCursor]
+	entry := list[idx]
 	ipPanelOpen = false
-	playVideoURL(config, entry.URL)
+	ipPanelPlayLink(config, entry.URL)
 }
 
-// ipPanelRemove deletes the highlighted stream.
+// ipPanelRemove deletes the highlighted stream. The action rows above the
+// channels are not removable, so the cursor maps through them first.
 func ipPanelRemove() {
 	list := ipPanelRows()
-	if ipStreamsCursor < 0 || ipStreamsCursor >= len(list) {
+	idx := ipPanelChannelIndex(ipStreamsCursor)
+	if idx < 0 || idx >= len(list) {
 		return
 	}
-	name := list[ipStreamsCursor].Name
-	if !removeIPStreamAt(ipStreamsCursor) {
+	name := list[idx].Name
+	if !removeIPStreamAt(idx) {
 		return
 	}
 	if err := saveIPStreams(); err != nil {
@@ -364,22 +504,33 @@ func channelNameFromURL(url string) string {
 	return s
 }
 
+// ipPanelMove moves the menu cursor by one row and reports whether it moved.
+// The cursor walks every row, actions included, so the D-pad reaches the way
+// to add a channel even when the library is empty.
+func ipPanelMove(delta int) bool {
+	items := ipPanelItems()
+	ipPanelClamp(items)
+	next := ipStreamsCursor + delta
+	if next < 0 || next >= len(items) {
+		return false
+	}
+	ipStreamsCursor = next
+	return true
+}
+
 // ctrlIPPanel is called before every other controller overlay.
 func ctrlIPPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
-	list := ipPanelRows()
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if ipStreamsCursor > 0 {
-			ipStreamsCursor--
+		if ipPanelMove(-1) {
 			PlayNavSound()
 		}
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-		if ipStreamsCursor < len(list)-1 {
-			ipStreamsCursor++
+		if ipPanelMove(1) {
 			PlayNavSound()
 		}
 	case sdl.CONTROLLER_BUTTON_A:
-		ipPanelPlay(config)
+		ipPanelActivate(config)
 	case sdl.CONTROLLER_BUTTON_X:
 		ipPanelSaveCurrentLink(config)
 	case sdl.CONTROLLER_BUTTON_Y:
@@ -387,9 +538,7 @@ func ctrlIPPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 		closeIPStreamPanel()
 	case sdl.CONTROLLER_BUTTON_START:
-		if len(list) > 0 {
-			ipPanelRemove()
-		}
+		ipPanelRemove()
 	}
 	return true
 }
@@ -399,28 +548,25 @@ func handleIPPanelKey(e *sdl.KeyboardEvent, config *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN || !ipPanelOpen {
 		return false
 	}
-	list := ipPanelRows()
 	switch e.Keysym.Sym {
 	case sdl.K_UP:
-		if ipStreamsCursor > 0 {
-			ipStreamsCursor--
+		if ipPanelMove(-1) {
 			PlayNavSound()
 		}
 	case sdl.K_DOWN:
-		if ipStreamsCursor < len(list)-1 {
-			ipStreamsCursor++
+		if ipPanelMove(1) {
 			PlayNavSound()
 		}
 	case sdl.K_RETURN, sdl.K_SPACE:
-		ipPanelPlay(config)
-	case sdl.K_a:
+		ipPanelActivate(config)
+	case sdl.K_a, sdl.K_x:
+		// X on the pad saves the URL box, so the keyboard's X does the same. A
+		// stays as the older alias for the same action.
 		ipPanelSaveCurrentLink(config)
 	case sdl.K_y:
 		ipPanelImport()
 	case sdl.K_DELETE, sdl.K_BACKSPACE:
-		if len(list) > 0 {
-			ipPanelRemove()
-		}
+		ipPanelRemove()
 	case sdl.K_ESCAPE, sdl.K_b:
 		closeIPStreamPanel()
 	}
@@ -444,7 +590,7 @@ func handleIPPanelMouse(mx, my int32, config *Config) bool {
 	for i, r := range ipPanelRowRects {
 		if r.W > 0 && pointInRect(mx, my, r) {
 			ipStreamsCursor = ipPanelRowFirst + i
-			ipPanelPlay(config)
+			ipPanelActivate(config)
 			return true
 		}
 	}
@@ -454,18 +600,25 @@ func handleIPPanelMouse(mx, my int32, config *Config) bool {
 	return true
 }
 
-// renderIPPanel draws the library panel.
+// ipPanelItemText is a row's title and the dim detail shown on its right.
+func ipPanelItemText(item ipPanelItem) (string, string) {
+	switch item.Kind {
+	case ipItemAdd:
+		return "Add a stream link", "type or paste a URL"
+	case ipItemBrowse:
+		return "Browse channels", "import public IPTV channels"
+	}
+	return item.Stream.Name, item.Stream.URL
+}
+
+// renderIPPanel draws the stream menu.
 func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	if !ipPanelOpen || renderer == nil {
 		return
 	}
-	list := ipPanelRows()
-	if ipStreamsCursor >= len(list) {
-		ipStreamsCursor = len(list) - 1
-	}
-	if ipStreamsCursor < 0 {
-		ipStreamsCursor = 0
-	}
+	items := ipPanelItems()
+	ipPanelClamp(items)
+	channels := len(items) - ipPanelActionRows
 
 	font, _ := getCachedFont(config, "small")
 	medium, _ := getCachedFont(config, "medium")
@@ -476,14 +629,14 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	const padX = int32(24)
+	const padX = OverlayPadX
 	lineH := smallH + 10
 	visible := 10
 	if screenHeight < 700 {
 		visible = 8
 	}
-	if len(list) < visible {
-		visible = len(list)
+	if len(items) < visible {
+		visible = len(items)
 	}
 	if visible < 1 {
 		visible = 1
@@ -491,11 +644,11 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar that fills it measure the same height.
-	sub := fmt.Sprintf("%d saved streams", len(list))
+	sub := fmt.Sprintf("%d saved channels", channels)
 	if ipPanelStatus != "" {
 		sub = ipPanelStatus
 	}
-	header := UIPanelHeader("IPStream Library", sub, "media")
+	header := UIPanelHeader("Stream", sub, "media")
 	headerH := UIPanelHeaderBand(config, header, 8)
 	footerH := 20 + smallH
 	panelW := int32(760)
@@ -510,27 +663,17 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	ipPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	rowW := panelW - 2*padX
 	focusColor := installHighlight()
 	ipPanelRowRects = make([]sdl.Rect, 0, visible)
 	rowY := panelY + headerH
-	if len(list) == 0 {
-		renderText(renderer, config, font, "No streams yet — type a link, then press X to save it.",
-			ColorTextTertiary(), panelX+padX, rowY)
-	}
 	first := 0
 	if ipStreamsCursor >= visible {
 		first = ipStreamsCursor - visible + 1
@@ -538,10 +681,10 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 	ipPanelRowFirst = first
 	for i := 0; i < visible; i++ {
 		idx := first + i
-		if idx >= len(list) {
+		if idx >= len(items) {
 			break
 		}
-		entry := list[idx]
+		item := items[idx]
 		rect := sdl.Rect{X: panelX + padX, Y: rowY, W: rowW, H: lineH - 2}
 		ipPanelRowRects = append(ipPanelRowRects, rect)
 		focused := idx == ipStreamsCursor
@@ -550,22 +693,35 @@ func renderIPPanel(renderer *sdl.Renderer, config *Config) {
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, 1, focusColor)
 		}
 		textColor := ColorTextSecondary()
-		if focused {
+		if focused || item.Kind != ipItemChannel {
+			// The two ways to get content read as actions, not as dim inventory.
 			textColor = ColorTextPrimary()
 		}
-		name := ellipsize(font, entry.Name, rowW-24)
+		name, detail := ipPanelItemText(item)
+		name = ellipsize(font, name, rowW-24)
 		renderText(renderer, config, font, name, textColor, rect.X+12, rowY+3)
-		url := ellipsize(font, entry.URL, rowW/2)
-		uw, _, _ := font.SizeUTF8(url)
-		renderText(renderer, config, font, url, ColorTextTertiary(), rect.X+rect.W-int32(uw)-12, rowY+3)
+		detail = ellipsize(font, detail, rowW/2)
+		uw, _, _ := font.SizeUTF8(detail)
+		renderText(renderer, config, font, detail, ColorTextTertiary(), rect.X+rect.W-int32(uw)-12, rowY+3)
 		rowY += lineH
 	}
+	if channels == 0 && rowY+lineH <= panelY+panelH-footerH {
+		renderText(renderer, config, font, "No saved channels yet — the two rows above add some.",
+			ColorTextTertiary(), panelX+padX, rowY+3)
+	}
 
-	footer := hintLine(FooterHint{"A", "Play"}, FooterHint{"X", "Save Link"},
-		FooterHint{"Y", "Import from GitHub"}, FooterHint{"Start", "Remove"}, FooterHint{"B", "Close"})
+	// Every hint names the pad button and the key that does the same thing, so a
+	// handheld and a Windows keyboard are told the same story. Narrow panels get
+	// the short spelling of the same list.
+	footer := hintLine(FooterHint{"A / Enter", "Open"}, FooterHint{"X", "Save Link"},
+		FooterHint{"Y", "Import"}, FooterHint{"Start / Del", "Remove"}, FooterHint{"B / Esc", "Close"})
 	if fw, _, _ := font.SizeUTF8(footer); int32(fw) > rowW {
-		footer = hintLine(FooterHint{"A", "Play"}, FooterHint{"X", "Save"},
-			FooterHint{"Y", "Import"}, FooterHint{"Start", "Remove"}, FooterHint{"B", "Close"})
+		footer = hintLine(FooterHint{"A / Enter", "Open"}, FooterHint{"X", "Save"},
+			FooterHint{"Y", "Import"}, FooterHint{"Del", "Remove"}, FooterHint{"B / Esc", "Close"})
+	}
+	if fw, _, _ := font.SizeUTF8(footer); int32(fw) > rowW {
+		footer = hintLine(FooterHint{"A / Enter", "Open"}, FooterHint{"X", "Save"},
+			FooterHint{"Del", "Remove"}, FooterHint{"B / Esc", "Close"})
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),
@@ -585,8 +741,11 @@ func ensureIPStreamEntries(config *Config) {
 			if sceneHasTriggerElement(*scene, "ip_open") {
 				continue
 			}
+			// "Channels" name the menu, not the library folder: the screen's own
+			// Stream button plays whatever is in the URL box, and this one lists
+			// (and adds) the saved ones.
 			scene.Elements = append(scene.Elements, Element{
-				Type: "button", Text: "Library", Color: "$labelColor", BgColor: "$buttonColor",
+				Type: "button", Text: "Channels", Color: "$labelColor", BgColor: "$buttonColor",
 				X: 912, Y: 72, Width: "160", Height: "48", Trigger: "ip_open",
 			})
 		case "Tube":
@@ -616,8 +775,11 @@ func ensureIPStreamEntries(config *Config) {
 			if x+116 > canvasW-16 {
 				x = canvasW - 16 - 116
 			}
+			// The label is the screen's own display name ("Streams"), not the
+			// internal "IPStream": the button opens the Streams menu, and the
+			// header it opens says the same word.
 			scene.Elements = append(scene.Elements, Element{
-				Type: "button", Text: "IPStream", Color: "$labelColor", BgColor: "$buttonColor",
+				Type: "button", Text: "Streams", Color: "$labelColor", BgColor: "$buttonColor",
 				X: x, Y: 72, Width: "116", Height: "48", Trigger: "ip_open",
 			})
 		}

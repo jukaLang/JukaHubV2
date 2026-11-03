@@ -1,0 +1,8 @@
+{
+  "name": "dice",
+  "version": "1.0.0",
+  "description": "Rolls a die, flips a coin or picks a random entry from a list.",
+  "author": "JukaHub",
+  "entry": "dice.sh",
+  "enabled": true
+}

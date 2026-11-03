@@ -27,7 +27,6 @@ package main
 
 import (
 	"log"
-	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -95,6 +94,36 @@ func noteGameChildExited(cmd *exec.Cmd) {
 	screenChildren.mu.Unlock()
 }
 
+// The settle delay covers the other half of the blink: the instant the child is
+// reaped, the firmware may still be replacing the game's last frame with the
+// panel's own. Drawing immediately painted the JukaHub UI over that and then
+// over the restored frame, which read as a flash on the way back.
+const screenSettleDelay = 300 * time.Millisecond
+
+// screenGroupPoll is how often the reaper re-checks a launcher's process group,
+// and screenGroupWatch bounds that wait so a stray daemon cannot keep the UI
+// parked forever.
+const (
+	screenGroupPoll  = 200 * time.Millisecond
+	screenGroupWatch = 8 * time.Hour
+)
+
+// screenChildReaped finishes a screen hand-off once cmd's Wait returned. A
+// launcher script that backgrounds the emulator exits early, so the group is
+// polled until it is empty; only then is the screen handed back, after a short
+// settle. Call this instead of noteGameChildExited from the reaper goroutine.
+func screenChildReaped(cmd *exec.Cmd) {
+	if screenChildGroupAlive(cmd) {
+		log.Printf("[handover] launcher %d exited but its process group is still running; keeping the screen parked", cmd.Process.Pid)
+		deadline := time.Now().Add(screenGroupWatch)
+		for screenChildGroupAlive(cmd) && time.Now().Before(deadline) {
+			time.Sleep(screenGroupPoll)
+		}
+	}
+	time.Sleep(screenSettleDelay)
+	noteGameChildExited(cmd)
+}
+
 // gameScreenSuspended reports whether a screen-taking child is live and the
 // main loop must therefore stop presenting frames.
 func gameScreenSuspended() bool {
@@ -119,9 +148,10 @@ func liveScreenChildren() []*exec.Cmd {
 // is safe on the exit deadline where the whole point is to be gone.
 func killScreenChildren() {
 	for _, cmd := range liveScreenChildren() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
+		// The group, not just the leader: a launcher that backgrounded the
+		// emulator must not leave it holding the framebuffer after JukaHub is
+		// gone, which shows as a frozen picture the firmware cannot clear.
+		_ = screenChildKill(cmd)
 	}
 }
 
@@ -136,11 +166,10 @@ func stopScreenChildren(grace time.Duration) int {
 	}
 	log.Printf("[exit] stopping %d running child process(es) before handing the screen back", len(cmds))
 	for _, cmd := range cmds {
-		if cmd.Process != nil {
-			// os.Interrupt is the portable equivalent: not every target has a
-			// SIGTERM, and emulators handle INT the same way (save and quit).
-			_ = cmd.Process.Signal(os.Interrupt)
-		}
+		// Interrupt is what emulators treat as save-and-quit. Delivered to the
+		// group so a wrapper's backgrounded emulator receives it too; not every
+		// target has SIGTERM, and none of the emulators handle it differently.
+		_ = screenChildSignal(cmd, screenSignalInterrupt)
 	}
 	deadline := time.Now().Add(grace)
 	for time.Now().Before(deadline) {
@@ -151,8 +180,8 @@ func stopScreenChildren(grace time.Duration) int {
 	}
 	for _, cmd := range liveScreenChildren() {
 		if cmd.Process != nil {
-			log.Printf("[exit] child %d ignored the quit request; killing it", cmd.Process.Pid)
-			_ = cmd.Process.Kill()
+			log.Printf("[exit] child %d ignored the quit request; killing its group", cmd.Process.Pid)
+			_ = screenChildKill(cmd)
 		}
 	}
 	return len(cmds)

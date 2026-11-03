@@ -31,6 +31,7 @@ type paletteSnapshot struct {
 	progress, progressIntense                      sdl.Color
 	chip, chipHover, chipFocus, divider            sdl.Color
 	surfaceHighlight, topSheen                     sdl.Color
+	statusInks                                     [4]sdl.Color // success, warning, danger, info
 }
 
 // capturePalette records every token ApplyThemeColors writes.
@@ -76,6 +77,7 @@ func capturePalette() paletteSnapshot {
 		divider:          ColorDivider,
 		surfaceHighlight: surfaceHighlightColor,
 		topSheen:         topSheenColor,
+		statusInks:       [4]sdl.Color{successInk, warningInk, dangerInk, infoInk},
 	}
 }
 
@@ -124,4 +126,5 @@ func restorePalette(s paletteSnapshot) {
 	// A theme change drops the cached gradient, so a restore has to as well.
 	gradientTexture = nil
 	gradientSceneKey = ""
+	successInk, warningInk, dangerInk, infoInk = s.statusInks[0], s.statusInks[1], s.statusInks[2], s.statusInks[3]
 }

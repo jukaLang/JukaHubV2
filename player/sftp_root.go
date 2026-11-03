@@ -315,7 +315,11 @@ func (h *sftpRootHandlers) Filelist(req *sftp.Request) (sftp.ListerAt, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.IsDir() {
+	// A stat request is answered from this same lister, and pkg/sftp reads only
+	// its first element. Returning a folder's contents there made `stat /dir`
+	// describe one of its children — and an empty folder look like it did not
+	// exist, which is enough to break a client's `mkdir -p`.
+	if req.Method != "List" || !info.IsDir() {
 		return sftpLister{info}, nil
 	}
 	dir, err := os.Open(local)

@@ -139,7 +139,10 @@ func parseCoreIndex(text string) []coreIndexEntry {
 			continue
 		}
 		date, crc, file := fields[0], strings.ToLower(fields[1]), fields[2]
-		if len(date) != len("2006-01-02") || len(crc) != 8 || !isHex(crc) {
+		// The date is not decoration: a fetched core is filed under
+		// <pool>/<core>/<date>/, so it has to be a real calendar date. The old
+		// length check accepted any ten characters, and "../../../.." is ten.
+		if !validCoreIndexDate(date) || len(crc) != 8 || !isHex(crc) {
 			continue
 		}
 		if !strings.HasSuffix(file, "_libretro.so.zip") {
@@ -157,6 +160,16 @@ func parseCoreIndex(text string) []coreIndexEntry {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Core < out[j].Core })
 	return out
+}
+
+// validCoreIndexDate reports whether a buildbot index date is a real
+// YYYY-MM-DD day. Only a value that parses is used as a folder name.
+func validCoreIndexDate(date string) bool {
+	if len(date) != len("2006-01-02") {
+		return false
+	}
+	parsed, err := time.Parse("2006-01-02", date)
+	return err == nil && parsed.Format("2006-01-02") == date
 }
 
 func isHex(s string) bool {

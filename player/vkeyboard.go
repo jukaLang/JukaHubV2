@@ -58,7 +58,26 @@ const (
 	vkTargetDownloads  // Downloads panel: a link to save for offline use
 	vkTargetGameArgs   // game library: extra launch arguments for one game
 	vkTargetToolArgs   // toolbox: arguments for the highlighted tool
+	vkTargetPodcast    // podcasts panel: an RSS feed URL to subscribe to
+	vkTargetFiles      // Files screen: address, password, new folder, rename
+	vkTargetDNS        // Tools: host name or IP for the DNS lookup
+	vkTargetFileLine   // text file editor: the line under the cursor
+	vkTargetToolsURL   // Tools: URL or host for the HTTP check
+	vkTargetNetwork    // Tools: host:port or domain for the port/whois rows
 )
+
+// podcastFeedInput holds the feed URL while it is being typed. It is only read
+// on submit, so a half-typed URL never reaches the subscription list.
+var podcastFeedInput string
+
+// fileEditorLineBuffer holds one line of a text file while it is being edited.
+// Like the other buffers nothing is committed until submit.
+var fileEditorLineBuffer string
+
+// dnsQueryBuffer holds the host being typed for the Tools DNS lookup. Like the
+// podcast feed it is only read on submit, so a half-typed name is never
+// resolved.
+var dnsQueryBuffer string
 
 // vkNameBuffer holds the chat display name while it is being edited; it is
 // committed to the user config when the keyboard submits.
@@ -273,9 +292,12 @@ func vkKeyValue(key string) (string, bool) {
 	return key, true
 }
 
-// vkIsActionKey reports whether activating the key submits and closes.
-func vkIsActionKey(key string) bool {
-	return key == "ENTER" || key == "SEND" || key == "ASK_AI"
+// vkHandleKeyClick activates a key and reports whether the keyboard closed.
+// Submitting can open a follow-up prompt, such as the PS Remote pairing PIN.
+func vkHandleKeyClick(row, col int, config *Config) bool {
+	keyboardPosY, keyboardPosX = row, col
+	vkActivateFocused(config)
+	return !virtualKeyboardActive
 }
 
 // --- Geometry ---------------------------------------------------------------
@@ -310,6 +332,18 @@ func vkEnsureLayout() {
 		target = 10
 	case vkTargetToolArgs:
 		target = 11
+	case vkTargetPodcast:
+		target = 12
+	case vkTargetFiles:
+		target = 13
+	case vkTargetDNS:
+		target = 14
+	case vkTargetFileLine:
+		target = 15
+	case vkTargetToolsURL:
+		target = 16
+	case vkTargetNetwork:
+		target = 17
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -511,8 +545,7 @@ func vkHandleTouchEvent(e *sdl.TouchFingerEvent, config *Config) {
 		return
 	}
 	if row, col, ok := vkHitTest(mx, my); ok {
-		keyboardPosY, keyboardPosX = row, col
-		vkActivateFocused(config)
+		vkHandleKeyClick(row, col, config)
 		return
 	}
 	if vkOutsidePanel(mx, my) {
@@ -557,6 +590,18 @@ func vkCurrentText() string {
 		return gameArgsBuffer
 	case vkTargetToolArgs:
 		return toolArgsBuffer
+	case vkTargetPodcast:
+		return podcastFeedInput
+	case vkTargetFiles:
+		return filesInputBuffer
+	case vkTargetDNS:
+		return dnsQueryBuffer
+	case vkTargetFileLine:
+		return fileEditorLineBuffer
+	case vkTargetToolsURL:
+		return toolsURLBuffer
+	case vkTargetNetwork:
+		return netPromptBuffer
 	}
 	return inputTextBuffer
 }
@@ -608,6 +653,28 @@ func vkSetText(text string, config *Config) {
 		// Same rule for the toolbox: the saved argument line changes on submit,
 		// so a half-typed `--delete` can never reach the tool.
 		toolArgsBuffer = text
+	case vkTargetPodcast:
+		// The feed is subscribed on submit only, so a mistyped host never
+		// becomes a refresh that runs on every launch.
+		podcastFeedInput = text
+	case vkTargetDNS:
+		// Resolved only on submit: a half-typed name must never reach the
+		// resolver.
+		dnsQueryBuffer = text
+	case vkTargetFileLine:
+		// The file's buffer changes only when the line is submitted, so a
+		// half-typed line never becomes part of the document.
+		fileEditorLineBuffer = text
+	case vkTargetToolsURL:
+		// Checked only on submit: a half-typed host must never be requested.
+		toolsURLBuffer = text
+	case vkTargetNetwork:
+		// Same rule: nothing is dialled or looked up until submit.
+		netPromptBuffer = text
+	case vkTargetFiles:
+		// One buffer for all four Files fields; filesKeyboard says which one is
+		// being edited, and nothing reaches the disk or the network until submit.
+		filesInputBuffer = text
 	default:
 		inputTextBuffer = text
 		updateInputVariable(config)
@@ -717,6 +784,32 @@ func vkTitle() string {
 		return "WI-FI PASSWORD"
 	case vkTargetMemory:
 		return "VALUE"
+	case vkTargetPodcast:
+		return "PODCAST FEED"
+	case vkTargetDNS:
+		return "DNS LOOKUP"
+	case vkTargetFileLine:
+		if fileEditor.pending == fileEditorInsertLine {
+			return "INSERT LINE"
+		}
+		return fmt.Sprintf("LINE %d", fileEditor.cursor+1)
+	case vkTargetToolsURL:
+		return "HTTP CHECK"
+	case vkTargetNetwork:
+		if netPrompt == netPromptWhois {
+			return "WHOIS LOOKUP"
+		}
+		return "PORT CHECK"
+	case vkTargetFiles:
+		switch filesKeyboard {
+		case filesEditPassword:
+			return "DEVICE PASSWORD"
+		case filesEditNewFolder:
+			return "NEW FOLDER"
+		case filesEditRename:
+			return "RENAME"
+		}
+		return "DEVICE ADDRESS"
 	}
 	if textBrowserSearchEditing {
 		return "SEARCH WEB"
@@ -786,6 +879,37 @@ func vkPlaceholder() string {
 		return "At least 8 characters"
 	case vkTargetMemory:
 		return "Decimal, or 0x for hex"
+	case vkTargetPodcast:
+		return "https://example.com/feed.xml"
+	case vkTargetDNS:
+		return "github.com or 8.8.8.8"
+	case vkTargetFileLine:
+		if fileEditor.pending == fileEditorInsertLine {
+			return "New line"
+		}
+		return "The line's text"
+	case vkTargetToolsURL:
+		return "example.com or https://…"
+	case vkTargetNetwork:
+		if netPrompt == netPromptWhois {
+			return "example.com"
+		}
+		return "192.168.1.7:22"
+	case vkTargetFiles:
+		switch filesKeyboard {
+		case filesEditPassword:
+			// The password is per run and random, so where to read it is the
+			// only useful hint: the other console shows it under Tools.
+			if feRemotePanel.tgt.Host != "" {
+				return "Password for " + feRemotePanel.tgt.User + "@" + feRemotePanel.tgt.Host + " — see Tools on it"
+			}
+			return "The other console's SFTP password (Tools)"
+		case filesEditNewFolder:
+			return "Folder name"
+		case filesEditRename:
+			return "New name"
+		}
+		return "user@192.168.1.7:2222/roms"
 	}
 	if textBrowserSearchEditing {
 		return browserSearchPrompt
@@ -803,7 +927,7 @@ func vkHints() string {
 	switch vkTarget {
 	case vkTargetName, vkTargetRA, vkTargetPSRemote:
 		if vkTarget == vkTargetPSRemote && psPanelEditField == psEditPIN {
-			return hintLine(FooterHint{"A", "Type"}, FooterHint{"A", "Ready to Pair"}, FooterHint{"B / Esc", "Close"})
+			return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Pair"}, FooterHint{"B / Esc", "Close"})
 		}
 		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 	case vkTargetChat:
@@ -826,6 +950,12 @@ func vkHints() string {
 		return hintLine(FooterHint{Label: "Quotes Group Words"}, FooterHint{"A / Enter", "Save"}, FooterHint{"B / Esc", "Close"})
 	case vkTargetToolArgs:
 		return hintLine(FooterHint{Label: "Quotes Group Words"}, FooterHint{"A / Enter", "Run"}, FooterHint{"B / Esc", "Cancel"})
+	case vkTargetFiles:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"A / Enter", "Save"}, FooterHint{"B / Esc", "Cancel"})
+	case vkTargetDNS:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y / Enter", "Look up"}, FooterHint{"B / Esc", "Cancel"})
+	case vkTargetFileLine:
+		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y / Enter", "Save Line"}, FooterHint{"B / Esc", "Cancel"})
 	}
 	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
@@ -1007,6 +1137,24 @@ func vkOpenGameSearch() {
 	vkEnsureLayout()
 }
 
+// vkOpenFilesInput opens the keyboard for one of the Files screen's fields.
+// The kind decides the title and what submitting does; the seed fills the line,
+// so a rename starts from the current name instead of an empty field.
+func vkOpenFilesInput(kind filesEditKind, seed string) {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetFiles
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	filesKeyboard = kind
+	filesInputBuffer = seed
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
 // toolArgsBuffer and toolArgsToolID carry the toolbox argument editor: the
 // keyboard writes into the buffer and the submit handler applies it to the tool
 // it was opened for. Both are touched on the UI thread only.
@@ -1030,6 +1178,86 @@ func vkOpenToolArgs(id string) {
 	keyboardPosY, keyboardPosX = 0, 0
 	toolArgsToolID = id
 	toolArgsBuffer = toolboxArgsFor(id)
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenDNSQuery opens the keyboard for the Tools DNS lookup. The remembered
+// host (or the text a failed submit kept) seeds the field, so looking up the
+// same name again or fixing a typo is an edit instead of a retype.
+func vkOpenDNSQuery(seed string) {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetDNS
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	if seed == "" {
+		seed = powerDNSRowHost()
+	}
+	dnsQueryBuffer = seed
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenNetPrompt opens the keyboard for the port check or the domain lookup.
+// The remembered value seeds the field, so checking again is an edit.
+func vkOpenNetPrompt(kind netPromptKind, seed string) {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetNetwork
+	netPrompt = kind
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	if seed == "" {
+		if kind == netPromptWhois {
+			seed = netLastDomain
+		} else {
+			seed = netLastPort
+		}
+	}
+	netPromptBuffer = seed
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenToolsURL opens the keyboard for the Tools HTTP check. The remembered
+// URL (or the text a rejected submit kept) seeds the field.
+func vkOpenToolsURL(seed string) {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetToolsURL
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	if seed == "" {
+		seed = toolsLastURL
+	}
+	toolsURLBuffer = seed
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenFileLine opens the keyboard for one line of the text editor. The line
+// is seeded so an edit is a correction instead of a retype; an insert starts
+// empty.
+func vkOpenFileLine(seed string) {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetFileLine
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	fileEditorLineBuffer = seed
 	virtualKeyboardActive = true
 	vkAnimStart = sdl.GetTicks64()
 	sdl.StartTextInput()
@@ -1112,7 +1340,17 @@ func vkOpenSceneInput(config *Config, sceneIdx, elemIdx int) {
 // vkCloseKeyboard dismisses the keyboard. Only scene inputs reset the modal
 // element indices; chat and unit input keep their state.
 func vkCloseKeyboard() {
+	if vkTarget == vkTargetFiles {
+		// A dismissed password field must not keep the secret around, and no
+		// Files field outlives the dialog that asked for it.
+		filesInputBuffer = ""
+	}
 	virtualKeyboardActive = false
+	// A dismissed prompt must not leave "play this next" armed for the next
+	// keyboard session, which may be an ordinary search. The stream menu's
+	// "add a link" prompt is the same one-shot, so it is disarmed here too.
+	mediaPlayLinkPending = false
+	ipPromptPending = false
 	vkTextSelected = false
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
@@ -1127,6 +1365,18 @@ func vkCloseKeyboard() {
 	if vkTarget == vkTargetScene {
 		activeSceneIndex = -1
 		activeElementIndex = -1
+	}
+	if vkTarget == vkTargetDNS {
+		dnsQueryBuffer = ""
+	}
+	if vkTarget == vkTargetFileLine {
+		fileEditorLineBuffer = ""
+	}
+	if vkTarget == vkTargetToolsURL {
+		toolsURLBuffer = ""
+	}
+	if vkTarget == vkTargetNetwork {
+		netPromptBuffer = ""
 	}
 	if vkTarget == vkTargetRA {
 		// The API-key field starts in uppercase; do not leak that into the
@@ -1369,6 +1619,12 @@ func vkSubmit(config *Config, askAI bool) {
 		// row and the game's record; the next launch picks it up.
 		vkCloseKeyboard()
 		applyGameArgs()
+	case vkTargetPodcast:
+		// Subscribe before closing: closing clears the buffer, and the panel is
+		// already open behind the keyboard so the new show can be refreshed
+		// into place.
+		podcastSubmitFeed(text)
+		vkCloseKeyboard()
 	case vkTargetToolArgs:
 		// Save first: the toolbox page reads the remembered line, and the run
 		// itself happens on the page so its output lands in the viewer.
@@ -1381,6 +1637,36 @@ func vkSubmit(config *Config, askAI bool) {
 		// value so the panel shows "not set" instead of holding a stale number.
 		vkCloseKeyboard()
 		memApplyValueInput(text)
+	case vkTargetDNS:
+		// Read before closing: closing clears the buffer, and the lookup is
+		// started from the text the user actually submitted.
+		value := vkCurrentText()
+		vkCloseKeyboard()
+		powerDNSLookupSubmit(value)
+	case vkTargetFileLine:
+		// Read before closing: closing clears the buffer, and the line is
+		// written into the document from what was submitted.
+		value := vkCurrentText()
+		vkCloseKeyboard()
+		fileEditorApplyLine(value)
+	case vkTargetToolsURL:
+		// Read before closing, like the DNS field: the check runs from what was
+		// submitted, and a rejected URL reopens with that text.
+		value := vkCurrentText()
+		vkCloseKeyboard()
+		toolsHTTPCheckSubmit(value)
+	case vkTargetNetwork:
+		// One target for two rows: netPromptSubmit knows which row opened it and
+		// reopens the field if the text is refused.
+		value := vkCurrentText()
+		vkCloseKeyboard()
+		netPromptSubmit(value)
+	case vkTargetFiles:
+		// Read before closing: a password field is cleared on close, so submitting
+		// the trimmed buffer afterwards would send an empty secret.
+		value := vkCurrentText()
+		vkCloseKeyboard()
+		filesSubmitInput(value)
 	case vkTargetChat:
 		vkSetText("", config)
 		// Close first: sending writes the chat log to the SD card (and may
@@ -1396,6 +1682,24 @@ func vkSubmit(config *Config, askAI bool) {
 			}
 		}
 	default:
+		if ipPromptPending {
+			// The stream menu asked for a channel link: save it as a channel and
+			// play it, and never treat it as a search or a Play Link.
+			ipPromptPending = false
+			vkSetText(text, config)
+			vkCloseKeyboard()
+			submitIPStreamLink(config, text)
+			return
+		}
+		if mediaPlayLinkPending {
+			// Play Link asked for a link: play what was typed, and never run
+			// the scene's search on it.
+			mediaPlayLinkPending = false
+			vkSetText(text, config)
+			vkCloseKeyboard()
+			submitMediaPlayLink(config, text)
+			return
+		}
 		if textBrowserAddressEditing {
 			textBrowserAddressSubmitted = true
 		}

@@ -43,22 +43,20 @@ const builtinActionPrefix = "action:"
 // list so the launcher is complete even on a machine with no external apps.
 // Only entries that really open something belong here: the grid is presented as
 // launchable apps, so a row that cannot start is noise.
+//
+// The scene-backed applets are limited to the ones with no equal entry in the
+// Start menu's Scenes group (JukaLand and the Browser also have home cards).
+// Live TV, Podcasts, Recordings, Tickers, Weather, Unit Converter, Canvas
+// Sandbox, IP Stream and the Audio Player used to be listed here as well and
+// were pure duplicates of Start → Scenes, which already lists every scene the
+// config ships.
 var builtinApplets = []struct {
 	Name   string
 	Scene  string
 	Action string
 }{
 	{"JukaLand", "JukaLand", ""},
-	{"Live TV", "LiveTV", ""},
-	{"Podcasts", "Podcasts", ""},
-	{"Recordings", "Recordings", ""},
-	{"Tickers", "Tickers", ""},
-	{"Weather", "Weather", ""},
-	{"Unit Converter", "UnitConverter", ""},
-	{"Canvas Sandbox", "CanvasSandbox", ""},
 	{"Browser", "Browser", ""},
-	{"IP Stream", "IPStream", ""},
-	{"Audio Player", "MusicPlayer", ""},
 	{"PS Remote Play", "", "chiaki"},
 }
 
@@ -571,6 +569,10 @@ func launchInstalledApp(path string) bool {
 		cmd = exec.Command(clean)
 	}
 	cmd.Dir = filepath.Dir(clean)
+	// Same hand-off rule as the emulator launchers: the child leads its own
+	// process group, so a wrapper script that backgrounds the game keeps the
+	// screen parked until the game itself exits.
+	screenChildGroupConfigure(cmd)
 	if err := cmd.Start(); err != nil {
 		log.Printf("[apps] launch failed for %s: %v", clean, err)
 		showToast("Could not launch "+filepath.Base(clean), ToastError())
@@ -579,7 +581,7 @@ func launchInstalledApp(path string) bool {
 	noteGameChildStarted(cmd)
 	go func() {
 		_ = cmd.Wait() // reap the child, keep JukaHub responsive
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 	}()
 	return true
 }

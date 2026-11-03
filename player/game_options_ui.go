@@ -276,7 +276,7 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const pad = int32(22)
+	const pad = OverlayPadX
 	rowH := int32(58)
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar drawn into it measure the same height.
@@ -301,17 +301,12 @@ func renderGameOptionsPanel(renderer *sdl.Renderer, config *Config) {
 	gameOptsUI.panel = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
 	// A second dim layer separates the sheet from the list it sits on.
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 150)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 16, Y: panelY + 1, W: panelW - 32, H: 2})
+	card := sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + pad
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*pad
+	header = overlayHeaderOnCard(header, card)
 	UIPageHeaderDraw(renderer, config, header)
 
 	bodyY := panelY + headerH

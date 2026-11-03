@@ -288,6 +288,146 @@ func TestRestoreRefusesAmbiguousFolderName(t *testing.T) {
 	}
 }
 
+// rewriteSaveManifest edits a snapshot's manifest in place, the way a hand-edit
+// or an interrupted write would leave it.
+func rewriteSaveManifest(t *testing.T, snap saveSnapshot, mutate func(*saveSnapshotManifest)) {
+	t.Helper()
+	manifest := snap.Manifest
+	mutate(&manifest)
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal manifest: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(snap.Dir, "manifest.json"), data, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+}
+
+// TestRestoreRefusesDamagedSnapshot is the promise behind the preflight: a
+// snapshot that lost a file, kept a truncated copy or had a byte flipped is
+// refused whole, so the live saves are exactly as they were before the press.
+func TestRestoreRefusesDamagedSnapshot(t *testing.T) {
+	cases := []struct {
+		name   string
+		damage func(t *testing.T, snap saveSnapshot, stored string)
+		want   string
+	}{
+		{
+			name: "truncated copy",
+			damage: func(t *testing.T, _ saveSnapshot, stored string) {
+				writeSaveTestFile(t, stored, "orig")
+			},
+			want: "was recorded as",
+		},
+		{
+			name: "flipped bytes",
+			damage: func(t *testing.T, _ saveSnapshot, stored string) {
+				// Same length, different content: only the hash can tell.
+				writeSaveTestFile(t, stored, "corrupt save!")
+			},
+			want: "checksum mismatch",
+		},
+		{
+			name: "missing file",
+			damage: func(t *testing.T, _ saveSnapshot, stored string) {
+				if err := os.Remove(stored); err != nil {
+					t.Fatalf("remove %s: %v", stored, err)
+				}
+			},
+			want: "is missing from snapshot",
+		},
+		{
+			name: "no checksum recorded",
+			damage: func(t *testing.T, snap saveSnapshot, _ string) {
+				rewriteSaveManifest(t, snap, func(m *saveSnapshotManifest) {
+					m.Roots[0].Files[0].SHA256 = ""
+				})
+			},
+			want: "has no checksum",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setSaveManagerTestDirs(t)
+			root := t.TempDir()
+			writeSaveTestFile(t, filepath.Join(root, "Mario.srm"), "original save")
+			roots := []saveRoot{{Name: "RetroArch saves", Path: root}}
+			snap, err := createSaveSnapshot(roots, "test")
+			if err != nil {
+				t.Fatalf("createSaveSnapshot: %v", err)
+			}
+			stored := filepath.Join(snap.Dir, "files", "retroarch-saves", "Mario.srm")
+			tc.damage(t, snap, stored)
+
+			// The live save is now the newer state a restore would overwrite.
+			writeSaveTestFile(t, filepath.Join(root, "Mario.srm"), "corrupted")
+			if _, err := restoreSaveSnapshot(snap, roots); err == nil {
+				t.Fatalf("restore of a damaged snapshot must fail")
+			} else if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not explain the damage (%q)", err, tc.want)
+			} else if !strings.Contains(err.Error(), "nothing was changed") {
+				t.Fatalf("error %q must say the live saves are untouched", err)
+			}
+			if got := readSaveTestFile(t, filepath.Join(root, "Mario.srm")); got != "corrupted" {
+				t.Fatalf("damaged restore changed the live save to %q", got)
+			}
+			// A refused restore must not have spent a safety snapshot either.
+			if snaps := listSaveSnapshots(); len(snaps) != 1 {
+				t.Fatalf("want only the original snapshot, got %d", len(snaps))
+			}
+		})
+	}
+}
+
+func TestRestoreRefusesEntryOutsideRoot(t *testing.T) {
+	setSaveManagerTestDirs(t)
+	root := t.TempDir()
+	writeSaveTestFile(t, filepath.Join(root, "Mario.srm"), "original save")
+	roots := []saveRoot{{Name: "RetroArch saves", Path: root}}
+	snap, err := createSaveSnapshot(roots, "test")
+	if err != nil {
+		t.Fatalf("createSaveSnapshot: %v", err)
+	}
+	rewriteSaveManifest(t, snap, func(m *saveSnapshotManifest) {
+		m.Roots[0].Files[0].Path = "../escaped.srm"
+	})
+
+	if _, err := restoreSaveSnapshot(snap, roots); err == nil || !strings.Contains(err.Error(), "escapes its folder") {
+		t.Fatalf("want an escape error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "..", "escaped.srm")); !os.IsNotExist(err) {
+		t.Fatalf("restore wrote outside the save folder: %v", err)
+	}
+	if got := readSaveTestFile(t, filepath.Join(root, "Mario.srm")); got != "original save" {
+		t.Fatalf("refused restore changed the live save to %q", got)
+	}
+}
+
+func TestRestoreRefusesLinkedFolderOutsideRoot(t *testing.T) {
+	setSaveManagerTestDirs(t)
+	source := t.TempDir()
+	writeSaveTestFile(t, filepath.Join(source, "linked", "state.srm"), "save")
+	snap, err := createSaveSnapshot([]saveRoot{{Name: "RetroArch saves", Path: source}}, "test")
+	if err != nil {
+		t.Fatalf("createSaveSnapshot: %v", err)
+	}
+
+	// A save folder can point one game's folder at another card. Restoring
+	// through that link would write outside the folder the user picked.
+	outside := t.TempDir()
+	restored := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(restored, "linked")); err != nil {
+		t.Skipf("symlinks unavailable on this host: %v", err)
+	}
+	_, err = restoreSaveSnapshot(snap, []saveRoot{{Name: "RetroArch saves", Path: restored}})
+	if err == nil || !strings.Contains(err.Error(), "link outside") {
+		t.Fatalf("want a link error, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(outside, "state.srm")); !os.IsNotExist(statErr) {
+		t.Fatalf("restore wrote through the link into %s", outside)
+	}
+}
+
 func TestCreateSaveSnapshotEmpty(t *testing.T) {
 	setSaveManagerTestDirs(t)
 	empty := t.TempDir()

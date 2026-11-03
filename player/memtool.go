@@ -752,7 +752,7 @@ func renderMemPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	const padX = int32(24)
+	const padX = OverlayPadX
 	lineH := smallH + 8
 	visible := memPanelVisible()
 
@@ -801,18 +801,12 @@ func renderMemPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	memPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	bodyY := panelY + headerH
@@ -1027,7 +1021,7 @@ func renderMemResultBody(renderer *sdl.Renderer, config *Config, font *ttf.Font,
 		}
 		renderText(renderer, config, font, live, textColor, colValue, rowY+2)
 		if focused && memPanel.confirmAddr == cand.Addr {
-			renderText(renderer, config, font, "press A to confirm", ColorToastWarn, colNote, rowY+2)
+			renderText(renderer, config, font, "press A to confirm", ToastWarnInk(), colNote, rowY+2)
 		}
 		rowY += lineH
 	}

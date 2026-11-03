@@ -162,9 +162,9 @@ func TestEmuGridViewAdaptsToTheCompactCanvas(t *testing.T) {
 	t.Cleanup(func() { screenWidth, screenHeight = prevW, prevH })
 
 	screenWidth, screenHeight = 1280, 720
-	wide := emuGridView()
+	wide := emuGridView(nil)
 	screenWidth, screenHeight = 960, 720
-	compact := emuGridView()
+	compact := emuGridView(nil)
 
 	if compact.cols < 2 || compact.rows < 2 {
 		t.Fatalf("compact grid = %d columns x %d rows, want a real grid", compact.cols, compact.rows)
@@ -391,11 +391,12 @@ func TestEmuPageDrawsTheSharedHeader(t *testing.T) {
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&buf[0]), int(probeW)*4); err != nil {
 		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
-	// The header band is the reserved strip at the top of the page; the title
-	// is drawn in the primary text colour, so it must contain bright pixels.
+	// The header band is the strip the shared header reserves at the top of the
+	// page; the title is drawn in the primary text colour, so it must contain
+	// bright pixels.
 	bright := 0
-	x0, y0 := int(page.X), int(page.Y+16)
-	x1, y1 := int(page.X+page.W), int(page.Y+emuPageHeaderH)
+	x0, y0 := int(page.X), int(page.Y+UIPanelHeaderInset)
+	x1, y1 := int(page.X+page.W), int(page.Y+emuPageHeaderBand(config))
 	for y := y0; y < y1 && y < int(probeH); y++ {
 		for x := x0; x < x1 && x < int(probeW); x++ {
 			i := (y*int(probeW) + x) * 4
@@ -529,7 +530,7 @@ func TestEmuPanelRendersTiles(t *testing.T) {
 	if emuPanelRect.W < probeW*3/4 || emuPanelRect.H < probeH*3/4 {
 		t.Errorf("page %+v does not fill the screen", emuPanelRect)
 	}
-	layout := emuGridView()
+	layout := emuGridView(nil)
 	if layout.cols < 2 {
 		t.Fatalf("tile grid has %d column(s), want a grid", layout.cols)
 	}

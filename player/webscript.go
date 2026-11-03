@@ -103,7 +103,7 @@ func runWebPageScripts(source string, base *url.URL) string {
 		count++
 		code := source[m[4]:m[5]]
 		if src := webScriptSrcRe.FindStringSubmatch(attrs); src != nil {
-			code = fetchWebScript(base, src[1], budget, deadline)
+			code = fetchWebScript(base, htmlAttrValue(src[1]), budget, deadline)
 		}
 		if code == "" || len(code) > budget {
 			continue

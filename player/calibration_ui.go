@@ -288,17 +288,13 @@ func renderStickCalibrationPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	offset := int32((1 - progress) * 24)
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 190)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
 	top := y + offset
-	fillRoundedRect(renderer, x, top, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, x, top, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: x + 18, Y: top + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: x, Y: top, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, x, top, panelW)
 
-	pad := int32(28)
+	pad := OverlayPadX
 	renderText(renderer, config, medium, "PPSSPP stick calibration", ColorTextPrimary(), x+pad, top+18)
 
 	lineY := top + 18 + medH + 16

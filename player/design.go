@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"strconv"
 	"strings"
 
@@ -114,31 +115,39 @@ var (
 	RadiusXXL   = int32(32)
 	RadiusRound = int32(9999) // fully round
 
-	// Surfaces - refined dark "Midnight" theme
-	// Background is nearly solid #090E19; ambient glow shapes are layered at
-	// low alpha by the home renderer so cards stay clearly separated.
-	ColorBackgroundTop    = sdl.Color{R: 9, G: 14, B: 25, A: 255}
-	ColorBackgroundBottom = sdl.Color{R: 9, G: 14, B: 25, A: 255}
-	ColorBackground       = ColorBackgroundBottom // default solid background
-	ColorTopBar           = sdl.Color{R: 17, G: 23, B: 37, A: 255}
-	ColorPanel            = sdl.Color{R: 18, G: 26, B: 42, A: 255} // #121A2A surface
-	ColorPanelRaised      = sdl.Color{R: 27, G: 37, B: 54, A: 255}
-	ColorCard             = sdl.Color{R: 24, G: 34, B: 54, A: 255} // #182236 resting card (slightly lighter)
-	ColorCardFocus        = sdl.Color{R: 36, G: 52, B: 78, A: 255} // #24344E focused card (more contrast)
-	ColorCardHover        = sdl.Color{R: 28, G: 39, B: 60, A: 255} // #1C273C hover state
-	ColorBorder           = sdl.Color{R: 42, G: 57, B: 83, A: 255} // #2A3953 resting border
-	ColorFooter           = sdl.Color{R: 18, G: 26, B: 42, A: 255}
+	// Surfaces - the dark blue ramp.
+	//
+	// Every step is a real step: the panel sits 1.20:1 above the background,
+	// rows 1.34:1 above the panel and a focused row 1.43:1 above a resting row,
+	// which is what makes cards, rows and the focused row tell apart on a
+	// handheld panel (the Brick's screen crushes neighbouring dark blues into
+	// one flat field). The ramp used to move by ~1.1:1 per step, so every card
+	// and every button read as the same dark blue as the page behind it.
+	// Ambient glow shapes are still layered at low alpha so the steps hold.
+	ColorBackgroundTop    = sdl.Color{R: 7, G: 11, B: 18, A: 255} // #070B12
+	ColorBackgroundBottom = sdl.Color{R: 7, G: 11, B: 18, A: 255}
+	ColorBackground       = ColorBackgroundBottom                   // default solid background
+	ColorTopBar           = sdl.Color{R: 22, G: 32, B: 47, A: 255}  // #16202F header band
+	ColorPanel            = sdl.Color{R: 22, G: 32, B: 47, A: 255}  // #16202F surface
+	ColorPanelRaised      = sdl.Color{R: 39, G: 54, B: 76, A: 255}  // #27364C raised row/card
+	ColorCard             = sdl.Color{R: 31, G: 43, B: 62, A: 255}  // #1F2B3E resting card
+	ColorCardFocus        = sdl.Color{R: 56, G: 77, B: 110, A: 255} // #384D6E focused card
+	ColorCardHover        = sdl.Color{R: 46, G: 64, B: 89, A: 255}  // #2E4059 hover state
+	ColorBorder           = sdl.Color{R: 58, G: 75, B: 107, A: 255} // #3A4B6B resting border
+	ColorFooter           = sdl.Color{R: 22, G: 32, B: 47, A: 255}
 
-	// Borders - subtle and refined
-	ColorBorderSubtle  = sdl.Color{R: 255, G: 255, B: 255, A: 10}
-	ColorBorderDefault = sdl.Color{R: 255, G: 255, B: 255, A: 18}
+	// Borders - subtle and refined. The white alphas rose with the surfaces
+	// above: at the old values a hairline over #16202F disappeared, so resting
+	// buttons (bordered with ColorBorderDefault) had no edge at all.
+	ColorBorderSubtle  = sdl.Color{R: 255, G: 255, B: 255, A: 22}
+	ColorBorderDefault = sdl.Color{R: 255, G: 255, B: 255, A: 40}
 	ColorBorderFocus   = sdl.Color{R: 110, G: 231, B: 255, A: 80}
-	ColorBorderHover   = sdl.Color{R: 255, G: 255, B: 255, A: 28}
+	ColorBorderHover   = sdl.Color{R: 255, G: 255, B: 255, A: 55}
 
 	// Semantic
 	ColorSuccess         = sdl.Color{R: 72, G: 213, B: 151, A: 255}
 	ColorWarning         = sdl.Color{R: 255, G: 191, B: 105, A: 255}
-	ColorDanger          = sdl.Color{R: 226, G: 104, B: 120, A: 255} // #E26878
+	ColorDanger          = sdl.Color{R: 240, G: 120, B: 138, A: 255} // #F0788A
 	ColorAccent          = sdl.Color{R: 85, G: 216, B: 255, A: 255}  // #55D8FF
 	ColorAccentSecondary = sdl.Color{R: 139, G: 124, B: 255, A: 255} // #8B7CFF
 	ColorDangerSubtle    = sdl.Color{R: 255, G: 200, B: 200, A: 60}
@@ -166,12 +175,12 @@ var (
 	ColorToastSuccess = sdl.Color{R: 52, G: 211, B: 153, A: 255}
 
 	// Progress / track tokens
-	ColorTrack           = sdl.Color{R: 255, G: 255, B: 255, A: 22}
+	ColorTrack           = sdl.Color{R: 255, G: 255, B: 255, A: 34}
 	ColorProgress        = sdl.Color{R: 85, G: 216, B: 255, A: 255}
 	ColorProgressIntense = sdl.Color{R: 60, G: 190, B: 255, A: 255}
 
 	// Divider line
-	ColorDivider = sdl.Color{R: 255, G: 255, B: 255, A: 10}
+	ColorDivider = sdl.Color{R: 255, G: 255, B: 255, A: 22}
 
 	// Icon tints for small glyph fills. ColorIconSurface and ColorIconDark are
 	// declared once in homelayout.go (home design tokens) and get retinted at
@@ -179,9 +188,9 @@ var (
 	ColorIconTertiary = sdl.Color{R: 255, G: 255, B: 255, A: 55}
 
 	// Chip / pill surface
-	ColorChip      = sdl.Color{R: 34, G: 46, B: 70, A: 255}
-	ColorChipHover = sdl.Color{R: 45, G: 60, B: 85, A: 255}
-	ColorChipFocus = sdl.Color{R: 55, G: 75, B: 105, A: 255}
+	ColorChip      = sdl.Color{R: 53, G: 72, B: 106, A: 255} // #35486A
+	ColorChipHover = sdl.Color{R: 63, G: 84, B: 120, A: 255} // #3F5478
+	ColorChipFocus = sdl.Color{R: 69, G: 94, B: 134, A: 255} // #455E86
 
 	// Accent (injected from config at runtime)
 	accentColor sdl.Color
@@ -194,8 +203,8 @@ var (
 
 var (
 	textPrimaryColor    = sdl.Color{R: 246, G: 248, B: 252, A: 255} // #F6F8FC
-	textSecondaryColor  = sdl.Color{R: 156, G: 169, B: 189, A: 255} // #9CA9BD
-	textTertiaryColor   = sdl.Color{R: 102, G: 117, B: 139, A: 255} // #66758B
+	textSecondaryColor  = sdl.Color{R: 180, G: 193, B: 212, A: 255} // #B4C1D4
+	textTertiaryColor   = sdl.Color{R: 143, G: 160, B: 186, A: 255} // #8FA0BA
 	textInverseColor    = sdl.Color{R: 9, G: 11, B: 20, A: 255}
 	textAccentColor     = sdl.Color{R: 110, G: 231, B: 255, A: 255}
 	textAccentSecondary = sdl.Color{R: 139, G: 124, B: 255, A: 255} // #8B7CFF
@@ -203,6 +212,14 @@ var (
 	// Derived surface tints (set by ApplyThemeColors)
 	surfaceHighlightColor = sdl.Color{R: 255, G: 255, B: 255, A: 14}
 	topSheenColor         = sdl.Color{R: 255, G: 255, B: 255, A: 12}
+
+	// Readable text variants of the semantic status colours. The fills stay as
+	// authored — chips, bars and rings are graphics, not text — while labels use
+	// these, which clear WCAG AA on the background and both surfaces.
+	successInk = TextInk(ColorSuccess)
+	warningInk = TextInk(ColorWarning)
+	dangerInk  = TextInk(ColorDanger)
+	infoInk    = TextInk(ColorInfo)
 )
 
 // ColorTextPrimary returns the primary text color.
@@ -222,6 +239,64 @@ func ColorTextAccent() sdl.Color { return textAccentColor }
 
 // ColorTextMuted returns the muted/secondary text color.
 func ColorTextMuted() sdl.Color { return textSecondaryColor }
+
+// SuccessInk returns the success colour as readable text.
+func SuccessInk() sdl.Color { return successInk }
+
+// WarningInk returns the warning colour as readable text.
+func WarningInk() sdl.Color { return warningInk }
+
+// DangerInk returns the danger colour as readable text.
+func DangerInk() sdl.Color { return dangerInk }
+
+// InfoInk returns the info colour as readable text.
+func InfoInk() sdl.Color { return infoInk }
+
+// The toast palette is fixed brand colour: no preset retints it, which made it
+// the worst case for text use — on the light theme the amber lands at 2.0:1 and
+// the error red at 3.3:1 against the card. These derive their readable variants
+// on each call rather than caching them, so they cannot go stale when the theme
+// changes underneath (and cannot leak palette state between tests).
+func ToastSuccessInk() sdl.Color { return TextInk(ColorToastSuccess) }
+
+// ToastWarnInk returns the toast amber as readable text.
+func ToastWarnInk() sdl.Color { return TextInk(ColorToastWarn) }
+
+// ToastErrorInk returns the toast red as readable text.
+func ToastErrorInk() sdl.Color { return TextInk(ColorToastError) }
+
+// ToastInfoInk returns the toast blue as readable text.
+func ToastInfoInk() sdl.Color { return TextInk(ColorToastInfo) }
+
+// StatusInk maps a status or toast colour to the variant that is readable as
+// text, and passes every other colour through untouched.
+//
+// It exists for the call sites that hold a colour whose provenance they do not
+// control — the Wi-Fi status line, a panel subtitle, a diagnostics result — so
+// the rule is applied once where the colour becomes a glyph, instead of at each
+// producer, which also use the same values as fills. Only the exact tokens map:
+// an alpha-shifted variant is graphics, not text.
+func StatusInk(c sdl.Color) sdl.Color {
+	switch c {
+	case ColorSuccess:
+		return successInk
+	case ColorWarning:
+		return warningInk
+	case ColorDanger:
+		return dangerInk
+	case ColorInfo:
+		return infoInk
+	case ColorToastSuccess:
+		return ToastSuccessInk()
+	case ColorToastWarn:
+		return ToastWarnInk()
+	case ColorToastError:
+		return ToastErrorInk()
+	case ColorToastInfo:
+		return ToastInfoInk()
+	}
+	return c
+}
 
 // SetAccentColor updates the runtime accent color from config.
 func SetAccentColor(c sdl.Color) {
@@ -276,7 +351,9 @@ func ApplyThemeColors(p ThemePreset) {
 	textPrimaryColor = hexRGBA(p.TextPrimary)
 	textSecondaryColor = hexRGBA(p.TextSecondary)
 	textTertiaryColor = hexRGBA(p.TextTertiary)
-	textAccentColor = hexRGBA(p.Info)
+	// Accent text is ink, not fill: the raw Info colour also draws rings and
+	// glows, where a 3:1 graphics ratio is enough.
+	textAccentColor = TextInk(hexRGBA(p.Info))
 	SetAccentColor(hexRGBA(p.Info))
 	// Retint the home design tokens too, so a theme (e.g. Light) never leaves
 	// the home screen with a light background but dark cards.
@@ -299,6 +376,13 @@ func ApplyThemeColors(p ThemePreset) {
 	ColorChipHover = hexRGBA(p.SurfaceRaised)
 	ColorChipFocus = hexRGBA(p.SurfaceRaised)
 	ColorDivider = hexRGBA(p.BorderSubtle)
+	// Re-derive the inks against this preset: a status colour that reads well
+	// as a fill may not read as a label on this background, and the gallery
+	// ships 25 different ones.
+	successInk = TextInk(ColorSuccess)
+	warningInk = TextInk(ColorWarning)
+	dangerInk = TextInk(ColorDanger)
+	infoInk = TextInk(ColorInfo)
 	// Derive soft sheen colors so cards and panels share one highlight look.
 	surfaceHighlightColor = sdl.Color{R: 255, G: 255, B: 255, A: 14}
 	topSheenColor = sdl.Color{R: 255, G: 255, B: 255, A: 12}
@@ -308,14 +392,90 @@ func ApplyThemeColors(p ThemePreset) {
 	gradientSceneKey = ""
 }
 
-// contrastText returns a readable text color for the given background:
-// dark text on bright surfaces, light text on dark surfaces.
+// wcagLuminance is the WCAG 2.1 relative luminance of an sRGB colour, the
+// value contrast decisions have to be made on.
+func wcagLuminance(c sdl.Color) float64 {
+	channel := func(v uint8) float64 {
+		s := float64(v) / 255
+		if s <= 0.04045 {
+			return s / 12.92
+		}
+		return math.Pow((s+0.055)/1.055, 2.4)
+	}
+	return 0.2126*channel(c.R) + 0.7152*channel(c.G) + 0.0722*channel(c.B)
+}
+
+// contrastText returns a readable text color for the given background: dark
+// text on bright surfaces, light text on dark surfaces.
+//
+// The crossover is the WCAG one (L = 0.179), where white and this near-black
+// label colour have the same contrast. A weighted 8-bit sum put that point at a
+// 23.5% mean channel value instead, so every mid-dark fill — a lifted dark blue
+// like #2E4061, for one — was given near-black text at ~1.7:1 while white on it
+// reads at 12:1.
 func contrastText(bg sdl.Color) sdl.Color {
-	lum := int(bg.R)*299 + int(bg.G)*587 + int(bg.B)*114
-	if lum > 60000 {
+	if wcagLuminance(bg) > 0.179 {
 		return sdl.Color{R: 18, G: 22, B: 30, A: 255}
 	}
 	return sdl.Color{R: 245, G: 248, B: 255, A: 255}
+}
+
+// textInkMinContrast is WCAG AA for body text. Status colours double as chip,
+// bar and ring fills, where 3:1 is enough, so only the ink variants carry it.
+const textInkMinContrast = 4.5
+
+// TextInk returns c adjusted just far enough to be readable as text on every
+// surface the app draws text on.
+//
+// The status colours are authored as fills, and the app also draws labels in
+// them ("Failed", "Offline", the Groq status). On a preset whose warning is a
+// deep amber sitting at 2.6:1 against its own background, that label was barely
+// there. Blending towards white, or towards dark ink on a light palette, keeps
+// the hue (an amber stays amber) while reaching WCAG AA on all three surfaces.
+// A colour that already passes comes back untouched, so a palette authored
+// correctly cannot drift.
+func TextInk(c sdl.Color) sdl.Color {
+	surfaces := [...]sdl.Color{ColorBackground, ColorSurface, ColorSurfaceAlt}
+	readable := func(v sdl.Color) bool {
+		for _, s := range surfaces {
+			la, lb := wcagLuminance(v), wcagLuminance(s)
+			if la < lb {
+				la, lb = lb, la
+			}
+			if (la+0.05)/(lb+0.05) < textInkMinContrast {
+				return false
+			}
+		}
+		return true
+	}
+	if readable(c) {
+		return c
+	}
+	// Towards white on dark surfaces, towards near-black on light ones: the
+	// direction with contrast to give, not the one that looks better on the
+	// palette currently loaded.
+	goal := sdl.Color{R: 255, G: 255, B: 255, A: 255}
+	mean := 0.0
+	for _, s := range surfaces {
+		mean += wcagLuminance(s)
+	}
+	if mean/float64(len(surfaces)) > 0.179 {
+		goal = sdl.Color{R: 18, G: 22, B: 30, A: 255}
+	}
+	mix := func(from, to uint8, t float64) uint8 {
+		return uint8(math.Round(float64(from) + (float64(to)-float64(from))*t))
+	}
+	cand := c
+	// 32 steps is finer than the 8-bit ramp being walked, so the result lands as
+	// close to the authored colour as the contrast requirement allows.
+	for step := 1; step <= 32; step++ {
+		f := float64(step) / 32
+		cand = sdl.Color{R: mix(c.R, goal.R, f), G: mix(c.G, goal.G, f), B: mix(c.B, goal.B, f), A: c.A}
+		if readable(cand) {
+			return cand
+		}
+	}
+	return cand
 }
 
 // WithAlpha returns a copy of c with the alpha channel replaced.
@@ -565,6 +725,21 @@ func DensitySpace(d Density, step string) int32 {
 }
 
 // focusColorForAccent returns a focus ring color from the accent hue.
+// visibleAccent returns the accent when it is bright enough to tint a focused
+// surface, and the ring fallback (focusColorForAccent) when it is not.
+//
+// The accent comes from the config's $buttonColor, so it is often a dark blue.
+// Painting a focused card with WithAlpha(accentColor, 70) then made the focused
+// card DARKER than the resting card beside it — focus read as a hole in the
+// panel instead of the brightest state on the page. Rings already substitute a
+// visible colour for such accents; fills have to agree with them.
+func visibleAccent() sdl.Color {
+	if wcagLuminance(accentColor) < 0.10 {
+		return focusColorForAccent(accentColor)
+	}
+	return accentColor
+}
+
 func focusColorForAccent(accent sdl.Color) sdl.Color {
 	if int(accent.R)+int(accent.G) > 420 && int(accent.R) > int(accent.B) {
 		return sdl.Color{R: 139, G: 124, B: 255, A: 255}

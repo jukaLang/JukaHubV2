@@ -62,6 +62,17 @@ focused, with a ring around it. **A** (or a tap) on it leaves the screen, exactl
 like **B**. The release offer, when a new version is advertised, is the pill
 immediately left of the notification bell, in the same place on every screen.
 
+The bar is never focused when a screen opens: the ring starts on the screen's
+own controls. On a screen with controls, **Up** from the top row steps onto the
+bar and **Down** steps back into the content. On a screen with no controls of
+its own (Playtime, the terminal, the audio player) there is nothing to step up
+from, so **Up** goes straight to the bar and **Down** hands the pad back to the
+page. Once a bar button holds the ring it answers to **A** before the screen
+underneath: the back pill goes back, the Apps pill opens the menu, the clock and
+the forecast open their cards, the Wi-Fi meter opens the picker and the bell
+opens the notification centre, even where the same button does something else
+in the scene below.
+
 The header chips are buttons on every screen: the weather chip
 (`21C / 12C`, or `69F / 53F` in the US) opens **Local weather**, a seven-day
 forecast for the detected location; the time opens the calendar. The chip uses
@@ -200,23 +211,55 @@ their way, and no panel is covered by a menu drawn beneath it.
 | X | Search YouTube |
 | Y | Shorts feed: opens Shorts, pre-loads it and plays the first clip, then keeps going after each one ends |
 | **Shorts** button | The same feed, from the button row next to Search / Play Link / Trending |
-| Left / Right | Select **Audio**, **Video** or **Chat** on the focused result row, then back to the row |
-| A | Play the focused result, or press the highlighted **Audio** / **Video** / **Chat** button |
+| **Play Link** button | Ask for a link: opens the URL field on the keyboard with an empty buffer, and **Save** plays what was typed. A highlighted result plays first, and a link already in the field plays without asking again |
+| Left / Right | Select **Audio**, **Video**, **Chat** or **Save** on the focused result row, then back to the row |
+| A | Play the focused result, or press the highlighted **Audio** / **Video** / **Chat** / **Save** button |
 | L1 / R1 | Previous / next screenful of the loaded results |
 | L2 / R2 | Previous / next results page; **R2** fetches the next page when it has not been loaded |
 | B | Return from the row's buttons, then back out of Media |
 
-Every result row carries three buttons at its right edge. **Audio** queues the
+Every result row carries four buttons at its right edge. **Audio** queues the
 track in the Downloads panel (the same yt-dlp path, saved as an m4a under
 `data/downloads/music`), **Video** queues the best picture and sound merged into
-an MP4 under `data/downloads/video`, and **Chat** posts the link into the chat
-as a message from you. The two downloads are separate because a track is small
-enough to keep a whole library on the card and a video is not. With a row
-focused, **Right** walks row → Audio → Video → Chat → row and **Left** walks the
-same ring the other way, so **A** can save the sound, save the picture or share
-a video without leaving the list. Tapping a pill works too, even on a row that
-is not highlighted. The legacy multi-column grid keeps Left/Right for moving
-between cards, so its buttons are tap-only.
+an MP4 under `data/downloads/video`, **Chat** posts the link into the chat as a
+message from you, and **Save** keeps the result in the Favorites library (the
+pill reads **Saved** on a row that is already there, and pressing it again takes
+the video out). The two downloads are separate because a track is small enough
+to keep a whole library on the card and a video is not. With a row focused,
+**Right** walks row → Audio → Video → Chat → Save → row and **Left** walks the
+same ring the other way, so **A** can save the sound, save the picture, share a
+video or bookmark it without leaving the list. Tapping a pill works too, even on
+a row that is not highlighted. The legacy multi-column grid keeps Left/Right for
+moving between cards, so its buttons are tap-only.
+
+## Favorites
+
+Favorites is the library, not a second copy of the search list. It opens on
+**Continue** and has four tabs, each with its item count on the tab itself:
+
+| Tab | What it holds |
+|-----|---------------|
+| **Continue** | Videos started but not finished, newest first, with the saved position |
+| **Videos** | Everything saved with the **Save** pill on a result, grouped by channel |
+| **Streams** | The channels kept on the IP Stream screen |
+| **Recent** | Whatever was played last, grouped into Today / Yesterday / This week / Earlier |
+
+| Button | Action |
+|--------|--------|
+| Left / Right | Previous / next tab |
+| Up / Down | Move through the rows; past the last row reaches the Play / Remove buttons, and up from the first row reaches the header |
+| L1 / R1 | Jump five rows; **L2 / R2** jump to the first / last row |
+| A | Play the highlighted row — a video resumes where it left off, a stream opens the player, a file opens its folder |
+| X | Remove the highlighted row from the tab it is shown on |
+| B | Back out of Favorites |
+| Tap a tab / row | Switch tab / play that row (the row map is recorded while drawing, so the tap resolves the row it landed on) |
+
+The list scrolls only as far as it must to keep the focused row visible, a
+heading is never scrolled over the row it belongs to, and every row shows a
+16:9 frame (or a drawn tile for a stream), the title, who made it, and a resume
+line when there is one. An empty tab says what it holds and how to fill it
+instead of showing a blank panel.
+
 
 The **Next page** chip appears in the bottom-right corner of the grid once the
 focused card is on the last loaded row. Clicking it, pressing **R2**, or pressing
@@ -224,6 +267,20 @@ Down on the last card all load the next page of the same query and focus its
 first result, so a search keeps going instead of stopping after the first batch.
 
 ## Live TV
+
+### Theme gallery
+
+The gallery of theme presets (Settings → Appearance) has two tabs: **Colour**
+and **Total conversion**. A colour preset repaints the interface; a conversion
+repaints it *and* rearranges the home screen, which is why they are not one
+list.
+
+| Button | Action |
+|--------|--------|
+| D-pad | Move between the cards of the open tab |
+| A | Apply the highlighted preset |
+| L1 / R1, or **Tab** / **Shift+Tab** | Switch tab (the grid resets to its first card) |
+| Click a tab | Switch to it |
 
 Playlists (`.m3u` / `.m3u8`) live in the `tv` folder next to the app, or use
 **Load Playlist** to fetch the public iptv-org list (cached for six hours).
@@ -288,8 +345,8 @@ Press **Filter** again to put the site back under the filter.
 ## Recordings
 
 Captures an emulator wrote into the shared folder, opened from
-**Apps → Recordings**. See [docs/RECORDINGS.md](RECORDINGS.md) for how that
-folder is chosen and what recording itself looks like.
+**Start → Scenes → Recordings**. See [docs/RECORDINGS.md](RECORDINGS.md) for
+how that folder is chosen and what recording itself looks like.
 
 | Button | Action |
 |--------|--------|
@@ -381,9 +438,13 @@ scrolled away is still one press away.
 
 A selected message turns the composer into its action bar: **Reply** (a quote
 header in the bubble, sent as a real Discord reply), **Copy**, **Ask AI**,
-**Profile**, and **Delete** for your own messages. The member list and the
-profile card are modal: **Up/Down** walks the rows, **A** opens a profile,
-**Left/Right** picks an action, and **B** closes.
+**Profile**, and **Delete** for your own messages. A message that carries a
+picture leads with **Enlarge** — clicking the picture itself does the same
+— which opens it full screen in the viewer, where it can be zoomed and
+panned. The member list and the profile card are modal: **Up/Down** walks the rows, **A** opens a profile,
+**Left/Right** picks an action, and **B** closes. The action bar belongs to the
+panel that draws it: leaving the chat scene drops the selection, so a bar left
+open can never take a press meant for the screen you are on.
 
 ## On-screen keyboard
 
@@ -591,7 +652,8 @@ screen you have only visited.
 
 The page is taller than the screen, so it scrolls. The page owns the D-pad and
 the arrow keys on this screen — it has no buttons of its own, so the top bar is
-a tap target here rather than a focus stop:
+reached with **Up** (which the page gives up at the top edge) rather than with a
+step off a grid:
 
 | Button | Action |
 |--------|--------|
@@ -602,7 +664,7 @@ a tap target here rather than a focus stop:
 | Y | RetroAchievements |
 
 A fresh visit starts at the top, and a scrollbar on the right shows where in the
-page you are.
+page you are.
 
 ### RetroAchievements
 
@@ -764,6 +826,51 @@ straight through; **A** on a saved video opens it in the embedded video player.
 Only `http(s)` links are accepted, and **X** only ever deletes files inside
 those folders — the rest of the card is off limits.
 
+## Files
+
+**Start → Files** (also the **Files** tile and any `fileexplorer` shortcut) is a
+file manager, not a directory dump. Above the list is a breadcrumb bar where
+every folder in the path is its own chip — a deep folder is one press from the
+card root instead of five **B** presses — with the folder's item count, its
+size and the card's free space on the right and the sort chip beside them. Each
+row carries a type chip (**DIR**, **IMG**, **AUD**, **VID**, **PDF**, **ZIP**,
+**BOOK**, **TXT**, and **UP** for the parent), the name, then the size and the
+day it was written. A photo or a video instead shows its own picture in that
+chip slot — a video carries a small play mark on its first frame — so a folder
+of pictures can be scanned by eye before anything is opened. Until the picture
+is ready, or when there is none to make (no ffmpeg installed, an unreadable
+format), the row keeps its type chip.
+
+| Button | Action |
+|--------|--------|
+| Up / Down | Move through the list |
+| L1 / R1 | Move a screenful; L2 / R2 jump to the first / last row |
+| A | Open a folder or a file |
+| B / Back | Up one level, or back to Home at the root |
+| Y | The action sheet |
+| X | Mark the row under the cursor and step down |
+| Mouse / touch | A chip in the breadcrumb bar to jump, the sort chip to change order, a row to open it |
+
+The action sheet (**Y**) holds **New folder**, **Rename**, **Copy**, **Cut**,
+**Paste**, **Delete**, **Select all**, **Sort**, **Connect to device** and
+**Remote files**. Marked rows are tinted and their type chip becomes a tick, so
+a selection is visible in the list rather than only in the sheet. When nothing
+is marked the actions apply to the row under the cursor, which is the rule a
+desktop manager follows. **Delete** arms on the first press and acts on the
+second, and a paste never overwrites: a second copy of the same name lands as
+`name (2).ext`. The clipboard holds paths, so **Copy** and **Cut** work between
+any two folders of either card without a PC.
+
+**Connect to device** asks for an address on the on-screen keyboard —
+`user@host:port/folder`, `host`, or `sftp://user@host/folder`, where a missing
+user and port mean JukaHub's own SFTP account, so `192.168.1.7` is enough — and
+opens **Remote files**, a browser for the other console's card. **A** downloads
+the highlighted file into the folder that was open, **Y** uploads the marked (or
+highlighted) local rows into the remote folder on screen, **X** takes another
+address and **B** goes up a level. Transfers run in the background with their
+progress in the panel's subtitle, one at a time; the first connection to a
+device pins its host key and a later change is refused rather than trusted.
+
 ## Wi-Fi picker
 
 Open it from **Quick Settings → Wi-Fi Networks**, **Hardware → Wi-Fi**, or a
@@ -776,10 +883,15 @@ Open it from **Quick Settings → Wi-Fi Networks**, **Hardware → Wi-Fi**, or a
 | X / `d` | Disconnect, keeping the saved network |
 | Y / `r` | Rescan |
 | SELECT / `f` | Forget the saved network — press twice to confirm |
-| B / Esc | Close the picker |
+| L1 / `i` | Open the diagnostics sheet (it works even when no backend answered) |
+| B / Esc | Close the picker, or leave the diagnostics sheet first |
 
 A new secured network opens the on-screen keyboard for its password. The field
 is masked, and **A** on the keyboard's key submits; closing the keyboard cancels.
+
+In the diagnostics sheet, **A** re-reads the radio, **Y** / `c` copies the report
+to the clipboard and writes a diagnostics bundle in the same press, and **B**
+returns to the network list.
 
 ## Power tools
 
@@ -884,15 +996,32 @@ by itself once on the first launch after an update.
 
 | Input | Action |
 |-------|--------|
-| Up / Down | Move through the rows, or scroll the changelog |
-| Enter / A | Open the changelog, report a bug, toggle diagnostics, or go back from the notes |
-| B / Esc | Close the panel |
+| Up / Down | Move through the rows, or scroll the changelog and BIOS Doctor |
+| Enter / A | Open the changelog, report a bug, toggle diagnostics, or enlarge the **Diagnostics export** code |
+| B / Esc | Leave a sub-page, then close the panel |
 
 **Report a bug** writes a diagnostics file, copies the redacted report and
 opens a GitHub issue with a summary, reproduction steps and diagnostics already
 filled in. **Anonymous diagnostics** is off by default; when on, it sends only
 the build, device model, platform, OS/architecture and panic counts — never
 designs, filenames, links or account details.
+
+## QR codes
+
+Three codes exist to be scanned by another device: the **Phone Companion**
+pairing code, the **Remote Cast** watch link, and **Community & support →
+Diagnostics export**. In their cards they are a few hundred pixels square over
+a dimmed screen, which is the shape a phone camera reads worst, so each one can
+also be enlarged on its own.
+
+| Input | Action |
+|-------|--------|
+| A (on the selected code), or a tap on it | Fill the screen with the code and raise the backlight to full |
+| Up / Down / Left / Right (Remote Cast) | Select the code or the Start / Stop switch; the switch keeps the selection when the card opens |
+| A / B / Esc, or any tap | Close the enlarged code and put the backlight back where it was |
+
+On **Diagnostics export**, **B** still leaves the page and the enlarged code is
+the page's only control, so **A** enlarges it instead of going back.
 
 ## Watch Party
 
@@ -949,6 +1078,24 @@ control playback and the timers.
 
 The sleep timer stops playback before it blanks the panel; **X** only blanks the
 panel. See [Dock & ambient](AMBIENT.md).
+
+### The starfield idle screen
+
+With **Ambient** off, the starfield is the idle screen. It keeps the clock, the
+battery, a rotating quote and — if one was chosen in Files — a photo behind
+them. The photo is set from the viewer, where **X** (or `l`) becomes **Set lock
+screen**, and the same button there reads **Clear lock screen** once that
+picture is the backdrop.
+
+The idle screen can take the photo back itself, so clearing it does not need a
+trip to Files. **Y** offers **Y clear photo** on its own line above the wake
+hint, and a **Y** pressed again inside five seconds forgets the backdrop and
+leaves the picture on the card. The first press only asks: every other input on
+this screen means "wake up", and an ordinary wake must not throw the photo
+away. While the first press is armed the line reads **Y again to clear** in
+amber, and after the second it reads **Backdrop cleared · any key wakes** for a
+few seconds. With no photo set there is no line at all, and **Y** wakes the
+screen like any other key.
 
 ## Pomodoro
 

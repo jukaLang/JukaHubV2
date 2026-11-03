@@ -535,17 +535,53 @@ func deleteSaveSnapshot(snap saveSnapshot) error {
 	return os.RemoveAll(snap.Dir)
 }
 
-// restoreSaveSnapshot writes the snapshot's files back into the live roots.
-// It takes a safety snapshot first, so a restore that turns out to be the
-// wrong one can itself be undone. Only files present in the snapshot are
-// written; extra files already in the save folder are left alone.
-func restoreSaveSnapshot(snap saveSnapshot, roots []saveRoot) (saveSnapshot, error) {
-	if len(snap.Manifest.Roots) == 0 {
-		return saveSnapshot{}, errors.New("this snapshot is empty")
+// saveRestorePlan is one file a restore has already proved readable and
+// intact. A restore builds the whole plan before the first live byte moves.
+type saveRestorePlan struct {
+	Rel    string // slash-separated path inside the root, for messages
+	Src    string
+	Dst    string
+	SHA256 string
+}
+
+// parentResolvesWithin reports whether the folder dst will be written into,
+// with every link resolved, is still inside root. A save folder can contain a
+// symlink (some setups point one game's folder at another card) and writing
+// through it would land outside the folder the user agreed to restore into.
+func parentResolvesWithin(root, dst string) bool {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		// The root is not there yet, so there is no link to follow; the
+		// lexical containment check already refused an escaping path.
+		return true
 	}
-	pre, preErr := createSaveSnapshot(roots, "before restore")
-	if preErr != nil && !errors.Is(preErr, errSaveManagerEmpty) {
-		return saveSnapshot{}, fmt.Errorf("could not take a safety snapshot: %w", preErr)
+	parent := filepath.Dir(dst)
+	for {
+		resolved, err := filepath.EvalSymlinks(parent)
+		if err == nil {
+			return isPathWithin(resolved, resolvedRoot)
+		}
+		if !os.IsNotExist(err) {
+			return false
+		}
+		// The folder itself is new; check the nearest parent that exists, which
+		// is where a link would have to be for the write to escape.
+		next := filepath.Dir(parent)
+		if next == parent {
+			return false
+		}
+		parent = next
+	}
+}
+
+// planSaveRestore proves the snapshot can be written before anything is: every
+// root is matched, every entry stays inside both folders, and every source file
+// is present at the size and SHA-256 the snapshot recorded. A truncated copy, a
+// hand-edited manifest or a card that lost a file therefore fails here, with
+// the live saves still untouched.
+func planSaveRestore(snap saveSnapshot, roots []saveRoot) ([]saveRestorePlan, error) {
+	if len(snap.Manifest.Roots) == 0 {
+		return nil, errors.New("this snapshot is empty")
 	}
 	// Roots are matched by their original path first, because one label can
 	// describe several folders (RetroArch saves in both SDCARD/RetroArch and
@@ -557,6 +593,7 @@ func restoreSaveSnapshot(snap saveSnapshot, roots []saveRoot) (saveSnapshot, err
 		byPath[filepath.Clean(root.Path)] = root
 		byName[root.Name] = append(byName[root.Name], root)
 	}
+	var plan []saveRestorePlan
 	for _, snapRoot := range snap.Manifest.Roots {
 		root, ok := byPath[filepath.Clean(snapRoot.Path)]
 		if !ok {
@@ -565,9 +602,9 @@ func restoreSaveSnapshot(snap saveSnapshot, roots []saveRoot) (saveSnapshot, err
 			case 1:
 				root, ok = matches[0], true
 			case 0:
-				return pre, fmt.Errorf("%s folder is no longer present", snapRoot.Name)
+				return nil, fmt.Errorf("%s folder is no longer present", snapRoot.Name)
 			default:
-				return pre, fmt.Errorf("%s has more than one folder now — restore it by hand from %s", snapRoot.Name, snap.Dir)
+				return nil, fmt.Errorf("%s has more than one folder now — restore it by hand from %s", snapRoot.Name, snap.Dir)
 			}
 		}
 		slug := snapRoot.Slug
@@ -581,11 +618,70 @@ func restoreSaveSnapshot(snap saveSnapshot, roots []saveRoot) (saveSnapshot, err
 			src := filepath.Join(snap.Dir, "files", slug, filepath.FromSlash(file.Path))
 			dst := filepath.Join(root.Path, filepath.FromSlash(file.Path))
 			if !isPathWithin(src, snap.Dir) || !isPathWithin(dst, root.Path) {
-				return pre, fmt.Errorf("snapshot entry %q escapes its folder", file.Path)
+				return nil, fmt.Errorf("snapshot entry %q escapes its folder", file.Path)
 			}
-			if err := copyFile(src, dst); err != nil {
-				return pre, fmt.Errorf("restore %s: %w", file.Path, err)
+			if !parentResolvesWithin(root.Path, dst) {
+				return nil, fmt.Errorf("%s would be written through a link outside %s", file.Path, snapRoot.Name)
 			}
+			info, err := os.Stat(src)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return nil, fmt.Errorf("%s is missing from snapshot %s", file.Path, snap.Manifest.ID)
+				}
+				return nil, fmt.Errorf("%s: %w", file.Path, err)
+			}
+			if !info.Mode().IsRegular() {
+				return nil, fmt.Errorf("%s is not a file in the snapshot", file.Path)
+			}
+			if file.Size > 0 && info.Size() != file.Size {
+				return nil, fmt.Errorf("%s is %s in the snapshot but was recorded as %s",
+					file.Path, humanBytes(info.Size()), humanBytes(file.Size))
+			}
+			// The checksum is what separates a restore from "copy whatever is
+			// on the card now", so a manifest without one cannot be proved and
+			// is refused rather than trusted.
+			if strings.TrimSpace(file.SHA256) == "" {
+				return nil, fmt.Errorf("%s has no checksum in the snapshot", file.Path)
+			}
+			sum, err := SHA256File(src)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", file.Path, err)
+			}
+			if !strings.EqualFold(sum, file.SHA256) {
+				return nil, fmt.Errorf("%s is corrupt (checksum mismatch)", file.Path)
+			}
+			plan = append(plan, saveRestorePlan{Rel: file.Path, Src: src, Dst: dst, SHA256: sum})
+		}
+	}
+	return plan, nil
+}
+
+// restoreSaveSnapshot writes the snapshot's files back into the live roots.
+// The whole snapshot is verified first, and only then is a safety snapshot
+// taken, so a restore that turns out to be the wrong one can itself be undone
+// while one that fails verification never touches a live file. Only files
+// present in the snapshot are written; extra files already in the save folder
+// are left alone.
+func restoreSaveSnapshot(snap saveSnapshot, roots []saveRoot) (saveSnapshot, error) {
+	plan, err := planSaveRestore(snap, roots)
+	if err != nil {
+		// The panel already says which action failed, so lead with the part the
+		// user needs to hear on a small screen: their saves are still there.
+		return saveSnapshot{}, fmt.Errorf("nothing was changed — %w", err)
+	}
+	pre, preErr := createSaveSnapshot(roots, "before restore")
+	if preErr != nil && !errors.Is(preErr, errSaveManagerEmpty) {
+		return saveSnapshot{}, fmt.Errorf("could not take a safety snapshot: %w", preErr)
+	}
+	for _, entry := range plan {
+		sum, _, err := copySaveFile(entry.Src, entry.Dst, saveManagerMaxFile)
+		if err != nil {
+			return pre, fmt.Errorf("restore %s: %w", entry.Rel, err)
+		}
+		// The hash is computed as the bytes are written, so a card that filled
+		// up part way through is caught here, not at the next boot.
+		if !strings.EqualFold(sum, entry.SHA256) {
+			return pre, fmt.Errorf("%s did not land intact — is the card full?", entry.Rel)
 		}
 	}
 	return pre, nil

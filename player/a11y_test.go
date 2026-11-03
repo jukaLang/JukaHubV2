@@ -209,9 +209,9 @@ func TestA11yRowsReportCurrentSettings(t *testing.T) {
 		}
 	}
 	// 4 fixed top rows (text size, contrast, palette, layout) + one row per
-	// remappable button + the 6 trailing rows (select, one-handed, chord, key
-	// repeat, power mode, reset).
-	if len(rows) != 4+len(a11yPanelButtons)+6 {
+	// remappable button + the 7 trailing rows (select, one-handed, chord, key
+	// repeat, power mode, vibration strength, reset).
+	if len(rows) != 4+len(a11yPanelButtons)+7 {
 		t.Fatalf("row count: got %d", len(rows))
 	}
 	if got := byKind[a11yRowTextSize].value; got != "130%" {
@@ -248,6 +248,9 @@ func TestA11yRowsReportCurrentSettings(t *testing.T) {
 	}
 	if got := byKind[a11yRowSlowRepeat].value; got != "Slow" {
 		t.Fatalf("key repeat row: got %q", got)
+	}
+	if got := byKind[a11yRowVibration].value; got != hapticsLevelNow().label {
+		t.Fatalf("vibration row: got %q, want the step in force (%q)", got, hapticsLevelNow().label)
 	}
 }
 

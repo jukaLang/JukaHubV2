@@ -76,6 +76,9 @@ func TestSearchShortcutReachesTheTubeField(t *testing.T) {
 	virtualKeyboardActive = false
 	activeSceneIndex, activeElementIndex = -1, -1
 
+	// A transition left armed by another test would make the first press a
+	// no-op that still reports the old destination.
+	transitionPhase, pendingSceneIndex = "none", 0
 	currentSceneIndex = 0
 	if !openSearchShortcut(config) {
 		t.Fatal("the X shortcut did nothing from Home")

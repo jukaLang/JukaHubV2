@@ -90,6 +90,10 @@ type HomeLayout struct {
 	Motion  bool
 	hover   uiHover
 	hoverID HomeFocusID
+
+	// Arrangement is the alternative layout in force (homeArrangementCustom
+	// when the scene's own geometry is authoritative).
+	Arrangement string
 }
 
 func NewHomeLayout(width, height int32) *HomeLayout {
@@ -127,11 +131,141 @@ func (h *HomeLayout) Resize(width, height int32) {
 	h.rebuildItems()
 }
 
+// Home arrangements are the alternative layouts of the home screen. The
+// dashboard is the composition the cards were designed around; the grid lays
+// the same cards out as equal tiles. A total-conversion theme preset installs
+// one of them, and "custom" — the default — keeps jukaconfig.json authoritative,
+// which is why choosing a conversion never rewrites the scene's own geometry.
+const (
+	homeArrangementCustom    = "custom"
+	homeArrangementDashboard = "dashboard"
+	homeArrangementGrid      = "grid"
+)
+
+// homeArrangementLabel is the name the UI shows for an arrangement.
+func homeArrangementLabel(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case homeArrangementDashboard:
+		return "Dashboard"
+	case homeArrangementGrid:
+		return "Hero grid"
+	}
+	return "Custom (from jukaconfig.json)"
+}
+
+// normalizeHomeArrangement clamps a stored value to a known arrangement.
+func normalizeHomeArrangement(name string) string {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case homeArrangementDashboard:
+		return homeArrangementDashboard
+	case homeArrangementGrid:
+		return homeArrangementGrid
+	}
+	return homeArrangementCustom
+}
+
+// homeArrangement is the arrangement the user is on. The unset case is Custom:
+// the shipped configs place their own cards, so an unset value must not move
+// anything.
+func homeArrangement(config *Config) string {
+	if config == nil {
+		return homeArrangementCustom
+	}
+	if s, ok := customString(config.Variables.Custom, "homeArrangement"); ok {
+		return normalizeHomeArrangement(s)
+	}
+	return homeArrangementCustom
+}
+
+// homeGridRects lays the body cards out as a mosaic: four columns over the
+// dashboard's body box, with the Continue card standing two rows tall in the
+// first column. The hero tile is not decoration — a resume card carries a
+// progress line and a chip, and at one row's height those collide — and it
+// makes the arrangement fill exactly: two cells for Continue, ten for the ten
+// remaining cards, three full rows and no gap to centre.
+func homeGridRects(width, height int32) map[HomeFocusID]sdl.Rect {
+	body := sdl.Rect{X: 32, Y: 164, W: width - 64, H: height - 164 - sdl.Rect{H: 108}.H}
+	if body.W <= 0 || body.H <= 0 {
+		return nil
+	}
+	const cols, rows = 4, 3
+	gap := int32(12)
+	cellW := (body.W - int32(cols-1)*gap) / int32(cols)
+	cellH := (body.H - int32(rows-1)*gap) / int32(rows)
+	if cellW <= 0 || cellH <= 0 {
+		return nil
+	}
+	cell := func(col, row int32) sdl.Rect {
+		return sdl.Rect{
+			X: body.X + col*(cellW+gap),
+			Y: body.Y + row*(cellH+gap),
+			W: cellW,
+			H: cellH,
+		}
+	}
+	rects := map[HomeFocusID]sdl.Rect{
+		// The hero tile: the first column, two rows tall.
+		HomeFocusContinue: {X: body.X, Y: body.Y, W: cellW, H: 2*cellH + gap},
+	}
+	// Everything else in reading order, skipping the two cells the hero tile
+	// occupies.
+	rest := []HomeFocusID{
+		HomeFocusMedia, HomeFocusFiles, HomeFocusPackages,
+		HomeFocusApps, HomeFocusFavorites, HomeFocusBrowser,
+		HomeFocusChat, HomeFocusTools, HomeFocusEmulator, HomeFocusSettings,
+	}
+	col, row := int32(1), int32(0)
+	for _, id := range rest {
+		rects[id] = cell(col, row)
+		col++
+		if col == cols {
+			col = 0
+			row++
+		}
+		if col == 0 && row == 1 {
+			// The hero tile's second cell is not available.
+			col = 1
+		}
+	}
+	return rects
+}
+
+// homeArrangementRects returns the card rects an arrangement specifies, or nil
+// for Custom and for the dashboard, whose rects are the built-in ones below.
+func homeArrangementRects(name string, width, height int32) map[HomeFocusID]sdl.Rect {
+	switch normalizeHomeArrangement(name) {
+	case homeArrangementGrid:
+		return homeGridRects(width, height)
+	}
+	return nil
+}
+
+// SetArrangement switches the layout to another arrangement and rebuilds the
+// cards. Custom returns the built-in geometry, which ApplyConfig then lets
+// jukaconfig.json override as before.
+func (h *HomeLayout) SetArrangement(name string) {
+	if h == nil {
+		return
+	}
+	next := normalizeHomeArrangement(name)
+	if h.Arrangement == next {
+		return
+	}
+	h.Arrangement = next
+	h.rebuildItems()
+}
+
 func (h *HomeLayout) rebuildItems() {
 	if h == nil {
 		return
 	}
+	// A built-in arrangement moves the body cards; the rects below are the
+	// dashboard composition and stay the default for Custom.
+	arrangementRects := homeArrangementRects(h.Arrangement, h.Width, h.Height)
 	card := func(id HomeFocusID, title, subtitle, icon string, action HomeAction, rect sdl.Rect) {
+		if override, ok := arrangementRects[id]; ok {
+			rect = override
+		}
 		h.Items[id] = HomeItem{
 			ID: id, Title: title, Subtitle: subtitle,
 			Icon: icon, Action: action,
@@ -256,6 +390,12 @@ func homeConfigOverlayables() map[HomeFocusID]bool {
 // because their rects are re-measured underneath this call every frame.
 func (h *HomeLayout) ApplyConfig(elements []Element) {
 	if h == nil {
+		return
+	}
+	// A total conversion owns the geometry while it is in force: the scene's
+	// own coordinates are left untouched, so switching back to Custom puts the
+	// authored arrangement back exactly as it was.
+	if normalizeHomeArrangement(h.Arrangement) != homeArrangementCustom {
 		return
 	}
 	overlayable := homeConfigOverlayables()

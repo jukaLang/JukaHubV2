@@ -1,0 +1,11 @@
+/* JukaHub Windows resource script.
+ *
+ * This is what gives JukaHub.exe its own icon in Explorer, the taskbar,
+ * Alt-Tab, the title bar and the Start menu; without it Windows shows the
+ * generic application icon for every build.
+ *
+ * The compiled form (rsrc_windows_amd64.syso) is what the Go linker picks up,
+ * so a plain "go build" on windows/amd64 gets the icon with no extra flags.
+ * Rebuild it with mkwinres.sh after changing JukaPlayer.png.
+ */
+1 ICON "JukaHub.ico"

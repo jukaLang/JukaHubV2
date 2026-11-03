@@ -36,6 +36,11 @@ type themeFile struct {
 	Danger        string `json:"danger"`
 	Info          string `json:"info"`
 	Overlay       string `json:"overlay"`
+	// A theme file may also rearrange the interface: naming an arrangement
+	// makes it a total conversion, which is what puts it in that gallery tab.
+	// An unknown or "custom" value is ignored rather than stored.
+	Summary     string `json:"summary"`
+	Arrangement string `json:"arrangement"`
 }
 
 // toPreset validates every colour and converts the file into a ThemePreset.
@@ -59,9 +64,41 @@ func (f themeFile) toPreset() (ThemePreset, error) {
 			return ThemePreset{}, fmt.Errorf("%s: %q is not #rrggbb or #rrggbbaa", key, value)
 		}
 	}
-	// themeFile mirrors ThemePreset field for field, so a conversion replaces
-	// the 18-line literal (and fails to compile if the two ever drift apart).
-	return ThemePreset(f), nil
+	// Written out rather than converted: the preset carries the gallery's own
+	// fields (kind, arrangement) that a theme file does not set directly, and
+	// a field added to one type alone must be a decision, not a silent zero.
+	preset := ThemePreset{
+		Name:          f.Name,
+		Summary:       strings.TrimSpace(f.Summary),
+		Background:    f.Background,
+		ButtonColor:   f.ButtonColor,
+		LabelColor:    f.LabelColor,
+		InputColor:    f.InputColor,
+		Surface:       f.Surface,
+		SurfaceAlt:    f.SurfaceAlt,
+		SurfaceRaised: f.SurfaceRaised,
+		TextPrimary:   f.TextPrimary,
+		TextSecondary: f.TextSecondary,
+		TextTertiary:  f.TextTertiary,
+		BorderSubtle:  f.BorderSubtle,
+		BorderDefault: f.BorderDefault,
+		BorderFocus:   f.BorderFocus,
+		Success:       f.Success,
+		Warning:       f.Warning,
+		Danger:        f.Danger,
+		Info:          f.Info,
+		Overlay:       f.Overlay,
+	}
+	if strings.TrimSpace(f.Arrangement) != "" {
+		if arrangement := normalizeHomeArrangement(f.Arrangement); arrangement != homeArrangementCustom {
+			preset.Arrangement = arrangement
+			preset.Kind = themeKindConversion
+			if preset.Summary == "" {
+				preset.Summary = "Custom theme · " + homeArrangementLabel(arrangement)
+			}
+		}
+	}
+	return preset, nil
 }
 
 // LoadThemeFiles registers themes from themeDir/*.json. The file name (without

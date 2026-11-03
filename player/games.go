@@ -1115,18 +1115,16 @@ func renderPong(renderer *sdl.Renderer, config *Config) {
 // ──────────────────────────────────────────────────────────────────────
 
 func renderGameOver(renderer *sdl.Renderer, config *Config, title string, score int) {
-	// Dim overlay
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 160)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	// Same dim and corner radius as every other modal card. The accent border
+	// stays: a finished run is the one card that celebrates rather than reports.
+	drawOverlayScrim(renderer)
 
-	// Card
 	cardW := int32(400)
 	cardH := int32(200)
 	cx := (screenWidth - cardW) / 2
 	cy := (screenHeight - cardH) / 2
-	fillRoundedRect(renderer, cx, cy, cardW, cardH, 16, ColorPanel)
-	strokeRoundedRect(renderer, cx, cy, cardW, cardH, 16, 2, getAccentColor(config))
+	fillRoundedRect(renderer, cx, cy, cardW, cardH, OverlayCardRadius, ColorPanelRaised)
+	strokeRoundedRect(renderer, cx, cy, cardW, cardH, OverlayCardRadius, 2, getAccentColor(config))
 
 	font, _ := getCachedFont(config, "large")
 	bodyFont, _ := getCachedFont(config, "medium")

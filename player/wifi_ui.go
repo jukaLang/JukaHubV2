@@ -92,6 +92,7 @@ const (
 	wifiActionForget
 	wifiActionDiag
 	wifiActionDiagRefresh
+	wifiActionDiagCopy
 	wifiActionDiagBack
 	wifiActionClose
 )
@@ -688,6 +689,8 @@ func handleWiFiKey(e *sdl.KeyboardEvent, config *Config) bool {
 			wifiDiagScroll(5)
 		case sdl.K_RETURN, sdl.K_SPACE, sdl.K_r, sdl.K_y:
 			wifiDiagRefreshAsync()
+		case sdl.K_c:
+			wifiDiagCopyReport()
 		case sdl.K_i, sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 			closeWiFiDiagnostics()
 		}
@@ -744,6 +747,8 @@ func ctrlWiFi(e *sdl.ControllerButtonEvent, config *Config) bool {
 			wifiDiagScroll(1)
 		case sdl.CONTROLLER_BUTTON_A:
 			wifiDiagRefreshAsync()
+		case sdl.CONTROLLER_BUTTON_Y:
+			wifiDiagCopyReport()
 		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
 			closeWiFiDiagnostics()
 		}
@@ -788,6 +793,8 @@ func wifiRunAction(id wifiActionID) {
 		openWiFiDiagnostics()
 	case wifiActionDiagRefresh:
 		wifiDiagRefreshAsync()
+	case wifiActionDiagCopy:
+		wifiDiagCopyReport()
 	case wifiActionDiagBack:
 		closeWiFiDiagnostics()
 	case wifiActionClose:
@@ -933,7 +940,7 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 	smallH := int32(font.Height())
-	const padX = int32(24)
+	const padX = OverlayPadX
 
 	rowH := smallH + 22
 
@@ -942,7 +949,7 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	// keeps its own ink: a dead radio still warns in amber under the title.
 	line, lineColor := wifiStatusLine()
 	header := UIPanelHeader("Wi-Fi", line, "settings")
-	header.SubtitleColor = lineColor
+	header.SubtitleColor = StatusInk(lineColor)
 	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
 	// Touch users need visible buttons for rescan/reconnect/disconnect/forget;
@@ -977,18 +984,12 @@ func renderWiFiPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	wifiPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	// List window: keep the cursor in view without moving a short list.
@@ -1116,7 +1117,7 @@ func wifiPanelActionBar(renderer *sdl.Renderer, config *Config, font *ttf.Font,
 	}
 	var pills []pill
 	if wifiPanel.diagOpen {
-		pills = []pill{{wifiActionDiagRefresh, "Refresh"}, {wifiActionDiagBack, "Back"}}
+		pills = []pill{{wifiActionDiagRefresh, "Refresh"}, {wifiActionDiagCopy, "Copy"}, {wifiActionDiagBack, "Back"}}
 	} else {
 		if wifiPanel.available {
 			pills = append(pills, pill{wifiActionRescan, "Rescan"})

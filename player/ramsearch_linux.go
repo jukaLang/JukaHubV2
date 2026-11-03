@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"syscall"
 )
@@ -108,10 +109,28 @@ func (p *procMemReader) Regions() ([]memRegion, error) {
 	return parseWritableMaps(f)
 }
 
+// procMemOffset converts an address to the file offset /proc/<pid>/mem takes.
+// The kernel's offsets are signed, so an address above the signed range is not
+// a valid one: the conversion would wrap to a negative offset and seek before
+// the start of the file instead of failing, so it is reported as an error.
+func procMemOffset(addr uint64) (int64, error) {
+	// The limit is taken in the same unsigned type as the address, so the
+	// conversion below cannot be reached by a value that would wrap.
+	limit := uint64(math.MaxInt64)
+	if addr > limit {
+		return 0, fmt.Errorf("address %s is above the readable range", ramFormatAddr(addr))
+	}
+	return int64(addr), nil
+}
+
 // ReadAt reads from the process at addr. A short read is returned with the
 // count, not as an error, so callers can keep the bytes they did get.
 func (p *procMemReader) ReadAt(addr uint64, buf []byte) (int, error) {
-	n, err := p.mem.ReadAt(buf, int64(addr))
+	off, err := procMemOffset(addr)
+	if err != nil {
+		return 0, err
+	}
+	n, err := p.mem.ReadAt(buf, off)
 	if err == io.EOF {
 		err = nil
 	}
@@ -121,7 +140,11 @@ func (p *procMemReader) ReadAt(addr uint64, buf []byte) (int, error) {
 // WriteAt stores buf at addr. The mapping has to be writable, which is true of
 // every region a scan found.
 func (p *procMemReader) WriteAt(addr uint64, buf []byte) error {
-	n, err := p.mem.WriteAt(buf, int64(addr))
+	off, err := procMemOffset(addr)
+	if err != nil {
+		return err
+	}
+	n, err := p.mem.WriteAt(buf, off)
 	if err == io.EOF && n == len(buf) {
 		return nil
 	}

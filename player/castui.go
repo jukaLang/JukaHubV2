@@ -19,7 +19,16 @@ type castPanelState struct {
 	url  string
 	qr   [][]bool
 	err  string
+	// focus is the selected control: the share code or the on/off switch.
+	// The switch keeps the selection when the panel opens so A means what it
+	// has always meant there; the code is one Up/Left away.
+	focus int
 }
+
+const (
+	castFocusQR = iota
+	castFocusSwitch
+)
 
 var castPanel castPanelState
 
@@ -38,6 +47,7 @@ func castShareURL() string {
 
 func openCastPanel(config *Config) {
 	qs.open = false
+	castPanel.focus = castFocusSwitch
 	toolsPanel.open = false
 	a11y.open = false
 	smartHomePanel.open = false
@@ -55,7 +65,38 @@ func closeCastPanel() {
 		return
 	}
 	castPanel.open = false
+	castToggleRect = sdl.Rect{}
+	castQRRect = sdl.Rect{}
 	PlayBackSound()
+}
+
+// castPanelMoveFocus selects the neighbouring control. Both axes work: the
+// code sits left of the switch, and Up/Down is what a handheld user reaches
+// for first.
+func castPanelMoveFocus(delta int) bool {
+	next := castPanel.focus + delta
+	if next < castFocusQR {
+		next = castFocusSwitch
+	}
+	if next > castFocusSwitch {
+		next = castFocusQR
+	}
+	if next == castPanel.focus {
+		return false
+	}
+	castPanel.focus = next
+	PlayNavSound()
+	return true
+}
+
+// castPanelActivate runs the selected control: the code opens full screen so
+// a phone can read it, the switch turns the cast on or off.
+func castPanelActivate() {
+	if castPanel.focus == castFocusQR {
+		qrZoomOpenCard(castPanel.qr, "Remote Cast")
+		return
+	}
+	castPanelToggle()
 }
 
 // castPanelRefresh rebuilds the link and QR when the address or PIN changed.
@@ -120,8 +161,12 @@ func handleCastKey(e *sdl.KeyboardEvent, config *Config) bool {
 	switch e.Keysym.Sym {
 	case sdl.K_ESCAPE, sdl.K_b:
 		closeCastPanel()
+	case sdl.K_UP, sdl.K_LEFT:
+		castPanelMoveFocus(-1)
+	case sdl.K_DOWN, sdl.K_RIGHT:
+		castPanelMoveFocus(1)
 	case sdl.K_RETURN, sdl.K_SPACE, sdl.K_a:
-		castPanelToggle()
+		castPanelActivate()
 	case sdl.K_y:
 		// A new PIN invalidates the shared link, which is how a viewer is
 		// kicked out: the old link stops authorising immediately.
@@ -144,8 +189,12 @@ func ctrlCastPanel(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return true
 	}
 	switch e.Button {
+	case sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+		castPanelMoveFocus(-1)
+	case sdl.CONTROLLER_BUTTON_DPAD_DOWN, sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+		castPanelMoveFocus(1)
 	case sdl.CONTROLLER_BUTTON_A:
-		castPanelToggle()
+		castPanelActivate()
 	case sdl.CONTROLLER_BUTTON_Y:
 		companionRestart()
 		if castIsEnabled() {
@@ -164,9 +213,16 @@ func handleCastMouse(mx, my int32, config *Config) bool {
 	if !castPanel.open {
 		return false
 	}
-	// The whole card is a toggle except the title row, which keeps the panel
-	// from closing on an accidental tap outside.
+	// The code enlarges, the switch toggles, and a tap anywhere else closes
+	// the panel (but not on the title row, so an accidental tap outside the
+	// controls is not a dismissal).
+	if castQRRect.W > 0 && pointInRect(mx, my, castQRRect) {
+		castPanel.focus = castFocusQR
+		castPanelActivate()
+		return true
+	}
 	if castToggleRect.W > 0 && pointInRect(mx, my, castToggleRect) {
+		castPanel.focus = castFocusSwitch
 		castPanelToggle()
 		return true
 	}
@@ -174,8 +230,12 @@ func handleCastMouse(mx, my int32, config *Config) bool {
 	return true
 }
 
-// castToggleRect is the on/off switch row, measured during render.
-var castToggleRect sdl.Rect
+// castToggleRect is the on/off switch row and castQRRect the share code; both
+// are measured during render so clicks and the drawn card agree.
+var (
+	castToggleRect sdl.Rect
+	castQRRect     sdl.Rect
+)
 
 // renderCastPanel draws the share card: QR on the left, link and state on the
 // right, switch at the bottom.
@@ -230,7 +290,16 @@ func renderCastPanel(renderer *sdl.Renderer, config *Config) {
 	if len(castPanel.qr) > 0 {
 		drawCompanionQR(renderer, sdl.Rect{X: qrX, Y: qrY, W: qrSize, H: qrSize}, castPanel.qr)
 	}
+	// The code is a control, so it is recorded for clicks and wears the same
+	// ring the panel's other selected control does.
+	castQRRect = sdl.Rect{X: qrX, Y: qrY, W: qrSize, H: qrSize}
+	if castPanel.focus == castFocusQR {
+		strokeRoundedRect(renderer, qrX-3, qrY-3, qrSize+6, qrSize+6, 10, 3, accent)
+	}
 	caption := "Scan to watch on a phone or laptop"
+	if len(castPanel.qr) > 0 {
+		caption = hintLine(FooterHint{"A", "Enlarge"}, FooterHint{Label: "scan to watch on a phone"})
+	}
 	drawText(renderer, smallFont, caption, qrX, qrY+qrSize+6, dim, textAlignLeft)
 	drawText(renderer, smallFont, "Viewers must be on the same Wi-Fi", qrX, qrY+qrSize+6+line, dim, textAlignLeft)
 
@@ -290,11 +359,15 @@ func renderCastPanel(renderer *sdl.Renderer, config *Config) {
 			Font:       bodyFont,
 			Radius:     RadiusSM,
 			NoShadow:   true,
-		}, UIButtonState{})
+		}, UIButtonState{Focused: castPanel.focus == castFocusSwitch})
 	}
 
-	hints := hintLine(FooterHint{"A / Enter", "Toggle Cast"}, FooterHint{"Y", "New PIN"},
-		FooterHint{"B / Esc", "Close"})
+	action := "Toggle Cast"
+	if castPanel.focus == castFocusQR {
+		action = "Enlarge QR"
+	}
+	hints := hintLine(FooterHint{"↑ ↓", "Select"}, FooterHint{"A / Enter", action},
+		FooterHint{"Y", "New PIN"}, FooterHint{"B / Esc", "Close"})
 	hw, _, _ := smallFont.SizeUTF8(hints)
 	drawText(renderer, smallFont, hints, cardX+(cardW-int32(hw))/2, footerY, dim, textAlignLeft)
 }

@@ -5,6 +5,7 @@ package main
 // panic, and the card must swallow every key while it is open.
 
 import (
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -67,12 +68,11 @@ func TestCompanionCardDrawsScannableQR(t *testing.T) {
 
 	f := probeCompanionCard(t, companionOverlay{open: true, pin: pin, url: urlish, qr: modules})
 
-	// The card is 760x430 centred in the probe frame; the QR sits at the
-	// left edge of its padding. Count black pixels inside that square and
-	// make sure they cluster like a code rather than one stray line.
-	qrX := (probeW-760)/2 + 24
-	qrY := (probeH-430)/2 + 24 + 40
-	box := sdl.Rect{X: qrX, Y: qrY, W: 286, H: 286}
+	// Measure the square actually drawn: its size follows the font and viewport.
+	box := companionQRRect
+	if box.W < int32(len(modules)) || box.H != box.W {
+		t.Fatalf("QR box cannot fit its modules: %+v", box)
+	}
 	black := 0
 	for y := box.Y + 4; y < box.Y+box.H-4; y++ {
 		for x := box.X + 4; x < box.X+box.W-4; x++ {
@@ -91,10 +91,10 @@ func TestCompanionCardDrawsScannableQR(t *testing.T) {
 
 	// The PIN is drawn to the right of the code, in the accent colour, so the
 	// right column must contain pixels the card background does not have.
-	bg := f.at(qrX+box.W+60, qrY+4)
+	bg := f.at(box.X+box.W+20, box.Y+4)
 	coloured := 0
-	for y := qrY; y < qrY+140; y++ {
-		for x := qrX + box.W + 20; x < qrX+box.W+300; x++ {
+	for y := box.Y; y < box.Y+140; y++ {
+		for x := box.X + box.W + 20; x < box.X+box.W+300; x++ {
 			c := f.at(x, y)
 			if c.R != bg.R || c.G != bg.G || c.B != bg.B {
 				coloured++
@@ -103,6 +103,39 @@ func TestCompanionCardDrawsScannableQR(t *testing.T) {
 	}
 	if coloured < 200 {
 		t.Fatalf("right column has only %d drawn pixels; the PIN/status text is missing", coloured)
+	}
+}
+
+func TestCompanionCardColumnsAndAddressFit(t *testing.T) {
+	newProbeFrame(t)
+	config := &Config{}
+	font := getSmallFont(config)
+	if font == nil {
+		t.Fatal("no usable font for companion layout")
+	}
+	address := "http://192.168.1.111:8317/?p=134276"
+	for _, tc := range []struct{ width, height, titleH, lineH int32 }{
+		{1280, 720, 32, 24},
+		{960, 720, 42, 32},
+		{640, 480, 42, 32},
+	} {
+		layout := companionCardLayoutFor(tc.width, tc.height, tc.titleH, tc.lineH)
+		if layout.left.X+layout.left.W > layout.right.X || layout.qr.Y+layout.qr.H+6+3*tc.lineH > layout.contentBottom {
+			t.Fatalf("columns or QR captions overlap: %+v", layout)
+		}
+		if layout.right.Y+layout.right.H > layout.footerY || layout.footerY+tc.lineH > layout.card.Y+layout.card.H {
+			t.Fatalf("content overlaps footer: %+v", layout)
+		}
+		lines := companionWrapAddress(font, address, layout.right.W)
+		if strings.Join(lines, "") != address {
+			t.Fatalf("address was lost: %q", lines)
+		}
+		for _, line := range lines {
+			width, _, err := font.SizeUTF8(line)
+			if err != nil || int32(width) > layout.right.W {
+				t.Fatalf("address line %q exceeds %d pixels", line, layout.right.W)
+			}
+		}
 	}
 }
 

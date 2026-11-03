@@ -62,6 +62,10 @@ var communityRowRects []sdl.Rect
 
 var communityPanelRect sdl.Rect
 
+// communityQRRect is the diagnostics code as drawn, so a tap can enlarge it.
+// Render/event thread only; empty when the page has no code to show.
+var communityQRRect sdl.Rect
+
 var communityBIOSReport *biosDoctorReport
 var communityDiagnosticQR struct {
 	url  string
@@ -343,8 +347,12 @@ func handleCommunityKey(e *sdl.KeyboardEvent, config *Config) bool {
 		return true
 	}
 	if communityPanel.page == communityPageDiagnosticsQR {
+		// The code is the page's only control: A/Enter enlarges it, B backs
+		// out to the list. Selecting the code used to mean leaving the page.
 		switch e.Keysym.Sym {
-		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_SPACE:
+		case sdl.K_RETURN, sdl.K_KP_ENTER, sdl.K_SPACE, sdl.K_a:
+			qrZoomOpenCard(communityDiagnosticQR.qr, "Diagnostics export")
+		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE:
 			communityPanel.page = communityPageHome
 			communityPanel.cursor = 0
 			PlayBackSound()
@@ -397,6 +405,17 @@ func ctrlCommunity(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return false
 	}
 	if communityPanel.page == communityPageBIOSDoctor || communityPanel.page == communityPageDiagnosticsQR {
+		if communityPanel.page == communityPageDiagnosticsQR {
+			switch e.Button {
+			case sdl.CONTROLLER_BUTTON_A:
+				qrZoomOpenCard(communityDiagnosticQR.qr, "Diagnostics export")
+			case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
+				communityPanel.page = communityPageHome
+				communityPanel.cursor = 0
+				PlayBackSound()
+			}
+			return true
+		}
 		switch e.Button {
 		case sdl.CONTROLLER_BUTTON_DPAD_UP:
 			if communityPanel.page == communityPageBIOSDoctor {
@@ -456,6 +475,12 @@ func handleCommunityMouse(mx, my int32, config *Config) bool {
 		return false
 	}
 	if communityPanel.page != communityPageHome {
+		// The diagnostics code enlarges on a tap; every other click on a
+		// sub-page returns to the list.
+		if communityQRRect.W > 0 && pointInRect(mx, my, communityQRRect) {
+			qrZoomOpenCard(communityDiagnosticQR.qr, "Diagnostics export")
+			return true
+		}
 		if communityPanelRect.W > 0 && !pointInRect(mx, my, communityPanelRect) {
 			closeCommunityPanel()
 			return true
@@ -560,19 +585,13 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 	panelX := (screenWidth - panelW) / 2
 	panelY := (screenHeight - panelH) / 2
 	communityPanelRect = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
-	const padX = int32(24)
+	const padX = OverlayPadX
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	if communityPanel.page == communityPageChangelog {
@@ -661,8 +680,13 @@ func renderCommunityDiagnosticsQR(renderer *sdl.Renderer, config *Config, font, 
 	qrRect := sdl.Rect{X: panelX + (panelW-qrSize)/2, Y: panelY + headerH + 24, W: qrSize, H: qrSize}
 	fillRoundedRect(renderer, qrRect.X, qrRect.Y, qrRect.W, qrRect.H, 10, sdl.Color{R: 255, G: 255, B: 255, A: 255})
 	labelY := qrRect.Y + qrRect.H + 18
+	communityQRRect = sdl.Rect{}
 	if len(communityDiagnosticQR.qr) > 0 {
 		drawCompanionQR(renderer, sdl.Rect{X: qrRect.X + 8, Y: qrRect.Y + 8, W: qrRect.W - 16, H: qrRect.H - 16}, communityDiagnosticQR.qr)
+		// The code is a control on this page, so it is ringed like the other
+		// selected things and recorded for the click and A paths.
+		communityQRRect = qrRect
+		strokeRoundedRect(renderer, qrRect.X-3, qrRect.Y-3, qrRect.W+6, qrRect.H+6, 12, 3, installHighlight())
 		label := "Scan to download · link expires in 10 minutes"
 		w, _, _ := font.SizeUTF8(label)
 		renderText(renderer, config, font, label, ColorTextSecondary(), panelX+(panelW-int32(w))/2, labelY)
@@ -692,6 +716,9 @@ func renderCommunityDiagnosticsQR(renderer *sdl.Renderer, config *Config, font, 
 			panelX+(panelW-int32(w))/2, labelY)
 	}
 	footer := hintLine(FooterHint{"B", "Back"})
+	if len(communityDiagnosticQR.qr) > 0 {
+		footer = hintLine(FooterHint{"A", "Enlarge"}, FooterHint{"B", "Back"})
+	}
 	fw, _, _ := medium.SizeUTF8(footer)
 	renderText(renderer, config, medium, footer, ColorTextTertiary(),
 		panelX+(panelW-int32(fw))/2, panelY+panelH-30)

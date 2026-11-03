@@ -601,7 +601,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const padX = int32(24)
+	const padX = OverlayPadX
 	rowH := 8 + medH + 4 + smallH + 8
 
 	// The title band is the shared page header, built before the card is sized so
@@ -614,7 +614,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 	}
 	header := UIPanelHeader(title, windowsAppsSummary(entries, runtime), "apps")
 	if !runtime.ready() {
-		header.SubtitleColor = ColorWarning
+		header.SubtitleColor = WarningInk()
 	}
 	headerH := UIPanelHeaderBand(config, header, 14)
 	footerH := 20 + smallH
@@ -672,18 +672,12 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 		winAppsPanel.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	if winAppsPanel.help {
@@ -709,11 +703,11 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 				strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 12, 1, focusColor)
 			}
 			renderText(renderer, config, medium, row.Title, ColorTextPrimary(), r.X+16, r.Y+8)
-			statusColor := ColorToastSuccess
+			statusColor := ToastSuccessInk()
 			if row.Bad {
-				statusColor = ColorToastError
+				statusColor = ToastErrorInk()
 			} else if row.Status == "installing" {
-				statusColor = ColorWarning
+				statusColor = WarningInk()
 			}
 			sw, _, _ := font.SizeUTF8(row.Status)
 			renderText(renderer, config, font, row.Status, statusColor, r.X+r.W-16-int32(sw), r.Y+8+(medH-smallH)/2)
@@ -729,13 +723,13 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			color := ColorTextSecondary()
 			switch {
 			case line != "" && line == winAppsPanel.notice:
-				color = ColorWarning
+				color = WarningInk()
 			case strings.HasPrefix(line, "Missing:"):
-				color = ColorToastError
+				color = ToastErrorInk()
 			case strings.HasPrefix(line, "Installer:") && strings.Contains(line, "failed"):
-				color = ColorToastError
+				color = ToastErrorInk()
 			case strings.HasPrefix(line, "Installer:"):
-				color = ColorWarning
+				color = WarningInk()
 			case strings.HasPrefix(line, "Wine:") || strings.HasPrefix(line, "Box64:") ||
 				strings.HasPrefix(line, "Display:") || strings.HasPrefix(line, "WestonPack:") ||
 				strings.HasPrefix(line, "DXVK:") || strings.HasPrefix(line, "Vulkan:"):
@@ -789,9 +783,9 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 
 			renderText(renderer, config, medium, entry.Title, ColorTextPrimary(), r.X+16, r.Y+8)
 			status := windowsAppStatus(entry, runtime)
-			statusColor := ColorToastSuccess
+			statusColor := ToastSuccessInk()
 			if status == "Unavailable" {
-				statusColor = ColorToastError
+				statusColor = ToastErrorInk()
 			} else if status == "Running" {
 				statusColor = accentColor
 			}
@@ -801,7 +795,7 @@ func renderWindowsAppsPanel(renderer *sdl.Renderer, config *Config) {
 			detail := windowsAppDetail(entry)
 			detailColor := ColorTextTertiary()
 			if !runtime.ready() {
-				detailColor = ColorToastError
+				detailColor = ToastErrorInk()
 			}
 			renderText(renderer, config, font, ellipsize(font, detail, r.W-32),
 				detailColor, r.X+16, r.Y+8+medH+4)

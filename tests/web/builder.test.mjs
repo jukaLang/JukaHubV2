@@ -47,6 +47,8 @@ before(async () => {
     pretendToBeVisual: true,
     virtualConsole,
     beforeParse(window) {
+      window.localStorage.setItem('jukahub-ai-key', 'old-test-key');
+      window.localStorage.setItem('jukahub-ai-provider', 'openai');
       window.matchMedia ||= () => ({ matches: false, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
       window.ResizeObserver ||= class { observe() {} unobserve() {} disconnect() {} };
       window.IntersectionObserver ||= class { observe() {} unobserve() {} disconnect() {} };
@@ -391,6 +393,102 @@ test('the exported schemaVersion matches the player ConfigSchemaVersion', () => 
   assert.equal(exported.schemaVersion, playerVersion, 'builder export carries the player schema version');
 });
 
+// The canvas draws tiles with Font Awesome and the player draws them with SDL
+// primitives, so the two can only agree on which picture a name means. They did
+// not: the canvas searched the label in its own order and ignored an explicit
+// `icon`, which made the Tools card a grid here and sliders on the device, and
+// drew Exit as a door where the player draws a power ring. These cases come from
+// player/homelayout.go (drawHomeIconShapes, the home scene) and
+// player/launcher.go (explicitTileIcon, tileIconKind, drawTileIcon).
+test('tile icons follow the player home and launcher vocabularies', () => {
+  const { window } = dom;
+  const iconFor = (icon, text, trigger, layout) => window.eval(
+    `tileIconClass(${JSON.stringify(icon)}, ${JSON.stringify(text)}, ${JSON.stringify(trigger)}, ${JSON.stringify(layout)})`
+  );
+
+  // Home scene: the name alone decides what is drawn.
+  const home = {
+    continue: 'fa-play',
+    media: 'fa-play',
+    files: 'fa-folder',
+    packages: 'fa-box',
+    apps: 'fa-table-cells-large',
+    favorites: 'fa-star',
+    browser: 'fa-globe',
+    chat: 'fa-comment',
+    tools: 'fa-sliders',
+    settings: 'fa-gear',
+    clock: 'fa-clock',
+    emulator: 'fa-gamepad',
+    exit: 'fa-power-off'
+  };
+  for (const [name, glyph] of Object.entries(home)) {
+    assert.ok(iconFor(name, '', '', 'home').includes(glyph), `home tile ${name} should draw ${glyph}`);
+  }
+  // A home tile without its own icon keeps the card's built-in one.
+  assert.ok(iconFor('', 'Tools', 'change_scene:Misc', 'home').includes('fa-sliders'));
+  assert.ok(iconFor('not-a-glyph', 'Media', 'change_scene:Tube', 'home').includes('fa-circle'), 'unknown home name falls back to a ring, like drawHomeIconShapes');
+
+  // Ordinary scene: an explicit glyph name wins over what the label suggests.
+  assert.ok(iconFor('disk', 'Disk Space', 'change_scene:DiskSpace', '').includes('fa-hard-drive'));
+  assert.ok(iconFor('cache', 'Clear Cache', 'cache_clear', '').includes('fa-broom'));
+  assert.ok(iconFor('logs', 'Log Exporter', 'change_scene:LogExporter', '').includes('fa-file-lines'));
+
+  // Otherwise the label and trigger are searched in tileIconKind's order:
+  // apps/tools comes before anything else tool-like, and continue is last.
+  assert.ok(iconFor('', 'Tools', 'change_scene:Misc', '').includes('fa-table-cells-large'));
+  assert.ok(iconFor('', 'Continue', 'change_scene:Tube', '').includes('fa-play'));
+  assert.ok(iconFor('', 'Weather', '', '').includes('fa-cloud'));
+  assert.ok(iconFor('', 'Nothing in particular', '', '').includes('fa-table-cells-large'));
+
+  // The tile the canvas builds carries the glyph, not just the helper: a home
+  // card and an ordinary tools tile must end up with different pictures.
+  const tileIcon = (data, layout) => {
+    window.eval(`window.__tile = createElementFromData(${JSON.stringify(data)}, ${JSON.stringify(layout)})`);
+    const cls = window.eval("window.__tile.querySelector('.tile-icon i').className");
+    window.eval("window.__tile.remove(); delete window.__tile;");
+    return cls;
+  };
+  const tile = { type: 'button', style: 'tile', x: 0, y: 0, width: '120', height: '120' };
+  assert.ok(tileIcon({ ...tile, icon: 'tools', text: 'Tools', trigger: 'change_scene:Misc' }, 'home').includes('fa-sliders'), 'a home Tools card draws sliders');
+  assert.ok(tileIcon({ ...tile, icon: 'tools', text: 'Tools', trigger: 'change_scene:Misc' }, '').includes('fa-table-cells-large'), 'a Tools tile outside the home scene draws the app grid');
+  assert.ok(tileIcon({ ...tile, icon: 'disk', text: 'Disk Space', trigger: 'change_scene:DiskSpace' }, '').includes('fa-hard-drive'), 'a tile with an explicit glyph name keeps it');
+});
+
+// The shipped config's home screen is applied card by card, keyed on the tile's
+// text (player/homelayout.go ApplyConfig + configItemFor): a tile whose text
+// names no card is simply not drawn on the device while the canvas shows it.
+// Its icon must also be one drawHomeIconShapes can paint, or the tile reads as
+// the unknown-icon ring.
+test('every home tile in the shipped configs is a card the player draws', () => {
+  const go = fs.readFileSync(path.join(root, 'player/homelayout.go'), 'utf8');
+  const cardTitles = [...go.matchAll(/card\(HomeFocus\w+,\s*"([^"]+)"/g)].map(m => m[1]);
+  assert.ok(cardTitles.length >= 10, 'could not read the home card titles from player/homelayout.go');
+
+  const { window } = dom;
+  for (const file of ['player/jukaconfig.json', 'player/trimui/jukaconfig.device.json']) {
+    const config = JSON.parse(fs.readFileSync(path.join(root, file), 'utf8'));
+    const home = config.scenes.find(scene => String(scene.layout || '').toLowerCase() === 'home');
+    assert.ok(home, `${file} has a home-layout scene`);
+    for (const el of home.elements) {
+      const text = String(el.text || '');
+      // A home scene is drawn by the home layout, not by its element list: a
+      // tile with no text names no card, so the device never draws it while the
+      // canvas would (this is how a second Continue card got into the device
+      // config).
+      assert.ok(text.trim() !== '', `${file}: a ${el.type} with no text is drawn on the canvas but ignored by the player`);
+      assert.ok(
+        cardTitles.some(title => title.toLowerCase() === text.toLowerCase() || text.toLowerCase().includes('tools') && title === 'Tools'),
+        `${file}: home tile ${JSON.stringify(text)} names no home card in player/homelayout.go`
+      );
+      const cls = window.eval(
+        `tileIconClass(${JSON.stringify(el.icon || '')}, ${JSON.stringify(text)}, ${JSON.stringify(el.trigger || '')}, 'home')`
+      );
+      assert.ok(!cls.includes('fa-circle'), `${file}: home tile ${text} would draw the unknown-icon ring`);
+    }
+  }
+});
+
 // Every form control needs an accessible name. Three trigger selects shipped
 // without one (axe: select-name, critical) because they sit in a panel that is
 // hidden until an element is selected, so a scan of the loaded page missed them.
@@ -456,6 +554,32 @@ test('scene bars share one clock timer instead of leaking one per menu', () => {
   const clocks = [...window.document.querySelectorAll('#canvas .menu-clock')];
   assert.ok(clocks.length >= 1, 'the new scene has a scene bar');
   assert.match(clocks[0].textContent, /^\d{2}:\d{2}$/, 'the clock shows the time now');
+});
+
+test('the Element inspector shows controls only for a selection', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const original = window.eval('captureWorkspace("inspector-test")');
+  const empty = doc.getElementById('noSelection');
+  const geometry = doc.querySelector('.position-controls');
+  try {
+    window.clearSelectionState();
+    window.switchTab('element-properties');
+    assert.notEqual(window.getComputedStyle(empty).display, 'none');
+    assert.equal(window.getComputedStyle(geometry).display, 'none');
+    const el = window.addElement('button', 60, 60);
+    el.click();
+    assert.equal(window.getComputedStyle(empty).display, 'none');
+    assert.equal(window.getComputedStyle(geometry).display, 'grid');
+    window.enterPreviewMode();
+    window.exitPreviewMode();
+    window.switchTab('element-properties');
+    assert.notEqual(window.getComputedStyle(empty).display, 'none', 'preview clears the selection');
+    assert.equal(window.getComputedStyle(geometry).display, 'none');
+  } finally {
+    if (window.eval('previewMode')) window.exitPreviewMode();
+    window.restoreSnapshot(original);
+  }
 });
 
 test('switching scenes releases the element the Inspector was editing', () => {
@@ -529,6 +653,32 @@ test('a plain click records no undo step and a drag records one', () => {
   assert.notEqual(el.getAttribute('data-x'), '120', 'the element moved');
 });
 
+test('component search hides empty categories and explains when nothing matches', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const search = doc.getElementById('componentSearch');
+  const sections = [...doc.querySelectorAll('.left-sidebar .component-section')];
+  const empty = doc.getElementById('componentSearchEmpty');
+  const filter = value => {
+    search.value = value;
+    search.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  try {
+    filter('search results');
+    assert.deepEqual(sections.map(section => section.hidden), [true, true, false]);
+    assert.equal(empty.hidden, true);
+    filter('no such component');
+    assert.ok(sections.every(section => section.hidden));
+    assert.equal(empty.hidden, false);
+    filter('');
+    assert.ok(sections.every(section => !section.hidden));
+    assert.ok([...doc.querySelectorAll('.left-sidebar .element[data-type]')].every(el => !el.hidden));
+    assert.equal(empty.hidden, true);
+  } finally {
+    filter('');
+  }
+});
+
 test('the mobile tab strip follows a drawer that closes on its own', () => {
   const { window } = dom;
   const doc = window.document;
@@ -546,5 +696,203 @@ test('the mobile tab strip follows a drawer that closes on its own', () => {
   } finally {
     if (own) Object.defineProperty(window, 'innerWidth', own);
     else delete window.innerWidth;
+  }
+});
+
+
+test('snap to grid is optional and respects zoom, bounds and undo', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const toggle = doc.getElementById('snapGridBtn');
+  const el = window.eval("addElement('button', 13, 17)");
+  Object.defineProperties(el, {
+    offsetLeft: { configurable: true, get: () => parseFloat(el.style.left) },
+    offsetTop: { configurable: true, get: () => parseFloat(el.style.top) },
+    offsetWidth: { configurable: true, value: 120 },
+    offsetHeight: { configurable: true, value: 40 },
+  });
+  const previousScale = window.eval('canvasScale');
+  window.eval('canvasScale = 0.5');
+  const drag = (dx, dy) => {
+    el.dispatchEvent(new window.MouseEvent('mousedown', { bubbles: true, clientX: 10, clientY: 10 }));
+    doc.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true, clientX: 10 + dx, clientY: 10 + dy }));
+    doc.dispatchEvent(new window.MouseEvent('mouseup', { bubbles: true }));
+  };
+  try {
+    assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+    drag(2, 3);
+    assert.equal(el.getAttribute('data-x'), '17');
+    assert.equal(el.getAttribute('data-y'), '23');
+    toggle.click();
+    assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+    drag(0, 0);
+    assert.equal(el.getAttribute('data-x'), '17', 'a click does not snap an off-grid item');
+    drag(5, 5);
+    assert.equal(el.getAttribute('data-x'), '24');
+    assert.equal(el.getAttribute('data-y'), '32');
+    assert.equal(window.eval('undoStack[undoStack.length - 1].label'), 'move');
+    window.eval('undo()');
+    assert.ok(doc.querySelector('#canvas .element[data-x="17"][data-y="23"]'), 'undo restores the unsnapped location');
+    el.style.left = '13px';
+    el.style.top = '17px';
+    window.beginElementDrag(el, 0, 0);
+    window.moveElementDrag(10000, 10000);
+    assert.equal(Number(el.getAttribute('data-x')), window.eval('canvasWidth') - 120);
+    assert.equal(Number(el.getAttribute('data-y')), window.eval('canvasHeight') - 40);
+    window.endElementDrag();
+  } finally {
+    if (toggle.getAttribute('aria-pressed') === 'true') toggle.click();
+    window.eval(`canvasScale = ${previousScale}`);
+  }
+});
+
+test('alignment guides are optional, zoom-aware and never change or save the layout', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const canvas = doc.getElementById('canvas');
+  const toggle = doc.getElementById('alignmentGuidesBtn');
+  const overlay = doc.getElementById('alignmentGuides');
+  const vertical = overlay.querySelector('.alignment-guide--vertical');
+  const horizontal = overlay.querySelector('.alignment-guide--horizontal');
+  const hidden = [...canvas.children].map(el => [el, el.hidden]);
+  hidden.forEach(([el]) => { el.hidden = true; });
+  const el = window.addElement('button', 60, 20);
+  const target = window.addElement('button', 100, 40);
+  const layout = (item, width, height) => Object.defineProperties(item, {
+    offsetLeft: { configurable: true, get: () => parseFloat(item.style.left) },
+    offsetTop: { configurable: true, get: () => parseFloat(item.style.top) },
+    offsetWidth: { configurable: true, value: width },
+    offsetHeight: { configurable: true, value: height },
+  });
+  layout(el, 20, 20);
+  layout(target, 40, 20);
+  const previousScale = window.eval('canvasScale');
+  window.eval('canvasScale = 0.5');
+  try {
+    assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+    window.beginElementDrag(el, 0, 0);
+    window.moveElementDrag(10.5, 11);
+    assert.equal(overlay.hidden, true, 'guides are off by default');
+    window.endElementDrag();
+    el.style.left = '60px'; el.style.top = '20px';
+    toggle.click();
+    assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+    window.beginElementDrag(el, 0, 0);
+    window.moveElementDrag(10.5, 11);
+    assert.equal(el.getAttribute('data-x'), '81', 'guides do not snap the element');
+    assert.equal(el.getAttribute('data-y'), '42');
+    assert.equal(overlay.hidden, false);
+    assert.equal(vertical.hidden, false);
+    assert.equal(horizontal.hidden, false);
+    assert.equal(vertical.style.left, '50px');
+    assert.equal(horizontal.style.top, '20px');
+    window.saveCurrentScene();
+    assert.equal(window.eval('scenes[currentScene].some(el => el.id === "alignmentGuides")'), false);
+    window.moveElementDrag(70, 90);
+    assert.equal(overlay.hidden, true, 'no match hides the guides');
+    window.moveElementDrag(10.5, 11);
+    toggle.click();
+    assert.equal(overlay.hidden, true, 'turning guides off clears them mid-drag');
+    toggle.click();
+    window.moveElementDrag(10.5, 11);
+    window.endElementDrag();
+    assert.equal(overlay.hidden, true, 'guides disappear on release');
+  } finally {
+    window.endElementDrag();
+    if (toggle.getAttribute('aria-pressed') === 'true') toggle.click();
+    window.eval(`canvasScale = ${previousScale}`);
+    el.remove(); target.remove();
+    hidden.forEach(([item, value]) => { item.hidden = value; });
+    window.saveCurrentScene();
+  }
+});
+
+test('safe-area guide is optional, zoom-aware and excluded from the design', () => {
+  const { window } = dom;
+  const doc = window.document;
+  const toggle = doc.getElementById('safeAreaBtn');
+  const overlay = doc.getElementById('safeAreaOverlay');
+  const original = window.eval('captureWorkspace("safe-area-test")');
+  const previousScale = window.eval('canvasScale');
+  const previousManual = window.eval('zoomIsManual');
+  try {
+    window.eval('canvasWidth = 1280; canvasHeight = 720; syncCanvasSizeControls(); applyCanvasScale(1)');
+    const before = JSON.stringify(window.eval('captureWorkspace("safe-area-test")'));
+    const configBefore = JSON.stringify(window.buildEditorConfig());
+    const undoCount = window.eval('undoStack.length');
+    assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+    assert.equal(overlay.hidden, true);
+    toggle.click();
+    assert.equal(toggle.getAttribute('aria-pressed'), 'true');
+    assert.equal(overlay.hidden, false);
+    assert.equal(overlay.style.left, '32px');
+    assert.equal(overlay.style.top, '32px');
+    assert.equal(overlay.style.width, '1216px');
+    assert.equal(overlay.style.height, '656px');
+    window.applyCanvasScale(0.5);
+    assert.equal(overlay.style.left, '16px');
+    assert.equal(overlay.style.top, '16px');
+    assert.equal(overlay.style.width, '608px');
+    assert.equal(overlay.style.height, '328px');
+    assert.equal(JSON.stringify(window.eval('captureWorkspace("safe-area-test")')), before);
+    assert.equal(JSON.stringify(window.buildEditorConfig()), configBefore);
+    assert.equal(window.eval('undoStack.length'), undoCount);
+    window.eval('canvasWidth = 1024; canvasHeight = 768; syncCanvasSizeControls()');
+    assert.equal(overlay.hidden, true, 'guide is hidden on another device size');
+    assert.equal(toggle.getAttribute('aria-pressed'), 'true', 'choice is remembered');
+    window.eval('canvasWidth = 1280; canvasHeight = 720; syncCanvasSizeControls()');
+    assert.equal(overlay.hidden, false, 'guide returns on the handheld canvas');
+    window.enterPreviewMode();
+    assert.equal(overlay.hidden, true, 'guide is hidden in preview');
+    window.exitPreviewMode();
+    assert.equal(overlay.hidden, false, 'guide returns after preview');
+    toggle.click();
+    assert.equal(overlay.hidden, true);
+    assert.equal(toggle.getAttribute('aria-pressed'), 'false');
+  } finally {
+    if (window.eval('previewMode')) window.exitPreviewMode();
+    if (toggle.getAttribute('aria-pressed') === 'true') toggle.click();
+    window.restoreSnapshot(original);
+    window.eval(`zoomIsManual = ${previousManual}`);
+    window.applyCanvasScale(previousScale);
+  }
+});
+
+test('AI keys are session-only, legacy keys are removed and providers do not share keys', async () => {
+  const { window } = dom;
+  const doc = window.document;
+  const provider = doc.getElementById('aiProvider');
+  const key = doc.getElementById('aiApiKey');
+  assert.equal(window.localStorage.getItem('jukahub-ai-key'), null);
+  assert.equal(window.localStorage.getItem('jukahub-ai-provider'), null);
+  provider.value = 'openai';
+  provider.dispatchEvent(new window.Event('change'));
+  key.value = 'temporary-test-key';
+  const originalFetch = window.fetch;
+  let request;
+  window.fetch = async (url, options) => {
+    request = { url, options };
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'test reply' } }] }) };
+  };
+  try {
+    const prompt = doc.getElementById('aiPrompt');
+    prompt.value = 'add a tile';
+    prompt.dispatchEvent(new window.Event('input', { bubbles: true }));
+    doc.getElementById('aiSuggestBtn').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(request.url, 'https://api.openai.com/v1/chat/completions');
+    assert.equal(request.options.headers.Authorization, 'Bearer temporary-test-key');
+    assert.equal(window.localStorage.getItem('jukahub-ai-key'), null);
+    provider.value = 'anthropic';
+    provider.dispatchEvent(new window.Event('change'));
+    assert.equal(key.value, '', 'switching providers clears the old provider key');
+    key.value = 'second-test-key';
+    doc.getElementById('aiKeyClearBtn').click();
+    assert.equal(key.value, '');
+    assert.equal(window.localStorage.getItem('jukahub-ai-key'), null);
+  } finally {
+    window.fetch = originalFetch;
+    provider.value = 'free';
+    provider.dispatchEvent(new window.Event('change'));
   }
 });

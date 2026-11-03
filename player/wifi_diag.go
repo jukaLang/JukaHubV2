@@ -112,6 +112,30 @@ func supplicantStartNote() (string, string) {
 	return wifiSupplicantStartLog.iface, wifiSupplicantStartLog.note
 }
 
+// wifiDiagLast keeps the newest collected report for the diagnostics bundle.
+// The sheet's copy lives on the event thread; the bundle is built from a worker,
+// so this guarded snapshot is the one piece both may touch. A report is written
+// here by the collection itself, which means the bundle carries Wi-Fi facts even
+// when the sheet is opened after the export, or not at all.
+var wifiDiagLast struct {
+	mu     sync.Mutex
+	report wifiDiagReport
+}
+
+// rememberWiFiDiagReport stores a collection for the support bundle.
+func rememberWiFiDiagReport(report wifiDiagReport) {
+	wifiDiagLast.mu.Lock()
+	wifiDiagLast.report = report
+	wifiDiagLast.mu.Unlock()
+}
+
+// lastWiFiDiagReport returns the stored collection, zero when none has run.
+func lastWiFiDiagReport() wifiDiagReport {
+	wifiDiagLast.mu.Lock()
+	defer wifiDiagLast.mu.Unlock()
+	return wifiDiagLast.report
+}
+
 // ── Probes ─────────────────────────────────────────────────────────────────
 
 // wifiInterfaceSource names how the interface was discovered, in the order
@@ -281,6 +305,58 @@ func shortAge(d time.Duration) string {
 	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
+// ── The report as text ─────────────────────────────────────────────────────
+
+// wifiDiagReportText renders the sheet as plain text: the same labels and
+// values, one aligned pair per line, under a header that dates the collection.
+// Copy puts this on the clipboard and the bundle carries the same words, so what
+// a user pastes into a support thread and what is attached to it cannot drift.
+func wifiDiagReportText(report wifiDiagReport) string {
+	var sb strings.Builder
+	sb.WriteString("Wi-Fi diagnostics\n")
+	sb.WriteString("-----------------\n")
+	if report.At.IsZero() {
+		sb.WriteString("Collected    : not yet — the sheet is still reading the radio\n")
+		return sb.String()
+	}
+	// The label column follows the longest row, with the 13-column field
+	// DiagnosticsText uses as the floor, so the finished block reads as a table.
+	width := 13
+	for _, e := range report.Entries {
+		if len(e.Label) > width {
+			width = len(e.Label)
+		}
+	}
+	field := func(label string) string {
+		if n := width - len(label); n > 0 {
+			return label + strings.Repeat(" ", n)
+		}
+		return label
+	}
+	sb.WriteString(field("Collected") + ": " + report.At.Local().Format("Jan 2 2006 15:04:05") + "\n")
+	if len(report.Entries) == 0 {
+		sb.WriteString("No facts were read.\n")
+		return sb.String()
+	}
+	for _, e := range report.Entries {
+		sb.WriteString(field(e.Label) + ": " + e.Value + "\n")
+	}
+	return sb.String()
+}
+
+// wifiDiagBundleFacts is the sheet's report as it joins the diagnostics bundle.
+// Redaction runs here because this file leaves the device: control directories
+// and the supplicant's config path can carry an account name. A session that
+// never collected a report says so instead of reading like a device with no
+// Wi-Fi facts.
+func wifiDiagBundleFacts() string {
+	report := lastWiFiDiagReport()
+	if report.At.IsZero() {
+		return "Wi-Fi diagnostics\n-----------------\nNot collected this session: open Wi-Fi → Diagnostics to read the radio.\n"
+	}
+	return redactDiagnosticText(wifiDiagReportText(report))
+}
+
 // ── Opening, closing, refreshing ───────────────────────────────────────────
 
 // openWiFiDiagnostics shows the sheet and starts collecting. It works whatever
@@ -316,8 +392,34 @@ func closeWiFiDiagnostics() {
 func wifiDiagRefreshAsync() {
 	wifiStartWork("Reading Wi-Fi state…", func() wifiUpdate {
 		report := collectWiFiDiagnostics()
+		rememberWiFiDiagReport(report)
 		return wifiUpdate{kind: wifiUpdateDiag, diag: &report}
 	})
+}
+
+// wifiDiagCopyReport is the sheet's Copy action: the report on the clipboard for
+// a support chat, and the same facts in a diagnostics bundle on the card. The
+// two destinations are attempted independently, because a platform that
+// refuses the clipboard must not cost the file and a full card must not cost the
+// paste. The report is the one on screen, so copying what the user just read is
+// the guarantee; the bundle adds the log and the cookie facts around it.
+func wifiDiagCopyReport() {
+	if len(wifiPanel.diag.Entries) == 0 {
+		ShowToast("The report is still being collected — try again in a moment", ToastKindInfo)
+		return
+	}
+	copyErr := copyTextToClipboard(wifiDiagReportText(wifiPanel.diag), "Wi-Fi diagnostics")
+	_, bundleErr := ExportDiagnosticsBundle(appConfig)
+	switch {
+	case copyErr == nil && bundleErr == nil:
+		ShowToast("Wi-Fi report copied · bundle saved", ToastKindSuccess)
+	case copyErr == nil:
+		ShowToast("Wi-Fi report copied · bundle failed: "+bundleErr.Error(), ToastKindWarning)
+	case bundleErr == nil:
+		ShowToast("Bundle saved · could not copy: "+copyErr.Error(), ToastKindWarning)
+	default:
+		ShowToast("Could not copy: "+copyErr.Error(), ToastKindWarning)
+	}
 }
 
 // wifiDiagScroll moves the sheet by rows, clamped to what was last rendered.
@@ -399,7 +501,7 @@ func renderWiFiDiagnostics(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	smallH := int32(font.Height())
-	const padX = int32(24)
+	const padX = OverlayPadX
 
 	panelW := int32(820)
 	if panelW > screenWidth-48 {
@@ -413,20 +515,14 @@ func renderWiFiDiagnostics(renderer *sdl.Renderer, config *Config) {
 	// that is not drawn.
 	wifiRowRects = wifiRowRects[:0]
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
 	header := UIPanelHeader("Wi-Fi diagnostics", wifiDiagSubtitle(), "settings")
-	header.SubtitleColor = wifiDiagSubtitleColor()
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header.SubtitleColor = StatusInk(wifiDiagSubtitleColor())
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	headerH := UIPanelHeaderBand(config, header, 14)
 	UIPageHeaderDraw(renderer, config, header)
 
@@ -480,9 +576,9 @@ func renderWiFiDiagnostics(renderer *sdl.Renderer, config *Config) {
 	wifiPanelActionBar(renderer, config, font, panelX,
 		panelY+panelH-footerH-actionH, panelW, actionH, smallH)
 
-	footer := hintLine(FooterHint{"A", "Refresh"}, FooterHint{"B", "Back"})
+	footer := hintLine(FooterHint{"A", "Refresh"}, FooterHint{"Y", "Copy"}, FooterHint{"B", "Back"})
 	if len(rows) > fits {
-		footer = hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"A", "Refresh"}, FooterHint{"B", "Back"})
+		footer = hintLine(FooterHint{"Up/Down", "Scroll"}, FooterHint{"A", "Refresh"}, FooterHint{"Y", "Copy"}, FooterHint{"B", "Back"})
 	}
 	fw, _, _ := font.SizeUTF8(footer)
 	renderText(renderer, config, font, footer, ColorTextTertiary(),

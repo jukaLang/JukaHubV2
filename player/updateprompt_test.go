@@ -36,6 +36,10 @@ func TestUpdatePromptUpdateNowInstallsDirectly(t *testing.T) {
 		currentSceneIndex, pendingSceneIndex, transitionPhase = prevScene, prevPending, prevPhase
 		endPatchOp()
 		clearPatchBusy()
+		// Update now raises the install card and settles it; without the
+		// reset the finished card's hold outlives this test and shows up as
+		// a background row in whichever test runs next.
+		resetInstallBar()
 	})
 	patchModal = nil
 	currentSceneIndex, pendingSceneIndex, transitionPhase = 0, -1, "none"
@@ -102,6 +106,8 @@ func TestUpdateBadgeClickStartsInstall(t *testing.T) {
 		sceneTitleBackRect, statusClockRect = prevBack, prevClock
 		updateInstallRunner = prevRunner
 		clearPatchBusy()
+		// The chip starts the same install the prompt does, card and all.
+		resetInstallBar()
 	})
 	updatePrompt.open, updatePrompt.seen = false, false
 	updatePrompt.badge = sdl.Rect{X: 1000, Y: 10, W: 100, H: 30}
@@ -152,11 +158,11 @@ func TestToolsRowsPatchAndCalculator(t *testing.T) {
 	}
 }
 
-// Nineteen tiles in three sections (the ten FTP & IP tiles, party, Updates,
-// power tools, toolbox, security, disc helpers, Calculator, Community, Classic
-// Tools) plus the SFTP credentials line must render on a 720p panel: the tile
-// grid scrolls instead of shrinking rows, and the credentials line survives
-// both.
+// Twenty-seven tiles across the five sections (sharing, probes, lookups, this
+// device, party, Updates, power tools, toolbox, security, disc helpers,
+// Calculator, Community, Classic Tools) plus the SFTP credentials line must
+// render on a 720p panel: the tile grid scrolls instead of shrinking rows, and
+// the credentials line survives both.
 func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
 	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
@@ -172,8 +178,8 @@ func TestToolsPanelDenseFitsWithPatchAndCalculator(t *testing.T) {
 		{Name: "Home"}, {Name: "Misc"}, {Name: "Patch"}, {Name: "Calculator"},
 	}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 19 {
-		t.Fatalf("tile rects = %d, want 19 with Patch and Calculator", len(rects))
+	if len(rects) != 28 {
+		t.Fatalf("tile rects = %d, want 28 with Patch and Calculator", len(rects))
 	}
 	layout := toolsPanelMetrics(config, toolsRows(config))
 	if panel.H > probeH-40 {

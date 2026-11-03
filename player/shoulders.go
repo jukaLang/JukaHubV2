@@ -75,6 +75,17 @@ func handleShoulderPress(s padShoulder, config *Config) bool {
 	if config == nil {
 		return false
 	}
+	// The editor's one destructive key lives on R2. A/X/Y/B are already editing
+	// keys there and DELETE exists only on a keyboard the handheld does not
+	// have, so a line could be added but never removed. The footer advertises
+	// the binding, so it is not a hidden combination; the buffer is unsaved
+	// until Y, which is the same safety the keyboard's Delete key has.
+	if fileEditor.open && !virtualKeyboardActive {
+		if s == padR2 {
+			fileEditorDeleteLine()
+		}
+		return true
+	}
 	if handleVideoShoulder(s, config) {
 		return true
 	}
@@ -178,15 +189,60 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 // open. Those panels already bind L1/R1 where it makes sense; the triggers are
 // consumed there instead of leaking into the scene underneath.
 func modalPanelBlocksShoulders() bool {
-	return ipPanelOpen || processPanel.open || wifiPanel.open || updatePrompt.open ||
-		browserLinkPanel.open || companion.open || partyUI.open || communityPanel.open ||
-		powerTools.open || raPanel.open || gpPanel.open || cpPanel.open || winAppsPanel.open ||
-		castPanel.open || musicSettings.open || a11y.open || smartHomePanel.open ||
-		calibrationPanel.open || chiakiPanel.open || savePanel.open || curationPanel.open ||
-		portsPanel.open || toolsPanel.open || netplayPanel.open || gameLib.open || emuPanel.open ||
-		kbPanel.open || dlPanel.open ||
-		weatherPopoverOpen || socialNotifOpen || imageViewerPath != "" || virtualKeyboardActive ||
-		memPanel.open || ctrldiag.open
+	return modalPanelBlockReason() != ""
+}
+
+// modalPanelBlockReason names the modal that owns the keys, or "" when the
+// shoulders are free. The audits that report "a modal from another test is
+// still open" print it, so a leaked panel names itself instead of costing a
+// debug session.
+func modalPanelBlockReason() string {
+	open := []struct {
+		name string
+		yes  bool
+	}{
+		{"IP panel", ipPanelOpen},
+		{"process panel", processPanel.open},
+		{"Wi-Fi panel", wifiPanel.open},
+		{"update prompt", updatePrompt.open},
+		{"browser link panel", browserLinkPanel.open},
+		{"companion", companion.open},
+		{"party panel", partyUI.open},
+		{"community panel", communityPanel.open},
+		{"power tools", powerTools.open},
+		{"achievements panel", raPanel.open},
+		{"game profiles panel", gpPanel.open},
+		{"curation picker", cpPanel.open},
+		{"Windows apps panel", winAppsPanel.open},
+		{"cast panel", castPanel.open},
+		{"music settings", musicSettings.open},
+		{"accessibility panel", a11y.open},
+		{"smart home panel", smartHomePanel.open},
+		{"calibration panel", calibrationPanel.open},
+		{"remote play panel", chiakiPanel.open},
+		{"save manager", savePanel.open},
+		{"curation panel", curationPanel.open},
+		{"ports panel", portsPanel.open},
+		{"Tools panel", toolsPanel.open},
+		{"netplay panel", netplayPanel.open},
+		{"game library", gameLib.open},
+		{"emulator panel", emuPanel.open},
+		{"on-screen keyboard", kbPanel.open},
+		{"downloads panel", dlPanel.open},
+		{"weather popover", weatherPopoverOpen},
+		{"social notifications", socialNotifOpen},
+		{"image viewer", imageViewerPath != ""},
+		{"keyboard", virtualKeyboardActive},
+		{"memory panel", memPanel.open},
+		{"text editor", fileEditor.open},
+		{"controller diagnostics", ctrldiag.open},
+	}
+	for _, p := range open {
+		if p.yes {
+			return p.name + " is open"
+		}
+	}
+	return ""
 }
 
 // startMenuShoulder pages the entries of the open group; the triggers jump to
@@ -379,6 +435,7 @@ func handleListShoulder(s padShoulder, config *Config) bool {
 // inside what is loaded; triggers move a whole page and fetch the next one
 // when it does not exist yet.
 func searchResultsShoulder(s padShoulder, config *Config, element Element, videos []VideoInfo) bool {
+	focusMediaResults(config)
 	pageSize := mediaPageSize(element, getElementHeight(element, 456))
 	switch s {
 	case padL2:

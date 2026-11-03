@@ -452,18 +452,15 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 	dlPanel.panel = sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 185)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	// Rows are drawn with ColorSurfaceRow (one step lighter), so the panel
-	// itself uses the darker surface for the list to read as separate rows.
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorSurface)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	// Rows are the raised surface, so the panel itself recesses one step for the
+	// list to read as separate bands. Radius, border, scrim and inside margin
+	// still come from the shared card.
+	drawOverlayCardFilled(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, ColorSurface)
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	const padX = int32(28)
+	const padX = OverlayPadX
 	textW := panelW - 2*padX
 	// A short window keeps the list usable by dropping the header's aside and
 	// the card's legend before it lets the rows shrink.
@@ -478,9 +475,7 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 		header.Status = "Saved audio and video play offline"
 		header.StatusColor = ColorTextTertiary()
 	}
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = textW
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	cardH := downloadStorageCardHeight(small, !compact)

@@ -330,30 +330,30 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 
 	rowH := 10 + medH + 10
 	footerH := 18 + smallH
+	// The settings sheet opens with the shared page header, measured before the
+	// card is sized so the rows start where the header band ends.
+	header := UIPanelHeader("Audio", "Settings", "media")
+	band := UIPanelHeaderBand(config, header, 12)
 	panelW := int32(860)
 	if panelW > screenWidth-48 {
 		panelW = screenWidth - 48
 	}
-	panelH := int32(24) + medH + 12 + int32(len(rows))*rowH + 12 + 2*smallH + 20 + footerH
+	panelH := band + int32(len(rows))*rowH + 12 + 2*smallH + 20 + footerH
 	if panelH > screenHeight-56 {
 		panelH = screenHeight - 56
 	}
 	x := (screenWidth - panelW) / 2
 	y := (screenHeight - panelH) / 2
-	musicSettings.panelRect = sdl.Rect{X: x, Y: y, W: panelW, H: panelH}
+	card := sdl.Rect{X: x, Y: y, W: panelW, H: panelH}
+	musicSettings.panelRect = card
 
-	renderer.SetDrawColor(0, 0, 0, 150)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	drawCard(renderer, x, y, panelW, panelH, 18)
-
-	title := "Audio"
-	renderText(renderer, config, medium, title, ColorTextPrimary(), x+24, y+20)
-	version := "Settings"
-	vw, _, _ := font.SizeUTF8(version)
-	renderText(renderer, config, font, version, ColorTextTertiary(), x+panelW-int32(vw)-24, y+24)
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
+	header = overlayHeaderOnCard(header, card)
+	UIPageHeaderDraw(renderer, config, header)
 
 	musicSettings.rowHits = musicSettings.rowHits[:0]
-	listTop := y + 24 + medH + 12
+	listTop := y + band
 	maxRows := int((panelH - (listTop - y) - 2*smallH - 44 - footerH) / rowH)
 	if maxRows < 1 {
 		maxRows = 1
@@ -375,7 +375,7 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 	for i := musicSettings.scroll; i < last; i++ {
 		row := rows[i]
 		ry := listTop + int32(i-musicSettings.scroll)*rowH
-		rect := sdl.Rect{X: x + 16, Y: ry, W: panelW - 32, H: rowH - 4}
+		rect := sdl.Rect{X: x + OverlayPadX, Y: ry, W: panelW - 2*OverlayPadX, H: rowH - 4}
 		if i == musicSettings.cursor {
 			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(ColorCardFocus, 255))
 			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, accentColor)
@@ -397,8 +397,8 @@ func renderMusicSettingsPanel(renderer *sdl.Renderer, config *Config) {
 	if musicSettings.cursor < len(rows) {
 		detail := rows[musicSettings.cursor].hint
 		measure := func(s string) int32 { w, _, _ := font.SizeUTF8(s); return int32(w) }
-		for _, line := range wrapMeasured([]rune(detail), panelW-48, measure) {
-			renderText(renderer, config, font, line, ColorTextTertiary(), x+24, detailY)
+		for _, line := range wrapMeasured([]rune(detail), panelW-2*OverlayPadX, measure) {
+			renderText(renderer, config, font, line, ColorTextTertiary(), x+OverlayPadX, detailY)
 			detailY += smallH + 2
 		}
 	}

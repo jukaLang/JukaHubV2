@@ -255,7 +255,7 @@ func renderCalendarCard(renderer *sdl.Renderer, config *Config, cx, cy int32) {
 	}
 
 	// ── Controls hint ──
-	hint := "Left/Right change month · select the month for today"
+	hint := hintLine(FooterHint{"Left/Right", "Change Month"}, FooterHint{"Enter / A", "Today"})
 	renderText(renderer, config, tiny, ellipsize(tiny, hint, cardW-2*calPopPadX),
 		ColorTextTertiary(), cx+calPopPadX, cy+cardH-calPopPadY-calPopHintH+2)
 }

@@ -133,6 +133,49 @@ func TestPSPanelAccountSubmitContinuesToPin(t *testing.T) {
 	}
 }
 
+// Clicking Done must leave the next pairing prompt open, not close it as if
+// it were still the address or account keyboard.
+func TestPSPanelPairingKeyboardClickHandoff(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		edit  psPanelEdit
+		text  string
+		next  psPanelEdit
+		setup func()
+	}{
+		{"address opens PIN", psEditHost, "192.168.1.40", psEditPIN, func() {}},
+		{"account opens PIN", psEditAccount, testPSNAccountID, psEditPIN, func() {
+			chiakiPanel.pairHost = "192.168.1.50"
+			chiakiPanel.pairTarget = psTargetPS5_1
+			psPanelPairAfterAccount = true
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			useTempPSHosts(t)
+			openPSPanelForTest(t)
+			tc.setup()
+			psPanelOpenKeyboard(tc.edit)
+			vkSeedText(tc.text)
+			vkEnsureLayout()
+			for row, keys := range keyboard {
+				for col, key := range keys {
+					if key != "ENTER" {
+						continue
+					}
+					if vkHandleKeyClick(row, col, nil) {
+						t.Fatal("the follow-up keyboard must remain open")
+					}
+					if !virtualKeyboardActive || psPanelEditField != tc.next || vkCurrentText() != "" {
+						t.Fatalf("follow-up active=%v field=%v text=%q", virtualKeyboardActive, psPanelEditField, vkCurrentText())
+					}
+					return
+				}
+			}
+			t.Fatal("keyboard has no Done key")
+		})
+	}
+}
+
 func TestPSPanelPairPS4GoesStraightToPin(t *testing.T) {
 	useTempPSHosts(t)
 	openPSPanelForTest(t)

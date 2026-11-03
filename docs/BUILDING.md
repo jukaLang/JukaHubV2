@@ -78,6 +78,28 @@ go build -o JukaHub.exe .
 
 The SDL2 DLLs must sit next to `JukaHub.exe` to run.
 
+### The executable icon
+
+Windows reads a program's icon from a resource compiled into the `.exe`, not
+from a file next to it, so JukaHub's own icon is linked in from these files in
+`player/`:
+
+| File | Role |
+|------|------|
+| `JukaPlayer.png` | source artwork |
+| `JukaHub.ico` | multi-size icon (16-256 px) generated from that artwork |
+| `JukaHub.rc` | resource script that attaches the icon to the binary |
+| `rsrc_windows_amd64.syso` | compiled resource, linked automatically by Go |
+
+`build.bat` recompiles the `.syso` with `windres` on every build, and both
+generated files are committed, so a plain `go build` (and the Windows CI job)
+gets the icon with no extra flags. After changing `JukaPlayer.png`, run
+`./mkwinres.sh` (needs Python 3 with Pillow and `windres`) to regenerate them;
+`build.bat diag` reports whether the compiled resource is present.
+
+The resource is per architecture: a `windows/arm64` build needs its own
+`rsrc_windows_arm64.syso` or it falls back to the generic icon.
+
 ## Linux and macOS (development)
 
 ```bash

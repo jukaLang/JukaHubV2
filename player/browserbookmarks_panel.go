@@ -53,13 +53,20 @@ func openBrowserBookmarkPanel(config *Config) {
 	PlayActivateSound()
 }
 
+// browserBookmarkPickerForget clears the picker and its row rects without a
+// sound, so closing it by hand and leaving the scene share one definition of
+// "closed" and neither can leave a stale hit behind.
+func browserBookmarkPickerForget() {
+	browserBookmarkPanel = browserBookmarkPanelState{}
+	browserBookmarkRowHits = nil
+	browserBookmarkPanelRect = sdl.Rect{}
+}
+
 func closeBrowserBookmarkPanel() {
 	if !browserBookmarkPanel.open {
 		return
 	}
-	browserBookmarkPanel = browserBookmarkPanelState{}
-	browserBookmarkRowHits = nil
-	browserBookmarkPanelRect = sdl.Rect{}
+	browserBookmarkPickerForget()
 	PlayBackSound()
 }
 
@@ -225,7 +232,7 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 	subtitleInk := ColorTextSecondary()
 	if armedNow {
 		subtitle = "Press X again to remove this saved page"
-		subtitleInk = ColorWarning
+		subtitleInk = WarningInk()
 	}
 	// The title band is the shared page header, built before the card is sized so
 	// the panel and the bar drawn into it measure the same height. Trailing 9
@@ -264,15 +271,10 @@ func renderBrowserBookmarkPanel(renderer *sdl.Renderer, config *Config) {
 		browserBookmarkPanel.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 18, 1, ColorBorderDefault)
-
-	header.X = panelX + 22
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 44
+	card := sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
+	header = overlayHeaderOnCard(header, card)
 	UIPageHeaderDraw(renderer, config, header)
 
 	browserBookmarkRowHits = browserBookmarkRowHits[:0]

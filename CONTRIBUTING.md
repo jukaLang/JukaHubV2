@@ -22,7 +22,7 @@ JukaHub .` elsewhere.
 ## Checks to run before opening a pull request
 
 ```bash
-make check   # gofmt, go vet, builder syntax, config JSON, player + jsdom tests
+make check   # gofmt, vet, builder syntax, config JSON, workflow pins, player + jsdom tests
 ```
 
 Or run the pieces yourself, from `player/`:
@@ -187,6 +187,25 @@ JukaHubV2/
 ├── docs/                              # user and developer documentation
 └── .github/workflows/                 # CI: SD-card package, release, tags
 ```
+
+Every workflow action is pinned to a full commit SHA with the release it matches in a
+trailing comment (`uses: actions/checkout@3d3c42e5... # v7.0.1`). Tags are mutable and
+a re-pointed one would change what CI runs without a commit here, which is what
+Scorecard's `Pinned-Dependencies` check reports. Dependabot's `github-actions` entry
+bumps both the SHA and the comment, so an update arrives as a normal PR; pin any new
+action the same way rather than by tag.
+
+A download is held to the same rule: CI fails when a workflow fetches an archive
+with `curl`/`wget` and does not verify it, so a new fetch needs a `sha256sum -c`
+check on or within the next two lines (or an explicit `# download-pin-ok:
+<reason>` when the source publishes no digest). The three SDL tarballs both
+Windows builds need are listed once, digests included, in
+[`.github/scripts/install-sdl-mingw.sh`](.github/scripts/install-sdl-mingw.sh).
+
+All three pinning rules live in
+[`.github/scripts/check-workflows.sh`](.github/scripts/check-workflows.sh), and
+`make check` runs that same script, so a workflow edit that breaks one fails
+before the push rather than after it.
 
 ## Which files to commit
 

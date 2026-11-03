@@ -28,6 +28,12 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return false
 	}
 
+	// An enlarged QR code sits above every panel: any button dismisses it, and
+	// nothing underneath may react to the press that does.
+	if ctrlQRZoom(e) {
+		return true
+	}
+
 	// The Start menu floats above the scene it was opened from, so it takes the
 	// pad before the scene and its elements see anything.
 	if tb.startOpen {
@@ -35,6 +41,17 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	}
 
 	// ── Overlay priority (highest to lowest) ──
+	// The podcast library is modal, but its feed keyboard takes the pad first.
+	if podPanel.open {
+		if virtualKeyboardActive {
+			return false
+		}
+		return ctrlPodcastPanel(e, config)
+	}
+	// The LED style panel is modal too, and owns the pad while it is open.
+	if ledPanel.open {
+		return ctrlLEDPanel(e, config)
+	}
 	// The IPStream library is modal: nothing underneath may react.
 	if ipPanelOpen {
 		return ctrlIPPanel(e, config)
@@ -46,6 +63,13 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	// The memory panel is modal, but its value keyboard takes the pad first.
 	if memPanel.open {
 		return ctrlMemPanel(e, config)
+	}
+	// The text editor is modal too, and its line keyboard takes the pad first.
+	if fileEditor.open {
+		if virtualKeyboardActive {
+			return false
+		}
+		return ctrlFileEditor(e, config)
 	}
 	// The Wi-Fi picker is modal. While its password keyboard is up the
 	// controller belongs to the keyboard, which runs after these overlays.
@@ -78,6 +102,10 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 			closeCompanionOverlay()
 			PlayBackSound()
+		case sdl.CONTROLLER_BUTTON_A:
+			// A enlarges the pairing code so a phone can read it at arm's
+			// length; B still closes the card.
+			qrZoomOpenCard(companion.qr, "Phone Companion")
 		case sdl.CONTROLLER_BUTTON_Y:
 			companionRestart()
 		}
@@ -230,15 +258,20 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 		return ctrlSocialNotif(e)
 	}
 	if imageViewerPath != "" {
-		return ctrlImageViewer(e)
+		return ctrlImageViewer(e, config)
 	}
 	// Chat member list and profile card float above the chat panel. The
 	// on-screen keyboard keeps the pad while it is typing.
-	if chatOverlayOpen() && !virtualKeyboardActive {
-		return ctrlChatOverlay(e, config)
+	// The member list and the profile card float inside the chat panel, and
+	// are dropped when that panel is no longer the scene on screen.
+	if !virtualKeyboardActive && chatOverlayOwnsInput(config) && ctrlChatOverlay(e, config) {
+		return true
 	}
-	if chatSelectionBar.open && !virtualKeyboardActive {
-		return ctrlChatSelection(e, config)
+	// A selected message turns the composer into its action bar, but only while
+	// the panel that draws it is on screen: chatSelectionOwnsInput drops a bar
+	// left behind by a scene change rather than letting it eat the press.
+	if !virtualKeyboardActive && chatSelectionOwnsInput(config) && ctrlChatSelection(e, config) {
+		return true
 	}
 
 	// The Now Playing chip is the pad-accessible anchor for the floating
@@ -494,11 +527,19 @@ func ctrlSocialNotif(e *sdl.ControllerButtonEvent) bool {
 
 // ── Image viewer ──
 
-func ctrlImageViewer(e *sdl.ControllerButtonEvent) bool {
+func ctrlImageViewer(e *sdl.ControllerButtonEvent, config *Config) bool {
 	switch e.Button {
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK, sdl.CONTROLLER_BUTTON_A:
 		closeImageViewer()
 		PlayBackSound()
+	case sdl.CONTROLLER_BUTTON_X:
+		// Keep the picture on the lock screen, or take it back if it already
+		// is the backdrop. A remote (chat) image has no file in Files, so the
+		// button stays inert for it.
+		if !imageViewerRemote {
+			toggleScreenlockFromViewer(config)
+			PlayActivateSound()
+		}
 	case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 		imageViewerStep(-1)
 	case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:

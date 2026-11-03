@@ -646,3 +646,72 @@ func browserLayoutControlTexts(config *Config, elem Element) []string {
 	}
 	return out
 }
+
+// Attributes carry character references just as text does. A "next page"
+// button is nearly always written value="&gt;"; a field's prompt is written
+// with &nbsp;. Read raw, the reader drew the markup on the button face and sent
+// a literal &amp; in the query.
+func TestBrowserFormAttributesDecodeEntities(t *testing.T) {
+	const src = `<html><body>
+<form action="/search?ie=utf-8&amp;lang=en">
+<input type="text" name="q" placeholder="Search&nbsp;here" value="a &amp; b">
+<input type="hidden" name="page" value="1&amp;2">
+<input type="submit" value="&gt;">
+<select name="kl"><option value="us&amp;m">U &amp; S</option></select>
+<textarea name="note" placeholder="x &lt; y"></textarea>
+</form>
+</body></html>`
+	doc := parseWebPage(src, "", "https://example.com/")
+	var controls []*webControl
+	for _, block := range doc.Blocks {
+		for _, run := range block.Runs {
+			if ctrl := run.Style.Control; ctrl != nil {
+				controls = append(controls, ctrl)
+			}
+		}
+	}
+	byName := map[string]*webControl{}
+	for _, ctrl := range controls {
+		byName[ctrl.Name] = ctrl
+	}
+	submit := byName[""]
+	if submit == nil {
+		t.Fatalf("the page drew no submit button: %v", byName)
+	}
+	if got := submit.Display(); !strings.Contains(got, ">") || strings.Contains(got, "&gt;") {
+		t.Errorf("button shows %q, want the arrow the markup names", got)
+	}
+	field := byName["q"]
+	if field == nil {
+		t.Fatal("the page drew no text field")
+	}
+	if got := field.Value; got != "a & b" {
+		t.Errorf("field value = %q, want the decoded text", got)
+	}
+	if got := field.Placeholder; got != "Search here" {
+		t.Errorf("placeholder = %q, want a non-breaking space", got)
+	}
+	if got := field.Form.Action; got != "/search?ie=utf-8&lang=en" {
+		t.Errorf("form action = %q, want the decoded query", got)
+	}
+	if hidden := doc.FormHidden[field.Form.ID]; len(hidden) != 1 || hidden[0].Value != "1&2" {
+		t.Errorf("hidden fields = %+v, want one value of 1&2", hidden)
+	}
+	sel := byName["kl"]
+	if sel == nil || len(sel.Options) != 1 {
+		t.Fatalf("select = %+v, want one option", sel)
+	}
+	if got := sel.Options[0]; got != "U & S" {
+		t.Errorf("option label = %q, want the decoded text", got)
+	}
+	if got := sel.OptionValues[0]; got != "us&m" {
+		t.Errorf("option value = %q, want the decoded query value", got)
+	}
+	area := byName["note"]
+	if area == nil {
+		t.Fatal("the page drew no textarea")
+	}
+	if got := area.Placeholder; got != "x < y" {
+		t.Errorf("textarea placeholder = %q, want the decoded text", got)
+	}
+}

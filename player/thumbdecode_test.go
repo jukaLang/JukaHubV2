@@ -19,7 +19,23 @@ func TestThumbnailDecodeBudgetForDevice(t *testing.T) {
 	}
 }
 
+// resetThumbnailDecodeGate clears the process-wide per-frame tally. A render
+// in an earlier test spends budget on its frame number, so this test starts
+// from a known gate instead of assuming it is the first to draw.
+func resetThumbnailDecodeGate(t *testing.T) {
+	t.Helper()
+	thumbnailDecodes.mu.Lock()
+	thumbnailDecodes.lastFrame, thumbnailDecodes.used = 0, 0
+	thumbnailDecodes.mu.Unlock()
+	t.Cleanup(func() {
+		thumbnailDecodes.mu.Lock()
+		thumbnailDecodes.lastFrame, thumbnailDecodes.used = 0, 0
+		thumbnailDecodes.mu.Unlock()
+	})
+}
+
 func TestAllowThumbnailDecodeResetsPerFrame(t *testing.T) {
+	resetThumbnailDecodeGate(t)
 	const budget = 2
 	if !allowThumbnailDecode(1, budget) {
 		t.Fatal("first load of frame 1 declined; a fresh frame opens a fresh budget")

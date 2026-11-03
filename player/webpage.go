@@ -286,6 +286,15 @@ type webBlock struct {
 	// InMain marks text inside <main>/<article>. When a page has any, the
 	// reader shows that content instead of the site's navigation furniture.
 	InMain bool
+	// Details and DetailsShown fold a <details> section. Details is every
+	// enclosing section, outermost first, because a closed outer section hides
+	// an open section inside it — one owner pointer could not say that. While any
+	// of them is closed the block is kept but not laid out, unless DetailsShown
+	// is set because the block is the summary (or the marker) of the innermost
+	// one. The states live on the controls, so opening a section re-measures the
+	// page instead of re-parsing it.
+	Details      []*webControl
+	DetailsShown bool
 	// Image marks an <img> block. ImageSrc is the resolved http(s) URL or a
 	// data:image/...;base64 URI; ImageW/ImageH are the width/height attrs in
 	// CSS px (zero when absent — the natural pixel size fills in at layout).
@@ -304,6 +313,20 @@ type webBlock struct {
 	VideoSrc   string
 	VideoThumb string
 	VideoTitle string
+}
+
+// Hidden reports a block a closed <details> section keeps out of the layout. It
+// stays in the document: opening the section lays it out again.
+func (b webBlock) Hidden() bool {
+	if b.DetailsShown || len(b.Details) == 0 {
+		return false
+	}
+	for _, ctrl := range b.Details {
+		if !ctrl.Checked {
+			return true
+		}
+	}
+	return false
 }
 
 // webDocument is one parsed page. It holds no raw HTML — the parser keeps the
@@ -555,6 +578,14 @@ func (c *webControl) Display() string {
 			return " ● "
 		}
 		return " ○ "
+	case "details":
+		// A closed section says [+] and an open one [-]. The bundled face has no
+		// reliable disclosure triangle, and a tick box would read as a form
+		// field rather than a fold, so the reader uses the tree convention.
+		if c.Checked {
+			return " [-] "
+		}
+		return " [+] "
 	case "submit":
 		label := strings.TrimSpace(c.Value)
 		if label == "" {
@@ -2426,6 +2457,14 @@ func webAlignValue(value string) int {
 
 // --- HTML parsing ---------------------------------------------------------
 
+// webDetailsFrame is one open <details>. inSummary marks the window between
+// <summary> and </summary>, where blocks stay visible even while the section is
+// closed.
+type webDetailsFrame struct {
+	ctrl      *webControl
+	inSummary bool
+}
+
 type webParser struct {
 	doc       *webDocument
 	rules     []webRule
@@ -2461,6 +2500,10 @@ type webParser struct {
 	selectOption         string
 	selectOptionText     strings.Builder
 	selectOptionSelected bool
+	// details is the stack of <details> sections currently open. A section's
+	// body is parsed and kept either way; the stack decides which blocks are
+	// laid out and which section a summary's toggle belongs to.
+	details []webDetailsFrame
 }
 
 // parseWebPage parses HTML plus any already-fetched CSS into a document.
@@ -2543,7 +2586,7 @@ func fetchWebStylesheets(source string, base *url.URL) string {
 		if !strings.Contains(relAttr, "stylesheet") {
 			continue
 		}
-		href := strings.TrimSpace(htmlTagAttribute(tag, "href"))
+		href := htmlAttrValue(htmlTagAttribute(tag, "href"))
 		if href == "" {
 			continue
 		}
@@ -2790,6 +2833,41 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		}
 	}
 
+	// <details> is a section a page folds away: a browser draws the summary and
+	// hides the body until it is opened. Without this the reader laid out every
+	// collapsed log, changelog and screenshot, so an issue whose evidence sat in
+	// a closed <details> read as the evidence. The body is parsed and kept; only
+	// the layout skips it.
+	if name == "details" {
+		p.flush()
+		ctrl := &webControl{Kind: "details", Checked: htmlTagAttributeHas(attrs, "open")}
+		// The marker is emitted before the section is pushed, so its block is
+		// never tagged as the section's body: it has to stay visible, and the
+		// summary's own text then joins it on the same line.
+		p.emitControl(ctrl, style, false)
+		p.details = append(p.details, webDetailsFrame{ctrl: ctrl})
+		if selfClose {
+			p.flush()
+			// Popped by index, not by a byte slice: the stack holds frames, not
+			// text, and the project's byte-slice rule exists to stop text edits
+			// from cutting a rune in half.
+			if n := len(p.details); n > 0 {
+				p.details = p.details[:n-1]
+			}
+			return
+		}
+		p.push(el, style, "block")
+		return
+	}
+	if name == "summary" {
+		if n := len(p.details); n > 0 {
+			// No flush: the summary continues the line the marker opened.
+			p.details[n-1].inSummary = true
+			p.push(el, style, "block")
+			return
+		}
+	}
+
 	if name == "main" || name == "article" {
 		p.mainDepth++
 	}
@@ -2812,7 +2890,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		p.formSeq++
 		p.form = webForm{
 			ID:     p.formSeq,
-			Action: strings.TrimSpace(htmlTagAttribute(attrs, "action")),
+			Action: htmlAttrValue(htmlTagAttribute(attrs, "action")),
 		}
 	}
 
@@ -2841,7 +2919,7 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 		if p.inHead {
 			return
 		}
-		src := strings.TrimSpace(htmlTagAttribute(attrs, "src"))
+		src := htmlAttrValue(htmlTagAttribute(attrs, "src"))
 		alt := strings.TrimSpace(htmlTagAttribute(attrs, "alt"))
 		resolved := p.webImageURL(src)
 		if resolved == "" {
@@ -2912,6 +2990,21 @@ func (p *webParser) startTag(name, attrs string, selfClose bool) {
 }
 
 func (p *webParser) endTag(name string) {
+	// A section's summary ends before its body, and the body's first block must
+	// start after that flush or it would join the visible marker line.
+	if name == "summary" {
+		if n := len(p.details); n > 0 {
+			p.details[n-1].inSummary = false
+			p.flush()
+		}
+	}
+	if name == "details" {
+		if n := len(p.details); n > 0 {
+			p.flush()
+			p.details = p.details[:n-1]
+		}
+	}
+
 	// The controls whose content is collected rather than drawn are closed
 	// before the stack walk: they were never pushed, since their run only
 	// exists once the closing tag has arrived.
@@ -3202,9 +3295,29 @@ func (p *webParser) ensureBlock() *webBlock {
 		block.FlexGapY = f.gapY
 		block.FlexWrap = f.wrap
 	}
+	block.Details, block.DetailsShown = p.detailsTag()
 	p.pendingB = ""
 	p.current = block
 	return block
+}
+
+// detailsTag reports the section a new block belongs to, and whether the block
+// is drawn while that section is closed. A block in a summary is; everything
+// else waits for the section to be opened. The loop covers nesting: a section
+// inside a closed outer section stays hidden however its own state is set.
+func (p *webParser) detailsTag() ([]*webControl, bool) {
+	if len(p.details) == 0 {
+		return nil, false
+	}
+	chain := make([]*webControl, 0, len(p.details))
+	shown := true
+	for _, f := range p.details {
+		chain = append(chain, f.ctrl)
+		if !f.ctrl.Checked && !f.inSummary {
+			shown = false
+		}
+	}
+	return chain, shown
 }
 
 func (p *webParser) addBreak() {
@@ -3225,9 +3338,9 @@ func (p *webParser) addControlFromInput(attrs string, style webStyle) {
 	if kind == "" {
 		kind = "text"
 	}
-	name := strings.TrimSpace(htmlTagAttribute(attrs, "name"))
-	value := strings.TrimSpace(htmlTagAttribute(attrs, "value"))
-	placeholder := strings.TrimSpace(htmlTagAttribute(attrs, "placeholder"))
+	name := htmlAttrValue(htmlTagAttribute(attrs, "name"))
+	value := htmlAttrValue(htmlTagAttribute(attrs, "value"))
+	placeholder := htmlAttrValue(htmlTagAttribute(attrs, "placeholder"))
 	checked := htmlTagAttributeHas(attrs, "checked")
 
 	switch kind {
@@ -3367,8 +3480,8 @@ func (p *webParser) startTextarea(attrs string) {
 	}
 	p.textarea = &webControl{
 		Kind:        "textarea",
-		Name:        strings.TrimSpace(htmlTagAttribute(attrs, "name")),
-		Placeholder: strings.TrimSpace(htmlTagAttribute(attrs, "placeholder")),
+		Name:        htmlAttrValue(htmlTagAttribute(attrs, "name")),
+		Placeholder: htmlAttrValue(htmlTagAttribute(attrs, "placeholder")),
 		Form:        p.form,
 	}
 	p.textareaText.Reset()
@@ -3404,7 +3517,7 @@ func (p *webParser) startSelect(attrs string) {
 	}
 	p.selectCtrl = &webControl{
 		Kind: "select",
-		Name: strings.TrimSpace(htmlTagAttribute(attrs, "name")),
+		Name: htmlAttrValue(htmlTagAttribute(attrs, "name")),
 		Form: p.form,
 	}
 }
@@ -3416,7 +3529,7 @@ func (p *webParser) startOption(attrs string) {
 		p.addText(" ")
 		return
 	}
-	p.selectOption = strings.TrimSpace(htmlTagAttribute(attrs, "value"))
+	p.selectOption = htmlAttrValue(htmlTagAttribute(attrs, "value"))
 	p.selectOptionText.Reset()
 	if htmlTagAttributeHas(attrs, "selected") && len(p.selectCtrl.Options) > 0 {
 		p.selectCtrl.Choice = len(p.selectCtrl.Options)
@@ -3706,6 +3819,9 @@ func (d *webDocument) computeLayout(config *Config, elem Element, width int32) *
 	flow := make([]webBlock, 0, len(d.Blocks))
 	var floats []webBlock
 	for _, b := range d.Blocks {
+		if b.Hidden() {
+			continue
+		}
 		if b.Float {
 			floats = append(floats, b)
 			continue

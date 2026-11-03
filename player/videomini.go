@@ -276,7 +276,12 @@ func renderVideoMini(renderer *sdl.Renderer, config *Config) {
 }
 
 func videoMiniHints() []string {
-	return []string{"Tap video: open", "Tap X icon: close", "Focus Now Playing", "A open  X close"}
+	return []string{
+		"Tap video: open",
+		"Tap X icon: close",
+		"Focus Now Playing",
+		hintLine(FooterHint{"A", "Open"}, FooterHint{"X", "Close"}),
+	}
 }
 
 // closeFocusedMiniVideo lets the now-playing focus target close only the

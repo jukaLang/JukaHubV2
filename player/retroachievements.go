@@ -1253,24 +1253,23 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 	raRowHits = raRowHits[:0]
 	raCloseRect, raRefreshRect, raSettingsRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 190)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
-	renderer.FillRect(&sdl.Rect{X: panelX + 20, Y: panelY + 1, W: panelW - 40, H: 2})
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
 	// Header buttons are touch targets too.
 	closeW := int32(84)
 	refreshW := int32(104)
 	settingsW := int32(104)
 	btnGap := int32(8)
-	raCloseRect = sdl.Rect{X: panelX + panelW - 28 - closeW, Y: panelY + 18, W: closeW, H: 34}
+	// The cluster sits on the shared header's own inset and inside margin, so
+	// the buttons line up with the title instead of 5px below it.
+	btnY := panelY + UIPanelHeaderInset
+	raCloseRect = sdl.Rect{X: panelX + panelW - OverlayPadX - closeW, Y: btnY, W: closeW, H: 34}
 	if !raPanel.settings {
-		raSettingsRect = sdl.Rect{X: raCloseRect.X - btnGap - settingsW, Y: panelY + 18, W: settingsW, H: 34}
+		raSettingsRect = sdl.Rect{X: raCloseRect.X - btnGap - settingsW, Y: btnY, W: settingsW, H: 34}
 	}
-	raRefreshRect = sdl.Rect{X: raSettingsRect.X - btnGap - refreshW, Y: panelY + 18, W: refreshW, H: 34}
+	raRefreshRect = sdl.Rect{X: raSettingsRect.X - btnGap - refreshW, Y: btnY, W: refreshW, H: 34}
 	if raPanel.settings {
 		raRefreshRect.X = raCloseRect.X - btnGap - refreshW
 	}
@@ -1297,7 +1296,7 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 		statusCol = ColorTextSecondary()
 	} else if syncErr != "" {
 		status = syncErr
-		statusCol = ColorToastWarn
+		statusCol = ToastWarnInk()
 	} else if cache.UpdatedAt > 0 {
 		status = "Synced " + raRelativeTime(time.Unix(cache.UpdatedAt, 0))
 		statusCol = ColorTextTertiary()
@@ -1316,9 +1315,8 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 	header := UIPanelHeader("RetroAchievements", subtitle, "favorites")
 	header.SubtitleColor = statusCol
 	headerH := UIPanelHeaderBand(config, header, 15)
-	header.X = panelX + 28
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = raRefreshRect.X - (panelX + 28) - 16
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	header.W = raRefreshRect.X - header.X - 16
 	UIPageHeaderDraw(renderer, config, header)
 
 	contentY := panelY + headerH
@@ -1334,7 +1332,7 @@ func renderRetroAchievementsPanel(renderer *sdl.Renderer, config *Config) {
 	if raPanel.settings {
 		hint = hintLine(FooterHint{"A", "Edit"}, FooterHint{"Y", "Refresh"}, FooterHint{"B", "Back"})
 	}
-	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+28, footerY)
+	renderText(renderer, config, font, hint, ColorTextSecondary(), panelX+OverlayPadX, footerY)
 	if loading {
 		label := "Syncing…"
 		lw, _, _ := font.SizeUTF8(label)
@@ -1348,7 +1346,7 @@ func raRenderOverview(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 	// The shipped device config uses 24px for both "small" and "medium";
 	// leave room for the name, points and rich-presence lines.
 	profileH := int32(104)
-	drawCard(renderer, panelX+28, contentY, panelW-56, profileH, 14)
+	drawCard(renderer, panelX+OverlayPadX, contentY, panelW-2*OverlayPadX, profileH, 14)
 
 	name := cache.Username
 	if name == "" {
@@ -1385,9 +1383,9 @@ func raRenderOverview(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 	columnsH := footerY - 10 - columnsY
 	innerW := panelW - 56
 	leftW := innerW * 60 / 100
-	rightX := panelX + 28 + leftW + 16
+	rightX := panelX + OverlayPadX + leftW + 16
 	rightW := panelX + panelW - 28 - rightX
-	leftX := panelX + 28
+	leftX := panelX + OverlayPadX
 
 	drawCard(renderer, leftX, columnsY, leftW, columnsH, 16)
 	drawCard(renderer, rightX, columnsY, rightW, columnsH, 16)
@@ -1569,7 +1567,7 @@ func raRenderSettings(renderer *sdl.Renderer, config *Config, font, med *ttf.Fon
 	if creds.complete() {
 		renderText(renderer, config, font, "Ready to sync. Press Y to refresh now.", ColorTextSecondary(), x+24, y+h-30)
 	} else {
-		renderText(renderer, config, font, "A username and a 32-character Web API key are both required.", ColorToastWarn, x+24, y+h-30)
+		renderText(renderer, config, font, "A username and a 32-character Web API key are both required.", ToastWarnInk(), x+24, y+h-30)
 	}
 }
 

@@ -32,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -1653,14 +1654,39 @@ func downloadToFile(ctx context.Context, client *http.Client, raw, dest, expectS
 		return err
 	}
 	part := dest + ".part"
-	out, err := os.OpenFile(part, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// Resume from what a previous attempt already wrote. On the handheld the
+	// card and the Wi-Fi are both slow and both drop out, and re-downloading a
+	// package from zero each time is what made a flaky link unfinishable.
+	var offset int64
+	if info, err := os.Stat(part); err == nil && info.Size() > 0 && info.Size() <= maxBytes {
+		offset = info.Size()
+	} else if info != nil {
+		_ = os.Remove(part)
+	}
+	out, err := os.OpenFile(part, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
+	if offset > 0 {
+		if err := out.Truncate(offset); err != nil {
+			out.Close()
+			_ = os.Remove(part)
+			return err
+		}
+		if _, err := out.Seek(offset, io.SeekStart); err != nil {
+			out.Close()
+			_ = os.Remove(part)
+			return err
+		}
+	}
 	ok := false
+	// keepPart leaves the bytes on the card after a transport failure so the
+	// next attempt resumes. A digest mismatch or an oversized file removes
+	// them: those bytes must not become the head of a later "successful" file.
+	keepPart := false
 	defer func() {
 		out.Close()
-		if !ok {
+		if !ok && !keepPart {
 			_ = os.Remove(part)
 		}
 	}()
@@ -1670,37 +1696,67 @@ func downloadToFile(ctx context.Context, client *http.Client, raw, dest, expectS
 		return err
 	}
 	req.Header.Set("User-Agent", "JukaHub-Patch/"+versionString(nil))
+	if offset > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
 	resp, err := client.Do(req)
 	if err != nil {
+		keepPart = offset > 0
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case resp.StatusCode == http.StatusPartialContent:
+		// Appending to the staged bytes.
+	case resp.StatusCode == http.StatusOK:
+		// The server ignored the range: start the file over rather than
+		// writing the whole body after the partial one.
+		if offset > 0 {
+			if err := out.Truncate(0); err != nil {
+				return err
+			}
+			if _, err := out.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			offset = 0
+		}
+	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable:
+		// The staged file does not match what the server has; drop it and let
+		// the next attempt start clean.
+		return fmt.Errorf("the partial download does not match %s; retry to start over", raw)
+	default:
+		keepPart = offset > 0
 		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, raw)
 	}
 
-	limited := io.LimitReader(resp.Body, maxBytes+1)
-	hasher := sha256.New()
-	n, err := io.Copy(io.MultiWriter(out, hasher), limited)
+	limited := io.LimitReader(resp.Body, maxBytes-offset+1)
+	n, err := io.Copy(out, limited)
 	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
+		keepPart = true
+		return fmt.Errorf("download failed after %s: %w", formatBytes(uint64(offset+n)), err)
 	}
-	if n > maxBytes {
+	if offset+n > maxBytes {
 		return fmt.Errorf("download exceeds %d byte limit", maxBytes)
 	}
+	if err := out.Sync(); err != nil {
+		keepPart = true
+		return err
+	}
+	if err := out.Close(); err != nil {
+		keepPart = true
+		return err
+	}
 	if expectSHA != "" {
-		got := hex.EncodeToString(hasher.Sum(nil))
+		got, err := SHA256File(part)
+		if err != nil {
+			return err
+		}
 		if !strings.EqualFold(got, expectSHA) {
 			return fmt.Errorf("sha256 mismatch: got %s want %s", got, expectSHA)
 		}
 	}
-	if err := out.Sync(); err != nil {
-		return err
-	}
-	if err := out.Close(); err != nil {
-		return err
-	}
 	if err := os.Rename(part, dest); err != nil {
+		keepPart = true
 		return err
 	}
 	ok = true
@@ -1806,6 +1862,39 @@ func sanitizeArchiveEntry(name string, mode fs.FileMode, isDir bool) error {
 	return nil
 }
 
+// declaredEntryBytes converts the uncompressed size a zip header declares into
+// an int64 without narrowing it. The field is a uint64 straight out of the
+// archive, so a hostile or corrupt header can claim more than int64 holds; that
+// value would wrap negative and slip through every cap written as "if total >
+// limit", leaving an extraction unbounded. Values that do not fit are reported
+// as math.MaxInt64, which each caller's cap then rejects.
+func declaredEntryBytes(size uint64) int64 {
+	if size > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(size)
+}
+
+// addDeclaredBytes adds one archive member's declared size to a running total,
+// reporting false when it would pass limit. The comparison is written as
+// limit-total rather than total+size so the sum itself cannot wrap, whatever
+// the header claims.
+func addDeclaredBytes(total, size, limit int64) (int64, bool) {
+	if size < 0 || total > limit || size > limit-total {
+		return total, false
+	}
+	return total + size, true
+}
+
+// satAddBytes returns a+b pinned to math.MaxInt64 instead of wrapping. It is for
+// sums of archive-declared sizes that only have to stay monotonically large.
+func satAddBytes(a, b int64) int64 {
+	if b > 0 && a > math.MaxInt64-b {
+		return math.MaxInt64
+	}
+	return a + b
+}
+
 // extractZipSafe extracts a zip archive into destDir after validating every
 // entry. Extraction is bounded by maxEntries and maxTotalBytes.
 func extractZipSafe(ctx context.Context, archive, destDir string, maxEntries int, maxTotalBytes int64) error {
@@ -1836,10 +1925,11 @@ func extractZipSafe(ctx context.Context, archive, destDir string, maxEntries int
 			}
 			continue
 		}
-		total += int64(f.UncompressedSize64)
-		if total > maxTotalBytes {
+		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), maxTotalBytes)
+		if !ok {
 			return fmt.Errorf("archive expands beyond %d bytes", maxTotalBytes)
 		}
+		total = sum
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
@@ -1896,6 +1986,12 @@ func extractTarGzSafe(ctx context.Context, archive, destDir string, maxEntries i
 		if err := sanitizeArchiveEntry(hdr.Name, hdr.FileInfo().Mode(), hdr.FileInfo().IsDir()); err != nil {
 			return err
 		}
+		// hdr.Size is signed and comes from the header: a negative one would
+		// subtract from the running total and let the rest of a tar bomb
+		// through, so it is refused before any arithmetic happens.
+		if hdr.Size < 0 {
+			return fmt.Errorf("archive entry %q declares a negative size", hdr.Name)
+		}
 		target := filepath.Join(destDir, filepath.FromSlash(hdr.Name))
 		if !strings.HasPrefix(target, filepath.Clean(destDir)+string(filepath.Separator)) {
 			return fmt.Errorf("entry escapes staging dir: %q", hdr.Name)
@@ -1906,10 +2002,11 @@ func extractTarGzSafe(ctx context.Context, archive, destDir string, maxEntries i
 				return err
 			}
 		case tar.TypeReg:
-			total += hdr.Size
-			if total > maxTotalBytes {
+			sum, ok := addDeclaredBytes(total, hdr.Size, maxTotalBytes)
+			if !ok {
 				return fmt.Errorf("archive expands beyond %d bytes", maxTotalBytes)
 			}
+			total = sum
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}

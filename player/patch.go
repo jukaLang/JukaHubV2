@@ -9,7 +9,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -72,7 +71,7 @@ func patchActions() []patchAction {
 	actions := []patchAction{
 		{ID: "check", Label: "Check for updates", Sub: "JukaHub releases · signed Patch repository"},
 		{ID: "refresh", Label: "Refresh repository", Sub: "Download + verify the signed package index"},
-		{ID: "editrepo", Label: "Edit packages.json", Sub: "Add your own packages (fonts, themes, tools, configs)"},
+		{ID: "editrepo", Label: "Edit packages.json", Sub: "Built-in editor · add your own packages (fonts, themes, tools, configs)"},
 		{ID: "history", Label: "History & Rollback", Sub: "Transaction log with rollback to the last backup"},
 		{ID: "repair", Label: "Verify & repair", Sub: "Validate config, tools, assets; clear stale downloads"},
 		{ID: "components", Label: "Component versions", Sub: "App, launcher, tools and packages with SHA-256 digests"},
@@ -359,7 +358,7 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 			chipY := y + (rowH-22)/2
 			riskColor := ColorTextSecondary()
 			if row.risk == "System Update" {
-				riskColor = ColorWarning
+				riskColor = WarningInk()
 			}
 			chipW := int32(0)
 			if row.risk != "" {
@@ -394,9 +393,9 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 		statusColor := ColorTextSecondary()
 		switch row.status {
 		case StatusAvailable, StatusStaged:
-			statusColor = ColorSuccess
+			statusColor = SuccessInk()
 		case StatusFailed:
-			statusColor = ColorDanger
+			statusColor = DangerInk()
 		case StatusUnavailable:
 			statusColor = ColorTextTertiary()
 		}
@@ -517,7 +516,7 @@ func renderPatchModal(renderer *sdl.Renderer, config *Config, font, medium *ttf.
 			fillRoundedRect(renderer, x+24, itemY, w-48, 38, RadiusMD, bg)
 			itemColor := ColorTextPrimary()
 			if item == "Remove" {
-				itemColor = ColorDanger
+				itemColor = DangerInk()
 			}
 			iw, _, _ := font.SizeUTF8(item)
 			renderText(renderer, config, font, item, itemColor, x+24+(w-48-int32(iw))/2, itemY+9)
@@ -1043,23 +1042,23 @@ func patchRowFor(comp PatchComponent) *PatchRow {
 	return nil
 }
 
-// openPatchRepoEditor opens the patch state directory in the File Explorer so
-// the user can open/edit packages.json (on the device, or on a desktop build
-// with any text editor). Returning to Patch reloads the repo.
+// openPatchRepoEditor opens packages.json in the built-in text editor. It used
+// to move the user to the Files screen with the state folder open, which is not
+// an editor: on the device there was nothing to open the file with, and the
+// desktop build only offered the path text. Patch re-reads its snapshot from
+// disk every couple of seconds, so a save shows up without leaving the scene.
 func openPatchRepoEditor(config *Config) {
 	path := mustRepoPath()
 	if _, err := os.Stat(path); err != nil {
-		ShowToast("No packages.json yet — created on first Patch use", ToastKindInfo)
-		return
+		// The starter index is written on first Patch use; create it here too so
+		// the row does what it says instead of turning the user away.
+		ensureDefaultRepo()
+		if _, err := os.Stat(path); err != nil {
+			ShowToast("No packages.json yet — created on first Patch use", ToastKindInfo)
+			return
+		}
 	}
-	dir := filepath.Dir(path)
-	config.Variables.Custom["fe_path"] = dir
-	config.Variables.Custom["fe_entries"] = nil
-	if idx := findSceneIndex(config, "FileExplorer"); idx >= 0 {
-		changeSceneTo(config, idx)
-	} else {
-		ShowToast("Open "+path+" in your editor", ToastKindInfo)
-	}
+	fileEditorOpen(path)
 }
 
 // --- Event handling (called from the main loop each frame) ---

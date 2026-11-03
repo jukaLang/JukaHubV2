@@ -224,14 +224,18 @@ func TestToolsPanelRunningFTP(t *testing.T) {
 func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}}}
 	rows := toolsRows(config)
-	if len(rows) != 16 {
-		t.Fatalf("rows = %d, want the ten FTP & IP rows, party, power tools, toolbox, security, disc helpers and community only", len(rows))
+	if len(rows) != 25 {
+		t.Fatalf("rows = %d, want the eighteen FTP & IP rows, party, power tools, toolbox, audit, security, disc helpers and community only", len(rows))
 	}
 	want := []toolsAction{
 		toolsActionCopyIP, toolsActionFTP, toolsActionCompanion, toolsActionSSH,
 		toolsActionGatewayScan, toolsActionClipboardScan, toolsActionPing,
 		toolsActionTraceroute, toolsActionDNSLookup, toolsActionWiFiSignal,
-		toolsActionParty, toolsActionPowerTools, toolsActionToolbox, toolsActionSecurity,
+		toolsActionLANDevices,
+		toolsActionPublicIP, toolsActionHTTPCheck, toolsActionPortCheck, toolsActionWhois,
+		toolsActionListeningPorts, toolsActionClockCheck, toolsActionSubnet,
+		toolsActionParty, toolsActionPowerTools, toolsActionToolbox,
+		toolsActionAudit, toolsActionSecurity,
 		toolsActionDiscHelpers, toolsActionCommunity,
 	}
 	for i, action := range want {
@@ -241,12 +245,17 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 	}
 	// Most-used first: the copyable address, then the transfer tools and the
 	// network probes they go with.
-	if rows[0].section != "FTP & IP" || rows[10].section != "WATCH TOGETHER" || rows[11].section != "SYSTEM & UPDATES" {
-		t.Fatalf("section headings are wrong: %q %q %q", rows[0].section, rows[10].section, rows[11].section)
+	// Three bands inside the transfer tools, then the two older groups: an
+	// eighteen-tile heading was the wall this split removed.
+	if rows[0].section != "SERVERS & SHARING" || rows[4].section != "NETWORK PROBES" ||
+		rows[11].section != "LOOKUPS & CHECKS" || rows[15].section != "THIS DEVICE" ||
+		rows[18].section != "WATCH TOGETHER" || rows[19].section != "SYSTEM & UPDATES" {
+		t.Fatalf("section headings are wrong: %q %q %q %q %q %q",
+			rows[0].section, rows[4].section, rows[11].section, rows[15].section, rows[18].section, rows[19].section)
 	}
 	// The probes came out of Power tools; each one must still carry its action
 	// hint so the panel reads like the rest of the list.
-	for _, action := range want[4:10] {
+	for _, action := range want[4:18] {
 		row := toolsRowByAction(rows, action)
 		if row == nil || row.hint == "" {
 			t.Fatalf("probe row %v = %+v, want an action hint", action, row)
@@ -269,7 +278,7 @@ func TestToolsRowsWithoutMiscScene(t *testing.T) {
 func TestToolsRowsWithMiscScene(t *testing.T) {
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	rows := toolsRows(config)
-	if len(rows) != 17 {
+	if len(rows) != 26 {
 		t.Fatalf("rows = %d, want a Classic Tools row too", len(rows))
 	}
 	if rows[len(rows)-1].action != toolsActionUtilities {
@@ -321,7 +330,7 @@ func TestToolsRowsRunningSSH(t *testing.T) {
 }
 
 // FTP and SFTP running together is the worst case for the panel's height:
-// nine rows plus two info lines must still leave the footer its space.
+// two info lines and a full grid must still leave the footer its space.
 func TestToolsPanelRunningBothServersFits(t *testing.T) {
 	t.Setenv("JUKAHUB_SSH_KEY_DIR", t.TempDir())
 	if err := sshSrv.startAt(t.TempDir(), "127.0.0.1:0"); err != nil {
@@ -335,8 +344,8 @@ func TestToolsPanelRunningBothServersFits(t *testing.T) {
 
 	config := &Config{Scenes: []SceneConfig{{Name: "Home"}, {Name: "Misc"}}}
 	_, panel, rects := renderToolsProbe(t, config, 0)
-	if len(rects) != 17 {
-		t.Fatalf("tile rects = %d, want 17 with the Misc scene", len(rects))
+	if len(rects) != 26 {
+		t.Fatalf("tile rects = %d, want 26 with the Misc scene", len(rects))
 	}
 	if font, _ := getCachedFont(config, "small"); font == nil {
 		t.Fatalf("no usable font: the shipped Inter-Regular.ttf did not load, so this check cannot run")
@@ -422,11 +431,14 @@ func toolsRowByAction(rows []toolsRow, action toolsAction) *toolsRow {
 // heading behind.
 func TestToolsSectionGlyphPerGroup(t *testing.T) {
 	cases := map[string]toolsAction{
-		"FTP & IP":         toolsActionFTP,
-		"WATCH TOGETHER":   toolsActionParty,
-		"System & updates": toolsActionPatch,
-		"":                 toolsActionPowerTools,
-		"Something new":    toolsActionPowerTools,
+		"SERVERS & SHARING": toolsActionFTP,
+		"Network probes":    toolsActionPing,
+		"LOOKUPS & CHECKS":  toolsActionDNSLookup,
+		"FTP & IP":          toolsActionFTP,
+		"WATCH TOGETHER":    toolsActionParty,
+		"System & updates":  toolsActionPatch,
+		"":                  toolsActionPowerTools,
+		"Something new":     toolsActionPowerTools,
 	}
 	for title, want := range cases {
 		if got := toolsSectionGlyph(title); got != want {

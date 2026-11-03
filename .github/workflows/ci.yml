@@ -20,11 +20,19 @@ concurrency:
 jobs:
   web:
     name: Web builder checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Scorecard's Pinned-Dependencies check, kept green by CI rather than by a
+      # weekly reminder: a tag is mutable, so `uses: owner/action@v7` lets the
+      # code CI runs change without a commit here.
+      - name: Workflow actions, images and downloads are pinned
+        # The script `make check` runs too, so a workflow edit that breaks a
+        # rule fails locally instead of on the push that follows it.
+        run: bash .github/scripts/check-workflows.sh
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
       - name: Syntax check builder scripts
@@ -58,14 +66,14 @@ jobs:
 
   web-e2e:
     name: Web builder smoke test (Chromium)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:
       run:
         working-directory: tests/e2e
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -73,14 +81,16 @@ jobs:
       - name: Install Playwright and Chromium
         run: |
           npm ci --no-audit --no-fund
-          npx playwright install --with-deps chromium
+          # --no-install: use the Playwright from package-lock.json, never a
+          # registry version resolved at run time.
+          npx --no-install playwright install --with-deps chromium
       - name: Run the builder smoke test
         # Loads the real page, drops a palette component on the canvas, checks
         # undo/redo, then exports JSON and re-imports it.
-        run: npx playwright test
+        run: npx --no-install playwright test
       - name: Upload the failure trace
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           path: |
@@ -99,8 +109,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -109,7 +119,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        # Pinned like staticcheck: a scanner that updates itself mid-run makes a
+        # red build unreproducible, and the vulnerability database it reads is
+        # fetched fresh on every run anyway, so the pin costs no coverage.
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - name: Scan the player
         # Advisory for now, like staticcheck. The scan includes the standard
         # library of whichever toolchain go.mod selects, so a fresh Go patch
@@ -123,7 +136,7 @@ jobs:
 
   player-core:
     name: Player helpers (no SDL)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     # These packages do not import SDL, so they build and test with cgo off and
     # are the blocking half of the player checks.
@@ -131,8 +144,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -155,8 +168,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -241,8 +254,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -271,8 +284,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum
@@ -295,8 +308,8 @@ jobs:
       run:
         working-directory: player
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: player/go.mod
           cache-dependency-path: player/go.sum

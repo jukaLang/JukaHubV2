@@ -328,7 +328,7 @@ func UIEmptyState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, 
 
 // UIErrorState is the same block in the danger colour, for failures.
 func UIErrorState(renderer *sdl.Renderer, config *Config, rect sdl.Rect, glyph, title, body string) {
-	uiStateBlock(renderer, config, rect, glyph, title, body, ColorDanger)
+	uiStateBlock(renderer, config, rect, glyph, title, body, DangerInk())
 }
 
 // uiStateBlockMetrics measures the vertical pieces of an empty/error state.
@@ -660,6 +660,94 @@ func UIPanelHeader(title, subtitle, glyph string) UIPageHeader {
 		}
 	}
 	return h
+} // ── The shared overlay page ─────────────────────────────────────────────
+//
+// A full-screen overlay is a card over the dimmed scene, and every one of them
+// is the same card: the same scrim, corner radius, inside margin and page
+// header at the same inset. Those numbers used to be picked per panel (radius
+// 16, 18 or 20; scrim 150, 180, 190 or 200; padding 16, 24, 26 or 28), which is
+// what made a panel opened from Files look like a different app from one opened
+// from Settings.
+
+const (
+	// OverlayCardRadius is every overlay card's corner radius.
+	OverlayCardRadius = int32(20)
+	// OverlayScrimAlpha is the dim behind a modal overlay.
+	OverlayScrimAlpha = uint8(180)
+	// OverlayPadX is the card's inside margin: the header, the rows and the
+	// footer all start this far from the card's edge.
+	OverlayPadX = int32(24)
+	// OverlayAccentInset is how far the accent hairline along a card's top edge
+	// starts from its corners. It is inset from the radius so the line never
+	// clips the curve.
+	OverlayAccentInset = int32(18)
+)
+
+// drawOverlayScrim dims the scene behind a modal overlay.
+func drawOverlayScrim(renderer *sdl.Renderer) {
+	drawOverlayScrimFade(renderer, 1)
+}
+
+// drawOverlayScrimFade is drawOverlayScrim scaled by a panel's enter animation,
+// for the one page that fades its dim in instead of painting it at full alpha.
+func drawOverlayScrimFade(renderer *sdl.Renderer, progress float64) {
+	if renderer == nil {
+		return
+	}
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 1 {
+		progress = 1
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(0, 0, 0, uint8(float64(OverlayScrimAlpha)*progress))
+	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+}
+
+// drawOverlayCard paints a panel card with the shared surface, hairline border
+// and radius. A panel only decides its rect and what goes inside it.
+func drawOverlayCard(renderer *sdl.Renderer, rect sdl.Rect) {
+	drawOverlayCardFilled(renderer, rect, ColorPanelRaised)
+}
+
+// drawOverlayCardFilled is drawOverlayCard with a caller-chosen surface, for the
+// one page whose rows are the raised colour: Downloads recesses its card so the
+// rows read as separate bands. The radius and border still come from here, so
+// the exception is the fill and nothing else.
+func drawOverlayCardFilled(renderer *sdl.Renderer, rect sdl.Rect, fill sdl.Color) {
+	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
+		return
+	}
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, OverlayCardRadius, fill)
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, OverlayCardRadius, 1, ColorBorderDefault)
+}
+
+// drawOverlayCardAccent is the accent hairline along a card's top edge. Every
+// page drew this itself, which is how RetroAchievements ended up at alpha 120
+// and the update prompt at 140 while the rest of the app used 110.
+func drawOverlayCardAccent(renderer *sdl.Renderer, x, y, w int32) {
+	if renderer == nil || w <= 2*OverlayAccentInset {
+		return
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
+	renderer.FillRect(&sdl.Rect{X: x + OverlayAccentInset, Y: y + 1, W: w - 2*OverlayAccentInset, H: 2})
+}
+
+// overlayHeaderOnCard places a panel header at the shared inset and inside
+// margin, so the band a panel reserves and the bar it draws are one placement.
+func overlayHeaderOnCard(h UIPageHeader, card sdl.Rect) UIPageHeader {
+	h.X = card.X + OverlayPadX
+	h.Y = card.Y + UIPanelHeaderInset
+	h.W = card.W - 2*OverlayPadX
+	return h
+}
+
+// overlayPageHeader is overlayHeaderOnCard for the panels whose header is a
+// plain title, subtitle and glyph.
+func overlayPageHeader(card sdl.Rect, title, subtitle, glyph string) UIPageHeader {
+	return overlayHeaderOnCard(UIPanelHeader(title, subtitle, glyph), card)
 }
 
 // UIPageHeaderDraw paints the band and returns the y where the page's content
@@ -840,8 +928,9 @@ func UICategoryTileDraw(renderer *sdl.Renderer, config *Config, tile UICategoryT
 	}
 	fillRoundedRect(renderer, ox, oy, w, h, radius, base)
 	if tile.Focused && tile.Surface == UITileRaised {
-		fillRoundedRect(renderer, ox, oy, w, h, radius, WithAlpha(accentColor, 70))
-		strokeRoundedRect(renderer, ox, oy, w, h, radius, 2, WithAlpha(accentColor, 235))
+		tint := visibleAccent()
+		fillRoundedRect(renderer, ox, oy, w, h, radius, WithAlpha(tint, 70))
+		strokeRoundedRect(renderer, ox, oy, w, h, radius, 2, WithAlpha(tint, 235))
 	} else {
 		strokeRoundedRect(renderer, ox, oy, w, h, radius, 1, border)
 	}

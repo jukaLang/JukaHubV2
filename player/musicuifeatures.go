@@ -437,8 +437,7 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 		medFont = font
 	}
 
-	renderer.SetDrawColor(0, 0, 0, 150)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
 	panelW := int32(760)
 	if panelW > screenWidth-48 {
@@ -454,18 +453,20 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 	}
 	px := (screenWidth - panelW) / 2
 	py := (screenHeight - panelH) / 2
-	drawCard(renderer, px, py, panelW, panelH, 18)
+	card := sdl.Rect{X: px, Y: py, W: panelW, H: panelH}
+	drawOverlayCard(renderer, card)
 
-	title := "SEARCH SONGS"
-	renderText(renderer, config, font, title, ColorTextTertiary(), px+24, py+18)
-	renderText(renderer, config, medFont, ellipsize(medFont, "Type initials: iwyn = I Want You Now", panelW-48),
-		ColorTextSecondary(), px+24, py+40)
+	// The search sheet opens with the shared page header instead of its own
+	// all-caps label, so its field starts where every panel's body starts.
+	header := overlayPageHeader(card, "Search songs", "Type initials: iwyn = I Want You Now", "media")
+	band := UIPanelHeaderBand(config, header, 12)
+	UIPageHeaderDraw(renderer, config, header)
 
 	queryText := query
 	if queryText == "" {
 		queryText = "…"
 	}
-	field := sdl.Rect{X: px + 24, Y: py + 78, W: panelW - 48, H: 46}
+	field := sdl.Rect{X: px + OverlayPadX, Y: py + band, W: panelW - 2*OverlayPadX, H: 46}
 	fillRoundedRect(renderer, field.X, field.Y, field.W, field.H, 10, WithAlpha(ColorPanelRaised, 255))
 	strokeRoundedRect(renderer, field.X, field.Y, field.W, field.H, 10, 1, WithAlpha(ColorBorder, 200))
 	renderText(renderer, config, medFont, ellipsize(medFont, queryText, field.W-24),
@@ -478,7 +479,7 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 		if strings.TrimSpace(query) != "" {
 			msg = "No song matches those initials"
 		}
-		renderText(renderer, config, font, msg, ColorTextTertiary(), px+24, listY+8)
+		renderText(renderer, config, font, msg, ColorTextTertiary(), px+OverlayPadX, listY+8)
 	} else {
 		// Keep the highlighted hit visible when the list is longer than the
 		// panel.
@@ -491,7 +492,7 @@ func renderMusicSearchOverlay(renderer *sdl.Renderer, config *Config) {
 			if idx < 0 || idx >= len(tracks) {
 				continue
 			}
-			row := sdl.Rect{X: px + 18, Y: listY + int32(i)*34, W: panelW - 36, H: 30}
+			row := sdl.Rect{X: px + OverlayPadX, Y: listY + int32(i)*34, W: panelW - 2*OverlayPadX, H: 30}
 			if start+i == sel {
 				fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 8, WithAlpha(ColorCardFocus, 255))
 			}

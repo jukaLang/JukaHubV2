@@ -446,9 +446,10 @@ func drawAppTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry
 		// Focus reads at a glance: a raised surface, an accent border and an
 		// accent spine, not just a tint that darker themes hide.
 		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, ColorSurfaceRaised)
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 70))
-		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 2, WithAlpha(accentColor, 235))
-		fillRoundedRect(r, cell.X+2, cell.Y+12, 3, cell.H-24, 2, accentColor)
+		tint := visibleAccent()
+		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(tint, 70))
+		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 2, WithAlpha(tint, 235))
+		fillRoundedRect(r, cell.X+2, cell.Y+12, 3, cell.H-24, 2, tint)
 	} else if hovered {
 		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 26))
 		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 1, WithAlpha(accentColor, 110))

@@ -467,6 +467,10 @@ func launchPortScript(name, path string) {
 		cmd.Env = append(os.Environ(), env...)
 	}
 	restoreProfile := beginGamePowerProfile(appConfig)
+	// Same hand-off rule as the emulator launchers: the child leads its own
+	// process group, so a wrapper script that backgrounds the game keeps the
+	// screen parked until the game itself exits.
+	screenChildGroupConfigure(cmd)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
 		log.Printf("[portmaster] launch failed for %s: %v", path, err)
@@ -477,7 +481,7 @@ func launchPortScript(name, path string) {
 	recorder := startTimelapse(appConfig, name)
 	go func() {
 		_ = cmd.Wait()
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()
 	}()
@@ -650,7 +654,7 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 	smallH := int32(font.Height())
 	medH := int32(medium.Height())
 
-	const padX = int32(24)
+	const padX = OverlayPadX
 	rowH := 8 + medH + 4 + smallH + 8
 
 	// The title band is the shared page header, built before the card is sized so
@@ -689,18 +693,12 @@ func renderPortsPanel(renderer *sdl.Renderer, config *Config) {
 		portsPanel.scroll = 0
 	}
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	drawOverlayScrim(renderer)
 
-	fillRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, ColorPanelRaised)
-	strokeRoundedRect(renderer, panelX, panelY, panelW, panelH, 20, 1, ColorBorderDefault)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: panelX + 18, Y: panelY + 1, W: panelW - 36, H: 2})
+	drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
+	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
-	header.X = panelX + padX
-	header.Y = panelY + UIPanelHeaderInset
-	header.W = panelW - 2*padX
+	header = overlayHeaderOnCard(header, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 	UIPageHeaderDraw(renderer, config, header)
 
 	focusColor := installHighlight()

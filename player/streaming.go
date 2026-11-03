@@ -418,6 +418,11 @@ func streamFailureReason(stderr string) string {
 			break
 		}
 	}
+	// The extractor is handed the decrypted YouTube API key in its own argument
+	// list, and yt-dlp sometimes quotes back what it was given. This text is
+	// capped and turned into an error message the log records, so it goes
+	// through the same redactor the support bundle uses first.
+	reason = redactDiagnosticText(reason)
 	if len(reason) > 200 {
 		reason = reason[:200] + "…"
 	}
@@ -514,7 +519,9 @@ func resolveWithRunner(ctx context.Context, source string, maxHeight int, extraA
 		if ctx.Err() != nil {
 			break
 		}
-		args := make([]string, 0, len(base)+len(attempt.args)+len(extraArgs)+1)
+		// One capacity hint, not a sum of three: appending grows the slice for
+		// the handful of extra arguments and no integer expression is needed.
+		args := make([]string, 0, len(base))
 		args = append(args, base...)
 		args = append(args, attempt.args...)
 		// Config-provided args come last so a user's cookies or API key win
@@ -1042,9 +1049,11 @@ func prefetchVideos(config *Config, videos []VideoInfo, focus int) {
 	if focus >= len(videos) {
 		focus = len(videos) - 1
 	}
-	end := focus + prefetchWindowSize()
-	if end > len(videos) {
-		end = len(videos)
+	// The window is added only while it fits inside the list, so focus+window
+	// is never an unbounded sum; anything past the last card is the end.
+	end := len(videos)
+	if room := prefetchWindowSize(); room < end-focus {
+		end = focus + room
 	}
 	urls := make([]string, 0, end-focus)
 	for _, v := range videos[focus:end] {

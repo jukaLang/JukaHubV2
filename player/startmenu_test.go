@@ -55,6 +55,10 @@ func useCleanControllerOverlays(t *testing.T) {
 	prevViewer, prevKeyboard := imageViewerPath, virtualKeyboardActive
 	prevWeather, prevSocial := weatherPopoverOpen, socialNotifOpen
 	prevChatSel, prevChatProfile, prevChatMembers := chatSelectionBar, chatProfile, chatMembers
+	// A fade left armed by another test is a surface too: switchScene refuses
+	// to start a new transition while one is running, so a stale "fade-out"
+	// silently stops the next test's scene change from being queued.
+	prevPhase, prevPending := transitionPhase, pendingSceneIndex
 	shortcutsOpen, clipSearchOpen, globalSearchOpen = false, false, false
 	qs.open, wpOpen = false, false
 	imageViewerPath, virtualKeyboardActive = "", false
@@ -62,12 +66,14 @@ func useCleanControllerOverlays(t *testing.T) {
 	chatSelectionBar = chatSelection{}
 	chatProfile = chatProfileCard{}
 	chatMembers = chatMembersPanel{}
+	transitionPhase, pendingSceneIndex = "none", -1
 	t.Cleanup(func() {
 		shortcutsOpen, clipSearchOpen, globalSearchOpen = prevShortcuts, prevClip, prevGlobal
 		qs.open, wpOpen = prevQS, prevWP
 		imageViewerPath, virtualKeyboardActive = prevViewer, prevKeyboard
 		weatherPopoverOpen, socialNotifOpen = prevWeather, prevSocial
 		chatSelectionBar, chatProfile, chatMembers = prevChatSel, prevChatProfile, prevChatMembers
+		transitionPhase, pendingSceneIndex = prevPhase, prevPending
 	})
 }
 
@@ -279,8 +285,9 @@ func TestStartMenuControllerDrivesMenu(t *testing.T) {
 		t.Fatalf("A targeted scene %d, want %d", pendingSceneIndex, want)
 	}
 
-	// B closes without changing scenes.
-	pendingSceneIndex = -1
+	// B closes without changing scenes. The queued fade is undone with the
+	// scene: leaving it armed would keep the next transition from starting.
+	pendingSceneIndex, transitionPhase = -1, "none"
 	tb.startOpen = true
 	handleControllerEvent(ctrlButton(sdl.CONTROLLER_BUTTON_B), config)
 	if tb.startOpen {

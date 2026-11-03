@@ -164,13 +164,22 @@ func shortsAheadURLs(videos []VideoInfo, index, ahead int) []string {
 	if ahead < 1 {
 		ahead = 1
 	}
-	start := index + 1
-	if start < 0 {
-		start = 0
+	// Bounds are decided before the sums: index+1 and start+ahead are integer
+	// expressions the analyser cannot assume stay in range, and everything past
+	// the list is "nothing to preload" anyway.
+	if index < 0 {
+		index = 0
 	}
-	end := start + ahead
-	if end > len(videos) {
-		end = len(videos)
+	if index >= len(videos) {
+		return nil
+	}
+	start := index + 1
+	if start >= len(videos) {
+		return nil
+	}
+	end := len(videos)
+	if ahead < end-start {
+		end = start + ahead
 	}
 	urls := make([]string, 0, end-start)
 	for _, v := range videos[start:end] {
@@ -359,7 +368,7 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 			titleColor := ColorTextPrimary()
 			if videoStreamPreloaded(vid.GetURL()) {
 				const boltSize = 12
-				titleColor = ColorWarning
+				titleColor = WarningInk()
 				drawPreloadBolt(r, titleX, yPos+thumbHeight+14, boltSize, ColorWarning)
 				titleX += boltSize + 5
 				titleW -= boltSize + 5

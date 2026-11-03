@@ -7,8 +7,31 @@ import (
 )
 
 // ThemePreset represents a complete visual theme.
+// ThemePresetKind is which tab of the gallery a preset belongs to. Colour
+// presets repaint the interface; a total conversion repaints it *and* rearranges
+// it, which is why the two are not offered in one list: picking a colour should
+// never move a card.
+type ThemePresetKind int
+
+const (
+	themeKindColour ThemePresetKind = iota
+	themeKindConversion
+)
+
 type ThemePreset struct {
-	Name          string
+	Name string
+	// Kind groups the preset in the gallery. The zero value is a colour
+	// preset, so every entry below stays a palette unless it says otherwise.
+	Kind ThemePresetKind
+	// Summary is what a conversion card says under its name, and what its
+	// toast adds: a conversion is a claim about the layout, so it has to name
+	// the layout.
+	Summary string
+	// Arrangement is the home layout a conversion installs (see
+	// homeArrangementCustom and friends). Empty means "leave the layout alone",
+	// which is what every colour preset does.
+	Arrangement string
+
 	Background    string
 	ButtonColor   string
 	LabelColor    string
@@ -115,27 +138,29 @@ var themePresets = map[string]ThemePreset{
 		Overlay:       "#05060bcc",
 	},
 	// hub matches the shipped home-screen palette so the whole app stays
-	// coherent with the TSP home design (#090E19 background, cyan accent).
+	// coherent with the TSP home design (dark blue background, cyan accent).
+	// Its steps mirror the design tokens in design.go: a button or card that
+	// only sits 1.1:1 above the page reads as the same colour on a handheld.
 	"hub": {
 		Name:          "Hub",
-		Background:    "#090E19",
-		ButtonColor:   "#1E293B",
+		Background:    "#070B12",
+		ButtonColor:   "#2E4061",
 		LabelColor:    "#F6F8FC",
-		InputColor:    "#0F1420",
-		Surface:       "#121A2A",
-		SurfaceAlt:    "#172033",
-		SurfaceRaised: "#22314B",
+		InputColor:    "#121A29",
+		Surface:       "#16202F",
+		SurfaceAlt:    "#1F2B3E",
+		SurfaceRaised: "#27364C",
 		TextPrimary:   "#F6F8FC",
-		TextSecondary: "#9CA9BD",
-		TextTertiary:  "#6c7c93",
-		BorderSubtle:  "#ffffff10",
-		BorderDefault: "#2A3953",
+		TextSecondary: "#B4C1D4",
+		TextTertiary:  "#8FA0BA",
+		BorderSubtle:  "#ffffff16",
+		BorderDefault: "#3A4B6B",
 		BorderFocus:   "#55D6FF",
 		Success:       "#57D68D",
 		Warning:       "#FFCB66",
-		Danger:        "#FF6B7A",
+		Danger:        "#FF7A88",
 		Info:          "#55D6FF",
-		Overlay:       "#090E19cc",
+		Overlay:       "#070B12cc",
 	},
 	// ocean is a deep blue palette with a cyan accent, built for long
 	// reading sessions on the TSP screen.
@@ -649,6 +674,32 @@ var themePresets = map[string]ThemePreset{
 	},
 }
 
+// themeConversionSpecs are the total conversions: a palette the catalogue
+// already has, plus the home arrangement the conversion installs. They are
+// derived rather than written out again, so a conversion cannot drift from the
+// palette it claims to use.
+var themeConversionSpecs = []struct {
+	key         string
+	name        string
+	palette     string
+	arrangement string
+	summary     string
+}{
+	{"convert-dashboard", "Dashboard", "dark", homeArrangementDashboard, "Dashboard · deep slate"},
+	{"convert-grid", "Hero grid", "sand", homeArrangementGrid, "Hero tile · warm paper"},
+}
+
+func init() {
+	for _, spec := range themeConversionSpecs {
+		preset := themePresets[spec.palette]
+		preset.Name = spec.name
+		preset.Kind = themeKindConversion
+		preset.Arrangement = spec.arrangement
+		preset.Summary = spec.summary
+		themePresets[spec.key] = preset
+	}
+}
+
 // GetThemePreset returns a theme preset by name, or the dark preset if not found.
 func GetThemePreset(name string) ThemePreset {
 	if p, ok := themePresets[name]; ok {
@@ -838,6 +889,15 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 	config.Variables.Custom["theme_danger"] = preset.Danger
 	config.Variables.Custom["theme_info"] = preset.Info
 	config.Variables.Custom["theme_overlay"] = preset.Overlay
+	// A total conversion also rearranges the interface. The scene's own
+	// geometry is never rewritten: the arrangement is a stored choice the home
+	// layout reads, so "Custom" puts the authored cards back untouched.
+	if preset.Arrangement != "" {
+		config.Variables.Custom["homeArrangement"] = normalizeHomeArrangement(preset.Arrangement)
+		if homeLayout != nil {
+			homeLayout.SetArrangement(preset.Arrangement)
+		}
+	}
 	ApplyThemeColors(preset)
 	// Cached text and shape textures carry the old palette in their pixels;
 	// drop them so the new theme is visible at once instead of after the LRU
@@ -850,7 +910,11 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 	// field intact when the theme changes.
 	saveUserConfig(userConfigFromVariables(config))
 	if notify {
-		showToast(fmt.Sprintf("Theme: %s", preset.Name), ToastInfo())
+		message := fmt.Sprintf("Theme: %s", preset.Name)
+		if preset.Summary != "" {
+			message += " · " + preset.Summary
+		}
+		showToast(message, ToastInfo())
 	}
 }
 
@@ -867,6 +931,36 @@ var themePresetOrder = []string{
 	"anime", "cute", "girly",
 	"sakura", "lavender", "sand", "nord", "gruvbox", "dracula", "matrix",
 	"fallout", "cyberpunk", "mono", "vaporwave",
+	// Total conversions last: they are their own tab, and a list built from
+	// the whole catalogue (onboarding, a config referencing a preset) still
+	// reads colours first.
+	"convert-dashboard", "convert-grid",
+}
+
+// themeGalleryTab is one tab of the theme gallery.
+type themeTab struct {
+	Kind  ThemePresetKind
+	Label string
+}
+
+// themeGalleryTabs are the gallery's tabs, in order. Colour first: it is what
+// most people come to change, and the conversions are a bigger decision.
+var themeGalleryTabs = []themeTab{
+	{themeKindColour, "Colour"},
+	{themeKindConversion, "Total conversion"},
+}
+
+// ListThemePresetsFor returns the presets of one tab, in the canonical order.
+func ListThemePresetsFor(kind ThemePresetKind) []string {
+	names := make([]string, 0, len(themePresetOrder))
+	for _, name := range themePresetOrder {
+		preset, ok := themePresets[name]
+		if !ok || preset.Kind != kind {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // ListThemePresets returns the names of all available theme presets in a

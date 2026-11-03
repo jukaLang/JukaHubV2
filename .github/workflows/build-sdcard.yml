@@ -32,7 +32,7 @@ concurrency:
 jobs:
   sdcard:
     name: linux/arm64 + SD card layout
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     container:
       # Pinned by digest: the image has one tag (latest), last pushed long ago, and a
@@ -40,10 +40,10 @@ jobs:
       image: anibaldeboni/trimui-smart-pro-toolchain:latest@sha256:69c8c0cd1a0330f21d3e6d82885e67d01bd895dc007ec5d121bca8d857997c42
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Cache Go modules and build cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             /home/toolchain/go/pkg/mod
@@ -64,7 +64,7 @@ jobs:
           ./package-sdcard.sh
 
       - name: Upload SD card package
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: JukaHub-SDCARD
           if-no-files-found: error

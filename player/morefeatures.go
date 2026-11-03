@@ -3,7 +3,9 @@ package main
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +18,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -115,6 +118,13 @@ func playSmartURL(config *Config, url string) {
 		return
 	}
 	if hasMediaExtension(url) {
+		// Audio enclosures belong in the music player: it keeps a listening
+		// position and a speed, and it does not open the video scene for a
+		// podcast or a radio stream.
+		if isAudioURL(url) {
+			openAudioPlayer(config, url)
+			return
+		}
 		playStream(config, url)
 		return
 	}
@@ -280,7 +290,13 @@ func fetchTickers(config *Config) {
 
 		// Each fetch owns one index, so the board keeps its order (BTC/ETH,
 		// AAPL, then the user's symbols) whether or not the network is slow.
-		lines := make([]string, 2+len(symbols))
+		// The two fixed rows are allocated, then one slot is added per symbol:
+		// `2+len(symbols)` as a length is a sum the analyser cannot bound, and
+		// this keeps the same length without ever forming it.
+		lines := make([]string, 2, 2)
+		for range symbols {
+			lines = append(lines, "")
+		}
 		fns := make([]func(context.Context) error, 0, len(lines))
 		fns = append(fns, func(ctx context.Context) error {
 			txt := httpGetTextContext(ctx, "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd", 8*time.Second)
@@ -347,187 +363,400 @@ func fetchTickers(config *Config) {
 // Network Speed Meter
 // ---------------------------------------------------------------------------
 
-func runNetSpeed(config *Config) {
-	runSceneTask(func(ctx context.Context) {
-		url := "https://cachefly.cachefly.net/100mb.test"
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		if err != nil {
-			return
-		}
-		start := time.Now()
-		resp, err := httpClient.Do(req)
-		if err != nil {
-			if ctx.Err() == nil {
-				publishCustom("netspeed_text", "Error: "+err.Error())
+const netSpeedSampleBytes = 5 * 1024 * 1024
+
+var (
+	netSpeedRunActive atomic.Bool
+	netSpeedHTTP      = &http.Client{Timeout: 20 * time.Second}
+	netSpeedURL       = "https://cachefly.cachefly.net/100mb.test"
+)
+
+// measureNetSpeed reads a bounded download sample and rejects HTTP errors and
+// short responses instead of reporting an error page as a speed measurement.
+func measureNetSpeed(ctx context.Context, client *http.Client, url string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	n, err := io.Copy(io.Discard, io.LimitReader(resp.Body, netSpeedSampleBytes))
+	if err != nil {
+		return "", err
+	}
+	if n != netSpeedSampleBytes {
+		return "", fmt.Errorf("download ended early (%d of %d bytes)", n, netSpeedSampleBytes)
+	}
+	dur := time.Since(start).Seconds()
+	if dur <= 0 {
+		dur = 0.001
+	}
+	mbps := (float64(n) * 8 / dur) / 1e6
+	return fmt.Sprintf("Downloaded %.1f MiB in %.2fs\nSpeed: %.1f Mbit/s", float64(n)/(1024*1024), dur, mbps), nil
+}
+
+// Cancelled runs do not publish into a scene the user has left.
+func resetNetSpeedOnSceneEntry(config *Config, scene SceneConfig) {
+	for _, element := range scene.Elements {
+		if element.Type == "textlog" && element.Variable == "netspeed_text" {
+			if text, _ := config.Variables.Custom["netspeed_text"].(string); strings.HasPrefix(text, "Measuring download speed…") {
+				delete(config.Variables.Custom, "netspeed_text")
 			}
 			return
 		}
-		n, copyErr := io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+	}
+}
+
+func runNetSpeed(config *Config) {
+	if !netSpeedRunActive.CompareAndSwap(false, true) {
+		return
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	config.Variables.Custom["netspeed_text"] = "Measuring download speed…\nDownloading a 5 MiB sample. Please wait."
+	started := runSceneTask(func(ctx context.Context) {
+		defer netSpeedRunActive.Store(false)
+		result, err := measureNetSpeed(ctx, netSpeedHTTP, netSpeedURL)
 		if ctx.Err() != nil {
-			// The test was cancelled: report nothing, the screen is gone.
 			return
 		}
-		if copyErr != nil {
-			publishCustom("netspeed_text", "Error: "+copyErr.Error())
-			return
+		if err != nil {
+			result = "Speed test failed: " + err.Error()
 		}
-		dur := time.Since(start).Seconds()
-		if dur <= 0 {
-			dur = 0.001
-		}
-		mbps := (float64(n) * 8 / dur) / 1e6
-		publishCustom("netspeed_text", fmt.Sprintf(
-			"Downloaded %.1f MB in %.2fs\nSpeed: %.1f Mbit/s", float64(n)/1e6, dur, mbps))
+		publishCustom("netspeed_text", result)
 	})
+	if !started {
+		netSpeedRunActive.Store(false)
+		config.Variables.Custom["netspeed_text"] = "Speed test could not start. Press Run to try again."
+	}
 }
 
 // ---------------------------------------------------------------------------
 // Read/Write Benchmark
 // ---------------------------------------------------------------------------
 
-func runBenchmark(config *Config) {
-	runSceneTask(func(ctx context.Context) {
-		path := ".jukabench.tmp"
-		f, err := os.Create(path)
-		if err != nil {
-			if ctx.Err() == nil {
-				publishCustom("benchmark_text", "Error: "+err.Error())
-			}
-			return
-		}
-		discard := func() {
-			f.Close()
-			os.Remove(path)
-		}
-		sz := 50 * 1024 * 1024
-		buf := make([]byte, 1024*1024)
-		for i := range buf {
-			buf[i] = byte(i)
-		}
-		start := time.Now()
-		for written := 0; written < sz; written += len(buf) {
-			if ctx.Err() != nil {
-				// Leaving the screen must not leave a 50 MB file behind.
-				discard()
-				return
-			}
-			f.Write(buf)
-		}
-		f.Sync()
-		d1 := time.Since(start)
-		if ctx.Err() != nil {
-			discard()
-			return
-		}
-		f.Seek(0, 0)
-		r := bufio.NewReader(f)
-		start = time.Now()
-		for {
-			if ctx.Err() != nil {
-				discard()
-				return
-			}
-			_, e := r.Read(buf)
-			if e != nil {
-				break
-			}
-		}
-		d2 := time.Since(start)
-		discard()
-		if ctx.Err() != nil {
-			return
-		}
-		writeMB := float64(sz) / d1.Seconds() / 1e6
-		readMB := float64(sz) / d2.Seconds() / 1e6
-		if err := recordPowerBenchmark("sequential", writeMB, readMB, config.Version); err != nil {
-			log.Printf("[BENCH] could not record result: %v", err)
-		}
-		publishCustom("benchmark_text", fmt.Sprintf(
-			"Write: %.1f MB/s\nRead:  %.1f MB/s", writeMB, readMB))
-	})
+// benchOutcome is one phase's measured throughput, in MB/s.
+type benchOutcome struct {
+	write float64
+	read  float64
 }
 
-// runRandomBenchmark performs random-access I/O benchmarking: it writes
-// 10 MB of random data to a temp file at random offsets, then reads 10 MB
-// of random positions, reporting MB/s for each phase.
-func runRandomBenchmark(config *Config) {
-	runSceneTask(func(ctx context.Context) {
-		const fileSize = 50 * 1024 * 1024
-		const ioBytes = 10 * 1024 * 1024
-		blockSize := 4 * 1024
-		path := ".jukarandbench.tmp"
+// benchProgress is where a phase has got to: the measurement's name and the
+// bytes it has moved so far. The screen used to sit on "Running benchmark…"
+// until both phases finished, which on a slow card is many seconds of a panel
+// that looks hung.
+type benchProgress struct {
+	label string
+	done  int64
+	total int64
+}
 
-		f, err := os.Create(path)
-		if err != nil {
-			if ctx.Err() == nil {
-				publishCustom("benchmark_text", "Random Error: "+err.Error())
-			}
-			return
-		}
-		if err := f.Truncate(fileSize); err != nil {
-			f.Close()
-			os.Remove(path)
-			if ctx.Err() == nil {
-				publishCustom("benchmark_text", "Random Error: "+err.Error())
-			}
-			return
-		}
-		discard := func() {
-			f.Close()
-			os.Remove(path)
-		}
+// benchProgressKey carries the phase's progress sink on the run's context, so
+// the phase functions can report without knowing where the text is drawn, and
+// a phase run without a screen (a test) simply reports nothing.
+type benchProgressKey struct{}
 
-		rnd := make([]byte, blockSize)
-		offsets := make([]int64, ioBytes/blockSize)
-		for i := range offsets {
-			offsets[i] = int64(i) * int64(fileSize) / int64(len(offsets))
-		}
+func withBenchProgress(ctx context.Context, sink func(benchProgress)) context.Context {
+	return context.WithValue(ctx, benchProgressKey{}, sink)
+}
 
-		start := time.Now()
-		for _, off := range offsets {
-			if ctx.Err() != nil {
-				discard()
-				return
-			}
-			if _, err := rand.Read(rnd); err != nil {
-				rnd = []byte{byte(off), byte(off >> 8), byte(off >> 16)}
-			}
-			if _, err := f.WriteAt(rnd, off); err != nil {
-				discard()
-				publishCustom("benchmark_text", "Random Write Error: "+err.Error())
-				return
-			}
+// reportBenchProgress publishes one step of the current phase. Phases call it
+// per block they move; callers that do not want the traffic can drop the sink.
+func reportBenchProgress(ctx context.Context, label string, done, total int64) {
+	sink, _ := ctx.Value(benchProgressKey{}).(func(benchProgress))
+	if sink == nil {
+		return
+	}
+	sink(benchProgress{label: label, done: done, total: total})
+}
+
+// benchProgressText is the panel's live line while a phase is running. It keeps
+// the same first line as the idle message so the panel does not jump.
+func benchProgressText(p benchProgress) string {
+	pct := 100
+	if p.total > 0 {
+		pct = int(p.done * 100 / p.total)
+		if pct > 100 {
+			pct = 100
 		}
-		f.Sync()
-		dWrite := time.Since(start)
+	}
+	if pct < 0 {
+		pct = 0
+	}
+	return fmt.Sprintf("Running benchmark…\n%s: %d%%", p.label, pct)
+}
+
+// benchSequential writes a 50 MB file as one stream and reads it back, which is
+// the shape of a large file copy.
+func benchSequential(ctx context.Context) (benchOutcome, error) {
+	path := ".jukabench.tmp"
+	f, err := os.Create(path)
+	if err != nil {
+		return benchOutcome{}, err
+	}
+	discard := func() {
+		f.Close()
+		os.Remove(path)
+	}
+	sz := 50 * 1024 * 1024
+	buf := make([]byte, 1024*1024)
+	for i := range buf {
+		buf[i] = byte(i)
+	}
+	start := time.Now()
+	for written := 0; written < sz; written += len(buf) {
+		if ctx.Err() != nil {
+			// Leaving the screen must not leave a 50 MB file behind.
+			discard()
+			return benchOutcome{}, ctx.Err()
+		}
+		f.Write(buf)
+		reportBenchProgress(ctx, "Sequential write", int64(written+len(buf)), int64(sz))
+	}
+	f.Sync()
+	d1 := time.Since(start)
+	if ctx.Err() != nil {
+		discard()
+		return benchOutcome{}, ctx.Err()
+	}
+	f.Seek(0, 0)
+	r := bufio.NewReader(f)
+	start = time.Now()
+	var read int64
+	for {
 		if ctx.Err() != nil {
 			discard()
+			return benchOutcome{}, ctx.Err()
+		}
+		n, e := r.Read(buf)
+		if n > 0 {
+			read += int64(n)
+			reportBenchProgress(ctx, "Sequential read", read, int64(sz))
+		}
+		if e != nil {
+			break
+		}
+	}
+	d2 := time.Since(start)
+	discard()
+	if ctx.Err() != nil {
+		return benchOutcome{}, ctx.Err()
+	}
+	return benchOutcome{
+		write: float64(sz) / d1.Seconds() / 1e6,
+		read:  float64(sz) / d2.Seconds() / 1e6,
+	}, nil
+}
+
+// benchRandom performs random-access I/O benchmarking: it writes 10 MB of
+// random data to a 50 MB file at spread-out offsets, then reads 10 MB of
+// random positions, which is the shape of many small files.
+func benchRandom(ctx context.Context) (benchOutcome, error) {
+	const fileSize = 50 * 1024 * 1024
+	const ioBytes = 10 * 1024 * 1024
+	blockSize := 4 * 1024
+	path := ".jukarandbench.tmp"
+
+	f, err := os.Create(path)
+	if err != nil {
+		return benchOutcome{}, err
+	}
+	if err := f.Truncate(fileSize); err != nil {
+		f.Close()
+		os.Remove(path)
+		return benchOutcome{}, err
+	}
+	discard := func() {
+		f.Close()
+		os.Remove(path)
+	}
+
+	rnd := make([]byte, blockSize)
+	offsets := make([]int64, ioBytes/blockSize)
+	for i := range offsets {
+		offsets[i] = int64(i) * int64(fileSize) / int64(len(offsets))
+	}
+
+	start := time.Now()
+	for i, off := range offsets {
+		if ctx.Err() != nil {
+			discard()
+			return benchOutcome{}, ctx.Err()
+		}
+		if _, err := rand.Read(rnd); err != nil {
+			rnd = []byte{byte(off), byte(off >> 8), byte(off >> 16)}
+		}
+		if _, err := f.WriteAt(rnd, off); err != nil {
+			discard()
+			return benchOutcome{}, fmt.Errorf("write: %w", err)
+		}
+		reportBenchProgress(ctx, "Random write", int64(i+1)*int64(blockSize), ioBytes)
+	}
+	f.Sync()
+	dWrite := time.Since(start)
+	if ctx.Err() != nil {
+		discard()
+		return benchOutcome{}, ctx.Err()
+	}
+
+	readBuf := make([]byte, blockSize)
+	start = time.Now()
+	for i, off := range offsets {
+		if ctx.Err() != nil {
+			discard()
+			return benchOutcome{}, ctx.Err()
+		}
+		if _, err := f.ReadAt(readBuf, off); err != nil {
+			discard()
+			return benchOutcome{}, fmt.Errorf("read: %w", err)
+		}
+		reportBenchProgress(ctx, "Random read", int64(i+1)*int64(blockSize), ioBytes)
+	}
+	dRead := time.Since(start)
+
+	discard()
+	if ctx.Err() != nil {
+		return benchOutcome{}, ctx.Err()
+	}
+	return benchOutcome{
+		write: float64(ioBytes) / dWrite.Seconds() / 1e6,
+		read:  float64(ioBytes) / dRead.Seconds() / 1e6,
+	}, nil
+}
+
+// benchPhases are the two measurements a Run performs. They are variables so
+// the screen's combined run can be tested without writing 100 MB per case.
+var (
+	benchSequentialPhase = benchSequential
+	benchRandomPhase     = benchRandom
+)
+
+// benchRunActive keeps two measurements from racing on one card. The screen
+// starts measuring as it opens, so a Run press on the way in would otherwise
+// put a second 100 MB pass on top of the first and the two would report each
+// other's contention as the device's speed.
+var benchRunActive atomic.Bool
+
+// benchRunLabel is what the screen's one Run button says while a measurement is
+// in flight, in place of its configured text.
+const benchRunLabel = "Running…"
+
+// benchmarkButtonFace is the label and the busy flag a scene button draws with.
+// The Benchmark and Net Speed Run buttons are busy during a measurement —
+// which on a slow card is seconds — so it is drawn disabled and relabelled
+// instead of sitting there looking like a second press would do something. The
+// render path and handleTrigger both read this one rule.
+func benchmarkButtonFace(elem Element) (label string, busy bool) {
+	if elem.Type == "button" && ((elem.Trigger == "benchmark_run" && benchRunActive.Load()) ||
+		(elem.Trigger == "netspeed_run" && netSpeedRunActive.Load())) {
+		return benchRunLabel, true
+	}
+	return elem.Text, false
+}
+
+// runBenchmark measures both phases from the screen's one Run press. They used
+// to be two buttons — Run and Random — so a run said only half the story and the
+// random phase was measured only if someone remembered the second button. Both
+// phases now run automatically, one after the other, and the panel shows all
+// four numbers (or which phase failed).
+//
+// The screen also starts this on entry, so the panel is measuring the moment it
+// appears. Each phase publishes its own progress line as it moves its bytes.
+func runBenchmark(config *Config) {
+	if !benchRunActive.CompareAndSwap(false, true) {
+		// Already measuring: the progress line on screen is the answer.
+		return
+	}
+	started := runSceneTask(func(ctx context.Context) {
+		defer benchRunActive.Store(false)
+		var lastPublish time.Time
+		ctx = withBenchProgress(ctx, func(p benchProgress) {
+			if ctx.Err() != nil {
+				return
+			}
+			// The panel is a string in the text cache: repainting it on every
+			// megabyte would miss the cache dozens of times a second. Four
+			// updates per second read as live and cost almost nothing to draw.
+			if p.done < p.total && time.Since(lastPublish) < 250*time.Millisecond {
+				return
+			}
+			lastPublish = time.Now()
+			publishCustom("benchmark_text", benchProgressText(p))
+		})
+		publishCustom("benchmark_text", "Running benchmark…")
+		lines := make([]string, 0, 4)
+
+		seq, err := benchSequentialPhase(ctx)
+		if ctx.Err() != nil {
 			return
 		}
-
-		readBuf := make([]byte, blockSize)
-		start = time.Now()
-		for _, off := range offsets {
-			if ctx.Err() != nil {
-				discard()
-				return
+		if err != nil {
+			lines = append(lines, "Sequential: "+err.Error())
+		} else {
+			if recordErr := recordPowerBenchmark("sequential", seq.write, seq.read, config.Version); recordErr != nil {
+				log.Printf("[BENCH] could not record result: %v", recordErr)
 			}
-			if _, err := f.ReadAt(readBuf, off); err != nil {
-				discard()
-				publishCustom("benchmark_text", "Random Read Error: "+err.Error())
-				return
-			}
+			lines = append(lines,
+				fmt.Sprintf("Write: %.1f MB/s", seq.write),
+				fmt.Sprintf("Read:  %.1f MB/s", seq.read))
 		}
-		dRead := time.Since(start)
 
-		discard()
+		rnd, err := benchRandomPhase(ctx)
 		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			lines = append(lines, "Random: "+err.Error())
+		} else {
+			lines = append(lines,
+				fmt.Sprintf("Random write: %.1f MB/s", rnd.write),
+				fmt.Sprintf("Random read:  %.1f MB/s", rnd.read))
+		}
+
+		publishCustom("benchmark_text", strings.Join(lines, "\n"))
+	})
+	if !started {
+		// Shutting down refuses new tasks; the flag must not stay taken.
+		benchRunActive.Store(false)
+	}
+}
+
+// benchmarkAutoStartOnOpen measures as soon as a scene that shows the benchmark
+// panel becomes active, and reports whether it did. It keys off the panel rather
+// than the scene name, so a renamed scene — or a hand-edited config that keeps
+// the panel — still measures, and a scene that dropped the panel does not.
+func benchmarkAutoStartOnOpen(config *Config, scene SceneConfig) bool {
+	for _, e := range scene.Elements {
+		if e.Type == "textlog" && e.Variable == "benchmark_text" {
+			runBenchmark(config)
+			return true
+		}
+	}
+	return false
+}
+
+// runRandomBenchmark is the random phase alone, kept for a hand-edited config
+// that still has the old Random button.
+func runRandomBenchmark(config *Config) {
+	runSceneTask(func(ctx context.Context) {
+		rnd, err := benchRandomPhase(ctx)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			publishCustom("benchmark_text", "Random Error: "+err.Error())
 			return
 		}
 		publishCustom("benchmark_text", fmt.Sprintf(
-			"Random Write: %.1f MB/s\nRandom Read:  %.1f MB/s",
-			float64(ioBytes)/dWrite.Seconds()/1e6, float64(ioBytes)/dRead.Seconds()/1e6))
+			"Random Write: %.1f MB/s\nRandom Read:  %.1f MB/s", rnd.write, rnd.read))
 	})
 }
 
@@ -559,9 +788,102 @@ func runTerminal(config *Config, cmdStr string) {
 // Cron / Task Scheduler (read-only viewer)
 // ---------------------------------------------------------------------------
 
+// taskOutputLimit bounds command output even on machines with many tasks.
+const taskOutputLimit = 2 * 1024 * 1024
+
+type taskOutputBuffer struct {
+	bytes.Buffer
+	truncated bool
+}
+
+func (b *taskOutputBuffer) Write(p []byte) (int, error) {
+	n := len(p)
+	remaining := taskOutputLimit - b.Len()
+	if remaining < n {
+		b.truncated = true
+		if remaining < 0 {
+			remaining = 0
+		}
+		p = p[:remaining]
+	}
+	_, _ = b.Buffer.Write(p)
+	return n, nil
+}
+
+// queryWindowsTasks runs the local, read-only Task Scheduler query. A timeout
+// and bounded output keep a stalled or unusually large result off the UI thread.
+func queryWindowsTasks(ctx context.Context) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "schtasks", "/query", "/fo", "CSV", "/nh")
+	var output taskOutputBuffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("%w: %s", err, strings.TrimSpace(output.String()))
+	}
+	if output.truncated {
+		return nil, fmt.Errorf("Task Scheduler output exceeded the 2 MiB limit")
+	}
+	return output.Bytes(), nil
+}
+
+// formatWindowsTasks uses field positions rather than localized column titles.
+// Limit the list and say it is partial even when a large font leaves fewer
+// rows visible in the textlog.
+func formatWindowsTasks(data []byte) (string, error) {
+	r := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(data), "\ufeff")))
+	r.FieldsPerRecord = -1
+	var rows []string
+	count := 0
+	for {
+		record, err := r.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		if len(record) != 3 {
+			return "", fmt.Errorf("unexpected Task Scheduler CSV row with %d fields", len(record))
+		}
+		count++
+		if len(rows) < 10 {
+			rows = append(rows, strings.Join(record, " | "))
+		}
+	}
+	if count == 0 {
+		return "No scheduled tasks returned by Windows Task Scheduler.", nil
+	}
+	return fmt.Sprintf("Windows Task Scheduler: %d tasks; first entries shown.\n%s", count, strings.Join(rows, "\n")), nil
+}
+
+var windowsTaskQuery = queryWindowsTasks
+var windowsTaskRequest atomic.Uint64
+
+func loadWindowsTasks(config *Config) {
+	id := windowsTaskRequest.Add(1)
+	config.Variables.Custom["cron_text"] = "Loading Windows scheduled tasks..."
+	runSceneTask(func(ctx context.Context) {
+		data, err := windowsTaskQuery(ctx)
+		text := ""
+		if err == nil {
+			text, err = formatWindowsTasks(data)
+		}
+		if err != nil {
+			text = "Cannot load Windows scheduled tasks: " + firstLine(err.Error())
+		}
+		if ctx.Err() == nil && windowsTaskRequest.Load() == id {
+			publishCustom("cron_text", text)
+		}
+	})
+}
+
 func loadCron(config *Config) {
 	if runtime.GOOS == "windows" {
-		publishCustom("cron_text", "Cron is not available on Windows.")
+		loadWindowsTasks(config)
 		return
 	}
 	var sb strings.Builder
@@ -591,34 +913,54 @@ func loadCron(config *Config) {
 // Unzip (.zip files in File Explorer)
 // ---------------------------------------------------------------------------
 
+// Bounds for a File Explorer unzip. A .zip the user picked is not signed and
+// not checked by anything, so it is unpacked with the same kind of cap the
+// installer archives use: without one, a bomb (or a header that merely claims
+// petabytes) filled the card until it was full.
+const (
+	maxUnzipEntries = 20000
+	maxUnzipBytes   = int64(2 << 30)
+)
+
 func unzipFile(src string) error {
 	// Only archives selected inside the browsable File Explorer tree are opened.
 	resolved, err := resolveExplorerEntry(appConfig, src)
 	if err != nil {
 		return err
 	}
-	src = resolved
+	return unzipFileBounded(resolved, maxUnzipEntries, maxUnzipBytes)
+}
+
+// unzipFileBounded unpacks a zip next to itself, refusing an archive with more
+// entries or more declared bytes than the caller allows. It is separate from
+// unzipFile so the caps can be exercised without building a real bomb.
+func unzipFileBounded(src string, maxEntries int, maxBytes int64) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
 		return err
 	}
 	defer r.Close()
+	if len(r.File) > maxEntries {
+		return fmt.Errorf("archive has %d entries (limit %d)", len(r.File), maxEntries)
+	}
 	dest := strings.TrimSuffix(src, filepath.Ext(src)) + "_unzipped"
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return err
 	}
 	destPrefix := filepath.Clean(dest) + string(os.PathSeparator)
+	var total int64
 	for _, f := range r.File {
 		// Mitigate Zip Slip: refuse entries whose cleaned path escapes dest.
 		cleanedP := filepath.Join(destPrefix, filepath.Clean(f.Name))
 		if !strings.HasPrefix(cleanedP, destPrefix) {
-			rc, openErr := f.Open()
-			if openErr == nil {
-				rc.Close()
-			}
 			return fmt.Errorf("refusing to extract zip entry with unsafe path %q", f.Name)
 		}
-
+		// A link entry's "content" is its target text. Written out as a file it
+		// would be a misleading stub, and materialised as a link it would let a
+		// later entry be written through it, so it is skipped outright.
+		if f.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
 		p := cleanedP
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(p, 0o755); err != nil {
@@ -626,27 +968,43 @@ func unzipFile(src string) error {
 			}
 			continue
 		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
+		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), maxBytes)
+		if !ok {
+			return fmt.Errorf("archive expands beyond %d bytes", maxBytes)
 		}
-		defer rc.Close()
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-		out, err := os.Create(p)
-		if err != nil {
-			return err
-		}
-		if _, err := io.Copy(out, rc); err != nil {
-			out.Close()
-			return err
-		}
-		if err := out.Close(); err != nil {
+		total = sum
+		if err := copyZipEntryTo(f, p); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// copyZipEntryTo writes one entry to p and closes both handles before the next
+// entry is opened: the older loop deferred the reader's Close inside the loop,
+// so a two-thousand-entry archive held two thousand open files at once.
+func copyZipEntryTo(f *zip.File, p string) error {
+	rc, err := f.Open()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		rc.Close()
+		return err
+	}
+	out, err := os.Create(p)
+	if err != nil {
+		rc.Close()
+		return err
+	}
+	// One entry may not expand past what the whole archive is allowed to.
+	_, copyErr := io.Copy(out, io.LimitReader(rc, maxUnzipBytes+1))
+	rc.Close()
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }
 
 // ---------------------------------------------------------------------------
@@ -704,11 +1062,13 @@ func textlogEmptyState(variable string) (title, body string) {
 	case "weather_screen_text":
 		return "Loading forecast…", "Press Refresh to fetch the weather again."
 	case "netspeed_text":
-		return "Measuring speed…", "Press Refresh to run a new sample."
+		return "Speed test not started.", "Press Run to measure download speed (5 MiB)."
 	case "benchmark_text":
-		return "Running benchmark…", "Press Refresh to start it again."
-	case "cron_text", "startup_text":
-		return "Nothing scheduled.", "Press Refresh to rescan the crontab."
+		return "Running benchmark…", "Press Run to measure the disk again."
+	case "cron_text":
+		return "Scheduled tasks not loaded.", "Press Refresh to scan scheduled tasks."
+	case "startup_text":
+		return "Startup items not loaded.", "Press Refresh or Startup to scan startup items."
 	case "plugin_list":
 		return "No plugins installed.", "Install a package to add plugins."
 	case "terminal_text":
@@ -755,6 +1115,9 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 	lines := strings.Split(text, "\n")
 	y := element.Y + 8
 	lineH := int32(22)
+	if (element.Variable == "cron_text" || element.Variable == cronStartupVar) && int32(font.Height()) > lineH {
+		lineH = int32(font.Height())
+	}
 	// The live log panel must end at the newest line; starting from the head
 	// would hide recent entries behind the panel's bottom edge.
 	if element.Variable == "log_text" {
@@ -763,6 +1126,9 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 		}
 	}
 	for i, ln := range lines {
+		if (element.Variable == "cron_text" || element.Variable == cronStartupVar) && y+lineH > element.Y+elemH-8 {
+			break
+		}
 		if y > element.Y+elemH-16 {
 			break
 		}
@@ -775,13 +1141,16 @@ func renderTextLog(renderer *sdl.Renderer, config *Config, element Element) {
 		lower := strings.ToLower(ln)
 		switch {
 		case strings.Contains(lower, "[error]") || strings.Contains(lower, "error:"):
-			col = ColorDanger
+			col = DangerInk()
 		case strings.Contains(lower, "[warn]") || strings.Contains(lower, "[warning]"):
-			col = ColorWarning
+			col = WarningInk()
 		case strings.Contains(lower, "[info]"):
-			col = ColorInfo
+			col = InfoInk()
 		case strings.Contains(lower, "[ok]") || strings.Contains(lower, "[success]"):
-			col = ColorSuccess
+			col = SuccessInk()
+		}
+		if element.Variable == "cron_text" || element.Variable == cronStartupVar {
+			ln = ellipsize(font, ln, elemW-24)
 		}
 		renderText(renderer, config, font, ln, col, element.X+12, y)
 		y += lineH

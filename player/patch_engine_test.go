@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -410,6 +411,83 @@ func TestArchiveTraversalRejected(t *testing.T) {
 	f3.Close()
 	if err := extractZipSafe(context.Background(), filepath.Join(dir, "link.zip"), dest, 100, 1<<20); err == nil {
 		t.Fatal("symlink archive must be rejected")
+	}
+}
+
+// TestArchiveExpandCapSumsDeclaredSizes checks the running total that bounds an
+// extraction: three members of 400 KiB each do not fit under a 1 MiB cap, and
+// the third must be refused rather than written.
+func TestArchiveExpandCapSumsDeclaredSizes(t *testing.T) {
+	dir := t.TempDir()
+	archive := filepath.Join(dir, "big.zip")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for _, name := range []string{"a.bin", "b.bin", "c.bin"} {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(make([]byte, 400<<10)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	dest := filepath.Join(dir, "out")
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractZipSafe(context.Background(), archive, dest, 100, 1<<20); err == nil {
+		t.Fatal("an archive that expands past the cap must be refused")
+	}
+	if _, err := os.Stat(filepath.Join(dest, "c.bin")); err == nil {
+		t.Fatal("an entry over the cap was written")
+	}
+}
+
+// TestDeclaredEntryBytesDoesNotNarrow pins the conversion that the size caps are
+// built on. A zip header may claim anything a uint64 holds; turning that into a
+// negative int64 is how the caps used to be bypassed.
+func TestDeclaredEntryBytesDoesNotNarrow(t *testing.T) {
+	cases := []struct {
+		in   uint64
+		want int64
+	}{
+		{0, 0},
+		{4096, 4096},
+		{math.MaxInt64, math.MaxInt64},
+		{math.MaxInt64 + 1, math.MaxInt64},
+		{math.MaxUint64, math.MaxInt64},
+	}
+	for _, c := range cases {
+		if got := declaredEntryBytes(c.in); got != c.want {
+			t.Errorf("declaredEntryBytes(%d) = %d, want %d", c.in, got, c.want)
+		}
+		if got := declaredEntryBytes(c.in); got < 0 {
+			t.Fatalf("declaredEntryBytes(%d) went negative", c.in)
+		}
+	}
+	// And the cap that consumes it: a size that saturates is refused, not summed.
+	if _, ok := addDeclaredBytes(0, declaredEntryBytes(math.MaxUint64), 1<<20); ok {
+		t.Fatal("a saturating size passed the expansion cap")
+	}
+	if sum, ok := addDeclaredBytes(1<<19, 1<<19, 1<<20); !ok || sum != 1<<20 {
+		t.Fatalf("addDeclaredBytes at the cap = %d, ok=%v; want %d, true", sum, ok, 1<<20)
+	}
+	if _, ok := addDeclaredBytes(1<<20, 1, 1<<20); ok {
+		t.Fatal("addDeclaredBytes accepted one byte over the cap")
+	}
+	if got := satAddBytes(math.MaxInt64, 1); got != math.MaxInt64 {
+		t.Fatalf("satAddBytes wrapped: %d", got)
+	}
+	if got := satAddBytes(10, -5); got != 5 {
+		t.Fatalf("satAddBytes(10, -5) = %d, want 5", got)
 	}
 }
 

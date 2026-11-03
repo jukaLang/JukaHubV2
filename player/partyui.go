@@ -538,10 +538,6 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Dim the scene below so the panel reads as modal.
-	renderer.SetDrawColor(0, 0, 0, 150)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-
 	w := screenWidth - 120
 	if w > 980 {
 		w = 980
@@ -552,24 +548,31 @@ func partyRender(renderer *sdl.Renderer, config *Config) {
 	}
 	x := (screenWidth - w) / 2
 	y := (screenHeight - h) / 2
-	partyPanelRect = sdl.Rect{X: x, Y: y, W: w, H: h}
-	fillRoundedRect(renderer, x, y, w, h, 22, WithAlpha(ColorPanel, 255))
-	strokeRoundedRect(renderer, x, y, w, h, 22, 1, WithAlpha(ColorBorder, 220))
+	card := sdl.Rect{X: x, Y: y, W: w, H: h}
+	partyPanelRect = card
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
 
-	pad := int32(28)
-	renderText(renderer, config, titleFont, "WATCH PARTY", ColorTextPrimary(), x+pad, y+22)
-	stateLine := "LAN · same stream, same moment"
+	pad := OverlayPadX
 	history := partyUI.history
+	stateLine := "LAN · same stream, same moment"
+	title := "Watch Party"
 	if history {
+		title = "Watch Party · History"
 		stateLine = "All-time · kept on this handheld"
 	} else if partyActive() {
 		stateLine = "Live · " + partyDeviceName()
 	}
-	sw, _, _ := small.SizeUTF8(stateLine)
-	renderText(renderer, config, small, stateLine, ColorTextTertiary(), x+w-pad-int32(sw), y+30)
+
+	// The sheet opens with the shared page header: the room state that used to
+	// float right-aligned under a hand-set title is the subtitle now, so it
+	// moves with the same band every other page reserves.
+	header := overlayPageHeader(card, title, stateLine, "chat")
+	band := UIPanelHeaderBand(config, header, 3)
+	UIPageHeaderDraw(renderer, config, header)
 
 	snapshot, _, active, errText := partyState()
-	listTop := y + 64
+	listTop := y + band
 
 	if history {
 		intro := "Cumulative watch time and the rooms behind it, across every party on this device."

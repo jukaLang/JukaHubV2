@@ -275,10 +275,18 @@ func captureCompanionScreen(renderer *sdl.Renderer) {
 		surface.Unlock()
 		return
 	}
-	// Copy the rows out before unlocking: the surface is freed on return.
-	pixels := make([]byte, int(surface.Pitch)*int(h))
-	copy(pixels, surface.Pixels())
+	// Copy the rows out before unlocking: the surface is freed on return. The
+	// pitch*height product is formed in int64 and checked against the surface's
+	// own pixel slice before it narrows: on a 32-bit int it would wrap for a
+	// large output size and size this buffer below the data it is handed.
 	pitch := int(surface.Pitch)
+	total := int64(pitch) * int64(h)
+	if pitch <= 0 || total <= 0 || total != int64(len(surface.Pixels())) {
+		surface.Unlock()
+		return
+	}
+	pixels := make([]byte, int(total))
+	copy(pixels, surface.Pixels())
 	surface.Unlock()
 
 	var pngFrame, jpegFrame []byte

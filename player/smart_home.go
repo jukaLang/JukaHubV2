@@ -504,9 +504,11 @@ func mqttString(s string) []byte {
 			s = trimLastRune(s)
 		}
 	}
-	buf := make([]byte, 2+len(s))
+	// Built by appending, so the allocation is not `2+len(s)`: the length that
+	// goes on the wire is written once the payload has been copied in.
+	buf := make([]byte, 2)
+	buf = append(buf, s...)
 	binary.BigEndian.PutUint16(buf, uint16(len(s)))
-	copy(buf[2:], s)
 	return buf
 }
 

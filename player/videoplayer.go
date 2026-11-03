@@ -104,6 +104,11 @@ var (
 // drawing order, so it moves left to right along the bar.
 type videoControlID int
 
+// maxVideoFrameBytes caps the buffer startFFmpegDecoder allocates for one YUV
+// frame. The decode size is already capped by videoDecodeMaxSize, so this is the
+// backstop that keeps a header-declared size from reaching make as an int.
+const maxVideoFrameBytes = int64(64 << 20)
+
 const (
 	vcNone videoControlID = iota
 	vcStop
@@ -899,11 +904,21 @@ func startFFmpegDecoder(sess *playbackSession, ffmpegPath, path string, width, h
 	defer sess.clearVideoCmd(cmd)
 	defer cmd.Wait()
 
-	// 1.5 bytes per pixel: the Y plane (w*h) then U and V quarters each.
-	frameSize := int(width * height * 3 / 2)
-	if frameSize <= 0 {
+	// 1.5 bytes per pixel: the Y plane (w*h) then U and V quarters each. The
+	// product is formed in int64 and capped before it narrows: width and height
+	// come from the container's header, and a 32-bit int product would wrap for
+	// a large one, handing make a buffer far smaller than the frames ffmpeg
+	// then writes into it.
+	frameBytes := int64(width) * int64(height) * 3 / 2
+	if frameBytes <= 0 {
+		// A probe that reported no usable size leaves nothing to size by.
 		return
 	}
+	if frameBytes > maxVideoFrameBytes {
+		log.Printf("[VIDEO] refusing a %dx%d frame buffer", width, height)
+		return
+	}
+	frameSize := int(frameBytes)
 	buf := make([]byte, frameSize)
 	frameCount := 0
 
@@ -1556,6 +1571,10 @@ func videoSyncPlaybackEnd() {
 		// A short reached its natural end: the main loop starts the next one
 		// instead of dropping the user back on the grid.
 		shortsAutoAdvance = true
+	} else if upNextAfterPlayback(shortsAutoplay) {
+		// Up Next holds the hand-off. It is taken on the main loop, once the
+		// player this video is releasing is idle again.
+		upNextAdvancePending = true
 	}
 	StopEmbeddedPlayback()
 }
@@ -1733,13 +1752,13 @@ func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoSta
 	phaseCol := ColorTextPrimary()
 	if state.phase == "paused" {
 		phaseText = "PAUSED"
-		phaseCol = ColorWarning
+		phaseCol = WarningInk()
 	} else if state.phase == "downloading" {
 		phaseText = "LOADING"
-		phaseCol = ColorInfo
+		phaseCol = InfoInk()
 	} else if state.phase == "error" {
 		phaseText = "ERROR"
-		phaseCol = ColorDanger
+		phaseCol = DangerInk()
 	}
 	phaseW, _, _ := font.SizeUTF8(phaseText)
 	badgeX := x + 16
@@ -1806,6 +1825,16 @@ func drawVideoOverlayLive(renderer *sdl.Renderer, config *Config, state videoSta
 	// Active subtitle cue above the control bar.
 	currentTime := state.progress * state.duration
 	renderVideoSubtitles(renderer, config, x, y, w, h, currentTime, barH+28)
+
+	// Up Next: what starts when this video reaches its end, and how much
+	// follows it. It sits above the seek track so it never fights a subtitle
+	// cue for the same line.
+	if line := upNextSummary(); line != "" {
+		if lw, lh, err := font.SizeUTF8(line); err == nil {
+			renderText(renderer, config, font, line, ColorTextSecondary(),
+				x+(w-int32(lw))/2, seekBarY-int32(lh)-8)
+		}
+	}
 
 	// Settings sheet sits above the control bar.
 	if videoSettingsOpen {
@@ -1963,7 +1992,7 @@ func drawCCBtn(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, siz
 // Layout of the settings sheet. The row metrics are shared by the renderer and
 // the click hit test, so a tap always lands on the row it is drawn over.
 const (
-	videoSettingsSheetRows = 5
+	videoSettingsSheetRows = 6
 	videoSettingsRowH      = int32(48)
 	videoSettingsTopPad    = int32(20)
 )
@@ -2011,6 +2040,7 @@ func drawVideoSettingsSheet(renderer *sdl.Renderer, config *Config, x, y, w, h i
 		"Full screen: " + fullscreenState,
 		fmt.Sprintf("Speed: %.2gx", snapshotVideoState().speed),
 		"Quality: " + videoQualityRowLabel(appConfig),
+		upNextSheetRowLabel(),
 		"Close",
 	}
 	for i, label := range rows {
@@ -2259,6 +2289,15 @@ func videoSettingsActivate(idx int) {
 	case 3:
 		cycleVideoQuality(appConfig)
 	case 4:
+		// The queue outlives the results screen it was filled from, so this is
+		// the one place it can be emptied once those rows are gone.
+		if n := upNextClear(); n > 0 {
+			PlayBackSound()
+			ShowToast(fmt.Sprintf("Up Next cleared (%d)", n), ToastKindInfo)
+		} else {
+			ShowToast("Up Next is empty", ToastKindInfo)
+		}
+	case 5:
 		videoSettingsOpen = false
 	}
 }

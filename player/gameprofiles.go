@@ -934,6 +934,10 @@ func launchGameProfile(entry gameProfileEntry) error {
 // background. logFile is closed and cleanup runs after the child exits;
 // afterExit (optional, nil on ignore) runs once after it with the wait error.
 func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File, cleanup func(), afterExit func(error)) error {
+	// Same hand-off rule as the emulator launchers: the child leads its own
+	// process group, so a wrapper script that backgrounds the game keeps the
+	// screen parked until the game itself exits.
+	screenChildGroupConfigure(cmd)
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {
 			fmt.Fprintf(logFile, "start failed: %v\n", err)
@@ -948,7 +952,7 @@ func startGameProfileCommand(cmd *exec.Cmd, id, gameDir string, logFile *os.File
 	recorder := startTimelapse(appConfig, id)
 	go func() {
 		err := cmd.Wait()
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 		gameProfileSetRunning(id, 0)
 		recorder.Stop()
 		if logFile != nil {

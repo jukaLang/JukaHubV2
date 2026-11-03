@@ -138,6 +138,35 @@ func TestRamNarrowDropsUnreadableAddresses(t *testing.T) {
 	}
 }
 
+// TestRamParseValueSignedRange pins the two's complement the value field
+// accepts: a negative number down to the narrowest signed 64-bit value maps to
+// the bits a game would store, and anything below that is refused instead of
+// wrapping to a small positive number.
+func TestRamParseValueSignedRange(t *testing.T) {
+	cases := []struct {
+		text string
+		want uint64
+		ok   bool
+	}{
+		{"42", 42, true},
+		{"0xFF", 0xFF, true},
+		{"-1", ^uint64(0), true},
+		{"-2147483648", 0xFFFFFFFF80000000, true},
+		{"-9223372036854775808", 1 << 63, true},
+		{"-9223372036854775809", 0, false},
+		{"-18446744073709551615", 0, false},
+		{"-0x10", ^uint64(0xF), true},
+		{"", 0, false},
+		{"nope", 0, false},
+	}
+	for _, c := range cases {
+		got, ok := ramParseValue(c.text)
+		if ok != c.ok || (ok && got != c.want) {
+			t.Errorf("ramParseValue(%q) = %#x, %v; want %#x, %v", c.text, got, ok, c.want, c.ok)
+		}
+	}
+}
+
 func TestParseWritableMapsKeepsOnlyReadWrite(t *testing.T) {
 	maps := strings.Join([]string{
 		"00400000-00401000 r-xp 00000000 08:01 1234 /usr/bin/game",

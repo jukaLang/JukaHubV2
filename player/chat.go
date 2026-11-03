@@ -567,6 +567,13 @@ var chatImageRects []chatImageHit
 // handleChatImageClick opens the image preview under the cursor in the image
 // viewer. It reports whether the click landed on one.
 func handleChatImageClick(mx, my int32) bool {
+	// An open action bar owns the clicks it covers; its own Enlarge entry
+	// is how the picture is opened while a message is selected. The two
+	// modal cards own their rectangle just as completely, so a click inside
+	// one never reaches a preview painted underneath it.
+	if chatSelectionBar.open || chatProfile.open || chatMembers.open {
+		return false
+	}
 	for _, hit := range chatImageRects {
 		if pointInRect(mx, my, hit.rect) {
 			openImageViewerURL(hit.url)
@@ -600,6 +607,17 @@ func firstChatImageURL(text string) string {
 		}
 	}
 	return ""
+}
+
+// chatMessageImageURL is the picture a message carries: an attachment first,
+// then the first image link pasted into its text. The bubble preview and the
+// action bar both read it here, so they can never disagree about whether a
+// message has a picture to enlarge.
+func chatMessageImageURL(msg ChatMessage) string {
+	if u := strings.TrimSpace(msg.ImageURL); u != "" {
+		return u
+	}
+	return firstChatImageURL(msg.Text)
 }
 
 // isYouTubeURL reports whether a URL is a YouTube watch/short link. yt-dlp
@@ -755,6 +773,42 @@ func currentSceneHasChat(config *Config) bool {
 		if elem.Type == "chat" {
 			return true
 		}
+	}
+	return false
+}
+
+// handleChatComposerMouse ignores the previous chat frame's hitboxes when a
+// different scene is visible, so they cannot intercept its controls.
+func handleChatComposerMouse(mx, my int32, config *Config) bool {
+	if !currentSceneHasChat(config) {
+		return false
+	}
+	if chatNameRect.W > 0 && pointInRect(mx, my, chatNameRect) {
+		vkOpenName()
+		return true
+	}
+	if chatInputRect.W > 0 && pointInRect(mx, my, chatInputRect) {
+		vkOpenChat()
+		return true
+	}
+	if chatSendBtnRect.W > 0 && pointInRect(mx, my, chatSendBtnRect) {
+		if chatInputText != "" {
+			sendChatMessage(chatDisplayName(), chatInputText)
+			chatInputText = ""
+		}
+		return true
+	}
+	if chatAskAIBtnRect.W > 0 && pointInRect(mx, my, chatAskAIBtnRect) {
+		if strings.TrimSpace(chatInputText) != "" {
+			sendGroqChatMessage(chatInputText)
+			chatInputText = ""
+		}
+		return true
+	}
+	if chatAttachBtnRect.W > 0 && pointInRect(mx, my, chatAttachBtnRect) {
+		config.Variables.Custom["chat_attach_image"] = "1"
+		showToast("Browse to attach an image to your message", ToastInfo())
+		return true
 	}
 	return false
 }
@@ -1569,11 +1623,11 @@ func sendGroqChatMessage(userText string) {
 func groqStatusColor() sdl.Color {
 	switch {
 	case strings.Contains(groqStatus, "error"), strings.Contains(groqStatus, "no API key"):
-		return ColorDanger
+		return DangerInk()
 	case strings.Contains(groqStatus, "thinking"):
-		return ColorWarning
+		return WarningInk()
 	}
-	return ColorSuccess
+	return SuccessInk()
 }
 
 func loadChatMessages() {
@@ -1742,7 +1796,7 @@ func drawChatLinkCard(renderer *sdl.Renderer, config *Config, font, small *ttf.F
 	}
 
 	action := "OPEN"
-	actionCol := WithAlpha(ColorInfo, 235)
+	actionCol := InfoInk()
 	if chatLinkOpensInPlayer(linkURL) {
 		action = "PLAY"
 		actionCol = ColorTextAccent()
@@ -1787,6 +1841,44 @@ func drawPencilGlyph(renderer *sdl.Renderer, x, y, size int32, col sdl.Color) {
 
 	fillTriangleFilled(renderer, tip, c1, c2, col)
 	fillQuad(renderer, c1, c2, c3, c4, col)
+}
+
+// chatMessageHeader fits the sender and keeps the timestamp visible. Own
+// headers align to the bubble's right edge; received ones start at its left.
+func chatMessageHeader(font *ttf.Font, sender, timestamp string, bubbleX, bubbleW, left, right int32, own bool) (string, string, int32, int32) {
+	if font == nil || right <= left {
+		return "", "", left, 0
+	}
+	measure := func(text string) int32 {
+		w, _, _ := font.SizeUTF8(text)
+		return int32(w)
+	}
+	name := sanitizeCached(font, sender)
+	suffix := sanitizeCached(font, " • "+timestamp)
+	nameBudget := right - left - measure(suffix)
+	if nameBudget <= 0 {
+		name = ""
+		suffix = sanitizeCached(font, timestamp)
+	} else if measure(name) > nameBudget {
+		name = ellipsize(font, name, nameBudget)
+		if measure(name) > nameBudget {
+			name = ""
+			suffix = sanitizeCached(font, timestamp)
+		}
+	}
+	nameW := measure(name)
+	width := nameW + measure(suffix)
+	x := bubbleX
+	if own {
+		x = bubbleX + bubbleW - width
+	}
+	if x+width > right {
+		x = right - width
+	}
+	if x < left {
+		x = left
+	}
+	return name, suffix, x, nameW
 }
 
 func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
@@ -2005,10 +2097,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 
 		// A pasted image URL gets the same inline preview as an attachment;
 		// a YouTube or media URL gets a play pill that opens the media player.
-		thumbURL := msg.ImageURL
-		if thumbURL == "" {
-			thumbURL = firstChatImageURL(text)
-		}
+		thumbURL := chatMessageImageURL(msg)
 		var imageH int32
 		var thumbTex *sdl.Texture
 		if thumbURL != "" {
@@ -2056,7 +2145,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		var avatarHit, senderHit sdl.Rect
 		if isUser {
 			bx = listX + listW - bw - SpaceSM
-			senderCol = ColorInfo
+			senderCol = InfoInk()
 		} else if isAI {
 			bx = listX + avatarSize + SpaceSM*2
 			senderCol = ColorTextAccent()
@@ -2066,7 +2155,7 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 			}
 		} else if isSystem {
 			bx = listX + (listW-bw)/2
-			senderCol = ColorWarning
+			senderCol = WarningInk()
 		} else {
 			bx = listX + avatarSize + SpaceSM*2
 			senderCol = senderColorForName(msg.Sender)
@@ -2103,12 +2192,14 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 		// Sender name + timestamp above the bubble, once per group. Clicking
 		// either opens the sender's profile card.
 		if !isSystem && !grouped {
-			nameText := fmt.Sprintf("%s • %s", msg.Sender, msg.Timestamp.Format("15:04"))
-			nameX := bx
+			name, timeText, nameX, nameW := chatMessageHeader(statusFont, msg.Sender, msg.Timestamp.Format("15:04"),
+				bx, bw, listX+SpaceSM, listX+listW-SpaceSM, isUser)
 			nameY := by - int32(statusFont.Height()) - 2
-			nameW, _, _ := statusFont.SizeUTF8(msg.Sender)
-			senderHit = sdl.Rect{X: nameX, Y: nameY, W: int32(nameW), H: int32(statusFont.Height())}
-			renderText(renderer, config, statusFont, nameText, senderCol, nameX, nameY)
+			senderHit = sdl.Rect{X: nameX, Y: nameY, W: nameW, H: int32(statusFont.Height())}
+			// Sender names are user content, not config templates. Drawing the
+			// measured text directly keeps the hit box and visible label aligned.
+			drawTextRun(renderer, config, statusFont, name, senderCol, nameX, nameY)
+			drawTextRun(renderer, config, statusFont, timeText, senderCol, nameX+nameW, nameY)
 		}
 
 		// Quote header for a reply.

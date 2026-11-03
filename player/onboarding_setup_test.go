@@ -87,6 +87,9 @@ func TestOnboardingChecklistMovesAndActivatesRows(t *testing.T) {
 		t.Fatalf("cursor starts at %d, want 0", onboarding.setupCursor)
 	}
 	if !handleOnboardingKey(down) {
+		if reason := modalPanelBlockReason(); reason != "" {
+			t.Fatalf("Down was not consumed by the checklist: %s", reason)
+		}
 		t.Fatal("Down was not consumed by the checklist")
 	}
 	if onboarding.setupCursor != 1 {

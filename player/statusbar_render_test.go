@@ -194,12 +194,12 @@ func TestThemeGalleryRendersWithoutOverflow(t *testing.T) {
 	if cols < 3 || visibleRows < 2 {
 		t.Fatalf("grid is %dx%d, want at least 3 columns and 2 visible rows", cols, visibleRows)
 	}
-	// The first card is drawn inside the element.
-	if f.at(element.X+12, element.Y+12) == f.bg {
+	// The first card is drawn inside the element, below the tab strip.
+	if f.at(element.X+12, element.Y+themeGalleryGridOffset()+12) == f.bg {
 		t.Fatal("first theme card was not drawn")
 	}
 	// Below the visible rows the panel background shows through, not a card.
-	below := element.Y + int32(visibleRows)*(themeGalleryH+themeGalleryGap) + 4
+	below := element.Y + themeGalleryGridOffset() + int32(visibleRows)*(themeGalleryH+themeGalleryGap) + 4
 	if below < element.Y+getElementHeight(element, 560) {
 		if f.at(element.X+12, below) != f.bg {
 			t.Fatalf("a card was drawn outside the visible rows at y=%d", below)

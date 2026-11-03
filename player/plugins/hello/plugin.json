@@ -1,0 +1,8 @@
+{
+  "name": "hello",
+  "version": "1.0.0",
+  "description": "Example greeting plugin for JukaHub.",
+  "author": "JukaHub",
+  "entry": "hello.sh",
+  "enabled": true
+}

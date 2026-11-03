@@ -443,8 +443,10 @@ func thumbnailPrefetchWorker() {
 			return err
 		}()
 		if err != nil {
-			// Silent failure — the render path retries on demand.
-			log.Printf("[thumb] prefetch failed for %s: %v", url, err)
+			// Silent failure — the render path retries on demand. The URL goes
+			// through the log sanitizer like every other one: thumbnail links
+			// can carry a per-session signed parameter.
+			log.Printf("[thumb] prefetch failed for %s: %v", sanitizeLogURL(url), err)
 		}
 	}
 }

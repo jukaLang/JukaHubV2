@@ -96,6 +96,34 @@ func TestParseCoreIndexSkipsJunkAndDedupes(t *testing.T) {
 	}
 }
 
+// TestParseCoreIndexRequiresRealDates pins the date field, which is not just
+// display text: a fetched core is filed under <pool>/<core>/<date>/. The line
+// with "../../.." (ten characters, the old length test's only requirement)
+// used to survive parsing and become a directory name.
+func TestParseCoreIndexRequiresRealDates(t *testing.T) {
+	text := strings.Join([]string{
+		"../../.. 16647efd vecx_libretro.so.zip",
+		"2026-13-45 16647efd fceumm_libretro.so.zip",
+		"2026-1-2 1234abcd gambatte_libretro.so.zip",
+		"2026-10-23 16647efd mednafen_supergrafx_libretro.so.zip",
+	}, "\n")
+	entries := parseCoreIndex(text)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d (%+v), want only the real date", len(entries), entries)
+	}
+	if entries[0].Core != "mednafen_supergrafx" || entries[0].Date != "2026-10-23" {
+		t.Fatalf("kept %+v, want the mednafen_supergrafx line", entries[0])
+	}
+	for _, bad := range []string{"../../..", "2026-13-45", "2026-1-2", "", "2026-10-23T00"} {
+		if validCoreIndexDate(bad) {
+			t.Errorf("validCoreIndexDate(%q) = true, want false", bad)
+		}
+	}
+	if !validCoreIndexDate("2026-10-23") {
+		t.Error("a real date was refused")
+	}
+}
+
 func TestPlanCoreUpdatesOnlyReportsChangedInstalledCores(t *testing.T) {
 	active := map[string]coreBuild{}
 	dir := t.TempDir()

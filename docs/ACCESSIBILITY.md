@@ -36,6 +36,26 @@ the 16:9 handhelds and 960×720 for the 4:3 Brick family — together with a
 minimum tap size for every pressable control and a bounds check on the compact
 canvas.
 
+## Readable status colours
+
+Status colours are authored as fills — chips, warning bars, danger rings — where
+WCAG's 3:1 graphics ratio is the requirement. Labels are drawn in the same
+semantic colours, though ("Failed", "Offline", the Groq status), and a fill is
+not automatically legible text: across the shipped presets a substantial share
+of them measured below the 4.5:1 body-text ratio on their own background.
+
+Rather than retune 25 palettes by hand, `TextInk` in `player/design.go` derives
+a text variant of each status colour: the same hue, blended towards white (or
+towards dark ink on a light palette) only as far as the ratio requires, and
+returned untouched when the authored colour already passes. Fills keep the
+authored colour, and accent *text* goes through the same derivation while the
+accent *fill* does not. Labels use the ink accessors — `SuccessInk`,
+`WarningInk`, `DangerInk`, `InfoInk` — and `ColorTextAccent` for accent text.
+
+`TestStatusInkIsReadableInEveryTheme` holds the contract for every preset: each
+ink clears 4.5:1 on the background and on both surfaces, and the result still
+carries the hue of the colour it came from instead of collapsing to grey.
+
 ## High contrast
 
 Switches to the **High Contrast** theme: black surfaces, white text, yellow

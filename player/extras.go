@@ -527,7 +527,7 @@ func sceneDisplayName(name string) string {
 	case "Playtime":
 		return "Playtime"
 	case "PDFReader":
-		return "PDF Reader"
+		return "Reader"
 	default:
 		return name
 	}
@@ -917,6 +917,30 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 		{Button: "B", Label: backLabel},
 	}
 	switch scene.Name {
+	case "FileExplorer":
+		// The screen is a file manager: A opens, Y is the action sheet, X marks
+		// a row and B climbs a folder. While the sheet or the remote browser
+		// owns the pad the footer follows it, so the labels never describe a
+		// screen the user cannot see.
+		if feSheet.open {
+			hints = []FooterHint{
+				{Button: "D-Pad", Label: "Choose"},
+				{Button: "A", Label: "Run"},
+				{Button: "B", Label: "Close"},
+			}
+		} else if feRemotePanel.open {
+			hints = []FooterHint{
+				{Button: "A", Label: "Download"},
+				{Button: "Y", Label: "Upload here"},
+				{Button: "X", Label: "Address"},
+				{Button: "B", Label: "Up"},
+			}
+		} else {
+			hints = append(hints,
+				FooterHint{Button: "Y", Label: "Actions"},
+				FooterHint{Button: "X", Label: "Mark"},
+			)
+		}
 	case "Browser":
 		// The browser has its own D-pad model: links on the page, the address
 		// bar on A, the search keyboard on Y and the full link list on X. The
@@ -985,18 +1009,25 @@ func footerHints(config *Config, scene SceneConfig) []FooterHint {
 			hints = []FooterHint{{Button: "B", Label: "Save & Back"}}
 		}
 	case "Calculator":
-		// The pad walks the key grid; the shoulders are Clear and Backspace.
+		// The pad walks the key grid; X inserts the graph variable and Y
+		// toggles the graph view. The shoulders are Clear and Backspace.
 		hints[1] = FooterHint{Button: "A", Label: "Select"}
 		hints = append(hints,
+			FooterHint{Button: "X", Label: "Insert x"},
+			FooterHint{Button: "Y", Label: "Graph"},
 			FooterHint{Button: "L1", Label: "Clear"},
 			FooterHint{Button: "R1", Label: "Delete"},
 		)
 	case "PDFReader":
-		// Page turns are the shoulders (or left/right); the pad scrolls the
-		// page and nothing opens.
+		// A book turns chapters on the shoulders; a chapterless PDF turns pages
+		// with them, which is what the same buttons did before.
+		chapterLabel := "Page"
+		if len(pdf.doc.Chapters) > 0 {
+			chapterLabel = "Chapter"
+		}
 		hints = []FooterHint{
 			{Button: "D-Pad", Label: "Scroll"},
-			{Button: "L1/R1", Label: "Page"},
+			{Button: "L1/R1", Label: chapterLabel},
 			{Button: "B", Label: "Back"},
 		}
 	case "Alarm":
@@ -1219,6 +1250,7 @@ var volatileCustomVars = map[string]bool{
 	"stream_url":     true,
 	"search_query":   true,
 	"search_error":   true,
+	"netspeed_text":  true,
 }
 
 // userConfigCache holds the loaded jukauser.json (user settings + favorites +

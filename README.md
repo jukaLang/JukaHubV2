@@ -62,8 +62,9 @@ firmware — not instead of it. Install, uninstall, repeat: it is a folder on th
 SD card, and the stock launcher is one Select+Start hold away whenever you want
 it back.
 
-* **Watch** — YouTube search and trending, Shorts, saved favourites, podcasts,
-  IPTV playlists, a local video player with subtitles, and a text web browser.
+* **Watch** — YouTube search and trending, Shorts, saved favourites, podcasts
+  with a subscription library, IPTV playlists, a local video player with
+  subtitles, an EPUB/PDF reader, and a text web browser.
 * **Play** — a console-by-console ROM library with box art, per-game launchers,
   play time, RetroAchievements progress, save-state auto-resume and LAN play
   (RetroArch netplay, hosted or joined from the library).

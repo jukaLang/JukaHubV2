@@ -486,7 +486,7 @@ func emuPanelMove(dx, dy int) {
 	if len(entries) == 0 {
 		return
 	}
-	next := emuGridTarget(emuPanel.cursor, len(entries), emuGridView().cols, dx, dy)
+	next := emuGridTarget(emuPanel.cursor, len(entries), emuGridColumns(), dx, dy)
 	if next == emuPanel.cursor {
 		return
 	}
@@ -528,6 +528,9 @@ func launchEmulatorEntry(e emuEntry) {
 		cmd = exec.Command(path)
 	}
 	cmd.Dir = filepath.Dir(path)
+	// Own process group, same rule as the game launcher: a wrapper script that
+	// backgrounds the emulator would otherwise return the screen early.
+	screenChildGroupConfigure(cmd)
 	// Raise the CPU profile for the emulator and drop it back when the child
 	// exits. beginGamePowerProfile never fails a launch: an unsupported
 	// firmware only logs.
@@ -542,7 +545,7 @@ func launchEmulatorEntry(e emuEntry) {
 	recorder := startTimelapse(appConfig, e.Name)
 	go func() {
 		_ = cmd.Wait() // reap the child, keep JukaHub responsive
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()
 	}()

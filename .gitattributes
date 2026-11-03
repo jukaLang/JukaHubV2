@@ -14,3 +14,8 @@
 # past that point.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+# The Windows icon resource is binary: JukaHub.ico is the artwork and
+# rsrc_windows_amd64.syso is the COFF object the Go linker links into the exe.
+# Converting either one produces a broken icon or a link error.
+*.ico binary
+*.syso binary

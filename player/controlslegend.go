@@ -171,17 +171,12 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	font, _ := getCachedFont(config, "small")
-	medFont, _ := getCachedFont(config, "medium")
 	if font == nil {
 		return
 	}
 	sections := controlsLegendSections(config)
 
-	const (
-		cardPadX = int32(20)
-		headerH  = int32(64)
-		footerH  = int32(36)
-	)
+	const footerH = int32(36)
 
 	fontH := int32(font.Height())
 	rowH := fontH + 12
@@ -190,6 +185,20 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 	for _, s := range sections {
 		bindingCount += len(s.Rows)
 	}
+
+	// The subtitle names what the first section describes; the scene snapshot
+	// is the truth at open time, not whatever scene is focused while reading.
+	sub := sceneDisplayName(controlsLegend.scene.Name)
+	if sub == "" {
+		sub = controlsLegend.scene.Name
+	}
+
+	// The legend opens with the shared page header, centered because the card
+	// is: one band geometry for a title and its scene line, measured before the
+	// card is sized so the rows start where the header ends.
+	header := UIPanelHeader("Controller", sub, "")
+	header.Centered = true
+	headerH := UIPanelHeaderBand(config, header, 8)
 
 	cardW := qsPanelWide + 20
 	if maxW := screenWidth - 24; cardW > maxW {
@@ -205,45 +214,15 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 	cardX := (screenWidth - cardW) / 2
 	cardY := (screenHeight - cardH) / 2
 
-	// Full-screen dim, like the other modals.
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 180)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-
-	UICard(renderer, sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, UICardStyle{
-		Fill:   sdl.Color{R: 14, G: 18, B: 28, A: 248},
-		Border: ColorBorder,
-		Radius: 20,
-	})
-
-	if medFont != nil {
-		title := "Controller"
-		tw, _, _ := medFont.SizeUTF8(title)
-		renderText(renderer, config, medFont, title,
-			sdl.Color{R: 220, G: 230, B: 245, A: 240},
-			cardX+(cardW-int32(tw))/2, cardY+14)
-	}
-	// The subtitle names what the first section describes; the scene snapshot
-	// is the truth at open time, not whatever scene is focused while reading.
-	sub := sceneDisplayName(controlsLegend.scene.Name)
-	if sub == "" {
-		sub = controlsLegend.scene.Name
-	}
-	if sub != "" {
-		subY := cardY + 16 + 24 + 4
-		if medFont != nil {
-			subY = cardY + 14 + int32(medFont.Height()) + 4
-		}
-		if sw, _, _ := font.SizeUTF8(sub); sw > 0 {
-			renderText(renderer, config, font, sub,
-				sdl.Color{R: 140, G: 155, B: 180, A: 200},
-				cardX+(cardW-int32(sw))/2, subY)
-		}
-	}
+	card := sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}
+	drawOverlayScrim(renderer)
+	drawOverlayCard(renderer, card)
+	header = overlayHeaderOnCard(header, card)
+	UIPageHeaderDraw(renderer, config, header)
 
 	// The button column is the widest binding string, so "Select + Start"
 	// never collides with its label.
-	buttonCol := cardPadX
+	buttonCol := OverlayPadX
 	buttonColMax := buttonCol
 	for _, s := range sections {
 		for _, h := range s.Rows {
@@ -253,8 +232,8 @@ func renderControlsLegend(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	x := cardX + cardPadX
-	textW := cardW - 2*cardPadX
+	x := cardX + OverlayPadX
+	textW := cardW - 2*OverlayPadX
 	labelX := x + (buttonColMax - buttonCol) + 16
 	labelW := textW - (labelX - x)
 	y := cardY + headerH

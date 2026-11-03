@@ -6,9 +6,9 @@ the other half — finding that clip again on a device with no file manager in
 reach. **Recordings** lists the captures and plays them in the hub's own video
 player, so a clip is one press from the screen it was recorded on.
 
-Open it from **Apps → Recordings**. It is a built-in applet rather than a
-button on the Media screen because that row is already full: the IPStream chip
-is injected into it at runtime and needs the last slot.
+Open it from **Start → Scenes → Recordings**. It has no button on the Media
+screen because that row is already full: the IPStream chip is injected into it
+at runtime and needs the last slot.
 
 ## Where the folder is
 

@@ -356,6 +356,9 @@ func main() {
 		log.Fatal("Window creation error:", err)
 	}
 	defer window.Destroy()
+	// Title bar, Alt-Tab and the taskbar read the window's own icon, so set it
+	// before anything is drawn instead of relying on the executable resource.
+	applyWindowIcon(window)
 
 	// On the handheld prefer the device's GLES2 GPU renderer explicitly: on
 	// the A133P boards that is the PowerVR GE8300 driver. If the vendor stack
@@ -492,6 +495,8 @@ func main() {
 		// config on the next frame.
 		mergeUserConfig(newCfg, loadUserConfig())
 		applyDeviceUIProfile(newCfg)
+		ensureWeatherUnitSetting(newCfg)
+		ensureTasksRefreshLabel(newCfg)
 		if presetName, ok := newCfg.Variables.Custom["theme_preset"].(string); ok && presetName != "" {
 			ApplyThemeColors(GetThemePreset(presetName))
 		}
@@ -654,6 +659,14 @@ func main() {
 				}
 				if e.Type == sdl.KEYDOWN {
 					frameRateCtrl.NotifyInput()
+					// The idle screen's own backdrop-clear button answers without
+					// waking it, so the photo can be taken away from the screen
+					// that shows it instead of a trip to Files. With nothing to
+					// clear the press is not consumed and wakes as usual.
+					if ss.active && screensaverClearKey(e.Keysym.Sym, e.Keysym.Mod) &&
+						screensaverBackdropPress(config, time.Now()) {
+						continue
+					}
 					screensaverNotifyInput()
 					// Shared clipboard chords (Ctrl+V paste, Ctrl+C copy) run before
 					// every modal and scene dispatch, because each of the four text
@@ -718,12 +731,25 @@ func main() {
 						handleClipboardInput(e)
 						continue
 					}
+					// An enlarged QR code is the topmost card: it owns every key
+					// while it is up, including the panel's own bindings.
+					if handleQRZoomKey(e) {
+						continue
+					}
 					// The QR overlay is modal: it owns every key while it is up.
 					if handleCompanionKey(e, config) {
 						continue
 					}
 					if globalSearchOpen {
 						handleGSInput(e, config)
+						continue
+					}
+					// LED style panel is modal and consumes all keys while open.
+					if ledPanel.open && handleLEDPanelKey(e, config) {
+						continue
+					}
+					// Podcast library is modal and consumes all keys while open.
+					if podPanel.open && handlePodcastPanelKey(e, config) {
 						continue
 					}
 					// IPStream library is modal and consumes all keys while open.
@@ -736,6 +762,10 @@ func main() {
 					}
 					// Memory panel is modal and yields only to its value keyboard.
 					if memPanel.open && handleMemKey(e, config) {
+						continue
+					}
+					// Text editor is modal and yields only to its line keyboard.
+					if fileEditor.open && handleFileEditorKey(e, config) {
 						continue
 					}
 					// Controller test is modal; the pad closes it by holding SELECT.
@@ -863,16 +893,17 @@ func main() {
 					}
 					// Chat member list and profile card float above the chat panel
 					// and take every key while one is up.
-					if chatOverlayOpen() && !virtualKeyboardActive && handleChatOverlayKey(e, config) {
+					if !virtualKeyboardActive && chatOverlayOwnsInput(config) && handleChatOverlayKey(e, config) {
 						continue
 					}
-					// A selected message turns the composer into its action bar.
-					if chatSelectionBar.open && !virtualKeyboardActive && handleChatSelectionKey(e, config) {
+					// A selected message turns the composer into its action bar, while
+					// that panel is the scene on screen (a stale bar is dropped).
+					if !virtualKeyboardActive && chatSelectionOwnsInput(config) && handleChatSelectionKey(e, config) {
 						continue
 					}
 					focusEngine.SyncSelected()
 					if imageViewerPath != "" {
-						handleImageViewerInput(e)
+						handleImageViewerInput(e, config)
 						continue
 					}
 					if virtualKeyboardActive {
@@ -950,6 +981,20 @@ func main() {
 						if handleChromeKey(e, config) {
 							continue
 						}
+						// The Files screen's action sheet and remote browser are modal
+						// over the list, and its two own keys (Y actions, X mark) act
+						// before the list's D-pad.
+						if feSceneActive(config) {
+							if handleFeSheetKey(e, config) {
+								continue
+							}
+							if handleFeRemoteKey(e, config) {
+								continue
+							}
+							if feFilesKey(e.Keysym.Sym, config) {
+								continue
+							}
+						}
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
 						if selectedButtonIndex < 0 || selectedButtonIndex >= len(curScene.Elements) {
@@ -960,6 +1005,11 @@ func main() {
 							// Playtime) still need their own keys: otherwise the empty
 							// element list swallowed Enter and B before the registry ran.
 							if m, ok := lookupScene(curScene.Name); ok && m.handleKey(e, config) {
+								continue
+							}
+							// The keyboard twin of the pad's Up: a screen with nothing
+							// focusable that left Up alone hands it to the top bar.
+							if !homeLayoutActive && e.Keysym.Sym == sdl.K_UP && focusEngine.ElementIndex() < 0 && focusChromeBar() {
 								continue
 							}
 							if !homeLayoutActive && (e.Keysym.Sym == sdl.K_ESCAPE || e.Keysym.Sym == sdl.K_b) {
@@ -1049,8 +1099,20 @@ func main() {
 								}
 							}
 						} else if curElem.Type == "themegallery" {
-							presets := ListThemePresets()
+							presets := themeGalleryPresets()
 							switch e.Keysym.Sym {
+							case sdl.K_TAB:
+								// Tab moves between Colour and Total conversion:
+								// the two are different promises about what a
+								// preset changes, and Left/Right already walk the
+								// cards of the open one.
+								step := 1
+								if e.Keysym.Mod&sdl.KMOD_SHIFT != 0 {
+									step = -1
+								}
+								if themeGallerySwitchTab(step) {
+									PlayNavSound()
+								}
 							case sdl.K_LEFT:
 								themeGalleryMove(curElem, -1)
 								PlayNavSound()
@@ -1292,6 +1354,8 @@ func main() {
 				// the card for restore-on-return (see handleHomeMouseClick).
 				if homeLayoutActive && homeLayout != nil {
 					homeLayout.FocusAt(mouseX, mouseY)
+				} else {
+					focusMediaResultAt(config, mouseX, mouseY)
 				}
 				if isDraggingSeekBar {
 					fraction := float64(mouseX-seekBarDragRect.X) / float64(seekBarDragRect.W)
@@ -1392,6 +1456,15 @@ func main() {
 						if handleOnboardingMouse(mx, my, config) {
 							break
 						}
+						// A tap anywhere on the enlarged code closes it, so the
+						// panel underneath cannot be pressed through the card.
+						if qrZoomActive() {
+							qrZoomCloseCard()
+							break
+						}
+						if handleCompanionMouse(mx, my) {
+							break
+						}
 						if virtualKeyboardActive {
 							kmx, kmy := physicalToLogical(int32(e.X), int32(e.Y))
 							if vkCloseHit(kmx, kmy) {
@@ -1399,12 +1472,7 @@ func main() {
 								break
 							}
 							if row, col, ok := vkHitTest(kmx, kmy); ok {
-								keyboardPosY, keyboardPosX = row, col
-								key := vkFocusedKey()
-								vkActivateFocused(config)
-								if vkIsActionKey(key) {
-									vkCloseKeyboard()
-								}
+								vkHandleKeyClick(row, col, config)
 								break
 							}
 							// A click on the dimmed content behind the panel dismisses it.
@@ -1421,6 +1489,16 @@ func main() {
 							toastRect = sdl.Rect{}
 							break
 						}
+						// LED style panel is modal the same way.
+						if ledPanel.open {
+							handleLEDPanelMouse(mx, my, config)
+							break
+						}
+						// Podcast library panel is modal the same way.
+						if podPanel.open {
+							handlePodcastPanelMouse(mx, my, config)
+							break
+						}
 						// IPStream library panel is modal the same way.
 						if ipPanelOpen {
 							handleIPPanelMouse(mx, my, config)
@@ -1434,6 +1512,11 @@ func main() {
 						// Memory panel is modal the same way.
 						if memPanel.open {
 							handleMemMouse(mx, my, config)
+							break
+						}
+						// Text editor is modal the same way.
+						if fileEditor.open {
+							handleFileEditorMouse(mx, my, config)
 							break
 						}
 						// Controller test is modal the same way.
@@ -1633,16 +1716,21 @@ func main() {
 							fraction := float64(mx-videoControlRects.progress.X) / float64(videoControlRects.progress.W)
 							SeekVideo(fraction)
 						}
-						// Image viewer overlay: a click anywhere closes it, matching
-						// the tap-to-open / tap-to-close gesture.
+						// Image viewer overlay: the lock button keeps the picture as
+						// the idle screen; any other click closes it, matching the
+						// tap-to-open / tap-to-close gesture.
 						if imageViewerPath != "" {
-							closeImageViewer()
+							if imageViewerLockBtn.W > 0 && pointInRect(mx, my, imageViewerLockBtn) {
+								toggleScreenlockFromViewer(config)
+							} else {
+								closeImageViewer()
+							}
 							break
 						}
 
 						// Chat member list / profile card: a scrim over the scene, so
 						// they take every click before anything underneath sees it.
-						if chatOverlayOpen() && chatOverlayClick(mx, my, config) {
+						if chatOverlayOwnsInput(config) && chatOverlayClick(mx, my, config) {
 							break
 						}
 
@@ -1711,11 +1799,13 @@ func main() {
 						// Chat names, avatars, message bodies and the composer action bar
 						// own their clicks: a name or picture opens that speaker's
 						// profile, a body selects the message.
-						if currentSceneHasChat(config) && chatMessageClick(mx, my, config) {
+						// A picture is checked before the bubble that holds it:
+						// the body hit rect covers the preview, so selection
+						// would otherwise swallow every click on the picture.
+						if currentSceneHasChat(config) && handleChatImageClick(mx, my) {
 							break
 						}
-						// Chat image previews open full screen; clicking again closes.
-						if currentSceneHasChat(config) && handleChatImageClick(mx, my) {
+						if currentSceneHasChat(config) && chatMessageClick(mx, my, config) {
 							break
 						}
 						// Chat link cards play media links or open web pages in the
@@ -1723,52 +1813,18 @@ func main() {
 						if currentSceneHasChat(config) && handleChatLinkClick(mx, my, config) {
 							break
 						}
-						// Chat header: the display-name pill renames the local chat user.
-						if chatNameRect.W > 0 && mx >= chatNameRect.X && mx <= chatNameRect.X+chatNameRect.W &&
-							my >= chatNameRect.Y && my <= chatNameRect.Y+chatNameRect.H {
-							vkOpenName()
+						// Composer hitboxes belong only to a visible chat scene.
+						if handleChatComposerMouse(mx, my, config) {
 							break
 						}
-						// Chat input area: clicking the text field opens the virtual keyboard.
-						if chatInputRect.W > 0 && mx >= chatInputRect.X && mx <= chatInputRect.X+chatInputRect.W &&
-							my >= chatInputRect.Y && my <= chatInputRect.Y+chatInputRect.H {
-							vkOpenChat()
+						// Calculator's compact graph and variable controls sit in the result
+						// panel and own taps before clicks fall through to the page.
+						if handleCalculatorMouse(mx, my, config) {
 							break
 						}
-						// Unit converter input area. The category chips and both swap
-						// controls are hit-tested first: they sit above the field and
-						// are drawn like buttons, so a tap has to reach them.
+						// Unit converter controls, including its input, only own clicks
+						// while that scene is visible.
 						if handleUnitConverterMouse(mx, my, config) {
-							break
-						}
-						if unitInputRect.W > 0 && mx >= unitInputRect.X && mx <= unitInputRect.X+unitInputRect.W &&
-							my >= unitInputRect.Y && my <= unitInputRect.Y+unitInputRect.H {
-							vkOpenUnit()
-							break
-						}
-						// Chat composer: Send button.
-						if chatSendBtnRect.W > 0 && mx >= chatSendBtnRect.X && mx <= chatSendBtnRect.X+chatSendBtnRect.W &&
-							my >= chatSendBtnRect.Y && my <= chatSendBtnRect.Y+chatSendBtnRect.H {
-							if chatInputText != "" {
-								sendChatMessage(chatDisplayName(), chatInputText)
-								chatInputText = ""
-							}
-							break
-						}
-						// Chat composer: "Ask AI" pill (controller/keyboard use Y).
-						if chatAskAIBtnRect.W > 0 && mx >= chatAskAIBtnRect.X && mx <= chatAskAIBtnRect.X+chatAskAIBtnRect.W &&
-							my >= chatAskAIBtnRect.Y && my <= chatAskAIBtnRect.Y+chatAskAIBtnRect.H {
-							if strings.TrimSpace(chatInputText) != "" {
-								sendGroqChatMessage(chatInputText)
-								chatInputText = ""
-							}
-							break
-						}
-						// Chat composer: Attach image pill.
-						if chatAttachBtnRect.W > 0 && mx >= chatAttachBtnRect.X && mx <= chatAttachBtnRect.X+chatAttachBtnRect.W &&
-							my >= chatAttachBtnRect.Y && my <= chatAttachBtnRect.Y+chatAttachBtnRect.H {
-							config.Variables.Custom["chat_attach_image"] = "1"
-							showToast("Browse to attach an image to your message", ToastInfo())
 							break
 						}
 						// The audio player draws its own transport, so it owns clicks
@@ -1792,6 +1848,28 @@ func main() {
 							if handlePatchMouse(mx, my, config) {
 								break
 							}
+						}
+						// Files: the action sheet and the remote transfer browser are
+						// modal over the list, and the breadcrumb bar and sort chip sit
+						// above it, so they take a tap before the list rows do. The remote
+						// browser is a Files session: off that screen it must not take the
+						// tap, or it would swallow a press meant for the scene on display
+						// (and its rows would download into a folder nobody can see).
+						if feSheet.open {
+							handleFeSheetMouse(mx, my, config)
+							break
+						}
+						if feRemotePanelOnScreen(config) {
+							handleFeRemoteMouse(mx, my, config)
+							break
+						}
+						if handleFilesChromeMouse(mx, my, config) {
+							break
+						}
+						// The floating page chip sits above scene elements and must
+						// consume the tap before an overlapping input can open.
+						if handleMediaNextPageClick(config, mx, my) {
+							break
 						}
 						// Check recent panel (Continue cards)
 						handleRecentMouseClick(mx, my, config)
@@ -1823,11 +1901,22 @@ func main() {
 										vkOpenChat()
 									}
 								} else if elem.Type == "themegallery" {
+									if tab := themeGalleryTabAt(elem, mx, my); tab >= 0 {
+										selectedButtonIndex = i
+										focusEngine.SetByElementIndex(i)
+										if tab != themeGalleryTab {
+											themeGalleryTab = tab
+											themeGalleryIndex = 0
+											themeGalleryScroll = 0
+											PlayNavSound()
+										}
+										continue
+									}
 									if idx := themeGalleryCardAt(elem, mx, my); idx >= 0 {
 										themeGalleryIndex = idx
 										selectedButtonIndex = i
 										focusEngine.SetByElementIndex(i)
-										presets := ListThemePresets()
+										presets := themeGalleryPresets()
 										if idx < len(presets) {
 											ApplyThemePreset(config, presets[idx])
 										}
@@ -1862,12 +1951,6 @@ func main() {
 									// the footer below.
 									if mx < elem.X || mx > elem.X+getElementWidth(elem, 1232) ||
 										my < elem.Y || my > elem.Y+getElementHeight(elem, 456) {
-										continue
-									}
-									// The Next chip floats over the results: a click there loads
-									// the next page instead of playing the card behind it.
-									if mediaNextPageHit(config, elem, videos, mx, my) {
-										loadMoreMediaResults(config)
 										continue
 									}
 									// A click on a row's Audio / Video / Chat pill presses
@@ -1996,6 +2079,13 @@ func main() {
 				// navigating with the D-pad sat at the idle cadence and every
 				// press felt late (the frame rate never woke up).
 				frameRateCtrl.NotifyInput()
+				// The pad's version of that same clear button, matched to the hint
+				// the idle screen draws. It has to be answered before the wake
+				// below, which would take the screen away mid-action.
+				if ss.active && e.Type == sdl.CONTROLLERBUTTONDOWN && screensaverClearButton(e.Button) &&
+					screensaverBackdropPress(config, time.Now()) {
+					continue
+				}
 				screensaverNotifyInput()
 				// Select + Start is the handheld's system quit chord and is read
 				// from the physical buttons, before remapping or any overlay: it
@@ -2046,18 +2136,11 @@ func main() {
 					} else if activeSceneIndex != -1 {
 						// Input field active - handled by virtualKeyboardActive
 					} else {
-						// Home scene uses the dedicated focus graph + activation.
-						if homeLayoutActive && handleHomeController(e, config) {
-							continue
-						}
-						// Patch scene owns its list + modals (no config elements).
-						if config.Scenes[currentSceneIndex].Name == "Patch" {
-							if handlePatchController(e, config) {
-								continue
-							}
-						}
-						// Scene-specific controller routing.
-						if handleSceneController(e, config) {
+						// The top bar, the home layout, the Patch list and the screen's
+						// own module, in that order: a focused bar button answers to A
+						// before the screen binds it, and Up on a screen with nothing
+						// focusable steps onto the bar.
+						if screenPadPress(e, config) {
 							continue
 						}
 						// Video control shortcuts (always active when video is playing).
@@ -2084,9 +2167,18 @@ func main() {
 								continue
 							}
 						}
-						// Chrome uses negative focus indices, not scene element indices.
-						if handleChromeController(e, config) {
-							continue
+						// Files: the action sheet and the remote browser are modal,
+						// and the screen's own Y / X act before the element dispatch.
+						if feSceneActive(config) {
+							if ctrlFeSheet(e, config) {
+								continue
+							}
+							if feRemotePanel.open && ctrlFeRemote(e, config) {
+								continue
+							}
+							if handleFilesController(e, config) {
+								continue
+							}
 						}
 						// Handle navigation
 						curScene := config.Scenes[currentSceneIndex]
@@ -2183,8 +2275,19 @@ func main() {
 								}
 							}
 						} else if curElem.Type == "themegallery" {
-							presets := ListThemePresets()
+							presets := themeGalleryPresets()
 							switch e.Button {
+							case sdl.CONTROLLER_BUTTON_LEFTSHOULDER, sdl.CONTROLLER_BUTTON_RIGHTSHOULDER:
+								step := 1
+								if e.Button == sdl.CONTROLLER_BUTTON_LEFTSHOULDER {
+									step = -1
+								}
+								if themeGallerySwitchTab(step) {
+									PlayNavSound()
+								}
+								// Consumed: the list pager below must not also
+								// see this press.
+								continue
 							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
 								themeGalleryMove(curElem, -1)
 								PlayNavSound()
@@ -2216,34 +2319,9 @@ func main() {
 								goBackScene(config)
 							}
 						} else if curElem.Type == "favorites" {
-							items := getCurrentFavorites()
-							n := len(items)
-							switch e.Button {
-							case sdl.CONTROLLER_BUTTON_DPAD_UP:
-								if favoritesFocusIndex > 0 {
-									favoritesFocusIndex--
-								}
-							case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
-								if favoritesFocusIndex < n-1 {
-									favoritesFocusIndex++
-								}
-							case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
-								if favoritesCurrentTab > 0 {
-									favoritesCurrentTab--
-									favoritesFocusIndex = 0
-								}
-							case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
-								if favoritesCurrentTab < 3 {
-									favoritesCurrentTab++
-									favoritesFocusIndex = 0
-								}
-							case sdl.CONTROLLER_BUTTON_A:
-								if favoritesFocusIndex >= 0 && favoritesFocusIndex < n {
-									items[favoritesFocusIndex].Play(config)
-								}
-							case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-								goBackScene(config)
-							}
+							// The library owns its pad handling so the tabs, grouping and
+							// scrolling stay in one place with the renderer.
+							handleFavoritesController(e, config)
 						} else if curElem.Type == "textbrowser" && textBrowserElementSource(curElem) == textBrowserSourceWeb {
 							// The web browser owns its pad: links, the address bar and the
 							// way out to the button row all live in browser.go.
@@ -2521,6 +2599,9 @@ func main() {
 		// Shorts feed: start the download- pending first short, then keep the
 		// feed rolling after each one finishes.
 		drainShortsAutoplay(config)
+		// Up Next: a video that ended with something queued hands over here,
+		// after drainShortsAutoplay has had the first say over a Shorts feed.
+		drainUpNextAutoplay(config)
 		playtimeTick(config)
 		// Dock and ambient screen: clock, weather, now-playing and photos when the
 		// device is charging or idle (see ambient.go). Runs here, on the event
@@ -2529,6 +2610,10 @@ func main() {
 		// Screensaver: the same idle timeout, checked here on the event thread
 		// so playback, downloads and open panels can hold it off.
 		screensaverAutoTick(config, time.Now())
+		// Remote transfers report here, not from their copying goroutine. The
+		// pump runs even when the Files remote browser is off screen: a transfer
+		// the user walked away from still has to finish and clear its busy flag.
+		feRemoteDrain(config)
 		// The dock/ambient screen takes the whole panel when it is up, then the
 		// screensaver, then the scene.
 		if ambientIsActive() {
@@ -2691,9 +2776,24 @@ func main() {
 			renderProcessPanel(renderer, config)
 		}
 
+		// Files: the action sheet and the remote transfer browser. The
+		// browser is drawn only on the screen it belongs to; the panels
+		// around it are top-bar overlays that belong to every screen.
+		if feSheet.open {
+			renderFeSheet(renderer, config)
+		}
+		if feRemotePanelOnScreen(config) {
+			renderFeRemotePanel(renderer, config)
+		}
+
 		// Memory panel (RAM scan and edit for one process).
 		if memPanel.open {
 			renderMemPanel(renderer, config)
+		}
+
+		// Text file editor (opened from Files or Patch).
+		if fileEditor.open {
+			renderFileEditor(renderer, config)
 		}
 
 		// Controller test (raw axes, drift verdicts, button chips).
@@ -2704,6 +2804,16 @@ func main() {
 		// Wi-Fi network picker (scan, join, disconnect, forget).
 		if wifiPanel.open {
 			renderWiFiPanel(renderer, config)
+		}
+
+		// Podcast library overlay (shows, episodes and their resume marks).
+		if podPanel.open {
+			renderPodcastPanel(renderer, config)
+		}
+
+		// LED style panel (mode, effect, colour, brightness, sync).
+		if ledPanel.open {
+			renderLEDPanel(renderer, config)
 		}
 
 		// IPStream library overlay.
@@ -2866,6 +2976,11 @@ func main() {
 		}
 		if launchFailure.open {
 			renderLaunchFailure(renderer, config)
+		}
+		// An enlarged QR code covers everything: the panel that opened it is
+		// what made it unscannable, so it must not show through.
+		if qrZoomActive() {
+			renderQRZoom(renderer, config)
 		}
 
 		// A finished time-lapse is assembled off the render thread; its notice is

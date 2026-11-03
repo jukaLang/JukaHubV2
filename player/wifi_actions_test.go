@@ -191,9 +191,11 @@ func TestStatusWiFiTapTargetIsFingerSized(t *testing.T) {
 
 	prevPanel, prevRects := wifiPanel, wifiRowRects
 	t.Cleanup(func() {
+		// Opening the picker starts a scan; let it land in the channel before
+		// the panel state is restored, or its result outlives this test and
+		// blocks the next one's hand-written update.
+		wifiSettleForTest()
 		wifiPanel, wifiRowRects = prevPanel, prevRects
-		wifiGeneration++
-		wifiDrainDiscarded()
 	})
 	wifiPanel = wifiPanelState{}
 
@@ -257,6 +259,9 @@ func TestWiFiScanProblemSurvivesAStatusRefresh(t *testing.T) {
 	})
 	wifiPanel = wifiPanelState{open: true, available: true}
 	wifiGeneration++
+	// Start from an empty slot: the producers block rather than drop, so a
+	// leftover result would hang this test's own send instead of failing it.
+	wifiDrainDiscarded()
 
 	snap := wifiSnapshot{Status: wifiStatus{State: "COMPLETED", SSID: "HomeNet", Connected: true}}
 	wifiUpdates <- wifiUpdate{

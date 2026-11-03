@@ -7,12 +7,15 @@ package main
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -384,5 +387,63 @@ func TestWindowsSetupRowsTrackInstallTarget(t *testing.T) {
 	rows = windowsAppsSetupRows(windowsRuntimeStatus{})
 	if rows[windowsSetupRowDisplay].Status != "failed" {
 		t.Errorf("display row = %q, want failed after an error", rows[windowsSetupRowDisplay].Status)
+	}
+}
+
+func TestRuntimeExtractionRejectsPreexistingSymlinkEscape(t *testing.T) {
+	for _, format := range []string{"tar", "zip"} {
+		t.Run(format, func(t *testing.T) {
+			dest, outside := t.TempDir(), t.TempDir()
+			if err := os.Symlink(outside, filepath.Join(dest, "escape")); err != nil {
+				if runtime.GOOS == "windows" {
+					t.Skipf("creating symlinks needs extra privileges on Windows: %v", err)
+				}
+				t.Fatal(err)
+			}
+			archive := filepath.Join(t.TempDir(), "test."+format)
+			if format == "tar" {
+				if err := os.WriteFile(archive, makeHangoverTar(t, map[string]string{"escape/payload": "unsafe"}), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeUnzipTestArchive(t, archive, func(zw *zip.Writer) {
+					w, err := zw.Create("escape/payload")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := w.Write([]byte("unsafe")); err != nil {
+						t.Fatal(err)
+					}
+				})
+			}
+			if err := extractRuntimeArchive(archive, dest); err == nil {
+				t.Fatal("extraction through outside link succeeded")
+			}
+			if _, err := os.Stat(filepath.Join(outside, "payload")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("outside path exists or stat failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeExtractionDoesNotOverwriteOutsideHardLink(t *testing.T) {
+	dest, outside := t.TempDir(), t.TempDir()
+	victim := filepath.Join(outside, "victim")
+	if err := os.WriteFile(victim, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(victim, filepath.Join(dest, "victim")); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "test.tar")
+	if err := os.WriteFile(archive, makeHangoverTar(t, map[string]string{"victim": "replacement"}), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractRuntimeArchive(archive, dest); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(victim)
+	if err != nil || string(got) != "original" {
+		t.Fatalf("outside hard link was modified: %q, %v", got, err)
 	}
 }

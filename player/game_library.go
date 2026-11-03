@@ -366,6 +366,9 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	name, args := gameLaunchCommandArgs(launcher, game.Path, parseGameArgs(options.Args))
 	cmd := exec.Command(name, args...)
 	cmd.Dir = filepath.Dir(launcher)
+	// Own process group: a stock launch.sh that starts RetroArch and returns
+	// must not hand the framebuffer back while the game is still drawing.
+	screenChildGroupConfigure(cmd)
 	restoreProfile := beginGamePowerProfileCap(appConfig, options.MaxFreqKHz)
 	if err := cmd.Start(); err != nil {
 		restoreProfile()
@@ -378,7 +381,7 @@ func launchLibraryGame(game libraryGame, launcher string) error {
 	recorder := startTimelapse(appConfig, game.Title)
 	go func() {
 		_ = cmd.Wait()
-		noteGameChildExited(cmd)
+		screenChildReaped(cmd)
 		restoreProfile()
 		recorder.Stop()
 	}()

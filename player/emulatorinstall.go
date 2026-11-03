@@ -177,6 +177,33 @@ func applyEmuInstallPlan(ctx context.Context, client *http.Client, plan emuInsta
 	return build, backup, nil
 }
 
+// emuCoreBuildsMatch compares the core RetroArch will actually load with the
+// build that was just installed. A download can succeed while the copy into
+// cores/ fails (a read-only or full card), and the tile then says "installed"
+// while the game still refuses to start — the least useful outcome on a device
+// where the user cannot see a console.
+func emuCoreBuildsMatch(active, installed coreBuild) error {
+	if strings.TrimSpace(active.Path) == "" || !regularFile(active.Path) {
+		return fmt.Errorf("the download finished but RetroArch cannot see the %s core — check its cores folder", coreConfigDisplayName(installed.Core))
+	}
+	if active.Size > 0 && installed.Size > 0 && active.Size != installed.Size {
+		return fmt.Errorf("RetroArch's %s core is %s, but %s was installed — the copy into the cores folder did not take",
+			coreConfigDisplayName(installed.Core), formatBytes(uint64(active.Size)), formatBytes(uint64(installed.Size)))
+	}
+	return nil
+}
+
+// emuConfirmInstalledCore re-reads the inventory so the confirmation describes
+// the file that is actually active, not the one that was requested.
+func emuConfirmInstalledCore(core string, installed coreBuild) error {
+	inv := scanCoreInventory()
+	active, ok := inv.Active[core]
+	if !ok {
+		return fmt.Errorf("the download finished but RetroArch cannot see the %s core — check its cores folder", coreConfigDisplayName(core))
+	}
+	return emuCoreBuildsMatch(active, installed)
+}
+
 // emuInstallReport is what one install action did.
 type emuInstallReport struct {
 	Installed []string
@@ -275,6 +302,13 @@ func startEmulatorInstall(e emuEntry) {
 		// so both caches are dropped rather than waiting for the next open.
 		invalidateEmulatorCache()
 		invalidateCompatCache()
+		// Say "installed" only when RetroArch's own folder now holds the build
+		// that was downloaded: an unwritable cores folder is reported here
+		// instead of as a game that will not start.
+		if err := emuConfirmInstalledCore(plan.Core, build); err != nil {
+			ShowToast(err.Error(), ToastKindError)
+			return
+		}
 		PlaySuccessSound()
 		if plan.Action == emuInstallNew {
 			ShowToast(coreConfigDisplayName(plan.Core)+" core installed · "+build.Version, ToastKindSuccess)

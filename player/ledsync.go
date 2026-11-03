@@ -256,6 +256,9 @@ const (
 	ledKeyPolicy = "led_policy"
 	ledKeyColor  = "led_color"
 	ledKeyEffect = "led_effect"
+	// ledKeyBrightness is a percentage applied to the colour the policy chose;
+	// see ledApplyBrightness in ledpanel.go.
+	ledKeyBrightness = "led_brightness"
 )
 
 var ledPolicyOrder = []struct {
@@ -384,11 +387,19 @@ func ledPolicyColor(policy string, batteryPct int, charging bool, tempC float64,
 		hue := ledHueLerp(tempC, 45, 80, 0.33, 0)
 		return hsvToRGB(hue, 1, 0.9)
 	case ledPolicyCustom:
-		level := 1.0
-		if strings.EqualFold(strings.TrimSpace(effect), "pulse") {
-			level = ledPulse(now)
+		switch strings.ToLower(strings.TrimSpace(effect)) {
+		case "pulse":
+			level := ledPulse(now)
+			return uint8(float64(r) * level), uint8(float64(g) * level), uint8(float64(b) * level)
+		case "rainbow":
+			// One full turn every twelve seconds: a glow, not a strobe.
+			phase := math.Mod(float64(now.UnixMilli())/12000.0, 1)
+			if phase < 0 {
+				phase += 1
+			}
+			return hsvToRGB(phase, 1, 0.9)
 		}
-		return uint8(float64(r) * level), uint8(float64(g) * level), uint8(float64(b) * level)
+		return r, g, b
 	}
 	return 0, 0, 0
 }
@@ -626,6 +637,12 @@ func ledTemperatureC() float64 {
 // policy. Audio keeps its own analysis path; every other policy reads device
 // state. Extracted so the policy maths is testable without a loop or a device.
 func ledFrameColor(now time.Time) (uint8, uint8, uint8) {
+	r, g, b := ledFrameColorRaw(now)
+	return ledApplyBrightness(r, g, b, ledBrightnessFromConfig(appConfig))
+}
+
+// ledFrameColorRaw is the colour before the style panel's brightness trim.
+func ledFrameColorRaw(now time.Time) (uint8, uint8, uint8) {
 	policy := ledPolicyFromConfig(appConfig)
 	if policy == ledPolicyAudio {
 		s := currentAudioSample()

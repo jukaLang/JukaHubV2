@@ -41,6 +41,11 @@ const (
 	// absent on a fresh install, which means "on".
 	hapticsVariable = "hapticsEnabled"
 
+	// hapticsIntensityVariable is how hard those pulses are. It is a separate
+	// setting from the switch on purpose: the switch answers "buzz or not",
+	// this answers "how much", which is the question someone asks at night.
+	hapticsIntensityVariable = "hapticsIntensity"
+
 	// hapticNavGap stops a held direction from turning the motor into one
 	// continuous buzz. It is shorter than the d-pad repeat interval, so every
 	// deliberate step still gets its own tick.
@@ -68,6 +73,31 @@ var (
 	hapticSuccessPulse  = hapticPulse{strength: 0.80, ms: 60}
 	hapticErrorPulse    = hapticPulse{strength: 1.00, ms: 150}
 )
+
+// hapticLevel is one step of that setting. The scale multiplies every pulse's
+// strength, so one choice covers navigation ticks, confirmations and errors
+// instead of the UI developing a second table of pulses per level.
+//
+// The pulse length is deliberately left alone. A coin motor needs tens of
+// milliseconds to spin up, so shortening a pulse would make "soft" feel
+// unreliable rather than gentle; the drive level is the honest knob.
+type hapticLevel struct {
+	key   string
+	label string
+	scale float32
+}
+
+// hapticLevels is the cycle order of the row: softest first, so holding right
+// walks the same way as every other setting on that panel.
+var hapticLevels = []hapticLevel{
+	{key: "soft", label: "Soft", scale: 0.55},
+	{key: "normal", label: "Normal", scale: 1},
+	{key: "strong", label: "Strong", scale: 1.35},
+}
+
+// hapticLevelDefault is Normal: an install that never touches the row behaves
+// exactly as it did before the setting existed.
+const hapticLevelDefault = 1
 
 // hapticBackend is one motor. It is an interface so tests can record pulses
 // without hardware and so a pad and a GPIO can share the same call site.
@@ -269,6 +299,7 @@ var (
 	hapticDev    hapticBackend
 	hapticTried  bool
 	hapticOn     atomic.Bool
+	hapticStep   atomic.Int32
 	hapticLastAt time.Time
 
 	// openPadHaptics is a variable so tests can inject a fake backend (or a
@@ -278,7 +309,116 @@ var (
 
 // Feedback is on until the saved preference says otherwise: a splash sound can
 // fire before hapticsBind runs and should not be silent.
-func init() { hapticOn.Store(true) }
+func init() {
+	hapticOn.Store(true)
+	hapticStep.Store(hapticLevelDefault)
+}
+
+// hapticsLevelIndex maps a stored spelling to its step. An unknown or missing
+// value is Normal, which is what a hand-edited config gets for a typo.
+func hapticsLevelIndex(key string) int {
+	want := strings.ToLower(strings.TrimSpace(key))
+	for i, level := range hapticLevels {
+		if level.key == want {
+			return i
+		}
+	}
+	return hapticLevelDefault
+}
+
+// hapticsConfiguredLevel reads the saved step. It accepts the same shapes the
+// Vibration switch accepts, so a config written by hand or by the web builder
+// behaves like the panel.
+func hapticsConfiguredLevel(config *Config) int {
+	if config == nil {
+		return hapticLevelDefault
+	}
+	v, ok := customValue(config.Variables.Custom, hapticsIntensityVariable)
+	if !ok {
+		return hapticLevelDefault
+	}
+	switch t := v.(type) {
+	case string:
+		return hapticsLevelIndex(t)
+	case float64:
+		// A number is a step index, which is what a JSON number in the custom
+		// map reads as.
+		idx := int(math.Round(t))
+		if idx >= 0 && idx < len(hapticLevels) {
+			return idx
+		}
+	}
+	return hapticLevelDefault
+}
+
+// hapticsLevelNow is the step in force. The event thread changes it and the
+// pulse path reads it, so it lives in an atomic instead of behind the motor
+// mutex.
+func hapticsLevelNow() hapticLevel {
+	idx := int(hapticStep.Load())
+	if idx < 0 || idx >= len(hapticLevels) {
+		return hapticLevels[hapticLevelDefault]
+	}
+	return hapticLevels[idx]
+}
+
+// hapticsSetLevel applies a step and records it beside the Vibration switch. It
+// writes the value into the config in memory and leaves persisting to its
+// caller, which is how every other row on the Accessibility panel behaves: the
+// panel saves once per adjustment, through the user-config writer, and a design
+// save is a different file with a different owner.
+//
+// A nil config applies the step for this session only.
+func hapticsSetLevel(config *Config, idx int) hapticLevel {
+	if idx < 0 {
+		idx = 0
+	}
+	if idx >= len(hapticLevels) {
+		idx = len(hapticLevels) - 1
+	}
+	level := hapticLevels[idx]
+	hapticStep.Store(int32(idx))
+	if config == nil {
+		return level
+	}
+	if config.Variables.Custom == nil {
+		config.Variables.Custom = map[string]interface{}{}
+	}
+	// Keep the key's casing as it is in the shipped config rather than adding a
+	// second spelling the reader would then have to choose between.
+	config.Variables.Custom[hapticsIntensityVariable] = level.key
+	return level
+}
+
+// hapticsCycleLevel steps the setting by one in dir, wrapping at both ends so
+// the row is a ring like the other cycling rows on the panel.
+func hapticsCycleLevel(config *Config, dir int) hapticLevel {
+	idx := int(hapticStep.Load())
+	if idx < 0 || idx >= len(hapticLevels) {
+		idx = hapticLevelDefault
+	}
+	step := 1
+	if dir < 0 {
+		step = -1
+	}
+	idx = (idx + step + len(hapticLevels)) % len(hapticLevels)
+	return hapticsSetLevel(config, idx)
+}
+
+// scaleHaptic applies the current step to one pulse. Strength is the only part
+// that changes, and it stays inside the 0..1 the backends clamp anyway, so a
+// Strong setting on an already maximum error pulse is simply maximum.
+func scaleHaptic(p hapticPulse) hapticPulse {
+	scale := hapticsLevelNow().scale
+	p.strength *= scale
+	if p.strength > 1 {
+		p.strength = 1
+	}
+	if p.strength < 0 {
+		p.strength = 0
+	}
+	return p
+}
 
 // detectPadHaptics prefers the handheld's own motor and falls back to SDL
 // rumble, which is what a USB or Bluetooth pad answers.
@@ -347,9 +487,10 @@ func hapticsConfiguredOn(config *Config) bool {
 	return true
 }
 
-// hapticsBind applies the saved preference and opens the motor once.
+// hapticsBind applies the saved preferences and opens the motor once.
 func hapticsBind(config *Config) {
 	hapticOn.Store(hapticsConfiguredOn(config))
+	hapticStep.Store(int32(hapticsConfiguredLevel(config)))
 	hapticsMu.Lock()
 	defer hapticsMu.Unlock()
 	if !hapticTried {
@@ -400,6 +541,7 @@ func playHaptic(p hapticPulse) {
 	if hapticDev == nil {
 		return
 	}
+	p = scaleHaptic(p)
 	now := time.Now()
 	if p.ms <= hapticNavPulse.ms && !hapticLastAt.IsZero() && now.Sub(hapticLastAt) < hapticNavGap {
 		return

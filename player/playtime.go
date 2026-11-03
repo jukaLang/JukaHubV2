@@ -896,6 +896,11 @@ func (playtimeScene) render(r *sdl.Renderer, c *Config) bool {
 	return true
 }
 
+// The page has no buttons of its own, so the D-pad scrolls it. Up at the top of
+// the list is handed back to the app instead of being swallowed: that is how the
+// top bar (Back, clock, bell) is reached on a screen with nothing to focus. The
+// focus graph no longer starts on the bar for this screen — a bar-only graph
+// leaves the focus off — so the arrows keep scrolling the page as before.
 func (playtimeScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 	if e == nil || e.Type != sdl.KEYDOWN {
 		return false
@@ -907,6 +912,9 @@ func (playtimeScene) handleKey(e *sdl.KeyboardEvent, c *Config) bool {
 	case sdl.K_y:
 		openRetroAchievementsPanel()
 	case sdl.K_UP:
+		if playtimeScroll <= 0 {
+			return false
+		}
 		playtimeScrollBy(-playtimeScrollStep)
 		PlayNavSound()
 	case sdl.K_DOWN:
@@ -941,6 +949,10 @@ func (playtimeScene) handleController(e *sdl.ControllerButtonEvent, c *Config) b
 	case sdl.CONTROLLER_BUTTON_Y:
 		openRetroAchievementsPanel()
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
+		if playtimeScroll <= 0 {
+			// Nothing above the list: let the press go so the top bar gets it.
+			return false
+		}
 		playtimeScrollBy(-playtimeScrollStep)
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_DPAD_DOWN:

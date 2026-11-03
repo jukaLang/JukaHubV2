@@ -337,7 +337,17 @@ it is open. **A** re-reads it immediately.
 
 Green is the expected answer, amber is a state the picker can work around, red
 is the reason it cannot. A row that says `none` or `missing` is the one to quote
-in a report; the diagnostics bundle's log carries the same facts.
+in a report.
+
+**Copy** (the pill, `c`, or pad **Y**) is the report as text: the header, the
+time it was collected and every row, aligned. It goes on the clipboard for a
+chat window and into a diagnostics bundle on the card in the same press, so the
+same facts are available however the report gets shared. The toast names both
+halves, and a failure on one side (no clipboard on the platform, a full card)
+does not cancel the other. Every bundle — this one, and **Export diagnostics**
+in the update tools — also carries the sheet's last collection, redacted like
+the log, because a "no networks" thread should not need a round trip to get
+the radio's own answer.
 
 ## Troubleshooting
 
@@ -413,9 +423,13 @@ working socket reports its directory, socket, backend and station, the last
 command error is kept with its phase (through the same function that builds the
 panel's message), a supplicant start records `failed:` for the sheet, `I` / **L1**
 opens the sheet while the list has no backend and **B** goes back to the list
-before it closes the panel, the sheet draws its Refresh/Back pills inside the
-panel at 720p and 480p without leaving stale list rows behind, and the list keeps
-a **Diagnostics** pill when it cannot rescan.
+before it closes the panel, the sheet draws its Refresh/Copy/Back pills inside
+the panel at 720p and 480p without leaving stale list rows behind, and the list
+keeps a **Diagnostics** pill when it cannot rescan. `Copy` is checked end to end
+there too: the clipboard receives the sheet's text, a bundle lands under
+`reports/` carrying the same rows, and pressing it before the worker answered
+neither pastes nor writes anything. `diagnostics_bundle_test.go` pins the
+bundle's Wi-Fi section and its redaction.
 
 `wifi_windows_test.go` covers the netsh backend the same way: the interface
 report (English and localized), the profile list, the scan rows and how they pick

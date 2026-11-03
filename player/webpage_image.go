@@ -269,7 +269,7 @@ func browserFaviconURL(source string, base *url.URL) string {
 		if !found {
 			continue
 		}
-		ref, err := url.Parse(strings.TrimSpace(htmlTagAttribute(tag, "href")))
+		ref, err := url.Parse(htmlAttrValue(htmlTagAttribute(tag, "href")))
 		if err != nil || ref.String() == "" {
 			continue
 		}

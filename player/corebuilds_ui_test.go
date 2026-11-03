@@ -29,6 +29,13 @@ func coreBuildsFixture(t *testing.T, names ...string) string {
 		kbPanel = coreBuildsPanelState{}
 		coreBuildsRowHits = nil
 		coreBuildsPanelRect = sdl.Rect{}
+		// These tests open the page the way the Emulators list does, so closing
+		// it restores that list. Left open, the restored page belongs to
+		// whichever test runs next and the idle screen refuses to appear
+		// because a panel is up — a failure that only shows under a shuffle.
+		emuPanel = emuPanelState{}
+		emuPanelRect = sdl.Rect{}
+		emuRowHits = nil
 	})
 	return cores
 }

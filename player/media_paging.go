@@ -12,6 +12,11 @@ import (
 
 // media_paging.go adds result paging to the Media grid.
 //
+// Keep each yt-dlp request to a small five-result batch. Additional results
+// are fetched as navigation reaches the end, avoiding the latency of a larger
+// initial playlist on handheld Wi-Fi.
+const mediaSearchPageSize = 5
+
 // yt-dlp's ytsearch extractor is a playlist, so asking for a larger ytsearchN
 // and slicing it with --playlist-start/--playlist-end returns the real next
 // page of results (the same trick fetchTrendingVideos already used for its 12).
@@ -35,7 +40,7 @@ var mediaPaging = struct {
 var (
 	ytSearchSpec     = regexp.MustCompile(`ytsearch(\d+):([^"]*)`)
 	playlistStartArg = regexp.MustCompile(`--playlist-start\s+\d+`)
-	playlistEndArg   = regexp.MustCompile(`--playlist-end\s+\d+`)
+	playlistEndArg   = regexp.MustCompile(`--playlist-end\s+(\d+)`)
 )
 
 // rememberMediaPaging records the command and page size of a fresh search, so
@@ -136,6 +141,41 @@ func mediaResultsElement(config *Config) (Element, bool) {
 	return sceneSearchResultsElement(config.Scenes[currentSceneIndex])
 }
 
+// focusMediaResults makes paging own the same focus as a selected result, so a
+// subsequent confirm cannot activate the search field behind the list.
+func focusMediaResults(config *Config) {
+	if config == nil || currentSceneIndex < 0 || currentSceneIndex >= len(config.Scenes) {
+		return
+	}
+	scene := config.Scenes[currentSceneIndex]
+	for i, element := range scene.Elements {
+		if element.Type == "searchresults" {
+			focusEngine.SetGraph(scene.Name, focusEngine.BuildGraph(scene))
+			if focusEngine.SetByElementIndex(i) {
+				selectedButtonIndex = i
+			}
+			resetResultActions()
+			return
+		}
+	}
+}
+
+// handleMediaNextPageClick takes the floating chip before scene elements below
+// it receive the same tap. Loading and exhausted states still consume the tap.
+func handleMediaNextPageClick(config *Config, mx, my int32) bool {
+	element, ok := mediaResultsElement(config)
+	if !ok || config.Variables.Custom["search_error"] != nil {
+		return false
+	}
+	videos, ok := config.Variables.Custom[element.Variable].([]VideoInfo)
+	if !ok || !mediaNextPageHit(config, element, videos, mx, my) {
+		return false
+	}
+	focusMediaResults(config)
+	loadMoreMediaResults(config)
+	return true
+}
+
 // mediaPageTarget is where a page jump lands: the first card of the next or
 // previous page inside the loaded list, with needMore set when that page has
 // not been fetched yet. Jumping back from the middle of a page lands on that
@@ -188,6 +228,7 @@ func mediaResultsPageJump(config *Config, delta int) bool {
 	if !ok || len(videos) == 0 {
 		return false
 	}
+	focusMediaResults(config)
 	state, hasPages := mediaPageState(element.Variable)
 	if !hasPages {
 		ShowToast("This list has no more pages", ToastKindInfo)
@@ -210,6 +251,9 @@ func mediaResultsPageJump(config *Config, delta int) bool {
 	PlayNavSound()
 	return true
 }
+
+// Test seam for the asynchronous page request.
+var mediaExecutePage = executeYouTubeSearchPage
 
 // loadMoreMediaResults fetches and appends the next page of the visible list.
 // It is the R2 action and the Next chip.
@@ -240,7 +284,7 @@ func loadMoreMediaResults(config *Config) bool {
 	next := state.page + 1
 	command := buildMediaPageCommand(state.command, state.pageSize, next)
 	markMediaPageRequested(element.Variable, next)
-	executeYouTubeSearchPage(config, command, element.Variable, snapshotVars(config), true)
+	mediaExecutePage(config, command, element.Variable, snapshotVars(config), true)
 	return true
 }
 
@@ -260,9 +304,31 @@ func videoMergeKeys(v VideoInfo) []string {
 
 // mergeMediaResults appends new videos to the loaded list, dropping duplicates
 // by ID or title. It reports how many were added.
+// sameMediaResults reports whether two result lists name the same videos in the
+// same order, which is how a background refresh knows it has nothing new to
+// publish over the page the grid already shows.
+func sameMediaResults(a, b []VideoInfo) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if strings.TrimSpace(a[i].GetURL()) != strings.TrimSpace(b[i].GetURL()) {
+			return false
+		}
+	}
+	return true
+}
+
 func mergeMediaResults(existing, incoming []VideoInfo) ([]VideoInfo, int) {
-	merged := make([]VideoInfo, 0, len(existing)+len(incoming))
-	seen := make(map[string]bool, len(existing)+len(incoming))
+	// Capacity comes from the larger list instead of the two lengths added
+	// together: the sum is an integer expression that could in principle wrap,
+	// and one page of headroom is enough because append grows as it fills.
+	hint := len(existing)
+	if len(incoming) > hint {
+		hint = len(incoming)
+	}
+	merged := make([]VideoInfo, 0, hint)
+	seen := make(map[string]bool, hint)
 	keep := func(v VideoInfo) bool {
 		keys := videoMergeKeys(v)
 		if len(keys) == 0 {
@@ -315,29 +381,18 @@ func mediaNextPageHit(config *Config, element Element, videos []VideoInfo, mx, m
 	return mx >= rect.X && mx <= rect.X+rect.W && my >= rect.Y && my <= rect.Y+rect.H
 }
 
-// mediaNextPageVisible reports whether the Next chip should be drawn: the
-// focused card is on the last loaded row and the list can grow.
+// mediaNextPageVisible keeps paging available throughout a paged result list.
+// It must not disappear when a pointer moves across the card under the chip.
 func mediaNextPageVisible(config *Config, element Element, videos []VideoInfo) bool {
-	if len(videos) == 0 || focusedResultIndex < 0 {
+	if len(videos) == 0 {
 		return false
 	}
-	if _, ok := mediaPageState(element.Variable); !ok {
-		return false
-	}
-	cols, _ := gridColsRows(element)
-	if cols < 1 {
-		cols = 1
-	}
-	if cols == 1 {
-		return focusedResultIndex >= len(videos)-1
-	}
-	lastRow := (len(videos) - 1) / int(cols)
-	return focusedResultIndex/int(cols) >= lastRow
+	_, ok := mediaPageState(element.Variable)
+	return ok
 }
 
 // renderMediaNextPageButton draws the "Next" affordance over the results
-// viewport while the user is at the end of what has been loaded. Clicking it
-// and pressing R2 do the same thing.
+// viewport. Clicking it and pressing R2 fetch the next results page.
 func renderMediaNextPageButton(renderer *sdl.Renderer, config *Config, element Element, videos []VideoInfo, elemWidth, elemHeight int32) {
 	if !mediaNextPageVisible(config, element, videos) {
 		return

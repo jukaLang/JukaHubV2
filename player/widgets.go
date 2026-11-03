@@ -170,7 +170,7 @@ func batteryPercentIn(dir string) int {
 		if pct < 0 {
 			pct = 0
 		}
-		return int(pct)
+		return pct
 	}
 	for _, pair := range [][2]string{{"charge_now", "charge_full"}, {"energy_now", "energy_full"}} {
 		now, okNow := readBatteryCounter(filepath.Join(dir, pair[0]))
@@ -178,21 +178,26 @@ func batteryPercentIn(dir string) int {
 		if !okNow || !okFull || full <= 0 {
 			continue
 		}
-		pct := now * 100 / full
+		// Charge counters are microamp-hours, a few million at most, but the
+		// multiply could still wrap a 32-bit int on a tiny kernel build. Divide
+		// first so the product never leaves the int range.
+		pct := (now/full)*100 + (now%full)*100/full
 		if pct > 100 {
 			pct = 100
 		}
 		if pct < 0 {
 			pct = 0
 		}
-		return int(pct)
+		return pct
 	}
 	return -1
 }
 
 // readBatteryCounter parses one sysfs counter. Some kernels add a newline and
-// a few append units, so only the leading integer is significant.
-func readBatteryCounter(path string) (int64, bool) {
+// a few append units, so only the leading integer is significant. It returns an
+// int: every counter it reads is a percentage or a charge total far inside the
+// range, and staying in one integer type keeps the callers free of casts.
+func readBatteryCounter(path string) (int, bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return 0, false
@@ -201,7 +206,7 @@ func readBatteryCounter(path string) (int64, bool) {
 	if len(fields) == 0 {
 		return 0, false
 	}
-	n, err := strconv.ParseInt(fields[0], 10, 64)
+	n, err := strconv.Atoi(fields[0])
 	if err != nil {
 		return 0, false
 	}
@@ -365,9 +370,46 @@ func ensureSettingsWidgets(config *Config) {
 	}
 	ensureSmartSettingsScene(config)
 	ensureSmartSettingsEntry(config)
+	ensureWeatherUnitSetting(config)
+	ensureTasksRefreshLabel(config)
 	ensureScreensaverTimeoutSetting(config)
 	ensureCookieRetentionSetting(config)
 	ensureSnapPreviewSetting(config)
+}
+
+// Older configs call the scheduled-task rescan "Load". Label that existing
+// action Refresh without moving it or changing custom button labels.
+func ensureTasksRefreshLabel(config *Config) {
+	scene := sceneByName(config, "Cron")
+	if scene == nil {
+		return
+	}
+	for i := range scene.Elements {
+		elem := &scene.Elements[i]
+		if elem.Type == "button" && elem.Trigger == "cron_load" && elem.Text == "Load" {
+			elem.Text = "Refresh"
+		}
+	}
+}
+
+// Replace the old free-text weather unit field in existing designs as well as
+// shipped configs; preserve its geometry and the separate Weather Unit label.
+func ensureWeatherUnitSetting(config *Config) {
+	scene := settingsGeneralScene(config)
+	if scene == nil {
+		return
+	}
+	for i := range scene.Elements {
+		elem := &scene.Elements[i]
+		if elem.Type == "input" && strings.EqualFold(strings.TrimSpace(elem.Variable), "weatherUnit") {
+			elem.Type = "button"
+			elem.Text = "Weather unit"
+			elem.Trigger = "cycle_weather_unit"
+			elem.Variable = ""
+			elem.Placeholder = ""
+			elem.BgColor = "$buttonColor"
+		}
+	}
 }
 
 // ensureScreensaverTimeoutSetting puts the screensaver timeout in Settings →

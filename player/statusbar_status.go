@@ -357,11 +357,11 @@ func drawStatusWiFiChip(renderer *sdl.Renderer, font *ttf.Font, part string, x, 
 	level := statusWiFiSignal()
 	ink := sdl.Color{R: 120, G: 132, B: 154, A: 220}
 	if offline {
-		ink = ColorWarning
+		ink = WarningInk()
 	}
 	drawStatusSignalBars(renderer, x, iconY, iconW, iconH, level, ink)
 	if offline && draw != nil {
-		draw(part, ColorWarning, x+iconW+statusChipTextGap, textTop)
+		draw(part, WarningInk(), x+iconW+statusChipTextGap, textTop)
 	}
 	return statusClusterPartWidth(font, part)
 }

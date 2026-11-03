@@ -5,6 +5,8 @@ package main
 // open a card, the member list, and the actions a card offers.
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,10 +23,16 @@ func resetChatProfileState(t *testing.T) {
 	chatMutex.Unlock()
 	prevOffset, prevSelected, prevSelectedID := chatScrollOffset, chatSelected, chatSelectedID
 	prevProfile, prevMembers := chatProfile, chatMembers
+	prevBar := chatSelectionBar
 	chatScrollOffset = 0
 	chatSelected, chatSelectedID = -1, ""
 	chatProfile = chatProfileCard{}
 	chatMembers = chatMembersPanel{}
+	// The action bar is part of the selection state: a test that selects a
+	// message leaves it open, and an open bar takes the pad before the scene
+	// underneath, so restoring the highlight alone would leak into the next
+	// test's controller checks.
+	chatSelectionBar = chatSelection{}
 	chatMessageHits = nil
 	t.Cleanup(func() {
 		chatMutex.Lock()
@@ -33,6 +41,7 @@ func resetChatProfileState(t *testing.T) {
 		chatScrollOffset = prevOffset
 		chatSelected, chatSelectedID = prevSelected, prevSelectedID
 		chatProfile, chatMembers = prevProfile, prevMembers
+		chatSelectionBar = prevBar
 		chatMessageHits = nil
 	})
 }
@@ -273,8 +282,9 @@ func TestChatMemberListOpensProfiles(t *testing.T) {
 	if chatMembers.rect.W <= 0 {
 		t.Fatal("member list did not record its card rect")
 	}
-	// Rows are drawn from the list's own top padding; click the first row.
-	if !chatOverlayClick(chatMembers.rect.X+chatMembers.rect.W/2, chatMembers.rect.Y+60, config) {
+	// Click the actual rendered first row.
+	row := chatMembers.layout.rowRect(0)
+	if !chatOverlayClick(row.X+row.W/2, row.Y+row.H/2, config) {
 		t.Fatal("a click on the member list was not consumed")
 	}
 	if !chatProfile.open {
@@ -286,6 +296,62 @@ func TestChatMemberListOpensProfiles(t *testing.T) {
 	closeChatProfile()
 	if !chatMembers.open {
 		t.Error("closing a card opened from the list should return to the list")
+	}
+}
+
+func TestChatMembersLayoutFitsTextAndScrolls(t *testing.T) {
+	resetChatProfileState(t)
+	for _, tc := range []struct {
+		width, height, line int32
+		count               int
+	}{
+		{1280, 720, 28, 3},
+		{960, 720, 42, 8},
+		{640, 480, 38, 8},
+	} {
+		layout := chatMembersLayoutFor(tc.width, tc.height, tc.line, tc.count)
+		if layout.rect.X < 0 || layout.rect.Y < 0 || layout.rect.X+layout.rect.W > tc.width || layout.rect.Y+layout.rect.H > tc.height {
+			t.Fatalf("card outside %dx%d: %+v", tc.width, tc.height, layout.rect)
+		}
+		if layout.visible < 1 || layout.visible > chatMembersMax {
+			t.Fatalf("unexpected visible count %d", layout.visible)
+		}
+		for i := 0; i < layout.visible; i++ {
+			row := layout.rowRect(i)
+			if row.H < 2*tc.line || row.Y < layout.rect.Y+layout.headerH || row.Y+row.H > layout.rect.Y+layout.rect.H-layout.footerH {
+				t.Fatalf("text or row overlaps card chrome: layout=%+v row=%+v", layout, row)
+			}
+			if i > 0 && row.Y < layout.rowRect(i-1).Y+layout.rowRect(i-1).H {
+				t.Fatal("member rows overlap")
+			}
+		}
+		chatMembers.rows = make([]chatMemberProfile, tc.count)
+		chatMembers.layout = layout
+		chatMembers.focus = tc.count - 1
+		chatMembers.scroll = 0
+		chatMembersEnsureVisible()
+		if chatMembers.focus < chatMembers.scroll || chatMembers.focus >= chatMembers.scroll+layout.visible {
+			t.Fatalf("last focused member is not visible: focus=%d scroll=%d visible=%d", chatMembers.focus, chatMembers.scroll, layout.visible)
+		}
+	}
+}
+
+func TestChatMemberClickUsesScrolledRowLayout(t *testing.T) {
+	resetChatProfileState(t)
+	chatMembers = chatMembersPanel{open: true, rows: []chatMemberProfile{
+		{Name: "one"}, {Name: "two"}, {Name: "three"}, {Name: "four"},
+	}}
+	chatMembers.layout = chatMembersLayoutFor(640, 480, 55, len(chatMembers.rows))
+	chatMembers.rect = chatMembers.layout.rect
+	chatMembers.focus = 3
+	chatMembersEnsureVisible()
+	index := chatMembers.focus - chatMembers.scroll
+	row := chatMembers.layout.rowRect(index)
+	if !chatOverlayClick(row.X+row.W/2, row.Y+row.H/2, nil) {
+		t.Fatal("row click was not consumed")
+	}
+	if !chatProfile.open || chatProfile.profile.Name != "four" {
+		t.Fatalf("scrolled click opened %+v, want fourth member", chatProfile.profile)
 	}
 }
 
@@ -348,6 +414,11 @@ func TestMessageActionBarReplyFromKeyboard(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
+	// The bar belongs to the chat panel, so the test stands where a user does
+	// when they tap a message: on the scene that draws it.
+	prevScene := currentSceneIndex
+	currentSceneIndex = findSceneIndex(config, "Chat")
+	t.Cleanup(func() { currentSceneIndex = prevScene })
 	chatMutex.Lock()
 	chatMessages = []ChatMessage{{ID: "1", Sender: "Alex", Text: "did it work?", Timestamp: time.Now()}}
 	chatMutex.Unlock()
@@ -371,6 +442,92 @@ func TestMessageActionBarReplyFromKeyboard(t *testing.T) {
 	clearChatReply()
 }
 
+// The action bar belongs to the panel that draws it. Leaving the chat scene
+// with a message selected must hand the pad and the keys back to the screen
+// underneath: the composer is gone, so the bar has nothing left to act on.
+func TestChatSelectionBarReleasesInputOffTheChatScene(t *testing.T) {
+	resetChatProfileState(t)
+	config, err := loadConfig("jukaconfig.json")
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	chatScene := findSceneIndex(config, "Chat")
+	if chatScene < 0 {
+		t.Fatal("the shipped config has a Chat scene; it went missing")
+	}
+	prevScene := currentSceneIndex
+	t.Cleanup(func() { currentSceneIndex = prevScene })
+
+	chatMutex.Lock()
+	chatMessages = []ChatMessage{{ID: "1", Sender: "Alex", Text: "first", Timestamp: time.Now()}}
+	chatMutex.Unlock()
+
+	currentSceneIndex = chatScene
+	selectChatMessage(0)
+	if !chatSelectionOwnsInput(config) {
+		t.Fatal("the action bar does not own input on the panel it is drawn in")
+	}
+
+	currentSceneIndex = homeSceneIndex(config)
+	if chatSelectionOwnsInput(config) {
+		t.Error("a bar left open by a scene change still owns input")
+	}
+	if chatSelectionBar.open {
+		t.Error("off the chat scene the stale action bar should be dropped")
+	}
+	if handleChatSelectionKey(keyEvent(sdl.K_LEFT), config) {
+		t.Error("the stale bar consumed a key meant for the scene underneath")
+	}
+	press := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_LEFT}
+	if ctrlChatSelection(press, config) {
+		t.Error("the stale bar consumed a pad press meant for the scene underneath")
+	}
+}
+
+// The member list and the profile card have the same owner as the action bar:
+// they float inside the chat panel, so leaving that scene drops them rather
+// than leaving them to eat the next press on the screen underneath.
+func TestChatOverlaysReleaseInputOffTheChatScene(t *testing.T) {
+	resetChatProfileState(t)
+	config, err := loadConfig("jukaconfig.json")
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	prevScene := currentSceneIndex
+	t.Cleanup(func() { currentSceneIndex = prevScene })
+
+	now := time.Now()
+	chatMutex.Lock()
+	chatMessages = []ChatMessage{
+		{ID: "1", Sender: "Steppa", Text: "first", Timestamp: now.Add(-time.Minute)},
+		{ID: "2", Sender: "Alex", UserID: "222222222222222222", Text: "second", Timestamp: now},
+	}
+	chatMutex.Unlock()
+
+	currentSceneIndex = findSceneIndex(config, "Chat")
+	if !openChatMembers() {
+		t.Fatal("the member list refused a history with speakers")
+	}
+	if !chatOverlayOwnsInput(config) {
+		t.Fatal("the member list does not own input on the panel it is drawn in")
+	}
+
+	currentSceneIndex = homeSceneIndex(config)
+	if chatOverlayOwnsInput(config) {
+		t.Error("a member list left open by a scene change still owns input")
+	}
+	if chatOverlayOpen() {
+		t.Error("off the chat scene the stale overlay should be dropped")
+	}
+	if handleChatOverlayKey(keyEvent(sdl.K_DOWN), config) {
+		t.Error("the stale overlay consumed a key meant for the scene underneath")
+	}
+	press := &sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_DPAD_DOWN}
+	if ctrlChatOverlay(press, config) {
+		t.Error("the stale overlay consumed a pad press meant for the scene underneath")
+	}
+}
+
 // The member list and the card are driveable without a mouse: Down walks the
 // rows, Enter opens a profile, and Escape steps back out one layer at a time.
 func TestChatOverlayKeyboardNavigation(t *testing.T) {
@@ -379,6 +536,11 @@ func TestChatOverlayKeyboardNavigation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
+	// The list floats inside the chat panel, so the test stands on the scene
+	// that draws it: off that scene the overlay is stale and gives input back.
+	prevScene := currentSceneIndex
+	currentSceneIndex = findSceneIndex(config, "Chat")
+	t.Cleanup(func() { currentSceneIndex = prevScene })
 	now := time.Now()
 	chatMutex.Lock()
 	chatMessages = []ChatMessage{
@@ -451,4 +613,114 @@ func TestProfileLatestJumpsToTheMessage(t *testing.T) {
 	if chatScrollOffset != 0 {
 		t.Errorf("scroll offset = %d, want 0 for the newest message", chatScrollOffset)
 	}
+}
+
+// Short outgoing bubbles must not push their longer header beyond the panel.
+// Long sender names yield space to the time and keep their profile hit target.
+func TestChatMessageHeaderFitsPanel(t *testing.T) {
+	resetChatProfileState(t)
+	config := layoutTestConfig(t)
+	font, _ := getCachedFont(config, "small")
+	if font == nil {
+		t.Fatal("missing chat status font")
+	}
+	for _, tc := range []struct {
+		name   string
+		width  int32
+		sender string
+		own    bool
+	}{
+		{"short outgoing", 1240, "Juka", true},
+		{"long outgoing", 500, strings.Repeat("LongName", 20), true},
+		{"long incoming", 500, strings.Repeat("RemoteName", 20), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chatMessages = []ChatMessage{{ID: "1", Sender: tc.sender, Text: "test", Own: tc.own, Timestamp: time.Date(2026, 11, 2, 23, 21, 0, 0, time.UTC)}}
+			elem := Element{Type: "chat", X: 0, Y: 0, Width: StringOrInt(fmt.Sprint(tc.width)), Height: "640", Font: "small"}
+			componentFrame(t, func(r *sdl.Renderer) { renderChat(r, config, elem) })
+			if len(chatMessageHits) != 1 {
+				t.Fatalf("message hits = %d", len(chatMessageHits))
+			}
+			hit := chatMessageHits[0]
+			left := int32(elem.X) + SpaceMD + SpaceSM
+			right := int32(elem.X) + tc.width - SpaceMD - SpaceSM
+			name, suffix, x, nameW := chatMessageHeader(font, tc.sender, "23:21", hit.body.X, hit.body.W, left, right, tc.own)
+			if !strings.HasSuffix(suffix, "23:21") {
+				t.Fatalf("timestamp missing: %q", suffix)
+			}
+			timeW, _, err := font.SizeUTF8(suffix)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if x < left || x+nameW+int32(timeW) > right {
+				t.Fatalf("header at %d..%d outside %d..%d", x, x+nameW+int32(timeW), left, right)
+			}
+			if tc.own && x+nameW+int32(timeW) != hit.body.X+hit.body.W {
+				t.Fatalf("own header does not align with bubble: %+v", hit)
+			}
+			if hit.name.X != x || hit.name.W != nameW || name == "" {
+				t.Fatalf("name hit %+v does not match %q at %d width %d", hit.name, name, x, nameW)
+			}
+			if !chatMessageClick(hit.name.X+2, hit.name.Y+2, config) || !chatProfile.open || chatProfile.profile.Name != tc.sender {
+				t.Fatal("sender name no longer opens the correct profile")
+			}
+			closeChatProfile()
+		})
+	}
+}
+
+// Chat hitboxes survive a scene switch but must not steal the Hardware buttons.
+func TestChatComposerHitboxesStayOnChatScene(t *testing.T) {
+	resetKeyboardState(t)
+	withScreen(t, 1280, 720)
+	previousScene := currentSceneIndex
+	oldName, oldInput := chatNameRect, chatInputRect
+	oldSend, oldAI, oldAttach := chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect
+	t.Cleanup(func() {
+		currentSceneIndex = previousScene
+		chatNameRect, chatInputRect = oldName, oldInput
+		chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect = oldSend, oldAI, oldAttach
+	})
+	config := &Config{Width: 1280, Height: 720, Variables: Variables{Custom: map[string]interface{}{}}, Scenes: []SceneConfig{
+		{Name: "Chat", Elements: []Element{{Type: "chat"}}},
+		{Name: "Hardware", Elements: []Element{{Type: "button", Text: "Refresh", X: 60, Y: 611, Width: "140", Height: "45"}}},
+	}}
+	ensureHardwareProcessEntry(config)
+	ensureHardwareWiFiEntry(config)
+	testedButtons := 0
+	for _, button := range config.Scenes[1].Elements {
+		if button.Trigger != "processes_open" && button.Trigger != "wifi_open" {
+			continue
+		}
+		testedButtons++
+		w, h := buttonHitSize(button, nil)
+		mx, my := button.X+w/2, button.Y+h/2
+		for _, target := range []*sdl.Rect{&chatNameRect, &chatInputRect, &chatSendBtnRect, &chatAskAIBtnRect, &chatAttachBtnRect} {
+			chatNameRect, chatInputRect, chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+			*target = sdl.Rect{X: mx - 5, Y: my - 5, W: 10, H: 10}
+			currentSceneIndex = 1
+			virtualKeyboardActive = false
+			if handleChatComposerMouse(mx, my, config) || virtualKeyboardActive {
+				t.Fatalf("stale chat target stole %s click", button.Text)
+			}
+		}
+	}
+
+	if testedButtons != 2 {
+		t.Fatalf("tested %d Hardware buttons, want Processes and Wi-Fi", testedButtons)
+	}
+	currentSceneIndex = 0
+	chatNameRect, chatSendBtnRect, chatAskAIBtnRect, chatAttachBtnRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
+	chatInputRect = sdl.Rect{X: 20, Y: 30, W: 100, H: 40}
+	virtualKeyboardActive = false
+	if !handleChatComposerMouse(30, 40, config) || !virtualKeyboardActive || vkTarget != vkTargetChat {
+		t.Fatal("the chat composer did not open its keyboard on the chat scene")
+	}
+	vkCloseKeyboard()
+	chatInputRect = sdl.Rect{}
+	chatNameRect = sdl.Rect{X: 20, Y: 30, W: 100, H: 40}
+	if !handleChatComposerMouse(30, 40, config) || !virtualKeyboardActive || vkTarget != vkTargetName {
+		t.Fatal("the chat name did not open its keyboard on the chat scene")
+	}
+	vkCloseKeyboard()
 }

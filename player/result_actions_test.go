@@ -1,9 +1,9 @@
 package main
 
-// Tests for the Audio / Video / Chat buttons on a video result: the row →
-// button cycle, the keys that reach it in the single-column list, the dispatch
-// to the download queue (audio or video) and the chat, and the pill geometry on
-// wide and narrow cards.
+// Tests for the Audio / Video / Chat / Save buttons on a video result: the row
+// → button cycle, the keys that reach it in the single-column list, the
+// dispatch to the download queue (audio or video), the chat and the Favorites
+// toggle, and the pill geometry on wide and narrow cards.
 
 import (
 	"errors"
@@ -14,23 +14,38 @@ import (
 )
 
 func TestMoveResultActionCyclesThroughTheRow(t *testing.T) {
-	cases := []struct {
-		current, delta, want int
-	}{
-		{resultActionNone, 1, resultActionAudio},
-		{resultActionAudio, 1, resultActionVideo},
-		{resultActionVideo, 1, resultActionChat},
-		{resultActionChat, 1, resultActionNone},
-		{resultActionNone, -1, resultActionChat},
-		{resultActionChat, -1, resultActionVideo},
-		{resultActionVideo, -1, resultActionAudio},
-		{resultActionAudio, -1, resultActionNone},
-		{resultActionAudio, 0, resultActionAudio},
+	// Right and Left both wrap, so the same key that enters the pills also
+	// leaves them; the ends are whatever the drawn order says they are.
+	if got := moveResultAction(resultActionNone, 1); got != resultActionOrder[0] {
+		t.Errorf("Right from the row = %d, want %d", got, resultActionOrder[0])
 	}
-	for _, tc := range cases {
-		if got := moveResultAction(tc.current, tc.delta); got != tc.want {
-			t.Errorf("move(%d, %d) = %d, want %d", tc.current, tc.delta, got, tc.want)
+	if got := moveResultAction(resultActionNone, -1); got != resultActionOrder[len(resultActionOrder)-1] {
+		t.Errorf("Left from the row = %d, want %d", got, resultActionOrder[len(resultActionOrder)-1])
+	}
+	if got := moveResultAction(resultActionOrder[len(resultActionOrder)-1], 1); got != resultActionNone {
+		t.Errorf("Right past the last pill = %d, want the row", got)
+	}
+	if got := moveResultAction(resultActionOrder[0], -1); got != resultActionNone {
+		t.Errorf("Left before the first pill = %d, want the row", got)
+	}
+	// Each step inside the strip lands on the next pill in drawn order. The
+	// ends are checked above: they return to the row rather than wrapping into
+	// the other end, which is what makes the same key that entered the pills
+	// also leave them.
+	for i := 1; i < len(resultActionOrder); i++ {
+		action := resultActionOrder[i]
+		if got := moveResultAction(action, -1); got != resultActionOrder[i-1] {
+			t.Errorf("move(%d, -1) = %d, want %d", action, got, resultActionOrder[i-1])
 		}
+	}
+	for i := 0; i < len(resultActionOrder)-1; i++ {
+		action := resultActionOrder[i]
+		if got := moveResultAction(action, 1); got != resultActionOrder[i+1] {
+			t.Errorf("move(%d, +1) = %d, want %d", action, got, resultActionOrder[i+1])
+		}
+	}
+	if got := moveResultAction(resultActionAudio, 0); got != resultActionAudio {
+		t.Errorf("move with no direction = %d, want the current pill", got)
 	}
 }
 
@@ -71,39 +86,32 @@ func TestListResultActionKeys(t *testing.T) {
 		handleSearchResultsAction(action, config)
 	}
 
-	// Right walks into the buttons; the fourth press returns to the row.
-	key(ActionNavigateRight)
-	if focusedResultAction != resultActionAudio {
-		t.Fatalf("Right = %d, want Audio", focusedResultAction)
-	}
-	key(ActionNavigateRight)
-	if focusedResultAction != resultActionVideo {
-		t.Fatalf("second Right = %d, want Video", focusedResultAction)
-	}
-	key(ActionNavigateRight)
-	if focusedResultAction != resultActionChat {
-		t.Fatalf("third Right = %d, want Chat", focusedResultAction)
+	// Right walks into the buttons in drawn order; one more press than there
+	// are pills returns to the row.
+	for i, want := range resultActionOrder {
+		key(ActionNavigateRight)
+		if focusedResultAction != want {
+			t.Fatalf("Right %d = %d, want %d", i+1, focusedResultAction, want)
+		}
 	}
 	key(ActionNavigateRight)
 	if focusedResultAction != resultActionNone {
-		t.Fatalf("fourth Right = %d, want the row again", focusedResultAction)
+		t.Fatalf("Right past the last pill = %d, want the row again", focusedResultAction)
 	}
 	// Left enters at the far end and walks back.
 	key(ActionNavigateLeft)
-	if focusedResultAction != resultActionChat {
-		t.Fatalf("Left = %d, want Chat", focusedResultAction)
+	if want := resultActionOrder[len(resultActionOrder)-1]; focusedResultAction != want {
+		t.Fatalf("Left = %d, want %d", focusedResultAction, want)
 	}
-	key(ActionNavigateLeft)
-	if focusedResultAction != resultActionVideo {
-		t.Fatalf("second Left = %d, want Video", focusedResultAction)
-	}
-	key(ActionNavigateLeft)
-	if focusedResultAction != resultActionAudio {
-		t.Fatalf("third Left = %d, want Audio", focusedResultAction)
+	for i := len(resultActionOrder) - 2; i >= 0; i-- {
+		key(ActionNavigateLeft)
+		if focusedResultAction != resultActionOrder[i] {
+			t.Fatalf("Left to %d = %d, want %d", i, focusedResultAction, resultActionOrder[i])
+		}
 	}
 	key(ActionNavigateLeft)
 	if focusedResultAction != resultActionNone {
-		t.Fatalf("fourth Left = %d, want the row again", focusedResultAction)
+		t.Fatalf("Left past the first pill = %d, want the row again", focusedResultAction)
 	}
 
 	// Down leaves the buttons first, so the row does not move underneath the
@@ -215,25 +223,34 @@ func TestResultActionPillsLayout(t *testing.T) {
 		t.Fatalf("no font available: the shipped Inter-Regular.ttf did not load, so this check cannot run")
 	}
 
-	for _, cardW := range []int32{1232, 600, 430} {
-		audio, video, chat, textRight := resultActionPills(font, 100, 200, cardW, 100)
-		if audio.W <= 0 || video.W <= 0 || chat.W <= 0 {
-			t.Fatalf("card %d: pills %+v %+v %+v", cardW, audio, video, chat)
+	for _, cardW := range []int32{1232, 920, 600} {
+		rects, textRight := resultActionPills(font, 100, 200, cardW, 100)
+		if len(rects) != len(resultActionOrder) {
+			t.Fatalf("card %d: %d pills, want one per action (%d)", cardW, len(rects), len(resultActionOrder))
 		}
-		if !(audio.X < video.X && video.X < chat.X) {
-			t.Errorf("card %d: pills are not in Audio → Video → Chat order: %+v %+v %+v", cardW, audio, video, chat)
+		for i, rect := range rects {
+			if rect.W <= 0 {
+				t.Fatalf("card %d: pill %d %+v", cardW, i, rect)
+			}
+			if i > 0 {
+				prev := rects[i-1]
+				if prev.X >= rect.X {
+					t.Errorf("card %d: pills are not in %v order: %+v %+v", cardW, resultActionOrder, prev, rect)
+				}
+				if prev.X+prev.W > rect.X {
+					t.Errorf("card %d: pills overlap: %+v %+v", cardW, prev, rect)
+				}
+			}
+			if rect.Y < 200 || rect.Y+rect.H > 300 {
+				t.Errorf("card %d: pill %d %+v is outside the 100px row", cardW, i, rect)
+			}
 		}
-		if audio.X+audio.W > video.X || video.X+video.W > chat.X {
-			t.Errorf("card %d: pills overlap: %+v %+v %+v", cardW, audio, video, chat)
+		last := rects[len(rects)-1]
+		if last.X+last.W > 100+cardW {
+			t.Errorf("card %d: the last pill ends at %d, past the card at %d", cardW, last.X+last.W, 100+cardW)
 		}
-		if chat.X+chat.W > 100+cardW {
-			t.Errorf("card %d: Chat ends at %d, past the card at %d", cardW, chat.X+chat.W, 100+cardW)
-		}
-		if textRight <= 120 || textRight > audio.X {
-			t.Errorf("card %d: text stops at %d, want it before the pills at %d", cardW, textRight, audio.X)
-		}
-		if audio.Y < 200 || audio.Y+audio.H > 300 {
-			t.Errorf("card %d: pills %+v are outside the 100px row", cardW, audio)
+		if textRight <= 120 || textRight > rects[0].X {
+			t.Errorf("card %d: text stops at %d, want it before the pills at %d", cardW, textRight, rects[0].X)
 		}
 	}
 }
@@ -264,8 +281,8 @@ func TestSearchResultsListDrawsActionPills(t *testing.T) {
 	scrollY = 0
 	renderSearchResultsList(renderer, config, element, videos, 1232, 456)
 
-	if len(resultActionHits) != len(videos)*3 {
-		t.Fatalf("hit rects = %d, want three per visible row (%d)", len(resultActionHits), len(videos)*3)
+	if want := len(videos) * len(resultActionOrder); len(resultActionHits) != want {
+		t.Fatalf("hit rects = %d, want one per action on every visible row (%d)", len(resultActionHits), want)
 	}
 	rowH, gap := int32(100), int32(14)
 	for _, hit := range resultActionHits {

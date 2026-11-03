@@ -25,3 +25,13 @@ updates:
     groups:
       web-tests:
         patterns: ["*"]
+  # The Playwright smoke test is the only check that drives the real drop
+  # handler and history buttons, so its driver needs the same update and
+  # advisory coverage as the jsdom harness.
+  - package-ecosystem: "npm"
+    directory: "/tests/e2e"
+    schedule:
+      interval: "monthly"
+    groups:
+      e2e-tests:
+        patterns: ["*"]

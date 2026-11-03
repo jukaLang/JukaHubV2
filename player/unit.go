@@ -176,6 +176,10 @@ func handleUnitConverterMouse(mx, my int32, config *Config) bool {
 		PlayNavSound()
 		return true
 	}
+	if unitInputRect.W > 0 && pointInRect(mx, my, unitInputRect) {
+		vkOpenUnit()
+		return true
+	}
 	return false
 }
 

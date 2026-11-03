@@ -91,6 +91,31 @@ func cacheGet(db *bolt.DB, key string) ([]byte, error) {
 	return val, err
 }
 
+// cacheGetStale returns a stored value whether or not its TTL has passed. A
+// reader that can paint the value and refresh behind it (the media grids) uses
+// this to show the last known list instead of an empty screen and a spinner;
+// anything that needs current data keeps using cacheGet.
+func cacheGetStale(db *bolt.DB, key string) ([]byte, bool) {
+	var val []byte
+	_ = db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(cacheBucket))
+		if b == nil {
+			return nil
+		}
+		v := b.Get([]byte(key))
+		if v == nil {
+			return nil
+		}
+		var entry cacheEntry
+		if err := json.Unmarshal(v, &entry); err != nil {
+			return nil
+		}
+		val = entry.Value
+		return nil
+	})
+	return val, val != nil
+}
+
 // cacheSet stores a value with a TTL duration.
 func cacheSet(db *bolt.DB, key string, value []byte, ttl time.Duration) error {
 	return db.Update(func(tx *bolt.Tx) error {

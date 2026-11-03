@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -223,5 +225,33 @@ func TestScanAppSubdirRejectsEscapingLaunch(t *testing.T) {
 func TestIsLaunchableAppPathRejectsArbitraryPaths(t *testing.T) {
 	if isLaunchableAppPath(filepath.Join(t.TempDir(), "not-an-app.exe")) {
 		t.Fatal("launcher accepted a path outside the app folders")
+	}
+}
+
+// The example is discovered from the normal relative plugins directory and
+// its script receives an action and custom arguments without shell expansion.
+func TestExamplePluginAction(t *testing.T) {
+	previousDir, previousPlugins, previousSafeMode := pluginDir, plugins, safeMode
+	t.Cleanup(func() { pluginDir, plugins, safeMode = previousDir, previousPlugins, previousSafeMode })
+	pluginDir = "plugins"
+	plugins = make(map[string]*PluginInfo)
+	safeMode = safeModeState{}
+
+	var config Config
+	if err := json.Unmarshal([]byte(`{"variables":{"plugin_name":"A B=friend","tspUsername":"ignored"}}`), &config); err != nil {
+		t.Fatal(err)
+	}
+	LoadPlugins(&config)
+	if _, ok := GetPlugins()["hello"]; !ok {
+		t.Fatal("example plugin was not discovered")
+	}
+	if got := ExecutePluginAction("hello", "greet", snapshotVars(&config)); got != "Hello, A B=friend!\n" {
+		t.Fatalf("greeting = %q", got)
+	}
+	if got := ExecutePluginAction("hello", "greet", nil); got != "Hello, friend!\n" {
+		t.Fatalf("default greeting = %q", got)
+	}
+	if got := ExecutePluginAction("hello", "missing", nil); !strings.HasPrefix(got, "Plugin error:") || !strings.Contains(got, "Unknown action: missing") {
+		t.Fatalf("unknown action did not return the script error: %q", got)
 	}
 }

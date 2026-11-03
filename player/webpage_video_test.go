@@ -311,6 +311,59 @@ func TestWebVideoThumbnailFallback(t *testing.T) {
 // the video's real frame through the disk-backed loader, exactly like a reader
 // play card. Real metadata always wins; non-YouTube and lookalike-host entries
 // keep the metadata-only behaviour.
+func TestMediaPreviewFrameURLs(t *testing.T) {
+	id := "dEADbEEF999"
+	got := mediaPreviewFrameURLs(VideoInfo{ID: id})
+	want := []string{
+		webYouTubeThumbBase + id + "/1.jpg",
+		webYouTubeThumbBase + id + "/2.jpg",
+		webYouTubeThumbBase + id + "/3.jpg",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("preview frame URLs = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("preview frame %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if got := mediaPreviewFrameURLs(VideoInfo{WebpageURL: "https://vimeo.com/123"}); len(got) != 0 {
+		t.Errorf("non-YouTube preview URLs = %v, want none", got)
+	}
+	for _, tc := range []struct {
+		ticks uint64
+		want  int
+	}{{0, 0}, {899, 0}, {900, 1}, {1800, 2}, {2700, 0}} {
+		if got := mediaPreviewFrameIndex(tc.ticks, 3); got != tc.want {
+			t.Errorf("frame index at %dms = %d, want %d", tc.ticks, got, tc.want)
+		}
+	}
+	if got := mediaPreviewFrameIndex(0, 0); got != -1 {
+		t.Errorf("frame index with no samples = %d, want -1", got)
+	}
+}
+
+func TestFocusMediaResultAtUsesHoveredCard(t *testing.T) {
+	withScreen(t, 1280, 720)
+	prevScene, prevFocus, prevSelected := currentSceneIndex, focusedResultIndex, selectedButtonIndex
+	t.Cleanup(func() {
+		currentSceneIndex, focusedResultIndex, selectedButtonIndex = prevScene, prevFocus, prevSelected
+	})
+	config := &Config{Scenes: []SceneConfig{{Name: "Tube", Elements: []Element{{Type: "searchresults", Variable: "search_results", X: 32, Y: 64, Columns: 1}}}}}
+	config.Variables.Custom = map[string]interface{}{"search_results": []VideoInfo{{ID: "dEADbEEF999"}, {ID: "abcDEF12345"}}}
+	currentSceneIndex, focusedResultIndex, selectedButtonIndex = 0, -1, -1
+	row := searchResultListRowRect(config.Scenes[0].Elements[0], 1)
+	if !focusMediaResultAt(config, row.X+8, row.Y+row.H/2) {
+		t.Fatal("hovering the second result did not focus it")
+	}
+	if focusedResultIndex != 1 || selectedButtonIndex != 0 {
+		t.Fatalf("hover focus = result %d, element %d; want result 1 on element 0", focusedResultIndex, selectedButtonIndex)
+	}
+	if focusMediaResultAt(config, 8, 8) {
+		t.Fatal("hover outside the media list changed focus")
+	}
+}
+
 func TestRealThumbnailCandidatesForMediaCards(t *testing.T) {
 	id := "dEADbEEF999"
 	want := webYouTubeThumbBase + id + "/mqdefault.jpg"
