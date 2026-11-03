@@ -3140,12 +3140,16 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 			y := element.Y + (elemHeight-int32(len(lines))*lineH)/2 - 8
 			for i, line := range lines {
 				w, _, _ := font.SizeUTF8(line)
-				renderText(renderer, config, font, line, sdl.Color{R: 255, G: 107, B: 122, A: 255},
+				// DangerInk, not a hardcoded red: the palette is retinted per
+				// theme, and the fixed #FF6B7A this used to draw fell under
+				// AA on the light presets, on the one screen that reports
+				// failures.
+				renderText(renderer, config, font, line, DangerInk(),
 					element.X+(elemWidth-int32(w))/2, y+int32(i)*lineH)
 			}
 			hint := "See Logs for details."
 			w, _, _ := font.SizeUTF8(hint)
-			renderText(renderer, config, font, hint, ColorTextMuted(),
+			renderText(renderer, config, font, hint, ColorTextTertiary(),
 				element.X+(elemWidth-int32(w))/2, y+int32(len(lines))*lineH+8)
 		}
 		return
@@ -3167,9 +3171,12 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 				renderText(renderer, config, font, config.Variables.SpinnerText, sdl.Color{R: 156, G: 169, B: 189, A: 255},
 					element.X+(elemWidth-int32(w))/2, element.Y+elemHeight/2+4)
 			} else {
-				w, _, _ := font.SizeUTF8("No results. Try searching.")
-				renderText(renderer, config, font, "No results. Try searching.", ColorTextMuted(),
-					element.X+(elemWidth-int32(w))/2, element.Y+elemHeight/2-int32(font.Height())/2)
+				// The same block the rest of the app draws (Favorites, Shorts,
+				// the folder lists): a glyph, a headline and one line that says
+				// what fills it. A single grey sentence floating in a
+				// full-height panel read as a screen that had failed.
+				UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemWidth, H: elemHeight},
+					"@media", "No results yet", "Search above, or paste a link with Play Link.")
 			}
 		}
 		return
@@ -3888,8 +3895,15 @@ func playVideoInfo(config *Config, v VideoInfo) {
 	go func() {
 		// A cancelled load played nothing, so it must not count as a play in the
 		// recently-played list or the playtime figures.
-		if resolveAndStartPlayback(prepareSeq, prepareCtx, config, url, v.Position, "playVideoInfo") {
+		outcome := resolveAndStartPlayback(prepareSeq, prepareCtx, config, url, v.Position, "playVideoInfo")
+		if outcome.Played() {
 			recordPlayed(config, url)
+		}
+		// Only a load that really reached the stream says anything about the
+		// link: a missing tool or a cancel is not the channel's fault, and a
+		// saved IPTV channel would otherwise be painted red for it.
+		if outcome.Tried() && prepareCtx.Err() == nil {
+			ipStreamRecordResult(url, outcome.Played())
 		}
 	}()
 }
@@ -3920,7 +3934,10 @@ func videoFormatSelectorFor(config *Config, source string) string {
 // playWithTempFile downloads the stream with yt-dlp and hands the file to the
 // embedded player. Downloading first (instead of piping) keeps seeking and
 // resume positions working and avoids holding two decoders in memory.
-func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url string, startSec float64, prepareSeq uint64) {
+// It reports whether playback started; every failure path (spawn, download,
+// empty file, cancel) returns false, so callers never mistake "the process
+// exited" for "something played".
+func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url string, startSec float64, prepareSeq uint64) bool {
 	// The caller's spinner covers the download; every way out of here has to
 	// clear it, including failures, or the media screen stays blocked.
 	defer finishVideoPrepare(prepareSeq)
@@ -3973,7 +3990,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 		videoPlaybackPhaseAt = sdl.GetTicks64()
 		videoPlaybackError = err.Error()
 		videoPlaybackMutex.Unlock()
-		return
+		return false
 	}
 
 	done := make(chan error, 1)
@@ -3991,7 +4008,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 					// failure, so no error toast and no half-download left behind.
 					log.Printf("[STREAM] download cancelled for %s", sanitizeLogURL(url))
 					os.Remove(tempPath)
-					return
+					return false
 				}
 				log.Printf("[ERROR] playWithTempFile: download failed: %v", err)
 				// Same redaction as the search path: these arguments include the
@@ -4007,7 +4024,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 				videoPlaybackPhaseAt = sdl.GetTicks64()
 				videoPlaybackError = err.Error()
 				videoPlaybackMutex.Unlock()
-				return
+				return false
 			}
 			downloadOK = true
 		case <-time.After(200 * time.Millisecond):
@@ -4019,7 +4036,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	if ctx.Err() != nil {
 		log.Printf("[STREAM] download cancelled after it finished for %s", sanitizeLogURL(url))
 		os.Remove(tempPath)
-		return
+		return false
 	}
 
 	// Verify the downloaded file is valid before playing
@@ -4037,7 +4054,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 		videoPlaybackError = "downloaded file is empty"
 		videoPlaybackMutex.Unlock()
 		os.Remove(tempPath)
-		return
+		return false
 	}
 	videoPlaybackMutex.Lock()
 	videoPlaybackPhase = "playing"
@@ -4049,6 +4066,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	// playback ends. User media files are never deleted.
 	startEmbeddedPlayback(config, tempPath, startSec, true)
 	log.Printf("[DEBUG] playWithTempFile: embedded playback started for %s (resume %.1fs)", tempPath, startSec)
+	return true
 }
 
 func parseDownloadProgress(stderr string) {

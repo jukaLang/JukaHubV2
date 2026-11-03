@@ -597,7 +597,7 @@ func formatCertificate(cert *x509.Certificate, now time.Time) string {
 	if name == "" && len(cert.DNSNames) > 0 {
 		name = cert.DNSNames[0]
 	}
-	days := int(cert.NotAfter.Sub(now).Hours() / 24)
+	days := calendarDaysBetween(now, cert.NotAfter)
 	var b strings.Builder
 	b.WriteString("TLS:    ")
 	if issuer != "" {
@@ -617,6 +617,22 @@ func formatCertificate(cert *x509.Certificate, now time.Time) string {
 	}
 	b.WriteString("\n")
 	return b.String()
+}
+
+// calendarDaysBetween counts whole calendar days from one date to another, so a
+// certificate that expires on the 17th reads "45 days left" on the 2nd.
+//
+// It replaced a 24-hour division of the remaining duration, which truncated: a
+// certificate due in exactly 45 days was 44 days and 23.999 hours away a moment
+// later, so the count disagreed with the expiry date printed next to it. Both
+// dates are normalised to midnight UTC, which also keeps a DST shift from
+// stealing or adding a day.
+func calendarDaysBetween(from, to time.Time) int {
+	fy, fm, fd := from.Date()
+	ty, tm, td := to.Date()
+	start := time.Date(fy, fm, fd, 0, 0, 0, 0, time.UTC)
+	end := time.Date(ty, tm, td, 0, 0, 0, 0, time.UTC)
+	return int(end.Sub(start).Hours() / 24)
 }
 
 // ── Rows ───────────────────────────────────────────────────────────────────

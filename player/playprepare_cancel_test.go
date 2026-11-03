@@ -188,8 +188,14 @@ func TestResolveAndStartPlaybackStopsOnACancelledLoad(t *testing.T) {
 		t.Fatal("cancel reported nothing in flight")
 	}
 
-	if played := resolveAndStartPlayback(seq, ctx, &Config{}, "https://example.com/v", 0, "test"); played {
+	outcome := resolveAndStartPlayback(seq, ctx, &Config{}, "https://example.com/v", 0, "test")
+	if outcome.Played() {
 		t.Fatal("a cancelled load reported that something played")
+	}
+	if outcome.Tried() {
+		// The cancel says nothing about the link: it must not be recorded as a
+		// failed stream, which would paint a working channel red.
+		t.Fatal("a cancelled load counted as an attempt on the link")
 	}
 	if videoPrepareActive() {
 		t.Fatal("a cancelled load left the loading card up")

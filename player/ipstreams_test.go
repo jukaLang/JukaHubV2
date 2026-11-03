@@ -10,6 +10,7 @@ package main
 // of the same D-pad/click cursor as the channels.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -23,10 +24,12 @@ func ipMenuTestState(t *testing.T) {
 	prevOpen, prevCursor, prevStatus := ipPanelOpen, ipStreamsCursor, ipPanelStatus
 	prevPrompt := ipPromptPending
 	prevScene := currentSceneIndex
+	prevTab, prevQuery, prevTabStart := ipPanelTab, ipPanelQuery, ipPanelTabStart
 	t.Cleanup(func() {
 		ipPanelOpen, ipStreamsCursor, ipPanelStatus = prevOpen, prevCursor, prevStatus
 		ipPromptPending = prevPrompt
 		currentSceneIndex = prevScene
+		ipPanelTab, ipPanelQuery, ipPanelTabStart = prevTab, prevQuery, prevTabStart
 		vkCloseKeyboard()
 		activeSceneIndex, activeElementIndex = -1, -1
 		inputTextBuffer = ""
@@ -35,6 +38,7 @@ func ipMenuTestState(t *testing.T) {
 	ipStreamsCursor = 0
 	ipPanelStatus = ""
 	ipPromptPending = false
+	ipPanelTab, ipPanelQuery, ipPanelTabStart = 0, "", 0
 }
 
 func ipMenuSetLibrary(list []IPStream) {
@@ -311,5 +315,245 @@ func TestStreamMenuOwnsTheDpad(t *testing.T) {
 	}
 	if len(played) != 1 || played[0] != a.URL {
 		t.Fatalf("Enter played %v, want %s", played, a.URL)
+	}
+}
+
+// The channel that was played comes back on top of the menu, while the library
+// file keeps the order it was imported in: only the list is sorted, so a fresh
+// import still reads like the playlist.
+func TestStreamMenuSortsRecentlyPlayedFirst(t *testing.T) {
+	ipMenuTestState(t)
+	a := IPStream{Name: "A", URL: "http://example.com/a.m3u8"}
+	b := IPStream{Name: "B", URL: "http://example.com/b.m3u8"}
+	c := IPStream{Name: "C", URL: "http://example.com/c.m3u8"}
+	ipMenuSetLibrary([]IPStream{a, b, c})
+
+	if got := ipPanelRows()[0].URL; got != a.URL {
+		t.Fatalf("a fresh library starts at %s, want the first channel %s", got, a.URL)
+	}
+	if !ipStreamRecordResult(c.URL, true) {
+		t.Fatal("recording a play on a saved channel reported nothing saved")
+	}
+	if got := ipPanelRows()[0].URL; got != c.URL {
+		t.Fatalf("the menu starts at %s after playing %s", got, c.URL)
+	}
+	if got := ipStreamList(); len(got) != 3 || got[2].URL != c.URL {
+		t.Fatalf("the library order changed to %+v; only the menu is sorted", got)
+	}
+	if n := len(ipPanelChannelList()); n != 3 {
+		t.Fatalf("sorting lost channels: %d rows left", n)
+	}
+}
+
+// A start paints the channel green and a failure red; a channel that was never
+// tried carries no verdict, so a fresh import is not a wall of red.
+func TestStreamMenuColorCodesPlayResults(t *testing.T) {
+	ipMenuTestState(t)
+	good := IPStream{Name: "Good", URL: "http://example.com/good.m3u8"}
+	bad := IPStream{Name: "Bad", URL: "http://example.com/bad.m3u8"}
+	fresh := IPStream{Name: "Fresh", URL: "http://example.com/fresh.m3u8"}
+	ipMenuSetLibrary([]IPStream{good, bad, fresh})
+
+	if !ipStreamRecordResult(good.URL, true) {
+		t.Fatal("a successful start on a saved channel was not recorded")
+	}
+	if !ipStreamRecordResult(bad.URL, false) {
+		t.Fatal("a failed start on a saved channel was not recorded")
+	}
+	if ipStreamRecordResult("https://example.com/not-saved", false) {
+		t.Fatal("a link that is not in the library was recorded as a channel")
+	}
+
+	rows := map[string]IPStream{}
+	for _, s := range ipPanelRows() {
+		rows[s.URL] = s
+	}
+	if got := rows[good.URL]; got.LastResult != ipStreamPlayed || got.LastPlayed == 0 {
+		t.Fatalf("the played channel reads %q at %d, want %q with a time", got.LastResult, got.LastPlayed, ipStreamPlayed)
+	}
+	if got := rows[bad.URL]; got.LastResult != ipStreamFailed || got.LastPlayed == 0 {
+		t.Fatalf("the failed channel reads %q at %d, want %q with a time", got.LastResult, got.LastPlayed, ipStreamFailed)
+	}
+	if got := rows[fresh.URL]; got.LastResult != "" || got.LastPlayed != 0 {
+		t.Fatalf("an untouched channel reads %q at %d, want no verdict", got.LastResult, got.LastPlayed)
+	}
+
+	if ink, ok := ipStreamStatusColor(rows[good.URL]); !ok || ink != SuccessInk() {
+		t.Fatalf("the played channel is painted %v, want the success ink", ink)
+	}
+	if ink, ok := ipStreamStatusColor(rows[bad.URL]); !ok || ink != DangerInk() {
+		t.Fatalf("the failed channel is painted %v, want the danger ink", ink)
+	}
+	if _, ok := ipStreamStatusColor(rows[fresh.URL]); ok {
+		t.Fatal("an untouched channel was given a verdict colour")
+	}
+}
+
+// The record the menu paints survives an app restart: the group, the time and
+// the verdict are part of the saved channel, not of the running process.
+func TestStreamResultsSurviveAReload(t *testing.T) {
+	ipMenuTestState(t)
+	a := IPStream{Name: "A", URL: "http://example.com/a.m3u8", Group: "News"}
+	ipMenuSetLibrary([]IPStream{a})
+	if !ipStreamRecordResult(a.URL, true) {
+		t.Fatal("the play was not recorded")
+	}
+
+	ipStreamsMu.Lock()
+	ipStreams, ipStreamsLoaded = nil, false
+	ipStreamsMu.Unlock()
+
+	got := ipStreamList()
+	if len(got) != 1 {
+		t.Fatalf("reloading found %d channels, want 1", len(got))
+	}
+	if got[0].Group != "News" || got[0].LastResult != ipStreamPlayed || got[0].LastPlayed == 0 {
+		t.Fatalf("the reloaded channel = %+v, want its group and its play result", got[0])
+	}
+}
+
+// The tab row is built from the playlist's group-title — or its country code when
+// there is no group — and filters the menu without touching the library.
+func TestStreamMenuTabsFollowThePlaylist(t *testing.T) {
+	ipMenuTestState(t)
+	news := IPStream{Name: "News One", URL: "http://example.com/news1.m3u8", Group: "News"}
+	sport := IPStream{Name: "Sport One", URL: "http://example.com/sport1.m3u8", Group: "Sports"}
+	manual := IPStream{Name: "Mine", URL: "http://example.com/mine.m3u8"}
+	ipMenuSetLibrary([]IPStream{news, sport, manual})
+
+	want := []string{ipStreamTabAll, "News", "Sports", ipStreamTabOther}
+	if got := ipPanelTabs(); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("tabs = %v, want %v", got, want)
+	}
+
+	// A library with no groups has one tab, and the panel hides the row: an
+	// import of hand-typed links must not grow a row of one.
+	ipMenuSetLibrary([]IPStream{manual})
+	if got := ipPanelTabs(); len(got) != 1 || got[0] != ipStreamTabAll {
+		t.Fatalf("a library without groups has tabs %v, want just All", got)
+	}
+	if ipPanelCycleTab(1) {
+		t.Fatal("cycling tabs with a single tab reported a move")
+	}
+
+	ipMenuSetLibrary([]IPStream{news, sport, manual})
+	if got := ipPanelChannelList(); len(got) != 3 {
+		t.Fatalf("the All tab shows %d channels, want 3", len(got))
+	}
+	ipPanelTab = 1
+	if got := ipPanelChannelList(); len(got) != 1 || got[0].URL != news.URL {
+		t.Fatalf("the News tab shows %+v, want only %s", got, news.URL)
+	}
+	if !ipPanelCycleTab(1) {
+		t.Fatal("cycling from News did nothing")
+	}
+	if got := ipPanelChannelList(); len(got) != 1 || got[0].Group != "Sports" {
+		t.Fatalf("after one cycle the tab shows %+v, want the Sports channel", got)
+	}
+	ipPanelTab = len(want) - 1
+	if got := ipPanelChannelList(); len(got) != 1 || got[0].URL != manual.URL {
+		t.Fatalf("the Ungrouped tab shows %+v, want only %s", got, manual.URL)
+	}
+}
+
+// Play and remove act on the row under the cursor. The rows are sorted and
+// filtered, so their index is not a library index, and reading the library with
+// the menu's index used to play and delete the wrong channel.
+func TestStreamMenuActsOnTheFilteredRow(t *testing.T) {
+	ipMenuTestState(t)
+	a := IPStream{Name: "Alpha", URL: "http://example.com/alpha.m3u8"}
+	b := IPStream{Name: "Sports Live", URL: "http://example.com/sport.m3u8"}
+	ipMenuSetLibrary([]IPStream{a, b})
+
+	var played []string
+	prevPlay := ipPanelPlayLink
+	ipPanelPlayLink = func(_ *Config, url string) { played = append(played, url) }
+	t.Cleanup(func() { ipPanelPlayLink = prevPlay })
+
+	ipPanelSubmitQuery("sport")
+	if got := ipPanelChannelList(); len(got) != 1 || got[0].URL != b.URL {
+		t.Fatalf("the search shows %+v, want only %s", got, b.URL)
+	}
+	ipStreamsCursor = ipPanelActionRows
+	ipPanelPlay(&Config{})
+	if len(played) != 1 || played[0] != b.URL {
+		t.Fatalf("play started %v, want the filtered row %s", played, b.URL)
+	}
+
+	ipStreamsCursor = ipPanelActionRows
+	ipPanelRemove()
+	if got := ipStreamList(); len(got) != 1 || got[0].URL != a.URL {
+		t.Fatalf("removing the filtered row left %+v, want only %s", got, a.URL)
+	}
+}
+
+// The Find row asks for a query with the keyboard, the menu narrows while it is
+// typed, and submitting keeps the menu on screen with the filter applied.
+func TestStreamMenuFindRowFiltersTheList(t *testing.T) {
+	ipMenuTestState(t)
+	a := IPStream{Name: "Alpha", URL: "http://example.com/alpha.m3u8"}
+	b := IPStream{Name: "Beta News", URL: "http://example.com/beta.m3u8"}
+	ipMenuSetLibrary([]IPStream{a, b})
+
+	ipStreamsCursor = ipPanelActionRows - 1
+	if items := ipPanelItems(); ipStreamsCursor >= len(items) || items[ipStreamsCursor].Kind != ipItemFind {
+		t.Fatalf("row %d of the menu is not the Find row", ipStreamsCursor)
+	}
+	ipPanelActivate(&Config{})
+	if !virtualKeyboardActive || vkTarget != vkTargetIPStream {
+		t.Fatal("the Find row did not open the stream filter keyboard")
+	}
+
+	vkInsertText("news", &Config{})
+	if got := ipPanelChannelList(); len(got) != 1 || got[0].URL != b.URL {
+		t.Fatalf("typing news shows %+v, want only %s", got, b.URL)
+	}
+	if ipStreamsCursor != ipPanelActionRows {
+		t.Fatalf("the cursor sits on %d while typing, want the first channel row", ipStreamsCursor)
+	}
+
+	vkSubmit(&Config{}, false)
+	if virtualKeyboardActive {
+		t.Error("the keyboard stayed up after Done")
+	}
+	if !ipPanelOpen {
+		t.Error("the menu closed when the search was submitted")
+	}
+	if got := ipPanelChannelList(); len(got) != 1 || got[0].URL != b.URL {
+		t.Fatalf("after Done the menu shows %+v, want the filtered list", got)
+	}
+
+	ipPanelSubmitQuery("")
+	if got := ipPanelChannelList(); len(got) != 2 {
+		t.Fatalf("clearing the search shows %d channels, want both", len(got))
+	}
+
+	// Reopening the menu must not carry a stale search: a filter from last week
+	// would look like a library that lost its channels.
+	ipPanelSubmitQuery("news")
+	openIPStreamPanel()
+	if ipPanelQuery != "" {
+		t.Fatalf("reopening the menu kept the query %q", ipPanelQuery)
+	}
+	if got := ipPanelChannelList(); len(got) != 2 {
+		t.Fatalf("reopening the menu shows %d channels, want both", len(got))
+	}
+}
+
+// The import keeps the playlist's group so the menu can offer country and genre
+// tabs; tvg-country is the fallback for a playlist that has no group-title.
+func TestM3UParseKeepsGroups(t *testing.T) {
+	data := "#EXTM3U\n" +
+		"#EXTINF:-1 tvg-country=\"US\" group-title=\"News\",News One\nhttp://example.com/1.m3u8\n" +
+		"#EXTINF:-1 tvg-country=\"FR\",France 2\nhttp://example.com/2.m3u8\n"
+	list := parseM3UStreams(data, 0)
+	if len(list) != 2 {
+		t.Fatalf("parsed %d channels, want 2", len(list))
+	}
+	if list[0].Name != "News One" || list[0].Group != "News" {
+		t.Fatalf("first channel = %+v, want the group-title", list[0])
+	}
+	if list[1].Name != "France 2" || list[1].Group != "FR" {
+		t.Fatalf("second channel = %+v, want the country code as its group", list[1])
 	}
 }

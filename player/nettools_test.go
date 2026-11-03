@@ -278,6 +278,38 @@ func TestFormatCertificateExpired(t *testing.T) {
 	}
 }
 
+// The day count beside the expiry date is the one a person reads off that date:
+// a certificate due on the 17th is "45 days left" on the 2nd, not 44, and a
+// DST shift in between must not change the answer.
+func TestCertificateDaysLeftMatchThePrintedDate(t *testing.T) {
+	// A zone with a DST shift inside the window, at an hour where a duration
+	// division and a calendar difference disagree.
+	loc := time.FixedZone("shifted", -5*3600)
+	now := time.Date(2026, 3, 1, 9, 0, 0, 0, loc)
+
+	soon := &x509.Certificate{
+		Subject:  pkix.Name{CommonName: "example.com"},
+		NotAfter: now.AddDate(0, 0, 45),
+	}
+	text := formatCertificate(soon, now)
+	if !strings.Contains(text, "expires 2026-04-15") {
+		t.Fatalf("text = %q, want the expiry date", text)
+	}
+	if !strings.Contains(text, "45 days left") {
+		t.Fatalf("text = %q, want the count to match the printed date", text)
+	}
+
+	today := &x509.Certificate{NotAfter: now.Add(3 * time.Hour)}
+	if got := formatCertificate(today, now); !strings.Contains(got, "(today)") {
+		t.Fatalf("text = %q, want a same-day expiry called today", got)
+	}
+
+	gone := &x509.Certificate{NotAfter: now.AddDate(0, 0, -1)}
+	if got := formatCertificate(gone, now); !strings.Contains(got, "expired 1 day ago") {
+		t.Fatalf("text = %q, want yesterday counted as one day ago", got)
+	}
+}
+
 func TestHTTPCheckAgainstLocalServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/roms" {

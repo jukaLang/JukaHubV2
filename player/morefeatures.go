@@ -293,7 +293,7 @@ func fetchTickers(config *Config) {
 		// The two fixed rows are allocated, then one slot is added per symbol:
 		// `2+len(symbols)` as a length is a sum the analyser cannot bound, and
 		// this keeps the same length without ever forming it.
-		lines := make([]string, 2, 2)
+		lines := make([]string, 2)
 		for range symbols {
 			lines = append(lines, "")
 		}

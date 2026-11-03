@@ -853,33 +853,57 @@ func resolvePlaybackTools(ctx context.Context, config *Config) (ytDlpPath, missi
 	return ytDlpPath, "", nil
 }
 
+// playbackOutcome is what one load attempt did. It replaces the pair of booleans
+// resolveAndStartPlayback used to return: both read the same at a call site, and
+// swapping them silently turned a cancelled load into a failed link, which is
+// then painted red in the stream library.
+type playbackOutcome int
+
+const (
+	// playbackNotTried means the link was never reached — the load was
+	// cancelled, or the helper tools could not be resolved. It says nothing
+	// about the link itself.
+	playbackNotTried playbackOutcome = iota
+	// playbackAttemptFailed means the link was tried and nothing played.
+	playbackAttemptFailed
+	// playbackStarted means the picture came back.
+	playbackStarted
+)
+
+// Played reports whether anything reached the player.
+func (o playbackOutcome) Played() bool { return o == playbackStarted }
+
+// Tried reports whether the link itself was attempted, so a caller can tell a
+// dead channel from a cancelled or misconfigured load.
+func (o playbackOutcome) Tried() bool { return o != playbackNotTried }
+
 // resolveAndStartPlayback is the work behind a load: resolve the tools under the
 // caller's prepare context, stream the source where ffmpeg can read it directly,
 // and fall back to downloading the file. It always clears the loading state it
 // was handed — by sequence, so a slow older attempt cannot clear a newer one —
-// and reports whether anything actually played.
+// and reports what became of the link.
 //
 // Callers begin the modal state before calling this and before resolving any
 // tool, so the whole wait, tool download included, is modal from the press and B
 // cancels all of it. Two callers exist and they must stay in step: Play
 // (playVideoInfo) and the quality switch, which re-resolves the same stream at a
 // new ceiling.
-func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, config *Config, url string, startSec float64, logLabel string) bool {
+func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, config *Config, url string, startSec float64, logLabel string) playbackOutcome {
 	ytDlpPath, missing, err := resolvePlaybackTools(prepareCtx, config)
 	if err != nil {
 		finishVideoPrepare(prepareSeq)
 		if prepareCtx.Err() != nil {
 			log.Printf("[STREAM] %s: load cancelled while resolving %s", logLabel, missing)
-			return false
+			return playbackNotTried
 		}
 		log.Printf("[ERROR] %s: %s unavailable: %v", logLabel, missing, err)
 		showToast(toolUnavailableMessage(missing, err), ToastError())
-		return false
+		return playbackNotTried
 	}
 	if prepareCtx.Err() != nil {
 		finishVideoPrepare(prepareSeq)
 		log.Printf("[STREAM] %s: load cancelled for %s", logLabel, sanitizeLogURL(url))
-		return false
+		return playbackNotTried
 	}
 
 	log.Printf("[DEBUG] %s: url=%q yt-dlp=%q", logLabel, sanitizeLogURL(url), ytDlpPath)
@@ -890,11 +914,11 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 	if cancelled {
 		finishVideoPrepare(prepareSeq)
 		log.Printf("[STREAM] %s: preparation cancelled for %s", logLabel, sanitizeLogURL(url))
-		return false
+		return playbackNotTried
 	}
 	if started {
 		finishVideoPrepare(prepareSeq)
-		return true
+		return playbackStarted
 	}
 	// Every streaming strategy failed: this is the slow path, and it is worth
 	// saying so in the log next to the reasons logged above.
@@ -903,8 +927,18 @@ func resolveAndStartPlayback(prepareSeq uint64, prepareCtx context.Context, conf
 	// the player overlay can report progress. The download honours prepareCtx, so
 	// B does not leave a download running invisibly behind a screen the user
 	// already left.
-	playWithTempFile(prepareCtx, config, ytDlpPath, url, startSec, prepareSeq)
-	return prepareCtx.Err() == nil
+	// The download reports whether playback actually started. This used to
+	// answer "did the context survive", so a failed or empty download counted
+	// as a play: it entered the recently-played list, and the stream library
+	// would have painted that channel green.
+	if playWithTempFile(prepareCtx, config, ytDlpPath, url, startSec, prepareSeq) {
+		return playbackStarted
+	}
+	if prepareCtx.Err() != nil {
+		// B during the download, or the five-minute cap: not the link's fault.
+		return playbackNotTried
+	}
+	return playbackAttemptFailed
 }
 
 // toolPathRunnable reports whether a resolved tool path is a real executable.

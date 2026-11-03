@@ -40,6 +40,10 @@ var skipGates = []string{
 	"SDL video unavailable",
 	"SDL_ttf unavailable",
 	"SDL_image unavailable",
+	// SDL_image linked but built without PNG: the icon decode probe cannot run
+	// on that machine, and the failure this audit is meant to catch is a skip
+	// for logic reasons, not a missing decoder.
+	"SDL_image PNG support unavailable",
 
 	// Developer opt-out for the heavy offscreen probes. CI never passes -short,
 	// so these tests always run there.

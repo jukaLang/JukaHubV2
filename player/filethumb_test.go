@@ -65,17 +65,20 @@ func TestFeThumbnailEligiblePicksPicturesAndVideos(t *testing.T) {
 
 func TestFeThumbKeyFollowsTheFile(t *testing.T) {
 	base := FileEntry{Name: "beach.jpg", Path: "/card/beach.jpg", Size: 1024, Mod: time.Unix(1700000000, 0)}
-	if feThumbKey(base) != feThumbKey(base) {
-		t.Fatal("the same file produced two keys; its row would rebuild the thumbnail every frame")
+	// The key is a pure function of the entry: the same file must hash the same
+	// way twice, or its row would rebuild the thumbnail on every frame.
+	first := feThumbKey(base)
+	if again := feThumbKey(base); again != first {
+		t.Fatalf("the same file produced two keys (%q, %q); its row would rebuild the thumbnail every frame", first, again)
 	}
 	edited := base
 	edited.Mod = base.Mod.Add(time.Minute)
-	if feThumbKey(edited) == feThumbKey(base) {
+	if feThumbKey(edited) == first {
 		t.Fatal("a re-saved picture kept its key; the row would show the old photo")
 	}
 	resized := base
 	resized.Size = base.Size + 1
-	if feThumbKey(resized) == feThumbKey(base) {
+	if feThumbKey(resized) == first {
 		t.Fatal("a resized file kept its key; the row would show the old picture")
 	}
 	moved := base

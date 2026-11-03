@@ -2405,8 +2405,12 @@ func cycleVideoQuality(config *Config) {
 
 // resolveQualityStream is the resolve behind a quality switch. It is a variable
 // so the switch — including what it does when the resolve does not reach the
-// player — can be exercised without a network or the helper tools.
-var resolveQualityStream = resolveAndStartPlayback
+// player — can be exercised without a network or the helper tools. The switch
+// only cares whether the picture came back, so the "was the link really tried"
+// half of the load result stops here.
+var resolveQualityStream = func(prepareSeq uint64, prepareCtx context.Context, config *Config, url string, startSec float64, logLabel string) bool {
+	return resolveAndStartPlayback(prepareSeq, prepareCtx, config, url, startSec, logLabel).Played()
+}
 
 // restartVideoAtQuality re-resolves and replays the current page URL at its
 // position, through the same load path playVideoInfo uses, but it keeps the

@@ -52,8 +52,12 @@ func handleControllerEvent(e *sdl.ControllerButtonEvent, config *Config) bool {
 	if ledPanel.open {
 		return ctrlLEDPanel(e, config)
 	}
-	// The IPStream library is modal: nothing underneath may react.
+	// The IPStream library is modal: nothing underneath may react. Its Find
+	// keyboard, when it is up, owns the pad.
 	if ipPanelOpen {
+		if virtualKeyboardActive {
+			return false
+		}
 		return ctrlIPPanel(e, config)
 	}
 	// The process list is modal: nothing underneath may react while it is open.

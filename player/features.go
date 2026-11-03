@@ -708,6 +708,12 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 			glyph = "@files"
 			title, body = "This folder is empty", "Pick another folder with Up, or refresh the list."
 		}
+		if element.Variable == tvEntriesVar {
+			// The empty list has a button that fills it, so the block names it
+			// instead of saying the panel is empty: on Live TV that sentence
+			// sat next to Load Playlist without ever pointing at it.
+			title, body = "No channels yet", "Load Playlist below fetches public channels."
+		}
 		UIEmptyState(renderer, config, sdl.Rect{X: element.X, Y: element.Y, W: elemW, H: elemH},
 			glyph, title, body)
 		return

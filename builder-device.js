@@ -189,6 +189,16 @@
     return window.location.protocol === 'https:' && /^http:\/\//i.test(state.url);
   }
 
+  // The one sentence for the one problem: an HTTPS page may not talk to a
+  // plain-HTTP handheld. Opening the panel, pressing Connect and pressing Push
+  // all used to say it in their own words, so the panel swapped the note for a
+  // near-duplicate as soon as it tried to connect. Every path now shows this.
+  const MIXED_CONTENT_NOTE = 'This page is served over HTTPS, so the browser blocks plain HTTP requests to the handheld. Open the builder over http://localhost (the local copy) to push.';
+
+  function mixedContentNote() {
+    return MIXED_CONTENT_NOTE;
+  }
+
   async function request(path, options) {
     const opts = Object.assign({}, options || {});
     const controller = typeof AbortController === 'function' ? new AbortController() : null;
@@ -228,7 +238,7 @@
     }
     if (mixedContentBlocked()) {
       setState('Blocked by the browser', 'error');
-      setWarning('This page is served over HTTPS, so the browser refuses plain HTTP requests to the handheld. Serve the builder over http://localhost (or use the local copy) to push.');
+      setWarning(mixedContentNote());
       return false;
     }
     setState('Connecting to ' + state.url.replace(/^https?:\/\//, '') + '…', 'connecting');
@@ -285,7 +295,7 @@
     }
     if (mixedContentBlocked()) {
       setState('Blocked by the browser', 'error');
-      setWarning('HTTPS pages cannot push to a plain-HTTP device address. Open the builder over http://localhost.');
+      setWarning(mixedContentNote());
       return false;
     }
 
@@ -469,9 +479,7 @@
     } else {
       setState('Not connected', 'offline');
     }
-    setWarning(mixedContentBlocked()
-      ? 'This page is served over HTTPS; the browser will block pushes to a plain-HTTP device. Open the builder over http://localhost.'
-      : '');
+    setWarning(mixedContentBlocked() ? mixedContentNote() : '');
     panel.removeAttribute('hidden');
     panel.setAttribute('aria-hidden', 'false');
     const focusTarget = state.url ? el('devicePushBtn') : el('deviceUrl');

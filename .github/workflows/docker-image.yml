@@ -250,11 +250,24 @@ jobs:
 
       - name: Install SDL2 into the MinGW toolchain
         run: |
-          MINGW_DIR=$(brew --prefix mingw-w64)/toolchain-x86_64
+          MINGW_DIR=$(brew --prefix mingw-w64)/toolchain-x86_64/x86_64-w64-mingw32
           # Globbed so a version bump in the shared script needs no edit here.
-          for dir in SDL2-*/x86_64-w64-mingw32; do
+          # The underscore is load-bearing: the tarballs extract as SDL2-<ver>,
+          # SDL2_image-<ver> and SDL2_ttf-<ver>, so the old "SDL2-*" pattern
+          # installed only the base package. This step still reported success and
+          # the release build then died on SDL_ttf.h and SDL_image.h.
+          for dir in SDL2*/x86_64-w64-mingw32; do
             echo "installing $dir"
-            sudo cp -r "$dir/"* "$MINGW_DIR/x86_64-w64-mingw32/"
+            sudo cp -r "$dir/"* "$MINGW_DIR/"
+          done
+          # Fail here, naming the file, instead of at a cgo compile further down
+          # with three "No such file" errors that do not say what fetched them.
+          for need in include/SDL2/SDL.h include/SDL2/SDL_image.h include/SDL2/SDL_ttf.h \
+                      lib/libSDL2.dll.a lib/libSDL2_image.dll.a lib/libSDL2_ttf.dll.a; do
+            if [ ! -e "$MINGW_DIR/$need" ]; then
+              echo "::error::the SDL2 MinGW packages did not install $need"
+              exit 1
+            fi
           done
 
       - name: Set up Go

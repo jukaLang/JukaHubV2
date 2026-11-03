@@ -64,6 +64,7 @@ const (
 	vkTargetFileLine   // text file editor: the line under the cursor
 	vkTargetToolsURL   // Tools: URL or host for the HTTP check
 	vkTargetNetwork    // Tools: host:port or domain for the port/whois rows
+	vkTargetIPStream   // stream menu: the Find row's filter
 )
 
 // podcastFeedInput holds the feed URL while it is being typed. It is only read
@@ -344,6 +345,8 @@ func vkEnsureLayout() {
 		target = 16
 	case vkTargetNetwork:
 		target = 17
+	case vkTargetIPStream:
+		target = 18
 	}
 	sig := fmt.Sprintf("%dx%d|%d|%d|%t|%d", screenWidth, screenHeight, int(vkLayer), target, keyboardUpper, len(keyboard))
 	if sig == vkLayoutSig && len(keyboardRects) > 0 {
@@ -584,6 +587,8 @@ func vkCurrentText() string {
 		return memValueBuffer
 	case vkTargetGameSearch:
 		return gameLibraryQuery()
+	case vkTargetIPStream:
+		return ipPanelQuery
 	case vkTargetDownloads:
 		return downloadLinkInput
 	case vkTargetGameArgs:
@@ -642,6 +647,13 @@ func vkSetText(text string, config *Config) {
 		// The library re-filters on every keystroke, so matches appear while
 		// the query is typed instead of after submitting.
 		setGameLibraryQuery(text)
+	case vkTargetIPStream:
+		// The stream menu stays open behind the keyboard and narrows on every
+		// keystroke, so matches appear while the query is typed. A new query
+		// starts from All: searching inside a country tab would hide most hits.
+		ipPanelQuery = text
+		ipPanelTab = 0
+		ipPanelCursorToFirstChannel()
 	case vkTargetDownloads:
 		// The link is only used when the field is submitted, so a mistyped
 		// character cannot start a download.
@@ -761,6 +773,8 @@ func vkTitle() string {
 		return "SEARCH SONGS"
 	case vkTargetGameSearch:
 		return "SEARCH GAMES"
+	case vkTargetIPStream:
+		return "FIND STREAMS"
 	case vkTargetDownloads:
 		return "SAVE TO SD CARD"
 	case vkTargetGameArgs:
@@ -856,6 +870,8 @@ func vkPlaceholder() string {
 		return "Type initials: iwyn = I Want You Now"
 	case vkTargetGameSearch:
 		return "Title, console or file: zelda"
+	case vkTargetIPStream:
+		return "Name, group or link: news"
 	case vkTargetDownloads:
 		return "https://www.youtube.com/watch?v=…"
 	case vkTargetGameArgs:
@@ -956,6 +972,8 @@ func vkHints() string {
 		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y / Enter", "Look up"}, FooterHint{"B / Esc", "Cancel"})
 	case vkTargetFileLine:
 		return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y / Enter", "Save Line"}, FooterHint{"B / Esc", "Cancel"})
+	case vkTargetIPStream:
+		return hintLine(FooterHint{Label: "Live Filter"}, FooterHint{"A / Enter", "Done"}, FooterHint{"B / Esc", "Close"})
 	}
 	return hintLine(FooterHint{"A", "Type"}, FooterHint{"Y", "Save"}, FooterHint{"B / Esc", "Close"})
 }
@@ -1111,6 +1129,22 @@ func vkOpenMusicSearch() {
 	chatInputActive = false
 	unitInputActive = false
 	vkTarget = vkTargetMusic
+	vkLayer = vkLayerLetters
+	vkLayoutSig = ""
+	keyboardPosY, keyboardPosX = 0, 0
+	virtualKeyboardActive = true
+	vkAnimStart = sdl.GetTicks64()
+	sdl.StartTextInput()
+	vkEnsureLayout()
+}
+
+// vkOpenIPStreamSearch opens the keyboard for the stream menu's Find row. The
+// menu stays open behind it and re-filters on every keystroke, and the current
+// query seeds the field so a typo can be corrected instead of retyped.
+func vkOpenIPStreamSearch() {
+	chatInputActive = false
+	unitInputActive = false
+	vkTarget = vkTargetIPStream
 	vkLayer = vkLayerLetters
 	vkLayoutSig = ""
 	keyboardPosY, keyboardPosX = 0, 0
@@ -1576,6 +1610,11 @@ func vkSubmit(config *Config, askAI bool) {
 		// Submit before closing: closing is what clears the field, and an
 		// emptied link must not become a queued row.
 		downloadLinkSubmit(text)
+		vkCloseKeyboard()
+	case vkTargetIPStream:
+		// The filter already applied while typing: submitting trims it and says
+		// how much of the library it kept.
+		ipPanelSubmitQuery(text)
 		vkCloseKeyboard()
 	case vkTargetTerm:
 		vkSetText("", config)
