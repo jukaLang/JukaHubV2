@@ -371,11 +371,17 @@ func scanSystemApps(dir string) []FileEntry {
 			if depth > 3 {
 				return filepath.SkipDir
 			}
+			// JukaHub's own folder is skipped whole. Leaving it out only of the
+			// app rows used to walk into it instead, and its launch.sh came
+			// back as a bare "launch" entry that restarted the hub.
+			if isSelfAppFolder(path) {
+				return filepath.SkipDir
+			}
 			// A TrimUI application folder (config.json + launch script) is one
 			// app, not a tree of scripts: take its label and icon and skip the
 			// rest, so the launcher never lists the same app as a bare
 			// "launch" row once per installed app.
-			if app, ok := scanAppSubdir(path); ok && !isSelfAppFolder(path) {
+			if app, ok := scanAppSubdir(path); ok {
 				entries = append(entries, app)
 				return filepath.SkipDir
 			}
@@ -399,9 +405,9 @@ func scanSystemApps(dir string) []FileEntry {
 	return entries
 }
 
-// isSelfAppFolder reports whether dir is the folder JukaHub itself runs from.
-// Listing the running app in its own launcher only restarts it, so it is left
-// out of the list.
+// isSelfAppFolder reports whether dir is the folder JukaHub itself runs from
+// (or holds the binary further down). Listing the running app in its own
+// launcher only restarts it, so it is left out of the list.
 func isSelfAppFolder(dir string) bool {
 	exe, err := os.Executable()
 	if err != nil || exe == "" {
@@ -415,7 +421,7 @@ func isSelfAppFolder(dir string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(filepath.Clean(exeDir), filepath.Clean(absDir))
+	return strings.EqualFold(filepath.Clean(exeDir), filepath.Clean(absDir)) || isPathWithin(exeDir, absDir)
 }
 
 // appEntryTarget splits an Apps row into its action: either a built-in scene

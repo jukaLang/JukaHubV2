@@ -171,8 +171,8 @@ func renderDashboard(renderer *sdl.Renderer, config *Config) {
 	}
 	dashPoll()
 
-	renderer.SetDrawColor(8, 10, 18, 255)
-	renderer.Clear()
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "small")
 	bigFont, _ := getCachedFont(config, "big")
@@ -188,8 +188,7 @@ func renderDashboard(renderer *sdl.Renderer, config *Config) {
 	title := "System Monitor"
 	if medFont != nil {
 		tw, _, _ := medFont.SizeUTF8(title)
-		renderText(renderer, config, medFont, title,
-			sdl.Color{R: 200, G: 210, B: 230, A: 220},
+		renderText(renderer, config, medFont, title, ColorTextPrimary(),
 			(screenWidth-int32(tw))/2, 20)
 	}
 
@@ -260,15 +259,14 @@ func renderDashboard(renderer *sdl.Renderer, config *Config) {
 			vw, vh, _ := bigFont.SizeUTF8(g.Current)
 			vx := gx - int32(vw)/2
 			vy := gy - int32(vh)/2
-			renderText(renderer, config, bigFont, g.Current,
-				sdl.Color{R: 240, G: 245, B: 255, A: 255}, vx, vy)
+			renderText(renderer, config, bigFont, g.Current, ColorTextPrimary(), vx, vy)
 		}
 
 		// Label below gauge.
 		if font != nil {
 			lw, _, _ := font.SizeUTF8(g.Label)
 			renderText(renderer, config, font, g.Label,
-				sdl.Color{R: 160, G: 175, B: 200, A: 200},
+				WithAlpha(ColorTextTertiary(), 200),
 				gx-int32(lw)/2, gy+gaugeR+12)
 		}
 	}

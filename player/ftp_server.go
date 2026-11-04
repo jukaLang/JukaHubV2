@@ -705,7 +705,28 @@ func ftpListLine(fi os.FileInfo, name string) string {
 		mode, fi.Size(), fi.ModTime().Format("Jan _2 15:04"), name)
 }
 
+// ftpIdleConn extends a data connection's deadline on every read and write, so
+// ftpIdleTimeout bounds a stall rather than the whole transfer. One deadline
+// set before the copy cut off every transfer that took longer — a multi-GB
+// file over handheld Wi-Fi does — and an overwriting upload had already
+// truncated the original by then.
+type ftpIdleConn struct{ net.Conn }
+
+func (c ftpIdleConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(ftpIdleTimeout))
+	return c.Conn.Read(p)
+}
+
+func (c ftpIdleConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(ftpIdleTimeout))
+	return c.Conn.Write(p)
+}
+
 func (s *ftpSession) retrieve(arg string) {
+	// A REST offset applies to this transfer only, whichever way it ends; read
+	// it now so an early refusal cannot leave it for the next command.
+	offset := s.rest
+	s.rest = 0
 	target, err := s.resolve(arg)
 	if err != nil {
 		s.reply("550 %s", err.Error())
@@ -729,8 +750,6 @@ func (s *ftpSession) retrieve(arg string) {
 	}
 	defer conn.Close()
 
-	offset := s.rest
-	s.rest = 0
 	if offset > 0 {
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			s.reply("550 Cannot seek")
@@ -738,8 +757,7 @@ func (s *ftpSession) retrieve(arg string) {
 		}
 	}
 	s.reply("150 Opening data connection (%d bytes)", max64(info.Size()-offset, 0))
-	_ = conn.SetWriteDeadline(time.Now().Add(ftpIdleTimeout))
-	if _, err := io.Copy(conn, f); err != nil {
+	if _, err := io.Copy(ftpIdleConn{conn}, f); err != nil {
 		log.Printf("[FTP] RETR %q failed: %v", path.Base(target), err)
 		s.reply("426 Transfer aborted")
 		return
@@ -748,6 +766,8 @@ func (s *ftpSession) retrieve(arg string) {
 }
 
 func (s *ftpSession) store(arg string) {
+	offset := s.rest
+	s.rest = 0
 	target, err := s.resolve(arg)
 	if err != nil {
 		s.reply("550 %s", err.Error())
@@ -768,16 +788,43 @@ func (s *ftpSession) store(arg string) {
 	}
 	defer conn.Close()
 
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	// A resume needs the file it resumes: without O_CREATE, a REST to a file
+	// that is not there fails here instead of leaving an empty one behind
+	// after the 554 below.
+	flags := os.O_WRONLY
+	if offset == 0 {
+		flags |= os.O_CREATE | os.O_TRUNC
+	}
+	f, err := os.OpenFile(target, flags, 0o644)
 	if err != nil {
 		s.reply("550 Cannot write file")
 		return
 	}
+	if offset > 0 {
+		// REST then STOR resumes an upload at the offset, as FEAT's "REST
+		// STREAM" promises. The offset used to be ignored: the client's tail
+		// was written at byte 0 over a truncated file, and the client
+		// reported a successful resume of a file now missing its head.
+		info, statErr := f.Stat()
+		if statErr != nil || offset > info.Size() {
+			f.Close()
+			s.reply("554 Restart position is past the end of the file")
+			return
+		}
+		if err := f.Truncate(offset); err != nil {
+			f.Close()
+			s.reply("550 Cannot resume the file")
+			return
+		}
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			f.Close()
+			s.reply("550 Cannot resume the file")
+			return
+		}
+	}
 	s.reply("150 Ok to send data")
-	_ = conn.SetReadDeadline(time.Now().Add(ftpIdleTimeout))
-	n, copyErr := io.Copy(f, conn)
+	n, copyErr := io.Copy(f, ftpIdleConn{conn})
 	closeErr := f.Close()
-	s.rest = 0
 	if copyErr != nil || closeErr != nil {
 		log.Printf("[FTP] STOR %q failed: %v", path.Base(target), copyErr)
 		s.reply("426 Transfer aborted")

@@ -94,6 +94,38 @@ func TestBuildTimeStampedUpdateDecision(t *testing.T) {
 	}
 }
 
+// The release a build was installed from is never offered as its own update.
+// Its stamp is the packaging time, earlier than GitHub's published_at, so the
+// clock comparison alone called a fresh install out of date.
+func TestOwnReleaseIsNotNewer(t *testing.T) {
+	patchStateMu.Lock()
+	prevTag, prevAt, prevAvail := patchState.InstalledReleaseTag, patchState.InstalledReleaseAt, patchState.AvailableUpdateTag
+	patchState.InstalledReleaseTag = "JukaHub-20261019120000"
+	patchState.InstalledReleaseAt = "2026-10-19T11:58:00Z" // packaged
+	patchStateMu.Unlock()
+	t.Cleanup(func() {
+		patchStateMu.Lock()
+		patchState.InstalledReleaseTag, patchState.InstalledReleaseAt, patchState.AvailableUpdateTag = prevTag, prevAt, prevAvail
+		patchStateMu.Unlock()
+	})
+
+	own := &githubRelease{TagName: "JukaHub-20261019120000", PublishedAt: "2026-10-19T12:06:00Z"}
+	if releaseIsNewerThanInstalled(own) {
+		t.Fatal("the installed release was offered as an update to itself")
+	}
+	next := &githubRelease{TagName: "JukaHub-20261020120000", PublishedAt: "2026-10-20T12:06:00Z"}
+	if !releaseIsNewerThanInstalled(next) {
+		t.Fatal("a later release must still be offered")
+	}
+
+	patchStateMu.Lock()
+	patchState.AvailableUpdateTag = own.TagName
+	patchStateMu.Unlock()
+	if !advertisedUpdateIsStale() {
+		t.Fatal("an advertisement for the installed release must read as stale")
+	}
+}
+
 // A stored advertisement outlives the update it offered: a card image copied
 // over the old install never ran the swap helper, and a handheld without Wi-Fi
 // never reaches the check that would clear it. The header chip used to keep
@@ -339,7 +371,7 @@ func TestAppUpdateKeepsInstalledTools(t *testing.T) {
 	for _, line := range strings.Split(string(data), sep) {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "start ") ||
-			trimmed == "sleep 2" || strings.HasPrefix(trimmed, "timeout /t 2") {
+			trimmed == "sleep 2" || strings.HasPrefix(trimmed, "ping -n 3 ") {
 			continue
 		}
 		line = strings.ReplaceAll(line, "nohup ", "true ")

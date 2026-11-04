@@ -147,9 +147,9 @@ var themePresets = map[string]ThemePreset{
 		ButtonColor:   "#2E4061",
 		LabelColor:    "#F6F8FC",
 		InputColor:    "#121A29",
-		Surface:       "#16202F",
-		SurfaceAlt:    "#1F2B3E",
-		SurfaceRaised: "#27364C",
+		Surface:       "#1B2029",
+		SurfaceAlt:    "#242B37",
+		SurfaceRaised: "#2D3644",
 		TextPrimary:   "#F6F8FC",
 		TextSecondary: "#B4C1D4",
 		TextTertiary:  "#8FA0BA",
@@ -916,6 +916,43 @@ func applyThemePreset(config *Config, presetName string, notify bool) {
 		}
 		showToast(message, ToastInfo())
 	}
+}
+
+// themePresetKeys are the Custom keys applyThemePreset writes.
+var themePresetKeys = []string{
+	"theme_preset", "theme_background", "theme_surface", "theme_surface_alt",
+	"theme_surface_raised", "theme_text_primary", "theme_text_secondary",
+	"theme_text_tertiary", "theme_border_subtle", "theme_border_default",
+	"theme_border_focus", "theme_success", "theme_warning", "theme_danger",
+	"theme_info", "theme_overlay",
+}
+
+// clearThemePreset returns a config to "no preset chosen" — the state the
+// shipped configs start in — after a preset was applied on the user's behalf.
+// The battery saver applies OLED and used to put back only a preset the user
+// had picked, so on a default setup OLED stayed after the battery recovered.
+func clearThemePreset(config *Config) {
+	if config == nil {
+		return
+	}
+	if config.Variables.Custom != nil {
+		for _, k := range themePresetKeys {
+			delete(config.Variables.Custom, k)
+		}
+		for _, name := range themeColorVariables {
+			delete(config.Variables.Custom, name)
+		}
+	}
+	config.Variables.ButtonColor = RGB{}
+	config.Variables.LabelColor = RGB{}
+	config.Variables.InputColor = RGB{}
+	ensureThemeColors(config)
+	// The built-in palette is the hub preset's (design.go).
+	ApplyThemeColors(GetThemePreset("hub"))
+	ClearTextCache()
+	ClearShapeCache()
+	ClearIconAtlas()
+	clearHomeTextCache()
 }
 
 // themePresetOrder is the canonical, stable display order for the theme

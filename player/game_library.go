@@ -220,9 +220,37 @@ func gameLauncherCandidates(system string) []string {
 	return out
 }
 
+// launcherNameGroups splits a catalog name at brackets and separators and
+// normalises each part: "Game Boy (Gambatte)" is "gameboy" and "gambatte".
+func launcherNameGroups(name string) []string {
+	parts := strings.FieldsFunc(name, func(r rune) bool {
+		return strings.ContainsRune("()[]{}-–—:/|,+", r)
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if n := normaliseLauncherName(p); n != "" {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// launcherNameTokens is every word of a catalog name, normalised.
+func launcherNameTokens(name string) []string {
+	words := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'))
+	})
+	return words
+}
+
 // findGameLauncher returns the launcher path for a system from the emulator
-// catalog. Exact alias matches win; a row whose name contains the alias is the
-// fallback so "RetroArch GBA" or "GBA (mGBA)" still resolve.
+// catalog. An exact alias match wins; then a bracketed part of the name ("GBA
+// (mGBA)", "Game Boy (Gambatte)"), then a whole word ("RetroArch GBA").
+//
+// The fallback used to be a plain substring test on the squashed name, and the
+// aliases are short: "nes" is inside "snes", "gb" inside "gba", "ps" inside
+// "psp", and "gameboy" inside "Game Boy Color" — so NES games went to the SNES
+// core and PlayStation games to PPSSPP whenever the exact name was missing.
 func findGameLauncher(system string, entries []emuEntry) string {
 	candidates := gameLauncherCandidates(system)
 	if len(candidates) == 0 {
@@ -231,17 +259,25 @@ func findGameLauncher(system string, entries []emuEntry) string {
 	usable := func(e emuEntry) bool {
 		return e.Status == emuAvailable && strings.TrimSpace(e.Launch) != ""
 	}
-	for _, want := range candidates {
-		for _, e := range entries {
-			if usable(e) && normaliseLauncherName(e.Name) == want {
-				return e.Launch
+	contains := func(list []string, want string) bool {
+		for _, v := range list {
+			if v == want {
+				return true
 			}
 		}
+		return false
 	}
-	for _, want := range candidates {
-		for _, e := range entries {
-			if usable(e) && strings.Contains(normaliseLauncherName(e.Name), want) {
-				return e.Launch
+	passes := []func(e emuEntry, want string) bool{
+		func(e emuEntry, want string) bool { return normaliseLauncherName(e.Name) == want },
+		func(e emuEntry, want string) bool { return contains(launcherNameGroups(e.Name), want) },
+		func(e emuEntry, want string) bool { return contains(launcherNameTokens(e.Name), want) },
+	}
+	for _, match := range passes {
+		for _, want := range candidates {
+			for _, e := range entries {
+				if usable(e) && match(e, want) {
+					return e.Launch
+				}
 			}
 		}
 	}

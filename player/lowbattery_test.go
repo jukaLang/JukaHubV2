@@ -85,6 +85,8 @@ func TestRetroArchCmdline(t *testing.T) {
 		{"plain binary", "/usr/bin/retroarch\x00--config\x00retroarch.cfg\x00", true},
 		{"trimui path", "/mnt/SDCARD/RetroArch/retroarch\x00", true},
 		{"windows binary", `C:\RetroArch\retroarch.exe` + "\x00", true},
+		{"trimui stock build", "/mnt/SDCARD/RetroArch/ra64.trimui\x00-v\x00-L\x00core.so\x00", true},
+		{"rom named like the trimui build", "/usr/bin/ppsspp\x00ra64.trimui.iso\x00", false},
 		{"rom named like retroarch", "/usr/bin/ppsspp\x00retroarch-demo.iso\x00", false},
 		{"empty", "", false},
 	}

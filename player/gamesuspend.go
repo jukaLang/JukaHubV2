@@ -48,6 +48,9 @@ var screenChildren struct {
 // first frame.
 func noteGameChildStarted(cmd *exec.Cmd) {
 	runningGameChildren.Add(1)
+	// The library's video snap would otherwise keep decoding under the game:
+	// the parked main loop no longer runs the code that stops it.
+	snapPreviewHalt()
 	if cmd == nil {
 		return
 	}

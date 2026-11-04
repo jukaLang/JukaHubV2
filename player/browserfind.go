@@ -200,6 +200,11 @@ func browserFindApply(config *Config, elem Element) {
 		browserFindClear()
 		return
 	}
+	// Whether this repeats the search already running is decided from the
+	// state before it is overwritten. Checked after, it was always true: every
+	// new search took the "next match" branch and opened on the second hit.
+	repeat := browserFind.active && strings.EqualFold(strings.TrimSpace(browserFind.query), query)
+	prevIndex := browserFind.index
 	browserFind.query = query
 	browserFind.active = true
 	browserFind.index = 0
@@ -217,9 +222,9 @@ func browserFindApply(config *Config, elem Element) {
 	// controller has no N key, and pressing Find a second time is the press a
 	// user reaches for when they want to keep stepping. This is the only way
 	// a pad can walk the matches, so it has to do the useful thing.
-	if browserFind.active && strings.EqualFold(strings.TrimSpace(browserFind.query), query) {
+	if repeat {
 		if rows := browserFindMatches(elem, layout); len(rows) > 0 {
-			browserFind.index = (browserFind.index + 1) % len(rows)
+			browserFind.index = (prevIndex + 1) % len(rows)
 			browserFindReveal(elem, layout, rows[browserFind.index])
 			PlayNavSound()
 			return

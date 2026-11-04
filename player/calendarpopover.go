@@ -156,8 +156,8 @@ func renderCalendarCard(renderer *sdl.Renderer, config *Config, cx, cy int32) {
 	cardW, cardH := calendarCardSize()
 	calendarPrevRect, calendarNextRect, calendarTitleRect = sdl.Rect{}, sdl.Rect{}, sdl.Rect{}
 
-	fillRoundedRect(renderer, cx, cy, cardW, cardH, 14, sdl.Color{R: 12, G: 16, B: 28, A: 240})
-	strokeRoundedRect(renderer, cx, cy, cardW, cardH, 14, 1, ColorBorder)
+	// The shared overlay sheet: Home's glass, made opaque.
+	drawOverlayCard(renderer, sdl.Rect{X: cx, Y: cy, W: cardW, H: cardH})
 
 	medium, _ := getCachedFont(config, "medium")
 	small, _ := getCachedFont(config, "small")

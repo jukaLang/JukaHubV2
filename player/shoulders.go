@@ -185,6 +185,26 @@ func handleChromeShoulder(s padShoulder, config *Config) bool {
 	return false
 }
 
+// triggerOwnedByOverlay reports whether something drawn above the scene owns
+// the pad while having no trigger binding of its own. A pad button reaches the
+// scene only after the dock, the launch-failure card, the tour and the overlay
+// router (handleControllerEvent) have passed on it; the triggers arrive as axis
+// motion and went straight to handleShoulderPress, so L2/R2 under Quick
+// Settings, the dock, the podcast or LED panel, the browser's bookmark and
+// cookie pickers or the controls legend skipped the video or paged the list
+// hidden behind them. Those overlays now swallow the trigger instead.
+func triggerOwnedByOverlay() bool {
+	switch {
+	case ambientIsActive(), launchFailure.open, videoPrepareActive(),
+		onboarding.active && !onboardingCoveredByOverlay():
+		return true
+	case qrZoom.open, qs.open, podPanel.open, ledPanel.open, controlsLegend.open,
+		browserCookiePanel.open, browserBookmarkPanel.open, homeCalendarOpen:
+		return true
+	}
+	return false
+}
+
 // modalPanelBlocksShoulders reports whether a panel that owns its own list is
 // open. Those panels already bind L1/R1 where it makes sense; the triggers are
 // consumed there instead of leaking into the scene underneath.

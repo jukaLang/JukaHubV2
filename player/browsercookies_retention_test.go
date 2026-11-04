@@ -173,10 +173,17 @@ func TestApplyCookieRetentionPrunesImmediately(t *testing.T) {
 	})
 	jar.mu.Unlock()
 
+	// The two-cookie session is on the card first, so the prune's save has a
+	// previous version to keep — and must not keep it.
+	jar.save()
+
 	config := retentionConfig(0)
 	pruned := applyCookieRetention(config, 7)
 	if pruned != 1 {
 		t.Fatalf("pruned %d cookies, want 1", pruned)
+	}
+	if _, err := os.Stat(path + ".bak"); !os.IsNotExist(err) {
+		t.Fatalf("the pruned session survives as %s.bak (%v)", path, err)
 	}
 	if got := browserCookiesCount(); got != 1 {
 		t.Fatalf("jar holds %d cookies after the prune, want 1", got)

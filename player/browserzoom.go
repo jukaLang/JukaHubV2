@@ -120,8 +120,10 @@ func browserZoomApplyChange(config *Config, elem Element) {
 	PlayNavSound()
 	// Persisted so the size a reader chose is waiting for them next launch;
 	// debounced because a D-pad held on the zoom key would otherwise write the
-	// config once per step to the SD card.
-	saveUserConfigDebounced(userConfigFromVariables(config))
+	// config once per step to the SD card. browserZoomSave stores the step in
+	// the config first — saving without that wrote the config as it was, and
+	// every launch came back at 100%.
+	browserZoomSave(config)
 }
 
 // browserZoomNearestStep maps an arbitrary stored scale onto the closest real

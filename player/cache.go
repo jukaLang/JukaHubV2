@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"log"
 	"path/filepath"
 	"sync"
 	"time"
@@ -149,6 +150,61 @@ func cacheDelete(db *bolt.DB, key string) error {
 			return nil
 		}
 		return b.Delete([]byte(key))
+	})
+}
+
+// cacheExpiredGrace is how long past its TTL an entry is still kept. The media
+// grids paint a stale list and refresh behind it (cacheGetStale), so an entry
+// is not dropped the moment it expires, only once nothing would show it.
+const cacheExpiredGrace = 14 * 24 * time.Hour
+
+// cacheSweepExpired deletes the entries more than grace past their expiry, and
+// unreadable ones, and reports how many went. Nothing removed them before:
+// every thumbnail and feed answer stayed in jukahub.cache on the card for good.
+func cacheSweepExpired(db *bolt.DB, grace time.Duration) (int, error) {
+	cutoff := time.Now().Add(-grace).Unix()
+	removed := 0
+	err := db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(cacheBucket))
+		if b == nil {
+			return nil
+		}
+		var stale [][]byte
+		if err := b.ForEach(func(k, v []byte) error {
+			// Only the stamp is decoded; the value (often a whole thumbnail)
+			// is skipped over, not copied.
+			var meta struct{ ExpiresAt int64 }
+			if json.Unmarshal(v, &meta) != nil || meta.ExpiresAt < cutoff {
+				stale = append(stale, append([]byte(nil), k...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, k := range stale {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+		removed = len(stale)
+		return nil
+	})
+	return removed, err
+}
+
+// sweepSharedCacheLater runs the expiry sweep on the shared cache a while after
+// boot, off the startup path and away from the first thumbnail reads.
+func sweepSharedCacheLater(delay time.Duration) {
+	time.AfterFunc(delay, func() {
+		db, err := openSharedCache("jukahub.cache")
+		if err != nil {
+			return
+		}
+		if n, err := cacheSweepExpired(db, cacheExpiredGrace); err != nil {
+			log.Printf("[cache] expiry sweep failed: %v", err)
+		} else if n > 0 {
+			log.Printf("[cache] expiry sweep removed %d entries", n)
+		}
 	})
 }
 

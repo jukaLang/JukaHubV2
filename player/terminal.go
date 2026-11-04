@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -35,6 +40,158 @@ type terminalState struct {
 	started time.Time
 	history []string
 	histIdx int // -1 = editing a fresh line, otherwise history index
+	// cwd is the terminal's own working directory. `cd` used to call
+	// os.Chdir, which moved the whole app: every relative path JukaHub writes
+	// (jukauser.json, alarms, notes, history) then landed in whatever folder
+	// the user had wandered into, and the settings seemed to vanish.
+	cwd string
+	// job is the external command running in the background, if any.
+	job *termJob
+}
+
+const (
+	// termCommandTimeout bounds an external command: `ping` or `top` used to
+	// run on the event thread until they ended on their own, freezing the
+	// whole UI with them. Ctrl+C (or B on the pad) stops one sooner.
+	termCommandTimeout = 60 * time.Second
+	// termJobMaxPending bounds the output a command may queue between frames.
+	termJobMaxPending = 2000
+	// termCatMaxBytes bounds `cat`: os.ReadFile on /dev/zero or a disc image
+	// read until the handheld ran out of memory.
+	termCatMaxBytes = 256 << 10
+)
+
+// termJob is one external command running off the event thread. Its output is
+// collected here and moved into the terminal by termDrainJob on the render
+// thread; the writer never blocks, so a command cannot stall on a full pipe.
+type termJob struct {
+	mu      sync.Mutex
+	pending []termLine
+	partial string
+	dropped int
+	done    bool
+	err     error
+	cancel  context.CancelFunc
+}
+
+func (j *termJob) Write(p []byte) (int, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	text := j.partial + string(p)
+	parts := strings.Split(text, "\n")
+	j.partial = parts[len(parts)-1]
+	if len(j.partial) > 4096 {
+		parts = append(parts, "")
+		j.partial = ""
+	}
+	for _, line := range parts[:len(parts)-1] {
+		if len(j.pending) >= termJobMaxPending {
+			j.dropped++
+			continue
+		}
+		j.pending = append(j.pending, termLine{text: strings.TrimRight(line, "\r")})
+	}
+	return len(p), nil
+}
+
+// termDrainJob moves a running command's output into the terminal and reports
+// its end. Render thread.
+func termDrainJob() {
+	j := term.job
+	if j == nil {
+		return
+	}
+	j.mu.Lock()
+	lines := j.pending
+	j.pending = nil
+	dropped := j.dropped
+	j.dropped = 0
+	done, err := j.done, j.err
+	partial := ""
+	if done {
+		partial = j.partial
+		j.partial = ""
+	}
+	j.mu.Unlock()
+	for _, l := range lines {
+		termPushLine(l.text, false)
+	}
+	if dropped > 0 {
+		termPushLine(fmt.Sprintf("... %d line(s) of output skipped", dropped), true)
+	}
+	if !done {
+		return
+	}
+	if strings.TrimSpace(partial) != "" {
+		termPushLine(strings.TrimRight(partial, "\r"), false)
+	}
+	if err != nil {
+		termPushLine(fmt.Sprintf("Error: %v", err), true)
+	}
+	term.job = nil
+}
+
+// termStopJob is Ctrl+C: it ends the running command, if there is one.
+func termStopJob() bool {
+	if term.job == nil {
+		return false
+	}
+	term.job.cancel()
+	termPushLine("^C", true)
+	return true
+}
+
+// termStartJob runs an external command in term.cwd without blocking the UI.
+func termStartJob(binPath string, args []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), termCommandTimeout)
+	cmd := exec.CommandContext(ctx, binPath, args...)
+	cmd.Dir = term.cwd
+	job := &termJob{cancel: cancel}
+	cmd.Stdout = job
+	cmd.Stderr = job
+	// Its own process group, killed whole on timeout or Ctrl+C, and a bounded
+	// wait for output pipes a stray grandchild still holds.
+	screenChildGroupConfigure(cmd)
+	cmd.Cancel = func() error { return screenChildKill(cmd) }
+	cmd.WaitDelay = 2 * time.Second
+	term.job = job
+	go func() {
+		defer cancel()
+		err := cmd.Run()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = fmt.Errorf("stopped after %s", termCommandTimeout)
+		} else if errors.Is(ctx.Err(), context.Canceled) {
+			err = nil // Ctrl+C already said so
+		}
+		job.mu.Lock()
+		job.done, job.err = true, err
+		job.mu.Unlock()
+	}()
+}
+
+// termPath resolves a path the user typed against the terminal's directory.
+func termPath(p string) (string, error) {
+	clean, err := cleanUserPath(p)
+	if err != nil {
+		return "", err
+	}
+	if clean == "~" || strings.HasPrefix(clean, "~"+string(filepath.Separator)) {
+		if home, herr := os.UserHomeDir(); herr == nil {
+			clean = filepath.Join(home, strings.TrimPrefix(clean, "~"))
+		}
+	}
+	if !filepath.IsAbs(clean) {
+		clean = filepath.Join(term.cwd, clean)
+	}
+	return filepath.Clean(clean), nil
+}
+
+// termMaxScroll is how far the output can scroll back.
+func termMaxScroll() int {
+	if m := len(term.lines) - 12; m > 0 {
+		return m
+	}
+	return 0
 }
 
 var term terminalState
@@ -53,6 +210,9 @@ func termInit() {
 	term.cursor = 0
 	term.scrollY = 0
 	term.histIdx = -1
+	if term.cwd == "" {
+		term.cwd, _ = os.Getwd()
+	}
 	// Keep the session across visits: leaving the terminal and coming back
 	// should not wipe what the user was reading.
 	// Commands survive a restart: the history file is small, read once, and
@@ -83,10 +243,7 @@ func termPushLine(text string, isErr bool) {
 // termScroll moves the output viewport by delta lines (positive = older
 // output), clamped to the available history.
 func termScroll(delta int) {
-	maxScroll := len(term.lines) - 12
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := termMaxScroll()
 	term.scrollY += delta
 	if term.scrollY < 0 {
 		term.scrollY = 0
@@ -152,7 +309,7 @@ func termExecute(input string) {
 		termPushLine("  exit        Return to home", false)
 
 	case "ls", "dir":
-		entries, err := os.ReadDir(".")
+		entries, err := os.ReadDir(term.cwd)
 		if err != nil {
 			termPushLine(fmt.Sprintf("Error: %v", err), true)
 			return
@@ -168,25 +325,36 @@ func termExecute(input string) {
 		}
 
 	case "pwd":
-		dir, _ := os.Getwd()
-		termPushLine(dir, false)
+		termPushLine(term.cwd, false)
 
 	case "cd":
+		target := ""
 		if len(args) == 0 {
-			home, _ := os.UserHomeDir()
-			if err := os.Chdir(home); err != nil {
+			home, err := os.UserHomeDir()
+			if err != nil {
 				termPushLine(fmt.Sprintf("Error: %v", err), true)
+				return
 			}
-			return
+			target = home
+		} else {
+			dir, pathErr := termPath(args[0])
+			if pathErr != nil {
+				termPushLine("Error: "+pathErr.Error(), true)
+				return
+			}
+			target = dir
 		}
-		dir, pathErr := cleanUserPath(args[0])
-		if pathErr != nil {
-			termPushLine("Error: "+pathErr.Error(), true)
-			return
-		}
-		if err := os.Chdir(dir); err != nil {
+		// The terminal's directory only; the app's own stays where it is.
+		info, err := os.Stat(target)
+		if err != nil {
 			termPushLine(fmt.Sprintf("Error: %v", err), true)
+			return
 		}
+		if !info.IsDir() {
+			termPushLine("Error: not a directory: "+target, true)
+			return
+		}
+		term.cwd = target
 
 	case "cat":
 		if len(args) == 0 {
@@ -195,18 +363,31 @@ func termExecute(input string) {
 		}
 		// The terminal is an intentional user shell: `cat` reads the path the
 		// user typed. Reject malformed paths (empty/NUL) before the OS call.
-		file, pathErr := cleanUserPath(args[0])
+		file, pathErr := termPath(args[0])
 		if pathErr != nil {
 			termPushLine("Error: "+pathErr.Error(), true)
 			return
 		}
-		data, err := os.ReadFile(file)
+		f, err := os.Open(file)
 		if err != nil {
 			termPushLine(fmt.Sprintf("Error: %v", err), true)
 			return
 		}
+		data, err := io.ReadAll(io.LimitReader(f, termCatMaxBytes+1))
+		f.Close()
+		if err != nil {
+			termPushLine(fmt.Sprintf("Error: %v", err), true)
+			return
+		}
+		truncated := len(data) > termCatMaxBytes
+		if truncated {
+			data = data[:termCatMaxBytes]
+		}
 		for _, line := range strings.Split(string(data), "\n") {
 			termPushLine(line, false)
+		}
+		if truncated {
+			termPushLine(fmt.Sprintf("... stopped after %d KB", termCatMaxBytes>>10), true)
 		}
 
 	case "echo":
@@ -292,23 +473,30 @@ func termExecute(input string) {
 
 	default:
 		// Try running as external command.
-		binPath, err := exec.LookPath(command)
+		if term.job != nil {
+			termPushLine("A command is still running — Ctrl+C (or B) stops it.", true)
+			return
+		}
+		// A name with a slash (./run.sh, bin/tool) is a path, and paths are
+		// the terminal's: resolved against the directory `cd` chose, not the
+		// app's, which LookPath would otherwise check (and the run would then
+		// use a different file than the one checked).
+		lookup := command
+		if strings.ContainsAny(command, "/\\") {
+			resolved, perr := termPath(command)
+			if perr != nil {
+				termPushLine("Error: "+perr.Error(), true)
+				return
+			}
+			lookup = resolved
+		}
+		binPath, err := exec.LookPath(lookup)
 		if err != nil {
 			termPushLine(fmt.Sprintf("Command not found: %s", command), true)
 			return
 		}
 		termPushLine(fmt.Sprintf("$ %s %s", command, strings.Join(args, " ")), false)
-		cmdExec := exec.Command(binPath, args...)
-		cmdExec.Dir, _ = os.Getwd()
-		out, err := cmdExec.CombinedOutput()
-		if len(out) > 0 {
-			for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-				termPushLine(line, false)
-			}
-		}
-		if err != nil {
-			termPushLine(fmt.Sprintf("Error: %v", err), true)
-		}
+		termStartJob(binPath, args)
 	}
 }
 
@@ -423,6 +611,10 @@ func handleTermInput(e *sdl.KeyboardEvent, config *Config) {
 			term.lines = term.lines[:0]
 			term.scrollY = 0
 		}
+	case sdl.K_c:
+		if e.Keysym.Mod&sdl.KMOD_CTRL != 0 {
+			termStopJob()
+		}
 	case sdl.K_ESCAPE:
 		goBackScene(config)
 	}
@@ -473,8 +665,8 @@ func handleTermWheel(dy int32) bool {
 // ── Rendering ────────────────────────────────────────────────────────────────
 
 func renderTerminal(renderer *sdl.Renderer, config *Config) {
-	renderer.SetDrawColor(5, 7, 12, 255)
-	renderer.Clear()
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
@@ -498,7 +690,9 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	renderStatusBar(renderer, config)
 	// The working directory is the terminal's own read-out, so it sits under
 	// the bar as a quiet line rather than taking the title slot.
-	cwd, _ := os.Getwd()
+	// A background command's output joins the scrollback before it is drawn.
+	termDrainJob()
+	cwd := term.cwd
 	cwdLineH := int32(0)
 	if cwd != "" {
 		cwdFont := headerCaptionFont(config)
@@ -556,12 +750,14 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 	y := outputTop
 	for i := startLine; i < endLine; i++ {
 		line := term.lines[i]
-		col := sdl.Color{R: 168, G: 184, B: 208, A: 235}
+		// Theme inks, not fixed light colours: the terminal stands on the app
+		// backdrop now, which is light on a light preset.
+		col := WithAlpha(ColorTextSecondary(), 235)
 		if line.isErr {
-			col = sdl.Color{R: 235, G: 115, B: 120, A: 235}
+			col = WithAlpha(DangerInk(), 235)
 		}
 		if strings.HasPrefix(line.text, termPrompt) {
-			col = sdl.Color{R: 120, G: 214, B: 160, A: 240}
+			col = WithAlpha(SuccessInk(), 240)
 		}
 		displayLine := fitTextWidth(renderer, config, font, line.text, contentW-20)
 		renderText(renderer, config, font, displayLine, col, padX, y)
@@ -613,7 +809,7 @@ func renderTerminal(renderer *sdl.Renderer, config *Config) {
 		inputStart = len(term.input) - maxVisible
 	}
 	visible := term.input[inputStart:]
-	renderText(renderer, config, font, visible, sdl.Color{R: 225, G: 235, B: 250, A: 255}, inputX, textY)
+	renderText(renderer, config, font, visible, ColorTextPrimary(), inputX, textY)
 
 	cursorRel := term.cursor - inputStart
 	if cursorRel < 0 {
@@ -655,10 +851,18 @@ func ctrlTerminal(e *sdl.ControllerButtonEvent, config *Config) bool {
 		// cannot type a command at all.
 		vkOpenTerminal()
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
-		// goBackScene plays the back sound itself.
+		// B stops a running command first (the pad's Ctrl+C); with nothing
+		// running it leaves. goBackScene plays the back sound itself.
+		if e.Button == sdl.CONTROLLER_BUTTON_B && termStopJob() {
+			PlayBackSound()
+			break
+		}
 		goBackScene(config)
 	case sdl.CONTROLLER_BUTTON_DPAD_UP:
-		if term.scrollY <= 0 {
+		// scrollY counts lines back from the newest, so "nothing older" is
+		// the maximum, not zero: the old test released every Up at the
+		// bottom of the output, and the pad could never scroll back at all.
+		if term.scrollY >= termMaxScroll() {
 			// The output is already at its oldest line: release the press so
 			// Up steps onto the top bar rather than scrolling into nothing.
 			return false

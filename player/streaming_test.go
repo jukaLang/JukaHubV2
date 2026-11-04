@@ -732,6 +732,9 @@ func TestLoadingCardShowsPreparingVideo(t *testing.T) {
 	seq, _ := beginVideoPrepare("A clip title that is long enough to be ellipsized inside the card")
 	defer finishVideoPrepare(seq)
 
+	// The card is placed from the screen size; pin it to the probe so the
+	// status band measured below is inside the captured frame.
+	withScreen(t, probeW, probeH)
 	r.SetDrawColor(f.bg.R, f.bg.G, f.bg.B, 255)
 	r.Clear()
 	renderLoadingCard(r, &Config{})
@@ -739,10 +742,14 @@ func TestLoadingCardShowsPreparingVideo(t *testing.T) {
 		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
-	// The status line and the cancel hint are the bright grey text tones; the
-	// card itself is much darker.
-	statusText := sdl.Color{R: 226, G: 234, B: 246}
-	if got := f.countColor(statusText, 0, 0, probeW-1, probeH-1); got < 20 {
+	// The status line is the primary text tone, in its own band of the card
+	// (the band keeps other primary-ink text out of the count); the card itself
+	// is much darker.
+	cardW, cardH := loadingCardSize()
+	cardX := (screenWidth - cardW) / 2
+	cardY := (screenHeight - cardH) / 2
+	statusText := ColorTextPrimary()
+	if got := f.countColor(statusText, cardX, cardY+104, cardX+cardW-1, cardY+156); got < 20 {
 		t.Errorf("status line painted %d pixels, want the video's title", got)
 	}
 	// The way out is a B button badge and its label, drawn in the secondary

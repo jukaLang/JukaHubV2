@@ -124,17 +124,23 @@ var (
 	// one flat field). The ramp used to move by ~1.1:1 per step, so every card
 	// and every button read as the same dark blue as the page behind it.
 	// Ambient glow shapes are still layered at low alpha so the steps hold.
+	//
+	// The hue is the Home screen's: white glass over the navy backdrop reads as
+	// a neutral blue-grey, so the opaque surfaces sit in that family instead of
+	// the saturated slate they used to be. Each step keeps its old luminance, so
+	// the contrast ratios above (and every text ink's contrast on them) are
+	// unchanged to the second decimal.
 	ColorBackgroundTop    = sdl.Color{R: 7, G: 11, B: 18, A: 255} // #070B12
 	ColorBackgroundBottom = sdl.Color{R: 7, G: 11, B: 18, A: 255}
 	ColorBackground       = ColorBackgroundBottom                   // default solid background
-	ColorTopBar           = sdl.Color{R: 22, G: 32, B: 47, A: 255}  // #16202F header band
-	ColorPanel            = sdl.Color{R: 22, G: 32, B: 47, A: 255}  // #16202F surface
-	ColorPanelRaised      = sdl.Color{R: 39, G: 54, B: 76, A: 255}  // #27364C raised row/card
-	ColorCard             = sdl.Color{R: 31, G: 43, B: 62, A: 255}  // #1F2B3E resting card
-	ColorCardFocus        = sdl.Color{R: 56, G: 77, B: 110, A: 255} // #384D6E focused card
-	ColorCardHover        = sdl.Color{R: 46, G: 64, B: 89, A: 255}  // #2E4059 hover state
+	ColorTopBar           = sdl.Color{R: 27, G: 32, B: 41, A: 255}  // #1B2029 header band
+	ColorPanel            = sdl.Color{R: 27, G: 32, B: 41, A: 255}  // #1B2029 surface
+	ColorPanelRaised      = sdl.Color{R: 45, G: 54, B: 68, A: 255}  // #2D3644 raised row/card
+	ColorCard             = sdl.Color{R: 36, G: 43, B: 55, A: 255}  // #242B37 resting card
+	ColorCardFocus        = sdl.Color{R: 64, G: 77, B: 98, A: 255}  // #404D62 focused card
+	ColorCardHover        = sdl.Color{R: 54, G: 64, B: 82, A: 255}  // #364052 hover state
 	ColorBorder           = sdl.Color{R: 58, G: 75, B: 107, A: 255} // #3A4B6B resting border
-	ColorFooter           = sdl.Color{R: 22, G: 32, B: 47, A: 255}
+	ColorFooter           = sdl.Color{R: 27, G: 32, B: 41, A: 255}
 
 	// Borders - subtle and refined. The white alphas rose with the surfaces
 	// above: at the old values a hairline over #16202F disappeared, so resting

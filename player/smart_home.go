@@ -30,6 +30,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
@@ -758,6 +759,11 @@ func piholeV6Summary(s smartHomeSettings) (piholeSnapshot, error) {
 			return piholeSnapshot{}, fmt.Errorf("Pi-hole did not return a session")
 		}
 		header.Set("X-FTL-SID", session.Session.SID)
+		// The session is logged out once the summary is read. Pi-hole v6
+		// keeps a few (16 by default) for half an hour, and a new one per
+		// refresh soon locked JukaHub — and the user's own browser — out
+		// with "API seats exceeded".
+		defer piholeLogout(authURL, session.Session.SID)
 	}
 	req, err := http.NewRequest(http.MethodGet, summaryURL, nil)
 	if err != nil {
@@ -776,6 +782,20 @@ func piholeV6Summary(s smartHomeSettings) (piholeSnapshot, error) {
 		return piholeSnapshot{}, fmt.Errorf("Pi-hole answered %d", resp.StatusCode)
 	}
 	return parsePiholeV6(raw)
+}
+
+// piholeLogout ends a v6 API session (DELETE /api/auth). Best effort: a session
+// that cannot be ended expires on Pi-hole's own clock.
+func piholeLogout(authURL, sid string) {
+	req, err := http.NewRequest(http.MethodDelete, authURL, nil)
+	if err != nil {
+		return
+	}
+	req.Header.Set("X-FTL-SID", sid)
+	if resp, err := smartHomeHTTP.Do(req); err == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+	}
 }
 
 // piholeV5Summary reads the legacy endpoint, which carries the token in the URL.
@@ -1227,28 +1247,22 @@ func smartHomeConfigured(s smartHomeSettings) bool {
 	return s.hasHA() || s.hasPiHole() || s.hasMQTT() || s.TSEnabled
 }
 
-// runCommandTimeout runs a command with a hard deadline, returning combined
-// output. exec.CommandContext handles the kill, so a hung `tailscale` cannot
-// pin the refresh goroutine forever.
+// runCommandTimeout runs a command with a hard deadline and returns its
+// standard output (the callers parse it: `tailscale status --json`).
+// exec.CommandContext does the kill, so a hung `tailscale` cannot pin the
+// refresh goroutine. It used to Start the command and then call Output on it,
+// which fails at once with "exec: already started": Tailscale always read
+// "status failed", WireGuard "wg failed", the toggle always ran `up`, and every
+// probe left an unreaped process behind.
 func runCommandTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
-	done := make(chan struct{})
-	var out []byte
-	var err error
-	cmd := exec.Command(name, args...)
-	if startErr := cmd.Start(); startErr != nil {
-		return nil, startErr
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	// A child that keeps the pipe open cannot hold Wait past the kill.
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return out, fmt.Errorf("timed out")
 	}
-	go func() {
-		out, err = cmd.Output()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return out, err
-	case <-time.After(timeout):
-		if cmd.Process != nil {
-			cmd.Process.Kill()
-		}
-		return nil, fmt.Errorf("timed out")
-	}
+	return out, err
 }

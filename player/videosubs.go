@@ -176,14 +176,20 @@ func loadSidecarSubtitles(videoPath string) ([]subtitleCue, string) {
 
 // extractEmbeddedSubtitles pulls the first subtitle track out of a local file
 // with ffmpeg. Containers without a text track simply return none.
-func extractEmbeddedSubtitles(ffmpegPath, videoPath string) ([]subtitleCue, string) {
+//
+// It reads the whole file, so it is tied to ctx (the playback session): a
+// video left before the scan finished no longer keeps its ffmpeg running.
+func extractEmbeddedSubtitles(ctx context.Context, ffmpegPath, videoPath string) ([]subtitleCue, string) {
 	if ffmpegPath == "" {
 		return nil, ""
 	}
 	if st, err := os.Stat(videoPath); err != nil || st.IsDir() {
 		return nil, ""
 	}
-	cmd := exec.Command(ffmpegPath, "-v", "error", "-i", videoPath, "-map", "0:s:0", "-f", "srt", "-")
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cmd := exec.CommandContext(ctx, ffmpegPath, "-v", "error", "-i", videoPath, "-map", "0:s:0", "-f", "srt", "-")
 	out, err := cmd.Output()
 	if err != nil || len(out) == 0 {
 		return nil, ""
@@ -210,7 +216,7 @@ func prepareVideoSubtitles(sess *playbackSession, config *Config, source string)
 		if config != nil {
 			ffmpegPath = getToolPath("ffmpeg", config)
 		}
-		cues, label = extractEmbeddedSubtitles(ffmpegPath, source)
+		cues, label = extractEmbeddedSubtitles(sess.ctx, ffmpegPath, source)
 	}
 	videoSubs.mu.Lock()
 	if videoSubs.owner == sess {

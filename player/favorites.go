@@ -855,13 +855,14 @@ func favoritesScrollShift(lines []favoritesLine, focus int, list sdl.Rect) int32
 // --- Favorites rendering ---
 
 func drawFavoritesTab(renderer *sdl.Renderer, config *Config, font *ttf.Font, rect sdl.Rect, label string, active bool) {
+	// Home's segmented-pill language (the PS4/PS5 group): the active tab is
+	// accent-tinted glass with an accent edge, the others quiet glass.
 	if active {
-		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(accentColor, 60))
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 2, accentColor)
-		fillRoundedRect(renderer, rect.X+12, rect.Y+rect.H-5, rect.W-24, 3, 2, accentColor)
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, WithAlpha(glassAccent(), 40))
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 2, glassAccent())
 	} else {
-		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, ColorIconSurface)
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, ColorBorder)
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, glassChipFill())
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, glassEdge())
 	}
 	color := ColorTextSecondary()
 	if active {
@@ -943,18 +944,9 @@ func favoriteProgress(it FavoriteItem) (position, duration float64) {
 // video and a drawn tile for a stream, so a row is recognisable before its
 // title is read.
 func drawFavoriteRow(renderer *sdl.Renderer, config *Config, rect sdl.Rect, it FavoriteItem, focused bool, titleFont, metaFont *ttf.Font) {
-	fill := ColorCard
-	if focused {
-		fill = ColorCardFocus
-	}
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, fill)
-	if focused {
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, 2, ColorAccent)
-		renderer.SetDrawColor(ColorAccent.R, ColorAccent.G, ColorAccent.B, 230)
-		renderer.FillRect(&sdl.Rect{X: rect.X + 1, Y: rect.Y + 10, W: 3, H: rect.H - 20})
-	} else {
-		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 12, 1, ColorBorder)
-	}
+	// The shared list row: Home's glass, and the accent wash and ring when
+	// selected.
+	UIListRow(renderer, rect, 12, focused, false)
 
 	const thumbW, thumbH = int32(96), int32(54)
 	thumb := sdl.Rect{X: rect.X + 9, Y: rect.Y + (rect.H-thumbH)/2, W: thumbW, H: thumbH}

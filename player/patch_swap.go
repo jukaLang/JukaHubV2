@@ -291,7 +291,16 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 	}
 
 	// Run the helper detached: the running process exits as part of the swap.
-	cmd := P().CommandContext(ctx, script)
+	// It must outlive this operation. Started on ctx it was killed the moment
+	// the operation returned — both callers cancel their context right then,
+	// and os/exec kills a context's command when it ends — so the helper died
+	// in its opening `sleep 2`, the launcher waited 30s for a verdict that never
+	// came, and the old build came back with the update still on offer. A
+	// background context and its own session (configureChiakiDetached: Setsid
+	// on the device, a new process group on Windows) keep it alive through
+	// JukaHub's exit; it is released, never waited for.
+	cmd := P().CommandContext(context.Background(), script)
+	configureChiakiDetached(cmd)
 	if err := cmd.Start(); err != nil {
 		if restartMarker != "" {
 			_ = os.Remove(restartMarker)
@@ -299,6 +308,7 @@ func OpApplyStagedSwap(ctx context.Context, config *Config) error {
 		_ = journal.rollback()
 		return fmt.Errorf("starting swap helper: %w", err)
 	}
+	_ = cmd.Process.Release()
 	patchRowStatus(ComponentApp, StatusRestartReq)
 	// Let the render loop quit so the helper can replace the executable.
 	appRestartRequested.Store(true)
@@ -317,7 +327,9 @@ func OpCancelStagedSwap(ctx context.Context, config *Config) error {
 	patchStateMu.Unlock()
 	_ = savePatchState()
 	if tag != "" {
-		_ = os.RemoveAll(filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag)))
+		staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag))
+		_ = os.RemoveAll(staging)
+		_ = os.Remove(stagedReadyMarker(staging))
 	}
 	patchRowStatus(ComponentApp, StatusCurrent)
 	return nil

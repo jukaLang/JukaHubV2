@@ -226,7 +226,7 @@ func webFadeGradient(g webGradient, behind sdl.Color, style webStyle) webGradien
 // repeating-linear-gradient() contains this name and is drawn as one pass:
 // a row grid has no way to tile a ramp vertically and honestly.
 func webParseGradient(value string) (webGradient, bool) {
-	lower := strings.ToLower(value)
+	lower := asciiLower(value)
 	idx := strings.Index(lower, "linear-gradient(")
 	if idx < 0 {
 		return webGradient{}, false
@@ -444,7 +444,7 @@ func webGradientStopPercent(part string) (float64, bool) {
 // colour text contrast is judged against. A ramp itself is painted by
 // drawWebGradient from webParseGradient's stops.
 func webGradientColor(value string) (sdl.Color, bool) {
-	lower := strings.ToLower(value)
+	lower := asciiLower(value)
 	if !strings.Contains(lower, "gradient(") {
 		return sdl.Color{}, false
 	}

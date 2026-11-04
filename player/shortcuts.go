@@ -129,6 +129,7 @@ var shortcutCategories = []struct {
 			{"A", "Select / save"},
 			{"Y", "New alarm"},
 			{"X", "Toggle alarm"},
+			{"L1 twice", "Delete alarm"},
 			{"^ v", "Adjust time"},
 		},
 	},

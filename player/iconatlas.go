@@ -175,7 +175,13 @@ func (a *iconAtlas) blit(renderer *sdl.Renderer, name string, focused bool, dst 
 		if a.next >= iconAtlasCapacity() {
 			// Every slot is a distinct glyph name in use; rebuilding
 			// costs one bake per glyph the frame actually draws, the
-			// frame after a config with that many unknown icons.
+			// frame after a config with that many unknown icons. The
+			// strip belongs to this renderer, so it is destroyed rather
+			// than dropped (each overflow used to leak one GPU texture;
+			// SDL flushes pending draws that still use it first).
+			if a.texture != nil {
+				a.texture.Destroy()
+			}
 			a.texture = nil
 			a.slots = map[iconAtlasKey]int32{}
 			a.next = 0

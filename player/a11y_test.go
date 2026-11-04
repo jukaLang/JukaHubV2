@@ -701,3 +701,49 @@ func TestOpenAccessibilityPanelClosesOtherOverlays(t *testing.T) {
 		t.Fatal("panel did not close")
 	}
 }
+
+// Hold-to-repeat follows the remapped direction. In one-handed mode a chorded
+// Up stands in for A: holding it must not stream Up moves after the A, and a
+// button the keymap turned into a direction repeats as that direction.
+func TestA11yHeldNavDirectionFollowsRemaps(t *testing.T) {
+	defer resetA11yForTest()
+	heldSet := map[uint8]bool{}
+	held := func(b uint8) bool { return heldSet[b] }
+
+	// Nothing remapped: the physical D-pad.
+	resetA11yForTest()
+	heldSet = map[uint8]bool{sdl.CONTROLLER_BUTTON_DPAD_LEFT: true}
+	if dx, dy := a11yHeldNavDirection(held); dx != -1 || dy != 0 {
+		t.Fatalf("plain Left = %d,%d", dx, dy)
+	}
+
+	// One-handed: the chorded Up became A, so nothing repeats.
+	a11y = a11ySettings{fontScale: 1.0, oneHanded: true, chordButton: "l1"}
+	mod := uint8(sdl.CONTROLLER_BUTTON_LEFTSHOULDER)
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONDOWN, mod))
+	a11yRemapEvent(chordEvent(sdl.CONTROLLERBUTTONUP, mod))
+	up := chordEvent(sdl.CONTROLLERBUTTONDOWN, sdl.CONTROLLER_BUTTON_DPAD_UP)
+	a11yRemapEvent(up)
+	if up.Button != sdl.CONTROLLER_BUTTON_A {
+		t.Fatalf("the chorded Up became %d, want A", up.Button)
+	}
+	heldSet = map[uint8]bool{sdl.CONTROLLER_BUTTON_DPAD_UP: true}
+	if dx, dy := a11yHeldNavDirection(held); dx != 0 || dy != 0 {
+		t.Fatalf("a held chorded Up (now A) repeats as %d,%d", dx, dy)
+	}
+
+	// The keymap: Select stands in for Down, and Down itself is disabled.
+	resetA11yForTest()
+	a11y.keys = map[uint8]uint8{
+		sdl.CONTROLLER_BUTTON_BACK:      sdl.CONTROLLER_BUTTON_DPAD_DOWN,
+		sdl.CONTROLLER_BUTTON_DPAD_DOWN: a11yDisabledButton,
+	}
+	heldSet = map[uint8]bool{sdl.CONTROLLER_BUTTON_BACK: true}
+	if dx, dy := a11yHeldNavDirection(held); dx != 0 || dy != 1 {
+		t.Fatalf("Select mapped to Down repeats as %d,%d", dx, dy)
+	}
+	heldSet = map[uint8]bool{sdl.CONTROLLER_BUTTON_DPAD_DOWN: true}
+	if dx, dy := a11yHeldNavDirection(held); dx != 0 || dy != 0 {
+		t.Fatalf("a disabled Down repeats as %d,%d", dx, dy)
+	}
+}

@@ -157,7 +157,10 @@ func retroArchConfigCandidates() []string {
 	if override := strings.TrimSpace(os.Getenv("JUKAHUB_RETROARCH_CFG")); override != "" {
 		return []string{override}
 	}
-	var out []string
+	// The TrimUI firmware keeps its RetroArch config under .retroarch; the
+	// achievements reader already knew that path, this guard did not, so on the
+	// Smart Pro and the Brick it never found network_cmd_enable at all.
+	out := append([]string(nil), raRetroArchConfigPaths...)
 	home, _ := os.UserHomeDir()
 	for _, base := range []string{"/mnt/SDCARD", "/mnt/sdcard"} {
 		out = append(out,
@@ -211,7 +214,16 @@ func retroArchCmdline(cmdline []byte) bool {
 		name = name[i+1:]
 	}
 	name = strings.ToLower(name)
-	return name == "retroarch" || name == "retroarch.exe"
+	switch {
+	case name == "retroarch", name == "retroarch.exe", name == "retroarch64":
+		return true
+	case strings.HasPrefix(name, "ra64."), strings.HasPrefix(name, "ra32."):
+		// TrimUI's own builds are ra64.trimui (ra32.trimui on older firmware);
+		// matching only "retroarch" left the guard blind to the emulator the
+		// Smart Pro and the Brick actually run.
+		return true
+	}
+	return false
 }
 
 // retroArchRunning reports whether any process is running RetroArch. Only Linux

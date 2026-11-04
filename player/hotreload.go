@@ -92,6 +92,19 @@ func (cw *ConfigWatcher) NotifyWritten(paths ...string) {
 	}
 }
 
+// IgnoreWrite records a write the app made itself, so the poller does not
+// reload it. Settings → Save rewrites the design file, and reloading those
+// bytes ran the whole reload path for a config the app already holds.
+func (cw *ConfigWatcher) IgnoreWrite(paths ...string) {
+	cw.mu.Lock()
+	defer cw.mu.Unlock()
+	for _, p := range paths {
+		if info, err := os.Stat(p); err == nil {
+			cw.lastMod[p] = info.ModTime()
+		}
+	}
+}
+
 // Start begins the background file watcher. It polls the modification times
 // every 2 seconds and debounces changes for 500ms to avoid rapid reloads while
 // a file is still being written.
@@ -226,9 +239,102 @@ var activeStart = time.Now()
 // globalConfigWatcher is the shared instance used by main.
 var globalConfigWatcher *ConfigWatcher
 
+// pendingConfigReload carries a reloaded config from the watcher goroutine to
+// the main loop, which applies it between frames (applyConfigReload).
+var pendingConfigReload struct {
+	mu  sync.Mutex
+	cfg *Config
+}
+
+// queueConfigReload hands a freshly loaded config to the main loop. The
+// watcher goroutine used to apply it itself: it swapped the config the render
+// loop was drawing, retinted the palette mid-frame, and iterated the user
+// config's live Custom map — a fatal concurrent map access — and it never
+// clamped the scene index, so reloading while on an injected scene (Alarm,
+// Music, Games, Playtime, Browser) indexed past the end of the new scene list
+// and the app exited.
+func queueConfigReload(cfg *Config) {
+	pendingConfigReload.mu.Lock()
+	pendingConfigReload.cfg = cfg
+	pendingConfigReload.mu.Unlock()
+}
+
+// takePendingConfigReload returns the queued config once, or nil.
+func takePendingConfigReload() *Config {
+	pendingConfigReload.mu.Lock()
+	defer pendingConfigReload.mu.Unlock()
+	cfg := pendingConfigReload.cfg
+	pendingConfigReload.cfg = nil
+	return cfg
+}
+
+// applyConfigReload installs a reloaded config on the main thread and returns
+// it. It redoes what boot does to a loaded config — the user's settings, the
+// device profile, the scenes injected in memory — and keeps the user on the
+// scene they were on.
+func applyConfigReload(prev, next *Config) *Config {
+	if next == nil {
+		return prev
+	}
+	// The user's settings as they are now: the pending save is written first
+	// and jukauser.json read back. Merging the boot-time cache undid every
+	// setting changed in this session (its typed fields never change after
+	// load), and Settings → Save itself triggered this path.
+	flushPendingUserConfig()
+	mergeUserConfig(next, reloadUserConfigFromDisk())
+	applyDeviceUIProfile(next)
+	ensureWeatherUnitSetting(next)
+	ensureTasksRefreshLabel(next)
+	ensureAlarmScene(next)
+	ensureSettingsWidgets(next)
+	ensureOnboardingEntry(next)
+	ensureMusicScene(next)
+	ensureGamesScene(next)
+	ensurePlaytimeScene(next)
+	ensurePlaytimeEntry(next)
+	ensureBrowserScene(next)
+	if presetName, ok := next.Variables.Custom["theme_preset"].(string); ok && presetName != "" {
+		ApplyThemeColors(GetThemePreset(presetName))
+	}
+	// After the preset, so a reload keeps the preset's accent.
+	SetAccentColor(themeAccentColor())
+
+	// Stay on the same scene, found by name in the new list; anything that
+	// indexes the old list (a pending transition, an input being edited)
+	// is reset rather than left pointing past the end.
+	name := ""
+	if prev != nil && currentSceneIndex >= 0 && currentSceneIndex < len(prev.Scenes) {
+		name = prev.Scenes[currentSceneIndex].Name
+	}
+	idx := 0
+	for i, scene := range next.Scenes {
+		if scene.Name == name {
+			idx = i
+			break
+		}
+	}
+	currentSceneIndex = idx
+	if pendingSceneIndex < 0 || pendingSceneIndex >= len(next.Scenes) {
+		pendingSceneIndex = idx
+	}
+	if idx < len(next.Scenes) && selectedButtonIndex >= len(next.Scenes[idx].Elements) {
+		selectedButtonIndex = -1
+	}
+	activeSceneIndex = -1
+	activeElementIndex = -1
+
+	appConfig = next
+	// In-memory injections are lost with the replaced scene list, so the
+	// Vibration row and its saved value are re-applied here.
+	hapticsBind(next)
+	ensureHapticsSetting(next)
+	showToast("Config reloaded", ColorToastSuccess)
+	return next
+}
+
 // StartConfigWatcher begins watching the given config file for changes.
-// The reloadFn callback is invoked on the main goroutine (inside the event
-// loop) when a change is detected.
+// The reloadFn callback runs on the watcher goroutine; main passes one that
+// only queues the config for the event loop (queueConfigReload).
 func StartConfigWatcher(path string, reloadFn func(*Config)) {
 	globalConfigWatcher = NewConfigWatcher(path)
 	globalConfigWatcher.SetOnReload(reloadFn)

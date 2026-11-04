@@ -578,21 +578,15 @@ func (h *HomeLayout) Render(renderer *sdl.Renderer, fonts HomeFonts, data HomeVi
 func (h *HomeLayout) drawBackdrop(renderer *sdl.Renderer) {
 	// Near-solid navy base, then the two radials the design sheet uses: a cyan
 	// bloom behind the Continue card and a violet one in the bottom-right
-	// corner. Each is one textured blit, so the ambience stays cheap on device.
-	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	setDrawColor(renderer, ColorBackground)
-	_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: h.Width, H: h.Height})
-	blob := scaleX(900, h.Width)
-	homeGlowBlob(renderer, sdl.Rect{
-		X: scaleX(60, h.Width) - blob/2, Y: scaleY(300, h.Height) - blob/2,
-		W: blob, H: blob,
-	}, ColorAccent, 44)
-	homeGlowBlob(renderer, sdl.Rect{
-		X: h.Width - blob/2 - scaleX(60, h.Width), Y: h.Height - blob/2,
-		W: blob, H: blob,
-	}, sdl.Color{R: 124, G: 58, B: 237}, 36)
-	// Slow animated glow layer, shared with the scene screens.
-	renderAmbientBackground(renderer)
+	// corner, then the slow ambient layer. Each is one textured blit, so the
+	// ambience stays cheap on device. It is the app's one backdrop
+	// (drawAppBackdrop, ui_glass.go): every scene and panel stands on the same
+	// surface, so leaving Home no longer changes the background.
+	cfg := homeBackdropConfig
+	if cfg == nil {
+		cfg = appConfig
+	}
+	drawAppBackdrop(renderer, cfg, h.Width, h.Height)
 }
 
 func (h *HomeLayout) drawHeader(renderer *sdl.Renderer, fonts HomeFonts, data HomeViewData) {

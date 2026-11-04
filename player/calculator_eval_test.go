@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"math"
+	"testing"
+)
 
 // TestCalcEvalExprPrecedence pins the parser's operator precedence and
 // grouping. Every case here was wrong at some point: ^ was checked before
@@ -78,5 +81,67 @@ func TestCalcEvaluateButtonPath(t *testing.T) {
 				t.Errorf("calcEvaluate(%q) result = %q, want %q", c.expr, calc.result, c.want)
 			}
 		})
+	}
+}
+
+// The constants keep full precision and the multiplication a user implies, a
+// number's exponent is not the constant e, and a call is only a call when its
+// own bracket closes the expression.
+func TestCalcConstantsExponentsAndCalls(t *testing.T) {
+	cases := []struct {
+		name string
+		expr string
+		want float64
+	}{
+		{"pi in full", "pi", math.Pi},
+		{"implied 2pi", "2pi", 2 * math.Pi},
+		{"pi times number", "pi2", math.Pi * 2},
+		{"e alone", "e", math.E},
+		{"result exponent reused", "1e+20*2", 2e20},
+		{"small exponent", "5e-7+1", 1.0000005},
+		{"two calls", "sqrt(4)+sqrt(9)", 5},
+		{"two groups", "(1+2)*(3+4)", 21},
+		{"trig sum", "sin(0)+cos(0)", 1},
+	}
+	for _, c := range cases {
+		got, err := calcEvalExpr(calcExpandConstants(c.expr))
+		if err != nil {
+			t.Errorf("%s: %q failed: %v", c.name, c.expr, err)
+			continue
+		}
+		if math.Abs(got-c.want) > 1e-9*math.Max(1, math.Abs(c.want)) {
+			t.Errorf("%s: %q = %v, want %v", c.name, c.expr, got, c.want)
+		}
+	}
+}
+
+// After "=", a function key works on the result on screen: +/- after 2+2 is
+// -4 (it used to negate the old expression, "-2+2" = 0).
+func TestCalcFunctionKeysUseTheResultAfterEquals(t *testing.T) {
+	prev := calc
+	t.Cleanup(func() { calc = prev })
+
+	initCalc()
+	calc.expression, calc.hasResult = "2+2", false
+	calcEvaluate()
+	calcHandleFunc("+/-")
+	calcEvaluate()
+	if calc.result != "-4" {
+		t.Fatalf("+/- after 2+2= gave %q, want -4", calc.result)
+	}
+
+	initCalc()
+	calc.expression, calc.hasResult = "-2+3", false
+	calcHandleFunc("+/-")
+	calcEvaluate()
+	if calc.result != "-1" {
+		t.Fatalf("+/- on -2+3 gave %q, want -1", calc.result)
+	}
+
+	// On an empty line a function key opens the call for its operand.
+	initCalc()
+	calcHandleFunc("sqrt")
+	if calc.expression != "sqrt(" {
+		t.Fatalf("sqrt on an empty line = %q, want an open call", calc.expression)
 	}
 }

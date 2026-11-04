@@ -3,13 +3,48 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/png"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// pngHeaderClaiming returns just a PNG signature and an IHDR chunk declaring
+// w×h RGBA pixels: what a decompression bomb looks like before its data.
+func pngHeaderClaiming(w, h uint32) []byte {
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:], w)
+	binary.BigEndian.PutUint32(ihdr[4:], h)
+	ihdr[8] = 8 // bit depth
+	ihdr[9] = 6 // RGBA
+	var buf bytes.Buffer
+	buf.WriteString("\x89PNG\r\n\x1a\n")
+	_ = binary.Write(&buf, binary.BigEndian, uint32(len(ihdr)))
+	buf.WriteString("IHDR")
+	buf.Write(ihdr)
+	_ = binary.Write(&buf, binary.BigEndian, crc32.ChecksumIEEE(append([]byte("IHDR"), ihdr...)))
+	return buf.Bytes()
+}
+
+// An image whose header claims more pixels than the decode limit is refused
+// before anything is allocated. A tiny PNG declaring 30000×30000 used to be
+// expanded (twice) and get the handheld killed for running out of memory.
+func TestDecodeImageRGBARefusesOversizedImages(t *testing.T) {
+	_, err := decodeImageRGBA(context.Background(), pngHeaderClaiming(30000, 30000))
+	if err == nil {
+		t.Fatal("a 30000x30000 image was decoded")
+	}
+	// The header-only fixture would fail a full decode anyway (it has no
+	// image data); the refusal must come from the size check, up front.
+	if !strings.Contains(err.Error(), "decode limit") {
+		t.Fatalf("error = %v, want the pixel-limit refusal", err)
+	}
+}
 
 // pngBytes renders a solid w×h PNG for decode tests.
 func pngBytes(t *testing.T, w, h int) []byte {

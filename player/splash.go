@@ -657,16 +657,25 @@ func ShowSplash(renderer *sdl.Renderer, config *Config, allotted time.Duration) 
 		}
 
 		// Skip on any input so a boot animation never delays a returning user.
-		// Quit requests are pushed back so closing the window during the
-		// splash still exits the app instead of being swallowed here.
+		// A quit request ends the splash and is pushed back for the main loop,
+		// so closing the window during the splash still exits the app. It is
+		// re-queued only after the drain: pushing it back inside the loop
+		// handed the same event straight back to PollEvent, forever.
+		quit, skip := false, false
 		for ev := sdl.PollEvent(); ev != nil; ev = sdl.PollEvent() {
 			switch ev.(type) {
 			case *sdl.QuitEvent:
-				sdl.PushEvent(ev)
+				quit = true
 			case *sdl.KeyboardEvent, *sdl.MouseButtonEvent, *sdl.ControllerButtonEvent, *sdl.TouchFingerEvent:
-				splash.inited = false
-				return
+				skip = true
 			}
+		}
+		if quit {
+			requeueQuit()
+		}
+		if quit || skip {
+			splash.inited = false
+			return
 		}
 
 		// Map the wall time onto the designed timeline so a 400 ms run is the

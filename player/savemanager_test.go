@@ -452,6 +452,36 @@ func TestPruneSaveSnapshots(t *testing.T) {
 	}
 }
 
+// Restoring the oldest snapshot of a full set works. The safety snapshot a
+// restore takes used to prune exactly that one, so the copy failed with "no
+// such file" and the backup the user picked was gone.
+func TestRestoreOldestSnapshotOfAFullSet(t *testing.T) {
+	setSaveManagerTestDirs(t)
+	root := t.TempDir()
+	save := filepath.Join(root, "save.srm")
+	writeSaveTestFile(t, save, "oldest")
+	roots := []saveRoot{{Name: "RetroArch saves", Path: root}}
+	for i := 0; i < saveSnapshotKeep; i++ {
+		if i > 0 {
+			writeSaveTestFile(t, save, "newer "+strings.Repeat("x", i))
+		}
+		if _, err := createSaveSnapshot(roots, "test"); err != nil {
+			t.Fatalf("snapshot %d: %v", i, err)
+		}
+	}
+	snaps := listSaveSnapshots()
+	if len(snaps) != saveSnapshotKeep {
+		t.Fatalf("want a full set of %d snapshots, got %d", saveSnapshotKeep, len(snaps))
+	}
+	oldest := snaps[len(snaps)-1]
+	if _, err := restoreSaveSnapshot(oldest, roots); err != nil {
+		t.Fatalf("restoring the oldest snapshot: %v", err)
+	}
+	if got := readSaveTestFile(t, save); got != "oldest" {
+		t.Fatalf("restored save = %q, want the oldest snapshot's", got)
+	}
+}
+
 func TestPrepareSaveSyncWritesManifestAndMarkers(t *testing.T) {
 	dataDir, _ := setSaveManagerTestDirs(t)
 	first := t.TempDir()

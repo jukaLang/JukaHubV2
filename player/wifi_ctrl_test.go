@@ -12,20 +12,27 @@ package main
 import (
 	"errors"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-// fakeCtrlConn answers reads from a queue and records what was written, so a
-// test can see the command the supplicant would have received.
+// fakeCtrlConn answers reads from a queue and records each write (one datagram
+// each on the real socket), so a test can see the commands the supplicant would
+// have received.
 type fakeCtrlConn struct {
 	replies []string
-	writes  strings.Builder
+	writes  []string
 	closed  bool
 }
+
+// sent is every datagram written, joined with "|" so a test compares one string.
+func (c *fakeCtrlConn) sent() string { return strings.Join(c.writes, "|") }
 
 func (c *fakeCtrlConn) Read(p []byte) (int, error) {
 	if len(c.replies) == 0 {
@@ -36,7 +43,10 @@ func (c *fakeCtrlConn) Read(p []byte) (int, error) {
 	return copy(p, reply), nil
 }
 
-func (c *fakeCtrlConn) Write(p []byte) (int, error) { return c.writes.Write(p) }
+func (c *fakeCtrlConn) Write(p []byte) (int, error) {
+	c.writes = append(c.writes, string(p))
+	return len(p), nil
+}
 
 func (c *fakeCtrlConn) Close() error {
 	c.closed = true
@@ -61,8 +71,10 @@ func TestWpaCtrlRequestWritesTheCommandAndReadsItsReply(t *testing.T) {
 	if reply != "wpa_state=COMPLETED" {
 		t.Fatalf("reply = %q, want the trimmed reply", reply)
 	}
-	if got := conn.writes.String(); got != "status\n" {
-		t.Fatalf("wrote %q, want one command line", got)
+	// The supplicant matches the verb case-sensitively and strips no line
+	// ending: wpa_cli sends "STATUS", and so must the socket backend.
+	if got := conn.sent(); got != "STATUS" {
+		t.Fatalf("wrote %q, want the upper-case verb and no newline", got)
 	}
 	if !conn.closed {
 		t.Error("the socket was not closed")
@@ -169,7 +181,7 @@ func TestSocketBackendServesThePickerWithoutWpaCli(t *testing.T) {
 	if !st.Connected || st.SSID != "Home" || st.IP != "192.168.1.5" {
 		t.Fatalf("status = %+v, want the socket's answer parsed", st)
 	}
-	if got := conn.writes.String(); got != "status\n" {
+	if got := conn.sent(); got != "STATUS" {
 		t.Fatalf("wrote %q, want the status command", got)
 	}
 }
@@ -184,8 +196,7 @@ func TestSocketBackendSendsThePassphraseAsACommand(t *testing.T) {
 	if _, err := wifiSetPassphrase(3, "correct horse battery"); err != nil {
 		t.Fatalf("wifiSetPassphrase over the socket: %v", err)
 	}
-	got := conn.writes.String()
-	if !strings.HasPrefix(got, `set_network 3 psk "correct horse battery"`) {
+	if got := conn.sent(); got != `SET_NETWORK 3 psk "correct horse battery"` {
 		t.Fatalf("wrote %q, want the quoted psk command", got)
 	}
 }
@@ -201,7 +212,7 @@ func TestSocketScriptKeepsTheSuppliantsFailForTheCaller(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a printed FAIL was reported as a transport failure: %v", err)
 	}
-	if got := conn.writes.String(); got != "add_network\nselect_network 0\n" {
+	if got := conn.sent(); got != "ADD_NETWORK|SELECT_NETWORK 0" {
 		t.Fatalf("wrote %q, want both commands of the script", got)
 	}
 	if err := wifiCommandError(out, nil); err == nil || !strings.Contains(err.Error(), "FAIL") {
@@ -255,5 +266,67 @@ func TestSocketDirectoryWithoutTheInterfaceSocketIsNotABackend(t *testing.T) {
 	}
 	if got := wifiCommandBackend(); got != "" {
 		t.Fatalf("backend = %q with an empty socket directory", got)
+	}
+}
+
+// The real transport: the supplicant's control interface is a datagram socket
+// that replies to the sender's address. The old stream dial could not connect
+// to it at all; this runs the real wpaCtrlOpen against a datagram server.
+func TestWpaCtrlRequestOverARealDatagramSocket(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("unixgram sockets are POSIX-only; the backend never runs on Windows")
+	}
+	sock := filepath.Join(t.TempDir(), "wlan0")
+	server, err := net.ListenUnixgram("unixgram", &net.UnixAddr{Name: sock, Net: "unixgram"})
+	if err != nil {
+		t.Skipf("cannot open a unixgram server here: %v", err)
+	}
+	defer server.Close()
+	got := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 512)
+		n, from, err := server.ReadFromUnix(buf)
+		if err != nil {
+			got <- "read error: " + err.Error()
+			return
+		}
+		got <- string(buf[:n])
+		if from != nil {
+			_, _ = server.WriteToUnix([]byte("PONG\n"), from)
+		}
+	}()
+
+	reply, err := wpaCtrlRequest(sock, "ping", 2*time.Second)
+	if err != nil {
+		t.Fatalf("wpaCtrlRequest over a datagram socket: %v", err)
+	}
+	if reply != "PONG" {
+		t.Fatalf("reply = %q, want PONG", reply)
+	}
+	if cmd := <-got; cmd != "PING" {
+		t.Fatalf("the supplicant received %q, want PING", cmd)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(os.TempDir(), "jukahub_wpa_*"))
+	for _, p := range leftovers {
+		if strings.HasPrefix(filepath.Base(p), "jukahub_wpa_"+itoaPid()+"-") {
+			t.Fatalf("client socket %s was not removed after the request", p)
+		}
+	}
+}
+
+func itoaPid() string { return strconv.Itoa(os.Getpid()) }
+
+func TestWpaCtrlWireCommand(t *testing.T) {
+	cases := map[string]string{
+		"status":                      "STATUS",
+		"  list_networks \n":          "LIST_NETWORKS",
+		"set_network 3 ssid 486f6d65": "SET_NETWORK 3 ssid 486f6d65",
+		`set_network 3 psk "a B c d"`: `SET_NETWORK 3 psk "a B c d"`,
+		"enable_network all":          "ENABLE_NETWORK all",
+	}
+	for in, want := range cases {
+		if got := wpaCtrlWireCommand(in); got != want {
+			t.Errorf("wpaCtrlWireCommand(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
@@ -22,6 +23,19 @@ type biosFileFingerprint struct {
 	Root   string
 	SHA256 string
 }
+
+const (
+	// biosHashMaxBytes is the largest file the doctor fingerprints. BIOS images
+	// are kilobytes to a few megabytes; RetroArch's system folder also holds
+	// hundreds of megabytes of core data, and hashing all of it read the whole
+	// lot off the SD card before the page could draw.
+	biosHashMaxBytes = 16 << 20
+	// biosScanMaxDepth and biosScanMaxFiles bound the walk the same way.
+	biosScanMaxDepth = 3
+	biosScanMaxFiles = 600
+	// biosNotHashed stands in for the fingerprint of a file over the size cap.
+	biosNotHashed = "(large file, not hashed)"
+)
 
 type biosSystemStatus struct {
 	Name    string
@@ -75,32 +89,45 @@ func biosDoctorRoots() []string {
 func scanBIOSRoots(roots []string) biosDoctorReport {
 	report := biosDoctorReport{Roots: append([]string(nil), roots...)}
 	found := make(map[string]biosFileFingerprint)
+	files := 0
 	for _, root := range roots {
+		rootDepth := strings.Count(filepath.Clean(root), string(os.PathSeparator))
 		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 			if walkErr != nil || entry == nil {
 				return nil
 			}
 			if entry.IsDir() {
+				if strings.Count(filepath.Clean(path), string(os.PathSeparator))-rootDepth >= biosScanMaxDepth {
+					return filepath.SkipDir
+				}
 				return nil
+			}
+			if files >= biosScanMaxFiles {
+				return filepath.SkipAll
 			}
 			info, err := entry.Info()
 			if err != nil || !info.Mode().IsRegular() {
 				return nil
 			}
-			file, err := os.Open(path)
-			if err != nil {
-				return nil
-			}
-			h := sha256.New()
-			_, copyErr := io.Copy(h, file)
-			closeErr := file.Close()
-			if copyErr != nil || closeErr != nil {
-				return nil
+			files++
+			sum := biosNotHashed
+			if info.Size() <= biosHashMaxBytes {
+				file, err := os.Open(path)
+				if err != nil {
+					return nil
+				}
+				h := sha256.New()
+				_, copyErr := io.Copy(h, io.LimitReader(file, biosHashMaxBytes+1))
+				closeErr := file.Close()
+				if copyErr != nil || closeErr != nil {
+					return nil
+				}
+				sum = hex.EncodeToString(h.Sum(nil))
 			}
 			item := biosFileFingerprint{
 				Name:   entry.Name(),
 				Root:   root,
-				SHA256: hex.EncodeToString(h.Sum(nil)),
+				SHA256: sum,
 			}
 			key := strings.ToLower(entry.Name())
 			if _, exists := found[key]; !exists {
@@ -136,6 +163,41 @@ func scanBIOSRoots(roots []string) biosDoctorReport {
 	return report
 }
 
+// biosScan runs the doctor's walk off the event thread: even bounded, it reads
+// up to biosScanMaxFiles files off the SD card, and the page used to freeze
+// the UI for as long as that took — on open and again on every Rescan.
+var biosScan struct {
+	sync.Mutex
+	running bool
+	report  *biosDoctorReport
+}
+
+// biosScanStart begins a scan unless one is already running.
+func biosScanStart() {
+	biosScan.Lock()
+	if biosScan.running {
+		biosScan.Unlock()
+		return
+	}
+	biosScan.running = true
+	biosScan.Unlock()
+	go func() {
+		report := scanBIOSRoots(biosDoctorRoots())
+		biosScan.Lock()
+		biosScan.report = &report
+		biosScan.running = false
+		biosScan.Unlock()
+	}()
+}
+
+// biosScanSnapshot is the latest finished report (nil before the first one)
+// and whether a scan is in flight.
+func biosScanSnapshot() (*biosDoctorReport, bool) {
+	biosScan.Lock()
+	defer biosScan.Unlock()
+	return biosScan.report, biosScan.running
+}
+
 func biosDoctorSummary(report biosDoctorReport) string {
 	parts := make([]string, 0, len(report.Systems))
 	for _, system := range report.Systems {
@@ -149,13 +211,20 @@ func biosDoctorSummary(report biosDoctorReport) string {
 }
 
 func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf.Font,
-	panelX, panelY, panelW, panelH, padX, headerH int32, report biosDoctorReport) {
+	panelX, panelY, panelW, panelH, padX, headerH int32, report biosDoctorReport, scanning bool) {
 	contentX := panelX + padX
 	contentW := panelW - 2*padX
 	lineH := int32(font.Height()) + 7
 	// Under the shared page header's measured band, not a number guessed here.
 	y := panelY + headerH + 16
-	lines := []string{fmt.Sprintf("Checked %d location(s) · hashed %d file(s)", len(report.Roots), len(report.Files)), "SHA-256 fingerprints · filenames indicate presence, not authenticity", ""}
+	status := fmt.Sprintf("Checked %d location(s) · found %d file(s)", len(report.Roots), len(report.Files))
+	if scanning {
+		status = "Scanning the BIOS folders…"
+		if len(report.Roots) > 0 {
+			status += " (showing the last result)"
+		}
+	}
+	lines := []string{status, "SHA-256 fingerprints · filenames indicate presence, not authenticity", ""}
 	for _, system := range report.Systems {
 		if system.Ready {
 			lines = append(lines, system.Name+" · ready")
@@ -180,7 +249,7 @@ func renderCommunityBIOSDoctor(renderer *sdl.Renderer, config *Config, font *ttf
 				lines = append(lines, "  "+file.Name+"  "+file.SHA256)
 			}
 		}
-	} else {
+	} else if !scanning || len(report.Roots) > 0 {
 		lines = append(lines, "No BIOS files found in the common locations.")
 	}
 	available := int((panelY + panelH - 44 - y) / lineH)

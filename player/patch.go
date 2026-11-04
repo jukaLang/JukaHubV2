@@ -197,14 +197,8 @@ func renderPatchScene(renderer *sdl.Renderer, config *Config) {
 	}
 	patchClampFocus()
 
-	ensureBackgroundTexture(renderer, config)
-	if bgTexture != nil {
-		renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	} else {
-		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
-		renderer.Clear()
-	}
-	renderAmbientBackground(renderer)
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	contentY := int32(72)
 	contentH := screenHeight - HomeFooterH - 16 - contentY
@@ -801,7 +795,9 @@ func patchConfirmModal() {
 				Confirm:  "Roll back",
 				HighRisk: true,
 			}
-		case "Install", "Update":
+		case "Install", "Update", "Reinstall":
+			// Reinstall is the same install over a current copy; it had no case,
+			// so choosing it only closed the menu.
 			patchModal = &patchModalState{
 				ID:        "confirm-install",
 				Title:     "Install " + m.PackageName + "?",

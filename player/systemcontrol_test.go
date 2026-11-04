@@ -55,6 +55,37 @@ func TestFindBacklightRejectsEmptyRoot(t *testing.T) {
 	}
 }
 
+// On a real kernel /sys/class/backlight/<dev> is a symlink into /sys/devices;
+// the old IsDir-only filter skipped it and the Smart Pro had no brightness row.
+func TestFindBacklightFollowsSysfsClassSymlinks(t *testing.T) {
+	devices := t.TempDir()
+	target := filepath.Join(devices, "platform", "backlight", "backlight0")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "max_brightness"), []byte("255\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "brightness"), []byte("64\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(root, "backlight0")); err != nil {
+		t.Skipf("symlinks unavailable here: %v", err)
+	}
+	// A dangling link must be dropped, not reported as the device.
+	if err := os.Symlink(filepath.Join(devices, "gone"), filepath.Join(root, "aaa-dangling")); err != nil {
+		t.Fatal(err)
+	}
+	dir, max, err := findBacklight(root)
+	if err != nil {
+		t.Fatalf("findBacklight: %v", err)
+	}
+	if dir != filepath.Join(root, "backlight0") || max != 255 {
+		t.Fatalf("findBacklight = %q, %d; want the class link and 255", dir, max)
+	}
+}
+
 // A file (not a directory) in the backlight root must never be treated as a
 // device: the writer only ever opens "brightness" inside a real child dir.
 func TestFindBacklightIgnoresFiles(t *testing.T) {

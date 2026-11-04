@@ -331,12 +331,25 @@ type qsProbe struct {
 	wifiOK, bluetoothOK, airplaneOK bool
 	volume, brightness              int
 	volumeOK, brightnessOK          bool
+	// gen is qsEditGen when the probe started.
+	gen int
 }
 
 var (
 	qsProbeCh      = make(chan qsProbe, 1)
 	qsProbePending bool
+	// qsEditGen counts the changes made from the panel. A probe that started
+	// before a change read the host before it, so its answer is stale: applied,
+	// it snapped the volume slider back to the old level (and the next step
+	// jumped from there) or flipped a radio switch the user had just changed.
+	qsEditGen int
+	// qsProbeRerun records a probe asked for while one was in flight; it runs
+	// as soon as that one is drained instead of being dropped.
+	qsProbeRerun bool
 )
+
+// qsNoteEdit marks a change made from the panel (see qsEditGen).
+func qsNoteEdit() { qsEditGen++ }
 
 // qsCollectLiveState asks the host what the radios and levels are doing. It runs
 // on a worker goroutine, so it takes everything it needs as arguments and never
@@ -363,6 +376,7 @@ func qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume, wantBrightne
 
 func qsStartProbe() {
 	if qsProbePending {
+		qsProbeRerun = true
 		return
 	}
 	qsProbePending = true
@@ -371,18 +385,30 @@ func qsStartProbe() {
 	wantAirplane := qs.toggles[2].Available
 	wantVolume := qs.sliders[0].Available
 	wantBrightness := qs.sliders[1].Available
+	gen := qsEditGen
 	go func() {
-		qsProbeCh <- qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume, wantBrightness)
+		r := qsCollectLiveState(wantWifi, wantBT, wantAirplane, wantVolume, wantBrightness)
+		r.gen = gen
+		qsProbeCh <- r
 	}()
 }
 
 // qsDrainProbe applies a finished probe. Called from the render loop, which runs
-// on the event thread, so the state it writes is never read concurrently.
+// on the event thread, so the state it writes is never read concurrently. A
+// result older than the latest change from the panel is dropped and a fresh
+// probe takes its place.
 func qsDrainProbe() {
 	select {
 	case r := <-qsProbeCh:
 		qsProbePending = false
-		qsApplyProbe(r)
+		stale := r.gen != qsEditGen
+		if !stale {
+			qsApplyProbe(r)
+		}
+		if stale || qsProbeRerun {
+			qsProbeRerun = false
+			qsStartProbe()
+		}
 	default:
 	}
 }
@@ -551,12 +577,14 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 		if err := setWifiEnabled(want); err != nil {
 			return err
 		}
+		qsNoteEdit()
 		qsStartProbe()
 		return nil
 	case qsActionBluetooth:
 		if err := setBluetoothEnabled(want); err != nil {
 			return err
 		}
+		qsNoteEdit()
 		qsStartProbe()
 		return nil
 	case qsActionAirplane:
@@ -584,6 +612,7 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 			}
 			qs.airplaneSavedWifi, qs.airplaneSavedBT = false, false
 		}
+		qsNoteEdit()
 		qsStartProbe()
 		return nil
 	case qsActionLedSync:
@@ -597,12 +626,14 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 	case qsActionLowPower:
 		if appConfig != nil {
 			appConfig.Variables.LowPower = want
+			dropCustomMirror(appConfig, "lowPower")
 			syncVariableOverrides(appConfig)
 		}
 		return nil
 	case qsActionReducedMotion:
 		if appConfig != nil {
 			appConfig.Variables.ReducedMotion = want
+			dropCustomMirror(appConfig, "reducedMotion")
 			syncVariableOverrides(appConfig)
 		}
 		return nil
@@ -621,6 +652,7 @@ func qsApplyToggle(t *qsToggle, want bool) error {
 					mainWindow.SetFullscreen(0)
 				}
 			}
+			dropCustomMirror(appConfig, "fullscreen")
 			syncVariableOverrides(appConfig)
 		}
 		return nil
@@ -659,6 +691,7 @@ func qsStepSlider(idx, deltaPct int) {
 			return
 		}
 		qs.lastVolume = pct
+		qsNoteEdit()
 	case "brightness":
 		if pct == qs.lastBrightness {
 			return
@@ -668,6 +701,7 @@ func qsStepSlider(idx, deltaPct int) {
 			return
 		}
 		qs.lastBrightness = pct
+		qsNoteEdit()
 	}
 	PlayNavSound()
 	if appConfig != nil {
@@ -729,40 +763,49 @@ func qsStepCycle(row, dir int) {
 	}
 	qs.cycles[qsCycleScreensaverRow].Value = next
 	if appConfig != nil {
-		appConfig.Variables.ScreensaverTimeout = next
-		screensaverIdleTimeout = time.Duration(next) * time.Second
+		// The shared setter keeps the Custom copy and the Settings row's label
+		// in step. Setting only the typed field left the old value in Custom,
+		// and the next override pass (any Low Power toggle) read it back.
+		applyScreensaverTimeout(appConfig, next)
 		qsPersist(appConfig)
+	} else {
+		screensaverIdleTimeout = time.Duration(next) * time.Second
 	}
 	PlayNavSound()
 }
 
 // qsPersist snapshots the panel's values into jukauser.json through the same
-// debounced writer the settings page uses. Untouched fields are left alone
-// because the cached user config is updated in place.
+// debounced writer the settings page uses.
+//
+// The snapshot starts from the live config (userConfigFromVariables), not from
+// the cached user config. The cache's other settings are the ones read at boot
+// — this saved them, so changing the volume put back a weather unit or colour
+// changed in Settings earlier in the session — and assigning the live Custom
+// map into the cache made the two one map, shared with the save goroutine.
+// The levels are the panel's own, so they are written into the cache too,
+// where every other save picks them up.
 func qsPersist(config *Config) {
-	user := loadUserConfig()
+	if config == nil {
+		return
+	}
+	cache := loadUserConfig()
+	if cache != nil {
+		if qs.sliders[0].Available {
+			cache.Variables.Volume = int(math.Round(qs.sliders[0].Value * 100))
+			cache.Variables.VolumeSet = true
+		}
+		if qs.sliders[1].Available {
+			cache.Variables.Brightness = int(math.Round(qs.sliders[1].Value * 100))
+			cache.Variables.BrightnessSet = true
+		}
+	}
+	user := userConfigFromVariables(config)
 	if user == nil {
 		return
 	}
-	if qs.sliders[0].Available {
-		user.Variables.Volume = int(math.Round(qs.sliders[0].Value * 100))
-		user.Variables.VolumeSet = true
-	}
-	if qs.sliders[1].Available {
-		user.Variables.Brightness = int(math.Round(qs.sliders[1].Value * 100))
-		user.Variables.BrightnessSet = true
-	}
 	user.Variables.ScreensaverTimeout = qs.cycles[qsCycleScreensaverRow].Value
-	if config != nil {
-		user.Variables.LedSync = config.Variables.LEDSync
-		on := config.Variables.NetPlayEnabled
-		user.Variables.NetPlayEnabled = &on
-		user.Variables.LowPower = config.Variables.LowPower
-		user.Variables.ReducedMotion = config.Variables.ReducedMotion
-		user.Variables.Fullscreen = config.Variables.Fullscreen
-		user.Variables.PowerMode = config.Variables.PowerMode
-		user.Variables.Custom = config.Variables.Custom
-	}
+	on := config.Variables.NetPlayEnabled
+	user.Variables.NetPlayEnabled = &on
 	saveUserConfigDebounced(user)
 }
 
@@ -800,9 +843,8 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 	fade := uiFadeIn.at(progress)
 	slide := int32(math.Round(uiPanelRise.at(progress)))
 
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, uint8(160*uiScrimProgress(progress, uiPanelEnterMS)))
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	// The shared overlay dim (the backdrop's navy), faded in with the panel.
+	drawOverlayScrimFade(renderer, uiScrimProgress(progress, uiPanelEnterMS))
 
 	panelW := qsPanelWide
 	if maxW := screenWidth - 24; panelW > maxW {
@@ -823,17 +865,13 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 	panelY := (screenHeight - panelH) / 2
 
 	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, func() {
-		UICard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, UICardStyle{
-			Fill:   sdl.Color{R: 14, G: 18, B: 28, A: 248},
-			Border: ColorBorder,
-			Radius: 20,
-		})
+		// The shared overlay sheet: Home's glass, made opaque.
+		drawOverlayCard(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH})
 
 		if medFont != nil {
 			title := "Quick Settings"
 			tw, _, _ := medFont.SizeUTF8(title)
-			renderText(renderer, config, medFont, title,
-				sdl.Color{R: 220, G: 230, B: 245, A: 240},
+			renderText(renderer, config, medFont, title, ColorTextPrimary(),
 				panelX+(panelW-int32(tw))/2, panelY+16)
 		}
 
@@ -870,7 +908,7 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		infoY := footerY - smallH - 8
 		if bat := getBatteryPercent(); bat >= 0 {
 			renderText(renderer, config, font, fmt.Sprintf("Battery %d%%", bat),
-				sdl.Color{R: 140, G: 155, B: 180, A: 200}, panelX+qsPadX, infoY)
+				WithAlpha(ColorTextSecondary(), 200), panelX+qsPadX, infoY)
 		}
 		netStr := "Online"
 		if !IsOnline() {
@@ -878,13 +916,13 @@ func renderQuickSettings(renderer *sdl.Renderer, config *Config) {
 		}
 		nw, _, _ := font.SizeUTF8(netStr)
 		renderText(renderer, config, font, netStr,
-			sdl.Color{R: 140, G: 155, B: 180, A: 200},
+			WithAlpha(ColorTextSecondary(), 200),
 			panelX+panelW-int32(nw)-qsPadX, infoY)
 
 		hint := hintLine(FooterHint{"A", "Change"}, FooterHint{"Left/Right", "Adjust"}, FooterHint{"B", "Close"})
 		hw, _, _ := font.SizeUTF8(hint)
 		renderText(renderer, config, font, hint,
-			sdl.Color{R: 90, G: 100, B: 125, A: 190},
+			WithAlpha(ColorTextTertiary(), 190),
 			panelX+(panelW-int32(hw))/2, footerY)
 	})
 }
@@ -916,23 +954,24 @@ func qsRowBackground(renderer *sdl.Renderer, x, y, w, h int32, focused bool) {
 	if !focused {
 		return
 	}
-	fillRoundedRect(renderer, x, y, w, h, 10, sdl.Color{R: 30, G: 36, B: 50, A: 200})
-	strokeRoundedRect(renderer, x, y, w, h, 10, 1,
-		sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 120})
+	// The focused row is a selected list row: Home's glass, an accent wash and
+	// the accent ring (UIListRow), so the cursor reads the same here as in
+	// every list.
+	UIListRow(renderer, sdl.Rect{X: x, Y: y, W: w, H: h}, 12, true, false)
 }
 
 func drawQSToggleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, t *qsToggle, focused bool) {
 	qsRowBackground(renderer, x, y, w, h, focused)
 
-	labelCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
-	iconCol := sdl.Color{R: 200, G: 210, B: 230, A: 220}
+	labelCol := WithAlpha(ColorTextSecondary(), 220)
+	iconCol := WithAlpha(ColorTextPrimary(), 220)
 	detail := ""
 	if !t.Available {
 		// A row with no backend is dimmed; the switch is not drawn because
 		// there is nothing for it to represent. The row says only "N/A": the
 		// specific reason ("no nmcli/rfkill") is too long for a 400 px row and
 		// is shown in the toast when A is pressed.
-		labelCol = sdl.Color{R: 110, G: 118, B: 135, A: 180}
+		labelCol = WithAlpha(ColorTextTertiary(), 180)
 		iconCol = labelCol
 		detail = "N/A"
 	}
@@ -942,7 +981,7 @@ func drawQSToggleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	if detail != "" {
 		dw, _, _ := font.SizeUTF8(detail)
 		renderText(renderer, config, font, detail,
-			sdl.Color{R: 90, G: 98, B: 115, A: 160}, x+w-int32(dw)-12, y+10)
+			WithAlpha(ColorTextTertiary(), 160), x+w-int32(dw)-12, y+10)
 		return
 	}
 
@@ -967,10 +1006,10 @@ func drawQSToggleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, s *qsSlider, focused bool) {
 	qsRowBackground(renderer, x, y, w, h, focused)
 
-	labelCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
-	iconCol := sdl.Color{R: 200, G: 210, B: 230, A: 220}
+	labelCol := WithAlpha(ColorTextSecondary(), 220)
+	iconCol := WithAlpha(ColorTextPrimary(), 220)
 	if !s.Available {
-		labelCol = sdl.Color{R: 110, G: 118, B: 135, A: 180}
+		labelCol = WithAlpha(ColorTextTertiary(), 180)
 		iconCol = labelCol
 	}
 
@@ -986,7 +1025,7 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	if detail != "" {
 		dw, _, _ := font.SizeUTF8(detail)
 		renderText(renderer, config, font, detail,
-			sdl.Color{R: 90, G: 98, B: 115, A: 160}, x+w-int32(dw)-12, y+6)
+			WithAlpha(ColorTextTertiary(), 160), x+w-int32(dw)-12, y+6)
 		return
 	}
 
@@ -994,14 +1033,14 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 	valStr := fmt.Sprintf("%d%%", pct)
 	vw, _, _ := font.SizeUTF8(valStr)
 	renderText(renderer, config, font, valStr,
-		sdl.Color{R: 140, G: 155, B: 180, A: 200}, x+w-int32(vw)-12, y+6)
+		WithAlpha(ColorTextSecondary(), 200), x+w-int32(vw)-12, y+6)
 
 	trackW := w - 130
 	trackX := x + 100
 	trackY := y + h - 16
 	trackH := int32(6)
 	fillRoundedRect(renderer, trackX, trackY, trackW, trackH, 3,
-		sdl.Color{R: 30, G: 36, B: 50, A: 200})
+		glassChipFill())
 
 	frac := 0.0
 	if s.Max > s.Min {
@@ -1019,16 +1058,16 @@ func drawQSSliderRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, 
 			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 200})
 	}
 	fillCircle(renderer, trackX+fillW, trackY+trackH/2, 6,
-		sdl.Color{R: 240, G: 245, B: 255, A: 240})
+		WithAlpha(ColorTextPrimary(), 240))
 }
 
 func drawQSLinkRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y, w, h int32, l *qsLink, focused bool) {
 	qsRowBackground(renderer, x, y, w, h, focused)
 
-	labelCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
-	iconCol := sdl.Color{R: 200, G: 210, B: 230, A: 220}
+	labelCol := WithAlpha(ColorTextSecondary(), 220)
+	iconCol := WithAlpha(ColorTextPrimary(), 220)
 	if !l.Available {
-		labelCol = sdl.Color{R: 110, G: 118, B: 135, A: 180}
+		labelCol = WithAlpha(ColorTextTertiary(), 180)
 		iconCol = labelCol
 	}
 	right := "Open >"
@@ -1039,7 +1078,7 @@ func drawQSLinkRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, x, y,
 	renderText(renderer, config, font, ellipsize(font, l.Label, qsLabelWidth(font, w, right)), labelCol, x+52, y+10)
 	rw, _, _ := font.SizeUTF8(right)
 	renderText(renderer, config, font, right,
-		sdl.Color{R: 120, G: 132, B: 152, A: 190}, x+w-int32(rw)-12, y+10)
+		WithAlpha(ColorTextTertiary(), 190), x+w-int32(rw)-12, y+10)
 }
 
 // drawQSCycleRow renders a cycler row (timeout steps, Power Mode). Its label
@@ -1050,10 +1089,10 @@ func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row 
 
 	c := &qs.cycles[row]
 	renderText(renderer, config, font, c.Icon,
-		sdl.Color{R: 200, G: 210, B: 230, A: 220}, x+8, y+10)
+		WithAlpha(ColorTextPrimary(), 220), x+8, y+10)
 
 	value := screenTimeoutLabel(c.Value)
-	valCol := sdl.Color{R: 140, G: 155, B: 180, A: 220}
+	valCol := WithAlpha(ColorTextSecondary(), 220)
 	if row == qsCycleRowLED {
 		value = ledPolicyLabel(ledPolicyOrder[c.Value].key)
 	}
@@ -1067,7 +1106,7 @@ func drawQSCycleRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, row 
 	}
 	labeled := ellipsize(font, c.Label, qsLabelWidth(font, w, value))
 	renderText(renderer, config, font, labeled,
-		sdl.Color{R: 180, G: 190, B: 210, A: 220}, x+52, y+10)
+		WithAlpha(ColorTextSecondary(), 220), x+52, y+10)
 
 	vw, _, _ := font.SizeUTF8(value)
 	renderText(renderer, config, font, value, valCol, x+w-int32(vw)-12, y+10)

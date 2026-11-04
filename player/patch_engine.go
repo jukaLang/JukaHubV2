@@ -693,25 +693,28 @@ func ensureHelperToolCtx(ctx context.Context, tool string, config *Config) error
 		return err
 	}
 	logPatch("[TOOLS] %s missing from %s; attempting automatic download into %s", tool, target, dir)
-	installBarBegin(tool)
+	// This download runs outside the Patch lock, so another run can take the
+	// card while it is still going; it reports through the card only while the
+	// card is still its own (the *Run calls check that under the card's lock).
+	run, runCtx := installBarBeginRun(tool)
 	if ctx == context.Background() {
 		// A caller with no richer cancellation (the Play preload passes its
 		// own loading-card token) rides the card's run token, minted by the
 		// begin above: the X on this install's chip then stops the transfer.
-		ctx = installBarRunContext()
+		ctx = runCtx
 	}
 	if err := downloadHelperToolCtx(ctx, tool, target, config); err != nil {
 		logPatch("[TOOLS] %s install failed: %v", tool, err)
 		if ctx.Err() != nil {
 			// Cancelled from the loading card: this is not an install failure,
 			// so the card is hidden rather than left showing an error.
-			installBarAbort()
+			installBarAbortRun(run)
 			return ctx.Err()
 		}
-		installBarFailRetry(tool, toolInstallFailureReason(err))
+		installBarFailRetryRun(run, tool, toolInstallFailureReason(err))
 		return err
 	}
-	installBarDone()
+	installBarDoneRun(run)
 	logPatch("[TOOLS] %s installed at %s", tool, target)
 	// The cached versions (and the Patch row that shows them) must notice the
 	// tool that just appeared.
@@ -1671,6 +1674,10 @@ const (
 	githubReleaseAPI = "https://api.github.com/repos/jukaLang/JukaHubV2/releases/latest"
 )
 
+// patchDownloadTimeout bounds one archive transfer as a whole; see
+// downloadToFile.
+const patchDownloadTimeout = 15 * time.Minute
+
 // newPatchClient returns an HTTP client that follows redirects only to
 // approved HTTPS hosts. TLS is never disabled.
 func newPatchClient() *http.Client {
@@ -1785,7 +1792,22 @@ func downloadToFile(ctx context.Context, client *http.Client, raw, dest, expectS
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
-	resp, err := client.Do(req)
+	// The Patch client caps a whole request at patchHTTPTimeout, which suits a
+	// manifest and kills an archive: on handheld Wi-Fi a release takes longer
+	// than 25 s, so every attempt timed out mid-body and an update needed press
+	// after press of resuming to finish. Here only the response headers keep
+	// the short limit; the body is bounded by ctx (callers pass a 20-minute
+	// one) and patchDownloadTimeout.
+	dl := *client
+	dl.Timeout = patchDownloadTimeout
+	if dl.Transport == nil {
+		if base, isHTTP := http.DefaultTransport.(*http.Transport); isHTTP {
+			tr := base.Clone()
+			tr.ResponseHeaderTimeout = patchHTTPTimeout
+			dl.Transport = tr
+		}
+	}
+	resp, err := dl.Do(req)
 	if err != nil {
 		keepPart = offset > 0
 		return err
@@ -2175,6 +2197,7 @@ func CreateBackupSet(reason string, files []string) (*BackupManifest, string, er
 		return nil, "", err
 	}
 	m := &BackupManifest{CreatedAt: stamp, Reason: reason, Version: versionString(appConfig)}
+	usedRel := map[string]bool{}
 	for _, src := range files {
 		info, err := os.Stat(src)
 		if err != nil {
@@ -2192,6 +2215,12 @@ func CreateBackupSet(reason string, files []string) (*BackupManifest, string, er
 		if m.Version != "" {
 			rel = m.Version + "-" + rel
 		}
+		// The set is flat, and two package files can share a base name in
+		// different folders: the second used to overwrite the first's copy.
+		if usedRel[rel] {
+			rel = fmt.Sprintf("%d-%s", len(m.Files), rel)
+		}
+		usedRel[rel] = true
 		dst := filepath.Join(setDir, rel)
 		if err := copyFile(src, dst); err != nil {
 			_ = os.RemoveAll(setDir)
@@ -2391,7 +2420,11 @@ func (j *journal) recordReplace(path string) error {
 	if info.IsDir() {
 		return fmt.Errorf("journal refuses directory replacement: %s", path)
 	}
-	backup := filepath.Join(filepath.Dir(j.path), "files", j.ID, filepath.Base(path))
+	// The entry index keeps the name unique: two files sharing a base name in
+	// different folders (A/config.json, B/config.json) used to share one
+	// backup, and a rollback then wrote B's original over A.
+	backup := filepath.Join(filepath.Dir(j.path), "files", j.ID,
+		fmt.Sprintf("%04d-%s", len(j.Entries), filepath.Base(path)))
 	if err := os.MkdirAll(filepath.Dir(backup), 0o700); err != nil {
 		return err
 	}
@@ -2407,15 +2440,46 @@ func (j *journal) recordReplace(path string) error {
 // only by commit/rollback.
 func (j *journal) close() {}
 
-// commit marks the journal complete and removes it.
+// commit marks the journal complete and removes it, with the backups it took:
+// once committed nothing can roll back to them, and they are full copies of
+// every replaced file.
 func (j *journal) commit() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.commited = true
 	if j.path != "" {
 		_ = os.Remove(j.path)
+		_ = os.RemoveAll(filepath.Join(filepath.Dir(j.path), "files", j.ID))
 	}
 	return nil
+}
+
+// purgeOrphanJournalBackups removes backup folders whose journal is gone. The
+// self-update helper commits by deleting the journal file alone, so every
+// update used to leave a copy of the whole previous installation in
+// journals/files on the card. It runs at startup after interrupted journals
+// were rolled back, when no journal can still need its backups.
+func purgeOrphanJournalBackups() {
+	dir, err := PatchStateDir()
+	if err != nil {
+		return
+	}
+	filesDir := filepath.Join(dir, "journals", "files")
+	entries, err := os.ReadDir(filesDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dir, "journals", e.Name()+".json")); err == nil {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(filesDir, e.Name())); err != nil {
+			logPatch("journal backups %s: %v", e.Name(), err)
+		}
+	}
 }
 
 // rollback replays the journal in reverse, restoring backups. Returns the
@@ -2490,6 +2554,8 @@ func pendingJournals() []string {
 // incomplete journal and rolls it back automatically so JukaHub always
 // launches in a consistent state. A toast is shown when recovery ran.
 func checkInterruptedJournal() {
+	// Deferred so it runs after any rollback below has used its backups.
+	defer purgeOrphanJournalBackups()
 	pending := pendingJournals()
 	if len(pending) == 0 {
 		return

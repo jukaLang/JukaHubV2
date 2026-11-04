@@ -208,7 +208,11 @@ func termCompletions(input string, dirEntries, history []string) (string, []stri
 // termDirectoryEntries lists the current directory for completion, with a
 // trailing slash on directories. It is bounded and silent on error.
 func termDirectoryEntries() []string {
-	entries, err := os.ReadDir(".")
+	dir := term.cwd
+	if dir == "" {
+		dir = "."
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}

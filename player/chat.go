@@ -123,14 +123,45 @@ func getChatImageTexture(renderer *sdl.Renderer, url string) *sdl.Texture {
 
 	chatImageDLMutex.Lock()
 	if data, ok := chatImageDownloads[url]; ok && len(data) > 0 {
+		// Taken out here so processChatImageDownloads does not decode the
+		// same bytes a second time in this frame.
+		delete(chatImageDownloads, url)
 		chatImageDLMutex.Unlock()
 		return uploadChatImage(renderer, url, data)
 	}
+	// A link that failed (gone, offline, not an image) waits before the next
+	// try. Nothing was remembered before, so it was fetched again on every
+	// frame it stayed on screen — up to 32 MB each time, or one failing DNS
+	// lookup per frame offline.
+	if when, failed := chatImageFailed[url]; failed && time.Since(when) < chatImageRetryAfter {
+		chatImageDLMutex.Unlock()
+		return nil
+	}
+	fetching := chatImageFetching[url]
 	chatImageDLMutex.Unlock()
 
-	go fetchChatImage(url)
+	if !fetching {
+		go fetchChatImage(url)
+	}
 
 	return nil
+}
+
+// chatImageFailed holds when each failing chat image URL last failed. It is
+// guarded by chatImageDLMutex.
+var chatImageFailed = make(map[string]time.Time)
+
+// chatImageRetryAfter is how long a failed chat image waits for another try.
+const chatImageRetryAfter = 2 * time.Minute
+
+// markChatImageFailed records a fetch or decode failure for url.
+func markChatImageFailed(url string) {
+	chatImageDLMutex.Lock()
+	defer chatImageDLMutex.Unlock()
+	if len(chatImageFailed) > 512 {
+		chatImageFailed = make(map[string]time.Time)
+	}
+	chatImageFailed[url] = time.Now()
 }
 
 // chatAttachmentRoot is the directory local chat attachments may be read from.
@@ -188,8 +219,12 @@ func fetchChatImage(url string) {
 	delete(chatImageFetching, url)
 	if len(data) > 0 {
 		chatImageDownloads[url] = data
+		delete(chatImageFailed, url)
 	}
 	chatImageDLMutex.Unlock()
+	if len(data) == 0 {
+		markChatImageFailed(url)
+	}
 }
 
 func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Texture {
@@ -199,15 +234,18 @@ func uploadChatImage(renderer *sdl.Renderer, url string, data []byte) *sdl.Textu
 	// holds a permit, so the Acquire never blocks here.
 	rgba, err := decodeImageRGBA(context.Background(), data)
 	if err != nil {
+		markChatImageFailed(url)
 		return nil
 	}
 	bounds := rgba.Bounds()
 	w, h := bounds.Max.X, bounds.Max.Y
 	if w <= 0 || h <= 0 {
+		markChatImageFailed(url)
 		return nil
 	}
 	tex, err := renderer.CreateTexture(sdl.PIXELFORMAT_ABGR8888, sdl.TEXTUREACCESS_STATIC, int32(w), int32(h))
 	if err != nil {
+		markChatImageFailed(url)
 		return nil
 	}
 	tex.Update(nil, unsafe.Pointer(&rgba.Pix[0]), rgba.Stride)
@@ -848,6 +886,13 @@ var groqStatus string
 // discordSession is the live Discord gateway client (discordgo) when connected.
 var discordSession *discordgo.Session
 
+// discordSessionKey names the token and channel discordSession was opened
+// for, so a connect for the same pair reuses it.
+var discordSessionKey string
+
+// discordConnectMu serializes discordConnect.
+var discordConnectMu sync.Mutex
+
 // discordCreds reads the configured Discord bot token and channel id. The channel
 // id comes from the explicit ChannelProfile (loaded from jukaconfig.json),
 // falling back to the runtime Custom value and finally the default JukaHub
@@ -1203,6 +1248,12 @@ func extractImageURL(msg *discordgo.Message) string {
 // token and listens for new messages in the configured channel. It returns
 // immediately; the connection is established in the background.
 func discordConnect() error {
+	// One connect at a time. Entering a chat scene starts one on its own
+	// goroutine, so two overlapping entries (Chat, back, Chat) each opened a
+	// gateway session: the first was overwritten without being closed, and
+	// its handler went on appending every message a second time.
+	discordConnectMu.Lock()
+	defer discordConnectMu.Unlock()
 	tok, ch := discordCreds()
 	if tok == "" {
 		return fmt.Errorf("discord not configured: %s", discordStatus)
@@ -1212,6 +1263,11 @@ func discordConnect() error {
 		return fmt.Errorf("discord not configured: channel not set")
 	}
 	if discordSession != nil {
+		// An open session for the same token and channel is kept: each new
+		// one is a fresh gateway IDENTIFY, which Discord limits per token.
+		if discordSessionKey == tok+"\x00"+ch {
+			return nil
+		}
 		discordSession.Close()
 		discordSession = nil
 	}
@@ -1252,6 +1308,7 @@ func discordConnect() error {
 		return err
 	}
 	discordSession = dg
+	discordSessionKey = tok + "\x00" + ch
 	discordStatus = "Discord: connecting..."
 	// Fetch recent history in the background.
 	go func() {
@@ -1272,15 +1329,19 @@ func discordConnect() error {
 			discordStatus = "Discord: " + ferr.Error()
 			return
 		}
-		chatMutex.Lock()
-		chatMessages = chatMessages[:0]
+		fresh := make([]ChatMessage, 0, len(msgs))
 		for _, m := range msgs {
-			chatMessages = append(chatMessages, chatMessageFromDiscord(m))
+			fresh = append(fresh, chatMessageFromDiscord(m))
 		}
 		// Discord returns newest-first; reverse to chronological.
-		for i, j := 0, len(chatMessages)-1; i < j; i, j = i+1, j-1 {
-			chatMessages[i], chatMessages[j] = chatMessages[j], chatMessages[i]
+		for i, j := 0, len(fresh)-1; i < j; i, j = i+1, j-1 {
+			fresh[i], fresh[j] = fresh[j], fresh[i]
 		}
+		// A new slice is swapped in. Refilling chatMessages[:0] rewrote the
+		// backing array the renderer had copied the slice of under this lock
+		// and was still reading, so messages changed under it mid-frame.
+		chatMutex.Lock()
+		chatMessages = fresh
 		chatMutex.Unlock()
 		saveChatMessages()
 		discordStatus = "Discord: connected"
@@ -1599,10 +1660,11 @@ func sendGroqChatMessage(userText string) {
 	key := groqAPIKey()
 	if key == "" {
 		groqStatus = "Groq: no API key"
-		sendChatMessage("System", "Groq API key not configured. Set groq_api_key in config.")
+		postLocalChatMessage("System", "Groq API key not configured. Set groq_api_key in config.")
 		return
 	}
-	sendChatMessage(chatDisplayName(), userText)
+	// The AI conversation stays on this device (postLocalChatMessage).
+	postLocalChatMessage(chatDisplayName(), userText)
 	groqStatus = "Groq: thinking..."
 	atomic.StoreInt32(&groqPending, 1)
 	go func() {
@@ -1611,11 +1673,11 @@ func sendGroqChatMessage(userText string) {
 		if err != nil {
 			groqStatus = "Groq: error"
 			log.Printf("[groq] request failed: %v", err)
-			sendChatMessage("System", err.Error())
+			postLocalChatMessage("System", err.Error())
 			return
 		}
 		groqStatus = "Groq: connected"
-		sendChatMessage("Juka AI", reply)
+		postLocalChatMessage("Juka AI", reply)
 	}()
 }
 
@@ -1667,6 +1729,22 @@ func newChatMessageID() string {
 }
 
 func sendChatMessage(sender, text string) {
+	// "System" lines are the app talking to this user (a missing key, a file
+	// that could not be read); they are never posted to the channel.
+	postChatMessage(sender, text, sender != "System")
+}
+
+// postLocalChatMessage adds a message to this device's chat only. The Ask-AI
+// conversation uses it: the empty state promises a solo chat, but every
+// prompt, every "Juka AI" answer — and quoted messages sent along with Ask
+// AI — went to the public Discord channel too.
+func postLocalChatMessage(sender, text string) {
+	postChatMessage(sender, text, false)
+}
+
+// postChatMessage adds a message to the chat, and posts it to the configured
+// Discord channel when mirror is set.
+func postChatMessage(sender, text string, mirror bool) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
@@ -1694,7 +1772,7 @@ func sendChatMessage(sender, text string) {
 
 	// Mirror the message to Discord when configured, quoting the original when
 	// the reply points at a Discord message.
-	if appConfig != nil {
+	if mirror && appConfig != nil {
 		replyID := ""
 		if msg.Quote != nil {
 			replyID = msg.Quote.ID
@@ -1922,14 +2000,8 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	const inputH = int32(50)
 	msgAreaTop := listY + headerH + SpaceSM
 
-	// Panel background with subtle border.
-	fillRoundedRect(renderer, listX, listY, listW, listH, RadiusMD, ColorSurfaceRaised)
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
-	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: listW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + 1, W: 1, H: listH - 2})
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 60)
-	renderer.DrawRect(&sdl.Rect{X: listX + 1, Y: listY + listH - 2, W: listW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: listX + listW - 2, Y: listY + 1, W: 1, H: listH - 2})
+	// Panel background: the shared content container (Home's glass).
+	drawPanel(renderer, listX, listY, listW, listH, sdl.Color{}, sdl.Color{})
 
 	// Status indicators row.
 	statusY := listY + SpaceSM
@@ -2333,13 +2405,15 @@ func renderChat(renderer *sdl.Renderer, config *Config, element Element) {
 	}
 	inputX := listX + SpaceSM
 	inputW := listW - 2*SpaceSM
-	inputBorderCol := ColorBorder
+	// The composer is a scene input: recessed glass with a hairline, the
+	// accent edge while it is typing (renderInputField's recipe).
+	inputBorderCol, inputBorderW := glassA(26), int32(1)
 	if chatInputActive {
-		inputBorderCol = WithAlpha(ColorInfo, 160)
+		inputBorderCol, inputBorderW = glassAccent(), 2
 	}
 	chatInputRect = sdl.Rect{X: inputX, Y: inputY, W: inputW, H: inputH}
-	fillRoundedRect(renderer, inputX, inputY, inputW, inputH, RadiusMD, ColorSurfacePanel)
-	strokeRoundedRect(renderer, inputX, inputY, inputW, inputH, RadiusMD, 1, inputBorderCol)
+	fillRoundedRect(renderer, inputX, inputY, inputW, inputH, glassControlRadius, glassA(10))
+	strokeRoundedRect(renderer, inputX, inputY, inputW, inputH, glassControlRadius, inputBorderW, inputBorderCol)
 
 	if chatInputText == "" {
 		renderText(renderer, config, font, "Type a message...", ColorTextTertiary(), listX+SpaceMD, inputY+(inputH-lineH)/2)

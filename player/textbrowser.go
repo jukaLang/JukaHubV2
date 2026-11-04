@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -283,6 +284,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	contentH := elemH - headerH - 8
 	if source == textBrowserSourceWeb {
 		contentH = elemH - headerH - textBrowserURLBarHeight - 12 - cookieStripH
+		browserCookieStripReserved = cookieStripH
 	}
 	maxLines := int((contentH) / lineH)
 	var lines []string
@@ -315,7 +317,12 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		totalLines = len(lines)
 	}
 
-	fillRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 4, headerColor)
+	// The header is Home's glass band with the source named in its own colour.
+	// It used to be a saturated slab with white type: white on the cyan WEB band
+	// was hard to read, and on a light preset the strip was the loudest thing on
+	// the screen. The 8px corner also keeps it inside the panel's rounding.
+	fillRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 8, glassA(14))
+	strokeRoundedRect(renderer, element.X+4, headerY, elemW-8, headerH, 8, 1, glassEdge())
 	labelFont, _ := getCachedFont(config, "small")
 	if labelFont != nil {
 		sourceLabel := "SYSTEM"
@@ -329,7 +336,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 		lw, lh, _ := labelFont.SizeUTF8(sourceLabel)
 		textY := headerY + (headerH-int32(lh))/2
-		renderText(renderer, config, labelFont, sourceLabel, sdl.Color{R: 255, G: 255, B: 255, A: 255}, element.X+12, textY)
+		renderText(renderer, config, labelFont, sourceLabel, TextInk(headerColor), element.X+12, textY)
 
 		// The header is a browser tab strip in miniature: source badge,
 		// page title, then the position and refresh time pushed right.
@@ -341,7 +348,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			ts := time.Unix(textBrowserLastUpdate, 0).Format("15:04:05")
 			tw, _, _ := labelFont.SizeUTF8(ts)
 			tsX := rightEdge - int32(tw)
-			renderText(renderer, config, labelFont, ts, sdl.Color{R: 255, G: 255, B: 255, A: 180}, tsX, textY)
+			renderText(renderer, config, labelFont, ts, ColorTextMuted(), tsX, textY)
 			rightEdge = tsX - 12
 		}
 		// A zoomed page names its scale on the toolbar chip (see the zoom
@@ -361,7 +368,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			}
 			infoW, _, _ := labelFont.SizeUTF8(lineInfo)
 			rightEdge -= int32(infoW)
-			renderText(renderer, config, labelFont, lineInfo, sdl.Color{R: 255, G: 255, B: 255, A: 180}, rightEdge, textY)
+			renderText(renderer, config, labelFont, lineInfo, ColorTextMuted(), rightEdge, textY)
 			rightEdge -= 12
 		}
 		if styledDoc != nil {
@@ -369,7 +376,7 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			if title != "" {
 				left := element.X + 12 + int32(lw) + 10
 				if avail := rightEdge - left; avail > 40 {
-					renderText(renderer, config, labelFont, ellipsize(labelFont, title, avail), sdl.Color{R: 255, G: 255, B: 255, A: 230}, left, textY)
+					renderText(renderer, config, labelFont, ellipsize(labelFont, title, avail), ColorTextPrimary(), left, textY)
 				}
 			}
 		}
@@ -381,12 +388,13 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 			}
 			spinnerY := headerY + headerH/2
 			angle := float64(sdl.GetTicks64()%360) * math.Pi / 180.0
+			ink := glassInk()
 			for i := 0; i < 8; i++ {
 				a := float64(i) * 45.0 * math.Pi / 180.0
 				x := spinnerX + int32(math.Cos(angle+a)*6)
 				y := spinnerY + int32(math.Sin(angle+a)*6)
 				alpha := uint8(255 - (i * 28))
-				renderer.SetDrawColor(255, 255, 255, alpha)
+				renderer.SetDrawColor(ink.R, ink.G, ink.B, alpha)
 				renderer.FillRect(&sdl.Rect{X: x, Y: y, W: 2, H: 2})
 			}
 		}
@@ -398,8 +406,12 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		backRect, forwardRect := textBrowserHistoryRects(config, element)
 		drawBrowserHistoryIcon(renderer, backRect, -1, browserHistoryAvailable(-1))
 		drawBrowserHistoryIcon(renderer, forwardRect, 1, browserHistoryAvailable(1))
-		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, sdl.Color{R: 27, G: 34, B: 48, A: 255})
-		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 6, 1, sdl.Color{R: 93, G: 110, B: 138, A: 210})
+		// The toolbar is Home's glass: the address field and the quiet chips
+		// are glass pills with the footer badges' edge, an active chip is an
+		// accent wash. The navy and slate fills they had were dark-theme-only
+		// slabs that did not match anything else on screen.
+		fillRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 8, glassA(16))
+		strokeRoundedRect(renderer, addressRect.X, addressRect.Y, addressRect.W, addressRect.H, 8, 1, glassChipEdge())
 		address := textBrowserAddress(config)
 		if styledDoc != nil && styledDoc.URL != "" {
 			address = styledDoc.URL // the final URL after redirects, not the requested URL
@@ -415,42 +427,44 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				if styledDoc != nil && browserHTTPSAddress(styledDoc.URL) && strings.HasPrefix(display, "https://") {
 					prefix := "https://"
 					pw, _, _ := labelFont.SizeUTF8(prefix)
-					renderText(r, config, labelFont, prefix, sdl.Color{R: 105, G: 218, B: 155, A: 255}, textX, y)
+					renderText(r, config, labelFont, prefix, SuccessInk(), textX, y)
 					renderText(r, config, labelFont, strings.TrimPrefix(display, prefix), ColorTextPrimary(), textX+int32(pw), y)
 				} else {
 					renderText(r, config, labelFont, display, ColorTextPrimary(), textX, y)
 				}
 			})
 			if searchRect.W > 0 {
-				fillRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 6, sdl.Color{R: 36, G: 45, B: 63, A: 255})
-				strokeRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 6, 1, WithAlpha(accentColor, 170))
+				fillRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 8, glassChipFill())
+				strokeRoundedRect(renderer, searchRect.X, searchRect.Y, searchRect.W, searchRect.H, 8, 1, WithAlpha(accentColor, 170))
 				sw, sh, _ := labelFont.SizeUTF8("SEARCH")
 				renderText(renderer, config, labelFont, "SEARCH", WithAlpha(accentColor, 235), searchRect.X+(searchRect.W-int32(sw))/2, searchRect.Y+(searchRect.H-int32(sh))/2)
 			}
 			tw, th, _ := labelFont.SizeUTF8("GO")
-			fillRoundedRect(renderer, goRect.X, goRect.Y, goRect.W, goRect.H, 6, accentColor)
-			renderText(renderer, config, labelFont, "GO", sdl.Color{R: 255, G: 255, B: 255, A: 255}, goRect.X+(goRect.W-int32(tw))/2, goRect.Y+(goRect.H-int32(th))/2)
+			// The label takes the accent's contrast ink: white on Home's cyan
+			// was about 1.7:1.
+			fillRoundedRect(renderer, goRect.X, goRect.Y, goRect.W, goRect.H, 8, accentColor)
+			renderText(renderer, config, labelFont, "GO", contrastText(accentColor), goRect.X+(goRect.W-int32(tw))/2, goRect.Y+(goRect.H-int32(th))/2)
 			if filterRect.W > 0 {
 				// The chip is the page's filter state and its count at once:
 				// amber says this site is excepted, accent says the load
 				// skipped something, and neutral means nothing was in the way.
 				view := browserAdBlockViewFor(element.Variable)
 				label := ellipsize(labelFont, browserAdBlockLabel(view), filterRect.W-8)
-				fill := sdl.Color{R: 36, G: 45, B: 63, A: 255}
-				ink := sdl.Color{R: 155, G: 170, B: 195, A: 255}
-				border := sdl.Color{R: 93, G: 110, B: 138, A: 170}
+				fill := glassChipFill()
+				ink := ColorTextSecondary()
+				border := glassChipEdge()
 				switch {
 				case view.Off:
-					fill = sdl.Color{R: 68, G: 48, B: 30, A: 255}
+					fill = WithAlpha(ColorWarning, 45)
 					ink = WarningInk()
 					border = WithAlpha(ColorWarning, 190)
 				case view.Blocked > 0:
-					fill = sdl.Color{R: 24, G: 58, B: 66, A: 255}
+					fill = WithAlpha(accentColor, 45)
 					ink = WithAlpha(accentColor, 240)
 					border = WithAlpha(accentColor, 170)
 				}
-				fillRoundedRect(renderer, filterRect.X, filterRect.Y, filterRect.W, filterRect.H, 6, fill)
-				strokeRoundedRect(renderer, filterRect.X, filterRect.Y, filterRect.W, filterRect.H, 6, 1, border)
+				fillRoundedRect(renderer, filterRect.X, filterRect.Y, filterRect.W, filterRect.H, 8, fill)
+				strokeRoundedRect(renderer, filterRect.X, filterRect.Y, filterRect.W, filterRect.H, 8, 1, border)
 				fw, fh, _ := labelFont.SizeUTF8(label)
 				renderText(renderer, config, labelFont, label, ink,
 					filterRect.X+(filterRect.W-int32(fw))/2, filterRect.Y+(filterRect.H-int32(fh))/2)
@@ -460,16 +474,16 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				// visible without waiting for a toast: accent means the pad walks
 				// links, a quiet chip means it scrolls.
 				label := textBrowserModeChipLabel()
-				fill := sdl.Color{R: 36, G: 45, B: 63, A: 255}
-				ink := sdl.Color{R: 155, G: 170, B: 195, A: 255}
-				border := sdl.Color{R: 93, G: 110, B: 138, A: 170}
+				fill := glassChipFill()
+				ink := ColorTextSecondary()
+				border := glassChipEdge()
 				if browserNav == browserModeLinks {
 					fill = accentColor
 					ink = contrastText(fill)
 					border = WithAlpha(accentColor, 220)
 				}
-				fillRoundedRect(renderer, modeRect.X, modeRect.Y, modeRect.W, modeRect.H, 6, fill)
-				strokeRoundedRect(renderer, modeRect.X, modeRect.Y, modeRect.W, modeRect.H, 6, 1, border)
+				fillRoundedRect(renderer, modeRect.X, modeRect.Y, modeRect.W, modeRect.H, 8, fill)
+				strokeRoundedRect(renderer, modeRect.X, modeRect.Y, modeRect.W, modeRect.H, 8, 1, border)
 				mw, mh, _ := labelFont.SizeUTF8(label)
 				renderText(renderer, config, labelFont, label, ink,
 					modeRect.X+(modeRect.W-int32(mw))/2, modeRect.Y+(modeRect.H-int32(mh))/2)
@@ -479,16 +493,16 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 				// tap. Accent when it is off 100% (so a scaled page is visibly
 				// a setting, not the site), quiet at normal size.
 				label := browserZoomLabel()
-				fill := sdl.Color{R: 36, G: 45, B: 63, A: 255}
-				ink := sdl.Color{R: 155, G: 170, B: 195, A: 255}
-				border := sdl.Color{R: 93, G: 110, B: 138, A: 170}
+				fill := glassChipFill()
+				ink := ColorTextSecondary()
+				border := glassChipEdge()
 				if browserZoomScale() != 1.0 {
-					fill = sdl.Color{R: 24, G: 58, B: 66, A: 255}
+					fill = WithAlpha(accentColor, 45)
 					ink = WithAlpha(accentColor, 240)
 					border = WithAlpha(accentColor, 170)
 				}
-				fillRoundedRect(renderer, zoomRect.X, zoomRect.Y, zoomRect.W, zoomRect.H, 6, fill)
-				strokeRoundedRect(renderer, zoomRect.X, zoomRect.Y, zoomRect.W, zoomRect.H, 6, 1, border)
+				fillRoundedRect(renderer, zoomRect.X, zoomRect.Y, zoomRect.W, zoomRect.H, 8, fill)
+				strokeRoundedRect(renderer, zoomRect.X, zoomRect.Y, zoomRect.W, zoomRect.H, 8, 1, border)
 				zw, zh, _ := labelFont.SizeUTF8(label)
 				renderText(renderer, config, labelFont, label, ink,
 					zoomRect.X+(zoomRect.W-int32(zw))/2, zoomRect.Y+(zoomRect.H-int32(zh))/2)
@@ -567,7 +581,8 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 	if cookieStripH > 0 && cookieFont != nil {
 		sites := browserCookieSites()
 		stripY := contentTop + contentH
-		renderer.SetDrawColor(255, 255, 255, 14)
+		hairline := glassHairline()
+		renderer.SetDrawColor(hairline.R, hairline.G, hairline.B, hairline.A)
 		renderer.FillRect(&sdl.Rect{X: element.X + 12, Y: stripY, W: elemW - 24, H: 1})
 		ink := ColorTextTertiary()
 		if len(sites) > 0 {
@@ -597,29 +612,17 @@ func renderTextBrowser(renderer *sdl.Renderer, config *Config, element Element) 
 		}
 	}
 
-	if scrollMax > 0 {
-		barX := element.X + elemW - 10
-		barY := element.Y + 8 + headerH
-		barH := contentH
-		thumbH := int32(0)
-		if totalLines > 0 {
-			thumbH = barH * int32(maxLines) / int32(totalLines)
-			if thumbH < 20 {
-				thumbH = 20
-			}
+	// The shared glass scrollbar, beside the page itself. It used to start
+	// under the header whatever the source, so on the web panel its top ran
+	// down the side of the toolbar, and its pale track was the one light bar
+	// on a dark screen.
+	if scrollMax > 0 && totalLines > 0 {
+		barY := contentTop
+		if source == textBrowserSourceWeb {
+			barY += 4
 		}
-		thumbY := barY + int32(float64(barH-thumbH)*float64(textBrowserScrollY)/float64(scrollMax))
-
-		renderer.SetDrawColor(220, 225, 235, 100)
-		renderer.FillRect(&sdl.Rect{X: barX, Y: barY, W: 4, H: barH})
-
-		renderer.SetDrawColor(140, 150, 175, 220)
-		renderer.FillRect(&sdl.Rect{X: barX, Y: thumbY, W: 4, H: thumbH})
-
-		if thumbH > 4 {
-			renderer.SetDrawColor(160, 170, 190, 180)
-			renderer.FillRect(&sdl.Rect{X: barX + 1, Y: thumbY + 2, W: 2, H: thumbH - 4})
-		}
+		drawScrollbar(renderer, element.X+elemW-10, barY, 4, contentH,
+			float64(maxLines)/float64(totalLines), float64(textBrowserScrollY)/float64(scrollMax))
 	}
 
 	// A running find names itself in the top-right of the page, so the reader
@@ -992,11 +995,12 @@ func drawBrowserHistoryIcon(r *sdl.Renderer, rect sdl.Rect, dir int32, enabled b
 	if rect.W <= 0 || rect.H <= 0 {
 		return
 	}
-	ink := sdl.Color{R: 125, G: 139, B: 158, A: 255}
+	ink := ColorTextTertiary()
 	if enabled {
 		ink = ColorTextPrimary()
 	}
-	fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 6, sdl.Color{R: 36, G: 45, B: 63, A: 255})
+	fillRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 8, glassChipFill())
+	strokeRoundedRect(r, rect.X, rect.Y, rect.W, rect.H, 8, 1, glassChipEdge())
 	cx, cy := rect.X+rect.W/2, rect.Y+rect.H/2
 	r.SetDrawColor(ink.R, ink.G, ink.B, ink.A)
 	r.DrawLine(cx-6, cy, cx+6, cy)
@@ -1142,6 +1146,21 @@ func browserLoadURL(config *Config, element Element, rawURL string, recordHistor
 	browserFetches.Add(1)
 	go func(variable, pageURL string, id uint64) {
 		defer browserFetches.Done()
+		// The fetch parses whatever the network sends — HTML, CSS, scripts —
+		// and a parser bug on one hostile or broken page must not take the
+		// whole hub down with it: a panic on this goroutine is not caught by
+		// the render loop's recover. The page becomes an error message.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[browser] reader crashed on %s: %v\n%s", pageURL, r, debug.Stack())
+				textBrowserRequestMutex.Lock()
+				isCurrent := textBrowserRequestSequence[variable] == id
+				textBrowserRequestMutex.Unlock()
+				if isCurrent {
+					publishCustom(variable, "This page could not be shown: the reader hit an internal error on it.")
+				}
+			}
+		}()
 		page := fetch(pageURL)
 		textBrowserRequestMutex.Lock()
 		isCurrent := textBrowserRequestSequence[variable] == id
@@ -1431,7 +1450,7 @@ func browserMetaRefreshTarget(html string, base *url.URL) string {
 	if base == nil {
 		return ""
 	}
-	lower := strings.ToLower(html)
+	lower := asciiLower(html)
 	for from := 0; from < len(lower); {
 		i := strings.Index(lower[from:], "<meta")
 		if i < 0 {
@@ -1542,7 +1561,7 @@ func textBrowserTruncationNote() string {
 // note at the end would be dropped along with the rest of the unread tail.
 func withTextBrowserTruncationNote(source string) string {
 	note := "<p>" + textBrowserTruncationNote() + "</p>"
-	lower := strings.ToLower(source)
+	lower := asciiLower(source)
 	for from := 0; from < len(lower); {
 		at := strings.Index(lower[from:], "<body")
 		if at < 0 {

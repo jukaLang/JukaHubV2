@@ -484,11 +484,15 @@ func ctrlWallpaper(e *sdl.ControllerButtonEvent) bool {
 	case sdl.CONTROLLER_BUTTON_A:
 		if wpCursor >= 0 && wpCursor < len(wpEntries) {
 			en := wpEntries[wpCursor]
-			if strings.HasPrefix(en.name, "\U0001f4c1") {
+			// Folders are listed as "[+] name" (listPickerEntries). This looked
+			// for a folder emoji the list never used, so A on a folder — the
+			// parent row included — set a directory as the wallpaper.
+			if strings.HasPrefix(en.name, "[+]") {
 				wpDir = en.path
 				scanWallpaperDir()
 			} else {
 				appConfig.Variables.BackgroundImage = en.path
+				wpPreview = en.path
 				dynbg.wallpaper = nil
 				wpOpen = false
 				ShowToast("[P] Wallpaper set!", ToastKindSuccess)
@@ -568,11 +572,17 @@ func handleControllerAxis(e *sdl.ControllerAxisEvent, config *Config) bool {
 	switch e.Axis {
 	case sdl.CONTROLLER_AXIS_TRIGGERLEFT:
 		if triggerPressedEdge(0, e.Value) {
+			if triggerOwnedByOverlay() {
+				return true
+			}
 			return handleShoulderPress(padL2, config)
 		}
 		return false
 	case sdl.CONTROLLER_AXIS_TRIGGERRIGHT:
 		if triggerPressedEdge(1, e.Value) {
+			if triggerOwnedByOverlay() {
+				return true
+			}
 			return handleShoulderPress(padR2, config)
 		}
 		return false

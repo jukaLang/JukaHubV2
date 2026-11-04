@@ -32,13 +32,14 @@ func TestChatImageURLDetection(t *testing.T) {
 // cases.
 func resetChatAttachmentState(t *testing.T, root string) {
 	t.Helper()
-	prevDownloads, prevFetching := chatImageDownloads, chatImageFetching
+	prevDownloads, prevFetching, prevFailed := chatImageDownloads, chatImageFetching, chatImageFailed
 	prevRoot := chatAttachmentRoot
 	chatImageDownloads = make(map[string][]byte)
 	chatImageFetching = make(map[string]bool)
+	chatImageFailed = make(map[string]time.Time)
 	chatAttachmentRoot = root
 	t.Cleanup(func() {
-		chatImageDownloads, chatImageFetching = prevDownloads, prevFetching
+		chatImageDownloads, chatImageFetching, chatImageFailed = prevDownloads, prevFetching, prevFailed
 		chatAttachmentRoot = prevRoot
 	})
 }
@@ -351,5 +352,28 @@ func TestChatLineLinkTargetsSkipClippedLinks(t *testing.T) {
 	}
 	if got := chatLineLinkTargets("watch https://youtu.be/dQw4w9WgX…", whole); len(got) != 0 {
 		t.Fatalf("clipped link targets = %+v, want none", got)
+	}
+}
+
+// A chat image that cannot be fetched waits before the next try instead of
+// being fetched again on every frame it stays on screen.
+func TestChatImageFailureWaitsBeforeRetry(t *testing.T) {
+	resetChatAttachmentState(t, t.TempDir())
+	missing := filepath.Join(chatAttachmentRoot, "gone.png")
+	fetchChatImage(missing)
+	chatImageDLMutex.Lock()
+	_, failed := chatImageFailed[missing]
+	chatImageDLMutex.Unlock()
+	if !failed {
+		t.Fatal("a fetch that found nothing was not remembered")
+	}
+	if tex := getChatImageTexture(nil, missing); tex != nil {
+		t.Fatal("a failed image produced a texture")
+	}
+	chatImageDLMutex.Lock()
+	fetching := chatImageFetching[missing]
+	chatImageDLMutex.Unlock()
+	if fetching {
+		t.Fatal("the failed image was fetched again straight away")
 	}
 }

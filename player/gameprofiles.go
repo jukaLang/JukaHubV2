@@ -861,6 +861,7 @@ func launchGameProfile(entry gameProfileEntry) error {
 	// card may have changed), extracted to tmpfs, and the staged tree is
 	// handed to the runtime through ANDROIDPAK_* env variables.
 	var stageDir string
+	var stageGen uint64
 	if entry.Profile.Runtime == gameRuntimeAndroidPak {
 		libs, triageErr := inspectAndroidPak(exe, entry.Profile.MainLib)
 		if triageErr != nil {
@@ -872,14 +873,14 @@ func launchGameProfile(entry gameProfileEntry) error {
 		if memErr := androidPakPreflight(exe, libs); memErr != nil {
 			return memErr
 		}
-		staged, _, stageErr := stageAndroidPak(id, exe, libs)
+		staged, _, gen, stageErr := stageAndroidPakGen(id, exe, libs)
 		if stageErr != nil {
 			return stageErr
 		}
-		stageDir = staged
+		stageDir, stageGen = staged, gen
 		command, args, buildErr = buildAndroidPakCommand(entry.Profile, exe, stageDir, libs, env)
 		if buildErr != nil {
-			removeAndroidPakStage(stageDir)
+			androidPakStageRelease(stageDir, stageGen)
 			return buildErr
 		}
 	}
@@ -909,6 +910,7 @@ func launchGameProfile(entry gameProfileEntry) error {
 	var logFile *os.File
 	if err := os.MkdirAll(gameProfilesLogsDir(), 0o755); err == nil {
 		logPath := filepath.Join(gameProfilesLogsDir(), id+".log")
+		rotateGameProfileLog(logPath)
 		if opened, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); logErr == nil {
 			logFile = opened
 			fmt.Fprintf(logFile, "\n=== %s start %s ===\ncommand: %s (args: %d)\nworking dir: %s\n",
@@ -923,11 +925,36 @@ func launchGameProfile(entry gameProfileEntry) error {
 		afterExit = func(err error) { androidPakFirstRunReport(id, err) }
 	}
 
-	return startGameProfileCommand(cmd, id, gameDir, logFile, func() {
+	startErr := startGameProfileCommand(cmd, id, gameDir, logFile, func() {
 		if stageDir != "" {
-			androidPakStageCleanupGC(stageDir)
+			androidPakStageCleanupGC(stageDir, stageGen)
 		}
 	}, afterExit)
+	if startErr != nil && stageDir != "" {
+		// Nothing started, so nothing will run the cleanup above: the
+		// extracted libraries would sit in tmpfs (RAM) until a reboot.
+		androidPakStageRelease(stageDir, stageGen)
+	}
+	return startErr
+}
+
+// gameProfileLogMaxBytes caps one game's launch log. Every launch appends a
+// run's whole stdout and stderr, and a chatty Wine or AndroidPak title grew
+// its log on the SD card without bound.
+const gameProfileLogMaxBytes = 1 << 20
+
+// rotateGameProfileLog moves a log past the cap to <log>.1 (replacing the
+// previous one), so the next launch starts a fresh file and one earlier run is
+// still there to compare with.
+func rotateGameProfileLog(path string) {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() <= gameProfileLogMaxBytes {
+		return
+	}
+	_ = os.Remove(path + ".1")
+	if err := os.Rename(path, path+".1"); err != nil {
+		_ = os.Truncate(path, 0)
+	}
 }
 
 // startGameProfileCommand starts cmd, records its PID, and waits in the

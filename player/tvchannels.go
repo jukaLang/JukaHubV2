@@ -10,6 +10,7 @@ package main
 // and persists the user's favorite channels by URL so they survive a reload.
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -358,13 +359,26 @@ func reloadIPTV(config *Config) {
 }
 
 func loadIPTV(config *Config) {
-	channels := loadTVChannelsFromDir("tv")
-	if len(channels) == 0 {
-		channels = loadTVPublicPlaylist()
-	}
-	tvSetChannels(channels)
-	tvSync()
+	// Scene work, like the podcast feeds. With an empty tv/ folder and a cold
+	// cache the public list is a fetch of up to 20 seconds plus a second of
+	// parsing, and it ran on the UI thread: entering Live TV froze the
+	// handheld until it finished.
+	//
+	// The list cursor belongs to the render thread, so it is reset here before
+	// the work leaves it; the task only publishes (tvPublishEntries), and
+	// writing the cursor from it raced every frame that read it.
 	focusedFileIndex = 0
+	runSceneTask(func(ctx context.Context) {
+		channels := loadTVChannelsFromDir("tv")
+		if len(channels) == 0 && ctx.Err() == nil {
+			channels = loadTVPublicPlaylist()
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		tvSetChannels(channels)
+		tvPublishEntries()
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -578,18 +592,25 @@ func tvCategoryLabel() string {
 // tvSync republishes the filtered list for the scene's dynamiclist and clamps
 // the selection so filtering never leaves the focus past the end.
 func tvSync() {
+	n := tvPublishEntries()
+	if focusedFileIndex >= n {
+		focusedFileIndex = n - 1
+	}
+	if focusedFileIndex < 0 {
+		focusedFileIndex = 0
+	}
+}
+
+// tvPublishEntries publishes the filtered channel list and returns its length.
+// It touches no render-thread state, so a scene task may call it.
+func tvPublishEntries() int {
 	channels := tvFilteredChannels()
 	entries := make([]FileEntry, 0, len(channels))
 	for _, ch := range channels {
 		entries = append(entries, FileEntry{Name: ch.Name, Path: ch.URL})
 	}
 	publishCustom(tvEntriesVar, entries)
-	if focusedFileIndex >= len(entries) {
-		focusedFileIndex = len(entries) - 1
-	}
-	if focusedFileIndex < 0 {
-		focusedFileIndex = 0
-	}
+	return len(entries)
 }
 
 // tvRowMeta returns the category and favorite state for a listed URL. The
@@ -806,8 +827,10 @@ func renderTVFilterBar(renderer *sdl.Renderer, config *Config, x, y, w int32) in
 		return tvFilterBarH
 	}
 
-	fillRoundedRect(renderer, x, y, w, tvFilterBarH, 10, ColorCard)
-	strokeRoundedRect(renderer, x, y, w, tvFilterBarH, 10, 1, ColorBorder)
+	// A glass strip inside the glass panel, like Home's footer band, rather than
+	// a slate card laid on top of it.
+	fillRoundedRect(renderer, x, y, w, tvFilterBarH, 10, glassA(16))
+	strokeRoundedRect(renderer, x, y, w, tvFilterBarH, 10, 1, glassEdge())
 
 	btn := int32(28)
 	by := y + (tvFilterBarH-btn)/2
@@ -850,7 +873,8 @@ func renderTVFilterBar(renderer *sdl.Renderer, config *Config, x, y, w int32) in
 
 // tvDrawBarButton draws one of the small category-arrow pills.
 func tvDrawBarButton(renderer *sdl.Renderer, config *Config, font *ttf.Font, glyph string, r sdl.Rect) {
-	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 8, ColorIconSurface)
+	fillRoundedRect(renderer, r.X, r.Y, r.W, r.H, 8, glassChipFill())
+	strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 8, 1, glassChipEdge())
 	gw, gh, _ := font.SizeUTF8(glyph)
 	renderText(renderer, config, font, glyph, ColorTextSecondary(),
 		r.X+(r.W-int32(gw))/2, r.Y+(r.H-int32(gh))/2)

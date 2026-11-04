@@ -248,6 +248,48 @@ func TestFTPServerUploadDownload(t *testing.T) {
 	}
 }
 
+// REST before STOR resumes an upload at the offset (lftp `put -c`, Python's
+// storbinary with rest=). The offset used to be ignored: the tail was written
+// at byte 0 over a truncated file and the client reported success.
+func TestFTPStoreHonoursRestart(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "resume.bin"), []byte("0123456789"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := &ftpService{conns: make(map[net.Conn]struct{})}
+	if err := srv.startAt(root, "127.0.0.1:0"); err != nil {
+		t.Fatalf("start FTP: %v", err)
+	}
+	t.Cleanup(srv.Stop)
+	c := newFTPTestClient(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(srv.Port())))
+	defer c.close()
+	if resp := c.cmd("USER test"); !strings.HasPrefix(resp, "331") {
+		t.Fatalf("USER = %q", resp)
+	}
+	if resp := c.cmd("PASS test"); !strings.HasPrefix(resp, "230") {
+		t.Fatalf("PASS = %q", resp)
+	}
+
+	data := c.passive()
+	if resp := c.cmd("REST 5"); !strings.HasPrefix(resp, "350") {
+		t.Fatalf("REST = %q", resp)
+	}
+	c.send("STOR resume.bin")
+	if resp := c.read(); !strings.HasPrefix(resp, "150") {
+		t.Fatalf("STOR = %q", resp)
+	}
+	if _, err := io.WriteString(data, "abcde"); err != nil {
+		t.Fatalf("write data: %v", err)
+	}
+	_ = data.Close()
+	if resp := c.read(); !strings.HasPrefix(resp, "226") {
+		t.Fatalf("STOR completion = %q", resp)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "resume.bin")); err != nil || string(got) != "01234abcde" {
+		t.Fatalf("resumed file = %q (err %v), want %q", got, err, "01234abcde")
+	}
+}
+
 // FileZilla and friends send LIST with flags when hidden files are enabled;
 // those flags are not a path and must not break the listing.
 func TestFTPListAcceptsFlags(t *testing.T) {

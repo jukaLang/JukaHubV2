@@ -735,16 +735,32 @@ func webMediaBlockApplies(query string) bool {
 // reader supports what it implements) and @layer (the cascade order is
 // approximated, but the rules are the site's real styling).
 func parseWebCSS(src string) []webRule {
-	src = stripWebCSSComments(src)
 	rules := make([]webRule, 0, 32)
 	order := 0
-	for i := 0; i < len(src); {
+	parseWebCSSInto(stripWebCSSComments(src), 0, &order, &rules)
+	return rules
+}
+
+const (
+	// webCSSMaxNesting bounds how deep conditional group rules are followed.
+	// Each level re-scanned its whole body, so a sheet of nothing but
+	// "@media a{" (58,000 levels in the 512 KB a page may load) cost
+	// quadratic time and gigabytes of copies before the page appeared.
+	webCSSMaxNesting = 8
+	// webCSSMaxRules bounds the rules one page keeps; a large site uses a few
+	// thousand.
+	webCSSMaxRules = 16000
+)
+
+// parseWebCSSInto appends the rules of one (comment-free) block to rules.
+func parseWebCSSInto(src string, depth int, order *int, rules *[]webRule) {
+	for i := 0; i < len(src) && len(*rules) < webCSSMaxRules; {
 		open := strings.IndexByte(src[i:], '{')
 		if open < 0 {
 			break
 		}
 		open += i
-		selectorText := strings.TrimSpace(src[i:open])
+		selectorText := webSkipCSSStatementRules(strings.TrimSpace(src[i:open]))
 		close := webCSSBlockEnd(src, open)
 		if close < 0 {
 			break
@@ -762,12 +778,8 @@ func parseWebCSS(src string) []webRule {
 			}
 			// A conditional group rule nests: `@media` inside `@layer` still
 			// has to be judged on its own query.
-			if keep {
-				for _, inner := range parseWebCSS(body) {
-					inner.order = order
-					order++
-					rules = append(rules, inner)
-				}
+			if keep && depth < webCSSMaxNesting {
+				parseWebCSSInto(body, depth+1, order, rules)
 			}
 			continue
 		}
@@ -780,17 +792,63 @@ func parseWebCSS(src string) []webRule {
 			if selector == "" {
 				continue
 			}
-			rules = append(rules, webRule{
+			if len(*rules) >= webCSSMaxRules {
+				break
+			}
+			*rules = append(*rules, webRule{
 				selector:    selector,
 				specificity: webSelectorSpecificity(selector),
-				order:       order,
+				order:       *order,
 				decls:       decls,
 				important:   important,
 			})
-			order++
+			*order++
 		}
 	}
-	return rules
+}
+
+// webSkipCSSStatementRules drops the statement at-rules — @charset, @import,
+// @namespace, which end at a semicolon instead of a block — from the text in
+// front of a block. They used to be read as part of the next selector, so
+// `@charset "utf-8"; body {…}` was taken for an at-rule block and the first
+// real rule of nearly every stylesheet was thrown away.
+func webSkipCSSStatementRules(text string) string {
+	for strings.HasPrefix(text, "@") {
+		lower := asciiLower(text)
+		if !strings.HasPrefix(lower, "@charset") && !strings.HasPrefix(lower, "@import") &&
+			!strings.HasPrefix(lower, "@namespace") {
+			return text
+		}
+		end := -1
+		var quote byte
+		depth := 0
+		for i := 0; i < len(text) && end < 0; i++ {
+			c := text[i]
+			switch {
+			case quote != 0:
+				if c == '\\' {
+					i++
+				} else if c == quote {
+					quote = 0
+				}
+			case c == '"' || c == '\'':
+				quote = c
+			case c == '(':
+				depth++
+			case c == ')':
+				if depth > 0 {
+					depth--
+				}
+			case c == ';' && depth == 0:
+				end = i
+			}
+		}
+		if end < 0 {
+			return text
+		}
+		text = strings.TrimSpace(text[end+1:])
+	}
+	return text
 }
 
 func stripWebCSSComments(src string) string {
@@ -893,7 +951,7 @@ func parseWebDeclsSplit(src string) (decls, important map[string]string) {
 // reports whether it was there. The flag has to be stripped before the value
 // reaches a length or colour parser.
 func webDropImportant(value string) (string, bool) {
-	lower := strings.ToLower(value)
+	lower := asciiLower(value)
 	idx := strings.LastIndex(lower, "!important")
 	if idx < 0 {
 		return value, false
@@ -996,7 +1054,7 @@ func webSubstituteVars(value string, scope *webVarScope) string {
 func webReplaceVarRefs(value string, own, props map[string]string, visiting map[string]bool, depth int) (string, bool) {
 	var out strings.Builder
 	out.Grow(len(value))
-	lower := strings.ToLower(value)
+	lower := asciiLower(value)
 	changed := false
 	for i := 0; i < len(value); {
 		idx := strings.Index(lower[i:], "var(")
@@ -1027,12 +1085,22 @@ func webReplaceVarRefs(value string, own, props map[string]string, visiting map[
 		out.WriteString(replacement)
 		changed = true
 		i = end + 1
+		// Each level may reference the next one many times, so expansion is
+		// exponential in the eight levels allowed ("--a: var(--b) var(--b)",
+		// and so on): a few lines of CSS asked for megabytes per element.
+		// Past the cap the value is invalid, like a cycle.
+		if out.Len() > webVarMaxValueBytes {
+			return "", false
+		}
 	}
 	if !changed {
 		return value, false
 	}
 	return out.String(), true
 }
+
+// webVarMaxValueBytes caps one expanded custom-property value.
+const webVarMaxValueBytes = 8 << 10
 
 // webVarArgs splits the inside of var(...) into the property name and its
 // fallback. Only a comma outside brackets separates the two.
@@ -1112,7 +1180,7 @@ func webSubstituteCalc(value string, em float64) string {
 	if em <= 0 {
 		em = 16
 	}
-	lower := strings.ToLower(value)
+	lower := asciiLower(value)
 	var out strings.Builder
 	out.Grow(len(value))
 	for i := 0; i < len(value); {

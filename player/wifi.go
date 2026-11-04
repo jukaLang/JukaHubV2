@@ -24,6 +24,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -1077,7 +1078,7 @@ func parseWPAStatus(out string) wifiStatus {
 		case "wpa_state":
 			st.State = v
 		case "ssid":
-			st.SSID = v
+			st.SSID = wpaUnescape(v)
 		case "ip_address":
 			st.IP = v
 		}
@@ -1102,7 +1103,7 @@ func parseWPANetworks(out string) []savedNetwork {
 		if err != nil {
 			continue
 		}
-		n := savedNetwork{ID: id, SSID: fields[1]}
+		n := savedNetwork{ID: id, SSID: wpaUnescape(fields[1])}
 		if len(fields) > 3 {
 			n.Flags = fields[3]
 		}
@@ -1126,8 +1127,9 @@ func parseWPAScanResults(out string) []wifiNetwork {
 		if len(fields) < 5 {
 			continue
 		}
-		ssid := strings.TrimRight(fields[4], "\r\x00")
-		if strings.TrimSpace(ssid) == "" {
+		ssid := wpaUnescape(strings.TrimRight(fields[4], "\r\x00"))
+		// A hidden network is printed as an empty name or as \x00 padding.
+		if strings.TrimSpace(strings.Trim(ssid, "\x00")) == "" {
 			continue
 		}
 		signal, err := strconv.Atoi(strings.TrimSpace(fields[2]))
@@ -1381,21 +1383,101 @@ func validateWiFiPassphrase(pass string) error {
 	return nil
 }
 
-// wpaQuote renders a value as the double-quoted string wpa_cli expects inside
-// set_network. Backslashes and quotes are escaped; validation has already
-// rejected newlines, which would end the command.
-func wpaQuote(s string) string {
-	var b strings.Builder
-	b.Grow(len(s) + 2)
-	b.WriteByte('"')
-	for _, r := range s {
-		if r == '"' || r == '\\' {
-			b.WriteByte('\\')
-		}
-		b.WriteRune(r)
+// wpaSSIDArg is the ssid value for set_network: the name's raw bytes in hex.
+//
+// wpa_supplicant reads a quoted value verbatim — everything between the first
+// and the last quote, with no escape processing — so the old backslash-escaping
+// configured `Home\"Net` for a network called Home"Net, and a name the
+// supplicant itself prints with \xNN escapes (anything non-ASCII, see
+// wpaUnescape) could not be written back at all. Hex is the one form every byte
+// survives, in wpa_cli's argv and over the control socket alike.
+func wpaSSIDArg(ssid string) string {
+	return hex.EncodeToString([]byte(ssid))
+}
+
+// wifiRawPSK reports whether a password is the 64-hex-digit raw-key form.
+func wifiRawPSK(pass string) bool {
+	if len(pass) != 64 {
+		return false
 	}
-	b.WriteByte('"')
-	return b.String()
+	for i := 0; i < len(pass); i++ {
+		if strings.IndexByte("0123456789abcdefABCDEF", pass[i]) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// wpaPSKArg is the psk value for set_network. A raw 64-digit key goes unquoted:
+// quoted, the supplicant counts 64 characters and refuses it as a passphrase
+// longer than 63, so a raw key could never be used. A passphrase goes between
+// quotes exactly as typed — the supplicant (and wpa_cli's stdin tokenizer)
+// takes everything up to the last quote verbatim, so escaping a quote or a
+// backslash changed the password and the router rejected it. Validation has
+// already kept newlines, which would end the command, out.
+func wpaPSKArg(pass string) string {
+	if wifiRawPSK(pass) {
+		return pass
+	}
+	return `"` + pass + `"`
+}
+
+// wpaUnescape decodes the escapes wpa_supplicant uses when it prints an SSID
+// (printf_encode: \\ \" \e \n \r \t and \xNN for every other byte outside
+// printable ASCII). Without it a café's network read as "Caf\xc3\xa9" in the
+// picker, and status, scan and saved lists could only ever be compared in their
+// escaped forms. Unknown escapes keep their backslash, so a decoder mismatch
+// shows up as text rather than as a silently different name.
+func wpaUnescape(s string) string {
+	if strings.IndexByte(s, '\\') < 0 {
+		return s
+	}
+	hexVal := func(c byte) int {
+		switch {
+		case c >= '0' && c <= '9':
+			return int(c - '0')
+		case c >= 'a' && c <= 'f':
+			return int(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			return int(c-'A') + 10
+		}
+		return -1
+	}
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c != '\\' || i+1 >= len(s) {
+			out = append(out, c)
+			continue
+		}
+		switch next := s[i+1]; next {
+		case '\\', '"':
+			out = append(out, next)
+			i++
+		case 'e':
+			out = append(out, 0x1b)
+			i++
+		case 'n':
+			out = append(out, '\n')
+			i++
+		case 'r':
+			out = append(out, '\r')
+			i++
+		case 't':
+			out = append(out, '\t')
+			i++
+		case 'x':
+			if i+3 < len(s) && hexVal(s[i+2]) >= 0 && hexVal(s[i+3]) >= 0 {
+				out = append(out, byte(hexVal(s[i+2])<<4|hexVal(s[i+3])))
+				i += 3
+			} else {
+				out = append(out, c)
+			}
+		default:
+			out = append(out, c)
+		}
+	}
+	return string(out)
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────
@@ -1528,7 +1610,7 @@ func wifiNextNetworkID(addOutput string) (int, error) {
 // wifiSetPassphrase sends the PSK on stdin. This is the one call that must not
 // put the secret in argv: `ps` lists every argument of every process.
 func wifiSetPassphrase(id int, pass string) (string, error) {
-	script := fmt.Sprintf("set_network %d psk %s\n", id, wpaQuote(pass))
+	script := fmt.Sprintf("set_network %d psk %s\n", id, wpaPSKArg(pass))
 	out, err := wifiWPAInput(script)
 	return out, wifiCommandError(out, err)
 }
@@ -1636,7 +1718,16 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 	if err != nil {
 		return res, err
 	}
-	if _, err := wifiWPAChecked("set_network", strconv.Itoa(id), "ssid", wpaQuote(ssid)); err != nil {
+	// Any failure from here on removes the half-configured entry, so repeated
+	// failed attempts cannot fill the supplicant's list with duplicates (and a
+	// later save_config cannot write them to disk).
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = wifiWPA("remove_network", strconv.Itoa(id))
+		}
+	}()
+	if _, err := wifiWPAChecked("set_network", strconv.Itoa(id), "ssid", wpaSSIDArg(ssid)); err != nil {
 		return res, err
 	}
 	if secured {
@@ -1655,27 +1746,47 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 	} else if _, err := wifiWPAChecked("set_network", strconv.Itoa(id), "key_mgmt", "NONE"); err != nil {
 		return res, err
 	}
+	// select_network disables every other saved network (in memory, and on
+	// disk at the next save_config); wifiReenableNetworks gives them back on
+	// both outcomes below.
 	if _, err := wifiWPAChecked("select_network", strconv.Itoa(id)); err != nil {
+		_, _ = wifiWPA("remove_network", strconv.Itoa(id))
+		committed = true
+		wifiReenableNetworks(preSaved, -1)
 		return res, err
-	}
-	// save_config fails when the supplicant runs with update_config=0. The
-	// connection still works, so this is a warning rather than a failure.
-	saved := false
-	if out, err := wifiWPA("save_config"); err != nil || wifiCommandFailed(out) {
-		saved = false
-	} else {
-		saved = true
 	}
 
 	st, err := wifiWaitForAssociation(ssid, wifiAssociateTimeout)
 	if err != nil {
-		// Do not leave a half-configured entry behind: repeated failed attempts
-		// would otherwise fill the supplicant's network list with duplicates.
+		// The new entry goes first (committed then stops the deferred remove
+		// from repeating it); the networks the select disabled are enabled
+		// again so the handheld falls back to one it knows instead of staying
+		// offline until a reboot. Nothing was saved yet, so the file on disk
+		// never saw the failed attempt.
 		_, _ = wifiWPA("remove_network", strconv.Itoa(id))
-		if saved {
-			_, _ = wifiWPA("save_config")
-		}
+		committed = true
+		wifiReenableNetworks(preSaved, -1)
 		return res, err
+	}
+	committed = true
+	// The entry this join replaced goes now that the new one works: removing
+	// it earlier would trade a working (if stale) key for a failed attempt.
+	skip := -1
+	if hadPrev && prevID != id {
+		skip = prevID
+	}
+	wifiReenableNetworks(preSaved, skip)
+	if skip >= 0 {
+		_, _ = wifiWPA("remove_network", strconv.Itoa(prevID))
+	}
+	// Saved only now, after the join worked and the other networks are enabled
+	// again: saving straight after select_network wrote every other network as
+	// disabled=1, so the handheld never rejoined home after one visit to a
+	// friend's Wi-Fi. save_config fails when the supplicant runs with
+	// update_config=0; the connection still works, so that is a warning.
+	saved := false
+	if out, err := wifiWPA("save_config"); err == nil && !wifiCommandFailed(out) {
+		saved = true
 	}
 	res.Saved = saved
 	warnings := make([]string, 0, 2)
@@ -1689,15 +1800,51 @@ func wifiJoin(ssid, passphrase string, secured bool) (wifiJoinResult, error) {
 	} else {
 		warnings = append(warnings, "no IP address was assigned; check DHCP on this network")
 	}
-	// The entry this join replaced goes now that the new one works: removing
-	// it earlier would trade a working (if stale) key for a failed attempt.
-	if hadPrev && prevID != id {
-		if _, err := wifiWPA("remove_network", strconv.Itoa(prevID)); err == nil && saved {
-			_, _ = wifiWPA("save_config")
-		}
-	}
 	res.Warn = strings.Join(warnings, "; ")
 	return res, nil
+}
+
+// wifiNetworkDisabled reports whether list_networks flagged an entry as
+// disabled on purpose. [TEMP-DISABLED] (a back-off after failed attempts) is
+// not that and does not match.
+func wifiNetworkDisabled(n savedNetwork) bool {
+	return strings.Contains(n.Flags, "[DISABLED]")
+}
+
+// wifiReenableNetworks undoes select_network's side effect. select_network
+// marks every other saved network disabled; left that way they never auto-join
+// again (and a save_config makes that permanent). The networks that were
+// enabled before the select are enabled again — which does not move the current
+// association — while one the user or the image disabled on purpose stays
+// disabled. skip is an entry about to be removed (-1 for none).
+func wifiReenableNetworks(before []savedNetwork, skip int) {
+	if len(before) == 0 {
+		// Nothing known about the list before the select (none saved, or
+		// the read failed): enabling everything is the safe answer — on a
+		// failed read, doing nothing let the save after a join write every
+		// other network as disabled.
+		_, _ = wifiWPA("enable_network", "all")
+		return
+	}
+	anyDisabled := false
+	for _, n := range before {
+		if wifiNetworkDisabled(n) {
+			anyDisabled = true
+			break
+		}
+	}
+	if !anyDisabled {
+		// One call instead of one per network: on the handheld each wpa_cli
+		// call is a fork.
+		_, _ = wifiWPA("enable_network", "all")
+		return
+	}
+	for _, n := range before {
+		if n.ID == skip || wifiNetworkDisabled(n) {
+			continue
+		}
+		_, _ = wifiWPA("enable_network", strconv.Itoa(n.ID))
+	}
 }
 
 // wifiSelectSaved reconnects a saved network without asking for its password
@@ -1725,6 +1872,10 @@ func wifiSelectSaved(id int) (wifiJoinResult, error) {
 		return res, fmt.Errorf("network %d is no longer saved", id)
 	}
 	res.SSID = ssid
+	// select_network disables every other saved network; they are enabled
+	// again whatever happens, so a reconnect that fails does not leave the
+	// handheld unable to fall back to another network it knows.
+	defer wifiReenableNetworks(nets, -1)
 	if _, err := wifiWPAChecked("select_network", strconv.Itoa(id)); err != nil {
 		return res, err
 	}

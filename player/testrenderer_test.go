@@ -17,6 +17,10 @@ func destroyTestRenderer(r *sdl.Renderer) {
 	// renderer-owned too.
 	DropShapeCacheForRenderer(r)
 	DropIconAtlasForRenderer(r)
+	// The ambient glow texture is cached by renderer pointer, and every
+	// backdrop, header band and focus bloom draws through it: a new probe
+	// renderer allocated at the freed address would get the dead texture back.
+	DropAmbientGlowForRenderer(r)
 	clearHomeTextCache()
 	clearAppIconCache()
 	// Avatar textures are cached by URL across frames; freeing them here keeps

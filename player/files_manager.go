@@ -184,18 +184,23 @@ func feFocusEntry(config *Config) (FileEntry, bool) {
 // are any, otherwise the row under the cursor. That is the rule every desktop
 // file manager follows, and it means the sheet's actions are useful without
 // first learning that X marks rows.
+//
+// The ".." row is never a target: its Path is the parent folder, and the
+// cursor rests on it whenever a folder is entered, so Delete with nothing
+// marked used to remove the whole folder above — every ROM next to the one
+// the user was looking at.
 func feSelectionTargets(config *Config) []FileEntry {
 	entries := feEntriesOf(config)
 	var targets []FileEntry
 	if feSelectionCount() > 0 {
 		for _, entry := range entries {
-			if feSelectedPaths[entry.Path] {
+			if entry.Name != ".." && feSelectedPaths[entry.Path] {
 				targets = append(targets, entry)
 			}
 		}
 		return targets
 	}
-	if entry, ok := feFocusEntry(config); ok {
+	if entry, ok := feFocusEntry(config); ok && entry.Name != ".." {
 		return []FileEntry{entry}
 	}
 	return nil
@@ -415,8 +420,14 @@ func feRenameEntry(config *Config, path, newName string) (string, error) {
 	if filepath.Clean(dest) == filepath.Clean(src) {
 		return dest, nil
 	}
-	if _, statErr := os.Lstat(dest); statErr == nil {
-		return "", fmt.Errorf("%q already exists here", name)
+	if destInfo, statErr := os.Lstat(dest); statErr == nil {
+		// On a case-insensitive card (FAT, exFAT, NTFS) the "existing" file is
+		// the one being renamed when only the letter case changes, and
+		// "pokemon.gba" → "Pokemon.gba" was refused as already there.
+		srcInfo, srcErr := os.Lstat(src)
+		if srcErr != nil || !os.SameFile(srcInfo, destInfo) {
+			return "", fmt.Errorf("%q already exists here", name)
+		}
 	}
 	if err := os.Rename(src, dest); err != nil {
 		return "", err
@@ -428,6 +439,22 @@ func feDeleteEntry(config *Config, path string) error {
 	resolved, err := feResolveEntry(config, path)
 	if err != nil {
 		return err
+	}
+	// A link is removed as a link. feResolveEntry follows it (to prove it
+	// stays inside the root), and RemoveAll on that answer emptied the whole
+	// folder the link pointed at. It is handled before the parent check below,
+	// which looks at the link's target: a link to the folder being browsed
+	// (or above it) is still just a link in this folder.
+	if lexical, err := resolveWithinRoot(feRoot(config), path); err == nil {
+		if info, err := os.Lstat(lexical); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return os.Remove(lexical)
+		}
+	}
+	// Never the folder being browsed or one above it: whatever route a parent
+	// path takes to get here (the ".." row, a stale mark), a delete is for
+	// things in the folder.
+	if cur := feCurrentPath(config); cur != "" && isPathWithin(cur, resolved) {
+		return errors.New("that folder holds the one you are in")
 	}
 	if err := os.RemoveAll(resolved); err != nil {
 		return err
@@ -777,7 +804,12 @@ func feToggleSelectionOnFocused(config *Config) bool {
 	if !ok {
 		return false
 	}
-	selected := feSelectionToggle(entry.Path)
+	// The ".." row is the way out, not a thing in the folder (it is the
+	// parent), so X steps over it without marking it.
+	selected := false
+	if entry.Name != ".." {
+		selected = feSelectionToggle(entry.Path)
+	}
 	if selected {
 		PlayActivateSound()
 	} else {
@@ -800,8 +832,9 @@ func renderFilesBreadcrumbBar(renderer *sdl.Renderer, config *Config, element El
 		return
 	}
 	bar := sdl.Rect{X: element.X, Y: element.Y - 52, W: elemW, H: 44}
-	fillRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, 10, ColorCard)
-	strokeRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, 10, 1, ColorBorder)
+	// A glass strip, the same surface as the list panel under it.
+	fillRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, glassControlRadius, glassFill())
+	strokeRoundedRect(renderer, bar.X, bar.Y, bar.W, bar.H, glassControlRadius, 1, glassEdge())
 	lineH := int32(font.Height())
 
 	// Sort chip, right-aligned: the order is a per-folder preference, and the
@@ -1441,7 +1474,7 @@ func renderFeSheet(renderer *sdl.Renderer, config *Config) {
 		action := actions[i]
 		rect := sdl.Rect{X: panelX + 12, Y: y, W: panelW - 24, H: rowH - 4}
 		if i == feSheet.cursor {
-			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, sdl.Color{R: 52, G: 66, B: 110, A: 230})
+			UIListRow(renderer, rect, 10, true, false)
 		}
 		ink := ColorTextPrimary()
 		detailInk := ColorTextSecondary()

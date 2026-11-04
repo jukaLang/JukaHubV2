@@ -24,7 +24,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -436,20 +435,14 @@ func addressableLEDName(name string) bool {
 }
 
 // discoverLEDs lists the LEDs the sync may drive. Only direct children of root
-// are considered, and every candidate must be writable by this process; a
-// symlinked entry is skipped so the writer cannot be steered outside the tree.
+// are considered (sysfsClassChildren: the kernel's class links are followed,
+// plain files are not devices), and every candidate must be writable by this
+// process.
 func discoverLEDs(root string) []ledDevice {
-	entries, err := os.ReadDir(root)
+	names, err := sysfsClassChildren(root)
 	if err != nil {
 		return nil
 	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
 
 	devs := make([]ledDevice, 0, len(names))
 	for _, name := range names {
@@ -593,6 +586,9 @@ func SetLEDSync(on bool) error {
 	if len(devs) == 0 {
 		return fmt.Errorf("no addressable LED under %s", ledRootDir)
 	}
+	// The loop reads a copy of the settings, never the config (see
+	// ledLoopSettings); publish it before the first frame.
+	syncLEDLoopSettings(appConfig)
 	stop := make(chan struct{})
 	ledSyncStop = stop
 	ledSyncDevices = devs
@@ -633,39 +629,103 @@ func ledTemperatureC() float64 {
 	return ledTempState.value
 }
 
-// ledFrameColor returns the colour for one loop tick under the configured
-// policy. Audio keeps its own analysis path; every other policy reads device
-// state. Extracted so the policy maths is testable without a loop or a device.
-func ledFrameColor(now time.Time) (uint8, uint8, uint8) {
-	r, g, b := ledFrameColorRaw(now)
-	return ledApplyBrightness(r, g, b, ledBrightnessFromConfig(appConfig))
+// ledLoopSettings is the part of the config the LED loop needs. The loop runs on
+// its own goroutine while the LED panel, Quick Settings and a config reload write
+// config.Variables.Custom — a plain map — on the render thread, and a map read
+// racing a write is a fatal runtime error, not a stale value. The loop therefore
+// never touches the config: it reads this copy, which syncLEDLoopSettings
+// refreshes from the render thread.
+type ledLoopSettings struct {
+	policy     string
+	effect     string
+	r, g, b    uint8
+	brightness int
 }
 
-// ledFrameColorRaw is the colour before the style panel's brightness trim.
-func ledFrameColorRaw(now time.Time) (uint8, uint8, uint8) {
-	policy := ledPolicyFromConfig(appConfig)
-	if policy == ledPolicyAudio {
-		s := currentAudioSample()
-		level := 0.0
-		if time.Since(s.At) <= ledSilenceAfter {
-			level = levelFromRMS(s.RMS)
-		}
-		return ledColorFor(level, s.Freq)
+// ledLoopSettingsRefresh is how often the main loop republishes the settings
+// while the lights run: a panel change shows within a quarter second, and the
+// render thread does not re-parse four config values every frame.
+const ledLoopSettingsRefresh = 250 * time.Millisecond
+
+var ledLoopState struct {
+	sync.Mutex
+	settings ledLoopSettings
+	synced   time.Time
+}
+
+// ledLoopSettingsFrom reads the LED settings out of config. Render thread (or a
+// test that owns the config) only.
+func ledLoopSettingsFrom(config *Config) ledLoopSettings {
+	s := ledLoopSettings{
+		policy:     ledPolicyFromConfig(config),
+		effect:     "solid",
+		brightness: ledBrightnessFromConfig(config),
 	}
-	effect, customR, customG, customB := "solid", uint8(0), uint8(0), uint8(0)
-	if appConfig != nil {
-		effect, _ = customString(appConfig.Variables.Custom, ledKeyEffect)
-		if hex, ok := customString(appConfig.Variables.Custom, ledKeyColor); ok {
+	if config != nil {
+		s.effect, _ = customString(config.Variables.Custom, ledKeyEffect)
+		if hex, ok := customString(config.Variables.Custom, ledKeyColor); ok {
 			if r, g, b, ok := parseLEDHex(hex); ok {
-				customR, customG, customB = r, g, b
+				s.r, s.g, s.b = r, g, b
 			}
 		}
 	}
+	return s
+}
+
+// syncLEDLoopSettings publishes config's LED settings to the loop. Render thread.
+func syncLEDLoopSettings(config *Config) {
+	s := ledLoopSettingsFrom(config)
+	ledLoopState.Lock()
+	ledLoopState.settings = s
+	ledLoopState.synced = time.Now()
+	ledLoopState.Unlock()
+}
+
+// syncLEDLoopSettingsIfDue is the main loop's throttled refresh, so every writer
+// of the LED keys (panel, Quick Settings, hot reload) reaches the lights without
+// each one needing its own hook. Free when the lights are off.
+func syncLEDLoopSettingsIfDue(config *Config, now time.Time) {
+	if !LEDSyncRunning() {
+		return
+	}
+	ledLoopState.Lock()
+	due := now.Sub(ledLoopState.synced) >= ledLoopSettingsRefresh
+	ledLoopState.Unlock()
+	if due {
+		syncLEDLoopSettings(config)
+	}
+}
+
+// currentLEDLoopSettings is the loop's read of the published copy.
+func currentLEDLoopSettings() ledLoopSettings {
+	ledLoopState.Lock()
+	defer ledLoopState.Unlock()
+	return ledLoopState.settings
+}
+
+// ledFrameColor returns the colour for one loop tick under the given settings.
+// Audio keeps its own analysis path; every other policy reads device state.
+// Extracted so the policy maths is testable without a loop or a device.
+func ledFrameColor(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
+	r, g, b := ledFrameColorRaw(s, now)
+	return ledApplyBrightness(r, g, b, s.brightness)
+}
+
+// ledFrameColorRaw is the colour before the style panel's brightness trim.
+func ledFrameColorRaw(s ledLoopSettings, now time.Time) (uint8, uint8, uint8) {
+	if s.policy == ledPolicyAudio {
+		sample := currentAudioSample()
+		level := 0.0
+		if time.Since(sample.At) <= ledSilenceAfter {
+			level = levelFromRMS(sample.RMS)
+		}
+		return ledColorFor(level, sample.Freq)
+	}
 	temp := 0.0
-	if policy == ledPolicyTemperature {
+	if s.policy == ledPolicyTemperature {
 		temp = ledTemperatureC()
 	}
-	return ledPolicyColor(policy, getBatteryPercent(), getBatteryCharging(), temp, effect, customR, customG, customB, now)
+	return ledPolicyColor(s.policy, getBatteryPercent(), getBatteryCharging(), temp, s.effect, s.r, s.g, s.b, now)
 }
 
 // runLEDLoop animates the lights until stop is closed, then blanks them so the
@@ -689,7 +749,7 @@ func runLEDLoop(stop <-chan struct{}, devs []ledDevice) {
 			if backgroundPaused() {
 				continue
 			}
-			r, g, b := ledFrameColor(time.Now())
+			r, g, b := ledFrameColor(currentLEDLoopSettings(), time.Now())
 			// Quantise to 32 steps per channel: visually identical, far fewer
 			// sysfs writes.
 			r, g, b = quantiseLEDChannel(r), quantiseLEDChannel(g), quantiseLEDChannel(b)

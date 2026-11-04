@@ -330,12 +330,33 @@ func appGridActivate(config *Config) {
 	launchAppEntry(config, entries[focusedFileIndex])
 }
 
-// drawAppTileIcon draws the app's own artwork when it has some, and otherwise a
-// tinted well holding the app's initial.
+// appTilePad is a launcher tile's inside margin: Home's tile padding, shared by
+// the icon in the top-left corner and the name anchored bottom-left.
+func appTilePad(cell sdl.Rect) int32 {
+	pad := cell.H / 8
+	if pad < 10 {
+		pad = 10
+	}
+	if pad > 16 {
+		pad = 16
+	}
+	return pad
+}
+
+// appTileIconRect is where a launcher tile's artwork sits: Home's icon badge
+// position, the tile's top-left corner. The tile used to centre its icon over
+// a centred name, a second card anatomy next to Home's.
+func appTileIconRect(cell sdl.Rect) sdl.Rect {
+	pad := appTilePad(cell)
+	return sdl.Rect{X: cell.X + pad, Y: cell.Y + pad, W: appIconBox, H: appIconBox}
+}
+
+// drawAppTileIcon draws the app's own artwork when it has some, and otherwise
+// Home's glass icon badge holding the app's initial.
 func drawAppTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry, name string, focused bool, medium *ttf.Font) {
 	box := appIconBox
-	x := cell.X + (cell.W-box)/2
-	y := cell.Y + appIconTop
+	icon := appTileIconRect(cell)
+	x, y := icon.X, icon.Y
 
 	if tex := appIconTexture(r, appEntryIconPath(entry)); tex != nil {
 		if _, _, tw, th, err := tex.Query(); err == nil && tw > 0 && th > 0 {
@@ -354,25 +375,21 @@ func drawAppTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileE
 		}
 	}
 
-	// The initial keeps the tile's own colour while focused: the card border
-	// and spine already say which tile is selected, and swapping the colour
-	// would make every focused tile look the same.
-	tint := appGridTileTint(name)
-	wellAlpha := uint8(42)
-	if focused {
-		wellAlpha = 62
-	}
-	fillRoundedRect(r, x, y, box, box, 14, WithAlpha(tint, wellAlpha))
-	strokeRoundedRect(r, x, y, box, box, 14, 1, WithAlpha(tint, 140))
-	// The initial is sized to the well so it reads as artwork rather than a
+	// No artwork: Home's glass badge with the initial in the primary ink, the
+	// way a Home tile carries its glyph.
+	drawGlassBadge(r, icon)
+	// The initial is sized to the badge so it reads as artwork rather than a
 	// small label left in the corner of a tile.
 	glyphFont := medium
 	if sized := getFontSized(config, "medium", int(box)*45/100); sized != nil {
 		glyphFont = sized
 	}
+	if glyphFont == nil {
+		return
+	}
 	glyph := appGridGlyph(name)
 	gw, gh, _ := glyphFont.SizeUTF8(glyph)
-	renderText(r, config, glyphFont, glyph, tint, x+(box-int32(gw))/2, y+(box-int32(gh))/2)
+	renderText(r, config, glyphFont, glyph, ColorTextPrimary(), x+(box-int32(gw))/2, y+(box-int32(gh))/2)
 }
 
 // appLabelKey identifies one wrapped tile name. The font pointer is part of the
@@ -438,22 +455,14 @@ func appTileLabelFont(config *Config) *ttf.Font {
 	return label
 }
 
-// drawAppTile renders one launcher tile: the icon (or initial), the app name
-// underneath, and the focus treatment shared with the rest of the shell.
+// drawAppTile renders one launcher tile in Home's card anatomy: the glass card
+// with Home's bloom, lift and ring when focused, the icon (or initial) in the
+// top-left corner, and the app name anchored bottom-left.
 func drawAppTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry, focused, hovered bool, labelFont, medium *ttf.Font) {
-	drawCard(r, cell.X, cell.Y, cell.W, cell.H, 12)
 	if focused {
-		// Focus reads at a glance: a raised surface, an accent border and an
-		// accent spine, not just a tint that darker themes hide.
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, ColorSurfaceRaised)
-		tint := visibleAccent()
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(tint, 70))
-		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 2, WithAlpha(tint, 235))
-		fillRoundedRect(r, cell.X+2, cell.Y+12, 3, cell.H-24, 2, tint)
-	} else if hovered {
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, WithAlpha(accentColor, 26))
-		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 12, 1, WithAlpha(accentColor, 110))
+		drawGlassFocusGlow(r, cell)
 	}
+	drawGlassSurface(r, cell, 16, glassState{Focused: focused, Hovered: hovered && !focused})
 
 	name := appGridDisplayName(entry.Name)
 	drawAppTileIcon(r, config, cell, entry, name, focused, medium)
@@ -461,30 +470,27 @@ func drawAppTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry FileEntry
 	// A small accent dot marks JukaHub's own applets; external programs get no
 	// marker, because their tile already carries the program's own icon.
 	if appGridIsBuiltin(entry.Name) {
-		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 3, WithAlpha(accentColor, 200))
+		fillCircle(r, cell.X+cell.W-13, cell.Y+13, 3, WithAlpha(glassAccent(), 220))
 	}
 
-	// Names wrap under the icon. They start at the same offset on every tile so
-	// the grid keeps one baseline, and the number of lines follows the room the
-	// tile really has (a large-text setting fits one taller line, not two that
-	// spill out of the card).
-	if labelFont == nil {
-		return
+	// The name is anchored to the bottom-left corner, at the largest size that
+	// fits it on at most two lines without cutting it (a large-text setting
+	// fits one taller line, not two that spill out of the card).
+	icon := appTileIconRect(cell)
+	pad := icon.X - cell.X
+	top := icon.Y + icon.H + 4
+	bottom := cell.Y + cell.H - pad
+	font, lineH, lines := glassTileLabel(config, name, cell.W-2*pad, bottom-top, appTileLabelSize)
+	if font == nil {
+		if labelFont == nil {
+			return
+		}
+		font, lineH = labelFont, int32(labelFont.Height()+1)
+		lines = []string{ellipsize(labelFont, name, cell.W-2*pad)}
 	}
-	lineH := int32(labelFont.Height() + 1)
-	textTop := cell.Y + appIconTop + appIconBox + 8
-	maxLines := int((cell.Y + cell.H - 6 - textTop) / lineH)
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	if maxLines > 2 {
-		maxLines = 2
-	}
-	lines := appTileLabelLines(labelFont, name, cell.W-16, maxLines)
+	y := bottom - int32(len(lines))*lineH
 	for li, line := range lines {
-		lw, _, _ := labelFont.SizeUTF8(line)
-		renderText(r, config, labelFont, line, ColorTextPrimary(),
-			cell.X+(cell.W-int32(lw))/2, textTop+int32(li)*lineH)
+		renderText(r, config, font, line, ColorTextPrimary(), cell.X+pad, y+int32(li)*lineH)
 	}
 }
 

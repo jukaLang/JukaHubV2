@@ -733,6 +733,10 @@ func finalizeConfig(config *Config) {
 			}
 		}
 	}
+	// A 0.4.0 home layout nobody edited gets the redesigned grid; the file is
+	// a user file that updates keep, so this is the only way the new Home
+	// reaches a device that already had one (home_migrate.go).
+	migrateLegacyHomeLayout(config)
 	// Make the network/FTP tools reachable from the classic Tools (Misc)
 	// screen without editing configs on disk.
 	ensureToolsMenuEntry(config)
@@ -921,6 +925,7 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 		return font
 	}
 
+	opened := fontPath
 	font, err := ttf.OpenFont(resolvePath(fontPath), size)
 	if err != nil {
 		// Fall back to a chain of likely-present fonts so text always renders.
@@ -929,7 +934,7 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 				continue
 			}
 			if f, e2 := ttf.OpenFont(resolvePath(candidate), size); e2 == nil {
-				font, err = f, nil
+				font, err, opened = f, nil, candidate
 				break
 			}
 		}
@@ -939,8 +944,11 @@ func loadCachedFont(fontPath string, size int) *ttf.Font {
 		return nil
 	}
 	// Remember where this font was opened so renderText can read its cmap and
-	// substitute characters it cannot draw (see fonts.go).
-	registerFontPath(font, fontPath)
+	// substitute characters it cannot draw (see fonts.go). That is the file
+	// actually opened: registering the missing one made the coverage lookup
+	// fail, which counts as "covers everything", so a fallback face drew
+	// .notdef boxes instead of substitutes.
+	registerFontPath(font, opened)
 	fontCache[key] = font
 	return font
 }
@@ -1012,14 +1020,25 @@ func renderTextWithFallback(renderer *sdl.Renderer, config *Config, font *ttf.Fo
 // --- Visual theme helpers ---------------------------------------------------
 
 var (
-	bgTexture    *sdl.Texture
-	bgImagePath  string
-	overlayColor = sdl.Color{R: 8, G: 10, B: 18, A: 150}
+	bgTexture   *sdl.Texture
+	bgImagePath string
+	// bgImageFailed is the wallpaper path that last failed to load, so a
+	// missing or corrupt image is not re-opened on every frame.
+	bgImageFailed string
+	overlayColor  = sdl.Color{R: 8, G: 10, B: 18, A: 150}
 
 	gradientTexture    *sdl.Texture
 	gradientSceneKey   string
 	gradientOverlayKey sdl.Color
 )
+
+// bgImageFailedAt is when bgImageFailed last failed. The same path is tried
+// again once bgImageRetry has passed, so a wallpaper on a card that mounts
+// after JukaHub starts still appears without being picked again.
+var bgImageFailedAt time.Time
+
+// bgImageRetry is how long a wallpaper that failed waits for its next attempt.
+const bgImageRetry = 15 * time.Second
 
 // exeDir returns the directory containing the running executable, so asset
 // paths can be resolved regardless of the current working directory.
@@ -1051,12 +1070,15 @@ func resolvePath(p string) string {
 // configured path changes. The texture is cached so it is not re-read from
 // disk every frame.
 func ensureBackgroundTexture(renderer *sdl.Renderer, config *Config) {
-	path := config.Variables.BackgroundImage
-	if path == "" {
-		// No custom background image was configured: rely on the theme-driven
-		// gradient (rendered in renderScene's else branch). This lets the
-		// selected theme preset visibly change the background instead of being
-		// hidden behind a fixed image + dark overlay.
+	path := ""
+	if config != nil {
+		path = config.Variables.BackgroundImage
+	}
+	if appWallpaperIsShippedDefault(path) {
+		// No wallpaper of the user's own: every screen draws the procedural
+		// backdrop (drawAppBackdrop), the one Home always used. The stock
+		// background.jpg is 2560x1440 — about 15 MB as a texture — and nothing
+		// draws it any more, so it is not loaded at all.
 		if bgTexture != nil {
 			bgTexture.Destroy()
 			bgTexture = nil
@@ -1067,23 +1089,29 @@ func ensureBackgroundTexture(renderer *sdl.Renderer, config *Config) {
 	if path == bgImagePath && bgTexture != nil {
 		return
 	}
+	// A wallpaper that failed to load is not retried on every frame: that was
+	// a file open, an image decode attempt and a log line per frame, forever.
+	// It is tried again every bgImageRetry, or at once if another wallpaper is
+	// picked and then this one again.
+	if path == bgImageFailed && time.Since(bgImageFailedAt) < bgImageRetry {
+		return
+	}
 	if bgTexture != nil {
 		bgTexture.Destroy()
 		bgTexture = nil
 	}
 	bgImagePath = path
-	if path == "" {
-		return
-	}
 	p := resolvePath(path)
 	if tex, err := img.LoadTexture(renderer, p); err == nil {
-		bgTexture = tex
+		bgTexture = fitBackgroundTexture(renderer, tex)
+		bgImageFailed = ""
 		log.Printf("Background image loaded: %s", p)
 		return
 	} else if surface, err2 := img.Load(p); err2 == nil {
 		// Fallback: load as a surface and upload manually.
 		if tex2, err3 := renderer.CreateTextureFromSurface(surface); err3 == nil {
-			bgTexture = tex2
+			bgTexture = fitBackgroundTexture(renderer, tex2)
+			bgImageFailed = ""
 			surface.Free()
 			log.Printf("Background image loaded (surface): %s", p)
 			return
@@ -1093,6 +1121,71 @@ func ensureBackgroundTexture(renderer *sdl.Renderer, config *Config) {
 	} else {
 		log.Printf("Background image load failed (%s): %v", path, err)
 	}
+	bgImageFailed = path
+	bgImageFailedAt = time.Now()
+}
+
+// fitBackgroundTexture turns a loaded wallpaper into a static, opaque texture
+// the size of the canvas, once, at load. A phone photo or a 4K wallpaper is
+// drawn at 1280x720 (960x720 on the Brick) every frame anyway; keeping it at
+// full size held tens of MB of texture for pixels the screen cannot show, and
+// made every frame minify it without mipmaps. The picture is scaled by the GPU
+// onto an opaque black canvas in a scratch render target, read back, and
+// uploaded as an ordinary texture: no render target is kept (a Direct3D device
+// reset would blank one), and a PNG with transparent areas cannot leave the
+// previous frame showing through them. The original is returned unchanged when
+// the renderer cannot draw into a texture.
+func fitBackgroundTexture(renderer *sdl.Renderer, tex *sdl.Texture) *sdl.Texture {
+	if renderer == nil || tex == nil || screenWidth <= 0 || screenHeight <= 0 {
+		return tex
+	}
+	if !renderer.RenderTargetSupported() {
+		return tex
+	}
+	cw, ch := screenWidth, screenHeight
+	target, err := renderer.CreateTexture(sdl.PIXELFORMAT_ARGB8888, sdl.TEXTUREACCESS_TARGET, cw, ch)
+	if err != nil || target == nil {
+		return tex
+	}
+	defer target.Destroy()
+	canvas, err := sdl.CreateRGBSurfaceWithFormat(0, cw, ch, 32, sdl.PIXELFORMAT_ARGB8888)
+	if err != nil || canvas == nil {
+		return tex
+	}
+	defer canvas.Free()
+	prev := renderer.GetRenderTarget()
+	// The wallpaper can first load mid-frame inside a caller's clip (the header
+	// band repaint, or a frame being captured into a texture). SDL restores the
+	// default target's clip itself, but a texture target comes back unclipped,
+	// so the clip is put back by hand.
+	hadClip := renderer.IsClipEnabled()
+	clip := renderer.GetClipRect()
+	if err := renderer.SetRenderTarget(target); err != nil {
+		return tex
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_NONE)
+	_ = renderer.SetDrawColor(0, 0, 0, 255)
+	_ = renderer.Clear()
+	_ = tex.SetBlendMode(sdl.BLENDMODE_BLEND)
+	_ = renderer.Copy(tex, nil, nil)
+	readErr := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, canvas.Data(), int(canvas.Pitch))
+	_ = renderer.SetRenderTarget(prev)
+	if hadClip {
+		_ = renderer.SetClipRect(&clip)
+	}
+	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+	if readErr != nil {
+		return tex
+	}
+	static, err := renderer.CreateTextureFromSurface(canvas)
+	if err != nil || static == nil {
+		return tex
+	}
+	// Opaque: copying it needs no blending, the cheapest full-screen copy the
+	// GPU can do.
+	_ = static.SetBlendMode(sdl.BLENDMODE_NONE)
+	tex.Destroy()
+	return static
 }
 
 func ensureGradientTexture(renderer *sdl.Renderer, config *Config, bg sdl.Color) {
@@ -1158,10 +1251,15 @@ func lerpColor(a, b sdl.Color, t float32) sdl.Color {
 		}
 		return uint8(v)
 	}
+	// The channel difference is taken in int, not uint8: b.R-a.R wrapped
+	// around whenever the target was darker (0-255 is 1 in uint8), so a blend
+	// towards black came back as the start colour — every home glyph's
+	// "shade" and "deepShade" were plain white, and the parcel, folder and
+	// gamepad lost the planes and details they were drawn with.
 	return sdl.Color{
-		R: clamp(int(a.R) + int(float32(b.R-a.R)*t)),
-		G: clamp(int(a.G) + int(float32(b.G-a.G)*t)),
-		B: clamp(int(a.B) + int(float32(b.B-a.B)*t)),
+		R: clamp(int(a.R) + int(float32(int(b.R)-int(a.R))*t)),
+		G: clamp(int(a.G) + int(float32(int(b.G)-int(a.G))*t)),
+		B: clamp(int(a.B) + int(float32(int(b.B)-int(a.B))*t)),
 		A: a.A,
 	}
 }
@@ -1362,9 +1460,13 @@ func renderDiskPieChart(renderer *sdl.Renderer, config *Config, element Element)
 	} else if usedFrac > 0.75 {
 		sectorColor = ColorWarning
 	}
-	fillCircle(renderer, layout.cx, layout.cy, layout.radius, ColorSurfaceRow)
+	// A glass track ring under the used arc, with the middle left open so the
+	// panel's glass shows through it. The track used to be a full slate disc
+	// with an opaque slate one stamped over its centre, which read as a grey
+	// coin on the glass panel. The track is opaque on purpose: the sector's
+	// uncached path paints at full alpha.
+	drawDiskPieSector(renderer, layout.cx, layout.cy, layout.radius, innerR, 1, glassMix(ColorBackground, glassInk(), 0.14))
 	drawDiskPieSector(renderer, layout.cx, layout.cy, layout.radius, innerR, usedFrac, sectorColor)
-	fillCircle(renderer, layout.cx, layout.cy, innerR, ColorSurfacePanel)
 
 	pctStr := fmt.Sprintf("%d%%", pct)
 	if centerFont := diskPiePercentFont(config, pctStr, innerR); centerFont != nil {
@@ -1711,55 +1813,35 @@ func drawRectOutline(renderer *sdl.Renderer, x, y, w, h int32, c sdl.Color) {
 	renderer.DrawRect(&sdl.Rect{X: x + w - 1, Y: y, W: 1, H: h})
 }
 
-// drawPanel renders a translucent panel with an accent border and premium shadow.
+// drawPanel renders a content container — a list's or a text log's frame — in
+// Home's glass: a translucent pane with a hairline edge and Home's 20px
+// corners. The callers' fills were a translucent slate, which is what the
+// glass replaces; a caller that asks for an (almost) opaque fill is covering
+// something underneath (a confirmation box over a list), so it gets the opaque
+// glass sheet instead. The three stacked drop shadows, the sheen lines and the
+// corner dots are gone: Home's cards have none of them, and they were seven
+// extra fills per panel per frame.
 func drawPanel(renderer *sdl.Renderer, x, y, w, h int32, fill, border sdl.Color) {
-	radius := RadiusMD
-	// layered premium shadow (wider spread, softer falloff)
-	fillRoundedRect(renderer, x+2, y+4, w, h, radius, ShadowFill(12))
-	fillRoundedRect(renderer, x+4, y+8, w, h, radius, ShadowFill(20))
-	fillRoundedRect(renderer, x+6, y+12, w, h, radius, ShadowFill(28))
-	// fill
-	fillRoundedRect(renderer, x, y, w, h, radius, fill)
-	// subtle gradient-like top sheen (two-tone highlight)
-	renderer.SetDrawColor(255, 255, 255, 16)
-	renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
-	renderer.SetDrawColor(255, 255, 255, 6)
-	renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 2, W: w - 4, H: 1})
-	// border with subtle glow
-	renderer.SetDrawColor(border.R, border.G, border.B, border.A)
-	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: w - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: 1, H: h - 2})
-	renderer.SetDrawColor(border.R, border.G, border.B, border.A/3)
-	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + h - 2, W: w - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: x + w - 2, Y: y + 1, W: 1, H: h - 2})
-	// corner accent dots (subtle polish)
-	dotColor := sdl.Color{R: border.R, G: border.G, B: border.B, A: uint8(border.A / 2)}
-	cSize := int32(2)
-	renderer.SetDrawColor(dotColor.R, dotColor.G, dotColor.B, dotColor.A)
-	renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + 1, W: cSize, H: cSize})
-	renderer.FillRect(&sdl.Rect{X: x + w - 1 - cSize, Y: y + 1, W: cSize, H: cSize})
-	renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + h - 1 - cSize, W: cSize, H: cSize})
-	renderer.FillRect(&sdl.Rect{X: x + w - 1 - cSize, Y: y + h - 1 - cSize, W: cSize, H: cSize})
+	if renderer == nil || w <= 0 || h <= 0 {
+		return
+	}
+	surface := glassA(10)
+	if fill.A >= 240 {
+		surface = glassSheetFill()
+	}
+	fillRoundedRect(renderer, x, y, w, h, homeTileRadius, surface)
+	strokeRoundedRect(renderer, x, y, w, h, homeTileRadius, 1, glassEdge())
 }
 
-// drawCard renders a raised surface card: shadow, surface fill, subtle top
-// gloss, and a hairline border. Canonical content container used across screens.
+// drawCard renders a raised surface card: Home's glass tile — the translucent
+// fill and its hairline — at the caller's corner radius. Canonical content
+// container used across screens.
 func drawCard(renderer *sdl.Renderer, x, y, w, h, r int32) {
-	// layered soft shadow (growing offset, fading alpha)
-	fillRoundedRect(renderer, x+1, y+2, w, h, r, ShadowFill(16))
-	fillRoundedRect(renderer, x+3, y+4, w, h, r, ShadowFill(24))
-	fillRoundedRect(renderer, x+5, y+6, w, h, r, ShadowFill(36))
-	// card body
-	fillRoundedRect(renderer, x, y, w, h, r, ColorSurfaceCard)
-	// 1px top highlight line (glass edge)
-	renderer.SetDrawColor(255, 255, 255, 12)
-	renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
-	// hairline border
-	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, ColorBorderSubtle.A)
-	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: w - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + 1, W: 1, H: h - 2})
-	renderer.DrawRect(&sdl.Rect{X: x + 1, Y: y + h - 2, W: w - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: x + w - 2, Y: y + 1, W: 1, H: h - 2})
+	if renderer == nil || w <= 0 || h <= 0 {
+		return
+	}
+	fillRoundedRect(renderer, x, y, w, h, r, glassFill())
+	strokeRoundedRect(renderer, x, y, w, h, r, 1, glassEdge())
 }
 
 // drawRow renders a single list row through the shared row component, so
@@ -1784,7 +1866,10 @@ func drawScrollbar(renderer *sdl.Renderer, x, y, w, h int32, thumbFrac, scrollFr
 	if scrollFrac > 1 {
 		scrollFrac = 1
 	}
-	renderer.SetDrawColor(255, 255, 255, 22)
+	// Glass ink, not white: on a light preset a white track and thumb vanished
+	// into the page.
+	track := glassA(22)
+	renderer.SetDrawColor(track.R, track.G, track.B, track.A)
 	renderer.FillRect(&sdl.Rect{X: x, Y: y, W: w, H: h})
 	thumbH := int32(float64(h) * thumbFrac)
 	if thumbH < 24 {
@@ -1792,7 +1877,7 @@ func drawScrollbar(renderer *sdl.Renderer, x, y, w, h int32, thumbFrac, scrollFr
 	}
 	maxOff := h - thumbH
 	thumbY := y + int32(float64(maxOff)*scrollFrac)
-	fillRoundedRect(renderer, x, thumbY, w, thumbH, w/2, sdl.Color{R: 255, G: 255, B: 255, A: 75})
+	fillRoundedRect(renderer, x, thumbY, w, thumbH, w/2, glassA(75))
 }
 
 // renderButtonElement draws a sleek glass-like button with soft shadows,
@@ -1853,7 +1938,6 @@ func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Elemen
 	}
 	font = buttonLabelFont(config, elem.Font, label, width)
 	x, y := elem.X, elem.Y
-	r := RadiusMD
 
 	// Hover scale: grow by up to 2px around the same centre. The element's
 	// rect is untouched, so hit testing and the focus graph keep their
@@ -1878,14 +1962,15 @@ func renderDarkButtonElement(renderer *sdl.Renderer, config *Config, elem Elemen
 	ox := x + pressOffset
 	oy := y + pressOffset
 
-	UIButton(renderer, config, sdl.Rect{X: ox, Y: oy, W: width, H: height}, label, UIButtonStyle{
-		Variant:   UIButtonCustom,
-		Fill:      resolveColor(config, elem.BgColor, ColorCard),
-		HoverFill: ColorCardHover,
-		FocusFill: ColorCardFocus,
-		Font:      font,
-		Radius:    r,
-	}, UIButtonState{Focused: selected, Hovered: hovered, Pressed: pressed, Disabled: busy})
+	// Home's glass, with the author's (or the theme's) button colour kept as a
+	// low-alpha wash under it, so Settings → Appearance → Button Color still
+	// tints the buttons without turning them back into opaque slabs.
+	tint := sdl.Color{}
+	if strings.TrimSpace(elem.BgColor) != "" {
+		tint = glassButtonTint(resolveColor(config, elem.BgColor, sdl.Color{}))
+	}
+	drawGlassButton(renderer, config, sdl.Rect{X: ox, Y: oy, W: width, H: height}, label, font, tint,
+		glassState{Focused: selected, Hovered: hovered, Pressed: pressed, Disabled: busy})
 }
 
 // renderAppTile draws an OS-style launcher icon: a clean opaque card with a
@@ -1898,7 +1983,6 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 	}
 	width, height := buttonHitSize(elem, labelFont)
 	x, y := elem.X, elem.Y
-	r := TileRadius
 
 	// Home layout override: when Main scene uses layout "home", tiles are
 	// positioned by the shared grid so render + mouse agree.
@@ -1906,77 +1990,22 @@ func renderAppTile(renderer *sdl.Renderer, config *Config, elem Element, elemInd
 		x, y, width, height = rect.X, rect.Y, rect.W, rect.H
 	}
 
-	// Eased press dip: the button travels down over the press window instead
-	// of jumping by a fixed offset, so a click reads as a physical push.
-	pressOffset := int32(0)
-	if pressed {
-		age := float64(sdl.GetTicks64() - pressStartTime)
-		pressOffset = int32(math.Round(float64(PressOffset) * uiPressProgress(config, age, float64(pressDuration))))
-	}
-	ox := x + pressOffset
-	oy := y + pressOffset
-	cw := width
-	ch := height
-
-	focusCol := focusColorForAccent(accentColor)
-
-	// Focus ring + subtle outer glow (3px crisp outline, no scale).
-	if selected {
-		fillRoundedRect(renderer, ox-FocusGlow, oy-FocusGlow, cw+2*FocusGlow, ch+2*FocusGlow, r+FocusGlow, WithAlpha(focusCol, 22))
-		strokeRoundedRect(renderer, ox-FocusRing, oy-FocusRing, cw+2*FocusRing, ch+2*FocusRing, r+FocusRing, FocusRing, focusCol)
-	} else if hoverProgress > 0.01 {
-		a := uint8(80 * hoverProgress)
-		strokeRoundedRect(renderer, ox-HoverRing, oy-HoverRing, cw+2*HoverRing, ch+2*HoverRing, r+HoverRing, HoverRing, WithAlpha(focusCol, a))
-	}
-
-	// Tile body: use the configured tile color when provided, otherwise fall
-	// back to the standard home card surface.
-	base := resolveColor(config, elem.BgColor, HomeCardColor())
-	if selected {
-		base = HomeCardFocusColor()
-	}
-	// Clip tile body to prevent overflow
-	renderWithClip(renderer, ox, oy, cw, ch, func(ren *sdl.Renderer) {
-		fillRoundedRect(ren, ox, oy, cw, ch, r, base)
-		// Hairline border using HomeBorderColor for consistency.
-		borderCol := HomeBorderColor()
-		if selected {
-			borderCol = WithAlpha(focusCol, 200)
-		} else if hovered {
-			borderCol = WithAlpha(focusCol, 120)
-		}
-		strokeRoundedRect(ren, ox, oy, cw, ch, r, 1, borderCol)
+	// One card anatomy app-wide: Home's glass tile with the icon badge in the
+	// top-left corner and the name anchored bottom-left (UICategoryTileDraw).
+	// The centred icon-over-label card this used to draw was the older shell's
+	// tile, and the only place it still appeared was a scene outside Home.
+	kind := tileIconKind(elem)
+	UICategoryTileDraw(renderer, config, UICategoryTile{
+		Rect:          sdl.Rect{X: x, Y: y, W: width, H: height},
+		Label:         elem.Text,
+		Focused:       selected,
+		Hovered:       hovered,
+		Pressed:       pressed,
+		HoverProgress: hoverProgress,
+		Glyph: func(rr *sdl.Renderer, box sdl.Rect, tint sdl.Color) {
+			drawTileIcon(rr, box.X+box.W/2, box.Y+box.H/2, box.W, kind, tint, WithAlpha(tint, 40))
+		},
 	})
-
-	// Icon and label use the configured tile text color so they read clearly
-	// against both dark and colored tile backgrounds.
-	iconKind := tileIconKind(elem)
-	iconCol := resolveColor(config, elem.Color, ColorTextPrimary())
-	if selected {
-		iconCol = focusCol
-	}
-	iconBg := base
-	iconSize := cw / 3
-	if iconSize > IconSizeMax {
-		iconSize = IconSizeMax
-	}
-	if iconSize < IconSizeMin {
-		iconSize = IconSizeMin
-	}
-	drawTileIcon(renderer, ox+cw/2, oy+int32(float64(ch)*0.36), iconSize, iconKind, iconCol, iconBg)
-
-	// Label beneath the icon, single line, kept off the edges.
-	if labelFont != nil && elem.Text != "" {
-		lw, lh, _ := labelFont.SizeUTF8(elem.Text)
-		maxLW := cw - SpaceXL
-		if lw > int(maxLW) {
-			lw = int(maxLW)
-		}
-		txt := iconCol
-		lx := ox + (cw-int32(lw))/2
-		ly := oy + ch - int32(lh) - LabelBottomPad
-		renderText(renderer, config, labelFont, elem.Text, txt, lx, ly)
-	}
 }
 
 // renderLabelShadowed draws a label with a subtle drop shadow for depth.
@@ -3164,9 +3193,11 @@ func renderSearchResults(renderer *sdl.Renderer, config *Config, element Element
 		}
 		if font != nil {
 			if config.Variables.LoadingSpinner {
-				renderSpinner(renderer, element.X+elemWidth/2-15, element.Y+elemHeight/2-40, 24, sdl.Color{R: 85, G: 216, B: 255, A: 255})
+				// Theme inks: the fixed cyan and slate grey were the default
+				// palette's, so every other preset had an off-brand spinner.
+				renderSpinner(renderer, element.X+elemWidth/2-15, element.Y+elemHeight/2-40, 24, glassAccent())
 				w, _, _ := font.SizeUTF8(config.Variables.SpinnerText)
-				renderText(renderer, config, font, config.Variables.SpinnerText, sdl.Color{R: 156, G: 169, B: 189, A: 255},
+				renderText(renderer, config, font, config.Variables.SpinnerText, ColorTextSecondary(),
 					element.X+(elemWidth-int32(w))/2, element.Y+elemHeight/2+4)
 			} else {
 				// The same block the rest of the app draws (Favorites, Shorts,
@@ -3392,18 +3423,11 @@ func renderSearchResultsList(renderer *sdl.Renderer, config *Config, element Ele
 			cardW, cardH := elemWidth, rowH
 			focused := i == focusedResultIndex
 
-			// Flat card matching the home design language: resting fill + thin
-			// border, focused fill + 3px cyan ring inside the rect.
-			fill := ColorCard
-			if focused {
-				fill = ColorCardFocus
-			}
-			fillRoundedRect(r, cardX, cardY, cardW, cardH, 12, fill)
-			if focused {
-				strokeRoundedRect(r, cardX, cardY, cardW, cardH, 12, 3, ColorAccent)
-			} else {
-				strokeRoundedRect(r, cardX, cardY, cardW, cardH, 12, 1, ColorBorder)
-			}
+			// Home's glass card: the translucent fill and hairline at rest, the
+			// brighter fill and Home's 3px accent ring when focused — the ring on
+			// the card's own edge, because the list clips at its viewport.
+			drawGlassSurface(r, sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}, glassControlRadius,
+				glassState{Focused: focused, NoLift: true})
 
 			// recently-played accent bar
 			if isRecentlyPlayed(vid.GetURL()) {
@@ -3528,12 +3552,12 @@ func renderSearchResultsGrid(renderer *sdl.Renderer, config *Config, element Ele
 			cardY := yPos + 4
 			cardW := cellWidth - 8
 			cardH := cellHeight - 8
-			drawCard(r, cardX, cardY, cardW, cardH, 10)
-
+			// Home's card: glass, with Home's bloom, lift and ring when focused.
+			card := sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH}
 			if i == focusedResultIndex {
-				fillRoundedRect(r, cardX-3, cardY-3, cardW+6, cardH+6, 12, sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 55})
-				fillRoundedRect(r, cardX, cardY, cardW, cardH, 10, ColorSurfaceRaised)
+				drawGlassFocusGlow(r, card)
 			}
+			drawGlassSurface(r, card, glassControlRadius, glassState{Focused: i == focusedResultIndex})
 
 			if isRecentlyPlayed(vid.GetURL()) {
 				fillRoundedRect(r, cardX+2, cardY+8, 3, cardH-16, 2, ColorDanger)
@@ -3958,7 +3982,10 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	// Clean up any stale temp file from a previous attempt
 	os.Remove(tempPath)
 
-	var stderrBuf bytes.Buffer
+	// yt-dlp prints its [download] progress on stdout, so both streams feed
+	// the parser; the buffer is locked because the loop below reads it while
+	// the helper is still writing.
+	stderrBuf := &lockedTailBuffer{max: 64 << 10}
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -3977,8 +4004,8 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 	dlArgs = append(dlArgs, ytDlpExtraArgsSlice(config)...)
 	dlCmd := exec.CommandContext(ctx, ytDlpPath, dlArgs...)
 	dlCmd.Env = helperToolEnv(ytDlpPath)
-	dlCmd.Stdout = os.Stdout
-	dlCmd.Stderr = &stderrBuf
+	dlCmd.Stdout = stderrBuf
+	dlCmd.Stderr = stderrBuf
 
 	if err := dlCmd.Start(); err != nil {
 		log.Printf("[ERROR] playWithTempFile: download failed to start: %v", err)
@@ -4005,9 +4032,12 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 					// Cancelled by B / Esc (or the 5-minute cap): not a network
 					// failure, so no error toast and no half-download left behind.
 					log.Printf("[STREAM] download cancelled for %s", sanitizeLogURL(url))
-					os.Remove(tempPath)
+					removeTempVideoArtifacts(tempPath)
 					return false
 				}
+				// A failed fetch leaves its partial pieces too; each attempt has
+				// a new name, so nothing would ever reuse or remove them.
+				removeTempVideoArtifacts(tempPath)
 				log.Printf("[ERROR] playWithTempFile: download failed: %v", err)
 				// Same redaction as the search path: these arguments include the
 				// decrypted API key.
@@ -4033,7 +4063,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 
 	if ctx.Err() != nil {
 		log.Printf("[STREAM] download cancelled after it finished for %s", sanitizeLogURL(url))
-		os.Remove(tempPath)
+		removeTempVideoArtifacts(tempPath)
 		return false
 	}
 
@@ -4051,7 +4081,7 @@ func playWithTempFile(parent context.Context, config *Config, ytDlpPath, url str
 		videoPlaybackPhaseAt = sdl.GetTicks64()
 		videoPlaybackError = "downloaded file is empty"
 		videoPlaybackMutex.Unlock()
-		os.Remove(tempPath)
+		removeTempVideoArtifacts(tempPath)
 		return false
 	}
 	videoPlaybackMutex.Lock()
@@ -4183,6 +4213,14 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 	vkEnsureLayout()
 	exitInput := false
 	for !exitInput {
+		// An exit request from outside the loop (a stop signal, the power
+		// key's shutdown path, the companion's Exit) used to wait for the
+		// keyboard to be closed by hand — long enough for the firmware to give
+		// up and cut power. The main loop owns the exit, so hand back to it.
+		if exitRequested.Load() {
+			vkCloseKeyboard()
+			return
+		}
 		drainCustom(config)
 		vkTickNavRepeat()
 		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
@@ -4193,9 +4231,24 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 		renderKeyboard(renderer, config)
 		renderer.Present()
 
+		quit := false
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 			applyButtonSwap(config, event)
+			switch event.(type) {
+			case *sdl.KeyboardEvent, *sdl.TextInputEvent, *sdl.ControllerButtonEvent,
+				*sdl.MouseButtonEvent, *sdl.TouchFingerEvent:
+				// Typing is input: without this the idle clock kept running
+				// while the keyboard was up, and closing it after a long entry
+				// dropped straight into the screensaver.
+				screensaverNotifyInput()
+				if frameRateCtrl != nil {
+					frameRateCtrl.NotifyInput()
+				}
+			}
 			switch e := event.(type) {
+			case *sdl.QuitEvent:
+				// Closing the window while typing used to be swallowed here.
+				quit = true
 			case *sdl.KeyboardEvent:
 				if e.Type != sdl.KEYDOWN {
 					continue
@@ -4275,6 +4328,13 @@ func runInputModal(renderer *sdl.Renderer, config *Config) {
 			case *sdl.MultiGestureEvent:
 				handleMultiGesture(e, config)
 			}
+		}
+		if quit {
+			// Re-queued after the drain (inside it, PollEvent would hand the
+			// same event straight back) for the main loop to act on.
+			vkCloseKeyboard()
+			requeueQuit()
+			return
 		}
 		// Cap the modal at the main loop's frame rate. Without a delay this loop
 		// spun flat out for as long as the address bar was open.
@@ -4509,6 +4569,37 @@ func absFloat(x float64) float64 {
 // Variables struct fields so that Settings inputs actually change runtime
 // behavior (fullscreen, weather, resolution, paths, colors).
 func syncVariableOverrides(config *Config) {
+	applyVariableOverrides(config)
+	// One snapshot helper for every save, so a settings change cannot drop the
+	// Quick Settings levels on the way to disk.
+	saveUserConfigDebounced(userConfigFromVariables(config))
+}
+
+// dropCustomMirror removes the Custom keys that shadow a typed setting,
+// matched case-insensitively the way applyVariableOverrides matches them. A
+// setter calls it before syncVariableOverrides: otherwise a stale copy — the
+// shipped config's flattened {"Fullscreen": false}, or the lowPower and
+// reducedMotion values the battery saver writes — was read back over the value
+// the user had just chosen, and the toggle snapped back while its switch still
+// showed the new state.
+func dropCustomMirror(config *Config, name string) {
+	if config == nil || config.Variables.Custom == nil {
+		return
+	}
+	for k := range config.Variables.Custom {
+		if strings.EqualFold(k, name) {
+			delete(config.Variables.Custom, k)
+		}
+	}
+}
+
+// applyVariableOverrides copies same-name Custom values onto the typed fields
+// without saving anything. Loading a config uses it: Variables.UnmarshalJSON
+// used to call the saving form, so every load scheduled a jukauser.json write
+// built from jukaconfig.json — at boot, before jukauser.json was even read,
+// with the Quick Settings levels zeroed — and a crash or power cut inside the
+// debounce left the user's colours, weather unit, name and levels reset.
+func applyVariableOverrides(config *Config) {
 	c := config.Variables.Custom
 	// Lookups are case-insensitive and accept strings, numbers or bools: the web
 	// builder emits capitalised keys ("GridColumns") and type-coerced numbers, so
@@ -4557,9 +4648,6 @@ func syncVariableOverrides(config *Config) {
 			}
 		}
 	}
-	// One snapshot helper for every save, so a settings change cannot drop the
-	// Quick Settings levels on the way to disk.
-	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 
 // inputVariableValue resolves the current value of a settings input from the
@@ -4628,51 +4716,44 @@ func inputVariableValue(config *Config, variable string) string {
 
 func renderInputField(renderer *sdl.Renderer, config *Config, element Element, sceneIdx, elemIdx int) {
 	width, height := resolveElementDimensions(element, 200, 40)
-
-	bgColor := resolveColor(config, element.BgColor, sdl.Color{R: 20, G: 24, B: 34, A: 255})
-	r := int32(8)
 	isActive := (sceneIdx == activeSceneIndex && elemIdx == activeElementIndex)
 
-	// subtle shadow
-	fillRoundedRect(renderer, element.X+1, element.Y+2, width, height, r, ShadowFill(32))
-
+	// Home's glass, a step recessed: the field is a darker pane than a button
+	// (the author's or the theme's input colour kept as a wash under it), with
+	// a hairline at rest and Home's accent ring and bloom while it is typing.
+	field := sdl.Rect{X: element.X, Y: element.Y, W: width, H: height}
+	r := glassControlRadius
+	if height < 2*r {
+		r = height / 2
+	}
 	if isActive {
-		// soft layered focus glow
-		fillRoundedRect(renderer, element.X-2, element.Y-2, width+4, height+4, r+2,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 22})
-		fillRoundedRect(renderer, element.X-1, element.Y-1, width+2, height+2, r+1,
-			sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 45})
-		// crisp inner border
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 150)
-		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: width - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: 1, H: height - 2})
-		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + height - 2, W: width - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: element.X + width - 2, Y: element.Y + 1, W: 1, H: height - 2})
+		drawGlassFocusGlow(renderer, field)
+	}
+	if strings.TrimSpace(element.BgColor) != "" {
+		if wash := resolveColor(config, element.BgColor, sdl.Color{}); wash.A > 0 {
+			fillRoundedRect(renderer, field.X, field.Y, field.W, field.H, r, WithAlpha(wash, 150))
+		}
+	}
+	fillRoundedRect(renderer, field.X, field.Y, field.W, field.H, r, glassA(10))
+	if isActive {
+		strokeRoundedRect(renderer, field.X, field.Y, field.W, field.H, r, 2, glassAccent())
 	} else {
-		// resting hairline border so the field reads as interactive
-		renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, ColorBorderSubtle.A)
-		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: width - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + 1, W: 1, H: height - 2})
-		renderer.DrawRect(&sdl.Rect{X: element.X + 1, Y: element.Y + height - 2, W: width - 2, H: 1})
-		renderer.DrawRect(&sdl.Rect{X: element.X + width - 2, Y: element.Y + 1, W: 1, H: height - 2})
+		strokeRoundedRect(renderer, field.X, field.Y, field.W, field.H, r, 1, glassA(26))
 	}
 
-	// background
-	fillRoundedRect(renderer, element.X, element.Y, width, height, r, bgColor)
-
-	// active bottom accent bar
-	if isActive {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 200)
-		renderer.FillRect(&sdl.Rect{X: element.X + 8, Y: element.Y + height - 3, W: width - 16, H: 2})
-	}
-
-	textColor := resolveColor(config, element.Color, sdl.Color{R: 220, G: 226, B: 240, A: 255})
+	textColor := resolveColor(config, element.Color, ColorTextPrimary())
 	font, _ := getCachedFont(config, element.Font)
 
 	// Color settings render the picked color itself. A bare "#3498db" told the
 	// user nothing about what they had chosen, and the swatch follows the live
 	// buffer so it previews as the value is typed.
 	textX := element.X + 14
+	// The value and the placeholder sit on the field's vertical centre: the
+	// old fixed 12px offset only centred the 24px default font in a 48px field.
+	textY := element.Y + 12
+	if font != nil {
+		textY = element.Y + (height-int32(font.Height()))/2
+	}
 	maxTextW := int32(0)
 	if col, ok, isColorField := settingsFieldColor(config, element, isActive); isColorField {
 		size := height - 16
@@ -4720,7 +4801,7 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 		if maxTextW > 0 {
 			draw = ellipsize(font, text, maxTextW)
 		}
-		renderText(renderer, config, font, draw, textColor, textX, element.Y+12)
+		renderText(renderer, config, font, draw, textColor, textX, textY)
 	}
 
 	// placeholder
@@ -4733,7 +4814,7 @@ func renderInputField(renderer *sdl.Renderer, config *Config, element Element, s
 		if maxTextW > 0 && font != nil {
 			placeholder = ellipsize(font, placeholder, maxTextW)
 		}
-		renderText(renderer, config, font, placeholder, phColor, textX, element.Y+12)
+		renderText(renderer, config, font, placeholder, phColor, textX, textY)
 	}
 }
 
@@ -4780,45 +4861,15 @@ func renderScene(renderer *sdl.Renderer, config *Config, scene SceneConfig) {
 
 	ensureBackgroundTexture(renderer, config)
 
-	if bgTexture != nil {
-		renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-		renderer.SetDrawColor(overlayColor.R, overlayColor.G, overlayColor.B, overlayColor.A)
-		renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	} else {
-		bg := ColorBackground
-		ensureGradientTexture(renderer, config, bg)
-		if gradientTexture != nil {
-			renderer.Copy(gradientTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-		} else {
-			renderer.SetDrawColor(bg.R, bg.G, bg.B, 255)
-			renderer.Clear()
-		}
-	}
-
-	// Content panel behind the scene elements to frame the form/list area.
-	// It ends 16px above the footer so no content can reach the footer band.
-	panelMargin := int32(24)
-	panelTop := HomeTopBarH + 8
-	panelBottom := screenHeight - bottomBarHeight(config.Scenes[currentSceneIndex].Name) - 16
-	panel := sdl.Rect{
-		X: panelMargin,
-		Y: panelTop,
-		W: screenWidth - panelMargin*2,
-		H: panelBottom - panelTop,
-	}
-	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusLG, WithAlpha(ColorSurface, 200))
-	strokeRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusLG, 1, WithAlpha(ColorBorder, 120))
-	// Subtle accent line at the top of the panel.
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 30)
-	renderer.FillRect(&sdl.Rect{X: panel.X + 20, Y: panel.Y, W: panel.W - 40, H: 1})
-
-	// Dynamic animated background: time-aware, weather-reactive, living backdrop.
-	if config.Variables.DynamicBg {
-		renderDynamicBackground(renderer)
-	} else {
-		renderAmbientBackground(renderer)
-	}
+	// Every scene stands on Home's backdrop (ui_glass.go): the navy base, the
+	// two colour blooms and the ambient layer, or the user's own wallpaper
+	// under them, or the dynamic background when that setting is on. The
+	// opaque slate panel that used to frame the body is gone: Home has no frame
+	// around its cards, and the panel was what made a scene read as a dialog
+	// box rather than a page of the same app. It was also a 1232x590 rounded
+	// texture blended over the whole body on every frame, on top of a
+	// full-screen copy of the 2560x1440 stock wallpaper and a full-screen dim.
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	// The classic Tools menu draws its own page header and section headings; its
 	// buttons were placed as tiles when the scene was entered (menutiles.go).
@@ -5163,16 +5214,10 @@ func renderThemeGallery(renderer *sdl.Renderer, config *Config, element Element)
 		y := element.Y + themeGalleryGridOffset() + int32(row-scroll)*(themeGalleryH+themeGalleryGap)
 		focused := i == themeGalleryIndex
 
-		fill := ColorCard
-		if focused {
-			fill = ColorCardFocus
-		}
-		fillRoundedRect(renderer, x, y, cardW, themeGalleryH, 16, fill)
-		if focused {
-			strokeRoundedRect(renderer, x, y, cardW, themeGalleryH, 16, 3, ColorAccent)
-		} else {
-			strokeRoundedRect(renderer, x, y, cardW, themeGalleryH, 16, 1, ColorBorder)
-		}
+		// Home's glass card, ringed in the accent when focused. No lift: the
+		// gallery scrolls inside its element and a grown card would be cut.
+		drawGlassSurface(renderer, sdl.Rect{X: x, Y: y, W: cardW, H: themeGalleryH}, 16,
+			glassState{Focused: focused, NoLift: true})
 
 		// Theme preview panel: the preset's background with an "Aa" text
 		// sample, its raised surface and an accent strip, so each card reads
@@ -5256,15 +5301,15 @@ func renderThemeGalleryTabs(renderer *sdl.Renderer, config *Config, element Elem
 	for i, tab := range themeGalleryTabs {
 		rect := themeGalleryTabRect(element, i)
 		open := tab.Kind == active.Kind
-		fill := sdl.Color{R: 255, G: 255, B: 255, A: 12}
+		fill := glassChipFill()
 		ink := ColorTextSecondary()
 		if open {
-			fill = ColorAccent
-			ink = contrastText(ColorAccent)
+			fill = glassAccent()
+			ink = contrastText(fill)
 		}
 		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, fill)
 		if !open {
-			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, ColorBorder)
+			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, rect.H/2, 1, glassChipEdge())
 		}
 		tw, th, _ := font.SizeUTF8(tab.Label)
 		drawText(renderer, font, tab.Label, rect.X+(rect.W-int32(tw))/2,
@@ -5441,17 +5486,18 @@ func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element
 	if font == nil {
 		font, _ = getCachedFont(config, "small")
 	}
-
-	fill := ColorCard
-	border := ColorBorder
-	borderW := int32(1)
-	if focused {
-		fill = ColorCardFocus
-		border = ColorAccent
-		borderW = 3
+	if font == nil {
+		return
 	}
-	fillRoundedRect(renderer, element.X, element.Y, width, height, 12, fill)
-	strokeRoundedRect(renderer, element.X, element.Y, width, height, 12, borderW, border)
+
+	// A glass row with Home's focus treatment; the state pill on the right is
+	// Home's chip language — the solid accent with dark type when on, a quiet
+	// glass chip when off.
+	row := sdl.Rect{X: element.X, Y: element.Y, W: width, H: height}
+	if focused {
+		drawGlassFocusGlow(renderer, row)
+	}
+	drawGlassSurface(renderer, row, glassControlRadius, glassState{Focused: focused})
 
 	on := toggleValue(config, element)
 
@@ -5476,16 +5522,13 @@ func renderToggleElement(renderer *sdl.Renderer, config *Config, element Element
 	label = ellipsize(font, label, labelMaxW)
 	drawText(renderer, font, label, element.X+18, element.Y+(height-int32(font.Height()))/2, labelCol, textAlignLeft)
 	pillY := element.Y + (height-pillH)/2
-	pillCol := ColorIconSurface
-	textCol := ColorTextPrimary()
+	// The off pill is Home's resting chip surface (the Exit chip and the bell).
+	pillCol, textCol := ColorIconSurface, ColorTextSecondary()
 	if on {
-		pillCol = ColorAccent
-		textCol = ColorIconDark
+		pillCol = glassAccent()
+		textCol = contrastText(pillCol)
 	}
 	fillRoundedRect(renderer, pillX, pillY, pillW, pillH, pillH/2, pillCol)
-	if focused && on {
-		strokeRoundedRect(renderer, pillX, pillY, pillW, pillH, pillH/2, 1, ColorIconDark)
-	}
 	if small != nil {
 		pillText := "OFF"
 		if on {
@@ -5604,6 +5647,7 @@ func ShowToast(message string, kind ToastKind) {
 // because it has already recorded its own message.
 func showToastPrimitive(message string, kind ToastKind) {
 	msg := strings.TrimSpace(message)
+	currentToastMu.Lock()
 	currentToast = ToastState{
 		Message:   msg,
 		Kind:      kind,
@@ -5612,6 +5656,7 @@ func showToastPrimitive(message string, kind ToastKind) {
 		lines:     nil,
 		linesW:    -1,
 	}
+	currentToastMu.Unlock()
 	if msg == "" {
 		return
 	}
@@ -5622,6 +5667,12 @@ func showToastPrimitive(message string, kind ToastKind) {
 		PlaySuccessSound()
 	}
 }
+
+// currentToastMu guards currentToast. Toasts are raised from goroutines (a
+// download finishing, a network answer, the volume-key skip ticker) while the
+// render loop reads the toast every frame, and an unguarded struct write can
+// be read half done: the text pointer of one toast with the length of another.
+var currentToastMu sync.Mutex
 
 // showToast is the legacy entry point used across the codebase; it maps the
 // semantic color constants to a ToastKind and delegates to ShowToast.
@@ -5765,13 +5816,20 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	if renderer == nil {
 		return
 	}
+	currentToastMu.Lock()
 	t := currentToast
+	currentToastMu.Unlock()
 	if strings.TrimSpace(t.Message) == "" {
 		return
 	}
 	elapsed := sdl.GetTicks64() - t.StartedAt
 	if t.Duration == 0 || elapsed > t.Duration {
-		currentToast = ToastState{}
+		currentToastMu.Lock()
+		// Only the toast this frame read is cleared; one raised since stays.
+		if currentToast.StartedAt == t.StartedAt && currentToast.Message == t.Message {
+			currentToast = ToastState{}
+		}
+		currentToastMu.Unlock()
 		toastRect = sdl.Rect{}
 		return
 	}
@@ -5802,8 +5860,12 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 	if t.lines == nil || t.linesW != maxTextW {
 		t.lines = wrapToastLines(font, t.Message, maxTextW)
 		t.linesW = maxTextW
-		currentToast.lines = t.lines
-		currentToast.linesW = t.linesW
+		currentToastMu.Lock()
+		if currentToast.StartedAt == t.StartedAt && currentToast.Message == t.Message {
+			currentToast.lines = t.lines
+			currentToast.linesW = t.linesW
+		}
+		currentToastMu.Unlock()
 	}
 	lines := t.lines
 	if len(lines) == 0 {
@@ -5849,13 +5911,13 @@ func renderToast(renderer *sdl.Renderer, config *Config) {
 
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
-	// Compact card: dark neutral surface, thin border, no black fill, no
-	// detached shadow, no heavy outline.
-	surface := ColorCard
+	// Compact card: the shared overlay sheet (Home's glass, opaque) with its
+	// hairline, faded as one with the text.
+	surface := glassSheetFill()
 	surface.A = alpha
 	fillRoundedRect(renderer, x, y, w, h, 12, surface)
-	border := ColorBorder
-	border.A = alpha
+	border := glassSheetEdge()
+	border.A = uint8(int(border.A) * int(alpha) / 255)
 	strokeRoundedRect(renderer, x, y, w, h, 12, 1, border)
 
 	// 4px severity strip on the left edge.
@@ -6248,10 +6310,7 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 			sym = strings.TrimSpace(v)
 		}
 		if sym != "" {
-			var list []string
-			if existing, ok := config.Variables.Custom["custom_tickers"].([]string); ok {
-				list = append(list, existing...)
-			}
+			list := customTickerList(config)
 			// Avoid duplicates (case-insensitive).
 			dup := false
 			for _, e := range list {
@@ -6513,8 +6572,9 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 				mainWindow.SetFullscreen(0)
 			}
 		}
-		// Apply theme colors live.
-		SetAccentColor(resolveColor(config, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
+		// Apply theme colors live. The accent stays the theme's: the button
+		// colour tints the glass buttons themselves (renderDarkButtonElement).
+		SetAccentColor(themeAccentColor())
 		saveConfig(config)
 		showToast("Settings saved", ToastInfo())
 	case "cycle_weather_unit":
@@ -6729,12 +6789,10 @@ func handleTrigger(renderer *sdl.Renderer, config *Config, element Element) {
 	case "textbrowser_copy":
 		tbVar := findTextBrowserVariable(config)
 		if text, ok := config.Variables.Custom[tbVar].(string); ok && text != "" {
-			if IsWindows() {
-				exec.Command("cmd", "/c", "echo", text).Run()
-			} else {
-				exec.Command("pbcopy").Run()
-			}
-			showToast("Copied to clipboard", ToastInfo())
+			// The shared clipboard path. This ran `cmd /c echo <page text>`
+			// (cmd then acted on any & or | in the page) or a bare pbcopy
+			// that is not on Linux, and said "Copied" either way.
+			copyWithToast(text, "Browser", "Copied to clipboard")
 		}
 	case "textbrowser_clear":
 		tbVar := findTextBrowserVariable(config)

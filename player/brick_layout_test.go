@@ -72,7 +72,11 @@ func TestFooterHintsFitCompactCanvas(t *testing.T) {
 	withScreen(t, uiCanvasCompactW, uiCanvasCompactH)
 	t.Cleanup(ClearTextCache)
 
-	avail := screenWidth - 24
+	// The room renderFooter gives the row: Home's inset footer band, less its
+	// padding on either side.
+	band := sceneFooterBand()
+	pad := scaleX(16, screenWidth)
+	avail := band.W - 2*pad
 	mustKeepEveryHint := map[string]bool{"Tube": true, "Chat": true, "Apps": true, "Settings": true}
 	longest := 0
 	for i := range config.Scenes {
@@ -97,14 +101,15 @@ func TestFooterHintsFitCompactCanvas(t *testing.T) {
 		t.Fatalf("longest hint row has only %d groups; the Tube row was not exercised", longest)
 	}
 
-	// The row is centered, so a width that fits cannot start left of the panel.
+	// The row is right-aligned in the band, so a width that fits starts inside
+	// the band's left padding, never over its edge or off the panel.
 	tube := findSceneIndex(config, "Tube")
 	if tube < 0 {
 		t.Fatal("Tube scene missing")
 	}
 	plan := planFooterHints(config, footerHints(config, config.Scenes[tube]), avail)
-	if start := (screenWidth - plan.width) / 2; start < 0 {
-		t.Fatalf("Tube hint row starts at x=%d", start)
+	if start := band.X + band.W - pad - plan.width; start < band.X+pad {
+		t.Fatalf("Tube hint row starts at x=%d, left of the footer band's padding at x=%d", start, band.X+pad)
 	}
 }
 

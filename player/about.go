@@ -28,14 +28,8 @@ var (
 )
 
 func renderAbout(renderer *sdl.Renderer, config *Config) {
-	ensureBackgroundTexture(renderer, config)
-	if bgTexture != nil {
-		renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	} else {
-		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
-		renderer.Clear()
-	}
-	renderAmbientBackground(renderer)
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "small")
 	medFont, _ := getCachedFont(config, "medium")

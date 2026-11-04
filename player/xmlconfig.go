@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -159,7 +160,7 @@ func LoadXMLConfig(filename string) (*Config, error) {
 	// XML attribute round-trip can leave the first-class bool/int/color fields as
 	// zero if the builder omits them; re-derive the cheap overlays from the parsed
 	// variables so XML and JSON keep one visible behavior for the runtime.
-	syncVariableOverrides(config)
+	applyVariableOverrides(config)
 	if config.Variables.Custom == nil {
 		config.Variables.Custom = make(map[string]interface{})
 	}
@@ -215,15 +216,16 @@ func LoadXMLConfig(filename string) (*Config, error) {
 			}
 			// Pipe the XML post-load normalization through the same path the JSON
 			// loader uses so element semantics stay consistent across formats.
-			syncVariableOverrides(&Config{Variables: config.Variables})
+			applyVariableOverrides(&Config{Variables: config.Variables})
 			scene.Elements = append(scene.Elements, elem)
 		}
 		config.Scenes = append(config.Scenes, scene)
 	}
 
 	// Typed variable overrides and trigger normalisation, shared with the JSON
-	// loader so either format yields the same runtime config.
-	syncVariableOverrides(config)
+	// loader so either format yields the same runtime config. Loading never
+	// saves, so this is the non-saving form.
+	applyVariableOverrides(config)
 	finalizeConfig(config)
 
 	return config, nil
@@ -316,6 +318,14 @@ func xmlParseFloat(s string) (float64, bool) {
 func xmlVariablesJSON(v xmlVariables) ([]byte, error) {
 	vars := make(map[string]interface{}, len(v.Entries))
 	for _, e := range v.Entries {
+		// A typed string setting keeps its text as written. Coerced, digit-only
+		// text became a number — <playbackResolution>720</playbackResolution>,
+		// <accentColor>000000</accentColor> — which failed the typed decode,
+		// and every custom variable was dropped along with it.
+		if len(e.Children) == 0 && xmlStringVariableKeys[strings.ToLower(e.XMLName.Local)] {
+			vars[e.XMLName.Local] = strings.TrimSpace(e.Value)
+			continue
+		}
 		val, _ := xmlVarValue(e)
 		vars[e.XMLName.Local] = val
 	}
@@ -329,6 +339,25 @@ func xmlVariablesJSON(v xmlVariables) ([]byte, error) {
 	}
 	return json.Marshal(vars)
 }
+
+// xmlStringVariableKeys are the string-typed settings of Variables, keyed by
+// lower-cased JSON name (encoding/json matches names case-insensitively).
+var xmlStringVariableKeys = func() map[string]bool {
+	keys := map[string]bool{}
+	t := reflect.TypeOf(Variables{})
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if f.Type.Kind() != reflect.String {
+			continue
+		}
+		name := strings.Split(f.Tag.Get("json"), ",")[0]
+		if name == "" || name == "-" {
+			continue
+		}
+		keys[strings.ToLower(name)] = true
+	}
+	return keys
+}()
 
 // xmlVarValue converts a captured <variables> entry into a typed value,
 // recursing into nested blocks so <Custom><ButtonColor>#1E293B</ButtonColor>

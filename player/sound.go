@@ -237,15 +237,30 @@ func QueueVideoAudio(pcm []byte, volume float64) {
 	if volume > 1 {
 		volume = 1
 	}
-	if volume < 0.01 {
-		return
-	}
-	videoAudioMutex.Lock()
-	defer videoAudioMutex.Unlock()
+	// A muted buffer is still queued (as silence, below): the wait for room is
+	// what paces both decoders to real time. Returning early at volume 0 let
+	// music race through whole playlists in silence and an audiobook "finish"
+	// — losing its resume point — while muted.
 	maxQ := videoMaxQueuedBytes()
-	for int(sdl.GetQueuedAudioSize(videoAudioDev)) > maxQ {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		videoAudioMutex.Lock()
+		if int(sdl.GetQueuedAudioSize(videoAudioDev)) <= maxQ {
+			break // keep the lock for the queueing below
+		}
+		videoAudioMutex.Unlock()
+		// The lock is not held while waiting: pause, resume and clear take it
+		// from the UI thread. A paused device never drains, and a wait that
+		// held the lock froze the whole UI on the next pause, stop or skip. A
+		// device still full at the deadline (paused, stalled) gets this buffer
+		// dropped instead; the decoders check their session and pause state
+		// between buffers.
+		if time.Now().After(deadline) {
+			return
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
+	defer videoAudioMutex.Unlock()
 	if volume < 0.999 {
 		n := len(pcm) / 2
 		for i := 0; i < n; i++ {

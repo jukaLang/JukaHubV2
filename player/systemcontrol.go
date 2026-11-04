@@ -64,23 +64,47 @@ func commandExists(name string) bool {
 
 // ── Backlight ──────────────────────────────────────────────────────────────
 
-// findBacklight picks the backlight device inside root. Only direct children of
-// root are considered and the entry must expose both max_brightness and
-// brightness; symlinked entries are skipped, so the returned directory is
-// always a real sysfs device and never a path the config could have chosen.
-func findBacklight(root string) (string, int, error) {
+// sysfsClassChildren lists the device entries directly under a sysfs class
+// directory such as /sys/class/backlight or /sys/class/leds, sorted so a device
+// exposing two controllers always picks the same one.
+//
+// On a real kernel every entry there is a symlink into /sys/devices, and
+// DirEntry.IsDir reports false for a link: the old IsDir-only filter therefore
+// found no backlight and no LED on the Smart Pro or the Brick at all (the
+// battery lookup had the same bug, see batterySysfsDirIn). A link is kept when
+// it resolves to a directory; plain files and dangling links are dropped. The
+// names are returned, not the link targets, so callers still only open fixed
+// attribute names inside a child of the one root they were given — and sysfs
+// links are made by the kernel, never by a config value.
+func sysfsClassChildren(root string) ([]string, error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		return "", 0, err
+		return nil, err
 	}
 	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
+		switch {
+		case e.IsDir():
 			names = append(names, e.Name())
+		case e.Type()&os.ModeSymlink != 0:
+			if info, err := os.Stat(filepath.Join(root, e.Name())); err == nil && info.IsDir() {
+				names = append(names, e.Name())
+			}
 		}
 	}
-	// Sorted so a device exposing two controllers always picks the same one.
 	sort.Strings(names)
+	return names, nil
+}
+
+// findBacklight picks the backlight device inside root. Only direct children of
+// root are considered (see sysfsClassChildren) and the entry must expose both
+// max_brightness and brightness, so the returned directory is always a sysfs
+// device and never a path the config could have chosen.
+func findBacklight(root string) (string, int, error) {
+	names, err := sysfsClassChildren(root)
+	if err != nil {
+		return "", 0, err
+	}
 	var lastErr error = fmt.Errorf("no backlight device under %s", root)
 	for _, name := range names {
 		dir := filepath.Join(root, name)

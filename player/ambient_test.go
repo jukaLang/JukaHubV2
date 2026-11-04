@@ -361,7 +361,7 @@ func TestAmbientWeatherDefaultsOn(t *testing.T) {
 	config.Variables.Custom = map[string]interface{}{}
 	wxMutex.Lock()
 	prevDaily, prevReady := weatherDaily, weatherReady
-	weatherDaily = []WeatherDay{{TMax: 20, TMin: 10, Code: 0}}
+	weatherDaily = []WeatherDay{{Date: time.Now().Format("2006-01-02"), TMax: 20, TMin: 10, Code: 0}}
 	weatherReady = true
 	wxMutex.Unlock()
 	t.Cleanup(func() {
@@ -557,6 +557,81 @@ func TestAmbientEmptyStatesStayOffTheDock(t *testing.T) {
 	for i, text := range want {
 		if lines[i].text != text {
 			t.Fatalf("line %d = %q, want %q", i, lines[i].text, text)
+		}
+	}
+}
+
+// The press that wakes a darkened dock (or the screensaver) only wakes it, its
+// release is swallowed with it, and a release never wakes — the release of X,
+// which darkens the dock, used to light the panel straight back up.
+func TestWakePressIsSwallowedAndReleasesNeverWake(t *testing.T) {
+	resetAmbientState(t)
+	prev := wakeSwallowed
+	wakeSwallowed = nil
+	t.Cleanup(func() { wakeSwallowed = prev })
+	config := &Config{}
+	ambientEnter(config)
+
+	// X darkens on its press...
+	if !ambientHandleController(&sdl.ControllerButtonEvent{Type: sdl.CONTROLLERBUTTONDOWN, Button: sdl.CONTROLLER_BUTTON_X}) {
+		t.Fatal("the dock did not take X")
+	}
+	if !ambientIsScreenOff() {
+		t.Fatal("X did not darken the dock")
+	}
+	// ...and its release must leave it dark.
+	if wakeSwallowRelease(wakeInputPad, int32(sdl.CONTROLLER_BUTTON_X)) {
+		t.Fatal("the release of a press that did not wake was swallowed")
+	}
+	if !ambientIsScreenOff() {
+		t.Fatal("a release woke the dock")
+	}
+
+	// The next press wakes and is consumed, not passed on as B (leave).
+	if !wakeSwallowPress(wakeInputPad, int32(sdl.CONTROLLER_BUTTON_B), false) {
+		t.Fatal("the waking press was not consumed")
+	}
+	if ambientIsScreenOff() || !ambientIsActive() {
+		t.Fatalf("after the waking press: screenOff=%v active=%v, want awake and still docked",
+			ambientIsScreenOff(), ambientIsActive())
+	}
+	if !wakeSwallowRelease(wakeInputPad, int32(sdl.CONTROLLER_BUTTON_B)) {
+		t.Fatal("the release of the waking press was not swallowed")
+	}
+	// Awake now: the next press is an ordinary press.
+	if wakeSwallowPress(wakeInputPad, int32(sdl.CONTROLLER_BUTTON_B), false) {
+		t.Fatal("a press on an awake screen was swallowed")
+	}
+	if wakeSwallowRelease(wakeInputPad, int32(sdl.CONTROLLER_BUTTON_B)) {
+		t.Fatal("an ordinary release was swallowed")
+	}
+
+	// A wake press whose release was taken by another loop must not swallow
+	// that button for good: the next fresh press is judged on its own.
+	ambientDarken()
+	if !wakeSwallowPress(wakeInputPad, int32(sdl.CONTROLLER_BUTTON_A), false) {
+		t.Fatal("the waking A was not consumed")
+	}
+	if wakeSwallowPress(wakeInputPad, int32(sdl.CONTROLLER_BUTTON_A), false) {
+		t.Fatal("a fresh A after a lost release was swallowed")
+	}
+	// Keyboard auto-repeat of the key that woke the screen stays swallowed.
+	ambientDarken()
+	if !wakeSwallowPress(wakeInputKey, 4, false) || !wakeSwallowPress(wakeInputKey, 4, true) {
+		t.Fatal("the waking key, or its auto-repeat, was not swallowed")
+	}
+	wakeSwallowRelease(wakeInputKey, 4)
+}
+
+func TestAxisDeflectedIgnoresDrift(t *testing.T) {
+	for _, v := range []int16{0, 900, -2500, axisWakeThreshold} {
+		if axisDeflected(v) {
+			t.Errorf("axisDeflected(%d) = true; drift must not count as input", v)
+		}
+	}
+	for _, v := range []int16{axisWakeThreshold + 1, -axisWakeThreshold - 1, 32767, -32768} {
+		if !axisDeflected(v) {
+			t.Errorf("axisDeflected(%d) = false; a deliberate push is input", v)
 		}
 	}
 }

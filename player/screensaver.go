@@ -239,6 +239,126 @@ func screensaverNotifyInput() {
 	}
 }
 
+// screensaverAsleep reports whether the screen is showing nothing the user can
+// act on: the screensaver is up, or the dock has darkened the panel.
+func screensaverAsleep() bool {
+	return ss.active || ambientIsScreenOff()
+}
+
+// screensaverWakeOnPress registers one press — a key, a pad button, a click, a
+// wheel step — and reports whether it was spent waking the screen. Such a
+// press is consumed: the user could not see what it would have pressed, and
+// the dock's B used to leave the dock (A to pause the music) on the same press
+// that only meant "wake up".
+func screensaverWakeOnPress() bool {
+	asleep := screensaverAsleep()
+	screensaverNotifyInput()
+	return asleep
+}
+
+// wakeInputKind separates the code spaces wakeSwallow remembers.
+type wakeInputKind uint8
+
+const (
+	wakeInputPad wakeInputKind = iota
+	wakeInputKey
+	wakeInputMouse
+)
+
+type wakeInputCode struct {
+	kind wakeInputKind
+	code int32
+}
+
+// wakeSwallowed holds the presses that were spent waking the screen, until
+// their release. Main thread only.
+var wakeSwallowed map[wakeInputCode]bool
+
+// wakeSwallowPress is screensaverWakeOnPress for an input with a release. A
+// press spent on waking is remembered so its release (and a held key's
+// auto-repeat) is swallowed with it: several surfaces act on release, and a
+// release arriving without its press acted on a screen that was dark when the
+// press happened. Releases themselves never wake — the release of the very
+// button that darkened the screen (X on the dock, a Sleep Screen action) used
+// to switch it straight back on.
+func wakeSwallowPress(kind wakeInputKind, code int32, repeat bool) bool {
+	k := wakeInputCode{kind, code}
+	if wakeSwallowed[k] {
+		if repeat {
+			return true // auto-repeat of a key still held from the wake
+		}
+		// A fresh press of an input whose release never came back here
+		// (another event loop took it): drop the stale mark and judge this
+		// press on its own, so one lost release cannot swallow a button
+		// for good.
+		delete(wakeSwallowed, k)
+	}
+	if !screensaverWakeOnPress() {
+		return false
+	}
+	if wakeSwallowed == nil {
+		wakeSwallowed = make(map[wakeInputCode]bool)
+	}
+	wakeSwallowed[k] = true
+	return true
+}
+
+// wakeSwallowRelease reports whether a release belongs to a press that was
+// spent waking the screen, and forgets that press.
+func wakeSwallowRelease(kind wakeInputKind, code int32) bool {
+	k := wakeInputCode{kind, code}
+	if !wakeSwallowed[k] {
+		return false
+	}
+	delete(wakeSwallowed, k)
+	return true
+}
+
+// axisWakeThreshold is how far a stick or trigger must move to count as input.
+// Half the navigation deadzone: a deliberate nudge counts, while a stick that
+// rests slightly off centre — drift is common on these handhelds — no longer
+// holds the screensaver off forever, wakes the darkened dock all night, or
+// keeps the frame rate at its active cadence.
+const axisWakeThreshold = stickDeadzone / 2
+
+// axisDeflected reports whether one axis value is past axisWakeThreshold.
+func axisDeflected(v int16) bool {
+	return v > axisWakeThreshold || v < -axisWakeThreshold
+}
+
+// axisWakeLatched holds an axis whose movement woke the screen until it comes
+// back to rest, so the push that only meant "wake up" does not also move the
+// focus or page a list (a trigger fires its press at a deeper value than the
+// one that woke the screen, a few events later). Sized above SDL's six axes.
+// Main thread only.
+var axisWakeLatched [8]bool
+
+// axisWakeFilter registers one stick or trigger event with the idle machinery
+// and reports whether the screen may act on it.
+func axisWakeFilter(axis uint8, value int16) bool {
+	deflected := axisDeflected(value)
+	if int(axis) >= len(axisWakeLatched) {
+		if deflected {
+			screensaverNotifyInput()
+		}
+		return true
+	}
+	if axisWakeLatched[axis] {
+		if !deflected {
+			axisWakeLatched[axis] = false
+		}
+		return false
+	}
+	if !deflected {
+		return true
+	}
+	if screensaverWakeOnPress() {
+		axisWakeLatched[axis] = true
+		return false
+	}
+	return true
+}
+
 // ──────────────────────────────────────────────────────────────────────
 // Clearing the backdrop photo from the idle screen
 //

@@ -1393,13 +1393,11 @@ func drawToolsHintChip(renderer *sdl.Renderer, config *Config, font *ttf.Font, h
 	w := int32(tw) + 2*padX
 	x := row.X + row.W - w - 10
 	y := row.Y + (row.H-h)/2
-	fill := WithAlpha(ColorSurface, 235)
-	border := WithAlpha(ColorBorder, 140)
-	label := ColorTextSecondary()
+	// Home's chips: a quiet glass pill, or — for the focused tile's action —
+	// the solid accent pill with dark type (the Continue card's "Open Media").
+	fill, border, label := glassChipFill(), glassChipEdge(), ColorTextSecondary()
 	if focused {
-		fill = WithAlpha(visibleAccent(), 90)
-		border = WithAlpha(focus, 220)
-		label = ColorTextPrimary()
+		fill, border, label = focus, focus, contrastText(focus)
 	}
 	fillRoundedRect(renderer, x, y, w, h, h/2, fill)
 	strokeRoundedRect(renderer, x, y, w, h, h/2, 1, border)

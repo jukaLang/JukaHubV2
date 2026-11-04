@@ -64,6 +64,11 @@ type installBarState struct {
 	// strip's chip tap focuses it, giving a background install a way back to
 	// the page that started it without a hunt through menus.
 	source string
+	// gen numbers the runs: every begin mints the next one. A flow that can
+	// overlap another (the helper-tool download runs outside the Patch lock)
+	// checks it before it reports, so it never fails, finishes or hides a card
+	// that now belongs to a different run.
+	gen uint64
 }
 
 var installBar installBarState
@@ -78,6 +83,22 @@ func installBarBegin(tool string) {
 func installBarBeginLabelled(tool, label string) {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
+	installBarBeginLocked(tool, label)
+}
+
+// installBarBeginRun is installBarBegin for a run that reports back later: it
+// returns the run's number and token, read under the same lock the begin took.
+// Reading them in a second call let a begin from another goroutine slip in
+// between and hand this run the other one's identity.
+func installBarBeginRun(tool string) (uint64, context.Context) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	installBarBeginLocked(tool, "")
+	return installBar.gen, installBar.runCtx
+}
+
+// installBarBeginLocked starts a run; installBar.mu is held.
+func installBarBeginLocked(tool, label string) {
 	now := time.Now()
 	// The previous run's token is freed here, not in installBarAbort: a run
 	// that is no longer on screen but whose goroutine is still winding down
@@ -87,6 +108,7 @@ func installBarBeginLabelled(tool, label string) {
 		installBar.runCancel()
 	}
 	installBar.runCtx, installBar.runCancel = context.WithCancel(context.Background())
+	installBar.gen++
 	installBar.visible = true
 	installBar.tool = tool
 	installBar.label = label
@@ -203,6 +225,11 @@ func installBarDetail(msg string) {
 func installBarDone() {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
+	installBarDoneLocked()
+}
+
+// installBarDoneLocked is installBarDone with installBar.mu held.
+func installBarDoneLocked() {
 	installBar.phase = installPhaseDone
 	installBar.message = ""
 	installBar.endedAt = time.Now()
@@ -215,8 +242,13 @@ func installBarDone() {
 func installBarAbort() {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
+	installBarAbortLocked()
+}
+
+// installBarAbortLocked is installBarAbort with installBar.mu held.
+func installBarAbortLocked() {
 	// The fields are cleared one by one: replacing the whole struct would copy
-	// the mutex this function is holding, and the deferred Unlock would then
+	// the mutex the caller is holding, and its deferred Unlock would then
 	// unlock a different one.
 	visible := installBar.visible
 	installBar.source = ""
@@ -240,10 +272,62 @@ func installBarAbort() {
 	installBar.retryable = false
 }
 
+// installBarGeneration returns the number of the run the card belongs to.
+func installBarGeneration() uint64 {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	return installBar.gen
+}
+
+// installBarOwnedBy reports whether the card still belongs to run gen.
+func installBarOwnedBy(gen uint64) bool {
+	return installBarGeneration() == gen
+}
+
+// installBarAbortRun is installBarAbort for one run: it hides the card only
+// while the card is still that run's. A run whose token a later begin retired
+// used to call installBarAbort on its way out, and that cancelled the run that
+// had just replaced it — on a first boot the core update and the tool download
+// took each other down.
+//
+// The ownership check and the abort happen under one lock: checked and acted on
+// in two calls, a begin from another goroutine could land in between and be
+// the run that got hidden.
+func installBarAbortRun(gen uint64) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.gen == gen {
+		installBarAbortLocked()
+	}
+}
+
+// installBarDoneRun is installBarDone for one run (see installBarAbortRun).
+func installBarDoneRun(gen uint64) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.gen == gen {
+		installBarDoneLocked()
+	}
+}
+
+// installBarFailRun is installBarFail for one run (see installBarAbortRun).
+func installBarFailRun(gen uint64, reason string) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.gen == gen {
+		installBarFailLocked(reason)
+	}
+}
+
 // installBarFail marks the install failed; the card shows the reason briefly.
 func installBarFail(reason string) {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
+	installBarFailLocked(reason)
+}
+
+// installBarFailLocked is installBarFail with installBar.mu held.
+func installBarFailLocked(reason string) {
 	installBar.phase = installPhaseError
 	installBar.message = reason
 	installBar.endedAt = time.Now()
@@ -304,6 +388,21 @@ func installCardDetail(reason string) string {
 func installBarFailRetry(tool, reason string) {
 	installBar.mu.Lock()
 	defer installBar.mu.Unlock()
+	installBarFailRetryLocked(tool, reason)
+}
+
+// installBarFailRetryRun is installBarFailRetry for one run (see
+// installBarAbortRun).
+func installBarFailRetryRun(gen uint64, tool, reason string) {
+	installBar.mu.Lock()
+	defer installBar.mu.Unlock()
+	if installBar.gen == gen {
+		installBarFailRetryLocked(tool, reason)
+	}
+}
+
+// installBarFailRetryLocked is installBarFailRetry with installBar.mu held.
+func installBarFailRetryLocked(tool, reason string) {
 	installBar.visible = true
 	installBar.tool = tool
 	installBar.phase = installPhaseError

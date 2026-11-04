@@ -321,7 +321,7 @@ func toolboxInstalled(t toolboxTool) string {
 // toolboxInstall downloads and unpacks one catalog tool into the tools folder.
 // It is idempotent: an installed copy is left alone so a running binary is
 // never overwritten (ETXTBSY on Linux).
-func toolboxInstall(id string, config *Config) error {
+func toolboxInstall(id string, config *Config) (err error) {
 	t, ok := toolboxFind(id)
 	if !ok {
 		return fmt.Errorf("unknown tool %q", id)
@@ -344,7 +344,17 @@ func toolboxInstall(id string, config *Config) error {
 		return errToolsOffline
 	}
 
-	installBarBegin(t.Name)
+	run, runCtx := installBarBeginRun(t.Name)
+	// Every failure from here on settles the card — this run's card only: an
+	// install begun meanwhile owns it now, and its progress must not turn
+	// into this one's error. An error return used to leave the card on its
+	// last phase, looking busy with nothing behind it until another install
+	// replaced it.
+	defer func() {
+		if err != nil {
+			installBarFailRun(run, installCardDetail(err.Error()))
+		}
+	}()
 	installBarPhase(installPhaseResolving)
 	asset, err := resolveToolURLMatching(t.Repo, "", groups...)
 	if err != nil {
@@ -365,7 +375,7 @@ func toolboxInstall(id string, config *Config) error {
 	installBarPhase(installPhaseDownload)
 	// The transfer runs on the card's run token: the strip's X on this chip
 	// stops the download instead of only hiding the bar.
-	if err := downloadFileWithProgressCtx(installBarRunContext(), asset.URL, tmpName, installBarProgress); err != nil {
+	if err := downloadFileWithProgressCtx(runCtx, asset.URL, tmpName, installBarProgress); err != nil {
 		return fmt.Errorf("download %s: %w", t.Name, err)
 	}
 
@@ -397,7 +407,7 @@ func toolboxInstall(id string, config *Config) error {
 	if toolboxInstalled(t) == "" {
 		return fmt.Errorf("%s reported success but %s is missing", t.Name, filepath.Base(target))
 	}
-	installBarDone()
+	installBarDoneRun(run)
 	logPatch("[TOOLS] toolbox %s installed at %s", t.ID, target)
 	return nil
 }

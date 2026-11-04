@@ -117,6 +117,13 @@ func fileEditorTooLargeText(size int64) string {
 func fileEditorLooksBinary(data []byte) bool {
 	if len(data) > 8192 {
 		data = data[:8192]
+		// The cut can land inside a multi-byte character, and the partial
+		// character is not binary data: about half of all Cyrillic or CJK
+		// files over 8 KiB were refused as "not a text file". Up to three
+		// trailing bytes of an unfinished character are dropped first.
+		for i := 0; i < utf8.UTFMax-1 && len(data) > 0 && !utf8.Valid(data); i++ {
+			data = data[:len(data)-1]
+		}
 	}
 	for _, b := range data {
 		if b == 0 {

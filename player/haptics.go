@@ -526,6 +526,28 @@ func hapticsSetEnabled(on bool) {
 	}
 }
 
+// hapticsForgetPad drops a rumble backend that drives pad. It runs before the
+// pad is closed (gamepad_hotplug.go): a pulse through a closed SDL controller
+// is a use-after-free in C. The next pulse detects again.
+func hapticsForgetPad(pad *sdl.GameController) {
+	hapticsMu.Lock()
+	defer hapticsMu.Unlock()
+	if p, ok := hapticDev.(padHaptics); ok && p.pad == pad {
+		hapticDev = nil
+		hapticTried = false
+	}
+}
+
+// hapticsPadAttached lets the next pulse look for a motor again when none was
+// found, so a pad opened after boot can rumble.
+func hapticsPadAttached() {
+	hapticsMu.Lock()
+	defer hapticsMu.Unlock()
+	if hapticDev == nil {
+		hapticTried = false
+	}
+}
+
 // playHaptic fires one pulse unless feedback is off, no motor answered, or the
 // pulse is a navigation tick arriving faster than the gap allows.
 func playHaptic(p hapticPulse) {

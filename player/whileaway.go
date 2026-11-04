@@ -171,5 +171,7 @@ func whileAwayNotify() {
 		return
 	}
 	ShowToast(text, ToastKindSuccess)
+	currentToastMu.Lock()
 	currentToast.Duration = whileAwayToastDurationMS
+	currentToastMu.Unlock()
 }

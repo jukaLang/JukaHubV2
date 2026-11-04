@@ -22,9 +22,10 @@ import (
 // strip the component owns, and says so.
 //
 // The same frames also pin the shared card recipe: the pixel beside the card is
-// the backdrop at OverlayScrimAlpha, and the pixel inside the card near its top
-// edge is ColorPanelRaised. A panel that paints its own dim, or its own card
-// fill, fails here even if its title still comes from the component.
+// the backdrop under the shared navy dim (glassScrimColor at
+// OverlayScrimAlpha), and the pixel inside the card near its top edge is the
+// shared glass sheet (overlayCardFill). A panel that paints its own dim, or its
+// own card fill, fails here even if its title still comes from the component.
 
 func TestFullScreensShareThePageHeader(t *testing.T) {
 	if testing.Short() {
@@ -42,7 +43,7 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 		rect   func() sdl.Rect
 		// fill is the card surface the page paints. Downloads recesses its card
 		// so its raised rows read as separate bands; every other page is the
-		// shared ColorPanelRaised.
+		// shared glass sheet.
 		fill sdl.Color
 	}{
 		{
@@ -88,7 +89,7 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 			},
 			render: renderDownloadsPanel,
 			rect:   func() sdl.Rect { return dlPanel.panel },
-			fill:   ColorSurface,
+			fill:   glassSheetDeepFill(),
 		},
 		{
 			name: "Curation hub",
@@ -455,11 +456,13 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 	}
 
 	buf := make([]byte, probeW*probeH*4)
+	// A known backdrop well away from the dim's own navy, so the shared dim is
+	// measurable from the frame (a navy dim over a navy backdrop would read the
+	// same with or without it).
+	backdrop := sdl.Color{R: 150, G: 150, B: 150, A: 255}
 	for _, s := range screens {
 		undo := s.begin()
-		// A known backdrop: the scrim over it is measurable, which is how the
-		// shared dim and card surface are checked from the frame.
-		renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
+		renderer.SetDrawColor(backdrop.R, backdrop.G, backdrop.B, 255)
 		renderer.Clear()
 		s.render(renderer, config)
 		card := s.rect()
@@ -474,8 +477,8 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 			t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 		}
 
-		// The shared scrim: a pixel beside the card is the backdrop at
-		// OverlayScrimAlpha, not an undimmed scene and not a different dim.
+		// The shared scrim: a pixel beside the card is the backdrop under the
+		// shared navy dim, not an undimmed scene and not a different dim.
 		sx, sy := int(card.X)-6, int(card.Y+card.H/2)
 		if sx < 0 {
 			sx = 0
@@ -485,21 +488,24 @@ func TestFullScreensShareThePageHeader(t *testing.T) {
 		}
 		i := (sy*int(probeW) + sx) * 4
 		got := int(buf[i]) + int(buf[i+1]) + int(buf[i+2])
-		base := (int(ColorBackground.R) + int(ColorBackground.G) + int(ColorBackground.B)) *
-			(255 - int(OverlayScrimAlpha)) / 255
+		dim := glassScrimColor(1)
+		blend := func(under, over uint8) int {
+			return (int(under)*(255-int(dim.A)) + int(over)*int(dim.A)) / 255
+		}
+		base := blend(backdrop.R, dim.R) + blend(backdrop.G, dim.G) + blend(backdrop.B, dim.B)
 		if diff := got - base; diff > 10 || diff < -10 {
 			t.Errorf("%s: the scrim beside the card read %d, want about %d for the shared dim", s.name, got, base)
 		}
 
 		// The shared card surface, sampled just inside the top edge away from
-		// the rounded corner and the accent hairline.
+		// the rounded corner and the edge highlight.
 		cx, cy := int(card.X+OverlayPadX), int(card.Y+6)
 		if cx < int(probeW) && cy < int(probeH) {
 			i := (cy*int(probeW) + cx) * 4
 			got := int(buf[i]) + int(buf[i+1]) + int(buf[i+2])
 			surface := s.fill
 			if surface.A == 0 {
-				surface = ColorPanelRaised
+				surface = overlayCardFill()
 			}
 			want := int(surface.R) + int(surface.G) + int(surface.B)
 			if diff := got - want; diff > 12 || diff < -12 {

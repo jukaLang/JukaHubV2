@@ -772,7 +772,9 @@ func renderDynamicList(renderer *sdl.Renderer, config *Config, element Element) 
 			// Use ▶ (U+25B6), which Inter contains — ▸ (U+25B8) does not exist
 			// in Inter and renders as a missing-glyph box.
 			prefix = "> "
-			color = sdl.Color{R: 255, G: 230, B: 120, A: 255}
+			// The folder gold, darkened on a light preset where the pale
+			// yellow was unreadable.
+			color = TextInk(sdl.Color{R: 255, G: 230, B: 120, A: 255})
 		} else if isMediaFile(entries[i].Name) {
 			prefix = "> "
 			color = ColorTextAccent()

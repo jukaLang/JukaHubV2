@@ -9,7 +9,8 @@ import (
 	"testing"
 )
 
-// fakeCPU creates <root>/cpuN/cpufreq/{scaling_governor,available_governors}.
+// fakeCPU creates <root>/cpuN/cpufreq/{scaling_governor,scaling_available_governors},
+// the two files a real kernel exposes.
 func fakeCPU(t *testing.T, root string, index int, current, available string, writable bool) string {
 	t.Helper()
 	dir := filepath.Join(root, "cpu"+testItoa(index), "cpufreq")
@@ -20,7 +21,7 @@ func fakeCPU(t *testing.T, root string, index int, current, available string, wr
 	if err := os.WriteFile(gov, []byte(current+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "available_governors"), []byte(available+"\n"), 0o444); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "scaling_available_governors"), []byte(available+"\n"), 0o444); err != nil {
 		t.Fatal(err)
 	}
 	if !writable {
@@ -365,7 +366,40 @@ func resetLaunchPowerProfile() {
 	launchPowerProfile.depth = 0
 	launchPowerProfile.warned = false
 	launchPowerProfile.ceiling = nil
+	launchPowerProfile.governors = nil
 	launchPowerProfile.mu.Unlock()
+}
+
+// A CPU that also offers powersave must come back on the governor it ran before
+// the launch: restoring the "battery" pick put the hub on powersave — its lowest
+// clock — after every game.
+func TestLaunchRestoresTheBootGovernorNotPowersave(t *testing.T) {
+	root := t.TempDir()
+	gov := fakeCPU(t, root, 0, "ondemand", "ondemand powersave performance schedutil", true)
+	prevRoot := cpufreqRoot
+	cpufreqRoot = root
+	resetLaunchPowerProfile()
+	t.Cleanup(func() {
+		cpufreqRoot = prevRoot
+		resetLaunchPowerProfile()
+	})
+
+	release := beginGamePowerProfile(nil)
+	if raw, _ := os.ReadFile(gov); strings.TrimSpace(string(raw)) != "performance" {
+		t.Fatalf("governor during the launch = %q, want performance", raw)
+	}
+	release()
+	if raw, _ := os.ReadFile(gov); strings.TrimSpace(string(raw)) != "ondemand" {
+		t.Fatalf("governor after the launch = %q, want the boot governor ondemand", raw)
+	}
+
+	// A configured battery governor is still honoured on the way back.
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{"powerProfileBattery": "powersave"}}}
+	release = beginGamePowerProfile(config)
+	release()
+	if raw, _ := os.ReadFile(gov); strings.TrimSpace(string(raw)) != "powersave" {
+		t.Fatalf("governor with powerProfileBattery set = %q, want powersave", raw)
+	}
 }
 
 // A launch that cannot switch profiles must still return a usable restore

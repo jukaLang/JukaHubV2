@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -35,6 +36,35 @@ const (
 type weatherCacheDoc struct {
 	SavedAt time.Time    `json:"saved_at"`
 	Days    []WeatherDay `json:"days"`
+	// UTCOffset is the forecast location's offset, so a restored forecast
+	// still knows which of its dates is "today" there.
+	UTCOffset *int `json:"utc_offset_seconds,omitempty"`
+}
+
+// weatherLocOffset is the forecast location's UTC offset in seconds, valid
+// when weatherLocOffsetKnown is set. The forecast is fetched with
+// timezone=auto, so its dates are the location's; a handheld whose clock runs
+// in another zone (images often run UTC) picked yesterday's or tomorrow's row
+// as today by its own calendar. Atomics, because weatherDayFor runs under
+// wxMutex.
+var (
+	weatherLocOffset      atomic.Int64
+	weatherLocOffsetKnown atomic.Bool
+)
+
+// weatherSetLocationOffset records the forecast location's UTC offset.
+func weatherSetLocationOffset(seconds int, known bool) {
+	weatherLocOffset.Store(int64(seconds))
+	weatherLocOffsetKnown.Store(known)
+}
+
+// weatherTodayDate is today's date at the forecast location (the device's own
+// calendar when the location's offset is unknown).
+func weatherTodayDate(now time.Time) string {
+	if weatherLocOffsetKnown.Load() {
+		now = now.In(time.FixedZone("forecast", int(weatherLocOffset.Load())))
+	}
+	return now.Format("2006-01-02")
 }
 
 var (
@@ -76,7 +106,12 @@ func saveWeatherCache(path string, days []WeatherDay, savedAt time.Time) error {
 	if strings.TrimSpace(path) == "" || len(days) == 0 {
 		return nil
 	}
-	data, err := json.MarshalIndent(weatherCacheDoc{SavedAt: savedAt.UTC(), Days: days}, "", "  ")
+	doc := weatherCacheDoc{SavedAt: savedAt.UTC(), Days: days}
+	if weatherLocOffsetKnown.Load() {
+		off := int(weatherLocOffset.Load())
+		doc.UTCOffset = &off
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -114,6 +149,9 @@ func readWeatherCache(path string, now time.Time) ([]WeatherDay, time.Time, bool
 	if age < 0 || age > weatherCacheMaxAge {
 		return nil, time.Time{}, false
 	}
+	if doc.UTCOffset != nil {
+		weatherSetLocationOffset(*doc.UTCOffset, true)
+	}
 	return days, doc.SavedAt, true
 }
 
@@ -142,6 +180,21 @@ func sanitiseWeatherDays(in []WeatherDay) []WeatherDay {
 	return out
 }
 
+// weatherDayFor returns the forecast entry for now's local date. The list can
+// start before today — a forecast restored from the cache may be a day old —
+// and taking its first entry showed yesterday's weather as today's in the
+// status bar, on the dock and in the backdrop. False when today is not in the
+// list at all.
+func weatherDayFor(days []WeatherDay, now time.Time) (WeatherDay, bool) {
+	today := weatherTodayDate(now)
+	for _, d := range days {
+		if d.Date == today {
+			return d, true
+		}
+	}
+	return WeatherDay{}, false
+}
+
 // restoreWeatherCache seeds the in-memory forecast before the first network
 // attempt, so an offline boot still has weather. It never overwrites data a
 // live fetch already stored: startup calls it first, and a fetch that lands
@@ -165,8 +218,8 @@ func restoreWeatherCache(now time.Time) bool {
 	weatherSavedAt = savedAt
 	weatherCacheMu.Unlock()
 
-	if len(days) > 0 {
-		DynBGUpdateWeather(days[0].Code)
+	if day, ok := weatherDayFor(days, now); ok {
+		DynBGUpdateWeather(day.Code)
 	}
 	logPatch("weather: restored the saved forecast from %s (age %s)", filepath.Base(path), now.Sub(savedAt).Round(time.Minute))
 	return true

@@ -626,9 +626,8 @@ func renderPlaytime(renderer *sdl.Renderer, config *Config) {
 	playtimeRARect = sdl.Rect{}
 	playtimeHeatRect = sdl.Rect{}
 	playtimeScrollbarRect = sdl.Rect{}
-	renderer.SetDrawColor(9, 12, 20, 255)
-	renderer.Clear()
-	renderAmbientBackground(renderer)
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "small")
 	med, _ := getCachedFont(config, "medium")

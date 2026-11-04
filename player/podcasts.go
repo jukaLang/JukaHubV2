@@ -509,6 +509,9 @@ func playPodcastEpisode(config *Config, show podcastShow, index int) bool {
 	}
 	musicPlayPlaylist(tracks, index)
 	openMusicPlayerScene(config)
+	// The queue alone plays nothing: this said "Playing" over a silent player
+	// until the user found the play button.
+	musicPlayTrack(index)
 	title := show.Title
 	if title == "" {
 		title = "Podcast"

@@ -103,6 +103,12 @@ func (m *musicState) musicStepLocked(delta int, natural bool) (int, bool) {
 		return 0, false
 	}
 	if n == 1 {
+		// One track: Next or Previous replays it, but the end of the track
+		// stops unless repeat-all is on. It always restarted before, so a
+		// single song looped with repeat off.
+		if natural && m.repeatMode != musicRepeatAll {
+			return 0, false
+		}
 		return m.current, true
 	}
 	if m.shuffle && len(m.order) == n {

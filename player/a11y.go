@@ -461,6 +461,50 @@ func a11yKeymapString(keys map[uint8]uint8) string {
 	return strings.Join(parts, ",")
 }
 
+// a11yHeldNavDirection is the D-pad direction held right now as the screens
+// see it: through the keymap and swaps, and through a one-handed chord press
+// that is still held. Hold-to-repeat used to poll the physical D-pad alone, so
+// holding Up while it stood in for A (one-handed mode) fired A once and then
+// streamed Up moves, and a direction remapped to another button still
+// repeated as a direction. held reports whether one physical button is down.
+func a11yHeldNavDirection(held func(uint8) bool) (int, int) {
+	dx, dy := 0, 0
+	var seen [64]bool // runs every frame: no map allocation
+	check := func(phys uint8) {
+		if int(phys) >= len(seen) || seen[phys] || !held(phys) {
+			return
+		}
+		seen[phys] = true
+		logical := phys
+		if target, chorded := a11yChordState.pressed[phys]; chorded && a11y.oneHanded {
+			logical = target
+		}
+		logical, dropped := a11yResolveButton(logical)
+		if dropped {
+			return
+		}
+		switch logical {
+		case sdl.CONTROLLER_BUTTON_DPAD_LEFT:
+			dx = -1
+		case sdl.CONTROLLER_BUTTON_DPAD_RIGHT:
+			dx = 1
+		case sdl.CONTROLLER_BUTTON_DPAD_UP:
+			dy = -1
+		case sdl.CONTROLLER_BUTTON_DPAD_DOWN:
+			dy = 1
+		}
+	}
+	for _, phys := range []uint8{sdl.CONTROLLER_BUTTON_DPAD_UP, sdl.CONTROLLER_BUTTON_DPAD_DOWN,
+		sdl.CONTROLLER_BUTTON_DPAD_LEFT, sdl.CONTROLLER_BUTTON_DPAD_RIGHT} {
+		check(phys)
+	}
+	// A button the keymap turned into a direction repeats like one.
+	for phys := range a11y.keys {
+		check(phys)
+	}
+	return dx, dy
+}
+
 // a11yResolveButton applies the general keymap, then the two swap presets, and
 // reports whether the press must be swallowed entirely (a disabled button).
 //

@@ -25,12 +25,12 @@ type UICardStyle struct {
 	Shadow      uint8 // 0 disables the soft drop shadow
 }
 
-// DefaultUICardStyle returns the standard raised surface.
+// DefaultUICardStyle returns the standard card: Home's glass tile.
 func DefaultUICardStyle() UICardStyle {
 	return UICardStyle{
-		Fill:        ColorSurfaceAlt,
-		Border:      ColorBorder,
-		Radius:      RadiusMD,
+		Fill:        glassFill(),
+		Border:      glassEdge(),
+		Radius:      homeTileRadius,
 		BorderWidth: 1,
 	}
 }
@@ -131,9 +131,13 @@ func uiButtonFocusFill(variant UIButtonVariant, fill sdl.Color) sdl.Color {
 	}
 }
 
-// UIButton draws the app-wide button recipe: one rounded surface, a top sheen,
-// a hairline border, a focus ring and a centred label. It returns rect so scene
-// code can record the hit target in the same expression.
+// UIButton draws the app-wide button recipe, in Home's language: a secondary
+// or ghost button is a glass surface with a hairline, a primary button is the
+// solid accent pill with dark type (the Continue card's "Open Media"), a danger
+// button is the danger colour, and a custom style keeps the caller's colours.
+// Every one takes Home's focus treatment — the bloom, the 3px lift and the ring
+// on the lifted edge — and a centred label. It returns rect so scene code can
+// record the hit target in the same expression.
 func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label string, style UIButtonStyle, state UIButtonState) sdl.Rect {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return rect
@@ -141,76 +145,97 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 
 	radius := style.Radius
 	if radius <= 0 {
-		radius = RadiusMD
+		radius = glassButtonRadius(rect.H)
 	}
 	if style.Pill {
 		radius = rect.H / 2
 	}
+	ring := state.Focused && !state.Disabled && !style.HideFocusRing
+	glass := (style.Variant == UIButtonSecondary || style.Variant == UIButtonGhost) && style.Fill.A == 0
 
-	fill := style.Fill
-	if fill.A == 0 {
-		fill = uiButtonFill(style.Variant)
-	}
-	hoverFill := style.HoverFill
-	if hoverFill.A == 0 {
-		hoverFill = uiButtonHoverFill(style.Variant, fill)
-	}
-	focusFill := style.FocusFill
-	if focusFill.A == 0 {
-		focusFill = uiButtonFocusFill(style.Variant, fill)
-	}
-	border := style.Border
-	if border.A == 0 {
-		border = ColorBorderDefault
-	}
 	labelColor := style.LabelColor
-	if labelColor.A == 0 {
-		labelColor = contrastText(fill)
-	}
-
-	if state.Disabled {
-		fill = WithAlpha(fill, 90)
-		border = WithAlpha(border, 90)
-		labelColor = WithAlpha(ColorTextTertiary(), 160)
-	} else if state.Pressed {
-		fill = darken(fill, 16)
-	} else if state.Focused {
-		fill = focusFill
-	} else if state.Hovered {
-		fill = hoverFill
-	}
-
-	if state.Focused && !state.Disabled && !style.HideFocusRing {
-		border = focusColorForAccent(accentColor)
-	} else if state.Hovered && !state.Disabled {
-		border = ColorBorderHover
-	}
-
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	if !style.NoShadow {
-		fillRoundedRect(renderer, rect.X+2, rect.Y+4, rect.W, rect.H, radius, ShadowFill(22))
+	if ring {
+		drawGlassFocusGlow(renderer, rect)
 	}
-	if state.Focused && !state.Disabled && !style.HideFocusRing {
-		fillRoundedRect(renderer, rect.X-FocusGlow, rect.Y-FocusGlow, rect.W+2*FocusGlow, rect.H+2*FocusGlow, radius+FocusGlow, WithAlpha(accentColor, 24))
-	}
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, fill)
-	if style.Progress > 0 {
-		progressFill := style.ProgressFill
-		if progressFill.A == 0 {
-			progressFill = lighten(fill, 24)
+	if glass {
+		st := glassState{
+			Focused:  ring,
+			Hovered:  state.Hovered || (state.Focused && style.HideFocusRing),
+			Pressed:  state.Pressed,
+			Disabled: state.Disabled,
 		}
-		UIProgressBar(renderer, rect, style.Progress, sdl.Color{}, progressFill)
-	}
-	// A full-width highlight line only fits a rounded rectangle; on a pill or
-	// circle it would stick out past the curved top edge.
-	if !style.Pill && radius < rect.H/2 {
-		renderer.SetDrawColor(255, 255, 255, 14)
-		renderer.FillRect(&sdl.Rect{X: rect.X + 2, Y: rect.Y + 1, W: rect.W - 4, H: 1})
-	}
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, border)
-	if state.Focused && !state.Disabled && !style.HideFocusRing {
-		strokeRoundedRect(renderer, rect.X-FocusRing, rect.Y-FocusRing, rect.W+2*FocusRing, rect.H+2*FocusRing, radius+FocusRing, FocusRing, focusColorForAccent(accentColor))
-		fillRoundedRect(renderer, rect.X+1, rect.Y+1, rect.W-2, rect.H/2, radius-1, SurfaceHighlight(8))
+		if style.Variant == UIButtonGhost && !st.Focused && !st.Hovered && !st.Pressed {
+			// A ghost button rests as its label on a whisper of glass.
+			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassA(6))
+		} else {
+			drawGlassSurface(renderer, rect, radius, st)
+		}
+		if style.Border.A > 0 && !st.Focused {
+			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, style.Border)
+		}
+		if style.Progress > 0 {
+			progressFill := style.ProgressFill
+			if progressFill.A == 0 {
+				progressFill = WithAlpha(glassAccent(), 90)
+			}
+			UIProgressBar(renderer, rect, style.Progress, sdl.Color{}, progressFill)
+		}
+		if labelColor.A == 0 {
+			labelColor = ColorTextPrimary()
+		}
+		if state.Disabled {
+			labelColor = WithAlpha(ColorTextTertiary(), 160)
+		}
+	} else {
+		fill := style.Fill
+		if fill.A == 0 {
+			fill = uiButtonFill(style.Variant)
+		}
+		hoverFill := style.HoverFill
+		if hoverFill.A == 0 {
+			hoverFill = uiButtonHoverFill(style.Variant, fill)
+		}
+		focusFill := style.FocusFill
+		if focusFill.A == 0 {
+			focusFill = uiButtonFocusFill(style.Variant, fill)
+		}
+		border := style.Border
+		if border.A == 0 {
+			border = glassEdge()
+		}
+		if labelColor.A == 0 {
+			labelColor = contrastText(fill)
+		}
+		if state.Disabled {
+			fill = WithAlpha(fill, 90)
+			border = WithAlpha(border, 90)
+			labelColor = WithAlpha(ColorTextTertiary(), 160)
+		} else if state.Pressed {
+			fill = darken(fill, 16)
+		} else if state.Focused {
+			fill = focusFill
+		} else if state.Hovered {
+			fill = hoverFill
+			border = glassEdgeHover()
+		}
+		surface, surfaceR := rect, radius
+		if ring {
+			surface, surfaceR = glassLifted(rect), radius+glassFocusLift
+		}
+		fillRoundedRect(renderer, surface.X, surface.Y, surface.W, surface.H, surfaceR, fill)
+		if style.Progress > 0 {
+			progressFill := style.ProgressFill
+			if progressFill.A == 0 {
+				progressFill = lighten(fill, 24)
+			}
+			UIProgressBar(renderer, rect, style.Progress, sdl.Color{}, progressFill)
+		}
+		if ring {
+			drawGlassFocusRing(renderer, surface, surfaceR)
+		} else {
+			strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 1, border)
+		}
 	}
 
 	// Substitute before measuring: a label like "Screensaver · $timeout" is only
@@ -230,7 +255,7 @@ func UIButton(renderer *sdl.Renderer, config *Config, rect sdl.Rect, label strin
 			text = ellipsize(style.Font, text, maxW)
 		}
 		if tw, th, err := style.Font.SizeUTF8(text); err == nil {
-			renderText(renderer, config, style.Font, text, labelColor,
+			drawGlassText(renderer, config, style.Font, text, labelColor,
 				rect.X+(rect.W-int32(tw))/2, rect.Y+(rect.H-int32(th))/2)
 		}
 	}
@@ -284,40 +309,30 @@ func UIProgressBar(renderer *sdl.Renderer, rect sdl.Rect, fraction float64, trac
 	}
 }
 
-// UIListRow draws one list row: shadow, surface, and the selected/hovered
-// treatment (accent tint and left bar when selected).
+// UIListRow draws one list row in Home's glass: a translucent row with a
+// hairline; the hovered row a step brighter; the selected row brighter still,
+// washed with the accent and outlined in the accent all the way round. The ring
+// sits on the row's own edge rather than a lifted one, and is 2px rather than a
+// tile's 3px, because rows sit a few pixels apart inside clipped scroll
+// viewports.
 func UIListRow(renderer *sdl.Renderer, rect sdl.Rect, radius int32, selected, hovered bool) {
 	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
 		return
 	}
 	if radius <= 0 {
-		radius = RadiusMD
+		radius = glassRowRadius
 	}
-	x, y, w, h := rect.X, rect.Y, rect.W, rect.H
-	fillRoundedRect(renderer, x+1, y+2, w, h, radius, ShadowFill(24))
-	fillRoundedRect(renderer, x, y, w, h, radius, ColorSurfaceRow)
 	if selected {
-		// The tint alone is too quiet on a dim handheld panel: on a theme whose
-		// accent is close to the row surface the wash reads as "slightly lighter
-		// card" and the cursor is lost. The selected row therefore carries the
-		// same focus ring the overlay panels draw (installHighlight falls back to
-		// the text colour when the accent itself has no contrast), plus the solid
-		// spine so the cursor is still obvious where the ring is clipped by a
-		// scroll viewport.
-		fillRoundedRect(renderer, x, y, w, h, radius, WithAlpha(accentColor, 50))
-		ring := installHighlight()
-		strokeRoundedRect(renderer, x, y, w, h, radius, 2, ring)
-		renderer.SetDrawColor(ring.R, ring.G, ring.B, 255)
-		renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + 2, W: 3, H: h - 4})
-		renderer.SetDrawColor(255, 255, 255, 20)
-		renderer.FillRect(&sdl.Rect{X: x + 4, Y: y + 1, W: w - 8, H: 1})
-		renderer.SetDrawColor(ring.R, ring.G, ring.B, 15)
-		renderer.FillRect(&sdl.Rect{X: x + 1, Y: y + h - 2, W: w - 2, H: 1})
-	} else if hovered {
-		fillRoundedRect(renderer, x, y, w, h, radius, WithAlpha(ColorCardHover, 120))
-		renderer.SetDrawColor(255, 255, 255, 12)
-		renderer.FillRect(&sdl.Rect{X: x + 2, Y: y + 1, W: w - 4, H: 1})
+		// The wash goes under the glass and the ring over it, so the ring stays
+		// the brightest edge on a dim handheld panel.
+		accent := glassAccent()
+		_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, WithAlpha(accent, 30))
+		fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, glassFillFocus())
+		strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, radius, 2, accent)
+		return
 	}
+	drawGlassSurface(renderer, rect, radius, glassState{Hovered: hovered, NoLift: true})
 }
 
 // UIEmptyState draws the standard "nothing here yet" block: an optional muted
@@ -672,8 +687,10 @@ func UIPanelHeader(title, subtitle, glyph string) UIPageHeader {
 const (
 	// OverlayCardRadius is every overlay card's corner radius.
 	OverlayCardRadius = int32(20)
-	// OverlayScrimAlpha is the dim behind a modal overlay.
-	OverlayScrimAlpha = uint8(180)
+	// OverlayScrimAlpha is the dim behind a modal overlay. The dim is the
+	// backdrop's navy (glassScrimColor), which reads lighter than black at the
+	// same alpha, so it is a step stronger than the old black scrim's 180.
+	OverlayScrimAlpha = uint8(200)
 	// OverlayPadX is the card's inside margin: the header, the rows and the
 	// footer all start this far from the card's edge.
 	OverlayPadX = int32(24)
@@ -700,39 +717,53 @@ func drawOverlayScrimFade(renderer *sdl.Renderer, progress float64) {
 	if progress > 1 {
 		progress = 1
 	}
+	// The dim is the backdrop's own navy, not black: a dialog sits in Home's
+	// ambience instead of in a hole cut out of it.
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, uint8(float64(OverlayScrimAlpha)*progress))
+	setDrawColor(renderer, glassScrimColor(progress))
 	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+}
+
+// overlayCardFill is the surface every overlay card is painted with: Home's
+// glass made opaque (glassSheetFill), so the dimmed screen underneath cannot
+// ghost through the card's text.
+func overlayCardFill() sdl.Color {
+	return glassSheetFill()
 }
 
 // drawOverlayCard paints a panel card with the shared surface, hairline border
 // and radius. A panel only decides its rect and what goes inside it.
 func drawOverlayCard(renderer *sdl.Renderer, rect sdl.Rect) {
-	drawOverlayCardFilled(renderer, rect, ColorPanelRaised)
+	drawGlassSheet(renderer, rect, overlayCardFill())
 }
 
 // drawOverlayCardFilled is drawOverlayCard with a caller-chosen surface, for the
 // one page whose rows are the raised colour: Downloads recesses its card so the
 // rows read as separate bands. The radius and border still come from here, so
-// the exception is the fill and nothing else.
+// the exception is the fill and nothing else. The two theme surfaces callers
+// pass map onto the glass sheet: the raised panel colour is the sheet itself
+// and the plain surface is the recessed sheet.
 func drawOverlayCardFilled(renderer *sdl.Renderer, rect sdl.Rect, fill sdl.Color) {
-	if renderer == nil || rect.W <= 0 || rect.H <= 0 {
-		return
+	switch fill {
+	case ColorPanelRaised, ColorSurfaceRaised:
+		fill = overlayCardFill()
+	case ColorSurface, ColorPanel:
+		fill = glassSheetDeepFill()
 	}
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, OverlayCardRadius, fill)
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, OverlayCardRadius, 1, ColorBorderDefault)
+	drawGlassSheet(renderer, rect, fill)
 }
 
-// drawOverlayCardAccent is the accent hairline along a card's top edge. Every
-// page drew this itself, which is how RetroAchievements ended up at alpha 120
-// and the update prompt at 140 while the rest of the app used 110.
+// drawOverlayCardAccent marks a card's top edge. Home's cards have no accent
+// hairline — light catches their top edge instead — so this is the glass edge
+// highlight: one soft line of the glass ink, inset from the corners. Every page
+// still calls it, so the edge stays one recipe app-wide.
 func drawOverlayCardAccent(renderer *sdl.Renderer, x, y, w int32) {
 	if renderer == nil || w <= 2*OverlayAccentInset {
 		return
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 110)
-	renderer.FillRect(&sdl.Rect{X: x + OverlayAccentInset, Y: y + 1, W: w - 2*OverlayAccentInset, H: 2})
+	setDrawColor(renderer, glassA(22))
+	renderer.FillRect(&sdl.Rect{X: x + OverlayAccentInset, Y: y + 1, W: w - 2*OverlayAccentInset, H: 1})
 }
 
 // overlayHeaderOnCard places a panel header at the shared inset and inside
@@ -763,10 +794,10 @@ func UIPageHeaderDraw(renderer *sdl.Renderer, config *Config, h UIPageHeader) in
 
 	textX := h.X
 	if h.Glyph != nil && m.WellBox > 0 {
-		tint := appGridTileTint(h.Title)
-		fillRoundedRect(renderer, h.X, h.Y, m.WellBox, m.WellBox, 12, WithAlpha(tint, 44))
-		strokeRoundedRect(renderer, h.X, h.Y, m.WellBox, m.WellBox, 12, 1, WithAlpha(tint, 150))
-		h.Glyph(renderer, insetRect(sdl.Rect{X: h.X, Y: h.Y, W: m.WellBox, H: m.WellBox}, 5), tint)
+		// Home's icon badge: a rounded glass square with a white glyph, the
+		// same badge a Home tile carries in its corner.
+		box := drawGlassBadge(renderer, sdl.Rect{X: h.X, Y: h.Y, W: m.WellBox, H: m.WellBox})
+		h.Glyph(renderer, box, ColorTextPrimary())
 		textX = h.X + m.WellBox + 14
 	}
 
@@ -795,9 +826,10 @@ func UIPageHeaderDraw(renderer *sdl.Renderer, config *Config, h UIPageHeader) in
 		renderText(renderer, config, title, ellipsize(title, h.Title, avail), ColorTextPrimary(), textX, h.Y+m.TitleY)
 	}
 	if sub != nil && strings.TrimSpace(h.Subtitle) != "" {
+		// Home's subline colour ("What do you want to do?").
 		color := h.SubtitleColor
 		if color.A == 0 {
-			color = ColorTextTertiary()
+			color = ColorTextMuted()
 		}
 		renderText(renderer, config, sub, ellipsize(sub, h.Subtitle, h.W), color, h.X, h.Y+m.SubtitleY)
 	}
@@ -880,8 +912,15 @@ func uiTileLabelFont(config *Config, avail int32, cap int) (*ttf.Font, int32) {
 	return font, int32(font.Height() + 1)
 }
 
-// UICategoryTileDraw paints one tile. Hit-testing and layout stay with the
-// caller; this only owns the pixels.
+// uiCategoryTileLabelSize is a tile name's size: Home's 20px card title.
+const uiCategoryTileLabelSize = 20
+
+// UICategoryTileDraw paints one tile in Home's card anatomy: a glass card, the
+// icon badge in the top-left corner and the name anchored bottom-left — never
+// centred, the rule Home's cards are built on — with Home's bloom, lift and
+// ring when focused. A tile too short to stack the badge over its name puts
+// the name beside the badge instead, the way Home's wide Media card does.
+// Hit-testing and layout stay with the caller; this only owns the pixels.
 func UICategoryTileDraw(renderer *sdl.Renderer, config *Config, tile UICategoryTile) {
 	w, h := tile.Rect.W, tile.Rect.H
 	if renderer == nil || w <= 0 || h <= 0 {
@@ -889,105 +928,88 @@ func UICategoryTileDraw(renderer *sdl.Renderer, config *Config, tile UICategoryT
 	}
 	radius := tile.Radius
 	if radius <= 0 {
-		radius = TileRadius
+		radius = homeTileRadius
 	}
-	focusCol := focusColorForAccent(accentColor)
+	if radius > h/3 {
+		radius = h / 3
+	}
 
 	ox, oy := tile.Rect.X, tile.Rect.Y
 	if tile.Pressed {
 		age := float64(sdl.GetTicks64() - pressStartTime)
-		off := int32(math.Round(float64(PressOffset) * uiPressProgress(config, age, float64(pressDuration))))
-		ox += off
-		oy += off
+		oy += int32(math.Round(float64(PressOffset) * uiPressProgress(config, age, float64(pressDuration))))
 	}
-
-	if tile.Focused {
-		fillRoundedRect(renderer, ox-FocusGlow, oy-FocusGlow, w+2*FocusGlow, h+2*FocusGlow,
-			radius+FocusGlow, WithAlpha(focusCol, 24))
-		strokeRoundedRect(renderer, ox-FocusRing, oy-FocusRing, w+2*FocusRing, h+2*FocusRing,
-			radius+FocusRing, FocusRing, focusCol)
-	} else if tile.HoverProgress > 0.01 {
-		a := uint8(80 * uiClamp01(tile.HoverProgress))
-		strokeRoundedRect(renderer, ox-HoverRing, oy-HoverRing, w+2*HoverRing, h+2*HoverRing,
-			radius+HoverRing, HoverRing, WithAlpha(focusCol, a))
+	card := sdl.Rect{X: ox, Y: oy, W: w, H: h}
+	if tile.Focused && !tile.Disabled {
+		drawGlassFocusGlow(renderer, card)
 	}
-
-	base, border := HomeCardColor(), HomeBorderColor()
-	if tile.Surface == UITileRaised {
-		base = ColorSurfaceRaised
-	}
-	if tile.Focused {
-		base, border = HomeCardFocusColor(), WithAlpha(focusCol, 200)
-		if tile.Surface == UITileRaised {
-			// The raised surface is the panel's own colour: tint it so a focused
-			// tile still reads as raised, not as a hole in the panel.
-			base = ColorSurfaceRaised
-		}
-	} else if tile.Hovered {
-		border = WithAlpha(focusCol, 120)
-	}
-	fillRoundedRect(renderer, ox, oy, w, h, radius, base)
-	if tile.Focused && tile.Surface == UITileRaised {
-		tint := visibleAccent()
-		fillRoundedRect(renderer, ox, oy, w, h, radius, WithAlpha(tint, 70))
-		strokeRoundedRect(renderer, ox, oy, w, h, radius, 2, WithAlpha(tint, 235))
-	} else {
-		strokeRoundedRect(renderer, ox, oy, w, h, radius, 1, border)
-	}
-
+	drawGlassSurface(renderer, card, radius, glassState{
+		Focused:  tile.Focused,
+		Hovered:  tile.Hovered || tile.HoverProgress > 0.01,
+		Pressed:  tile.Pressed,
+		Disabled: tile.Disabled,
+	})
 	if tile.Status.A > 0 {
 		fillCircle(renderer, ox+w-13, oy+13, 4, tile.Status)
 	}
 
-	tint := appGridTileTint(tile.Label)
-	iconCol := tint
-	if tile.Focused {
-		iconCol = focusCol
+	// Badge and padding are shares of the tile, clamped to Home's numbers (a
+	// 48px badge 20px in from the corner on a 152px card).
+	pad := h / 7
+	if pad < 10 {
+		pad = 10
 	}
-	// The well is a share of the tile's own height, so a short tile and a tall
-	// one keep the same proportions instead of one of them losing its label.
-	box := int32(float64(h) * 0.32)
-	if box > 52 {
-		box = 52
+	if pad > 20 {
+		pad = 20
 	}
-	if box < 32 {
-		box = 32
+	badge := h * 32 / 100
+	if badge < 28 {
+		badge = 28
 	}
-	wellX := ox + (w-box)/2
-	wellY := oy + 8
-	wellAlpha := uint8(40)
-	if tile.Focused {
-		wellAlpha = 62
+	if badge > homeIconSize {
+		badge = homeIconSize
 	}
-	fillRoundedRect(renderer, wellX, wellY, box, box, 14, WithAlpha(tint, wellAlpha))
-	strokeRoundedRect(renderer, wellX, wellY, box, box, 14, 1, WithAlpha(tint, 150))
-	if tile.Glyph != nil {
-		tile.Glyph(renderer, insetRect(sdl.Rect{X: wellX, Y: wellY, W: box, H: box}, 8), iconCol)
+	ink := ColorTextPrimary()
+	if tile.Disabled {
+		ink = ColorTextTertiary()
+	}
+	label := strings.TrimSpace(tile.Label)
+	labelCap := tile.LabelSize
+	if labelCap <= 0 {
+		labelCap = uiCategoryTileLabelSize
 	}
 
-	if strings.TrimSpace(tile.Label) == "" {
+	badgeRect := sdl.Rect{X: ox + pad, Y: oy + pad, W: badge, H: badge}
+	top := badgeRect.Y + badge + 4
+	bottom := oy + h - pad
+	font, lineH, lines := glassTileLabel(config, label, w-2*pad, bottom-top, labelCap)
+	if label != "" && len(lines) == 0 {
+		// Too short to stack: the badge sits on the left, centred, and the name
+		// takes one line beside it.
+		badgeRect.Y = oy + (h-badge)/2
+		glyph := drawGlassBadge(renderer, badgeRect)
+		if tile.Glyph != nil {
+			tile.Glyph(renderer, glyph, ink)
+		}
+		lineFont := getFontSized(config, "small", labelCap)
+		if lineFont == nil {
+			return
+		}
+		textX := badgeRect.X + badge + pad/2 + 4
+		text := ellipsize(lineFont, label, ox+w-pad-textX)
+		renderText(renderer, config, lineFont, text, ink, textX, oy+(h-int32(lineFont.Height()))/2)
 		return
 	}
-	top := wellY + box + 5
-	avail := oy + h - 8 - top
-	font, lineH := uiTileLabelFont(config, avail, tile.LabelSize)
+	glyph := drawGlassBadge(renderer, badgeRect)
+	if tile.Glyph != nil {
+		tile.Glyph(renderer, glyph, ink)
+	}
 	if font == nil || lineH <= 0 {
 		return
 	}
-	maxLines := int(avail / lineH)
-	if maxLines < 1 {
-		maxLines = 1
-	}
-	if maxLines > 2 {
-		maxLines = 2
-	}
-	color := ColorTextPrimary()
-	if tile.Disabled {
-		color = ColorTextTertiary()
-	}
-	for li, line := range appTileLabelLines(font, tile.Label, w-16, maxLines) {
-		lw, _, _ := font.SizeUTF8(line)
-		renderText(renderer, config, font, line, color, ox+(w-int32(lw))/2, top+int32(li)*lineH)
+	y := bottom - int32(len(lines))*lineH
+	for li, line := range lines {
+		renderText(renderer, config, font, line, ink, ox+pad, y+int32(li)*lineH)
 	}
 }
 
@@ -1006,18 +1028,18 @@ func UISectionLabel(renderer *sdl.Renderer, config *Config, title string, x, y, 
 	textY := y + 6
 	textX := x
 	if th > 0 && glyph != nil {
+		// A small glass badge, the heading's version of a tile's icon badge.
 		chip := int32(th) + 12
 		chipY := y + (int32(th)+14-chip)/2
-		tint := appGridTileTint(label)
-		fillRoundedRect(renderer, x, chipY, chip, chip, chip/4, WithAlpha(tint, 38))
-		strokeRoundedRect(renderer, x, chipY, chip, chip, chip/4, 1, WithAlpha(tint, 130))
-		glyph(renderer, insetRect(sdl.Rect{X: x, Y: chipY, W: chip, H: chip}, 4), tint)
+		fillRoundedRect(renderer, x, chipY, chip, chip, chip/4, glassA(16))
+		strokeRoundedRect(renderer, x, chipY, chip, chip, chip/4, 1, glassA(26))
+		glyph(renderer, insetRect(sdl.Rect{X: x, Y: chipY, W: chip, H: chip}, 4), ColorTextSecondary())
 		textX += chip + 10
 	}
 	tw, _, _ := font.SizeUTF8(label)
 	renderText(renderer, config, font, label, ColorTextTertiary(), textX, textY)
 	if lx := textX + int32(tw) + 12; lx < x+w {
-		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 80)
+		setDrawColor(renderer, glassHairline())
 		renderer.FillRect(&sdl.Rect{X: lx, Y: textY + int32(th)/2, W: x + w - lx, H: 1})
 	}
 }

@@ -41,6 +41,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -330,26 +331,61 @@ func androidPakStageDir(id string) string {
 	return filepath.Join(androidPakStageRoot(), "pak-"+id)
 }
 
+// androidPakStages serialises staging against cleanup and counts the stages
+// written into each directory. A launch's cleanup runs some seconds after its
+// game exits; relaunching the same game inside that window re-staged the same
+// directory, and the old cleanup then deleted the files the new run was using.
+// Cleanup now only removes a stage that is still the one its launch wrote.
+var androidPakStages struct {
+	sync.Mutex
+	gen map[string]uint64
+}
+
 // stageAndroidPak extracts the runtime-relevant subset of the APK (bounded)
 // into a fresh staging dir and returns it with the chosen ABI's library
 // directory. A previous stage for the same profile is removed first, so a
 // rebuilt APK is never masked by stale files.
 func stageAndroidPak(id, apk string, libs androidPakLibs) (stageDir, libDir string, err error) {
+	stageDir, libDir, _, err = stageAndroidPakGen(id, apk, libs)
+	return stageDir, libDir, err
+}
+
+// stageAndroidPakGen is stageAndroidPak for a launch: it also returns the
+// stage's generation, which androidPakStageCleanupGC needs. A failed stage is
+// removed at once — a partial extraction is RAM on the device's tmpfs.
+func stageAndroidPakGen(id, apk string, libs androidPakLibs) (stageDir, libDir string, gen uint64, err error) {
+	androidPakStages.Lock()
+	defer androidPakStages.Unlock()
 	stageDir = androidPakStageDir(id)
+	if androidPakStages.gen == nil {
+		androidPakStages.gen = map[string]uint64{}
+	}
+	androidPakStages.gen[stageDir]++
+	gen = androidPakStages.gen[stageDir]
+	libDir, err = stageAndroidPakInto(stageDir, apk, libs)
+	if err != nil {
+		_ = os.RemoveAll(stageDir)
+		return "", "", 0, err
+	}
+	return stageDir, libDir, gen, nil
+}
+
+// stageAndroidPakInto does the extraction; androidPakStages is held.
+func stageAndroidPakInto(stageDir, apk string, libs androidPakLibs) (libDir string, err error) {
 	libDir = filepath.Join(stageDir, "lib", libs.Chosen)
 	if err := os.RemoveAll(stageDir); err != nil {
-		return "", "", fmt.Errorf("clear old stage: %w", err)
+		return "", fmt.Errorf("clear old stage: %w", err)
 	}
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {
-		return "", "", err
+		return "", err
 	}
 	zr, err := zip.OpenReader(apk)
 	if err != nil {
-		return "", "", fmt.Errorf("open APK: %w", err)
+		return "", fmt.Errorf("open APK: %w", err)
 	}
 	defer zr.Close()
 	if len(zr.File) > androidPakStageMaxEntries {
-		return "", "", fmt.Errorf("APK has %d entries (limit %d)", len(zr.File), androidPakStageMaxEntries)
+		return "", fmt.Errorf("APK has %d entries (limit %d)", len(zr.File), androidPakStageMaxEntries)
 	}
 	chosenPrefix := filepath.ToSlash(filepath.Join("lib", libs.Chosen)) + "/"
 	var total int64
@@ -364,15 +400,15 @@ func stageAndroidPak(id, apk string, libs androidPakLibs) (stageDir, libDir stri
 			continue
 		}
 		if err := sanitizeArchiveEntry(slash, f.Mode(), f.FileInfo().IsDir()); err != nil {
-			return "", "", fmt.Errorf("APK entry: %w", err)
+			return "", fmt.Errorf("APK entry: %w", err)
 		}
 		target := filepath.Join(stageDir, filepath.FromSlash(slash))
 		if !strings.HasPrefix(target, filepath.Clean(stageDir)+string(filepath.Separator)) {
-			return "", "", fmt.Errorf("entry escapes staging dir: %q", slash)
+			return "", fmt.Errorf("entry escapes staging dir: %q", slash)
 		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
-				return "", "", err
+				return "", err
 			}
 			continue
 		}
@@ -381,32 +417,32 @@ func stageAndroidPak(id, apk string, libs androidPakLibs) (stageDir, libDir stri
 		// claims more than int64 holds wrap negative and pass the cap below.
 		sum, ok := addDeclaredBytes(total, declaredEntryBytes(f.UncompressedSize64), androidPakStageMaxBytes)
 		if !ok {
-			return "", "", fmt.Errorf("staged files exceed %d bytes — APK too large for RAM staging", androidPakStageMaxBytes)
+			return "", fmt.Errorf("staged files exceed %d bytes — APK too large for RAM staging", androidPakStageMaxBytes)
 		}
 		total = sum
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return "", "", err
+			return "", err
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return "", "", fmt.Errorf("open %q: %w", slash, err)
+			return "", fmt.Errorf("open %q: %w", slash, err)
 		}
 		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		if err != nil {
 			rc.Close()
-			return "", "", fmt.Errorf("create %q: %w", slash, err)
+			return "", fmt.Errorf("create %q: %w", slash, err)
 		}
 		_, copyErr := io.Copy(out, io.LimitReader(rc, androidPakStageMaxBytes+1))
 		rc.Close()
 		closeErr := out.Close()
 		if copyErr != nil {
-			return "", "", fmt.Errorf("extract %q: %w", slash, copyErr)
+			return "", fmt.Errorf("extract %q: %w", slash, copyErr)
 		}
 		if closeErr != nil {
-			return "", "", fmt.Errorf("extract %q: %w", slash, closeErr)
+			return "", fmt.Errorf("extract %q: %w", slash, closeErr)
 		}
 	}
-	return stageDir, libDir, nil
+	return libDir, nil
 }
 
 // removeAndroidPakStage removes a staging dir, tolerating a missing one.
@@ -419,11 +455,25 @@ func removeAndroidPakStage(stageDir string) {
 
 // androidPakStageCleanupGC runs in the launch reaper goroutine after the game
 // exits: give the runtime a moment to flush, then free the tmpfs stage.
-func androidPakStageCleanupGC(stageDir string) {
+func androidPakStageCleanupGC(stageDir string, gen uint64) {
 	if stageDir == "" {
 		return
 	}
 	time.Sleep(androidPakStageCleanupDelay)
+	androidPakStageRelease(stageDir, gen)
+}
+
+// androidPakStageRelease removes a launch's stage now, unless a later launch
+// has re-staged the directory since (see androidPakStages).
+func androidPakStageRelease(stageDir string, gen uint64) {
+	if stageDir == "" {
+		return
+	}
+	androidPakStages.Lock()
+	defer androidPakStages.Unlock()
+	if androidPakStages.gen[stageDir] != gen {
+		return
+	}
 	removeAndroidPakStage(stageDir)
 }
 
@@ -510,7 +560,14 @@ func androidPakFirstRunSymbol(id string) string {
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	// The log is appended to on every launch; only the run that just ended
+	// counts. Reading from the top named the oldest failure in the file, so a
+	// symbol already shimmed kept being reported after the rebuild.
+	text := string(data)
+	if i := strings.LastIndex(text, "=== "+id+" start "); i >= 0 {
+		text = text[i:]
+	}
+	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.Contains(line, "[androidrt] could not load") {
 			continue

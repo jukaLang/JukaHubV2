@@ -81,3 +81,32 @@ func TestRunWebPageScriptsTimeoutDoesNotHang(t *testing.T) {
 		t.Errorf("page content after a stopped script was lost: %s", out)
 	}
 }
+
+// A script cannot grow the page without bound: document.write output stops at
+// webScriptMaxOutput, and the page after the script survives.
+func TestRunWebPageScriptsCapsDocumentWrite(t *testing.T) {
+	src := `<body><script>var s = "x"; for (var i = 0; i < 16; i++) { s = s + s; } ` +
+		`while (true) { document.write(s); }</script><p>After writes</p></body>`
+	base, _ := url.Parse("http://example.test/")
+	out := runWebPageScripts(src, base)
+	if len(out) > webScriptMaxOutput+len(src) {
+		t.Fatalf("page grew to %d bytes; document.write is capped at %d", len(out), webScriptMaxOutput)
+	}
+	if !strings.Contains(out, "After writes") {
+		t.Errorf("page content after a capped script was lost")
+	}
+}
+
+// Runaway recursion stops at the stack cap instead of growing the heap.
+func TestRunWebPageScriptsStopsDeepRecursion(t *testing.T) {
+	src := `<body><script>function f(n) { return f(n + 1) + 1; } f(0);</script><p>After recursion</p></body>`
+	base, _ := url.Parse("http://example.test/")
+	start := time.Now()
+	out := runWebPageScripts(src, base)
+	if time.Since(start) > webScriptRunTimeout+time.Second {
+		t.Fatalf("recursion ran for %s; the stack cap should stop it at once", time.Since(start))
+	}
+	if !strings.Contains(out, "After recursion") {
+		t.Errorf("page content after the recursion was lost")
+	}
+}

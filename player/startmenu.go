@@ -380,19 +380,15 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 	fade := uiFadeIn.at(progress)
 	slide := int32(math.Round(uiMenuDrop.at(progress)))
 
+	// The shared overlay dim (the backdrop's navy), under the header only: the
+	// menu hangs from the header's Menu pill, which stays readable above it.
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, uint8(140*uiScrimProgress(progress, uiMenuEnterMS)))
+	setDrawColor(renderer, glassScrimColor(uiScrimProgress(progress, uiMenuEnterMS)))
 	renderer.FillRect(&sdl.Rect{X: 0, Y: HomeTopBarH, W: screenWidth, H: screenHeight - HomeTopBarH})
 
 	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: menuX, Y: menuY, W: menuW, H: menuH}, func() {
-		UICard(renderer, sdl.Rect{X: menuX, Y: menuY, W: menuW, H: menuH}, UICardStyle{
-			Fill:        ColorSurfaceAlt,
-			Border:      ColorBorder,
-			Radius:      12,
-			BorderWidth: 1,
-		})
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 90)
-		renderer.FillRect(&sdl.Rect{X: menuX, Y: menuY, W: 3, H: menuH})
+		// The shared overlay sheet: Home's glass, made opaque.
+		drawOverlayCard(renderer, sdl.Rect{X: menuX, Y: menuY, W: menuW, H: menuH})
 
 		// ── Header ──────────────────────────────────────────────────────
 		renderText(renderer, config, font, "Start", ColorTextPrimary(), menuX+20, menuY+12)
@@ -426,15 +422,16 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 
 			selected := i == tb.group
 			hovered := pointInRect(mouseX, mouseY, rect)
-			if selected || hovered {
-				fill := WithAlpha(ColorSurfaceRaised, 180)
-				if selected {
-					fill = WithAlpha(accentColor, 70)
-				}
-				fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, fill)
-			}
-			if selected && tb.focus == 0 {
-				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, 2, accentColor)
+			switch {
+			case selected && tb.focus == 0:
+				// The cursor: a selected list row (glass, accent wash, ring).
+				UIListRow(renderer, rect, 10, true, false)
+			case selected:
+				// The open group while the cursor is in the list: lit, unringed.
+				fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, WithAlpha(glassAccent(), 40))
+				strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 10, 1, WithAlpha(glassAccent(), 110))
+			case hovered:
+				UIListRow(renderer, rect, 10, false, true)
 			}
 			renderText(renderer, config, font, g.icon, ColorTextSecondary(), rect.X+12, rect.Y+8)
 			renderText(renderer, config, font, ellipsize(font, g.name, rect.W-52),
@@ -443,7 +440,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 
 		// A hairline makes the two panes read as panes rather than one grid.
 		dividerX := railX + railW + 5
-		renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
+		setDrawColor(renderer, glassHairline())
 		renderer.FillRect(&sdl.Rect{X: dividerX, Y: menuY + startMenuHeadH - 6, W: 1, H: menuH - startMenuHeadH - startMenuFootH + 4})
 
 		// ── Entries ─────────────────────────────────────────────────────
@@ -470,11 +467,7 @@ func renderStartMenu(renderer *sdl.Renderer, config *Config) {
 			focused := tb.focus == 1 && i == tb.cursor
 			hovered := pointInRect(mouseX, mouseY, rect)
 			if focused || hovered {
-				fill := WithAlpha(ColorSurfaceRaised, 180)
-				if focused {
-					fill = WithAlpha(accentColor, 70)
-				}
-				fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, fill)
+				UIListRow(renderer, rect, 10, focused, hovered)
 			}
 			iconCol := ColorTextSecondary()
 			nameCol := ColorTextPrimary()

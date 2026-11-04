@@ -434,6 +434,20 @@ func (c *partyClient) post(path string, payload interface{}) (partySnapshot, err
 }
 
 func (c *partyClient) store(snap partySnapshot) {
+	// A JukaHub host never sends more than its own limits, so anything past
+	// them is cut here. The snapshot comes off the network: the leaderboard is
+	// folded into the history on the main loop with a linear lookup per row,
+	// and a hostile host's 20,000 rows a second froze the joiner and grew the
+	// saved history without end.
+	if len(snap.Leaderboard) > partyLeaderboardLimit {
+		snap.Leaderboard = snap.Leaderboard[:partyLeaderboardLimit]
+	}
+	if len(snap.Members) > partyMaxMembers {
+		snap.Members = snap.Members[:partyMaxMembers]
+	}
+	if len(snap.Queue) > partyMaxQueue {
+		snap.Queue = snap.Queue[:partyMaxQueue]
+	}
 	c.mu.Lock()
 	c.last = snap
 	c.received = time.Now()
@@ -749,8 +763,12 @@ func partyTick(config *Config) {
 	partySession.mu.Unlock()
 
 	if due {
-		// The poll result lands on the next tick; nothing here waits for the LAN.
-		client.Poll(watch)
+		// The poll result lands on the next tick; nothing here waits for the
+		// LAN. It ran inline despite this promise: with the host asleep or off
+		// Wi-Fi every due frame blocked for the 2.5 s HTTP timeout, and the
+		// joiner could barely reach Leave. Poll's in-flight guard keeps it to
+		// one request at a time.
+		go client.Poll(watch)
 	}
 	partyApplyRemote(config)
 }

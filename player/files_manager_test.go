@@ -280,10 +280,31 @@ func TestFESelectionDrivesTheActions(t *testing.T) {
 	config.Variables.Custom["fe_path"] = sub
 	feListDirectory(config)
 
+	// Nothing marked and the cursor on "..": nothing is a target. That row's
+	// path is the parent folder, and Delete on it removed the folder above.
+	if got := feSelectionTargets(config); len(got) != 0 {
+		t.Fatalf("the .. row became a target: %v", names(got))
+	}
+	for _, action := range feActions(config) {
+		if (action.Kind == feActDelete || action.Kind == feActCut || action.Kind == feActCopy) && action.Enabled {
+			t.Errorf("%s is offered with the cursor on ..", action.Label)
+		}
+	}
+	if feToggleSelectionOnFocused(config); feSelectionCount() != 0 {
+		t.Fatal("X marked the .. row")
+	}
+	if err := feDeleteEntry(config, filepath.Dir(sub)); err == nil {
+		t.Fatal("deleting the folder above the current one was allowed")
+	}
+	if _, err := os.Stat(filepath.Join(root, "roms")); err != nil {
+		t.Fatalf("the parent folder is gone: %v", err)
+	}
 	// Nothing marked: the actions apply to the row under the cursor.
-	if got := feSelectionTargets(config); len(got) != 1 || got[0].Name != ".." {
+	focusedFileIndex = 1
+	if got := feSelectionTargets(config); len(got) != 1 || got[0].Name == ".." {
 		t.Fatalf("cursor target is %v", names(got))
 	}
+	focusedFileIndex = 0
 	// Marking a row makes it the target, and only it.
 	entry := feEntriesOf(config)[1]
 	feSelectionToggle(entry.Path)

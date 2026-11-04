@@ -459,7 +459,12 @@ func checkPackageStatus(p *PatchPackage, gen uint64) {
 	packageStatusCache.mu.Lock()
 	if packageStatusCache.gen != gen {
 		// A newer read owns this key now; this answer describes files that
-		// have since been replaced.
+		// have since been replaced. The in-flight mark still goes: left set,
+		// packageStatusFor never started another check and the row read
+		// "Checking…" for the rest of the session.
+		if packageStatusCache.checking != nil {
+			delete(packageStatusCache.checking, key)
+		}
 		packageStatusCache.mu.Unlock()
 		return
 	}

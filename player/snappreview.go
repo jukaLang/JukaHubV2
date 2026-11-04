@@ -278,6 +278,12 @@ type snapPreviewState struct {
 	starting bool
 	playing  bool
 	cancel   context.CancelFunc
+	// run is the context of the decoder that owns this state. A decoder that
+	// was cancelled can still be inside a read or its cleanup; it may only
+	// touch the state while run is still its own context, so a stale decoder
+	// can neither put the previous game's frame on the new one nor clear the
+	// new decoder's flags (which let a second ffmpeg start beside it).
+	run context.Context
 	// broken remembers clips this process could not decode, keyed by the clip
 	// path the decoder was given (not the game's ROM path), so a bad file is not
 	// retried on every frame.
@@ -291,6 +297,10 @@ type snapPreviewState struct {
 	tex      *sdl.Texture
 	uploaded uint64
 	frames   uint64
+	// upload is the render thread's copy of the frame being uploaded, taken
+	// under the lock: the decoder swaps buffers, so the slice the renderer saw
+	// was the decoder's next write target and could tear mid-upload.
+	upload []byte
 }
 
 var snapState = snapPreviewState{broken: map[string]bool{}}
@@ -303,6 +313,10 @@ func snapDecoderArgs(path string, width, height int32, fps int) []string {
 		// reads the list; ffmpeg restarts the input instead of us marshalling
 		// seeks.
 		"-stream_loop", "-1",
+		// Read at the clip's own pace. Without it ffmpeg decoded as fast as
+		// the pipe drained — a core at 100% while the library is open, and the
+		// clip racing through in fast-forward.
+		"-re",
 		"-i", path,
 		// Silent: a preview that beeps while browsing is a bug, and dropping
 		// the audio stream is cheaper than decoding it.
@@ -399,10 +413,29 @@ func snapPreviewSync(now time.Time) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	snapState.cancel = cancel
+	snapState.run = ctx
 	snapState.starting = true
 	snapState.mu.Unlock()
 
 	go snapStartDecoder(ctx, snap, appConfig)
+}
+
+// snapPreviewHalt stops the decoder without touching the texture, so any
+// goroutine may call it. A game launch calls it (noteGameChildStarted): the
+// main loop stops drawing while the game runs, so nothing else would end the
+// preview, and ffmpeg kept decoding beside the emulator. The library re-arms
+// the clip when it is drawn again.
+func snapPreviewHalt() {
+	snapState.mu.Lock()
+	cancel := snapState.cancel
+	snapState.cancel = nil
+	snapState.run = nil
+	snapState.starting = false
+	snapState.playing = false
+	snapState.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // snapPreviewStop ends the decoder, forgets the frames and drops the texture.
@@ -412,6 +445,7 @@ func snapPreviewStop() {
 	snapState.mu.Lock()
 	cancel := snapState.cancel
 	snapState.cancel = nil
+	snapState.run = nil
 	snapState.starting = false
 	snapState.playing = false
 	snapState.game = ""
@@ -449,8 +483,11 @@ func snapPreviewReset() {
 func snapPreviewRun(ctx context.Context, path string, config *Config) {
 	defer func() {
 		snapState.mu.Lock()
-		snapState.starting = false
-		snapState.playing = false
+		if snapState.run == ctx {
+			snapState.run = nil
+			snapState.starting = false
+			snapState.playing = false
+		}
 		snapState.mu.Unlock()
 	}()
 
@@ -488,6 +525,12 @@ func snapPreviewRun(ctx context.Context, path string, config *Config) {
 		}
 		got = true
 		snapState.mu.Lock()
+		if snapState.run != ctx {
+			// Cancelled while this frame was read: it belongs to a game that
+			// is no longer focused.
+			snapState.mu.Unlock()
+			break
+		}
 		if snapState.frame == nil || len(snapState.frame) != frameSize {
 			snapState.frame = make([]byte, frameSize)
 		}
@@ -506,7 +549,10 @@ func snapPreviewRun(ctx context.Context, path string, config *Config) {
 		snapState.mu.Unlock()
 	}
 	_ = cmd.Wait()
-	if !got {
+	if !got && ctx.Err() == nil {
+		// A decoder stopped before its first frame (focus moved on, the panel
+		// closed, a game started) proved nothing about the clip; marking it
+		// broken there hid that game's snap for the rest of the session.
 		// No frame at all: a broken clip. Remember it so the panel does not
 		// restart ffmpeg on every frame it draws.
 		snapPreviewMarkBroken(path)
@@ -544,18 +590,22 @@ func snapPreviewTexture(renderer *sdl.Renderer, gamePath string) *sdl.Texture {
 		snapState.mu.Unlock()
 		return nil
 	}
-	frame := snapState.frame
 	w, h, seq := snapState.w, snapState.h, snapState.seq
 	uploaded := snapState.uploaded
 	tex := snapState.tex
-	snapState.mu.Unlock()
-
 	if tex != nil && seq == uploaded {
+		snapState.mu.Unlock()
 		return tex
 	}
-	if len(frame) != int(w*h*3/2) {
+	if len(snapState.frame) != int(w*h*3/2) {
+		snapState.mu.Unlock()
 		return nil
 	}
+	// Copied under the lock: the decoder's next swap hands this very buffer
+	// back to ffmpeg to fill.
+	snapState.upload = append(snapState.upload[:0], snapState.frame...)
+	frame := snapState.upload
+	snapState.mu.Unlock()
 	if tex != nil {
 		_, _, tw, th, qerr := tex.Query()
 		if qerr != nil || tw != w || th != h {

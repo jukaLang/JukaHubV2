@@ -440,17 +440,12 @@ func drawEmuTileIcon(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEn
 // drawEmuTile renders one tile: card, picture or glyph, wrapped name, and the
 // status pill. The footer carries the long detail, so the tile stays legible.
 func drawEmuTile(r *sdl.Renderer, config *Config, cell sdl.Rect, entry emuEntry, focused, hovered bool, labelFont *ttf.Font) {
-	drawCard(r, cell.X, cell.Y, cell.W, cell.H, 14)
+	// Home's card: the glass surface, and Home's bloom, lift and ring when
+	// focused.
 	if focused {
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, ColorSurfaceRaised)
-		tint := visibleAccent()
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, WithAlpha(tint, 70))
-		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, 2, WithAlpha(tint, 235))
-		fillRoundedRect(r, cell.X+2, cell.Y+14, 3, cell.H-28, 2, tint)
-	} else if hovered {
-		fillRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, WithAlpha(accentColor, 26))
-		strokeRoundedRect(r, cell.X, cell.Y, cell.W, cell.H, 14, 1, WithAlpha(accentColor, 110))
+		drawGlassFocusGlow(r, cell)
 	}
+	drawGlassSurface(r, cell, 16, glassState{Focused: focused, Hovered: hovered && !focused})
 
 	chipFont := emuStatusChipFont(config)
 	chipH := int32(0)

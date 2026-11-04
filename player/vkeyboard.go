@@ -1866,27 +1866,18 @@ func vkClearPressFlash() {
 
 var vkNavRepeat navRepeatTracker
 
-// vkControllerNavDirection reads the D-pad that is held right now. Physical
-// arrow keys are left to SDL's own key repeat; polling them too would double
-// the rate of a desktop hold.
+// vkControllerNavDirection reads the D-pad direction held right now, as the
+// screens see it after accessibility remapping (a11yHeldNavDirection).
+// Physical arrow keys are left to SDL's own key repeat; polling them too would
+// double the rate of a desktop hold.
 func vkControllerNavDirection() (int, int) {
-	if gameController == nil {
+	pad := gameController
+	if pad == nil {
 		return 0, 0
 	}
-	dx, dy := 0, 0
-	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_LEFT) != 0 {
-		dx = -1
-	}
-	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_RIGHT) != 0 {
-		dx = 1
-	}
-	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_UP) != 0 {
-		dy = -1
-	}
-	if gameController.Button(sdl.CONTROLLER_BUTTON_DPAD_DOWN) != 0 {
-		dy = 1
-	}
-	return dx, dy
+	return a11yHeldNavDirection(func(b uint8) bool {
+		return pad.Button(sdl.GameControllerButton(b)) != 0
+	})
 }
 
 // vkTickNavRepeat advances the held-D-pad state. The main loop and the modal
@@ -2342,16 +2333,13 @@ func renderKeyboard(renderer *sdl.Renderer, config *Config) {
 // vkDrawPanel paints the panel shadow, body, sheen and hairline borders. It is
 // shared by the live path and the cached-layer build so both look identical.
 func vkDrawPanel(renderer *sdl.Renderer, panel sdl.Rect) {
-	for i := int32(1); i <= 3; i++ {
-		fillRoundedRect(renderer, panel.X-i*2, panel.Y+i*3, panel.W, panel.H, RadiusXL+i, ShadowFill(uint8(10+i*6)))
-	}
-	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, RadiusXL, WithAlpha(ColorSurfacePanel, 250))
-	renderer.SetDrawColor(255, 255, 255, 14)
-	renderer.FillRect(&sdl.Rect{X: panel.X + RadiusXL, Y: panel.Y, W: panel.W - 2*RadiusXL, H: 1})
-	renderer.SetDrawColor(ColorBorder.R, ColorBorder.G, ColorBorder.B, 120)
-	renderer.DrawRect(&sdl.Rect{X: panel.X, Y: panel.Y, W: panel.W, H: panel.H})
-	renderer.SetDrawColor(ColorBorderSubtle.R, ColorBorderSubtle.G, ColorBorderSubtle.B, 60)
-	renderer.DrawRect(&sdl.Rect{X: panel.X + 1, Y: panel.Y + 1, W: panel.W - 2, H: panel.H - 2})
+	// The overlay sheet's shape — the shared corner radius and glass hairline,
+	// with the glass edge highlight along the top — on the theme's panel
+	// surface. The three stacked shadows and the square double border were the
+	// older shell's panel; Home's cards have neither.
+	fillRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, OverlayCardRadius, WithAlpha(ColorSurfacePanel, 250))
+	strokeRoundedRect(renderer, panel.X, panel.Y, panel.W, panel.H, OverlayCardRadius, 1, glassSheetEdge())
+	drawOverlayCardAccent(renderer, panel.X, panel.Y, panel.W)
 }
 
 func vkDrawHeader(renderer *sdl.Renderer, config *Config, font *ttf.Font, panel, closeBtn sdl.Rect) {

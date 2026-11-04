@@ -706,6 +706,190 @@ For anything older, the git log and the
 
 ### Fixed
 
+- **Whole-program audit, November 2026.** Ten reviewers went through every
+  subsystem and about a hundred defects were fixed; the entries below are the
+  ones a user could run into. Each fix carries a regression test where the
+  failure can be reproduced off the device.
+
+- **Brightness and the stick LEDs were never found on the Smart Pro or the
+  Brick.** Every entry in `/sys/class/backlight` and `/sys/class/leds` is a
+  kernel symlink, and the discovery kept only real directories, so Quick
+  Settings had no brightness row and the LED sync had nothing to drive. Both
+  now follow the class links ([player/systemcontrol.go](player/systemcontrol.go),
+  [player/ledsync.go](player/ledsync.go)). The LED loop also stopped reading
+  the live settings map from its own goroutine — a fatal concurrent map access
+  once the LEDs were actually found.
+
+- **Joining one Wi-Fi network disabled every other saved network.**
+  `select_network` disables the rest, and the join saved the config straight
+  after it, so the handheld never rejoined home after one visit elsewhere —
+  and a failed join left everything disabled too. The other networks are now
+  enabled again after the join either way, and the config is saved only once
+  the join worked. Passwords and names with `"` or `\` were escaped into
+  something else (wpa_supplicant reads quoted values verbatim), non-ASCII names
+  shown as `\xNN` could not be joined at all, and a 64-digit raw key was always
+  refused; names now travel as hex, passwords exactly as typed. The control
+  socket used on images without `wpa_cli` could never connect (it is a
+  datagram socket) and sent commands the supplicant does not accept; it now
+  binds its own address and speaks the real protocol
+  ([player/wifi.go](player/wifi.go), [player/wifi_ctrl.go](player/wifi_ctrl.go)).
+
+- **Performance mode never switched the CPU — and its restore would have left
+  the hub at the lowest clock.** The governor list was read from a file no
+  kernel has, so every launch said "no performance governor". With that fixed,
+  the way back after a game is now the governor the hub was running before it,
+  not `powersave` ([player/powerprofile.go](player/powerprofile.go)). The
+  low-battery guard now recognises TrimUI's own RetroArch (`ra64.trimui`) and
+  its `.retroarch` config ([player/lowbattery.go](player/lowbattery.go)).
+
+- **The self-update could kill its own helper.** The script that swaps the new
+  binary in was started on a context cancelled a moment later, so it could die
+  before the swap; it now runs detached. The Windows helper broke on paths with
+  spaces, a half-extracted update was reused on the next try, and JukaHub could
+  offer the release it was already running ([player/patch_swap.go](player/patch_swap.go),
+  [player/autoupdate.go](player/autoupdate.go)). Patch journals overwrote one
+  backup with another of the same name and never cleaned up after themselves,
+  large downloads were cut off by a 25-second total timeout, and one install
+  could cancel — or paint its error over — another install's card
+  ([player/patch_engine.go](player/patch_engine.go),
+  [player/installbar.go](player/installbar.go), [player/toolbox.go](player/toolbox.go)).
+
+- **Settings came back after Settings → Save, and some never saved at all.**
+  The hot reload that a save triggers merged the settings read at boot, undoing
+  every change made since; it also ran off the main thread. Every config load
+  wrote design values over the user's settings, Power Mode was never saved, a
+  handheld boot forced Reduced Motion and Low Power on, and a setting changed in
+  the second before quitting was lost. The debounced save marshalled live maps
+  on a timer goroutine — a fatal crash waiting to happen — and web-form values
+  (passwords included) and page text went into `jukauser.json`
+  ([player/hotreload.go](player/hotreload.go), [player/extras.go](player/extras.go),
+  [player/config.go](player/config.go), [player/main.go](player/main.go)).
+
+- **Files: Delete on the ".." row deleted the parent folder.** Delete, Cut and
+  the X mark now skip that row and refuse anything that holds the folder being
+  browsed, a symlink is removed as a link instead of emptying what it points
+  at (in Files and over SFTP), and a rename that only changes letter case
+  works ([player/files_manager.go](player/files_manager.go),
+  [player/sftp_root.go](player/sftp_root.go)). Restoring a save snapshot could
+  prune away the very snapshot being restored
+  ([player/savemanager.go](player/savemanager.go)).
+
+- **Transfers and the phone companion.** An FTP resume wrote the client's tail
+  over byte 0 of a truncated file, and long transfers were cut at 30 minutes.
+  Companion uploads were buffered in RAM-backed `/tmp` and now stream to the
+  card; repeated wrong PINs lock out for longer each time, and idle
+  connections are closed. Expired cache entries are finally deleted
+  ([player/ftp_server.go](player/ftp_server.go), [player/companion.go](player/companion.go),
+  [player/cache.go](player/cache.go)).
+
+- **Pausing and seeking a video could freeze the whole UI.** The audio device
+  was paused and never resumed while the queue waited on it holding a lock.
+  Muted playlists raced through, a one-track list repeated forever, a decoder
+  that failed half way through counted as a finished track (and forgot the
+  resume point), podcast episodes never started, downloads could adopt the
+  wrong file, temporary video files were never removed, and Live TV froze on
+  entry while it fetched its playlist ([player/sound.go](player/sound.go),
+  [player/videoplayer.go](player/videoplayer.go), [player/musicplayer.go](player/musicplayer.go),
+  [player/podcasts.go](player/podcasts.go), [player/downloads.go](player/downloads.go),
+  [player/tvchannels.go](player/tvchannels.go)).
+
+- **Input.** The dock's "screen off" was switched straight back on by the
+  release of the button that turned it off, and a press that woke the screen
+  also acted on it (B left the dock). A press now only wakes, and a drifting
+  stick no longer keeps the screen awake. L2/R2 reached the screen under
+  overlays, the controller test could not be closed once SELECT was remapped,
+  closing the window during the splash froze it, the on-screen keyboard
+  ignored quit and exit requests, a pad plugged in after launch did nothing,
+  and typed text leaked into the note or terminal behind an open panel
+  ([player/main.go](player/main.go), [player/screensaver.go](player/screensaver.go),
+  [player/gamepad_hotplug.go](player/gamepad_hotplug.go), [player/splash.go](player/splash.go),
+  [player/core.go](player/core.go), [player/shoulders.go](player/shoulders.go)).
+
+- **Games.** A video snap kept decoding at full speed — and kept running
+  under the game it launched; it now plays at its own pace and stops when a
+  game starts. CD games were listed once per track and multi-disc `.m3u` sets
+  not at all, an emulator was matched by substring ("nes" inside "snes"),
+  Boost overwrote the user's own per-game options and revert deleted them, the
+  BIOS doctor hashed hundreds of megabytes on the UI thread, the Apps grid
+  listed JukaHub's own launch script, and relaunching an AndroidPak game within
+  ten seconds had its files deleted under it
+  ([player/snappreview.go](player/snappreview.go), [player/romsetup.go](player/romsetup.go),
+  [player/game_library.go](player/game_library.go), [player/compat.go](player/compat.go),
+  [player/biosdoctor.go](player/biosdoctor.go), [player/apps.go](player/apps.go),
+  [player/androidpak.go](player/androidpak.go)).
+
+- **Browser.** A page in a legacy encoding could crash the reader (and with it
+  the hub); scanners now keep byte offsets intact and a parser panic shows an
+  error page. Every page leaked the decoded pixels of its images, the 4 MiB
+  image budget never held, a site could set a cookie for every `.com` site,
+  and a sign-in form would have put the password in the address. Scripts are
+  capped in output, recursion, memory and total time; deeply nested CSS and
+  exponential `var()` chains are bounded. Find opened on the second match,
+  zoom was never saved, the first rule after `@charset` was dropped, the last
+  line hid behind the cookie strip, and Forget left signed-in pages in the
+  Back cache ([player/textutil.go](player/textutil.go), [player/webpage.go](player/webpage.go),
+  [player/webpage_image.go](player/webpage_image.go), [player/browserpsl.go](player/browserpsl.go),
+  [player/webscript.go](player/webscript.go), [player/browserfind.go](player/browserfind.go),
+  [player/browserzoom.go](player/browserzoom.go)).
+
+- **Chat, Watch Party and Smart Home.** A chat image could declare a size
+  that ran the handheld out of memory, Watch Party polled the network on the
+  UI thread, Discord connections raced and leaked sessions, Smart Home toggles
+  froze the UI for up to twelve seconds, Pi-hole sessions leaked, and AI chat
+  replies were mirrored to Discord ([player/chat.go](player/chat.go),
+  [player/partynet.go](player/partynet.go), [player/smart_home.go](player/smart_home.go),
+  [player/smart_home_ui.go](player/smart_home_ui.go)).
+
+- **Apps.** Daily alarms rang once and never again; a missed minute is now
+  caught up, Y on the pad makes a new alarm, and L1 deletes only after a
+  confirming second press. The terminal's `cd` moved the whole app — every
+  relative save then went to the folder the user had wandered into — and an
+  external command froze the UI until it ended; the terminal now keeps its own
+  directory, runs commands in the background with a timeout, and Ctrl+C (or B)
+  stops them. The dictionary closed the shared cache database and fetched
+  suggestions over the network on every frame. Pomodoro resumed the wrong
+  phase, the calculator cut π to six decimals and misread `2pi` and printed
+  exponents, the forecast labelled yesterday "Today", a note open in the editor
+  was lost on exit, and saved tickers vanished after a restart
+  ([player/alarm.go](player/alarm.go), [player/terminal.go](player/terminal.go),
+  [player/dictionary.go](player/dictionary.go), [player/pomodoro.go](player/pomodoro.go),
+  [player/calculator.go](player/calculator.go), [player/weather_cache.go](player/weather_cache.go),
+  [player/notes.go](player/notes.go), [player/morefeatures.go](player/morefeatures.go)).
+
+- **The handheld config opened the new Home on the old grid.**
+  `player/trimui/jukaconfig.device.json`, which the Smart Pro and Brick builds
+  ship, still carried the 0.4.0 Home tile geometry, so the redesigned Home drew
+  its cards in the old rectangles there. Its Main scene now matches the desktop
+  config. Because `jukaconfig.json` is kept across updates, a config whose
+  twelve Home tiles still sit exactly on the old geometry is also moved to the
+  new grid in memory when it loads; a layout with any tile moved or resized is
+  left alone ([player/home_migrate.go](player/home_migrate.go); tests in
+  [player/home_migrate_test.go](player/home_migrate_test.go)).
+
+- **Colour blends towards a darker colour came back unchanged.** `lerpColor`
+  took each channel difference in `uint8`, which wraps whenever the target is
+  darker, so a blend towards black returned the start colour: every Home
+  glyph's shade and deep shade were plain white, and the parcel, folder and
+  gamepad icons lost the planes they are drawn with
+  ([player/core.go](player/core.go)).
+
+- **A wallpaper that failed to load was retried on every frame.** Each frame
+  reopened the file, attempted a decode and logged the failure. A failed path
+  now waits 15 seconds before its next attempt, which still lets a wallpaper on
+  a card that mounts late appear on its own ([player/core.go](player/core.go)).
+
+- **Smaller fixes found on the way.** A toggle drawn before its font loaded
+  dereferenced a nil font. White **GO** text on the browser's cyan button was
+  about 1.7:1 and now takes the accent's contrast ink. The loading card's square
+  outline was drawn straight across its rounded corners, the text browser's
+  scrollbar ran down the side of its toolbar, and the unit converter's result
+  rule poked out of its rounded corners. The scrollbar, the Files folder colour
+  and the search spinner were dark-theme-only colours that vanished or clashed
+  on light presets ([player/core.go](player/core.go),
+  [player/textbrowser.go](player/textbrowser.go),
+  [player/loadingcard.go](player/loadingcard.go),
+  [player/unit.go](player/unit.go), [player/features.go](player/features.go)).
+
 - **An SFTP client's `stat` of a folder described one of its children.** The
   server answered stat from the same listing it uses to browse, and the protocol
   reads only the first entry, so a folder looked like whatever file sorted first
@@ -1306,6 +1490,55 @@ scene. ([player/trimui/jukaconfig.device.json](player/trimui/jukaconfig.device.j
   ([player/snappreview.go](player/snappreview.go), `player/snappreview_test.go`).
 
 ### Changed
+
+- **Every screen now wears Home's design.** Home's frosted glass — the navy
+  backdrop with its cyan and violet blooms, translucent tiles with a hairline
+  edge, the 3px cyan focus ring that lifts a control with a soft bloom behind
+  it, and the inset footer band with glass button badges — is now one shared
+  recipe in [player/ui_glass.go](player/ui_glass.go) that every other screen
+  draws with, instead of the older slate recipe that made leaving Home look
+  like opening a different app. Scenes stand on Home's backdrop rather than the
+  stock wallpaper behind an opaque panel; the status row has no bar chrome; the
+  footer is Home's inset band with right-aligned hint badges at Home's 16px
+  type; and buttons, inputs, toggles, list rows, page headers, category tiles,
+  overlay sheets and their dim, the Tools and Settings tile pages, Quick
+  Settings, the Start menu, notifications, the calendar and weather cards,
+  Files, Apps, Emulators, Downloads, Favorites, Chat, the on-screen keyboard,
+  the browser's toolbar and panels, the unit converter, Shorts, Live TV, the
+  disk chart, the loading card and the module screens (Calculator, Notes,
+  Alarm, Pomodoro, Dictionary, PDF reader, Terminal, Music, Dashboard, About,
+  Playtime, Patches, Games) all draw those surfaces
+  ([player/components.go](player/components.go), [player/core.go](player/core.go),
+  [player/extras.go](player/extras.go), [player/header.go](player/header.go)
+  and the screens themselves). The glass is theme-aware: on a light preset it
+  is mixed from a deep slate instead of white, and text that was hard-coded
+  light now takes the theme's inks, so the six light presets get visible cards
+  and readable type.
+
+- **Focus, pills and highlights use the theme's accent.** The shell's accent
+  was `$buttonColor`, a surface colour (slate by default), so every scene's
+  focus ring and selection was a navy that barely showed beside Home's cyan. It
+  is now the active theme's accent, and a config reload applies it after the
+  preset instead of overwriting the preset's accent with the button colour.
+  `$buttonColor` stays as a light tint under scene buttons
+  ([player/main.go](player/main.go), [player/ui_glass.go](player/ui_glass.go)).
+
+- **The dark palette's surfaces are Home's blue-grey.** The opaque panel, card,
+  raised and focus surfaces were a saturated slate that clashed with the glass;
+  they are now the neutral blue-grey white glass makes over the navy
+  (#1B2029, #242B37, #2D3644, #404D62) at the same luminance, so every contrast
+  ratio the palette tests pin is unchanged
+  ([player/design.go](player/design.go), [player/themes.go](player/themes.go)).
+
+- **Lighter frames on the handheld.** The stock 2560x1440 `background.jpg` —
+  about 15 MB of texture — is no longer loaded, because nothing draws it. A
+  wallpaper the user picks is scaled once to the canvas (1280x720, or 960x720
+  on the Brick) and kept as an opaque static texture, so a frame copies a
+  canvas-sized image with blending off instead of minifying a full-size photo.
+  The scene panel's 1232x590 rounded texture, its three stacked shadows, sheen
+  lines and corner dots, and the drop shadows under buttons, chips and cards
+  are gone as well ([player/core.go](player/core.go),
+  [player/ui_glass.go](player/ui_glass.go)).
 
 - **The release offer is a quiet system chip, not a warning banner.** It sat in
   the same corner as the notification bell but at the labelled buttons' full

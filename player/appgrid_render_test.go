@@ -73,13 +73,10 @@ func countPixelsMatching(f *probeFrame, rect sdl.Rect, match func(sdl.Color) boo
 	return n
 }
 
+// appGridIconRect is where the grid draws a tile's artwork: Home's icon badge
+// position in the tile's top-left corner (appTileIconRect).
 func appGridIconRect(cell sdl.Rect) sdl.Rect {
-	return sdl.Rect{
-		X: cell.X + (cell.W-appIconBox)/2,
-		Y: cell.Y + appIconTop,
-		W: appIconBox,
-		H: appIconBox,
-	}
+	return appTileIconRect(cell)
 }
 
 func TestAppGridDrawsTheAppsOwnIcon(t *testing.T) {

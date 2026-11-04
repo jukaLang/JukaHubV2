@@ -102,6 +102,13 @@ func saveUserConfigDebounced(user *UserConfig) {
 	if !userConfigWritesEnabled {
 		return
 	}
+	// The write runs on a timer goroutine two seconds from now, and the Custom
+	// map handed in is the live one the main thread keeps writing (playtime's
+	// counters every second, background updates, every keystroke). Iterating
+	// it there was a fatal "concurrent map iteration and map write". It is
+	// copied here, on the caller's goroutine, so the timer owns everything it
+	// touches.
+	user = detachUserConfig(user)
 	userConfigSaveMutex.Lock()
 	pendingUserConfig = user
 	pendingUserConfigDir, _ = os.Getwd()
@@ -118,6 +125,73 @@ func saveUserConfigDebounced(user *UserConfig) {
 		}
 	})
 	userConfigSaveMutex.Unlock()
+}
+
+// flushPendingUserConfig writes a debounced jukauser.json save now, so the
+// file holds the latest settings for whoever reads it next.
+func flushPendingUserConfig() {
+	userConfigSaveMutex.Lock()
+	defer userConfigSaveMutex.Unlock()
+	if userConfigSaveTimer != nil {
+		userConfigSaveTimer.Stop()
+	}
+	if pendingUserConfig != nil {
+		saveUserConfigToDir(pendingUserConfigDir, pendingUserConfig)
+		pendingUserConfig = nil
+		pendingUserConfigDir = ""
+	}
+}
+
+// reloadUserConfigFromDisk refreshes the cached settings from jukauser.json
+// and returns the cache. Its typed fields are filled once at boot and no save
+// updates them, so a hot reload that merged the cache restored the boot value
+// of every setting changed since. The favorites, chat and JukaLand sections
+// stay as they are in memory: those are always the newest copy.
+func reloadUserConfigFromDisk() *UserConfig {
+	uc, err := readUserConfigFile("jukauser.json")
+	if err != nil || uc == nil {
+		return loadUserConfig()
+	}
+	if uc.Variables.Custom == nil {
+		uc.Variables.Custom = make(map[string]interface{})
+	}
+	if userConfigCache == nil {
+		userConfigCache = uc
+		return uc
+	}
+	userConfigCache.Variables = uc.Variables
+	return userConfigCache
+}
+
+// detachUserConfig returns a copy of user whose Custom map shares nothing with
+// the live config. Each persisted value goes through JSON — exactly what the
+// save does with it — so nested maps and slices (playtime's day and scene
+// counters) come back as fresh values the caller can keep writing. Volatile
+// keys are never saved, so they are left out rather than copied.
+func detachUserConfig(user *UserConfig) *UserConfig {
+	if user == nil {
+		return nil
+	}
+	c := *user
+	if user.Variables.Custom == nil {
+		return &c
+	}
+	c.Variables.Custom = make(map[string]interface{}, len(user.Variables.Custom))
+	for k, v := range user.Variables.Custom {
+		if volatileCustomVars[k] {
+			continue
+		}
+		data, err := json.Marshal(v)
+		if err != nil {
+			continue
+		}
+		var cp interface{}
+		if json.Unmarshal(data, &cp) != nil {
+			continue
+		}
+		c.Variables.Custom[k] = cp
+	}
+	return &c
 }
 
 // userConfigFromVariables snapshots the persisted half of a live config into
@@ -146,6 +220,7 @@ func userConfigFromVariables(config *Config) *UserConfig {
 		SocialNotifs:       config.Variables.SocialNotifs,
 		ReducedMotion:      config.Variables.ReducedMotion,
 		LowPower:           config.Variables.LowPower,
+		PowerMode:          config.Variables.PowerMode,
 		LedSync:            config.Variables.LEDSync,
 		Custom:             config.Variables.Custom,
 	}}
@@ -421,7 +496,9 @@ func fetchWeatherOnceContext(parent context.Context) {
 		return
 	}
 	var w struct {
-		Daily struct {
+		// The location's offset: the daily dates below are its calendar.
+		UTCOffset *int `json:"utc_offset_seconds"`
+		Daily     struct {
 			Time []string  `json:"time"`
 			TMax []float64 `json:"temperature_2m_max"`
 			TMin []float64 `json:"temperature_2m_min"`
@@ -434,6 +511,9 @@ func fetchWeatherOnceContext(parent context.Context) {
 	}
 	if ctx.Err() != nil {
 		return
+	}
+	if w.UTCOffset != nil {
+		weatherSetLocationOffset(*w.UTCOffset, true)
 	}
 	n := len(w.Daily.Time)
 	days := make([]WeatherDay, 0, n)
@@ -462,9 +542,9 @@ func fetchWeatherOnceContext(parent context.Context) {
 	if len(days) > 0 {
 		noteWeatherFetched(days, time.Now())
 	}
-	// Update dynamic background with weather data.
-	if len(days) > 0 {
-		DynBGUpdateWeather(days[0].Code)
+	// Update dynamic background with today's weather.
+	if day, ok := weatherDayFor(days, time.Now()); ok {
+		DynBGUpdateWeather(day.Code)
 	}
 }
 
@@ -580,12 +660,12 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	weatherStatusRect = sdl.Rect{}
 	statusMediaRect = sdl.Rect{}
 	barH := headerBarHeight()
-	// Opaque top bar surface.
-	fillRoundedRect(renderer, 0, 0, screenWidth, barH, 0, ColorTopBar)
-	// Subtle bottom border.
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 40)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: barH - 1, W: screenWidth, H: 1})
+	// Home's status row has no bar chrome: the wordmark and the system corner
+	// sit straight on the backdrop. The band is repainted with the backdrop's
+	// own pixels rather than left alone, so a body that scrolls up under the
+	// header cannot show through the wordmark — and the header reads as part
+	// of the page, the way it does on Home, instead of a slate strip on top.
+	drawAppBackdropBand(renderer, config, sdl.Rect{X: 0, Y: 0, W: screenWidth, H: barH})
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
@@ -773,21 +853,21 @@ func renderStatusBar(renderer *sdl.Renderer, config *Config) {
 	if statusWiFiRect.W > 0 {
 		statusWiFiRect = statusFingerRect(statusWiFiRect, barH, weatherStatusRect, statusClockRect)
 	}
-	if focusEngine.ElementIndex() == ChromeClockIndex && statusClockRect.W > 0 {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-		renderer.DrawRect(&statusClockRect)
-	}
-	if focusEngine.ElementIndex() == ChromeWeatherIndex && weatherStatusRect.W > 0 {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-		renderer.DrawRect(&weatherStatusRect)
-	}
-	if focusEngine.ElementIndex() == ChromeWiFiIndex && statusWiFiRect.W > 0 {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-		renderer.DrawRect(&statusWiFiRect)
-	}
-	if focusEngine.ElementIndex() == ChromeMediaIndex && statusMediaRect.W > 0 {
-		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 230)
-		renderer.DrawRect(&statusMediaRect)
+	// Focused header chips wear the ring Home's header draws: a rounded 2px
+	// accent outline, not a square hairline box.
+	for _, chip := range []struct {
+		index int
+		rect  sdl.Rect
+	}{
+		{ChromeClockIndex, statusClockRect},
+		{ChromeWeatherIndex, weatherStatusRect},
+		{ChromeWiFiIndex, statusWiFiRect},
+		{ChromeMediaIndex, statusMediaRect},
+	} {
+		if focusEngine.ElementIndex() == chip.index && chip.rect.W > 0 {
+			r := chip.rect
+			strokeRoundedRect(renderer, r.X, r.Y, r.W, r.H, 10, 2, glassAccent())
+		}
 	}
 
 	// Notification bell: top-right corner, always reachable with the D-pad.
@@ -870,12 +950,9 @@ func headerStatusParts(config *Config) []string {
 	}
 	wxMutex.Lock()
 	ready := weatherReady
-	var today WeatherDay
-	if len(weatherDaily) > 0 {
-		today = weatherDaily[0]
-	}
+	today, haveToday := weatherDayFor(weatherDaily, time.Now())
 	wxMutex.Unlock()
-	if ready && len(weatherDaily) > 0 {
+	if ready && haveToday {
 		unit := weatherUnit(config)
 		hi, lo := weatherTemp(today.TMax, unit), weatherTemp(today.TMin, unit)
 		parts = append(parts, safeStatusText(fmt.Sprintf("%d%s / %d%s", int(hi), unit, int(lo), unit)))
@@ -1102,41 +1179,42 @@ func renderFooter(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	barH := footerBarHeight()
-	y := screenHeight - barH
+	// Home's footer: a band inset by the frame margin, rounded at the top and
+	// flush with the bottom edge, with the controller hints right-aligned as
+	// glass badges. It used to be a full-width opaque slate strip with the
+	// hints centred, which is the first thing that told a user they had left
+	// Home.
+	band := sceneFooterBand()
+	drawGlassFooterBand(renderer, band)
 
-	// Opaque footer surface on the shared dark surface, accent divider on top.
-	fillRoundedRect(renderer, 0, y, screenWidth, barH, 0, HomeFooterColor())
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 40)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: y, W: screenWidth, H: 1})
-
-	font, _ := getCachedFont(config, "small")
-	if font == nil {
+	// planFooterHints measures the row and re-lays it out until it fits,
+	// because on the Brick's 960-wide canvas the full Tube row used to run off
+	// both edges ("d Navigate" … "R2").
+	pad := scaleX(16, screenWidth)
+	plan := planFooterHints(config, footerHints(config, scene), band.W-2*pad)
+	if plan.font == nil {
 		return
 	}
-
-	// Hint groups: a small button badge pill plus a separate label, centered as
-	// one row inside the footer. planFooterHints measures the row and re-lays it
-	// out until it fits, because on the Brick's 960-wide canvas the full Tube
-	// row used to run off both edges ("d Navigate" … "R2").
-	plan := planFooterHints(config, footerHints(config, scene), screenWidth-24)
-	font = plan.font
-	hints := plan.hints
-	total := plan.width
-
-	x := (screenWidth - total) / 2
-	textY := y + (barH-plan.fontHeight)/2
-	badgeY := y + (barH-plan.badgeH)/2
-	for i, g := range hints {
-		badge := sdl.Rect{X: x, Y: badgeY, W: plan.badgeW[i], H: plan.badgeH}
-		fillRoundedRect(renderer, badge.X, badge.Y, badge.W, badge.H, badge.H/2, ColorIconSurface)
-		renderText(renderer, config, font, g.Button, ColorTextPrimary(), badge.X+plan.badgePad, textY)
-		labelX := badge.X + plan.badgeW[i] + plan.badgeGap
-		renderText(renderer, config, font, g.Label, ColorTextSecondary(), labelX, textY)
-		x += plan.badgeW[i] + plan.badgeGap + plan.labelW[i] + plan.groupGap
+	x := band.X + band.W - pad - plan.width
+	textY := band.Y + (band.H-plan.fontHeight)/2
+	badgeY := band.Y + (band.H-plan.badgeH)/2
+	for i, g := range plan.hints {
+		labelX := x
+		if plan.badgeW[i] > 0 {
+			badge := sdl.Rect{X: x, Y: badgeY, W: plan.badgeW[i], H: plan.badgeH}
+			labelX = badge.X + badge.W + plan.badgeGap
+			drawGlassHintBadge(renderer, config, plan.font, badge, g.Button, g.Label, labelX, textY)
+		} else {
+			drawGlassText(renderer, config, plan.font, g.Label, ColorTextMuted(), labelX, textY)
+		}
+		x = labelX + plan.labelW[i] + plan.groupGap
 	}
 }
+
+// footerHintSize is the hint row's type size in design pixels: Home's footer
+// size. The row used to start at the theme's "small" role, which is 24px on a
+// config that does not set it — half again the size of the same hints on Home.
+const footerHintSize = 16
 
 // footerPlan is one hint row laid out for a specific width: the font and
 // spacing that fit, the hints that survived, and every measured badge so
@@ -1161,68 +1239,94 @@ type footerPlan struct {
 // hint row inside avail pixels, dropping trailing hints only if even the
 // smallest type does not fit.
 func planFooterHints(config *Config, hints []FooterHint, avail int32) footerPlan {
-	font, size := getCachedFont(config, "small")
-	if font == nil || size <= 0 {
-		size = 16
-	}
+	// Home's spacing first (18px between groups, a 6px pad either side of the
+	// button name, 7px to the label), then a pixel smaller and tighter at each
+	// step. Every candidate is opened at its design size through getFontSized,
+	// which applies the canvas and text-size scaling exactly once; the old
+	// planner scaled the role's already-scaled size a second time on the Brick.
 	spacings := []struct {
 		size     int
 		groupGap int32
 		badgePad int32
 		badgeGap int32
 	}{
-		{size, 32, 12, 6},
-		{size - 1, 24, 10, 5},
-		{size - 2, 18, 9, 5},
-		{size - 3, 14, 8, 4},
-		{size - 4, 10, 7, 4},
+		{footerHintSize, 18, 6, 7},
+		{footerHintSize - 1, 16, 6, 6},
+		{footerHintSize - 2, 14, 5, 5},
+		{footerHintSize - 3, 12, 5, 4},
+		{footerHintSize - 4, 10, 4, 4},
 	}
 
 	plan := footerPlan{hints: hints, groupGap: spacings[0].groupGap, badgePad: spacings[0].badgePad, badgeGap: spacings[0].badgeGap}
 	for _, sp := range spacings {
-		candidate := font
-		if sp.size != size && sp.size > 0 {
-			if smaller := getFontSized(config, "small", sp.size); smaller != nil {
-				candidate = smaller
-			}
+		candidate := getFontSized(config, "small", sp.size)
+		if candidate == nil {
+			continue
 		}
 		plan.font = candidate
 		plan.groupGap, plan.badgePad, plan.badgeGap = sp.groupGap, sp.badgePad, sp.badgeGap
-		if footerHintsWidth(candidate, hints, sp.groupGap, sp.badgePad, sp.badgeGap) <= avail {
+		plan.badgeH = footerBadgeHeight(candidate)
+		if footerHintsWidth(candidate, hints, sp.groupGap, sp.badgePad, sp.badgeGap, plan.badgeH) <= avail {
 			break
 		}
 	}
 	if plan.font == nil {
-		plan.font = font
+		plan.font, _ = getCachedFont(config, "small")
+		if plan.font == nil {
+			plan.hints = nil
+			return plan
+		}
+		plan.badgeH = footerBadgeHeight(plan.font)
 	}
 
 	// Still too wide for even the smallest type: drop hints from the end.
 	keep := len(plan.hints)
-	for keep > 1 && footerHintsWidth(plan.font, plan.hints[:keep], plan.groupGap, plan.badgePad, plan.badgeGap) > avail {
+	for keep > 1 && footerHintsWidth(plan.font, plan.hints[:keep], plan.groupGap, plan.badgePad, plan.badgeGap, plan.badgeH) > avail {
 		keep--
 	}
 	plan.hints = plan.hints[:keep]
 
 	plan.fontHeight = int32(plan.font.Height())
-	plan.badgeH = int32(20)
-	if plan.fontHeight+6 > plan.badgeH {
-		plan.badgeH = plan.fontHeight + 6
-	}
 	plan.badgeW = make([]int32, len(plan.hints))
 	plan.labelW = make([]int32, len(plan.hints))
 	for i, g := range plan.hints {
-		bw, _ := measureText(plan.font, g.Button)
-		lw, _ := measureText(plan.font, g.Label)
-		plan.badgeW[i] = bw + plan.badgePad*2
-		plan.labelW[i] = lw
+		plan.badgeW[i] = footerBadgeWidth(plan.font, g.Button, plan.badgePad, plan.badgeH)
+		plan.labelW[i], _ = measureText(plan.font, g.Label)
 	}
-	plan.width = footerHintsWidth(plan.font, plan.hints, plan.groupGap, plan.badgePad, plan.badgeGap)
+	plan.width = footerHintsWidth(plan.font, plan.hints, plan.groupGap, plan.badgePad, plan.badgeGap, plan.badgeH)
 	return plan
+}
+
+// footerBadgeHeight is a hint badge's height for a font: Home's 22px pill, or
+// taller when the text size setting makes the type taller than that.
+func footerBadgeHeight(font *ttf.Font) int32 {
+	h := scaleY(22, screenHeight)
+	if font != nil {
+		if fh := int32(font.Height()) + 4; fh > h {
+			h = fh
+		}
+	}
+	return h
+}
+
+// footerBadgeWidth is the pill around one button name: the text plus its pad,
+// never narrower than it is tall, so a single-letter button ("A", "B") is a
+// round badge the way Home draws it. A hint with no button has no badge.
+func footerBadgeWidth(font *ttf.Font, button string, badgePad, badgeH int32) int32 {
+	if button == "" {
+		return 0
+	}
+	bw, _ := measureText(font, button)
+	w := bw + badgePad*2
+	if w < badgeH {
+		w = badgeH
+	}
+	return w
 }
 
 // footerHintsWidth measures one hint row laid out with the given font and
 // spacing, so the planner can compare it with the panel width before drawing.
-func footerHintsWidth(font *ttf.Font, hints []FooterHint, groupGap, badgePad, badgeGap int32) int32 {
+func footerHintsWidth(font *ttf.Font, hints []FooterHint, groupGap, badgePad, badgeGap, badgeH int32) int32 {
 	if font == nil {
 		return 0
 	}
@@ -1230,9 +1334,11 @@ func footerHintsWidth(font *ttf.Font, hints []FooterHint, groupGap, badgePad, ba
 	for _, g := range hints {
 		// Cached widths: this runs several times per frame (once per type size
 		// the planner tries), and the hints are the same strings every time.
-		bw, _ := measureText(font, g.Button)
 		lw, _ := measureText(font, g.Label)
-		total += bw + badgePad*2 + badgeGap + lw
+		total += lw
+		if bw := footerBadgeWidth(font, g.Button, badgePad, badgeH); bw > 0 {
+			total += bw + badgeGap
+		}
 	}
 	if len(hints) > 1 {
 		total += groupGap * int32(len(hints)-1)
@@ -1251,6 +1357,11 @@ var volatileCustomVars = map[string]bool{
 	"search_query":   true,
 	"search_error":   true,
 	"netspeed_text":  true,
+	// What was typed into a web form (a password included) and the page text
+	// itself: both went into jukauser.json on every save, and Settings → Save
+	// put them in jukaconfig.json, which the live builder serves over Wi-Fi.
+	"browser_form_value": true,
+	"browser_content":    true,
 }
 
 // userConfigCache holds the loaded jukauser.json (user settings + favorites +
@@ -1560,6 +1671,9 @@ func mergeUserConfig(config *Config, user *UserConfig) {
 	}
 	config.Variables.ReducedMotion = user.Variables.ReducedMotion
 	config.Variables.LowPower = user.Variables.LowPower
+	// Power Mode was saved by Quick Settings but never read back, so every
+	// launch came up in Default (and the next save wrote that over the choice).
+	config.Variables.PowerMode = normalizePowerMode(user.Variables.PowerMode)
 	config.Variables.LEDSync = user.Variables.LedSync
 	if user.Variables.NetPlayEnabled != nil {
 		config.Variables.NetPlayEnabled = *user.Variables.NetPlayEnabled
@@ -1628,5 +1742,9 @@ func saveConfig(config *Config) {
 	}
 	configHealth.RecordSave("jukaconfig.json", nil)
 	configHealth.MarkSaveOK()
+	// The watcher must not treat this write as an outside edit and reload it.
+	if globalConfigWatcher != nil {
+		globalConfigWatcher.IgnoreWrite("jukaconfig.json")
+	}
 	LogScene("config").Info("design config saved")
 }

@@ -171,9 +171,12 @@ func chooseGovernor(profile powerProfile, available []string) string {
 	return ""
 }
 
-// availableGovernors reads the list a CPU advertises.
+// availableGovernors reads the list a CPU advertises. The kernel's file is
+// scaling_available_governors; the old code read "available_governors", which
+// no kernel has, so every real device answered "this CPU offers no performance
+// governor" and the launch profile never switched anything.
 func availableGovernors(governorPath string) []string {
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(governorPath), "available_governors"))
+	raw, err := os.ReadFile(filepath.Join(filepath.Dir(governorPath), "scaling_available_governors"))
 	if err != nil {
 		return nil
 	}
@@ -296,6 +299,43 @@ type cpuFrequencySave struct {
 	value string
 }
 
+// cpuGovernorSave remembers one scaling_governor, so the end of a launch puts
+// back the governor the hub was running rather than a guess.
+type cpuGovernorSave struct {
+	path  string
+	value string
+}
+
+// readGovernorSaves records the governor of every CPU. All or nothing: a
+// partial record would restore some CPUs and leave others on performance.
+func readGovernorSaves(paths []string) []cpuGovernorSave {
+	saves := make([]cpuGovernorSave, 0, len(paths))
+	for _, p := range paths {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		value := strings.TrimSpace(string(raw))
+		if value == "" {
+			return nil
+		}
+		saves = append(saves, cpuGovernorSave{path: p, value: value})
+	}
+	return saves
+}
+
+// restoreGovernors writes every recorded governor back, reporting the first
+// refusal.
+func restoreGovernors(saves []cpuGovernorSave) error {
+	var first error
+	for _, s := range saves {
+		if err := writeGovernor(s.path, s.value); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
 // applyFrequencyCeiling writes the profile's ceiling to scaling_max_freq. The
 // performance governor asks the policy for its maximum, so a firmware that
 // ships scaling_max_freq below the chip's top OPP — a TrimUI Smart Pro booted
@@ -414,10 +454,11 @@ func probePowerProfiles(cfg powerProfileConfig) powerProfileState {
 // launchPowerProfile holds the profile applied for the running child, so a
 // second launch cannot restore the wrong one when the first exits.
 var launchPowerProfile struct {
-	mu      sync.Mutex
-	depth   int
-	warned  bool
-	ceiling []cpuFrequencySave
+	mu        sync.Mutex
+	depth     int
+	warned    bool
+	ceiling   []cpuFrequencySave
+	governors []cpuGovernorSave
 }
 
 // beginGamePowerProfile raises the performance profile and returns a function
@@ -466,18 +507,33 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 		launchPowerProfile.depth--
 		last := launchPowerProfile.depth <= 0
 		var ceiling []cpuFrequencySave
+		var governors []cpuGovernorSave
 		if last {
 			launchPowerProfile.depth = 0
 			// The ceiling belongs to the launch that raised it: nested launches
 			// share it, and only the outermost one puts the firmware value back.
 			ceiling = launchPowerProfile.ceiling
 			launchPowerProfile.ceiling = nil
+			governors = launchPowerProfile.governors
+			launchPowerProfile.governors = nil
 		}
 		launchPowerProfile.mu.Unlock()
 		if !last || !switchable {
 			return
 		}
 		restoreFrequencyCeiling(ceiling)
+		// Without a configured battery governor the hub gets back exactly the
+		// governor it ran before the launch. Writing the "battery" pick instead
+		// put a hub that booted on schedutil or ondemand onto powersave — the
+		// lowest clock — after every game, which made the menus crawl.
+		if cfg.BatteryGovernor == "" && len(governors) > 0 {
+			if err := restoreGovernors(governors); err != nil {
+				logPatch("power profile: could not restore %s (%v)", governors[0].value, err)
+				return
+			}
+			logPatch("power profile: %s restored", governors[0].value)
+			return
+		}
 		if _, err := applyPowerProfile(powerProfileBattery, cfg); err != nil {
 			logPatch("power profile: could not restore (%v)", err)
 			return
@@ -491,11 +547,14 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	// Lift the ceiling before the governor: the performance governor asks the
 	// policy for its maximum, so a firmware that boots with scaling_max_freq
 	// below the top OPP would otherwise pin the game to that lower clock.
+	governors := readGovernorSaves(cpuGovernorPaths(cpufreqRoot))
 	ceiling, ceilingKHz, ceilingErr := applyFrequencyCeiling(cfg)
 	if _, err := applyPowerProfile(powerProfilePerformance, cfg); err != nil {
 		// The governor was refused: leave the ceiling as it was too, so a
-		// partial profile does not outlive this launch.
+		// partial profile does not outlive this launch — and put back any CPU
+		// that did switch before the refusal.
 		restoreFrequencyCeiling(ceiling)
+		_ = restoreGovernors(governors)
 		launchPowerProfile.mu.Lock()
 		warn := !launchPowerProfile.warned
 		launchPowerProfile.warned = true
@@ -508,6 +567,7 @@ func beginGamePowerProfileWith(cfg powerProfileConfig) func() {
 	}
 	launchPowerProfile.mu.Lock()
 	launchPowerProfile.ceiling = ceiling
+	launchPowerProfile.governors = governors
 	launchPowerProfile.mu.Unlock()
 	if ceilingErr != nil {
 		logPatch("power profile: %v", ceilingErr)

@@ -194,6 +194,16 @@ func TestAndroidPakFirstRunSymbolCapturedFromLaunchLog(t *testing.T) {
 	if got := androidPakFirstRunSymbol("absent"); got != "" {
 		t.Errorf("symbol = %q, want empty without a log file", got)
 	}
+
+	// The log is appended to on every launch: the run that just ended is the
+	// one that counts, not the oldest failure in the file.
+	writeLog("rerun", "\n=== rerun start 2026-11-01T10:00:00Z ===\n"+
+		"[androidrt] could not load /stage/libgame.so: undefined symbol: ATrace_beginSection\nexit: exit status 1\n"+
+		"\n=== rerun start 2026-11-01T10:05:00Z ===\n"+
+		"[androidrt] could not load /stage/libgame.so: undefined symbol: AChoreographer_getInstance\nexit: exit status 1\n")
+	if got := androidPakFirstRunSymbol("rerun"); got != "AChoreographer_getInstance" {
+		t.Errorf("symbol = %q, want the latest run's AChoreographer_getInstance", got)
+	}
 }
 
 func TestAndroidRTPreferredCandidatesAreDocumented(t *testing.T) {

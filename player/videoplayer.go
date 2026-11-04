@@ -621,6 +621,58 @@ func removeTempVideo(path string) {
 	}
 }
 
+// removeTempVideoArtifacts deletes a temp download together with everything
+// yt-dlp staged around it — the .part file, per-format pieces, .ytdl state.
+// Only the finished file was removed before, and a cancelled or failed fetch
+// left its partial video on the card for good (each attempt has a new name).
+func removeTempVideoArtifacts(tempPath string) {
+	removeTempVideo(tempPath)
+	base := filepath.Base(tempPath)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if !strings.HasPrefix(stem, "jukahub-video-") {
+		return
+	}
+	matches, _ := filepath.Glob(filepath.Join(filepath.Dir(tempPath), stem+".*"))
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+// sweepTempVideos removes the temp downloads a crash or a power cut left
+// behind. Nothing plays at boot, so every jukahub-video file is an orphan then.
+func sweepTempVideos() {
+	matches, _ := filepath.Glob(filepath.Join(videoTempDir(), "jukahub-video-*"))
+	for _, m := range matches {
+		_ = os.Remove(m)
+	}
+}
+
+// lockedTailBuffer collects a helper's output for a progress parser that reads
+// it while the helper is still writing. A bare bytes.Buffer was read every
+// 200 ms by the waiting loop while exec's copier appended to it — a data race
+// — and it kept the whole log of a five-minute download.
+type lockedTailBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+func (b *lockedTailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if b.max > 0 && len(b.buf) > b.max {
+		b.buf = append(b.buf[:0], b.buf[len(b.buf)-b.max:]...)
+	}
+	return len(p), nil
+}
+
+func (b *lockedTailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
+}
+
 func playerPhase() string {
 	embeddedPlayer.mu.Lock()
 	defer embeddedPlayer.mu.Unlock()
@@ -1228,10 +1280,15 @@ func startEmbeddedPlayback(config *Config, url string, startSec float64, tempFil
 		embeddedPlayer.progressBase = progressBase
 		embeddedPlayer.progress = progressBase
 		embeddedPlayer.mu.Unlock()
+		// A new video plays, whatever the shared device was left in.
+		PauseVideoAudio(false)
 
-		// Sidecar / embedded subtitle tracks belong to this source; load them
-		// before the first frame so the CC button knows what it can turn on.
-		prepareVideoSubtitles(sess, config, url)
+		// Sidecar / embedded subtitle tracks belong to this source. They load
+		// beside the decoders, not before them: finding an embedded track
+		// means ffmpeg reading the whole file, and a large MKV used to sit on
+		// a black screen for that long while the clock (decoderStartTime,
+		// already set) ran on, leaving progress and cues out of step.
+		go prepareVideoSubtitles(sess, config, url)
 
 		go startFFmpegAudio(sess, ffmpegPath, url, startSec)
 		startFFmpegDecoder(sess, ffmpegPath, url, w, h, startSec)
@@ -1255,6 +1312,10 @@ func StopEmbeddedPlayback() {
 		}
 	}
 	ClearVideoAudioQueue()
+	// The device is shared with the music player: a video stopped while paused
+	// left it paused, and the next song queued into a device that never
+	// played — silence, then a frozen UI on the next skip.
+	PauseVideoAudio(false)
 
 	embeddedPlayer.mu.Lock()
 	prevPhase := embeddedPlayer.phase
@@ -1300,18 +1361,26 @@ func stopVideoPlayback() {
 func ToggleVideoPlayback() {
 	embeddedPlayer.mu.Lock()
 
+	// The audio device is paused and resumed after the state lock is let go,
+	// so the player lock is never held while waiting on the audio one.
+	pauseAudio, resumeAudio := false, false
 	switch embeddedPlayer.phase {
 	case "playing":
 		embeddedPlayer.phase = "paused"
 		embeddedPlayer.pauseStartTime = time.Now()
-		PauseVideoAudio(true)
+		pauseAudio = true
 	case "paused":
 		embeddedPlayer.totalPausedDuration += time.Since(embeddedPlayer.pauseStartTime).Seconds()
 		embeddedPlayer.pauseStartTime = time.Time{}
 		embeddedPlayer.phase = "playing"
-		PauseVideoAudio(false)
+		resumeAudio = true
 	}
 	embeddedPlayer.mu.Unlock()
+	if pauseAudio {
+		PauseVideoAudio(true)
+	} else if resumeAudio {
+		PauseVideoAudio(false)
+	}
 	// Publish after releasing the state lock: partyPublishPlayback snapshots
 	// the player and would deadlock if called underneath it.
 	partyPublishPlayback()
@@ -1363,6 +1432,10 @@ func SeekVideo(fraction float64) {
 	embeddedPlayer.progressBase = fraction
 	embeddedPlayer.progress = fraction
 	embeddedPlayer.mu.Unlock()
+	// A seek resumes playback, so the device resumes too. Seeking from pause
+	// left it paused under a "playing" player: the picture ran on in silence
+	// and the audio decoder blocked on a queue that never drained.
+	PauseVideoAudio(false)
 
 	videoDecoderWG.Add(1)
 	go func() {
@@ -1547,8 +1620,12 @@ func videoAdvanceProgress(state *videoStateSnapshot) {
 	// Throttled resume-position safety net.
 	if now := sdl.GetTicks64(); now-lastResumeSaveTicks > 5000 {
 		lastResumeSaveTicks = now
-		if src := currentPlaybackURL; src != "" && state.duration > 0 {
-			updateRecentPosition(src, fraction*state.duration)
+		// The session's own page URL, not currentPlaybackURL: that switches
+		// to the next video the moment Play is pressed, while this one keeps
+		// playing through the resolve, and its position was written into the
+		// next video's history entry every five seconds.
+		if sess := playbackCurrentSession(); sess != nil && sess.pageURL != "" && state.duration > 0 {
+			updateRecentPosition(sess.pageURL, fraction*state.duration)
 			saveFavorites()
 		}
 	}

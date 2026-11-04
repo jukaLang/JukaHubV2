@@ -372,14 +372,22 @@ func menuTilesLayoutFor(config *Config, scene SceneConfig, elems []Element) (men
 	}
 	var l menuTilesLayout
 
+	// The page has no frame of its own any more — it stands on the backdrop
+	// like Home's cards do — so the "panel" is only the content box, placed so
+	// the header and the tiles start at Home's 32px side margin (24px on the
+	// Brick's narrower canvas), level with the wordmark above them.
+	padX := SpaceXL
 	top := HomeTopBarH + 8
 	bottom := screenHeight - bottomBarHeight(scene.Name) - 16
-	l.panel = sdl.Rect{X: 24, Y: top, W: screenWidth - 48, H: bottom - top}
+	inset := scaleX(homeSideMargin, screenWidth) - padX
+	if inset < 0 {
+		inset = 0
+	}
+	l.panel = sdl.Rect{X: inset, Y: top, W: screenWidth - 2*inset, H: bottom - top}
 	if l.panel.W < 260 || l.panel.H < 220 {
 		return menuTilesLayout{}, false
 	}
 
-	padX := SpaceXL
 	l.titleY = l.panel.Y + SpaceLG
 	// The title band is the shared page header: it measures itself, and the
 	// body starts where its draw says the header ends.

@@ -214,6 +214,32 @@ func TestFindGameLauncherResolvesAliases(t *testing.T) {
 	if got := findGameLauncher("SNES", fallback); got != "/emus/RA/launch.sh" {
 		t.Errorf("contains-match launcher = %q, want the RetroArch row", got)
 	}
+
+	// Short aliases must match whole words or bracketed parts, never the
+	// inside of another system's name.
+	near := []emuEntry{
+		{Name: "SNES", Status: emuAvailable, Launch: "/emus/SNES/launch.sh"},
+		{Name: "GBA", Status: emuAvailable, Launch: "/emus/GBA/launch.sh"},
+		{Name: "PSP", Status: emuAvailable, Launch: "/emus/PSP/launch.sh"},
+		{Name: "Game Boy Color (Gambatte)", Status: emuAvailable, Launch: "/emus/GBC/launch.sh"},
+	}
+	for system, want := range map[string]string{
+		"NES":              "",
+		"Game Boy":         "/emus/GBC/launch.sh", // only via the gambatte core it shares
+		"PlayStation":      "",
+		"Game Boy Advance": "/emus/GBA/launch.sh",
+	} {
+		if got := findGameLauncher(system, near); got != want {
+			t.Errorf("%s resolved to %q, want %q", system, got, want)
+		}
+	}
+	grouped := []emuEntry{
+		{Name: "Game Boy Color (Gambatte)", Status: emuAvailable, Launch: "/emus/GBC/launch.sh"},
+		{Name: "Game Boy (Gambatte)", Status: emuAvailable, Launch: "/emus/GB/launch.sh"},
+	}
+	if got := findGameLauncher("Game Boy", grouped); got != "/emus/GB/launch.sh" {
+		t.Errorf("Game Boy resolved to %q, want its own bracketed row, not Game Boy Color", got)
+	}
 }
 
 func TestGameLauncherOverrides(t *testing.T) {

@@ -764,6 +764,56 @@ func TestJournalRollback(t *testing.T) {
 	}
 }
 
+// TestJournalBackupsKeepSameNamedFilesApart pins the backup naming: two files
+// sharing a base name in different folders each roll back to their own
+// original (they used to share one backup copy), and a commit removes the
+// backups with the journal instead of leaving them on the card for good.
+func TestJournalBackupsKeepSameNamedFilesApart(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "A", "config.json")
+	b := filepath.Join(dir, "B", "config.json")
+	mustWrite(t, a, "original-a")
+	mustWrite(t, b, "original-b")
+
+	j := newJournal("test", "same-names")
+	j.path = filepath.Join(dir, "journals", "same-names.json")
+	if err := os.MkdirAll(filepath.Dir(j.path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{a, b} {
+		if err := j.recordReplace(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(t, a, "new-a")
+	mustWrite(t, b, "new-b")
+	if err := j.rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, a); got != "original-a" {
+		t.Errorf("A rolled back to %q, want original-a", got)
+	}
+	if got := readFile(t, b); got != "original-b" {
+		t.Errorf("B rolled back to %q, want original-b", got)
+	}
+
+	j2 := newJournal("test", "commit")
+	j2.path = filepath.Join(dir, "journals", "commit.json")
+	if err := j2.recordReplace(a); err != nil {
+		t.Fatal(err)
+	}
+	backups := filepath.Join(dir, "journals", "files", j2.ID)
+	if _, err := os.Stat(backups); err != nil {
+		t.Fatalf("backup folder missing before commit: %v", err)
+	}
+	if err := j2.commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(backups); !os.IsNotExist(err) {
+		t.Errorf("commit left the backup folder %s behind", backups)
+	}
+}
+
 // --- Config migration preserves unknown fields ---
 
 func TestConfigMigrationPreservesUnknownFields(t *testing.T) {

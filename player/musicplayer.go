@@ -102,6 +102,7 @@ type musicState struct {
 	pcmStart float64   // decode offset in seconds
 	pcmBytes int64     // bytes decoded since pcmStart
 	rate     int32     // device sample rate of the running decoder
+	failRun  int       // tracks in a row that ended without any audio
 }
 
 var music = musicState{current: -1, volume: 0.8}
@@ -180,6 +181,10 @@ func musicLoadPlaylist(dir, startPath string) int {
 	}
 
 	music.mu.Lock()
+	prev := musicRetireDecoderLocked()
+	// A new list starts with no failures behind it: a count left over from a
+	// list where nothing played stopped this one at its first bad track.
+	music.failRun = 0
 	music.tracks = tracks
 	music.dir = dir
 	music.cursor = start
@@ -196,6 +201,7 @@ func musicLoadPlaylist(dir, startPath string) int {
 	music.queue = nil
 	music.queueLen = 0
 	music.mu.Unlock()
+	musicKillDecoder(prev)
 	return start
 }
 
@@ -245,6 +251,10 @@ func musicPlayPlaylist(tracks []musicTrack, start int) bool {
 		start = 0
 	}
 	music.mu.Lock()
+	prev := musicRetireDecoderLocked()
+	// A new list starts with no failures behind it: a count left over from a
+	// list where nothing played stopped this one at its first bad track.
+	music.failRun = 0
 	music.tracks = append([]musicTrack(nil), tracks...)
 	music.dir = ""
 	music.cursor = start
@@ -259,7 +269,27 @@ func musicPlayPlaylist(tracks []musicTrack, start int) bool {
 	music.queue = nil
 	music.queueLen = 0
 	music.mu.Unlock()
+	musicKillDecoder(prev)
 	return true
+}
+
+// musicRetireDecoderLocked makes the running decoder stale and hands it back
+// to be killed once the lock is released. A new playlist used to only clear
+// the playing flag: the old decoder left its read loop with ffmpeg blocked on
+// a full pipe, and both sat there until something else started.
+func musicRetireDecoderLocked() *exec.Cmd {
+	music.gen++
+	prev := music.proc
+	music.proc = nil
+	return prev
+}
+
+// musicKillDecoder stops a decoder musicRetireDecoderLocked retired; its own
+// goroutine reaps it.
+func musicKillDecoder(cmd *exec.Cmd) {
+	if cmd != nil && cmd.Process != nil {
+		_ = cmd.Process.Kill()
+	}
 }
 
 // openAudioPlayer starts the file at path and switches to the player, using
@@ -474,6 +504,9 @@ func musicStartDecode(path string, startSec float64) {
 		_ = prev.Process.Kill()
 	}
 	ClearVideoAudioQueue()
+	// The device is shared with the video player, which pauses it while a
+	// video is paused; a song queued into a paused device never plays.
+	PauseVideoAudio(false)
 	if musicDecodeHook != nil {
 		musicDecodeHook(path, startSec, gen)
 		return
@@ -526,7 +559,10 @@ func musicDecode(path string, startSec float64, gen int) {
 	music.mu.Lock()
 	if gen != music.gen {
 		music.mu.Unlock()
+		// Reaped as well as killed: a quick run of skips left one zombie
+		// process behind per skip.
 		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return
 	}
 	music.proc = cmd
@@ -589,15 +625,33 @@ loop:
 		}
 	}
 
-	_ = cmd.Wait()
+	waitErr := cmd.Wait()
 
 	music.mu.Lock()
 	finished := gen == music.gen && music.playing
-	reachedEnd := false
+	reachedEnd, cutShort, silent := false, false, false
+	stoppedAt, stoppedDur := music.position, music.duration
 	if gen == music.gen {
 		music.proc = nil
 		music.playing = false
-		if music.duration > 0 {
+		silent = music.pcmBytes == 0
+		if silent {
+			music.failRun++
+		} else {
+			music.failRun = 0
+		}
+		// A decoder that failed (non-zero exit) well before the known length
+		// lost its stream or file part way: a podcast dropping at minute 30
+		// of 60 used to count as finished, forget its place and move on to
+		// the next episode. A clean exit is the end even when it comes a
+		// little early (an estimated VBR length).
+		// A track that played nothing did not reach its end either: marking
+		// it finished forgot the saved place of an episode that could not
+		// even open (offline), and of each one after it as the list advanced.
+		if music.duration > 0 && waitErr != nil && !silent &&
+			music.position < music.duration-audioResumeTailSeconds {
+			cutShort = true
+		} else if music.duration > 0 && !silent {
 			music.position = music.duration
 			reachedEnd = true
 		}
@@ -607,6 +661,12 @@ loop:
 	repeatOne := music.repeatMode == musicRepeatOne
 	nextIdx, advance := 0, false
 	switch {
+	case cutShort:
+		// Stay on the interrupted track; its place is kept below.
+	case silent && (repeatOne || music.failRun >= len(music.tracks)):
+		// Nothing played: a dead link or an unreadable file. Restarting it,
+		// or walking a list in which every entry fails, relaunched ffmpeg
+		// every few hundred milliseconds for as long as the app ran.
 	case repeatOne:
 		nextIdx, advance = music.current, true
 	default:
@@ -621,6 +681,10 @@ loop:
 	if !finished {
 		return
 	}
+	if cutShort {
+		audioRememberPosition(path, stoppedAt, stoppedDur)
+		showToast("Playback stopped early — press Play to resume", ToastWarn())
+	}
 	if reachedEnd {
 		// A finished book or episode starts from the top next time.
 		audioForgetPosition(path)
@@ -628,6 +692,9 @@ loop:
 	if advance {
 		musicPlayTrack(nextIdx)
 		return
+	}
+	if silent && !advance {
+		showToast("Could not play this track", ToastError())
 	}
 	ClearVideoAudioQueue()
 }
@@ -1191,16 +1258,19 @@ func renderMusicPlayer(renderer *sdl.Renderer, config *Config) {
 		renderMusicScreenOff(renderer)
 		return
 	}
-	renderer.SetDrawColor(11, 15, 23, 255)
-	renderer.Clear()
-
 	music.mu.Lock()
 	fullVisualizer := music.visualizerFull
 	music.mu.Unlock()
 	if fullVisualizer {
+		// The full-screen visualizer is an immersive mode on its own dark
+		// stage, not a page of the app.
+		renderer.SetDrawColor(11, 15, 23, 255)
+		renderer.Clear()
 		renderMusicFullVisualizer(renderer, config)
 		return
 	}
+	// Both list layouts stand on Home's backdrop, like every other screen.
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 	// The list-first layout replaces the whole scene body, so it returns before
 	// the Auralis card below is built.
 	if musicLayoutFromConfig(config) == musicLayoutStockOS {

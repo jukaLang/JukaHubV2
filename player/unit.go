@@ -282,20 +282,19 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 		if cx < catStartX {
 			break
 		}
-		bg := ColorSurfaceRow
+		// Home's glass chips: the footer badges' glass for a category, an
+		// accent wash with its underline for the chosen one. The slate fills
+		// and their drop shadows were the old card recipe.
 		if cat == unitCategory {
-			bg = WithAlpha(accentColor, 90)
-		}
-		fillRoundedRect(renderer, cx+2, catY+2, catW, catH, 8, ShadowFill(30))
-		fillRoundedRect(renderer, cx, catY, catW, catH, 8, bg)
-		if cat == unitCategory {
+			fillRoundedRect(renderer, cx, catY, catW, catH, 8, WithAlpha(accentColor, 70))
 			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 220)
 			renderer.FillRect(&sdl.Rect{X: cx + 8, Y: catY + catH - 2, W: catW - 16, H: 2})
 		} else {
 			// The four 1px DrawRect edges drew a square outline over the
 			// rounded fill, so an unselected tab read as a different shape from
 			// the selected one. The shared rounding keeps them a single chip.
-			strokeRoundedRect(renderer, cx, catY, catW, catH, 8, 1, WithAlpha(ColorBorderSubtle, 60))
+			fillRoundedRect(renderer, cx, catY, catW, catH, 8, glassChipFill())
+			strokeRoundedRect(renderer, cx, catY, catW, catH, 8, 1, glassChipEdge())
 		}
 		// Every drawn tab is a tap target; the row used to be painted with no
 		// hit area at all, so tapping a category did nothing.
@@ -340,16 +339,15 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 	// The unit boxes keep the card's rounding: two straight 1px lines drawn
 	// across a 10px radius poked out past the curved corners and read as a
 	// stray rule floating above each box.
-	fillRoundedRect(renderer, fromX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))
-	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, ColorSurfaceRow)
-	strokeRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, 1, WithAlpha(ColorBorderSubtle, 60))
-	fillRoundedRect(renderer, toX+1, rowY+1, rowW, rowH, 10, ShadowFill(30))
-	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, ColorSurfaceRow)
-	strokeRoundedRect(renderer, toX, rowY, rowW, rowH, 10, 1, WithAlpha(ColorBorderSubtle, 60))
+	// Glass boxes, like Home's tiles; the value field is one step brighter.
+	fillRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, glassFill())
+	strokeRoundedRect(renderer, fromX, rowY, rowW, rowH, 10, 1, glassEdge())
+	fillRoundedRect(renderer, toX, rowY, rowW, rowH, 10, glassFill())
+	strokeRoundedRect(renderer, toX, rowY, rowW, rowH, 10, 1, glassEdge())
 	unitFromRect = sdl.Rect{X: fromX, Y: rowY, W: rowW, H: rowH}
 	unitToRect = sdl.Rect{X: toX, Y: rowY, W: rowW, H: rowH}
-	fillRoundedRect(renderer, inputX+1, rowY+1, inputW, rowH, 10, ShadowFill(30))
-	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, ColorSurfaceRaised)
+	fillRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, glassFillFocus())
+	strokeRoundedRect(renderer, inputX, rowY, inputW, rowH, 10, 1, glassChipEdge())
 	unitInputRect = sdl.Rect{X: inputX, Y: rowY, W: inputW, H: rowH}
 	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 120)
 	renderer.FillRect(&sdl.Rect{X: inputX + 8, Y: rowY + rowH - 2, W: inputW - 16, H: 2})
@@ -380,9 +378,14 @@ func renderUnitConverter(renderer *sdl.Renderer, config *Config, element Element
 
 	resultY := rowY + rowH + 40
 	resultH := int32(60)
-	fillRoundedRect(renderer, inputX, resultY, inputW, resultH, 12, ColorSurfaceCard)
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 100)
-	renderer.FillRect(&sdl.Rect{X: inputX, Y: resultY, W: inputW, H: 2})
+	fillRoundedRect(renderer, inputX, resultY, inputW, resultH, 12, glassFill())
+	strokeRoundedRect(renderer, inputX, resultY, inputW, resultH, 12, 1, glassEdge())
+	// The accent rule sits inside the rounded corners instead of running
+	// straight across them.
+	if inputW > 24 {
+		renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 100)
+		renderer.FillRect(&sdl.Rect{X: inputX + 12, Y: resultY, W: inputW - 24, H: 2})
+	}
 
 	if font != nil {
 		resultText := unitResult

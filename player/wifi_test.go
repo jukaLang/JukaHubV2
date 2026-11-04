@@ -157,8 +157,53 @@ func TestValidateWiFiCredentials(t *testing.T) {
 	if err := validateWiFiPassphrase("correct horse"); err != nil {
 		t.Errorf("valid passphrase rejected: %v", err)
 	}
-	if got := wpaQuote(`Home"Net\`); got != `"Home\"Net\\"` {
-		t.Fatalf("wpaQuote = %s", got)
+	// wpa_supplicant takes a quoted value verbatim (no escapes), so the SSID
+	// travels as hex and a passphrase is quoted exactly as typed.
+	if got := wpaSSIDArg(`Home"Net\`); got != "486f6d65224e65745c" {
+		t.Fatalf("wpaSSIDArg = %s", got)
+	}
+	if got := wpaSSIDArg("Café"); got != "436166c3a9" {
+		t.Fatalf("wpaSSIDArg(UTF-8) = %s", got)
+	}
+	if got := wpaPSKArg(`pa"ss\word`); got != `"pa"ss\word"` {
+		t.Fatalf("wpaPSKArg = %s, want the passphrase quoted verbatim", got)
+	}
+	raw := strings.Repeat("0123456789abcdef", 4)
+	if got := wpaPSKArg(raw); got != raw {
+		t.Fatalf("wpaPSKArg(raw key) = %s, want it unquoted", got)
+	}
+}
+
+// The supplicant prints SSIDs with printf-style escapes; the parsers must hand
+// the real name to the picker (and to set_network, via wpaSSIDArg).
+func TestWPAUnescapeDecodesSupplicantSSIDs(t *testing.T) {
+	cases := map[string]string{
+		"HomeNet":      "HomeNet",
+		`Caf\xc3\xa9`:  "Café",
+		`Home\"Net\\`:  `Home"Net\`,
+		`tab\there`:    "tab\there",
+		`odd\q`:        `odd\q`,
+		`short\x4`:     `short\x4`,
+		`trailing\`:    `trailing\`,
+		`\x00\x00\x00`: "\x00\x00\x00",
+	}
+	for in, want := range cases {
+		if got := wpaUnescape(in); got != want {
+			t.Errorf("wpaUnescape(%q) = %q, want %q", in, got, want)
+		}
+	}
+	scan := "bssid / frequency / signal level / flags / ssid\n" +
+		"aa:bb:cc:dd:ee:01\t2412\t-47\t[WPA2-PSK-CCMP][ESS]\tCaf\\xc3\\xa9\n" +
+		"aa:bb:cc:dd:ee:02\t2412\t-60\t[ESS]\t\\x00\\x00\\x00\\x00\n"
+	nets := parseWPAScanResults(scan)
+	if len(nets) != 1 || nets[0].SSID != "Café" {
+		t.Fatalf("scan = %+v, want the decoded name and the hidden row dropped", nets)
+	}
+	if st := parseWPAStatus("wpa_state=COMPLETED\nssid=Caf\\xc3\\xa9\n"); st.SSID != "Café" || !st.Connected {
+		t.Fatalf("status = %+v, want the decoded name", st)
+	}
+	if saved := parseWPANetworks("network id / ssid / bssid / flags\n0\tCaf\\xc3\\xa9\tany\t[CURRENT]\n"); len(saved) != 1 || saved[0].SSID != "Café" {
+		t.Fatalf("saved = %+v, want the decoded name", saved)
 	}
 }
 

@@ -355,6 +355,13 @@ func isSaveFile(name string) bool {
 // renamed into place only after the copy succeeded, so a full card or a
 // yanked cable leaves no half snapshot behind.
 func createSaveSnapshot(roots []saveRoot, label string) (saveSnapshot, error) {
+	return createSaveSnapshotKeeping(roots, label)
+}
+
+// createSaveSnapshotKeeping is createSaveSnapshot whose pruning spares the
+// snapshots named in keep as well as the new one: a restore's safety snapshot
+// must not delete the snapshot that restore is about to read.
+func createSaveSnapshotKeeping(roots []saveRoot, label string, keep ...string) (saveSnapshot, error) {
 	if err := ensureSaveManagerLayout(); err != nil {
 		return saveSnapshot{}, err
 	}
@@ -366,11 +373,19 @@ func createSaveSnapshot(roots []saveRoot, label string) (saveSnapshot, error) {
 	if err := os.RemoveAll(staging); err != nil {
 		return saveSnapshot{}, err
 	}
+	created := time.Now().UTC()
+	// A handheld that lost its clock (no network time yet after a power cycle)
+	// stamps a new snapshot before the ones it already keeps. Sorted by that
+	// stamp the new one was the oldest, and pruning deleted it the moment it
+	// was written. The stamp never goes back past the newest kept snapshot.
+	if kept := listSaveSnapshots(); len(kept) > 0 && !created.After(kept[0].Manifest.Created) {
+		created = kept[0].Manifest.Created.Add(time.Second)
+	}
 	manifest := saveSnapshotManifest{
 		Version: 1,
 		ID:      id,
 		Label:   strings.TrimSpace(label),
-		Created: time.Now().UTC(),
+		Created: created,
 	}
 	if manifest.Label == "" {
 		manifest.Label = "manual"
@@ -463,7 +478,7 @@ func createSaveSnapshot(roots []saveRoot, label string) (saveSnapshot, error) {
 		_ = os.RemoveAll(staging)
 		return saveSnapshot{}, err
 	}
-	_ = pruneSaveSnapshots(saveSnapshotKeep)
+	_ = pruneSaveSnapshots(saveSnapshotKeep, append(keep, id)...)
 	return loadSaveSnapshot(final)
 }
 
@@ -509,7 +524,9 @@ func listSaveSnapshots() []saveSnapshot {
 	return out
 }
 
-func pruneSaveSnapshots(keep int) error {
+// pruneSaveSnapshots keeps the newest keep snapshots. The IDs in protect are
+// never deleted, even past that count.
+func pruneSaveSnapshots(keep int, protect ...string) error {
 	if keep < 1 {
 		keep = 1
 	}
@@ -517,8 +534,12 @@ func pruneSaveSnapshots(keep int) error {
 	if len(snaps) <= keep {
 		return nil
 	}
+	spared := map[string]bool{}
+	for _, id := range protect {
+		spared[id] = true
+	}
 	for _, snap := range snaps[keep:] {
-		if !isPathWithin(snap.Dir, saveManagerSnapshotsDir()) {
+		if spared[snap.Manifest.ID] || !isPathWithin(snap.Dir, saveManagerSnapshotsDir()) {
 			continue
 		}
 		if err := os.RemoveAll(snap.Dir); err != nil {
@@ -669,7 +690,10 @@ func restoreSaveSnapshot(snap saveSnapshot, roots []saveRoot) (saveSnapshot, err
 		// user needs to hear on a small screen: their saves are still there.
 		return saveSnapshot{}, fmt.Errorf("nothing was changed — %w", err)
 	}
-	pre, preErr := createSaveSnapshot(roots, "before restore")
+	// The safety snapshot spares the one being restored: with the usual full
+	// set, that is often the oldest, and its pruning deleted it right before
+	// the copy — the restore failed and the backup was gone.
+	pre, preErr := createSaveSnapshotKeeping(roots, "before restore", snap.Manifest.ID)
 	if preErr != nil && !errors.Is(preErr, errSaveManagerEmpty) {
 		return saveSnapshot{}, fmt.Errorf("could not take a safety snapshot: %w", preErr)
 	}

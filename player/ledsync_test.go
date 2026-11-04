@@ -235,6 +235,32 @@ func TestDiscoverLEDsClassifiesAndFilters(t *testing.T) {
 	}
 }
 
+// /sys/class/leds/<dev> entries are kernel symlinks into /sys/devices; they
+// must be found (the old IsDir-only filter skipped every one of them).
+func TestDiscoverLEDsFollowsSysfsClassSymlinks(t *testing.T) {
+	devices := t.TempDir()
+	target := makeLED(t, devices, "rgb-joystick", map[string]string{
+		"multi_intensity": "0 0 0",
+		"brightness":      "0",
+	})
+	root := t.TempDir()
+	if err := os.Symlink(target, filepath.Join(root, "rgb-joystick")); err != nil {
+		t.Skipf("symlinks unavailable here: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(devices, "plain"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A link to a plain file is not a device either.
+	if err := os.Symlink(filepath.Join(devices, "plain"), filepath.Join(root, "file-link")); err != nil {
+		t.Fatal(err)
+	}
+	devs := discoverLEDs(root)
+	if len(devs) != 1 || devs[0].Name != "rgb-joystick" || devs[0].Dir != filepath.Join(root, "rgb-joystick") ||
+		devs[0].Mode != ledModeMultiIntensity {
+		t.Fatalf("discoverLEDs = %+v, want the one linked RGB device", devs)
+	}
+}
+
 func TestDiscoverLEDsMissingRoot(t *testing.T) {
 	if got := discoverLEDs(filepath.Join(t.TempDir(), "nope")); got != nil {
 		t.Fatalf("missing root returned %+v, want nil", got)

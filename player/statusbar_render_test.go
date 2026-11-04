@@ -136,15 +136,30 @@ func TestBottomBarIsFooterButtons(t *testing.T) {
 	if err := renderer.ReadPixels(nil, sdl.PIXELFORMAT_ARGB8888, unsafe.Pointer(&f.buf[0]), int(probeW)*4); err != nil {
 		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
-	top := screenHeight - HomeFooterH
-	if px := f.at(4, top+8); px == f.bg {
-		t.Fatalf("footer band was not drawn at (%d,%d)", 4, top+8)
+	// Home's footer: a band inset by the frame margin, flush with the bottom,
+	// as tall as Home's (56px), and inside the gap scene layouts keep above the
+	// reserved footer height.
+	band := sceneFooterBand()
+	top := band.Y
+	if band.Y+band.H != screenHeight || band.H != scaleY(56, screenHeight) {
+		t.Fatalf("footer band %+v, want Home's 56px band flush with the bottom edge", band)
 	}
-	if px := f.at(4, top-6); px != f.bg {
+	if band.Y < screenHeight-HomeFooterH-16 {
+		t.Fatalf("footer band starts at y=%d, inside the content area (it ends at %d)", band.Y, screenHeight-HomeFooterH-16)
+	}
+	left := band.X + 8
+	if px := f.at(left, top+8); px == f.bg {
+		t.Fatalf("footer band was not drawn at (%d,%d)", left, top+8)
+	}
+	if px := f.at(left, top-6); px != f.bg {
 		t.Fatalf("footer bled above its band: %v at y=%d", px, top-6)
 	}
+	// Outside the inset band the backdrop shows, as it does on Home.
+	if px := f.at(band.X-4, top+8); px != f.bg {
+		t.Fatalf("footer band reaches past its inset margin: %v at x=%d", px, band.X-4)
+	}
 	// The far-right of the band is empty hint space now, not a clock.
-	right := f.at(screenWidth-6, top+8)
+	right := f.at(band.X+band.W-6, top+8)
 	if right == f.bg {
 		t.Fatal("footer band missing at the right edge")
 	}

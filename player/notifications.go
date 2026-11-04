@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -91,6 +92,8 @@ func notifRecord(msg string, p notifPriority) {
 	if msg == "" {
 		return
 	}
+	notifHistoryMu.Lock()
+	defer notifHistoryMu.Unlock()
 	if len(nc.history) > 0 {
 		top := &nc.history[0]
 		if top.Message == msg && top.Priority == p && !top.Read {
@@ -112,7 +115,22 @@ func notifPush(msg string, p notifPriority) {
 	showToastPrimitive(msg, priorityToastKind(p))
 }
 
+// notifHistoryMu guards nc.history. Toasts — and with them notifRecord — are
+// raised from goroutines (downloads, updates, network results), while the
+// render loop reads the history every frame for the bell's unread count; an
+// append racing that read could hand it a torn slice header.
+var notifHistoryMu sync.Mutex
+
+// notifHistorySnapshot copies the history for a reader on the render thread.
+func notifHistorySnapshot() []notification {
+	notifHistoryMu.Lock()
+	defer notifHistoryMu.Unlock()
+	return append([]notification(nil), nc.history...)
+}
+
 func notifUnreadCount() int {
+	notifHistoryMu.Lock()
+	defer notifHistoryMu.Unlock()
 	n := 0
 	for _, notif := range nc.history {
 		if !notif.Read {
@@ -523,7 +541,8 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	// are measured first: their heights depend on the wrapped message, and the
 	// card has to be tall enough for whatever survives the wrap.
 	by := nc.bellRect.Y + nc.bellRect.H + 8
-	rowLayouts := notifMeasureRows(font, nc.history, notifMessageWidth(notifDropWidth()), len(nc.history))
+	history := notifHistorySnapshot()
+	rowLayouts := notifMeasureRows(font, history, notifMessageWidth(notifDropWidth()), len(history))
 	dropW, dropH, numRows := notifDropdownLayout(config, by, rowLayouts)
 	bx := nc.bellRect.X
 	if bx+dropW > screenWidth {
@@ -549,27 +568,20 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 	fade := uiFadeIn.at(progress)
 	slide := int32(math.Round(uiDropDown.at(progress)))
 
-	// Dark backdrop.
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, uint8(160*uiScrimProgress(progress, uiPanelEnterMS)))
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
+	// The shared overlay dim (the backdrop's navy), faded in with the card.
+	drawOverlayScrimFade(renderer, uiScrimProgress(progress, uiPanelEnterMS))
 
 	compositeUILayerIn(renderer, fade, slide, sdl.Rect{X: bx, Y: by, W: dropW, H: dropH}, func() {
-		// Dropdown card.
+		// Dropdown card: the shared overlay sheet.
 		nc.dropRect = sdl.Rect{X: bx, Y: by, W: dropW, H: dropH}
-		UICard(renderer, sdl.Rect{X: bx, Y: by, W: dropW, H: dropH}, UICardStyle{
-			Fill:   sdl.Color{R: 16, G: 20, B: 30, A: 245},
-			Border: ColorBorder,
-			Radius: 16,
-		})
+		drawOverlayCard(renderer, nc.dropRect)
 
 		// Header: "Notifications" + Clear All.
 		title := "Notifications"
-		renderText(renderer, config, font, title,
-			sdl.Color{R: 200, G: 210, B: 230, A: 220}, bx+16, by+12)
+		renderText(renderer, config, font, title, ColorTextPrimary(), bx+16, by+12)
 
 		nc.clearRect = sdl.Rect{}
-		if len(nc.history) > 0 {
+		if len(history) > 0 {
 			clearStr := "Clear All"
 			cw, ch, _ := font.SizeUTF8(clearStr)
 			clearX := bx + dropW - int32(cw) - 16
@@ -585,8 +597,8 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 		listY := by + headerH
 		lineH := int32(font.Height())
 		ry := listY
-		for i := 0; i < numRows && i < len(nc.history); i++ {
-			n := nc.history[i]
+		for i := 0; i < numRows && i < len(history) && i < len(rowLayouts); i++ {
+			n := history[i]
 			row := rowLayouts[i]
 
 			if ry+row.height > by+dropH {
@@ -596,10 +608,9 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			rowRect := sdl.Rect{X: bx + 4, Y: ry, W: dropW - 8, H: row.height - 2}
 			nc.rowRects = append(nc.rowRects, rowRect)
 
-			// Row background.
+			// Row background: the cursor row is a selected list row.
 			if i == nc.cursor {
-				fillRoundedRect(renderer, rowRect.X, rowRect.Y, rowRect.W, rowRect.H, 8,
-					sdl.Color{R: 30, G: 36, B: 50, A: 255})
+				UIListRow(renderer, rowRect, 10, true, false)
 			}
 
 			// Priority dot, aligned with the first message line.
@@ -615,9 +626,9 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 			fillCircle(renderer, bx+20, ry+notifRowPad+lineH/2, 4, dotCol)
 
 			// Message lines, wrapped by notifMeasureRows.
-			msgCol := sdl.Color{R: 180, G: 190, B: 210, A: 220}
+			msgCol := WithAlpha(ColorTextSecondary(), 220)
 			if n.Read {
-				msgCol = sdl.Color{R: 110, G: 120, B: 140, A: 180}
+				msgCol = WithAlpha(ColorTextTertiary(), 180)
 			}
 			for li, line := range row.lines {
 				renderText(renderer, config, font, line, msgCol,
@@ -636,13 +647,13 @@ func renderNotifDropdown(renderer *sdl.Renderer, config *Config) {
 				timeStr = fmt.Sprintf("%dh ago", int(ago.Hours()))
 			}
 			renderText(renderer, config, font, timeStr,
-				sdl.Color{R: 80, G: 90, B: 110, A: 150},
+				WithAlpha(ColorTextTertiary(), 150),
 				bx+32, ry+notifRowPad+int32(len(row.lines))*lineH+2)
 
 			ry += row.height
 		}
 
-		if len(nc.history) == 0 {
+		if len(history) == 0 {
 			UIEmptyState(renderer, config, sdl.Rect{X: bx, Y: listY, W: dropW, H: dropH - headerH},
 				"@bell", "No notifications", "You're all caught up.")
 		}
@@ -668,9 +679,11 @@ func notifToggle() {
 		homeCalendarOpen = false
 		dismissWeatherPopover()
 		// Mark all as read.
+		notifHistoryMu.Lock()
 		for i := range nc.history {
 			nc.history[i].Read = true
 		}
+		notifHistoryMu.Unlock()
 	}
 	PlayActivateSound()
 }
@@ -690,7 +703,10 @@ func notifNavigate(dr int) {
 	if max < 0 {
 		max = notifMaxRows - 1
 	}
-	if last := len(nc.history) - 1; max > last {
+	notifHistoryMu.Lock()
+	last := len(nc.history) - 1
+	notifHistoryMu.Unlock()
+	if max > last {
 		max = last
 	}
 	if max < 0 {
@@ -704,7 +720,9 @@ func notifNavigate(dr int) {
 // notifClearAll clears all notifications. The dropdown stays open so the
 // empty state is visible (touch users get direct feedback).
 func notifClearAll() {
+	notifHistoryMu.Lock()
 	nc.history = nc.history[:0]
+	notifHistoryMu.Unlock()
 	nc.cursor = 0
 }
 

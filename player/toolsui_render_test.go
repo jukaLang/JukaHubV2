@@ -484,7 +484,9 @@ func TestToolsPanelDrawsHeaderAndSectionGlyphs(t *testing.T) {
 		t.Fatal("first grid line has no section heading")
 	}
 	headTop := panel.Y + m.headerH + g.lines[0].headingY
-	tint := appGridTileTint(strings.ToUpper(g.lines[0].heading))
+	// Section glyphs are drawn in the secondary ink on a glass chip, like
+	// Home's monochrome badges.
+	tint := ColorTextSecondary()
 	if n := f.countColor(tint, panel.X+24, headTop, panel.X+64, headTop+m.sectionH); n < 8 {
 		t.Fatalf("section heading %q has %d glyph pixels, want its chip icon", g.lines[0].heading, n)
 	}

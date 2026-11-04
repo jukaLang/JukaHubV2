@@ -242,6 +242,16 @@ func applyBatterySaver(config *Config, engage bool, percent int) {
 			lowPower:      config.Variables.LowPower,
 			themePreset:   themePresetName(config),
 		}
+		// The saver's values reach jukauser.json (the save below, and every
+		// save while it is on), so what they replace is saved with them. Kept
+		// in memory only, it was lost when the battery died or JukaHub
+		// restarted under the saver, and the OLED theme, reduced motion and
+		// low power then stayed for good (restoreBatterySaverLeftover).
+		config.Variables.Custom[batterySaverRestoreKey] = map[string]interface{}{
+			"reducedMotion": batterySaverSaved.reducedMotion,
+			"lowPower":      batterySaverSaved.lowPower,
+			"themePreset":   batterySaverSaved.themePreset,
+		}
 		config.Variables.ReducedMotion = true
 		config.Variables.LowPower = true
 		config.Variables.Custom["reducedMotion"] = "true"
@@ -257,14 +267,54 @@ func applyBatterySaver(config *Config, engage bool, percent int) {
 			config.Variables.Custom["lowPower"] = boolString(batterySaverSaved.lowPower)
 			if preset := batterySaverSaved.themePreset; preset != "" {
 				applyThemePreset(config, preset, false)
+			} else {
+				clearThemePreset(config)
 			}
 			batterySaverSaved = batterySaverSnapshot{}
 		}
+		delete(config.Variables.Custom, batterySaverRestoreKey)
 		batterySaverActive = false
 		showToast(saverMessage("Battery saver off", percent), ToastSuccess())
 	}
 	// The cadence controller reads LowPower from the config each frame, so the
 	// change takes effect on the next tick.
+	saveUserConfigDebounced(userConfigFromVariables(config))
+}
+
+// batterySaverRestoreKey holds, in the saved settings, what the battery saver
+// replaced, for as long as it is engaged.
+const batterySaverRestoreKey = "batterySaverRestore"
+
+// restoreBatterySaverLeftover undoes a battery saver that was still engaged
+// when JukaHub last stopped. Boot calls it once the theme files are loaded; a
+// saver that is still needed engages again at the next battery check, over
+// the user's own values this time.
+func restoreBatterySaverLeftover(config *Config) {
+	if config == nil || config.Variables.Custom == nil {
+		return
+	}
+	stored, present := config.Variables.Custom[batterySaverRestoreKey]
+	if !present {
+		return
+	}
+	delete(config.Variables.Custom, batterySaverRestoreKey)
+	saved, ok := stored.(map[string]interface{})
+	if !ok {
+		return
+	}
+	if v, ok := saved["reducedMotion"].(bool); ok {
+		config.Variables.ReducedMotion = v
+		config.Variables.Custom["reducedMotion"] = boolString(v)
+	}
+	if v, ok := saved["lowPower"].(bool); ok {
+		config.Variables.LowPower = v
+		config.Variables.Custom["lowPower"] = boolString(v)
+	}
+	if preset, _ := saved["themePreset"].(string); preset != "" {
+		applyThemePreset(config, preset, false)
+	} else {
+		clearThemePreset(config)
+	}
 	saveUserConfigDebounced(userConfigFromVariables(config))
 }
 

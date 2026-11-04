@@ -65,15 +65,42 @@ var socialMessages = []string{
 var socialNotifTimer *time.Timer
 
 func startSocialNotifs() {
+	if socialNotifTimer != nil {
+		socialNotifTimer.Stop()
+	}
 	scheduleSocialNotif()
 }
+
+// socialNotifDue carries "one is due" from the timer to the main loop.
+var socialNotifDue = make(chan struct{}, 1)
 
 func scheduleSocialNotif() {
 	delay := time.Duration(45+rand.Intn(90)) * time.Second // 45-135 seconds
 	socialNotifTimer = time.AfterFunc(delay, func() {
-		fireSocialNotif()
-		scheduleSocialNotif()
+		// Only a signal crosses over. The history, the notification list and
+		// the toast were written from this timer goroutine while the render
+		// loop read them.
+		select {
+		case socialNotifDue <- struct{}{}:
+		default:
+		}
 	})
+}
+
+// drainSocialNotifs fires a due notification on the main loop while the setting
+// is on, and arms the next tick either way: ending the chain when the setting
+// was off left nothing to restart it, so switching it back on stayed silent
+// until a relaunch. A tick with the setting off does nothing else.
+func drainSocialNotifs(config *Config) {
+	select {
+	case <-socialNotifDue:
+	default:
+		return
+	}
+	if config != nil && config.Variables.SocialNotifs {
+		fireSocialNotif()
+	}
+	scheduleSocialNotif()
 }
 
 func fireSocialNotif() {

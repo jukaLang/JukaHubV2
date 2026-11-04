@@ -180,8 +180,8 @@ func pdfChapterLabel() string {
 // ── Rendering ──────────────────────────────────────────────────────────────
 
 func renderPDFReader(renderer *sdl.Renderer, config *Config) {
-	renderer.SetDrawColor(12, 14, 22, 255)
-	renderer.Clear()
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "small")
 	medFont, _ := getCachedFont(config, "medium")
@@ -359,42 +359,22 @@ func renderPDFPageRow(renderer *sdl.Renderer, config *Config, font *ttf.Font, ct
 	const btnH = int32(32)
 	count := pdfPageCount()
 
-	prevFill := sdl.Color{R: 30, G: 36, B: 50, A: 200}
-	if pdf.page <= 1 {
-		prevFill = sdl.Color{R: 20, G: 24, B: 30, A: 150}
-	}
+	// Glass buttons (Home's secondary recipe); the end of the book dims them.
 	UIButton(renderer, config, sdl.Rect{X: ctrlX, Y: ctrlY, W: btnW, H: btnH}, "< Prev", UIButtonStyle{
-		Variant:    UIButtonCustom,
-		Fill:       prevFill,
-		HoverFill:  prevFill,
-		FocusFill:  prevFill,
-		Border:     ColorBorder,
-		LabelColor: sdl.Color{R: 180, G: 190, B: 210, A: 200},
-		Font:       font,
-		Radius:     RadiusSM,
-		NoShadow:   true,
+		Variant: UIButtonSecondary,
+		Font:    font,
+		Radius:  RadiusSM,
 	}, UIButtonState{Disabled: pdf.page <= 1})
 
 	numStr := fmt.Sprintf("%d / %d", pdf.page, count)
 	nw, _, _ := font.SizeUTF8(numStr)
-	renderText(renderer, config, font, numStr,
-		sdl.Color{R: 200, G: 210, B: 230, A: 220},
+	renderText(renderer, config, font, numStr, ColorTextSecondary(),
 		ctrlX+(ctrlW-int32(nw))/2, ctrlY+8)
 
-	nextFill := sdl.Color{R: 30, G: 36, B: 50, A: 200}
-	if pdf.page >= count {
-		nextFill = sdl.Color{R: 20, G: 24, B: 30, A: 150}
-	}
 	UIButton(renderer, config, sdl.Rect{X: ctrlX + ctrlW - btnW, Y: ctrlY, W: btnW, H: btnH}, "Next >", UIButtonStyle{
-		Variant:    UIButtonCustom,
-		Fill:       nextFill,
-		HoverFill:  nextFill,
-		FocusFill:  nextFill,
-		Border:     ColorBorder,
-		LabelColor: sdl.Color{R: 180, G: 190, B: 210, A: 200},
-		Font:       font,
-		Radius:     RadiusSM,
-		NoShadow:   true,
+		Variant: UIButtonSecondary,
+		Font:    font,
+		Radius:  RadiusSM,
 	}, UIButtonState{Disabled: pdf.page >= count})
 }
 
@@ -407,23 +387,17 @@ func renderPDFChapterRow(renderer *sdl.Renderer, config *Config, font *ttf.Font,
 	const btnH = int32(28)
 	_, idx := pdfChapterForPage(pdf.page)
 
-	fill := sdl.Color{R: 26, G: 32, B: 44, A: 200}
-	label := sdl.Color{R: 170, G: 182, B: 205, A: 200}
-	UIButton(renderer, config, sdl.Rect{X: ctrlX, Y: ctrlY, W: btnW, H: btnH}, "< Chapter", UIButtonStyle{
-		Variant: UIButtonCustom, Fill: fill, HoverFill: fill, FocusFill: fill,
-		Border: ColorBorder, LabelColor: label, Font: font, Radius: RadiusSM, NoShadow: true,
-	}, UIButtonState{Disabled: idx <= 0})
+	chapterStyle := UIButtonStyle{Variant: UIButtonSecondary, Font: font, Radius: RadiusSM}
+	UIButton(renderer, config, sdl.Rect{X: ctrlX, Y: ctrlY, W: btnW, H: btnH}, "< Chapter", chapterStyle,
+		UIButtonState{Disabled: idx <= 0})
 
 	chapterStr := fmt.Sprintf("Chapter %d / %d", idx+1, len(pdf.doc.Chapters))
 	cw, _, _ := font.SizeUTF8(chapterStr)
-	renderText(renderer, config, font, chapterStr,
-		sdl.Color{R: 200, G: 210, B: 230, A: 220},
+	renderText(renderer, config, font, chapterStr, ColorTextSecondary(),
 		ctrlX+(ctrlW-int32(cw))/2, ctrlY+6)
 
-	UIButton(renderer, config, sdl.Rect{X: ctrlX + ctrlW - btnW, Y: ctrlY, W: btnW, H: btnH}, "Chapter >", UIButtonStyle{
-		Variant: UIButtonCustom, Fill: fill, HoverFill: fill, FocusFill: fill,
-		Border: ColorBorder, LabelColor: label, Font: font, Radius: RadiusSM, NoShadow: true,
-	}, UIButtonState{Disabled: idx < 0 || idx >= len(pdf.doc.Chapters)-1})
+	UIButton(renderer, config, sdl.Rect{X: ctrlX + ctrlW - btnW, Y: ctrlY, W: btnW, H: btnH}, "Chapter >", chapterStyle,
+		UIButtonState{Disabled: idx < 0 || idx >= len(pdf.doc.Chapters)-1})
 }
 
 // pdfDocumentTitle is the title line under the bar: the document's own title

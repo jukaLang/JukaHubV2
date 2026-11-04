@@ -110,6 +110,120 @@ func calcSelect() {
 	}
 }
 
+// calcTakeResult makes the result on screen the operand of a function key
+// pressed straight after "=". +/- after "2+2=" used to negate the old
+// expression ("-2+2", which is 0) instead of the 4 the user was looking at,
+// and sqrt wrapped "2+2" rather than 4 — the same value only by luck.
+func calcTakeResult() {
+	if calc.hasResult && calc.result != "" {
+		calc.expression = calc.result
+		calc.hasResult = false
+	}
+}
+
+// calcWrap applies a function key: around what is there, or — on an empty
+// line — as an open "fn(" for the operand to be typed into. Wrapping nothing
+// made "sqrt()", which could only ever be an error.
+func calcWrap(fn string) {
+	calcTakeResult()
+	if strings.TrimSpace(calc.expression) == "" || calc.hasResult {
+		calc.expression = fn + "("
+		calc.hasResult = false
+		return
+	}
+	calc.expression = fn + "(" + calc.expression + ")"
+}
+
+// calcToggleSign negates the whole expression: a plain number flips its sign,
+// "-(…)" unwraps, anything else is wrapped. Flipping only a leading "-" turned
+// "-2+3" into "2+3" and "2+3" into "-2+3".
+func calcToggleSign() {
+	calcTakeResult()
+	expr := strings.TrimSpace(calc.expression)
+	if expr == "" {
+		return
+	}
+	if _, err := strconv.ParseFloat(expr, 64); err == nil {
+		if strings.HasPrefix(expr, "-") {
+			calc.expression = expr[1:]
+		} else {
+			calc.expression = "-" + expr
+		}
+		return
+	}
+	if strings.HasPrefix(expr, "-(") && calcMatchingParen(expr, 1) == len(expr)-1 {
+		calc.expression = expr[2 : len(expr)-1]
+		return
+	}
+	calc.expression = "-(" + expr + ")"
+}
+
+// calcMatchingParen returns the index of the ')' closing the '(' at open, or -1.
+func calcMatchingParen(expr string, open int) int {
+	if open < 0 || open >= len(expr) || expr[open] != '(' {
+		return -1
+	}
+	depth := 0
+	for i := open; i < len(expr); i++ {
+		switch expr[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// calcExpandConstants replaces pi and e with their full values, bracketed,
+// with the multiplication the user implied ("2pi" is 2×π, "pi2" π×2). Two
+// bugs lived here: "%f" cut π to six decimals, and every "e" was replaced —
+// including the exponent of a result such as 1e+20, which "=" prints itself,
+// so reusing it computed 12.718282+20. A digit, "e", a sign and a digit is a
+// number's exponent and is left alone.
+func calcExpandConstants(expr string) string {
+	isDigit := func(c byte) bool { return c >= '0' && c <= '9' }
+	var b strings.Builder
+	b.Grow(len(expr) + 24)
+	lastValue := false  // the text so far ends in a value
+	afterConst := false // ...and that value is a constant just written
+	constant := func(v float64) {
+		if lastValue {
+			b.WriteByte('*')
+		}
+		b.WriteByte('(')
+		b.WriteString(strconv.FormatFloat(v, 'g', -1, 64))
+		b.WriteByte(')')
+		lastValue, afterConst = true, true
+	}
+	for i := 0; i < len(expr); i++ {
+		c := expr[i]
+		if c == 'p' && i+1 < len(expr) && expr[i+1] == 'i' {
+			constant(math.Pi)
+			i++
+			continue
+		}
+		if c == 'e' {
+			exponent := i > 0 && (isDigit(expr[i-1]) || expr[i-1] == '.') &&
+				i+2 < len(expr) && (expr[i+1] == '+' || expr[i+1] == '-') && isDigit(expr[i+2])
+			if !exponent {
+				constant(math.E)
+				continue
+			}
+		}
+		if afterConst && (isDigit(c) || c == '.' || c == '(') {
+			b.WriteByte('*')
+		}
+		b.WriteByte(c)
+		lastValue = isDigit(c) || c == '.' || c == ')'
+		afterConst = false
+	}
+	return b.String()
+}
+
 func calcHandleFunc(label string) {
 	switch label {
 	case "C":
@@ -117,19 +231,19 @@ func calcHandleFunc(label string) {
 	case "<":
 		calcBackspace()
 	case "+/-":
-		if calc.expression != "" {
-			if strings.HasPrefix(calc.expression, "-") {
-				calc.expression = calc.expression[1:]
-			} else {
-				calc.expression = "-" + calc.expression
-			}
-		}
+		calcToggleSign()
 	case "%":
-		calc.expression += "/100"
+		calcTakeResult()
+		if strings.TrimSpace(calc.expression) != "" && !calc.hasResult {
+			calc.expression += "/100"
+		}
 	case "sqrt":
-		calc.expression = "sqrt(" + calc.expression + ")"
+		calcWrap("sqrt")
 	case "^2":
-		calc.expression = "(" + calc.expression + ")^2"
+		calcTakeResult()
+		if strings.TrimSpace(calc.expression) != "" && !calc.hasResult {
+			calc.expression = "(" + calc.expression + ")^2"
+		}
 	case "pi":
 		if calc.hasResult {
 			calc.expression = "pi"
@@ -141,15 +255,16 @@ func calcHandleFunc(label string) {
 		if calc.hasResult {
 			calc.expression = "e"
 			calc.hasResult = false
+		} else if n := len(calc.expression); n > 0 && (calc.expression[n-1] >= '0' && calc.expression[n-1] <= '9' ||
+			calc.expression[n-1] == '.' || calc.expression[n-1] == ')') {
+			// After a number the key writes "*e": "2e-1" typed as 2, e, -, 1
+			// would otherwise read as the exponent 0.2 instead of 2e−1.
+			calc.expression += "*e"
 		} else {
 			calc.expression += "e"
 		}
-	case "sin":
-		calc.expression = "sin(" + calc.expression + ")"
-	case "cos":
-		calc.expression = "cos(" + calc.expression + ")"
-	case "tan":
-		calc.expression = "tan(" + calc.expression + ")"
+	case "sin", "cos", "tan":
+		calcWrap(label)
 	}
 }
 
@@ -191,8 +306,7 @@ func calcEvaluate() {
 	// left untouched: calcEvalExpr parses them natively, and rewriting them
 	// here (sqrt → math.Sqrt, ^2 → *1) turned valid input into errors or
 	// wrong answers — sqrt(9) showed "Error" and (5)^2 showed 5.
-	expr = strings.ReplaceAll(expr, "pi", fmt.Sprintf("%f", math.Pi))
-	expr = strings.ReplaceAll(expr, "e", fmt.Sprintf("%f", math.E))
+	expr = calcExpandConstants(expr)
 
 	val, err := calcEvalExpr(expr)
 	if err != nil {
@@ -226,9 +340,11 @@ func calcEvalExpr(expr string) (float64, error) {
 		return 0, fmt.Errorf("empty expression")
 	}
 
-	// Handle functions: sin, cos, tan, sqrt.
+	// Handle functions: sin, cos, tan, sqrt — only when the call's own bracket
+	// closes the expression. "sqrt(4)+sqrt(9)" starts and ends like one call,
+	// and taking it for one asked the parser for "4)+sqrt(9".
 	for _, fn := range []string{"sin", "cos", "tan", "sqrt"} {
-		if strings.HasPrefix(expr, fn+"(") && strings.HasSuffix(expr, ")") {
+		if strings.HasPrefix(expr, fn+"(") && calcMatchingParen(expr, len(fn)) == len(expr)-1 {
 			inner := expr[len(fn)+1 : len(expr)-1]
 			val, err := calcEvalExpr(inner)
 			if err != nil {
@@ -256,7 +372,10 @@ func calcEvalExpr(expr string) (float64, error) {
 		case '(':
 			depth--
 		case '+', '-':
-			if depth == 0 && (expr[i-1] != '*' && expr[i-1] != '/' && expr[i-1] != '^') {
+			// Not the sign of an exponent (1e+20): that belongs to its number.
+			exponentSign := (expr[i-1] == 'e' || expr[i-1] == 'E') && i >= 2 &&
+				((expr[i-2] >= '0' && expr[i-2] <= '9') || expr[i-2] == '.')
+			if depth == 0 && !exponentSign && (expr[i-1] != '*' && expr[i-1] != '/' && expr[i-1] != '^') {
 				left, err := calcEvalExpr(expr[:i])
 				if err != nil {
 					return 0, err
@@ -329,7 +448,7 @@ func calcEvalExpr(expr string) (float64, error) {
 	}
 
 	// Handle parentheses.
-	if strings.HasPrefix(expr, "(") && strings.HasSuffix(expr, ")") {
+	if strings.HasPrefix(expr, "(") && calcMatchingParen(expr, 0) == len(expr)-1 {
 		return calcEvalExpr(expr[1 : len(expr)-1])
 	}
 
@@ -399,8 +518,7 @@ func calcEvalExprAtX(expression string, x float64) (float64, error) {
 		}
 	}
 	// Expand only the two named constants, matching calcEvaluate.
-	expr := strings.ReplaceAll(expanded.String(), "pi", fmt.Sprintf("%.16g", math.Pi))
-	expr = strings.ReplaceAll(expr, "e", fmt.Sprintf("%.16g", math.E))
+	expr := calcExpandConstants(expanded.String())
 	result, err := calcEvalExpr(expr)
 	if err != nil {
 		return 0, err
@@ -535,8 +653,8 @@ func drawCalcGraph(renderer *sdl.Renderer, config *Config, font *ttf.Font, panel
 
 // renderCalculator draws the full-screen calculator scene.
 func renderCalculator(renderer *sdl.Renderer, config *Config) {
-	renderer.SetDrawColor(8, 10, 18, 255)
-	renderer.Clear()
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "medium")
 	smallFont, _ := getCachedFont(config, "small")
@@ -603,8 +721,7 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 	dw, _, _ := font.SizeUTF8(dispText)
 	dx := displayX + displayW - int32(dw) - 16
 	dy := displayY + 40
-	renderText(renderer, config, font, dispText,
-		sdl.Color{R: 240, G: 245, B: 255, A: 255}, dx, dy)
+	renderText(renderer, config, font, dispText, ColorTextPrimary(), dx, dy)
 
 	// Button grid.
 	for row := 0; row < calcRows; row++ {
@@ -616,15 +733,25 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 			buttonRect := sdl.Rect{X: bx, Y: by, W: int32(calcBtnW), H: int32(calcBtnH)}
 			calcButtonRects[row][col] = buttonRect
 
-			// Button fill. The calculator keeps its own semantic colours
-			// (equals is blue, clear/back are red) while sharing the shape,
-			// sheen, border and focus ring with every other button.
-			fill := ColorCard
-			if btn.action == "eq" {
-				fill = sdl.Color{R: 80, G: 160, B: 255, A: 255}
-			}
-			if btn.action == "clear" || btn.action == "back" {
-				fill = sdl.Color{R: 60, G: 30, B: 30, A: 255}
+			// Key style. The calculator keeps its own semantics — equals is the
+			// primary (accent) key, clear/back are danger-tinted, operators are
+			// accent ink on glass — while sharing Home's glass, ring and lift
+			// with every other button.
+			style := UIButtonStyle{Variant: UIButtonSecondary, LabelColor: ColorTextPrimary(), Radius: 10}
+			switch btn.action {
+			case "op":
+				style.LabelColor = ColorTextAccent()
+			case "eq":
+				style = UIButtonStyle{Variant: UIButtonPrimary, Fill: glassAccent(), Radius: 10}
+			case "clear", "back":
+				style = UIButtonStyle{
+					Variant:    UIButtonCustom,
+					Fill:       WithAlpha(ColorDanger, 70),
+					HoverFill:  WithAlpha(ColorDanger, 90),
+					FocusFill:  WithAlpha(ColorDanger, 100),
+					LabelColor: DangerInk(),
+					Radius:     10,
+				}
 			}
 
 			// Label.
@@ -635,24 +762,8 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 					btnFont = font
 				}
 			}
-			textCol := ColorTextPrimary()
-			if btn.action == "op" {
-				textCol = sdl.Color{R: 140, G: 200, B: 255, A: 255}
-			}
-			if btn.action == "eq" {
-				textCol = sdl.Color{R: 255, G: 255, B: 255, A: 255}
-			}
-			UIButton(renderer, config, buttonRect, btn.label, UIButtonStyle{
-				Variant:    UIButtonCustom,
-				Fill:       fill,
-				HoverFill:  fill,
-				FocusFill:  fill,
-				Border:     ColorBorder,
-				LabelColor: textCol,
-				Font:       btnFont,
-				Radius:     10,
-				NoShadow:   true,
-			}, UIButtonState{Focused: focused})
+			style.Font = btnFont
+			UIButton(renderer, config, buttonRect, btn.label, style, UIButtonState{Focused: focused})
 		}
 	}
 
@@ -673,7 +784,7 @@ func renderCalculator(renderer *sdl.Renderer, config *Config) {
 		}
 		hTitle := "History"
 		renderText(renderer, config, smallFont, hTitle,
-			sdl.Color{R: 160, G: 175, B: 200, A: 200}, histX+12, histY+8)
+			WithAlpha(ColorTextTertiary(), 200), histX+12, histY+8)
 
 		for i, h := range calc.history[start:] {
 			line := h

@@ -751,7 +751,7 @@ func extractBrowserLinks(source string, base *url.URL) []browserLink {
 	if base == nil {
 		return nil
 	}
-	lower := strings.ToLower(source)
+	lower := asciiLower(source)
 	var links []browserLink
 	seen := map[string]bool{}
 	for pos := 0; pos < len(source) && len(links) < browserLinkLimit; {
@@ -1117,7 +1117,9 @@ func renderBrowserLinkPanel(renderer *sdl.Renderer, config *Config) {
 	for i := browserLinkPanel.scroll; i < len(links) && i < browserLinkPanel.scroll+int(maxRows); i++ {
 		row := sdl.Rect{X: panelX + 12, Y: y, W: panelW - 24, H: rowH - 4}
 		if i == browserLinkPanel.cursor {
-			fillRoundedRect(renderer, row.X, row.Y, row.W, row.H, 8, sdl.Color{R: 52, G: 66, B: 110, A: 230})
+			// The shared selected row (accent wash and ring), not a solid
+			// indigo slab of the panel's own.
+			UIListRow(renderer, row, 8, true, false)
 		}
 		renderText(renderer, config, font, truncate(links[i].Text, 100), ColorTextPrimary(), row.X+12, row.Y+4)
 		renderText(renderer, config, font, truncate(browserLinkHost(links[i].URL), 100), ColorTextSecondary(), row.X+12, row.Y+4+smallH)
@@ -1194,13 +1196,19 @@ func browserPageLayout(config *Config, elem Element) *webLayout {
 	return layout
 }
 
+// browserCookieStripReserved is the height the last frame kept for the cookie
+// strip under the page (render thread). The viewport maths has to leave it out
+// like the renderer does: counting it as page made the scroll stop a row short,
+// with the last line of every page hidden behind the strip.
+var browserCookieStripReserved int32
+
 // browserVisibleRows is how many page rows fit under the toolbar. It mirrors
 // the renderer's measurement so the link cursor scrolls to the right place.
 func browserVisibleRows(elem Element, layout *webLayout) int {
 	if layout == nil || layout.RowH <= 0 {
 		return 0
 	}
-	height := getElementHeight(elem, 480) - 28 - textBrowserURLBarHeight - 12
+	height := getElementHeight(elem, 480) - 28 - textBrowserURLBarHeight - 12 - browserCookieStripReserved
 	rows := int(height / layout.RowH)
 	if rows < 1 {
 		rows = 1
@@ -1708,6 +1716,8 @@ func browserFillPageControl(renderer *sdl.Renderer, config *Config, elem Element
 		browserSubmitPageControl(config, elem, ctrl, value)
 	}
 	browserFormSubmitted = false
+	// The typed text has done its job; it is not kept around in memory.
+	delete(config.Variables.Custom, browserFormVariable)
 }
 
 // browserSubmitPageControl is the text path: the field that was just filled is
@@ -1739,6 +1749,20 @@ func browserSubmitFormValues(config *Config, elem Element, ctrl *webControl, typ
 		ctrl.Value = typed
 	}
 	form := ctrl.Form
+	// A form goes out as a GET, so every field lands in the address. A login
+	// form's password went into the address bar, history, cache keys, the
+	// server's logs and the Referer of each redirect hop; a form with a filled
+	// password field is refused instead.
+	hasSecret := ctrl.Secret && strings.TrimSpace(ctrl.Value) != ""
+	for _, other := range browserFormControls(elem) {
+		if other.Form.ID == form.ID && other.Secret && strings.TrimSpace(other.Value) != "" {
+			hasSecret = true
+		}
+	}
+	if hasSecret {
+		showToast("Sign-in forms can't be sent from the reader — passwords would end up in the address", ToastWarn())
+		return false
+	}
 	values := url.Values{}
 	// The page's own hidden inputs go first: they are the constants the site's
 	// handler expects (`ie=utf-8`, a site key, a locale). A visible field with

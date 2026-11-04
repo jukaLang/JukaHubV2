@@ -15,10 +15,12 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/big"
+	"mime/multipart"
 	"net"
 	"net/http"
 	"os"
@@ -148,6 +150,11 @@ func sanitizeUploadName(name string) string {
 		if r < 0x20 || r == 0x7f {
 			return -1
 		}
+		// The drop folder is on the FAT/exFAT card, which refuses these in a
+		// name: "notes 10:15.txt" from a desktop failed as "cannot save".
+		if strings.ContainsRune(`:*?"<>|`, r) {
+			return '_'
+		}
 		return r
 	}, name)
 	name = strings.TrimSpace(name)
@@ -244,6 +251,7 @@ type companionServer struct {
 	port            int
 	fails           int
 	failSince       time.Time
+	lockouts        int
 	diagnosticToken string
 	diagnosticUntil time.Time
 	diagnosticText  string
@@ -270,6 +278,10 @@ func (s *companionServer) Start() error {
 	srv := &http.Server{
 		Handler:           s.handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Keep-alive connections a client stopped using are dropped instead of
+		// being held for good: any phone on the network could otherwise pile
+		// them up until the handheld ran out of file descriptors.
+		IdleTimeout: 2 * time.Minute,
 	}
 	s.mu.Lock()
 	s.ln = ln
@@ -299,9 +311,15 @@ func (s *companionServer) Stop() {
 	if srv == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// A short grace for a request finishing, then every connection is closed.
+	// Shutdown alone never ends an open /stream viewer — it waits for it, so a
+	// new PIN froze the UI for the whole timeout and the old viewer, paired
+	// with the PIN just retired, kept watching.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	_ = srv.Shutdown(ctx)
+	if err := srv.Shutdown(ctx); err != nil {
+		_ = srv.Close()
+	}
 }
 
 func (s *companionServer) Running() bool {
@@ -336,14 +354,21 @@ func (s *companionServer) authorized(r *http.Request) bool {
 
 // throttled reports whether the failure budget is spent. Twenty wrong PINs in
 // thirty seconds cannot be explained by a mis-scanned QR code.
+//
+// Each spent budget doubles the next lockout (30 s, 1 min, 2 min … about an
+// hour). A fixed 30 s window let a script on the network try 2,400 PINs an
+// hour — a few percent of the whole six-digit space every day, for a PIN that
+// unlocks the keyboard and with it the Terminal.
 func (s *companionServer) throttled() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.fails < companionFailLimit {
 		return false
 	}
-	if time.Since(s.failSince) > companionFailWindow {
+	window := companionFailWindow << min(s.lockouts, 7)
+	if time.Since(s.failSince) > window {
 		s.fails = 0
+		s.lockouts++
 		return false
 	}
 	return true
@@ -356,6 +381,18 @@ func (s *companionServer) noteFailure() {
 		s.failSince = time.Now()
 	}
 	s.fails++
+}
+
+// noteSuccess clears the lockout escalation once the right PIN arrives, so a
+// phone that mistyped a few times is not slowed down for the session.
+func (s *companionServer) noteSuccess() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.fails == 0 && s.lockouts == 0 {
+		return
+	}
+	s.fails = 0
+	s.lockouts = 0
 }
 
 func (s *companionServer) handler() http.Handler {
@@ -420,7 +457,7 @@ func (s *companionServer) handleDiagnostics(w http.ResponseWriter, r *http.Reque
 func (s *companionServer) guard(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.throttled() {
-			http.Error(w, "too many attempts, wait half a minute", http.StatusTooManyRequests)
+			http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 			return
 		}
 		if !s.authorized(r) {
@@ -428,6 +465,7 @@ func (s *companionServer) guard(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "bad PIN", http.StatusUnauthorized)
 			return
 		}
+		s.noteSuccess()
 		next(w, r)
 	}
 }
@@ -441,7 +479,7 @@ func (s *companionServer) handlePage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	if s.throttled() {
-		http.Error(w, "too many attempts, wait half a minute", http.StatusTooManyRequests)
+		http.Error(w, "too many attempts, try again later", http.StatusTooManyRequests)
 		return
 	}
 	if !s.authorized(r) {
@@ -537,12 +575,32 @@ func (s *companionServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, companionMaxUpload)
-	if err := r.ParseMultipartForm(8 << 20); err != nil {
-		http.Error(w, "upload too large or malformed", http.StatusRequestEntityTooLarge)
+	// The file part is streamed straight onto the card. ParseMultipartForm
+	// spooled any part over 8 MiB to os.TempDir(), which on the handheld is a
+	// small RAM-backed tmpfs: a video upload filled it (and failed as "too
+	// large") or pushed the device into the out-of-memory killer.
+	mr, err := r.MultipartReader()
+	if err != nil {
+		http.Error(w, "upload too large or malformed", http.StatusBadRequest)
 		return
 	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
+	var file *multipart.Part
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "upload too large or malformed", http.StatusRequestEntityTooLarge)
+			return
+		}
+		if p.FormName() == "file" {
+			file = p
+			break
+		}
+		p.Close()
+	}
+	if file == nil {
 		http.Error(w, "missing file field", http.StatusBadRequest)
 		return
 	}
@@ -553,7 +611,7 @@ func (s *companionServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot open drop folder: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	name := sanitizeUploadName(header.Filename)
+	name := sanitizeUploadName(file.FileName())
 	out, saved, err := createCompanionFile(dir, name)
 	if err != nil {
 		http.Error(w, "cannot save file: "+err.Error(), http.StatusInternalServerError)
@@ -563,6 +621,11 @@ func (s *companionServer) handleUpload(w http.ResponseWriter, r *http.Request) {
 	closeErr := out.Close()
 	if copyErr != nil || closeErr != nil {
 		_ = os.Remove(filepath.Join(dir, saved))
+		var tooBig *http.MaxBytesError
+		if errors.As(copyErr, &tooBig) {
+			http.Error(w, "upload too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "upload interrupted", http.StatusInternalServerError)
 		return
 	}

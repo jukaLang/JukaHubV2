@@ -74,7 +74,111 @@ var romFileExtensions = map[string]bool{
 	".7z": true, ".gen": true, ".iso": true, ".md": true, ".nds": true, ".nes": true,
 	".n64": true, ".pbp": true, ".pce": true, ".rom": true, ".sfc": true,
 	".smc": true, ".z64": true, ".zip": true, ".v64": true, ".ndd": true,
-	".cdi": true, ".gdi": true,
+	".cdi": true, ".gdi": true, ".m3u": true,
+}
+
+// romSheetMaxBytes bounds how much of a .cue, .gdi or .m3u is read: real sheets
+// are a few hundred bytes, and a mislabelled multi-megabyte file must not be
+// slurped by a library scan.
+const romSheetMaxBytes = 256 << 10
+
+// romSheetReferences returns the files a .cue, .gdi or .m3u names, as cleaned
+// paths beside the sheet. Those files are parts of the game the sheet starts —
+// the tracks of a CD, the discs of a multi-disc set — not games of their own.
+func romSheetReferences(sheet string) []string {
+	ext := strings.ToLower(filepath.Ext(sheet))
+	if ext != ".cue" && ext != ".gdi" && ext != ".m3u" {
+		return nil
+	}
+	f, err := os.Open(sheet)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, romSheetMaxBytes))
+	if err != nil {
+		return nil
+	}
+	dir := filepath.Dir(sheet)
+	var out []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		// Sheets written on Windows separate folders with backslashes.
+		name = filepath.FromSlash(strings.ReplaceAll(name, "\\", "/"))
+		if !filepath.IsAbs(name) {
+			name = filepath.Join(dir, name)
+		}
+		out = append(out, filepath.Clean(name))
+	}
+	quoted := func(s string) (string, bool) {
+		start := strings.IndexByte(s, '"')
+		if start < 0 {
+			return "", false
+		}
+		end := strings.IndexByte(s[start+1:], '"')
+		if end < 0 {
+			return "", false
+		}
+		return s[start+1 : start+1+end], true
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch ext {
+		case ".m3u":
+			if !strings.HasPrefix(line, "#") {
+				add(line)
+			}
+		case ".cue":
+			// FILE "Game (Track 1).bin" BINARY
+			if len(line) < 5 || !strings.EqualFold(line[:5], "FILE ") {
+				continue
+			}
+			if name, ok := quoted(line); ok {
+				add(name)
+			} else if fields := strings.Fields(line); len(fields) > 1 {
+				add(fields[1])
+			}
+		case ".gdi":
+			// <track> <lba> <type> <sector size> <file> <offset>
+			if name, ok := quoted(line); ok {
+				add(name)
+			} else if fields := strings.Fields(line); len(fields) >= 6 {
+				add(fields[4])
+			}
+		}
+	}
+	return out
+}
+
+// dropSheetParts removes the files a sheet in the same scan refers to, so a CD
+// game is one row (its .cue, or its .m3u for a multi-disc set) instead of the
+// sheet plus one row per track or disc, and recounts the systems. Paths are
+// compared without case: sheets are written by hand and the cards are FAT.
+func dropSheetParts(games []scannedROM) ([]scannedROM, map[string]int) {
+	referenced := map[string]bool{}
+	for _, g := range games {
+		for _, ref := range romSheetReferences(g.Path) {
+			if !strings.EqualFold(ref, g.Path) {
+				referenced[strings.ToLower(ref)] = true
+			}
+		}
+	}
+	counts := make(map[string]int)
+	kept := games[:0]
+	for _, g := range games {
+		if referenced[strings.ToLower(g.Path)] {
+			continue
+		}
+		kept = append(kept, g)
+		counts[g.System]++
+	}
+	return kept, counts
 }
 
 func romLibraryRoots() []string {
@@ -133,6 +237,7 @@ func scanROMLibrary(roots []string) romScanReport {
 			})
 		}
 	}
+	report.Games, report.Counts = dropSheetParts(report.Games)
 	sort.Slice(report.Games, func(i, j int) bool {
 		return strings.ToLower(report.Games[i].Path) < strings.ToLower(report.Games[j].Path)
 	})

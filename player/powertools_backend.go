@@ -179,13 +179,31 @@ func runPowerScript(command string, timeout time.Duration) (string, error) {
 	defer cancel()
 	name, args := powerShellCommand(command)
 	cmd := exec.CommandContext(ctx, name, args...)
+	// A snippet is usually a pipeline, or starts something in the background.
+	// The context alone kills only the shell; the commands it started kept the
+	// output pipe open, CombinedOutput waited for them, and the "hard timeout"
+	// never returned. The snippet now leads its own process group, the timeout
+	// kills the whole group, and WaitDelay stops waiting on a pipe held by
+	// anything that escaped it.
+	screenChildGroupConfigure(cmd)
+	cmd.Cancel = func() error { return screenChildKill(cmd) }
+	cmd.WaitDelay = powerScriptWaitDelay
 	out, err := cmd.CombinedOutput()
 	text := truncatePowerOutput(string(out))
 	if ctx.Err() == context.DeadlineExceeded {
 		return text + fmt.Sprintf("\n(stopped after %s)", timeout), ctx.Err()
 	}
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		// The snippet itself finished fine and left a background job holding
+		// the output; that job's output is simply not collected.
+		return text + "\n(a background job is still running; its output is not shown)", nil
+	}
 	return text, err
 }
+
+// powerScriptWaitDelay is how long a finished (or timed-out) snippet's output
+// pipe may stay open before the run returns anyway.
+const powerScriptWaitDelay = 2 * time.Second
 
 func truncatePowerOutput(s string) string {
 	if len(s) <= powerMaxOutput {

@@ -710,6 +710,9 @@ func renderHomeModern(renderer *sdl.Renderer, config *Config) {
 	// Reduced motion and focusMotion none both drop the eased lift; the
 	// colour/press feedback stays either way (motion.go).
 	homeLayout.Motion = uiMotionEnabled(config) && motionFocusEnabled(config)
+	// The layout's backdrop draws the wallpaper of the config being rendered,
+	// the same one ensureBackgroundTexture above was refreshed for.
+	homeBackdropConfig = config
 	_ = homeLayout.Render(renderer, loadHomeFonts(), homeViewData(config))
 
 	// The header clock toggles the mini calendar (trigger: toggle_calendar).

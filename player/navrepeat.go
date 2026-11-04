@@ -67,12 +67,18 @@ var padRepeatPush = func(button uint8) { pushControllerButtonDown(button) }
 // padRepeatNow is the clock the tracker reads. Swappable for the same reason.
 var padRepeatNow = func() uint64 { return sdl.GetTicks64() }
 
+// padRepeatWhich marks a queued repeat press. The tracker follows the direction
+// already remapped for accessibility (a11yHeldNavDirection), so the frame loop
+// must not run the press through the remap a second time.
+const padRepeatWhich sdl.JoystickID = -2
+
 // pushControllerButtonDown queues a controller press through SDL so the frame
 // loop's router handles it like a physical one. It is the same trick
 // handleStickDpad uses for the analog stick.
 func pushControllerButtonDown(button uint8) {
 	if _, err := sdl.PushEvent(&sdl.ControllerButtonEvent{
 		Type:   sdl.CONTROLLERBUTTONDOWN,
+		Which:  padRepeatWhich,
 		Button: button,
 	}); err != nil {
 		LogScene("input").Warn("could not queue a repeat press", "button", button, "err", err)

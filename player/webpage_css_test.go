@@ -8,6 +8,7 @@ package main
 import (
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/veandco/go-sdl2/sdl"
@@ -828,5 +829,64 @@ func TestWebBoxShorthandsFillAllSides(t *testing.T) {
 	}
 	if b.MarginTop != 10+20 || b.MarginBot != 14+24 {
 		t.Errorf("vertical margins = %v/%v, want 30/38", b.MarginTop, b.MarginBot)
+	}
+}
+
+// Statement at-rules end at a semicolon; read as part of the next selector they
+// took the first real rule of the sheet down with them.
+func TestParseWebCSSSkipsStatementAtRules(t *testing.T) {
+	cases := map[string]string{
+		`@charset "utf-8"; body { color: #ff0000 }`:                        "body",
+		`@import url("theme;v=2.css"); @import "x.css"; p { color: red }`:  "p",
+		`@namespace svg url(http://www.w3.org/2000/svg); h1 { margin: 0 }`: "h1",
+	}
+	for src, want := range cases {
+		rules := parseWebCSS(src)
+		if len(rules) != 1 || rules[0].selector != want {
+			t.Errorf("parseWebCSS(%q) = %+v, want the %q rule", src, rules, want)
+		}
+	}
+}
+
+// Deeply nested group rules are followed only so far: each level re-scanned its
+// whole body, and a sheet of nothing but "@media a{" was quadratic.
+func TestParseWebCSSBoundsNesting(t *testing.T) {
+	const levels = 20000
+	src := strings.Repeat("@media screen{", levels) + "p{color:red}" + strings.Repeat("}", levels) +
+		" a { color: blue }"
+	done := make(chan []webRule, 1)
+	go func() { done <- parseWebCSS(src) }()
+	select {
+	case rules := <-done:
+		if len(rules) != 1 || rules[0].selector != "a" {
+			t.Fatalf("rules = %d, want only the top-level rule after the over-deep block", len(rules))
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("parsing a deeply nested sheet took longer than five seconds")
+	}
+}
+
+// Custom properties that each reference the previous one twice expand
+// exponentially; past the cap the value is dropped like a cycle.
+func TestWebVarExpansionIsBounded(t *testing.T) {
+	decls := map[string]string{"--l0": strings.Repeat("x", 100)}
+	for i := 1; i <= 8; i++ {
+		prev := "--l" + string(rune('0'+i-1))
+		decls["--l"+string(rune('0'+i))] = "var(" + prev + ") var(" + prev + ")"
+	}
+	scope := webVarScopeFor(nil, decls)
+	if scope == nil {
+		t.Fatal("no scope was built")
+	}
+	for name, value := range scope.props {
+		if len(value) > webVarMaxValueBytes {
+			t.Fatalf("%s expanded to %d bytes, past the %d-byte cap", name, len(value), webVarMaxValueBytes)
+		}
+	}
+	if _, ok := scope.props["--l8"]; ok {
+		t.Fatal("a 25 KB expansion was kept")
+	}
+	if got := scope.props["--l2"]; len(got) != 403 {
+		t.Fatalf("--l2 = %d bytes, want a normal small expansion (403)", len(got))
 	}
 }

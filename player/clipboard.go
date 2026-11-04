@@ -90,6 +90,9 @@ func clipboardPasteIntoActiveField(config *Config) bool {
 			return true
 		}
 		termInsertText(text)
+		// Done here: falling through to the shared path below pasted the
+		// text a second time into a stale on-screen keyboard target.
+		return true
 	case isNotesScene():
 		text, err := pasteTextFromClipboard()
 		if err != nil {
@@ -101,6 +104,7 @@ func clipboardPasteIntoActiveField(config *Config) bool {
 			return true
 		}
 		notesInsertText(text)
+		return true
 	default:
 		return false
 	}
@@ -146,6 +150,12 @@ func clipboardCopyFromActiveField(config *Config) bool {
 		}
 		copyWithToast(chatInputText, "Chat", "Copied to clipboard")
 	case isTerminalScene():
+		// Ctrl+C in a terminal with a command running is the interrupt, as
+		// in every shell; this chord used to be taken for copy first, so the
+		// terminal's own Ctrl+C never saw it.
+		if termStopJob() {
+			return true
+		}
 		if term.input == "" {
 			return true
 		}

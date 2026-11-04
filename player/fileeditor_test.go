@@ -522,3 +522,17 @@ func TestFileEditorDeletesALineFromThePadAndKeyboard(t *testing.T) {
 		t.Fatalf("file on disk = %q, want the original (deletes are buffer-only until save)", body)
 	}
 }
+
+// A text file whose first 8 KiB ends inside a multi-byte character is still
+// text. The cut used to make about half of all Cyrillic or CJK files over
+// 8 KiB "not a text file".
+func TestFileEditorTextCutMidCharacterIsText(t *testing.T) {
+	// One ASCII byte, then two-byte characters: byte 8192 splits one.
+	body := append([]byte("x"), []byte(strings.Repeat("а", 4096))...)
+	if fileEditorLooksBinary(body) {
+		t.Fatal("UTF-8 text cut mid-character at 8 KiB was called binary")
+	}
+	if !fileEditorLooksBinary([]byte("abc\x00d")) {
+		t.Fatal("a NUL byte must still mark binary data")
+	}
+}

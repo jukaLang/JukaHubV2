@@ -39,6 +39,11 @@ func TestBrowserZoomScaleStepsAndClamps(t *testing.T) {
 	if got := browserZoomLabel(); got != "115%" {
 		t.Fatalf("one step in = %q, want 115%%", got)
 	}
+	// The step reaches the config the save writes; without it every launch
+	// came back at 100%.
+	if got, ok := config.Variables.Custom[browserZoomKey].(float64); !ok || got != browserZoomScale() {
+		t.Fatalf("stored zoom after a step = %v (%v), want %v", got, ok, browserZoomScale())
+	}
 	// Two separate calls: joining them with || would stop after the first.
 	for i := 0; i < 2; i++ {
 		if !browserZoomStep(config, elem, -1) {

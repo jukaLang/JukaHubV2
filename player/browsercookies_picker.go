@@ -341,7 +341,7 @@ func renderBrowserCookiePanel(renderer *sdl.Renderer, config *Config) {
 		row := rows[i]
 		rect := sdl.Rect{X: panelX + 12, Y: y, W: panelW - 24, H: rowH - 4}
 		if i == browserCookiePanel.cursor {
-			fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, 8, sdl.Color{R: 52, G: 66, B: 110, A: 230})
+			UIListRow(renderer, rect, 8, true, false)
 		}
 		label := row.Site
 		ink := ColorTextPrimary()

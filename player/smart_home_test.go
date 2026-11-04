@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -448,10 +449,17 @@ func TestFetchHAEntitiesAndToggle(t *testing.T) {
 }
 
 func TestFetchPiholeV6Session(t *testing.T) {
-	var sidHeader string
+	var sidHeader, loggedOut string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/auth":
+			if r.Method == http.MethodDelete {
+				// The session is given back after each read; Pi-hole v6 only
+				// holds a few at a time.
+				loggedOut = r.Header.Get("X-FTL-SID")
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
 			var body map[string]string
 			json.NewDecoder(r.Body).Decode(&body)
 			if body["password"] != "hunter2" {
@@ -477,6 +485,9 @@ func TestFetchPiholeV6Session(t *testing.T) {
 	}
 	if sidHeader != "session-1" {
 		t.Errorf("session header = %q", sidHeader)
+	}
+	if loggedOut != "session-1" {
+		t.Errorf("the session was not logged out after the read (DELETE sid %q)", loggedOut)
 	}
 
 	// Wrong password: the error has to name the credential, not the network.
@@ -703,5 +714,21 @@ func TestRefreshAndToggleEndToEnd(t *testing.T) {
 	}
 	if state := smartHomeSnapshot().entities[0].State; state != "on" {
 		t.Errorf("optimistic state = %q, want on", state)
+	}
+}
+
+// runCommandTimeout returns the command's output. It used to Start the
+// command and then call Output on it, which always failed with "exec: already
+// started", so Tailscale and WireGuard never read any status.
+func TestRunCommandTimeoutReturnsOutput(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on this host")
+	}
+	out, err := runCommandTimeout(5*time.Second, "sh", "-c", "echo hi")
+	if err != nil || string(out) != "hi\n" {
+		t.Fatalf("runCommandTimeout = %q, %v; want \"hi\\n\"", out, err)
+	}
+	if _, err := runCommandTimeout(200*time.Millisecond, "sh", "-c", "sleep 5"); err == nil {
+		t.Fatal("a command past its deadline did not time out")
 	}
 }

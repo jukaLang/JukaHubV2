@@ -66,7 +66,6 @@ var communityPanelRect sdl.Rect
 // Render/event thread only; empty when the page has no code to show.
 var communityQRRect sdl.Rect
 
-var communityBIOSReport *biosDoctorReport
 var communityDiagnosticQR struct {
 	url  string
 	path string
@@ -182,8 +181,7 @@ func communityPanelActivate(config *Config) {
 		communityPanel.scroll = 0
 		startChangelog(config)
 	case communityActionBIOSDoctor:
-		report := scanBIOSRoots(biosDoctorRoots())
-		communityBIOSReport = &report
+		biosScanStart()
 		communityPanel.page = communityPageBIOSDoctor
 		communityPanel.scroll = 0
 	case communityActionDiagnosticsQR:
@@ -337,8 +335,7 @@ func handleCommunityKey(e *sdl.KeyboardEvent, config *Config) bool {
 		case sdl.K_PAGEDOWN:
 			communityPanel.scroll += 10
 		case sdl.K_y:
-			report := scanBIOSRoots(biosDoctorRoots())
-			communityBIOSReport = &report
+			biosScanStart()
 		case sdl.K_ESCAPE, sdl.K_b, sdl.K_BACKSPACE, sdl.K_RETURN, sdl.K_SPACE:
 			communityPanel.page = communityPageHome
 			communityPanel.cursor = 0
@@ -430,8 +427,7 @@ func ctrlCommunity(e *sdl.ControllerButtonEvent, config *Config) bool {
 			}
 		case sdl.CONTROLLER_BUTTON_Y:
 			if communityPanel.page == communityPageBIOSDoctor {
-				report := scanBIOSRoots(biosDoctorRoots())
-				communityBIOSReport = &report
+				biosScanStart()
 			}
 		case sdl.CONTROLLER_BUTTON_A, sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:
 			communityPanel.page = communityPageHome
@@ -599,11 +595,16 @@ func renderCommunityPanel(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 	if communityPanel.page == communityPageBIOSDoctor {
-		if communityBIOSReport == nil {
-			report := scanBIOSRoots(biosDoctorRoots())
-			communityBIOSReport = &report
+		report, scanning := biosScanSnapshot()
+		if report == nil && !scanning {
+			biosScanStart()
+			scanning = true
 		}
-		renderCommunityBIOSDoctor(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH, *communityBIOSReport)
+		shown := biosDoctorReport{}
+		if report != nil {
+			shown = *report
+		}
+		renderCommunityBIOSDoctor(renderer, config, font, panelX, panelY, panelW, panelH, padX, headerH, shown, scanning)
 		return
 	}
 	if communityPanel.page == communityPageDiagnosticsQR {

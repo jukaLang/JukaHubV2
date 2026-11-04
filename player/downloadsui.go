@@ -457,7 +457,10 @@ func renderDownloadsPanel(renderer *sdl.Renderer, config *Config) {
 	// Rows are the raised surface, so the panel itself recesses one step for the
 	// list to read as separate bands. Radius, border, scrim and inside margin
 	// still come from the shared card.
-	drawOverlayCardFilled(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, ColorSurface)
+	// The recessed glass sheet, asked for by name: mapping a theme colour onto
+	// it picked the wrong sheet on presets whose surface and raised surface
+	// are the same colour (Light).
+	drawGlassSheet(renderer, sdl.Rect{X: panelX, Y: panelY, W: panelW, H: panelH}, glassSheetDeepFill())
 	drawOverlayCardAccent(renderer, panelX, panelY, panelW)
 
 	const padX = OverlayPadX
@@ -690,8 +693,9 @@ func drawDownloadStorageCard(renderer *sdl.Renderer, config *Config, font *ttf.F
 	if font == nil || rect.W <= 0 {
 		return
 	}
-	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusMD, ColorPanelRaised)
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusMD, 1, ColorBorderDefault)
+	// Glass on the recessed sheet: the raised glass surface and its hairline.
+	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusMD, glassRaisedFill())
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, RadiusMD, 1, glassEdge())
 
 	label := "SD card"
 	rowH := int32(font.Height())
@@ -814,8 +818,8 @@ func drawDownloadFocusRing(renderer *sdl.Renderer, rect sdl.Rect) {
 	if renderer == nil {
 		return
 	}
-	strokeRoundedRect(renderer, rect.X-2, rect.Y-2, rect.W+4, rect.H+4, RadiusMD, 2, WithAlpha(accentColor, 225))
-	strokeRoundedRect(renderer, rect.X-4, rect.Y-4, rect.W+8, rect.H+8, RadiusMD, 1, WithAlpha(accentColor, 70))
+	// Home's focus ring: 3px of accent on the control's lifted edge.
+	drawGlassFocusRing(renderer, glassLifted(rect), RadiusMD+glassFocusLift)
 }
 
 // drawDownloadAddRow is the first row: paste a link to start a download.

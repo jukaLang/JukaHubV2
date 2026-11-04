@@ -120,6 +120,46 @@ func TestStageDownloadedReleaseUnzipsAndStamps(t *testing.T) {
 	}
 }
 
+// TestStagingWithoutReadyMarkerIsExtractedAgain pins the reuse check: a tree
+// holding the binary and the archive's own release-info.json — what an
+// extraction cut short by a cancel or a power cut leaves — is not a staged
+// release. It is unpacked again instead of being installed half-written.
+func TestStagingWithoutReadyMarkerIsExtractedAgain(t *testing.T) {
+	exe := releaseExecutableName()
+	archive := filepath.Join(t.TempDir(), "JukaHub-Test.zip")
+	writeReleaseZip(t, archive, map[string]string{
+		exe:                 "new-binary",
+		"SDL2.dll":          "new-dll",
+		releaseInfoFileName: `{"tag":"JukaHub-20200101000000"}`,
+	})
+	staging := filepath.Join(t.TempDir(), "staging", "app-test")
+	if err := os.MkdirAll(staging, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		exe:                 "trunc",
+		releaseInfoFileName: `{"tag":"JukaHub-20200101000000"}`,
+	} {
+		if err := os.WriteFile(filepath.Join(staging, name), []byte(body), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rel := &githubRelease{TagName: "JukaHub-20261019120000", PublishedAt: "2026-10-19T12:00:00Z"}
+	if err := stageDownloadedRelease(context.Background(), rel, archive, staging); err != nil {
+		t.Fatalf("stageDownloadedRelease: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(staging, exe)); err != nil || string(got) != "new-binary" {
+		t.Fatalf("staged binary = %q, %v; want the archive's full build", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(staging, "SDL2.dll")); err != nil {
+		t.Errorf("the re-extracted tree is missing SDL2.dll: %v", err)
+	}
+	if _, err := os.Stat(stagedReadyMarker(staging)); err != nil {
+		t.Errorf("a complete staging tree must carry the ready marker: %v", err)
+	}
+}
+
 // TestStagedUpdateUnzipsAndReplacesTheInstallation is the whole one-press path
 // short of the restart: a release ZIP is staged, the swap helper is generated
 // from the staged files, and running it (with the relaunch line removed) leaves
@@ -186,7 +226,7 @@ func TestStagedUpdateUnzipsAndReplacesTheInstallation(t *testing.T) {
 	for _, line := range strings.Split(string(data), sep) {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "start ") || strings.Contains(trimmed, "nohup") ||
-			trimmed == "sleep 2" || strings.HasPrefix(trimmed, "timeout /t 2") {
+			trimmed == "sleep 2" || strings.HasPrefix(trimmed, "ping -n 3 ") {
 			continue
 		}
 		kept = append(kept, line)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/veandco/go-sdl2/sdl"
 )
@@ -19,10 +20,12 @@ func withWeatherData(t *testing.T, days []WeatherDay) {
 	})
 }
 
+// sampleWeatherDays is a forecast starting today: the UI labels rows by their
+// own date and shows today's entry, so a fixed past date reads as no forecast.
 func sampleWeatherDays(n int) []WeatherDay {
 	days := make([]WeatherDay, n)
 	for i := range days {
-		days[i] = WeatherDay{Date: "2026-10-19", TMax: 21, TMin: 12, Code: 1, Pop: 20}
+		days[i] = WeatherDay{Date: time.Now().AddDate(0, 0, i).Format("2006-01-02"), TMax: 21, TMin: 12, Code: 1, Pop: 20}
 	}
 	return days
 }
@@ -146,5 +149,33 @@ func TestWeatherStatusPartDetection(t *testing.T) {
 		if isWeatherStatusPart(s) {
 			t.Errorf("%q was mistaken for the weather chip", s)
 		}
+	}
+}
+
+// A forecast restored from yesterday's cache starts with yesterday: today is
+// the entry with today's date, not the first one.
+func TestWeatherDayForPicksTodaysDate(t *testing.T) {
+	prevOff, prevKnown := weatherLocOffset.Load(), weatherLocOffsetKnown.Load()
+	t.Cleanup(func() { weatherSetLocationOffset(int(prevOff), prevKnown) })
+	weatherSetLocationOffset(0, false)
+	now := time.Date(2026, 11, 4, 9, 0, 0, 0, time.Local)
+	days := []WeatherDay{
+		{Date: "2026-11-03", TMax: 5},
+		{Date: "2026-11-04", TMax: 14},
+		{Date: "2026-11-05", TMax: 18},
+	}
+	if d, ok := weatherDayFor(days, now); !ok || d.TMax != 14 {
+		t.Fatalf("weatherDayFor = %+v, %v; want the 2026-11-04 entry", d, ok)
+	}
+	if _, ok := weatherDayFor(days[:1], now); ok {
+		t.Fatal("yesterday's forecast was offered as today's")
+	}
+
+	// The dates are the forecast location's: a device clock in UTC at 23:00
+	// on the 3rd is already the 4th in Tokyo (UTC+9).
+	weatherSetLocationOffset(9*3600, true)
+	utcLate := time.Date(2026, 11, 3, 23, 0, 0, 0, time.UTC)
+	if d, ok := weatherDayFor(days, utcLate); !ok || d.TMax != 14 {
+		t.Fatalf("weatherDayFor in the location's zone = %+v, %v; want the 2026-11-04 entry", d, ok)
 	}
 }

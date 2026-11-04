@@ -395,3 +395,83 @@ func TestWifiSelectSavedSurfacesRejectedPassword(t *testing.T) {
 		t.Error("a non-password failure was treated as a rejected password")
 	}
 }
+
+// select_network disables every other saved network. A join used to save the
+// config right after it — before the new network had even associated — so every
+// other network was written as disabled=1 and the handheld never rejoined home
+// after one visit to a friend's Wi-Fi. The others must be enabled again before
+// the (single, post-success) save, and a failed join must neither save nor leave
+// them disabled.
+func TestWiFiJoinKeepsOtherSavedNetworksEnabled(t *testing.T) {
+	for _, ok := range []bool{true, false} {
+		var order []string
+		joined := false
+		stubWiFi(t, func(stdin, name string, args []string) (string, error) {
+			if stdin != "" {
+				order = append(order, "psk")
+				return "OK\n", nil
+			}
+			cmd := wifiStubCommand(args)
+			if cmd == "enable_network" || cmd == "remove_network" {
+				cmd += " " + args[len(args)-1]
+			}
+			order = append(order, cmd)
+			switch wifiStubCommand(args) {
+			case "add_network":
+				return "5\n", nil
+			case "list_networks":
+				if joined {
+					return "network id / ssid / bssid / flags\n0\tHome\tany\t[DISABLED]\n" +
+						"1\tWork\tany\t[DISABLED]\n2\tOld\tany\t[DISABLED]\n5\tFriend\tany\t[CURRENT]\n", nil
+				}
+				return "network id / ssid / bssid / flags\n0\tHome\tany\t[CURRENT]\n" +
+					"1\tWork\tany\t\n2\tOld\tany\t[DISABLED]\n5\tFriend\tany\t[DISABLED]\n", nil
+			case "select_network":
+				joined = true
+			case "status":
+				if ok && joined {
+					return "wpa_state=COMPLETED\nssid=Friend\nip_address=10.0.0.9\n", nil
+				}
+				return "wpa_state=SCANNING\n", nil
+			}
+			return "OK\n", nil
+		})
+		prevTimeout := wifiAssociateTimeout
+		wifiAssociateTimeout = 60 * time.Millisecond
+
+		_, err := wifiJoin("Friend", "friendpass1", true)
+		wifiAssociateTimeout = prevTimeout
+		if ok != (err == nil) {
+			t.Fatalf("ok=%v: wifiJoin err = %v", ok, err)
+		}
+		index := func(cmd string) int {
+			for i, c := range order {
+				if c == cmd {
+					return i
+				}
+			}
+			return -1
+		}
+		sel := index("select_network")
+		home, work, old := index("enable_network 0"), index("enable_network 1"), index("enable_network 2")
+		if sel < 0 || home < sel || work < sel {
+			t.Fatalf("ok=%v: the networks select_network disabled were not enabled again: %v", ok, order)
+		}
+		if old >= 0 {
+			t.Fatalf("ok=%v: a network that was disabled on purpose was enabled: %v", ok, order)
+		}
+		save := index("save_config")
+		if ok {
+			if save < 0 || save < home || save < work {
+				t.Fatalf("the config was saved before the other networks were enabled again: %v", order)
+			}
+		} else {
+			if save >= 0 {
+				t.Fatalf("a failed join saved the config: %v", order)
+			}
+			if rm := index("remove_network 5"); rm < 0 || rm > home {
+				t.Fatalf("a failed join kept its entry, or removed it after re-enabling: %v", order)
+			}
+		}
+	}
+}

@@ -266,7 +266,7 @@ func epubHTMLText(raw []byte) (string, string) {
 		title = cleanHTMLInline(m[1])
 	}
 	body := s
-	if i := strings.Index(strings.ToLower(body), "<body"); i >= 0 {
+	if i := strings.Index(asciiLower(body), "<body"); i >= 0 {
 		body = body[i:]
 	}
 	body = reStyleBlock.ReplaceAllString(body, " ")

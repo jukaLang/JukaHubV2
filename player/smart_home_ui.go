@@ -279,17 +279,26 @@ func smartHomePanelActivate(config *Config) {
 		if row.entityID == "" {
 			return
 		}
-		if err := toggleSmartHomeEntity(config, row.entityID); err != nil {
-			showToast("Smart home: "+err.Error(), ToastWarn())
-			return
-		}
+		// The toggles run off the event thread: a Home Assistant or MQTT
+		// broker that is down held the whole UI for up to ~12 s per press.
+		// The settings are resolved here first, so the goroutine reads the
+		// cached copy rather than the live config.
+		currentSmartHomeSettings(config)
+		entityID := row.entityID
 		PlayActivateSound()
+		go func() {
+			if err := toggleSmartHomeEntity(config, entityID); err != nil {
+				showToast("Smart home: "+err.Error(), ToastWarn())
+			}
+		}()
 	case smartHomeRowTailscale:
-		if err := toggleTailscale(config); err != nil {
-			showToast("Tailscale: "+firstLine(err.Error()), ToastWarn())
-			return
-		}
+		currentSmartHomeSettings(config)
 		PlayActivateSound()
+		go func() {
+			if err := toggleTailscale(config); err != nil {
+				showToast("Tailscale: "+firstLine(err.Error()), ToastWarn())
+			}
+		}()
 	case smartHomeRowRefresh:
 		refreshSmartHome(config)
 		PlayNavSound()

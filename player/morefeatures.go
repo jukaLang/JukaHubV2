@@ -271,16 +271,41 @@ func fetchTickerPrice(ctx context.Context, symbol string) (float64, bool) {
 	return 0, false
 }
 
+// customTickerList is the saved symbol list. Loaded back from jukauser.json it
+// is a []interface{}, not the []string this session wrote, so the old
+// assertion found nothing after a restart: the saved symbols vanished from the
+// board and the next "add" replaced the whole list with one entry.
+func customTickerList(config *Config) []string {
+	if config == nil {
+		return nil
+	}
+	switch v := config.Variables.Custom["custom_tickers"].(type) {
+	case []string:
+		return append([]string(nil), v...)
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 // fetchTickers refreshes the crypto/stock board for the scene that asked for
 // it. The endpoints are independent, so they share one round trip instead of
 // three serial ones; a failed endpoint is data ("n/a"), not a reason to stop
 // the others. Leaving the scene is.
 func fetchTickers(config *Config) {
+	if config == nil {
+		return
+	}
+	// Read on the calling (render) thread: the task runs on its own goroutine,
+	// and reading the live Custom map there raced every write to it.
+	custom := customTickerList(config)
 	runSceneTask(func(ctx context.Context) {
-		if config == nil {
-			return
-		}
-		custom, _ := config.Variables.Custom["custom_tickers"].([]string)
 		symbols := make([]string, 0, len(custom))
 		for _, raw := range custom {
 			if sym := strings.TrimSpace(raw); sym != "" {

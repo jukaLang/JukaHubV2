@@ -71,15 +71,13 @@ func headerBarHeight() int32 {
 	return HomeTopBarH
 }
 
-// headerAccent is the bar's accent colour. It falls back to the design accent
-// for the frames drawn before a theme is applied — the splash and the offscreen
-// render tests — where accentColor is still the zero value and every accent
-// control would otherwise come out black on black.
+// headerAccent is the bar's accent colour: Home's accent (glassAccent), so the
+// Back pill on a scene is the same cyan as the focus ring and the Continue
+// card's pill on Home. It used to be accentColor, which the shipped config
+// derived from the slate $buttonColor — the "loudest control in the bar" was
+// tinted a navy that barely showed against the header.
 func headerAccent() sdl.Color {
-	if accentColor.A == 0 {
-		return ColorAccent
-	}
-	return accentColor
+	return glassAccent()
 }
 
 // headerBrandFont is the wordmark. It is one size on Home and in every scene,
@@ -185,20 +183,22 @@ func drawHeaderBack(renderer *sdl.Renderer, config *Config, x, barH int32, focus
 	w := pad + headerBackChevronW + headerCaptionGap + tw + pad
 	rect := sdl.Rect{X: x, Y: (barH - h) / 2, W: w, H: h}
 
+	// Home's chip language: an accent-tinted glass pill with accent type while
+	// idle (the Continue card's chip), a solid accent pill with dark type and
+	// Home's rounded ring while the D-pad holds it (the Continue card's pill).
 	accent := headerAccent()
 	fill := WithAlpha(accent, 38)
-	border := WithAlpha(accent, 225)
+	border := WithAlpha(accent, 150)
 	text := lighten(accent, 60)
 	if focused {
 		fill = accent
 		border = accent
-		text = ColorTopBar
+		text = contrastText(accent)
 	}
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, fill)
 	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, 1, border)
 	if focused {
-		renderer.SetDrawColor(accent.R, accent.G, accent.B, 230)
-		renderer.DrawRect(&sdl.Rect{X: rect.X - 3, Y: rect.Y - 3, W: rect.W + 6, H: rect.H + 6})
+		strokeRoundedRect(renderer, rect.X-3, rect.Y-3, rect.W+6, rect.H+6, (h+6)/2, 2, accent)
 	}
 
 	arrowX := rect.X + pad
@@ -238,18 +238,22 @@ func drawHeaderMenu(renderer *sdl.Renderer, config *Config, x, barH int32, open,
 	pad := int32(12)
 	tw, _ := measureText(font, headerMenuLabel)
 	rect := sdl.Rect{X: x, Y: (barH - h) / 2, W: tw + pad*2, H: h}
+	// A quiet glass pill (Home's footer badge), the accent while its menu is
+	// open, and the solid accent pill with Home's ring while focused.
 	accent := headerAccent()
-	fill := ColorIconSurface
+	fill, border, text := glassChipFill(), glassChipEdge(), ColorTextSecondary()
 	if open {
 		fill = WithAlpha(accent, 70)
 	}
+	if focused {
+		fill, border, text = accent, accent, contrastText(accent)
+	}
 	fillRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, fill)
-	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, 1, ColorBorder)
-	renderText(renderer, config, font, headerMenuLabel, ColorTextSecondary(),
+	strokeRoundedRect(renderer, rect.X, rect.Y, rect.W, rect.H, h/2, 1, border)
+	renderText(renderer, config, font, headerMenuLabel, text,
 		rect.X+pad, rect.Y+(h-int32(font.Height()))/2)
 	if focused {
-		renderer.SetDrawColor(accent.R, accent.G, accent.B, 230)
-		renderer.DrawRect(&sdl.Rect{X: rect.X - 3, Y: rect.Y - 3, W: rect.W + 6, H: rect.H + 6})
+		strokeRoundedRect(renderer, rect.X-3, rect.Y-3, rect.W+6, rect.H+6, (h+6)/2, 2, accent)
 	}
 	return rect
 }

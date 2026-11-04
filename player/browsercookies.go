@@ -116,7 +116,7 @@ type browserCookieJar struct {
 }
 
 func newBrowserCookieJar(path string) *browserCookieJar {
-	inner, err := cookiejar.New(nil)
+	inner, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: browserPublicSuffixes{}})
 	if err != nil {
 		// Without a public suffix list there is no jar and no cookies, but a
 		// page still loads.
@@ -366,7 +366,7 @@ func (j *browserCookieJar) forgetSite(site string) int {
 	if dropped == 0 {
 		return 0
 	}
-	inner, err := cookiejar.New(nil)
+	inner, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: browserPublicSuffixes{}})
 	if err != nil {
 		log.Printf("[browser] cannot rebuild the jar: %v", err)
 		return 0
@@ -678,7 +678,7 @@ func browserCookiesCount() int {
 func browserResetCookies() {
 	browserJar.mu.Lock()
 	old := browserJar.jar
-	if jar, err := cookiejar.New(nil); err == nil {
+	if jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: browserPublicSuffixes{}}); err == nil {
 		browserJar.jar = &browserCookieJar{
 			jar:  jar,
 			recs: map[string]browserCookieRecord{},
@@ -706,7 +706,7 @@ func browserForgetCookies() (int, error) {
 		dropped = old.count()
 		path = old.path
 	}
-	jar, err := cookiejar.New(nil)
+	jar, err := cookiejar.New(&cookiejar.Options{PublicSuffixList: browserPublicSuffixes{}})
 	if err != nil {
 		browserJar.jar = nil
 		browserJar.dead = true
@@ -724,6 +724,10 @@ func browserForgetCookies() (int, error) {
 	// A page load that was already on the wire still holds the old jar. Retire
 	// it before the delete, so the delete is the last word on the file.
 	old.retire()
+	// Pages fetched with the session are in the Back/Forward cache: Back after
+	// a Forget showed the signed-in page (an inbox, an account screen) as if
+	// the session were still there.
+	browserClearPageCache()
 
 	if strings.TrimSpace(path) == "" {
 		return dropped, nil

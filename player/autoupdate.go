@@ -279,11 +279,34 @@ func releaseIsNewerThanInstalled(rel *githubRelease) bool {
 	if !ok {
 		return false
 	}
+	// A release is never newer than itself. The archive's stamp records when
+	// it was packaged and GitHub publishes the release after that, so by the
+	// clock alone a fresh install was offered its own build as an update.
+	if installedReleaseTagIs(rel.TagName) {
+		return false
+	}
 	installed, known := installedReleaseTime()
 	if !known {
 		return true
 	}
 	return relTime.After(installed)
+}
+
+// installedReleaseTagIs reports whether tag names the release this build was
+// installed from: the stamp next to the executable, or the tag a completed
+// self-update recorded.
+func installedReleaseTagIs(tag string) bool {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(readInstalledReleaseInfo().Tag), tag) {
+		return true
+	}
+	patchStateMu.Lock()
+	installed := patchState.InstalledReleaseTag
+	patchStateMu.Unlock()
+	return strings.EqualFold(strings.TrimSpace(installed), tag)
 }
 
 // markUpdateAvailable records that a newer release exists. It deliberately does
@@ -391,6 +414,9 @@ func advertisedReleaseTime() (time.Time, bool) {
 // replaced the files without going through the swap helper). Comparing the two
 // stamps locally answers "is this still an update?" without the network.
 func advertisedUpdateIsStale() bool {
+	if installedReleaseTagIs(availableUpdateTag()) {
+		return true
+	}
 	advertised, ok := advertisedReleaseTime()
 	if !ok {
 		return false // cannot prove it stale: keep advertising
@@ -692,20 +718,26 @@ func stageDownloadedRelease(ctx context.Context, rel *githubRelease, archivePath
 		return errors.New("missing release metadata")
 	}
 	// Reuse a complete staging tree: startup checks must not redownload the
-	// same release after a failed or postponed apply.
+	// same release after a failed or postponed apply. "Complete" is the ready
+	// marker written below, not release-info.json: the archive ships its own
+	// stamp, so a tree cut short after the binary and the stamp were unpacked
+	// passed for complete and a truncated build could be installed.
 	reused := false
 	if bin := findStagedBinary(staging); bin != "" {
-		if info, err := os.Stat(releaseInfoPath(filepath.Dir(bin))); err == nil && info.Mode().IsRegular() {
+		if info, err := os.Stat(stagedReadyMarker(staging)); err == nil && info.Mode().IsRegular() {
 			reused = true
 		}
 	}
 	if !reused {
+		_ = os.Remove(stagedReadyMarker(staging))
 		_ = os.RemoveAll(staging)
 		if err := os.MkdirAll(staging, 0o700); err != nil {
 			return err
 		}
 		installBarPhase(installPhaseExtract)
 		if err := extractSafe(ctx, archivePath, staging, patchMaxEntries, patchMaxExpandBytes); err != nil {
+			// A half-unpacked tree is never left behind to be picked up later.
+			_ = os.RemoveAll(staging)
 			return fmt.Errorf("extracting update: %w", err)
 		}
 	} else {
@@ -733,7 +765,18 @@ func stageDownloadedRelease(ctx context.Context, rel *githubRelease, archivePath
 	}
 	// AtomicWrite keeps a .bak of the previous stamp; never ship that copy.
 	_ = os.Remove(releaseInfoPath(filepath.Dir(newBin)) + ".bak")
+	// Only now is the tree whole, so only now may a later run reuse it.
+	if err := os.WriteFile(stagedReadyMarker(staging), []byte(rel.TagName+"\n"), 0o600); err != nil {
+		logPatch("staged release marker: %v", err)
+	}
 	return nil
+}
+
+// stagedReadyMarker is the file written next to a staging tree once it has been
+// extracted and stamped in full. It sits beside the tree, not in it, so the
+// swap helper never copies it into the installation.
+func stagedReadyMarker(staging string) string {
+	return staging + ".ready"
 }
 
 // stagedInstallFile is one file copied by the swap helper.
@@ -856,7 +899,11 @@ func writeSwapScriptFor(goos, scriptPath, exePath string, files []stagedInstallF
 		b.WriteString("setlocal\r\n")
 		b.WriteString("set \"EXE=" + strings.ReplaceAll(exePath, `"`, ``) + "\"\r\n")
 		b.WriteString("set \"JOURNAL=" + strings.ReplaceAll(journalPath, `"`, ``) + "\"\r\n")
-		b.WriteString("timeout /t 2 /nobreak >nul\r\n")
+		// The waits use ping, not timeout: timeout exits at once ("Input
+		// redirection is not supported") when stdin is not a console, and the
+		// helper's stdin is NUL, so the old script never waited for JukaHub to
+		// exit and burned its 30 copy retries in a blink.
+		b.WriteString("ping -n 3 127.0.0.1 >nul\r\n")
 		for _, f := range files {
 			b.WriteString("call :copyloop " + quoteWindowsArg(f.Src) + " " + quoteWindowsArg(f.Dest) + " || goto fail\r\n")
 		}
@@ -866,10 +913,13 @@ func writeSwapScriptFor(goos, scriptPath, exePath string, files []stagedInstallF
 		b.WriteString(":copyloop\r\n")
 		b.WriteString("set /a tries=0\r\n")
 		b.WriteString(":retry\r\n")
-		b.WriteString("copy /y %~1 %~2 >nul 2>nul && exit /b 0\r\n")
+		// %~1 strips the quotes the call passed, so they are put back: unquoted,
+		// a path with a space (C:\Users\John Smith\...) split into several
+		// arguments and every copy failed.
+		b.WriteString("copy /y \"%~1\" \"%~2\" >nul 2>nul && exit /b 0\r\n")
 		b.WriteString("set /a tries+=1\r\n")
 		b.WriteString("if %tries% geq 30 exit /b 9\r\n")
-		b.WriteString("timeout /t 1 /nobreak >nul\r\n")
+		b.WriteString("ping -n 2 127.0.0.1 >nul\r\n")
 		b.WriteString("goto retry\r\n")
 		b.WriteString(":fail\r\n")
 		b.WriteString("exit /b 9\r\n")
@@ -962,7 +1012,9 @@ func confirmAppliedUpdate() {
 	patchStateMu.Unlock()
 	_ = savePatchState()
 	if dir, err := PatchStateDir(); err == nil {
-		_ = os.RemoveAll(filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag)))
+		staging := filepath.Join(dir, "staging", "app-"+sanitizeFileName(tag))
+		_ = os.RemoveAll(staging)
+		_ = os.Remove(stagedReadyMarker(staging))
 	}
 	logPatch("JukaHub updated to release %s", tag)
 }

@@ -129,6 +129,7 @@ func cyclePowerModeTo(config *Config, mode string) string {
 	mode = normalizePowerMode(mode)
 	if config != nil {
 		config.Variables.PowerMode = mode
+		dropCustomMirror(config, "powerMode")
 		syncVariableOverrides(config)
 	}
 	applyPowerMode(config)

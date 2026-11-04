@@ -175,6 +175,27 @@ func TestSFTPHandlersFileOperations(t *testing.T) {
 	}
 }
 
+// Removing a symlink removes the link, not the file it points to. The handler
+// used to follow it: with the device's share rooted at "/", `rm /bin/ls`
+// deleted /bin/busybox.
+func TestSFTPRemoveDeletesTheLinkNotItsTarget(t *testing.T) {
+	root, dir := newTestSFTPRoot(t, false)
+	handlers := &sftpRootHandlers{root: root}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(filepath.Join(dir, "sub", "hello.txt"), link); err != nil {
+		t.Skipf("symlinks unavailable here: %v", err)
+	}
+	if err := handlers.Filecmd(sftp.NewRequest("Remove", "/link")); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("the link is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sub", "hello.txt")); err != nil {
+		t.Fatalf("removing the link deleted its target: %v", err)
+	}
+}
+
 func TestSFTPHandlersRefuseLinkCreation(t *testing.T) {
 	root, _ := newTestSFTPRoot(t, false)
 	handlers := &sftpRootHandlers{root: root}

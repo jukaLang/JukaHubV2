@@ -57,10 +57,8 @@ var gameList = []gameEntry{
 var gameMenuCursor int
 
 func renderGamesMenu(renderer *sdl.Renderer, config *Config) {
-	// Background
-	renderer.SetDrawColor(ColorBackground.R, ColorBackground.G, ColorBackground.B, 255)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	renderAmbientBackground(renderer)
+	// Background: Home's backdrop, the one every screen stands on.
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	titleFont, _ := getCachedFont(config, "large")
 	bodyFont, _ := getCachedFont(config, "medium")

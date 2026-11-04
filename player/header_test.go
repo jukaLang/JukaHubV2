@@ -384,7 +384,7 @@ func TestToolScreensDrawTheSharedBar(t *testing.T) {
 
 	barH := headerBarHeight()
 	wantBackH := headerBackPillHeight()
-	footer := HomeFooterColor()
+	footer := glassFooterFill()
 
 	for i, name := range names {
 		currentSceneIndex = base + i
@@ -423,8 +423,10 @@ func TestToolScreensDrawTheSharedBar(t *testing.T) {
 			t.Errorf("%s: only %d bright wordmark pixels in the bar", name, bright)
 		}
 
-		// And the shared footer band is on screen at the bottom edge.
-		i := (int(probeH-4)*int(probeW) + 4) * 4
+		// And the shared footer band is on screen at the bottom edge, inside
+		// Home's frame margin.
+		bandX := sceneFooterBand().X + 4
+		i := (int(probeH-4)*int(probeW) + int(bandX)) * 4
 		if absI(int(frame.buf[i+2])-int(footer.R)) > 2 ||
 			absI(int(frame.buf[i+1])-int(footer.G)) > 2 ||
 			absI(int(frame.buf[i])-int(footer.B)) > 2 {

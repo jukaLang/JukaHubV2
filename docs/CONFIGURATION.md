@@ -58,8 +58,8 @@ settings such as `search_query` or `stream_url`.
 
 | Key | Type | Meaning |
 |-----|------|---------|
-| `buttonColor`, `labelColor`, `inputColor` | `"#rrggbb"` or `{r,g,b}` | palette |
-| `backgroundImage` | string | background image path |
+| `buttonColor`, `labelColor`, `inputColor` | `"#rrggbb"` or `{r,g,b}` | palette. `buttonColor` is a light tint under each scene button's glass; focus rings, pills and highlights use the active theme's accent, not this colour |
+| `backgroundImage` | string | your own wallpaper, drawn on every screen (Home included) under the backdrop's dim and colour blooms so glass and text stay readable. Empty or the stock `background.jpg` means Home's procedural backdrop; the stock image is not loaded. A picked image is scaled once to the canvas when it loads |
 | `fonts`, `fontSizes` | object | per-role font file and size (e.g. `small`, `medium`, `big`) |
 | `fullscreen` | bool | start in fullscreen |
 | `screenWidth`, `screenHeight` | int | window size on desktop. On supported TrimUI models the runtime uses the device's canvas: 1280×720 on the Smart Pro / Smart Pro S and a compact 960×720 canvas scaled to the 1024×768 Brick, Brick Pro and Hammer panels. Logical font sizes follow that canvas (0.75× on the compact one) so text keeps its proportion to the layout. |

@@ -292,6 +292,59 @@ func TestApplyAndRevertBoostWritesOnlyJukaHubOverride(t *testing.T) {
 	}
 }
 
+// The per-game file may be the user's own: boosting keeps their other options
+// in effect, and revert puts their original file back byte for byte instead of
+// deleting it.
+func TestBoostKeepsAndRestoresTheUsersOwnGameOptions(t *testing.T) {
+	dir := t.TempDir()
+	raConfig := filepath.Join(dir, "retroarch", "config")
+	romPath := filepath.Join(dir, "roms", "Crisis Core.iso")
+	writeCompatTestFile(t, romPath, "fake rom")
+	setCompatTestDirs(t, dir, []string{raConfig}, nil, filepath.Join(dir, "pool"))
+	target := filepath.Join(raConfig, "PPSSPP", "Crisis Core.opt")
+	original := "ppsspp_frameskip = \"0\"\nppsspp_button_preference = \"Circle\"\n"
+	writeCompatTestFile(t, target, original)
+
+	assessment := gameAssessment{
+		ROM:   scannedROM{Path: romPath, System: "PlayStation Portable"},
+		Key:   gameKey(scannedROM{Path: romPath, System: "PlayStation Portable"}),
+		Title: "Crisis Core",
+		Core:  "ppsspp",
+		Plan:  boostPlan{Options: map[string]string{"ppsspp_frameskip": "1"}},
+	}
+	if _, err := applyBoost(assessment); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	boosted := string(data)
+	if !strings.HasPrefix(boosted, compatBoostHeader) || !strings.Contains(boosted, `ppsspp_frameskip = "1"`) {
+		t.Fatalf("boosted file = %q", boosted)
+	}
+	if strings.Contains(boosted, `ppsspp_frameskip = "0"`) {
+		t.Fatalf("the user's value for a boosted key survived: %q", boosted)
+	}
+	if !strings.Contains(boosted, `ppsspp_button_preference = "Circle"`) {
+		t.Fatalf("the user's other option was dropped: %q", boosted)
+	}
+
+	if _, err := revertBoost(assessment); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("the user's file was not put back: %v", err)
+	}
+	if string(restored) != original {
+		t.Fatalf("restored file = %q, want the original %q", restored, original)
+	}
+	if _, err := os.Stat(target + compatOptBackupSuffix); !os.IsNotExist(err) {
+		t.Fatalf("the backup is still there after the restore: %v", err)
+	}
+}
+
 func TestCoreBuildPoolScanAndActivation(t *testing.T) {
 	dir := t.TempDir()
 	activeDir := filepath.Join(dir, "RetroArch", ".retroarch", "cores")

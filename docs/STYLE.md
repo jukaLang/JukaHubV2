@@ -50,6 +50,16 @@ The build and test loop lives in [CONTRIBUTING.md](../CONTRIBUTING.md).
 - New panels follow an existing panel's layout (`toolsui.go`, `a11y.go`,
   `netplay_ui.go`) instead of inventing a card: same header, same row height,
   same footer hint line. A screen that looks bolted on is a review finding.
+- **Every screen draws with Home's glass.** Surfaces, focus and chrome come from
+  [player/ui_glass.go](../player/ui_glass.go) (`glassA` and the named glass
+  tokens, `drawAppBackdrop`, `drawGlassSurface`, `drawGlassButton`,
+  `drawGlassSheet`, the footer band and hint badges) or the shared components
+  built on it in [player/components.go](../player/components.go) (`UIListRow`,
+  `UIButton`, `drawOverlayScrim`/`drawOverlayCard`, `UIPageHeaderDraw`,
+  `UICategoryTileDraw`). Do not hard-code a slate fill or a white text colour:
+  the glass ink and the text inks follow the theme, which is what keeps a screen
+  readable on the light presets. Focus is Home's 3px accent ring
+  (`glassAccent()`); there are no drop shadows.
 - Keyboard, controller, mouse and touch all reach the same action. If a row can
   be activated with A, it needs a click target and a key binding too.
 

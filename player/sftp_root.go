@@ -121,6 +121,30 @@ func (r *sftpRoot) resolve(client string) (string, error) {
 	return resolved, nil
 }
 
+// resolveNoFollow maps a client path for an operation on the entry itself —
+// remove, rename, rmdir — rather than on whatever a symlink points to. The
+// parent folder is resolved (and must stay inside the root) and the last
+// component is taken as named, so removing a link removes the link. resolve()
+// follows a final link: with the root at "/" on the device, `rm /bin/ls`
+// deleted /bin/busybox, and renaming a library's link renamed the library.
+func (r *sftpRoot) resolveNoFollow(client string) (string, error) {
+	local, err := r.localPath(client)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Clean(local) == filepath.Clean(r.root) {
+		return r.resolve(client)
+	}
+	parent, err := resolveExisting(filepath.Dir(local))
+	if err != nil {
+		return "", err
+	}
+	if !pathWithin(r.root, parent) {
+		return "", errSFTPOutsideRoot
+	}
+	return filepath.Join(parent, filepath.Base(local)), nil
+}
+
 // resolveLink returns a symlink's target after proving that following it stays
 // inside the root. It deliberately does not use resolve(): that follows the
 // link, which would make Readlink report the target's own path.
@@ -414,11 +438,11 @@ func (h *sftpRootHandlers) Filecmd(req *sftp.Request) error {
 		if err := h.root.denyReadOnly(); err != nil {
 			return err
 		}
-		from, err := h.root.resolve(req.Filepath)
+		from, err := h.root.resolveNoFollow(req.Filepath)
 		if err != nil {
 			return err
 		}
-		to, err := h.root.resolve(req.Target)
+		to, err := h.root.resolveNoFollow(req.Target)
 		if err != nil {
 			return err
 		}
@@ -442,7 +466,7 @@ func (h *sftpRootHandlers) Filecmd(req *sftp.Request) error {
 		if err := h.root.denyReadOnly(); err != nil {
 			return err
 		}
-		local, err := h.root.resolve(req.Filepath)
+		local, err := h.root.resolveNoFollow(req.Filepath)
 		if err != nil {
 			return err
 		}
@@ -459,7 +483,7 @@ func (h *sftpRootHandlers) Filecmd(req *sftp.Request) error {
 		if err := h.root.denyReadOnly(); err != nil {
 			return err
 		}
-		local, err := h.root.resolve(req.Filepath)
+		local, err := h.root.resolveNoFollow(req.Filepath)
 		if err != nil {
 			return err
 		}

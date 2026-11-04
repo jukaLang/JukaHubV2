@@ -280,7 +280,10 @@ func browserReplaceCookieJar(records []browserCookieRecord) {
 		return
 	}
 	fresh.restore(records)
-	fresh.save()
+	// The list is shorter because the policy dropped cookies; a plain save
+	// kept the previous file as .bak, so the dropped session stayed on the
+	// card and a damaged read would bring it back.
+	fresh.saveDropBackup()
 
 	browserJar.mu.Lock()
 	old := browserJar.jar

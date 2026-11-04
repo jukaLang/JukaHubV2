@@ -129,7 +129,7 @@ func TestLoadingCardDrawsSloganInsideTheCard(t *testing.T) {
 		t.Fatalf("ReadPixels failed on the offscreen renderer: %v (the frame assertions that follow would otherwise never run)", err)
 	}
 
-	slogan := sdl.Color{R: 176, G: 194, B: 220}
+	slogan := loadingSloganInk()
 	outside := 0
 	for y := int32(0); y < probeH; y++ {
 		for x := int32(0); x < probeW; x++ {

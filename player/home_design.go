@@ -25,10 +25,13 @@ const (
 	homeGlyphSize  int32 = 24
 )
 
-// homeGlass is white at the given alpha: the cards are frosted panes over the
-// background, not opaque slabs, so the ambient glow reads through them.
+// homeGlass is the glass ink at the given alpha: the cards are frosted panes
+// over the background, not opaque slabs, so the ambient glow reads through
+// them. The ink is white on a dark palette and a deep slate on a light one
+// (glassA in ui_glass.go): white-on-white tiles made every light preset's Home
+// a page of invisible cards.
 func homeGlass(alpha uint8) sdl.Color {
-	return sdl.Color{R: 255, G: 255, B: 255, A: alpha}
+	return glassA(alpha)
 }
 
 // homeCardFill is the resting tile fill (white 5%) and homeCardEdge its 8%
@@ -152,7 +155,7 @@ func drawGlassTile(renderer *sdl.Renderer, base, rect sdl.Rect, focused, pressed
 		fill = homeCardFillFocus()
 	}
 	if pressed {
-		fill = sdl.Color{R: 255, G: 255, B: 255, A: 26}
+		fill = homeGlass(26)
 	}
 	_ = renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 	fillRoundedRectAt(renderer, base, rect, homeTileRadius, fill)

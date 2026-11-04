@@ -164,26 +164,55 @@ func TestLEDPanelMoveWraps(t *testing.T) {
 }
 
 func TestLEDFrameColorAppliesBrightness(t *testing.T) {
-	prevConfig := appConfig
-	t.Cleanup(func() { appConfig = prevConfig })
-
 	base := time.Unix(1700000000, 0)
-	appConfig = &Config{Variables: Variables{Custom: map[string]interface{}{
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{
 		ledKeyPolicy:     ledPolicyCustom,
 		ledKeyEffect:     "solid",
 		ledKeyColor:      "#3366ff",
 		ledKeyBrightness: 100,
 	}}}
-	fullR, fullG, fullB := ledFrameColor(base)
-	appConfig.Variables.Custom[ledKeyBrightness] = 50
-	halfR, halfG, halfB := ledFrameColor(base)
+	fullR, fullG, fullB := ledFrameColor(ledLoopSettingsFrom(config), base)
+	config.Variables.Custom[ledKeyBrightness] = 50
+	halfR, halfG, halfB := ledFrameColor(ledLoopSettingsFrom(config), base)
 	if halfR >= fullR || halfG >= fullG || halfB >= fullB {
 		t.Fatalf("half brightness = %d,%d,%d, full = %d,%d,%d",
 			halfR, halfG, halfB, fullR, fullG, fullB)
 	}
-	appConfig.Variables.Custom[ledKeyBrightness] = 0
-	if r, g, b := ledFrameColor(base); r|g|b != 0 {
+	config.Variables.Custom[ledKeyBrightness] = 0
+	if r, g, b := ledFrameColor(ledLoopSettingsFrom(config), base); r|g|b != 0 {
 		t.Fatalf("0%% brightness = %d,%d,%d, want off", r, g, b)
+	}
+}
+
+// The LED loop runs on its own goroutine and must read the published copy, not
+// the config map the render thread writes: a later config change reaches it only
+// through syncLEDLoopSettings.
+func TestLEDLoopSettingsArePublishedCopies(t *testing.T) {
+	ledLoopState.Lock()
+	prev := ledLoopState.settings
+	prevAt := ledLoopState.synced
+	ledLoopState.Unlock()
+	t.Cleanup(func() {
+		ledLoopState.Lock()
+		ledLoopState.settings = prev
+		ledLoopState.synced = prevAt
+		ledLoopState.Unlock()
+	})
+
+	config := &Config{Variables: Variables{Custom: map[string]interface{}{
+		ledKeyPolicy:     ledPolicyCustom,
+		ledKeyColor:      "#3366ff",
+		ledKeyBrightness: 40,
+	}}}
+	syncLEDLoopSettings(config)
+	config.Variables.Custom[ledKeyColor] = "#ff0000"
+	got := currentLEDLoopSettings()
+	if got.policy != ledPolicyCustom || got.r != 0x33 || got.g != 0x66 || got.b != 0xff || got.brightness != 40 {
+		t.Fatalf("published settings = %+v", got)
+	}
+	syncLEDLoopSettings(config)
+	if got := currentLEDLoopSettings(); got.r != 0xff || got.g != 0 || got.b != 0 {
+		t.Fatalf("after a re-sync = %+v, want the new colour", got)
 	}
 }
 

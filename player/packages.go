@@ -112,10 +112,11 @@ func downloadAndInstallPackage(config *Config, p Package) {
 		return
 	}
 
-	// Create a directory for this package.
+	// The package's directory is what marks it installed, so it is created only
+	// once the download has arrived: made up front, a failed fetch left an
+	// empty folder that the list then showed as installed.
 	safeName := packageDirName(p.Name)
 	pkgDir := filepath.Join(packageInstallDir(), safeName)
-	os.MkdirAll(pkgDir, 0755)
 
 	// Download the file.
 	installBarPhase(installPhaseDownload)
@@ -131,21 +132,41 @@ func downloadAndInstallPackage(config *Config, p Package) {
 
 	installBarPhase(installPhaseExtract)
 
-	// Save as zip.
-	zipPath := filepath.Join(pkgDir, safeName+".zip")
-	if err := os.WriteFile(zipPath, []byte(raw), 0644); err != nil {
+	_, statErr := os.Stat(pkgDir)
+	fresh := os.IsNotExist(statErr)
+	if err := os.MkdirAll(pkgDir, 0o755); err != nil {
 		installBarFail("Save failed")
 		showToast("Save failed: "+err.Error(), ToastError())
 		return
 	}
 
-	// Try to extract if it's a zip file.
-	if strings.HasSuffix(strings.ToLower(p.Download), ".zip") || len(raw) > 4 && raw[0] == 'P' && raw[1] == 'K' {
-		if err := unzipToDir(zipPath, pkgDir); err != nil {
-			log.Printf("packages: unzip error: %v (saved as zip)", err)
-		} else {
-			os.Remove(zipPath) // Remove the zip after extraction
+	// Save as zip.
+	zipPath := filepath.Join(pkgDir, safeName+".zip")
+	if err := os.WriteFile(zipPath, []byte(raw), 0644); err != nil {
+		if fresh {
+			_ = os.RemoveAll(pkgDir)
 		}
+		installBarFail("Save failed")
+		showToast("Save failed: "+err.Error(), ToastError())
+		return
+	}
+
+	// Extract it when it is a zip file.
+	if strings.HasSuffix(strings.ToLower(p.Download), ".zip") || len(raw) > 4 && raw[0] == 'P' && raw[1] == 'K' {
+		if err := unzipToDir(installBarRunContext(), zipPath, pkgDir); err != nil {
+			log.Printf("packages: unzip error: %v", err)
+			// A package that did not unpack is not installed. A fresh folder
+			// goes; an earlier install it was meant to update stays.
+			if fresh {
+				_ = os.RemoveAll(pkgDir)
+			} else {
+				_ = os.Remove(zipPath)
+			}
+			installBarFail("Could not unpack")
+			showToast("Could not unpack "+p.Name+": "+err.Error(), ToastError())
+			return
+		}
+		os.Remove(zipPath) // Remove the zip after extraction
 	}
 
 	installedPackagesMu.Lock()
@@ -156,20 +177,13 @@ func downloadAndInstallPackage(config *Config, p Package) {
 	installBarDone()
 }
 
-// unzipToDir extracts a zip archive to the destination directory.
-func unzipToDir(zipPath, destDir string) error {
-	data, err := os.ReadFile(zipPath)
-	if err != nil {
-		return err
-	}
-	// Simple zip detection: check for PK header.
-	if len(data) < 4 || data[0] != 'P' || data[1] != 'K' {
-		return fmt.Errorf("not a zip file")
-	}
-	// For simplicity, just log that extraction would happen.
-	// Full zip extraction requires archive/zip which may not be available.
-	log.Printf("packages: zip extraction to %s (zip saved)", destDir)
-	return nil
+// unzipToDir extracts a zip archive to the destination directory through the
+// Patch extractor, which refuses entries that escape destDir, links and
+// archives that expand past the cap. It used to be a stub that only logged and
+// reported success, after which the caller deleted the zip: every package
+// "installed" as an empty folder.
+func unzipToDir(ctx context.Context, zipPath, destDir string) error {
+	return extractZipSafe(ctx, zipPath, destDir, patchMaxEntries, 1<<30)
 }
 
 // isPackageInstalled returns true if the package directory exists.

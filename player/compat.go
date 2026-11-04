@@ -1394,7 +1394,26 @@ func applyBoost(assessment gameAssessment) (boostResult, error) {
 			stem := strings.TrimSuffix(filepath.Base(assessment.ROM.Path), filepath.Ext(assessment.ROM.Path))
 			dir := filepath.Join(configDirs[0], display)
 			target := filepath.Join(dir, stem+".opt")
-			if err := writeCompatAtomic(target, compatOptionFile(assessment), 0o644); err != nil {
+			content := compatOptionFile(assessment)
+			// The per-game file may be the user's own (RetroArch's "Save Game
+			// Options"). Boost used to overwrite it, and revert then deleted
+			// the boosted file, so the user's options were gone for good. The
+			// original is kept beside it and put back on revert, and its other
+			// options stay in effect while the boost is on.
+			backup := target + compatOptBackupSuffix
+			if existing, readErr := os.ReadFile(target); readErr == nil && !strings.HasPrefix(string(existing), compatBoostHeader) {
+				if _, statErr := os.Stat(backup); errors.Is(statErr, os.ErrNotExist) {
+					if err := writeCompatAtomic(backup, existing, 0o644); err != nil {
+						return result, fmt.Errorf("keep your %s: %w", filepath.Base(target), err)
+					}
+				}
+				content = mergeCompatOptions(content, existing, assessment.Plan.Options)
+			} else if original, backupErr := os.ReadFile(backup); backupErr == nil {
+				// Boosting a game that is already boosted: the file on disk is
+				// JukaHub's, so the user's own options come from the kept copy.
+				content = mergeCompatOptions(content, original, assessment.Plan.Options)
+			}
+			if err := writeCompatAtomic(target, content, 0o644); err != nil {
 				return result, fmt.Errorf("write RetroArch override: %w", err)
 			}
 			result.Targets = append(result.Targets, target)
@@ -1416,9 +1435,44 @@ func applyBoost(assessment gameAssessment) (boostResult, error) {
 	return result, nil
 }
 
+const (
+	// compatBoostHeader opens every per-game file boost writes; revert only
+	// ever removes a file that starts with it.
+	compatBoostHeader = "# JukaHub boost mode"
+	// compatOptBackupSuffix names the copy of a user's own per-game options
+	// file kept while a boost replaces it.
+	compatOptBackupSuffix = ".jukahub-orig"
+)
+
+// mergeCompatOptions appends the user's own options that the boost does not
+// set, so boosting a game does not switch its other per-game options off.
+func mergeCompatOptions(boost, user []byte, options map[string]string) []byte {
+	var extra strings.Builder
+	for _, line := range strings.Split(string(user), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key, _, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		if _, boosted := options[strings.TrimSpace(key)]; boosted {
+			continue
+		}
+		extra.WriteString(trimmed + "\n")
+	}
+	if extra.Len() == 0 {
+		return boost
+	}
+	out := append([]byte(nil), boost...)
+	out = append(out, "# Your own options for this game (your original file comes back on revert):\n"...)
+	return append(out, extra.String()...)
+}
+
 func compatOptionFile(assessment gameAssessment) []byte {
 	var b strings.Builder
-	b.WriteString("# JukaHub boost mode\n")
+	b.WriteString(compatBoostHeader + "\n")
 	b.WriteString("# Game: " + assessment.Title + "\n")
 	b.WriteString("# Generated " + time.Now().Format("2006-01-02 15:04") + " — remove with X in the compatibility panel.\n")
 	keys := make([]string, 0, len(assessment.Plan.Options))
@@ -1446,11 +1500,18 @@ func revertBoost(assessment gameAssessment) ([]string, error) {
 					continue
 				}
 				data, readErr := os.ReadFile(target)
-				if readErr != nil || !strings.HasPrefix(string(data), "# JukaHub boost mode") {
+				if readErr != nil || !strings.HasPrefix(string(data), compatBoostHeader) {
 					continue
 				}
 				if err := os.Remove(target); err == nil {
 					removed = append(removed, target)
+				}
+				// The user's own file, kept when the boost replaced it.
+				backup := target + compatOptBackupSuffix
+				if _, err := os.Stat(backup); err == nil {
+					if err := os.Rename(backup, target); err != nil {
+						log.Printf("[compat] could not restore %s: %v", target, err)
+					}
 				}
 			}
 		}

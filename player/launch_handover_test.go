@@ -189,6 +189,35 @@ func TestSwapHelperLaunchesAfterTheOldOneExits(t *testing.T) {
 	}
 }
 
+// TestWindowsSwapHelperQuotesPathsAndWaitsWithoutConsole pins the Windows
+// helper: the copy re-quotes the paths that %~1/%~2 strip (a profile folder
+// with a space split into several arguments and every copy failed), and the
+// waits do not use timeout, which exits at once when stdin is NUL — as it is
+// for the detached helper — so the helper never waited for JukaHub to exit.
+func TestWindowsSwapHelperQuotesPathsAndWaitsWithoutConsole(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "apply-update.bat")
+	src := `C:\Users\John Smith\AppData\Roaming\JukaHub\staging\JukaHub.exe`
+	dest := `C:\Program Files\JukaHub\JukaHub.exe`
+	files := []stagedInstallFile{{Src: src, Name: "JukaHub.exe", Dest: dest}}
+	if err := writeSwapScriptFor("windows", script, dest, files, `C:\Users\John Smith\journal.json`, 0); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, `copy /y "%~1" "%~2"`) {
+		t.Errorf("copy does not re-quote its arguments:\n%s", body)
+	}
+	if strings.Contains(body, "timeout ") {
+		t.Errorf("helper waits with timeout, which exits at once without a console:\n%s", body)
+	}
+	if !strings.Contains(body, `call :copyloop "`+src+`" "`+dest+`"`) {
+		t.Errorf("the copy call does not pass both quoted paths:\n%s", body)
+	}
+}
+
 // TestLauncherScriptsStayInSync keeps the release archive and the SD-card
 // package shipping the same launcher. They diverged before: a release shipped
 // the old script that never stopped MainUI, and updating replaced the device's

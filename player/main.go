@@ -107,6 +107,11 @@ func main() {
 		}
 	}
 
+	// A battery saver still engaged when JukaHub last stopped is undone first,
+	// so its OLED theme and motion overrides do not outlive it. Theme files
+	// are loaded just above, so a saved user theme can be put back.
+	restoreBatterySaverLeftover(config)
+
 	// Expose the active config for sub-packages (Discord chat, canvas, ...).
 	appConfig = config
 
@@ -153,7 +158,10 @@ func main() {
 	// startup folder (only ever our own launcher file).
 	reconcileAutoStart(config)
 
-	SetAccentColor(resolveColor(config, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
+	// The accent is the theme's (cyan by default), the colour Home's focus ring
+	// and pills use — not $buttonColor, which is a surface colour (slate by
+	// default) and left every scene's accent a navy that barely showed.
+	SetAccentColor(themeAccentColor())
 
 	// Reapply the persisted theme preset (if any) so the chosen theme is
 	// visible immediately on launch, not just after re-selecting it.
@@ -163,8 +171,11 @@ func main() {
 
 	// Default reduced-motion and low-power on handheld targets
 	// (e.g. Trimui Smart Pro) for a safer out-of-box experience. Windows
-	// development builds keep full animation.
-	if !IsWindows() && !config.Variables.ReducedMotion && !config.Variables.LowPower {
+	// development builds keep full animation. Out of the box only: with a
+	// jukauser.json present both values are the user's, and turning them off
+	// used to last until the next boot switched them back on.
+	_, userFileErr := os.Stat("jukauser.json")
+	if !IsWindows() && os.IsNotExist(userFileErr) && !config.Variables.ReducedMotion && !config.Variables.LowPower {
 		config.Variables.ReducedMotion = true
 		config.Variables.LowPower = true
 	}
@@ -251,6 +262,12 @@ func main() {
 	if safeModeAllows(SafeFeatureUpdates) {
 		deferStartupTask("core-update", func() { startCoreAutoUpdate(config) })
 	}
+
+	// Expired thumbnail and feed entries leave jukahub.cache two minutes in,
+	// after boot's own reads.
+	deferStartupTask("cache-sweep", func() { sweepSharedCacheLater(2 * time.Minute) })
+	// Temp video downloads a crash or power cut left on the card.
+	deferStartupTask("temp-videos", func() { go sweepTempVideos() })
 
 	// Start disk space pie chart auto-refresh (every 5 seconds).
 	startDiskPieAutoRefresh()
@@ -528,31 +545,17 @@ func main() {
 	bootWorkDrain()
 	startupMarkNow("boot-work")
 	config.Variables.LoadingSpinner = false
-	if gameController != nil {
-		defer gameController.Close()
-	}
+	// Whatever pad is open at exit is closed then — not the one open now: a
+	// hot-plug (gamepad_hotplug.go) may have closed and replaced it, and a
+	// second Close on that handle would be a use-after-free in C.
+	defer replaceGameController(nil)
 
 	// Start config file watcher for hot-reload
 	StartConfigWatcher("jukaconfig.json", func(newCfg *Config) {
-		// Apply the reloaded config: merge user settings, refresh theme,
-		// and update the scene list. The render loop will pick up the new
-		// config on the next frame.
-		mergeUserConfig(newCfg, loadUserConfig())
-		applyDeviceUIProfile(newCfg)
-		ensureWeatherUnitSetting(newCfg)
-		ensureTasksRefreshLabel(newCfg)
-		if presetName, ok := newCfg.Variables.Custom["theme_preset"].(string); ok && presetName != "" {
-			ApplyThemeColors(GetThemePreset(presetName))
-		}
-		SetAccentColor(resolveColor(newCfg, "$buttonColor", sdl.Color{R: 120, G: 130, B: 255, A: 255}))
-		// Update the global config pointer atomically
-		appConfig = newCfg
-		config = newCfg
-		// In-memory injections are lost with the replaced scene list, so the
-		// Vibration row and its saved value are re-applied here.
-		hapticsBind(newCfg)
-		ensureHapticsSetting(newCfg)
-		showToast("Config reloaded", ColorToastSuccess)
+		// This runs on the watcher goroutine: the config is only handed over
+		// here, and the event loop applies it between frames
+		// (applyConfigReload, hotreload.go).
+		queueConfigReload(newCfg)
 	})
 	defer StopConfigWatcher()
 
@@ -664,6 +667,9 @@ func main() {
 			running = false
 			continue
 		}
+		// Set when a key press only woke the screen, so the text event SDL
+		// sends with it in the same batch is dropped too.
+		wakeSwallowedText := false
 		for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
 			applyButtonSwap(config, event)
 			switch e := event.(type) {
@@ -688,6 +694,9 @@ func main() {
 				}
 			case *sdl.KeyboardEvent:
 				if e.Type == sdl.KEYUP {
+					// The release of a key that only woke the screen is forgotten
+					// here; nothing below acts on a release except ending a hold.
+					wakeSwallowRelease(wakeInputKey, int32(e.Keysym.Scancode))
 					// Only the audio player cares: letting go of a volume key ends a
 					// hold, so the next tap changes the volume instead of looking
 					// like one long press that already skipped a track.
@@ -706,7 +715,12 @@ func main() {
 						screensaverBackdropPress(config, time.Now()) {
 						continue
 					}
-					screensaverNotifyInput()
+					// A key that wakes the screen only wakes it (and the text it
+					// would have typed is dropped with it).
+					if wakeSwallowPress(wakeInputKey, int32(e.Keysym.Scancode), e.Repeat != 0) {
+						wakeSwallowedText = true
+						continue
+					}
 					// Shared clipboard chords (Ctrl+V paste, Ctrl+C copy) run before
 					// every modal and scene dispatch, because each of the four text
 					// surfaces — Browser, Notes, Terminal and Chat — can own the
@@ -1382,6 +1396,9 @@ func main() {
 				}
 			case *sdl.TextInputEvent:
 				frameRateCtrl.NotifyInput()
+				if wakeSwallowedText {
+					continue
+				}
 				screensaverNotifyInput()
 				handleTextInputEvent(e, config)
 			case *sdl.MouseMotionEvent:
@@ -1410,6 +1427,12 @@ func main() {
 					SeekVideo(fraction)
 				}
 			case *sdl.MouseWheelEvent:
+				// Scrolling is input too: the wheel used to leave the idle clock
+				// running, so a long read with the wheel ended in the screensaver.
+				frameRateCtrl.NotifyInput()
+				if screensaverWakeOnPress() {
+					continue
+				}
 				if powerTools.open && handlePowerToolsWheel(e.Y) {
 					continue
 				}
@@ -1469,7 +1492,15 @@ func main() {
 				}
 			case *sdl.MouseButtonEvent:
 				frameRateCtrl.NotifyInput()
-				screensaverNotifyInput()
+				// A click that wakes the screen only wakes it, release included
+				// (several surfaces act on the release); a release never wakes.
+				if e.Type == sdl.MOUSEBUTTONDOWN {
+					if wakeSwallowPress(wakeInputMouse, int32(e.Button), false) {
+						continue
+					}
+				} else if wakeSwallowRelease(wakeInputMouse, int32(e.Button)) {
+					continue
+				}
 				if ambientIsActive() {
 					// Taps on the dock screen act on its chips; everything else
 					// only wakes it, so a stray tap cannot press the UI behind.
@@ -1524,7 +1555,9 @@ func main() {
 
 						// Dismiss toast on click
 						if toastRect.W > 0 && toastRect.H > 0 && pointInRect(mx, my, toastRect) {
+							currentToastMu.Lock()
 							currentToast = ToastState{}
+							currentToastMu.Unlock()
 							toastRect = sdl.Rect{}
 							break
 						}
@@ -2125,7 +2158,17 @@ func main() {
 					screensaverBackdropPress(config, time.Now()) {
 					continue
 				}
-				screensaverNotifyInput()
+				// A press that wakes the screen (the screensaver, or the dock's
+				// darkened panel) only wakes it, and its release is swallowed
+				// with it. Releases never wake: the release of X, which darkens
+				// the dock, used to light it straight back up.
+				if e.Type == sdl.CONTROLLERBUTTONDOWN {
+					if wakeSwallowPress(wakeInputPad, int32(e.Button), false) {
+						continue
+					}
+				} else if wakeSwallowRelease(wakeInputPad, int32(e.Button)) {
+					continue
+				}
 				// Select + Start is the handheld's system quit chord and is read
 				// from the physical buttons, before remapping or any overlay: it
 				// has to leave the app from a panel, a video or the keyboard too.
@@ -2133,17 +2176,22 @@ func main() {
 					requestAppExit()
 					continue
 				}
+				// The controller test owns every pad event, releases included: a
+				// held button is only visible if its release is seen. It reads the
+				// physical buttons, before accessibility remapping — it is a
+				// hardware test, and with SELECT remapped or used as the chord
+				// modifier the hold-SELECT close never arrived, leaving a handheld
+				// with no way out of the panel.
+				if ctrldiag.open {
+					ctrldiagButtonEvent(e)
+					continue
+				}
 				// Accessibility remapping rewrites the physical button once, here,
 				// before the overlay router or the scene sees the event. A chord
 				// modifier press is consumed: it arms the next direction instead of
-				// firing its own action.
-				if a11yRemapEvent(e) {
-					continue
-				}
-				// The controller test owns every pad event, releases included: a
-				// held button is only visible if its release is seen.
-				if ctrldiag.open {
-					ctrldiagButtonEvent(e)
+				// firing its own action. A queued hold-to-repeat press is already
+				// the remapped direction (padRepeatWhich).
+				if e.Which != padRepeatWhich && a11yRemapEvent(e) {
 					continue
 				}
 				if e.Type == sdl.CONTROLLERBUTTONDOWN && ambientHandleController(e) {
@@ -2528,17 +2576,35 @@ func main() {
 					}
 				}
 			case *sdl.ControllerAxisEvent:
-				frameRateCtrl.NotifyInput()
-				screensaverNotifyInput()
+				// Only a deliberate deflection is input (axisDeflected): a
+				// drifting stick kept the screen awake and the frame rate up.
+				// The controller test still sees every value.
+				deflected := axisDeflected(e.Value)
+				if ctrldiag.open || deflected {
+					frameRateCtrl.NotifyInput()
+				}
 				if ctrldiag.open {
+					if deflected {
+						screensaverNotifyInput()
+					}
 					ctrldiagAxisEvent(int(e.Axis), e.Value)
-				} else {
+				} else if axisWakeFilter(e.Axis, e.Value) {
+					// A push that woke the screen only woke it (axisWakeFilter).
 					handleControllerAxis(e, config)
 				}
+			case *sdl.ControllerDeviceEvent:
+				handleControllerDevice(e)
 			}
 		}
 
 		drainCustom(config)
+		// A hot-reloaded config is installed here, on the main thread and
+		// between frames, never under a frame that is still drawing.
+		if next := takePendingConfigReload(); next != nil {
+			config = applyConfigReload(config, next)
+		}
+		drainSocialNotifs(config)
+		syncLEDLoopSettingsIfDue(config, time.Now())
 
 		// Apply kinetic scroll for text browser panels
 		if textBrowserScrollCooldown > 0 {
@@ -3107,6 +3173,13 @@ func main() {
 	playtimeFlush(config)
 	partyHistoryFlush()
 	saveFavorites()
+	// A note open in the editor is written now; it used to be saved only on
+	// the way out of the editor, so quitting (or the power key) from inside
+	// a note lost what had been typed since it was opened.
+	notesFlushOnExit()
+	// The settings save is debounced by a second; a change made just before
+	// quitting sat in the pending slot and never reached jukauser.json.
+	flushPendingUserConfig()
 	// A boot that reached the cleanup was healthy bootguard-wise: the crash-loop
 	// counter resets, so the next boot starts from zero.
 	clearBootGuard()
@@ -3129,6 +3202,16 @@ func main() {
 	for _, font := range fontCache {
 		font.Close()
 	}
+}
+
+// textInputBlockedByOverlay reports whether a panel drawn above the scene owns
+// the keyboard. Its letter shortcuts (B closes, R refreshes, X rescans) arrive
+// as text events too, and were typed into the note, terminal or chat composer
+// hidden behind it.
+func textInputBlockedByOverlay() bool {
+	return modalPanelBlocksShoulders() || triggerOwnedByOverlay() ||
+		tb.startOpen || nc.open || wpOpen || shortcutsOpen || socialNotifOpen ||
+		imageViewerPath != ""
 }
 
 // handleTextInputEvent routes one SDL text event to whatever currently owns
@@ -3159,6 +3242,9 @@ func handleTextInputEvent(e *sdl.TextInputEvent, config *Config) {
 		// While the keyboard is open its target owns the text, so
 		// scene-specific handlers must not also consume it.
 		vkInsertText(text, config)
+		return
+	}
+	if textInputBlockedByOverlay() {
 		return
 	}
 	if currentSceneIndex >= 0 && currentSceneIndex < len(config.Scenes) {

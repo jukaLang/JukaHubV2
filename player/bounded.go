@@ -16,6 +16,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"image"
 	_ "image/gif"
 	_ "image/jpeg"
@@ -119,6 +120,15 @@ func imageDecodeJobs() int {
 
 var imageDecodeSem = newSemaphore(imageDecodeJobs())
 
+// imageDecodeMaxPixels is the largest image decodeImageRGBA expands: 16 MP on
+// the handheld (64 MB as RGBA), more on a desktop.
+func imageDecodeMaxPixels() int64 {
+	if IsTrimuiDevice() || P().IsHandheld() {
+		return 16 << 20
+	}
+	return 64 << 20
+}
+
 // imageDecodeSemReset rebuilds the decode semaphore at the current device
 // profile. Tests use it to install a known capacity.
 func imageDecodeSemReset(n int) { imageDecodeSem = newSemaphore(n) }
@@ -137,6 +147,17 @@ func decodeImageRGBA(ctx context.Context, data []byte) (*image.RGBA, error) {
 	}
 	defer imageDecodeSem.Release(1)
 
+	// The header is read first and an oversized image refused before a pixel
+	// is allocated: a 1–2 MB PNG can declare 20000×20000, which decoded (and
+	// converted, below) asked for over 3 GB — any image posted in a chat the
+	// handheld showed could get it killed for running out of memory.
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > imageDecodeMaxPixels() {
+		return nil, fmt.Errorf("image is %dx%d, over the %d-pixel decode limit", cfg.Width, cfg.Height, imageDecodeMaxPixels())
+	}
 	img, _, err := image.Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, err

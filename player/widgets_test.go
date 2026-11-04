@@ -333,6 +333,48 @@ func TestBatterySaverPreservesUserSettings(t *testing.T) {
 	}
 }
 
+// A saver still engaged when JukaHub stopped is undone at the next boot. Its
+// values were saved while the snapshot of what they replaced lived only in
+// memory, so a battery that died under the saver left OLED, reduced motion and
+// low power on for good. A user with no theme preset gets no preset back
+// rather than keeping OLED.
+func TestBatterySaverLeftoverIsUndoneAtBoot(t *testing.T) {
+	t.Chdir(t.TempDir()) // applyThemePreset persists jukauser.json
+	palette := capturePalette()
+	t.Cleanup(func() { restorePalette(palette) })
+	prevDelay := userConfigSaveDelay
+	userConfigSaveDelay = time.Hour
+	t.Cleanup(func() {
+		userConfigSaveDelay = prevDelay
+		batterySaverActive = false
+		batterySaverSaved = batterySaverSnapshot{}
+	})
+
+	cfg := widgetTestConfig()
+	delete(cfg.Variables.Custom, "theme_preset")
+	cfg.Variables.ReducedMotion = false
+	cfg.Variables.LowPower = false
+	applyBatterySaver(cfg, true, 9)
+	if _, ok := cfg.Variables.Custom[batterySaverRestoreKey]; !ok {
+		t.Fatal("the engaged saver did not save what it replaced")
+	}
+
+	// A restart under the saver: the in-memory state is gone, the saved
+	// settings (with the leftover) are what the next boot has.
+	batterySaverActive = false
+	batterySaverSaved = batterySaverSnapshot{}
+	restoreBatterySaverLeftover(cfg)
+	if cfg.Variables.ReducedMotion || cfg.Variables.LowPower {
+		t.Fatalf("the saver's overrides survived the restart: %+v", cfg.Variables)
+	}
+	if got := themePresetName(cfg); got != "" {
+		t.Fatalf("theme after the restart = %q, want no preset (the user had none)", got)
+	}
+	if _, ok := cfg.Variables.Custom[batterySaverRestoreKey]; ok {
+		t.Fatal("the leftover was not cleared")
+	}
+}
+
 // Enabling autostart writes exactly one launcher and disabling removes it; the
 // launcher points at this executable.
 func TestAutoStartLauncherLifecycle(t *testing.T) {

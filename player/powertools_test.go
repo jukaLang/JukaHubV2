@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -149,6 +150,23 @@ func TestPowerRunScript(t *testing.T) {
 	}
 	if !strings.Contains(out, "power-tools-ok") {
 		t.Fatalf("output = %q", out)
+	}
+}
+
+// The timeout must hold for a pipeline: the context used to kill only the
+// shell, the commands it started kept the output pipe open, and the run waited
+// for them however long they took.
+func TestPowerRunScriptTimeoutStopsAPipeline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell pipeline")
+	}
+	start := time.Now()
+	_, err := runPowerScript("sleep 20 | cat", 300*time.Millisecond)
+	if err == nil {
+		t.Fatal("a snippet that outlived its timeout reported success")
+	}
+	if took := time.Since(start); took > 300*time.Millisecond+powerScriptWaitDelay+2*time.Second {
+		t.Fatalf("the run returned after %s; the timeout did not stop the pipeline", took)
 	}
 }
 

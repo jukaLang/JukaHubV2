@@ -109,6 +109,23 @@ func TestStepSequentialRules(t *testing.T) {
 	}
 }
 
+// A one-track list follows the same rules: the end of the track stops with
+// repeat off (it used to restart forever), a manual next replays it, and
+// repeat-all loops it.
+func TestStepSingleTrackStopsAtItsEnd(t *testing.T) {
+	m := musicTestState(1)
+	if idx, ok := m.musicStepLocked(1, true); ok {
+		t.Errorf("a single track restarted with repeat off (index %d)", idx)
+	}
+	if idx, ok := m.musicStepLocked(1, false); !ok || idx != 0 {
+		t.Errorf("manual next on a single track = %d,%v, want 0,true", idx, ok)
+	}
+	m.repeatMode = musicRepeatAll
+	if idx, ok := m.musicStepLocked(1, true); !ok || idx != 0 {
+		t.Errorf("repeat all on a single track = %d,%v, want 0,true", idx, ok)
+	}
+}
+
 func TestStepShuffleWalksTheOrderThenStops(t *testing.T) {
 	m := musicTestState(4)
 	m.shuffle = true

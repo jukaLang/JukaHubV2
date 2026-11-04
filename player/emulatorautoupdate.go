@@ -100,6 +100,15 @@ func startCoreAutoUpdate(config *Config) {
 		}
 		defer endPatchOp()
 
+		// A helper-tool download runs outside the Patch lock and may own the
+		// card right now — on a first boot ffmpeg is often still arriving —
+		// and a begin would retire its token and stop it. The cores wait for
+		// the next launch instead; the check stamp is untouched, so they are
+		// still due then.
+		if installBarActive() {
+			logPatch("core auto-update: skipped, an install is running")
+			return
+		}
 		logPatch("core auto-update: checking installed cores")
 		installBarBeginLabelled("Emulator cores", "Updating emulator cores")
 		// The timeout derives from the card's run token (minted by the begin

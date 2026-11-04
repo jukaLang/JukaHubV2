@@ -77,12 +77,18 @@ func absDiffU8(a, b uint8) uint8 {
 }
 
 // borderPixels counts the columns around row y whose pixel looks like the
-// calendar popover's border colour. The 3-row band tolerates stroke rounding.
+// calendar popover's border: the overlay sheet's glass hairline blended over
+// the sheet. The 3-row band tolerates stroke rounding.
 func borderPixels(f *probeFrame, y, x0, x1 int32) int {
+	edge, sheet := glassSheetEdge(), overlayCardFill()
+	blend := func(under, over uint8) uint8 {
+		return uint8((int(under)*(255-int(edge.A)) + int(over)*int(edge.A)) / 255)
+	}
+	border := sdl.Color{R: blend(sheet.R, edge.R), G: blend(sheet.G, edge.G), B: blend(sheet.B, edge.B), A: 255}
 	n := 0
 	for x := x0; x <= x1; x++ {
 		for dy := int32(-1); dy <= 1; dy++ {
-			if nearColor(f.at(x, y+dy), ColorBorder, 10) {
+			if nearColor(f.at(x, y+dy), border, 10) {
 				n++
 				break
 			}

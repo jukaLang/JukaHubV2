@@ -237,6 +237,14 @@ func feRemoteAddressSubmitted(config *Config, text string) {
 		showToast("That address: "+err.Error(), ToastError())
 		return
 	}
+	// One network step at a time. Resetting the panel here cleared its busy
+	// flag under a step still running, so a second connect started beside it:
+	// the session that finished last replaced the other without closing it,
+	// and uploads could go to the device the panel no longer showed.
+	if feRemotePanel.busy {
+		showToast("Wait for "+feRemotePanel.tgt.key()+" to finish first", ToastInfo())
+		return
+	}
 	feRemoteCloseConn()
 	feRemotePanel = feRemotePanelState{open: true, tgt: target, status: "Connecting to " + target.key() + "…"}
 	if config != nil {
@@ -272,6 +280,9 @@ var (
 	// cheap defence against a same-LAN impersonation, without the key-management
 	// screen a full SSH client would need.
 	feRemoteHostKeys = map[string]string{}
+	// feRemoteHostKeysMu guards the pins: the check runs on the dialling
+	// goroutine.
+	feRemoteHostKeysMu sync.Mutex
 )
 
 // feTransferErr keeps a transfer error to its first line: an SFTP failure can
@@ -291,6 +302,8 @@ func feRemoteFingerprint(key ssh.PublicKey) string {
 // feRemoteHostKeyCheck implements trust-on-first-use per run.
 func feRemoteHostKeyCheck(hostname string, key ssh.PublicKey, pinned *string) error {
 	fingerprint := feRemoteFingerprint(key)
+	feRemoteHostKeysMu.Lock()
+	defer feRemoteHostKeysMu.Unlock()
 	if known, ok := feRemoteHostKeys[hostname]; ok {
 		if known != fingerprint {
 			return fmt.Errorf("the device's host key changed (was %s, now %s)", known, fingerprint)
@@ -351,10 +364,16 @@ func feRemoteTakeConn() *feRemoteClient {
 	return feRemoteConn
 }
 
+// feRemoteStoreConn keeps c as the session and closes whichever one it
+// replaces, so a session is never dropped while still open.
 func feRemoteStoreConn(c *feRemoteClient) {
 	feRemoteConnMu.Lock()
-	defer feRemoteConnMu.Unlock()
+	prev := feRemoteConn
 	feRemoteConn = c
+	feRemoteConnMu.Unlock()
+	if prev != nil && prev != c {
+		prev.Close()
+	}
 }
 
 func feRemoteCloseConn() {

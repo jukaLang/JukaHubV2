@@ -169,7 +169,7 @@ func TestWeatherUnitMigrationClearsLegacyCelsius(t *testing.T) {
 // chip must carry the unit it actually displays and stay clickable.
 func TestHeaderWeatherChipUsesLocalUnit(t *testing.T) {
 	setWeatherCountryForTest(t, "US")
-	withWeatherData(t, []WeatherDay{{Date: "2026-10-19", TMax: 21, TMin: 12, Code: 1}})
+	withWeatherData(t, []WeatherDay{{Date: time.Now().Format("2006-01-02"), TMax: 21, TMin: 12, Code: 1}})
 
 	hasPart := func(parts []string, want string) bool {
 		for _, p := range parts {
@@ -200,7 +200,7 @@ func TestHeaderWeatherChipUsesLocalUnit(t *testing.T) {
 // including older copies of the configs already installed on devices.
 func TestWeatherUnitSettingsCycleAndPersistence(t *testing.T) {
 	setWeatherCountryForTest(t, "US")
-	withWeatherData(t, []WeatherDay{{Date: "2026-10-19", TMax: 21, TMin: 12, Code: 1}})
+	withWeatherData(t, []WeatherDay{{Date: time.Now().Format("2006-01-02"), TMax: 21, TMin: 12, Code: 1}})
 	for _, path := range []string{"jukaconfig.json", "trimui/jukaconfig.device.json"} {
 		config, err := loadConfig(path)
 		if err != nil {

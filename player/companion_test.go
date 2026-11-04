@@ -127,6 +127,7 @@ func TestSanitizeUploadName(t *testing.T) {
 		"bad\x00name\x01.txt":           "badname.txt",
 		"/absolute/path/photo (1).jpeg": "photo (1).jpeg",
 		"a/b/c/../d.tar.gz":             "d.tar.gz",
+		"notes 10:15?.txt":              "notes 10_15_.txt",
 	}
 	for in, want := range cases {
 		if got := sanitizeUploadName(in); got != want {
@@ -404,6 +405,26 @@ func TestCompanionThrottlesGuessing(t *testing.T) {
 	handler.ServeHTTP(rec, companionRequest(http.MethodGet, "/?p=123456", "", nil))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("status after %d failures = %d, want 429", companionFailLimit, rec.Code)
+	}
+}
+
+// Each spent PIN budget locks guessing out for twice as long as the last, so a
+// script on the network cannot keep trying forty PINs a minute.
+func TestCompanionLockoutEscalates(t *testing.T) {
+	srv, _ := newTestCompanion(t)
+	srv.fails = companionFailLimit
+	srv.failSince = time.Now().Add(-45 * time.Second)
+	if srv.throttled() {
+		t.Fatal("the first lockout outlived its 30 s window")
+	}
+	srv.fails = companionFailLimit
+	srv.failSince = time.Now().Add(-45 * time.Second)
+	if !srv.throttled() {
+		t.Fatal("the second lockout did not escalate past 30 s")
+	}
+	srv.noteSuccess()
+	if srv.throttled() || srv.lockouts != 0 {
+		t.Fatal("the right PIN did not clear the escalation")
 	}
 }
 

@@ -38,6 +38,10 @@ type pomodoroState struct {
 	lastTick    time.Time
 	completed   int
 	sessionName string
+	// resume is the phase a pause interrupted. Resuming used to guess it from
+	// the time left, so a work session paused with ten minutes to go came
+	// back as a break, and a long break as work.
+	resume pomodoroPhase
 }
 
 var pom pomodoroState
@@ -53,13 +57,14 @@ func pomodoroStart() {
 func pomodoroTogglePause() {
 	if pom.phase == pomPaused {
 		pom.lastTick = time.Now()
-		// Determine what to resume to.
-		if pom.remaining > time.Duration(float64(pomodoroWorkMin)*float64(time.Minute)*0.5) {
+		switch pom.resume {
+		case pomWork, pomBreak, pomLongBreak:
+			pom.phase = pom.resume
+		default:
 			pom.phase = pomWork
-		} else {
-			pom.phase = pomBreak
 		}
 	} else if pom.phase == pomWork || pom.phase == pomBreak || pom.phase == pomLongBreak {
+		pom.resume = pom.phase
 		pom.phase = pomPaused
 	}
 }
@@ -71,8 +76,16 @@ func pomodoroSkip() {
 	case pomBreak, pomLongBreak:
 		pomodoroStart()
 	case pomPaused:
-		pom.phase = pomIdle
-		pom.remaining = 0
+		// Skip what the pause interrupted, not the whole timer.
+		switch pom.resume {
+		case pomWork:
+			pomodoroFinishWork()
+		case pomBreak, pomLongBreak:
+			pomodoroStart()
+		default:
+			pom.phase = pomIdle
+			pom.remaining = 0
+		}
 	}
 }
 
@@ -126,9 +139,8 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 
-	// Background.
-	renderer.SetDrawColor(8, 10, 18, 255)
-	renderer.Clear()
+	// Background: Home's backdrop, the one every screen stands on.
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	// Centred in the body, between the shared header and the shared footer,
 	// rather than at a fixed 640×380 that ignored both bars.
@@ -163,7 +175,7 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 		arcColor = sdl.Color{R: 220, G: 160, B: 80, A: 255} // long break: gold
 		phaseText = "LONG BREAK"
 	case pomPaused:
-		arcColor = sdl.Color{R: 200, G: 200, B: 200, A: 200}
+		arcColor = WithAlpha(ColorTextTertiary(), 200)
 		phaseText = "PAUSED"
 	case pomIdle:
 		arcColor = sdl.Color{R: 80, G: 100, B: 140, A: 150}
@@ -213,8 +225,7 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 			renderer.FillRect(&sdl.Rect{X: tx - 10, Y: ty - 6, W: int32(tw) + 20, H: int32(th) + 12})
 		}
 
-		renderText(renderer, config, bigFont, timeStr,
-			sdl.Color{R: 230, G: 240, B: 255, A: 255}, tx, ty)
+		renderText(renderer, config, bigFont, timeStr, ColorTextPrimary(), tx, ty)
 	}
 
 	// Session info below circle.
@@ -225,15 +236,15 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 		sx := cx - int32(sw)/2
 		sy := cy + r + 18
 		renderText(renderer, config, smallFont, sessionStr,
-			sdl.Color{R: 140, G: 155, B: 180, A: 200}, sx, sy)
+			WithAlpha(ColorTextTertiary(), 200), sx, sy)
 
 		// Active session name.
-		if pom.phase == pomWork || pom.phase == pomPaused {
+		if pom.phase == pomWork || (pom.phase == pomPaused && pom.resume == pomWork) {
 			nw, _, _ := smallFont.SizeUTF8(pom.sessionName)
 			nx := cx - int32(nw)/2
 			ny := sy + 20
 			renderText(renderer, config, smallFont, pom.sessionName,
-				sdl.Color{R: 180, G: 190, B: 210, A: 180}, nx, ny)
+				WithAlpha(ColorTextSecondary(), 180), nx, ny)
 		}
 	}
 
@@ -250,7 +261,7 @@ func renderPomodoro(renderer *sdl.Renderer, config *Config) {
 			col.A = 220
 		}
 		fillCircle(renderer, dx, dotY, dotR, col)
-		if i == pom.sessions && (pom.phase == pomWork || pom.phase == pomPaused) {
+		if i == pom.sessions && (pom.phase == pomWork || (pom.phase == pomPaused && pom.resume == pomWork)) {
 			strokeCircle(renderer, dx, dotY, dotR+2, sdl.Color{
 				R: arcColor.R, G: arcColor.G, B: arcColor.B, A: 100,
 			})

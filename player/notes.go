@@ -121,6 +121,20 @@ func notesSaveCurrentEdit() {
 	notesSave()
 }
 
+// notesFlushOnExit saves the note being edited, if any, when the app quits.
+func notesFlushOnExit() {
+	// Tab 1 edits the title, tab 2 the body.
+	if (notes.tab != 1 && notes.tab != 2) || notes.editID < 0 {
+		return
+	}
+	for _, n := range notes.store.Notes {
+		if n.ID == notes.editID && (n.Title != notes.editTitle || n.Content != notes.editContent) {
+			notesSaveCurrentEdit()
+			return
+		}
+	}
+}
+
 func notesFiltered() []noteEntry {
 	var filtered []noteEntry
 	for _, n := range notes.store.Notes {
@@ -147,8 +161,8 @@ func notesFiltered() []noteEntry {
 // ──────────────────────────────────────────────────────────────────────
 
 func renderNotes(renderer *sdl.Renderer, config *Config) {
-	renderer.SetDrawColor(8, 10, 18, 255)
-	renderer.Clear()
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "small")
 	medFont, _ := getCachedFont(config, "medium")
@@ -176,7 +190,7 @@ func renderNotes(renderer *sdl.Renderer, config *Config) {
 		}
 		cw, _, _ := font.SizeUTF8(countStr)
 		renderText(renderer, config, font, countStr,
-			sdl.Color{R: 140, G: 155, B: 180, A: 200},
+			WithAlpha(ColorTextSecondary(), 200),
 			screenWidth-int32(cw)-16, barH+16)
 	}
 
@@ -193,11 +207,11 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 	searchX := int32(16)
 	searchY := barH + 8
 	fillRoundedRect(renderer, searchX, searchY, searchW, searchH, 8,
-		sdl.Color{R: 20, G: 24, B: 34, A: 200})
+		glassA(10))
 	strokeRoundedRect(renderer, searchX, searchY, searchW, searchH, 8, 1, ColorBorder)
 	searchIcon := "[S]"
 	renderText(renderer, config, font, searchIcon,
-		sdl.Color{R: 100, G: 115, B: 140, A: 180}, searchX+8, searchY+6)
+		WithAlpha(ColorTextTertiary(), 180), searchX+8, searchY+6)
 	// The text starts past the icon's real advance; a fixed +30 ran
 	// "Search notes..." through the "[S]" badge.
 	iconW, _ := measureText(font, searchIcon)
@@ -206,10 +220,10 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 	if searchText == "" {
 		searchText = "Search notes..."
 		renderText(renderer, config, font, searchText,
-			sdl.Color{R: 80, G: 90, B: 110, A: 150}, textX, searchY+6)
+			WithAlpha(ColorTextTertiary(), 150), textX, searchY+6)
 	} else {
 		renderText(renderer, config, font, searchText,
-			sdl.Color{R: 200, G: 210, B: 230, A: 220}, textX, searchY+6)
+			WithAlpha(ColorTextPrimary(), 220), textX, searchY+6)
 	}
 
 	// Folder tabs.
@@ -220,12 +234,12 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 		fY := searchY
 		fH := searchH
 		active := notes.filter == folder || (notes.filter == "" && folder == "All")
-		fill := sdl.Color{R: 25, G: 30, B: 40, A: 180}
+		fill := glassChipFill()
 		if active {
 			fill = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 60}
 		}
 		fillRoundedRect(renderer, folderX, fY, int32(fw), fH, 8, fill)
-		col := sdl.Color{R: 140, G: 155, B: 180, A: 200}
+		col := WithAlpha(ColorTextSecondary(), 200)
 		if active {
 			col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 220}
 		}
@@ -247,12 +261,12 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 			empty := "No notes yet"
 			ew, _, _ := medFont.SizeUTF8(empty)
 			renderText(renderer, config, medFont, empty,
-				sdl.Color{R: 100, G: 115, B: 140, A: 150},
+				WithAlpha(ColorTextTertiary(), 150),
 				(screenWidth-int32(ew))/2, listY+40)
 			hint := "Press N to create a new note"
 			hw, _, _ := font.SizeUTF8(hint)
 			renderText(renderer, config, font, hint,
-				sdl.Color{R: 80, G: 90, B: 110, A: 120},
+				WithAlpha(ColorTextTertiary(), 120),
 				(screenWidth-int32(hw))/2, listY+70)
 		}
 		return
@@ -283,28 +297,26 @@ func notesRenderList(renderer *sdl.Renderer, config *Config, font, medFont *ttf.
 		focused := i == notes.cursor
 
 		if focused {
-			fillRoundedRect(renderer, listX+4, ry, listW-8, lineH-4, 10,
-				sdl.Color{R: 30, G: 36, B: 50, A: 200})
-			renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 200)
-			renderer.FillRect(&sdl.Rect{X: listX + 4, Y: ry + 4, W: 3, H: lineH - 12})
+			// The cursor row is the shared selected list row.
+			UIListRow(renderer, sdl.Rect{X: listX + 4, Y: ry, W: listW - 8, H: lineH - 4}, 10, true, false)
 		}
 
 		// Title.
 		title := truncateRunesSuffix(n.Title, 45, "...")
 		renderText(renderer, config, medFont, title,
-			sdl.Color{R: 220, G: 230, B: 245, A: 240}, listX+16, ry+2)
+			WithAlpha(ColorTextPrimary(), 240), listX+16, ry+2)
 
 		// Preview.
 		preview := truncateRunesSuffix(strings.ReplaceAll(n.Content, "\n", " "), 60, "...")
 		renderText(renderer, config, subFont, preview,
-			sdl.Color{R: 120, G: 135, B: 160, A: 180}, listX+16, ry+36)
+			WithAlpha(ColorTextTertiary(), 180), listX+16, ry+36)
 
 		// Metadata.
 		folderStr := n.Folder
 		timeStr := n.UpdatedAt.Format("Jan 2 15:04")
 		meta := fmt.Sprintf("%s  •  %s", folderStr, timeStr)
 		renderText(renderer, config, subFont, meta,
-			sdl.Color{R: 80, G: 95, B: 120, A: 140}, listX+16, ry+58)
+			WithAlpha(ColorTextTertiary(), 140), listX+16, ry+58)
 	}
 
 	// Scrollbar.
@@ -332,7 +344,7 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 		titleText = "Note title..."
 	}
 	renderText(renderer, config, medFont, titleText,
-		sdl.Color{R: 220, G: 230, B: 245, A: 255}, titleX+12, titleY+8)
+		ColorTextPrimary(), titleX+12, titleY+8)
 
 	// Folder selector.
 	folderY := titleY + titleH + 8
@@ -352,12 +364,12 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 				}
 			}
 		}
-		fill := sdl.Color{R: 25, G: 30, B: 40, A: 180}
+		fill := glassChipFill()
 		if active {
 			fill = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 60}
 		}
 		fillRoundedRect(renderer, folderX, folderY, int32(fw), 24, 8, fill)
-		col := sdl.Color{R: 140, G: 155, B: 180, A: 200}
+		col := WithAlpha(ColorTextSecondary(), 200)
 		if active {
 			col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 220}
 		}
@@ -381,7 +393,7 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 	if content == "" {
 		content = "Start typing your note..."
 		renderText(renderer, config, font, content,
-			sdl.Color{R: 80, G: 90, B: 110, A: 150}, contentX+16, contentY+16)
+			WithAlpha(ColorTextTertiary(), 150), contentX+16, contentY+16)
 	} else {
 		lines := strings.Split(content, "\n")
 		// 30px, not 20: the body font's line box is 30px on this canvas, so
@@ -398,13 +410,13 @@ func notesRenderEditor(renderer *sdl.Renderer, config *Config, font, medFont *tt
 				break
 			}
 			ly := contentY + 16 + int32(i-startLine)*lineH
-			col := sdl.Color{R: 180, G: 190, B: 210, A: 220}
+			col := WithAlpha(ColorTextSecondary(), 220)
 
 			// Simple markdown rendering.
 			if strings.HasPrefix(line, "# ") {
 				if medFont != nil {
 					renderText(renderer, config, medFont, line[2:],
-						sdl.Color{R: 240, G: 245, B: 255, A: 255}, contentX+16, ly)
+						ColorTextPrimary(), contentX+16, ly)
 					continue
 				}
 			} else if strings.HasPrefix(line, "## ") {

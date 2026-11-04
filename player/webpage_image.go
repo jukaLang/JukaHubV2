@@ -27,12 +27,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"image"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/veandco/go-sdl2/img"
@@ -48,6 +48,7 @@ const (
 	webMaxImagesBytes        = 4 << 20 // 4 MiB of images per page
 	webMaxVideoThumbsPerPage = 8       // one page never fetches more video thumbnails
 	webImageFetchTimeout     = 8 * time.Second
+	webImageFetchWorkers     = 4 // concurrent image downloads per page
 	// webImagePassTimeout bounds the whole image pass, not one image. The page
 	// text is published after this pass, so a page of slow hero banners must
 	// not keep the reader on the loading card for eight seconds each; anything
@@ -132,26 +133,66 @@ func (d *webDocument) imageMeta(key string) (webImageMeta, bool) {
 	return m, ok
 }
 
-// decodeWebImageMeta decodes bytes far enough to learn the natural size, then
-// frees the surface: the layout needs small integers, not pixels.
+// decodeWebImageMeta learns an image's natural size: the layout needs two small
+// integers, not pixels. PNG, JPEG and GIF answer from their header and WebP
+// from its RIFF chunk, so nothing is decoded; only an exotic format falls back
+// to a full decode. That fallback used to be the only path, and it never freed
+// the surface — every picture on every page leaked its decoded pixels.
 func decodeWebImageMeta(data []byte) webImageMeta {
 	if len(data) == 0 {
 		return webImageMeta{}
+	}
+	if cfg, _, err := image.DecodeConfig(bytes.NewReader(data)); err == nil && cfg.Width > 0 && cfg.Height > 0 {
+		return webImageMeta{HasSize: true, W: cfg.Width, H: cfg.Height}
+	}
+	if w, h, ok := webpImageSize(data); ok {
+		return webImageMeta{HasSize: true, W: w, H: h}
 	}
 	rwops, err := sdl.RWFromMem(data)
 	if err != nil {
 		return webImageMeta{}
 	}
+	// freesrc=true: SDL closes the RWops, on failure too.
 	surface, err := img.LoadRW(rwops, true)
 	if err != nil || surface == nil {
-		// LoadRW with freesrc=true frees it even on failure; ignore the
-		// double-free risk by only closing explicitly on the success path's
-		// own freesrc flag.
-		_ = rwops
 		return webImageMeta{}
 	}
-	m := webImageMeta{HasSize: true, W: int(surface.W), H: int(surface.H)}
-	return m
+	defer surface.Free()
+	return webImageMeta{HasSize: true, W: int(surface.W), H: int(surface.H)}
+}
+
+// webpImageSize reads a WebP's canvas size from its first chunk (lossy VP8,
+// lossless VP8L or extended VP8X) without decoding it.
+func webpImageSize(data []byte) (int, int, bool) {
+	if len(data) < 30 || string(data[0:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+		return 0, 0, false
+	}
+	var w, h int
+	switch string(data[12:16]) {
+	case "VP8 ":
+		// Frame tag (3 bytes) and start code (3 bytes) precede two 14-bit sizes.
+		if data[23] != 0x9d || data[24] != 0x01 || data[25] != 0x2a {
+			return 0, 0, false
+		}
+		w = int(data[26]) | int(data[27]&0x3f)<<8
+		h = int(data[28]) | int(data[29]&0x3f)<<8
+	case "VP8L":
+		if data[20] != 0x2f {
+			return 0, 0, false
+		}
+		b0, b1, b2, b3 := int(data[21]), int(data[22]), int(data[23]), int(data[24])
+		w = 1 + (b0 | (b1&0x3f)<<8)
+		h = 1 + (b1>>6 | b2<<2 | (b3&0x0f)<<10)
+	case "VP8X":
+		w = 1 + (int(data[24]) | int(data[25])<<8 | int(data[26])<<16)
+		h = 1 + (int(data[27]) | int(data[28])<<8 | int(data[29])<<16)
+	default:
+		return 0, 0, false
+	}
+	if w <= 0 || h <= 0 {
+		return 0, 0, false
+	}
+	return w, h, true
 }
 
 // decodeWebImageDataURI decodes a data:image/...;base64 URI into raw bytes
@@ -343,43 +384,64 @@ func fetchWebImages(doc *webDocument) {
 	ctx, cancel := context.WithTimeout(context.Background(), webImagePassTimeout)
 	defer cancel()
 
+	var remote []string
 	for _, src := range srcs {
 		// Data URIs decode inline: no network, no budget.
 		if data, m, ok := decodeWebImageDataURI(src); ok {
 			images[src] = data
 			fetched[src] = m
+			continue
 		}
+		remote = append(remote, src)
 	}
-	for _, src := range srcs {
-		if _, ok := images[src]; ok {
-			continue
-		}
-		if atomic.LoadInt64(&budget) <= 0 {
-			// Budget exhausted: record the key so the layout still reserves
-			// its box, but do not pay for a 17th download.
-			mu.Lock()
-			fetched[src] = webImageMeta{}
-			mu.Unlock()
-			continue
-		}
+	// A few workers, each reserving the worst case from the page budget before
+	// it downloads and handing back what the image did not use. The budget
+	// used to be read only when a fetch was scheduled — and every fetch was
+	// scheduled before the first one finished, so all of them ran and the
+	// 4 MiB page cap never held.
+	queue := make(chan string)
+	for i := 0; i < webImageFetchWorkers; i++ {
 		wg.Add(1)
-		go func(src string) {
+		go func() {
 			defer wg.Done()
-			body := fetchWebImageBytes(ctx, doc.URL, src)
-			if len(body) == 0 {
+			for src := range queue {
 				mu.Lock()
-				fetched[src] = webImageMeta{}
+				reserve := int64(webMaxImageBytes)
+				if budget < reserve {
+					reserve = budget
+				}
+				if reserve <= 0 {
+					// Budget spent: the key still gets an entry so the layout
+					// reserves its box and the painter draws a placeholder.
+					fetched[src] = webImageMeta{}
+					mu.Unlock()
+					continue
+				}
+				budget -= reserve
 				mu.Unlock()
-				return
+
+				body := fetchWebImageBytes(ctx, doc.URL, src)
+				if int64(len(body)) > reserve {
+					body = nil // larger than what was left for this page
+				}
+				var m webImageMeta
+				if len(body) > 0 {
+					m = decodeWebImageMeta(body)
+				}
+				mu.Lock()
+				budget += reserve - int64(len(body))
+				if len(body) > 0 {
+					images[src] = body
+				}
+				fetched[src] = m
+				mu.Unlock()
 			}
-			atomic.AddInt64(&budget, -int64(len(body)))
-			m := decodeWebImageMeta(body)
-			mu.Lock()
-			images[src] = body
-			fetched[src] = m
-			mu.Unlock()
-		}(src)
+		}()
 	}
+	for _, src := range remote {
+		queue <- src
+	}
+	close(queue)
 	wg.Wait()
 
 	// Anything scheduled but never fetched still needs an entry so the layout

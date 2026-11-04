@@ -19,8 +19,47 @@ type alarmEntry struct {
 	Minute  int    `json:"minute"`
 	Label   string `json:"label"`
 	Enabled bool   `json:"enabled"`
-	Fired   bool   `json:"fired"` // true after alarm rings today
-	ID      int    `json:"id"`
+	// FiredOn is the local date (2006-01-02) the alarm is done for: the day
+	// it rang, or the day it was set for a time already past. The old "fired"
+	// flag was only cleared by a launch at exactly midnight, so a daily alarm
+	// rang once and then never again.
+	FiredOn string `json:"fired_on,omitempty"`
+	// RangOn is the date it last actually rang, which is what the list marks.
+	RangOn string `json:"rang_on,omitempty"`
+	ID     int    `json:"id"`
+}
+
+// alarmDate is the key FiredOn is compared with.
+func alarmDate(t time.Time) string { return t.Format("2006-01-02") }
+
+// firedToday reports whether the alarm already rang on now's date.
+func (a alarmEntry) firedToday(now time.Time) bool { return a.FiredOn == alarmDate(now) }
+
+// alarmCatchUp is how late an alarm may still ring. The check runs about once
+// a second, but a frame that blocks (a modal, a slow card) or a short sleep
+// could step over the exact minute, and a missed alarm is the one failure an
+// alarm clock must not have.
+const alarmCatchUp = 5 * time.Minute
+
+// alarmDue reports whether a ring is owed now: enabled, not rung today, and
+// now inside [the alarm's time today, alarmCatchUp later).
+func alarmDue(a alarmEntry, now time.Time) bool {
+	if !a.Enabled || a.firedToday(now) {
+		return false
+	}
+	at := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
+	return !now.Before(at) && now.Sub(at) < alarmCatchUp
+}
+
+// alarmArmFrom marks an alarm set (or reset) at now: a time already past today
+// starts tomorrow instead of ringing at once through the catch-up window.
+func alarmArmFrom(a *alarmEntry, now time.Time) {
+	at := time.Date(now.Year(), now.Month(), now.Day(), a.Hour, a.Minute, 0, 0, now.Location())
+	if now.Before(at) {
+		a.FiredOn = ""
+	} else {
+		a.FiredOn = alarmDate(now)
+	}
 }
 
 type alarmList struct {
@@ -45,13 +84,6 @@ func alarmLoad() {
 	for _, a := range al.Alarms {
 		if a.ID >= alarmNextID {
 			alarmNextID = a.ID + 1
-		}
-	}
-	// Reset "fired" flags at midnight.
-	now := time.Now()
-	if now.Hour() == 0 && now.Minute() == 0 {
-		for i := range alarmStore.Alarms {
-			alarmStore.Alarms[i].Fired = false
 		}
 	}
 }
@@ -194,11 +226,7 @@ func alarmSelect() {
 	case 0: // List
 		if len(alarmStore.Alarms) == 0 {
 			// Start creating a new alarm
-			alarmUI.tab = 1
-			alarmUI.editHour = now.Hour()
-			alarmUI.editMin = (now.Minute() + 5) % 60
-			alarmUI.editLabel = ""
-			alarmUI.editID = -1
+			alarmStartNew(now)
 			PlayActivateSound()
 			return
 		}
@@ -240,9 +268,54 @@ func alarmBack() {
 	}
 }
 
+// alarmStartNew opens the editor on a new alarm five minutes from now. The
+// hour follows the minutes past the top of the hour: (minute+5)%60 alone set
+// 10:58 to 10:03, a time already gone.
+func alarmStartNew(now time.Time) {
+	soon := now.Add(5 * time.Minute)
+	alarmUI.tab = 1
+	alarmUI.editHour = soon.Hour()
+	alarmUI.editMin = soon.Minute()
+	alarmUI.editLabel = ""
+	alarmUI.editID = -1
+}
+
+// alarmDeleteArm is the first L1 of a delete: a second one on the same alarm
+// inside alarmDeleteWindow removes it. One press used to delete at once, from
+// the editor too, with nothing to take it back.
+var alarmDeleteArm struct {
+	at time.Time
+	id int
+}
+
+const alarmDeleteWindow = 3 * time.Second
+
+// alarmRequestDelete is L1 on the list: arm, then confirm.
+func alarmRequestDelete() {
+	if alarmUI.tab != 0 || alarmUI.cursor < 0 || alarmUI.cursor >= len(alarmStore.Alarms) {
+		return
+	}
+	a := alarmStore.Alarms[alarmUI.cursor]
+	if alarmDeleteArm.at.IsZero() || alarmDeleteArm.id != a.ID || time.Since(alarmDeleteArm.at) > alarmDeleteWindow {
+		alarmDeleteArm.at, alarmDeleteArm.id = time.Now(), a.ID
+		ShowToast(fmt.Sprintf("Press L1 again to delete the %02d:%02d alarm", a.Hour, a.Minute), ToastKindWarning)
+		PlayNavSound()
+		return
+	}
+	alarmDeleteArm.at = time.Time{}
+	alarmDeleteFocused()
+	PlayBackSound()
+}
+
 func alarmToggleFocused() {
 	if alarmUI.tab == 0 && alarmUI.cursor >= 0 && alarmUI.cursor < len(alarmStore.Alarms) {
-		alarmStore.Alarms[alarmUI.cursor].Enabled = !alarmStore.Alarms[alarmUI.cursor].Enabled
+		a := &alarmStore.Alarms[alarmUI.cursor]
+		a.Enabled = !a.Enabled
+		if a.Enabled {
+			// Switched back on a few minutes after its time, it must wait for
+			// tomorrow rather than ring at once through the catch-up window.
+			alarmArmFrom(a, time.Now())
+		}
 		alarmSave()
 		PlayToggleSound()
 	}
@@ -266,20 +339,22 @@ func alarmSaveAlarm() {
 				alarmStore.Alarms[i].Hour = alarmUI.editHour
 				alarmStore.Alarms[i].Minute = alarmUI.editMin
 				alarmStore.Alarms[i].Label = alarmUI.editLabel
-				alarmStore.Alarms[i].Fired = false
+				alarmArmFrom(&alarmStore.Alarms[i], time.Now())
 				break
 			}
 		}
 	} else {
 		// Create new
 		alarmNextID++
-		alarmStore.Alarms = append(alarmStore.Alarms, alarmEntry{
+		entry := alarmEntry{
 			Hour:    alarmUI.editHour,
 			Minute:  alarmUI.editMin,
 			Label:   alarmUI.editLabel,
 			Enabled: true,
 			ID:      alarmNextID,
-		})
+		}
+		alarmArmFrom(&entry, time.Now())
+		alarmStore.Alarms = append(alarmStore.Alarms, entry)
 	}
 	// Sort by time
 	sort.Slice(alarmStore.Alarms, func(i, j int) bool {
@@ -296,11 +371,9 @@ func alarmSaveAlarm() {
 func alarmCheck(now time.Time) {
 	for i := range alarmStore.Alarms {
 		a := &alarmStore.Alarms[i]
-		if !a.Enabled || a.Fired {
-			continue
-		}
-		if now.Hour() == a.Hour && now.Minute() == a.Minute {
-			a.Fired = true
+		if alarmDue(*a, now) {
+			a.FiredOn = alarmDate(now)
+			a.RangOn = a.FiredOn
 			alarmSave()
 			// A darked ambient panel is the common way to sleep with an alarm
 			// armed, so the alarm has to bring the screen back with it.
@@ -334,22 +407,8 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 
 	// Reuse the shared backdrop instead of clearing to near-black: the alarm
 	// screen is a normal scene, and a bare Clear() read as a broken black page.
-	ensureBackgroundTexture(renderer, config)
-	if bgTexture != nil {
-		_ = renderer.Copy(bgTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-		setDrawColor(renderer, overlayColor)
-		_ = renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	} else {
-		// No wallpaper configured: use the same theme gradient every other
-		// scene falls back to, so the alarm screen is never a black page.
-		ensureGradientTexture(renderer, config, ColorBackground)
-		if gradientTexture != nil {
-			_ = renderer.Copy(gradientTexture, nil, &sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-		} else {
-			renderer.SetDrawColor(8, 10, 18, 255)
-			renderer.Clear()
-		}
-	}
+	// It is Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	// The app's one bar owns the top of the screen; the clock starts under it.
 	barH := headerBarHeight()
@@ -376,13 +435,13 @@ func renderAlarmClock(renderer *sdl.Renderer, config *Config) {
 		renderer.FillRect(&sdl.Rect{X: tx - 12, Y: ty - 6, W: int32(tw) + 24, H: int32(th) + 12})
 
 		renderText(renderer, config, bigFont, timeStr,
-			sdl.Color{R: 230, G: 240, B: 255, A: 255}, tx, ty)
+			ColorTextPrimary(), tx, ty)
 
 		if smallFont != nil {
 			dateStr := alarmUI.now.Format("Monday, January 2, 2006")
 			dw, _, _ := smallFont.SizeUTF8(dateStr)
 			renderText(renderer, config, smallFont, dateStr,
-				sdl.Color{R: 120, G: 135, B: 160, A: 200},
+				WithAlpha(ColorTextTertiary(), 200),
 				cx-int32(dw)/2, ty+int32(th)+8)
 		}
 	}
@@ -439,7 +498,7 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 			empty := "No alarms set. Tap + Add Alarm or press Y."
 			ew, _, _ := smallFont.SizeUTF8(empty)
 			renderText(renderer, config, smallFont, empty,
-				sdl.Color{R: 100, G: 115, B: 140, A: 150},
+				WithAlpha(ColorTextTertiary(), 150),
 				(screenWidth-int32(ew))/2, y+80)
 		}
 		renderAlarmAddRow(renderer, config, font, x, y+120, w)
@@ -455,17 +514,10 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 		focused := i == alarmUI.cursor
 
 		// Row background
-		fill := ColorCard
-		if focused {
-			fill = ColorCardFocus
-		}
-		if !a.Enabled {
-			fill = sdl.Color{R: 15, G: 18, B: 25, A: 200}
-		}
-		fillRoundedRect(renderer, x, ry, w, rowH-4, 12, fill)
-		if focused {
-			strokeRoundedRect(renderer, x, ry, w, rowH-4, 12, 3, ColorAccent)
-		}
+		// Home's glass row: a disabled alarm is the dimmed glass, the cursor
+		// row carries Home's ring (on its own edge: the list scrolls).
+		drawGlassSurface(renderer, sdl.Rect{X: x, Y: ry, W: w, H: rowH - 4}, 12,
+			glassState{Focused: focused, Disabled: !a.Enabled && !focused, NoLift: true})
 
 		// Toggle indicator
 		if a.Enabled {
@@ -480,9 +532,9 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 
 		// Time
 		timeStr := fmt.Sprintf("%02d:%02d", a.Hour, a.Minute)
-		timeCol := sdl.Color{R: 220, G: 230, B: 245, A: 255}
+		timeCol := ColorTextPrimary()
 		if !a.Enabled {
-			timeCol = sdl.Color{R: 100, G: 110, B: 130, A: 150}
+			timeCol = WithAlpha(ColorTextTertiary(), 150)
 		}
 		renderText(renderer, config, font, timeStr, timeCol, x+40, ry+10)
 
@@ -491,12 +543,12 @@ func renderAlarmList(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 			label := a.Label
 			label = truncateRunes(label, 40)
 			renderText(renderer, config, smallFont, label,
-				sdl.Color{R: 140, G: 155, B: 180, A: 180},
+				WithAlpha(ColorTextSecondary(), 180),
 				x+160, ry+20)
 		}
 
-		// Fired indicator
-		if a.Fired {
+		// Fired indicator: rang today (not merely set for a time already past).
+		if a.RangOn == alarmDate(time.Now()) {
 			fired := "[F]"
 			if smallFont != nil {
 				renderText(renderer, config, smallFont, fired,
@@ -576,7 +628,7 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 	}
 	tw, _, _ := font.SizeUTF8(title)
 	renderText(renderer, config, font, title,
-		sdl.Color{R: 200, G: 210, B: 230, A: 220},
+		WithAlpha(ColorTextPrimary(), 220),
 		(screenWidth-int32(tw))/2, editY)
 
 	editY += 50
@@ -591,7 +643,7 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 	}
 
 	// Hour
-	hourCol := sdl.Color{R: 200, G: 210, B: 230, A: 220}
+	hourCol := WithAlpha(ColorTextPrimary(), 220)
 	if alarmUI.tab == 1 {
 		hourCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 255}
 	}
@@ -609,13 +661,13 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 	if alarmUI.now.Second()%2 == 0 {
 		cw, ch, _ := bigFont.SizeUTF8(colonStr)
 		renderText(renderer, config, bigFont, colonStr,
-			sdl.Color{R: 140, G: 155, B: 180, A: 180},
+			WithAlpha(ColorTextSecondary(), 180),
 			screenWidth/2-int32(cw)/2, editY)
 		_ = ch
 	}
 
 	// Minute
-	minCol := sdl.Color{R: 200, G: 210, B: 230, A: 220}
+	minCol := WithAlpha(ColorTextPrimary(), 220)
 	if alarmUI.tab == 2 {
 		minCol = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 255}
 	}
@@ -633,15 +685,17 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 	if smallFont != nil {
 		labelTitle := "Label:"
 		renderText(renderer, config, smallFont, labelTitle,
-			sdl.Color{R: 140, G: 155, B: 180, A: 200}, x+20, editY)
+			WithAlpha(ColorTextSecondary(), 200), x+20, editY)
 
 		editY += 28
-		labelBg := sdl.Color{R: 20, G: 24, B: 34, A: 255}
+		// The label field is a scene input: recessed glass, the accent edge
+		// while it is the field being edited.
+		labelBg, labelEdge, labelEdgeW := glassA(10), glassA(26), int32(1)
 		if alarmUI.tab == 3 {
-			labelBg = sdl.Color{R: 30, G: 36, B: 50, A: 255}
+			labelBg, labelEdge, labelEdgeW = glassFillFocus(), glassAccent(), 2
 		}
 		fillRoundedRect(renderer, x+20, editY, w-40, 36, 8, labelBg)
-		strokeRoundedRect(renderer, x+20, editY, w-40, 36, 8, 1, ColorBorder)
+		strokeRoundedRect(renderer, x+20, editY, w-40, 36, 8, labelEdgeW, labelEdge)
 
 		displayLabel := alarmUI.editLabel
 		if displayLabel == "" && alarmUI.tab != 3 {
@@ -651,7 +705,7 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 			displayLabel += "_" // cursor
 		}
 		renderText(renderer, config, smallFont, displayLabel,
-			sdl.Color{R: 180, G: 190, B: 210, A: 220}, x+32, editY+8)
+			WithAlpha(ColorTextSecondary(), 220), x+32, editY+8)
 	}
 
 	editY += 60
@@ -663,7 +717,7 @@ func renderAlarmEditor(renderer *sdl.Renderer, config *Config, x, y, w int32) {
 		for i, d := range days {
 			dx := x + 60 + int32(i)*40
 			// Highlight today's column
-			col := sdl.Color{R: 70, G: 80, B: 100, A: 150}
+			col := WithAlpha(ColorTextTertiary(), 150)
 			if i == int(today) {
 				col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 200}
 			}
@@ -728,8 +782,7 @@ func renderMiniCalendarAt(renderer *sdl.Renderer, config *Config, cx, cy int32) 
 	numRows := (int(firstDay) + daysInMonth + 6) / 7
 
 	// Card background.
-	fillRoundedRect(renderer, cx, cy, cardW, cardH, 12, sdl.Color{R: 12, G: 16, B: 28, A: 230})
-	strokeRoundedRect(renderer, cx, cy, cardW, cardH, 12, 1, ColorBorder)
+	drawOverlayCard(renderer, sdl.Rect{X: cx, Y: cy, W: cardW, H: cardH})
 
 	font, _ := getCachedFont(config, "small")
 	if font == nil {
@@ -740,7 +793,7 @@ func renderMiniCalendarAt(renderer *sdl.Renderer, config *Config, cx, cy int32) 
 	monthStr := now.Format("January 2006")
 	mw, _, _ := font.SizeUTF8(monthStr)
 	renderText(renderer, config, font, monthStr,
-		sdl.Color{R: 200, G: 210, B: 230, A: 220},
+		WithAlpha(ColorTextPrimary(), 220),
 		cx+(cardW-int32(mw))/2, cy+calPadY)
 
 	// Day-of-week header: S M T W T F S.
@@ -749,7 +802,7 @@ func renderMiniCalendarAt(renderer *sdl.Renderer, config *Config, cx, cy int32) 
 		dw, _, _ := font.SizeUTF8(d)
 		dx := cx + calPadX + int32(i)*calCellW + (calCellW-int32(dw))/2
 		dy := cy + headerH
-		col := sdl.Color{R: 80, G: 90, B: 110, A: 180}
+		col := WithAlpha(ColorTextTertiary(), 170)
 		if i == int(weekday) {
 			col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 220}
 		}
@@ -784,9 +837,9 @@ func renderMiniCalendarAt(renderer *sdl.Renderer, config *Config, cx, cy int32) 
 			nw, _, _ := font.SizeUTF8(numStr)
 			nx := cellX + (calCellW-int32(nw))/2
 			ny := cellY + (calCellH-14)/2
-			dayCol := sdl.Color{R: 160, G: 170, B: 190, A: 200}
+			dayCol := WithAlpha(ColorTextSecondary(), 200)
 			if isToday {
-				dayCol = sdl.Color{R: 255, G: 255, B: 255, A: 255}
+				dayCol = ColorTextPrimary()
 			} else if col == 0 || col == 6 {
 				// Weekend tint.
 				dayCol = sdl.Color{R: 180, G: 140, B: 140, A: 180}
@@ -844,11 +897,7 @@ func handleAlarmInput(e *sdl.KeyboardEvent, config *Config) {
 			alarmToggleFocused()
 		case sdl.K_y, sdl.K_n:
 			// New alarm
-			alarmUI.tab = 1
-			alarmUI.editHour = alarmUI.now.Hour()
-			alarmUI.editMin = (alarmUI.now.Minute() + 5) % 60
-			alarmUI.editLabel = ""
-			alarmUI.editID = -1
+			alarmStartNew(time.Now())
 			PlayActivateSound()
 		case sdl.K_ESCAPE, sdl.K_b:
 			alarmBack()
@@ -927,14 +976,17 @@ func ctrlAlarm(e *sdl.ControllerButtonEvent) bool {
 		alarmBack()
 		PlayBackSound()
 	case sdl.CONTROLLER_BUTTON_Y:
-		alarmInitUI()
-		PlayActivateSound()
+		// Y is "New alarm" — the legend and the empty list both say so; it
+		// used to reset the screen instead.
+		if alarmUI.tab == 0 {
+			alarmStartNew(time.Now())
+			PlayActivateSound()
+		}
 	case sdl.CONTROLLER_BUTTON_X:
 		alarmToggleFocused()
 		PlayNavSound()
 	case sdl.CONTROLLER_BUTTON_LEFTSHOULDER:
-		alarmDeleteFocused()
-		PlayNavSound()
+		alarmRequestDelete()
 	default:
 		return false
 	}

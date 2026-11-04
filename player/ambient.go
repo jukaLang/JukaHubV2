@@ -624,7 +624,10 @@ func ambientWeather(config *Config) (string, string) {
 	if !weatherReady || len(weatherDaily) == 0 {
 		return "Weather", "loading…"
 	}
-	day := weatherDaily[0]
+	day, ok := weatherDayFor(weatherDaily, time.Now())
+	if !ok {
+		return "Weather", "no forecast for today yet"
+	}
 	return weatherCodeDesc(day.Code), formatAmbientTemps(day, weatherUnit(config))
 }
 

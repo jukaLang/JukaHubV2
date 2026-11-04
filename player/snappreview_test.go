@@ -11,6 +11,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -418,5 +419,50 @@ func TestSnapPreviewDirOverride(t *testing.T) {
 	appConfig.Variables.Custom["gameSnapsDir"] = "  " + custom + "  "
 	if got := snapPreviewRoot(appConfig); got != custom {
 		t.Fatalf("override root = %q, want %q", got, custom)
+	}
+}
+
+// A decoder stopped before its first frame — the focus moved on, the panel
+// closed, a game started — proved nothing about the clip. Marking it broken
+// there hid that game's snap for the rest of the session.
+func TestSnapPreviewCancelledDecoderIsNotMarkedBroken(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in decoder is a POSIX shell script")
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "ffmpeg")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prevPath := snapFFmpegPath
+	snapFFmpegPath = func(*Config) string { return fake }
+	t.Cleanup(func() { snapFFmpegPath = prevPath })
+	snapPreviewReset()
+	t.Cleanup(snapPreviewReset)
+
+	clip := filepath.Join(dir, "clip.mp4")
+	ctx, cancel := context.WithCancel(context.Background())
+	snapState.mu.Lock()
+	snapState.run = ctx
+	snapState.starting = true
+	snapState.mu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		snapPreviewRun(ctx, clip, nil)
+		close(done)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	snapPreviewHalt()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the decoder did not stop when its context was cancelled")
+	}
+	snapState.mu.Lock()
+	broken := snapState.broken[clip]
+	snapState.mu.Unlock()
+	if broken {
+		t.Fatal("a decoder cancelled before its first frame marked the clip broken")
 	}
 }

@@ -241,11 +241,18 @@ func TestLoadingCancelButtonDrawsItsBadgeAndLabel(t *testing.T) {
 	}
 
 	// The pill's fill: sample the middle of its left padding, away from the
-	// glyph, and require the fill colour the theme defines.
-	fill := ColorIconSurface
-	if b, g, rr := at(pill.X+3, pill.Y+pill.H/2); b != fill.B || g != fill.G || rr != fill.R {
-		t.Fatalf("the badge pill is not filled with the icon surface: got (%d,%d,%d), want (%d,%d,%d)",
-			rr, g, b, fill.R, fill.G, fill.B)
+	// glyph and the 1px edge, and require Home's footer badge — the glass chip,
+	// here composited over the black clear.
+	chip := glassChipFill()
+	over := func(c uint8) int { return int(c) * int(chip.A) / 255 }
+	b, g, rr := at(pill.X+3, pill.Y+pill.H/2)
+	for _, ch := range []struct{ got, want int }{
+		{int(rr), over(chip.R)}, {int(g), over(chip.G)}, {int(b), over(chip.B)},
+	} {
+		if d := ch.got - ch.want; d < -2 || d > 2 {
+			t.Fatalf("the badge pill is not the glass chip: got (%d,%d,%d), want about (%d,%d,%d)",
+				rr, g, b, over(chip.R), over(chip.G), over(chip.B))
+		}
 	}
 
 	// The label: count glyph-core pixels of the secondary text colour in the

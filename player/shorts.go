@@ -347,12 +347,11 @@ func renderShortsGrid(renderer *sdl.Renderer, config *Config, element Element) {
 				continue
 			}
 
-			if i == currentShortIdx {
-				fillRoundedRect(r, cellX-3, yPos-3, cellWidth+6, cellHeight+6, 13, WithAlpha(accentColor, 90))
-			}
-
-			fillRoundedRect(r, cellX, yPos, cellWidth, cellHeight, 12, ColorSurfaceAlt)
-			strokeRoundedRect(r, cellX, yPos, cellWidth, cellHeight, 12, 1, ColorBorder)
+			// Home's tile: glass with a hairline, and the current short
+			// lifted 3px with the accent ring, where a translucent accent
+			// halo used to sit behind a slate card.
+			drawGlassSurface(r, sdl.Rect{X: cellX, Y: yPos, W: cellWidth, H: cellHeight}, 12,
+				glassState{Focused: i == currentShortIdx})
 
 			// Real artwork through the shared card loader: the feed's own
 			// metadata first, then the URL-derived YouTube art — the same

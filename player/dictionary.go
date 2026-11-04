@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -58,6 +60,88 @@ func dictInit() {
 	dict = dictState{}
 }
 
+// dictAsync carries the network work off the event thread. Suggestions used
+// to be fetched from the render function — one blocking HTTP request per
+// frame once two letters were typed — and a lookup goroutine wrote dict.result
+// and dict.history while the frame was reading them.
+var dictAsync struct {
+	mu       sync.Mutex
+	gen      uint64      // bumped per lookup; a stale answer is dropped
+	done     *dictResult // a finished lookup waiting for dictDrain
+	sugg     map[string][]string
+	suggBusy bool
+}
+
+// dictStartLookup looks a word up in the background; dictDrain applies it.
+func dictStartLookup(word string) {
+	dict.searching = true
+	dictAsync.mu.Lock()
+	dictAsync.gen++
+	gen := dictAsync.gen
+	dictAsync.mu.Unlock()
+	go func() {
+		result := dictLookup(word)
+		dictAsync.mu.Lock()
+		if gen == dictAsync.gen {
+			dictAsync.done = &result
+		}
+		dictAsync.mu.Unlock()
+	}()
+}
+
+// dictCancelLookup drops a lookup still in flight (the query was cleared).
+func dictCancelLookup() {
+	dictAsync.mu.Lock()
+	dictAsync.gen++
+	dictAsync.done = nil
+	dictAsync.mu.Unlock()
+	dict.searching = false
+}
+
+// dictDrain applies a finished lookup. Render thread.
+func dictDrain() {
+	dictAsync.mu.Lock()
+	r := dictAsync.done
+	dictAsync.done = nil
+	dictAsync.mu.Unlock()
+	if r == nil {
+		return
+	}
+	dict.result = *r
+	dict.searching = false
+	if r.Found {
+		dict.history = append([]string{r.Query}, dict.history...)
+		if len(dict.history) > 20 {
+			dict.history = dict.history[:20]
+		}
+	}
+}
+
+// dictSuggestions returns the suggestions already fetched for query, and starts
+// the fetch the first time a query is seen. One request at a time: while one
+// is out, the newer queries simply wait for the next frame. Render thread.
+func dictSuggestions(query string) []string {
+	dictAsync.mu.Lock()
+	defer dictAsync.mu.Unlock()
+	if s, ok := dictAsync.sugg[query]; ok {
+		return s
+	}
+	if !dictAsync.suggBusy {
+		dictAsync.suggBusy = true
+		go func() {
+			s := dictSuggest(query)
+			dictAsync.mu.Lock()
+			if dictAsync.sugg == nil || len(dictAsync.sugg) > 200 {
+				dictAsync.sugg = map[string][]string{}
+			}
+			dictAsync.sugg[query] = s
+			dictAsync.suggBusy = false
+			dictAsync.mu.Unlock()
+		}()
+	}
+	return nil
+}
+
 // dictLookup fetches a word definition from the Datamuse API.
 func dictLookup(word string) dictResult {
 	word = strings.TrimSpace(strings.ToLower(word))
@@ -67,6 +151,9 @@ func dictLookup(word string) dictResult {
 
 	// Check cache first.
 	cacheKey := "dict:" + word
+	// The handle is the app's shared cache: it is not closed here. Closing it
+	// shut the database every other cache user holds (thumbnails, feeds), and
+	// they failed for the rest of the session.
 	if db, err := openSharedCache("jukahub.cache"); err == nil {
 		if cached, cErr := cacheGet(db, cacheKey); cErr == nil && cached != nil {
 			var result dictResult
@@ -75,19 +162,20 @@ func dictLookup(word string) dictResult {
 				return result
 			}
 		}
-		db.Close()
 	}
 
-	// Fetch definitions.
-	url := fmt.Sprintf("https://api.datamuse.com/words?sp=%s&md=dps&max=1", word)
+	// Fetch definitions. The word is escaped: a space or an "&" in it used to
+	// end or split the query.
+	q := url.QueryEscape(word)
+	defsURL := fmt.Sprintf("https://api.datamuse.com/words?sp=%s&md=dps&max=1", q)
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(defsURL)
 	if err != nil {
 		return dictResult{Query: word, Error: "Network error: " + err.Error()}
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return dictResult{Query: word, Error: "Read error"}
 	}
@@ -119,10 +207,10 @@ func dictLookup(word string) dictResult {
 	}
 
 	// Fetch synonyms.
-	synURL := fmt.Sprintf("https://api.datamuse.com/words?rel_syn=%s&max=8", word)
+	synURL := fmt.Sprintf("https://api.datamuse.com/words?rel_syn=%s&max=8", q)
 	if synResp, err := client.Get(synURL); err == nil {
 		defer synResp.Body.Close()
-		if synBody, err := io.ReadAll(synResp.Body); err == nil {
+		if synBody, err := io.ReadAll(io.LimitReader(synResp.Body, 1<<20)); err == nil {
 			var syns []dictDef
 			if json.Unmarshal(synBody, &syns) == nil {
 				for _, s := range syns {
@@ -133,10 +221,10 @@ func dictLookup(word string) dictResult {
 	}
 
 	// Fetch antonyms.
-	antURL := fmt.Sprintf("https://api.datamuse.com/words?rel_ant=%s&max=5", word)
+	antURL := fmt.Sprintf("https://api.datamuse.com/words?rel_ant=%s&max=5", q)
 	if antResp, err := client.Get(antURL); err == nil {
 		defer antResp.Body.Close()
-		if antBody, err := io.ReadAll(antResp.Body); err == nil {
+		if antBody, err := io.ReadAll(io.LimitReader(antResp.Body, 1<<20)); err == nil {
 			var ants []dictDef
 			if json.Unmarshal(antBody, &ants) == nil {
 				for _, a := range ants {
@@ -161,15 +249,15 @@ func dictSuggest(prefix string) []string {
 	if len(prefix) < 2 {
 		return nil
 	}
-	url := fmt.Sprintf("https://api.datamuse.com/sug?s=%s&max=6", prefix)
+	sugURL := fmt.Sprintf("https://api.datamuse.com/sug?s=%s&max=6", url.QueryEscape(prefix))
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(sugURL)
 	if err != nil {
 		return nil
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil
 	}
@@ -193,8 +281,9 @@ func dictSuggest(prefix string) []string {
 // ──────────────────────────────────────────────────────────────────────
 
 func renderDictionary(renderer *sdl.Renderer, config *Config) {
-	renderer.SetDrawColor(8, 10, 18, 255)
-	renderer.Clear()
+	dictDrain()
+	// Home's backdrop, the one every screen stands on (ui_glass.go).
+	drawAppBackdrop(renderer, config, screenWidth, screenHeight)
 
 	font, _ := getCachedFont(config, "small")
 	medFont, _ := getCachedFont(config, "medium")
@@ -212,17 +301,17 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 
 	// Search icon.
 	renderText(renderer, config, font, "[S]",
-		sdl.Color{R: 100, G: 115, B: 140, A: 180}, searchX+12, searchY+10)
+		WithAlpha(ColorTextTertiary(), 180), searchX+12, searchY+10)
 
 	// Search text with cursor.
 	searchText := dict.query
 	if dict.cursor == 0 && searchText == "" {
 		searchText = "Type a word..."
 		renderText(renderer, config, font, searchText,
-			sdl.Color{R: 80, G: 90, B: 110, A: 150}, searchX+36, searchY+12)
+			WithAlpha(ColorTextTertiary(), 150), searchX+36, searchY+12)
 	} else {
 		renderText(renderer, config, font, searchText,
-			sdl.Color{R: 220, G: 230, B: 245, A: 255}, searchX+36, searchY+12)
+			ColorTextPrimary(), searchX+36, searchY+12)
 		// Blinking cursor.
 		if time.Now().UnixMilli()%1000 < 500 {
 			cw, _, _ := font.SizeUTF8(searchText)
@@ -234,19 +323,19 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 
 	// Autocomplete suggestions.
 	if len(dict.query) >= 2 && !dict.result.Found {
-		suggestions := dictSuggest(dict.query)
+		suggestions := dictSuggestions(dict.query)
 		if len(suggestions) > 0 {
 			sugY := searchY + searchH + 8
 			sugW := searchW
 			sugH := int32(len(suggestions)*30 + 8)
 			fillRoundedRect(renderer, searchX, sugY, sugW, sugH, 10,
-				sdl.Color{R: 16, G: 20, B: 30, A: 245})
+				overlayCardFill())
 			strokeRoundedRect(renderer, searchX, sugY, sugW, sugH, 10, 1, ColorBorder)
 
 			for i, s := range suggestions {
 				sy := sugY + 4 + int32(i)*30
 				// Highlight if matches query exactly.
-				col := sdl.Color{R: 160, G: 175, B: 200, A: 200}
+				col := WithAlpha(ColorTextSecondary(), 200)
 				if strings.EqualFold(s, dict.query) {
 					col = sdl.Color{R: accentColor.R, G: accentColor.G, B: accentColor.B, A: 220}
 				}
@@ -270,7 +359,7 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 			loading := "Looking up" + dots
 			lw, _, _ := medFont.SizeUTF8(loading)
 			renderText(renderer, config, medFont, loading,
-				sdl.Color{R: 140, G: 155, B: 180, A: 200},
+				WithAlpha(ColorTextSecondary(), 200),
 				(screenWidth-int32(lw))/2, resultY+40)
 		}
 	} else if dict.result.Error != "" {
@@ -286,7 +375,7 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 			hint := "Try another word, or check your spelling"
 			hw, _, _ := font.SizeUTF8(hint)
 			renderText(renderer, config, font, hint,
-				sdl.Color{R: 100, G: 110, B: 130, A: 150},
+				WithAlpha(ColorTextTertiary(), 150),
 				(screenWidth-int32(hw))/2, resultY+70)
 		}
 	} else if dict.result.Found {
@@ -296,7 +385,7 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 
 		// Word.
 		if medFont != nil {
-			wordCol := sdl.Color{R: 240, G: 245, B: 255, A: 255}
+			wordCol := ColorTextPrimary()
 			renderText(renderer, config, medFont, r.Word, wordCol, contentX, ry)
 			ry += 32
 		}
@@ -347,7 +436,7 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 					contentX, ry)
 				// Definition text.
 				renderText(renderer, config, font, def,
-					sdl.Color{R: 180, G: 190, B: 210, A: 220},
+					WithAlpha(ColorTextSecondary(), 220),
 					contentX+int32(numW)+8, ry)
 				ry += 24
 			}
@@ -419,14 +508,14 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 			hint := "Look up any English word"
 			hw, _, _ := medFont.SizeUTF8(hint)
 			renderText(renderer, config, medFont, hint,
-				sdl.Color{R: 100, G: 115, B: 140, A: 150},
+				WithAlpha(ColorTextTertiary(), 150),
 				(screenWidth-int32(hw))/2, resultY+40)
 		}
 		if font != nil {
 			features := "Definitions • Synonyms • Antonyms • Pronunciation"
 			fw, _, _ := font.SizeUTF8(features)
 			renderText(renderer, config, font, features,
-				sdl.Color{R: 80, G: 90, B: 110, A: 120},
+				WithAlpha(ColorTextTertiary(), 120),
 				(screenWidth-int32(fw))/2, resultY+70)
 		}
 	}
@@ -436,7 +525,7 @@ func renderDictionary(renderer *sdl.Renderer, config *Config) {
 		controls := hintLine(FooterHint{Label: "Type to Search"}, FooterHint{"Enter", "Look Up"}, FooterHint{"Esc", "Back"})
 		cw, _, _ := font.SizeUTF8(controls)
 		renderText(renderer, config, font, controls,
-			sdl.Color{R: 80, G: 90, B: 110, A: 120},
+			WithAlpha(ColorTextTertiary(), 120),
 			(screenWidth-int32(cw))/2, screenHeight-30)
 	}
 }
@@ -448,19 +537,7 @@ func handleDictInput(e *sdl.KeyboardEvent, config *Config) {
 	switch e.Keysym.Sym {
 	case sdl.K_RETURN:
 		if dict.query != "" {
-			dict.searching = true
-			go func() {
-				result := dictLookup(dict.query)
-				dict.result = result
-				dict.searching = false
-				// Add to history.
-				if result.Found {
-					dict.history = append([]string{dict.query}, dict.history...)
-					if len(dict.history) > 20 {
-						dict.history = dict.history[:20]
-					}
-				}
-			}()
+			dictStartLookup(dict.query)
 		}
 	case sdl.K_BACKSPACE:
 		dict.query = trimLastRune(dict.query)
@@ -468,6 +545,7 @@ func handleDictInput(e *sdl.KeyboardEvent, config *Config) {
 		if dict.query != "" {
 			dict.query = ""
 			dict.result = dictResult{}
+			dictCancelLookup()
 		} else {
 			goBackScene(config)
 			PlayBackSound()
@@ -504,7 +582,7 @@ func ctrlDictionary(e *sdl.ControllerButtonEvent) bool {
 		if dict.cursor >= 0 && dict.cursor < len(dict.results) {
 			word := dict.results[dict.cursor].Word
 			dict.query = word
-			dict.result = dictLookup(word)
+			dictStartLookup(word)
 			PlayActivateSound()
 		}
 	case sdl.CONTROLLER_BUTTON_B, sdl.CONTROLLER_BUTTON_BACK:

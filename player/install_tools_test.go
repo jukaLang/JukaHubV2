@@ -456,6 +456,32 @@ func TestInstallBarRunContextPerRun(t *testing.T) {
 	}
 }
 
+// TestInstallBarAbortRunLeavesALaterRunAlone: a run whose token a later begin
+// retired must not hide or cancel the run that replaced it on its way out. On
+// a first boot the core update and the helper-tool download took each other
+// down that way.
+func TestInstallBarAbortRunLeavesALaterRunAlone(t *testing.T) {
+	t.Cleanup(resetInstallBar)
+
+	installBarBegin("ffmpeg")
+	first := installBarGeneration()
+	installBarBeginLabelled("Emulator cores", "Updating emulator cores")
+	second := installBarRunContext()
+
+	installBarAbortRun(first)
+	if visible, tool, _, _, _, _, _, _, _ := installBarSnapshot(); !visible || tool != "Emulator cores" {
+		t.Fatalf("the retired run hid the card: visible=%v tool=%q", visible, tool)
+	}
+	if second.Err() != nil {
+		t.Fatalf("the retired run cancelled its replacement: %v", second.Err())
+	}
+
+	installBarAbortRun(installBarGeneration())
+	if visible, _, _, _, _, _, _, _, _ := installBarSnapshot(); visible {
+		t.Error("a run could not hide its own card")
+	}
+}
+
 func TestInstallBarFailureOffersRetry(t *testing.T) {
 	t.Cleanup(resetInstallBar)
 

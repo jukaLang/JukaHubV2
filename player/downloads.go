@@ -273,6 +273,10 @@ func downloadsDirForKind(k downloadKind) string {
 	return downloadsMusicDir()
 }
 
+// downloadsStagingSweep clears orphaned staging folders once per launch, just
+// before the first job is queued (see downloadEnqueueKind).
+var downloadsStagingSweep sync.Once
+
 func downloadsPartDir(id int64) string {
 	return filepath.Join(downloadsRoot(), ".partial", strconv.FormatInt(id, 10))
 }
@@ -319,6 +323,15 @@ func downloadEnqueueKind(raw string, kind downloadKind) (downloadItem, error) {
 	if err := validateDownloadURL(clean); err != nil {
 		return downloadItem{}, err
 	}
+	// Staging folders are named by job id, and ids restart with every launch
+	// while the queue itself is not kept. A folder a failed or paused job left
+	// behind was taken over by the next launch's job with the same id: that
+	// job adopted the old file under its own title, then deleted the folder
+	// holding its real download. Before a launch's first job nothing in
+	// .partial belongs to a live job, so it is cleared then.
+	downloadsStagingSweep.Do(func() {
+		_ = os.RemoveAll(filepath.Join(downloadsRoot(), ".partial"))
+	})
 	downloads.mu.Lock()
 	downloads.nextID++
 	it := &downloadItem{ID: downloads.nextID, URL: clean, Kind: kind, Status: downloadQueued, added: time.Now()}

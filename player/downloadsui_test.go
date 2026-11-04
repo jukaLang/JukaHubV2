@@ -120,11 +120,13 @@ func TestDownloadsPanelRendersRowsAndTabs(t *testing.T) {
 
 	// The panel is a real surface with a storage card, and the selected row's
 	// accent tile is painted: a black frame would fail all three.
-	if got := f.countColor(ColorSurface, panel.X+2, panel.Y+2, panel.X+panel.W-2, panel.Y+panel.H-2); got < 5000 {
+	// The card is the recessed glass sheet (Downloads asks for the plain
+	// surface, which maps onto it).
+	if got := f.countColor(glassSheetDeepFill(), panel.X+2, panel.Y+2, panel.X+panel.W-2, panel.Y+panel.H-2); got < 5000 {
 		t.Errorf("panel surface painted only %d pixels", got)
 	}
 	// The storage card is the only raised surface above the first row.
-	if got := f.countColor(ColorPanelRaised, panel.X+40, panel.Y+60, panel.X+panel.W-40, panel.Y+250); got < 5000 {
+	if got := f.countColor(glassRaisedFill(), panel.X+40, panel.Y+60, panel.X+panel.W-40, panel.Y+250); got < 5000 {
 		t.Errorf("storage card painted only %d pixels", got)
 	}
 	// The Add a link glyph tile is a tinted square with a bright plus, so it is
@@ -174,7 +176,7 @@ func TestDownloadsPanelScrollsToTheCursor(t *testing.T) {
 		t.Fatalf("last visible row %d at %+v, want the focused row %d inside panel %+v", lastIndex, last, len(items), panel)
 	}
 	// The rows that scrolled off are clipped rather than painted over the card.
-	if got := f.countColor(ColorPanelRaised, panel.X+40, panel.Y+60, panel.X+panel.W-40, panel.Y+250); got < 5000 {
+	if got := f.countColor(glassRaisedFill(), panel.X+40, panel.Y+60, panel.X+panel.W-40, panel.Y+250); got < 5000 {
 		t.Errorf("list painted over the storage card (%d card pixels left)", got)
 	}
 }

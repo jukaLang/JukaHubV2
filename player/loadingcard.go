@@ -143,13 +143,16 @@ func renderLoadingCancelButton(renderer *sdl.Renderer, config *Config, cardX, ca
 		return
 	}
 	pill, labelX, labelY := loadingCancelLayout(font, cardX, cardW, y)
-	fillRoundedRect(renderer, pill.X, pill.Y, pill.W, pill.H, pill.H/2, ColorIconSurface)
-	// The badge letter is the button's own name, so it is centred in its pill
-	// rather than padded to the left like a footer badge.
-	bw, bh, _ := font.SizeUTF8(loadingCancelButton)
-	renderText(renderer, config, font, loadingCancelButton, ColorTextPrimary(),
-		pill.X+(pill.W-int32(bw))/2, pill.Y+(pill.H-int32(bh))/2)
-	renderText(renderer, config, font, loadingCancelLabel, ColorTextSecondary(), labelX, labelY)
+	// Home's footer hint exactly: the button's name centred in a glass pill,
+	// its action in the muted ink beside it.
+	drawGlassHintBadge(renderer, config, font, pill, loadingCancelButton, loadingCancelLabel, labelX, labelY)
+}
+
+// loadingSloganInk is the slogan's tone: between the secondary and primary
+// text inks, so it reads at arm's length on the handheld without competing
+// with the status line, and it follows a light preset the way the card does.
+func loadingSloganInk() sdl.Color {
+	return glassMix(ColorTextSecondary(), ColorTextPrimary(), 0.35)
 }
 
 // renderLoadingCard draws the modal loading overlay: spinner, status line and a
@@ -159,25 +162,19 @@ func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
 		return
 	}
 
-	// Frosted backdrop.
-	fillRoundedRect(renderer, 0, 0, screenWidth, screenHeight, 0, sdl.Color{R: 6, G: 8, B: 14, A: 200})
+	// The shared modal dim and glass sheet (components.go), so the loading card
+	// is the same surface as every other dialog. It was a black wash, a drop
+	// shadow, a navy slab and a square 1px outline drawn straight across the
+	// card's rounded corners.
+	drawOverlayScrim(renderer)
 
 	cardW, cardH := loadingCardSize()
 	cardX := (screenWidth - cardW) / 2
 	cardY := (screenHeight - cardH) / 2
+	drawOverlayCard(renderer, sdl.Rect{X: cardX, Y: cardY, W: cardW, H: cardH})
+	drawOverlayCardAccent(renderer, cardX, cardY, cardW)
 
-	fillRoundedRect(renderer, cardX+4, cardY+6, cardW, cardH, 20, ShadowFill(80))
-	fillRoundedRect(renderer, cardX, cardY, cardW, cardH, 20, sdl.Color{R: 18, G: 24, B: 36, A: 238})
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(255, 255, 255, 14)
-	renderer.FillRect(&sdl.Rect{X: cardX + 12, Y: cardY + 1, W: cardW - 24, H: 1})
-	renderer.SetDrawColor(accentColor.R, accentColor.G, accentColor.B, 90)
-	renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + 1, W: cardW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + 1, W: 1, H: cardH - 2})
-	renderer.DrawRect(&sdl.Rect{X: cardX + 1, Y: cardY + cardH - 2, W: cardW - 2, H: 1})
-	renderer.DrawRect(&sdl.Rect{X: cardX + cardW - 2, Y: cardY + 1, W: 1, H: cardH - 2})
-
-	renderSpinner(renderer, cardX+cardW/2, cardY+62, 40, sdl.Color{R: 140, G: 180, B: 255, A: 220})
+	renderSpinner(renderer, cardX+cardW/2, cardY+62, 40, WithAlpha(glassAccent(), 220))
 
 	statusFont, _ := getCachedFont(config, "medium")
 	if statusFont == nil {
@@ -201,7 +198,7 @@ func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
 		}
 	}
 	sw, _, _ := statusFont.SizeUTF8(status)
-	renderText(renderer, config, statusFont, status, sdl.Color{R: 226, G: 234, B: 246, A: 255},
+	renderText(renderer, config, statusFont, status, ColorTextPrimary(),
 		cardX+(cardW-int32(sw))/2, cardY+116)
 	if preparing {
 		// The card blocks navigation, so the way out has to look like a
@@ -229,7 +226,7 @@ func renderLoadingCard(renderer *sdl.Renderer, config *Config) {
 		if x < cardX+loadingCardPad {
 			x = cardX + loadingCardPad
 		}
-		renderText(renderer, config, sloganFont, line, sdl.Color{R: 176, G: 194, B: 220, A: 235}, x, y)
+		renderText(renderer, config, sloganFont, line, loadingSloganInk(), x, y)
 		y += loadingSloganLineH
 	}
 }

@@ -185,17 +185,10 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 		medium = font
 	}
 
-	// A light scrim makes the card read as a foreground panel without hiding
-	// the scene completely.
-	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
-	renderer.SetDrawColor(0, 0, 0, 70)
-	renderer.FillRect(&sdl.Rect{X: 0, Y: 0, W: screenWidth, H: screenHeight})
-	UICard(renderer, r, UICardStyle{
-		Fill:   sdl.Color{R: 16, G: 20, B: 30, A: 246},
-		Border: ColorBorder,
-		Radius: 16,
-		Shadow: 90,
-	})
+	// A light scrim (the backdrop's navy at a third of the overlay dim) makes
+	// the card read as a foreground panel without hiding the scene completely.
+	drawOverlayScrimFade(renderer, 0.35)
+	drawOverlayCard(renderer, r)
 
 	unit := weatherUnit(config)
 	heading := "Local weather · °" + unit
@@ -229,13 +222,20 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 	convert := func(c float64) float64 { return weatherTemp(c, unit) }
 	lineH := int32(font.Height()) + weatherRowGap
 	rowY := r.Y + 52
-	for i, d := range days {
+	// Rows are labelled by their own date. The first row used to be "Today"
+	// whatever it was, so a forecast restored from yesterday's cache showed
+	// yesterday's weather as today's; days already past are left out.
+	today := weatherTodayDate(time.Now())
+	for _, d := range days {
 		if rowY+lineH > r.Y+r.H-8 {
 			break
 		}
+		if d.Date < today {
+			continue
+		}
 		label := d.Date
 		if t, err := time.Parse("2006-01-02", d.Date); err == nil {
-			if i == 0 {
+			if d.Date == today {
 				label = "Today"
 			} else {
 				label = t.Format("Mon")
@@ -247,7 +247,7 @@ func renderWeatherPopover(renderer *sdl.Renderer, config *Config) {
 			line += fmt.Sprintf("   %d%% rain", d.Pop)
 		}
 		col := ColorTextSecondary()
-		if i == 0 {
+		if d.Date == today {
 			col = ColorTextPrimary()
 		}
 		renderText(renderer, config, font, ellipsize(font, line, r.W-36), col, r.X+18, rowY)

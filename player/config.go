@@ -6,7 +6,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 )
@@ -203,7 +205,15 @@ func (s *StringOrInt) UnmarshalJSON(data []byte) error {
 func (v *Variables) UnmarshalJSON(data []byte) error {
 	type alias Variables
 	if err := json.Unmarshal(data, (*alias)(v)); err != nil {
-		return err
+		// A setting with the wrong JSON type (a hand-edited
+		// "playbackResolution": 720) failed the whole block, and every custom
+		// variable went with it. encoding/json still decodes every other
+		// field in that case, so only that one setting keeps its default.
+		var typeErr *json.UnmarshalTypeError
+		if !errors.As(err, &typeErr) {
+			return err
+		}
+		log.Printf("[config] variables: %v; that setting keeps its default", err)
 	}
 
 	var raw map[string]json.RawMessage
@@ -287,7 +297,8 @@ func (v *Variables) UnmarshalJSON(data []byte) error {
 		}
 	}
 	tmp := &Config{Variables: *v}
-	syncVariableOverrides(tmp)
+	// The non-saving form: decoding a config must never write jukauser.json.
+	applyVariableOverrides(tmp)
 	*v = tmp.Variables
 	return nil
 }
